@@ -1,0 +1,10 @@
+{
+  "name": "mano",
+  "private": true,
+  "packageManager": "pnpm@10.33.4",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "check": "pnpm -r --if-present run check",
+    "eval:baselines": "pnpm --filter ./eval run baselines"
+  }
+}

@@ -32,6 +32,8 @@ This is a hackathon entry (Meta Global AI Developer Hackathon, submissions due N
 
 ## How to work
 
+- The workspace root (package.json, pnpm-workspace.yaml) is shared. Add your own package under `apps/`, `packages/` or `eval/` and give it a `check` script; change root files only when you must, and say so in the pull request.
+
 - Work in a git worktree under `~/Desktop/code/.worktrees/mano/<branch>`, ship through a pull request, and keep `main` deployable.
 - Commit as `7089067+mrcoven94@users.noreply.github.com`. If you are Muse Code, keep your own co-author trailer. Never add a trailer for a tool that did not write the change.
 - Tests with every change to the gateway, the protocol or anything that sends. `pnpm check` must pass before a pull request.
