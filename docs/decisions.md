@@ -33,5 +33,5 @@ A held-out test, frozen before any tuning: renewal and document scenarios with u
 
 - Engine on Cloudflare (per-person Durable Objects with their own SQLite, R2 for files, Browser Run, Sandbox, Email Routing, AI Gateway). Chosen over Vercel because calls on hold need hour-long connections, idle agents should cost nothing at 10 million people, and per-person databases isolate data by construction.
 - Shared relational data in PlanetScale Postgres through Hyperdrive.
-- Agent computers on Modal Sandboxes (sponsor credits, per-second billing, the same platform as the Glimmer guardian); Cloudflare Browser Run for simple browsing and login handoff. Muse Wonder drives the computer.
+- Agent computers on Modal Sandboxes (sponsor credits, per-second billing, the same platform as the Glimmer guardian); Cloudflare Browser Run for simple browsing and login handoff. Muse Spark 1.3 drives the computer (Wonder's computer tool was not enabled on our key on Oct 26).
 - Website and screens on Vercel.
