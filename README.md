@@ -1,0 +1,29 @@
+# Mano
+
+Apply once, for anything that makes your life better.
+
+Mano gives every person their own agent. It applies for benefits, cash assistance, jobs, scholarships and training, fills out any form you hand it, reads your mail from a photo, renews on time and waits on hold for you. Every government office and nonprofit that runs those programs can claim agents of their own, and the agents work a case together with the resident's consent. A person approves every decision.
+
+Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026) on Meta's Muse models.
+
+## Status
+
+Under construction during the hackathon. Everything in this repository was written from October 26, 2026 onward.
+
+## Layout
+
+| Path | What |
+| --- | --- |
+| `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway, channels and phone |
+| `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel |
+| `packages/protocol` | The open message format agents use to work a case together |
+| `eval` | The held-out test: scenarios, baselines and results |
+| `docs` | Decisions and design notes |
+
+## Prior work
+
+Program, office and form data come from Front Door, an earlier product by the same author, through its partner API. Front Door's code is not part of this repository.
+
+## License
+
+MIT
