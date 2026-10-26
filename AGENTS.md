@@ -22,6 +22,18 @@ This is a hackathon entry (Meta Global AI Developer Hackathon, submissions due N
 10. **One brand.** Everything is Mano, the way everything at Meta is Muse. No sub-brands or feature names: say "Mano fills out any form", not a named feature.
 11. **Writing.** Plain, specific language. No em dashes, no italics, no slogan pairs, no filler.
 
+## Open source, from the first commit
+
+This repository is public and MIT licensed. Build every part so a stranger can read it, run it and deploy their own copy.
+
+- Runs without our accounts: each package works locally with stand-ins when keys are missing (fake model client, in-memory stores, local link check) and prints which parts are not live. Ship a `.env.example` listing every variable by name, never a value.
+- No account-specific values in code: Cloudflare account IDs, domains, phone numbers and model IDs come from config.
+- Swappable providers behind small interfaces: models (Meta by default), channels, telephony, storage, computers. Meta stays the default; nothing else may be hard-wired.
+- Public contracts are versioned: `packages/protocol` (JSON Schema plus a written spec in `docs/protocol.md`) and the extension manifest. Breaking changes bump the version.
+- Security does not rely on secrecy of code. The eval's held-out seed is the one intentional secret (published after the final run).
+- Maintainer tooling (`ws keys run`, Infisical, Linear) is for David's machine. Write code and docs that also work for contributors without it, and keep personal paths out of code.
+- Write for readers: a README per package (what it does, how to run it, how to test it), decisions recorded in `docs/decisions.md`.
+
 ## Architecture (see docs/decisions.md)
 
 - Engine: Cloudflare Workers with the Agents SDK. One Durable Object agent per person (private memory, conversations, deadlines, approvals in its own SQLite) and one per organization (only the cases residents shared with it). Files in R2, encrypted per person. Shared data (programs, office profiles, learned form recipes, consented indexes, eval results) in PlanetScale Postgres through Hyperdrive.
@@ -32,7 +44,8 @@ This is a hackathon entry (Meta Global AI Developer Hackathon, submissions due N
 
 ## How to work
 
-- The workspace root (package.json, pnpm-workspace.yaml) is shared. Add your own package under `apps/`, `packages/` or `eval/` and give it a `check` script; change root files only when you must, and say so in the pull request.
+- The workspace root (package.json, pnpm-workspace.yaml, pnpm-lock.yaml) is shared. If the lockfile conflicts, rebase on `main` and run `pnpm install` again.
+- Add your own package under `apps/`, `packages/` or `eval/` and give it a `check` script; change root files only when you must, and say so in the pull request.
 
 - Work in a git worktree under `~/Desktop/code/.worktrees/mano/<branch>`, ship through a pull request, and keep `main` deployable.
 - Commit as `7089067+mrcoven94@users.noreply.github.com`. If you are Muse Code, keep your own co-author trailer. Never add a trailer for a tool that did not write the change.
