@@ -1,18 +1,20 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
-const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono", display: "swap" });
+const inter = Inter({ subsets: ["latin", "latin-ext", "vietnamese"], variable: "--font-inter", display: "swap" });
+const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono", display: "swap", weight: ["500"] });
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://withmano.com"),
-  title: { default: "Mano: Apply once, for anything that makes your life better", template: "%s | Mano" },
-  description: "Mano is your own agent that applies for help, fills out any form, reads your mail from a photo, renews on time and waits on hold for you. You approve every decision.",
-  openGraph: { title: "Mano", description: "Apply once, for anything that makes your life better. You approve every decision.", type: "website" },
+  title: { default: "Mano", template: "%s | Mano" },
+  description: "Your own agent applies for help, fills out any form, reads your mail from a photo, renews on time and waits on hold. You approve every step.",
+  openGraph: { siteName: "Mano", type: "website" },
 };
+
+export const viewport: Viewport = { themeColor: "#131313", colorScheme: "dark" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

@@ -1,31 +1,46 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef } from "react";
 import Mascot from "./Mascot";
+import { SMS_HREF } from "@/lib/site";
 
 const links = [
-  { href: "/", label: "For you" },
-  { href: "/government", label: "Government" },
-  { href: "/organizations", label: "Organizations" },
+  { href: "/", label: "For you", sub: "Residents" },
+  { href: "/government", label: "Government", sub: "Agencies and offices" },
+  { href: "/organizations", label: "Nonprofits", sub: "Case managers" },
 ];
 
 export default function Header() {
   const path = usePathname();
+  const menu = useRef<HTMLDetailsElement>(null);
+  useEffect(() => { if (menu.current) menu.current.open = false; }, [path]);
+
   return (
-    <header style={{ position: "sticky", top: 0, zIndex: 50, backdropFilter: "blur(14px)", background: "rgba(20,20,20,.82)", borderBottom: "1px solid var(--border)" }}>
-      <div className="wrap headerbar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 68, gap: 16 }}>
-        <Link href="/" className="brand" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none", fontWeight: 700, fontSize: "1.15rem", letterSpacing: "-.02em", flex: "none" }} aria-label="Mano home">
-          <Mascot size={34} wave={false} /> Mano
+    <header className="site-header">
+      <div className="wrap bar">
+        <Link href="/" className="brand" aria-label="Mano home">
+          <Mascot size={30} tile tone="orange" /> Mano
         </Link>
-        <nav aria-label="Main" style={{ display: "flex", gap: 4, alignItems: "center" }}>
+        <nav aria-label="Main" className="mainnav">
           {links.map((l) => (
-            <Link key={l.href} href={l.href} className="navlink" aria-current={path === l.href ? "page" : undefined}
-              style={{ padding: "8px 13px", borderRadius: 999, textDecoration: "none", fontSize: ".92rem", color: path === l.href ? "var(--text)" : "var(--muted)", background: path === l.href ? "var(--fill2)" : "transparent" }}>
-              {l.label}
-            </Link>
+            <Link key={l.href} href={l.href} aria-current={path === l.href ? "page" : undefined}>{l.label}</Link>
           ))}
-          <Link href="/#get-started" className="btn btn-primary navcta" style={{ padding: "9px 16px", marginLeft: 8, fontSize: ".88rem" }}>Get started</Link>
         </nav>
+        <div className="header-cta">
+          <a className="btn btn-primary btn-sm" href={SMS_HREF}>Text Mano</a>
+          <details className="menu" ref={menu}>
+            <summary aria-label="Menu"><span /></summary>
+            <nav aria-label="Main" className="menu-panel">
+              {links.map((l) => (
+                <Link key={l.href} href={l.href} aria-current={path === l.href ? "page" : undefined}>
+                  {l.label} <small>{l.sub}</small>
+                </Link>
+              ))}
+              <a className="btn btn-primary" href={SMS_HREF} style={{ width: "100%", marginTop: 6 }}>Text Mano</a>
+            </nav>
+          </details>
+        </div>
       </div>
     </header>
   );
