@@ -3,7 +3,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import Mascot from "./Mascot";
-import { SMS_HREF } from "@/lib/site";
 
 const links = [
   { href: "/", label: "For you", sub: "Residents" },
@@ -28,7 +27,7 @@ export default function Header() {
           ))}
         </nav>
         <div className="header-cta">
-          <a className="btn btn-primary btn-sm" href={SMS_HREF}>Text Mano</a>
+          <a className="btn btn-primary btn-sm" href="/#get-mano">Get Mano</a>
           <details className="menu" ref={menu}>
             <summary aria-label="Menu"><span /></summary>
             <nav aria-label="Main" className="menu-panel">
@@ -37,7 +36,7 @@ export default function Header() {
                   {l.label} <small>{l.sub}</small>
                 </Link>
               ))}
-              <a className="btn btn-primary" href={SMS_HREF} style={{ width: "100%", marginTop: 6 }}>Text Mano</a>
+              <a className="btn btn-primary" href="/#get-mano" style={{ width: "100%", marginTop: 6 }}>Get Mano</a>
             </nav>
           </details>
         </div>
