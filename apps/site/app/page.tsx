@@ -4,8 +4,6 @@ import Mascot from "@/components/Mascot";
 import FamilyDemo from "@/components/FamilyDemo";
 import HelpTiles from "@/components/HelpTiles";
 import Channels from "@/components/Channels";
-import TellMano from "@/components/TellMano";
-import Bundles from "@/components/Bundles";
 import Everywhere from "@/components/Everywhere";
 import Ladder from "@/components/Ladder";
 import WatchMano from "@/components/WatchMano";
@@ -42,7 +40,7 @@ export default function Home() {
               <span className="hero-line">Mano <Mascot tile tone="orange" wave className="hero-tile" /></span>
               <span className="hero-sub">helps your family thrive.</span>
             </h1>
-            <p className="lede">Text Mano what your family needs. It finds every program you can get for food, rent, child care, health coverage and jobs, and fills out the forms. Then it helps you get ahead, with credit, training and school.</p>
+            <p className="lede">Text Mano what your family needs. It finds every program you can get, fills out the forms and helps you get ahead.</p>
             <div className="btn-row" id="hero-cta">
               <a className="btn btn-primary btn-lg" href="#get-mano">Get Mano free</a>
               <a className="btn btn-ghost btn-lg" href="#demo-h">See how it works</a>
@@ -59,7 +57,6 @@ export default function Home() {
       <section className="demo-section" aria-labelledby="demo-h">
         <div className="wrap">
           <div className="section-head">
-            <span className="mono eyebrow">One text</span>
             <h2 id="demo-h">Ask for one thing. Get everything you qualify for.</h2>
           </div>
           <FamilyDemo />
@@ -69,7 +66,6 @@ export default function Home() {
       <section aria-labelledby="work-h" className="tint">
         <div className="wrap">
           <div className="section-head">
-            <span className="mono eyebrow">Watch Mano work</span>
             <h2 id="work-h">Mano does the hard parts while you live your life.</h2>
           </div>
           <WatchMano />
@@ -79,96 +75,36 @@ export default function Home() {
       <section aria-labelledby="ladder-h">
         <div className="wrap">
           <div className="section-head">
-            <span className="mono eyebrow">More than forms</span>
             <h2 id="ladder-h">The safety net has gaps. Mano fills them.</h2>
-            <p className="lede">Programs don&rsquo;t talk to each other, so families fall between them. Mano connects every piece for you and keeps going until your family is on steady ground, then helps you climb.</p>
+            <p className="lede">Programs don&rsquo;t talk to each other. Mano connects them for your family, then helps you climb.</p>
           </div>
           <Ladder />
-        </div>
-      </section>
-
-      <section aria-labelledby="ask-h">
-        <div className="wrap">
-          <div className="section-head">
-            <span className="mono eyebrow">Tell Mano</span>
-            <h2 id="ask-h">Say it the way you would say it to a friend.</h2>
-          </div>
-          <TellMano />
-        </div>
-      </section>
-
-      <section aria-labelledby="bundle-h" className="tint">
-        <div className="wrap">
-          <div className="section-head">
-            <span className="mono eyebrow">Your whole family</span>
-            <h2 id="bundle-h">One need usually comes with others.</h2>
-            <p className="lede">If you need help with rent, you probably need help with the power bill. If you have four kids and need food help, you may also need child care and a ride. Mano looks at your whole situation, so nothing gets missed.</p>
-          </div>
-          <Bundles />
-        </div>
-      </section>
-
-      <section aria-labelledby="watch-h">
-        <div className="wrap">
-          <div className="section-head">
-            <span className="mono eyebrow">After you apply</span>
-            <h2 id="watch-h">Mano keeps watching, so you can stop worrying.</h2>
-          </div>
-          <div className="watch">
-            <article className="card watch-card">
-              <div className="art"><Image src="/art/detective.svg" width={480} height={360} alt="" unoptimized /></div>
-              <h3>Renews before the deadline</h3>
-              <p>Mano knows when every program needs a renewal and gets it done early, asking only what changed.</p>
-            </article>
-            <article className="card watch-card">
-              <div className="art"><Image src="/art/plant.svg" width={480} height={360} alt="" unoptimized /></div>
-              <h3>Finds new help when life changes</h3>
-              <p>A new baby, a new job, a move. Tell Mano and it checks what your family can get now.</p>
-            </article>
-            <article className="card watch-card">
-              <div className="art"><Image src="/art/hold.svg" width={480} height={360} alt="" unoptimized /></div>
-              <h3>Waits on hold so you don&rsquo;t</h3>
-              <p>Mano calls the office, sits through the hold music and texts you when a person picks up.</p>
-            </article>
-          </div>
+          <ul className="quotes" role="list" aria-label="Things families text Mano">
+            {["Help me raise my credit score.", "Handle my EBT.", "Find child care I can afford.", "I'm behind on rent.", "Lower my phone bill.", "Find job training that pays."].map((q) => <li key={q}>&ldquo;{q}&rdquo;</li>)}
+          </ul>
         </div>
       </section>
 
       <section aria-labelledby="every-h" className="tint">
         <div className="wrap">
           <div className="section-head">
-            <span className="mono eyebrow">Everywhere</span>
             <h2 id="every-h">Message Mano from anywhere.</h2>
-            <p className="lede">iMessage, text, the apps for your phone and computer, or the web. Start on one, pick up on another. Same Mano, same memory.</p>
+            <p className="lede">Text, iMessage, the apps or the web. Same Mano, same memory.</p>
           </div>
           <Everywhere />
-        </div>
-      </section>
-
-      <section aria-labelledby="net-h">
-        <div className="wrap">
-          <div className="section-head">
-            <span className="mono eyebrow">Connected</span>
-            <h2 id="net-h">When an office needs something, Mano asks you first.</h2>
-          </div>
-          <ol className="handoff" role="list">
-            <li className="card"><span className="ho-step">1</span><span className="ho-from">Sample County</span><p className="ho-big">&ldquo;We need one pay stub from March.&rdquo;</p><p>The county asks Mano, not you, so you don't miss the letter.</p></li>
-            <li className="card"><span className="ho-step">2</span><span className="ho-from">Mano</span><p className="ho-big">&ldquo;The county needs your March pay stub. Send a photo?&rdquo;</p><p>Mano tells you exactly what is needed and why.</p></li>
-            <li className="card"><span className="ho-step">3</span><span className="ho-from">You</span><p className="ho-big">&ldquo;Yes.&rdquo;</p><p>Only that one page goes to the county. Nothing is shared until you say yes.</p></li>
-          </ol>
         </div>
       </section>
 
       <section aria-labelledby="charge-h">
         <div className="wrap control">
           <div>
-            <span className="mono eyebrow">You stay in charge</span>
             <h2 id="charge-h">Nothing goes out without your yes.</h2>
+            <p className="lede" style={{ marginTop: 16 }}>When an office needs a document, it asks Mano. Mano asks you.</p>
             <div className="points">
               {[
-                ["var(--cyan)", "You approve every step", "Before anything is sent, Mano shows you who it goes to, why, and the exact copy. If the copy changes, Mano asks again."],
-                ["var(--green)", "You choose who sees your case", "Share one case with one office or one case manager, for one reason. Their agent sees that case and nothing else."],
-                ["var(--orange)", "You can take access back", "Remove access at any time and it stops right away. Mano tells you plainly what was already sent."],
+                ["var(--cyan)", "You approve every send", "You see who it goes to, why, and the exact pages first."],
+                ["var(--green)", "You choose who sees your case", "One case, one office, one reason. Nothing else."],
+                ["var(--orange)", "You can take access back", "It stops right away, and Mano tells you what was already sent."],
               ].map(([c, t, x], k) => (
                 <div key={t}><span className="num" style={{ background: c }}>0{k + 1}</span><div><h3>{t}</h3><p>{x}</p></div></div>
               ))}
@@ -200,10 +136,8 @@ export default function Home() {
 
       <section id="pricing" aria-labelledby="pricing-h" className="center">
         <div className="wrap">
-          <span className="mono eyebrow">What it costs</span>
-          <div className="zero" aria-hidden="true">$0</div>
-          <h2 id="pricing-h" style={{ marginTop: 8 }}>Free to apply. Free to renew.</h2>
-          <p className="lede narrow" style={{ marginTop: 16, maxWidth: 560 }}>Applying, renewals, deadlines, reminders and filing are free, and they stay free. Nothing you need to keep your help is behind a paid plan.</p>
+          <h2 id="pricing-h">Free to apply. Free to renew.</h2>
+          <p className="lede narrow" style={{ marginTop: 16, maxWidth: 560 }}>Everything you need to get and keep your help is free, for good.</p>
           <div className="plans">
             <article className="card plan">
               <h3>Free</h3>

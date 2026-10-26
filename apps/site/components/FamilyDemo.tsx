@@ -142,8 +142,6 @@ export default function FamilyDemo() {
         </ol>
         <div className="im-input" aria-hidden="true"><span className="im-plus">+</span><span className="im-field">iMessage</span></div>
       </IPhone>
-      <p className="note-pin n1" aria-hidden="true"><span>Note</span>Mano spots the help that comes with what you asked for.</p>
-      <p className="note-pin n2" aria-hidden="true"><span>Note</span>Nothing is sent until you say yes.</p>
       </div>
     </div>
   );
