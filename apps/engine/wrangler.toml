@@ -1,0 +1,25 @@
+name = "mano-engine"
+main = "src/index.ts"
+compatibility_date = "2025-09-06"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [
+  { name = "PERSON_AGENT", class_name = "PersonAgent" },
+  { name = "ORG_AGENT", class_name = "OrgAgent" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PersonAgent", "OrgAgent"]
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "mano-files"
+
+[vars]
+AI_GATEWAY_BASE = "https://gateway.ai.cloudflare.com/v1"
+
+# Secrets (never commit values):
+#   wrangler secret put META_MODEL_API_KEY  (reads from stdin)
+#   wrangler secret put ENCRYPTION_KEK_B64
