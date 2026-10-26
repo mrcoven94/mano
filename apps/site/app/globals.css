@@ -107,7 +107,6 @@ section{padding:128px 0}
 .access .mini-row button{background:none;border:1px solid var(--border2);border-radius:999px;padding:5px 12px;font-size:.76rem;cursor:default;color:var(--text)}
 
 /* pricing */
-.zero{font-size:clamp(6rem,16vw,10rem);font-weight:700;letter-spacing:-.07em;line-height:.85;font-family:var(--font-display),sans-serif;background:linear-gradient(180deg,#E8651A,#D9531A);-webkit-background-clip:text;background-clip:text;color:transparent;user-select:none}
 .plans{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:880px;margin:56px auto 0;text-align:left}
 .plan{padding:32px;display:flex;flex-direction:column}
 .plan .price{font-size:2.6rem;font-weight:650;letter-spacing:-.04em;color:var(--text);margin-top:14px;line-height:1}
