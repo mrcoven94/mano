@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 360">
+  <ellipse cx="241" cy="319" rx="187" ry="11" fill="#F5F0E8"/>
+  <g stroke="#1B1814" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <!-- A small office with a generously sized front door. -->
+    <path d="M145 116V65" fill="none"/>
+    <path d="M146 66Q161 60 177 68L175 90Q160 83 146 89Z" fill="#9CC8A6"/>
+    <path d="m64 174 80-57 85 55Z" fill="#FFB26B"/>
+    <path d="m78 181 138-1 1 117-138 1Z" fill="#FFFDF9"/>
+    <path d="m66 173 162-1 1 15-163 1Z" fill="#F4C64E"/>
+    <path d="M121 297v-58Q121 216 145 216Q169 216 169 239v58" fill="#9CC3F0"/>
+    <path d="m145 217 1 79m10-39v8" fill="none"/>
+    <path d="m85 191 18-1-1 100-18 1Zm103-1 18 1 1 99-18-1Z" fill="#FFFDF9"/>
+    <path d="m81 189 26-1v9l-26 1Zm103-1 27 1v9l-27-1ZM80 286l27-1v10l-27 1Zm104-1 28 1v10l-28-1Z" fill="#FFB26B"/>
+    <path d="m72 298 150-1 1 10-151 1Zm-9 10 169-1 1 10-170 1Z" fill="#FFFDF9"/>
+    <!-- The folder is tucked under the thumb, all ready to go. -->
+    <path d="m249 224 16-1 7 8 43-2 3 56-65 3Z" fill="#FFB26B"/>
+    <path d="m254 237 55-3 2 18-56 3Z" fill="#FFFDF9"/>
+    <path d="M334 278q2 17-8 29m42-30q-1 17 10 29" fill="none"/>
+    <path d="M327 303q-15-2-18 9-1 6 21 4l6-7Z" fill="#1B1814"/>
+    <path d="M376 303q16-3 21 7 3 7-20 6l-5-7Z" fill="#1B1814"/>
+    <path d="M342 282C316 283 298 264 292 242L273 237C256 235 255 217 269 214L304 221V162C304 145 329 144 329 162V170Q331 176 333 170V141C333 124 358 124 358 141V170Q360 176 362 170V151C362 134 387 134 387 151V183Q389 189 392 183V175C392 158 417 158 417 175V222C417 257 394 282 361 282Z" fill="#FFFDF9"/>
+    <path d="M291 232q8 0 11 8" fill="none"/>
+    <ellipse cx="321" cy="242" rx="7" ry="4.5" fill="#FF8F6B"/>
+    <ellipse cx="390" cy="240" rx="7" ry="4.5" fill="#FF8F6B"/>
+    <circle cx="335" cy="228" r="3" fill="#1B1814"/>
+    <path d="m370 226 9 3-9 4M345 246q10 11 21-1" fill="none"/>
+    <path d="m267 267 9 8 16-19" fill="none"/>
+    <path d="m430 133 3-9m4 22 8-4" fill="none"/>
+  </g>
+</svg>

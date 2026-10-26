@@ -8,6 +8,7 @@ const links = [
   { href: "/", label: "For you", sub: "Residents" },
   { href: "/government", label: "Government", sub: "Agencies and offices" },
   { href: "/organizations", label: "Nonprofits", sub: "Case managers" },
+  { href: "/partners", label: "Partners", sub: "Offer your service" },
 ];
 
 export default function Header() {

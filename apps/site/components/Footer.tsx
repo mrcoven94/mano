@@ -8,7 +8,7 @@ export default function Footer() {
         <div className="foot">
           <div>
             <Link href="/" className="brand"><Mascot size={30} tile tone="orange" /> Mano</Link>
-            <p style={{ marginTop: 16, maxWidth: 320, fontSize: ".95rem" }}>Apply once, for anything that makes your life better.</p>
+            <p style={{ marginTop: 16, maxWidth: 320, fontSize: ".95rem" }}>Help for your whole family, from getting by to getting ahead.</p>
           </div>
           <nav aria-label="Footer">
             <p className="mono">Mano</p>
@@ -23,6 +23,7 @@ export default function Footer() {
             <ul>
               <li><Link href="/government">Government</Link></li>
               <li><Link href="/organizations">Nonprofits</Link></li>
+              <li><Link href="/partners">Partners</Link></li>
               <li><a href="mailto:hello@withmano.com">hello@withmano.com</a></li>
             </ul>
           </nav>
