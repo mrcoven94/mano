@@ -1,9 +1,9 @@
-import { Hand } from "./Mascot";
+import { Wave } from "./Mascot";
 
-const tones = { cyan: "#67e8f9", blue: "#7cb3ff", green: "#5eeaa0", orange: "#ffb26b" };
+const tones = { peach: "#FFB26B", sage: "#9CC8A6", sky: "#9CC3F0", lilac: "#C7B5F2" };
 const keys = Object.keys(tones) as (keyof typeof tones)[];
 
-export default function Closing({ id = "closing", title, text, children, extra }: { id?: string; title: string; text: string; children: React.ReactNode; extra?: React.ReactNode }) {
+export default function Closing({ id = "closing", title, text, children, extra, art }: { id?: string; title: string; text: string; children: React.ReactNode; extra?: React.ReactNode; art?: React.ReactNode }) {
   return (
     <section id={id} aria-labelledby={`${id}-h`} style={{ paddingBottom: 0 }}>
       <div className="wrap">
@@ -12,7 +12,7 @@ export default function Closing({ id = "closing", title, text, children, extra }
             {keys.map((k) => (
               <symbol key={k} id={`${id}-t-${k}`} viewBox="0 0 100 100">
                 <rect width="100" height="100" rx="28" fill={tones[k]} />
-                <g transform="translate(13 12) scale(.74)"><Hand fill="#fbfaf6" /></g>
+                <Wave />
               </symbol>
             ))}
           </svg>
@@ -23,6 +23,7 @@ export default function Closing({ id = "closing", title, text, children, extra }
               </svg>
             ))}
           </div>
+          {art}
           <h2 id={`${id}-h`}>{title}</h2>
           <p className="lede">{text}</p>
           <div className="btn-row">{children}</div>

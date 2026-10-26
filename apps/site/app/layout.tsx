@@ -1,10 +1,11 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Bricolage_Grotesque, Inter, JetBrains_Mono } from "next/font/google";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin", "latin-ext", "vietnamese"], variable: "--font-inter", display: "swap" });
+const display = Bricolage_Grotesque({ subsets: ["latin", "latin-ext", "vietnamese"], variable: "--font-display", display: "swap", axes: ["opsz"] });
 const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono", display: "swap", weight: ["500"] });
 
 export const metadata: Metadata = {
@@ -14,11 +15,11 @@ export const metadata: Metadata = {
   openGraph: { siteName: "Mano", type: "website" },
 };
 
-export const viewport: Viewport = { themeColor: "#131313", colorScheme: "dark" };
+export const viewport: Viewport = { themeColor: "#FBF8F3", colorScheme: "light" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable} ${mono.variable}`}>
+    <html lang="en" className={`${inter.variable} ${display.variable} ${mono.variable}`}>
       <body>
         <a href="#main" className="skip">Skip to content</a>
         <Header />

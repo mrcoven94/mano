@@ -7,8 +7,8 @@ export default function Faq({ id = "questions", title = "Questions", intro, item
           <p className="lede" style={{ marginTop: 16, maxWidth: 380 }}>{intro}</p>
         </div>
         <div className="faq-list">
-          {items.map(([q, a]) => (
-            <details key={q} className="faq">
+          {items.map(([q, a], i) => (
+            <details key={q} className="faq" open={i === 0}>
               <summary>{q}</summary>
               <p>{a}</p>
             </details>

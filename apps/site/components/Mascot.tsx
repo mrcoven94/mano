@@ -2,7 +2,7 @@ const tones = {
   cyan: "#67e8f9",
   blue: "#7cb3ff",
   green: "#5eeaa0",
-  orange: "#ffb26b",
+  orange: "#FFB26B",
   light: "#f2f2ef",
 } as const;
 
@@ -17,7 +17,21 @@ type Props = {
   className?: string;
 };
 
-/* An open helping hand with a face on the palm. Drawn for Mano. */
+/* The waving hand from the logo: four fingers, a thumb, a face on the palm. Drawn for Mano. */
+export function Wave({ fill = "#FFFDF9", face = "#1B1814", blush = "#FF8F6B" }: { fill?: string; face?: string; blush?: string }) {
+  return (
+    <>
+      <path fill={fill} d="M45 87C33 87 26 79 23 68L13 49C9 41 18 36 23 43L29 51V30C29 22 41 22 41 30V34Q42 37 43 34V20C43 12 55 12 55 20V34Q56 37 57 34V25C57 17 69 17 69 25V40Q70 43 71 40V36C71 28 83 28 83 36V58C83 75 72 87 56 87Z" />
+      <ellipse cx="36" cy="65" rx="5" ry="3.5" fill={blush} />
+      <ellipse cx="70" cy="65" rx="5" ry="3.5" fill={blush} />
+      <circle cx="43" cy="58" r="3.2" fill={face} />
+      <circle cx="63" cy="58" r="3.2" fill={face} />
+      <path d="M47 68Q53 75 59 68" fill="none" stroke={face} strokeWidth="3" strokeLinecap="round" />
+    </>
+  );
+}
+
+/* The earlier open-hand drawing, kept for the line-art (non-tile) mascot. */
 export function Hand({ fill = "#f2f2ef", face = "#141414", blush = "#ffb26b" }: { fill?: string; face?: string; blush?: string }) {
   return (
     <>
@@ -44,10 +58,8 @@ export default function Mascot({ size = 72, tone = "light", tile = false, wave =
     return (
       <svg width={size} height={size} viewBox="0 0 100 100" className={className} {...a11y}>
         <rect width="100" height="100" rx="28" fill={tones[tone]} />
-        <g transform="translate(13 12) scale(.74)">
-          <g className={wave ? "mascot-wave" : undefined}>
-            <Hand fill="#fbfaf6" blush={tone === "orange" ? "#ff8f6b" : "#ffb26b"} />
-          </g>
+        <g className={wave ? "mascot-wave" : undefined}>
+          <Wave blush={tone === "orange" ? "#FF8F6B" : "#FFB26B"} />
         </g>
       </svg>
     );
