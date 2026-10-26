@@ -8,6 +8,29 @@ Mano gives every person an agent that applies for help, fills out any form, read
 
 This is a hackathon entry (Meta Global AI Developer Hackathon, submissions due November 4, 2026). It is judged on impact, use of Meta's models, the demo and technical depth. Build one deep, checkable story first; breadth comes only while that story works end to end.
 
+## Sessions have names
+
+Every coding session has one name and one ticket. Start status updates with `[Name]`, title pull requests `[Name] LAP-xxx: <what>`, and name branches `lap-xxx-name`.
+
+| Name | Ticket | Job |
+| --- | --- | --- |
+| Engine | LAP-500 | Agents, action gateway, protocol, model client |
+| Eval | LAP-501 | Held-out test and baselines (never shares a session with anything that builds Mano) |
+| Site | LAP-496 | withmano.com marketing pages |
+| Guardian | LAP-502 | Glimmer checker on Modal |
+| Mail | LAP-503 | Mail photo and video to deadlines |
+| Forms | LAP-504 | Fill out any form, agent computers |
+| Orgs | LAP-505 | Office profiles, claiming, staff agents, consent |
+| Spine | LAP-506 | End-to-end story, legacy mock |
+| Screens | LAP-507 | Resident and staff screens |
+| Channels | LAP-508 | iMessage, SMS, email |
+| Phone | LAP-509 | Calls, hold for me, fax |
+| Program | LAP-510 | Policy document to program |
+| Extensions | LAP-511 | Partner extensions, jobs, scholarships |
+| Results | LAP-512 | Run the held-out test, publish results |
+
+Reviews come from the architect (Claude) and outside critics; a session never reviews its own work.
+
 ## Hard rules
 
 1. **New work only.** Everything here is written during the hackathon. Never copy code from Front Door (a private product); reach it only through its partner API. Never copy code from openbot.run (noncommercial license). If you vendor any open source file, keep its license header and list it in `docs/third-party.md`.
