@@ -19,7 +19,8 @@ This is a hackathon entry (Meta Global AI Developer Hackathon, submissions due N
 7. **Model IDs.** Real resident content may only go to Standard Meta model IDs (for example `muse-spark-1.3`), with `store: false`. The cheaper `-contributor` IDs are allowed only for synthetic data (eval runs, fixtures). Never name models or providers in anything a resident or staff member sees.
 8. **Secrets.** Keys live in Infisical. Run commands with `~/Desktop/code/bin/ws keys run -- <command>`. Never put a key value in a file, a command line, a log or a commit. The Meta key is `META_MODEL_API_KEY`.
 9. **Partners.** Never name a partner company (in code, copy, docs or commits) until David confirms they agreed in writing.
-10. **Writing.** Plain, specific language. No em dashes, no italics, no slogan pairs, no filler.
+10. **One brand.** Everything is Mano, the way everything at Meta is Muse. No sub-brands or feature names: say "Mano fills out any form", not a named feature.
+11. **Writing.** Plain, specific language. No em dashes, no italics, no slogan pairs, no filler.
 
 ## Architecture (see docs/decisions.md)
 
