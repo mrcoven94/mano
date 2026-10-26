@@ -13,7 +13,6 @@ import StickyCta from "@/components/StickyCta";
 import Faq from "@/components/Faq";
 import Closing from "@/components/Closing";
 import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
-import "./home.css";
 
 export const metadata: Metadata = {
   title: { absolute: "Mano: help your family thrive" },

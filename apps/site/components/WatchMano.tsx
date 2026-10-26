@@ -1,16 +1,12 @@
 "use client";
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
 import Mascot from "./Mascot";
 import { Browser, IPhone } from "./Devices";
-import { useInView } from "./InView";
+import DemoTabs, { at, typed, type Demo } from "./DemoTabs";
 
 /* Three live demos of Mano working: filling an application, searching for programs, waiting on hold.
-   Each one plays from a single clock (ms since it started). Everyone and everything shown is made up. */
+   Everyone and everything shown is made up. */
 
-const DURATION = 11000;
-const at = (t: number, ms: number) => t >= ms;
-const typed = (t: number, start: number, text: string, cps = 28) => text.slice(0, Math.max(0, Math.floor(((t - start) / 1000) * cps)));
 
 const fields: [label: string, value: string, start: number][] = [
   ["Full name", "Maria Lopez", 600],
@@ -121,58 +117,12 @@ function HoldDemo({ t }: { t: number }) {
   );
 }
 
-const demos = [
+const demos: Demo[] = [
   { id: "apply", title: "Fills out applications", text: "Mano reads your papers, fills every field and attaches what the office asks for.", Demo: ApplyDemo },
   { id: "search", title: "Searches for you", text: "Mano reads the rules for every program near you and keeps only the ones your family can get.", Demo: SearchDemo },
   { id: "hold", title: "Waits on hold", text: "Mano sits through the hold music and calls you in the moment a person picks up.", Demo: HoldDemo },
 ];
 
 export default function WatchMano() {
-  const [i, setI] = useState(0);
-  const [t, setT] = useState(DURATION);
-  const [still, setStill] = useState(true);
-  const [ref, seen] = useInView<HTMLDivElement>(0.3);
-  const clock = useRef(0);
-
-  useEffect(() => {
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    setStill(reduce);
-    if (!reduce) setT(0);
-  }, []);
-
-  useEffect(() => {
-    if (still || !seen) return;
-    let raf = 0;
-    let last = performance.now();
-    const tick = (now: number) => {
-      const dt = now - last;
-      last = now;
-      clock.current += dt;
-      if (clock.current >= DURATION + 1500) { clock.current = 0; setI((x) => (x + 1) % demos.length); }
-      setT(clock.current);
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [still, seen]);
-
-  const pick = (k: number) => { setI(k); clock.current = 0; setT(still ? DURATION : 0); };
-  const { Demo } = demos[i];
-
-  return (
-    <div className="wm" ref={ref}>
-      <div className="wm-tabs" role="tablist" aria-label="What Mano does">
-        {demos.map((d, k) => (
-          <button key={d.id} role="tab" aria-selected={k === i} aria-controls="wm-stage" className="wm-tab" onClick={() => pick(k)}>
-            <strong>{d.title}</strong>
-            <span>{d.text}</span>
-            <i className="wm-progress" style={{ transform: `scaleX(${k === i ? Math.min(1, t / DURATION) : 0})` }} />
-          </button>
-        ))}
-      </div>
-      <div className="wm-stage" id="wm-stage" role="tabpanel" aria-label={demos[i].title}>
-        <Demo t={t} />
-      </div>
-    </div>
-  );
+  return <DemoTabs demos={demos} label="What Mano does" />;
 }

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 360">
+  <ellipse cx="243" cy="319" rx="180" ry="10" fill="#F5F0E8"/>
+  <g stroke="#1B1814" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Two heads, one very manageable piece of paper. -->
+    <path d="M344 256v44m30-44 9 44" fill="none"/>
+    <path d="M344 299q-15-3-19 8-2 7 22 5l5-6Zm38-1q16-2 20 9 2 7-21 5l-5-6Z" fill="#9CC3F0"/>
+    <path d="m386 213 18-1-1 64-66 1v-12l52-1Z" fill="#C7B5F2"/>
+    <path d="M345 191Q319 190 314 218l-5 37 83 1-4-34Q386 194 366 192Z" fill="#9CC3F0"/>
+    <path d="M377 156C379 173 370 188 354 189C336 190 324 179 323 164C322 147 332 132 349 131C365 129 376 140 377 156Z" fill="#9CC3F0"/>
+    <circle cx="333" cy="167" r="2.5" fill="#1B1814"/>
+    <circle cx="352" cy="170" r="2.5" fill="#1B1814"/>
+    <path d="M338 179q5 6 11 1" fill="none"/>
+    <!-- Little feet stay visible below the desk. -->
+    <path d="m134 273-6 33m44-33 5 33" fill="none"/>
+    <path d="M128 302q-16-2-19 9-1 6 21 4l6-7Zm48 0q17-3 21 8 3 7-20 5l-5-7Z" fill="#1B1814"/>
+    <path d="m247 221 62-1 20 29-71 1Z" fill="#FFFDF9"/>
+    <path d="m270 235 7 6 12-14" fill="none"/>
+    <path d="M146 278C117 278 97 258 95 228V186C95 170 119 170 119 186V194Q121 200 123 194V163C123 147 147 147 147 163V182Q149 188 151 182V154C151 138 175 138 175 154V182Q177 188 179 182V174C179 158 203 158 203 174V213L247 215Q259 216 266 223Q274 230 267 235Q263 240 251 235L215 237C204 264 186 278 165 278Z" fill="#FFFDF9"/>
+    <ellipse cx="122" cy="240" rx="7" ry="4.5" fill="#FF8F6B"/>
+    <ellipse cx="189" cy="239" rx="7" ry="4.5" fill="#FF8F6B"/>
+    <circle cx="148" cy="229" r="3" fill="#1B1814"/>
+    <circle cx="180" cy="228" r="3" fill="#1B1814"/>
+    <path d="M149 245q9 9 18-1m35-24q6 1 8 7" fill="none"/>
+    <path d="m210 261-4 54m171-54 4 54" fill="none"/>
+    <path d="m194 249 206 1 1 13-207-1Z" fill="#FFB26B"/>
+    <path d="M375 215q-1 15-17 19l-35 4q-15 1-15-8 0-7 11-8l27-3 5-10" fill="#9CC3F0"/>
+    <path d="m266 194 2-8m9 12 7-5" fill="none"/>
+  </g>
+</svg>
