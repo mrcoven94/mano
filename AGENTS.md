@@ -25,7 +25,7 @@ This is a hackathon entry (Meta Global AI Developer Hackathon, submissions due N
 ## Architecture (see docs/decisions.md)
 
 - Engine: Cloudflare Workers with the Agents SDK. One Durable Object agent per person (private memory, conversations, deadlines, approvals in its own SQLite) and one per organization (only the cases residents shared with it). Files in R2, encrypted per person. Shared data (programs, office profiles, learned form recipes, consented indexes, eval results) in PlanetScale Postgres through Hyperdrive.
-- Each agent gets a browser (Cloudflare Browser Run, live view and handoff for logins) and, when it needs one, a sandbox computer; both start on demand and stop when idle.
+- Each agent gets a computer when it needs one: a Modal Sandbox running a small Linux desktop with Chromium (screenshots in, mouse and keyboard out) that Muse Wonder drives through its computer-use tool, with a per-person browser profile kept in a Modal volume. Simple page reads and login handoff use Cloudflare Browser Run. Both start on demand and stop when idle. boat.dev is the fallback if the Modal desktop image takes too long.
 - Models: Muse Spark for reasoning and reading, Muse Wonder for computer use, SAM 3.1 for splitting mail photos and video, Muse Voice Transcribe for listening, Muse Image for illustrations and synthetic letter images, Muse Glimmer on our own GPU (Modal) as the guardian that checks each action. All Meta calls go through Cloudflare AI Gateway. Speech output on calls uses Deepgram (Meta has no speech output).
 - Channels: Linq (iMessage and SMS), Cloudflare Email Routing, Telnyx (voice and fax), the web app.
 - Site: `apps/site`, Next.js on Vercel, deployed by pushing `main`. Never run `vercel deploy --prod`.
