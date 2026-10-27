@@ -10,6 +10,7 @@ import {
   type Submission,
 } from "./store";
 import {
+  TEST_BANNER,
   caseworkerDetailPage,
   caseworkerListPage,
   confirmationPage,
@@ -61,9 +62,13 @@ function json(data: unknown, status = 200): Response {
 }
 
 function redirect(location: string, setCookie?: string): Response {
-  const headers: Record<string, string> = { location };
+  const headers: Record<string, string> = { location, "content-type": "text/html; charset=utf-8" };
   if (setCookie) headers["set-cookie"] = setCookie;
-  return new Response(null, { status: 303, headers });
+  // Redirects carry a labeled body so clients that do not follow them still see the test banner.
+  return new Response(
+    `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Continue</title></head><body><p>${TEST_BANNER}</p><p><a href="${location}">Continue</a></p></body></html>`,
+    { status: 303, headers },
+  );
 }
 
 function sessionCookie(id: string): string {

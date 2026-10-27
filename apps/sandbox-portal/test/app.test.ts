@@ -419,4 +419,16 @@ describe("test system labels", () => {
     const timeout = await handleRequest(new Request(`${BASE}/apply/review`), store, config);
     expect(await timeout.text()).toContain(TEST_BANNER);
   });
+
+  test("redirects carry the test banner for clients that do not follow them", async () => {
+    const store = new MemoryStore();
+    const config = testConfig();
+    const res = await handleRequest(
+      new Request(`${BASE}/apply/household`, { method: "POST", body: householdForm() }),
+      store,
+      config,
+    );
+    expect(res.status).toBe(303);
+    expect(await res.text()).toContain(TEST_BANNER);
+  });
 });
