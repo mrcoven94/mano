@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ActionGateway,
   InMemoryExecutor,
+  MapDocumentStore,
   MemoryApprovalStore,
 } from "../src/gateway/index.js";
 import type { ActionRequest } from "../src/gateway/index.js";
@@ -14,47 +15,54 @@ function baseReq(over: Partial<ActionRequest> = {}): ActionRequest {
     recipient: "sandbox-agency",
     purpose: "renewal",
     documentId: "doc-1",
-    documentContent: "Form v1: Maria Lopez, renewal",
     payload: {},
     idempotencyKey: "key-1",
     actor: "foreground",
     personId: "maria",
+    sources: [],
+    origin: "person",
     ...over,
   };
 }
 
+function gatewayWithDoc(content: string) {
+  const docs = new MapDocumentStore(new Map([["doc-1", content]]));
+  const exec = new InMemoryExecutor();
+  const gw = new ActionGateway(new MemoryApprovalStore(), exec, { documents: docs });
+  return { docs, exec, gw };
+}
+
 describe("action gateway", () => {
   it("blocks a stale approval after a document edit", async () => {
-    const store = new MemoryApprovalStore();
-    const gw = new ActionGateway(store, new InMemoryExecutor());
+    const { docs, exec, gw } = gatewayWithDoc("Form v1: Maria Lopez, renewal");
     const first = await gw.requestAction(baseReq());
     expect(first.status).toBe("needs_approval");
     const approval = first.approval!;
-    const result = await gw.approveAndExecute(
-      approval.id,
-      "maria",
-      "Form v2: Maria Lopez, CHANGED",
-      baseReq({ documentContent: "Form v2: Maria Lopez, CHANGED" }),
-    );
+    docs.set("doc-1", "Form v2: Maria Lopez, CHANGED");
+    const result = await gw.approveAndExecute(approval.id, "maria");
     expect(result.status).toBe("stale");
+    expect(exec.calls.length).toBe(0);
   });
 
   it("reconciles a timed-out submit without duplicating", async () => {
-    const store = new MemoryApprovalStore();
     const exec = new InMemoryExecutor();
-    const gw = new ActionGateway(store, exec, { submit: "allow" });
+    const gw = new ActionGateway(new MemoryApprovalStore(), exec, {
+      policyOverrides: { submit: "allow" },
+    });
     exec.failNextWithTimeout = true;
-    const result = await gw.requestAction(baseReq({ idempotencyKey: "key-timeout" }));
+    const result = await gw.requestAction(baseReq({ idempotencyKey: "key-timeout", documentId: undefined }));
     expect(result.status).toBe("reconciled");
     expect(result.receipt?.externalId).toBeTruthy();
     expect(exec.calls.length).toBe(1);
-    const again = await gw.requestAction(baseReq({ idempotencyKey: "key-timeout" }));
+    const again = await gw.requestAction(baseReq({ idempotencyKey: "key-timeout", documentId: undefined }));
     expect(again.status).toBe("completed");
     expect(exec.calls.length).toBe(1);
   });
 
   it("blocks background write actions", async () => {
-    const gw = new ActionGateway(new MemoryApprovalStore(), new InMemoryExecutor(), { submit: "allow" });
+    const gw = new ActionGateway(new MemoryApprovalStore(), new InMemoryExecutor(), {
+      policyOverrides: { submit: "allow" },
+    });
     const result = await gw.requestAction(baseReq({ actor: "background" }));
     expect(result.status).toBe("blocked");
   });

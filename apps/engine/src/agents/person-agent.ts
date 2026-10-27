@@ -19,6 +19,10 @@ interface ApprovalRow {
   remind_at: string;
   expires_at: string;
   escalated: number;
+  person_id: string;
+  request_json: string;
+  request_hash: string;
+  problems_json: string;
 }
 
 export class PersonAgent extends DurableObject<Env> {
@@ -36,7 +40,7 @@ export class PersonAgent extends DurableObject<Env> {
       sql.exec(`CREATE TABLE IF NOT EXISTS conversation(id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS deadlines(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
-      sql.exec(`CREATE TABLE IF NOT EXISTS approvals(id TEXT PRIMARY KEY, action_type TEXT, recipient TEXT, purpose TEXT, document_hash TEXT, document_id TEXT, idempotency_key TEXT, status TEXT, approved_by TEXT, created_at TEXT, remind_at TEXT, expires_at TEXT, escalated INTEGER)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS approvals(id TEXT PRIMARY KEY, action_type TEXT, recipient TEXT, purpose TEXT, document_hash TEXT, document_id TEXT, idempotency_key TEXT, status TEXT, approved_by TEXT, created_at TEXT, remind_at TEXT, expires_at TEXT, escalated INTEGER, person_id TEXT, request_json TEXT, request_hash TEXT, problems_json TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT, detail TEXT, created_at TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE, action_type TEXT, recipient TEXT, status TEXT, external_id TEXT, created_at TEXT)`);
       const stored = await ctx.storage.get<string>("personId");
@@ -111,10 +115,10 @@ export class PersonAgent extends DurableObject<Env> {
     if (result.approval) {
       const a = result.approval;
       this.sql().exec(
-        "INSERT OR REPLACE INTO approvals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO approvals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         a.id, a.actionType, a.recipient, a.purpose, a.documentHash, a.documentId,
         a.idempotencyKey, a.status, a.approvedByHumanId, a.createdAt, a.remindAt, a.expiresAt,
-        a.escalated ? 1 : 0,
+        a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems),
       );
     }
     if (result.receipt) this.persistReceipt(result.receipt);
@@ -136,11 +140,13 @@ export class PersonAgent extends DurableObject<Env> {
       documentHash: r.document_hash, documentId: r.document_id, idempotencyKey: r.idempotency_key,
       status: r.status, approvedByHumanId: r.approved_by, createdAt: r.created_at,
       remindAt: r.remind_at, expiresAt: r.expires_at, escalated: r.escalated === 1,
+      personId: r.person_id, requestJson: r.request_json, requestHash: r.request_hash,
+      problems: JSON.parse(r.problems_json ?? "[]") as string[],
     }));
   }
 
-  async approve(approvalId: string, humanId: string, currentDocumentContent: string | undefined, req: ActionRequest) {
-    const result = await this.gateway.approveAndExecute(approvalId, humanId, currentDocumentContent, req);
+  async approve(approvalId: string, humanId: string) {
+    const result = await this.gateway.approveAndExecute(approvalId, humanId);
     if (result.approval) {
       const a = result.approval;
       this.sql().exec("UPDATE approvals SET status = ?, approved_by = ? WHERE id = ?", a.status, a.approvedByHumanId, a.id);

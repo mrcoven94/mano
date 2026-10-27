@@ -78,8 +78,7 @@ export function parseActionRequest(raw: unknown): ActionRequest {
   };
   const documentId = optionalString(raw.documentId, "documentId", 200);
   if (documentId !== undefined) req.documentId = documentId;
-  const documentContent = optionalString(raw.documentContent, "documentContent", 1_000_000);
-  if (documentContent !== undefined) req.documentContent = documentContent;
+  // documentContent from the caller is ignored: bytes come from storage.
   const caseId = optionalString(raw.caseId, "caseId", 200);
   if (caseId !== undefined) req.caseId = caseId;
   const deadlineAt = optionalString(raw.deadlineAt, "deadlineAt", 100);

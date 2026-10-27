@@ -8,8 +8,9 @@ export interface ActionRequest {
   type: ActionType;
   recipient: string;
   purpose: string;
+  // Document bytes always come from server storage, never from the caller,
+  // so the request carries only the document ID.
   documentId?: string;
-  documentContent?: string;
   payload: Record<string, unknown>;
   idempotencyKey: string;
   actor: ActorKind;
@@ -32,6 +33,13 @@ export interface Approval {
   idempotencyKey: string;
   status: "pending" | "approved" | "expired" | "stale" | "blocked";
   approvedByHumanId: string | null;
+  // The person this approval belongs to, the frozen request it authorizes
+  // (canonical JSON, executed verbatim), and the hash binding type,
+  // recipient, purpose, payload, person, key and document bytes.
+  personId: string;
+  requestJson: string;
+  requestHash: string;
+  problems: string[];
   createdAt: string;
   remindAt: string;
   expiresAt: string;
