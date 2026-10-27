@@ -10,7 +10,6 @@ export default function ShareFlow() {
   return (
     <div className="share">
       <div className="h-head">
-        <p className="h-eyebrow">Working with your caseworker</p>
         <h2 id="share-h">Share one case, for one reason, with the people helping you.</h2>
         <p className="lede">Nonprofits and offices can give their staff Mano too. When Dana at Northside needs a document for Maria&rsquo;s renewal, her agent asks Maria&rsquo;s agent. Nothing moves until Maria agrees.</p>
       </div>

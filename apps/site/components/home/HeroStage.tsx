@@ -47,7 +47,6 @@ export default function HeroStage() {
   return (
     <div className="h-hero">
       <div className="wrap h-hero-head">
-        <p className="h-kicker"><span className="h-live" aria-hidden="true" />Early access. Free for applying and renewals.</p>
         <h1>
           <span className="sr-only">Mano is AI that applies for help, fills out any form, reads your mail, renews on time and waits on hold.</span>
           <span aria-hidden="true">
@@ -60,6 +59,7 @@ export default function HeroStage() {
           <a className="btn btn-primary btn-lg" href="#get-mano">Text Mano</a>
           <a className="btn btn-ghost btn-lg" href="#trust-h">How it stays safe</a>
         </div>
+        <p className="h-note">Free for applying and renewals, and it stays free.</p>
       </div>
 
       <div className="wrap h-stage-wrap" ref={stage}>

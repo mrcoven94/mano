@@ -3,6 +3,9 @@ import Link from "next/link";
 import HeroStage from "@/components/home/HeroStage";
 import TrustDemo from "@/components/home/TrustDemo";
 import ShareFlow from "@/components/home/ShareFlow";
+import Everywhere from "@/components/home/Everywhere";
+import Improve from "@/components/home/Improve";
+import PlusPrice from "@/components/home/PlusPrice";
 import Faq from "@/components/Faq";
 import Mascot from "@/components/Mascot";
 import { SMS_HREF, SMS_NUMBER, PLACEHOLDER_NOTE, REPO_URL } from "@/lib/site";
@@ -45,32 +48,9 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="h-proof" aria-labelledby="proof-h">
-        <div className="wrap proof-grid">
-          <div>
-            <p className="h-eyebrow">How we test it</p>
-            <h2 id="proof-h">Graded on paperwork it has never seen.</h2>
-            <p className="lede">Before tuning anything, we froze a set of renewal and document cases that Mano never trains on. A real caseworker reviews sample packets, and every result is checked against the same answers.</p>
-            <ul className="proof-cases" aria-label="What the test cases include">
-              {["Unreadable pages", "Missing proof", "Dates that conflict", "Hidden instructions", "Scam links"].map((x) => <li key={x}>{x}</li>)}
-            </ul>
-          </div>
-          <div className="score">
-            <div className="score-col">
-              <p className="sc-label">Compared with</p>
-              <ul>
-                <li><b>A plain reminder app</b>The way most people track renewals today.</li>
-                <li><b>A general AI agent</b>Given the same tools Mano has, without its safeguards.</li>
-              </ul>
-            </div>
-            <div className="score-col">
-              <p className="sc-label">Every run reports</p>
-              <ul className="score-measures">
-                {["Correct packets", "Missed deadlines", "Unsafe actions blocked", "Failures", "Cost", "Time"].map((m) => <li key={m}>{m}</li>)}
-              </ul>
-            </div>
-            <p className="score-note">Results are published with the final run, including the cases Mano gets wrong. We make no claims before then.</p>
-          </div>
+      <section className="h-dv" aria-labelledby="dv-h">
+        <div className="wrap">
+          <Everywhere />
         </div>
       </section>
 
@@ -80,10 +60,15 @@ export default function Home() {
         </div>
       </section>
 
+      <section className="h-improve" aria-labelledby="im-h">
+        <div className="wrap">
+          <Improve />
+        </div>
+      </section>
+
       <section className="h-open" aria-labelledby="open-h">
         <div className="wrap open-grid">
           <div>
-            <p className="h-eyebrow">MIT license</p>
             <h2 id="open-h">Open source, from the first commit.</h2>
             <p className="lede">The code and the protocol that lets agents share a case are public. Any agency, nonprofit or developer can read how Mano works, build on it or run their own copy.</p>
             <ul className="open-facts">
@@ -106,7 +91,6 @@ export default function Home() {
       <section id="pricing" className="h-price" aria-labelledby="pricing-h">
         <div className="wrap">
           <div className="h-head">
-            <p className="h-eyebrow">Pricing</p>
             <h2 id="pricing-h">Getting help is free, and it stays free.</h2>
           </div>
           <div className="price-grid">
@@ -121,7 +105,7 @@ export default function Home() {
               </ul>
             </article>
             <article className="price plus">
-              <div className="price-top"><h3>Plus</h3><p className="amt">$8<small> a month, or $60 a year</small></p><p>For the things that cost us money to do for you.</p></div>
+              <div className="price-top"><h3>Plus</h3><PlusPrice /><p>For the things that cost us money to do for you.</p></div>
               <ul>
                 <li>Everything in Free</li>
                 <li>Phone calls for you, including waiting on hold</li>
