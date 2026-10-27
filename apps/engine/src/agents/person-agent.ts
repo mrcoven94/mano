@@ -158,6 +158,12 @@ export class PersonAgent extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    // The worker sets x-mano-subject from a verified session token and is
+    // this agent's only caller. No other identity input is trusted.
+    const subject = request.headers.get("x-mano-subject");
+    if (!subject) return new Response("Forbidden", { status: 403 });
+    if (!this.personId) await this.setIdentity(subject);
+    else if (this.personId !== subject) return new Response("Forbidden", { status: 403 });
     if (url.pathname.endsWith("/ws")) {
       if (request.headers.get("Upgrade") !== "websocket") {
         return new Response("Expected websocket", { status: 426 });
@@ -173,8 +179,7 @@ export class PersonAgent extends DurableObject<Env> {
       return new Response(null, { status: 101, webSocket: client });
     }
     if (request.method === "POST" && url.pathname.endsWith("/chat")) {
-      const body = (await request.json()) as { message: string; personId?: string };
-      if (body.personId && !this.personId) await this.setIdentity(body.personId);
+      const body = (await request.json()) as { message: string };
       const out = await this.chat(body.message ?? "");
       return Response.json(out);
     }
