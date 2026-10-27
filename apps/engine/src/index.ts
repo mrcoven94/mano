@@ -9,7 +9,7 @@ export { ActionGateway, MemoryApprovalStore, InMemoryExecutor } from "./gateway/
 export * from "./gateway/types.js";
 export { checkLinkSafety } from "./link-safety.js";
 export { extractEvidence, detectPlantedInstructions, wrapEvidenceForModel } from "./evidence.js";
-export { MetaModelClient } from "./model-client.js";
+export { MetaModelClient, StandInModelClient, createModelClient, buildModelBaseUrl } from "./model-client.js";
 export { encryptForPerson, decryptForPerson, documentAad } from "./crypto.js";
 export { putDocument, getDocumentBytes, documentR2Key } from "./files.js";
 export { InMemorySharedStore } from "./shared-store.js";
@@ -49,11 +49,40 @@ async function forwardToAgent(
   return stub.fetch(new Request(new URL(path, "https://agent.internal"), init));
 }
 
+// Which parts are live and which are stand-ins. Labels only: this is
+// public, so it never carries values, only which side each part is on.
+export interface LiveStatus {
+  model: "meta" | "stand-in";
+  modelVia: "ai-gateway" | "direct" | "none";
+  executor: string;
+  files: "bound" | "missing";
+  kek: boolean;
+  sessionSecret: "set" | "dev";
+}
+
+export function liveStatus(env: Env): LiveStatus {
+  const hasKey = Boolean(env.META_MODEL_API_KEY);
+  return {
+    model: hasKey ? "meta" : "stand-in",
+    modelVia: !hasKey ? "none" : env.CF_ACCOUNT_ID && env.AI_GATEWAY_ID ? "ai-gateway" : "direct",
+    executor: env.EXECUTOR_MODE ?? "simulated",
+    files: env.FILES ? "bound" : "missing",
+    kek: Boolean(env.ENCRYPTION_KEK_B64),
+    sessionSecret: env.SESSION_SECRET ? "set" : "dev",
+  };
+}
+
+let loggedStartup = false;
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    if (!loggedStartup) {
+      loggedStartup = true;
+      console.info(`[mano] engine live: ${JSON.stringify(liveStatus(env))}`);
+    }
     const url = new URL(request.url);
 
-    if (url.pathname === "/health") return Response.json({ ok: true });
+    if (url.pathname === "/health") return Response.json({ ok: true, live: liveStatus(env) });
 
     if (url.pathname === "/api/check-link" && request.method === "POST") {
       // A person-facing tool, so the server always applies the family
