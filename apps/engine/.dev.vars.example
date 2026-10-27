@@ -2,9 +2,9 @@
 # values from Infisical with `ws keys`. Names only here, never values.
 #
 # Required for live model calls and documents:
-META_MODEL_API_KEY=
-ENCRYPTION_KEK_B64=
-SESSION_SECRET=
+META_MODEL_API_KEY= # gitleaks:allow (empty example value)
+ENCRYPTION_KEK_B64= # gitleaks:allow (empty example value)
+SESSION_SECRET= # gitleaks:allow (empty example value)
 # Model routing: with account and gateway IDs, calls go through
 # Cloudflare AI Gateway; without them, direct to the model API.
 CF_ACCOUNT_ID=
