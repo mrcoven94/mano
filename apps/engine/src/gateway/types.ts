@@ -53,6 +53,9 @@ export interface Receipt {
   recipient: string;
   status: "completed" | "reconciled";
   externalId: string;
+  // True when a stand-in executor produced this receipt instead of a real
+  // outside system. Simulated receipts must never read as real filings.
+  simulated: boolean;
   createdAt: string;
 }
 
@@ -73,7 +76,14 @@ export interface GatewayResult {
 }
 
 export interface Executor {
+  // True when this executor simulates outside systems instead of calling
+  // them. Receipts carry the flag so drills never read as real filings.
+  readonly simulated: boolean;
   execute(req: ActionRequest): Promise<{ externalId: string }>;
+  // Returns the recorded outcome for a key, or null when the executor has
+  // no record of it. After an unknown outcome the gateway calls check
+  // again before any new execution, so check must be authoritative and
+  // execute must stay safe to retry under the same key.
   check(idempotencyKey: string): Promise<{ externalId: string } | null>;
 }
 

@@ -5,12 +5,17 @@ import type { ActionRequest, Executor } from "../gateway/index.js";
 // executor. The delivery callback is owned by the person agent, which
 // holds the signing key and the approval record.
 export class ConsentDeliveringExecutor implements Executor {
+  readonly simulated: boolean;
   calls: ActionRequest[] = [];
 
   constructor(
     private inner: Executor,
     private deliverShare: (req: ActionRequest) => Promise<{ externalId: string }>,
-  ) {}
+  ) {
+    // Share delivery is Mano-internal protocol; the flag tracks whether
+    // outside systems are simulated, which the inner executor decides.
+    this.simulated = inner.simulated;
+  }
 
   async execute(req: ActionRequest): Promise<{ externalId: string }> {
     this.calls.push(req);

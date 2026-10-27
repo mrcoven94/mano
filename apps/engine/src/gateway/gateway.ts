@@ -378,6 +378,7 @@ export class ActionGateway {
         recipient: req.recipient,
         status: "completed",
         externalId: out.externalId,
+        simulated: this.executor.simulated,
         createdAt: now.toISOString(),
       };
       this.store.putReceipt(receipt);
@@ -394,6 +395,7 @@ export class ActionGateway {
             recipient: req.recipient,
             status: "reconciled",
             externalId: found.externalId,
+            simulated: this.executor.simulated,
             createdAt: now.toISOString(),
           };
           this.store.putReceipt(receipt);
@@ -410,6 +412,7 @@ export class ActionGateway {
 }
 
 export class InMemoryExecutor implements Executor {
+  readonly simulated = true;
   calls: ActionRequest[] = [];
   completed = new Map<string, { externalId: string }>();
   failNextWithTimeout = false;
