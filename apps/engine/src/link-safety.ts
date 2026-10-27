@@ -5,6 +5,34 @@ export interface DohAnswer {
 
 export type FetchFn = typeof fetch;
 
+export function extractHttpUrls(text: string): string[] {
+  const found = text.match(/https?:\/\/[^\s<>"')\]]+/gi) ?? [];
+  return [...new Set(found.map((url) => url.replace(/[.,;:!?]+$/, "")))];
+}
+
+// Replaces every blocked URL in person-visible text. A check error blocks,
+// same as a block verdict: fail closed.
+export async function redactBlockedLinks(
+  text: string,
+  check: (url: string) => Promise<{ allowed: boolean }>,
+): Promise<{ text: string; blocked: string[] }> {
+  const blocked: string[] = [];
+  let out = text;
+  for (const url of extractHttpUrls(text)) {
+    let allowed = false;
+    try {
+      allowed = (await check(url)).allowed;
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) {
+      blocked.push(url);
+      out = out.split(url).join("[blocked link]");
+    }
+  }
+  return { text: out, blocked };
+}
+
 export async function checkLinkSafety(
   url: string,
   opts: { forDisplay?: boolean; fetchFn?: FetchFn } = {},

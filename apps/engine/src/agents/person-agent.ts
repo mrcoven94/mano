@@ -10,6 +10,7 @@ import { ActionGateway, InMemoryExecutor, SqlApprovalStore, approvalFromRow, ens
 import type { ActionRequest, Approval } from "../gateway/index.js";
 import { extractEvidence } from "../evidence.js";
 import { getDocumentBytes, putDocument } from "../files.js";
+import { checkLinkSafety, redactBlockedLinks } from "../link-safety.js";
 import { base64ToBytes } from "../hash.js";
 import { defaultModelFor } from "../model-client.js";
 import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
@@ -202,18 +203,25 @@ export class PersonAgent extends Agent<Env, PersonState> {
       new Date().toISOString(),
     );
     const ev = extractEvidence(message);
-    const reply =
+    const draft =
       ev.instructionsIgnored.length > 0
         ? "I read that as a document. I did not follow the instructions inside it. Tell me what you want me to do."
         : `Got it. I saved that to your conversation. You said: ${message.slice(0, 200)}`;
+    // Anything shown to the person passes the family filter, decided
+    // here on the server. Blocked links never reach the screen.
+    const redacted = await redactBlockedLinks(draft, (url) => checkLinkSafety(url, { forDisplay: true }));
     this.db().exec(
       "INSERT INTO conversation(id, role, content, created_at) VALUES (?, 'assistant', ?, ?)",
       crypto.randomUUID(),
-      reply,
+      redacted.text,
       new Date().toISOString(),
     );
-    this.store.audit({ event: "chat", instructionsIgnored: ev.instructionsIgnored.length });
-    return { reply, evidence: ev };
+    this.store.audit({
+      event: "chat",
+      instructionsIgnored: ev.instructionsIgnored.length,
+      linksBlocked: redacted.blocked.length,
+    });
+    return { reply: redacted.text, evidence: ev };
   }
 
   async addMemory(content: string, source: string) {
