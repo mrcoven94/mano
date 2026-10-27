@@ -73,7 +73,7 @@ export default function Partners() {
         ]}
       />
 
-      <Faq id="pt-questions" intro="For product, partnerships and data teams." items={faqs} />
+      <Faq id="pt-questions" items={faqs} />
 
       <Closing id="pt-cta" title="Offer your service through Mano." text="Tell us what your service does and the data it needs. We will review it with you and get it in front of the families it helps.">
         <a className="btn btn-primary" href={MAIL}>Talk to us</a>

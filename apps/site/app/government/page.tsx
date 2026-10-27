@@ -64,7 +64,7 @@ export default function Government() {
 
       <SeatStrip title="Priced per staff seat." text="Residents never pay to apply, renew or file." href={MAIL} />
 
-      <Faq id="gov-questions" intro="For program directors, eligibility staff and IT." items={faqs} />
+      <Faq id="gov-questions" items={faqs} />
 
       <Closing id="gov-cta" title="Claim your office on Mano." text="Tell us about your office and the programs you run. We will set up the profile and your first program with you.">
         <a className="btn btn-primary" href={MAIL}>Talk to us</a>

@@ -10,7 +10,7 @@ import WatchMano from "@/components/WatchMano";
 import StickyCta from "@/components/StickyCta";
 import Faq from "@/components/Faq";
 import Closing from "@/components/Closing";
-import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
+import { SMS_HREF, PLACEHOLDER_NOTE } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: { absolute: "Mano: help your family thrive" },
@@ -105,8 +105,8 @@ export default function Home() {
                 ["var(--cyan)", "You approve every send", "You see who it goes to, why, and the exact pages first."],
                 ["var(--green)", "You choose who sees your case", "One case, one office, one reason. Nothing else."],
                 ["var(--orange)", "You can take access back", "It stops right away, and Mano tells you what was already sent."],
-              ].map(([c, t, x], k) => (
-                <div key={t}><span className="num" style={{ background: c }}>0{k + 1}</span><div><h3>{t}</h3><p>{x}</p></div></div>
+              ].map(([, t, x]) => (
+                <div key={t}><span className="b-check" aria-hidden="true" /><div><h3>{t}</h3><p>{x}</p></div></div>
               ))}
             </div>
           </div>
@@ -114,17 +114,17 @@ export default function Home() {
             <div className="card approval">
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <Mascot size={36} tile tone="orange" />
-                <div><span className="mono">Ready to send</span><h3 style={{ marginTop: 2 }}>Send your renewal?</h3></div>
+                <div><small className="card-label">Ready to send</small><h3 style={{ marginTop: 2 }}>Send your renewal?</h3></div>
               </div>
               <dl>
                 <div><dt>To</dt><dd>Sample County Human Services</dd></div>
                 <div><dt>For</dt><dd>Benefits renewal</dd></div>
-                <div><dt>Copy</dt><dd>Renewal form, 4 pages <span className="hash">version 2</span></dd></div>
+                <div><dt>Copy</dt><dd>Renewal form, 4 pages</dd></div>
               </dl>
               <div className="ask" style={{ marginTop: 0 }}><span className="yes">Yes, send it</span><span className="no">Not yet</span></div>
             </div>
             <div className="card approval access">
-              <span className="mono">Who can see your case</span>
+              <small className="card-label">Who can see your case</small>
               <div className="mini" style={{ maxWidth: "none" }}>
                 <div className="mini-row"><span><span className="dot" style={{ background: "var(--blue)" }} /><span>County office <small>Renewal only</small></span></span><button tabIndex={-1}>Remove</button></div>
                 <div className="mini-row"><span><span className="dot" style={{ background: "var(--green)" }} /><span>Your case manager <small>Renewal only</small></span></span><button tabIndex={-1}>Remove</button></div>
@@ -164,23 +164,17 @@ export default function Home() {
         </div>
       </section>
 
-      <Faq intro="Short answers about cost, approvals, privacy and calls." items={faqs} />
+      <Faq items={faqs} />
 
       <Closing
         id="get-mano"
+        extra={<p className="note closing-note">{PLACEHOLDER_NOTE}</p>}
         art={<Image className="closing-art" src="/art/paperwork.svg" width={480} height={360} alt="" unoptimized />}
         title="Help for your whole family, in one text."
         text="Hand Mano the pile of paperwork on your counter. It will tell you what each letter says, what your family can get and what happens next."
-        extra={
-          <div className="steps3">
-            <div><span className="mono">Step 1</span><strong>Text Mano</strong><p>Text or iMessage {SMS_NUMBER} (a placeholder until launch), or open Mano on the web.</p></div>
-            <div><span className="mono">Step 2</span><strong>Send a photo or ask</strong><p>A letter, a form, or a question like &ldquo;Can I get help with rent?&rdquo;</p></div>
-            <div><span className="mono">Step 3</span><strong>Say yes when it is ready</strong><p>Mano shows you the finished copy. Nothing goes out until you approve it.</p></div>
-          </div>
-        }
       >
         <a className="btn btn-primary" href={SMS_HREF}>Text Mano</a>
-        <a className="btn btn-ghost" href="/government">For agencies</a>
+        <a className="btn btn-ghost" href="/government">For offices</a>
       </Closing>
       <StickyCta />
     </>

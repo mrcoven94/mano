@@ -27,14 +27,6 @@ export default function Footer() {
               <li><a href="mailto:hello@withmano.com">hello@withmano.com</a></li>
             </ul>
           </nav>
-          <div>
-            <p className="mono">Your rules</p>
-            <ul>
-              <li>You approve every step</li>
-              <li>You choose who sees your case</li>
-              <li>You can take access back</li>
-            </ul>
-          </div>
         </div>
         <div className="legal">
           <p>Mano is independent. It is not a government agency and is not part of any government office. The agency that runs a program makes every decision about it.</p>
