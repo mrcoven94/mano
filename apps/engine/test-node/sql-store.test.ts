@@ -87,6 +87,18 @@ describe("blocker 6: approvals, attempts and receipts survive eviction", () => {
     expect(first.getApproval(approval.id)?.status).toBe("approved");
   });
 
+  it("adopts an unknown attempt so a retry can reconcile first", () => {
+    const { first } = openStorePair();
+    const approval = pendingApproval();
+    first.putApproval(approval);
+    const unknown = { key: approval.idempotencyKey, status: "unknown" as const, updatedAt: new Date().toISOString() };
+    expect(first.insertAttempt(unknown)).toBe(true);
+
+    expect(first.adoptUnknownAttempt(approval.idempotencyKey, new Date())).toBe(true);
+    expect(first.getAttempt(approval.idempotencyKey)?.status).toBe("in_flight");
+    expect(first.adoptUnknownAttempt(approval.idempotencyKey, new Date())).toBe(false);
+  });
+
   it("refuses to consume when the idempotency key is already claimed", () => {
     const { first } = openStorePair();
     const approval = pendingApproval();

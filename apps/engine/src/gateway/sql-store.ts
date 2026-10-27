@@ -85,20 +85,25 @@ export class SqlApprovalStore implements ApprovalStore {
   }
 
   consumeApprovalAndClaim(id: string, humanId: string, attempt: Attempt): Approval | null {
+    let inserted = false;
+    let adopted = false;
     try {
       this.sql.exec(
         "INSERT INTO attempts(idempotency_key, status, updated_at) VALUES (?,?,?)",
         attempt.key, attempt.status, attempt.updatedAt,
       );
+      inserted = true;
     } catch {
-      return null;
+      adopted = this.adoptUnknownAttempt(attempt.key, new Date(attempt.updatedAt));
+      if (!adopted) return null;
     }
     const updated = this.sql.exec(
       "UPDATE approvals SET status = 'approved', approved_by = ? WHERE id = ? AND status = 'pending'",
       humanId, id,
     );
     if (updated.rowsWritten !== 1) {
-      this.sql.exec("DELETE FROM attempts WHERE idempotency_key = ?", attempt.key);
+      if (inserted) this.sql.exec("DELETE FROM attempts WHERE idempotency_key = ?", attempt.key);
+      else this.sql.exec("UPDATE attempts SET status = 'unknown' WHERE idempotency_key = ?", attempt.key);
       return null;
     }
     return this.getApproval(id);
@@ -140,6 +145,14 @@ export class SqlApprovalStore implements ApprovalStore {
     } catch {
       return false;
     }
+  }
+
+  adoptUnknownAttempt(key: string, now: Date): boolean {
+    const updated = this.sql.exec(
+      "UPDATE attempts SET status = 'in_flight', updated_at = ? WHERE idempotency_key = ? AND status = 'unknown'",
+      now.toISOString(), key,
+    );
+    return updated.rowsWritten === 1;
   }
 
   updateAttempt(key: string, status: Attempt["status"]): void {
