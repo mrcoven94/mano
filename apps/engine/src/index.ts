@@ -97,6 +97,12 @@ export default {
           }),
         );
       }
+      const approveMatch = rest.match(/^\/approvals\/([^/]+)\/approve$/);
+      if (approveMatch && request.method === "POST") {
+        const approvalId = decodeURIComponent(approveMatch[1]);
+        const result = await (stub as unknown as PersonAgent).approve(approvalId, claims.sub);
+        return Response.json(result);
+      }
       // No model route: the agent calls the model client itself with the
       // synthetic flag from its own profile record. Callers never pick a
       // model ID.

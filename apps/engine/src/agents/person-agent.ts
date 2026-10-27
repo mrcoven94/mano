@@ -54,6 +54,7 @@ export class PersonAgent extends DurableObject<Env> {
       sql.exec(`CREATE TABLE IF NOT EXISTS deadlines(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS consents(recipient TEXT NOT NULL, purpose TEXT NOT NULL, PRIMARY KEY (recipient, purpose))`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS approval_reminders(approval_id TEXT PRIMARY KEY, reminded_at TEXT NOT NULL)`);
       const stored = await ctx.storage.get<string>("personId");
       if (stored) this.personId = stored;
     });
@@ -169,7 +170,73 @@ export class PersonAgent extends DurableObject<Env> {
     await this.assertSubject(verified);
     const result = await this.gateway.requestAction(raw);
     this.store.audit({ event: "gateway.request", status: result.status });
+    if (result.status === "needs_approval") await this.scheduleApprovalAlarm();
     return result;
+  }
+
+  // Next pending reminder or expiry becomes the alarm time. Past-due work
+  // runs on the next alarm tick, which fires immediately for past times.
+  private async scheduleApprovalAlarm(): Promise<void> {
+    const rows = this.sql().exec(
+      "SELECT remind_at, expires_at FROM approvals WHERE status = 'pending'",
+    ).toArray() as unknown as { remind_at: string; expires_at: string }[];
+    if (rows.length === 0) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+    const times = rows.flatMap((r) => [r.remind_at, r.expires_at].map((t) => new Date(t).getTime()));
+    await this.ctx.storage.setAlarm(new Date(Math.min(...times)));
+  }
+
+  async alarm(): Promise<void> {
+    await this.processDueApprovals({ now: new Date().toISOString() });
+    await this.scheduleApprovalAlarm();
+  }
+
+  // Sends due reminders, expires past-due approvals and escalates ones
+  // whose deadline is close. Returns what it did; safe to call twice.
+  // Actual delivery of a reminder (push, message) belongs to the channel
+  // the person uses; here the reminder is recorded and audited.
+  async processDueApprovals(input: { approvalId?: string; now?: string }): Promise<{
+    reminded: string[];
+    expired: string[];
+    escalated: string[];
+  }> {
+    const nowMs = new Date(input.now ?? new Date().toISOString()).getTime();
+    const out = { reminded: [] as string[], expired: [] as string[], escalated: [] as string[] };
+    const rows = (
+      input.approvalId
+        ? this.sql().exec("SELECT * FROM approvals WHERE id = ?", input.approvalId).toArray()
+        : this.sql().exec("SELECT * FROM approvals WHERE status = 'pending'").toArray()
+    ).map((r) => approvalFromRow(r as Record<string, unknown>));
+    for (const approval of rows) {
+      if (approval.status !== "pending") continue;
+      if (new Date(approval.expiresAt).getTime() <= nowMs) {
+        approval.status = "expired";
+        this.store.putApproval(approval);
+        this.store.audit({ event: "approval.expired", approvalId: approval.id });
+        out.expired.push(approval.id);
+        continue;
+      }
+      if (new Date(approval.remindAt).getTime() <= nowMs) {
+        const seen = this.sql().exec("SELECT approval_id FROM approval_reminders WHERE approval_id = ?", approval.id).toArray();
+        if (seen.length === 0) {
+          this.sql().exec("INSERT INTO approval_reminders VALUES (?, ?)", approval.id, new Date(nowMs).toISOString());
+          this.store.audit({ event: "approval.reminded", approvalId: approval.id });
+          out.reminded.push(approval.id);
+        }
+      }
+      if (!approval.escalated) {
+        const hoursLeft = hoursToDeadline(approval.requestJson, nowMs);
+        if (hoursLeft !== null && hoursLeft < 24) {
+          approval.escalated = true;
+          this.store.putApproval(approval);
+          this.store.audit({ event: "approval.escalated", approvalId: approval.id });
+          out.escalated.push(approval.id);
+        }
+      }
+    }
+    return out;
   }
 
   async listApprovals() {
@@ -336,4 +403,14 @@ function requireOrgAgentId(value: string): string {
     throw new Error("orgAgentId must look like org:<id>.");
   }
   return value;
+}
+
+function hoursToDeadline(requestJson: string, nowMs: number): number | null {
+  try {
+    const stored = JSON.parse(requestJson) as { deadlineAt?: string };
+    if (!stored.deadlineAt) return null;
+    return (new Date(stored.deadlineAt).getTime() - nowMs) / 3600_000;
+  } catch {
+    return null;
+  }
 }
