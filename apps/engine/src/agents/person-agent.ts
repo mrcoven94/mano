@@ -1,5 +1,6 @@
 import { Agent, type Connection, type ConnectionContext, type WSMessage } from "agents";
 import {
+  PROTOCOL_VERSION,
   signMessage,
   type ConsentGrantPayload,
   type ConsentRevokePayload,
@@ -389,6 +390,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const message = await signMessage(
       {
         id: crypto.randomUUID(),
+        version: PROTOCOL_VERSION,
         type: consent === "grant" ? "consent.grant" : "consent.revoke",
         caseId,
         fromAgentId: `person:${this.personId}`,

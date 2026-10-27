@@ -1,4 +1,6 @@
-import type { ProtocolMessage } from "./types.js";
+import { canonicalJson } from "./canonical.js";
+import { PROTOCOL_VERSION, type ProtocolMessage } from "./types.js";
+import { validatePayload } from "./schema.js";
 
 function b64(buf: ArrayBuffer | Uint8Array): string {
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
@@ -17,8 +19,9 @@ function unb64(s: string): Uint8Array {
 export function canonicalPayload(
   msg: Omit<ProtocolMessage, "signature" | "signerPublicKey">,
 ): string {
-  return JSON.stringify({
+  return canonicalJson({
     id: msg.id,
+    version: msg.version,
     type: msg.type,
     caseId: msg.caseId,
     fromAgentId: msg.fromAgentId,
@@ -97,17 +100,21 @@ export function validateMessageShape(msg: unknown): msg is ProtocolMessage {
     "consent.grant",
     "consent.revoke",
   ];
-  return (
-    typeof m.id === "string" &&
-    types.includes(m.type as string) &&
-    typeof m.caseId === "string" &&
-    typeof m.fromAgentId === "string" &&
-    typeof m.toAgentId === "string" &&
-    Array.isArray(m.sources) &&
-    typeof m.idempotencyKey === "string" &&
-    m.idempotencyKey.length > 0 &&
-    typeof m.signature === "string" &&
-    typeof m.signerPublicKey === "string" &&
-    typeof m.createdAt === "string"
-  );
+  if (
+    typeof m.id !== "string" ||
+    m.version !== PROTOCOL_VERSION ||
+    !types.includes(m.type as string) ||
+    typeof m.caseId !== "string" ||
+    typeof m.fromAgentId !== "string" ||
+    typeof m.toAgentId !== "string" ||
+    !Array.isArray(m.sources) ||
+    typeof m.idempotencyKey !== "string" ||
+    m.idempotencyKey.length === 0 ||
+    typeof m.signature !== "string" ||
+    typeof m.signerPublicKey !== "string" ||
+    typeof m.createdAt !== "string"
+  ) {
+    return false;
+  }
+  return validatePayload(m.type as string, m.payload);
 }

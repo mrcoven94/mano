@@ -1,3 +1,5 @@
+export const PROTOCOL_VERSION = 1;
+
 export type MessageType =
   | "case.open"
   | "document.request"
@@ -15,6 +17,7 @@ export interface SourceCitation {
 
 export interface ProtocolMessage<T = unknown> {
   id: string;
+  version: number;
   type: MessageType;
   caseId: string;
   fromAgentId: string;
