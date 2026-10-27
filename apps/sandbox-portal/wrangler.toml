@@ -1,0 +1,17 @@
+name = "mano-sandbox-portal"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+[[durable_objects.bindings]]
+name = "PORTAL_STORE"
+class_name = "PortalStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PortalStore"]
+
+[vars]
+SESSION_TIMEOUT_MINUTES = "15"
+SLOW_MS_DEFAULT = "20000"
+MAX_UPLOAD_BYTES = "5242880"
+MAX_UPLOAD_FILES = "3"

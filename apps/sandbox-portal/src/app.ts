@@ -1,0 +1,421 @@
+import {
+  fromBase64,
+  newId,
+  toBase64,
+  uniqueConfirmationNumber,
+  type Household,
+  type SessionData,
+  type StoredFile,
+  type Store,
+  type Submission,
+} from "./store";
+import {
+  caseworkerDetailPage,
+  caseworkerListPage,
+  confirmationPage,
+  documentsPage,
+  errorPage,
+  homePage,
+  householdPage,
+  reviewPage,
+  timeoutPage,
+} from "./pages";
+
+export interface PortalConfig {
+  sessionTimeoutMinutes: number;
+  slowMsDefault: number;
+  maxUploadBytes: number;
+  maxUploadFiles: number;
+  now?: () => number;
+}
+
+export const DEFAULT_CONFIG: PortalConfig = {
+  sessionTimeoutMinutes: 15,
+  slowMsDefault: 20000,
+  maxUploadBytes: 5 * 1024 * 1024,
+  maxUploadFiles: 3,
+};
+
+const SESSION_COOKIE = "portal_session";
+const ALLOWED_UPLOAD_TYPES = new Set(["application/pdf", "image/png", "image/jpeg"]);
+const MAX_SLOW_MS = 60000;
+const MAX_KEY_LENGTH = 128;
+const CASEWORKER_LIST_LIMIT = 100;
+
+function nowMs(config: PortalConfig): number {
+  return config.now ? config.now() : Date.now();
+}
+
+function html(body: string, status = 200, headers?: HeadersInit): Response {
+  return new Response(body, {
+    status,
+    headers: { "content-type": "text/html; charset=utf-8", ...headers },
+  });
+}
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+function redirect(location: string, setCookie?: string): Response {
+  const headers: Record<string, string> = { location };
+  if (setCookie) headers["set-cookie"] = setCookie;
+  return new Response(null, { status: 303, headers });
+}
+
+function sessionCookie(id: string): string {
+  return `${SESSION_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax`;
+}
+
+function clearSessionCookie(): string {
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
+
+function readSessionId(request: Request): string | null {
+  const header = request.headers.get("cookie");
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === SESSION_COOKIE) return rest.join("=") || null;
+  }
+  return null;
+}
+
+function wantsJson(request: Request): boolean {
+  const contentType = request.headers.get("content-type") ?? "";
+  const accept = request.headers.get("accept") ?? "";
+  return contentType.includes("application/json") || accept.includes("application/json");
+}
+
+async function loadSession(request: Request, store: Store, config: PortalConfig): Promise<SessionData | null> {
+  const id = readSessionId(request);
+  if (!id) return null;
+  const session = await store.getSession(id);
+  if (!session) return null;
+  if (session.expiresAt <= nowMs(config)) {
+    await store.deleteSession(id);
+    return null;
+  }
+  return session;
+}
+
+async function touchSession(store: Store, session: SessionData, config: PortalConfig): Promise<SessionData> {
+  const fresh: SessionData = {
+    ...session,
+    expiresAt: nowMs(config) + config.sessionTimeoutMinutes * 60 * 1000,
+  };
+  await store.putSession(fresh);
+  return fresh;
+}
+
+function timedOut(): Response {
+  return html(timeoutPage(), 403, { "set-cookie": clearSessionCookie() });
+}
+
+function validateHousehold(data: Record<string, string>): { household?: Household; error?: string } {
+  const household: Household = {
+    fullName: (data["fullName"] ?? "").trim(),
+    dateOfBirth: (data["dateOfBirth"] ?? "").trim(),
+    address: (data["address"] ?? "").trim(),
+    phone: (data["phone"] ?? "").trim(),
+    householdSize: (data["householdSize"] ?? "").trim(),
+    monthlyIncome: (data["monthlyIncome"] ?? "").trim(),
+  };
+  if (!household.fullName) return { error: "Enter the applicant's full legal name." };
+  if (!household.dateOfBirth) return { error: "Enter the applicant's date of birth." };
+  if (!household.address) return { error: "Enter the applicant's mailing address." };
+  if (!household.phone) return { error: "Enter the applicant's phone number." };
+  const size = Number(household.householdSize);
+  if (!Number.isInteger(size) || size < 1 || size > 30) {
+    return { error: "Household size must be a whole number between 1 and 30." };
+  }
+  const income = Number(household.monthlyIncome);
+  if (household.monthlyIncome === "" || Number.isNaN(income) || income < 0) {
+    return { error: "Monthly income must be a number, 0 or more." };
+  }
+  return { household };
+}
+
+async function readUploads(form: FormData, config: PortalConfig): Promise<{ files?: StoredFile[]; error?: string }> {
+  const files: StoredFile[] = [];
+  for (let i = 1; i <= config.maxUploadFiles; i++) {
+    // workers-types declares get() as string-only; at runtime file inputs come back as File.
+    const value = form.get(`document${i}`) as unknown as string | File | null;
+    if (!(value instanceof File) || value.size === 0) continue;
+    if (!ALLOWED_UPLOAD_TYPES.has(value.type)) {
+      return { error: `${value.name || `document ${i}`} must be a PDF, PNG or JPG file.` };
+    }
+    if (value.size > config.maxUploadBytes) {
+      return {
+        error: `${value.name || `document ${i}`} is larger than the ${config.maxUploadBytes} byte limit.`,
+      };
+    }
+    const bytes = new Uint8Array(await value.arrayBuffer());
+    files.push({ name: value.name || `document${i}`, type: value.type, size: value.size, data: toBase64(bytes) });
+  }
+  if (files.length === 0) return { error: "Attach at least one document." };
+  return { files };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveSlowMs(url: URL, fields: Record<string, string>, config: PortalConfig): number {
+  const raw = url.searchParams.get("slowMs") ?? fields["slowMs"];
+  if (raw !== undefined && raw !== null && raw !== "") {
+    const parsed = Number(raw);
+    if (!Number.isNaN(parsed)) return Math.max(0, Math.min(MAX_SLOW_MS, Math.floor(parsed)));
+  }
+  const slowFlag = url.searchParams.get("slow") ?? fields["slow"];
+  if (slowFlag === "1" || slowFlag === "true") return config.slowMsDefault;
+  return 0;
+}
+
+function submissionJson(sub: Submission, duplicate: boolean): Response {
+  return json(
+    {
+      key: sub.key,
+      status: sub.status,
+      confirmationNumber: sub.confirmationNumber,
+      receivedAt: sub.receivedAt,
+      receivedAtIso: new Date(sub.receivedAt).toISOString(),
+      duplicate,
+    },
+    200,
+  );
+}
+
+async function handleSubmit(request: Request, url: URL, store: Store, config: PortalConfig): Promise<Response> {
+  const isJson = (request.headers.get("content-type") ?? "").includes("application/json");
+  let fields: Record<string, string> = {};
+  let jsonHousehold: Household | null = null;
+  let jsonFiles: StoredFile[] | null = null;
+
+  if (isJson) {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "Request body must be valid JSON." }, 400);
+    }
+    if (typeof body !== "object" || body === null) return json({ error: "Request body must be an object." }, 400);
+    const record = body as Record<string, unknown>;
+    for (const [k, v] of Object.entries(record)) {
+      if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") fields[k] = String(v);
+    }
+    if (record["household"] !== undefined) {
+      const parsed = validateHousehold((record["household"] ?? {}) as Record<string, string>);
+      if (!parsed.household) return json({ error: parsed.error }, 400);
+      jsonHousehold = parsed.household;
+    }
+    if (record["files"] !== undefined) {
+      if (!Array.isArray(record["files"])) return json({ error: "files must be an array." }, 400);
+      jsonFiles = [];
+      for (const entry of record["files"] as Array<Record<string, unknown>>) {
+        if (typeof entry["name"] !== "string" || typeof entry["type"] !== "string" || typeof entry["data"] !== "string") {
+          return json({ error: "Each file needs a name, type and base64 data." }, 400);
+        }
+        if (!ALLOWED_UPLOAD_TYPES.has(entry["type"])) {
+          return json({ error: `${entry["name"]} must be a PDF, PNG or JPG file.` }, 400);
+        }
+        let bytes: Uint8Array;
+        try {
+          bytes = fromBase64(entry["data"]);
+        } catch {
+          return json({ error: `${entry["name"]} is not valid base64.` }, 400);
+        }
+        if (bytes.length > config.maxUploadBytes) {
+          return json({ error: `${entry["name"]} is larger than the ${config.maxUploadBytes} byte limit.` }, 400);
+        }
+        jsonFiles.push({ name: entry["name"], type: entry["type"], size: bytes.length, data: entry["data"] });
+      }
+      if (jsonFiles.length > config.maxUploadFiles) {
+        return json({ error: `Attach at most ${config.maxUploadFiles} files.` }, 400);
+      }
+    }
+  } else {
+    const form = await request.formData();
+    for (const [k, v] of form.entries()) {
+      if (typeof v === "string") fields[k] = v;
+    }
+  }
+
+  const key = (fields["key"] ?? "").trim();
+  if (!key) {
+    const message = "A submission key is required.";
+    return isJson || wantsJson(request) ? json({ error: message }, 400) : html(errorPage("Missing key", message, "/apply/review", "Back to review"), 400);
+  }
+  if (key.length > MAX_KEY_LENGTH) {
+    const message = "The submission key is too long.";
+    return isJson || wantsJson(request) ? json({ error: message }, 400) : html(errorPage("Bad key", message, "/apply/review", "Back to review"), 400);
+  }
+
+  const existing = await store.getSubmission(key);
+  if (existing) {
+    if (isJson || wantsJson(request)) return submissionJson(existing, true);
+    return html(confirmationPage(existing, true));
+  }
+
+  let household: Household | undefined;
+  let files: StoredFile[] = [];
+  let source: Submission["source"] = "web";
+  let session: SessionData | null = null;
+
+  if (isJson) {
+    source = "api";
+    if (!jsonHousehold) return json({ error: "A JSON submission needs a household object." }, 400);
+    household = jsonHousehold;
+    files = jsonFiles ?? [];
+    if (files.length === 0) return json({ error: "Attach at least one document." }, 400);
+  } else {
+    session = await loadSession(request, store, config);
+    if (!session) return timedOut();
+    if (!session.household) {
+      return html(errorPage("Incomplete application", "Household information is missing. Start again.", "/apply", "Start over"), 400);
+    }
+    if (session.files.length === 0) {
+      return redirect("/apply/documents");
+    }
+    household = session.household;
+    files = session.files;
+  }
+
+  const slowMs = resolveSlowMs(url, fields, config);
+  const submission: Submission = {
+    key,
+    confirmationNumber: await uniqueConfirmationNumber(store),
+    household,
+    files,
+    status: "received",
+    receivedAt: nowMs(config),
+    slowMs,
+    source,
+  };
+  await store.putSubmission(submission);
+
+  if (session) await store.deleteSession(session.id);
+
+  if (slowMs > 0) await sleep(slowMs);
+
+  if (isJson || wantsJson(request)) return submissionJson(submission, false);
+  return html(confirmationPage(submission, false));
+}
+
+export async function handleRequest(request: Request, store: Store, config: PortalConfig): Promise<Response> {
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const method = request.method.toUpperCase();
+
+  if (method === "GET" && path === "/") return html(homePage());
+
+  if (method === "GET" && path === "/apply") return html(householdPage());
+
+  if (method === "POST" && path === "/apply/household") {
+    const form = await request.formData();
+    const fields: Record<string, string> = {};
+    for (const [k, v] of form.entries()) {
+      if (typeof v === "string") fields[k] = v;
+    }
+    const parsed = validateHousehold(fields);
+    if (!parsed.household) return html(householdPage(parsed.error, fields), 400);
+    let session = await loadSession(request, store, config);
+    if (!session) {
+      session = {
+        id: newId(),
+        files: [],
+        key: newId(16),
+        createdAt: nowMs(config),
+        expiresAt: 0,
+      };
+    }
+    session.household = parsed.household;
+    const fresh = await touchSession(store, session, config);
+    return redirect("/apply/documents", sessionCookie(fresh.id));
+  }
+
+  if (method === "GET" && path === "/apply/documents") {
+    const session = await loadSession(request, store, config);
+    if (!session) return timedOut();
+    if (!session.household) return redirect("/apply");
+    await touchSession(store, session, config);
+    return html(documentsPage());
+  }
+
+  if (method === "POST" && path === "/apply/documents") {
+    const session = await loadSession(request, store, config);
+    if (!session) return timedOut();
+    if (!session.household) return redirect("/apply");
+    const form = await request.formData();
+    const parsed = await readUploads(form, config);
+    if (!parsed.files) {
+      await touchSession(store, session, config);
+      return html(documentsPage(parsed.error), 400);
+    }
+    session.files = parsed.files;
+    await touchSession(store, session, config);
+    return redirect("/apply/review");
+  }
+
+  if (method === "GET" && path === "/apply/review") {
+    const session = await loadSession(request, store, config);
+    if (!session) return timedOut();
+    if (!session.household) return redirect("/apply");
+    if (session.files.length === 0) return redirect("/apply/documents");
+    await touchSession(store, session, config);
+    return html(reviewPage(session.household, session.files, session.key));
+  }
+
+  if (method === "POST" && path === "/submissions") {
+    return handleSubmit(request, url, store, config);
+  }
+
+  const submissionMatch = /^\/submissions\/([^/]+)$/.exec(path);
+  if (method === "GET" && submissionMatch?.[1]) {
+    const key = decodeURIComponent(submissionMatch[1]);
+    const sub = await store.getSubmission(key);
+    if (!sub) return json({ key, status: "not_found" }, 404);
+    return json({
+      key: sub.key,
+      status: sub.status,
+      confirmationNumber: sub.confirmationNumber,
+      receivedAt: sub.receivedAt,
+      receivedAtIso: new Date(sub.receivedAt).toISOString(),
+    });
+  }
+
+  if (method === "GET" && path === "/caseworker") {
+    const subs = await store.listSubmissions(CASEWORKER_LIST_LIMIT);
+    return html(caseworkerListPage(subs));
+  }
+
+  const fileMatch = /^\/caseworker\/([^/]+)\/file\/(\d+)$/.exec(path);
+  if (method === "GET" && fileMatch?.[1] && fileMatch[2] !== undefined) {
+    const sub = await store.getSubmissionByConfirmation(decodeURIComponent(fileMatch[1]));
+    const file = sub?.files[Number(fileMatch[2])];
+    if (!sub || !file) {
+      return html(errorPage("Not found", "That file does not exist.", "/caseworker", "Back to the list"), 404);
+    }
+    const bytes = fromBase64(file.data);
+    return new Response(bytes as unknown as BodyInit, {
+      headers: {
+        "content-type": file.type,
+        "content-disposition": `attachment; filename="${file.name.replaceAll('"', "")}"`,
+      },
+    });
+  }
+
+  const caseMatch = /^\/caseworker\/([^/]+)$/.exec(path);
+  if (method === "GET" && caseMatch?.[1]) {
+    const sub = await store.getSubmissionByConfirmation(decodeURIComponent(caseMatch[1]));
+    if (!sub) {
+      return html(errorPage("Not found", "That confirmation number does not exist.", "/caseworker", "Back to the list"), 404);
+    }
+    return html(caseworkerDetailPage(sub));
+  }
+
+  return html(errorPage("Not found", "That page does not exist on this test portal.", "/", "Back to the home page"), 404);
+}
