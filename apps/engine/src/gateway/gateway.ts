@@ -9,6 +9,7 @@ import type {
   Receipt,
 } from "./types.js";
 import { TimeoutError } from "./types.js";
+import { ValidationError, parseActionRequest } from "./validate.js";
 
 export interface ApprovalStore {
   getApproval(id: string): Approval | null;
@@ -46,7 +47,15 @@ export class ActionGateway {
     private policyOverrides: Partial<Record<string, PolicyDecision>> = {},
   ) {}
 
-  async requestAction(req: ActionRequest, now = new Date()): Promise<GatewayResult> {
+  async requestAction(raw: unknown, now = new Date()): Promise<GatewayResult> {
+    let req: ActionRequest;
+    try {
+      req = parseActionRequest(raw);
+    } catch (err) {
+      const detail = err instanceof ValidationError ? err.message : "unreadable request";
+      this.store.audit({ event: "gateway.invalid", detail, at: now.toISOString() });
+      return { status: "blocked", reason: `Invalid action request: ${detail}` };
+    }
     this.store.audit({ event: "gateway.decide", type: req.type, key: req.idempotencyKey, at: now.toISOString() });
     const existing = this.store.getReceiptByKey(req.idempotencyKey);
     if (existing) return { status: "completed", receipt: existing };
