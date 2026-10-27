@@ -63,7 +63,7 @@ export default function Organizations() {
 
       <SeatStrip title="Priced per seat." text="One seat for each case manager. Families never pay to apply, renew or file." href={MAIL} />
 
-      <Faq id="org-questions" intro="For program leads and case managers." items={faqs} />
+      <Faq id="org-questions" items={faqs} />
 
       <Closing id="org-cta" title="Give your case managers their week back." text="Tell us about your team and your programs. We will set up your caseload agents with you.">
         <a className="btn btn-primary" href={MAIL}>Talk to us</a>

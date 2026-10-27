@@ -25,7 +25,7 @@
 .browser{border-radius:18px;background:#fff;box-shadow:0 0 0 1px rgba(27,24,20,.1),0 40px 80px -30px rgba(60,40,20,.35);overflow:hidden}
 .browser-bar{display:grid;grid-template-columns:80px 1fr 80px;align-items:center;height:42px;padding:0 14px;background:#F3F1EE;border-bottom:1px solid rgba(27,24,20,.08)}
 .lights{display:flex;gap:7px}.lights i{width:11px;height:11px;border-radius:50%;background:#FF5F57}.lights i:nth-child(2){background:#FEBC2E}.lights i:nth-child(3){background:#28C840}
-.url{justify-self:center;display:inline-flex;align-items:center;gap:6px;font-size:.78rem;color:var(--muted);background:#fff;border:1px solid rgba(27,24,20,.08);padding:4px 40px;border-radius:8px}
+.url{justify-self:center;display:inline-flex;align-items:center;gap:6px;font-size:.78rem;color:var(--muted);background:#fff;border:1px solid rgba(27,24,20,.08);padding:4px 40px;border-radius:8px;white-space:nowrap;max-width:100%;overflow:hidden}
 
 @media (max-width:720px){.iphone{border-radius:48px}.iphone-screen{border-radius:38px}}
 /* watch mano work */
@@ -110,6 +110,7 @@
 .wm-banner strong{font-size:.78rem}
 @media (max-width:1080px){.wm{grid-template-columns:1fr}.wm-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}.wm-tab[aria-selected="false"] span{display:block}}
 @media (max-width:860px){
+  .wm-results li{flex-direction:column;align-items:flex-start;gap:8px}
   .wm-tabs{grid-template-columns:1fr}
   .wm-tab span{display:none!important}
   .wm-tab{padding:14px 16px}
@@ -254,3 +255,4 @@
   .og-phone{justify-self:center}
   .seat{flex-direction:column;align-items:flex-start;gap:18px}
 }
+@media (max-width:720px){.url{padding:4px 12px}.browser-bar{grid-template-columns:52px 1fr 20px}}
