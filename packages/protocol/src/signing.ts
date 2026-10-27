@@ -56,12 +56,19 @@ export async function signMessage<T>(
   return { ...unsigned, signature: b64(sig), signerPublicKey: publicKeyB64 };
 }
 
-export async function verifyMessage(msg: ProtocolMessage): Promise<boolean> {
+// Verifies against a registry key for the sender (resolved by the caller
+// from its own agent directory), never against the key inside the message.
+// A message carrying a different key than the registry fails closed.
+export async function verifyMessage(
+  msg: ProtocolMessage,
+  expectedPublicKeyB64: string,
+): Promise<boolean> {
   try {
-    const { signature, signerPublicKey, ...rest } = msg;
+    if (msg.signerPublicKey !== expectedPublicKeyB64) return false;
+    const { signature, signerPublicKey: _claimed, ...rest } = msg;
     const key = await crypto.subtle.importKey(
       "raw",
-      unb64(signerPublicKey) as BufferSource,
+      unb64(expectedPublicKeyB64) as BufferSource,
       "Ed25519",
       false,
       ["verify"],

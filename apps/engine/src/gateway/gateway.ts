@@ -401,7 +401,10 @@ export class ActionGateway {
         }
         return { status: "blocked", reason: "Timed out and no receipt found. Safe to retry with the same idempotency key." };
       }
-      throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      this.store.updateAttempt(req.idempotencyKey, "unknown");
+      this.store.audit({ event: "gateway.executor_error", key: req.idempotencyKey, detail: message });
+      return { status: "blocked", reason: `The action failed before a receipt was recorded: ${message}` };
     }
   }
 }

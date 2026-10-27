@@ -1,5 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
+import {
+  validateMessageShape,
+  verifyMessage,
+  type ProtocolMessage,
+} from "@mano/protocol";
 import type { Env } from "../env.js";
+import { generateAgentKeypair, resolveAgentKey } from "./agent-keys.js";
 
 export interface SharedCase {
   caseId: string;
@@ -8,6 +14,14 @@ export interface SharedCase {
   sharedAt: string;
 }
 
+export interface ConsentResult {
+  accepted: boolean;
+  reason?: string;
+  duplicate?: boolean;
+}
+
+const ORG_AGENT_ID = /^org:([A-Za-z0-9_-]+)$/;
+
 export class OrgAgent extends DurableObject<Env> {
   orgId = "";
 
@@ -15,49 +29,165 @@ export class OrgAgent extends DurableObject<Env> {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       const sql = ctx.storage.sql;
-      sql.exec(`CREATE TABLE IF NOT EXISTS cases(case_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, purpose TEXT NOT NULL, shared_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)`);
+      // Append-only history: revocation is terminal and is never
+      // overwritten by a later share of the same case.
+      sql.exec(`CREATE TABLE IF NOT EXISTS case_events(id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL, event TEXT NOT NULL, person_id TEXT NOT NULL, purpose TEXT NOT NULL, message_id TEXT NOT NULL, at TEXT NOT NULL)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS agent_keys(agent_id TEXT PRIMARY KEY, public_key_b64 TEXT NOT NULL, first_seen TEXT NOT NULL)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS processed_messages(message_id TEXT PRIMARY KEY)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT, detail TEXT, created_at TEXT)`);
       const stored = await ctx.storage.get<string>("orgId");
       if (stored) this.orgId = stored;
     });
   }
 
-  async setIdentity(orgId: string) {
-    this.orgId = orgId;
-    await this.ctx.storage.put("orgId", orgId);
+  private sql() {
+    return this.ctx.storage.sql;
   }
 
-  async shareCase(c: SharedCase) {
-    this.ctx.storage.sql.exec(
-      "INSERT OR REPLACE INTO cases VALUES (?,?,?,?,0)",
-      c.caseId, c.personId, c.purpose, c.sharedAt,
+  private audit(event: string, detail: unknown) {
+    this.sql().exec(
+      "INSERT INTO audit_log(event, detail, created_at) VALUES (?, ?, ?)",
+      event,
+      JSON.stringify(detail),
+      new Date().toISOString(),
     );
-    return c;
   }
 
-  async revokeCase(caseId: string) {
-    this.ctx.storage.sql.exec("UPDATE cases SET revoked = 1 WHERE case_id = ?", caseId);
+  private async assertOrg(verifiedOrg: string) {
+    if (!verifiedOrg) throw new Error("Forbidden: no verified org.");
+    if (!this.orgId) {
+      this.orgId = verifiedOrg;
+      await this.ctx.storage.put("orgId", verifiedOrg);
+    } else if (this.orgId !== verifiedOrg) {
+      throw new Error("Forbidden: org mismatch.");
+    }
   }
 
-  async listCases(): Promise<SharedCase[]> {
-    const rows = [...this.ctx.storage.sql.exec("SELECT * FROM cases WHERE revoked = 0").toArray()] as unknown as Record<string, unknown>[];
+  // Public key of this agent, for org-signed messages. Stored beside the
+  // private key in the agent's own storage.
+  async getPublicKey(): Promise<string> {
+    const stored = await this.ctx.storage.get<string>("agentPublicKeyB64");
+    if (stored) return stored;
+    const fresh = await generateAgentKeypair();
+    await this.ctx.storage.put("agentPrivateKeyJwk", fresh.privateJwk);
+    await this.ctx.storage.put("agentPublicKeyB64", fresh.publicKeyB64);
+    return fresh.publicKeyB64;
+  }
+
+  // Accepts a signed consent message delivered by a person's agent. Only
+  // this path adds cases to the org; the worker exposes no share route.
+  async receiveConsent(message: unknown): Promise<ConsentResult> {
+    if (!validateMessageShape(message)) {
+      return { accepted: false, reason: "Malformed consent message." };
+    }
+    const msg = message as ProtocolMessage;
+    if (msg.type !== "consent.grant" && msg.type !== "consent.revoke") {
+      return { accepted: false, reason: `Wrong message type: ${msg.type}.` };
+    }
+    const addressed = ORG_AGENT_ID.exec(msg.toAgentId);
+    if (!addressed) {
+      return { accepted: false, reason: "This message is not addressed to an org agent." };
+    }
+    if (!this.orgId) {
+      this.orgId = addressed[1];
+      await this.ctx.storage.put("orgId", this.orgId);
+    } else if (this.orgId !== addressed[1]) {
+      return { accepted: false, reason: "This message is addressed to a different org." };
+    }
+    if (!msg.approvedByHumanId) {
+      return { accepted: false, reason: "Consent needs a person's approval." };
+    }
+    const seen = this.sql().exec("SELECT message_id FROM processed_messages WHERE message_id = ?", msg.id).toArray();
+    if (seen.length > 0) return { accepted: true, duplicate: true };
+
+    const expected = await this.keyForSender(msg.fromAgentId);
+    if (!expected) {
+      return { accepted: false, reason: `Unknown sender: ${msg.fromAgentId}.` };
+    }
+    if (!(await verifyMessage(msg, expected))) {
+      return { accepted: false, reason: "Bad consent signature." };
+    }
+
+    const payload = msg.payload as Record<string, unknown> | null;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return { accepted: false, reason: "Consent payload must be an object." };
+    }
+    const now = new Date().toISOString();
+    if (msg.type === "consent.revoke") {
+      this.appendEvent(msg.caseId, "revoke", senderPerson(msg.fromAgentId), "", msg.id, now);
+      this.audit("consent.revoke", { caseId: msg.caseId, from: msg.fromAgentId });
+      return { accepted: true };
+    }
+    if (typeof payload.purpose !== "string" || !payload.purpose) {
+      return { accepted: false, reason: "Consent grant needs a purpose." };
+    }
+    const revoked = this.sql().exec(
+      "SELECT id FROM case_events WHERE case_id = ? AND event = 'revoke'",
+      msg.caseId,
+    ).toArray();
+    if (revoked.length > 0) {
+      return { accepted: false, reason: `Case ${msg.caseId} was revoked and cannot be shared again.` };
+    }
+    this.appendEvent(msg.caseId, "share", senderPerson(msg.fromAgentId), payload.purpose, msg.id, now);
+    this.audit("consent.grant", { caseId: msg.caseId, from: msg.fromAgentId });
+    return { accepted: true };
+  }
+
+  private async keyForSender(fromAgentId: string): Promise<string | null> {
+    const rows = this.sql().exec(
+      "SELECT public_key_b64 FROM agent_keys WHERE agent_id = ?",
+      fromAgentId,
+    ).toArray() as unknown as { public_key_b64: string }[];
+    if (rows[0]?.public_key_b64) return rows[0].public_key_b64;
+    // Not cached: resolve live from the sender's own agent stub, which no
+    // caller can forge, then pin the key.
+    const resolved = await resolveAgentKey(this.env, fromAgentId);
+    if (!resolved) return null;
+    this.sql().exec(
+      "INSERT OR IGNORE INTO agent_keys VALUES (?, ?, ?)",
+      fromAgentId,
+      resolved,
+      new Date().toISOString(),
+    );
+    return resolved;
+  }
+
+  private appendEvent(
+    caseId: string,
+    event: "share" | "revoke",
+    personId: string,
+    purpose: string,
+    messageId: string,
+    at: string,
+  ) {
+    this.sql().exec(
+      "INSERT INTO case_events(case_id, event, person_id, purpose, message_id, at) VALUES (?,?,?,?,?,?)",
+      caseId, event, personId, purpose, messageId, at,
+    );
+    this.sql().exec("INSERT OR IGNORE INTO processed_messages VALUES (?)", messageId);
+  }
+
+  async listCases(verifiedOrg: string): Promise<SharedCase[]> {
+    await this.assertOrg(verifiedOrg);
+    const rows = this.sql().exec(
+      `SELECT case_id, person_id, purpose, MAX(at) AS shared_at FROM case_events
+       WHERE event = 'share' AND case_id NOT IN (SELECT case_id FROM case_events WHERE event = 'revoke')
+       GROUP BY case_id ORDER BY shared_at`,
+    ).toArray() as unknown as {
+      case_id: string;
+      person_id: string;
+      purpose: string;
+      shared_at: string;
+    }[];
     return rows.map((r) => ({
-      caseId: r.case_id as string,
-      personId: r.person_id as string,
-      purpose: r.purpose as string,
-      sharedAt: r.shared_at as string,
+      caseId: r.case_id,
+      personId: r.person_id,
+      purpose: r.purpose,
+      sharedAt: r.shared_at,
     }));
   }
+}
 
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname.endsWith("/cases")) {
-      return Response.json({ cases: await this.listCases() });
-    }
-    if (request.method === "POST" && url.pathname.endsWith("/share")) {
-      const body = (await request.json()) as SharedCase;
-      return Response.json(await this.shareCase(body));
-    }
-    return new Response("Not found", { status: 404 });
-  }
+function senderPerson(fromAgentId: string): string {
+  return fromAgentId.startsWith("person:") ? fromAgentId.slice("person:".length) : fromAgentId;
 }
