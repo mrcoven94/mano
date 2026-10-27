@@ -1,10 +1,13 @@
-// Render letters as text and as phone-photo style PNG images.
-// SVG is only the text source. Committed photos are real PNG pixels with
-// skew, blur, shadows, a folded corner on some, and a second page for some.
-// Rendering is deterministic per letterId so the pipeline runs at $0.
-// Muse Image may be used for backgrounds; the default local backgrounds
-// keep the eval runnable without keys.
+// Render letters as text and as phone-photo style images.
+// SVG is only the text source. Committed photos are real JPG pixels with
+// skew, perspective shear, blur, shadows, uneven light, partial crops on
+// some, a folded corner on some, and a second page for some. Rendering is
+// deterministic per letterId so the pipeline runs at $0. Muse Image may be
+// used for backgrounds; the default local backgrounds keep the eval runnable
+// without keys.
 import { createHash } from "node:crypto";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { PHOTO_HOUSEHOLDS } from "./generator.mjs";
 import { rngFromString, intBetween } from "./rng.mjs";
 
@@ -66,7 +69,14 @@ export async function renderPagePng(svg, seedStr, { unreadable = false } = {}) {
 
   const svgBuffer = Buffer.from(svg);
   let png = await sharp(svgBuffer, { density: 140 }).png().toBuffer();
-  png = await sharp(png).rotate(Number(angle), { background: { r: 255, g: 253, b: 245, alpha: 1 } }).blur(sigma).toBuffer();
+  // Skew plus a touch of perspective shear, like a handheld photo.
+  const shearX = rng() * 0.1 - 0.05;
+  const shearY = rng() * 0.06 - 0.03;
+  png = await sharp(png)
+    .rotate(Number(angle), { background: { r: 255, g: 253, b: 245, alpha: 1 } })
+    .affine([[1, shearX], [shearY, 1]], { background: { r: 255, g: 253, b: 245, alpha: 1 } })
+    .blur(sigma)
+    .toBuffer();
   const rotMeta = await sharp(png).metadata();
   const rw = rotMeta.width || 760;
   const rh = rotMeta.height || 1000;
@@ -97,20 +107,61 @@ export async function renderPagePng(svg, seedStr, { unreadable = false } = {}) {
     .blur(12)
     .png()
     .toBuffer();
-  const out = await sharp({
+  let composed = await sharp({
     create: { width: bgW, height: bgH, channels: 3, background: tone },
   })
     .composite([
       { input: shadow, top: padY + 10, left: padX + 8 },
       { input: png, top: padY, left: padX },
     ])
-    .jpeg({ quality: 82 })
+    .png()
     .toBuffer();
-  return out;
+  // Uneven light: a soft diagonal gradient, sometimes bright, sometimes dim.
+  const lightDir = rng() < 0.5 ? 0 : 1;
+  const lightColor = rng() < 0.6 ? "255,255,255" : "0,0,0";
+  const lightStrength = (0.1 + rng() * 0.14).toFixed(2);
+  const x1 = lightDir ? bgW : 0;
+  const gradient = Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${bgW}" height="${bgH}"><defs><linearGradient id="g" x1="${x1}" y1="0" x2="${bgW - x1}" y2="${bgH}" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="rgb(${lightColor})" stop-opacity="${lightStrength}"/><stop offset="1" stop-color="rgb(${lightColor})" stop-opacity="0"/></linearGradient></defs><rect width="${bgW}" height="${bgH}" fill="url(#g)"/></svg>`
+  );
+  composed = await sharp(composed).composite([{ input: gradient, blend: "over" }]).png().toBuffer();
+  // Partial crop on some photos: a random window keeping most of the page.
+  if (rng() < 0.35) {
+    const keepW = 0.86 + rng() * 0.1;
+    const keepH = 0.86 + rng() * 0.1;
+    const w = Math.floor(bgW * keepW);
+    const h = Math.floor(bgH * keepH);
+    const left = Math.floor(rng() * (bgW - w));
+    const top = Math.floor(rng() * (bgH - h));
+    composed = await sharp(composed).extract({ left, top, width: w, height: h }).png().toBuffer();
+  }
+  return sharp(composed).jpeg({ quality: 82 }).toBuffer();
+}
+
+// Map letterId to its photo files in a directory. Used at run time so photo
+// inputs need no manifest: any `${letterId}*.jpg` file belongs to the letter.
+export async function photoFilesByLetter(photoDir) {
+  const map = {};
+  let files = [];
+  try {
+    files = await readdir(photoDir);
+  } catch {
+    return map;
+  }
+  for (const f of files.filter((x) => x.endsWith(".jpg") || x.endsWith(".jpeg") || x.endsWith(".png")).sort()) {
+    const letterId = f.replace(/\.(jpg|jpeg|png)$/, "").replace(/-p\d+$/, "");
+    if (!map[letterId]) map[letterId] = [];
+    map[letterId].push(join(photoDir, f));
+  }
+  return map;
 }
 
 export async function renderPhoto(letter, householdId, { fetchImpl = fetch } = {}) {
-  const pages = letter.pageCount === 2 ? splitForPages(letter.text) : [letter.text];
+  // Out-of-order letters photograph as received: page 2 first, then page 1.
+  const outOfOrder = letter.text.includes("--- page 1 follows ---");
+  const pages = letter.pageCount === 2
+    ? (outOfOrder ? letter.text.split("\n\n--- page 1 follows ---\n\n") : splitForPages(letter.text))
+    : [letter.text];
   const unreadable = letter.hardCase === "unreadable";
   const files = [];
   for (let i = 0; i < pages.length; i++) {
@@ -124,6 +175,26 @@ export async function renderPhoto(letter, householdId, { fetchImpl = fetch } = {
 
 export function photoHouseholdIds(households) {
   return new Set(households.slice(0, PHOTO_HOUSEHOLDS).map((h) => h.householdId));
+}
+
+// Render the first `lettersEach` letters of each household into outDir.
+// Used for committed dev photos and, with a temp dir, for run-time
+// held-out photos that must never persist. Returns the file count.
+export async function renderHouseholdPhotos(households, outDir, lettersEach = 2) {
+  const { writeFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const dir = String(outDir).startsWith("file:") ? new URL(outDir).pathname : String(outDir);
+  let count = 0;
+  for (const h of households) {
+    for (const letter of h.letters.slice(0, lettersEach)) {
+      const photo = await renderPhoto(letter, h.householdId);
+      for (const f of photo.files) {
+        await writeFile(join(dir, f.filename), f.buffer);
+        count++;
+      }
+    }
+  }
+  return count;
 }
 
 export function contentHash(obj) {
