@@ -56,8 +56,10 @@ export default {
     if (url.pathname === "/health") return Response.json({ ok: true });
 
     if (url.pathname === "/api/check-link" && request.method === "POST") {
-      const body = (await request.json()) as { url: string; forDisplay?: boolean };
-      const result = await checkLinkSafety(body.url, { forDisplay: body.forDisplay });
+      // A person-facing tool, so the server always applies the family
+      // filter. Callers cannot downgrade it.
+      const body = (await request.json()) as { url: string };
+      const result = await checkLinkSafety(body.url, { forDisplay: true });
       return Response.json(result, { status: result.allowed ? 200 : 403 });
     }
 
