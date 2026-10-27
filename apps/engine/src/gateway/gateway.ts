@@ -27,6 +27,9 @@ export interface ApprovalStore {
   putReceipt(r: Receipt): void;
   getAttempt(key: string): Attempt | null;
   insertAttempt(a: Attempt): boolean;
+  // Compare-and-set: moves an unknown attempt back to in_flight so a retry
+  // can adopt the key. False unless the attempt exists and is unknown.
+  adoptUnknownAttempt(key: string, now: Date): boolean;
   updateAttempt(key: string, status: Attempt["status"]): void;
   audit(entry: Record<string, unknown>): void;
 }
@@ -45,11 +48,15 @@ export class MemoryApprovalStore implements ApprovalStore {
   consumeApprovalAndClaim(id: string, humanId: string, attempt: Attempt): Approval | null {
     const current = this.approvals.get(id);
     if (!current || current.status !== "pending") return null;
-    if (this.attempts.has(attempt.key)) return null;
+    const prior = this.attempts.get(attempt.key);
+    // The key is claimable when unused, or when a previous attempt ended
+    // unknown: adopting it is what lets a retry reconcile first. A key
+    // that is in flight or done stays claimed.
+    if (prior && prior.status !== "unknown") return null;
+    this.attempts.set(attempt.key, attempt);
     current.status = "approved";
     current.approvedByHumanId = humanId;
     this.approvals.set(id, current);
-    this.attempts.set(attempt.key, attempt);
     return current;
   }
   getReceiptByKey(key: string) {
@@ -64,6 +71,12 @@ export class MemoryApprovalStore implements ApprovalStore {
   insertAttempt(a: Attempt) {
     if (this.attempts.has(a.key)) return false;
     this.attempts.set(a.key, a);
+    return true;
+  }
+  adoptUnknownAttempt(key: string, now: Date) {
+    const current = this.attempts.get(key);
+    if (!current || current.status !== "unknown") return false;
+    this.attempts.set(key, { key, status: "in_flight", updatedAt: now.toISOString() });
     return true;
   }
   updateAttempt(key: string, status: Attempt["status"]) {
@@ -354,6 +367,13 @@ export class ActionGateway {
       approval.problems = check.problems;
       this.store.putApproval(approval);
     }
+    // An unknown attempt must reconcile to a definite answer before any
+    // new execution, on the approve path as well as the allow path.
+    const prior = this.store.getAttempt(stored.idempotencyKey);
+    if (prior?.status === "unknown") {
+      const settled = await this.reconcileUnknown(stored, now);
+      if (settled) return settled;
+    }
     const attempt: Attempt = {
       key: stored.idempotencyKey,
       status: "in_flight",
@@ -363,45 +383,95 @@ export class ActionGateway {
     if (!consumed) {
       return { status: "blocked", reason: "This approval was already used or is in progress." };
     }
-    return this.execute(stored, now);
+    return this.runExecution(stored, now);
+  }
+
+  private makeReceipt(
+    req: ActionRequest,
+    status: Receipt["status"],
+    externalId: string,
+    now: Date,
+  ): Receipt {
+    return {
+      id: crypto.randomUUID(),
+      idempotencyKey: req.idempotencyKey,
+      actionType: req.type,
+      recipient: req.recipient,
+      status,
+      externalId,
+      simulated: this.executor.simulated,
+      createdAt: now.toISOString(),
+    };
+  }
+
+  // Reconciles an unknown attempt. Returns a result when the executor has
+  // a recorded outcome, or null when the key is still unclaimed and the
+  // caller may adopt it and execute.
+  private async reconcileUnknown(req: ActionRequest, now: Date): Promise<GatewayResult | null> {
+    const found = await this.executor.check(req.idempotencyKey);
+    if (found) {
+      const receipt = this.makeReceipt(req, "reconciled", found.externalId, now);
+      this.store.putReceipt(receipt);
+      this.store.updateAttempt(req.idempotencyKey, "done");
+      this.store.audit({ event: "gateway.reconciled", key: req.idempotencyKey });
+      return { status: "reconciled", receipt };
+    }
+    return null;
   }
 
   async execute(req: ActionRequest, now = new Date()): Promise<GatewayResult> {
     const existing = this.store.getReceiptByKey(req.idempotencyKey);
     if (existing) return { status: "completed", receipt: existing };
+    const attempt = this.store.getAttempt(req.idempotencyKey);
+    if (attempt?.status === "in_flight") {
+      return { status: "in_progress", reason: "Another request with this idempotency key is running." };
+    }
+    if (attempt?.status === "unknown") {
+      const settled = await this.reconcileUnknown(req, now);
+      if (settled) return settled;
+      if (!this.store.adoptUnknownAttempt(req.idempotencyKey, now)) {
+        const receipt = this.store.getReceiptByKey(req.idempotencyKey);
+        if (receipt) return { status: "completed", receipt };
+        return { status: "in_progress", reason: "Another request with this idempotency key is running." };
+      }
+      return this.runExecution(req, now);
+    }
+    if (attempt?.status === "done") {
+      // Invariant: done always ships with a receipt, which the check above
+      // would have returned. If it is missing anyway, reconcile once and
+      // otherwise fail closed rather than executing blindly.
+      const settled = await this.reconcileUnknown(req, now);
+      if (settled) return settled;
+      this.store.audit({ event: "gateway.corrupt_attempt", key: req.idempotencyKey });
+      return { status: "blocked", reason: "This key has a recorded attempt but no receipt. Refusing to execute." };
+    }
+    if (!this.store.insertAttempt({ key: req.idempotencyKey, status: "in_flight", updatedAt: now.toISOString() })) {
+      const receipt = this.store.getReceiptByKey(req.idempotencyKey);
+      if (receipt) return { status: "completed", receipt };
+      return { status: "in_progress", reason: "Another request with this idempotency key is running." };
+    }
+    return this.runExecution(req, now);
+  }
+
+  // Runs the executor for an already-claimed (in_flight) attempt.
+  private async runExecution(req: ActionRequest, now: Date): Promise<GatewayResult> {
     try {
       const out = await this.executor.execute(req);
-      const receipt: Receipt = {
-        id: crypto.randomUUID(),
-        idempotencyKey: req.idempotencyKey,
-        actionType: req.type,
-        recipient: req.recipient,
-        status: "completed",
-        externalId: out.externalId,
-        simulated: this.executor.simulated,
-        createdAt: now.toISOString(),
-      };
+      const receipt = this.makeReceipt(req, "completed", out.externalId, now);
       this.store.putReceipt(receipt);
+      this.store.updateAttempt(req.idempotencyKey, "done");
       this.store.audit({ event: "gateway.executed", key: req.idempotencyKey });
-      return { status: receipt.status, receipt };
+      return { status: "completed", receipt };
     } catch (err) {
       if (err instanceof TimeoutError || (err as Error)?.name === "TimeoutError") {
-        const found = await this.executor.check(req.idempotencyKey);
-        if (found) {
-          const receipt: Receipt = {
-            id: crypto.randomUUID(),
-            idempotencyKey: req.idempotencyKey,
-            actionType: req.type,
-            recipient: req.recipient,
-            status: "reconciled",
-            externalId: found.externalId,
-            simulated: this.executor.simulated,
-            createdAt: now.toISOString(),
-          };
-          this.store.putReceipt(receipt);
-          return { status: "reconciled", receipt };
-        }
-        return { status: "blocked", reason: "Timed out and no receipt found. Safe to retry with the same idempotency key." };
+        const settled = await this.reconcileUnknown(req, now);
+        if (settled) return settled;
+        this.store.updateAttempt(req.idempotencyKey, "unknown");
+        this.store.audit({ event: "gateway.unknown", key: req.idempotencyKey });
+        return {
+          status: "blocked",
+          reason: "The action timed out and its outcome is unknown. Retry with the same idempotency key; the gateway reconciles before executing again.",
+        };
       }
       const message = err instanceof Error ? err.message : String(err);
       this.store.updateAttempt(req.idempotencyKey, "unknown");

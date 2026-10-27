@@ -69,7 +69,7 @@ export interface Attempt {
 }
 
 export interface GatewayResult {
-  status: "completed" | "needs_approval" | "blocked" | "stale" | "reconciled";
+  status: "completed" | "needs_approval" | "blocked" | "stale" | "reconciled" | "in_progress";
   approval?: Approval;
   receipt?: Receipt;
   reason?: string;
