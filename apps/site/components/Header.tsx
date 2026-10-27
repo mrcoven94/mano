@@ -2,13 +2,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
-import Mascot from "./Mascot";
+import { REPO_URL } from "@/lib/site";
 
 const links = [
-  { href: "/", label: "For you", sub: "Residents" },
-  { href: "/government", label: "Government", sub: "Agencies and offices" },
-  { href: "/organizations", label: "Nonprofits", sub: "Case managers" },
+  { href: "/", label: "For people", sub: "Free for everyone" },
+  { href: "/government", label: "For offices", sub: "Agencies" },
+  { href: "/organizations", label: "For nonprofits", sub: "Case managers" },
   { href: "/partners", label: "Partners", sub: "Offer your service" },
+  { href: "/#pricing", label: "Pricing", sub: "Free and Plus" },
 ];
 
 export default function Header() {
@@ -19,16 +20,15 @@ export default function Header() {
   return (
     <header className="site-header">
       <div className="wrap bar">
-        <Link href="/" className="brand" aria-label="Mano home">
-          <Mascot size={30} tile tone="orange" /> Mano
-        </Link>
+        <Link href="/" className="brand" aria-label="Mano home">mano</Link>
         <nav aria-label="Main" className="mainnav">
           {links.map((l) => (
             <Link key={l.href} href={l.href} aria-current={path === l.href ? "page" : undefined}>{l.label}</Link>
           ))}
         </nav>
         <div className="header-cta">
-          <a className="btn btn-primary btn-sm" href="/#get-mano">Get Mano</a>
+          <a className="quiet" href={REPO_URL}>Open source</a>
+          <a className="btn btn-primary btn-sm" href="/#get-mano">Text Mano</a>
           <details className="menu" ref={menu}>
             <summary aria-label="Menu"><span /></summary>
             <nav aria-label="Main" className="menu-panel">
@@ -37,7 +37,8 @@ export default function Header() {
                   {l.label} <small>{l.sub}</small>
                 </Link>
               ))}
-              <a className="btn btn-primary" href="/#get-mano" style={{ width: "100%", marginTop: 6 }}>Get Mano</a>
+              <a href={REPO_URL}>Open source <small>GitHub</small></a>
+              <a className="btn btn-primary" href="/#get-mano" style={{ width: "100%", marginTop: 6 }}>Text Mano</a>
             </nav>
           </details>
         </div>

@@ -37,7 +37,7 @@
 .wm-tab[aria-selected="false"] span{display:none}
 .wm-tab[aria-selected="true"]{box-shadow:var(--shadow-lg);border-color:var(--border2)}
 .wm-progress{position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--orange);transform-origin:left;transform:scaleX(0)}
-.wm-stage{position:relative;border-radius:32px;padding:36px;min-height:560px;display:grid;place-items:center;background:linear-gradient(150deg,#FFE3CC,#FDF1E6 50%,#E8E1F8);overflow:hidden}
+.wm-stage{position:relative;border-radius:32px;padding:36px;min-height:560px;display:grid;place-items:center;background:var(--bg2);overflow:hidden}
 .caret{display:inline-block;width:2px;height:1em;background:var(--orange);margin-left:1px;vertical-align:-2px;animation:blink 1s steps(2) infinite}
 .wm-browser{width:100%;max-width:720px}
 .wm-form{display:grid;grid-template-columns:1fr 230px;min-height:440px}

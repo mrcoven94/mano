@@ -1,20 +1,14 @@
 import type { Metadata } from "next";
-import Image from "next/image";
-import Mascot from "@/components/Mascot";
-import FamilyDemo from "@/components/FamilyDemo";
-import HelpTiles from "@/components/HelpTiles";
-import Channels from "@/components/Channels";
-import Everywhere from "@/components/Everywhere";
-import Ladder from "@/components/Ladder";
-import WatchMano from "@/components/WatchMano";
-import StickyCta from "@/components/StickyCta";
+import Link from "next/link";
+import HeroStage from "@/components/home/HeroStage";
+import TrustDemo from "@/components/home/TrustDemo";
+import ShareFlow from "@/components/home/ShareFlow";
 import Faq from "@/components/Faq";
-import Closing from "@/components/Closing";
-import { SMS_HREF, PLACEHOLDER_NOTE } from "@/lib/site";
+import { SMS_HREF, SMS_NUMBER, PLACEHOLDER_NOTE, REPO_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
-  title: { absolute: "Mano: help your family thrive" },
-  description: "Mano is your family's own helper. It finds everything you can get, from food and rent to child care, health coverage, credit and job training, fills out the forms and asks before anything is sent. Then it helps you get ahead.",
+  title: { absolute: "Mano: AI that applies for help, reads your mail and waits on hold" },
+  description: "Mano is an agent for every person. It applies for help, fills out any form, reads your mail, renews on time and waits on hold. You approve every step, and applying is free.",
   alternates: { canonical: "/" },
 };
 
@@ -25,123 +19,98 @@ const faqs: [string, string][] = [
   ["Who can see my information?", "Only the people and offices you choose, for the reason you choose. You can see who has access and take it back at any time. Mano cannot pull back copies that were already sent, and it tells you which ones those are."],
   ["What happens when Mano makes a call?", "It says who it is right away: \"I'm calling for (your name). I'm their automated assistant. This call is transcribed.\" Mano never pretends to be you or to be a person."],
   ["What if a letter tells Mano to do something?", "Mano treats letters, forms and web pages as information, never as orders. It checks every link before opening it and will not open one that fails the check."],
-  ["What do I need to start?", "A phone that can text. Text or iMessage Mano, or open it on the web. Apps for iPhone, Android, Mac and Windows are in early access. It is the same Mano, with the same memory, everywhere you use it."],
+  ["What do I need to start?", "A phone that can text. Text or iMessage Mano, or open it on the web. Apps for iPhone and Android are in early access. It is the same Mano, with the same memory, everywhere you use it."],
   ["Is Mano part of the government?", "No. Mano is independent. It deals with the offices that run programs for you, so you spend less time on the phone and in line."],
 ];
 
+const grant = `{
+  "type": "consent.grant",
+  "from": "person:maria-lopez",
+  "to": "org:northside-family-center",
+  "purpose": "food-benefits-renewal",
+  "documents": ["pay-stub-2026-10-24"],
+  "expires": "2026-12-31",
+  "revocable": true
+}`;
+
 export default function Home() {
   return (
-    <>
-      <div className="hero2">
-        <div className="wrap hero2-grid">
-          <div className="hero2-copy">
-            <Channels />
-            <h1>
-              <span className="hero-line">Mano <Mascot tile tone="orange" wave className="hero-tile" /></span>
-              <span className="hero-sub">helps your family thrive.</span>
-            </h1>
-            <p className="lede">Text Mano what your family needs. It finds every program you can get, fills out the forms and helps you get ahead.</p>
-            <div className="btn-row" id="hero-cta">
-              <a className="btn btn-primary btn-lg" href="#get-mano">Get Mano free</a>
-              <a className="btn btn-ghost btn-lg" href="#demo-h">See how it works</a>
-            </div>
-            <p className="note">Free for families. Nothing is sent until you say yes.</p>
-          </div>
-          <div className="hero2-art">
-            <HelpTiles />
-            <Image src="/art/hero.svg" width={480} height={360} priority alt="Mano, a cheerful hand with a smiling face, waving and holding a phone" unoptimized />
-          </div>
-        </div>
-      </div>
+    <div className="home">
+      <HeroStage />
 
-      <section className="demo-section" aria-labelledby="demo-h">
+      <section className="h-trust" aria-labelledby="trust-h">
         <div className="wrap">
-          <div className="section-head">
-            <h2 id="demo-h">Ask for one thing. Get everything you qualify for.</h2>
-          </div>
-          <FamilyDemo />
+          <TrustDemo />
         </div>
       </section>
 
-      <section aria-labelledby="work-h" className="tint">
-        <div className="wrap">
-          <div className="section-head">
-            <h2 id="work-h">Mano does the hard parts while you live your life.</h2>
-          </div>
-          <WatchMano />
-        </div>
-      </section>
-
-      <section aria-labelledby="ladder-h">
-        <div className="wrap">
-          <div className="section-head">
-            <h2 id="ladder-h">The safety net has gaps. Mano fills them.</h2>
-            <p className="lede">Programs don&rsquo;t talk to each other. Mano connects them for your family, then helps you climb.</p>
-          </div>
-          <Ladder />
-          <ul className="quotes" role="list" aria-label="Things families text Mano">
-            {["Help me raise my credit score.", "Handle my EBT.", "Find child care I can afford.", "I'm behind on rent.", "Lower my phone bill.", "Find job training that pays."].map((q) => <li key={q}>&ldquo;{q}&rdquo;</li>)}
-          </ul>
-        </div>
-      </section>
-
-      <section aria-labelledby="every-h" className="tint">
-        <div className="wrap">
-          <div className="section-head">
-            <h2 id="every-h">Message Mano from anywhere.</h2>
-            <p className="lede">Text, iMessage, the apps or the web. Same Mano, same memory.</p>
-          </div>
-          <Everywhere />
-        </div>
-      </section>
-
-      <section aria-labelledby="charge-h">
-        <div className="wrap control">
+      <section className="h-proof" aria-labelledby="proof-h">
+        <div className="wrap proof-grid">
           <div>
-            <h2 id="charge-h">Nothing goes out without your yes.</h2>
-            <p className="lede" style={{ marginTop: 16 }}>When an office needs a document, it asks Mano. Mano asks you.</p>
-            <div className="points">
-              {[
-                ["var(--cyan)", "You approve every send", "You see who it goes to, why, and the exact pages first."],
-                ["var(--green)", "You choose who sees your case", "One case, one office, one reason. Nothing else."],
-                ["var(--orange)", "You can take access back", "It stops right away, and Mano tells you what was already sent."],
-              ].map(([, t, x]) => (
-                <div key={t}><span className="b-check" aria-hidden="true" /><div><h3>{t}</h3><p>{x}</p></div></div>
-              ))}
-            </div>
+            <p className="h-eyebrow">How we test it</p>
+            <h2 id="proof-h">Graded on paperwork it has never seen.</h2>
+            <p className="lede">Before tuning anything, we froze a set of renewal and document cases that Mano never trains on. A real caseworker reviews sample packets, and every result is checked against the same answers.</p>
+            <ul className="proof-cases" aria-label="What the test cases include">
+              {["Unreadable pages", "Missing proof", "Dates that conflict", "Hidden instructions", "Scam links"].map((x) => <li key={x}>{x}</li>)}
+            </ul>
           </div>
-          <div style={{ display: "grid", gap: 14 }} aria-hidden="true">
-            <div className="card approval">
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <Mascot size={36} tile tone="orange" />
-                <div><small className="card-label">Ready to send</small><h3 style={{ marginTop: 2 }}>Send your renewal?</h3></div>
-              </div>
-              <dl>
-                <div><dt>To</dt><dd>Sample County Human Services</dd></div>
-                <div><dt>For</dt><dd>Benefits renewal</dd></div>
-                <div><dt>Copy</dt><dd>Renewal form, 4 pages</dd></div>
-              </dl>
-              <div className="ask" style={{ marginTop: 0 }}><span className="yes">Yes, send it</span><span className="no">Not yet</span></div>
+          <div className="score">
+            <div className="score-col">
+              <p className="sc-label">Compared with</p>
+              <ul>
+                <li><b>A plain reminder app</b>The way most people track renewals today.</li>
+                <li><b>A general AI agent</b>Given the same tools Mano has, without its safeguards.</li>
+              </ul>
             </div>
-            <div className="card approval access">
-              <small className="card-label">Who can see your case</small>
-              <div className="mini" style={{ maxWidth: "none" }}>
-                <div className="mini-row"><span><span className="dot" style={{ background: "var(--blue)" }} /><span>County office <small>Renewal only</small></span></span><button tabIndex={-1}>Remove</button></div>
-                <div className="mini-row"><span><span className="dot" style={{ background: "var(--green)" }} /><span>Your case manager <small>Renewal only</small></span></span><button tabIndex={-1}>Remove</button></div>
-              </div>
+            <div className="score-col">
+              <p className="sc-label">Every run reports</p>
+              <ul className="score-measures">
+                {["Correct packets", "Missed deadlines", "Unsafe actions blocked", "Failures", "Cost", "Time"].map((m) => <li key={m}>{m}</li>)}
+              </ul>
             </div>
+            <p className="score-note">Results are published with the final run, including the cases Mano gets wrong. We make no claims before then.</p>
           </div>
         </div>
       </section>
 
-      <section id="pricing" aria-labelledby="pricing-h" className="center">
+      <section className="h-share" aria-labelledby="share-h">
         <div className="wrap">
-          <h2 id="pricing-h">Free to apply. Free to renew.</h2>
-          <p className="lede narrow" style={{ marginTop: 16, maxWidth: 560 }}>Everything you need to get and keep your help is free, for good.</p>
-          <div className="plans">
-            <article className="card plan">
-              <h3>Free</h3>
-              <div className="price">$0 <small>forever</small></div>
+          <ShareFlow />
+        </div>
+      </section>
+
+      <section className="h-open" aria-labelledby="open-h">
+        <div className="wrap open-grid">
+          <div>
+            <p className="h-eyebrow">MIT license</p>
+            <h2 id="open-h">Open source, from the first commit.</h2>
+            <p className="lede">The code and the protocol that lets agents share a case are public. Any agency, nonprofit or developer can read how Mano works, build on it or run their own copy.</p>
+            <ul className="open-facts">
+              <li><b>Consent is a record.</b> Every share names who, why and until when, and can be taken back.</li>
+              <li><b>Every action is logged first.</b> Mano decides, writes it down, then acts. If anything is unclear, it stops.</li>
+              <li><b>Runs without our accounts.</b> Every part works locally with stand-ins, so you can try it today.</li>
+            </ul>
+            <div className="btn-row" style={{ marginTop: 32 }}>
+              <a className="btn btn-primary" href={REPO_URL}>Read the code</a>
+              <a className="btn btn-ghost" href={`${REPO_URL}#readme`}>Run your own</a>
+            </div>
+          </div>
+          <figure className="code" aria-label="An example consent grant">
+            <figcaption><span className="sc-label">consent-grant.json</span><span className="sc-label">Example</span></figcaption>
+            <pre><code>{grant}</code></pre>
+          </figure>
+        </div>
+      </section>
+
+      <section id="pricing" className="h-price" aria-labelledby="pricing-h">
+        <div className="wrap">
+          <div className="h-head">
+            <p className="h-eyebrow">Pricing</p>
+            <h2 id="pricing-h">Getting help is free, and it stays free.</h2>
+          </div>
+          <div className="price-grid">
+            <article className="price">
+              <div className="price-top"><h3>Free</h3><p className="amt">$0</p><p>Everything you need to get help and keep it.</p></div>
               <ul>
                 <li>Applying for programs, jobs and scholarships</li>
                 <li>Renewals and deadlines</li>
@@ -150,9 +119,8 @@ export default function Home() {
                 <li>Filling out and filing forms</li>
               </ul>
             </article>
-            <article className="card plan plus">
-              <h3>Plus</h3>
-              <div className="price">$8 <small>a month, or $60 a year</small></div>
+            <article className="price plus">
+              <div className="price-top"><h3>Plus</h3><p className="amt">$8<small> a month, or $60 a year</small></p><p>For the things that cost us money to do for you.</p></div>
               <ul>
                 <li>Everything in Free</li>
                 <li>Phone calls for you, including waiting on hold</li>
@@ -161,22 +129,24 @@ export default function Home() {
               </ul>
             </article>
           </div>
+          <p className="price-note">Organizations pay per staff seat. <Link href="/organizations">See plans for teams</Link></p>
         </div>
       </section>
 
       <Faq items={faqs} />
 
-      <Closing
-        id="get-mano"
-        extra={<p className="note closing-note">{PLACEHOLDER_NOTE}</p>}
-        art={<Image className="closing-art" src="/art/paperwork.svg" width={480} height={360} alt="" unoptimized />}
-        title="Help for your whole family, in one text."
-        text="Hand Mano the pile of paperwork on your counter. It will tell you what each letter says, what your family can get and what happens next."
-      >
-        <a className="btn btn-primary" href={SMS_HREF}>Text Mano</a>
-        <a className="btn btn-ghost" href="/government">For offices</a>
-      </Closing>
-      <StickyCta />
-    </>
+      <section id="get-mano" className="h-close" aria-labelledby="close-h">
+        <div className="wrap">
+          <h2 id="close-h">Start with the letter you have been putting off.</h2>
+          <p className="lede">Text Mano a photo. It will tell you what the letter says, what you can do and what happens next.</p>
+          <a className="close-num" href={SMS_HREF}>{SMS_NUMBER}</a>
+          <div className="btn-row">
+            <a className="btn btn-primary btn-lg" href={SMS_HREF}>Text Mano</a>
+            <a className="btn btn-ghost btn-lg" href="/government">For offices</a>
+          </div>
+          <p className="note">{PLACEHOLDER_NOTE}</p>
+        </div>
+      </section>
+    </div>
   );
 }

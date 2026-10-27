@@ -1,14 +1,15 @@
 import type { Metadata, Viewport } from "next";
-import { Bricolage_Grotesque, Inter, JetBrains_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Schibsted_Grotesk } from "next/font/google";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import "./globals.css";
 import "./shared.css";
 import "./sections.css";
+import "./home.css";
 
-const inter = Inter({ subsets: ["latin", "latin-ext", "vietnamese"], variable: "--font-inter", display: "swap" });
-const display = Bricolage_Grotesque({ subsets: ["latin", "latin-ext", "vietnamese"], variable: "--font-display", display: "swap", axes: ["opsz"] });
-const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono", display: "swap", weight: ["500"] });
+const sans = Geist({ subsets: ["latin", "latin-ext"], variable: "--font-sans", display: "swap" });
+const display = Schibsted_Grotesk({ subsets: ["latin", "latin-ext"], variable: "--font-display", display: "swap" });
+const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono", display: "swap" });
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://withmano.com"),
@@ -17,11 +18,11 @@ export const metadata: Metadata = {
   openGraph: { siteName: "Mano", type: "website" },
 };
 
-export const viewport: Viewport = { themeColor: "#FBF8F3", colorScheme: "light" };
+export const viewport: Viewport = { themeColor: "#FFFFFF", colorScheme: "light" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable} ${display.variable} ${mono.variable}`}>
+    <html lang="en" className={`${sans.variable} ${display.variable} ${mono.variable}`}>
       <body>
         <a href="#main" className="skip">Skip to content</a>
         <Header />
