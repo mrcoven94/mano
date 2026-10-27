@@ -1,5 +1,5 @@
 import Link from "next/link";
-import Mascot from "./Mascot";
+import { REPO_URL } from "@/lib/site";
 
 export default function Footer() {
   return (
@@ -7,13 +7,13 @@ export default function Footer() {
       <div className="wrap">
         <div className="foot">
           <div>
-            <Link href="/" className="brand"><Mascot size={30} tile tone="orange" /> Mano</Link>
-            <p style={{ marginTop: 16, maxWidth: 320, fontSize: ".95rem" }}>Help for your whole family, from getting by to getting ahead.</p>
+            <Link href="/" className="brand">mano</Link>
+            <p style={{ marginTop: 16, maxWidth: 320, fontSize: ".95rem" }}>An agent for every person. It applies for help, reads your mail and asks before anything is sent.</p>
           </div>
           <nav aria-label="Footer">
             <p className="mono">Mano</p>
             <ul>
-              <li><Link href="/">For you</Link></li>
+              <li><Link href="/">For people</Link></li>
               <li><Link href="/#pricing">Pricing</Link></li>
               <li><Link href="/#questions">Questions</Link></li>
             </ul>
@@ -21,9 +21,16 @@ export default function Footer() {
           <nav aria-label="Teams">
             <p className="mono">Teams</p>
             <ul>
-              <li><Link href="/government">Government</Link></li>
-              <li><Link href="/organizations">Nonprofits</Link></li>
+              <li><Link href="/government">For offices</Link></li>
+              <li><Link href="/organizations">For nonprofits</Link></li>
               <li><Link href="/partners">Partners</Link></li>
+            </ul>
+          </nav>
+          <nav aria-label="Open source">
+            <p className="mono">Build</p>
+            <ul>
+              <li><a href={REPO_URL}>Source code</a></li>
+              <li><a href={`${REPO_URL}/blob/main/LICENSE`}>MIT license</a></li>
               <li><a href="mailto:hello@withmano.com">hello@withmano.com</a></li>
             </ul>
           </nav>
