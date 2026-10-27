@@ -6,7 +6,7 @@ import {
   type ConsentRevokePayload,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
-import { ActionGateway, InMemoryExecutor, SqlApprovalStore, approvalFromRow, ensureGatewayTables } from "../gateway/index.js";
+import { ActionGateway, SqlApprovalStore, approvalFromRow, createExecutor, ensureGatewayTables } from "../gateway/index.js";
 import type { ActionRequest, Approval } from "../gateway/index.js";
 import { extractEvidence } from "../evidence.js";
 import { getDocumentBytes, putDocument } from "../files.js";
@@ -55,7 +55,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     this.store = new SqlApprovalStore(ctx.storage.sql);
     this.gateway = new ActionGateway(
       this.store,
-      new ConsentDeliveringExecutor(new InMemoryExecutor(), (req) => this.deliverShare(req)),
+      new ConsentDeliveringExecutor(createExecutor(env), (req) => this.deliverShare(req)),
       {
         listConsents: () => this.listStoredConsents(),
         documents: {

@@ -9,4 +9,6 @@ export interface Env {
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;
   MODEL_ALLOWLIST_EXTRA?: string;
+  EXECUTOR_MODE?: string;
+  SANDBOX_BASE_URL?: string;
 }

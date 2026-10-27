@@ -146,3 +146,46 @@ function isRetryable(err: unknown): boolean {
   if (err instanceof Error && err.name === "AbortError") return true;
   return false;
 }
+
+export interface ModelComplete {
+  complete(req: ModelRequest): Promise<{ text: string; model: string }>;
+}
+
+// Stand-in used when no API key is configured, so the engine runs
+// locally end to end. Its output is labeled and never a real answer.
+export class StandInModelClient implements ModelComplete {
+  readonly standIn = true;
+  costLog: CostEntry[] = [];
+
+  async complete(req: ModelRequest): Promise<{ text: string; model: string }> {
+    this.costLog.push({ model: "stand-in", synthetic: req.synthetic, at: new Date().toISOString(), inputChars: req.input.length });
+    return {
+      text: "[stand-in model: set META_MODEL_API_KEY for live answers] " + req.input.slice(0, 200),
+      model: "stand-in",
+    };
+  }
+}
+
+export interface ModelClientEnv {
+  META_MODEL_API_KEY?: string;
+  CF_ACCOUNT_ID?: string;
+  AI_GATEWAY_ID?: string;
+  AI_GATEWAY_PROVIDER?: string;
+  MODEL_ALLOWLIST_EXTRA?: string;
+}
+
+export function createModelClient(env: ModelClientEnv, fetchFn?: typeof fetch): MetaModelClient | StandInModelClient {
+  if (!env.META_MODEL_API_KEY) return new StandInModelClient();
+  const allowExtra = (env.MODEL_ALLOWLIST_EXTRA ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return new MetaModelClient({
+    apiKey: env.META_MODEL_API_KEY,
+    accountId: env.CF_ACCOUNT_ID,
+    gatewayId: env.AI_GATEWAY_ID,
+    provider: env.AI_GATEWAY_PROVIDER,
+    allowExtra,
+    fetchFn,
+  });
+}

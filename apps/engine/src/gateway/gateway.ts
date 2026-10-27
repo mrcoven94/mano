@@ -415,9 +415,17 @@ export class ActionGateway {
 
   // Reconciles an unknown attempt. Returns a result when the executor has
   // a recorded outcome, or null when the key is still unclaimed and the
-  // caller may adopt it and execute.
+  // caller may adopt it and execute. A failing check is audited and
+  // treated as no record: executors must stay safe to retry under the
+  // same key, so adopting after a check error cannot double-execute.
   private async reconcileUnknown(req: ActionRequest, now: Date): Promise<GatewayResult | null> {
-    const found = await this.executor.check(req.idempotencyKey);
+    let found: { externalId: string } | null;
+    try {
+      found = await this.executor.check(req.idempotencyKey);
+    } catch (err) {
+      this.store.audit({ event: "gateway.check_error", key: req.idempotencyKey, detail: String(err) });
+      return null;
+    }
     if (found) {
       const receipt = this.makeReceipt(req, "reconciled", found.externalId, now);
       this.store.putReceipt(receipt);
@@ -490,27 +498,3 @@ export class ActionGateway {
   }
 }
 
-export class InMemoryExecutor implements Executor {
-  readonly simulated = true;
-  calls: ActionRequest[] = [];
-  completed = new Map<string, { externalId: string }>();
-  failNextWithTimeout = false;
-
-  async execute(req: ActionRequest): Promise<{ externalId: string }> {
-    if (this.completed.has(req.idempotencyKey)) {
-      return this.completed.get(req.idempotencyKey)!;
-    }
-    this.calls.push(req);
-    const externalId = `sim-${this.calls.length}`;
-    this.completed.set(req.idempotencyKey, { externalId });
-    if (this.failNextWithTimeout) {
-      this.failNextWithTimeout = false;
-      throw new TimeoutError();
-    }
-    return { externalId };
-  }
-
-  async check(idempotencyKey: string) {
-    return this.completed.get(idempotencyKey) ?? null;
-  }
-}
