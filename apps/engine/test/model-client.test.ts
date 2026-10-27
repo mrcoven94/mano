@@ -99,7 +99,12 @@ describe("model client", () => {
           });
         })) as typeof fetch,
     });
-    const timedOut = await hanging.complete({ input: "hi", synthetic: false }).catch((e: Error) => e);
-    expect(timedOut.name).toBe("AbortError");
+    let timedOut: Error | null = null;
+    try {
+      await hanging.complete({ input: "hi", synthetic: false });
+    } catch (e) {
+      timedOut = e as Error;
+    }
+    expect(timedOut?.name).toBe("AbortError");
   });
 });

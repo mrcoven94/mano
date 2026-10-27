@@ -41,7 +41,7 @@ export async function encryptForPerson(
     "encrypt",
   ]);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const params = (ivBytes: Uint8Array): AesGcmParams => ({
+  const params = (ivBytes: Uint8Array): SubtleCryptoEncryptAlgorithm => ({
     name: "AES-GCM",
     iv: ivBytes as BufferSource,
     ...(associatedData ? { additionalData: associatedData as BufferSource } : {}),
@@ -63,7 +63,7 @@ export async function decryptForPerson(
   associatedData?: Uint8Array,
 ): Promise<Uint8Array> {
   const kek = await importKek(kekB64);
-  const params = (ivBytes: Uint8Array): AesGcmParams => ({
+  const params = (ivBytes: Uint8Array): SubtleCryptoEncryptAlgorithm => ({
     name: "AES-GCM",
     iv: ivBytes as BufferSource,
     ...(associatedData ? { additionalData: associatedData as BufferSource } : {}),
