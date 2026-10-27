@@ -122,7 +122,16 @@ export async function authenticate(
 ): Promise<SessionClaims | null> {
   const auth = request.headers.get("authorization");
   if (!auth || !auth.startsWith("Bearer ")) return null;
-  const token = auth.slice("Bearer ".length).trim();
+  return authenticateToken(auth.slice("Bearer ".length).trim(), env);
+}
+
+// Verifies a bare token string. Used for the Authorization header and for
+// the ?token= query param on the WebSocket route, where browsers cannot
+// set headers.
+export async function authenticateToken(
+  token: string,
+  env: { SESSION_SECRET?: string },
+): Promise<SessionClaims | null> {
   if (!token) return null;
   const { secret } = getSessionSecret(env);
   return verifySessionToken(token, secret);

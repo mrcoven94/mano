@@ -1,7 +1,7 @@
 import type { Env } from "./env.js";
 import { PersonAgent } from "./agents/person-agent.js";
 import { OrgAgent } from "./agents/org-agent.js";
-import { authenticate } from "./auth.js";
+import { authenticate, authenticateToken } from "./auth.js";
 import { checkLinkSafety } from "./link-safety.js";
 
 export { PersonAgent, OrgAgent };
@@ -63,18 +63,36 @@ export default {
     const personMatch = url.pathname.match(/^\/api\/persons\/([^/]+)(\/.*)?$/);
     if (personMatch) {
       const personId = decodeURIComponent(personMatch[1]);
-      const claims = await authenticate(request, env);
+      const rest = personMatch[2] ?? "";
+      // Browsers cannot set headers on a WebSocket upgrade, so /ws also
+      // accepts the session token as a query param. Everywhere else the
+      // header is required.
+      const queryToken = rest === "/ws" ? url.searchParams.get("token") : null;
+      const claims =
+        (await authenticate(request, env)) ??
+        (queryToken ? await authenticateToken(queryToken, env) : null);
       if (!claims || claims.kind !== "person" || claims.sub !== personId) return FORBIDDEN();
       const stub = personStub(env, personId);
-      const rest = personMatch[2] ?? "";
+      const agent = stub as unknown as PersonAgent;
       if (rest === "/ws") {
+        if (request.headers.get("Upgrade") !== "websocket") {
+          return new Response("Expected websocket", { status: 426 });
+        }
         return forwardToAgent(stub, `/ws`, request, claims.sub);
       }
       if (rest === "/chat" && request.method === "POST") {
-        return forwardToAgent(stub, `/chat`, request, claims.sub);
+        let body: unknown;
+        try {
+          body = await request.json();
+        } catch {
+          return Response.json({ error: "Invalid JSON." }, { status: 400 });
+        }
+        const message = (body as { message?: unknown })?.message;
+        const out = await agent.chat(typeof message === "string" ? message : "", claims.sub);
+        return Response.json(out);
       }
       if (rest === "/approvals" && request.method === "GET") {
-        return forwardToAgent(stub, `/approvals`, request, claims.sub);
+        return Response.json({ approvals: await agent.listApprovals(claims.sub) });
       }
       if (rest === "/action" && request.method === "POST") {
         // The gateway binds the approval to the request's person ID, so the
@@ -88,19 +106,13 @@ export default {
         if (typeof body !== "object" || body === null || Array.isArray(body)) {
           return Response.json({ error: "Invalid action request." }, { status: 400 });
         }
-        const stamped = JSON.stringify({ ...body, personId: claims.sub });
-        return stub.fetch(
-          new Request(new URL(`/action`, "https://agent.internal"), {
-            method: "POST",
-            headers: { "content-type": "application/json", "x-mano-subject": claims.sub },
-            body: stamped,
-          }),
-        );
+        const result = await agent.requestAction({ ...body, personId: claims.sub }, claims.sub);
+        return Response.json(result);
       }
       const approveMatch = rest.match(/^\/approvals\/([^/]+)\/approve$/);
       if (approveMatch && request.method === "POST") {
         const approvalId = decodeURIComponent(approveMatch[1]);
-        const result = await (stub as unknown as PersonAgent).approve(approvalId, claims.sub);
+        const result = await agent.approve(approvalId, claims.sub);
         return Response.json(result);
       }
       // No model route: the agent calls the model client itself with the
