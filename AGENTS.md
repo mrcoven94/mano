@@ -22,12 +22,15 @@ Every coding session has one name and one ticket. Start status updates with `[Na
 | Forms | LAP-504 | Fill out any form, agent computers |
 | Orgs | LAP-505 | Office profiles, claiming, staff agents, consent |
 | Spine | LAP-506 | End-to-end story, legacy mock |
-| Screens | LAP-507 | Resident and staff screens |
+| Screens | LAP-507 | Staff and case manager screens on the web |
 | Channels | LAP-508 | iMessage, SMS, email |
 | Phone | LAP-509 | Calls, hold for me, fax |
 | Program | LAP-510 | Policy document to program |
 | Extensions | LAP-511 | Partner extensions, jobs, scholarships |
 | Results | LAP-512 | Run the held-out test, publish results |
+| Vault | LAP-518 | Saved logins, cards and contact details, filled without the model seeing them |
+| App | LAP-519 | Resident app in React Native (iOS, Android, web) |
+| Platform | LAP-520 | Public API, SDK, extension manifest, deploy your own |
 
 Reviews come from the architect (Claude) and outside critics; a session never reviews its own work.
 
@@ -63,6 +66,7 @@ This repository is public and MIT licensed. Build every part so a stranger can r
 - Each agent gets a computer when it needs one: a Modal Sandbox running a small Linux desktop with Chromium (screenshots in, mouse and keyboard out) that Muse Spark 1.3 drives through the computer-use tool (on Oct 26 the tool returned "Unsupported tool type" on Muse Wonder for our key, while Spark 1.3 filled a test form correctly; switch to Wonder if Meta enables it), with a per-person browser profile kept in a Modal volume. Simple page reads and login handoff use Cloudflare Browser Run. Both start on demand and stop when idle. boat.dev is the fallback if the Modal desktop image takes too long.
 - Models: Muse Spark for reasoning and reading, Muse Spark 1.3 for computer use (Wonder's computer tool is not enabled on our key yet), Muse Wonder for long text-only runs, SAM 3.1 for splitting mail photos and video, Muse Voice Transcribe for listening, Muse Image for illustrations and synthetic letter images, Muse Glimmer on our own GPU (Modal) as the guardian that checks each action. All Meta calls go through Cloudflare AI Gateway. Speech output on calls uses Deepgram (Meta has no speech output).
 - Channels: Linq (iMessage and SMS), Cloudflare Email Routing, Telnyx (voice and fax), the web app.
+- Resident app: `apps/app`, React Native with Expo, one codebase for iOS, Android and the web.
 - Site: `apps/site`, Next.js on Vercel, deployed by pushing `main`. Never run `vercel deploy --prod`.
 
 ## How to work
