@@ -4,6 +4,7 @@ import HeroStage from "@/components/home/HeroStage";
 import TrustDemo from "@/components/home/TrustDemo";
 import ShareFlow from "@/components/home/ShareFlow";
 import Faq from "@/components/Faq";
+import Mascot from "@/components/Mascot";
 import { SMS_HREF, SMS_NUMBER, PLACEHOLDER_NOTE, REPO_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
@@ -137,6 +138,7 @@ export default function Home() {
 
       <section id="get-mano" className="h-close" aria-labelledby="close-h">
         <div className="wrap">
+          <Mascot tile wave tone="orange" size={88} className="close-mascot" />
           <h2 id="close-h">Start with the letter you have been putting off.</h2>
           <p className="lede">Text Mano a photo. It will tell you what the letter says, what you can do and what happens next.</p>
           <a className="close-num" href={SMS_HREF}>{SMS_NUMBER}</a>

@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import Mascot from "@/components/Mascot";
 
 /* Three things that go wrong in real paperwork, and what Mano does about each. Pick one to see it play. */
 
@@ -47,7 +48,7 @@ export default function TrustDemo() {
 
         <div className="tr-card" key={c}>
           <div className="tr-card-head">
-            <span className="tr-who"><span className={`tr-dot ${c === "yes" ? "" : c === "timeout" ? "" : "warn"}`} />Mano</span>
+            <span className="tr-who"><Mascot tile tone="orange" size={26} />Mano{c !== "yes" && c !== "timeout" && <span className="tr-dot warn" />}</span>
             <span className="sc-label">{c === "yes" ? "Ready to send" : c === "changed" ? "Stopped" : c === "timeout" ? "Checking" : "Blocked"}</span>
           </div>
 
