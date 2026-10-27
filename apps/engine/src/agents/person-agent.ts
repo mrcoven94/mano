@@ -5,33 +5,13 @@ import {
   type ConsentRevokePayload,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
-import { ActionGateway, InMemoryExecutor, MemoryApprovalStore } from "../gateway/index.js";
+import { ActionGateway, InMemoryExecutor, SqlApprovalStore, approvalFromRow, ensureGatewayTables } from "../gateway/index.js";
 import type { ActionRequest } from "../gateway/index.js";
 import { extractEvidence } from "../evidence.js";
 import { sha256Hex } from "../hash.js";
 import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
 import { ConsentDeliveringExecutor } from "./person-executor.js";
 import type { OrgAgent } from "./org-agent.js";
-
-interface ApprovalRow {
-  id: string;
-  action_type: string;
-  recipient: string;
-  purpose: string;
-  document_hash: string | null;
-  document_id: string | null;
-  idempotency_key: string;
-  status: string;
-  approved_by: string | null;
-  created_at: string;
-  remind_at: string;
-  expires_at: string;
-  escalated: number;
-  person_id: string;
-  request_json: string;
-  request_hash: string;
-  problems_json: string;
-}
 
 export interface GrantConsentInput {
   orgAgentId: string;
@@ -48,13 +28,17 @@ export interface RevokeConsentInput {
 const ORG_AGENT_ID = /^org:([A-Za-z0-9_-]+)$/;
 
 export class PersonAgent extends DurableObject<Env> {
-  private store = new MemoryApprovalStore();
+  // The gateway reads and writes its own SQLite tables directly. There is
+  // no in-memory copy: after eviction or redeploy the agent finds every
+  // approval, attempt and receipt where it left them.
+  private store: SqlApprovalStore;
   private gateway: ActionGateway;
   private keypair: { privateKey: CryptoKey; publicKeyB64: string } | null = null;
   personId = "";
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.store = new SqlApprovalStore(ctx.storage.sql);
     this.gateway = new ActionGateway(
       this.store,
       new ConsentDeliveringExecutor(new InMemoryExecutor(), (req) => this.deliverShare(req)),
@@ -62,15 +46,13 @@ export class PersonAgent extends DurableObject<Env> {
     );
     ctx.blockConcurrencyWhile(async () => {
       const sql = ctx.storage.sql;
+      ensureGatewayTables(sql);
       sql.exec(`CREATE TABLE IF NOT EXISTS profile(id TEXT PRIMARY KEY, display_name TEXT, synthetic INTEGER NOT NULL DEFAULT 0, public_key_b64 TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS conversation(id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS deadlines(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
-      sql.exec(`CREATE TABLE IF NOT EXISTS approvals(id TEXT PRIMARY KEY, action_type TEXT, recipient TEXT, purpose TEXT, document_hash TEXT, document_id TEXT, idempotency_key TEXT, status TEXT, approved_by TEXT, created_at TEXT, remind_at TEXT, expires_at TEXT, escalated INTEGER, person_id TEXT, request_json TEXT, request_hash TEXT, problems_json TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS consents(recipient TEXT NOT NULL, purpose TEXT NOT NULL, PRIMARY KEY (recipient, purpose))`);
-      sql.exec(`CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT, detail TEXT, created_at TEXT)`);
-      sql.exec(`CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE, action_type TEXT, recipient TEXT, status TEXT, external_id TEXT, created_at TEXT)`);
       const stored = await ctx.storage.get<string>("personId");
       if (stored) this.personId = stored;
     });
@@ -78,15 +60,6 @@ export class PersonAgent extends DurableObject<Env> {
 
   private sql() {
     return this.ctx.storage.sql;
-  }
-
-  private audit(event: string, detail: unknown) {
-    this.sql().exec(
-      "INSERT INTO audit_log(event, detail, created_at) VALUES (?, ?, ?)",
-      event,
-      JSON.stringify(detail),
-      new Date().toISOString(),
-    );
   }
 
   private async assertSubject(verified: string) {
@@ -155,7 +128,7 @@ export class PersonAgent extends DurableObject<Env> {
       reply,
       new Date().toISOString(),
     );
-    this.audit("chat", { instructionsIgnored: ev.instructionsIgnored.length });
+    this.store.audit({ event: "chat", instructionsIgnored: ev.instructionsIgnored.length });
     return { reply, evidence: ev };
   }
 
@@ -178,58 +151,23 @@ export class PersonAgent extends DurableObject<Env> {
   async requestAction(raw: unknown, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.requestAction(raw);
-    if (result.approval) {
-      const a = result.approval;
-      this.sql().exec(
-        "INSERT OR REPLACE INTO approvals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        a.id, a.actionType, a.recipient, a.purpose, a.documentHash, a.documentId,
-        a.idempotencyKey, a.status, a.approvedByHumanId, a.createdAt, a.remindAt, a.expiresAt,
-        a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems),
-      );
-    }
-    if (result.receipt) this.persistReceipt(result.receipt);
-    this.audit("gateway.request", { status: result.status });
+    this.store.audit({ event: "gateway.request", status: result.status });
     return result;
   }
 
-  private persistReceipt(r: { id: string; idempotencyKey: string; actionType: string; recipient: string; status: string; externalId: string; createdAt: string }) {
-    this.sql().exec(
-      "INSERT OR REPLACE INTO receipts VALUES (?,?,?,?,?,?,?)",
-      r.id, r.idempotencyKey, r.actionType, r.recipient, r.status, r.externalId, r.createdAt,
-    );
-  }
-
   async listApprovals() {
-    const rows = [...this.sql().exec("SELECT * FROM approvals ORDER BY created_at DESC").toArray()] as unknown as ApprovalRow[];
-    return rows.map((r) => ({
-      id: r.id, actionType: r.action_type, recipient: r.recipient, purpose: r.purpose,
-      documentHash: r.document_hash, documentId: r.document_id, idempotencyKey: r.idempotency_key,
-      status: r.status, approvedByHumanId: r.approved_by, createdAt: r.created_at,
-      remindAt: r.remind_at, expiresAt: r.expires_at, escalated: r.escalated === 1,
-      personId: r.person_id, requestJson: r.request_json, requestHash: r.request_hash,
-      problems: JSON.parse(r.problems_json ?? "[]") as string[],
-    }));
+    const rows = this.sql().exec("SELECT * FROM approvals ORDER BY created_at DESC").toArray();
+    return rows.map((r) => approvalFromRow(r as Record<string, unknown>));
   }
 
   async approve(approvalId: string, verified: string) {
     await this.assertSubject(verified);
-    // Pre-stamp who is approving so the share delivery running inside the
-    // gateway can read it from the same row, then reconcile the row from
-    // the gateway afterward so a blocked approval never keeps the stamp.
-    this.sql().exec("UPDATE approvals SET approved_by = ? WHERE id = ?", verified, approvalId);
     const result = await this.gateway.approveAndExecute(approvalId, verified);
-    const current = this.store.getApproval(approvalId);
-    if (current) {
-      this.sql().exec(
-        "UPDATE approvals SET status = ?, approved_by = ?, problems_json = ? WHERE id = ?",
-        current.status, current.approvedByHumanId, JSON.stringify(current.problems), current.id,
-      );
+    if (result.status === "completed" || result.status === "reconciled") {
+      const current = this.store.getApproval(approvalId);
+      if (current?.actionType === "share") this.recordConsentOutcome(current);
     }
-    if (result.receipt) this.persistReceipt(result.receipt);
-    if ((result.status === "completed" || result.status === "reconciled") && current?.actionType === "share") {
-      this.recordConsentOutcome(current);
-    }
-    this.audit("gateway.approve", { approvalId, status: result.status });
+    this.store.audit({ event: "gateway.approve", approvalId, status: result.status });
     return result;
   }
 
