@@ -8,7 +8,8 @@ import type { Env } from "../env.js";
 import { ActionGateway, InMemoryExecutor, SqlApprovalStore, approvalFromRow, ensureGatewayTables } from "../gateway/index.js";
 import type { ActionRequest, Approval } from "../gateway/index.js";
 import { extractEvidence } from "../evidence.js";
-import { sha256Hex } from "../hash.js";
+import { getDocumentBytes, putDocument } from "../files.js";
+import { base64ToBytes } from "../hash.js";
 import { defaultModelFor } from "../model-client.js";
 import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
 import { ConsentDeliveringExecutor } from "./person-executor.js";
@@ -53,7 +54,13 @@ export class PersonAgent extends Agent<Env, PersonState> {
     this.gateway = new ActionGateway(
       this.store,
       new ConsentDeliveringExecutor(new InMemoryExecutor(), (req) => this.deliverShare(req)),
-      { listConsents: () => this.listStoredConsents() },
+      {
+        listConsents: () => this.listStoredConsents(),
+        documents: {
+          getBytes: (documentId) =>
+            getDocumentBytes(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, documentId),
+        },
+      },
     );
     ctx.blockConcurrencyWhile(async () => {
       const sql = ctx.storage.sql;
@@ -401,10 +408,24 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { externalId: message.id };
   }
 
-  async registerDocument(name: string, content: string, r2Key: string) {
-    const hash = await sha256Hex(content);
+  async registerDocument(verified: string, input: { name: string; contentB64: string }) {
+    await this.assertSubject(verified);
+    if (!input.name || typeof input.name !== "string" || input.name.length > 300) {
+      throw new Error("Document needs a name.");
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = base64ToBytes(input.contentB64);
+    } catch {
+      throw new Error("Document contentB64 is not valid base64.");
+    }
+    if (bytes.length === 0 || bytes.length > 10_000_000) {
+      throw new Error("Document is empty or larger than 10 MB.");
+    }
     const id = crypto.randomUUID();
-    this.db().exec("INSERT INTO documents VALUES (?,?,?,?)", id, name, hash, r2Key);
+    const { hash, r2Key } = await putDocument(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, id, bytes);
+    this.db().exec("INSERT INTO documents VALUES (?,?,?,?)", id, input.name, hash, r2Key);
+    this.store.audit({ event: "document.registered", id, hash });
     return { id, hash };
   }
 }

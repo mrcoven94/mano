@@ -10,6 +10,16 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(s);
 }
 
+export function base64ToBytes(s: string): Uint8Array {
+  if (typeof s !== "string" || s.length === 0 || s.length % 4 !== 0 || !/^[A-Za-z0-9+/=]+$/.test(s)) {
+    throw new Error("Not valid base64.");
+  }
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 export function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;

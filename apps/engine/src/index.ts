@@ -10,7 +10,8 @@ export * from "./gateway/types.js";
 export { checkLinkSafety } from "./link-safety.js";
 export { extractEvidence, detectPlantedInstructions, wrapEvidenceForModel } from "./evidence.js";
 export { MetaModelClient } from "./model-client.js";
-export { encryptForPerson, decryptForPerson } from "./crypto.js";
+export { encryptForPerson, decryptForPerson, documentAad } from "./crypto.js";
+export { putDocument, getDocumentBytes, documentR2Key } from "./files.js";
 export { InMemorySharedStore } from "./shared-store.js";
 export { sha256Hex } from "./hash.js";
 
@@ -108,6 +109,26 @@ export default {
         }
         const result = await agent.requestAction({ ...body, personId: claims.sub }, claims.sub);
         return Response.json(result);
+      }
+      if (rest === "/documents" && request.method === "POST") {
+        let body: unknown;
+        try {
+          body = await request.json();
+        } catch {
+          return Response.json({ error: "Invalid JSON." }, { status: 400 });
+        }
+        const { name, contentB64 } = (body ?? {}) as { name?: unknown; contentB64?: unknown };
+        if (typeof name !== "string" || typeof contentB64 !== "string") {
+          return Response.json({ error: "Body needs a name and contentB64." }, { status: 400 });
+        }
+        try {
+          const doc = await agent.registerDocument(claims.sub, { name, contentB64 });
+          return Response.json(doc);
+        } catch (err) {
+          const message = (err as Error).message;
+          const status = message.includes("ENCRYPTION_KEK_B64") ? 500 : 400;
+          return Response.json({ error: message }, { status });
+        }
       }
       const approveMatch = rest.match(/^\/approvals\/([^/]+)\/approve$/);
       if (approveMatch && request.method === "POST") {

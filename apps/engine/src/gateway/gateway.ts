@@ -135,12 +135,6 @@ export function collectActionUrls(req: ActionRequest): string[] {
   return [...new Set(urls)];
 }
 
-function bytesToB64(input: Uint8Array | string): string {
-  return typeof input === "string"
-    ? bytesToBase64(new TextEncoder().encode(input))
-    : bytesToBase64(input);
-}
-
 export interface FrozenRequest {
   requestJson: string;
   requestHash: string;
@@ -154,7 +148,13 @@ export async function freezeActionRequest(
   req: ActionRequest,
   documentBytes: Uint8Array | string | null,
 ): Promise<FrozenRequest> {
-  const documentB64 = documentBytes == null ? null : bytesToB64(documentBytes);
+  let documentB64: string | null = null;
+  let documentHash: string | null = null;
+  if (documentBytes != null) {
+    const raw = typeof documentBytes === "string" ? new TextEncoder().encode(documentBytes) : documentBytes;
+    documentHash = await sha256Hex(raw);
+    documentB64 = bytesToBase64(raw);
+  }
   const fingerprint = {
     type: req.type,
     recipient: req.recipient,
@@ -167,7 +167,7 @@ export async function freezeActionRequest(
   return {
     requestJson: canonicalJson(req),
     requestHash: await sha256Hex(fingerprintToJson(fingerprint)),
-    documentHash: documentB64 == null ? null : await sha256Hex(documentB64),
+    documentHash,
   };
 }
 
@@ -238,7 +238,16 @@ export class ActionGateway {
     | { ok: false; result: GatewayResult }
   > {
     if (!documentId) return { ok: true, bytes: null };
-    const bytes = await this.documents.getBytes(documentId);
+    let bytes: Uint8Array | string | null;
+    try {
+      bytes = await this.documents.getBytes(documentId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        result: { status: "blocked", reason: `Document storage is unavailable: ${message}` },
+      };
+    }
     if (bytes == null) {
       return {
         ok: false,
