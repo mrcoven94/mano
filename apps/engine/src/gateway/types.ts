@@ -1,3 +1,5 @@
+import type { SourceCitation } from "@mano/protocol";
+
 export type ActionType = "send" | "submit" | "call" | "fax" | "share";
 export type PolicyDecision = "allow" | "ask" | "block";
 export type ActorKind = "foreground" | "background";
@@ -14,6 +16,10 @@ export interface ActionRequest {
   caseId?: string;
   deadlineAt?: string;
   personId: string;
+  // Evidence the action is based on, and where the request originated. The
+  // gateway fills defaults (no sources, person origin) when they are absent.
+  sources?: SourceCitation[];
+  origin?: "person" | "content";
 }
 
 export interface Approval {

@@ -8,13 +8,26 @@ const DEFAULT_POLICY: Record<ActionType, PolicyDecision> = {
   share: "ask",
 };
 
+const KNOWN_TYPES: ReadonlySet<string> = new Set(Object.keys(DEFAULT_POLICY));
+const DECISIONS: ReadonlySet<string> = new Set(["allow", "ask", "block"]);
+
 export function evaluatePolicy(
   req: ActionRequest,
   overrides: Partial<Record<ActionType, PolicyDecision>> = {},
 ): PolicyDecision {
   if (req.actor === "background") return "block";
-  const policy = { ...DEFAULT_POLICY, ...overrides };
-  return policy[req.type] ?? "block";
+  // Own-property lookup against a fixed allowlist: inherited names such as
+  // "toString" or "__proto__" never match, and overrides for unknown types
+  // are ignored. Anything other than allow or ask is a block.
+  let decision: unknown;
+  if (KNOWN_TYPES.has(req.type)) {
+    decision = DEFAULT_POLICY[req.type];
+    if (Object.hasOwn(overrides, req.type)) {
+      const override = (overrides as Record<string, unknown>)[req.type];
+      if (typeof override === "string" && DECISIONS.has(override)) decision = override;
+    }
+  }
+  return decision === "allow" || decision === "ask" ? decision : "block";
 }
 
 export function approvalWindow(now: Date, deadlineAt?: string) {
