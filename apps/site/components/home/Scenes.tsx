@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import Mascot from "@/components/Mascot";
 
 /* The five hero demos. Each one plays once when it mounts; --d is the delay before a piece appears.
    Everyone and every office here is made up. */
@@ -26,7 +27,10 @@ export function ApplyScene() {
       <div className="sc-thread">
         <p className="sc-label">Text message, 9:41 PM</p>
         <p className="bub me rv" style={d(0.2)}>My hours got cut to 20 a week. Rent is due on the 1st and I have two kids. What can I get?</p>
-        <p className="bub mano rv" style={d(1.3)}>These four look like a fit for your family. I filled out each one from what you told me and your last pay stub.</p>
+        <div className="bub-row rv" style={d(1.3)}>
+          <Mascot tile tone="orange" size={30} className="bub-av" />
+          <p className="bub mano">These four look like a fit for your family. I filled out each one from what you told me and your last pay stub.</p>
+        </div>
       </div>
       <div className="sc-card">
         <div className="sc-card-head"><span>Applications</span><span className="sc-label">4 ready</span></div>
@@ -91,7 +95,7 @@ export function MailScene() {
         <div className="env e1" /><div className="env e2" />
         <div className="env e3"><span>SAMPLE COUNTY HUMAN SERVICES</span><i /><i /><i /></div>
         <div className="scan" />
-        <p className="sc-label sc-photo-cap">1 photo. 3 letters found.</p>
+        <p className="sc-label sc-photo-cap"><Mascot tile tone="orange" size={16} className="ts-av" />1 photo. 3 letters found.</p>
       </div>
       <ul className="sc-letters">
         <li className="rv" style={d(1.6)}>
@@ -180,7 +184,7 @@ export function HoldScene() {
           {lines.map(([ts, who, text, delay, kind]) => (
             <li key={ts} className={`rv ${kind ?? ""}`} style={d(delay)}>
               <span className="ts">{ts}</span>
-              <span><b>{who}</b> {kind === "hl" ? <mark>{text}</mark> : text}</span>
+              <span>{who === "Mano" && <Mascot tile tone="orange" size={18} className="ts-av" />}<b>{who}</b> {kind === "hl" ? <mark>{text}</mark> : text}</span>
             </li>
           ))}
         </ol>

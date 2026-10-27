@@ -315,3 +315,25 @@ mark{background:none;color:inherit}
   .share-flow{grid-template-columns:1fr;gap:24px}
   .share-step+.share-step::before{display:none}
 }
+
+/* mascot: the waving hand from the logo, wherever Mano speaks */
+.brand-mark{flex:none;transform:rotate(-6deg);transition:transform .25s cubic-bezier(.3,1.6,.5,1)}
+.brand:hover .brand-mark{transform:rotate(6deg) scale(1.06)}
+.h-mascot{display:inline-block;width:.86em;height:.86em;vertical-align:-.06em;margin:0 .02em;transform:rotate(-8deg);filter:drop-shadow(0 .06em 0 rgba(18,18,18,.12))}
+.h-stage-wrap{position:relative}
+.h-sticker{position:absolute;right:56px;top:20px;z-index:3;display:flex;align-items:center;gap:10px;pointer-events:none;animation:stickerIn .6s cubic-bezier(.3,1.5,.5,1) .6s both}
+.h-sticker svg{transform:rotate(10deg);filter:drop-shadow(0 6px 10px rgba(18,18,18,.16))}
+.h-sticker-bubble{background:#fff;border:1px solid var(--border2);border-radius:14px 14px 4px 14px;padding:8px 12px;font-size:.88rem;font-weight:500;color:var(--text);box-shadow:var(--shadow);white-space:nowrap}
+@keyframes stickerIn{from{opacity:0;transform:translateY(10px) scale(.9)}to{opacity:1;transform:none}}
+.h-tabs{padding-right:330px}
+.bub-row{display:flex;align-items:flex-end;gap:8px;max-width:96%}
+.bub-row .bub{max-width:none}
+.bub-av{flex:none;margin-bottom:2px}
+.ts-av{display:inline-block;vertical-align:-3px;margin-right:6px}
+.sc-photo-cap{display:flex;align-items:center}
+.tr-who svg{flex:none}
+.tr-who .tr-dot{margin-left:2px}
+.share-from{display:flex;align-items:center;gap:8px;font-weight:600;font-size:.92rem;color:var(--text)}
+.close-mascot{margin:0 auto 28px;transform:rotate(-8deg);filter:drop-shadow(0 8px 14px rgba(18,18,18,.14))}
+@media (max-width:1080px){.h-tabs{padding-right:0}.h-sticker{position:static;justify-content:flex-end;margin:0 0 -8px}}
+@media (max-width:720px){.h-sticker{margin:24px 0 -40px}.h-sticker svg{width:52px;height:52px}}

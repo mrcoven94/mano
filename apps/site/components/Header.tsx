@@ -3,6 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { REPO_URL } from "@/lib/site";
+import Mascot from "./Mascot";
 
 const links = [
   { href: "/", label: "For people", sub: "Free for everyone" },
@@ -20,7 +21,7 @@ export default function Header() {
   return (
     <header className="site-header">
       <div className="wrap bar">
-        <Link href="/" className="brand" aria-label="Mano home">mano</Link>
+        <Link href="/" className="brand" aria-label="Mano home"><Mascot size={30} tile tone="orange" className="brand-mark" />mano</Link>
         <nav aria-label="Main" className="mainnav">
           {links.map((l) => (
             <Link key={l.href} href={l.href} aria-current={path === l.href ? "page" : undefined}>{l.label}</Link>

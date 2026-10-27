@@ -60,7 +60,7 @@ section{padding:128px 0}
 /* header */
 .site-header{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.88);backdrop-filter:saturate(1.6) blur(14px);-webkit-backdrop-filter:saturate(1.6) blur(14px);border-bottom:1px solid var(--border)}
 .site-header .bar{display:flex;align-items:center;height:68px;gap:44px}
-.brand{display:inline-flex;align-items:center;text-decoration:none;font-family:var(--font-display),sans-serif;font-weight:800;font-size:1.6rem;letter-spacing:-.055em;line-height:1;padding-bottom:3px}
+.brand{display:inline-flex;align-items:center;gap:9px;text-decoration:none;font-family:var(--font-display),sans-serif;font-weight:800;font-size:1.6rem;letter-spacing:-.055em;line-height:1;padding-bottom:3px}
 .mainnav{display:flex;gap:4px}
 .mainnav a{padding:8px 12px;border-radius:8px;text-decoration:none;font-size:.95rem;color:var(--muted);transition:color .15s,background .15s}
 .mainnav a:hover{color:var(--text)}

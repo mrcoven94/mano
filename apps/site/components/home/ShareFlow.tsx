@@ -1,5 +1,6 @@
 import Link from "next/link";
 import InView from "@/components/InView";
+import Mascot from "@/components/Mascot";
 
 /* One shared case, start to finish: the caseworker's agent asks, the person decides, the document arrives. */
 
@@ -29,6 +30,7 @@ export default function ShareFlow() {
         <li className="share-step rv" style={d(0.5)}>
           <p className="share-n"><span>02</span>Maria decides</p>
           <div className="share-card">
+            <p className="share-from"><Mascot tile tone="orange" size={26} />Mano, to Maria</p>
             <p className="share-msg">Dana is asking for your October 24 pay stub for your renewal. Share it with Northside until December 31?</p>
             <div className="share-btns"><span className="tr-yes">Share it</span><span className="tr-no">Not now</span></div>
           </div>

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { REPO_URL } from "@/lib/site";
+import Mascot from "./Mascot";
 
 export default function Footer() {
   return (
@@ -7,7 +8,7 @@ export default function Footer() {
       <div className="wrap">
         <div className="foot">
           <div>
-            <Link href="/" className="brand">mano</Link>
+            <Link href="/" className="brand"><Mascot size={30} tile tone="orange" className="brand-mark" />mano</Link>
             <p style={{ marginTop: 16, maxWidth: 320, fontSize: ".95rem" }}>An agent for every person. It applies for help, reads your mail and asks before anything is sent.</p>
           </div>
           <nav aria-label="Footer">

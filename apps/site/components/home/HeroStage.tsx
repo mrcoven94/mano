@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { ApplyScene, FormScene, MailScene, RenewScene, HoldScene } from "./Scenes";
+import Mascot from "@/components/Mascot";
 
 /* The hero: one headline whose highlighted phrase follows the demo below it.
    Scenes advance on their own while the stage is on screen; choosing a tab stops that. */
@@ -50,7 +51,7 @@ export default function HeroStage() {
         <h1>
           <span className="sr-only">Mano is AI that applies for help, fills out any form, reads your mail, renews on time and waits on hold.</span>
           <span aria-hidden="true">
-            <span className="h-line">Mano is AI that</span>
+            <span className="h-line">Mano <Mascot tile wave tone="orange" size="1em" className="h-mascot" /> is AI that</span>
             <span className="h-line"><mark key={i} className="h-phrase">{SCENES[i].phrase}</mark>.</span>
           </span>
         </h1>
@@ -61,7 +62,11 @@ export default function HeroStage() {
         </div>
       </div>
 
-      <div className="wrap" ref={stage}>
+      <div className="wrap h-stage-wrap" ref={stage}>
+        <div className="h-sticker" aria-hidden="true">
+          <span className="h-sticker-bubble">Hi, I&rsquo;m Mano. Watch me work.</span>
+          <Mascot tile wave tone="orange" size={64} />
+        </div>
         <div className="h-tabs" role="tablist" aria-label="What Mano does" onKeyDown={onKey}>
           {SCENES.map((s, n) => (
             <button
