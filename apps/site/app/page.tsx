@@ -6,7 +6,7 @@ import ShareFlow from "@/components/home/ShareFlow";
 import Everywhere from "@/components/home/Everywhere";
 import Improve from "@/components/home/Improve";
 import Needs from "@/components/home/Needs";
-import PlusPrice from "@/components/home/PlusPrice";
+import Pricing from "@/components/home/Pricing";
 import Faq from "@/components/Faq";
 import Mascot from "@/components/Mascot";
 import { SMS_HREF, SMS_NUMBER, PLACEHOLDER_NOTE, REPO_URL } from "@/lib/site";
@@ -18,7 +18,7 @@ export const metadata: Metadata = {
 };
 
 const faqs: [string, string][] = [
-  ["Is Mano really free?", "Yes. Applying, renewals, deadlines, reminders and filing are free, and they stay free. Plus costs $8 a month or $60 a year and pays for things that cost money to run: phone calls, mailed and faxed letters and a priority line."],
+  ["Is Mano really free?", "Yes. Applications, renewals, reminders, mail scans and documents are free with no limits, and they stay free. Plus is $8 a month or $60 a year. It gives Mano its own computer, phone number and email, and covers unlimited calls, faxes and mailed letters, credit disputes and a priority line."],
   ["Does Mano decide if I get help?", "No. The office that runs the program decides. Mano prepares your application, sends it when you say yes, follows up and tells you what the office said."],
   ["Do I have to approve everything?", "Yes. Before anything goes out, Mano shows you who it is for, what it is for and the exact copy. If anything changes after you said yes, Mano asks you again."],
   ["Who can see my information?", "Only the people and offices you choose, for the reason you choose. You can see who has access and take it back at any time. Mano cannot pull back copies that were already sent, and it tells you which ones those are."],
@@ -99,32 +99,7 @@ export default function Home() {
 
       <section id="pricing" className="h-price" aria-labelledby="pricing-h">
         <div className="wrap">
-          <div className="h-head">
-            <h2 id="pricing-h">Getting help is free, and it stays free.</h2>
-          </div>
-          <div className="price-grid">
-            <article className="price">
-              <div className="price-top"><h3>Free</h3><p className="amt">$0</p><p>Everything you need to get help and keep it.</p></div>
-              <ul>
-                <li>Help with rent, food, bills, medicine and child care</li>
-                <li>Applying for programs, jobs and scholarships</li>
-                <li>Renewals and deadlines</li>
-                <li>Reminders before anything is due</li>
-                <li>Reading your mail from a photo</li>
-                <li>Filling out and filing forms</li>
-              </ul>
-            </article>
-            <article className="price plus">
-              <div className="price-top"><h3>Plus</h3><PlusPrice /><p>For the things that cost us money to do for you.</p></div>
-              <ul>
-                <li>Everything in Free</li>
-                <li>Phone calls for you, including waiting on hold</li>
-                <li>Letters mailed and faxed for you</li>
-                <li>A priority line when you need a person fast</li>
-              </ul>
-            </article>
-          </div>
-          <p className="price-note">Organizations pay per staff seat. <Link href="/organizations">See plans for teams</Link></p>
+          <Pricing />
         </div>
       </section>
 
