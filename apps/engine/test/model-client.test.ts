@@ -30,7 +30,13 @@ describe("model client", () => {
       fetchFn: (async (url: string, init: RequestInit) => {
         seenBody = JSON.parse(init.body as string) as Record<string, unknown>;
         seenAuth = (init.headers as Record<string, string>).authorization;
-        return new Response(JSON.stringify({ output_text: "hello" }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            status: "completed",
+            output: [{ type: "message", content: [{ type: "output_text", text: "hello" }] }],
+          }),
+          { status: 200 },
+        );
       }) as typeof fetch,
     });
     const out = await client.complete({ input: "hi", synthetic: true });
@@ -51,7 +57,13 @@ describe("model client", () => {
         calls.push(attempt);
         if (attempt === 0) return new Response("{}", { status: 429 });
         if (attempt === 1) return new Response("{}", { status: 500 });
-        return new Response(JSON.stringify({ output_text: "ok" }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            status: "completed",
+            output: [{ type: "message", content: [{ type: "output_text", text: "ok" }] }],
+          }),
+          { status: 200 },
+        );
       }) as typeof fetch,
     });
     const out = await flaky.complete({ input: "hi", synthetic: false });
@@ -68,6 +80,33 @@ describe("model client", () => {
     });
     await expect(bad.complete({ input: "hi", synthetic: false })).rejects.toThrow(/400/);
     expect(badCalls).toBe(1);
+  });
+
+  it("extracts text from output items and rejects incomplete runs", async () => {
+    const client = new MetaModelClient({
+      apiKey: "k",
+      fetchFn: (async () =>
+        new Response(
+          JSON.stringify({
+            status: "completed",
+            output: [
+              { type: "reasoning", summary: [] },
+              { type: "message", content: [{ type: "output_text", text: "ready" }] },
+            ],
+          }),
+          { status: 200 },
+        )) as typeof fetch,
+    });
+    expect((await client.complete({ input: "hi", synthetic: true })).text).toBe("ready");
+
+    const failed = new MetaModelClient({
+      apiKey: "k",
+      fetchFn: (async () =>
+        new Response(JSON.stringify({ status: "failed", error: { message: "boom" }, output: [] }), {
+          status: 200,
+        })) as typeof fetch,
+    });
+    await expect(failed.complete({ input: "hi", synthetic: true })).rejects.toThrow(/failed.*boom/);
   });
 
   it("retries network errors and timeouts without leaking the key", async () => {
