@@ -20,8 +20,8 @@ export default function TrustDemo() {
   return (
     <div className="tr">
       <div className="tr-copy">
-        <h2 id="trust-h">Nothing goes out without your yes.</h2>
-        <p className="lede">Before Mano sends anything, it shows you who it is for, why and the exact pages. Try what happens when something goes wrong.</p>
+        <h2 id="trust-h">You approve everything Mano sends.</h2>
+        <p className="lede">Before anything goes to an office, a landlord or a company, Mano shows you who it is for, why and the exact pages. Tap below to see what happens when something goes wrong.</p>
         <p className="tr-prompt sc-label">Try a case</p>
         <div className="tr-cases" role="group" aria-label="Try a case">
           {CASES.map((x) => (

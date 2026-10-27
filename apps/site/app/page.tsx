@@ -5,14 +5,15 @@ import TrustDemo from "@/components/home/TrustDemo";
 import ShareFlow from "@/components/home/ShareFlow";
 import Everywhere from "@/components/home/Everywhere";
 import Improve from "@/components/home/Improve";
+import Needs from "@/components/home/Needs";
 import PlusPrice from "@/components/home/PlusPrice";
 import Faq from "@/components/Faq";
 import Mascot from "@/components/Mascot";
 import { SMS_HREF, SMS_NUMBER, PLACEHOLDER_NOTE, REPO_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
-  title: { absolute: "Mano: AI that applies for help, reads your mail and waits on hold" },
-  description: "Mano is an agent for every person. It applies for help, fills out any form, reads your mail, renews on time and waits on hold. You approve every step, and applying is free.",
+  title: { absolute: "Mano: AI that helps you pay rent, get food, medicine and child care" },
+  description: "Mano is AI that gets you the help you need: rent, food and EBT, light and water bills, medicine, child care, housing and credit. It finds the help, fills out the forms and keeps it coming. You approve every step, and it is free.",
   alternates: { canonical: "/" },
 };
 
@@ -25,6 +26,8 @@ const faqs: [string, string][] = [
   ["What if a letter tells Mano to do something?", "Mano treats letters, forms and web pages as information, never as orders. It checks every link before opening it and will not open one that fails the check."],
   ["What do I need to start?", "A phone that can text. Text or iMessage Mano, or open it on the web. Apps for iPhone and Android are in early access. It is the same Mano, with the same memory, everywhere you use it."],
   ["Is Mano part of the government?", "No. Mano is independent. It deals with the offices that run programs for you, so you spend less time on the phone and in line."],
+  ["What can Mano help me get?", "Help paying rent, food benefits on an EBT card, help with light and water bills, health coverage and prescriptions, child care, housing waitlists, credit repair and emergency help. If there is a program for it, Mano can find it and apply for you."],
+  ["Can nonprofits and government offices use Mano?", "Yes. Each caseworker gets their own Mano for case management: it collects documents, prepares applications and tracks renewals for the people they serve, with each person's permission."],
 ];
 
 const grant = `{
@@ -41,6 +44,12 @@ export default function Home() {
   return (
     <div className="home">
       <HeroStage />
+
+      <section className="h-needs" aria-labelledby="nd-h">
+        <div className="wrap">
+          <Needs />
+        </div>
+      </section>
 
       <section className="h-trust" aria-labelledby="trust-h">
         <div className="wrap">
@@ -97,6 +106,7 @@ export default function Home() {
             <article className="price">
               <div className="price-top"><h3>Free</h3><p className="amt">$0</p><p>Everything you need to get help and keep it.</p></div>
               <ul>
+                <li>Help with rent, food, bills, medicine and child care</li>
                 <li>Applying for programs, jobs and scholarships</li>
                 <li>Renewals and deadlines</li>
                 <li>Reminders before anything is due</li>
@@ -124,7 +134,7 @@ export default function Home() {
         <div className="wrap">
           <Mascot tile wave tone="orange" size={88} className="close-mascot" />
           <h2 id="close-h">Start with the letter you have been putting off.</h2>
-          <p className="lede">Text Mano a photo. It will tell you what the letter says, what you can do and what happens next.</p>
+          <p className="lede">Or just tell Mano what you need this month. Rent, food, a bill, medicine, child care. It will tell you what help there is and start on it tonight.</p>
           <a className="close-num" href={SMS_HREF}>{SMS_NUMBER}</a>
           <div className="btn-row">
             <a className="btn btn-primary btn-lg" href={SMS_HREF}>Text Mano</a>

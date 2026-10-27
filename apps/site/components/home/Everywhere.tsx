@@ -57,8 +57,8 @@ export default function Everywhere() {
   return (
     <div className="ev">
       <div className="h-head">
-        <h2 id="dv-h">Same Mano on your phone, your computer or your own servers.</h2>
-        <p className="lede">Start a renewal by text, approve it in the app and print it from a laptop. Mano remembers the whole conversation everywhere.</p>
+        <h2 id="dv-h">Get help by text, in the app or on a computer.</h2>
+        <p className="lede">Start by text, approve in the app and print from a laptop. It is one Mano that remembers everything, and anyone can run their own copy.</p>
       </div>
 
       <div className="dv-tabs" role="tablist" aria-label="Ways to use Mano">
