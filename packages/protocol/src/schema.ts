@@ -1,9 +1,10 @@
 export const messageSchema = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
-  $id: "https://mano.example/protocol/message.schema.json",
+  $id: "https://withmano.com/protocol/message.schema.json",
   type: "object",
   required: [
     "id",
+    "version",
     "type",
     "caseId",
     "fromAgentId",
@@ -18,6 +19,7 @@ export const messageSchema = {
   ],
   properties: {
     id: { type: "string", minLength: 1 },
+    version: { type: "number", const: 1 },
     type: {
       type: "string",
       enum: [
@@ -116,3 +118,51 @@ export const schemasByType: Record<string, object> = {
     properties: { orgAgentId: { type: "string" }, note: { type: "string" } },
   },
 };
+
+interface MiniSchema {
+  type?: string;
+  required?: string[];
+  properties?: Record<string, MiniSchema>;
+  enum?: unknown[];
+  items?: MiniSchema;
+  minLength?: number;
+}
+
+// Small validator for the payload schemas above: required, type, enum,
+// minLength and array items. Deliberately narrow; unknown keywords fail.
+function matches(value: unknown, schema: MiniSchema): boolean {
+  if (schema.enum !== undefined && !schema.enum.includes(value)) return false;
+  switch (schema.type) {
+    case "string":
+      return (
+        typeof value === "string" &&
+        (schema.minLength === undefined || value.length >= schema.minLength)
+      );
+    case "boolean":
+      return typeof value === "boolean";
+    case "array":
+      return (
+        Array.isArray(value) &&
+        (schema.items === undefined || value.every((entry) => matches(entry, schema.items as MiniSchema)))
+      );
+    case "object": {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+      const record = value as Record<string, unknown>;
+      for (const key of schema.required ?? []) {
+        if (record[key] === undefined) return false;
+      }
+      for (const [key, sub] of Object.entries(schema.properties ?? {})) {
+        if (record[key] !== undefined && !matches(record[key], sub)) return false;
+      }
+      return true;
+    }
+    default:
+      return schema.type === undefined;
+  }
+}
+
+export function validatePayload(type: string, payload: unknown): boolean {
+  const schema = (schemasByType as Record<string, MiniSchema>)[type];
+  if (!schema) return false;
+  return matches(payload, schema);
+}
