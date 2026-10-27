@@ -9,6 +9,7 @@ import { ActionGateway, InMemoryExecutor, SqlApprovalStore, approvalFromRow, ens
 import type { ActionRequest } from "../gateway/index.js";
 import { extractEvidence } from "../evidence.js";
 import { sha256Hex } from "../hash.js";
+import { defaultModelFor } from "../model-client.js";
 import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
 import { ConsentDeliveringExecutor } from "./person-executor.js";
 import type { OrgAgent } from "./org-agent.js";
@@ -99,6 +100,22 @@ export class PersonAgent extends DurableObject<Env> {
   // from this stub; the binding of key to agent ID is the stub lookup.
   async getPublicKey(): Promise<string> {
     return (await this.ensureKeypair()).publicKeyB64;
+  }
+
+  // The synthetic flag lives in the profile record the agent owns. Model
+  // calls read it from here; request input can never set it.
+  async setSyntheticFlag(verified: string, synthetic: boolean) {
+    await this.assertSubject(verified);
+    this.sql().exec("UPDATE profile SET synthetic = ? WHERE id = ?", synthetic ? 1 : 0, this.personId);
+  }
+
+  async getModelInfo(verified: string): Promise<{ synthetic: boolean; model: string }> {
+    await this.assertSubject(verified);
+    const rows = this.sql().exec("SELECT synthetic FROM profile WHERE id = ?", this.personId).toArray() as unknown as {
+      synthetic: number;
+    }[];
+    const synthetic = (rows[0]?.synthetic ?? 0) === 1;
+    return { synthetic, model: defaultModelFor(synthetic) };
   }
 
   private listStoredConsents(): { recipient: string; purpose: string }[] {

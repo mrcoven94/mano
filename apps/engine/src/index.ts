@@ -3,7 +3,6 @@ import { PersonAgent } from "./agents/person-agent.js";
 import { OrgAgent } from "./agents/org-agent.js";
 import { authenticate } from "./auth.js";
 import { checkLinkSafety } from "./link-safety.js";
-import { MetaModelClient } from "./model-client.js";
 
 export { PersonAgent, OrgAgent };
 export { ActionGateway, MemoryApprovalStore, InMemoryExecutor } from "./gateway/index.js";
@@ -98,12 +97,9 @@ export default {
           }),
         );
       }
-      if (rest === "/model" && request.method === "POST") {
-        const body = (await request.json()) as { input: string; synthetic: boolean };
-        const client = new MetaModelClient({ apiKey: env.META_MODEL_API_KEY, gatewayBase: env.AI_GATEWAY_BASE });
-        const out = await client.complete(body);
-        return Response.json(out);
-      }
+      // No model route: the agent calls the model client itself with the
+      // synthetic flag from its own profile record. Callers never pick a
+      // model ID.
       return new Response("Not found", { status: 404 });
     }
 
