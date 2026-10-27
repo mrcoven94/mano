@@ -3,9 +3,8 @@ import { Geist, Geist_Mono, Schibsted_Grotesk } from "next/font/google";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import "./globals.css";
-import "./shared.css";
-import "./sections.css";
 import "./home.css";
+import "./teams.css";
 
 const sans = Geist({ subsets: ["latin", "latin-ext"], variable: "--font-sans", display: "swap" });
 const display = Schibsted_Grotesk({ subsets: ["latin", "latin-ext"], variable: "--font-display", display: "swap" });
