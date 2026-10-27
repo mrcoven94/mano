@@ -78,7 +78,25 @@ export default {
         return forwardToAgent(stub, `/approvals`, request, claims.sub);
       }
       if (rest === "/action" && request.method === "POST") {
-        return forwardToAgent(stub, `/action`, request, claims.sub);
+        // The gateway binds the approval to the request's person ID, so the
+        // worker stamps it from the verified token; client input is ignored.
+        let body: unknown;
+        try {
+          body = await request.json();
+        } catch {
+          return Response.json({ error: "Invalid JSON." }, { status: 400 });
+        }
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return Response.json({ error: "Invalid action request." }, { status: 400 });
+        }
+        const stamped = JSON.stringify({ ...body, personId: claims.sub });
+        return stub.fetch(
+          new Request(new URL(`/action`, "https://agent.internal"), {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-mano-subject": claims.sub },
+            body: stamped,
+          }),
+        );
       }
       if (rest === "/model" && request.method === "POST") {
         const body = (await request.json()) as { input: string; synthetic: boolean };
@@ -92,13 +110,15 @@ export default {
     const orgMatch = url.pathname.match(/^\/api\/orgs\/([^/]+)(\/.*)?$/);
     if (orgMatch) {
       const orgId = decodeURIComponent(orgMatch[1]);
+      const claims = await authenticate(request, env);
+      if (!claims || claims.kind !== "staff" || claims.org !== orgId) return FORBIDDEN();
       const stub = orgStub(env, orgId);
       const rest = orgMatch[2] ?? "";
+      // Cases reach the org only through consent messages from a person's
+      // agent; there is deliberately no share route here.
       if (rest === "/cases" && request.method === "GET") {
-        return stub.fetch(new Request(new URL(`/cases`, url.origin), request));
-      }
-      if (rest === "/share" && request.method === "POST") {
-        return stub.fetch(new Request(new URL(`/share`, url.origin), request));
+        const cases = await (stub as unknown as OrgAgent).listCases(orgId);
+        return Response.json({ cases });
       }
       return new Response("Not found", { status: 404 });
     }
