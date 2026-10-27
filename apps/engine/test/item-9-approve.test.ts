@@ -93,7 +93,7 @@ describe("item 9: approve route and due-approval processing", () => {
     // Past the 24 hour expiry the approval is done.
     const late = await person.processDueApprovals({ now: new Date(Date.now() + 25 * 3600_000).toISOString() });
     expect(late.expired).toContain(id);
-    const approvals = await person.listApprovals();
+    const approvals = await person.listApprovals("i9due");
     expect(approvals.find((a) => a.id === id)?.status).toBe("expired");
   });
 });

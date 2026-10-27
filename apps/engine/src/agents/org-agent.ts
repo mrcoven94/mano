@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { Agent } from "agents";
 import {
   validateMessageShape,
   verifyMessage,
@@ -20,9 +20,16 @@ export interface ConsentResult {
   duplicate?: boolean;
 }
 
+// Synced to staff screens: the org's active shared cases.
+export interface OrgState {
+  orgId: string;
+  cases: SharedCase[];
+}
+
 const ORG_AGENT_ID = /^org:([A-Za-z0-9_-]+)$/;
 
-export class OrgAgent extends DurableObject<Env> {
+export class OrgAgent extends Agent<Env, OrgState> {
+  initialState: OrgState = { orgId: "", cases: [] };
   orgId = "";
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -40,12 +47,12 @@ export class OrgAgent extends DurableObject<Env> {
     });
   }
 
-  private sql() {
+  private db() {
     return this.ctx.storage.sql;
   }
 
   private audit(event: string, detail: unknown) {
-    this.sql().exec(
+    this.db().exec(
       "INSERT INTO audit_log(event, detail, created_at) VALUES (?, ?, ?)",
       event,
       JSON.stringify(detail),
@@ -58,9 +65,14 @@ export class OrgAgent extends DurableObject<Env> {
     if (!this.orgId) {
       this.orgId = verifiedOrg;
       await this.ctx.storage.put("orgId", verifiedOrg);
+      this.syncState();
     } else if (this.orgId !== verifiedOrg) {
       throw new Error("Forbidden: org mismatch.");
     }
+  }
+
+  private syncState(): void {
+    this.setState({ orgId: this.orgId, cases: this.activeCases() });
   }
 
   // Public key of this agent, for org-signed messages. Stored beside the
@@ -97,7 +109,7 @@ export class OrgAgent extends DurableObject<Env> {
     if (!msg.approvedByHumanId) {
       return { accepted: false, reason: "Consent needs a person's approval." };
     }
-    const seen = this.sql().exec("SELECT message_id FROM processed_messages WHERE message_id = ?", msg.id).toArray();
+    const seen = this.db().exec("SELECT message_id FROM processed_messages WHERE message_id = ?", msg.id).toArray();
     if (seen.length > 0) return { accepted: true, duplicate: true };
 
     const expected = await this.keyForSender(msg.fromAgentId);
@@ -116,12 +128,13 @@ export class OrgAgent extends DurableObject<Env> {
     if (msg.type === "consent.revoke") {
       this.appendEvent(msg.caseId, "revoke", senderPerson(msg.fromAgentId), "", msg.id, now);
       this.audit("consent.revoke", { caseId: msg.caseId, from: msg.fromAgentId });
+      this.syncState();
       return { accepted: true };
     }
     if (typeof payload.purpose !== "string" || !payload.purpose) {
       return { accepted: false, reason: "Consent grant needs a purpose." };
     }
-    const revoked = this.sql().exec(
+    const revoked = this.db().exec(
       "SELECT id FROM case_events WHERE case_id = ? AND event = 'revoke'",
       msg.caseId,
     ).toArray();
@@ -130,11 +143,12 @@ export class OrgAgent extends DurableObject<Env> {
     }
     this.appendEvent(msg.caseId, "share", senderPerson(msg.fromAgentId), payload.purpose, msg.id, now);
     this.audit("consent.grant", { caseId: msg.caseId, from: msg.fromAgentId });
+    this.syncState();
     return { accepted: true };
   }
 
   private async keyForSender(fromAgentId: string): Promise<string | null> {
-    const rows = this.sql().exec(
+    const rows = this.db().exec(
       "SELECT public_key_b64 FROM agent_keys WHERE agent_id = ?",
       fromAgentId,
     ).toArray() as unknown as { public_key_b64: string }[];
@@ -143,7 +157,7 @@ export class OrgAgent extends DurableObject<Env> {
     // caller can forge, then pin the key.
     const resolved = await resolveAgentKey(this.env, fromAgentId);
     if (!resolved) return null;
-    this.sql().exec(
+    this.db().exec(
       "INSERT OR IGNORE INTO agent_keys VALUES (?, ?, ?)",
       fromAgentId,
       resolved,
@@ -160,16 +174,20 @@ export class OrgAgent extends DurableObject<Env> {
     messageId: string,
     at: string,
   ) {
-    this.sql().exec(
+    this.db().exec(
       "INSERT INTO case_events(case_id, event, person_id, purpose, message_id, at) VALUES (?,?,?,?,?,?)",
       caseId, event, personId, purpose, messageId, at,
     );
-    this.sql().exec("INSERT OR IGNORE INTO processed_messages VALUES (?)", messageId);
+    this.db().exec("INSERT OR IGNORE INTO processed_messages VALUES (?)", messageId);
   }
 
   async listCases(verifiedOrg: string): Promise<SharedCase[]> {
     await this.assertOrg(verifiedOrg);
-    const rows = this.sql().exec(
+    return this.activeCases();
+  }
+
+  private activeCases(): SharedCase[] {
+    const rows = this.db().exec(
       `SELECT case_id, person_id, purpose, MAX(at) AS shared_at FROM case_events
        WHERE event = 'share' AND case_id NOT IN (SELECT case_id FROM case_events WHERE event = 'revoke')
        GROUP BY case_id ORDER BY shared_at`,

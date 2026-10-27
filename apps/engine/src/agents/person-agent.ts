@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { Agent, type Connection, type ConnectionContext, type WSMessage } from "agents";
 import {
   signMessage,
   type ConsentGrantPayload,
@@ -6,7 +6,7 @@ import {
 } from "@mano/protocol";
 import type { Env } from "../env.js";
 import { ActionGateway, InMemoryExecutor, SqlApprovalStore, approvalFromRow, ensureGatewayTables } from "../gateway/index.js";
-import type { ActionRequest } from "../gateway/index.js";
+import type { ActionRequest, Approval } from "../gateway/index.js";
 import { extractEvidence } from "../evidence.js";
 import { sha256Hex } from "../hash.js";
 import { defaultModelFor } from "../model-client.js";
@@ -26,9 +26,19 @@ export interface RevokeConsentInput {
   caseId: string;
 }
 
+// Synced to screens: the resident's approvals, consents and reminders.
+export interface PersonState {
+  personId: string;
+  approvals: Approval[];
+  consents: { recipient: string; purpose: string }[];
+  reminders: { approvalId: string; at: string }[];
+}
+
 const ORG_AGENT_ID = /^org:([A-Za-z0-9_-]+)$/;
 
-export class PersonAgent extends DurableObject<Env> {
+export class PersonAgent extends Agent<Env, PersonState> {
+  initialState: PersonState = { personId: "", approvals: [], consents: [], reminders: [] };
+
   // The gateway reads and writes its own SQLite tables directly. There is
   // no in-memory copy: after eviction or redeploy the agent finds every
   // approval, attempt and receipt where it left them.
@@ -60,8 +70,54 @@ export class PersonAgent extends DurableObject<Env> {
     });
   }
 
-  private sql() {
+  private db() {
     return this.ctx.storage.sql;
+  }
+
+  private syncState(): void {
+    const approvals = this.db().exec("SELECT * FROM approvals ORDER BY created_at DESC").toArray()
+      .map((r) => approvalFromRow(r as Record<string, unknown>));
+    const reminders = this.db().exec("SELECT approval_id, reminded_at FROM approval_reminders").toArray() as unknown as {
+      approval_id: string;
+      reminded_at: string;
+    }[];
+    this.setState({
+      personId: this.personId,
+      approvals,
+      consents: this.listStoredConsents(),
+      reminders: reminders.map((r) => ({ approvalId: r.approval_id, at: r.reminded_at })),
+    });
+  }
+
+  // Hibernating WebSocket: the worker forwards the upgrade with the
+  // verified subject attached, and the connection sleeps while idle.
+  async onConnect(connection: Connection, ctx: ConnectionContext): Promise<void> {
+    const subject = ctx.request.headers.get("x-mano-subject");
+    try {
+      if (!subject) throw new Error("no subject");
+      await this.assertSubject(subject);
+      connection.setState({ subject });
+    } catch {
+      connection.close(4403, "Forbidden");
+    }
+  }
+
+  async onMessage(connection: Connection, message: WSMessage): Promise<void> {
+    const state = connection.state as { subject?: string } | null;
+    const subject = state?.subject;
+    if (!subject) {
+      connection.close(4403, "Forbidden");
+      return;
+    }
+    try {
+      await this.assertSubject(subject);
+    } catch {
+      connection.close(4403, "Forbidden");
+      return;
+    }
+    const text = typeof message === "string" ? message : new TextDecoder().decode(message as ArrayBuffer);
+    const out = await this.chat(text, subject);
+    connection.send(JSON.stringify({ type: "reply", ...out }));
   }
 
   private async assertSubject(verified: string) {
@@ -73,15 +129,16 @@ export class PersonAgent extends DurableObject<Env> {
   async setIdentity(personId: string) {
     this.personId = personId;
     await this.ctx.storage.put("personId", personId);
-    this.sql().exec("INSERT OR IGNORE INTO profile(id, display_name, synthetic) VALUES (?, ?, 0)", personId, personId);
-    this.sql().exec("UPDATE profile SET display_name = ? WHERE id = ?", personId, personId);
+    this.db().exec("INSERT OR IGNORE INTO profile(id, display_name, synthetic) VALUES (?, ?, 0)", personId, personId);
+    this.db().exec("UPDATE profile SET display_name = ? WHERE id = ?", personId, personId);
+    this.syncState();
   }
 
   private async ensureKeypair(): Promise<{ privateKey: CryptoKey; publicKeyB64: string }> {
     if (this.keypair) return this.keypair;
     const stored = await this.ctx.storage.get<JsonWebKey>("agentPrivateKeyJwk");
     if (stored) {
-      const rows = this.sql().exec("SELECT public_key_b64 FROM profile WHERE id = ?", this.personId).toArray() as unknown as {
+      const rows = this.db().exec("SELECT public_key_b64 FROM profile WHERE id = ?", this.personId).toArray() as unknown as {
         public_key_b64: string | null;
       }[];
       const publicKeyB64 = rows[0]?.public_key_b64;
@@ -92,7 +149,7 @@ export class PersonAgent extends DurableObject<Env> {
     }
     const fresh = await generateAgentKeypair();
     await this.ctx.storage.put("agentPrivateKeyJwk", fresh.privateJwk);
-    this.sql().exec("UPDATE profile SET public_key_b64 = ? WHERE id = ?", fresh.publicKeyB64, this.personId);
+    this.db().exec("UPDATE profile SET public_key_b64 = ? WHERE id = ?", fresh.publicKeyB64, this.personId);
     this.keypair = { privateKey: await importAgentPrivateKey(fresh.privateJwk), publicKeyB64: fresh.publicKeyB64 };
     return this.keypair;
   }
@@ -107,12 +164,12 @@ export class PersonAgent extends DurableObject<Env> {
   // calls read it from here; request input can never set it.
   async setSyntheticFlag(verified: string, synthetic: boolean) {
     await this.assertSubject(verified);
-    this.sql().exec("UPDATE profile SET synthetic = ? WHERE id = ?", synthetic ? 1 : 0, this.personId);
+    this.db().exec("UPDATE profile SET synthetic = ? WHERE id = ?", synthetic ? 1 : 0, this.personId);
   }
 
   async getModelInfo(verified: string): Promise<{ synthetic: boolean; model: string }> {
     await this.assertSubject(verified);
-    const rows = this.sql().exec("SELECT synthetic FROM profile WHERE id = ?", this.personId).toArray() as unknown as {
+    const rows = this.db().exec("SELECT synthetic FROM profile WHERE id = ?", this.personId).toArray() as unknown as {
       synthetic: number;
     }[];
     const synthetic = (rows[0]?.synthetic ?? 0) === 1;
@@ -120,16 +177,17 @@ export class PersonAgent extends DurableObject<Env> {
   }
 
   private listStoredConsents(): { recipient: string; purpose: string }[] {
-    const rows = this.sql().exec("SELECT recipient, purpose FROM consents").toArray() as unknown as {
+    const rows = this.db().exec("SELECT recipient, purpose FROM consents").toArray() as unknown as {
       recipient: string;
       purpose: string;
     }[];
     return rows.map((r) => ({ recipient: r.recipient, purpose: r.purpose }));
   }
 
-  async chat(message: string): Promise<{ reply: string; evidence?: ReturnType<typeof extractEvidence> }> {
+  async chat(message: string, verified: string): Promise<{ reply: string; evidence?: ReturnType<typeof extractEvidence> }> {
+    await this.assertSubject(verified);
     const id = crypto.randomUUID();
-    this.sql().exec(
+    this.db().exec(
       "INSERT INTO conversation(id, role, content, created_at) VALUES (?, 'user', ?, ?)",
       id,
       message,
@@ -140,7 +198,7 @@ export class PersonAgent extends DurableObject<Env> {
       ev.instructionsIgnored.length > 0
         ? "I read that as a document. I did not follow the instructions inside it. Tell me what you want me to do."
         : `Got it. I saved that to your conversation. You said: ${message.slice(0, 200)}`;
-    this.sql().exec(
+    this.db().exec(
       "INSERT INTO conversation(id, role, content, created_at) VALUES (?, 'assistant', ?, ?)",
       crypto.randomUUID(),
       reply,
@@ -152,7 +210,7 @@ export class PersonAgent extends DurableObject<Env> {
 
   async addMemory(content: string, source: string) {
     const id = crypto.randomUUID();
-    this.sql().exec(
+    this.db().exec(
       "INSERT INTO memory(id, content, source, created_at) VALUES (?, ?, ?, ?)",
       id,
       content,
@@ -163,34 +221,21 @@ export class PersonAgent extends DurableObject<Env> {
   }
 
   async listMemory() {
-    return [...this.sql().exec("SELECT * FROM memory ORDER BY created_at").toArray()];
+    return [...this.db().exec("SELECT * FROM memory ORDER BY created_at").toArray()];
   }
 
   async requestAction(raw: unknown, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.requestAction(raw);
     this.store.audit({ event: "gateway.request", status: result.status });
-    if (result.status === "needs_approval") await this.scheduleApprovalAlarm();
-    return result;
-  }
-
-  // Next pending reminder or expiry becomes the alarm time. Past-due work
-  // runs on the next alarm tick, which fires immediately for past times.
-  private async scheduleApprovalAlarm(): Promise<void> {
-    const rows = this.sql().exec(
-      "SELECT remind_at, expires_at FROM approvals WHERE status = 'pending'",
-    ).toArray() as unknown as { remind_at: string; expires_at: string }[];
-    if (rows.length === 0) {
-      await this.ctx.storage.deleteAlarm();
-      return;
+    if (result.status === "needs_approval" && result.approval) {
+      // Durable schedules drive the reminder and the expiry; each firing
+      // runs processDueApprovals, which is idempotent.
+      await this.schedule(new Date(result.approval.remindAt), "processDueApprovals", { approvalId: result.approval.id });
+      await this.schedule(new Date(result.approval.expiresAt), "processDueApprovals", { approvalId: result.approval.id });
     }
-    const times = rows.flatMap((r) => [r.remind_at, r.expires_at].map((t) => new Date(t).getTime()));
-    await this.ctx.storage.setAlarm(new Date(Math.min(...times)));
-  }
-
-  async alarm(): Promise<void> {
-    await this.processDueApprovals({ now: new Date().toISOString() });
-    await this.scheduleApprovalAlarm();
+    this.syncState();
+    return result;
   }
 
   // Sends due reminders, expires past-due approvals and escalates ones
@@ -206,8 +251,8 @@ export class PersonAgent extends DurableObject<Env> {
     const out = { reminded: [] as string[], expired: [] as string[], escalated: [] as string[] };
     const rows = (
       input.approvalId
-        ? this.sql().exec("SELECT * FROM approvals WHERE id = ?", input.approvalId).toArray()
-        : this.sql().exec("SELECT * FROM approvals WHERE status = 'pending'").toArray()
+        ? this.db().exec("SELECT * FROM approvals WHERE id = ?", input.approvalId).toArray()
+        : this.db().exec("SELECT * FROM approvals WHERE status = 'pending'").toArray()
     ).map((r) => approvalFromRow(r as Record<string, unknown>));
     for (const approval of rows) {
       if (approval.status !== "pending") continue;
@@ -219,9 +264,9 @@ export class PersonAgent extends DurableObject<Env> {
         continue;
       }
       if (new Date(approval.remindAt).getTime() <= nowMs) {
-        const seen = this.sql().exec("SELECT approval_id FROM approval_reminders WHERE approval_id = ?", approval.id).toArray();
+        const seen = this.db().exec("SELECT approval_id FROM approval_reminders WHERE approval_id = ?", approval.id).toArray();
         if (seen.length === 0) {
-          this.sql().exec("INSERT INTO approval_reminders VALUES (?, ?)", approval.id, new Date(nowMs).toISOString());
+          this.db().exec("INSERT INTO approval_reminders VALUES (?, ?)", approval.id, new Date(nowMs).toISOString());
           this.store.audit({ event: "approval.reminded", approvalId: approval.id });
           out.reminded.push(approval.id);
         }
@@ -236,11 +281,13 @@ export class PersonAgent extends DurableObject<Env> {
         }
       }
     }
+    this.syncState();
     return out;
   }
 
-  async listApprovals() {
-    const rows = this.sql().exec("SELECT * FROM approvals ORDER BY created_at DESC").toArray();
+  async listApprovals(verified: string) {
+    await this.assertSubject(verified);
+    const rows = this.db().exec("SELECT * FROM approvals ORDER BY created_at DESC").toArray();
     return rows.map((r) => approvalFromRow(r as Record<string, unknown>));
   }
 
@@ -252,6 +299,7 @@ export class PersonAgent extends DurableObject<Env> {
       if (current?.actionType === "share") this.recordConsentOutcome(current);
     }
     this.store.audit({ event: "gateway.approve", approvalId, status: result.status });
+    this.syncState();
     return result;
   }
 
@@ -259,9 +307,9 @@ export class PersonAgent extends DurableObject<Env> {
     try {
       const stored = JSON.parse(approval.requestJson) as { payload?: { consent?: string } };
       if (stored.payload?.consent === "grant") {
-        this.sql().exec("INSERT OR REPLACE INTO consents VALUES (?, ?)", approval.recipient, approval.purpose);
+        this.db().exec("INSERT OR REPLACE INTO consents VALUES (?, ?)", approval.recipient, approval.purpose);
       } else if (stored.payload?.consent === "revoke") {
-        this.sql().exec("DELETE FROM consents WHERE recipient = ? AND purpose = ?", approval.recipient, approval.purpose);
+        this.db().exec("DELETE FROM consents WHERE recipient = ? AND purpose = ?", approval.recipient, approval.purpose);
       }
     } catch {
       // Approval JSON is written by the gateway; ignore unreadable rows.
@@ -317,7 +365,7 @@ export class PersonAgent extends DurableObject<Env> {
     }
     const caseId = req.payload.caseId;
     if (typeof caseId !== "string" || !caseId) throw new Error("Share payload must carry a case ID.");
-    const rows = this.sql().exec(
+    const rows = this.db().exec(
       "SELECT approved_by FROM approvals WHERE idempotency_key = ?",
       req.idempotencyKey,
     ).toArray() as unknown as { approved_by: string | null }[];
@@ -356,45 +404,8 @@ export class PersonAgent extends DurableObject<Env> {
   async registerDocument(name: string, content: string, r2Key: string) {
     const hash = await sha256Hex(content);
     const id = crypto.randomUUID();
-    this.sql().exec("INSERT INTO documents VALUES (?,?,?,?)", id, name, hash, r2Key);
+    this.db().exec("INSERT INTO documents VALUES (?,?,?,?)", id, name, hash, r2Key);
     return { id, hash };
-  }
-
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    // The worker sets x-mano-subject from a verified session token and is
-    // this agent's only caller. No other identity input is trusted.
-    const subject = request.headers.get("x-mano-subject");
-    if (!subject) return new Response("Forbidden", { status: 403 });
-    if (!this.personId) await this.setIdentity(subject);
-    else if (this.personId !== subject) return new Response("Forbidden", { status: 403 });
-    if (url.pathname.endsWith("/ws")) {
-      if (request.headers.get("Upgrade") !== "websocket") {
-        return new Response("Expected websocket", { status: 426 });
-      }
-      const pair = new WebSocketPair();
-      const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
-      server.accept();
-      server.addEventListener("message", async (event) => {
-        const text = typeof event.data === "string" ? event.data : "";
-        const out = await this.chat(text);
-        server.send(JSON.stringify({ type: "reply", ...out }));
-      });
-      return new Response(null, { status: 101, webSocket: client });
-    }
-    if (request.method === "POST" && url.pathname.endsWith("/chat")) {
-      const body = (await request.json()) as { message: string };
-      const out = await this.chat(body.message ?? "");
-      return Response.json(out);
-    }
-    if (request.method === "GET" && url.pathname.endsWith("/approvals")) {
-      return Response.json({ approvals: await this.listApprovals() });
-    }
-    if (request.method === "POST" && url.pathname.endsWith("/action")) {
-      const body = (await request.json()) as ActionRequest;
-      return Response.json(await this.requestAction(body, subject));
-    }
-    return new Response("Not found", { status: 404 });
   }
 }
 
