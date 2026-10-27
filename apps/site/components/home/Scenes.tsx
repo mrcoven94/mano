@@ -20,7 +20,7 @@ export function ApplyScene() {
     ["Emergency rent help", "Sample County. Up to one month of rent."],
     ["Food benefits", "For a family of three."],
     ["Child care help", "Pays part of daycare while you work."],
-    ["Power bill credit", "Lowers your bill through the winter."],
+    ["Power bill help", "Lowers your bill through the winter."],
   ];
   return (
     <div className="sc sc-apply">
@@ -105,8 +105,8 @@ export function MailScene() {
         </li>
         <li className="rv" style={d(2.5)}>
           <span className="sc-label">Bill</span>
-          <strong>Clinic bill, $84</strong>
-          <p>You were charged twice for one visit on October 3. I drafted a dispute for you to read.</p>
+          <strong>Water bill, $96 past due</strong>
+          <p>You qualify for help paying it. I started the application, and it needs your yes.</p>
         </li>
         <li className="rv is-alert" style={d(3.4)}>
           <span className="sc-label">Warning</span>
@@ -123,9 +123,9 @@ export function RenewScene() {
   /* position on the six-month track, from Oct 1 */
   const at = (month: number, day: number, days: number) => (month + day / days) / 6;
   const rows: [string, string, number, number, string, boolean][] = [
-    ["Power bill credit", "Renewed Oct 12", at(0, 1, 31), at(0, 12, 31), "Approved Oct 19", true],
+    ["Power bill help", "Renewed Oct 12", at(0, 1, 31), at(0, 12, 31), "Approved Oct 19", true],
     ["Food benefits", "Due Nov 14", at(0, 20, 31), at(1, 14, 30), "Ready for your yes", false],
-    ["Health coverage", "Due Jan 31", at(3, 6, 31), at(3, 31, 31), "Mano starts Jan 6", false],
+    ["Water bill help", "Due Jan 31", at(3, 6, 31), at(3, 31, 31), "Mano starts Jan 6", false],
     ["Child care", "Due Mar 15", at(4, 20, 28), at(5, 15, 31), "Mano starts Feb 20", false],
   ];
   return (
@@ -146,7 +146,7 @@ export function RenewScene() {
           ))}
           <span className="rn-today" style={{ "--today": at(0, 26, 31) } as React.CSSProperties} aria-hidden="true"><span>Today</span></span>
         </div>
-        <p className="sc-foot rv" style={d(2.8)}>Mano starts every renewal three weeks early and tells you what it needs from you.</p>
+        <p className="sc-foot rv" style={d(2.8)}>Mano starts every renewal three weeks early, so the help never stops.</p>
       </div>
     </div>
   );
@@ -163,7 +163,7 @@ export function HoldScene() {
   const mm = String(Math.floor(t / 60)).padStart(2, "0");
   const ss = String(t % 60).padStart(2, "0");
   const lines: [string, string, string, number, string?][] = [
-    ["00:04", "Mano", "I'm calling for Maria Lopez. I'm her automated assistant, and this call is transcribed.", 0.3],
+    ["00:04", "Mano", "I'm calling for Maria Lopez about her prescription coverage. I'm her automated assistant, and this call is transcribed.", 0.3],
     ["00:09", "Recording", "All of our caseworkers are busy. Please stay on the line.", 1.2, "dim"],
     ["31:40", "Mano", "Texted Maria: still on hold, number 3 in line.", 2.4, "dim"],
     ["47:10", "Caseworker", "Thanks for holding, this is Dana.", 5.0],
@@ -174,7 +174,7 @@ export function HoldScene() {
       <div className="sc-timer">
         <p className="sc-label">On hold for Maria</p>
         <p className="tm" aria-label={`${mm} minutes ${ss} seconds`}>{mm}:{ss}</p>
-        <p className="sub">Sample County benefits line</p>
+        <p className="sub">Sample County health coverage line</p>
         <div className={`wave${t >= end ? " stop" : ""}`} aria-hidden="true">{Array.from({ length: 24 }, (_, n) => <i key={n} style={d(-(n % 7) * 0.13)} />)}</div>
         <p className="note-line">Mano waits so you don&rsquo;t have to. When a person picks up, it texts you and hands over the call.</p>
       </div>

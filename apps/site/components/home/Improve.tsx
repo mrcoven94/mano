@@ -3,7 +3,7 @@ import { useState } from "react";
 import Mascot from "@/components/Mascot";
 import { REPO_URL } from "@/lib/site";
 
-/* How Mano keeps getting better: four loops, each with a small demo. The test step lets a visitor open each kind of case. */
+/* Mano is always improving: four loops, each with a small demo. The test step lets a visitor open each kind of case. */
 
 const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
 
@@ -35,8 +35,8 @@ export default function Improve() {
   return (
     <div className="im">
       <div className="h-head">
-        <h2 id="im-h">How Mano keeps getting better.</h2>
-        <p className="lede">Mano improves from your corrections, from every form it fills, from caseworkers who check its work and from a test anyone can read.</p>
+        <h2 id="im-h">Mano is always improving.</h2>
+        <p className="lede">Every correction you make, every form it fills and every caseworker review makes Mano better for the next person. It is graded on paperwork it has never seen, and the results are public.</p>
       </div>
 
       <div className="im-grid">

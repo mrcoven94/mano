@@ -3,15 +3,15 @@ import { useEffect, useRef, useState } from "react";
 import { ApplyScene, FormScene, MailScene, RenewScene, HoldScene } from "./Scenes";
 import Mascot from "@/components/Mascot";
 
-/* The hero: one headline whose highlighted phrase follows the demo below it.
+/* The hero: one headline whose highlighted outcome follows the demo below it. Each tab names the outcome and the work behind it.
    Scenes advance on their own while the stage is on screen; choosing a tab stops that. */
 
 const SCENES = [
-  { key: "apply", tab: "Applies for help", phrase: "applies for help", Scene: ApplyScene },
-  { key: "forms", tab: "Fills out any form", phrase: "fills out any form", Scene: FormScene },
-  { key: "mail", tab: "Reads your mail", phrase: "reads your mail", Scene: MailScene },
-  { key: "renew", tab: "Renews on time", phrase: "renews on time", Scene: RenewScene },
-  { key: "hold", tab: "Waits on hold", phrase: "waits on hold", Scene: HoldScene },
+  { key: "apply", tab: "Pay rent", how: "Applies for help", phrase: "helps you pay rent", Scene: ApplyScene },
+  { key: "forms", tab: "Find child care", how: "Fills out any form", phrase: "finds child care", Scene: FormScene },
+  { key: "mail", tab: "Keep your benefits", how: "Reads your mail", phrase: "keeps food coming", Scene: MailScene },
+  { key: "renew", tab: "Keep the lights on", how: "Renews on time", phrase: "keeps the lights on", Scene: RenewScene },
+  { key: "hold", tab: "Get your medicine", how: "Waits on hold", phrase: "gets your medicine", Scene: HoldScene },
 ];
 
 const SECONDS = 8;
@@ -48,16 +48,16 @@ export default function HeroStage() {
     <div className="h-hero">
       <div className="wrap h-hero-head">
         <h1>
-          <span className="sr-only">Mano is AI that applies for help, fills out any form, reads your mail, renews on time and waits on hold.</span>
+          <span className="sr-only">Mano is AI that helps you pay rent, finds child care, keeps food coming, keeps the lights on and gets your medicine.</span>
           <span aria-hidden="true">
             <span className="h-line">Mano <Mascot tile wave tone="orange" size="1em" className="h-mascot" /> is AI that</span>
             <span className="h-line"><mark key={i} className="h-phrase">{SCENES[i].phrase}</mark>.</span>
           </span>
         </h1>
-        <p className="h-lede">Text it what you need or a photo of the letter you have been putting off. Mano does the paperwork, then asks you before anything is sent.</p>
+        <p className="h-lede">Rent, food, medicine, child care, light and water bills. Text Mano what is going on and it finds the help, fills out the forms and keeps the help coming. You say yes before anything is sent.</p>
         <div className="btn-row h-ctas">
           <a className="btn btn-primary btn-lg" href="#get-mano">Text Mano</a>
-          <a className="btn btn-ghost btn-lg" href="#trust-h">How it stays safe</a>
+          <a className="btn btn-ghost btn-lg" href="#nd-h">What Mano helps with</a>
         </div>
         <p className="h-note">Free for applying and renewals, and it stays free.</p>
       </div>
@@ -80,7 +80,7 @@ export default function HeroStage() {
               onClick={() => pick(n)}
             >
               <span className="h-tab-n">0{n + 1}</span>
-              {s.tab}
+              <span className="h-tab-t">{s.tab}<small>{s.how}</small></span>
               {n === i && auto && (
                 <span
                   key={`p-${i}`}
