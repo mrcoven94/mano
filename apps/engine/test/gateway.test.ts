@@ -66,6 +66,22 @@ describe("action gateway", () => {
     const result = await gw.requestAction(baseReq({ actor: "background" }));
     expect(result.status).toBe("blocked");
   });
+
+  it("re-runs policy at approval time and blocks when it changed", async () => {
+    const store = new MemoryApprovalStore();
+    const docs = new MapDocumentStore();
+    const first = await new ActionGateway(store, new InMemoryExecutor(), { documents: docs }).requestAction(
+      baseReq({ idempotencyKey: "key-rerun", documentId: undefined }),
+    );
+    expect(first.status).toBe("needs_approval");
+    const strict = new ActionGateway(store, new InMemoryExecutor(), {
+      documents: docs,
+      policyOverrides: { submit: "block" },
+    });
+    const result = await strict.approveAndExecute(first.approval!.id, "maria");
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toMatch(/policy now blocks/i);
+  });
 });
 
 describe("evidence handling", () => {

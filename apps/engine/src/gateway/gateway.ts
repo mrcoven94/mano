@@ -5,6 +5,7 @@ import { approvalWindow, evaluatePolicy } from "./policy.js";
 import type {
   ActionRequest,
   Approval,
+  Attempt,
   Executor,
   GatewayResult,
   PolicyDecision,
@@ -17,14 +18,23 @@ import { LocalRulesChecker, checkerWithTimeout, type Checker, type CheckResult }
 export interface ApprovalStore {
   getApproval(id: string): Approval | null;
   putApproval(a: Approval): void;
+  // Atomically moves a pending approval to approved and records the
+  // execution attempt. Returns null when the approval is not pending or
+  // the key is already claimed. Implementations must perform both writes
+  // with no await between them.
+  consumeApprovalAndClaim(id: string, humanId: string, attempt: Attempt): Approval | null;
   getReceiptByKey(key: string): Receipt | null;
   putReceipt(r: Receipt): void;
+  getAttempt(key: string): Attempt | null;
+  insertAttempt(a: Attempt): boolean;
+  updateAttempt(key: string, status: Attempt["status"]): void;
   audit(entry: Record<string, unknown>): void;
 }
 
 export class MemoryApprovalStore implements ApprovalStore {
   approvals = new Map<string, Approval>();
   receipts = new Map<string, Receipt>();
+  attempts = new Map<string, Attempt>();
   auditLog: Record<string, unknown>[] = [];
   getApproval(id: string) {
     return this.approvals.get(id) ?? null;
@@ -32,11 +42,33 @@ export class MemoryApprovalStore implements ApprovalStore {
   putApproval(a: Approval) {
     this.approvals.set(a.id, a);
   }
+  consumeApprovalAndClaim(id: string, humanId: string, attempt: Attempt): Approval | null {
+    const current = this.approvals.get(id);
+    if (!current || current.status !== "pending") return null;
+    if (this.attempts.has(attempt.key)) return null;
+    current.status = "approved";
+    current.approvedByHumanId = humanId;
+    this.approvals.set(id, current);
+    this.attempts.set(attempt.key, attempt);
+    return current;
+  }
   getReceiptByKey(key: string) {
     return this.receipts.get(key) ?? null;
   }
   putReceipt(r: Receipt) {
     this.receipts.set(r.idempotencyKey, r);
+  }
+  getAttempt(key: string) {
+    return this.attempts.get(key) ?? null;
+  }
+  insertAttempt(a: Attempt) {
+    if (this.attempts.has(a.key)) return false;
+    this.attempts.set(a.key, a);
+    return true;
+  }
+  updateAttempt(key: string, status: Attempt["status"]) {
+    const current = this.attempts.get(key);
+    if (current) this.attempts.set(key, { ...current, status, updatedAt: new Date().toISOString() });
   }
   audit(entry: Record<string, unknown>) {
     this.auditLog.push(entry);
@@ -281,24 +313,56 @@ export class ActionGateway {
       this.store.putApproval(approval);
       return { status: "blocked", reason: "Approval expired." };
     }
+    if (approval.status !== "pending") {
+      const reasons: Record<string, string> = {
+        approved: "This approval was already used.",
+        stale: "This approval is stale: the request changed after it was created.",
+        blocked: "This approval is blocked.",
+        expired: "Approval expired.",
+      };
+      return { status: "blocked", reason: reasons[approval.status] ?? "This approval is no longer pending." };
+    }
+    if (!humanId || humanId !== approval.personId) {
+      return { status: "blocked", reason: "This approval belongs to a different person." };
+    }
     let stored: ActionRequest;
     try {
       stored = parseActionRequest(JSON.parse(approval.requestJson));
     } catch {
       return { status: "blocked", reason: "Approval data is unreadable." };
     }
+    if (evaluatePolicy(stored, this.opts.policyOverrides as never) === "block") {
+      approval.status = "blocked";
+      this.store.putApproval(approval);
+      this.store.audit({ event: "gateway.block", type: stored.type, reason: "policy-rerun" });
+      return { status: "blocked", reason: "Policy now blocks this action." };
+    }
+    const linkBlock = await this.checkLinks(stored);
+    if (linkBlock) return linkBlock;
     const docRead = await this.readDocumentBytes(stored.documentId);
     if (!docRead.ok) return docRead.result;
     const frozen = await freezeActionRequest(stored, docRead.bytes);
+    const check = await this.runChecker(stored, frozen.documentHash);
+    if (!check.ok) return { status: "blocked", reason: check.reason };
     if (frozen.requestHash !== approval.requestHash) {
       approval.status = "stale";
       this.store.putApproval(approval);
       this.store.audit({ event: "gateway.stale_block", approvalId });
       return { status: "stale", approval, reason: "Document changed after approval." };
     }
-    approval.status = "approved";
-    approval.approvedByHumanId = humanId;
-    this.store.putApproval(approval);
+    if (check.problems.length > 0) {
+      approval.problems = check.problems;
+      this.store.putApproval(approval);
+    }
+    const attempt: Attempt = {
+      key: stored.idempotencyKey,
+      status: "in_flight",
+      updatedAt: now.toISOString(),
+    };
+    const consumed = this.store.consumeApprovalAndClaim(approvalId, humanId, attempt);
+    if (!consumed) {
+      return { status: "blocked", reason: "This approval was already used or is in progress." };
+    }
     return this.execute(stored, now);
   }
 

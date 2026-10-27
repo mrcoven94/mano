@@ -56,6 +56,15 @@ export interface Receipt {
   createdAt: string;
 }
 
+// One execution claim for an idempotency key. in_flight while the executor
+// runs, unknown when a timeout left the outcome uncertain, done once a
+// receipt (or a definitive failure) is recorded.
+export interface Attempt {
+  key: string;
+  status: "in_flight" | "unknown" | "done";
+  updatedAt: string;
+}
+
 export interface GatewayResult {
   status: "completed" | "needs_approval" | "blocked" | "stale" | "reconciled";
   approval?: Approval;
