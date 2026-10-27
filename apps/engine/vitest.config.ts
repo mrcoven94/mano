@@ -11,6 +11,7 @@ export default defineWorkersConfig({
           bindings: {
             META_MODEL_API_KEY: "test-key-not-real",
             ENCRYPTION_KEK_B64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            SESSION_SECRET: "test-session-secret-not-real",
           },
         },
       },
