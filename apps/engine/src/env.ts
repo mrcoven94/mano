@@ -4,6 +4,9 @@ export interface Env {
   FILES: R2Bucket;
   META_MODEL_API_KEY: string;
   ENCRYPTION_KEK_B64: string;
-  AI_GATEWAY_BASE?: string;
   SESSION_SECRET?: string;
+  CF_ACCOUNT_ID?: string;
+  AI_GATEWAY_ID?: string;
+  AI_GATEWAY_PROVIDER?: string;
+  MODEL_ALLOWLIST_EXTRA?: string;
 }

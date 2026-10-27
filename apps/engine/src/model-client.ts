@@ -1,3 +1,11 @@
+// Meta model client. Model IDs come from a fixed allowlist: standard IDs
+// for person data, contributor IDs for synthetic data only. The agent
+// decides which side a request is on from its own profile record; callers
+// never pick.
+
+export const STANDARD_MODEL_IDS = ["muse-spark-1.3"];
+export const CONTRIBUTOR_MODEL_IDS = ["muse-spark-1.3-contributor"];
+
 export interface ModelRequest {
   input: string;
   synthetic: boolean;
@@ -11,36 +19,83 @@ export interface CostEntry {
   inputChars: number;
 }
 
+export interface ModelEndpointOptions {
+  accountId?: string;
+  gatewayId?: string;
+  provider?: string;
+  directBaseUrl?: string;
+}
+
+export interface ModelClientOptions extends ModelEndpointOptions {
+  apiKey: string;
+  allowExtra?: string[];
+  timeoutMs?: number;
+  maxRetries?: number;
+  fetchFn?: typeof fetch;
+}
+
+// AI Gateway when the account and gateway are configured, otherwise direct
+// to the model API. The caller reports which path is live; both carry the
+// same request shape and store:false.
+export function buildModelBaseUrl(opts: ModelEndpointOptions): { url: string; via: "ai-gateway" | "direct" } {
+  if (opts.accountId && opts.gatewayId) {
+    const provider = opts.provider ?? "meta";
+    return {
+      url: `https://gateway.ai.cloudflare.com/v1/${opts.accountId}/${opts.gatewayId}/${provider}`,
+      via: "ai-gateway",
+    };
+  }
+  return { url: (opts.directBaseUrl ?? "https://api.meta.ai/v1").replace(/\/$/, ""), via: "direct" };
+}
+
+export function defaultModelFor(synthetic: boolean): string {
+  return synthetic ? CONTRIBUTOR_MODEL_IDS[0] : STANDARD_MODEL_IDS[0];
+}
+
+class RetryableStatus extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`Model request failed: ${status}`);
+    this.name = "RetryableStatus";
+    this.status = status;
+  }
+}
+
 export class MetaModelClient {
   costLog: CostEntry[] = [];
+  readonly baseUrl: string;
+  readonly via: "ai-gateway" | "direct";
   private apiKey: string;
-  private baseUrl: string;
+  private allowlist: Set<string>;
   private timeoutMs: number;
   private maxRetries: number;
   private fetchFn: typeof fetch;
 
-  constructor(opts: {
-    apiKey: string;
-    gatewayBase?: string;
-    timeoutMs?: number;
-    maxRetries?: number;
-    fetchFn?: typeof fetch;
-  }) {
+  constructor(opts: ModelClientOptions) {
+    if (!opts.apiKey) throw new Error("A model API key is required.");
     this.apiKey = opts.apiKey;
-    this.baseUrl = (opts.gatewayBase ?? "https://api.meta.ai/v1").replace(/\/$/, "");
+    const endpoint = buildModelBaseUrl(opts);
+    this.baseUrl = endpoint.url;
+    this.via = endpoint.via;
+    this.allowlist = new Set([...STANDARD_MODEL_IDS, ...CONTRIBUTOR_MODEL_IDS, ...(opts.allowExtra ?? [])]);
     this.timeoutMs = opts.timeoutMs ?? 15000;
     this.maxRetries = opts.maxRetries ?? 2;
     this.fetchFn = opts.fetchFn ?? fetch;
   }
 
+  private isContributorId(id: string): boolean {
+    return CONTRIBUTOR_MODEL_IDS.includes(id) || (this.allowlist.has(id) && id.includes("-contributor"));
+  }
+
   resolveModel(synthetic: boolean, requested?: string): string {
-    if (requested) {
-      if (!synthetic && requested.includes("-contributor")) {
+    if (requested !== undefined) {
+      if (!this.allowlist.has(requested)) throw new Error(`Unknown model ID: ${requested}.`);
+      if (!synthetic && this.isContributorId(requested)) {
         throw new Error("Contributor models are only allowed for synthetic data.");
       }
       return requested;
     }
-    return synthetic ? "muse-spark-1.3-contributor" : "muse-spark-1.3";
+    return defaultModelFor(synthetic);
   }
 
   async complete(req: ModelRequest): Promise<{ text: string; model: string }> {
@@ -60,18 +115,34 @@ export class MetaModelClient {
           },
           body: JSON.stringify({ model, input: req.input, store: false }),
         });
-        clearTimeout(timer);
-        if (!res.ok) throw new Error(`Model request failed: ${res.status}`);
+        if (res.status !== 429 && res.status < 500 && !res.ok) {
+          clearTimeout(timer);
+          throw new Error(`Model request failed: ${res.status}`);
+        }
+        // The timeout stays armed while the body is read.
         const data = (await res.json()) as { output_text?: string };
+        clearTimeout(timer);
+        if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
         return { text: data.output_text ?? "", model };
       } catch (err) {
         clearTimeout(timer);
         lastErr = err;
-        if (attempt < this.maxRetries) {
+        if (attempt < this.maxRetries && isRetryable(err)) {
           await new Promise((r) => setTimeout(r, 100 * 2 ** attempt));
+          continue;
         }
+        throw err instanceof Error ? err : new Error("Model request failed.");
       }
     }
     throw lastErr instanceof Error ? lastErr : new Error("Model request failed.");
   }
+}
+
+// Retries only 429, 5xx and network errors (including timeouts). Every
+// other 4xx fails fast, and client errors are never retried.
+function isRetryable(err: unknown): boolean {
+  if (err instanceof RetryableStatus) return true;
+  if (err instanceof TypeError) return true;
+  if (err instanceof Error && err.name === "AbortError") return true;
+  return false;
 }
