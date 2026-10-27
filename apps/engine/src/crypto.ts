@@ -24,9 +24,16 @@ export interface EncryptedBlob {
   dekIvB64: string;
 }
 
+// Binds a ciphertext to one person's one document. Decryption with any
+// other person or document ID fails authentication.
+export function documentAad(personId: string, documentId: string): Uint8Array {
+  return new TextEncoder().encode(`mano-doc:v1:${personId}:${documentId}`);
+}
+
 export async function encryptForPerson(
   plaintext: Uint8Array,
   kekB64: string,
+  associatedData?: Uint8Array,
 ): Promise<EncryptedBlob> {
   const kek = await importKek(kekB64);
   const dekRaw = crypto.getRandomValues(new Uint8Array(32));
@@ -34,13 +41,14 @@ export async function encryptForPerson(
     "encrypt",
   ]);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource }, dek, plaintext as BufferSource);
+  const params = (ivBytes: Uint8Array): AesGcmParams => ({
+    name: "AES-GCM",
+    iv: ivBytes as BufferSource,
+    ...(associatedData ? { additionalData: associatedData as BufferSource } : {}),
+  });
+  const ct = await crypto.subtle.encrypt(params(iv), dek, plaintext as BufferSource);
   const dekIv = crypto.getRandomValues(new Uint8Array(12));
-  const wrapped = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: dekIv as BufferSource },
-    kek,
-    dekRaw as BufferSource,
-  );
+  const wrapped = await crypto.subtle.encrypt(params(dekIv), kek, dekRaw as BufferSource);
   return {
     ciphertextB64: bytesToB64(new Uint8Array(ct)),
     ivB64: bytesToB64(iv),
@@ -52,16 +60,22 @@ export async function encryptForPerson(
 export async function decryptForPerson(
   blob: EncryptedBlob,
   kekB64: string,
+  associatedData?: Uint8Array,
 ): Promise<Uint8Array> {
   const kek = await importKek(kekB64);
+  const params = (ivBytes: Uint8Array): AesGcmParams => ({
+    name: "AES-GCM",
+    iv: ivBytes as BufferSource,
+    ...(associatedData ? { additionalData: associatedData as BufferSource } : {}),
+  });
   const dekRaw = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: b64ToBytes(blob.dekIvB64) as BufferSource },
+    params(b64ToBytes(blob.dekIvB64)),
     kek,
     b64ToBytes(blob.wrappedDekB64) as BufferSource,
   );
   const dek = await crypto.subtle.importKey("raw", dekRaw, "AES-GCM", false, ["decrypt"]);
   const pt = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: b64ToBytes(blob.ivB64) as BufferSource },
+    params(b64ToBytes(blob.ivB64)),
     dek,
     b64ToBytes(blob.ciphertextB64) as BufferSource,
   );
