@@ -52,6 +52,25 @@ export function defaultModelFor(synthetic: boolean): string {
   return synthetic ? CONTRIBUTOR_MODEL_IDS[0] : STANDARD_MODEL_IDS[0];
 }
 
+// Pulls the reply text out of a /responses body: output items of type
+// message carry content parts of type output_text.
+export function extractOutputText(data: unknown): string {
+  const output = (data as { output?: unknown } | null)?.output;
+  if (!Array.isArray(output)) return "";
+  const parts: string[] = [];
+  for (const item of output) {
+    const content = (item as { content?: unknown } | null)?.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      const candidate = part as { type?: unknown; text?: unknown } | null;
+      if (candidate?.type === "output_text" && typeof candidate.text === "string") {
+        parts.push(candidate.text);
+      }
+    }
+  }
+  return parts.join("");
+}
+
 class RetryableStatus extends Error {
   readonly status: number;
   constructor(status: number) {
@@ -120,10 +139,15 @@ export class MetaModelClient {
           throw new Error(`Model request failed: ${res.status}`);
         }
         // The timeout stays armed while the body is read.
-        const data = (await res.json()) as { output_text?: string };
+        const data: unknown = await res.json();
         clearTimeout(timer);
         if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
-        return { text: data.output_text ?? "", model };
+        const status = (data as { status?: unknown })?.status;
+        if (typeof status === "string" && status !== "completed") {
+          const detail = (data as { error?: { message?: unknown } })?.error?.message;
+          throw new Error(`Model run ${status}: ${typeof detail === "string" ? detail : "no detail"}`);
+        }
+        return { text: extractOutputText(data), model };
       } catch (err) {
         clearTimeout(timer);
         lastErr = err;
