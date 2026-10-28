@@ -78,7 +78,7 @@ const PAGE_SCHEMA = {
     program: fieldProp("Program name, e.g. Medi-Cal, CalFresh, or null."),
     subject: fieldProp("Subject or Re line, or null."),
     asked: { type: "array", items: fieldProp("One thing the letter asks the resident to do or send.") },
-    deadlines: { type: "array", items: fieldProp("One deadline exactly as written. A page can state more than one (respond by one date, appeal by another); return each with its own box.") },
+    deadlines: { type: "array", items: fieldProp("The full sentence stating one deadline, exactly as written, with its verbs: who must do what by when. Never return a bare date. A page can state more than one deadline; return each sentence separately with the box around that sentence.") },
     consequence: fieldProp("What happens if the deadline is missed, or null."),
     reference_no: fieldProp("Case, account or notice number, or null."),
     notice_date: fieldProp("Notice date exactly as written, or null."),
@@ -96,7 +96,7 @@ const PAGE_SCHEMA = {
         program: fieldProp("Second letter program, or null."),
         subject: fieldProp("Second letter subject, or null."),
         asked: { type: "array", items: fieldProp("One thing the second letter asks for.") },
-        deadlines: { type: "array", items: fieldProp("One second-letter deadline exactly as written.") },
+        deadlines: { type: "array", items: fieldProp("One second-letter deadline as its full sentence, exactly as written, never a bare date.") },
         reference_no: fieldProp("Second letter case or account number, or null."),
         notice_date: fieldProp("Second letter notice date, or null."),
         phones: { type: "array", items: fieldProp("Second letter phone number.") },
@@ -132,7 +132,7 @@ const READ_SYSTEM =
   "[ymin, xmin, ymax, xmax] in 0-1000 coordinates. When a field is absent, return null text and null box. " +
   "Mail sometimes overlaps: if two distinct letters with two sender blocks are visible, read the most visible " +
   "one into the main fields and the other into extra_letter. Otherwise extra_letter is null. " +
-  "A page can state more than one deadline (respond by one date, appeal by another); return each in deadlines. " +
+  "A page can state more than one deadline; return the full sentence stating each one in deadlines, never a bare date. " +
   "When the page is too blurry, dark or cut off to read, set readable false and say what is wrong.";
 
 const READ_USER = "Read this page of mail and extract its fields.";

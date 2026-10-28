@@ -87,11 +87,12 @@ export function parseWrittenDate(text: string): string | null {
 }
 
 // Dates that must not resolve silently: two-way numerics and yearless
-// month-day phrases. Returns the expression, or null.
+// month-day phrases. Returns the expression, or null. Every numeric
+// is checked, not just the first: a clear date never clears a later
+// ambiguous one.
 export function findAmbiguousDate(text: string): string | null {
   const cleaned = text.replace(/\s+/g, " ");
-  const numeric = cleaned.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b/);
-  if (numeric) {
+  for (const numeric of cleaned.matchAll(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b/g)) {
     const first = Number(numeric[1]);
     const second = Number(numeric[2]);
     if ((first <= 12 && second <= 12) || first > 12) return numeric[0];
@@ -177,8 +178,16 @@ export function resolveDeadline(deadlineText: string | null, noticeDateText: str
   const business = /business/i.test(rel[2] ?? "");
   const rest = (rel[3] ?? "").trim();
   if (UNSUPPORTED_REST.test(rest)) return { kind: "unsupported", expression: text };
-  const ambiguous = findAmbiguousDate(rest);
+  // Ambiguity anywhere in the whole expression asks, including ahead
+  // of the count ("Respond by 03/04/2027 or within 10 days after
+  // November 25, 2026"). So does a second date outside the relative
+  // construction itself.
+  const ambiguous = findAmbiguousDate(text);
   if (ambiguous) return { kind: "ambiguous", expression: ambiguous };
+  const remainder = text.replace(rel[0], " ");
+  if (parseWrittenDate(remainder) || findAmbiguousDate(remainder)) {
+    return { kind: "ambiguous", expression: text };
+  }
   // Anchor named in the expression wins.
   const anchorInText = rest ? parseWrittenDate(rest) : null;
   if (anchorInText) {
@@ -218,34 +227,9 @@ export function resolveDeadline(deadlineText: string | null, noticeDateText: str
   return { kind: "needs-anchor", expression: text };
 }
 
-// The duty a deadline sentence puts on the resident, read from its
-// verbs. Dates within one duty are compared with each other; anything
-// without a duty word is other, and unknown duties cannot be compared
-// by kind.
-// Duty from the letter's own words when the extraction is bare. The
-// model often returns just the date ("November 20, 2026"), which
-// names no duty; the clause around it does ("we must receive your
-// packet by ..."). One sentence can hold two dates with different
-// roles ("... by November 20, 2026, your coverage will end on
-// December 20, 2026"), so the lookup narrows to comma clauses, never
-// splitting the comma inside a date. The extraction's own verbs win;
-// the first duty found across the clauses stating the text wins
-// next; a date with no duty clause stays other.
-export function obligationInContext(deadlineText: string, fullText: string): Obligation {
-  const direct = obligationOf(deadlineText);
-  if (direct !== "other") return direct;
-  const want = deadlineText.toLowerCase().replace(/\s+/g, " ").trim();
-  if (want.length < 2) return "other";
-  for (const sentence of fullText.split(/(?<=[.!?])\s+/)) {
-    for (const clause of sentence.split(/;|,(?!\s*\d{4}\b)/)) {
-      if (!clause.toLowerCase().replace(/\s+/g, " ").includes(want)) continue;
-      const duty = obligationOf(clause);
-      if (duty !== "other") return duty;
-    }
-  }
-  return "other";
-}
-
+// The duty a deadline text states, read from its own verbs. Dates
+// within one duty are compared with each other. This never looks at
+// surrounding text: bare dates take no duty from their clause.
 export function obligationOf(deadlineText: string): Obligation {
   const t = deadlineText.toLowerCase();
   if (/\b(appeal|hearing|grievance|reconsideration|dispute|contest|decision)\b/.test(t)) return "appeal";
@@ -259,6 +243,83 @@ export function obligationOf(deadlineText: string): Obligation {
     return "respond";
   }
   return "other";
+}
+
+// The strict publish rule works on sentences, not fragments. A
+// deadline publishes only from the full sentence that states it:
+// the sentence holds an obligation phrase, exactly one date, no
+// hedge words, and no second deadline expression.
+const OBLIGATION_PHRASES: RegExp[] = [
+  /\bmust\b/i,
+  /\bdue\b(?!\s+to\b)/i,
+  /\brespond\s+by\b/i,
+  /\bresponse\s+by\b/i,
+  /\bsend\b[\s\S]{0,80}?\bby\b/i,
+  /\breturn\b[\s\S]{0,80}?\bby\b/i,
+  /\bappeal\b[\s\S]{0,80}?\bby\b/i,
+  /\brenew\b[\s\S]{0,80}?\bby\b/i,
+  /\bno later than\b/i,
+];
+const PAY_BY = /\bpay\b[\s\S]{0,80}?\bby\b/i;
+const PAY_STUB = /\bpay stubs?\b/i;
+
+// Obligation phrases: must, due, respond/response by, send/return/
+// appeal/pay/renew ... by, no later than. "Due to" is causal, not a
+// deadline, and pay stubs are a document, not a payment.
+export function hasObligationPhrase(text: string): boolean {
+  if (OBLIGATION_PHRASES.some((re) => re.test(text))) return true;
+  return PAY_BY.test(text) && !PAY_STUB.test(text);
+}
+
+// Hedge words that make a date uncertain: may, might, could, will
+// arrive, if. The month May is not a hedge. Callers allow "if" for
+// relative expressions: a conditional deadline ("if you disagree,
+// you have 60 days ...") is still a deadline with a clear date.
+export function findHedge(text: string, opts?: { allowIf?: boolean }): string | null {
+  if (/\bmay\b(?!\s+\d)/i.test(text)) return "may";
+  if (/\bmight\b/i.test(text)) return "might";
+  if (/\bcould\b/i.test(text)) return "could";
+  if (/\bwill arrive\b/i.test(text)) return "will arrive";
+  if (!opts?.allowIf && /\bif\b/i.test(text)) return "if";
+  return null;
+}
+
+export function isRelativeExpression(text: string): boolean {
+  return RELATIVE_AFTER.test(text) || RELATIVE_WITHIN.test(text);
+}
+
+// Deadline expressions in a sentence: relative constructions plus
+// absolute dates outside them. Overlapping after/within matches of
+// one construction ("within 10 days after November 25") count once.
+export function countDeadlineExpressions(text: string): number {
+  const spans: { start: number; end: number }[] = [];
+  for (const re of [RELATIVE_AFTER, RELATIVE_WITHIN]) {
+    const m = text.match(re);
+    if (m && m.index !== undefined) spans.push({ start: m.index, end: m.index + m[0].length });
+  }
+  spans.sort((a, b) => a.start - b.start);
+  const merged: { start: number; end: number }[] = [];
+  for (const s of spans) {
+    const last = merged[merged.length - 1];
+    if (last && s.start < last.end) last.end = Math.max(last.end, s.end);
+    else merged.push({ ...s });
+  }
+  let remainder = text;
+  for (const s of [...merged].sort((a, b) => b.start - a.start)) {
+    remainder = `${remainder.slice(0, s.start)} ${remainder.slice(s.end)}`;
+  }
+  return merged.length + parseAllDates(remainder).length;
+}
+
+// First sentence of the transcription stating the extracted text,
+// or null. Matching ignores case and whitespace.
+export function sentenceContaining(text: string, fullText: string): string | null {
+  const want = text.toLowerCase().replace(/\s+/g, " ").trim();
+  if (want.length < 2) return null;
+  for (const sentence of fullText.split(/(?<=[.!?])\s+/)) {
+    if (sentence.toLowerCase().replace(/\s+/g, " ").includes(want)) return sentence;
+  }
+  return null;
 }
 
 // A deadline before the notice date, or more than a year after it, is

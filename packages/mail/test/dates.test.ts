@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   chronologyOf,
+  countDeadlineExpressions,
   findAmbiguousDate,
-  obligationInContext,
+  findHedge,
+  hasObligationPhrase,
+  isRelativeExpression,
   obligationOf,
   parseAllDates,
   parseWrittenDate,
   resolveDeadline,
+  sentenceContaining,
 } from "../src/dates.js";
 
 describe("parseWrittenDate", () => {
@@ -119,6 +123,25 @@ describe("resolveDeadline", () => {
     });
     expect(resolveDeadline("within 10 days of November 25, 2026 or November 26, 2026", null).kind).toBe("ambiguous");
   });
+  it("checks every numeric date, not just the first", () => {
+    expect(findAmbiguousDate("Respond by 11/20/2026 or 03/04/2027")).toBe("03/04/2027");
+    expect(findAmbiguousDate("due 11/20/2026 then 13/04/2027")).toBe("13/04/2027");
+    expect(findAmbiguousDate("due 11/20/2026 or 11/21/2026")).toBeNull();
+    expect(resolveDeadline("Respond by 11/20/2026 or 03/04/2027", null)).toEqual({
+      kind: "ambiguous",
+      expression: "03/04/2027",
+    });
+  });
+  it("asks on ambiguity ahead of the count and on second dates", () => {
+    expect(resolveDeadline("Respond by 03/04/2027 or within 10 days after November 25, 2026", null)).toEqual({
+      kind: "ambiguous",
+      expression: "03/04/2027",
+    });
+    expect(resolveDeadline("Respond by November 20, 2026 or within 10 days after November 25, 2026", null)).toEqual({
+      kind: "ambiguous",
+      expression: "Respond by November 20, 2026 or within 10 days after November 25, 2026",
+    });
+  });
   it("asks on ambiguity anywhere, even past a notice anchor", () => {
     expect(resolveDeadline("60 days from the November 5 notice", "November 2, 2026")).toEqual({
       kind: "ambiguous",
@@ -143,24 +166,67 @@ describe("obligationOf", () => {
   });
 });
 
-describe("obligationInContext", () => {
-  it("reads the duty from the sentence around a bare date", () => {
-    expect(obligationInContext("November 20, 2026", "We must receive your packet by November 20, 2026.")).toBe(
-      "respond",
-    );
-    expect(obligationInContext("December 20, 2026", "Coverage ends December 20, 2026.")).toBe("other");
+describe("hasObligationPhrase", () => {
+  it("matches duty language putting a date on the resident", () => {
+    expect(hasObligationPhrase("we must receive your packet by November 20, 2026")).toBe(true);
+    expect(hasObligationPhrase("Renewal due November 20, 2026")).toBe(true);
+    expect(hasObligationPhrase("Respond by November 20, 2026")).toBe(true);
+    expect(hasObligationPhrase("Send it so it arrives by November 18, 2026")).toBe(true);
+    expect(hasObligationPhrase("Return the form by December 5, 2026")).toBe(true);
+    expect(hasObligationPhrase("Appeal by December 1, 2026")).toBe(true);
+    expect(hasObligationPhrase("Pay in full by November 24, 2026")).toBe(true);
+    expect(hasObligationPhrase("Renew by November 20, 2026")).toBe(true);
+    expect(hasObligationPhrase("arrive no later than November 30, 2026")).toBe(true);
   });
-  it("prefers the extraction's own verbs, then the first duty clause", () => {
-    expect(obligationInContext("Respond by November 20, 2026", "Coverage ends November 20, 2026.")).toBe("respond");
-    expect(obligationInContext("November 20, 2026", "Noted November 20, 2026. Respond by November 20, 2026.")).toBe(
-      "respond",
-    );
-    expect(obligationInContext("November 20, 2026", "Unrelated body text here.")).toBe("other");
+  it("rejects causal due, pay stubs, and informational verbs", () => {
+    expect(hasObligationPhrase("delayed due to a backlog")).toBe(false);
+    expect(hasObligationPhrase("Send your pay stubs by November 20, 2026")).toBe(true);
+    expect(hasObligationPhrase("Mail your pay stubs by Friday")).toBe(false);
+    expect(hasObligationPhrase("your renewal may be denied and your coverage may end on December 20, 2026")).toBe(false);
+    expect(hasObligationPhrase("Your first payment of $967.00 will arrive on December 1, 2026")).toBe(false);
+    expect(hasObligationPhrase("November 20, 2026")).toBe(false);
   });
-  it("splits one sentence's two dates by clause", () => {
-    const text = "If we do not receive your packet by November 20, 2026, your coverage will end on December 20, 2026.";
-    expect(obligationInContext("November 20, 2026", text)).toBe("respond");
-    expect(obligationInContext("December 20, 2026", text)).toBe("other");
+});
+
+describe("findHedge", () => {
+  it("finds uncertainty words", () => {
+    expect(findHedge("your renewal may be denied")).toBe("may");
+    expect(findHedge("you might have more time")).toBe("might");
+    expect(findHedge("it could arrive late")).toBe("could");
+    expect(findHedge("payment will arrive on December 1, 2026")).toBe("will arrive");
+    expect(findHedge("if you disagree, appeal")).toBe("if");
+  });
+  it("ignores the month May and allows if for relatives", () => {
+    expect(findHedge("due May 5, 2027")).toBeNull();
+    expect(findHedge("Respond by November 20, 2026")).toBeNull();
+    expect(findHedge("if you disagree, you have 60 days", { allowIf: true })).toBeNull();
+  });
+});
+
+describe("isRelativeExpression", () => {
+  it("matches counting constructions", () => {
+    expect(isRelativeExpression("within 10 days of November 25, 2026")).toBe(true);
+    expect(isRelativeExpression("60 days from the date of this notice")).toBe(true);
+    expect(isRelativeExpression("Respond by November 20, 2026")).toBe(false);
+  });
+});
+
+describe("countDeadlineExpressions", () => {
+  it("counts relative constructions plus outside absolute dates", () => {
+    expect(countDeadlineExpressions("Respond by November 20, 2026.")).toBe(1);
+    expect(countDeadlineExpressions("within 10 days after November 25, 2026")).toBe(1);
+    expect(countDeadlineExpressions("Respond by November 20, 2026 or within 10 days of receipt.")).toBe(2);
+    expect(countDeadlineExpressions("November 20, 2026 or December 1, 2026")).toBe(2);
+    expect(countDeadlineExpressions("no dates here")).toBe(0);
+  });
+});
+
+describe("sentenceContaining", () => {
+  it("finds the sentence stating the text", () => {
+    expect(sentenceContaining("November 20, 2026", "Hello. Respond by November 20, 2026. Bye.")).toBe(
+      "Respond by November 20, 2026.",
+    );
+    expect(sentenceContaining("November 20, 2026", "Nothing here.")).toBeNull();
   });
 });
 

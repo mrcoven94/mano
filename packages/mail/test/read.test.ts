@@ -212,6 +212,14 @@ describe("groupDeterministic", () => {
     expect(groups).not.toContainEqual([0, 1]);
     expect(ambiguous).toEqual([0, 1]);
   });
+  it("merges page 1 of 3 with page 3 of 3 deterministically", () => {
+    const { groups, ambiguous } = groupDeterministic([
+      page(0, "County Office", "CA-1", "page 1 of 3"),
+      page(1, "County Office", "CA-1", "page 3 of 3"),
+    ]);
+    expect(groups).toEqual([[0, 1]]);
+    expect(ambiguous).toEqual([]);
+  });
 });
 
 describe("validateMerge", () => {
