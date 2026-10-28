@@ -7,6 +7,7 @@ import {
   BlooioChannel,
   RecordingChannel,
   createLogger,
+  errName,
   hashChatId,
   hashHandle,
   lifecycleStateFor,
@@ -233,7 +234,7 @@ export default {
       } catch (err) {
         createLogger().warn("event_route_failed", {
           eventId: String((event as { id?: unknown })?.id ?? "unknown"),
-          err: err instanceof Error ? err.message : "unknown",
+          err: errName(err),
         });
         message.retry();
       }

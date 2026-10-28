@@ -454,13 +454,15 @@ describe("infrastructure retries", () => {
     expect(h.channel.sends).toHaveLength(0);
     expect(h.lines.join("\n")).toContain("turn_infra_error");
     expect(h.runner.retryAfterMs()).toBe(5000);
-    // The hold released: other conversations can still reserve.
-    expect(h.ledger.reserve("probe:1", 5).allowed).toBe(true);
-    h.ledger.release("probe:1");
+    // The answer was already paid for, so the hold stays until the
+    // retry's settlement succeeds.
+    expect(h.ledger.reserve("probe:1", 5).allowed).toBe(false);
     expect(await h.runner.runDueTurn()).toBe("ran");
     expect(h.channel.sends.map((s) => s.text)).toContain("Answer.");
     expect(h.store.pending()).toHaveLength(0);
     expect(h.store.unfinishedTurn()).toBeNull();
+    expect(h.ledger.reserve("probe:1", 5).allowed).toBe(true);
+    expect(h.ledger.spent().spentUsd).toBe(0);
   });
 
   it("retries when the reservation itself fails, without calling the model", async () => {
@@ -483,6 +485,27 @@ describe("infrastructure retries", () => {
     expect(h.channel.sends.map((s) => s.text)).toContain("Answer.");
   });
 
+  it("keeps the turn and input when a send throws a generic error", async () => {
+    const h = makeHarness({ replies: ["Answer."] });
+    let down = true;
+    const inner = h.channel.send.bind(h.channel);
+    h.channel.send = async (input) => {
+      if (down) throw new Error("socket hangup");
+      return inner(input);
+    };
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hi.", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(h.store.pending()).toHaveLength(1);
+    expect(h.store.unfinishedTurn()).toMatchObject({ turn: 1, attempts: 1 });
+    expect(h.channel.sends).toHaveLength(0);
+    down = false;
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    expect(h.channel.sends).toHaveLength(2);
+    expect(new Set(h.channel.sends.map((s) => s.idempotencyKey)).size).toBe(2);
+    expect(h.store.pending()).toHaveLength(0);
+  });
+
   it("retries uncertain replies on later alarms with no new input", async () => {
     const h = makeHarness({ replies: ["Answer."] });
     let down = true;
@@ -499,10 +522,63 @@ describe("infrastructure retries", () => {
     expect(await h.runner.runDueTurn()).toBe("retry");
     expect(h.runner.retryAfterMs()).toBeGreaterThan(firstDelay);
     down = false;
-    expect(await h.runner.runDueTurn()).toBe("idle");
+    expect(await h.runner.runDueTurn()).toBe("ran");
     expect(h.channel.sends).toHaveLength(2);
     expect(new Set(h.channel.sends.map((s) => s.idempotencyKey)).size).toBe(2);
     expect(h.runner.needsRetry()).toBe(false);
+  });
+
+  it("keeps the spend hold until a failed settlement succeeds", async () => {
+    const h = makeHarness({
+      config: { usdPer1kChars: 1 },
+      responder: {
+        name: "metered",
+        maxAttempts: 1,
+        respond: async () => ({
+          text: "Answer.",
+          bubbles: ["Answer."],
+          inputChars: 1000,
+          outputChars: 1000,
+          model: "muse-spark-1.3",
+          attempts: 1,
+        }),
+      },
+    });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hi.", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    const realSettle = h.ledger.settle.bind(h.ledger);
+    let fails = 1;
+    h.ledger.settle = (key: string, actual: number) => {
+      if (fails > 0) {
+        fails -= 1;
+        throw new Error("ledger down");
+      }
+      return realSettle(key, actual);
+    };
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(h.ledger.reserve("probe:1", 2).allowed).toBe(false);
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    expect(h.ledger.spent().spentUsd).toBeCloseTo(2);
+    expect(h.ledger.reserve("probe:1", 2).allowed).toBe(true);
+  });
+
+  it("releases the hold when the turn errors before paid work", async () => {
+    const h = makeHarness({ replies: ["Answer."] });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hi.", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    const realAnswer = h.store.updateTurnAnswer.bind(h.store);
+    let fails = 1;
+    h.store.updateTurnAnswer = ((...args: Parameters<typeof realAnswer>) => {
+      if (fails > 0) {
+        fails -= 1;
+        throw new Error("storage down");
+      }
+      return realAnswer(...args);
+    }) as typeof realAnswer;
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(h.ledger.reserve("probe:1", 5).allowed).toBe(true);
+    h.ledger.release("probe:1");
+    expect(await h.runner.runDueTurn()).toBe("ran");
   });
 });
 
@@ -648,6 +724,40 @@ describe("log safety", () => {
     expect(logs).not.toContain(TEST_HANDLE);
     const queued = h.lines.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => l.eventId === "evt_1");
     expect(queued).toMatchObject({ event: "inbound_queued", eventId: "evt_1", handle: TEST_HANDLE_HASH });
+  });
+
+  it("never logs error message text, only the error name", async () => {
+    const h = makeHarness({
+      responder: {
+        name: "exploding",
+        maxAttempts: 1,
+        respond: async () => {
+          throw new Error("call +15550009999 exploded");
+        },
+      },
+    });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hi.", occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h);
+    const logs = h.lines.join("\n");
+    expect(logs).toContain("responder_failed");
+    expect(logs).not.toContain("+15550009999");
+    expect(logs).toContain('"err":"Error"');
+    const h2 = makeHarness({ replies: ["Answer."] });
+    await h2.runner.handleEvent(inboundEvent({ id: "evt_2", text: "Hi.", occurredAtMs: h2.now }), "webhook");
+    h2.advance(h2.batchMs + 100);
+    const realSettle = h2.ledger.settle.bind(h2.ledger);
+    let fails = 1;
+    h2.ledger.settle = (key: string, actual: number) => {
+      if (fails > 0) {
+        fails -= 1;
+        throw new Error("sms +15550009999 failed");
+      }
+      return realSettle(key, actual);
+    };
+    expect(await h2.runner.runDueTurn()).toBe("retry");
+    const logs2 = h2.lines.join("\n");
+    expect(logs2).toContain("turn_infra_error");
+    expect(logs2).not.toContain("+15550009999");
   });
 
   it("never logs phone-shaped chat IDs or email handles", async () => {

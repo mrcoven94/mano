@@ -100,6 +100,31 @@ describe("both resolvers", () => {
 });
 
 describe("stripBlockedLinks", () => {
+  it("replaces matches in place without touching longer hosts", async () => {
+    const fetchFn = vi.fn(async (url: string) => {
+      const blocked = url.includes("name=evil.test") && !url.includes("name=xevil.test");
+      return dohJson(0, [{ data: blocked ? "0.0.0.0" : "203.0.113.7" }]);
+    });
+    const checker = new LinkChecker({ fetchFn: fetchFn as unknown as typeof fetch });
+    const stripped = await stripBlockedLinks("See evil.test/a and xevil.test/a.", checker);
+    expect(stripped.removed).toBe(1);
+    expect(stripped.text).toBe(`See ${LINK_REMOVED} and xevil.test/a.`);
+  });
+
+  it("checks Unicode domains by their punycode", async () => {
+    expect(extractLinks("Visit bücher.de/trap today.")).toEqual(["bücher.de/trap"]);
+    const seen: string[] = [];
+    const fetchFn = vi.fn(async (url: string) => {
+      seen.push(url);
+      return dohJson(0, [{ data: "0.0.0.0" }]);
+    });
+    const checker = new LinkChecker({ fetchFn: fetchFn as unknown as typeof fetch });
+    const stripped = await stripBlockedLinks("Visit bücher.de/trap today.", checker);
+    expect(stripped.removed).toBe(1);
+    expect(stripped.text).not.toContain("bücher.de");
+    expect(seen[0]).toContain("name=xn--bcher-kva.de");
+  });
+
   it("removes blocked links and keeps clean ones", async () => {
     const fetchFn = vi.fn(async (url: string) => {
       if (url.includes("name=evil.test")) return dohJson(0, [{ data: "0.0.0.0" }]);

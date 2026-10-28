@@ -51,6 +51,12 @@ describe("deploy-channels workflow", () => {
     expect(siteLib).not.toContain("NEXT_PUBLIC_MANO_TEXT_NUMBER");
   });
 
+  it("serves only from text.withmano.com, never workers.dev", () => {
+    const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
+    expect(toml).toContain("workers_dev = false");
+    expect(toml).toContain('pattern = "text.withmano.com/*"');
+  });
+
   it("never writes an empty optional secret", () => {
     expect(yaml).toContain('if [ -n "$1" ]');
     expect(yaml).toContain('maybe "$BLOOIO_WEBHOOK_SECRET" BLOOIO_WEBHOOK_SECRET');

@@ -332,6 +332,30 @@ describe("link safety", () => {
     expect(answer.text).not.toContain("evil.test");
   });
 
+  it("never splits a link across bubbles with the tail unchecked", async () => {
+    const fetched: string[] = [];
+    const selective = (async (url: unknown) => {
+      fetched.push(String(url));
+      const clean = String(url).includes("name=xevil.test");
+      return new Response(JSON.stringify({ Status: 0, Answer: [{ data: clean ? "203.0.113.7" : "0.0.0.0" }] }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+    // One sentence with xevil.test/trap straddling the old 600-char cut:
+    // a character split would leave an unchecked l.test/trap behind.
+    const reply = `${"w ".repeat(298)}xevil.test/trap end of message.`;
+    const h = makeHarness({ fetchFn: selective, replies: [reply] });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_straddle", text: "Long?", occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h);
+    const answers = h.channel.sends.filter((s) => !s.text.includes("automated assistant"));
+    expect(answers.some((s) => s.text.includes("xevil.test/trap"))).toBe(true);
+    for (const send of answers) {
+      if (send.text.includes("trap")) expect(send.text).toContain("xevil.test/trap");
+    }
+    expect(fetched.some((u) => u.includes("name=xevil.test"))).toBe(true);
+    expect(fetched.some((u) => u.includes("name=l.test"))).toBe(false);
+  });
+
   it("checks every redirect hop before following it", async () => {
     const fetched: string[] = [];
     const h = makeHarness({

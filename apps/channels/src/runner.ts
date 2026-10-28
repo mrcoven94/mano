@@ -4,7 +4,6 @@
 // a provider or a runtime.
 import {
   ChannelRefused,
-  ChannelUncertain,
   HANDLE_BYTES_DAILY,
   INPUT_SLACK_CHARS,
   MAX_ATTACHMENTS_PER_TURN,
@@ -14,8 +13,11 @@ import {
   ResponderFailed,
   TURN_TEXT_CAP,
   dayKeyFor,
+  errName,
   estimateCostUsd,
   LinkChecker,
+  MAX_BUBBLES,
+  MAX_BUBBLE_CHARS,
   MAX_PENDING_CHARS,
   handleOverLimit,
   hourKeyFor,
@@ -105,6 +107,15 @@ export class GenerationStopped extends Error {
   constructor() {
     super("Conversation generation moved on.");
     this.name = "GenerationStopped";
+  }
+}
+
+// A turn whose sends never resolved. Not an outcome: the turn row and
+// its input stay, and the turn retries with backoff.
+export class TurnIncomplete extends Error {
+  constructor() {
+    super("Turn sends unresolved.");
+    this.name = "TurnIncomplete";
   }
 }
 
@@ -514,26 +525,31 @@ export class ConversationRunner {
   }
 
   // An infrastructure error (ledger, network, storage) is not an
-  // outcome: the turn row and its input stay, the spend hold releases
-  // so the retry can reserve again, and the caller re-arms. The release
-  // itself is best-effort: a failing ledger must not wedge the retry,
-  // which reserves idempotently under the same key.
+  // outcome: the turn row and its input stay, and the caller re-arms.
+  // The spend hold releases only when no paid work happened yet (no
+  // answer persisted): once the model ran, the hold stays until the
+  // retry's settlement succeeds, so the cap cannot be passed meanwhile.
+  // The release itself is best-effort: a failing ledger must not wedge
+  // the retry, which reserves idempotently under the same key.
   private async noteInfraError(turn: number, err: unknown): Promise<"retry"> {
     const { store, logger, nowMs } = this.deps;
     store.bumpTurnAttempt(turn, nowMs());
-    try {
-      await this.deps.spend.release(`${this.deps.config.handleHash}:${turn}`);
-    } catch (releaseErr) {
-      logger.warn("turn_release_failed", {
-        handle: this.logHandle(),
-        turn,
-        err: releaseErr instanceof Error ? releaseErr.message : "unknown",
-      });
+    const row = store.unfinishedTurn();
+    if (!row || row.turn !== turn || row.costUsd === null) {
+      try {
+        await this.deps.spend.release(`${this.deps.config.handleHash}:${turn}`);
+      } catch (releaseErr) {
+        logger.warn("turn_release_failed", {
+          handle: this.logHandle(),
+          turn,
+          err: errName(releaseErr),
+        });
+      }
     }
     logger.warn("turn_infra_error", {
       handle: this.logHandle(),
       turn,
-      err: err instanceof Error ? err.message : "unknown",
+      err: errName(err),
     });
     return "retry";
   }
@@ -604,6 +620,7 @@ export class ConversationRunner {
     if (resumed?.answerJson) {
       await this.settleResumedCost(turn, resumed);
       await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation);
+      this.checkSendsResolved(turn, generation);
       return;
     }
     const texts = items.map((i) => i.text).filter((t): t is string => !!t && t.length > 0);
@@ -665,13 +682,14 @@ export class ConversationRunner {
         this.checkGeneration(generation);
         const answer = await this.respondWithInterim(turn, turnText, saved, chatId, to, generation);
         if (answer.ok) {
-          // Links come out before splitting: the persisted bubbles are
-          // final, capped, and identical on every replay.
-          const cleaned = await stripBlockedLinks(answer.text, new LinkChecker({ fetchFn: this.deps.fetchFn }));
-          if (cleaned.removed > 0) {
-            logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: cleaned.removed });
+          // Links come out before splitting, and each final bubble is
+          // checked again: a split must never leave an unchecked link
+          // behind. The persisted bubbles are final and capped.
+          const final = await this.finalizeBubbles(answer.text);
+          if (final.removed > 0) {
+            logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
           }
-          splitBubbles(cleaned.text).forEach((text, i) => bubbles.push({ part: i + 1, tag: "", text }));
+          final.bubbles.forEach((text, i) => bubbles.push({ part: i + 1, tag: "", text }));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
@@ -690,9 +708,42 @@ export class ConversationRunner {
       }
       this.checkGeneration(generation);
       await this.sendBubbles(turn, bubbles, chatId, to, saved, generation);
+      this.checkSendsResolved(turn, generation);
     } finally {
       if (chatId) await this.bestEffort("typing_stopped", () => this.deps.channel.setTyping(chatId, "stopped"));
     }
+  }
+
+  // Sanitizes the raw answer, splits it into capped bubbles, and
+  // checks each final bubble again. The splitter never breaks a word,
+  // so the recheck normally finds nothing; it exists so a future
+  // extraction gap cannot ship an unchecked link. A bubble that grows
+  // past the cap under replacement splits again, stripped text having
+  // no links left to expose.
+  private async finalizeBubbles(text: string): Promise<{ bubbles: string[]; removed: number }> {
+    const checker = new LinkChecker({ fetchFn: this.deps.fetchFn });
+    const first = await stripBlockedLinks(text, checker);
+    let removed = first.removed;
+    const out: string[] = [];
+    for (const bubble of splitBubbles(first.text)) {
+      const rechecked = await stripBlockedLinks(bubble, checker);
+      removed += rechecked.removed;
+      if (rechecked.text.length <= MAX_BUBBLE_CHARS) {
+        out.push(rechecked.text);
+      } else {
+        out.push(...splitBubbles(rechecked.text));
+      }
+    }
+    return { bubbles: out.length <= MAX_BUBBLES ? out : splitBubbles(out.join(" ")), removed };
+  }
+
+  // A turn is finished only when every send resolved. Anything still
+  // uncertain or sending aborts the turn: the row and its input stay,
+  // and the retry looks each send up again.
+  private checkSendsResolved(turn: number, generation: number): void {
+    this.checkGeneration(generation);
+    const stuck = this.store.outbounds().some((r) => r.turn === turn && (r.state === "uncertain" || r.state === "sending"));
+    if (stuck) throw new TurnIncomplete();
   }
 
   private async settleResumedCost(turn: number, resumed: import("./store.js").PersistedTurn): Promise<void> {
@@ -749,7 +800,7 @@ export class ConversationRunner {
       interimSent = true;
       void this
         .sendBubble({ turn, part: 0, tag: "interim", text: INTERIM_BUBBLE, chatId, to, generation })
-        .catch((err: unknown) => logger.warn("interim_failed", { handle: this.logHandle(), turn, err: String(err) }));
+        .catch((err: unknown) => logger.warn("interim_failed", { handle: this.logHandle(), turn, err: errName(err) }));
     }, config.interimMs);
     const attemptCost = (inputChars: number, attempts: number): number =>
       estimateCostUsd(inputChars * attempts, 0, config.usdPer1kChars);
@@ -759,7 +810,7 @@ export class ConversationRunner {
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
       return { ok: true, text: result.text, costUsd };
     } catch (err) {
-      logger.warn("responder_failed", { handle: this.logHandle(), turn, err: err instanceof Error ? err.message : "unknown" });
+      logger.warn("responder_failed", { handle: this.logHandle(), turn, err: errName(err) });
       const costUsd = err instanceof ResponderFailed ? attemptCost(err.inputChars, err.attempts) : 0;
       return { ok: false, costUsd };
     } finally {
@@ -831,7 +882,7 @@ export class ConversationRunner {
         saved += 1;
       } catch (err) {
         await spend.byteRelease(byteKey);
-        logger.warn("attachment_failed", { handle: this.logHandle(), turn, err: err instanceof Error ? err.message : "unknown" });
+        logger.warn("attachment_failed", { handle: this.logHandle(), turn, err: errName(err) });
       }
     }
     return saved;
@@ -910,14 +961,12 @@ export class ConversationRunner {
         logger.warn("send_refused", { handle: this.logHandle(), key, code: err.code, status: err.status });
         return finish({ key, state: "refused", code: err.code, fresh: false, counted: true });
       }
-      if (err instanceof ChannelUncertain) {
-        store.updateOutbound(key, { state: "uncertain", updatedAtMs: nowMs() });
-        logger.warn("send_uncertain", { handle: this.logHandle(), key });
-        return this.resolveUncertainKey(key, opts, generation);
-      }
-      store.updateOutbound(key, { state: "failed", code: "send_error", updatedAtMs: nowMs() });
-      logger.warn("send_failed", { handle: this.logHandle(), key, code: "send_error" });
-      return finish({ key, state: "failed", code: "send_error", fresh: false, counted: false });
+      // Any other send error (timeout, network, 5xx, unexpected) may
+      // have landed: never terminal. Mark uncertain, look the message
+      // up or replay its key, and let the turn retry on backoff.
+      store.updateOutbound(key, { state: "uncertain", updatedAtMs: nowMs() });
+      logger.warn("send_uncertain", { handle: this.logHandle(), key });
+      return this.resolveUncertainKey(key, opts, generation);
     }
   }
 
@@ -948,7 +997,7 @@ export class ConversationRunner {
         }
       } catch (err) {
         if (err instanceof GenerationStopped) throw err;
-        logger.warn("lookup_failed", { handle: this.logHandle(), key, err: err instanceof Error ? err.message : "unknown" });
+        logger.warn("lookup_failed", { handle: this.logHandle(), key, err: errName(err) });
       }
     }
     try {
@@ -1009,7 +1058,7 @@ export class ConversationRunner {
     try {
       await fn();
     } catch (err) {
-      this.deps.logger.warn(name, { handle: this.logHandle(), err: err instanceof Error ? err.message : "unknown" });
+      this.deps.logger.warn(name, { handle: this.logHandle(), err: errName(err) });
     }
   }
 

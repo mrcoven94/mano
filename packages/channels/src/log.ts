@@ -22,3 +22,9 @@ export function createLogger(sink: LogSink = console.log): Logger {
     warn: (event, fields) => sink(formatLogLine("warn", event, fields)),
   };
 }
+
+// What a log line may say about an error: its class name only. Messages
+// can carry phone numbers, URLs and text, so they never reach a log.
+export function errName(err: unknown): string {
+  return err instanceof Error ? err.name || "Error" : "unknown";
+}

@@ -15,11 +15,11 @@ export interface LinkCheckResult {
 }
 
 // Anything Messages would render tappable: full URLs in any scheme
-// case, www. hosts, and bare domains with a dotted alpha TLD. Numbers
-// (1.2), single-letter trails (Section 4.b) and the domain inside an
-// email address do not match.
+// case, www. hosts, and bare domains with a dotted alpha TLD, in any
+// script. Numbers (1.2), single-letter trails (Section 4.b) and the
+// domain inside an email address do not match.
 const LINK_PATTERN =
-  /\bhttps?:\/\/[^\s<>"')\]]+|\b(?<!@)(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?::\d{1,5})?(?:\/[^\s<>"')\]]*)?/gi;
+  /\bhttps?:\/\/[^\s<>"')\]]+|\b(?<!@)(?:www\.)?(?:[\p{L}0-9](?:[\p{L}0-9-]{0,61}[\p{L}0-9])?\.)+[\p{L}]{2,}(?::\d{1,5})?(?:\/[^\s<>"')\]]*)?/giu;
 const TRAILING_PUNCT = /[.,;:!?)\]]+$/;
 
 export function extractLinks(text: string): string[] {
@@ -109,14 +109,29 @@ export async function stripBlockedLinks(
   text: string,
   checker: LinkChecker,
 ): Promise<{ text: string; removed: number }> {
-  let out = text;
+  // Replaces each match in place by index. A substring replace would
+  // also rewrite the match inside a longer host (evil.test inside
+  // xevil.test); index replacement cannot.
+  let out = "";
+  let last = 0;
   let removed = 0;
-  for (const link of extractLinks(text)) {
-    const check = await checker.checkUrl(link, true);
-    if (!check.ok) {
-      out = out.split(link).join(LINK_REMOVED);
-      removed += 1;
+  for (const match of text.matchAll(LINK_PATTERN)) {
+    const start = match.index ?? 0;
+    const cleaned = match[0].replace(TRAILING_PUNCT, "");
+    out += text.slice(last, start);
+    if (!cleaned) {
+      last = start + match[0].length;
+      continue;
     }
+    const check = await checker.checkUrl(cleaned, true);
+    if (!check.ok) {
+      out += LINK_REMOVED;
+      removed += 1;
+    } else {
+      out += cleaned;
+    }
+    last = start + cleaned.length;
   }
+  out += text.slice(last);
   return { text: out, removed };
 }

@@ -1,6 +1,9 @@
 // Splits a reply into a few short bubbles at sentence boundaries. Every
 // bubble is hard-capped: overflow is cut, never merged into a giant last
-// bubble.
+// bubble. Splits never land inside a word or URL: a link broken across
+// bubbles would dodge the per-bubble link check, and a broken word reads
+// as a typo. The one exception is an over-long atom (a single word or
+// URL past the cap), which goes whole into its own bubble.
 
 export const MAX_BUBBLES = 4;
 export const MAX_BUBBLE_CHARS = 600;
@@ -32,14 +35,49 @@ export function splitBubbles(text: string, maxBubbles = MAX_BUBBLES, maxCharsPer
       current = sentence;
       continue;
     }
-    for (let i = 0; i < sentence.length; i += maxCharsPerBubble) {
-      bubbles.push(sentence.slice(i, i + maxCharsPerBubble).trim());
-    }
+    // Over-long sentence: pack whole words. An over-long atom stays
+    // whole in its own bubble rather than splitting mid-word.
     current = "";
+    for (const word of sentence.split(" ")) {
+      if (!word) continue;
+      if (!current) {
+        if (word.length <= maxCharsPerBubble) {
+          current = word;
+        } else {
+          bubbles.push(word);
+        }
+        continue;
+      }
+      const grown = `${current} ${word}`;
+      if (grown.length <= maxCharsPerBubble) {
+        current = grown;
+        continue;
+      }
+      bubbles.push(current);
+      if (word.length <= maxCharsPerBubble) {
+        current = word;
+      } else {
+        bubbles.push(word);
+        current = "";
+      }
+    }
   }
   if (current) bubbles.push(current);
   if (bubbles.length <= maxBubbles) return bubbles;
+  // Overflow: keep whole words up to the cap, drop the rest entirely.
+  // Cutting mid-word here would manufacture a broken tail link.
   const head = bubbles.slice(0, maxBubbles - 1);
-  head.push(bubbles.slice(maxBubbles - 1).join(" ").slice(0, maxCharsPerBubble).trim());
-  return head;
+  const tailWords = bubbles
+    .slice(maxBubbles - 1)
+    .join(" ")
+    .split(" ")
+    .filter((w) => w.length > 0);
+  let tail = "";
+  for (const word of tailWords) {
+    const next = tail ? `${tail} ${word}` : word;
+    if (next.length > maxCharsPerBubble) break;
+    tail = next;
+  }
+  head.push(tail || tailWords[0] || "");
+  return head.filter((b) => b.length > 0);
 }

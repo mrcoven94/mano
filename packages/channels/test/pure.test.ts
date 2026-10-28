@@ -36,6 +36,35 @@ describe("splitBubbles", () => {
       expect(bubble.length).toBeLessThanOrEqual(600);
     }
   });
+
+  it("never splits inside a word or URL", () => {
+    const url = `https://ok.test/${"a".repeat(100)}`;
+    const text = `${"word ".repeat(150)}${url} tail words here.`;
+    const bubbles = splitBubbles(text);
+    expect(bubbles.length).toBeGreaterThan(1);
+    expect(bubbles.some((b) => b.includes(url))).toBe(true);
+    for (const bubble of bubbles) {
+      expect(bubble.length).toBeLessThanOrEqual(600);
+    }
+    expect(bubbles.join(" ")).toBe(text);
+  });
+
+  it("keeps an over-long atom whole instead of breaking it", () => {
+    const atom = `https://ok.test/${"b".repeat(700)}`;
+    const bubbles = splitBubbles(`See ${atom} now.`);
+    expect(bubbles).toContain(atom);
+  });
+
+  it("cuts overflow at a word boundary, dropping the rest", () => {
+    const words = Array.from({ length: 200 }, (_, i) => `w${i}`);
+    const bubbles = splitBubbles(words.join(" "), 2, 20);
+    expect(bubbles).toHaveLength(2);
+    for (const bubble of bubbles) {
+      expect(bubble.length).toBeLessThanOrEqual(20);
+      expect(bubble).not.toMatch(/\s$/);
+    }
+    expect(`${bubbles[0]} ${bubbles[1]}`.split(" ").every((w) => /^w\d+$/.test(w))).toBe(true);
+  });
 });
 
 describe("parseApprovalReply", () => {
