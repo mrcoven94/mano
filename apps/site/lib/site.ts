@@ -10,3 +10,10 @@ export const SMS_HREF = `sms:${E164}`;
 export const SMS_IS_PLACEHOLDER = !LIVE;
 export const PLACEHOLDER_NOTE = LIVE ? "" : `Placeholder number ${SMS_NUMBER} until launch`;
 export const REPO_URL = "https://github.com/mrcoven94/mano";
+
+/* The web app, from config. Set NEXT_PUBLIC_APP_URL (for example https://app.example.org) once it is live; until
+   then the sign up and sign in buttons ask for early access by email. */
+const APP_URL = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+export const EARLY_HREF = "mailto:hello@withmano.com?subject=Mano%20early%20access";
+export const SIGN_UP_HREF = APP_URL ? `${APP_URL}/sign-up` : EARLY_HREF;
+export const SIGN_IN_HREF = APP_URL ? `${APP_URL}/sign-in` : EARLY_HREF;

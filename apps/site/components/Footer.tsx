@@ -38,7 +38,6 @@ export default function Footer() {
           </nav>
         </div>
         <div className="legal">
-          <p>Mano is independent. It is not a government agency and is not part of any government office. The agency that runs a program makes every decision about it.</p>
           <p>Every person in the examples on this site is made up.</p>
         </div>
       </div>
