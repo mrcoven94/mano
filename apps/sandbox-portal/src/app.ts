@@ -1,4 +1,4 @@
-import { draftFileKey, submissionFileKey, type FileStore } from "./files";
+import { draftFileKey, stagingAttemptKey, submissionFileKey, type FileStore } from "./files";
 import {
   fromBase64,
   metasToDigests,
@@ -522,7 +522,10 @@ async function handleSubmit(
   let session: SessionData | null = null;
   let scope = WEB_SCOPE;
   let reviewedDigest = "";
-  let uploadedKeys: string[] = [];
+  // Sources this attempt reads bytes from, paired with the filed keys they fill on success.
+  let copies: Array<{ from: string; to: string }> = [];
+  // Objects this attempt created and may delete. Filed keys are never deleted here.
+  let stagedKeys: string[] = [];
 
   if (isJson) {
     source = "api";
@@ -531,13 +534,21 @@ async function handleSubmit(
     if (uploads.length === 0) return json({ error: "Attach at least one document." }, 400);
     scope = await callerScope(request);
     household = jsonHousehold;
-    for (let i = 0; i < uploads.length; i++) {
-      const upload = uploads[i]!;
-      const sha256 = await sha256Hex(upload.bytes);
-      const r2key = submissionFileKey(scope, key, i + 1, sha256);
-      await fileStore.put(r2key, upload.bytes, upload.type);
-      uploadedKeys.push(r2key);
-      files.push({ name: upload.name, type: upload.type, size: upload.bytes.length, sha256, r2key });
+    const attemptId = newId();
+    try {
+      for (let i = 0; i < uploads.length; i++) {
+        const upload = uploads[i]!;
+        const sha256 = await sha256Hex(upload.bytes);
+        const staged = stagingAttemptKey(attemptId, i + 1, sha256);
+        await fileStore.put(staged, upload.bytes, upload.type);
+        stagedKeys.push(staged);
+        const r2key = submissionFileKey(scope, key, i + 1, sha256);
+        copies.push({ from: staged, to: r2key });
+        files.push({ name: upload.name, type: upload.type, size: upload.bytes.length, sha256, r2key });
+      }
+    } catch {
+      await fileStore.del(stagedKeys).catch(() => undefined);
+      return json({ error: "The office could not store the attachments. Try again." }, 500);
     }
   } else {
     session = await loadSession(request, store, config);
@@ -566,29 +577,13 @@ async function handleSubmit(
     }
     household = session.household;
     reviewedDigest = fields["digest"] ?? "";
-    // Promote draft bytes to filed objects before the atomic submit records them.
-    const promoted: FileMeta[] = [];
-    const staged: string[] = [];
-    for (let i = 0; i < session.files.length; i++) {
-      const draft = session.files[i]!;
-      const bytes = await fileStore.get(draft.r2key);
-      if (!bytes) {
-        await fileStore.del(staged);
-        return html(errorPage("Missing document", "An uploaded document expired before submit. Attach it again.", "/apply/documents", "Back to documents"), 400);
-      }
-      const r2key = submissionFileKey(scope, key, i + 1, draft.sha256);
-      await fileStore.put(r2key, bytes.data, draft.type);
-      staged.push(r2key);
-      promoted.push({ ...draft, r2key });
-    }
-    files = promoted;
-    uploadedKeys = staged;
+    files = session.files.map((draft, i) => ({ ...draft, r2key: submissionFileKey(scope, key, i + 1, draft.sha256) }));
+    copies = session.files.map((draft, i) => ({ from: draft.r2key, to: submissionFileKey(scope, key, i + 1, draft.sha256) }));
   }
 
   const slowMs = resolveSlowMs(url, fields, config);
   const digest = await packetDigest(household, metasToDigests(files));
   if (!isJson && reviewedDigest !== digest) {
-    await fileStore.del(uploadedKeys);
     return html(
       errorPage(
         "Changed since review",
@@ -603,7 +598,7 @@ async function handleSubmit(
     // The browser may have filed this exact packet under the web scope; a retry must not file it again.
     const webFiled = await store.getSubmission(WEB_SCOPE, key);
     if (webFiled && webFiled.digest === digest) {
-      await fileStore.del(uploadedKeys);
+      await fileStore.del(stagedKeys).catch(() => undefined);
       return submissionJson(webFiled, true);
     }
   }
@@ -611,7 +606,7 @@ async function handleSubmit(
   if (slowMs > 0) {
     lease = await store.tryBeginSlow(nowMs(config), SLOW_LEASE_TTL_MS, config.slowMaxConcurrent);
     if (!lease) {
-      await fileStore.del(uploadedKeys);
+      await fileStore.del(stagedKeys).catch(() => undefined);
       return slowBusyResponse(!isJson && !wantsJson(request));
     }
   }
@@ -626,9 +621,7 @@ async function handleSubmit(
     receivedAt: nowMs(config),
   });
   if (result.outcome === "conflict") {
-    // Our bytes lost; drop the objects that are not the winner's.
-    const winners = new Set(result.stored.files.map((f) => f.r2key));
-    await fileStore.del(uploadedKeys.filter((k) => !winners.has(k)));
+    await fileStore.del(stagedKeys).catch(() => undefined);
     if (lease) await store.endSlow(lease);
     const stored = result.stored;
     if (isJson || wantsJson(request)) return conflictJson(stored);
@@ -642,17 +635,39 @@ async function handleSubmit(
       409,
     );
   }
-  // Filed objects stay (a duplicate wrote identical bytes to identical keys); drafts go.
-  if (session) await fileStore.del(session.files.map((f) => f.r2key));
   const duplicate = result.outcome === "duplicate";
+  const receipt = result.submission;
+  // Copies are idempotent: a duplicate writes identical bytes to identical keys.
+  // A missing source with a present target means a twin attempt already copied.
+  try {
+    for (const pair of copies) {
+      const bytes = await fileStore.get(pair.from);
+      if (!bytes) {
+        const twin = await fileStore.get(pair.to);
+        if (!twin) throw new Error(`staged object missing: ${pair.from}`);
+        continue;
+      }
+      await fileStore.put(pair.to, bytes.data, bytes.type);
+    }
+  } catch {
+    await fileStore.del(stagedKeys).catch(() => undefined);
+    if (lease) await store.endSlow(lease);
+    const message = `The application was filed as ${receipt.confirmationNumber} but a file failed to save. Reconcile with key ${key} instead of refiling.`;
+    return isJson || wantsJson(request)
+      ? json({ error: message, key, confirmationNumber: receipt.confirmationNumber }, 500)
+      : html(errorPage("Filing incomplete", message, "/", "Back to the home page"), 500);
+  }
+  await fileStore.del(stagedKeys).catch(() => undefined);
+  // Drafts belong to this session and no receipt references them; dropping them is safe.
+  if (session) await fileStore.del(session.files.map((f) => f.r2key)).catch(() => undefined);
 
   if (session) {
     const fresh = await touchSession(store, session, config);
     fresh.submitted = {
-      key: result.submission.key,
-      confirmationNumber: result.submission.confirmationNumber,
-      digest: result.submission.digest,
-      receivedAt: result.submission.receivedAt,
+      key: receipt.key,
+      confirmationNumber: receipt.confirmationNumber,
+      digest: receipt.digest,
+      receivedAt: receipt.receivedAt,
     };
     delete fresh.household;
     fresh.files = [];
@@ -662,8 +677,8 @@ async function handleSubmit(
   if (slowMs > 0 && !duplicate) await sleep(slowMs);
   if (lease) await store.endSlow(lease);
 
-  if (isJson || wantsJson(request)) return submissionJson(result.submission, duplicate);
-  return html(confirmationPage(result.submission, duplicate));
+  if (isJson || wantsJson(request)) return submissionJson(receipt, duplicate);
+  return html(confirmationPage(receipt, duplicate));
 }
 
 export interface CleanupReport {

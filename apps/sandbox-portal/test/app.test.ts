@@ -1231,6 +1231,44 @@ describe("blocker 6: access control", () => {
     expect(authed.status).toBe(200);
   });
 
+  test("a retry rejected while all slow slots are busy leaves the filed attachment alone", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-original").toString("base64") };
+    const post = (key: string, slowMs: number) =>
+      handleRequest(
+        new Request(`${BASE}/submissions?slowMs=${slowMs}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: AUTH },
+          body: JSON.stringify({ key, household: HOUSEHOLD, files: [file] }),
+        }),
+        store,
+        files,
+        config,
+      );
+    const first = await post("precious-key", 0);
+    expect(first.status).toBe(200);
+    const confirmation = ((await first.json()) as Record<string, string>)["confirmationNumber"] ?? "";
+    const parked = [0, 1, 2, 3, 4].map((i) => post(`park-${i}`, 800));
+    const deadline = Date.now() + 5000;
+    while (store.slowLeases.size < 5 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(store.slowLeases.size).toBe(5);
+    const retry = await post("precious-key", 800);
+    expect(retry.status).toBe(503);
+    for (const done of parked) expect((await done).status).toBe(200);
+    const download = await handleRequest(
+      new Request(`${BASE}/caseworker/${confirmation}/file/0`, { headers: { authorization: AUTH } }),
+      store,
+      files,
+      config,
+    );
+    expect(download.status).toBe(200);
+    expect(await download.text()).toBe("%PDF-original");
+  });
+
   test("slow requests past the concurrency cap get a busy response without filing", async () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();

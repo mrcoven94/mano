@@ -11,9 +11,13 @@ export interface FileStore {
   del(keys: string[]): Promise<void>;
 }
 
+function hashPrefix(full: string): string {
+  return full.slice(0, 8);
+}
+
 /** Draft bytes for a session that has not submitted yet. */
 export function draftFileKey(sessionId: string, index: number, sha256: string): string {
-  return `drafts/${sessionId}/${index}-${sha256.slice(0, 8)}`;
+  return `drafts/${sessionId}/${index}-${hashPrefix(sha256)}`;
 }
 
 /**
@@ -21,7 +25,15 @@ export function draftFileKey(sessionId: string, index: number, sha256: string): 
  * key never share an object: a losing racer cannot clobber the winner's bytes.
  */
 export function submissionFileKey(scope: string, key: string, index: number, sha256: string): string {
-  return `submissions/${scope}/${key}/${index}-${sha256.slice(0, 8)}`;
+  return `submissions/${scope}/${key}/${index}-${hashPrefix(sha256)}`;
+}
+
+/**
+ * One submit attempt's private staging. The attempt id is fresh per request,
+ * so a rejected attempt only ever deletes objects it created itself.
+ */
+export function stagingAttemptKey(attemptId: string, index: number, sha256: string): string {
+  return `staging/${attemptId}/${index}-${hashPrefix(sha256)}`;
 }
 
 /** Minimal R2 surface, so app code never imports cloudflare:workers. */
