@@ -101,7 +101,7 @@ export default function Home() {
             <a className="btn btn-primary btn-lg" href={SMS_HREF}>Text Mano</a>
             <a className="btn btn-ghost btn-lg" href="/government">For government</a>
           </div>
-          <p className="note">{PLACEHOLDER_NOTE}</p>
+          {PLACEHOLDER_NOTE && <p className="note">{PLACEHOLDER_NOTE}</p>}
         </div>
       </section>
     </div>
