@@ -1,0 +1,47 @@
+name: deploy-sandbox-portal
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/sandbox-portal/**"
+      - ".github/workflows/deploy-sandbox-portal.yml"
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @mano/sandbox-portal check
+      - run: npm install -g wrangler
+      - name: require deploy secrets
+        shell: bash
+        run: ./scripts/require-deploy-secrets.sh
+        working-directory: apps/sandbox-portal
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SANDBOX_PORTAL_TOKEN: ${{ secrets.SANDBOX_PORTAL_TOKEN }}
+      # Succeeds when the bucket already exists; deploy below fails loudly on bad credentials.
+      - run: wrangler r2 bucket create mano-sandbox-portal-files || true
+        working-directory: apps/sandbox-portal
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - run: wrangler deploy
+        working-directory: apps/sandbox-portal
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - run: printf '%s' "$SANDBOX_PORTAL_TOKEN" | wrangler secret put SANDBOX_PORTAL_TOKEN
+        shell: bash
+        working-directory: apps/sandbox-portal
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SANDBOX_PORTAL_TOKEN: ${{ secrets.SANDBOX_PORTAL_TOKEN }}

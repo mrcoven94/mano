@@ -1,0 +1,17 @@
+{
+  "name": "@mano/sandbox-portal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fake state benefits portal that every Mano demo submits to. A Cloudflare Worker anyone can deploy.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit && vitest run",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251025.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}

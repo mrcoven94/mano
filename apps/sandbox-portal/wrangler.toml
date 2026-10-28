@@ -1,0 +1,28 @@
+name = "mano-sandbox-portal"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+[[durable_objects.bindings]]
+name = "PORTAL_STORE"
+class_name = "PortalStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PortalStore"]
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "mano-sandbox-portal-files"
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+SESSION_TIMEOUT_MINUTES = "15"
+SLOW_MS_DEFAULT = "20000"
+MAX_UPLOAD_BYTES = "5242880"
+MAX_UPLOAD_FILES = "3"
+MAX_BODY_BYTES = "25165824"
+MAX_FIELD_LENGTH = "500"
+RATE_LIMIT_PER_MINUTE = "60"
+SLOW_MAX_CONCURRENT = "5"

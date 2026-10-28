@@ -24,10 +24,15 @@ Three members: David Coven, Claude and Muse.
 | Path | What |
 | --- | --- |
 | `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway, channels and phone |
+| `apps/sandbox-portal` | A fake benefits portal every demo submits to, on Cloudflare Workers |
 | `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel |
 | `packages/protocol` | The open message format agents use to work a case together |
 | `eval` | The held-out test: scenarios, baselines and results |
 | `docs` | Decisions and design notes |
+
+## Sandbox portal
+
+`apps/sandbox-portal` is a fake state benefits portal: a three-step renewal application with uploads, confirmation numbers, and idempotency keys the action gateway reconciles against. Demos submit here; Mano never touches a real benefits site. Run it with `pnpm --filter @mano/sandbox-portal dev` (details in the header comment of its `src/index.ts`). Pushing to `main` deploys it.
 
 ## Prior work
 
