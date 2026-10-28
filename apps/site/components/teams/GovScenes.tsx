@@ -92,9 +92,9 @@ export default function GovScenes() {
     <SceneTabs
       label="More of what your agent does"
       scenes={[
-        { key: "gov-policy", tab: "Turns a policy into a program", Scene: PolicyScene },
-        { key: "gov-queue", tab: "Flags what it cannot settle", Scene: QueueScene },
-        { key: "gov-notice", tab: "Writes notices people can read", Scene: NoticeScene },
+        { key: "gov-policy", tab: "Launch a program from a policy", Scene: PolicyScene },
+        { key: "gov-queue", tab: "Clear the queue", Scene: QueueScene },
+        { key: "gov-notice", tab: "Send notices people understand", Scene: NoticeScene },
       ]}
     />
   );

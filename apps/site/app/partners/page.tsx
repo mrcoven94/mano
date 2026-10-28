@@ -13,7 +13,7 @@ export const metadata: Metadata = { title, description, alternates: { canonical:
 
 const MAIL = "mailto:partners@withmano.com?subject=Offering%20our%20service%20through%20Mano";
 
-const kinds = ["Credit building", "Food and groceries", "Child care booking", "Jobs and training", "Housing and rent", "Health and care", "Legal help", "Transportation"];
+const kinds = ["Housing and rent", "Light and water bills", "Food and groceries", "Health and medicine", "Child care", "Credit building", "Jobs and training", "Legal help", "Transportation"];
 
 const faqs: [string, string][] = [
   ["How does a service join Mano?", "You write a manifest: what the service does, the exact data it uses, its tools, who pays and how to stop. We review it, and Mano offers the service when it fits what a person asked for."],
@@ -53,7 +53,7 @@ export default function Partners() {
           <div>
             <p className="h-eyebrow">Where services fit</p>
             <h2 id="pt-kinds-h">Services people ask Mano about.</h2>
-            <p className="lede">People come to Mano to get help and keep it. A service belongs here if it helps with that, and says plainly what it costs and what it uses.</p>
+            <p className="lede">People come to Mano to pay rent, keep the lights on, feed their families and get care. A service belongs here if it helps with that, and says plainly what it costs and what it uses.</p>
             <ul className="t-chips">{kinds.map((k) => <li key={k}>{k}</li>)}</ul>
           </div>
           <div>

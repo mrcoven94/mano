@@ -4,19 +4,20 @@ import GovDesk from "@/components/teams/GovDesk";
 import GovScenes from "@/components/teams/GovScenes";
 import { TeamHero, Stage, Steps, Rules, Seat, Close } from "@/components/teams/Parts";
 
-const title = "Mano for government offices";
-const description = "Cases arrive ready for a decision, with every finding cited to the rule. Your staff approve, and Mano enters the case into the system you already run.";
+const title = "Case management for government offices";
+const description = "Mano helps government offices keep residents covered. It keeps renewals on time, brings caseworkers complete cases with every finding cited to the rule, and enters approved cases into the system you already run.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/government" }, openGraph: { title, description } };
 
 const MAIL = "mailto:agencies@withmano.com?subject=Claiming%20our%20office%20on%20Mano";
 
 const faqs: [string, string][] = [
+  ["What does case management with Mano look like?", "Each caseworker gets their own Mano. It gathers documents from residents who chose to share them, prepares applications and renewals, tracks every deadline and drafts notices in plain language. Caseworkers make every decision."],
   ["Do we have to replace our current system?", "No. Your agent types approved cases into the system you already run, the way a person would, and reads the screen back to check it. The old system stays and the retyping goes away."],
   ["Who decides a case?", "Your staff. Mano prepares the case, cites the rule behind each finding and flags what it cannot settle. A person approves, denies or asks for more."],
   ["What can a resident see about our office?", "Your profile, and the cases they chose to share with you. A resident shares a case for one purpose and can take that access back."],
   ["Do agents call residents or other offices?", "Only when staff approve it. Every call starts by saying whose automated assistant is calling and that the call is transcribed."],
-  ["How is it priced?", "Per staff seat. Residents never pay to apply, renew or file."],
+  ["How is it priced?", "Per staff seat. Residents never pay for anything your office asks Mano to do."],
   ["Is Mano a government system?", "No. Mano is independent. Your office keeps its own systems, seals and authority, and Mano never presents itself as your office."],
 ];
 
@@ -39,10 +40,10 @@ export default function Government() {
     <div className="team">
       <TeamHero
         eyebrow="For government offices"
-        before="Cases arrive "
-        phrase="ready"
-        after=" for your staff to decide."
-        lede="Mano prepares each case from your policy and cites the rule behind every finding. When a caseworker approves, Mano enters it into the system you already run, and you can watch every keystroke."
+        before="Residents "
+        phrase="stay covered"
+        after=" and the backlog shrinks."
+        lede="Many people lose benefits over a missed form, not because they stopped qualifying. Mano keeps renewals on time and brings your caseworkers complete cases, with every finding cited to your rule. Your staff decide, and Mano enters the result into the system you already run."
         stage={<Stage id="desk" label="Sample County Human Services" hint="Approve the case, or ask for more"><GovDesk /></Stage>}
       >
         <a className="btn btn-primary btn-lg" href={MAIL}>Talk to us</a>
@@ -53,7 +54,7 @@ export default function Government() {
         <div className="wrap">
           <div className="h-head">
             <p className="h-eyebrow">Before the case reaches you</p>
-            <h2 id="gov-more-h">The busywork around each decision, done.</h2>
+            <h2 id="gov-more-h">Your staff spend their time on decisions.</h2>
           </div>
           <GovScenes />
         </div>
@@ -106,7 +107,7 @@ export default function Government() {
         ]}
       />
 
-      <Seat title="Priced per staff seat." text="Residents never pay to apply, renew or file." href={MAIL} />
+      <Seat title="Priced per staff seat." text="Residents never pay for anything your office asks Mano to do." href={MAIL} />
 
       <Faq id="gov-questions" items={faqs} />
 

@@ -90,9 +90,9 @@ export default function OrgScenes() {
     <SceneTabs
       label="More of what your agent does"
       scenes={[
-        { key: "org-morning", tab: "Drafts are ready by morning", Scene: MorningScene },
-        { key: "org-program", tab: "Runs your own program", Scene: ProgramScene },
-        { key: "org-trail", tab: "Follows each case to a decision", Scene: TrailScene },
+        { key: "org-morning", tab: "Start the day with drafts ready", Scene: MorningScene },
+        { key: "org-program", tab: "Run your own grant program", Scene: ProgramScene },
+        { key: "org-trail", tab: "Know where every case stands", Scene: TrailScene },
       ]}
     />
   );

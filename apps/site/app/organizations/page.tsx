@@ -4,18 +4,19 @@ import OrgConsent from "@/components/teams/OrgConsent";
 import OrgScenes from "@/components/teams/OrgScenes";
 import { TeamHero, Stage, Steps, Rules, Seat, Close } from "@/components/teams/Parts";
 
-const title = "Mano for nonprofits and case managers";
-const description = "Every case manager gets an agent that drafts the paperwork from the case file and asks families for missing pages. Families decide what to share, and your team approves every send.";
+const title = "Case management for nonprofits";
+const description = "Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications and tracks every renewal, so families keep their help and your team spends its time with people.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/organizations" }, openGraph: { title, description } };
 
 const MAIL = "mailto:organizations@withmano.com?subject=Mano%20for%20our%20team";
 
 const faqs: [string, string][] = [
+  ["What can families get help with?", "Rent help, food benefits, light and water bills, health coverage and prescriptions, child care, housing waitlists and your own programs. Mano finds what each family qualifies for, applies and keeps every renewal on time."],
   ["What does a case manager do in Mano?", "Review and approve. The agent prepares applications, renewals and document requests from the caseload. The case manager checks the exact draft and handles the conversations only a person can."],
   ["How do families share cases with us?", "A family shares one case with your organization, for one purpose, until a date. Your agent sees only what was shared, and the family can stop sharing at any time."],
   ["Can we run our own assistance program?", "Yes. You set the rules and the budget. Mano drafts an application families complete by text, and prepares each case for your review."],
-  ["How is it priced?", "Per seat, one for each case manager. Families never pay to apply, renew or file."],
+  ["How is it priced?", "Per seat, one for each case manager. Families never pay for help your team prepares for them."],
   ["Does Mano replace case managers?", "No. Mano does the paperwork around the work. Case managers keep the relationships, the judgment calls and every approval."],
 ];
 
@@ -34,10 +35,10 @@ export default function Organizations() {
     <div className="team">
       <TeamHero
         eyebrow="For nonprofits and case managers"
-        before="Ask for a document. Get it with "
-        phrase="consent"
+        before="Keep more families "
+        phrase="housed and fed"
         after="."
-        lede="Every case manager gets an agent that drafts renewals and applications from the case file. When a page is missing, it asks the family's own Mano, and the family decides what to share."
+        lede="Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications and tracks every renewal, so your team spends its time with families instead of paperwork. Families choose what to share and can stop at any time."
         stage={<Stage id="desk" label="Northside Family Center" hint="Ask for the missing page, then answer as Maria"><OrgConsent /></Stage>}
       >
         <a className="btn btn-primary btn-lg" href={MAIL}>Talk to us</a>
@@ -57,7 +58,7 @@ export default function Organizations() {
       <Rules
         id="org-rules"
         eyebrow="Your team keeps every judgment call"
-        title="Consent is a record, not a checkbox."
+        title="Families choose what you see."
         lede="Every request names who is asking, for what and until when. The family answers in their own Mano, and their answer is kept with the case."
         facts={[
           ["One case, one purpose, one date.", "Families share exactly that, and nothing else in their Mano."],
@@ -101,7 +102,7 @@ export default function Organizations() {
         ]}
       />
 
-      <Seat title="Priced per seat." text="One seat for each case manager. Families never pay to apply, renew or file." href={MAIL} />
+      <Seat title="Priced per seat." text="One seat for each case manager. Families never pay for help your team prepares for them." href={MAIL} />
 
       <Faq id="org-questions" items={faqs} />
 
