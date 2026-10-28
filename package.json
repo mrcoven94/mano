@@ -2,9 +2,11 @@
   "name": "mano",
   "private": true,
   "packageManager": "pnpm@10.33.0",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
-    "check": "pnpm -r --if-present run check",
+    "check": "node scripts/check-markdown.mjs && pnpm -r --if-present run check",
     "eval:baselines": "pnpm --filter ./eval run baselines"
   }
 }

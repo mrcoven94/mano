@@ -47,6 +47,7 @@ Reviews come from the architect (Claude) and outside critics; a session never re
 9. **Partners.** Never name a partner company (in code, copy, docs or commits) until David confirms they agreed in writing.
 10. **One brand.** Everything is Mano, the way everything at Meta is Muse. No sub-brands or feature names: say "Mano fills out any form", not a named feature.
 11. **Writing.** Plain, specific language. No em dashes, no italics, no slogan pairs, no filler.
+12. **No new Markdown files.** The only Markdown files allowed are `README.md`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `docs/decisions.md`, `docs/protocol.md` and `docs/third-party.md`. No package READMEs, notes, plans, reports or handoffs in the repo: reports go in the pull request, plans in Linear. `pnpm check` fails on any other `.md` or `.mdx` file. Adding to the list is David's decision.
 
 ## Open source, from the first commit
 
@@ -58,7 +59,7 @@ This repository is public and MIT licensed. Build every part so a stranger can r
 - Public contracts are versioned: `packages/protocol` (JSON Schema plus a written spec in `docs/protocol.md`) and the extension manifest. Breaking changes bump the version.
 - Security does not rely on secrecy of code. The eval's held-out seed is the one intentional secret (published after the final run).
 - Maintainer tooling (`ws keys run`, Infisical, Linear) is for David's machine. Write code and docs that also work for contributors without it, and keep personal paths out of code.
-- Write for readers: a README per package (what it does, how to run it, how to test it), decisions recorded in `docs/decisions.md`.
+- Write for readers in code, not in new files: a short header comment at the top of each package's entry file (what it does, how to run it, how to test it), usage in the root `README.md`, decisions in `docs/decisions.md`.
 
 ## Architecture (see docs/decisions.md)
 
