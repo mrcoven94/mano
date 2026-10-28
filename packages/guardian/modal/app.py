@@ -69,7 +69,7 @@ except ImportError:  # pragma: no cover
 app = modal.App("mano-guardian")
 
 cache = modal.Volume.from_name("mano-guardian-cache", create_if_missing=True)
-gpu_image = modal.Image.from_registry(IMAGE_TAG)
+gpu_image = modal.Image.from_registry(f"vllm/vllm-openai@{IMAGE_DIGEST}")
 web_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi")
 
 
@@ -89,9 +89,18 @@ def server_info() -> dict[str, dict[str, str]]:
     }
 
 
+def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    obj: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError(f"duplicate key: {key!r}")
+        obj[key] = value
+    return obj
+
+
 def parse_verdict(text: str) -> dict[str, Any]:
     """Strictly parse one model answer. Raise on anything unexpected."""
-    data = json.loads(text)
+    data = json.loads(text, object_pairs_hook=_no_duplicates)
     if not isinstance(data, dict):
         raise ValueError("verdict is not an object")
     verdict = data.get("verdict")

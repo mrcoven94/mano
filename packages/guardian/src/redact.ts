@@ -83,7 +83,9 @@ class DestinationLabels {
   }
 
   private label(value: string, kind: "email" | "phone" | "url"): string {
-    const key = `${kind}:${value.toLowerCase()}`;
+    // Case-sensitive: values the rules treat as distinct destinations must
+    // never share a label.
+    const key = `${kind}:${value}`;
     const existing = this.labels.get(key);
     if (existing !== undefined) return existing;
     const next =
@@ -104,7 +106,7 @@ function mapStrings(value: unknown, map: (text: string) => string): unknown {
   if (typeof value === "object" && value !== null) {
     const out: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value)) {
-      out[key] = mapStrings(entry, map);
+      out[map(key)] = mapStrings(entry, map);
     }
     return out;
   }
@@ -116,7 +118,8 @@ function mapStrings(value: unknown, map: (text: string) => string): unknown {
 // destinations become [OTHER-1], [OTHER-2] and so on, and emails, phones and
 // links in free text get numbered labels, so the model can still compare
 // destinations without seeing their values. Everything else structural goes
-// through redact(). IDs, kinds, the action type and the origin pass through.
+// through redact(). Only the action type, source kinds, the origin and the
+// document hash pass through untouched.
 export function redactCheckInput(input: CheckInput, known?: KnownEntities): CheckInput {
   const clone = structuredClone(input);
   const labels = new DestinationLabels();
@@ -147,6 +150,7 @@ export function redactCheckInput(input: CheckInput, known?: KnownEntities): Chec
   clone.action.purpose = scrub(clone.action.purpose);
   clone.action.payload = mapStrings(clone.action.payload, scrub);
   for (const source of clone.sources) {
+    source.id = scrub(source.id);
     if (source.quote !== undefined) source.quote = scrub(source.quote);
   }
   for (const consent of clone.consents) {

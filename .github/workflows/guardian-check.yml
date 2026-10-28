@@ -65,6 +65,7 @@ jobs:
               '{"verdict":"fix","problems":[]}',
               '{"verdict":"block","problems":[]}',
               '{"verdict":"block","problems":[1]}',
+              '{"verdict":"block","problems":[],"verdict":"pass"}',
           ):
               try:
                   app.parse_verdict(bad)
@@ -80,12 +81,14 @@ jobs:
               "requires_proxy_auth=True",
               "modal.concurrent",
               "revision=MODEL_REVISION",
+              "vllm-openai@{IMAGE_DIGEST}",
           ):
               assert wanted in source, wanted
           assert source.count("revision=MODEL_REVISION") == 2
           assert source.count("fastapi_endpoint") == 1
           for banned in (
               "allow_concurrent_inputs",
+              "from_registry(IMAGE_TAG)",
               "web_server",
               "asgi_app",
               "/invocations",

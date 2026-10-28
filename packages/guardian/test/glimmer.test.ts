@@ -83,6 +83,86 @@ describe("GlimmerChecker", () => {
     expect(sent).toContain("[RECIPIENT]");
   });
 
+  it("sends no personal detail of any kind", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
+    );
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      knownEntities: { names: ["Ana Ruiz"], employers: ["Sunset Bakery"] },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const body =
+      "Call (415) 555-0132 about SSN 123-45-6789. " +
+      "Ana Ruiz works at Sunset Bakery and lives at 4821 Clement Street. " +
+      "See https://example.com/Claim/9. " +
+      'File says {"dob": "03/14/1988"}.';
+    const input: CheckInput = {
+      action: {
+        type: "send",
+        recipient: "ana.ruiz@example.com",
+        purpose: "Income check DOB: 1988-03-14 case SN-2026-0417",
+        payload: {
+          to: "ana.ruiz@example.com",
+          body,
+          claims: ["Born 1988-03-14."],
+        },
+        documentHash: null,
+      },
+      sources: [
+        { kind: "message", id: "msg-files-backup@example.net", quote: body },
+        { kind: "document", id: "d1", quote: "Born 1988-03-14." },
+      ],
+      consents: [
+        {
+          recipient: "ana.ruiz@example.com",
+          purpose: "Income check DOB: 1988-03-14 case SN-2026-0417",
+        },
+        { recipient: "(415) 555-0100", purpose: "SSN check 123-45-6788" },
+      ],
+      origin: "person",
+    };
+    const result = await checker.check(input);
+    expect(result).toEqual({ verdict: "pass", problems: [] });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const sent = init.body as string;
+    for (const secret of [
+      "ana.ruiz@example.com",
+      "files-backup@example.net",
+      "(415) 555-0132",
+      "(415) 555-0100",
+      "123-45-6789",
+      "123-45-6788",
+      "Ana Ruiz",
+      "Sunset Bakery",
+      "4821 Clement Street",
+      "https://example.com/Claim/9",
+      "03/14/1988",
+      "1988-03-14",
+      "SN-2026-0417",
+      "Claim/9",
+    ]) {
+      expect(sent).not.toContain(secret);
+    }
+    for (const label of [
+      "[RECIPIENT]",
+      "[OTHER-1]",
+      "[PHONE-1]",
+      "[URL-1]",
+      "[EMAIL-1]",
+      "[ID]",
+      "[NAME]",
+      "[EMPLOYER]",
+      "[ADDRESS]",
+      "[DATE OF BIRTH]",
+      "[CASE NUMBER]",
+    ]) {
+      expect(sent).toContain(label);
+    }
+  });
+
   it("redacts known names before sending", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ verdict: "pass", problems: [], ...SERVER }),

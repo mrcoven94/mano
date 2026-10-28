@@ -169,4 +169,34 @@ describe("redactCheckInput", () => {
     redactCheckInput(input);
     expect(input.action.recipient).toBe("Caseworker Ana Ruiz");
   });
+
+  it("keeps case-distinct destinations distinct", () => {
+    const input = checkInput();
+    input.action.payload = {
+      text: "Write to Benefits@example.com, not benefits@example.com.",
+    };
+    const redacted = redactCheckInput(input);
+    const text = (redacted.action.payload as { text: string }).text;
+    expect(text).toBe("Write to [EMAIL-1], not [EMAIL-2].");
+  });
+
+  it("redacts source ids and payload keys", () => {
+    const input = checkInput();
+    input.sources = [
+      {
+        kind: "message",
+        id: "msg-ana.ruiz@example.com",
+        quote: "See the attached file.",
+      },
+    ];
+    input.action.payload = {
+      text: "See the attached file.",
+      "note-4821 Clement Street": "See the attached file.",
+    };
+    const redacted = redactCheckInput(input);
+    const wire = JSON.stringify(redacted);
+    expect(wire).not.toContain("ana.ruiz@example.com");
+    expect(wire).not.toContain("4821 Clement Street");
+    expect(redacted.sources[0]?.id).toBe("[EMAIL-1]");
+  });
 });
