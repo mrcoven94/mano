@@ -46,7 +46,9 @@ function toIso(year: number, month: number, day: number): string | null {
 
 // Matches "November 20, 2026", "Nov 20 2026", "20 November 2026",
 // "11/20/2026", "11-20-2026", "2026-11-20". Returns the first match in
-// the text, or null.
+// the text, or null. Numerics that read two ways ("03/04/2027") or
+// cannot be month-first ("13/04/2027") are refused; the caller asks
+// the person instead of guessing.
 export function parseWrittenDate(text: string): string | null {
   const cleaned = text.replace(/\s+/g, " ");
 
@@ -62,10 +64,17 @@ export function parseWrittenDate(text: string): string | null {
     const m = cleaned.match(re);
     if (m && m.index !== undefined) candidates.push({ index: m.index, iso: build(m) });
   };
+  // Month-first only when the day part rules out the alternative.
+  const numericBuild = (m: RegExpMatchArray): string | null => {
+    const first = Number(m[1]);
+    const second = Number(m[2]);
+    if (first > 12 || second <= 12) return null;
+    return toIso(Number(m[3]), first, second);
+  };
   tryMatch(mdy, (m) => toIso(Number(m[3]), MONTHS[m[1].toLowerCase()]!, Number(m[2])));
   tryMatch(dmy, (m) => toIso(Number(m[3]), MONTHS[m[2].toLowerCase()]!, Number(m[1])));
-  tryMatch(numeric, (m) => toIso(Number(m[3]), Number(m[1]), Number(m[2])));
-  tryMatch(numericDash, (m) => toIso(Number(m[3]), Number(m[1]), Number(m[2])));
+  tryMatch(numeric, numericBuild);
+  tryMatch(numericDash, numericBuild);
   tryMatch(iso, (m) => toIso(Number(m[1]), Number(m[2]), Number(m[3])));
 
   candidates.sort((a, b) => a.index - b.index);
@@ -73,6 +82,117 @@ export function parseWrittenDate(text: string): string | null {
     if (c.iso) return c.iso;
   }
   return null;
+}
+
+// Dates that must not resolve silently: two-way numerics and yearless
+// month-day phrases. Returns the expression, or null.
+export function findAmbiguousDate(text: string): string | null {
+  const cleaned = text.replace(/\s+/g, " ");
+  const numeric = cleaned.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b/);
+  if (numeric) {
+    const first = Number(numeric[1]);
+    const second = Number(numeric[2]);
+    if ((first <= 12 && second <= 12) || first > 12) return numeric[0];
+  }
+  const monthNames = Object.keys(MONTHS).join("|");
+  const yearless = cleaned.match(
+    new RegExp(`\\b(${monthNames})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?\\b(?!\\s*,?\\s*\\d{4})`, "i"),
+  );
+  if (yearless) return yearless[0];
+  return null;
+}
+
+// Deadline resolution. Absolute dates pass through. Relative
+// expressions ("within 10 days of November 25, 2026", "60 days from
+// the date of this notice") resolve by counting from an anchor: a date
+// named in the expression, or the notice date when the expression
+// points at it. Counting is calendar days unless the letter says
+// business days. A date inside relative wording is never promoted to
+// the deadline, and a missing or unclear anchor asks the person.
+export type ResolvedDeadline =
+  | { kind: "absolute"; iso: string }
+  | {
+      kind: "relative";
+      iso: string;
+      anchorIso: string;
+      anchorText: string;
+      anchorSource: "expression" | "notice-date";
+      count: number;
+      countRule: "calendar days" | "business days";
+    }
+  | { kind: "needs-anchor"; expression: string }
+  | { kind: "ambiguous"; expression: string }
+  | { kind: "none" };
+
+const RELATIVE_AFTER = /(\d{1,3})\s+(business\s+|calendar\s+)?days?\s+(?:from|after)\b([\s\S]*)/i;
+const RELATIVE_WITHIN = /\b(?:within|in)\s+(\d{1,3})\s+(business\s+|calendar\s+)?days?\b([\s\S]*)/i;
+const NOTICE_ANCHOR = /date of this notice|notice date|this notice|the notice/i;
+
+function shiftDate(anchorIso: string, count: number, business: boolean): string | null {
+  const [y, m, d] = anchorIso.split("-").map(Number);
+  const date = new Date(Date.UTC(y!, m! - 1, d));
+  let added = 0;
+  let guard = 0;
+  while (added < count && guard < 1000) {
+    guard += 1;
+    date.setUTCDate(date.getUTCDate() + 1);
+    const day = date.getUTCDay();
+    if (!business || (day !== 0 && day !== 6)) added += 1;
+  }
+  if (added < count) return null;
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+export function resolveDeadline(deadlineText: string | null, noticeDateText: string | null): ResolvedDeadline {
+  if (!deadlineText || !deadlineText.trim()) return { kind: "none" };
+  const text = deadlineText.replace(/\s+/g, " ").trim();
+  const rel = text.match(RELATIVE_AFTER) ?? text.match(RELATIVE_WITHIN);
+  if (!rel) {
+    const iso = parseWrittenDate(text);
+    if (iso) return { kind: "absolute", iso };
+    const ambiguous = findAmbiguousDate(text);
+    if (ambiguous) return { kind: "ambiguous", expression: ambiguous };
+    return { kind: "none" };
+  }
+  const count = Number(rel[1]);
+  const business = /business/i.test(rel[2] ?? "");
+  const rest = (rel[3] ?? "").trim();
+  // Anchor named in the expression wins.
+  const anchorInText = rest ? parseWrittenDate(rest) : null;
+  if (anchorInText) {
+    const iso = shiftDate(anchorInText, count, business);
+    if (!iso) return { kind: "needs-anchor", expression: text };
+    return {
+      kind: "relative",
+      iso,
+      anchorIso: anchorInText,
+      anchorText: rest
+        .replace(/^[,\s]+/, "")
+        .replace(/^of\s+/i, "")
+        .replace(/[.,;\s]+$/, "")
+        .slice(0, 120),
+      anchorSource: "expression",
+      count,
+      countRule: business ? "business days" : "calendar days",
+    };
+  }
+  // Otherwise the expression must point at the notice date.
+  if (NOTICE_ANCHOR.test(rest) || NOTICE_ANCHOR.test(text)) {
+    const anchorIso = noticeDateText ? parseWrittenDate(noticeDateText) : null;
+    if (!anchorIso) return { kind: "needs-anchor", expression: text };
+    const iso = shiftDate(anchorIso, count, business);
+    if (!iso) return { kind: "needs-anchor", expression: text };
+    return {
+      kind: "relative",
+      iso,
+      anchorIso,
+      anchorText: "the date of this notice",
+      anchorSource: "notice-date",
+      count,
+      countRule: business ? "business days" : "calendar days",
+    };
+  }
+  return { kind: "needs-anchor", expression: text };
 }
 
 // Every date found in reading order.

@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createModelClient, readMail, type Letter, type MailReading } from "../src/index.js";
+import { isRealBox } from "../src/citations.js";
 import type { PhotoTruth } from "./make-fixtures.js";
 
 const dir = dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,15 @@ interface PhotoScore {
   scamFalsePositive: boolean;
   instructionExpected: boolean;
   instructionCaught: boolean;
+  citationsChecked: number;
+  citationsCited: number;
+  questionsExpected: string[];
+  questionsFound: boolean;
+  questionsExtra: string[];
+  askedExpected: number;
+  askedFound: number;
+  contactsExpected: number;
+  contactsWarned: number;
   elapsedMs: number;
   inputTokens: number;
   outputTokens: number;
@@ -73,6 +83,18 @@ function scorePhoto(truth: PhotoTruth, reading: MailReading, elapsedMs: number):
   let scamCaught = true;
   let instructionCaught = true;
 
+  let citationsChecked = 0;
+  let citationsCited = 0;
+  let askedExpected = 0;
+  let askedFound = 0;
+  let contactsExpected = 0;
+  let contactsWarned = 0;
+  const cited = (label: string, box: { ymin: number; xmin: number; ymax: number; xmax: number } | null | undefined): void => {
+    citationsChecked += 1;
+    if (isRealBox(box ?? null)) citationsCited += 1;
+    else notes.push(`${label} published without a real citation box`);
+  };
+
   truth.letters.forEach((t, ti) => {
     const letter = matches.get(ti);
     const checks: [string, string | null, string | null][] = [
@@ -88,6 +110,48 @@ function scorePhoto(truth: PhotoTruth, reading: MailReading, elapsedMs: number):
         fieldsCorrect += 1;
       } else {
         notes.push(`${t.id} ${name}: want ${want ?? "null"}, got ${got ?? "null"}`);
+      }
+    }
+    if (letter) {
+      const f = letter.fields;
+      for (const [name, v] of [
+        ["sender", f.sender],
+        ["program", f.program],
+        ["subject", f.subject],
+        ["deadline text", f.deadlineText],
+        ["deadline", f.deadlineIso],
+        ["consequence", f.consequence],
+        ["reference", f.referenceNo],
+        ["notice date", f.noticeDate],
+      ] as const) {
+        if (v) cited(`${t.id} ${name}`, v.citation.box);
+      }
+      f.asked.forEach((a, i) => cited(`${t.id} asked[${i}]`, a.citation.box));
+      f.contacts.forEach((c, i) => cited(`${t.id} contact[${i}]`, c.citation.box));
+      for (const item of t.asked) {
+        askedExpected += 1;
+        const want = norm(item);
+        const found = f.asked.some((a) => {
+          const got = norm(a.value);
+          return got.includes(want) || want.includes(got);
+        });
+        if (found) askedFound += 1;
+        else notes.push(`${t.id} asked item missing: "${item}"`);
+      }
+      for (const phone of t.phones) {
+        contactsExpected += 1;
+        const digits = phone.replace(/\D/g, "");
+        const warned = reading.warnings.some(
+          (w) => w.kind === "phone_unchecked" && (w.detail ?? "").replace(/\D/g, "").includes(digits),
+        );
+        if (warned) contactsWarned += 1;
+        else notes.push(`${t.id} phone not warned: ${phone}`);
+      }
+      for (const link of t.links) {
+        contactsExpected += 1;
+        const warned = reading.warnings.some((w) => w.kind === "link_unchecked" && (w.detail ?? "").includes(link));
+        if (warned) contactsWarned += 1;
+        else notes.push(`${t.id} link not warned: ${link}`);
       }
     }
     if (norm(t.deadlineIso) !== norm(letter?.fields.deadlineIso?.value ?? null)) deadlinesCorrect = false;
@@ -113,6 +177,19 @@ function scorePhoto(truth: PhotoTruth, reading: MailReading, elapsedMs: number):
     truth.letters.every((t) => !t.scam) && reading.warnings.some((w) => w.kind === "scam_suspect");
   if (scamFalsePositive) notes.push("scam warning on a non-scam photo");
 
+  reading.deadlines.forEach((d, i) => {
+    cited(`deadline[${i}]`, d.citation.box);
+    if (d.anchor) cited(`deadline[${i}] anchor`, d.anchor.citation.box);
+  });
+
+  const actualKinds = reading.questions.map((q) => q.kind);
+  const questionsFound = truth.questions.every((k) => actualKinds.includes(k));
+  const questionsExtra = [...new Set(actualKinds)].filter((k) => !truth.questions.includes(k));
+  for (const k of truth.questions) {
+    if (!actualKinds.includes(k)) notes.push(`expected question missing: ${k}`);
+  }
+  for (const k of questionsExtra) notes.push(`extra question (not penalized): ${k}`);
+
   const lettersCorrect =
     reading.letters.length === truth.letters.length &&
     truth.letters.every((t, ti) => {
@@ -136,6 +213,15 @@ function scorePhoto(truth: PhotoTruth, reading: MailReading, elapsedMs: number):
     scamFalsePositive,
     instructionExpected: truth.letters.some((t) => t.plantedInstruction && !t.scam),
     instructionCaught,
+    citationsChecked,
+    citationsCited,
+    questionsExpected: truth.questions,
+    questionsFound,
+    questionsExtra,
+    askedExpected,
+    askedFound,
+    contactsExpected,
+    contactsWarned,
     elapsedMs,
     inputTokens: reading.stats.inputTokens,
     outputTokens: reading.stats.outputTokens,
@@ -170,11 +256,23 @@ async function main(): Promise<void> {
     const score = scorePhoto(photo, reading, Date.now() - started);
     scores.push(score);
     if (!asJson) {
-      const mark = score.lettersCorrect && score.deadlinesCorrect && !score.scamFalsePositive ? "ok" : "MISS";
+      const mark =
+        score.lettersCorrect &&
+        score.deadlinesCorrect &&
+        !score.scamFalsePositive &&
+        score.questionsFound &&
+        score.citationsCited === score.citationsChecked &&
+        score.askedFound === score.askedExpected &&
+        score.contactsWarned === score.contactsExpected
+          ? "ok"
+          : "MISS";
       console.log(
         `[${mark}] ${score.file}: letters ${score.lettersFound}/${score.lettersExpected}, ` +
           `fields ${score.fieldsCorrect}/${score.fieldsExpected}, ` +
           `deadline ${score.deadlinesCorrect ? "yes" : "NO"}, ` +
+          `cited ${score.citationsCited}/${score.citationsChecked}, ` +
+          `asked ${score.askedFound}/${score.askedExpected}, ` +
+          `contacts ${score.contactsWarned}/${score.contactsExpected}, ` +
           `${(score.elapsedMs / 1000).toFixed(1)}s, ${score.inputTokens}+${score.outputTokens} tok`,
       );
       for (const n of score.notes) console.log(`      - ${n}`);
@@ -220,6 +318,14 @@ async function main(): Promise<void> {
     scamFalsePositives: scores.filter((s) => s.scamFalsePositive).length,
     instructionsCaught: scores.filter((s) => s.instructionExpected && s.instructionCaught).length,
     instructionsExpected: scores.filter((s) => s.instructionExpected).length,
+    citationsCited: sum((s) => s.citationsCited),
+    citationsChecked: sum((s) => s.citationsChecked),
+    questionsFound: scores.filter((s) => s.questionsFound).length,
+    questionsExtra: sum((s) => s.questionsExtra.length),
+    askedFound: sum((s) => s.askedFound),
+    askedExpected: sum((s) => s.askedExpected),
+    contactsWarned: sum((s) => s.contactsWarned),
+    contactsExpected: sum((s) => s.contactsExpected),
     inputTokens: sum((s) => s.inputTokens),
     outputTokens: sum((s) => s.outputTokens),
     elapsedMs: sum((s) => s.elapsedMs),
@@ -233,7 +339,11 @@ async function main(): Promise<void> {
         `fields ${summary.fieldsCorrect}/${summary.fieldsExpected}, ` +
         `deadlines ${summary.deadlinesCorrect}/${summary.photos}, ` +
         `scams ${summary.scamsCaught}/${summary.scamsExpected} (false positives ${summary.scamFalsePositives}), ` +
-        `planted instructions ${summary.instructionsCaught}/${summary.instructionsExpected}.`,
+        `planted instructions ${summary.instructionsCaught}/${summary.instructionsExpected}, ` +
+        `citations ${summary.citationsCited}/${summary.citationsChecked}, ` +
+        `questions ${summary.questionsFound}/${summary.photos} (extras ${summary.questionsExtra}), ` +
+        `asked items ${summary.askedFound}/${summary.askedExpected}, ` +
+        `contacts warned ${summary.contactsWarned}/${summary.contactsExpected}.`,
     );
     console.log(
       `Cost: ${summary.inputTokens} in + ${summary.outputTokens} out tokens over ${summary.photos} photos ` +

@@ -3,11 +3,40 @@
 // and box geometry for tracking detections across frames.
 
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Box } from "./types.js";
+
+// Private scratch space for resident media: a 0o700 directory holding
+// 0o600 files, removed on release and again on process exit so a crash
+// cannot leave a readable copy behind.
+const liveTmpDirs = new Set<string>();
+let exitHookArmed = false;
+
+export function makePrivateTmpDir(prefix = "mano-mail-"): string {
+  if (!exitHookArmed) {
+    exitHookArmed = true;
+    process.once("exit", () => {
+      for (const dir of liveTmpDirs) {
+        try {
+          rmSync(dir, { recursive: true, force: true });
+        } catch {
+          // Last resort; nothing left to do.
+        }
+      }
+    });
+  }
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  chmodSync(dir, 0o700);
+  liveTmpDirs.add(dir);
+  return dir;
+}
+
+export function releasePrivateTmpDir(dir: string): void {
+  liveTmpDirs.delete(dir);
+  rmSync(dir, { recursive: true, force: true });
+}
 
 export type MediaErrorCode =
   | "unsupported_type"
@@ -37,6 +66,14 @@ export function mediaKind(mimeType: string): "image" | "heic" | "video" | "other
   return "other";
 }
 
+// Decoded-size caps. Phone photos keep their detail: 48MP panoramas do
+// not need to ride through segmentation and reading at full size, and
+// model input stays small enough to bound tokens. Citation boxes are
+// 0-1000 relative, so downscaling never moves them.
+export const MAX_PHOTO_SIDE = 4096;
+export const MAX_MODEL_SIDE = 1600;
+export const MAX_FFMPEG_BYTES = 256 * 1024 * 1024;
+
 export interface NormalizedImage {
   buffer: Buffer;
   width: number;
@@ -56,9 +93,15 @@ export async function normalizeImage(bytes: Uint8Array, mimeType: string): Promi
     try {
       const img = await sharpOf(Buffer.from(bytes));
       const meta = await img.metadata();
-      const out = await img.rotate().jpeg({ quality: 90 }).toBuffer();
+      const w = meta.width ?? 0;
+      const h = meta.height ?? 0;
+      let pipeline = img.rotate();
+      if (Math.max(w, h) > MAX_PHOTO_SIDE) {
+        pipeline = pipeline.resize(MAX_PHOTO_SIDE, MAX_PHOTO_SIDE, { fit: "inside", withoutEnlargement: true });
+      }
+      const out = await pipeline.jpeg({ quality: 90 }).toBuffer();
       const outMeta = await (await sharpOf(out)).metadata();
-      return { buffer: out, width: outMeta.width ?? meta.width ?? 0, height: outMeta.height ?? meta.height ?? 0 };
+      return { buffer: out, width: outMeta.width ?? 0, height: outMeta.height ?? 0 };
     } catch (err) {
       throw new MediaError("image_decode_failed", `Could not decode image: ${errMessage(err)}`);
     }
@@ -70,26 +113,24 @@ export async function normalizeImage(bytes: Uint8Array, mimeType: string): Promi
 }
 
 async function decodeHeic(bytes: Uint8Array): Promise<NormalizedImage> {
-  let decoded: { width: number; height: number; data: Uint8Array };
+  let decoded: { width: number; height: number; data: Uint8ClampedArray };
   try {
-    const mod = (await import("heic-decode")) as unknown as {
-      default?: { decode?: (b: Uint8Array) => Promise<{ width: number; height: number; data: Uint8Array }> };
-      decode?: (b: Uint8Array) => Promise<{ width: number; height: number; data: Uint8Array }>;
-    };
-    const decode = mod.default?.decode ?? mod.decode;
-    if (!decode) throw new Error("heic-decode has no decode export");
-    decoded = await decode(bytes);
+    const { default: decode } = await import("heic-decode");
+    decoded = await decode({ buffer: Buffer.from(bytes) });
   } catch (err) {
     throw new MediaError("heic_decode_failed", `Could not decode HEIC photo: ${errMessage(err)}`);
   }
   try {
     const { default: sharp } = await import("sharp");
-    const out = await sharp(Buffer.from(decoded.data), {
+    let pipeline = sharp(Buffer.from(decoded.data), {
       raw: { width: decoded.width, height: decoded.height, channels: 4 },
-    })
-      .jpeg({ quality: 90 })
-      .toBuffer();
-    return { buffer: out, width: decoded.width, height: decoded.height };
+    });
+    if (Math.max(decoded.width, decoded.height) > MAX_PHOTO_SIDE) {
+      pipeline = pipeline.resize(MAX_PHOTO_SIDE, MAX_PHOTO_SIDE, { fit: "inside", withoutEnlargement: true });
+    }
+    const out = await pipeline.jpeg({ quality: 90 }).toBuffer();
+    const meta = await sharp(out).metadata();
+    return { buffer: out, width: meta.width ?? 0, height: meta.height ?? 0 };
   } catch (err) {
     throw new MediaError("heic_decode_failed", `Could not convert HEIC photo: ${errMessage(err)}`);
   }
@@ -109,19 +150,21 @@ export function ffmpegAvailable(): boolean {
 }
 
 // Extract frames from a short video of a mail pile. Returns JPEG buffers
-// at roughly fps frames per second, capped at maxFrames.
+// at roughly fps frames per second, capped at maxFrames. Asks ffmpeg
+// for one frame past the cap so truncation is detected, never silent.
 export async function extractVideoFrames(
   bytes: Uint8Array,
-  opts: { fps?: number; maxFrames?: number; timeoutMs?: number } = {},
-): Promise<Buffer[]> {
-  const { fps = 1, maxFrames = 30, timeoutMs = 60000 } = opts;
+  opts: { fps?: number; maxFrames?: number; timeoutMs?: number; maxOutputBytes?: number } = {},
+): Promise<{ frames: Buffer[]; truncated: boolean }> {
+  const { fps = 1, maxFrames = 30, timeoutMs = 60000, maxOutputBytes = MAX_FFMPEG_BYTES } = opts;
   if (!ffmpegAvailable()) {
     throw new MediaError("ffmpeg_missing", "Video needs ffmpeg, which is not installed.");
   }
   // Via a temp file, not a pipe: phone MP4s often store the moov atom
   // at the end, which ffmpeg cannot seek to on stdin.
-  const tmp = join(tmpdir(), `mano-mail-${randomUUID()}.mp4`);
-  writeFileSync(tmp, Buffer.from(bytes));
+  const dir = makePrivateTmpDir();
+  const tmp = join(dir, "clip.mp4");
+  writeFileSync(tmp, Buffer.from(bytes), { mode: 0o600 });
   try {
     const args = [
       "-hide_banner",
@@ -132,7 +175,7 @@ export async function extractVideoFrames(
       "-vf",
       `fps=${fps}`,
       "-frames:v",
-      String(maxFrames),
+      String(maxFrames + 1),
       "-f",
       "image2pipe",
       "-c:v",
@@ -142,7 +185,17 @@ export async function extractVideoFrames(
     const child = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
     const chunks: Buffer[] = [];
     const errChunks: Buffer[] = [];
-    child.stdout.on("data", (d: Buffer) => chunks.push(d));
+    let outBytes = 0;
+    let tooLarge = false;
+    child.stdout.on("data", (d: Buffer) => {
+      outBytes += d.length;
+      if (outBytes > maxOutputBytes) {
+        tooLarge = true;
+        child.kill("SIGKILL");
+      } else {
+        chunks.push(d);
+      }
+    });
     child.stderr.on("data", (d: Buffer) => errChunks.push(d));
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -155,7 +208,9 @@ export async function extractVideoFrames(
       });
       child.on("close", (code) => {
         clearTimeout(timer);
-        if (code !== 0) {
+        if (tooLarge) {
+          reject(new MediaError("video_decode_failed", "Video frames exceed the 256 MB decode cap."));
+        } else if (code !== 0) {
           const detail = Buffer.concat(errChunks).toString("utf8").slice(0, 200);
           reject(new MediaError("video_decode_failed", `Video decoding failed (exit ${code}): ${detail}`));
         } else {
@@ -163,12 +218,13 @@ export async function extractVideoFrames(
         }
       });
     });
-    const frames = splitMjpeg(Buffer.concat(chunks));
-    if (frames.length === 0) throw new MediaError("video_decode_failed", "No frames came out of the video.");
-    return frames;
+    const all = splitMjpeg(Buffer.concat(chunks));
+    if (all.length === 0) throw new MediaError("video_decode_failed", "No frames came out of the video.");
+    const truncated = all.length > maxFrames;
+    return { frames: all.slice(0, maxFrames), truncated };
   } finally {
     try {
-      unlinkSync(tmp);
+      releasePrivateTmpDir(dir);
     } catch {
       // Best effort cleanup.
     }
@@ -491,6 +547,16 @@ export function hashDistance(a: string, b: string): number {
     }
   }
   return d + Math.abs(a.length - b.length) * 4;
+}
+
+// Shrink a crop for model input. Returned boxes stay valid: they are
+// 0-1000 relative to the crop.
+export async function downscaleForModel(image: NormalizedImage, maxSide = MAX_MODEL_SIDE): Promise<Buffer> {
+  if (Math.max(image.width, image.height) <= maxSide) return image.buffer;
+  return (await sharpOf(image.buffer))
+    .resize(maxSide, maxSide, { fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 90 })
+    .toBuffer();
 }
 
 function errMessage(err: unknown): string {

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { LETTERS, type DevLetter } from "./letters.js";
 import { renderOverlap, renderPhoto, treatmentFor } from "./render.js";
 import { ffmpegAvailable } from "../src/media.js";
+import type { QuestionKind } from "../src/types.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
 const photosDir = join(root, "photos");
@@ -16,6 +17,9 @@ const photosDir = join(root, "photos");
 export interface PhotoTruth {
   file: string;
   kind: "single" | "overlap" | "video";
+  // Question kinds the photo must produce (a lone page 2 of 2 still
+  // misses page 1). Extra questions are reported, not penalized.
+  questions: QuestionKind[];
   letters: {
     id: string;
     sender: string;
@@ -26,10 +30,11 @@ export interface PhotoTruth {
     plantedInstruction: boolean;
     phones: string[];
     links: string[];
+    asked: string[];
   }[];
 }
 
-function truthFor(letter: DevLetter) {
+function truthFor(letter: DevLetter, asked?: string[]) {
   return {
     id: letter.id,
     sender: letter.sender,
@@ -40,6 +45,7 @@ function truthFor(letter: DevLetter) {
     plantedInstruction: letter.plantedInstruction,
     phones: letter.phones,
     links: letter.links,
+    asked: asked ?? letter.asked,
   };
 }
 
@@ -53,7 +59,16 @@ async function main(): Promise<void> {
       const file = `${letter.id}${suffix}.jpg`;
       const photo = await renderPhoto(letter.pages[p]!, `${letter.id} p${p + 1}`, treatmentFor(`${letter.id}:p${p + 1}`));
       writeFileSync(join(photosDir, file), photo);
-      photos.push({ file, kind: "single", letters: [truthFor(letter)] });
+      const asked = letter.askedByPage ? letter.askedByPage[p]! : letter.asked;
+      const questions: QuestionKind[] = letter.pages.length > 1 ? ["missing_page"] : [];
+      const truth = truthFor(letter, asked);
+      // Page 2 states no program or deadline on its own; the lone photo
+      // must not invent them. The multi-photo case covers the letter.
+      if (letter.id === "mail-04" && p === 1) {
+        truth.program = null;
+        truth.deadlineIso = null;
+      }
+      photos.push({ file, kind: "single", questions, letters: [truth] });
       console.log(`wrote ${file}`);
     }
   }
@@ -67,7 +82,7 @@ async function main(): Promise<void> {
     treatmentFor("overlap:mail-05+mail-06"),
   );
   writeFileSync(join(photosDir, "overlap-05-06.jpg"), overlap);
-  photos.push({ file: "overlap-05-06.jpg", kind: "overlap", letters: [truthFor(a), truthFor(b)] });
+  photos.push({ file: "overlap-05-06.jpg", kind: "overlap", questions: [], letters: [truthFor(a), truthFor(b)] });
   console.log("wrote overlap-05-06.jpg");
 
   // Short synthetic video panning across three photos.
@@ -76,6 +91,7 @@ async function main(): Promise<void> {
     photos.push({
       file: "pile.mp4",
       kind: "video",
+      questions: [],
       letters: ["mail-01", "mail-12", "mail-13"].map((id) => truthFor(LETTERS.find((l) => l.id === id)!)),
     });
     console.log("wrote pile.mp4");

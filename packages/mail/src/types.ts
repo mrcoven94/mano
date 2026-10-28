@@ -36,6 +36,12 @@ export interface LetterPage {
   crop: Box;
   width: number;
   height: number;
+  // Position of the source frame in the video, 0 for photos. Together
+  // with the crop and rotation, a viewer can map a cited box on the
+  // straightened crop back to the original frame.
+  frameTimeMs: number;
+  // In-plane rotation corrected when straightening, in degrees.
+  rotationDegrees: number;
 }
 
 export type ContactKind = "phone" | "link" | "address";
@@ -75,15 +81,21 @@ export interface Deadline {
   dueDate: string;
   dateText: string;
   citation: Citation;
+  // Relative deadlines ("60 days from the date of this notice") cite
+  // the rule above and the anchor here, plus the count rule used.
+  anchor: Cited<string> | null;
+  countRule: string | null;
 }
 
 export type WarningKind =
   | "instruction_in_content"
   | "link_unchecked"
   | "phone_unchecked"
+  | "address_unchecked"
   | "scam_suspect"
   | "conflicting_dates"
   | "segmentation_fallback"
+  | "video_truncated"
   | "model_error";
 
 export interface Warning {
@@ -99,7 +111,10 @@ export type QuestionKind =
   | "missing_page"
   | "confirm_deadline"
   | "unsupported_media"
-  | "read_failed";
+  | "read_failed"
+  | "video_truncated"
+  | "budget_exceeded"
+  | "unverified_field";
 
 export interface Question {
   id: string;
@@ -107,6 +122,9 @@ export interface Question {
   letterId: string | null;
   prompt: string;
   citation: Citation | null;
+  // Conflicting deadline candidates, each with its own citation. The
+  // deadline stays unpublished until the person confirms one.
+  candidates?: Cited<string>[];
 }
 
 export interface ModelCallStat {
@@ -143,6 +161,3 @@ export interface ReadMailOptions {
   model: import("./model.js").ModelClient;
 }
 
-export function fullPageBox(): Box {
-  return { ymin: 0, xmin: 0, ymax: 1000, xmax: 1000 };
-}

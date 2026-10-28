@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { boxToPixels, clampBox, detectPaperBoxes, frameSharpness, iou, normalizeImage, trackBoxes } from "../src/media.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 describe("clampBox", () => {
   it("clamps and orders coordinates", () => {
@@ -107,6 +112,90 @@ describe("detectPaperBoxes", () => {
     const frame = await normalizeImage(await tablePhoto(true), "image/jpeg");
     const boxes = await detectPaperBoxes(frame);
     expect(boxes).toHaveLength(2);
+  });
+});
+
+describe("extractVideoFrames", () => {
+  it("reports truncation instead of silently stopping", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { mkdtempSync, readFileSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { default: sharp } = await import("sharp");
+    const { extractVideoFrames, ffmpegAvailable } = await import("../src/media.js");
+    if (!ffmpegAvailable()) return;
+    const dir = mkdtempSync(join(tmpdir(), "mano-mail-trunc-"));
+    const imgPath = join(dir, "frame.jpg");
+    const vidPath = join(dir, "clip.mp4");
+    await sharp({ create: { width: 64, height: 64, channels: 3, background: "#fff" } })
+      .jpeg()
+      .toFile(imgPath);
+    execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-t", "3", "-i", imgPath, "-pix_fmt", "yuv420p", vidPath]);
+    const bytes = new Uint8Array(readFileSync(vidPath));
+    const capped = await extractVideoFrames(bytes, { fps: 1, maxFrames: 1 });
+    expect(capped.frames).toHaveLength(1);
+    expect(capped.truncated).toBe(true);
+    const whole = await extractVideoFrames(bytes, { fps: 1, maxFrames: 5 });
+    expect(whole.frames).toHaveLength(3);
+    expect(whole.truncated).toBe(false);
+    await expect(extractVideoFrames(bytes, { fps: 1, maxFrames: 5, maxOutputBytes: 100 })).rejects.toThrow(
+      /decode cap/,
+    );
+  });
+});
+
+describe("makePrivateTmpDir", () => {
+  it("creates a 0o700 dir, holds 0o600 files, and cleans up", async () => {
+    const { existsSync, statSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { makePrivateTmpDir, releasePrivateTmpDir } = await import("../src/media.js");
+    const dir = makePrivateTmpDir();
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    const file = join(dir, "clip.mp4");
+    writeFileSync(file, Buffer.from([1, 2, 3]), { mode: 0o600 });
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    releasePrivateTmpDir(dir);
+    expect(existsSync(dir)).toBe(false);
+  });
+});
+
+describe("normalizeImage", () => {
+  it("decodes a real HEIC photo", async () => {
+    const bytes = new Uint8Array(readFileSync(join(here, "fixtures", "heic-photo.heic")));
+    const image = await normalizeImage(bytes, "image/heic");
+    expect(image.width).toBe(120);
+    expect(image.height).toBe(80);
+    expect(image.buffer.length).toBeGreaterThan(100);
+  });
+  it("asks a question's worth of error on corrupt HEIC bytes", async () => {
+    await expect(normalizeImage(new Uint8Array([0, 1, 2, 3]), "image/heic")).rejects.toThrow();
+  });
+  it("caps oversized photos at 4096 on the long side", async () => {
+    const { default: sharp } = await import("sharp");
+    const big = await sharp({ create: { width: 5000, height: 4000, channels: 3, background: "#889" } })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+    const image = await normalizeImage(big, "image/jpeg");
+    expect(Math.max(image.width, image.height)).toBeLessThanOrEqual(4096);
+    expect(image.width).toBe(4096);
+  });
+});
+
+describe("downscaleForModel", () => {
+  it("shrinks large crops to 1600 and leaves small ones alone", async () => {
+    const { default: sharp } = await import("sharp");
+    const { downscaleForModel } = await import("../src/media.js");
+    const big = await sharp({ create: { width: 4000, height: 3000, channels: 3, background: "#fff" } })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    const small = await sharp({ create: { width: 800, height: 600, channels: 3, background: "#fff" } })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    const shrunk = await downscaleForModel({ buffer: big, width: 4000, height: 3000 });
+    const shrunkMeta = await sharp(shrunk).metadata();
+    expect(shrunkMeta.width).toBe(1600);
+    const kept = await downscaleForModel({ buffer: small, width: 800, height: 600 });
+    expect(kept).toBe(small);
   });
 });
 

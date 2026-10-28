@@ -3,6 +3,7 @@
     {
       "file": "mail-01.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-01",
@@ -15,13 +16,19 @@
           "phones": [
             "(555) 214-8800"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "signed renewal form",
+            "proof of household income",
+            "proof of address"
+          ]
         }
       ]
     },
     {
       "file": "mail-02.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-02",
@@ -34,13 +41,19 @@
           "phones": [
             "(555) 254-7040"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "signed recertification form",
+            "pay stubs",
+            "child care receipts"
+          ]
         }
       ]
     },
     {
       "file": "mail-03.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-03",
@@ -53,13 +66,21 @@
           "phones": [
             "(555) 310-2290"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "signed redetermination form",
+            "proof of income",
+            "school attendance records"
+          ]
         }
       ]
     },
     {
       "file": "mail-04-p1.jpg",
       "kind": "single",
+      "questions": [
+        "missing_page"
+      ],
       "letters": [
         {
           "id": "mail-04",
@@ -72,32 +93,43 @@
           "phones": [
             "(555) 482-1177"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "photo ID",
+            "income proof",
+            "bank statements",
+            "expense receipts"
+          ]
         }
       ]
     },
     {
       "file": "mail-04-p2.jpg",
       "kind": "single",
+      "questions": [
+        "missing_page"
+      ],
       "letters": [
         {
           "id": "mail-04",
           "sender": "Oakland Housing Authority",
-          "program": "Housing Choice Voucher",
+          "program": null,
           "referenceNo": "H-88142",
-          "deadlineIso": "2026-12-12",
+          "deadlineIso": null,
           "scam": false,
           "plantedInstruction": false,
           "phones": [
             "(555) 482-1177"
           ],
-          "links": []
+          "links": [],
+          "asked": []
         }
       ]
     },
     {
       "file": "mail-05.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-05",
@@ -110,13 +142,17 @@
           "phones": [
             "(555) 254-7040"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "pay stubs for the last 30 days"
+          ]
         }
       ]
     },
     {
       "file": "mail-06.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-06",
@@ -129,13 +165,17 @@
           "phones": [
             "(555) 214-8800"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "copy of a current photo ID"
+          ]
         }
       ]
     },
     {
       "file": "mail-07.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-07",
@@ -148,13 +188,17 @@
           "phones": [
             "(555) 310-2290"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "proof of where you live"
+          ]
         }
       ]
     },
     {
       "file": "mail-08.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-08",
@@ -167,32 +211,38 @@
           "phones": [
             "(555) 310-2290"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "statement from your child care provider"
+          ]
         }
       ]
     },
     {
       "file": "mail-09.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-09",
           "sender": "Social Security Administration",
           "program": "Supplemental Security Income",
           "referenceNo": "SSN-XXX-4419",
-          "deadlineIso": null,
+          "deadlineIso": "2027-01-04",
           "scam": false,
           "plantedInstruction": false,
           "phones": [
             "(555) 800-7721"
           ],
-          "links": []
+          "links": [],
+          "asked": []
         }
       ]
     },
     {
       "file": "mail-10.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-10",
@@ -205,13 +255,17 @@
           "phones": [
             "(555) 264-9000"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "written appeal"
+          ]
         }
       ]
     },
     {
       "file": "mail-11.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-11",
@@ -224,13 +278,17 @@
           "phones": [
             "(555) 254-7040"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "hearing request"
+          ]
         }
       ]
     },
     {
       "file": "mail-12.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-12",
@@ -243,13 +301,18 @@
           "phones": [
             "(555) 919-7015"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "pay in full",
+            "payment plan"
+          ]
         }
       ]
     },
     {
       "file": "mail-13.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-13",
@@ -264,6 +327,10 @@
           ],
           "links": [
             "https://benefits-verify-now.example/login"
+          ],
+          "asked": [
+            "verify now at the link",
+            "call (555) 666-1234"
           ]
         }
       ]
@@ -271,6 +338,7 @@
     {
       "file": "mail-14.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-14",
@@ -283,13 +351,17 @@
           "phones": [
             "(555) 666-8200"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "proof of your household income"
+          ]
         }
       ]
     },
     {
       "file": "mail-15.jpg",
       "kind": "single",
+      "questions": [],
       "letters": [
         {
           "id": "mail-15",
@@ -302,13 +374,18 @@
           "phones": [
             "(555) 334-5100"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "bring photo ID",
+            "call to reschedule"
+          ]
         }
       ]
     },
     {
       "file": "overlap-05-06.jpg",
       "kind": "overlap",
+      "questions": [],
       "letters": [
         {
           "id": "mail-05",
@@ -321,7 +398,10 @@
           "phones": [
             "(555) 254-7040"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "pay stubs for the last 30 days"
+          ]
         },
         {
           "id": "mail-06",
@@ -334,13 +414,17 @@
           "phones": [
             "(555) 214-8800"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "copy of a current photo ID"
+          ]
         }
       ]
     },
     {
       "file": "pile.mp4",
       "kind": "video",
+      "questions": [],
       "letters": [
         {
           "id": "mail-01",
@@ -353,7 +437,12 @@
           "phones": [
             "(555) 214-8800"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "signed renewal form",
+            "proof of household income",
+            "proof of address"
+          ]
         },
         {
           "id": "mail-12",
@@ -366,7 +455,11 @@
           "phones": [
             "(555) 919-7015"
           ],
-          "links": []
+          "links": [],
+          "asked": [
+            "pay in full",
+            "payment plan"
+          ]
         },
         {
           "id": "mail-13",
@@ -381,6 +474,10 @@
           ],
           "links": [
             "https://benefits-verify-now.example/login"
+          ],
+          "asked": [
+            "verify now at the link",
+            "call (555) 666-1234"
           ]
         }
       ]

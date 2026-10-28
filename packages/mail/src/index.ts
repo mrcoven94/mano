@@ -1,20 +1,49 @@
-// readMail: photos or short videos of a mail pile in, letters with
-// cited fields, deadlines, warnings and questions out.
+// @mano/mail: photos or a short video of a mail pile in, letters with
+// cited fields, deadlines, warnings and questions out. A library with
+// no dependency on apps/engine; the person's agent calls readMail and
+// acts on the result through the action gateway.
 //
-// Flow per file: decode to frames (one for photos, up to N for video),
-// segment each frame into pages (SAM 3.1, whole-frame fallback), track
-// video detections and keep the sharpest frame per track, crop and
-// straighten, read each page (Muse Spark, structured output), group
-// pages into letters, merge fields, scan for instructions/links/phones,
-// and collect deadlines.
+// Usage:
 //
-// Links and phone numbers are never acted on here: they come back as
-// warnings for the action gateway. Unreadable or missing pages become
-// questions for the person, never guesses. Content failures never
-// throw; only invalid arguments do.
+//   import { createModelClient, readMail } from "@mano/mail";
+//   const model = createModelClient(process.env, { synthetic: false });
+//   const reading = await readMail(
+//     [{ bytes, mimeType: "image/jpeg", name: "mail.jpg" }],
+//     { personId: "person-123", synthetic: false, model },
+//   );
+//
+// Synthetic runs use the contributor reading model; anything else uses
+// the standard model. Without META_MODEL_API_KEY, createModelClient
+// returns the recorded stand-in, which only answers explicitly
+// recorded requests and fails closed otherwise.
+//
+// Flow per file: decode to frames (one for photos, up to 30 for video
+// at 1 fps; truncation is reported and asked about, never silent),
+// segment each frame into pages (SAM 3.1, on-device paper detection,
+// then whole frame; every fallback is a warning), track video
+// detections across frames by box plus appearance and keep the
+// sharpest frame per track, crop and straighten, read each page (Muse
+// Spark, structured output), verify every field against the page's own
+// transcription, group pages into letters, merge fields, scan for
+// instructions/links/phones, and resolve deadlines.
+//
+// Guarantees: a field publishes only with a real box and text found in
+// the transcription, else it becomes a question; unreadable pages
+// contribute nothing; pages merge only on continuation evidence (page
+// markers, or same notice date and subject); conflicting deadlines are
+// withheld with cited candidates; relative deadlines resolve from a
+// cited anchor and count rule, or ask; links, phones and addresses are
+// never acted on here and come back as warnings for the gateway.
+// Content failures never throw; only invalid arguments do. Each file
+// has a time and token budget; past it the file stops early with a
+// question.
+//
+// Run and test (no key needed): pnpm check. Regenerate fixtures:
+// pnpm make-fixtures. Live dev-set grade: ws keys run -- pnpm eval-dev.
 
 import {
   cropAndStraighten,
+  downscaleForModel,
   extractVideoFrames,
   frameSharpness,
   hashDistance,
@@ -34,8 +63,9 @@ import {
   type GroupablePage,
   type PageExtraction,
 } from "./read.js";
-import { parseWrittenDate } from "./dates.js";
+import { resolveDeadline } from "./dates.js";
 import { scanContent, type ContentFlag } from "./safety.js";
+import { verifyExtraction, type DroppedField } from "./citations.js";
 import { readingModelFor } from "./model.js";
 import type {
   Box,
@@ -57,7 +87,7 @@ import type {
 export type { InputFile, MailReading, ReadMailOptions };
 export * from "./types.js";
 export * from "./model.js";
-export { parseWrittenDate, parseAllDates } from "./dates.js";
+export { parseWrittenDate, parseAllDates, resolveDeadline } from "./dates.js";
 export { scanContent, findInstructions, findLinks, findPhones, screenScam } from "./safety.js";
 
 const MAX_FILES = 10;
@@ -65,19 +95,23 @@ const MAX_PHOTO_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
 const VIDEO_FPS = 1;
 const VIDEO_MAX_FRAMES = 30;
-const FULL_BOX: Box = { ymin: 0, xmin: 0, ymax: 1000, xmax: 1000 };
+// Per-photo budgets. A normal photo spends about 7k input and 4k output
+// tokens over 30 seconds; a 6-second clip about triple that. Past the
+// budget the file stops early with a question, never silently.
+const MAX_INPUT_TOKENS_PER_FILE = 100_000;
+const MAX_OUTPUT_TOKENS_PER_FILE = 50_000;
+const MAX_MS_PER_FILE = 300_000;
 
 interface PipelinePage {
   order: number;
   file: string;
   crop: Box;
   image: NormalizedImage;
+  frameTimeMs: number;
+  rotationDegrees: number;
   extraction: PageExtraction | null;
   readFailed: boolean;
-}
-
-function fullBox(): Box {
-  return { ...FULL_BOX };
+  dropped: DroppedField[];
 }
 
 export async function readMail(files: InputFile[], opts: ReadMailOptions): Promise<MailReading> {
@@ -94,8 +128,25 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
 
   const pages: PipelinePage[] = [];
   let frameCount = 0;
+  const fileSpend = new Map<string, { input: number; output: number; startMs: number }>();
+  const addUsage = (file: string, usage: { inputTokens: number; outputTokens: number } | null): void => {
+    const spend = fileSpend.get(file);
+    if (!spend || !usage) return;
+    spend.input += usage.inputTokens;
+    spend.output += usage.outputTokens;
+  };
+  const overBudget = (file: string): boolean => {
+    const spend = fileSpend.get(file);
+    if (!spend) return false;
+    return (
+      spend.input > MAX_INPUT_TOKENS_PER_FILE ||
+      spend.output > MAX_OUTPUT_TOKENS_PER_FILE ||
+      Date.now() - spend.startMs > MAX_MS_PER_FILE
+    );
+  };
 
   for (const file of files) {
+    fileSpend.set(file.name, { input: 0, output: 0, startMs: Date.now() });
     const kind = mediaKind(file.mimeType);
     if (kind === "other") {
       ask({
@@ -125,9 +176,24 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       continue;
     }
 
-    let frames: NormalizedImage[];
+    let frames: TimedFrame[];
     try {
-      frames = await fileToFrames(file, kind);
+      const decoded = await fileToFrames(file, kind);
+      frames = decoded.frames;
+      if (decoded.truncated) {
+        warnings.push({
+          kind: "video_truncated",
+          message: `Video ${file.name} runs past the first ${VIDEO_MAX_FRAMES} seconds sampled. The rest was not read.`,
+          letterId: null,
+          citation: null,
+        });
+        ask({
+          kind: "video_truncated",
+          letterId: null,
+          prompt: `The video ${file.name} continues past what was read. Film the rest of the pile as a second clip.`,
+          citation: null,
+        });
+      }
     } catch (err) {
       if (err instanceof MediaError && err.code === "ffmpeg_missing") {
         ask({
@@ -142,7 +208,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         kind: "unreadable_page",
         letterId: null,
         prompt: `Could not read ${file.name} (${shortMessage(err)}). Retake the photo with the letter flat and lit.`,
-        citation: { file: file.name, page: 1, box: fullBox() },
+        citation: null,
       });
       continue;
     }
@@ -152,7 +218,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     const frameDets: Detection[][] = [];
     const methods = new Set<SegmentMethod>();
     for (const frame of frames) {
-      const seg = await segmentFrame(frame, opts.model);
+      const seg = await segmentFrame(frame.image, opts.model);
       modelCalls.push({
         model: "sam-3.1",
         purpose: "segment",
@@ -160,6 +226,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         outputTokens: seg.usage?.outputTokens ?? 0,
         elapsedMs: seg.elapsedMs,
       });
+      addUsage(file.name, seg.usage);
       methods.add(seg.method);
       frameDets.push(seg.detections);
     }
@@ -173,7 +240,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
           `SAM 3.1 returned nothing usable for ${file.name}; ` +
           (parts.length === 2 ? "some frames were split on-device and some read as one page." : `${parts[0]} instead.`),
         letterId: null,
-        citation: { file: file.name, page: 1, box: fullBox() },
+        citation: null,
       });
     }
 
@@ -182,7 +249,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     if (kind === "video") {
       const hashed = await Promise.all(
         frameDets.map(async (dets, f) =>
-          Promise.all(dets.map(async (det) => ({ ...det, hash: await regionHash(frames[f]!, det.box) }))),
+          Promise.all(dets.map(async (det) => ({ ...det, hash: await regionHash(frames[f]!.image, det.box) }))),
         ),
       );
       // Tight appearance gate: dense text pages hash within a few bits
@@ -192,37 +259,67 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       const tracks = trackBoxes(hashed, 0.3, (prev, next) => hashDistance(prev.hash, next.hash) <= 4);
       for (const track of tracks) {
         const scored = await Promise.all(
-          track.map(async (t) => ({ t, sharp: await frameSharpness(frames[t.frameIndex]!.buffer) })),
+          track.map(async (t) => ({ t, sharp: await frameSharpness(frames[t.frameIndex]!.image.buffer) })),
         );
         scored.sort((a, b) => b.sharp - a.sharp);
         const best = scored[0]!.t;
         const frame = frames[best.frameIndex]!;
-        const crop = await cropAndStraighten(frame, best.detection.box);
-        pages.push({ order: pages.length, file: file.name, crop: best.detection.box, image: crop, extraction: null, readFailed: false });
+        const crop = await cropAndStraighten(frame.image, best.detection.box);
+        pages.push({ order: pages.length, file: file.name, crop: best.detection.box, image: crop, frameTimeMs: frame.timeMs, rotationDegrees: crop.deskewDegrees, extraction: null, readFailed: false, dropped: [] });
       }
       if (tracks.length === 0) {
         ask({
           kind: "unreadable_page",
           letterId: null,
           prompt: `No letters were found in ${file.name}. Film the pile again, slowly, with each letter visible.`,
-          citation: { file: file.name, page: 1, box: fullBox() },
+          citation: null,
         });
       }
     } else {
       for (let f = 0; f < frames.length; f++) {
         for (const det of frameDets[f]!) {
-          const crop = await cropAndStraighten(frames[f]!, det.box);
-          pages.push({ order: pages.length, file: file.name, crop: det.box, image: crop, extraction: null, readFailed: false });
+          const crop = await cropAndStraighten(frames[f]!.image, det.box);
+          pages.push({ order: pages.length, file: file.name, crop: det.box, image: crop, frameTimeMs: frames[f]!.timeMs, rotationDegrees: crop.deskewDegrees, extraction: null, readFailed: false, dropped: [] });
         }
       }
     }
   }
 
-  // Read every page.
+  // Read every page, then verify each field against the page's own
+  // transcription. Unverified fields are dropped and become questions.
+  // A file past its budget stops early: its unread pages are dropped
+  // and one question says so.
+  const budgetAsked = new Set<string>();
+  const skipped = new Set<number>();
   for (const page of pages) {
+    if (overBudget(page.file)) {
+      if (!budgetAsked.has(page.file)) {
+        budgetAsked.add(page.file);
+        warnings.push({
+          kind: "model_error",
+          message: `Stopped reading ${page.file} early: it exceeded the per-photo time or token budget.`,
+          letterId: null,
+          citation: null,
+        });
+        ask({
+          kind: "budget_exceeded",
+          letterId: null,
+          prompt:
+            `${page.file} took too long or cost too much to finish. ` +
+            `Photograph fewer letters per photo, or film shorter clips.`,
+          citation: null,
+        });
+      }
+      skipped.add(page.order);
+      continue;
+    }
     try {
-      const extraction = await readPage(page.image.buffer, opts.model, { synthetic: opts.synthetic });
+      const readBuffer = await downscaleForModel(page.image);
+      const extraction = await readPage(readBuffer, opts.model, { synthetic: opts.synthetic });
       page.extraction = extraction;
+      if (extraction.readable) {
+        page.dropped = verifyExtraction(extraction, extraction.fullText);
+      }
       modelCalls.push({
         model: readingModelFor(opts.synthetic),
         purpose: "read",
@@ -230,21 +327,31 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         outputTokens: extraction.usage?.outputTokens ?? 0,
         elapsedMs: extraction.elapsedMs,
       });
+      addUsage(page.file, extraction.usage);
     } catch (err) {
       page.readFailed = true;
       warnings.push({
         kind: "model_error",
         message: `Reading failed for a page in ${page.file} (${shortMessage(err)}).`,
         letterId: null,
-        citation: { file: page.file, page: 1, box: fullBox() },
+        citation: null,
       });
       ask({
         kind: "read_failed",
         letterId: null,
         prompt: `A page in ${page.file} could not be read. Try again, or retake the photo.`,
-        citation: { file: page.file, page: 1, box: fullBox() },
+        citation: null,
       });
     }
+  }
+
+  if (skipped.size > 0) {
+    const kept = pages.filter((p) => !skipped.has(p.order));
+    pages.length = 0;
+    pages.push(...kept);
+    pages.forEach((p, i) => {
+      p.order = i;
+    });
   }
 
   // Second letters found on shared crops become pseudo-pages, so the
@@ -254,7 +361,10 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     if (!page.extraction || !page.extraction.readable) continue;
     const extra = extraLetterExtraction(page.extraction);
     if (extra) {
-      pages.push({ order: pages.length, file: page.file, crop: page.crop, image: page.image, extraction: extra, readFailed: false });
+      // Verified against the shared crop's own transcription, not the
+      // composed pseudo-text, so extra letters face the same check.
+      const dropped = verifyExtraction(extra, page.extraction.fullText);
+      pages.push({ order: pages.length, file: page.file, crop: page.crop, image: page.image, frameTimeMs: page.frameTimeMs, rotationDegrees: page.rotationDegrees, extraction: extra, readFailed: false, dropped });
     }
   }
 
@@ -267,7 +377,10 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
   const groups: number[][] = [...detGroups];
   if (ambiguous.length > 0) {
     const ambPages = groupable.filter((p) => ambiguous.includes(p.index));
-    try {
+    const blocked = ambPages.some((p) => overBudget(pages[p.index]!.file));
+    if (blocked) {
+      ambPages.forEach((p) => groups.push([p.index]));
+    } else try {
       const grouped = await groupWithModel(ambPages, opts.model, { synthetic: opts.synthetic });
       modelCalls.push({
         model: readingModelFor(opts.synthetic),
@@ -300,12 +413,12 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       crop: m.crop,
       width: m.image.width,
       height: m.image.height,
+      frameTimeMs: m.frameTimeMs,
+      rotationDegrees: m.rotationDegrees,
     }));
-    const cite = (memberIdx: number, box: Box | null): Citation => ({
-      file: members[memberIdx]!.file,
-      page: memberIdx + 1,
-      box: box ?? fullBox(),
-    });
+    // No box means no citation. The full page is never substituted.
+    const cite = (memberIdx: number, box: Box | null): Citation | null =>
+      box ? { file: members[memberIdx]!.file, page: memberIdx + 1, box } : null;
     const fields = mergeFields(members, cite);
     letters.push({ id: letterId, pages: letterPages, fields });
 
@@ -321,49 +434,167 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
             `Page ${i + 1} of letter ${letterId} could not be read` +
             (ex.readabilityNote ? ` (${ex.readabilityNote})` : "") +
             `. Photograph that page again, flat and lit.`,
-          citation: cite(i, null),
+          citation: null,
+        });
+      }
+      for (const d of m.dropped) {
+        ask({
+          kind: "unverified_field",
+          letterId,
+          prompt:
+            `Letter ${letterId}: the ${d.name} ("${d.value}") could not be verified against the photo. ` +
+            `Check the letter before relying on it.`,
+          citation: null,
         });
       }
     });
     checkMissingPages(members, letterId, cite, ask);
 
-    const isoDates = members
-      .map((m) => (m.extraction?.deadlineText.text ? parseWrittenDate(m.extraction.deadlineText.text) : null))
-      .filter((d): d is string => d !== null);
-    const distinct = [...new Set(isoDates)];
-    if (distinct.length > 1) {
-      const firstIdx = members.findIndex(
-        (m) => m.extraction?.deadlineText.text && parseWrittenDate(m.extraction.deadlineText.text) === distinct[0],
-      );
+    // Resolve every deadline expression on every page against the
+    // letter's notice date. Relative wording never promotes its
+    // anchor date. Several dates on one page are separate obligations
+    // and each publishes with its own citation; several dates spread
+    // across pages of one notice conflict, so all are withheld until
+    // the person confirms.
+    const resolved: {
+      iso: string;
+      text: string;
+      memberIdx: number;
+      ruleCitation: Citation;
+      anchor: Cited<string> | null;
+      countRule: string | null;
+    }[] = [];
+    const askedExpressions = new Set<string>();
+    members.forEach((m, i) => {
+      if (!m.extraction?.readable) return;
+      for (const d of m.extraction.deadlines) {
+        if (!d.text) continue;
+        const r = resolveDeadline(d.text, fields.noticeDate?.value ?? null);
+        if (r.kind === "absolute" || r.kind === "relative") {
+          const ruleCitation = cite(i, d.box);
+          if (!ruleCitation) continue;
+          let anchor: Cited<string> | null = null;
+          if (r.kind === "relative") {
+            anchor =
+              r.anchorSource === "notice-date" && fields.noticeDate
+                ? { value: fields.noticeDate.value, citation: fields.noticeDate.citation }
+                : { value: r.anchorText, citation: ruleCitation };
+          }
+          resolved.push({
+            iso: r.iso,
+            text: d.text,
+            memberIdx: i,
+            ruleCitation,
+            anchor,
+            countRule: r.kind === "relative" ? r.countRule : null,
+          });
+        } else if (r.kind === "needs-anchor" || r.kind === "ambiguous") {
+          if (askedExpressions.has(r.expression)) continue;
+          askedExpressions.add(r.expression);
+          ask({
+            kind: "confirm_deadline",
+            letterId,
+            prompt:
+              r.kind === "needs-anchor"
+                ? `Letter ${letterId} gives its deadline as "${r.expression}" but the starting date is unclear. ` +
+                  `What date does the deadline run from?`
+                : `Letter ${letterId} gives its deadline as "${r.expression}", which could be read more than one way. ` +
+                  `Which date is meant?`,
+            citation: cite(i, d.box),
+          });
+        }
+      }
+    });
+    const distinct = [...new Set(resolved.map((r) => r.iso))];
+    const statingMembers = new Set(resolved.map((r) => r.memberIdx));
+    if (distinct.length > 1 && statingMembers.size > 1) {
+      // Withheld: no deadline is published until the person confirms.
+      // The question carries every candidate with its own citation.
+      const candidates: Cited<string>[] = [];
+      for (const iso of distinct) {
+        const entry = resolved.find((r) => r.iso === iso)!;
+        candidates.push({ value: iso, citation: entry.ruleCitation });
+      }
       warnings.push({
         kind: "conflicting_dates",
-        message: `Letter ${letterId} states more than one deadline (${distinct.join(", ")}).`,
+        message: `Letter ${letterId} states more than one deadline across its pages (${distinct.join(", ")}). None was published.`,
         letterId,
-        citation: cite(Math.max(0, firstIdx), members[Math.max(0, firstIdx)]!.extraction?.deadlineText.box ?? null),
+        citation: candidates[0]?.citation ?? null,
         detail: distinct.join(", "),
       });
       ask({
         kind: "confirm_deadline",
         letterId,
-        prompt: `Letter ${letterId} shows conflicting deadlines (${distinct.join(", ")}). Which date is on the letter?`,
-        citation: cite(Math.max(0, firstIdx), null),
+        prompt: `Letter ${letterId} shows more than one deadline (${distinct.join(", ")}). Which dates are the real deadlines?`,
+        citation: null,
+        candidates,
       });
-    }
-    if (fields.deadlineIso) {
-      deadlines.push({
-        letterId,
-        program: fields.program?.value ?? null,
-        dueDate: fields.deadlineIso.value,
-        dateText: fields.deadlineText?.value ?? fields.deadlineIso.value,
-        citation: fields.deadlineIso.citation,
-      });
+    } else {
+      const published = new Set<string>();
+      for (const entry of resolved) {
+        if (published.has(entry.iso)) continue;
+        published.add(entry.iso);
+        if (!fields.deadlineIso) fields.deadlineIso = { value: entry.iso, citation: entry.ruleCitation };
+        deadlines.push({
+          letterId,
+          program: fields.program?.value ?? null,
+          dueDate: entry.iso,
+          dateText: entry.text,
+          citation: entry.ruleCitation,
+          anchor: entry.anchor,
+          countRule: entry.countRule,
+        });
+      }
     }
 
-    // Safety scan over the letter text.
-    const fullText = members.map((m) => m.extraction?.fullText ?? "").join("\n");
-    if (fullText.trim().length > 0) {
-      for (const flag of scanContent(fullText, fields.sender?.value ?? null)) {
-        warnings.push(flagToWarning(flag, letterId, members, cite));
+    // Safety: every contact becomes a warning on its own, then the
+    // transcription and every dropped field value are scanned for
+    // anything the model transcribed but did not extract, or claimed
+    // but could not verify. Duplicates collapse by kind and value.
+    const warned = new Set<string>();
+    const warnContact = (kind: Contact["kind"], value: string, citation: Citation | null): void => {
+      const key = `${kind}:${value.toLowerCase()}`;
+      if (warned.has(key)) return;
+      warned.add(key);
+      if (kind === "address") {
+        warnings.push({
+          kind: "address_unchecked",
+          message: `Letter ${letterId} contains a mailing address (${value}). It was not used or checked here.`,
+          letterId,
+          citation,
+          detail: value,
+        });
+        return;
+      }
+      warnings.push(
+        flagToWarning({ kind, label: "", match: value }, letterId, members, cite, { citation }),
+      );
+    };
+    for (const contact of fields.contacts) {
+      warnContact(contact.kind, contact.value, contact.citation);
+    }
+    members.forEach((m, i) => {
+      for (const d of m.dropped) {
+        if (d.name === "phone number") warnContact("phone", d.value, cite(i, d.box));
+        else if (d.name === "link") warnContact("link", d.value, cite(i, d.box));
+        else if (d.name === "address") warnContact("address", d.value, cite(i, d.box));
+      }
+    });
+    const scanSources: { text: string; citation?: { citation: Citation | null } }[] = members
+      .map((m) => m.extraction?.fullText ?? "")
+      .filter((t) => t.trim().length > 0)
+      .map((text) => ({ text }));
+    members.forEach((m, i) => {
+      for (const d of m.dropped) {
+        scanSources.push({ text: d.value, citation: { citation: cite(i, d.box) } });
+      }
+    });
+    for (const source of scanSources) {
+      for (const flag of scanContent(source.text, fields.sender?.value ?? null)) {
+        const key = `${flag.kind}:${flag.match.toLowerCase()}`;
+        if (warned.has(key)) continue;
+        warned.add(key);
+        warnings.push(flagToWarning(flag, letterId, members, cite, source.citation));
       }
     }
   });
@@ -401,16 +632,24 @@ function validateArgs(files: InputFile[], opts: ReadMailOptions): void {
   if (!opts.model || typeof opts.model.responses !== "function") throw new Error("readMail needs opts.model (a ModelClient).");
 }
 
-async function fileToFrames(file: InputFile, kind: "image" | "heic" | "video"): Promise<NormalizedImage[]> {
+interface TimedFrame {
+  image: NormalizedImage;
+  timeMs: number;
+}
+
+async function fileToFrames(
+  file: InputFile,
+  kind: "image" | "heic" | "video",
+): Promise<{ frames: TimedFrame[]; truncated: boolean }> {
   if (kind === "image" || kind === "heic") {
-    return [await normalizeImage(file.bytes, file.mimeType)];
+    return { frames: [{ image: await normalizeImage(file.bytes, file.mimeType), timeMs: 0 }], truncated: false };
   }
   const raw = await extractVideoFrames(file.bytes, { fps: VIDEO_FPS, maxFrames: VIDEO_MAX_FRAMES });
-  const frames: NormalizedImage[] = [];
-  for (const frame of raw) {
-    frames.push(await normalizeImage(frame, "image/jpeg"));
+  const frames: TimedFrame[] = [];
+  for (let i = 0; i < raw.frames.length; i++) {
+    frames.push({ image: await normalizeImage(raw.frames[i]!, "image/jpeg"), timeMs: Math.round((i * 1000) / VIDEO_FPS) });
   }
-  return frames;
+  return { frames, truncated: raw.truncated };
 }
 
 function pageMarkerNum(ex: PageExtraction | null): number {
@@ -423,16 +662,22 @@ function pageMarkerNum(ex: PageExtraction | null): number {
 
 function mergeFields(
   members: PipelinePage[],
-  cite: (memberIdx: number, box: Box | null) => Citation,
+  cite: (memberIdx: number, box: Box | null) => Citation | null,
 ): LetterFields {
+  // Only boxed fields from readable pages are published. Verification
+  // already dropped the rest; these checks are a second lock on the
+  // same door.
   const firstText = (
     pick: (ex: PageExtraction) => { text: string | null; box: Box | null },
   ): Cited<string> | null => {
     for (let i = 0; i < members.length; i++) {
       const ex = members[i]!.extraction;
-      if (!ex) continue;
+      if (!ex || !ex.readable) continue;
       const f = pick(ex);
-      if (f.text && f.text.trim()) return { value: f.text.trim(), citation: cite(i, f.box) };
+      if (f.text && f.text.trim() && f.box) {
+        const citation = cite(i, f.box);
+        if (citation) return { value: f.text.trim(), citation };
+      }
     }
     return null;
   };
@@ -443,22 +688,35 @@ function mergeFields(
     const out: { value: string; citation: Citation }[] = [];
     members.forEach((m, i) => {
       const ex = m.extraction;
-      if (!ex) return;
+      if (!ex || !ex.readable) return;
       for (const f of pick(ex)) {
-        if (f.text && f.text.trim()) out.push({ value: f.text.trim(), citation: cite(i, f.box) });
+        if (f.text && f.text.trim() && f.box) {
+          const citation = cite(i, f.box);
+          if (citation) out.push({ value: f.text.trim(), citation });
+        }
       }
     });
     if (!kind) return out;
     return out.map((o) => ({ kind, value: o.value, citation: o.citation }));
   };
 
-  const deadlineText = firstText((ex) => ex.deadlineText);
-  let deadlineIso: Cited<string> | null = null;
-  if (deadlineText) {
-    const iso = parseWrittenDate(deadlineText.value);
-    if (iso) deadlineIso = { value: iso, citation: deadlineText.citation };
-  }
-  const excerpt = (members[0]?.extraction?.fullText ?? "").slice(0, 280);
+  const firstDeadline = (): Cited<string> | null => {
+    for (let i = 0; i < members.length; i++) {
+      const ex = members[i]!.extraction;
+      if (!ex || !ex.readable) continue;
+      const d = ex.deadlines[0];
+      if (d?.text && d.text.trim() && d.box) {
+        const citation = cite(i, d.box);
+        if (citation) return { value: d.text.trim(), citation };
+      }
+    }
+    return null;
+  };
+  const deadlineText = firstDeadline();
+  // Resolved per letter in the pipeline, where a missing anchor and
+  // conflicting dates can become questions.
+  const deadlineIso: Cited<string> | null = null;
+  const excerpt = (members.find((m) => m.extraction?.readable)?.extraction?.fullText ?? "").slice(0, 280);
   return {
     sender: firstText((ex) => ex.sender),
     program: firstText((ex) => ex.program),
@@ -490,10 +748,12 @@ function mergeFields(
   };
 }
 
+const MAX_NOTICE_PAGES = 100;
+
 function checkMissingPages(
   members: PipelinePage[],
   letterId: string,
-  cite: (memberIdx: number, box: Box | null) => Citation,
+  cite: (memberIdx: number, box: Box | null) => Citation | null,
   ask: (q: Omit<Question, "id">) => void,
 ): void {
   let expected = 0;
@@ -507,7 +767,23 @@ function checkMissingPages(
       expected = Math.max(expected, Number(mt[2]));
     }
   });
-  if (expected > members.length) {
+  // Absurd counts ("page 1 of 999999999") get one question, not a
+  // billion-iteration loop.
+  if (expected > MAX_NOTICE_PAGES) {
+    const claimed = members.find((m) => m.extraction?.pageMarker.text)?.extraction?.pageMarker.text ?? "";
+    ask({
+      kind: "missing_page",
+      letterId,
+      prompt:
+        `Letter ${letterId} claims an implausible page count ("${claimed}"). ` +
+        `Photograph the pages you have, one at a time.`,
+      citation: null,
+    });
+    return;
+  }
+  // Unique markers seen, not photos taken: two shots of page 1 still
+  // miss page 2.
+  if (expected > 0 && seen.size < expected) {
     const missing: number[] = [];
     for (let n = 1; n <= expected; n++) {
       if (!seen.has(n)) missing.push(n);
@@ -529,27 +805,36 @@ function flagToWarning(
   flag: ContentFlag,
   letterId: string,
   members: PipelinePage[],
-  cite: (memberIdx: number, box: Box | null) => Citation,
+  cite: (memberIdx: number, box: Box | null) => Citation | null,
+  direct?: { citation: Citation | null },
 ): Warning {
-  // Prefer the citation of the matching contacts field; otherwise cite
-  // the first page that contains the flagged text.
-  let citation: Citation | null = null;
-  if (flag.kind === "link" || flag.kind === "phone") {
+  // A caller-supplied citation wins. Otherwise prefer the citation of
+  // any verified field holding the flagged text. Else no citation.
+  let citation: Citation | null = direct?.citation ?? null;
+  if (!direct) {
     outer: for (let i = 0; i < members.length; i++) {
       const ex = members[i]!.extraction;
-      if (!ex) continue;
-      const fields = flag.kind === "link" ? ex.links : ex.phones;
+      if (!ex || !ex.readable) continue;
+      const fields = [
+        ex.sender,
+        ex.program,
+        ex.subject,
+        ...ex.deadlines,
+        ex.consequence,
+        ex.referenceNo,
+        ex.noticeDate,
+        ...ex.asked,
+        ...ex.phones,
+        ...ex.links,
+        ...ex.addresses,
+      ];
       for (const f of fields) {
-        if (f.text && (f.text.includes(flag.match) || flag.match.includes(f.text))) {
+        if (f.text && f.box && (f.text.includes(flag.match) || flag.match.includes(f.text))) {
           citation = cite(i, f.box);
           break outer;
         }
       }
     }
-  }
-  if (!citation) {
-    const idx = members.findIndex((m) => (m.extraction?.fullText ?? "").includes(flag.match));
-    citation = cite(Math.max(0, idx), null);
   }
   switch (flag.kind) {
     case "instruction":
