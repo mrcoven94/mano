@@ -483,18 +483,21 @@ export class ActionGateway {
   ): Promise<GatewayResult> {
     const approval = this.store.getApproval(approvalId);
     if (!approval) return { status: "blocked", reason: "Approval not found." };
+    // Consumed approvals retry first, whatever the expiry: their attempt
+    // always reconciles, and expiry only stops new execution (see
+    // retryConsumedApproval, which reconciles before any expiry decision).
+    if (approval.status !== "pending") {
+      if (approval.status === "approved" && approval.approvedByHumanId === humanId) {
+        return this.retryConsumedApproval(approval, humanId, now);
+      }
+      return { status: "blocked", reason: approvalGoneReason(approval.status) };
+    }
     if (new Date(approval.expiresAt).getTime() < now.getTime()) {
       // Guarded: a no-op unless the row is still pending, so this write
       // can never clobber a concurrent consume.
       this.store.expireApproval(approvalId);
       const fresh = this.store.getApproval(approvalId);
       return { status: "blocked", reason: approvalGoneReason(fresh?.status ?? "expired") };
-    }
-    if (approval.status !== "pending") {
-      if (approval.status === "approved" && approval.approvedByHumanId === humanId) {
-        return this.retryConsumedApproval(approval, humanId, now);
-      }
-      return { status: "blocked", reason: approvalGoneReason(approval.status) };
     }
     if (!humanId || humanId !== approval.personId) {
       return { status: "blocked", reason: "This approval belongs to a different person." };

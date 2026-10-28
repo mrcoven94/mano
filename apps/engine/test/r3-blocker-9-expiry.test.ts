@@ -102,7 +102,7 @@ describe("r3 blocker 9: consent expiry end to end", () => {
     const freshExpiry = new Date(Date.now() + 3600_000).toISOString();
     const second = await person.grantConsent("r3b9-again", { ...input, expiresAt: freshExpiry });
     expect(second.status).toBe("needs_approval");
-    expect(second.approval!.idempotencyKey).toBe(`consent-grant:r3b9-again:case-r3b9-again:${freshExpiry}`);
+    expect(second.approval!.idempotencyKey).toBe(`consent-grant:r3b9-again:${orgAgentId}:case-r3b9-again:${freshExpiry}`);
     const secondDone = await person.approve(second.approval!.id, "r3b9-again");
     expect(secondDone.status, secondDone.reason).toBe("completed");
     expect((await org.listCases("r3b9-again-county")).map((c) => c.caseId)).toContain("case-r3b9-again");

@@ -23,14 +23,14 @@ function orgStub(name: string): OrgAgent {
 type ShareDeliverer = { deliverShare(req: ActionRequest): Promise<{ externalId: string }> };
 
 describe("r2 blocker 5: consent is delivered exactly once", () => {
-  it("uses a deterministic key per person, case and direction", async () => {
+  it("uses a deterministic key per person, org, case and direction", async () => {
     const person = personStub("r2b5-maria");
     const grant = { orgAgentId: "org:r2b5-county", purpose: "renewal", scope: ["documents"], caseId: "case-r2b5" };
     const first = await person.grantConsent("r2b5-maria", grant);
     const second = await person.grantConsent("r2b5-maria", grant);
     expect(first.status).toBe("needs_approval");
     expect(second.status).toBe("needs_approval");
-    expect(first.approval!.idempotencyKey).toBe("consent-grant:r2b5-maria:case-r2b5");
+    expect(first.approval!.idempotencyKey).toBe("consent-grant:r2b5-maria:org:r2b5-county:case-r2b5");
     expect(second.approval!.idempotencyKey).toBe(first.approval!.idempotencyKey);
   });
 

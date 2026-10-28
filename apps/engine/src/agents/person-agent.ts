@@ -60,8 +60,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
     this.store = new SqlApprovalStore(ctx.storage.sql);
     this.gateway = new ActionGateway(
       this.store,
-      new ConsentDeliveringExecutor(createExecutor(env), (req) => this.deliverShare(req), (key) =>
-        this.checkShareDelivery(key),
+      new ConsentDeliveringExecutor(
+        createExecutor(env),
+        (req) => this.deliverShare(req),
+        (key) => this.checkShareDelivery(key),
+        (key) => this.store.getAttempt(key)?.actionType ?? null,
       ),
       {
         listConsents: () => this.listStoredConsents(),
@@ -91,6 +94,26 @@ export class PersonAgent extends Agent<Env, PersonState> {
       } catch {
         // The column already exists: additive migrations are idempotent.
       }
+      // Expiry is stored as epoch milliseconds and compared numerically;
+      // the legacy ISO text column compared lexically, which breaks on
+      // non-UTC offsets. Surviving text values are parsed once here.
+      try {
+        sql.exec(`ALTER TABLE consents ADD COLUMN expires_at_ms INTEGER`);
+      } catch {
+        // The column already exists: additive migrations are idempotent.
+      }
+      const legacyConsents = sql.exec(
+        `SELECT recipient, case_id, expires_at FROM consents WHERE expires_at_ms IS NULL AND expires_at IS NOT NULL`,
+      ).toArray() as unknown as { recipient: string; case_id: string; expires_at: string }[];
+      for (const row of legacyConsents) {
+        const ms = new Date(row.expires_at).getTime();
+        sql.exec(
+          `UPDATE consents SET expires_at_ms = ? WHERE recipient = ? AND case_id = ?`,
+          Number.isFinite(ms) ? ms : null,
+          row.recipient,
+          row.case_id,
+        );
+      }
       sql.exec(`CREATE TABLE IF NOT EXISTS ws_tickets(ticket_id TEXT PRIMARY KEY, redeemed_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS approval_reminders(approval_id TEXT PRIMARY KEY, reminded_at TEXT NOT NULL)`);
       // One stored outbound message per consent key. Retries resend the
@@ -115,21 +138,36 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return this.ctx.storage.sql;
   }
 
+  // One predicate for every session-expiry decision: connects,
+  // broadcasts, inbound messages and outbound replies all apply it.
+  private sessionExpired(sessionExp: number | undefined): boolean {
+    return typeof sessionExp === "number" && sessionExp * 1000 <= Date.now();
+  }
+
   // Closes sockets whose session lapsed, including idle ones that will
   // never send another message. Runs before every outbound broadcast so
-  // expired sessions stop receiving state.
-  private closeExpiredSockets(): void {
-    const now = Date.now();
+  // expired sessions stop receiving state, and on the schedule every
+  // connect arms for its own session expiry. Returns sockets closed.
+  private closeExpiredSockets(): number {
+    let closed = 0;
     for (const conn of this.getConnections<{ subject?: string; sessionExp?: number }>()) {
-      const exp = conn.state?.sessionExp;
-      if (typeof exp === "number" && exp * 1000 <= now) {
+      if (this.sessionExpired(conn.state?.sessionExp)) {
         try {
           conn.close(4408, "Session expired");
+          closed += 1;
         } catch {
           // Already gone; the sweep is best-effort per socket.
         }
       }
     }
+    return closed;
+  }
+
+  // The scheduled close every socket arms at connect: fires at session
+  // expiry whether the socket is idle or not. Idempotent: each firing
+  // sweeps whatever has lapsed.
+  async closeExpiredSessionSockets(_input: unknown): Promise<{ closed: number }> {
+    return { closed: this.closeExpiredSockets() };
   }
 
   private syncState(): void {
@@ -159,7 +197,19 @@ export class PersonAgent extends Agent<Env, PersonState> {
     try {
       if (!subject || !Number.isFinite(sessionExp)) throw new Error("no verified subject");
       await this.assertSubject(subject);
+      if (this.sessionExpired(sessionExp)) {
+        connection.close(4408, "Session expired");
+        return;
+      }
       connection.setState({ subject, sessionExp });
+      // Every socket arms its own close at session expiry, so idle
+      // sockets die on time with no broadcast to sweep them. If arming
+      // fails the backstops still apply: message checks and sweeps.
+      try {
+        await this.schedule(new Date(sessionExp * 1000), "closeExpiredSessionSockets", {});
+      } catch (err) {
+        this.store.audit({ event: "ws.schedule_failed", detail: String(err) });
+      }
     } catch {
       connection.close(4403, "Forbidden");
     }
@@ -172,7 +222,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       connection.close(4403, "Forbidden");
       return;
     }
-    if (typeof state?.sessionExp === "number" && state.sessionExp * 1000 <= Date.now()) {
+    if (this.sessionExpired(state?.sessionExp)) {
       connection.close(4408, "Session expired");
       return;
     }
@@ -184,6 +234,12 @@ export class PersonAgent extends Agent<Env, PersonState> {
     }
     const text = typeof message === "string" ? message : new TextDecoder().decode(message as ArrayBuffer);
     const out = await this.chat(text, subject);
+    // Recheck before the send: the session can lapse while the reply
+    // is being written, and an expired session gets nothing.
+    if (this.sessionExpired(state?.sessionExp)) {
+      connection.close(4408, "Session expired");
+      return;
+    }
     connection.send(JSON.stringify({ type: "reply", ...out }));
   }
 
@@ -274,8 +330,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
 
   private listStoredConsents(): { recipient: string; purpose: string }[] {
     const rows = this.db().exec(
-      "SELECT recipient, purpose FROM consents WHERE expires_at IS NULL OR expires_at > ?",
-      new Date().toISOString(),
+      "SELECT recipient, purpose FROM consents WHERE expires_at_ms IS NULL OR expires_at_ms > ?",
+      Date.now(),
     ).toArray() as unknown as {
       recipient: string;
       purpose: string;
@@ -483,13 +539,20 @@ export class PersonAgent extends Agent<Env, PersonState> {
       const caseId = stored.payload?.caseId;
       if (typeof caseId !== "string" || !caseId) return;
       if (stored.payload?.consent === "grant") {
-        const expiresAt = typeof stored.payload?.expiresAt === "string" ? stored.payload.expiresAt : null;
+        // Parsed to epoch milliseconds at write time; an unreadable
+        // value fails closed as already expired.
+        const raw = stored.payload?.expiresAt;
+        const expiresAtMs = typeof raw === "string" && Number.isFinite(new Date(raw).getTime())
+          ? new Date(raw).getTime()
+          : raw === undefined
+            ? null
+            : 0;
         this.db().exec(
-          "INSERT OR REPLACE INTO consents VALUES (?, ?, ?, ?)",
+          "INSERT OR REPLACE INTO consents(recipient, case_id, purpose, expires_at_ms) VALUES (?, ?, ?, ?)",
           approval.recipient,
           caseId,
           approval.purpose,
-          expiresAt,
+          expiresAtMs,
         );
       } else if (stored.payload?.consent === "revoke") {
         this.db().exec("DELETE FROM consents WHERE recipient = ? AND case_id = ?", approval.recipient, caseId);
@@ -524,10 +587,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
       this.store.audit({ event: "consent.regrant_refused", caseId: input.caseId });
       return { status: "blocked" as const, reason };
     }
-    // The expiry is part of the key: the same grant retried resends one
-    // message, while a re-grant after expiry delivers fresh.
+    // The key identifies the grant: person, organization, case and
+    // expiry. The same grant retried resends one message, while another
+    // org or a re-grant after expiry delivers fresh.
     const idempotencyKey =
-      `consent-grant:${this.personId}:${input.caseId}` + (input.expiresAt ? `:${input.expiresAt}` : "");
+      `consent-grant:${this.personId}:${orgAgentId}:${input.caseId}` + (input.expiresAt ? `:${input.expiresAt}` : "");
     const req: ActionRequest = {
       type: "share",
       recipient: orgAgentId,
@@ -556,7 +620,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       recipient: orgAgentId,
       purpose: "revoke access",
       payload: { consent: "revoke", caseId: input.caseId },
-      idempotencyKey: `consent-revoke:${this.personId}:${input.caseId}`,
+      idempotencyKey: `consent-revoke:${this.personId}:${orgAgentId}:${input.caseId}`,
       actor: "foreground",
       personId: this.personId,
       sources: [{ kind: "profile", id: this.personId }],

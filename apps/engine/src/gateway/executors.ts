@@ -119,6 +119,25 @@ export class SandboxExecutor implements Executor {
   }
 }
 
+// Test seam: agents build their executor through createExecutor, and
+// tests inject a shared controllable instance here to fail an execution
+// on purpose through the real agent. Production code never sets it.
+let testFactory: ((env: {
+  EXECUTOR_MODE?: string;
+  SANDBOX_BASE_URL?: string;
+  MANO_ENV?: string;
+}) => Executor) | null = null;
+
+export function setExecutorFactoryForTests(
+  factory: ((env: {
+    EXECUTOR_MODE?: string;
+    SANDBOX_BASE_URL?: string;
+    MANO_ENV?: string;
+  }) => Executor) | null,
+): void {
+  testFactory = factory;
+}
+
 // Picks the executor from config. Simulated must be an explicit choice:
 // EXECUTOR_MODE=simulated set on purpose, or unset in development. Outside
 // development with no choice made, construction fails loud instead of
@@ -128,6 +147,7 @@ export function createExecutor(env: {
   SANDBOX_BASE_URL?: string;
   MANO_ENV?: string;
 }): Executor {
+  if (testFactory) return testFactory(env);
   const mode = env.EXECUTOR_MODE;
   if (mode === "simulated") return new InMemoryExecutor();
   if (mode === undefined && env.MANO_ENV === "development") return new InMemoryExecutor();

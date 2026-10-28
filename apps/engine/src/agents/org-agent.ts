@@ -6,7 +6,7 @@ import {
 } from "@mano/protocol";
 import type { Env } from "../env.js";
 import { generateAgentKeypair, resolveAgentKey } from "./agent-keys.js";
-import { tryRecordDelivery } from "../consent-dedupe.js";
+import { applyConsentDelivery, consentEventRecorded } from "../consent-dedupe.js";
 
 export interface SharedCase {
   caseId: string;
@@ -43,6 +43,13 @@ export class OrgAgent extends Agent<Env, OrgState> {
       // Append-only history: revocation is terminal and is never
       // overwritten by a later share of the same case.
       sql.exec(`CREATE TABLE IF NOT EXISTS case_events(id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL, event TEXT NOT NULL, person_id TEXT NOT NULL, purpose TEXT NOT NULL, message_id TEXT NOT NULL, at TEXT NOT NULL)`);
+      // The delivery key behind each event: reconcile reads the event
+      // record, and retries find the event their key already applied.
+      try {
+        sql.exec(`ALTER TABLE case_events ADD COLUMN idempotency_key TEXT`);
+      } catch {
+        // The column already exists: additive migrations are idempotent.
+      }
       sql.exec(`CREATE TABLE IF NOT EXISTS agent_keys(agent_id TEXT PRIMARY KEY, public_key_b64 TEXT NOT NULL, first_seen TEXT NOT NULL)`);
       // Dedupe on sender plus idempotency key: retries resend the same
       // key, so a duplicate revoke can never end a newer share.
@@ -60,6 +67,21 @@ export class OrgAgent extends Agent<Env, OrgState> {
         sql.exec(`ALTER TABLE case_owners ADD COLUMN expires_at TEXT`);
       } catch {
         // The column already exists: additive migrations are idempotent.
+      }
+      // Expiry is stored as epoch milliseconds and compared numerically.
+      // The legacy ISO text column compared lexically, which breaks on
+      // non-UTC offsets; its surviving values are parsed once here.
+      try {
+        sql.exec(`ALTER TABLE case_owners ADD COLUMN expires_at_ms INTEGER`);
+      } catch {
+        // The column already exists: additive migrations are idempotent.
+      }
+      const legacyExpiry = sql.exec(
+        `SELECT case_id, expires_at FROM case_owners WHERE expires_at_ms IS NULL AND expires_at IS NOT NULL`,
+      ).toArray() as unknown as { case_id: string; expires_at: string }[];
+      for (const row of legacyExpiry) {
+        const ms = new Date(row.expires_at).getTime();
+        sql.exec(`UPDATE case_owners SET expires_at_ms = ? WHERE case_id = ?`, Number.isFinite(ms) ? ms : null, row.case_id);
       }
       sql.exec(`CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT, detail TEXT, created_at TEXT)`);
       const stored = await ctx.storage.get<string>("orgId");
@@ -157,10 +179,11 @@ export class OrgAgent extends Agent<Env, OrgState> {
     }
     const now = new Date().toISOString();
     if (msg.type === "consent.revoke") {
-      const delivery = this.recordDelivery(msg.fromAgentId, msg.idempotencyKey);
+      const delivery = this.applyDelivery(msg.fromAgentId, msg.idempotencyKey, () => {
+        this.appendEvent(msg.caseId, "revoke", sender, "", msg.id, now, msg.idempotencyKey);
+      });
       if (delivery === "duplicate") return { accepted: true, duplicate: true };
       if (delivery === "unavailable") return { accepted: false, reason: "The org cannot record this delivery right now. Retry.", retryable: true };
-      this.appendEvent(msg.caseId, "revoke", sender, "", msg.id, now);
       this.audit("consent.revoke", { caseId: msg.caseId, from: msg.fromAgentId });
       this.syncState();
       return { accepted: true };
@@ -169,11 +192,13 @@ export class OrgAgent extends Agent<Env, OrgState> {
       return { accepted: false, reason: "Consent grant needs a purpose." };
     }
     const expiresAt = payload.expiresAt;
+    let expiresAtMs: number | null = null;
     if (expiresAt !== undefined) {
       if (typeof expiresAt !== "string" || !Number.isFinite(new Date(expiresAt).getTime())) {
         return { accepted: false, reason: "Consent grant carries an invalid expiry." };
       }
-      if (new Date(expiresAt).getTime() <= Date.now()) {
+      expiresAtMs = new Date(expiresAt).getTime();
+      if (expiresAtMs <= Date.now()) {
         return { accepted: false, reason: `Case ${msg.caseId} consent already expired.` };
       }
     }
@@ -184,11 +209,12 @@ export class OrgAgent extends Agent<Env, OrgState> {
     if (revoked.length > 0) {
       return { accepted: false, reason: `Case ${msg.caseId} was revoked and cannot be shared again.` };
     }
-    const delivery = this.recordDelivery(msg.fromAgentId, msg.idempotencyKey);
+    const delivery = this.applyDelivery(msg.fromAgentId, msg.idempotencyKey, () => {
+      this.db().exec("UPDATE case_owners SET expires_at_ms = ? WHERE case_id = ?", expiresAtMs, msg.caseId);
+      this.appendEvent(msg.caseId, "share", sender, payload.purpose as string, msg.id, now, msg.idempotencyKey);
+    });
     if (delivery === "duplicate") return { accepted: true, duplicate: true };
     if (delivery === "unavailable") return { accepted: false, reason: "The org cannot record this delivery right now. Retry.", retryable: true };
-    this.db().exec("UPDATE case_owners SET expires_at = ? WHERE case_id = ?", expiresAt ?? null, msg.caseId);
-    this.appendEvent(msg.caseId, "share", sender, payload.purpose, msg.id, now);
     this.audit("consent.grant", { caseId: msg.caseId, from: msg.fromAgentId });
     this.syncState();
     return { accepted: true };
@@ -206,29 +232,23 @@ export class OrgAgent extends Agent<Env, OrgState> {
     return rows[0]?.person_id ?? null;
   }
 
-  // Records a delivery for dedupe. Only a genuine duplicate key
-  // conflict counts as a duplicate; any other storage error is
-  // unavailable, never success. Runs with no await between the checks
-  // above and the append below.
-  private recordDelivery(fromAgentId: string, idempotencyKey: string): "recorded" | "duplicate" | "unavailable" {
-    try {
-      return tryRecordDelivery(this.db(), fromAgentId, idempotencyKey);
-    } catch {
-      return "unavailable";
-    }
+  // Marker plus event in one Durable Object transaction. SQL BEGIN
+  // is forbidden here; transactionSync rolls back on throw.
+  private applyDelivery(fromAgentId: string, idempotencyKey: string, append: () => void) {
+    return applyConsentDelivery(this.db(), fromAgentId, idempotencyKey, append, (fn) =>
+      this.ctx.storage.transactionSync(fn),
+    );
   }
 
-  // Whether this org recorded a delivery under a sender and key. The
-  // person's agent asks this to reconcile a share; agent-to-agent only.
-  // A pure historical fact: expiry is enforced on case reads, not by
-  // rewriting delivery history.
-  async hasConsentRecord(fromAgentId: string, idempotencyKey: string): Promise<boolean> {
-    const rows = this.db().exec(
-      "SELECT idempotency_key FROM processed_messages WHERE sender_agent_id = ? AND idempotency_key = ?",
-      fromAgentId,
-      idempotencyKey,
-    ).toArray();
-    return rows.length > 0;
+  // Whether this org recorded a consent event under a delivery key.
+  // The person's agent asks this to reconcile a share; agent-to-agent
+  // only. Reads the event record, never the dedupe marker: a marker can
+  // survive a crash that the event did not. The sender stays on the
+  // signature for the agent-to-agent contract; keys embed the sender, so
+  // the key alone identifies the record. A pure historical fact: expiry
+  // is enforced on case reads, not by rewriting delivery history.
+  async hasConsentRecord(_fromAgentId: string, idempotencyKey: string): Promise<boolean> {
+    return consentEventRecorded(this.db(), idempotencyKey);
   }
 
   private async keyForSender(fromAgentId: string): Promise<string | null> {
@@ -257,10 +277,11 @@ export class OrgAgent extends Agent<Env, OrgState> {
     purpose: string,
     messageId: string,
     at: string,
+    idempotencyKey: string,
   ) {
     this.db().exec(
-      "INSERT INTO case_events(case_id, event, person_id, purpose, message_id, at) VALUES (?,?,?,?,?,?)",
-      caseId, event, personId, purpose, messageId, at,
+      "INSERT INTO case_events(case_id, event, person_id, purpose, message_id, at, idempotency_key) VALUES (?,?,?,?,?,?,?)",
+      caseId, event, personId, purpose, messageId, at, idempotencyKey,
     );
   }
 
@@ -270,14 +291,13 @@ export class OrgAgent extends Agent<Env, OrgState> {
   }
 
   private activeCases(): SharedCase[] {
-    const now = new Date().toISOString();
     const rows = this.db().exec(
       `SELECT e.case_id, e.person_id, e.purpose, MAX(e.at) AS shared_at FROM case_events e
        LEFT JOIN case_owners o ON o.case_id = e.case_id
        WHERE e.event = 'share' AND e.case_id NOT IN (SELECT case_id FROM case_events WHERE event = 'revoke')
-       AND (o.expires_at IS NULL OR o.expires_at > ?)
+       AND (o.expires_at_ms IS NULL OR o.expires_at_ms > ?)
        GROUP BY e.case_id ORDER BY shared_at`,
-      now,
+      Date.now(),
     ).toArray() as unknown as {
       case_id: string;
       person_id: string;
