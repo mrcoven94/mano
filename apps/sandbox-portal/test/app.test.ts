@@ -9,7 +9,7 @@ import {
   type PortalConfig,
 } from "../src/app";
 import { submissionFileKey } from "../src/files";
-import { packetDigest, sha256Hex } from "../src/store";
+import { sha256Hex } from "../src/store";
 import { TEST_BANNER } from "../src/pages";
 import type { Household } from "../src/store";
 import { MemoryFileStore, MemoryStore } from "./memory-store";
@@ -156,12 +156,10 @@ describe("renewal flow", () => {
     const confirmation = confirmationFrom(await submit.text());
     expect(confirmation).toMatch(/^SR-[A-Z2-9]{8}$/);
 
+    // The web filing belongs to the web scope; an API caller cannot see it.
     const status = await handleRequest(new Request(`${BASE}/submissions/${key}`, { headers: { authorization: AUTH } }), store, files, config);
-    expect(status.status).toBe(200);
-    const statusJson = (await status.json()) as Record<string, string>;
-    expect(statusJson["status"]).toBe("received");
-    expect(statusJson["confirmationNumber"]).toBe(confirmation);
-    expect(statusJson["digest"]).toBe(digest);
+    expect(status.status).toBe(404);
+    expect(((await status.json()) as Record<string, string>)["status"]).toBe("not_found");
   });
 
   test("editing after review rejects the stale submit", async () => {
@@ -366,44 +364,6 @@ describe("idempotency", () => {
     expect(body["status"]).toBe("not_found");
   });
 
-  test("the same key reconciles across the web form and the JSON API", async () => {
-    const store = new MemoryStore();
-    const files = new MemoryFileStore();
-    const config = testConfig();
-    const cookie = await postHousehold(store, files, config);
-    await postDocuments(store, files, config, cookie);
-    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
-    const reviewText = await review.text();
-    const key = keyFromReview(reviewText);
-    const submitForm = new URLSearchParams();
-    submitForm.set("key", key);
-    submitForm.set("digest", digestFromReview(reviewText));
-    await handleRequest(
-      new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
-      store,
-      files,
-      config,
-    );
-    const retry = await handleRequest(
-      new Request(`${BASE}/submissions`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: AUTH },
-        body: JSON.stringify({
-          key,
-          household: HOUSEHOLD,
-          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-fake-bytes").toString("base64") }],
-        }),
-      }),
-      store,
-      files,
-      config,
-    );
-    expect(retry.status).toBe(200);
-    const body = (await retry.json()) as Record<string, unknown>;
-    expect(body["duplicate"]).toBe(true);
-    expect((await store.countSubmissions())).toBe(1);
-  });
-
   test("a different packet under an existing key returns 409 with the received digest", async () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
@@ -517,7 +477,7 @@ describe("idempotency", () => {
     expect((await store.countSubmissions())).toBe(2);
   });
 
-  test("an API retry of a browser filing duplicates instead of filing again", async () => {
+  test("a web key is unknown to an API caller, and an API post files it fresh", async () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
     const config = testConfig();
@@ -529,14 +489,12 @@ describe("idempotency", () => {
     const form = new URLSearchParams();
     form.set("key", key);
     form.set("digest", digestFromReview(reviewText));
-    const web = await handleRequest(
-      new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }),
-      store,
-      files,
-      config,
-    );
-    const webConfirmation = confirmationFrom(await web.text());
-    const retry = await handleRequest(
+    const web = await handleRequest(new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }), store, files, config);
+    expect(web.status).toBe(200);
+    const unknown = await handleRequest(new Request(`${BASE}/submissions/${key}`, { headers: { authorization: AUTH } }), store, files, config);
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as Record<string, unknown>)["status"]).toBe("not_found");
+    const api = await handleRequest(
       new Request(`${BASE}/submissions`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: AUTH },
@@ -550,41 +508,15 @@ describe("idempotency", () => {
       files,
       config,
     );
-    expect(retry.status).toBe(200);
-    const body = (await retry.json()) as Record<string, unknown>;
-    expect(body["duplicate"]).toBe(true);
-    expect(body["confirmationNumber"]).toBe(webConfirmation);
-    expect(body["scope"]).toBe("web");
-    expect((await store.countSubmissions())).toBe(1);
-  });
-
-  test("reconcile reads the caller's scope first, then the web scope", async () => {
-    const store = new MemoryStore();
-    const files = new MemoryFileStore();
-    const config = testConfig();
-    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") };
-    await handleRequest(
-      new Request(`${BASE}/submissions`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: AUTH },
-        body: JSON.stringify({ key: "scoped-key", household: HOUSEHOLD, files: [file] }),
-      }),
-      store,
-      files,
-      config,
-    );
-    const own = (await (
-      await handleRequest(new Request(`${BASE}/submissions/scoped-key`, { headers: { authorization: AUTH } }), store, files, config)
-    ).json()) as Record<string, string>;
-    expect(own["status"]).toBe("received");
-    expect(own["scope"]).toMatch(/^api-/);
-    const web = await handleRequest(
-      new Request(`${BASE}/submissions/web-only-key`, { headers: { authorization: AUTH } }),
-      store,
-      files,
-      config,
-    );
-    expect(web.status).toBe(404);
+    expect(api.status).toBe(200);
+    const apiBody = (await api.json()) as Record<string, unknown>;
+    expect(apiBody["duplicate"]).toBe(false);
+    expect(apiBody["scope"]).toMatch(/^api-/);
+    const reread = (await (
+      await handleRequest(new Request(`${BASE}/submissions/${key}`, { headers: { authorization: AUTH } }), store, files, config)
+    ).json()) as Record<string, unknown>;
+    expect(reread["status"]).toBe("received");
+    expect(reread["confirmationNumber"]).toBe(apiBody["confirmationNumber"]);
   });
 
   test("malformed JSON is rejected with 400, never a crash", async () => {
@@ -1759,59 +1691,6 @@ describe("review round 2 item 4: idempotency survives retirement", () => {
     const body = (await changed.json()) as Record<string, { confirmationNumber: string }>;
     expect(body["received"]?.confirmationNumber).toBe(original);
     expect(await store.countSubmissions()).toBe(0);
-  });
-});
-
-describe("review round 2 item 5: caller scope wins over web fallback", () => {
-  test("with both scopes populated, an API post answers from the caller scope", async () => {
-    const store = new MemoryStore();
-    const files = new MemoryFileStore();
-    const config = testConfig();
-    const bytesB = new TextEncoder().encode("%PDF-B");
-    const shaB = await sha256Hex(bytesB);
-    const householdB = { ...HOUSEHOLD, fullName: "Betty Browser" };
-    const postPacket = (body: unknown) =>
-      handleRequest(
-        new Request(`${BASE}/submissions`, { method: "POST", headers: { "content-type": "application/json", authorization: AUTH }, body: JSON.stringify(body) }),
-        store,
-        files,
-        config,
-      );
-    const packetA = {
-      key: "shared-key",
-      household: HOUSEHOLD,
-      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-A").toString("base64") }],
-    };
-    const first = await postPacket(packetA);
-    expect(first.status).toBe(200);
-    const ownConfirmation = ((await first.json()) as Record<string, string>)["confirmationNumber"] ?? "";
-    // The same key string was filed under the web scope with a different packet.
-    const digestB = await packetDigest(householdB, [{ name: "paystub.pdf", type: "application/pdf", size: bytesB.length, sha256: shaB }]);
-    const webFiled = await store.submit({
-      key: "shared-key",
-      scope: "web",
-      household: householdB,
-      files: [{ name: "paystub.pdf", type: "application/pdf", size: bytesB.length, sha256: shaB, r2key: `submissions/web/shared-key/1-${shaB}` }],
-      digest: digestB,
-      source: "web",
-      slowMs: 0,
-      receivedAt: Date.now(),
-    });
-    expect(webFiled.outcome).toBe("stored");
-    // Posting the web packet must conflict with the caller's own filing, not duplicate the web one.
-    const packetB = {
-      key: "shared-key",
-      household: householdB,
-      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from(bytesB).toString("base64") }],
-    };
-    const res = await postPacket(packetB);
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as Record<string, { confirmationNumber: string }>;
-    expect(body["received"]?.confirmationNumber).toBe(ownConfirmation);
-    const status = (await (
-      await handleRequest(new Request(`${BASE}/submissions/shared-key`, { headers: { authorization: AUTH } }), store, files, config)
-    ).json()) as Record<string, unknown>;
-    expect(status["confirmationNumber"]).toBe(ownConfirmation);
   });
 });
 

@@ -641,19 +641,8 @@ async function handleSubmit(
       400,
     );
   }
-  if (source === "api") {
-    // The caller's own scope answers first; the web fallback only applies when
-    // the caller never filed this key, live or retired.
-    const own = (await store.getSubmission(scope, key)) ?? (await store.getReceipt(scope, key));
-    if (!own) {
-      // The browser may have filed this exact packet under the web scope; a retry must not file it again.
-      const webFiled = await store.getSubmission(WEB_SCOPE, key);
-      if (webFiled && webFiled.digest === digest) {
-        await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-        return submissionJson(webFiled, true);
-      }
-    }
-  }
+  // A key belongs to the scope that created it. There is no cross-scope
+  // fallback: API requests see only their token's scope, web only theirs.
   let lease: string | null = null;
   if (slowMs > 0) {
     lease = await store.tryBeginSlow(nowMs(config), SLOW_LEASE_TTL_MS, config.slowMaxConcurrent);
@@ -912,8 +901,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "GET" && submissionMatch?.[1]) {
     const key = decodeURIComponent(submissionMatch[1]);
     const scope = await callerScope(request);
-    const own = await store.getSubmission(scope, key);
-    const sub = own ?? (await store.getSubmission(WEB_SCOPE, key));
+    const sub = await store.getSubmission(scope, key);
     if (sub) {
       return json({
         key: sub.key,
@@ -925,7 +913,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
         receivedAtIso: new Date(sub.receivedAt).toISOString(),
       });
     }
-    const receipt = (await store.getReceipt(scope, key)) ?? (await store.getReceipt(WEB_SCOPE, key));
+    const receipt = await store.getReceipt(scope, key);
     if (receipt) {
       return json({
         key: receipt.key,
