@@ -642,11 +642,16 @@ async function handleSubmit(
     );
   }
   if (source === "api") {
-    // The browser may have filed this exact packet under the web scope; a retry must not file it again.
-    const webFiled = await store.getSubmission(WEB_SCOPE, key);
-    if (webFiled && webFiled.digest === digest) {
-      await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-      return submissionJson(webFiled, true);
+    // The caller's own scope answers first; the web fallback only applies when
+    // the caller never filed this key, live or retired.
+    const own = (await store.getSubmission(scope, key)) ?? (await store.getReceipt(scope, key));
+    if (!own) {
+      // The browser may have filed this exact packet under the web scope; a retry must not file it again.
+      const webFiled = await store.getSubmission(WEB_SCOPE, key);
+      if (webFiled && webFiled.digest === digest) {
+        await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
+        return submissionJson(webFiled, true);
+      }
     }
   }
   let lease: string | null = null;

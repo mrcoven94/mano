@@ -9,7 +9,7 @@ import {
   type PortalConfig,
 } from "../src/app";
 import { submissionFileKey } from "../src/files";
-import { sha256Hex } from "../src/store";
+import { packetDigest, sha256Hex } from "../src/store";
 import { TEST_BANNER } from "../src/pages";
 import type { Household } from "../src/store";
 import { MemoryFileStore, MemoryStore } from "./memory-store";
@@ -1757,5 +1757,58 @@ describe("review round 2 item 4: idempotency survives retirement", () => {
     const body = (await changed.json()) as Record<string, { confirmationNumber: string }>;
     expect(body["received"]?.confirmationNumber).toBe(original);
     expect(await store.countSubmissions()).toBe(0);
+  });
+});
+
+describe("review round 2 item 5: caller scope wins over web fallback", () => {
+  test("with both scopes populated, an API post answers from the caller scope", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const bytesB = new TextEncoder().encode("%PDF-B");
+    const shaB = await sha256Hex(bytesB);
+    const householdB = { ...HOUSEHOLD, fullName: "Betty Browser" };
+    const postPacket = (body: unknown) =>
+      handleRequest(
+        new Request(`${BASE}/submissions`, { method: "POST", headers: { "content-type": "application/json", authorization: AUTH }, body: JSON.stringify(body) }),
+        store,
+        files,
+        config,
+      );
+    const packetA = {
+      key: "shared-key",
+      household: HOUSEHOLD,
+      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-A").toString("base64") }],
+    };
+    const first = await postPacket(packetA);
+    expect(first.status).toBe(200);
+    const ownConfirmation = ((await first.json()) as Record<string, string>)["confirmationNumber"] ?? "";
+    // The same key string was filed under the web scope with a different packet.
+    const digestB = await packetDigest(householdB, [{ name: "paystub.pdf", type: "application/pdf", size: bytesB.length, sha256: shaB }]);
+    const webFiled = await store.submit({
+      key: "shared-key",
+      scope: "web",
+      household: householdB,
+      files: [{ name: "paystub.pdf", type: "application/pdf", size: bytesB.length, sha256: shaB, r2key: `submissions/web/shared-key/1-${shaB}` }],
+      digest: digestB,
+      source: "web",
+      slowMs: 0,
+      receivedAt: Date.now(),
+    });
+    expect(webFiled.outcome).toBe("stored");
+    // Posting the web packet must conflict with the caller's own filing, not duplicate the web one.
+    const packetB = {
+      key: "shared-key",
+      household: householdB,
+      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from(bytesB).toString("base64") }],
+    };
+    const res = await postPacket(packetB);
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as Record<string, { confirmationNumber: string }>;
+    expect(body["received"]?.confirmationNumber).toBe(ownConfirmation);
+    const status = (await (
+      await handleRequest(new Request(`${BASE}/submissions/shared-key`, { headers: { authorization: AUTH } }), store, files, config)
+    ).json()) as Record<string, unknown>;
+    expect(status["confirmationNumber"]).toBe(ownConfirmation);
   });
 });
