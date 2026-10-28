@@ -1,0 +1,21 @@
+.acct{max-width:640px;margin:0 auto;padding:64px 0 96px}
+.acct h1{font-size:clamp(2rem,5vw,2.8rem);margin-bottom:8px}
+.acct .lede{margin-bottom:32px}
+.acct-card{background:var(--bg2);border-radius:var(--radius);padding:24px;margin-bottom:16px}
+.acct-card h2{font-size:1.25rem;margin-bottom:6px}
+.acct-card p{font-size:.95rem;margin-bottom:16px}
+.acct-field{display:grid;gap:6px;margin-bottom:12px}
+.acct-field label{font-size:.9rem;font-weight:600}
+.acct-field input{height:46px;border:1.5px solid var(--border2);border-radius:12px;padding:0 14px;font:inherit;background:#fff;color:var(--text)}
+.acct-field input:focus{outline:none;border-color:var(--pen);box-shadow:0 0 0 3px var(--pen-soft)}
+.acct-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.acct-error{background:var(--alert-soft);color:var(--alert);border-radius:12px;padding:12px 16px;font-size:.92rem;margin-bottom:16px}
+.acct-ok{background:var(--sage);color:var(--text);border-radius:12px;padding:12px 16px;font-size:.92rem;margin-bottom:16px}
+.acct-list{list-style:none;margin:0 0 8px;padding:0;display:grid;gap:8px}
+.acct-list li{display:flex;justify-content:space-between;align-items:center;gap:12px;background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px 16px;font-size:.95rem}
+.acct-kind{font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin-right:8px}
+.acct-thread{list-style:none;margin:0;padding:0;display:grid;gap:8px;max-height:320px;overflow:auto}
+.acct-thread li{background:#fff;border:1px solid var(--border);border-radius:12px;padding:10px 14px;font-size:.93rem}
+.acct-thread .mono{margin-bottom:4px;display:block}
+.acct-danger{margin-top:32px}
+.acct-merge{border:1.5px solid var(--border2);border-radius:12px;padding:16px;background:#fff;margin-top:12px}
