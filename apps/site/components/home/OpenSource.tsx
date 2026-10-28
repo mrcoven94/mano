@@ -64,7 +64,7 @@ export default function OpenSource() {
       <div>
         <h2 id="open-h">Open source, from the first commit.</h2>
         <p className="lede">The code and the protocol that lets agents share a case are public. Any agency, nonprofit or developer can read how Mano works, build on it or run their own copy.</p>
-        <ul className="open-facts">
+        <ul className="open-facts os-facts">
           {FACTS.map(([icon, b, t]) => (
             <li key={b}><NeedIcon k={icon} size={44} /><span><b>{b}</b> {t}</span></li>
           ))}

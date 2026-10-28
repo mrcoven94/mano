@@ -23,7 +23,6 @@
 .t-steps-head{display:flex;justify-content:space-between;align-items:flex-end;gap:40px}
 .t-steps-head .h-head{margin-bottom:48px}
 .t-art{width:300px;height:auto;flex:none;margin:-40px 0 8px}
-.pt-art{margin:0 0 8px auto;width:260px}
 
 /* shared bits */
 .btn-pen{background:var(--pen);color:#fff}
@@ -128,7 +127,7 @@
 .t-trail .ts{font-size:.74rem;color:var(--faint);padding-top:3px}
 
 /* partners: a manifest and the resident's yes */
-.po{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:24px;align-items:start}
+.po{display:grid;grid-template-columns:minmax(0,.95fr) minmax(0,1.05fr);gap:24px;align-items:start}
 .po .code{box-shadow:var(--shadow)}
 .code pre.po-code{margin:0;padding:18px 0 22px;overflow-x:auto;font-family:var(--font-mono),monospace;font-size:.84rem;line-height:1.7;color:#E9E7E1;counter-reset:ln}
 .po-code span{display:block;padding:0 20px 0 52px;position:relative;white-space:pre;transition:background .2s,color .2s}
@@ -200,7 +199,6 @@
   .t-sticker-bubble{font-size:.84rem}
   .t-steps-head{flex-direction:column-reverse;align-items:flex-start;gap:0}
   .t-art{width:220px;margin:0 0 8px}
-  .pt-art{margin:32px 0 8px}
   .t-scene{min-height:0}
   .t-more .h-tabs{margin-left:-18px;margin-right:-18px;padding:0 18px}
   .t-queue li{grid-template-columns:1fr}
@@ -324,3 +322,16 @@
 @media (max-width:720px){.t-report{grid-template-columns:repeat(2,minmax(0,1fr))}.t-report-rows li{grid-template-columns:1fr auto}.t-report-rows li span:nth-child(2){display:none}}
 
 .share-card>.nd-icon{margin:0}
+
+/* partners: who it is for */
+.pt-kinds{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.pt-kinds li{display:grid;gap:6px;align-content:start;justify-items:start;padding:20px 20px 22px;border:3px solid #fff;border-radius:24px;box-shadow:0 1px 2px rgba(18,18,18,.06),0 10px 22px -14px rgba(18,18,18,.22);transform:rotate(-1deg);transition:transform .3s cubic-bezier(.3,1.6,.5,1)}
+.pt-kinds li:nth-child(even){transform:rotate(1.2deg)}
+.pt-kinds li:nth-child(3n){transform:rotate(-.4deg)}
+.pt-kinds li:hover{transform:rotate(0) translateY(-4px)}
+.pt-kinds li:hover .nd-icon{transform:rotate(-8deg) scale(1.08)}
+.pt-kinds .nd-icon{margin-bottom:8px;transition:transform .3s cubic-bezier(.3,1.6,.5,1)}
+.pt-kinds b{font-weight:600;color:var(--text)}
+.pt-kinds span{color:var(--muted);font-size:.92rem;line-height:1.45}
+@media (max-width:900px){.pt-kinds{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:420px){.pt-kinds{gap:10px}.pt-kinds li{padding:16px 14px 18px}}

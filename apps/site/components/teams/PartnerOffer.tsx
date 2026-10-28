@@ -54,14 +54,6 @@ export default function PartnerOffer() {
 
   return (
     <div className="po" ref={ref}>
-      <div className="po-man">
-        <p className="t-who">The partner&rsquo;s manifest</p>
-        <figure className="code" aria-label="Example extension manifest">
-          <pre className="po-code"><code>{manifest.map(([line, g], n) => <span key={n} className={lineClass(g)}>{line}</span>)}</code></pre>
-        </figure>
-        <p className="po-key"><span><i />Shown to Maria in plain words</span><span><i className="used" />Shared after she says yes</span></p>
-      </div>
-
       <div className="po-phone">
       <p className="t-who">Maria&rsquo;s phone</p>
       <div className="t-phone" aria-label="Maria's phone" role="group">
@@ -97,6 +89,14 @@ export default function PartnerOffer() {
         </div>
       </div>
       </div>
+      <div className="po-man">
+        <p className="t-who">What you send us</p>
+        <figure className="code" aria-label="Example extension manifest">
+          <pre className="po-code"><code>{manifest.map(([line, g], n) => <span key={n} className={lineClass(g)}>{line}</span>)}</code></pre>
+        </figure>
+        <p className="po-key"><span><i />Shown to Maria in plain words</span><span><i className="used" />Shared after she says yes</span></p>
+      </div>
+
     </div>
   );
 }

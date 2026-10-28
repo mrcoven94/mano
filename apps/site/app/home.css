@@ -1,5 +1,5 @@
 /* Home page. Paper white, ink type, one yellow highlighter and one blue pen. The person's own texts are message blue. */
-.home{--text-blue:#1E7BF6}
+:root{--text-blue:#1E7BF6}
 
 .home section{padding:112px 0}
 .home .lede{max-width:560px}
@@ -226,10 +226,12 @@ mark{background:none;color:inherit}
 .open-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:80px;align-items:center}
 .h-open h2{max-width:14ch}
 .h-open .lede{margin-top:20px}
-.open-facts{list-style:none;margin:32px 0 0;padding:0;display:grid;gap:10px}
-.open-facts li{display:grid;grid-template-columns:44px 1fr;gap:16px;align-items:center;padding:14px 18px 14px 14px;border-radius:20px;background:#fff;color:var(--muted);font-size:.97rem;line-height:1.5;box-shadow:0 1px 2px rgba(18,18,18,.05)}
-.open-facts li .nd-icon{transition:transform .3s cubic-bezier(.3,1.6,.5,1)}
-.open-facts li:hover .nd-icon{transform:rotate(-8deg) scale(1.08)}
+.open-facts{list-style:none;margin:36px 0 0;padding:0;display:grid;gap:0}
+.open-facts li{padding:16px 0;color:var(--muted);font-size:.97rem;line-height:1.5}
+.os-facts{margin-top:32px;gap:10px}
+.os-facts li{display:grid;grid-template-columns:44px 1fr;gap:16px;align-items:center;padding:14px 18px 14px 14px;border-radius:20px;background:#fff;box-shadow:0 1px 2px rgba(18,18,18,.05)}
+.os-facts li .nd-icon{transition:transform .3s cubic-bezier(.3,1.6,.5,1)}
+.os-facts li:hover .nd-icon{transform:rotate(-8deg) scale(1.08)}
 .open-facts b{color:var(--text);font-weight:600}
 .code{margin:0;background:#121212;border-radius:18px;overflow:hidden;box-shadow:var(--shadow-lg)}
 .code figcaption{display:flex;justify-content:space-between;padding:14px 20px}
