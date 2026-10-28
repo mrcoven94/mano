@@ -9,7 +9,7 @@ const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
 
 const STEPS = [
   { key: "correct", title: "You correct it once", text: "Tell Mano something changed and it fixes every open application, then remembers for next time." },
-  { key: "learn", title: "It learns the form, not the person", text: "Each form Mano fills makes the next person's faster. It keeps the map of the form and nothing about you." },
+  { key: "learn", title: "It learns the form and you", text: "Each form Mano fills makes the next one faster. What it learns about your life stays private to you, and it uses that to see what you need next and start early." },
   { key: "review", title: "A caseworker checks the work", text: "A real caseworker reviews sample packets. What they flag goes back into how Mano prepares the next one." },
   { key: "test", title: "Every mistake becomes a test", text: "Mano is graded on paperwork it has never seen, next to a reminder app and a general AI agent with the same tools." },
 ] as const;
@@ -36,7 +36,7 @@ export default function Improve() {
     <div className="im">
       <div className="h-head">
         <h2 id="im-h">Mano is always improving.</h2>
-        <p className="lede">Mano learns as it applies. Every correction you make, every form it fills and every caseworker review makes Mano better for the next person. It is graded on paperwork it has never seen, and the results are public.</p>
+        <p className="lede">Mano learns from every form it fills and from you, so it adjusts, sees what you will need next and starts before you ask. Every correction and every caseworker review makes it better. It is graded on paperwork it has never seen, and the results are public.</p>
       </div>
 
       <div className="im-grid">
@@ -44,8 +44,7 @@ export default function Improve() {
           {STEPS.map((s, n) => (
             <li key={s.key}>
               <button className="im-step" aria-pressed={k === s.key} onClick={() => setK(s.key)}>
-                <span className="im-n">{n + 1}</span>
-                <span><strong>{s.title}</strong><span className="im-text">{s.text}</span></span>
+                                <span><strong>{s.title}</strong><span className="im-text">{s.text}</span></span>
               </button>
             </li>
           ))}
@@ -61,7 +60,6 @@ export default function Improve() {
                   <p className="sc-label">Changed in 2 applications</p>
                   <div><span>Hours per week</span><span><s>20</s> 24</span></div>
                   <div><span>Monthly income</span><span><s>$2,140</s> $2,570</span></div>
-                  <p className="im-foot">Both need your yes again, because the copy changed.</p>
                 </div>
               </div>
             )}
@@ -69,7 +67,7 @@ export default function Improve() {
             {k === "learn" && (
               <div className="im-recipe">
                 <div className="im-recipe-col rv" style={d(0.1)}>
-                  <p className="sc-label">Kept: how the form works</p>
+                  <p className="sc-label">From the form</p>
                   <b>Sample County child care form</b>
                   <ul>
                     {["Household size", "Monthly income", "Employer", "Hours of care", "Signature page"].map((f, n) => (
@@ -77,12 +75,12 @@ export default function Improve() {
                     ))}
                   </ul>
                 </div>
-                <div className="im-recipe-col no rv" style={d(0.6)}>
-                  <p className="sc-label">Never kept</p>
+                <div className="im-recipe-col rv" style={d(0.6)}>
+                  <p className="sc-label">From Maria, kept private</p>
                   <ul>
-                    {["Maria's name", "Her income", "Her children", "Her address"].map((f) => <li key={f}><s>{f}</s></li>)}
+                    {["Works 24 hours a week", "Leo starts kindergarten in August", "Lease ends March 31"].map((f) => <li key={f}><span>{f}</span></li>)}
                   </ul>
-                  <p className="im-foot">The next person who fills this form gets a faster, checked start.</p>
+                  <p className="im-foot">So Mano moves child care to after school in July and starts housing waitlists in January, before she asks.</p>
                 </div>
               </div>
             )}

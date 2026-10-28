@@ -22,25 +22,10 @@ const faqs: [string, string][] = [
   ["Is Mano a government system?", "No. Mano is independent. Your office keeps its own systems, seals and authority, and Mano never presents itself as your office."],
 ];
 
-const log = `{
-  "action": "case_system.enter",
-  "case": "sample-county/0418",
-  "approved_by": "staff:j-park",
-  "approval": {
-    "recipient": "sample-county/case-system",
-    "purpose": "food-benefits-renewal",
-    "copy": "sha256:7f3ac19e…"
-  },
-  "idempotency_key": "0418-recert-2026-10",
-  "logged_at": "2026-10-27T10:42:03Z",
-  "result": "saved; screen read back; matches"
-}`;
-
 export default function Government() {
   return (
     <div className="team">
       <TeamHero
-        eyebrow="For government offices"
         before="Residents "
         phrase="stay covered"
         after=" and the backlog shrinks."
@@ -54,18 +39,16 @@ export default function Government() {
       <section className="t-more" aria-labelledby="gov-more-h">
         <div className="wrap">
           <div className="h-head">
-            <p className="h-eyebrow">Before the case reaches you</p>
             <h2 id="gov-more-h">Your staff spend their time on decisions.</h2>
           </div>
           <GovScenes />
         </div>
       </section>
 
-      <Verified id="gov-vf" eyebrow="When a case reaches you" office="Sample County" />
+      <Verified id="gov-vf" office="Sample County" />
 
       <Rules
         id="gov-rules"
-        eyebrow="Your staff keep every decision"
         title="Every action is written down before it happens."
         lede="After a caseworker approves, Mano records the approval, then enters the case. An approval covers one recipient, one purpose and one exact copy. If anything is unclear, it stops."
         facts={[
@@ -75,13 +58,10 @@ export default function Government() {
           ["Agents say they are automated", "on every call, and that the call is transcribed."],
           ["Your systems, seal and authority", "stay yours."],
         ]}
-        file="action-log.json"
-        code={log}
       />
 
       <Steps
         id="gov-start"
-        eyebrow="How an office starts"
         title="Your office already has a profile. Claim it."
         art="/art/office.svg"
         artAlt="Mano standing beside a small civic building, holding a folder with a check mark"

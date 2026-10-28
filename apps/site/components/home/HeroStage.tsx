@@ -54,7 +54,7 @@ export default function HeroStage() {
             <span className="h-line"><mark key={i} className="h-phrase">{SCENES[i].phrase}</mark>.</span>
           </span>
         </h1>
-        <p className="h-lede">Rent, food, medicine, child care, light and water bills. Text Mano what is going on and it finds the help, fills out the forms and keeps the help coming. You say yes before anything is sent.</p>
+        <p className="h-lede">Rent, food, medicine, child care, light and water bills. Text Mano what is going on and it finds the help, fills out the forms and keeps the help coming.</p>
         <div className="btn-row h-ctas">
           <a className="btn btn-primary btn-lg" href="#get-mano">Text Mano</a>
           <a className="btn btn-ghost btn-lg" href="#nd-h">What Mano helps with</a>
@@ -79,7 +79,6 @@ export default function HeroStage() {
               className="h-tab"
               onClick={() => pick(n)}
             >
-              <span className="h-tab-n">0{n + 1}</span>
               <span className="h-tab-t">{s.tab}<small>{s.how}</small></span>
               {n === i && auto && (
                 <span

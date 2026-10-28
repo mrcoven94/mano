@@ -42,7 +42,6 @@ export default function SceneTabs({ scenes, label }: { scenes: SceneTab[]; label
       <div className="h-tabs t-tabs" role="tablist" aria-label={label} onKeyDown={onKey}>
         {scenes.map((s, n) => (
           <button key={s.key} id={`tab-${s.key}`} role="tab" aria-selected={n === i} aria-controls={`${id}-panel`} tabIndex={n === i ? 0 : -1} className="h-tab" onClick={() => pick(n)}>
-            <span className="h-tab-n">0{n + 1}</span>
             {s.tab}
             {n === i && auto && (
               <span

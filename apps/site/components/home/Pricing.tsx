@@ -1,5 +1,7 @@
 import Link from "next/link";
 import PlusPrice from "./PlusPrice";
+import { NeedIcon } from "./NeedIcons";
+import { Wave } from "@/components/Mascot";
 
 /* Two plans and a full side by side. Keeping help is free for everyone; Plus adds unlimited applications, a Mano that
    works every day without being asked, and a support team. Faxes and mail cost real money, so they are at cost on both. */
@@ -17,18 +19,18 @@ const FREE = [
 const PLUS: [string, string][] = [
   ["Unlimited applications.", "Every program you qualify for, as many as you need, every month."],
   ["Always on.", "Mano checks your accounts and portals every day, finds new help you qualify for and starts renewals early, without being asked."],
-  ["Its own computer.", "Mano creates and signs in to your county, landlord and utility accounts, with your OK for each one."],
+  ["Its own computer.", "Mano creates and signs in to your county, landlord and utility accounts."],
   ["Calls and waiting on hold.", "Mano calls the office for you and hands you the phone when a person picks up."],
   ["A support team that knows your case.", "Real people, ready when you need more than Mano."],
 ];
 
-const SUPPORT: [string, string][] = [
-  ["Answers the same day.", "Text support and hear back from a person who has read your file, so you never explain it twice."],
-  ["Help when you are turned down.", "Mano reads the denial and writes the appeal, and a person checks it before it goes. If there is a hearing, you will be ready for it."],
-  ["Ready for every interview.", "Practice the questions the office will ask and get a list of exactly what to bring."],
-  ["First in line when it is urgent.", "A shutoff or eviction notice moves your case to the front, any day of the week."],
-  ["A yearly checkup.", "Once a year a person goes over everything you get and finds what you are missing."],
-  ["Someone on your side.", "If an office is not answering, support follows up with them until your case moves."],
+const SUPPORT: [string, string, string][] = [
+  ["chat", "Answers the same day.", "Text support and hear back from a person who has read your file, so you never explain it twice."],
+  ["programs", "Help when you are turned down.", "Mano reads the denial and writes the appeal, and a person checks it before it goes. If there is a hearing, you will be ready for it."],
+  ["clipboard", "Ready for every interview.", "Practice the questions the office will ask and get a list of exactly what to bring."],
+  ["now", "First in line when it is urgent.", "A shutoff or eviction notice moves your case to the front, any day of the week."],
+  ["calendar", "A yearly checkup.", "Once a year a person goes over everything you get and finds what you are missing."],
+  ["mano", "Someone on your side.", "If an office is not answering, support follows up with them until your case moves."],
 ];
 
 type Cell = string | boolean;
@@ -57,7 +59,6 @@ const ROWS: [string, [string, Cell, Cell][]][] = [
     ["Yearly checkup", false, true],
   ]],
   ["Always included", [
-    ["You approve everything before it is sent", true, true],
     ["Share a case with your caseworker", true, true],
   ]],
 ];
@@ -107,7 +108,15 @@ export default function Pricing() {
           <p>Mano does the paperwork. When you need a person, there is one who has already read your file.</p>
         </div>
         <ul className="sup-list">
-          {SUPPORT.map(([b, t]) => <li key={b}><b>{b}</b><span>{t}</span></li>)}
+          {SUPPORT.map(([icon, b, t]) => (
+            <li key={b}>
+              {icon === "mano"
+                ? <svg className="nd-icon" width={52} height={52} viewBox="0 0 100 100" aria-hidden="true"><rect x="6" y="6" width="88" height="88" rx="26" fill="#FFB26B" stroke="#121212" strokeWidth="4" /><Wave /></svg>
+                : <NeedIcon k={icon} size={52} />}
+              <b>{b}</b>
+              <span>{t}</span>
+            </li>
+          ))}
         </ul>
       </div>
 

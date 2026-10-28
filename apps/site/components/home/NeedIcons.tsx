@@ -82,6 +82,28 @@ const ICONS: Record<string, React.ReactNode> = {
       <Face x={32} y={17} w={9} />
     </>
   ),
+  chat: (
+    <>
+      <path {...S} fill="#DCE3FB" d="M10 14H54A6 6 0 0 1 60 20V40A6 6 0 0 1 54 46H28L16 56V46H10A6 6 0 0 1 4 40V20A6 6 0 0 1 10 14Z" />
+      <Face x={32} y={28} />
+    </>
+  ),
+  clipboard: (
+    <>
+      <rect {...S} fill="#CFE3D6" x="12" y="10" width="40" height="48" rx="6" />
+      <rect {...S} fill="#FFFDF9" x="22" y="5" width="20" height="10" rx="3" />
+      <path {...S} d="M20 46H44" />
+      <Face x={32} y={28} />
+    </>
+  ),
+  calendar: (
+    <>
+      <rect {...S} fill="#FFFDF9" x="8" y="12" width="48" height="44" rx="7" />
+      <path {...S} fill="#FF8F6B" d="M8 19A7 7 0 0 1 15 12H49A7 7 0 0 1 56 19V24H8Z" />
+      <path {...S} d="M20 6V16M44 6V16" />
+      <Face x={32} y={37} />
+    </>
+  ),
   now: (
     <>
       <path {...S} fill="none" d="M5 14L10 17M59 14L54 17M32 3V8" />

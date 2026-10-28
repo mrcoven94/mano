@@ -100,10 +100,6 @@ export default function Needs() {
           <div className="nd-panel" key={n.key}>
             <p className="sc-label">Text message</p>
             <p className="bub me rv" style={d(0.05)}>{n.ask}</p>
-            <div className="bub-row rv" style={d(0.6)}>
-              <Mascot tile tone="orange" size={30} className="bub-av" />
-              <p className="bub mano">I can help with that. Here is what I&rsquo;ll do, and I&rsquo;ll check with you before anything is sent.</p>
-            </div>
             <ul className="nd-steps">
               {n.steps.map((s, k) => (
                 <li key={s} className="rv" style={d(1.1 + k * 0.35)}><Check />{s}</li>

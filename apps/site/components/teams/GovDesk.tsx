@@ -27,7 +27,7 @@ const fields: [string, string][] = [
 ];
 
 const approvedLog: [string, string, string?][] = [
-  ["10:42:03", "Approved by J. Park. Covers copy 7f3a c19e."],
+  ["10:42:03", "Approved by J. Park."],
   ["10:42:05", "Opened case 0418 on screen 14"],
   ["10:42:11", "Entered household, income and dates"],
   ["10:42:14", "Attached 4 documents"],
@@ -73,7 +73,6 @@ export default function GovDesk() {
                 <button className="btn btn-pen btn-sm t-pulse" onClick={() => go("approved")}>Approve</button>
                 <button className="btn btn-ghost btn-sm" onClick={() => go("asked")}>Ask for more</button>
               </div>
-              <p className="gd-note">Your approval covers this exact copy, <span className="tr-hash">7f3a c19e</span>. If anything changes, Mano asks again.</p>
             </>
           ) : (
             <div className="gd-done">
@@ -105,7 +104,7 @@ export default function GovDesk() {
         <div className="sc-card gd-log">
           <div className="sc-card-head"><ManoHead>What the agent did</ManoHead><span className="sc-label">Staff can stop it at any keystroke</span></div>
           {phase === "review" ? (
-            <p className="gd-empty">The agent waits. It does not touch your system until a person approves the case.</p>
+            <p className="gd-empty">Nothing entered yet.</p>
           ) : (
             <ol key={phase}>
               {log.map(([ts, text, kind], n) => (

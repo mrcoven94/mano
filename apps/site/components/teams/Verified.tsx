@@ -37,7 +37,7 @@ const CASES = [
   },
 ];
 
-export default function Verified({ id, eyebrow, office }: { id: string; eyebrow: string; office: string }) {
+export default function Verified({ id, office }: { id: string; office: string }) {
   const [k, setK] = useState(0);
   const c = CASES[k];
 
@@ -45,7 +45,6 @@ export default function Verified({ id, eyebrow, office }: { id: string; eyebrow:
     <section className="t-vf" aria-labelledby={`${id}-h`}>
       <div className="wrap vf-grid">
         <div>
-          <p className="h-eyebrow">{eyebrow}</p>
           <h2 id={`${id}-h`}>Faster reviews, fewer mistakes, less fraud.</h2>
           <p className="lede">When a case reaches you, the documents are already there. Mano confirms income with banks and payroll, pulls official records and checks that every document agrees. It catches the same person applying twice, and every fact links to where it came from.</p>
           <ul className="open-facts">

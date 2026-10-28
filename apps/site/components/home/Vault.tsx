@@ -93,7 +93,7 @@ export default function Vault() {
           </div>
           <div className="vt-out" key={a} aria-live="polite">
             <p className="rv" style={d(0.05)}><mark style={d(0.2)}>Filled from your vault.</mark></p>
-            <p className="rv vt-out-small" style={d(0.3)}>{app.uses.length} things used, nothing typed twice. Waiting for your yes.</p>
+            <p className="rv vt-out-small" style={d(0.3)}>{app.uses.length} things used, nothing typed twice.</p>
           </div>
         </div>
       </div>

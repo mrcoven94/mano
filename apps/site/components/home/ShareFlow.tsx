@@ -16,7 +16,7 @@ export default function ShareFlow() {
 
       <InView as="ol" className="share-flow" threshold={0.3}>
         <li className="share-step rv" style={d(0.1)}>
-          <p className="share-n"><span>01</span>Dana asks for a pay stub</p>
+          <p className="share-n">Dana asks for a pay stub</p>
           <div className="share-card">
             <p className="sc-label">Request from Northside Family Center</p>
             <p className="share-big">Pay stub, October 24</p>
@@ -27,7 +27,7 @@ export default function ShareFlow() {
           </div>
         </li>
         <li className="share-step rv" style={d(0.5)}>
-          <p className="share-n"><span>02</span>Maria taps Share</p>
+          <p className="share-n">Maria taps Share</p>
           <div className="share-card">
             <p className="share-from"><Mascot tile tone="orange" size={26} />Mano, to Maria</p>
             <p className="share-msg">Dana is asking for your October 24 pay stub for your renewal. Share it with Northside until December 31?</p>
@@ -35,7 +35,7 @@ export default function ShareFlow() {
           </div>
         </li>
         <li className="share-step rv" style={d(0.9)}>
-          <p className="share-n"><span>03</span>The renewal is ready</p>
+          <p className="share-n">The renewal is ready</p>
           <div className="share-card">
             <p className="sc-label">Northside case 0418</p>
             <p className="share-big">Renewal ready to submit</p>

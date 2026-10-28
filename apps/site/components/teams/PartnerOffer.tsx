@@ -57,7 +57,6 @@ export default function PartnerOffer() {
       <div className="po-man">
         <p className="t-who">The partner&rsquo;s manifest</p>
         <figure className="code" aria-label="Example extension manifest">
-          <figcaption><span className="sc-label">rent-reporting.manifest.json</span><span className="sc-label">Written by the partner</span></figcaption>
           <pre className="po-code"><code>{manifest.map(([line, g], n) => <span key={n} className={lineClass(g)}>{line}</span>)}</code></pre>
         </figure>
         <p className="po-key"><span><i />Shown to Maria in plain words</span><span><i className="used" />Shared after she says yes</span></p>
