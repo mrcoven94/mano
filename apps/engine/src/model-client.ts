@@ -196,10 +196,27 @@ export interface ModelClientEnv {
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;
   MODEL_ALLOWLIST_EXTRA?: string;
+  MANO_ENV?: string;
 }
 
-export function createModelClient(env: ModelClientEnv, fetchFn?: typeof fetch): MetaModelClient | StandInModelClient {
-  if (!env.META_MODEL_API_KEY) return new StandInModelClient();
+// Test seam: chat() builds its client through createModelClient, and tests
+// inject a capturing fake here. Production code never sets it.
+let testFactory: ((env: ModelClientEnv) => ModelComplete) | null = null;
+
+export function setModelClientFactoryForTests(factory: ((env: ModelClientEnv) => ModelComplete) | null): void {
+  testFactory = factory;
+}
+
+export function createModelClient(env: ModelClientEnv, fetchFn?: typeof fetch): ModelComplete {
+  if (testFactory) return testFactory(env);
+  if (!env.META_MODEL_API_KEY) {
+    // The stand-in must be an explicit choice: development only. Outside
+    // development with no key, fail loud instead of answering from a fake.
+    if (env.MANO_ENV !== "development") {
+      throw new Error("META_MODEL_API_KEY is not set. Set the key, or MANO_ENV=development for the stand-in.");
+    }
+    return new StandInModelClient();
+  }
   const allowExtra = (env.MODEL_ALLOWLIST_EXTRA ?? "")
     .split(",")
     .map((s) => s.trim())

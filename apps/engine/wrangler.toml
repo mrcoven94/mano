@@ -21,5 +21,6 @@ bucket_name = "mano-files"
 #   wrangler secret put META_MODEL_API_KEY  (reads from stdin)
 #   wrangler secret put ENCRYPTION_KEK_B64
 #   wrangler secret put SESSION_SECRET
+#   wrangler secret put OPERATOR_SECRET  (marks people synthetic via the admin route)
 # Optional model routing (see .dev.vars.example):
 #   CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA

@@ -36,7 +36,7 @@ describe("blocker 7: single flight and reconcile before re-execution", () => {
         await gate;
         return inner.execute(req);
       },
-      check: (k) => inner.check(k),
+      check: (k, p) => inner.check(k, p),
     };
     const gw = new ActionGateway(new MemoryApprovalStore(), slow, {
       policyOverrides: { submit: "allow" },
@@ -64,7 +64,7 @@ describe("blocker 7: single flight and reconcile before re-execution", () => {
       },
       async check() {
         events.push("check");
-        return null;
+        return { found: false as const };
       },
     };
     const gw = new ActionGateway(new MemoryApprovalStore(), flaky, {

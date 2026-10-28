@@ -1,5 +1,9 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { mintSessionToken } from "../src/auth.js";
+
+// Must match the SESSION_SECRET binding in vitest.config.ts.
+const TEST_SESSION_SECRET = "test-session-secret-not-real";
 import {
   ActionGateway,
   InMemoryExecutor,
@@ -76,12 +80,13 @@ describe("item 13: enforced link checks", () => {
   });
 
   it("refuses invalid URLs on the check endpoint without fetching", async () => {
+    const token = await mintSessionToken({ kind: "person", sub: "i13maria" }, TEST_SESSION_SECRET);
     const res = await SELF.fetch("https://mano.test/api/check-link", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ url: "not a url", forDisplay: false }),
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
     const body = (await res.json()) as { allowed: boolean };
     expect(body.allowed).toBe(false);
   });

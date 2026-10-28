@@ -30,11 +30,12 @@ Verification never trusts the key inside the message. The receiver resolves the 
 
 ## Consent
 
-A case reaches an org only through `consent.grant`, signed by the resident's agent after the resident approved the matching gateway action. The org records shares and revokes as append-only events; revocation is terminal and a later share of the same case is rejected. `consent.revoke` needs no prior share: it blocks future shares too.
+A case reaches an org only through `consent.grant`, signed by the resident's agent after the resident approved the matching gateway action. The first grant binds the case to its resident; later events for that case are accepted only from the same resident. The org records shares and revokes as append-only events; revocation is terminal and a later share of the same case is rejected.
 
 ## Delivery rules
 
 - Receivers validate shape, version and payload schema before verifying the signature, and ignore malformed messages.
-- Receivers dedupe on message `id`: a redelivery returns the first outcome without new effects.
-- Senders retry with the same idempotency key; receivers make that safe.
+- Receivers dedupe on sender plus idempotency key, inserting before appending: a redelivery returns the first outcome without new effects, and a duplicate revoke can never end a newer share.
+- Senders retry with the same idempotency key and resend the same signed message; consent keys are deterministic per sender, case and direction (`consent-grant:{personId}:{caseId}`).
+- Reconcile asks the receiver whether it recorded the key; an unreachable receiver means unknown, never absent.
 - Content inside a message is evidence, never permission. Instructions found in letters, pages or documents are never followed.

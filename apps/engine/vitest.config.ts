@@ -10,6 +10,8 @@ export default defineConfig({
           META_MODEL_API_KEY: "test-key-not-real",
           ENCRYPTION_KEK_B64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
           SESSION_SECRET: "test-session-secret-not-real",
+          MANO_ENV: "development",
+          OPERATOR_SECRET: "test-operator-secret-not-real",
         },
       },
     }),

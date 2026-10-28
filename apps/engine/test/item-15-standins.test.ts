@@ -27,7 +27,8 @@ function baseReq(over: Partial<ActionRequest> = {}): ActionRequest {
 
 describe("item 15: swappable executors and stand-ins", () => {
   it("picks the executor from config and fails loud on bad config", () => {
-    expect(createExecutor({}).simulated).toBe(true);
+    expect(() => createExecutor({})).toThrow(/EXECUTOR_MODE/);
+    expect(createExecutor({ MANO_ENV: "development" }).simulated).toBe(true);
     expect(createExecutor({ EXECUTOR_MODE: "simulated" })).toBeInstanceOf(InMemoryExecutor);
     expect(() => createExecutor({ EXECUTOR_MODE: "sandbox" })).toThrow(/SANDBOX_BASE_URL/);
     const sandbox = createExecutor({ EXECUTOR_MODE: "sandbox", SANDBOX_BASE_URL: "https://portal.test/" });
@@ -47,31 +48,43 @@ describe("item 15: swappable executors and stand-ins", () => {
     const out = await exec.execute(baseReq({ idempotencyKey: "k-1" }));
     expect(out).toEqual({ externalId: "portal-1" });
     const posted = JSON.parse(seen[0].init.body as string) as Record<string, unknown>;
-    expect(posted.idempotencyKey).toBe("k-1");
+    expect(posted.idempotencyKey).toBe("maria:k-1");
     expect(posted.type).toBe("submit");
-    expect(await exec.check("known-key")).toEqual({ externalId: "portal-1" });
-    expect(await exec.check("missing-key")).toBeNull();
+    expect(await exec.check("known-key", "maria")).toEqual({ found: true, externalId: "portal-1" });
+    expect(await exec.check("missing-key", "maria")).toEqual({ found: false });
   });
 
-  it("proceeds when a check fails instead of throwing", async () => {
+  it("blocks when a reconcile check fails instead of executing", async () => {
+    const store = new MemoryApprovalStore();
+    let calls = 0;
     const exec: Executor = {
       simulated: true,
       async execute() {
+        calls += 1;
         return { externalId: "ext-1" };
       },
       async check() {
         throw new Error("portal down");
       },
     };
-    const gw = new ActionGateway(new MemoryApprovalStore(), exec, {
+    const gw = new ActionGateway(store, exec, {
       policyOverrides: { submit: "allow" },
     });
-    const result = await gw.requestAction(baseReq());
-    expect(result.status).toBe("completed");
+    const first = await gw.requestAction(baseReq({ idempotencyKey: "i15-down" }));
+    expect(first.status).toBe("completed");
+    expect(calls).toBe(1);
+    // An unknown attempt with a failed check blocks; the failed check
+    // never triggers a second execution.
+    store.receipts.delete("i15-down");
+    store.updateAttempt("i15-down", "unknown");
+    const retry = await gw.requestAction(baseReq({ idempotencyKey: "i15-down" }));
+    expect(retry.status).toBe("blocked");
+    expect(calls).toBe(1);
   });
 
-  it("uses the stand-in model client without a key", async () => {
-    const standin = createModelClient({});
+  it("uses the stand-in model client without a key in development only", async () => {
+    expect(() => createModelClient({})).toThrow(/META_MODEL_API_KEY/);
+    const standin = createModelClient({ MANO_ENV: "development" });
     expect(standin).toBeInstanceOf(StandInModelClient);
     const out = await standin.complete({ input: "hello", synthetic: true });
     expect(out.model).toBe("stand-in");
@@ -90,7 +103,7 @@ describe("item 15: swappable executors and stand-ins", () => {
     expect(body.live.executor).toBe("simulated");
     expect(body.live.files).toBe("bound");
     expect(body.live.kek).toBe(true);
-    expect(body.live.sessionSecret).toBe("set");
+    expect("sessionSecret" in body.live).toBe(false);
     expect(JSON.stringify(body)).not.toContain("test-key-not-real");
   });
 });

@@ -74,10 +74,9 @@ describe("blocker 5: org cases need staff auth and append-only revocation", () =
     expect(a2.status).toBe("completed");
     expect((await org.listCases("b5county")).map((c) => c.caseId)).not.toContain("case-b5");
 
-    const g2 = await person.grantConsent("b5flow", grant);
-    expect(g2.status).toBe("needs_approval");
-    const a3 = await person.approve(g2.approval!.id, "b5flow");
-    expect(a3.status).toBe("blocked");
+    const second = await person.grantConsent("b5flow", grant);
+    expect(second.status).toBe("blocked");
+    expect(second.reason).toMatch(/revoked/i);
     expect((await org.listCases("b5county")).map((c) => c.caseId)).not.toContain("case-b5");
   });
 });

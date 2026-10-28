@@ -1,9 +1,9 @@
-import type { ActionRequest, Executor } from "./types.js";
-import { TimeoutError } from "./types.js";
+import type { ActionRequest, CheckOutcome, Executor } from "./types.js";
+import { DefiniteFailureError, TimeoutError } from "./types.js";
 
 // In-memory stand-in: records calls, invents external IDs, and can fail
 // once with a timeout for reconcile tests. Receipts are always labeled
-// simulated so a drill never reads as a real filing.
+// simulated so a drill never reads as real filing.
 export class InMemoryExecutor implements Executor {
   readonly simulated = true;
   calls: ActionRequest[] = [];
@@ -24,14 +24,17 @@ export class InMemoryExecutor implements Executor {
     return { externalId };
   }
 
-  async check(idempotencyKey: string) {
-    return this.completed.get(idempotencyKey) ?? null;
+  async check(idempotencyKey: string, _personId: string): Promise<CheckOutcome> {
+    const found = this.completed.get(idempotencyKey);
+    return found ? { found: true, externalId: found.externalId } : { found: false };
   }
 }
 
 // Executor against the sandbox agency portal (owned by the Spine session).
 // Contract: POST {base}/v1/actions with the action JSON returns
-// {externalId}; the portal dedupes on idempotencyKey. GET
+// {externalId}; the portal dedupes on idempotencyKey, which is scoped as
+// "<personId>:<key>". When the gateway verified a document, the post
+// carries document: {hash, contentB64}. GET
 // {base}/v1/actions/by-key/{key} returns {externalId} or 404. Receipts
 // from this executor are real filings into the sandbox, never simulated.
 export class SandboxExecutor implements Executor {
@@ -44,24 +47,36 @@ export class SandboxExecutor implements Executor {
     private fetchFn: typeof fetch = fetch,
   ) {}
 
+  private downstreamKey(req: ActionRequest): string {
+    return `${req.personId}:${req.idempotencyKey}`;
+  }
+
   async execute(req: ActionRequest): Promise<{ externalId: string }> {
     this.calls.push(req);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
+      const body: Record<string, unknown> = {
+        idempotencyKey: this.downstreamKey(req),
+        type: req.type,
+        recipient: req.recipient,
+        purpose: req.purpose,
+        payload: req.payload,
+      };
+      if (req.document) body.document = { hash: req.document.hash, contentB64: req.document.bytesB64 };
       const res = await this.fetchFn(`${this.baseUrl}/v1/actions`, {
         method: "POST",
         signal: controller.signal,
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          idempotencyKey: req.idempotencyKey,
-          type: req.type,
-          recipient: req.recipient,
-          purpose: req.purpose,
-          payload: req.payload,
-        }),
+        body: JSON.stringify(body),
       });
       clearTimeout(timer);
+      if (res.status === 429) throw new Error(`Sandbox portal is rate limited: ${res.status}`);
+      if (res.status >= 400 && res.status < 500) {
+        // The portal answered and refused: the action definitely did not
+        // happen, so the gateway records a clean failed attempt.
+        throw new DefiniteFailureError(`Sandbox portal rejected the action: ${res.status}`);
+      }
       if (!res.ok) throw new Error(`Sandbox portal failed: ${res.status}`);
       const data = (await res.json()) as { externalId?: string };
       if (!data.externalId) throw new Error("Sandbox portal returned no external ID.");
@@ -75,19 +90,19 @@ export class SandboxExecutor implements Executor {
     }
   }
 
-  async check(idempotencyKey: string): Promise<{ externalId: string } | null> {
+  async check(idempotencyKey: string, personId: string): Promise<CheckOutcome> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       const res = await this.fetchFn(
-        `${this.baseUrl}/v1/actions/by-key/${encodeURIComponent(idempotencyKey)}`,
+        `${this.baseUrl}/v1/actions/by-key/${encodeURIComponent(`${personId}:${idempotencyKey}`)}`,
         { signal: controller.signal },
       );
       clearTimeout(timer);
-      if (res.status === 404) return null;
+      if (res.status === 404) return { found: false };
       if (!res.ok) throw new Error(`Sandbox portal check failed: ${res.status}`);
       const data = (await res.json()) as { externalId?: string };
-      return data.externalId ? { externalId: data.externalId } : null;
+      return data.externalId ? { found: true, externalId: data.externalId } : { found: false };
     } catch (err) {
       clearTimeout(timer);
       if (err instanceof Error && err.name === "AbortError") {
@@ -98,12 +113,21 @@ export class SandboxExecutor implements Executor {
   }
 }
 
-// Picks the executor from config. Unset means simulated (local default,
-// always labeled). Sandbox mode requires the portal URL; anything else
-// fails loud at construction instead of silently simulating.
-export function createExecutor(env: { EXECUTOR_MODE?: string; SANDBOX_BASE_URL?: string }): Executor {
-  const mode = env.EXECUTOR_MODE ?? "simulated";
+// Picks the executor from config. Simulated must be an explicit choice:
+// EXECUTOR_MODE=simulated set on purpose, or unset in development. Outside
+// development with no choice made, construction fails loud instead of
+// silently simulating.
+export function createExecutor(env: {
+  EXECUTOR_MODE?: string;
+  SANDBOX_BASE_URL?: string;
+  MANO_ENV?: string;
+}): Executor {
+  const mode = env.EXECUTOR_MODE;
   if (mode === "simulated") return new InMemoryExecutor();
+  if (mode === undefined && env.MANO_ENV === "development") return new InMemoryExecutor();
+  if (mode === undefined) {
+    throw new Error("Set EXECUTOR_MODE=simulated on purpose, or MANO_ENV=development for local stand-ins.");
+  }
   if (mode === "sandbox") {
     if (!env.SANDBOX_BASE_URL) {
       throw new Error("EXECUTOR_MODE is sandbox but SANDBOX_BASE_URL is not set.");

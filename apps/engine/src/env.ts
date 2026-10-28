@@ -5,6 +5,8 @@ export interface Env {
   META_MODEL_API_KEY: string;
   ENCRYPTION_KEK_B64: string;
   SESSION_SECRET?: string;
+  MANO_ENV?: string;
+  OPERATOR_SECRET?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;

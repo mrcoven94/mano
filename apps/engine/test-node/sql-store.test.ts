@@ -28,7 +28,20 @@ function openStorePair() {
   return { first, second };
 }
 
+function attemptFor(a: { idempotencyKey: string; actionType: Approval["actionType"]; recipient: string; personId: string }) {
+  return {
+    key: a.idempotencyKey,
+    status: "in_flight" as const,
+    updatedAt: new Date().toISOString(),
+    requestHash: "content-1",
+    actionType: a.actionType,
+    recipient: a.recipient,
+    personId: a.personId,
+  };
+}
+
 function pendingApproval(over: Partial<Approval> = {}): Approval {
+  const now = new Date();
   return {
     id: `appr-${crypto.randomUUID()}`,
     actionType: "submit",
@@ -43,9 +56,9 @@ function pendingApproval(over: Partial<Approval> = {}): Approval {
     requestJson: JSON.stringify({ type: "submit" }),
     requestHash: "hash",
     problems: [],
-    createdAt: new Date().toISOString(),
-    remindAt: new Date().toISOString(),
-    expiresAt: new Date().toISOString(),
+    createdAt: now.toISOString(),
+    remindAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 3600_000).toISOString(),
     escalated: false,
     ...over,
   };
@@ -64,6 +77,7 @@ describe("blocker 6: approvals, attempts and receipts survive eviction", () => {
       status: "completed",
       externalId: "ext-1",
       simulated: true,
+      requestHash: "content-1",
       createdAt: new Date().toISOString(),
     });
 
@@ -76,14 +90,15 @@ describe("blocker 6: approvals, attempts and receipts survive eviction", () => {
     const { first, second } = openStorePair();
     const approval = pendingApproval();
     first.putApproval(approval);
-    const attempt = { key: approval.idempotencyKey, status: "in_flight" as const, updatedAt: new Date().toISOString() };
+    const attempt = attemptFor(approval);
+    const guard = { personId: "maria", requestHash: "hash", now: new Date() };
 
-    const consumed = first.consumeApprovalAndClaim(approval.id, "maria", attempt);
+    const consumed = first.consumeApprovalAndClaim(approval.id, "maria", attempt, guard);
     expect(consumed?.status).toBe("approved");
     expect(second.getAttempt(approval.idempotencyKey)?.status).toBe("in_flight");
 
     // A second consumer gets nothing: the approval is no longer pending.
-    expect(second.consumeApprovalAndClaim(approval.id, "maria", attempt)).toBeNull();
+    expect(second.consumeApprovalAndClaim(approval.id, "maria", attempt, guard)).toBeNull();
     expect(first.getApproval(approval.id)?.status).toBe("approved");
   });
 
@@ -91,7 +106,7 @@ describe("blocker 6: approvals, attempts and receipts survive eviction", () => {
     const { first } = openStorePair();
     const approval = pendingApproval();
     first.putApproval(approval);
-    const unknown = { key: approval.idempotencyKey, status: "unknown" as const, updatedAt: new Date().toISOString() };
+    const unknown = { ...attemptFor(approval), status: "unknown" as const };
     expect(first.insertAttempt(unknown)).toBe(true);
 
     expect(first.adoptUnknownAttempt(approval.idempotencyKey, new Date())).toBe(true);
@@ -103,10 +118,16 @@ describe("blocker 6: approvals, attempts and receipts survive eviction", () => {
     const { first } = openStorePair();
     const approval = pendingApproval();
     first.putApproval(approval);
-    const attempt = { key: approval.idempotencyKey, status: "in_flight" as const, updatedAt: new Date().toISOString() };
+    const attempt = attemptFor(approval);
     expect(first.insertAttempt(attempt)).toBe(true);
 
-    expect(first.consumeApprovalAndClaim(approval.id, "maria", attempt)).toBeNull();
+    expect(
+      first.consumeApprovalAndClaim(approval.id, "maria", attempt, {
+        personId: "maria",
+        requestHash: "hash",
+        now: new Date(),
+      }),
+    ).toBeNull();
     expect(first.getApproval(approval.id)?.status).toBe("pending");
   });
 });

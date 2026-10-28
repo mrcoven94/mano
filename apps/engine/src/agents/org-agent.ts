@@ -40,10 +40,29 @@ export class OrgAgent extends Agent<Env, OrgState> {
       // overwritten by a later share of the same case.
       sql.exec(`CREATE TABLE IF NOT EXISTS case_events(id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL, event TEXT NOT NULL, person_id TEXT NOT NULL, purpose TEXT NOT NULL, message_id TEXT NOT NULL, at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS agent_keys(agent_id TEXT PRIMARY KEY, public_key_b64 TEXT NOT NULL, first_seen TEXT NOT NULL)`);
-      sql.exec(`CREATE TABLE IF NOT EXISTS processed_messages(message_id TEXT PRIMARY KEY)`);
+      // Dedupe on sender plus idempotency key: retries resend the same
+      // key, so a duplicate revoke can never end a newer share.
+      const processedCols = sql.exec(`PRAGMA table_info(processed_messages)`).toArray() as unknown as {
+        name: string;
+      }[];
+      if (processedCols.length > 0 && !processedCols.some((c) => c.name === "sender_agent_id")) {
+        sql.exec(`DROP TABLE processed_messages`);
+      }
+      sql.exec(`CREATE TABLE IF NOT EXISTS processed_messages(sender_agent_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, PRIMARY KEY (sender_agent_id, idempotency_key))`);
+      // Each case is bound to the resident who first shared it. Only that
+      // resident's later messages can change it.
+      sql.exec(`CREATE TABLE IF NOT EXISTS case_owners(case_id TEXT PRIMARY KEY, person_id TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT, detail TEXT, created_at TEXT)`);
       const stored = await ctx.storage.get<string>("orgId");
       if (stored) this.orgId = stored;
+      // The keypair is created here, inside blockConcurrencyWhile, so two
+      // first calls can never generate two different keys.
+      const existingKey = await ctx.storage.get<string>("agentPublicKeyB64");
+      if (!existingKey) {
+        const fresh = await generateAgentKeypair();
+        await ctx.storage.put("agentPrivateKeyJwk", fresh.privateJwk);
+        await ctx.storage.put("agentPublicKeyB64", fresh.publicKeyB64);
+      }
     });
   }
 
@@ -75,15 +94,13 @@ export class OrgAgent extends Agent<Env, OrgState> {
     this.setState({ orgId: this.orgId, cases: this.activeCases() });
   }
 
-  // Public key of this agent, for org-signed messages. Stored beside the
-  // private key in the agent's own storage.
+  // Public key of this agent, for org-signed messages. Created once in
+  // the constructor; this read never generates, so concurrent first calls
+  // cannot diverge.
   async getPublicKey(): Promise<string> {
     const stored = await this.ctx.storage.get<string>("agentPublicKeyB64");
-    if (stored) return stored;
-    const fresh = await generateAgentKeypair();
-    await this.ctx.storage.put("agentPrivateKeyJwk", fresh.privateJwk);
-    await this.ctx.storage.put("agentPublicKeyB64", fresh.publicKeyB64);
-    return fresh.publicKeyB64;
+    if (!stored) throw new Error("Agent keypair is missing.");
+    return stored;
   }
 
   // Accepts a signed consent message delivered by a person's agent. Only
@@ -100,18 +117,14 @@ export class OrgAgent extends Agent<Env, OrgState> {
     if (!addressed) {
       return { accepted: false, reason: "This message is not addressed to an org agent." };
     }
-    if (!this.orgId) {
-      this.orgId = addressed[1];
-      await this.ctx.storage.put("orgId", this.orgId);
-    } else if (this.orgId !== addressed[1]) {
+    // A pinned ID rejects anything else, but pinning waits until a
+    // signature verifies below: an unverified message never sets it.
+    if (this.orgId && this.orgId !== addressed[1]) {
       return { accepted: false, reason: "This message is addressed to a different org." };
     }
     if (!msg.approvedByHumanId) {
       return { accepted: false, reason: "Consent needs a person's approval." };
     }
-    const seen = this.db().exec("SELECT message_id FROM processed_messages WHERE message_id = ?", msg.id).toArray();
-    if (seen.length > 0) return { accepted: true, duplicate: true };
-
     const expected = await this.keyForSender(msg.fromAgentId);
     if (!expected) {
       return { accepted: false, reason: `Unknown sender: ${msg.fromAgentId}.` };
@@ -119,14 +132,24 @@ export class OrgAgent extends Agent<Env, OrgState> {
     if (!(await verifyMessage(msg, expected))) {
       return { accepted: false, reason: "Bad consent signature." };
     }
+    if (!this.orgId) {
+      this.orgId = addressed[1];
+      await this.ctx.storage.put("orgId", this.orgId);
+    }
 
     const payload = msg.payload as Record<string, unknown> | null;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       return { accepted: false, reason: "Consent payload must be an object." };
     }
+    const sender = senderPerson(msg.fromAgentId);
+    const owner = this.caseOwner(msg.caseId, msg.type === "consent.grant" ? sender : null);
+    if (owner !== sender) {
+      return { accepted: false, reason: "Only the resident who shared this case can change it." };
+    }
     const now = new Date().toISOString();
     if (msg.type === "consent.revoke") {
-      this.appendEvent(msg.caseId, "revoke", senderPerson(msg.fromAgentId), "", msg.id, now);
+      if (!this.recordDelivery(msg.fromAgentId, msg.idempotencyKey)) return { accepted: true, duplicate: true };
+      this.appendEvent(msg.caseId, "revoke", sender, "", msg.id, now);
       this.audit("consent.revoke", { caseId: msg.caseId, from: msg.fromAgentId });
       this.syncState();
       return { accepted: true };
@@ -141,10 +164,47 @@ export class OrgAgent extends Agent<Env, OrgState> {
     if (revoked.length > 0) {
       return { accepted: false, reason: `Case ${msg.caseId} was revoked and cannot be shared again.` };
     }
-    this.appendEvent(msg.caseId, "share", senderPerson(msg.fromAgentId), payload.purpose, msg.id, now);
+    if (!this.recordDelivery(msg.fromAgentId, msg.idempotencyKey)) return { accepted: true, duplicate: true };
+    this.appendEvent(msg.caseId, "share", sender, payload.purpose, msg.id, now);
     this.audit("consent.grant", { caseId: msg.caseId, from: msg.fromAgentId });
     this.syncState();
     return { accepted: true };
+  }
+
+  // The resident a case is bound to. A grant binds an unbound case to its
+  // sender; every later message must come from that same resident.
+  private caseOwner(caseId: string, bindTo: string | null): string | null {
+    if (bindTo) {
+      this.db().exec("INSERT OR IGNORE INTO case_owners VALUES (?, ?)", caseId, bindTo);
+    }
+    const rows = this.db().exec("SELECT person_id FROM case_owners WHERE case_id = ?", caseId).toArray() as unknown as {
+      person_id: string;
+    }[];
+    return rows[0]?.person_id ?? null;
+  }
+
+  // Records a delivery for dedupe. Insert-first with no preceding select:
+  // a constraint failure means a concurrent delivery recorded this same
+  // sender and key, so this one is a duplicate. Runs with no await
+  // between the checks above and the append below.
+  private recordDelivery(fromAgentId: string, idempotencyKey: string): boolean {
+    try {
+      this.db().exec("INSERT INTO processed_messages VALUES (?, ?)", fromAgentId, idempotencyKey);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Whether this org recorded a delivery under a sender and key. The
+  // person's agent asks this to reconcile a share; agent-to-agent only.
+  async hasConsentRecord(fromAgentId: string, idempotencyKey: string): Promise<boolean> {
+    const rows = this.db().exec(
+      "SELECT idempotency_key FROM processed_messages WHERE sender_agent_id = ? AND idempotency_key = ?",
+      fromAgentId,
+      idempotencyKey,
+    ).toArray();
+    return rows.length > 0;
   }
 
   private async keyForSender(fromAgentId: string): Promise<string | null> {
@@ -178,7 +238,6 @@ export class OrgAgent extends Agent<Env, OrgState> {
       "INSERT INTO case_events(case_id, event, person_id, purpose, message_id, at) VALUES (?,?,?,?,?,?)",
       caseId, event, personId, purpose, messageId, at,
     );
-    this.db().exec("INSERT OR IGNORE INTO processed_messages VALUES (?)", messageId);
   }
 
   async listCases(verifiedOrg: string): Promise<SharedCase[]> {
