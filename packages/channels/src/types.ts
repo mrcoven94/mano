@@ -23,6 +23,11 @@ export interface EventAttachment {
   name?: string;
 }
 
+export interface EventGroup {
+  id: string;
+  name: string | null;
+}
+
 export interface NormalizedEvent {
   id: string;
   kind: NormalizedEventKind;
@@ -31,6 +36,10 @@ export interface NormalizedEvent {
   channelType: string | null;
   chatId: string | null;
   messageId: string | null;
+  // Set when the event belongs to a group chat. The worker records group
+  // events and answers 1:1 chats only, so a private reply can never land
+  // in a group.
+  group: EventGroup | null;
   // The other party's handle (phone or email), normalized. Null when the
   // event is not about one handle.
   handle: string | null;
@@ -40,12 +49,19 @@ export interface NormalizedEvent {
   // Machine-readable provider code on failures and refusals.
   errorCode: string | null;
   errorMessage: string | null;
-  occurredAtMs: number;
+  // Null when the provider gave no usable timestamp. The worker never
+  // treats an undated event as new: undated inbound is quarantined, and
+  // undated events older than a deletion cutoff are dropped.
+  occurredAtMs: number | null;
 }
 
 export type OutboundState =
   | "planned"
   | "sending"
+  // The send may or may not have landed: timeout, network error, or 5xx
+  // after retries. Never terminal: the worker looks the message up (or
+  // replays its idempotency key) before deciding.
+  | "uncertain"
   | "sent"
   | "delivered"
   | "read"
@@ -55,12 +71,30 @@ export type OutboundState =
 export const OUTBOUND_RANK: Record<OutboundState, number> = {
   planned: 0,
   sending: 1,
-  sent: 2,
-  delivered: 3,
-  read: 4,
-  failed: 5,
-  refused: 6,
+  uncertain: 2,
+  sent: 3,
+  delivered: 4,
+  read: 5,
+  failed: 6,
+  refused: 7,
 };
+
+// The lifecycle state a delivery event carries, or null when the event
+// kind says nothing about a send.
+export function lifecycleStateFor(kind: NormalizedEventKind): OutboundState | null {
+  switch (kind) {
+    case "message.sent":
+      return "sent";
+    case "message.delivered":
+      return "delivered";
+    case "message.read":
+      return "read";
+    case "message.failed":
+      return "failed";
+    default:
+      return null;
+  }
+}
 
 export interface ChannelSendInput {
   to: string;

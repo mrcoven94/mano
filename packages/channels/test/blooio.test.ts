@@ -76,6 +76,40 @@ describe("parseBlooioEvent", () => {
     expect(parseBlooioEvent({ nope: true })).toBeNull();
     expect(parseBlooioEvent("junk")).toBeNull();
   });
+
+  it("keeps group metadata on the event", () => {
+    const solo = parseBlooioEvent(webhookEnvelope())!;
+    expect(solo.group).toBeNull();
+    const grouped = parseBlooioEvent(webhookEnvelope({ group: { group_id: "grp_1", name: "Family" } }))!;
+    expect(grouped.group).toEqual({ id: "grp_1", name: "Family" });
+  });
+
+  it("parses numeric and ISO timestamps, null when missing", () => {
+    expect(parseBlooioEvent(webhookEnvelope())!.occurredAtMs).toBe(1_790_000_000_000);
+    const seconds = parseBlooioEvent({
+      id: "evt_s",
+      type: "message.received",
+      occurred_at: 1_790_000_000,
+      data: { channel_id: CHANNEL_ID },
+    })!;
+    expect(seconds.occurredAtMs).toBe(1_790_000_000_000);
+    const iso = parseBlooioEvent({
+      id: "evt_iso",
+      type: "message.received",
+      occurred_at: "2026-10-28T12:00:00.000Z",
+      data: { channel_id: CHANNEL_ID },
+    })!;
+    expect(iso.occurredAtMs).toBe(Date.parse("2026-10-28T12:00:00.000Z"));
+    const missing = parseBlooioEvent({ id: "evt_none", type: "message.received", data: { channel_id: CHANNEL_ID } })!;
+    expect(missing.occurredAtMs).toBeNull();
+    const junk = parseBlooioEvent({
+      id: "evt_junk",
+      type: "message.received",
+      occurred_at: "not a time",
+      data: { channel_id: CHANNEL_ID },
+    })!;
+    expect(junk.occurredAtMs).toBeNull();
+  });
 });
 
 describe("BlooioChannel.send", () => {

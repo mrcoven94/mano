@@ -11,12 +11,36 @@ permissions:
   contents: read
 jobs:
   deploy:
+    if: github.ref_name == 'main'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/channels
     steps:
       - uses: actions/checkout@v7
+      - name: Verify required secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          check() {
+            if [ -z "$1" ]; then echo "::error::missing required secret $2"; missing=1; fi
+          }
+          check "$CLOUDFLARE_API_TOKEN" CLOUDFLARE_API_TOKEN
+          check "$CLOUDFLARE_ACCOUNT_ID" CLOUDFLARE_ACCOUNT_ID
+          check "$BLOOIO_API_KEY" BLOOIO_API_KEY
+          check "$BLOOIO_CHANNEL_ID" BLOOIO_CHANNEL_ID
+          check "$MANO_HANDLE_PEPPER" MANO_HANDLE_PEPPER
+          check "$ENCRYPTION_KEK_B64" ENCRYPTION_KEK_B64
+          check "$META_MODEL_API_KEY" META_MODEL_API_KEY
+          exit $missing
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BLOOIO_API_KEY: ${{ secrets.BLOOIO_API_KEY }}
+          BLOOIO_CHANNEL_ID: ${{ secrets.BLOOIO_CHANNEL_ID }}
+          MANO_HANDLE_PEPPER: ${{ secrets.MANO_HANDLE_PEPPER }}
+          ENCRYPTION_KEK_B64: ${{ secrets.ENCRYPTION_KEK_B64 }}
+          META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -27,6 +51,7 @@ jobs:
         working-directory: .
       - name: Create queue and bucket
         run: |
+          set -euo pipefail
           pnpm exec wrangler queues create mano-channel-events || true
           pnpm exec wrangler queues create mano-channel-events-dlq || true
           pnpm exec wrangler r2 bucket create mano-channel-files || true
@@ -39,9 +64,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Set required secrets
         run: |
-          for name in BLOOIO_API_KEY BLOOIO_CHANNEL_ID MANO_HANDLE_PEPPER ENCRYPTION_KEK_B64 META_MODEL_API_KEY; do
-            printenv "$name" | pnpm exec wrangler secret put "$name"
-          done
+          set -euo pipefail
+          printf '%s' "$BLOOIO_API_KEY" | pnpm exec wrangler secret put BLOOIO_API_KEY
+          printf '%s' "$BLOOIO_CHANNEL_ID" | pnpm exec wrangler secret put BLOOIO_CHANNEL_ID
+          printf '%s' "$MANO_HANDLE_PEPPER" | pnpm exec wrangler secret put MANO_HANDLE_PEPPER
+          printf '%s' "$ENCRYPTION_KEK_B64" | pnpm exec wrangler secret put ENCRYPTION_KEK_B64
+          printf '%s' "$META_MODEL_API_KEY" | pnpm exec wrangler secret put META_MODEL_API_KEY
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -55,9 +83,17 @@ jobs:
       # webhook fails closed with 500.
       - name: Set webhook secret and optional vars
         run: |
-          for name in BLOOIO_WEBHOOK_SECRET CF_ACCOUNT_ID AI_GATEWAY_ID AI_GATEWAY_PROVIDER MANO_TEXT_DAILY_BUDGET_USD MANO_TEXT_USD_PER_1K_CHARS; do
-            if [ -n "$(printenv "$name")" ]; then printenv "$name" | pnpm exec wrangler secret put "$name"; fi
-          done
+          set -euo pipefail
+          maybe() {
+            if [ -n "$1" ]; then printf '%s' "$1" | pnpm exec wrangler secret put "$2"; fi
+          }
+          maybe "$BLOOIO_WEBHOOK_SECRET" BLOOIO_WEBHOOK_SECRET
+          maybe "$CF_ACCOUNT_ID" CF_ACCOUNT_ID
+          maybe "$AI_GATEWAY_ID" AI_GATEWAY_ID
+          maybe "$AI_GATEWAY_PROVIDER" AI_GATEWAY_PROVIDER
+          maybe "$MANO_TEXT_DAILY_BUDGET_USD" MANO_TEXT_DAILY_BUDGET_USD
+          maybe "$MANO_TEXT_USD_PER_1K_CHARS" MANO_TEXT_USD_PER_1K_CHARS
+          maybe "$BLOOIO_MEDIA_HOSTS" BLOOIO_MEDIA_HOSTS
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -67,3 +103,4 @@ jobs:
           AI_GATEWAY_PROVIDER: ${{ secrets.AI_GATEWAY_PROVIDER }}
           MANO_TEXT_DAILY_BUDGET_USD: ${{ secrets.MANO_TEXT_DAILY_BUDGET_USD }}
           MANO_TEXT_USD_PER_1K_CHARS: ${{ secrets.MANO_TEXT_USD_PER_1K_CHARS }}
+          BLOOIO_MEDIA_HOSTS: ${{ secrets.BLOOIO_MEDIA_HOSTS }}

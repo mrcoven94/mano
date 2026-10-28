@@ -48,4 +48,19 @@ describe("verifySignature", () => {
     expect(await verifySignature(BODY, "nope", SECRET, NOW)).toMatchObject({ ok: false, failure: "bad_format" });
     expect(await verifySignature(BODY, "t=abc,v1=12", SECRET, NOW)).toMatchObject({ ok: false, failure: "bad_format" });
   });
+
+  it("verifies over raw bytes and catches a flipped byte", async () => {
+    const body = JSON.stringify({ id: "evt_byte_1", type: "message.received", text: "Héllo wörld ✓" });
+    const bytes = new TextEncoder().encode(body);
+    const v1 = await computeSignatureHex(SECRET, String(NOW), bytes);
+    expect(await verifySignature(bytes, `t=${NOW},v1=${v1}`, SECRET, NOW)).toMatchObject({ ok: true });
+    // The string and byte forms sign identically.
+    expect(await computeSignatureHex(SECRET, String(NOW), body)).toBe(v1);
+    const tampered = new Uint8Array(bytes);
+    tampered[tampered.length - 2] ^= 0x01;
+    expect(await verifySignature(tampered, `t=${NOW},v1=${v1}`, SECRET, NOW)).toMatchObject({
+      ok: false,
+      failure: "mismatch",
+    });
+  });
 });

@@ -23,6 +23,13 @@ max_batch_size = 10
 max_retries = 5
 dead_letter_queue = "mano-channel-events-dlq"
 
+# The dead-letter consumer records the event ID and drops the body, so
+# failed events and their message text do not sit in the DLQ forever.
+[[queues.consumers]]
+queue = "mano-channel-events-dlq"
+max_batch_size = 10
+max_retries = 0
+
 [[r2_buckets]]
 binding = "FILES"
 bucket_name = "mano-channel-files"
@@ -36,4 +43,4 @@ crons = ["* * * * *"]
 # Optional tuning (plain vars or secrets):
 #   CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER,
 #   MANO_TEXT_DAILY_BUDGET_USD, MANO_TEXT_USD_PER_1K_CHARS,
-#   TURN_BATCH_MS, TURN_INTERIM_MS
+#   TURN_BATCH_MS, TURN_INTERIM_MS, BLOOIO_MEDIA_HOSTS

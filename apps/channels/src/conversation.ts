@@ -9,12 +9,18 @@ import {
   StandInResponder,
   buildModelBaseUrl,
   createLogger,
+  hashChatId,
   type Channel,
   type Logger,
   type NormalizedEvent,
   type Responder,
 } from "@mano/channels";
-import { DEFAULT_RUNNER_CONFIG, ConversationRunner, type SpendLedger } from "./runner.js";
+import { DEFAULT_MEDIA_HOSTS, DEFAULT_RUNNER_CONFIG, ConversationRunner, type SpendLedger } from "./runner.js";
+
+export function parseMediaHosts(raw: string | undefined): string[] {
+  const hosts = (raw ?? "").split(",").map((h) => h.trim().toLowerCase()).filter((h) => h.length > 0);
+  return hosts.length > 0 ? hosts : [...DEFAULT_MEDIA_HOSTS];
+}
 import { R2FileStore, conversationFilePrefix } from "./files.js";
 import { SqlConversationStore } from "./store-sql.js";
 import { numberEnv, type Env } from "./env.js";
@@ -27,18 +33,33 @@ class StateSpendLedger implements SpendLedger {
     this.stub = stub;
   }
 
-  async check(estimateUsd: number): Promise<{ allowed: boolean; spentUsd: number }> {
-    const res = await this.stub.fetch("https://state/internal/spend-check", {
+  async reserve(key: string, worstUsd: number): Promise<{ allowed: boolean; spentUsd: number }> {
+    const res = await this.stub.fetch("https://state/internal/spend-reserve", {
       method: "POST",
-      body: JSON.stringify({ estimateUsd }),
+      body: JSON.stringify({ key, worstUsd }),
     });
     return (await res.json()) as { allowed: boolean; spentUsd: number };
   }
 
-  async record(usd: number): Promise<void> {
-    await this.stub.fetch("https://state/internal/spend-record", {
+  async settle(key: string, actualUsd: number): Promise<void> {
+    await this.stub.fetch("https://state/internal/spend-settle", {
       method: "POST",
-      body: JSON.stringify({ usd }),
+      body: JSON.stringify({ key, actualUsd }),
+    });
+  }
+
+  async byteReserve(key: string, bytes: number): Promise<{ allowed: boolean; bytesUsed: number }> {
+    const res = await this.stub.fetch("https://state/internal/bytes-reserve", {
+      method: "POST",
+      body: JSON.stringify({ key, bytes }),
+    });
+    return (await res.json()) as { allowed: boolean; bytesUsed: number };
+  }
+
+  async byteSettle(key: string, actualBytes: number): Promise<void> {
+    await this.stub.fetch("https://state/internal/bytes-settle", {
+      method: "POST",
+      body: JSON.stringify({ key, actualBytes }),
     });
   }
 }
@@ -61,7 +82,7 @@ export function buildResponder(env: Env): Responder {
       gatewayId: env.AI_GATEWAY_ID,
       provider: env.AI_GATEWAY_PROVIDER,
     });
-    return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, baseUrl: endpoint.url });
+    return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
   }
   return new StandInResponder();
 }
@@ -70,11 +91,23 @@ export class ConversationDO implements DurableObject {
   private ctx: DurableObjectState;
   private env: Env;
   private logger: Logger;
+  // Serializes turns across requests in one isolate, so an unfinished
+  // row always means the last attempt died rather than a concurrent run.
+  private turnChain: Promise<unknown> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx;
     this.env = env;
     this.logger = createLogger();
+  }
+
+  private runTurnSerialized(handleHash: string): Promise<import("./runner.js").TurnResult> {
+    const next = this.turnChain.then(() => this.runner(handleHash).runner.runDueTurn());
+    this.turnChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   private runner(handleHash: string): { runner: ConversationRunner; channel: Channel; responder: Responder } {
@@ -97,6 +130,7 @@ export class ConversationDO implements DurableObject {
         budgetUsd: numberEnv(this.env.MANO_TEXT_DAILY_BUDGET_USD, DEFAULT_RUNNER_CONFIG.budgetUsd),
         usdPer1kChars: numberEnv(this.env.MANO_TEXT_USD_PER_1K_CHARS, DEFAULT_RUNNER_CONFIG.usdPer1kChars),
         maxInboundAgeMs: DEFAULT_RUNNER_CONFIG.maxInboundAgeMs,
+        mediaHosts: parseMediaHosts(this.env.BLOOIO_MEDIA_HOSTS),
       },
     });
     return { runner, channel, responder };
@@ -110,18 +144,34 @@ export class ConversationDO implements DurableObject {
         return new Response("Bad event.", { status: 400 });
       }
       const { runner } = this.runner(body.handleHash);
-      const result = await runner.handleEvent(body.event as NormalizedEvent, "webhook");
+      const event = body.event as NormalizedEvent;
+      const result = await runner.handleEvent(event, "webhook");
+      // Every event with a chat refreshes the chat route, keyed by hash,
+      // so handle-less delivery receipts find this conversation later.
+      if (event.chatId) {
+        const chat = await hashChatId(event.chatId, this.env.MANO_HANDLE_PEPPER);
+        await globalStateStub(this.env).fetch("https://state/internal/route", {
+          method: "POST",
+          body: JSON.stringify({ chat, handleHash: body.handleHash }),
+        });
+      }
+      const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
       if (result === "queued") {
-        const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
         await this.ctx.storage.setAlarm(Date.now() + batchMs);
+      } else if (result === "duplicate") {
+        // A redelivery while input waits with no alarm means the alarm
+        // fired into a crash or was lost: re-arm it so the turn runs.
+        const store = new SqlConversationStore(this.ctx.storage.sql);
+        if (store.pending().length > 0 && (await this.ctx.storage.getAlarm()) === null) {
+          await this.ctx.storage.setAlarm(Date.now() + batchMs);
+        }
       }
       return Response.json({ result });
     }
     if (request.method === "POST" && url.pathname === "/internal/turn") {
       const body = (await request.json().catch(() => null)) as { handleHash?: unknown } | null;
       if (!body || typeof body.handleHash !== "string") return new Response("Bad turn.", { status: 400 });
-      const { runner } = this.runner(body.handleHash);
-      const result = await runner.runDueTurn();
+      const result = await this.runTurnSerialized(body.handleHash);
       if (result === "waiting") {
         const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
         await this.ctx.storage.setAlarm(Date.now() + batchMs);
@@ -157,7 +207,7 @@ export class ConversationDO implements DurableObject {
     if (request.method === "POST" && url.pathname === "/internal/delete") {
       const body = (await request.json().catch(() => null)) as { handleHash?: unknown } | null;
       if (!body || typeof body.handleHash !== "string") return new Response("Bad delete.", { status: 400 });
-      new SqlConversationStore(this.ctx.storage.sql).wipe();
+      new SqlConversationStore(this.ctx.storage.sql).wipe(Date.now());
       let filesDeleted = 0;
       if (this.env.FILES) {
         filesDeleted = await new R2FileStore(this.env.FILES).deletePrefix(conversationFilePrefix(body.handleHash));
@@ -179,14 +229,14 @@ export class ConversationDO implements DurableObject {
         turn: store.meta().turn,
         introduced: store.meta().introduced,
         pending: store.pending().length,
+        approvals: store.pendingApprovals(Date.now()).length,
       });
     }
     return new Response("Not found.", { status: 404 });
   }
 
   async alarm(): Promise<void> {
-    const { runner } = this.runner(this.ctx.id.name ?? this.ctx.id.toString());
-    const result = await runner.runDueTurn();
+    const result = await this.runTurnSerialized(this.ctx.id.name ?? this.ctx.id.toString());
     if (result === "waiting" || (result === "ran" && new SqlConversationStore(this.ctx.storage.sql).pending().length > 0)) {
       const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
       await this.ctx.storage.setAlarm(Date.now() + batchMs);

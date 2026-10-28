@@ -1,8 +1,13 @@
-// Splits a reply into a few short bubbles at sentence boundaries.
+// Splits a reply into a few short bubbles at sentence boundaries. Every
+// bubble is hard-capped: overflow is cut, never merged into a giant last
+// bubble.
+
+export const MAX_BUBBLES = 4;
+export const MAX_BUBBLE_CHARS = 600;
 
 const SENTENCE_END = /([.!?…]+["”’)]?\s+)/;
 
-export function splitBubbles(text: string, maxBubbles = 4, maxCharsPerBubble = 500): string[] {
+export function splitBubbles(text: string, maxBubbles = MAX_BUBBLES, maxCharsPerBubble = MAX_BUBBLE_CHARS): string[] {
   const clean = text.replace(/\s+/g, " ").trim();
   if (!clean) return [];
   const sentences = clean
@@ -35,6 +40,6 @@ export function splitBubbles(text: string, maxBubbles = 4, maxCharsPerBubble = 5
   if (current) bubbles.push(current);
   if (bubbles.length <= maxBubbles) return bubbles;
   const head = bubbles.slice(0, maxBubbles - 1);
-  head.push(bubbles.slice(maxBubbles - 1).join(" "));
+  head.push(bubbles.slice(maxBubbles - 1).join(" ").slice(0, maxCharsPerBubble).trim());
   return head;
 }

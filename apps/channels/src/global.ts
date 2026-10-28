@@ -1,25 +1,64 @@
 // Global channel state: the reconcile cursor and the daily model spend.
 // One singleton row, in its own Durable Object in the worker and in
-// memory in tests.
-import { DEFAULT_DAILY_BUDGET_USD, budgetAllows, dayKeyFor } from "@mano/channels";
+// memory in tests. Spend is reserved before the model call and settled
+// after, so concurrent conversations cannot overshoot the budget.
+import { DEFAULT_DAILY_BUDGET_USD, GLOBAL_BYTES_DAILY, dayKeyFor } from "@mano/channels";
 
 export interface GlobalStateRow {
   cursor: string | null;
   spendDay: string;
   spentUsd: number;
+  byteDay: string;
+  bytesUsed: number;
+}
+
+export interface SpendReservation {
+  key: string;
+  worstUsd: number;
+  day: string;
+}
+
+export interface ByteReservation {
+  key: string;
+  bytes: number;
+  day: string;
 }
 
 export function defaultGlobalState(): GlobalStateRow {
-  return { cursor: null, spendDay: "", spentUsd: 0 };
+  return { cursor: null, spendDay: "", spentUsd: 0, byteDay: "", bytesUsed: 0 };
 }
+
+// Feed event IDs remembered as already enqueued. Bounded: older pages
+// fall out and would requeue, but the conversation event log dedupes
+// them.
+export const SEEN_IDS_CAP = 500;
 
 export interface GlobalStore {
   state(): GlobalStateRow;
   save(state: GlobalStateRow): void;
+  spendReservations(day: string): SpendReservation[];
+  reserveSpend(reservation: SpendReservation): void;
+  settleSpend(key: string, day: string, actualUsd: number): void;
+  pruneSpendReservations(day: string): void;
+  byteReservations(day: string): ByteReservation[];
+  reserveBytes(reservation: ByteReservation): void;
+  settleBytes(key: string, day: string, actualBytes: number): void;
+  pruneByteReservations(day: string): void;
+  // Hashed chat ID to owning handle hash, so delivery receipts that
+  // name no recipient still reach their conversation. Keys are hashes:
+  // a 1:1 chat ID can itself be a phone number.
+  noteRoute(chatHash: string, handleHash: string): void;
+  routeFor(chatHash: string): string | null;
+  // High-watermark of feed event IDs already enqueued, so a page the
+  // provider serves again (no next cursor) is not requeued.
+  filterUnseen(ids: string[]): string[];
+  noteSeen(ids: string[]): void;
 }
 
 export class MemoryGlobalStore implements GlobalStore {
   private row: GlobalStateRow = defaultGlobalState();
+  private held = new Map<string, SpendReservation>();
+  private heldBytes = new Map<string, ByteReservation>();
 
   state(): GlobalStateRow {
     return { ...this.row };
@@ -28,29 +67,177 @@ export class MemoryGlobalStore implements GlobalStore {
   save(state: GlobalStateRow): void {
     this.row = { ...state };
   }
+
+  spendReservations(day: string): SpendReservation[] {
+    return [...this.held.values()].filter((r) => r.day === day);
+  }
+
+  reserveSpend(reservation: SpendReservation): void {
+    this.held.set(reservation.key, { ...reservation });
+  }
+
+  settleSpend(key: string, day: string, actualUsd: number): void {
+    this.held.delete(key);
+    const state = this.state();
+    if (state.spendDay === day) {
+      state.spentUsd += actualUsd;
+      this.save(state);
+    } else {
+      state.spendDay = day;
+      state.spentUsd = actualUsd;
+      this.save(state);
+    }
+  }
+
+  pruneSpendReservations(day: string): void {
+    for (const [key, reservation] of this.held) {
+      if (reservation.day !== day) this.held.delete(key);
+    }
+  }
+
+  byteReservations(day: string): ByteReservation[] {
+    return [...this.heldBytes.values()].filter((r) => r.day === day);
+  }
+
+  reserveBytes(reservation: ByteReservation): void {
+    this.heldBytes.set(reservation.key, { ...reservation });
+  }
+
+  settleBytes(key: string, day: string, actualBytes: number): void {
+    this.heldBytes.delete(key);
+    const state = this.state();
+    if (state.byteDay === day) {
+      state.bytesUsed += actualBytes;
+      this.save(state);
+    } else {
+      state.byteDay = day;
+      state.bytesUsed = actualBytes;
+      this.save(state);
+    }
+  }
+
+  pruneByteReservations(day: string): void {
+    for (const [key, reservation] of this.heldBytes) {
+      if (reservation.day !== day) this.heldBytes.delete(key);
+    }
+  }
+
+  private routes = new Map<string, string>();
+
+  noteRoute(chatHash: string, handleHash: string): void {
+    this.routes.set(chatHash, handleHash);
+  }
+
+  routeFor(chatHash: string): string | null {
+    return this.routes.get(chatHash) ?? null;
+  }
+
+  private seen: Set<string> = new Set();
+
+  filterUnseen(ids: string[]): string[] {
+    return ids.filter((id) => !this.seen.has(id));
+  }
+
+  noteSeen(ids: string[]): void {
+    for (const id of ids) this.seen.add(id);
+    while (this.seen.size > SEEN_IDS_CAP) {
+      const oldest = this.seen.values().next();
+      if (oldest.done) break;
+      this.seen.delete(oldest.value);
+    }
+  }
 }
 
 export class GlobalLedger {
   private store: GlobalStore;
   private nowMs: () => number;
   private budgetUsd: number;
+  private byteBudget: number;
 
-  constructor(store: GlobalStore, nowMs: () => number, budgetUsd: number = DEFAULT_DAILY_BUDGET_USD) {
+  constructor(
+    store: GlobalStore,
+    nowMs: () => number,
+    budgetUsd: number = DEFAULT_DAILY_BUDGET_USD,
+    byteBudget: number = GLOBAL_BYTES_DAILY,
+  ) {
     this.store = store;
     this.nowMs = nowMs;
     this.budgetUsd = budgetUsd;
+    this.byteBudget = byteBudget;
   }
 
-  check(estimateUsd: number): { allowed: boolean; spentUsd: number } {
-    const state = this.current();
-    return { allowed: budgetAllows(state.spentUsd, estimateUsd, this.budgetUsd), spentUsd: state.spentUsd };
+  // Reserves the worst-case cost under a turn key. Idempotent: reusing a
+  // key returns allowed without holding twice.
+  reserve(key: string, worstUsd: number): { allowed: boolean; spentUsd: number } {
+    const today = dayKeyFor(this.nowMs());
+    this.rollDay(today);
+    this.store.pruneSpendReservations(today);
+    const held = this.store.spendReservations(today);
+    if (held.some((r) => r.key === key)) {
+      return { allowed: true, spentUsd: this.store.state().spentUsd };
+    }
+    const committed = this.store.state().spentUsd + held.reduce((sum, r) => sum + r.worstUsd, 0);
+    if (committed + worstUsd > this.budgetUsd) {
+      return { allowed: false, spentUsd: this.store.state().spentUsd };
+    }
+    this.store.reserveSpend({ key, worstUsd, day: today });
+    return { allowed: true, spentUsd: this.store.state().spentUsd };
   }
 
-  record(usd: number): { spentUsd: number } {
-    const state = this.current();
-    state.spentUsd += usd;
-    this.store.save(state);
-    return { spentUsd: state.spentUsd };
+  // Settles actual spend against a reservation, releasing the hold.
+  // Settling an unknown key still records the spend.
+  settle(key: string, actualUsd: number): { spentUsd: number } {
+    const today = dayKeyFor(this.nowMs());
+    this.rollDay(today);
+    this.store.settleSpend(key, today, actualUsd);
+    return { spentUsd: this.store.state().spentUsd };
+  }
+
+  spent(): { spentUsd: number; budgetUsd: number } {
+    const today = dayKeyFor(this.nowMs());
+    this.rollDay(today);
+    return { spentUsd: this.store.state().spentUsd, budgetUsd: this.budgetUsd };
+  }
+
+  // Byte reservations work like spend reservations: hold the worst case
+  // before downloading, settle the actual size after.
+  byteReserve(key: string, bytes: number): { allowed: boolean; bytesUsed: number } {
+    const today = dayKeyFor(this.nowMs());
+    this.rollByteDay(today);
+    this.store.pruneByteReservations(today);
+    const held = this.store.byteReservations(today);
+    if (held.some((r) => r.key === key)) {
+      return { allowed: true, bytesUsed: this.store.state().bytesUsed };
+    }
+    const committed = this.store.state().bytesUsed + held.reduce((sum, r) => sum + r.bytes, 0);
+    if (committed + bytes > this.byteBudget) {
+      return { allowed: false, bytesUsed: this.store.state().bytesUsed };
+    }
+    this.store.reserveBytes({ key, bytes, day: today });
+    return { allowed: true, bytesUsed: this.store.state().bytesUsed };
+  }
+
+  byteSettle(key: string, actualBytes: number): { bytesUsed: number } {
+    const today = dayKeyFor(this.nowMs());
+    this.rollByteDay(today);
+    this.store.settleBytes(key, today, actualBytes);
+    return { bytesUsed: this.store.state().bytesUsed };
+  }
+
+  noteRoute(chatHash: string, handleHash: string): void {
+    this.store.noteRoute(chatHash, handleHash);
+  }
+
+  routeFor(chatHash: string): string | null {
+    return this.store.routeFor(chatHash);
+  }
+
+  filterUnseen(ids: string[]): string[] {
+    return this.store.filterUnseen(ids);
+  }
+
+  noteSeen(ids: string[]): void {
+    this.store.noteSeen(ids);
   }
 
   cursor(): string | null {
@@ -63,14 +250,21 @@ export class GlobalLedger {
     this.store.save(state);
   }
 
-  private current(): GlobalStateRow {
+  private rollDay(today: string): void {
     const state = this.store.state();
-    const today = dayKeyFor(this.nowMs());
     if (state.spendDay !== today) {
       state.spendDay = today;
       state.spentUsd = 0;
       this.store.save(state);
     }
-    return state;
+  }
+
+  private rollByteDay(today: string): void {
+    const state = this.store.state();
+    if (state.byteDay !== today) {
+      state.byteDay = today;
+      state.bytesUsed = 0;
+      this.store.save(state);
+    }
   }
 }

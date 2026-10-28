@@ -27,10 +27,10 @@ function envelope(channelId: string): string {
 }
 
 describe("worker ingress", () => {
-  it("reports liveness on /health", async () => {
+  it("answers ok on /health and reveals nothing else", async () => {
     const res = await SELF.fetch("https://worker/health");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, live: { blooio: false, model: false, files: true } });
+    expect(await res.json()).toEqual({ ok: true });
   });
 
   it("rejects a bad signature with 401", async () => {

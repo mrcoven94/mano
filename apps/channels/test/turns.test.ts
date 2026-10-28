@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decryptForPerson, documentAad } from "@mano/channels";
+import { HANDLE_BYTES_DAILY, ResponderFailed, decryptForPerson, documentAad } from "@mano/channels";
 import { FAILURE_BUBBLE, INTERIM_BUBBLE } from "../src/text.js";
 import {
   TEST_HANDLE_HASH,
@@ -19,13 +19,14 @@ describe("slow answers", () => {
       config: { interimMs: 20 },
       responder: {
         name: "slow",
+        maxAttempts: 1,
         respond: async () => {
           const text = await gate;
-          return { bubbles: [text], inputChars: 10, outputChars: text.length, model: "stand-in" };
+          return { bubbles: [text], inputChars: 10, outputChars: text.length, model: "stand-in", attempts: 1 };
         },
       },
     });
-    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Think hard." }), "webhook");
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Think hard.", occurredAtMs: h.now }), "webhook");
     h.advance(3000);
     const turn = h.runner.runDueTurn();
     await new Promise((r) => setTimeout(r, 60));
@@ -40,33 +41,61 @@ describe("slow answers", () => {
     const h = makeHarness({
       responder: {
         name: "broken",
+        maxAttempts: 1,
         respond: async () => {
           throw new Error("model down");
         },
       },
     });
-    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hello." }), "webhook");
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hello.", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     expect(h.channel.sends.map((s) => s.text)).toContain(FAILURE_BUBBLE);
     expect(h.channel.typingCalls[h.channel.typingCalls.length - 1].state).toBe("stopped");
+  });
+
+  it("settles failed attempts against the reservation", async () => {
+    const h = makeHarness({
+      config: { usdPer1kChars: 0.01 },
+      responder: {
+        name: "flaky",
+        maxAttempts: 3,
+        respond: async () => {
+          throw new ResponderFailed("model down", 3, 1000);
+        },
+      },
+    });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hello.", occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h);
+    expect(h.channel.sends.map((s) => s.text)).toContain(FAILURE_BUBBLE);
+    expect(h.ledger.spent().spentUsd).toBeCloseTo(0.03);
   });
 });
 
 describe("attachments", () => {
   const PHOTO = new TextEncoder().encode("synthetic-photo-bytes");
+  const CLEAN_DOH = JSON.stringify({ Status: 0, Answer: [{ name: "cdn.example.test.", type: 1, data: "203.0.113.7" }] });
 
   function photoFetch(): typeof fetch {
-    return (async () => new Response(PHOTO, { status: 200, headers: { "content-type": "image/jpeg" } })) as typeof fetch;
+    return (async (url: unknown) => {
+      if (String(url).includes("dns-query")) {
+        return new Response(CLEAN_DOH, { status: 200, headers: { "content-type": "application/dns-json" } });
+      }
+      return new Response(PHOTO, { status: 200, headers: { "content-type": "image/jpeg" } });
+    }) as typeof fetch;
   }
+
+  const MEDIA = { mediaHosts: ["cdn.example.test"] };
 
   it("saves photos encrypted and acknowledges in one line", async () => {
     const h = makeHarness({
       fetchFn: photoFetch(),
       replies: ["About your bill."],
+      config: MEDIA,
     });
     await h.runner.handleEvent(
       inboundEvent({
         id: "evt_photo",
+        occurredAtMs: h.now,
         text: "What is this?",
         attachments: [{ url: "https://cdn.example.test/p1.jpg", mediaType: "image/jpeg", size: 21 }],
       }),
@@ -85,10 +114,11 @@ describe("attachments", () => {
   });
 
   it("skips files over the size cap", async () => {
-    const h = makeHarness({ fetchFn: photoFetch() });
+    const h = makeHarness({ fetchFn: photoFetch(), config: MEDIA });
     await h.runner.handleEvent(
       inboundEvent({
         id: "evt_big",
+        occurredAtMs: h.now,
         text: null,
         attachments: [{ url: "https://cdn.example.test/big.mov", mediaType: "video/mp4", size: 50_000_000 }],
       }),
@@ -98,20 +128,175 @@ describe("attachments", () => {
     expect(h.files.files.size).toBe(0);
     expect(h.channel.sends.some((s) => s.text.startsWith("Got your"))).toBe(false);
   });
+
+  it("downloads nothing when admission fails", async () => {
+    let downloads = 0;
+    const h = makeHarness({
+      budgetUsd: 0.000001,
+      fetchFn: (async () => {
+        downloads += 1;
+        return new Response(PHOTO, { status: 200 });
+      }) as typeof fetch,
+    });
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_busy_photo",
+        occurredAtMs: h.now,
+        text: "Look.",
+        attachments: [{ url: "https://cdn.example.test/p1.jpg", mediaType: "image/jpeg", size: 21 }],
+      }),
+      "webhook",
+    );
+    await runTurnAfterBatch(h);
+    expect(downloads).toBe(0);
+    expect(h.files.files.size).toBe(0);
+    expect(h.channel.sends[0].text).toContain("busy");
+  });
+
+  it("enforces the per-handle daily byte budget", async () => {
+    const h = makeHarness({ fetchFn: photoFetch(), config: MEDIA });
+    const meta = h.store.meta();
+    meta.byteDayKey = new Date(h.now).toISOString().slice(0, 10);
+    meta.byteDayCount = HANDLE_BYTES_DAILY - 1;
+    h.store.saveMeta(meta);
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_capped",
+        occurredAtMs: h.now,
+        text: "Photo.",
+        attachments: [{ url: "https://cdn.example.test/p1.jpg", mediaType: "image/jpeg", size: 21 }],
+      }),
+      "webhook",
+    );
+    await runTurnAfterBatch(h);
+    expect(h.files.files.size).toBe(0);
+    expect(h.lines.join("\n")).toContain("attachment_capped");
+    h.advance(24 * 3600 * 1000 + 1000);
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_next_day",
+        occurredAtMs: h.now,
+        text: "Photo.",
+        attachments: [{ url: "https://cdn.example.test/p2.jpg", mediaType: "image/jpeg", size: 21 }],
+      }),
+      "webhook",
+    );
+    await runTurnAfterBatch(h);
+    expect(h.files.files.size).toBe(1);
+  });
+
+  it("holds files when the global byte budget is spent", async () => {
+    const h = makeHarness({ fetchFn: photoFetch(), byteBudget: 1, config: MEDIA });
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_gbytes",
+        occurredAtMs: h.now,
+        text: "Photo.",
+        attachments: [{ url: "https://cdn.example.test/p1.jpg", mediaType: "image/jpeg", size: 21 }],
+      }),
+      "webhook",
+    );
+    await runTurnAfterBatch(h);
+    expect(h.files.files.size).toBe(0);
+    expect(h.channel.sends.some((s) => s.text.startsWith("Got your"))).toBe(false);
+  });
+});
+
+describe("link safety", () => {
+  function dohFetch(fetched: string[]): typeof fetch {
+    return (async (url: unknown) => {
+      fetched.push(String(url));
+      const raw = String(url);
+      if (raw.includes("name=evil.test")) {
+        return new Response(JSON.stringify({ Status: 0, Answer: [{ data: "0.0.0.0" }] }), { status: 200 });
+      }
+      if (raw.includes("dns-query")) {
+        return new Response(JSON.stringify({ Status: 0, Answer: [{ data: "203.0.113.7" }] }), { status: 200 });
+      }
+      return new Response("nope", { status: 404 });
+    }) as typeof fetch;
+  }
+
+  it("removes blocked links from replies instead of sending them", async () => {
+    const fetched: string[] = [];
+    const h = makeHarness({
+      fetchFn: dohFetch(fetched),
+      replies: ["Read https://ok.test/guide and https://evil.test/trap for details."],
+    });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_link", text: "Links?", occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h);
+    const answer = h.channel.sends.find((s) => s.text.includes("Read "))!;
+    expect(answer.text).toContain("https://ok.test/guide");
+    expect(answer.text).not.toContain("https://evil.test/trap");
+    expect(answer.text).toContain("(link removed)");
+    expect(fetched.some((u) => u.startsWith("https://family.cloudflare-dns.com/dns-query"))).toBe(true);
+    expect(h.lines.join("\n")).not.toContain("evil.test");
+  });
+
+  it("refuses attachments off the provider media hosts without fetching", async () => {
+    const fetched: string[] = [];
+    const h = makeHarness({ fetchFn: dohFetch(fetched), config: { mediaHosts: ["cdn.example.test"] } });
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_evil_file",
+        occurredAtMs: h.now,
+        text: "File.",
+        attachments: [{ url: "https://evil.test/payload.bin", mediaType: "application/octet-stream", size: 10 }],
+      }),
+      "webhook",
+    );
+    await runTurnAfterBatch(h);
+    expect(h.files.files.size).toBe(0);
+    expect(fetched).toHaveLength(0);
+  });
+
+  it("checks every redirect hop before following it", async () => {
+    const fetched: string[] = [];
+    const h = makeHarness({
+      config: { mediaHosts: ["cdn.example.test"] },
+      fetchFn: (async (url: unknown) => {
+        fetched.push(String(url));
+        const raw = String(url);
+        if (raw.includes("dns-query")) {
+          const blocked = raw.includes("name=evil.test");
+          return new Response(
+            JSON.stringify({ Status: 0, Answer: [{ data: blocked ? "0.0.0.0" : "203.0.113.7" }] }),
+            { status: 200 },
+          );
+        }
+        if (raw === "https://cdn.example.test/hop") {
+          return new Response("", { status: 302, headers: { location: "https://evil.test/payload.bin" } });
+        }
+        return new Response("photo", { status: 200 });
+      }) as typeof fetch,
+    });
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_hop",
+        occurredAtMs: h.now,
+        text: "File.",
+        attachments: [{ url: "https://cdn.example.test/hop", mediaType: "image/jpeg", size: 5 }],
+      }),
+      "webhook",
+    );
+    await runTurnAfterBatch(h);
+    expect(h.files.files.size).toBe(0);
+    expect(fetched).not.toContain("https://evil.test/payload.bin");
+  });
 });
 
 describe("approvals by text", () => {
   it("accepts YES and NO only for a matching code", async () => {
     const h = makeHarness();
     await h.runner.requestApproval({ id: "apr_1", code: "K7Q2", summary: "File the renewal.", ttlMs: 600_000 });
-    await h.runner.handleEvent(inboundEvent({ id: "evt_yes", text: "YES K7Q2" }), "webhook");
+    await h.runner.handleEvent(inboundEvent({ id: "evt_yes", text: "YES K7Q2", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     expect(h.store.pendingApprovals(h.now)).toHaveLength(0);
     expect(h.channel.sends.map((s) => s.text)).toContain("Recorded. I will follow up when it is decided.");
     expect((h.responder as unknown as { prompts: unknown[] }).prompts).toHaveLength(0);
 
     await h.runner.requestApproval({ id: "apr_2", code: "M3P9", summary: "Share the pay stub.", ttlMs: 600_000 });
-    await h.runner.handleEvent(inboundEvent({ id: "evt_no", text: "NO M3P9" }), "webhook");
+    await h.runner.handleEvent(inboundEvent({ id: "evt_no", text: "NO M3P9", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     expect(h.store.pendingApprovals(h.now)).toHaveLength(0);
   });
@@ -119,7 +304,7 @@ describe("approvals by text", () => {
   it("treats a wrong code as a normal message", async () => {
     const h = makeHarness();
     await h.runner.requestApproval({ id: "apr_1", code: "K7Q2", summary: "File the renewal.", ttlMs: 600_000 });
-    await h.runner.handleEvent(inboundEvent({ id: "evt_wrong", text: "YES ZZZZ" }), "webhook");
+    await h.runner.handleEvent(inboundEvent({ id: "evt_wrong", text: "YES ZZZZ", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     expect(h.store.pendingApprovals(h.now)).toHaveLength(1);
     expect((h.responder as unknown as { prompts: unknown[] }).prompts).toHaveLength(1);
@@ -129,7 +314,7 @@ describe("approvals by text", () => {
     const h = makeHarness();
     await h.runner.requestApproval({ id: "apr_1", code: "K7Q2", summary: "File the renewal.", ttlMs: 1000 });
     h.advance(2000);
-    await h.runner.handleEvent(inboundEvent({ id: "evt_late", text: "YES K7Q2" }), "webhook");
+    await h.runner.handleEvent(inboundEvent({ id: "evt_late", text: "YES K7Q2", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     expect((h.responder as unknown as { prompts: unknown[] }).prompts).toHaveLength(1);
   });

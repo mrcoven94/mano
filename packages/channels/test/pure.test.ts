@@ -27,6 +27,15 @@ describe("splitBubbles", () => {
     const text = ["One.", "Two.", "Three.", "Four.", "Five.", "Six."].join(" ");
     expect(splitBubbles(text, 3, 10)).toHaveLength(3);
   });
+
+  it("hard-caps every bubble at 4 by 600", () => {
+    const text = Array.from({ length: 200 }, (_, i) => `Sentence number ${i} goes on for a while.`).join(" ");
+    const bubbles = splitBubbles(text);
+    expect(bubbles.length).toBeLessThanOrEqual(4);
+    for (const bubble of bubbles) {
+      expect(bubble.length).toBeLessThanOrEqual(600);
+    }
+  });
 });
 
 describe("parseApprovalReply", () => {

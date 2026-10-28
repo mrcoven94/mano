@@ -18,6 +18,7 @@ export interface Env {
   MANO_TEXT_USD_PER_1K_CHARS?: string;
   TURN_BATCH_MS?: string;
   TURN_INTERIM_MS?: string;
+  BLOOIO_MEDIA_HOSTS?: string;
 }
 
 export function numberEnv(value: string | undefined, fallback: number): number {

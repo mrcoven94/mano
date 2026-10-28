@@ -36,7 +36,16 @@ export function parseSignatureHeader(header: string): { t: string; v1: string } 
   return { t, v1: v1.toLowerCase() };
 }
 
-export async function computeSignatureHex(secret: string, t: string, rawBody: string): Promise<string> {
+function signedBytes(t: string, rawBody: string | Uint8Array): Uint8Array<ArrayBuffer> {
+  const prefix = new TextEncoder().encode(`${t}.`);
+  const body = typeof rawBody === "string" ? new TextEncoder().encode(rawBody) : rawBody;
+  const out = new Uint8Array(prefix.length + body.length);
+  out.set(prefix);
+  out.set(body, prefix.length);
+  return out;
+}
+
+export async function computeSignatureHex(secret: string, t: string, rawBody: string | Uint8Array): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -44,12 +53,12 @@ export async function computeSignatureHex(secret: string, t: string, rawBody: st
     false,
     ["sign"],
   );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${t}.${rawBody}`));
+  const sig = await crypto.subtle.sign("HMAC", key, signedBytes(t, rawBody));
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export async function verifySignature(
-  rawBody: string,
+  rawBody: string | Uint8Array,
   header: string | null,
   secret: string,
   nowSeconds: number,

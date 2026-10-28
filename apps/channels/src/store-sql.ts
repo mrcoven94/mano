@@ -8,6 +8,7 @@ import {
   type ConversationStore,
   type OutboundRow,
   type PendingInbound,
+  type PersistedTurn,
 } from "./store.js";
 
 const SCHEMA = `
@@ -30,7 +31,11 @@ CREATE TABLE IF NOT EXISTS meta (
   day_key TEXT NOT NULL,
   day_count INTEGER NOT NULL,
   busy_notice_key TEXT,
-  last_inbound_ms INTEGER NOT NULL
+  last_inbound_ms INTEGER NOT NULL,
+  byte_day_key TEXT NOT NULL DEFAULT '',
+  byte_day_count INTEGER NOT NULL DEFAULT 0,
+  generation INTEGER NOT NULL DEFAULT 0,
+  deleted_at_ms INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS pending (
   event_id TEXT PRIMARY KEY,
@@ -46,6 +51,7 @@ CREATE TABLE IF NOT EXISTS outbounds (
   turn INTEGER NOT NULL,
   part INTEGER NOT NULL,
   tag TEXT NOT NULL,
+  bubble_text TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL,
   code TEXT,
   chat_id TEXT,
@@ -54,6 +60,15 @@ CREATE TABLE IF NOT EXISTS outbounds (
   updated_at_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_outbounds_message ON outbounds (message_id);
+CREATE TABLE IF NOT EXISTS held_receipts (
+  event_id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL,
+  chat_id TEXT,
+  state TEXT NOT NULL,
+  code TEXT,
+  recorded_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_held_receipts_message ON held_receipts (message_id);
 CREATE TABLE IF NOT EXISTS approvals (
   id TEXT PRIMARY KEY,
   code_hash TEXT NOT NULL,
@@ -62,6 +77,18 @@ CREATE TABLE IF NOT EXISTS approvals (
   decision TEXT,
   created_at_ms INTEGER NOT NULL,
   expires_at_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS turns (
+  turn INTEGER PRIMARY KEY,
+  items_json TEXT NOT NULL,
+  chat_id TEXT,
+  handle_to TEXT,
+  answer_json TEXT,
+  cost_usd REAL,
+  cost_settled INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
 );
 `;
 
@@ -79,6 +106,10 @@ interface MetaRow {
   day_count: number;
   busy_notice_key: string | null;
   last_inbound_ms: number;
+  byte_day_key: string;
+  byte_day_count: number;
+  generation: number;
+  deleted_at_ms: number;
 }
 
 function firstRow<T>(cursor: SqlStorageCursor<Record<string, SqlStorageValue>>): T | null {
@@ -92,6 +123,13 @@ export class SqlConversationStore implements ConversationStore {
   constructor(sql: SqlStorage) {
     this.sql = sql;
     this.sql.exec(SCHEMA);
+    // Pre-launch migration for dev databases created before uncertain
+    // sends stored their bubble text.
+    try {
+      this.sql.exec("ALTER TABLE outbounds ADD COLUMN bubble_text TEXT NOT NULL DEFAULT ''");
+    } catch {
+      // The column already exists.
+    }
     const existing = firstRow(this.sql.exec("SELECT id FROM meta WHERE id = 1"));
     if (!existing) {
       this.sql.exec(
@@ -125,12 +163,16 @@ export class SqlConversationStore implements ConversationStore {
       dayCount: row.day_count,
       busyNoticeKey: row.busy_notice_key,
       lastInboundMs: row.last_inbound_ms,
+      byteDayKey: row.byte_day_key ?? "",
+      byteDayCount: row.byte_day_count ?? 0,
+      generation: row.generation ?? 0,
+      deletedAtMs: row.deleted_at_ms ?? 0,
     };
   }
 
   saveMeta(meta: ConversationMeta): void {
     this.sql.exec(
-      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ? WHERE id = 1",
+      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ? WHERE id = 1",
       meta.turn,
       meta.introduced ? 1 : 0,
       meta.closed ? 1 : 0,
@@ -144,6 +186,10 @@ export class SqlConversationStore implements ConversationStore {
       meta.dayCount,
       meta.busyNoticeKey,
       meta.lastInboundMs,
+      meta.byteDayKey,
+      meta.byteDayCount,
+      meta.generation,
+      meta.deletedAtMs,
     );
   }
 
@@ -189,11 +235,12 @@ export class SqlConversationStore implements ConversationStore {
 
   addOutbound(row: OutboundRow): void {
     this.sql.exec(
-      "INSERT OR IGNORE INTO outbounds (idem_key, turn, part, tag, state, code, chat_id, message_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO outbounds (idem_key, turn, part, tag, bubble_text, state, code, chat_id, message_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       row.key,
       row.turn,
       row.part,
       row.tag,
+      row.text,
       row.state,
       row.code,
       row.chatId,
@@ -209,6 +256,7 @@ export class SqlConversationStore implements ConversationStore {
       turn: number;
       part: number;
       tag: string;
+      bubble_text: string;
       state: OutboundRow["state"];
       code: string | null;
       chat_id: string | null;
@@ -222,6 +270,7 @@ export class SqlConversationStore implements ConversationStore {
       turn: row.turn,
       part: row.part,
       tag: row.tag,
+      text: row.bubble_text,
       state: row.state,
       code: row.code,
       chatId: row.chat_id,
@@ -271,6 +320,7 @@ export class SqlConversationStore implements ConversationStore {
       turn: number;
       part: number;
       tag: string;
+      bubble_text: string;
       state: OutboundRow["state"];
       code: string | null;
       chat_id: string | null;
@@ -282,6 +332,7 @@ export class SqlConversationStore implements ConversationStore {
       turn: r.turn,
       part: r.part,
       tag: r.tag,
+      text: r.bubble_text,
       state: r.state,
       code: r.code,
       chatId: r.chat_id,
@@ -289,6 +340,40 @@ export class SqlConversationStore implements ConversationStore {
       createdAtMs: r.created_at_ms,
       updatedAtMs: r.updated_at_ms,
     }));
+  }
+
+  holdReceipt(receipt: import("./store.js").HeldReceipt): void {
+    this.sql.exec(
+      "INSERT OR IGNORE INTO held_receipts (event_id, message_id, chat_id, state, code, recorded_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
+      receipt.eventId,
+      receipt.messageId,
+      receipt.chatId,
+      receipt.state,
+      receipt.code,
+      receipt.atMs,
+    );
+  }
+
+  takeReceipts(messageId: string): import("./store.js").HeldReceipt[] {
+    const taken = (this.sql.exec("SELECT * FROM held_receipts WHERE message_id = ? ORDER BY recorded_at_ms ASC", messageId).toArray() as unknown as Array<{
+      event_id: string;
+      message_id: string;
+      chat_id: string | null;
+      state: OutboundRow["state"];
+      code: string | null;
+      recorded_at_ms: number;
+    }>).map((r) => ({
+      eventId: r.event_id,
+      messageId: r.message_id,
+      chatId: r.chat_id,
+      state: r.state,
+      code: r.code,
+      atMs: r.recorded_at_ms,
+    }));
+    if (taken.length > 0) {
+      this.sql.exec("DELETE FROM held_receipts WHERE message_id = ?", messageId);
+    }
+    return taken;
   }
 
   addApproval(row: ApprovalRow): void {
@@ -328,8 +413,67 @@ export class SqlConversationStore implements ConversationStore {
     this.sql.exec("UPDATE approvals SET status = 'answered', decision = ? WHERE id = ?", decision, id);
   }
 
-  wipe(): void {
-    this.sql.exec("DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM approvals;");
-    this.saveMeta(defaultMeta());
+  startTurn(row: PersistedTurn): void {
+    this.sql.exec(
+      "INSERT OR REPLACE INTO turns (turn, items_json, chat_id, handle_to, answer_json, cost_usd, cost_settled, state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      row.turn,
+      row.itemsJson,
+      row.chatId,
+      row.to,
+      row.answerJson,
+      row.costUsd,
+      row.costSettled ? 1 : 0,
+      row.state,
+      row.createdAtMs,
+      row.updatedAtMs,
+    );
+  }
+
+  unfinishedTurn(): PersistedTurn | null {
+    const row = firstRow<{
+      turn: number;
+      items_json: string;
+      chat_id: string | null;
+      handle_to: string | null;
+      answer_json: string | null;
+      cost_usd: number | null;
+      cost_settled: number;
+      state: PersistedTurn["state"];
+      created_at_ms: number;
+      updated_at_ms: number;
+    }>(this.sql.exec("SELECT * FROM turns WHERE state = 'started' ORDER BY turn ASC LIMIT 1"));
+    if (!row) return null;
+    return {
+      turn: row.turn,
+      itemsJson: row.items_json,
+      chatId: row.chat_id,
+      to: row.handle_to,
+      answerJson: row.answer_json,
+      costUsd: row.cost_usd,
+      costSettled: row.cost_settled === 1,
+      state: row.state,
+      createdAtMs: row.created_at_ms,
+      updatedAtMs: row.updated_at_ms,
+    };
+  }
+
+  updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number): void {
+    this.sql.exec("UPDATE turns SET answer_json = ?, cost_usd = ?, updated_at_ms = ? WHERE turn = ?", answerJson, costUsd, atMs, turn);
+  }
+
+  markTurnSettled(turn: number, atMs: number): void {
+    this.sql.exec("UPDATE turns SET cost_settled = 1, updated_at_ms = ? WHERE turn = ?", atMs, turn);
+  }
+
+  finishTurn(turn: number, atMs: number): void {
+    this.sql.exec("UPDATE turns SET state = 'finished', updated_at_ms = ? WHERE turn = ?", atMs, turn);
+  }
+
+  wipe(deletedAtMs: number): void {
+    const meta = this.meta();
+    this.sql.exec(
+      "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns;",
+    );
+    this.saveMeta({ ...defaultMeta(), generation: meta.generation + 1, turn: meta.turn, deletedAtMs });
   }
 }

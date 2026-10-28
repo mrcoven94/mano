@@ -40,13 +40,14 @@ export function inboundEvent(overrides: Partial<NormalizedEvent> & { id: string 
     channelType: "blooio",
     chatId: TEST_CHAT,
     messageId: `msg_${overrides.id}`,
+    group: null,
     handle: TEST_HANDLE,
     direction: "inbound",
     text: "Hello",
     attachments: [],
     errorCode: null,
     errorMessage: null,
-    occurredAtMs: 0,
+    occurredAtMs: null,
     ...overrides,
   };
 }
@@ -65,6 +66,7 @@ export function lifecycleEvent(
     channelType: "blooio",
     chatId: TEST_CHAT,
     messageId,
+    group: null,
     handle: TEST_HANDLE,
     direction: "outbound",
     text: null,
@@ -81,6 +83,7 @@ export function makeHarness(
     responder?: Responder;
     config?: Partial<RunnerConfig>;
     budgetUsd?: number;
+    byteBudget?: number;
     startMs?: number;
     fetchFn?: typeof fetch;
   } = {},
@@ -107,11 +110,15 @@ export function makeHarness(
       h.now += ms;
     },
   };
-  h.ledger = new GlobalLedger(new MemoryGlobalStore(), () => h.now, opts.budgetUsd ?? 5);
+  h.ledger = new GlobalLedger(new MemoryGlobalStore(), () => h.now, opts.budgetUsd ?? 5, opts.byteBudget);
   const spend: SpendLedger = {
-    check: async (estimateUsd: number) => h.ledger.check(estimateUsd),
-    record: async (usd: number) => {
-      h.ledger.record(usd);
+    reserve: async (key: string, worstUsd: number) => h.ledger.reserve(key, worstUsd),
+    settle: async (key: string, actualUsd: number) => {
+      h.ledger.settle(key, actualUsd);
+    },
+    byteReserve: async (key: string, bytes: number) => h.ledger.byteReserve(key, bytes),
+    byteSettle: async (key: string, actualBytes: number) => {
+      h.ledger.byteSettle(key, actualBytes);
     },
   };
   h.runner = new ConversationRunner({

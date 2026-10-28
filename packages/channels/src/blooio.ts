@@ -36,7 +36,11 @@ function asString(v: unknown): string | null {
 }
 
 function asMs(v: unknown): number | null {
-  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  if (typeof v === "string" && v.length > 0 && v.length <= 40) {
+    const parsed = Date.parse(v);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) return null;
   return v < 1_000_000_000_000 ? v * 1000 : v;
 }
 
@@ -93,6 +97,9 @@ export function parseBlooioEvent(raw: unknown): NormalizedEvent | null {
   const kind = kindFor(type);
 
   const contact = isRecord(data.contact) ? data.contact : null;
+  const groupRaw = isRecord(data.group) ? data.group : null;
+  const groupId = asString(groupRaw?.group_id);
+  const group = groupId ? { id: groupId, name: asString(groupRaw?.name) } : null;
   const rawHandle =
     direction === "inbound"
       ? (asString(data.sender) ?? asString(contact?.identifier))
@@ -100,7 +107,8 @@ export function parseBlooioEvent(raw: unknown): NormalizedEvent | null {
   const handle = rawHandle ? normalizeHandle(rawHandle) : null;
 
   const error = isRecord(data.error) ? data.error : null;
-  const occurredAtMs = asMs(data.occurred_at) ?? asMs(raw.occurred_at) ?? asMs(data.created_at) ?? asMs(raw.created_at) ?? 0;
+  const occurredAtMs =
+    asMs(data.occurred_at) ?? asMs(raw.occurred_at) ?? asMs(data.created_at) ?? asMs(raw.created_at);
 
   return {
     id,
@@ -110,6 +118,7 @@ export function parseBlooioEvent(raw: unknown): NormalizedEvent | null {
     channelType,
     chatId,
     messageId,
+    group,
     handle,
     direction,
     text: typeof data.text === "string" ? data.text : null,

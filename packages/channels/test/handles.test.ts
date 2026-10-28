@@ -32,12 +32,13 @@ describe("hashHandle", () => {
 });
 
 describe("idempotencyKeyFor", () => {
-  it("is deterministic per conversation, turn and part", () => {
-    const key = idempotencyKeyFor("abc123", 2, 1);
-    expect(key).toBe(idempotencyKeyFor("abc123", 2, 1));
-    expect(key).not.toBe(idempotencyKeyFor("abc123", 2, 2));
-    expect(key).not.toBe(idempotencyKeyFor("abc123", 3, 1));
-    expect(key).not.toBe(idempotencyKeyFor("def456", 2, 1));
-    expect(idempotencyKeyFor("abc123", 2, 0, "interim")).not.toBe(idempotencyKeyFor("abc123", 2, 0));
+  it("is deterministic per conversation, generation, turn and part", () => {
+    const key = idempotencyKeyFor("abc123", 0, 2, 1);
+    expect(key).toBe(idempotencyKeyFor("abc123", 0, 2, 1));
+    expect(key).not.toBe(idempotencyKeyFor("abc123", 0, 2, 2));
+    expect(key).not.toBe(idempotencyKeyFor("abc123", 0, 3, 1));
+    expect(key).not.toBe(idempotencyKeyFor("def456", 0, 2, 1));
+    expect(key).not.toBe(idempotencyKeyFor("abc123", 1, 2, 1));
+    expect(idempotencyKeyFor("abc123", 0, 2, 0, "interim")).not.toBe(idempotencyKeyFor("abc123", 0, 2, 0));
   });
 });
