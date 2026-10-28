@@ -1,0 +1,53 @@
+name: quality-smoke
+on:
+  pull_request:
+    paths:
+      - "packages/quality/**"
+      - "apps/engine/**"
+      - "packages/protocol/**"
+      - "eval/**"
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: pnpm install --no-frozen-lockfile
+      - name: Fetch main baseline
+        run: |
+          mkdir -p runs
+          curl -fsSL "${{ vars.QUALITY_RUNS_URL }}/latest.json" -o runs/baseline.json || echo "no baseline yet"
+      - name: Run smoke subset
+        env:
+          MANO_MODEL_API_KEY: ${{ secrets.MANO_MODEL_API_KEY }}
+          MANO_MODEL_BASE_URL: ${{ secrets.MANO_MODEL_BASE_URL }}
+          MANO_MODEL_JUDGE_ID: ${{ secrets.MANO_MODEL_BENCH_ID }}
+        run: |
+          set -o pipefail
+          cd packages/quality
+          BASELINE=""
+          [ -f ../../runs/baseline.json ] && BASELINE="--baseline ../../runs/baseline.json"
+          node src/bin/smoke.ts $BASELINE --out ../../runs/smoke 2>&1 | tee ../../runs/smoke.log
+          echo "exit=$?" >> "$GITHUB_ENV"
+      - name: Post or update PR comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BODY=$(sed -n '/## Quality smoke/,$p' runs/smoke.log)
+          [ -z "$BODY" ] && BODY="## Quality smoke: error"$'\n\nThe smoke run failed before scoring. See the action log.'
+          EXISTING=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -q '.[] | select(.body | startswith("## Quality smoke")) | .id' | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/$EXISTING" -X PATCH -f body="$BODY" --jq .id
+          else
+            gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
+          fi
+      - name: Fail on gate failure
+        if: env.exit != '0'
+        run: exit 1

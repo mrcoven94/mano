@@ -1,0 +1,47 @@
+name: quality-nightly
+on:
+  schedule:
+    - cron: "13 7 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: pnpm install --no-frozen-lockfile
+      - name: Restore history
+        run: |
+          mkdir -p runs-staging
+          curl -fsSL "${{ vars.QUALITY_RUNS_URL }}/history.json" -o runs-staging/history.json || echo "no history yet"
+      - name: Restore holdout
+        if: ${{ secrets.MANO_QUALITY_HOLDOUT != '' }}
+        run: |
+          printf '%s' '${{ secrets.MANO_QUALITY_HOLDOUT }}' > /tmp/holdout.json
+          echo "MANO_QUALITY_HOLDOUT_PATH=/tmp/holdout.json" >> "$GITHUB_ENV"
+          echo "MANO_QUALITY_HOLDOUT_SHA256=${{ secrets.MANO_QUALITY_HOLDOUT_SHA256 }}" >> "$GITHUB_ENV"
+      - name: Run every suite
+        env:
+          MANO_MODEL_API_KEY: ${{ secrets.MANO_MODEL_API_KEY }}
+          MANO_MODEL_BASE_URL: ${{ secrets.MANO_MODEL_BASE_URL }}
+          MANO_MODEL_JUDGE_ID: ${{ secrets.MANO_MODEL_BENCH_ID }}
+        run: |
+          cd packages/quality
+          node src/bin/nightly.ts --out ../../runs-staging
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          pip install --quiet awscli
+          aws s3 sync runs-staging s3://mano-quality \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --no-progress
