@@ -2,7 +2,7 @@
 import { useState } from "react";
 import Mascot from "@/components/Mascot";
 import { NeedIcon } from "./NeedIcons";
-import { REPO_URL, SMS_HREF, SMS_NUMBER } from "@/lib/site";
+import { REPO_URL, SMS_HREF, SMS_NUMBER, SMS_IS_PLACEHOLDER } from "@/lib/site";
 
 /* One Mano on every device. Each tab continues the same conversation, then the last one hands over the code. */
 
@@ -84,7 +84,7 @@ export default function Everywhere() {
             {k === "web" && <><a className="btn btn-primary" href={EARLY}>Web app, early access</a></>}
             {k === "own" && <><a className="btn btn-primary" href={`${REPO_URL}/archive/refs/heads/main.zip`}>Download the code</a><a className="btn btn-ghost" href={REPO_URL}>Read it on GitHub</a></>}
           </div>
-          {k === "text" && <p className="dv-small rv" style={d(0.24)}>Placeholder number until launch.</p>}
+          {k === "text" && SMS_IS_PLACEHOLDER && <p className="dv-small rv" style={d(0.24)}>Placeholder number until launch.</p>}
           {k === "own" && <p className="dv-small rv" style={d(0.24)}>MIT license. Every part runs on your laptop with stand-ins when keys are missing, and tells you which parts are not live.</p>}
         </div>
 
