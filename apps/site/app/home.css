@@ -435,13 +435,18 @@ mark{background:none;color:inherit}
 
 /* needs: pick what you need help with */
 .nd-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:40px;align-items:start}
-.nd-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-.nd-pick{display:grid;gap:4px;align-content:start;text-align:left;padding:16px;min-height:104px;border-radius:16px;border:1px solid var(--border);background:#fff;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s}
-.nd-pick:hover{border-color:var(--border2)}
-.nd-pick strong{font-family:var(--font-display),sans-serif;font-weight:700;font-size:1.06rem;letter-spacing:-.01em;line-height:1.2}
-.nd-pick span{font-size:.86rem;color:var(--muted);line-height:1.35}
-.nd-pick[aria-pressed="true"]{background:var(--hl);border-color:var(--hl)}
+.nd-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:6px}
+.nd-pick{display:grid;gap:4px;align-content:start;justify-items:start;text-align:left;padding:16px 16px 18px;min-height:150px;border-radius:20px;border:3px solid #fff;background:var(--tint);box-shadow:0 1px 2px rgba(18,18,18,.08),0 10px 22px -12px rgba(18,18,18,.25);cursor:pointer;transform:rotate(var(--tilt));transition:transform .3s cubic-bezier(.3,1.6,.5,1),box-shadow .2s,border-color .15s}
+.nd-icon{flex:none;overflow:visible;margin-bottom:6px;transition:transform .35s cubic-bezier(.3,1.6,.5,1)}
+.nd-pick strong{font-family:var(--font-display),sans-serif;font-weight:700;font-size:1.04rem;letter-spacing:-.01em;line-height:1.2}
+.nd-pick span{font-size:.84rem;color:var(--muted);line-height:1.35}
+.nd-pick:hover{transform:rotate(0) translateY(-3px)}
+.nd-pick:hover .nd-icon{transform:rotate(-8deg) scale(1.08)}
+.nd-pick[aria-pressed="true"]{transform:rotate(0) scale(1.04);border-color:var(--text);box-shadow:0 4px 0 var(--text)}
+.nd-pick[aria-pressed="true"] .nd-icon{animation:ndHop .6s cubic-bezier(.3,1.6,.5,1)}
 .nd-pick[aria-pressed="true"] span{color:var(--text)}
+@keyframes ndHop{0%{transform:none}35%{transform:translateY(-10px) rotate(-6deg)}70%{transform:rotate(3deg)}100%{transform:none}}
+@media (prefers-reduced-motion:reduce){.nd-pick,.nd-icon{transition:none}.nd-pick[aria-pressed="true"] .nd-icon{animation:none}}
 .nd-stage{background:var(--bg2);border-radius:20px;padding:32px;min-height:480px}
 .nd-panel{display:flex;flex-direction:column;gap:12px}
 .nd-panel .bub{max-width:88%}
@@ -452,7 +457,7 @@ mark{background:none;color:inherit}
 .nd-get mark{background-image:linear-gradient(var(--hl),var(--hl));background-repeat:no-repeat;background-size:100% 100%;padding:0 .08em;-webkit-box-decoration-break:clone;box-decoration-break:clone;animation:hlDraw .55s cubic-bezier(.6,0,.2,1) var(--d,.15s) both}
 .nd-small{font-size:.88rem;color:var(--muted)}
 @media (max-width:1080px){.nd-grid{grid-template-columns:1fr;gap:24px}.nd-stage{min-height:0}}
-@media (max-width:720px){.nd-list{grid-template-columns:repeat(2,minmax(0,1fr))}.nd-pick{min-height:0;padding:14px}.nd-stage{padding:18px;border-radius:16px}}
+@media (max-width:720px){.nd-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.nd-pick{min-height:0;padding:14px}.nd-icon{width:44px;height:44px}.nd-stage{padding:18px;border-radius:16px}}
 
 /* pricing details */
 .price.plus{display:flex;flex-direction:column}
