@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG, handleRequest, RECEIPT_RETENTION_MS, runCleanup, SUBMISSION_RETENTION_MS, type PortalConfig } from "../src/app";
+import { submissionFileKey } from "../src/files";
+import { sha256Hex } from "../src/store";
 import { TEST_BANNER } from "../src/pages";
 import type { Household } from "../src/store";
 import { MemoryFileStore, MemoryStore } from "./memory-store";
@@ -916,7 +918,7 @@ describe("blocker 5: file bytes in the file store", () => {
     if (!filed) throw new Error("submission was not filed");
     expect(JSON.stringify(filed)).not.toContain("%PDF-");
     expect(filed.files[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(filed.files[0]?.r2key).toMatch(/^submissions\/web\/.+\/1-[0-9a-f]{8}$/);
+    expect(filed.files[0]?.r2key).toMatch(/^submissions\/web\/.+\/1-[0-9a-f]{64}$/);
     const bytes = await files.get(filed.files[0]!.r2key);
     expect(bytes?.type).toBe("application/pdf");
     expect(Buffer.from(bytes!.data).toString()).toBe("%PDF-fake-bytes");
@@ -934,6 +936,47 @@ describe("blocker 5: file bytes in the file store", () => {
     expect(files.objects.size).toBe(1);
     const remaining = await files.get([...files.objects.keys()][0]!);
     expect(Buffer.from(remaining!.data).toString()).toBe("%PDF-second-bytes");
+  });
+
+  test("two files sharing a 32-bit hash prefix file and download independently", async () => {
+    // Both byte strings hash to 19e758ad...; only the full hash tells them apart.
+    const firstBytes = "%PDF-collision-probe-13359";
+    const secondBytes = "%PDF-collision-probe-20352";
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const post = (packetBytes: string) =>
+      handleRequest(
+        new Request(`${BASE}/submissions`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: AUTH },
+          body: JSON.stringify({
+            key: "prefix-key",
+            household: HOUSEHOLD,
+            files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from(packetBytes).toString("base64") }],
+          }),
+        }),
+        store,
+        files,
+        config,
+      );
+    const first = await post(firstBytes);
+    expect(first.status).toBe(200);
+    const confirmation = ((await first.json()) as Record<string, string>)["confirmationNumber"] ?? "";
+    const second = await post(secondBytes);
+    expect(second.status).toBe(409);
+    const download = await handleRequest(
+      new Request(`${BASE}/caseworker/${confirmation}/file/0`, { headers: { authorization: AUTH } }),
+      store,
+      files,
+      config,
+    );
+    expect(download.status).toBe(200);
+    expect(await download.text()).toBe(firstBytes);
+    expect(files.objects.size).toBe(1);
+    const [hashA, hashB] = await Promise.all([sha256Hex(firstBytes), sha256Hex(secondBytes)]);
+    expect(hashA.slice(0, 8)).toBe(hashB.slice(0, 8));
+    expect(submissionFileKey("web", "prefix-key", 1, hashA)).not.toBe(submissionFileKey("web", "prefix-key", 1, hashB));
   });
 
   test("a conflict deletes the loser's objects and keeps the winner's bytes", async () => {
