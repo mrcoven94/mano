@@ -7,6 +7,7 @@ import Everywhere from "@/components/home/Everywhere";
 import Improve from "@/components/home/Improve";
 import Needs from "@/components/home/Needs";
 import Vault from "@/components/home/Vault";
+import Reach from "@/components/home/Reach";
 import Pricing from "@/components/home/Pricing";
 import Faq from "@/components/Faq";
 import Mascot from "@/components/Mascot";
@@ -55,6 +56,12 @@ export default function Home() {
       <section className="h-vault" aria-labelledby="vt-h">
         <div className="wrap">
           <Vault />
+        </div>
+      </section>
+
+      <section className="h-reach" aria-labelledby="rc-h">
+        <div className="wrap">
+          <Reach />
         </div>
       </section>
 
