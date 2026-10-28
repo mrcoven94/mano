@@ -13,12 +13,12 @@ import { SMS_HREF, SMS_NUMBER, PLACEHOLDER_NOTE, REPO_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: { absolute: "Mano: AI that helps you pay rent, get food, medicine and child care" },
-  description: "Mano is AI that gets you the help you need: rent, food and EBT, light and water bills, medicine, child care, housing and credit. It finds the help, fills out the forms and keeps it coming. You approve every step, and it is free.",
+  description: "Mano is AI that gets you the help you need: rent, food and EBT, light and water bills, medicine, child care, housing and credit. It finds the help, fills out the forms and keeps it coming. You approve every step, and it is free to start.",
   alternates: { canonical: "/" },
 };
 
 const faqs: [string, string][] = [
-  ["Is Mano really free?", "Yes. Applications, renewals, reminders, mail scans and documents are free with no limits, and they stay free. Plus is $8 a month or $60 a year. It gives Mano its own computer, phone number and email, and covers unlimited calls, faxes and mailed letters, credit disputes and a priority line."],
+  ["Is Mano really free?", "Keeping your help is always free: renewals, reminders, mail scans and documents have no limits, and you can make 3 applications a month. Plus is $8 a month or $60 a year for unlimited applications, a Mano that works every day without being asked, calls and waiting on hold, and a support team that answers the same day and helps with appeals. Faxes and mailed letters are at cost, and Mano tells you the price first."],
   ["Does Mano decide if I get help?", "No. The office that runs the program decides. Mano prepares your application, sends it when you say yes, follows up and tells you what the office said."],
   ["Do I have to approve everything?", "Yes. Before anything goes out, Mano shows you who it is for, what it is for and the exact copy. If anything changes after you said yes, Mano asks you again."],
   ["Who can see my information?", "Only the people and offices you choose, for the reason you choose. You can see who has access and take it back at any time. Mano cannot pull back copies that were already sent, and it tells you which ones those are."],

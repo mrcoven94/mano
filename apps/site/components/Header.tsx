@@ -6,7 +6,7 @@ import { REPO_URL } from "@/lib/site";
 import Mascot from "./Mascot";
 
 const links = [
-  { href: "/", label: "For people", sub: "Free for everyone" },
+  { href: "/", label: "For people", sub: "Free to start" },
   { href: "/government", label: "For offices", sub: "Agencies" },
   { href: "/organizations", label: "For nonprofits", sub: "Case managers" },
   { href: "/partners", label: "Partners", sub: "Offer your service" },

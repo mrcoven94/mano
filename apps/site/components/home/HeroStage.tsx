@@ -59,7 +59,7 @@ export default function HeroStage() {
           <a className="btn btn-primary btn-lg" href="#get-mano">Text Mano</a>
           <a className="btn btn-ghost btn-lg" href="#nd-h">What Mano helps with</a>
         </div>
-        <p className="h-note">Free for applying and renewals, and it stays free.</p>
+        <p className="h-note">Free to start, and keeping your help is always free.</p>
       </div>
 
       <div className="wrap h-stage-wrap" ref={stage}>
