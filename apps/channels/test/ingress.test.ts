@@ -113,6 +113,8 @@ describe("webhook ingress", () => {
     expect((await handleWebhook(await signedRequest(body, now), hookEnv(sent))).status).toBe(200);
     expect(lines.join("\n")).not.toContain("SENTINEL-INBOUND-4");
     expect(lines.join("\n")).not.toContain("+15550001001");
+    const enqueued = lines.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => l.eventId === "evt_hook_1");
+    expect(enqueued).toMatchObject({ event: "webhook_enqueued", eventId: "evt_hook_1" });
   });
 });
 

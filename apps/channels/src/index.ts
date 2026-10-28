@@ -18,7 +18,7 @@ import { globalStateStub } from "./conversation.js";
 export { ConversationDO } from "./conversation.js";
 export { ChannelStateDO } from "./state.js";
 
-export const WEBHOOK_PATH = "/webhooks/blooio";
+const WEBHOOK_PATH = "/webhooks/blooio";
 const RECONCILE_LIMIT = 100;
 const RECONCILE_MAX_PAGES = 5;
 
@@ -58,7 +58,7 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
   if (event.channelId !== env.BLOOIO_CHANNEL_ID) {
     logger.info("webhook_ignored", {
       reason: "wrong_channel",
-      event: event.id,
+      eventId: event.id,
       type: event.rawType,
       durationMs: Date.now() - started,
     });
@@ -66,7 +66,7 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
   }
   await env.EVENTS.send(event);
   logger.info("webhook_enqueued", {
-    event: event.id,
+    eventId: event.id,
     type: event.rawType,
     chat: event.chatId,
     durationMs: Date.now() - started,
@@ -79,7 +79,7 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
 export async function routeEvent(event: NormalizedEvent, env: Env): Promise<"routed" | "skipped"> {
   const logger = createLogger();
   if (!event.handle || event.kind === "ignored" || event.kind === "typing.started" || event.kind === "typing.stopped") {
-    logger.info("event_skipped", { event: event.id, type: event.rawType });
+    logger.info("event_skipped", { eventId: event.id, type: event.rawType });
     return "skipped";
   }
   const handleHash = await hashHandle(event.handle, env.MANO_HANDLE_PEPPER);
@@ -90,7 +90,7 @@ export async function routeEvent(event: NormalizedEvent, env: Env): Promise<"rou
   });
   if (!res.ok) throw new Error(`Conversation route failed: ${res.status}`);
   const data = (await res.json()) as { result?: string };
-  logger.info("event_routed", { event: event.id, type: event.rawType, handle: handleHash, result: data.result ?? "unknown" });
+  logger.info("event_routed", { eventId: event.id, type: event.rawType, handle: handleHash, result: data.result ?? "unknown" });
   return "routed";
 }
 
@@ -162,7 +162,7 @@ export default {
         message.ack();
       } catch (err) {
         createLogger().warn("event_route_failed", {
-          event: String((event as { id?: unknown })?.id ?? "unknown"),
+          eventId: String((event as { id?: unknown })?.id ?? "unknown"),
           err: err instanceof Error ? err.message : "unknown",
         });
         message.retry();

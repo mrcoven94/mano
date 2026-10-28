@@ -134,11 +134,11 @@ export class ConversationRunner {
     if (event.kind === "message.received" && event.direction === "inbound") {
       const ageMs = event.occurredAtMs > 0 ? nowMs() - event.occurredAtMs : 0;
       if (ageMs > config.maxInboundAgeMs) {
-        logger.info("inbound_stale", { handle: this.logHandle(), event: event.id, ageMs });
+        logger.info("inbound_stale", { handle: this.logHandle(), eventId: event.id, ageMs });
         return "stale";
       }
       if (!event.chatId && !event.handle) {
-        logger.warn("inbound_unroutable", { handle: this.logHandle(), event: event.id });
+        logger.warn("inbound_unroutable", { handle: this.logHandle(), eventId: event.id });
         return "recorded";
       }
       const text = event.text ?? "";
@@ -163,7 +163,7 @@ export class ConversationRunner {
       });
       logger.info("inbound_queued", {
         handle: this.logHandle(),
-        event: event.id,
+        eventId: event.id,
         source,
         hasText: text.length > 0,
         attachments: event.attachments.length,
@@ -183,7 +183,7 @@ export class ConversationRunner {
         });
         logger.info("outbound_lifecycle", {
           handle: this.logHandle(),
-          event: event.id,
+          eventId: event.id,
           key: row.key,
           state: advanced,
           code: event.errorCode ?? null,
@@ -198,7 +198,7 @@ export class ConversationRunner {
       const meta = store.meta();
       meta.closed = true;
       store.saveMeta(meta);
-      logger.info("conversation_closed", { handle: this.logHandle(), event: event.id });
+      logger.info("conversation_closed", { handle: this.logHandle(), eventId: event.id });
       return "recorded";
     }
 
@@ -214,7 +214,7 @@ export class ConversationRunner {
     meta.to = event.handle ?? meta.to;
     meta.turn += 1;
     store.saveMeta(meta);
-    logger.info("opted_out", { handle: this.logHandle(), event: event.id, turn: meta.turn });
+    logger.info("opted_out", { handle: this.logHandle(), eventId: event.id, turn: meta.turn });
     await this.sendBubble({
       turn: meta.turn,
       part: 0,

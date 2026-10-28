@@ -242,8 +242,8 @@ describe("log safety", () => {
     expect(logs).not.toContain("SENTINEL-ZULU-9");
     expect(logs).not.toContain("SENTINEL-555-0199");
     expect(logs).not.toContain(TEST_HANDLE);
-    expect(logs).toContain("evt_1");
-    expect(logs).toContain(TEST_HANDLE_HASH);
+    const queued = h.lines.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => l.eventId === "evt_1");
+    expect(queued).toMatchObject({ event: "inbound_queued", eventId: "evt_1", handle: TEST_HANDLE_HASH });
   });
 });
 
