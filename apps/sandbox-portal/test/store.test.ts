@@ -21,7 +21,7 @@ function input(key: string, digest = "digest-a", household: Household = HOUSEHOL
 }
 
 function filed(result: SubmitResult): Submission {
-  if (result.outcome === "conflict") throw new Error("unexpected conflict");
+  if (result.outcome !== "stored" && result.outcome !== "duplicate") throw new Error(`unexpected ${result.outcome}`);
   return result.submission;
 }
 
@@ -75,7 +75,7 @@ describe("blocker 1: atomic submit", () => {
     const confirmations = new Set<string>();
     for (let i = 0; i < 25; i++) {
       const result = await store.submit(input(`key-${i}`));
-      if (result.outcome === "conflict") throw new Error("unexpected conflict");
+      if (result.outcome !== "stored") throw new Error(`unexpected ${result.outcome}`);
       confirmations.add(result.submission.confirmationNumber);
     }
     expect(confirmations.size).toBe(25);
@@ -247,6 +247,24 @@ describe("blocker 8: retention", () => {
       expect(await store.listStaleStaged(5000)).toEqual(["staging/a/1-x"]);
       await store.untrackStaged(["staging/a/1-x"]);
       expect(await store.listStaleStaged(5000)).toEqual([]);
+    });
+
+    test(`${name}: submit after retirement returns the original receipt or 409`, async () => {
+      const store = make();
+      const first = await store.submit(input("retired-key", "digest-a"));
+      if (first.outcome !== "stored") throw new Error("expected stored");
+      const original = first.submission.confirmationNumber;
+      await store.writeReceipts([{ key: "retired-key", scope: "web", confirmationNumber: original, digest: "digest-a", receivedAt: 1000 }]);
+      await store.deleteSubmissions([{ scope: "web", key: "retired-key" }]);
+      const same = await store.submit(input("retired-key", "digest-a"));
+      expect(same.outcome).toBe("duplicate-retired");
+      if (same.outcome !== "duplicate-retired") throw new Error("expected duplicate-retired");
+      expect(same.receipt.confirmationNumber).toBe(original);
+      const changed = await store.submit(input("retired-key", "digest-b", { ...HOUSEHOLD, fullName: "Someone Else" }));
+      expect(changed.outcome).toBe("conflict-retired");
+      if (changed.outcome !== "conflict-retired") throw new Error("expected conflict-retired");
+      expect(changed.receipt.confirmationNumber).toBe(original);
+      expect(await store.countSubmissions()).toBe(0);
     });
   }
 });

@@ -120,6 +120,11 @@ export class MemoryStore implements Store {
       if (existing.digest === input.digest) return { outcome: "duplicate", submission: structuredClone(existing) };
       return { outcome: "conflict", stored: structuredClone(existing) };
     }
+    const receipt = this.receipts.get(scopedKey(input.scope, input.key));
+    if (receipt) {
+      if (receipt.digest === input.digest) return { outcome: "duplicate-retired", receipt: structuredClone(receipt) };
+      return { outcome: "conflict-retired", receipt: structuredClone(receipt) };
+    }
     let confirmationNumber = newConfirmationNumber();
     while (this.byConfirmation.has(confirmationNumber)) confirmationNumber = newConfirmationNumber();
     const submission: Submission = {

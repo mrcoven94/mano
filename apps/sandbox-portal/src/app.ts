@@ -437,7 +437,7 @@ function submissionJson(sub: Submission, duplicate: boolean): Response {
   );
 }
 
-function conflictJson(stored: Submission): Response {
+function conflictJson(stored: Pick<Submission, "key" | "scope" | "confirmationNumber" | "digest" | "receivedAt">): Response {
   return json(
     {
       error: "This key already filed a different application. Use a new key for a new application.",
@@ -667,10 +667,10 @@ async function handleSubmit(
     slowMs,
     receivedAt: nowMs(config),
   });
-  if (result.outcome === "conflict") {
+  if (result.outcome === "conflict" || result.outcome === "conflict-retired") {
     await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
     if (lease) await store.endSlow(lease);
-    const stored = result.stored;
+    const stored = result.outcome === "conflict" ? result.stored : result.receipt;
     if (isJson || wantsJson(request)) return conflictJson(stored);
     return html(
       errorPage(
@@ -681,6 +681,35 @@ async function handleSubmit(
       ),
       409,
     );
+  }
+  if (result.outcome === "duplicate-retired") {
+    await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
+    if (lease) await store.endSlow(lease);
+    const kept = result.receipt;
+    if (session) {
+      const fresh = await touchSession(store, session, config);
+      fresh.submitted = { key: kept.key, confirmationNumber: kept.confirmationNumber, digest: kept.digest, receivedAt: kept.receivedAt };
+      delete fresh.household;
+      fresh.files = [];
+      await store.putSession(fresh);
+    }
+    if (isJson || wantsJson(request)) {
+      return json(
+        {
+          key: kept.key,
+          scope: kept.scope,
+          status: "received",
+          confirmationNumber: kept.confirmationNumber,
+          digest: kept.digest,
+          receivedAt: kept.receivedAt,
+          receivedAtIso: new Date(kept.receivedAt).toISOString(),
+          duplicate: true,
+          retired: true,
+        },
+        200,
+      );
+    }
+    return html(submittedPage({ key: kept.key, confirmationNumber: kept.confirmationNumber, digest: kept.digest, receivedAt: kept.receivedAt }));
   }
   const duplicate = result.outcome === "duplicate";
   const receipt = result.submission;

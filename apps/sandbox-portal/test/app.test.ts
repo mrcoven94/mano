@@ -1710,3 +1710,52 @@ describe("review round 2 item 3: staged bytes are tracked and deletes are ordere
     expect(store.stagedObjects.has("staging/new-attempt/0-def")).toBe(true);
   });
 });
+
+describe("review round 2 item 4: idempotency survives retirement", () => {
+  const packet = {
+    key: "retire-key",
+    household: HOUSEHOLD,
+    files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
+  };
+
+  function post(store: MemoryStore, files: MemoryFileStore, config: PortalConfig, body: unknown = packet) {
+    return handleRequest(
+      new Request(`${BASE}/submissions`, { method: "POST", headers: { "content-type": "application/json", authorization: AUTH }, body: JSON.stringify(body) }),
+      store,
+      files,
+      config,
+    );
+  }
+
+  test("an identical retry after retirement returns the original receipt", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const filedAt = Date.now();
+    const config = testConfig({ now: () => filedAt });
+    const original = ((await (await post(store, files, config)).json()) as Record<string, string>)["confirmationNumber"] ?? "";
+    expect(original).not.toBe("");
+    await runCleanup(store, files, filedAt + SUBMISSION_RETENTION_MS + 1000);
+    expect(await store.countSubmissions()).toBe(0);
+    const retry = await post(store, files, config);
+    expect(retry.status).toBe(200);
+    const body = (await retry.json()) as Record<string, unknown>;
+    expect(body["duplicate"]).toBe(true);
+    expect(body["retired"]).toBe(true);
+    expect(body["confirmationNumber"]).toBe(original);
+    expect(await store.countSubmissions()).toBe(0);
+  });
+
+  test("a changed packet after retirement returns 409 with the original receipt", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const filedAt = Date.now();
+    const config = testConfig({ now: () => filedAt });
+    const original = ((await (await post(store, files, config)).json()) as Record<string, string>)["confirmationNumber"] ?? "";
+    await runCleanup(store, files, filedAt + SUBMISSION_RETENTION_MS + 1000);
+    const changed = await post(store, files, config, { ...packet, household: { ...HOUSEHOLD, fullName: "Someone Else" } });
+    expect(changed.status).toBe(409);
+    const body = (await changed.json()) as Record<string, { confirmationNumber: string }>;
+    expect(body["received"]?.confirmationNumber).toBe(original);
+    expect(await store.countSubmissions()).toBe(0);
+  });
+});

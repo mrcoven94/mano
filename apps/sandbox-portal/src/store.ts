@@ -75,7 +75,9 @@ export interface SubmitInput {
 export type SubmitResult =
   | { outcome: "stored"; submission: Submission }
   | { outcome: "duplicate"; submission: Submission }
-  | { outcome: "conflict"; stored: Submission };
+  | { outcome: "duplicate-retired"; receipt: SubmissionReceipt }
+  | { outcome: "conflict"; stored: Submission }
+  | { outcome: "conflict-retired"; receipt: SubmissionReceipt };
 
 /** Small receipt kept after the full submission is retired. */
 export interface SubmissionReceipt {
@@ -127,7 +129,8 @@ export interface Store {
   /**
    * File one submission atomically within its scope. The first writer for a
    * scope and key wins; a later submit under the same scope and key gets the
-   * stored winner back (duplicate) or a conflict, never overwrites it.
+   * stored winner back (duplicate) or a conflict, never overwrites it. After
+   * the submission retires, the retained receipt answers the same way.
    */
   submit(input: SubmitInput): Promise<SubmitResult>;
 }
@@ -398,6 +401,17 @@ export class PortalStoreSql implements Store {
 
   async submit(input: SubmitInput): Promise<SubmitResult> {
     this.ensureTables();
+    const live = await this.getSubmission(input.scope, input.key);
+    if (live) {
+      if (live.digest === input.digest) return { outcome: "duplicate", submission: live };
+      return { outcome: "conflict", stored: live };
+    }
+    // A retired key keeps its idempotency: the retained receipt answers.
+    const receipt = await this.getReceipt(input.scope, input.key);
+    if (receipt) {
+      if (receipt.digest === input.digest) return { outcome: "duplicate-retired", receipt };
+      return { outcome: "conflict-retired", receipt };
+    }
     for (let attempt = 0; attempt < 10; attempt++) {
       const submission: Submission = {
         key: input.key,
@@ -429,7 +443,17 @@ export class PortalStoreSql implements Store {
         if (isConfirmationConflict(err)) continue;
         throw err;
       }
-      if (written === 1) return { outcome: "stored", submission };
+      if (written === 1) {
+        // A retire that landed between our receipt check and this insert owns
+        // the key; yield to it instead of filing a second confirmation.
+        const raced = await this.getReceipt(input.scope, input.key);
+        if (raced) {
+          await this.deleteSubmissions([{ scope: input.scope, key: input.key }]);
+          if (raced.digest === input.digest) return { outcome: "duplicate-retired", receipt: raced };
+          return { outcome: "conflict-retired", receipt: raced };
+        }
+        return { outcome: "stored", submission };
+      }
       const existing = await this.getSubmission(input.scope, input.key);
       if (!existing) continue;
       if (existing.digest === input.digest) return { outcome: "duplicate", submission: existing };
