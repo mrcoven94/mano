@@ -16,6 +16,14 @@ export interface FileMeta {
   r2key: string;
 }
 
+/** What this session already filed, so the review page can say so. */
+export interface SubmittedRef {
+  key: string;
+  confirmationNumber: string;
+  digest: string;
+  receivedAt: number;
+}
+
 export interface SessionData {
   id: string;
   household?: Household;
@@ -24,6 +32,7 @@ export interface SessionData {
   key: string;
   createdAt: number;
   expiresAt: number;
+  submitted?: SubmittedRef;
 }
 
 export type SubmissionStatus = "received";

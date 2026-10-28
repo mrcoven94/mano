@@ -21,6 +21,7 @@ import {
   homePage,
   householdPage,
   reviewPage,
+  submittedPage,
   timeoutPage,
 } from "./pages";
 
@@ -109,6 +110,38 @@ function formRequestFromBytes(request: Request, bytes: Uint8Array): Request {
 /** Longest base64 string that can still decode within the byte cap. */
 function maxEncodedLength(maxBytes: number): number {
   return Math.ceil(maxBytes / 3) * 4;
+}
+
+/** Attachment header that cannot break out of the filename parameter. */
+function contentDisposition(name: string): string {
+  const ascii = name.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_").replace(/[\r\n]/g, "_").trim() || "download";
+  return `attachment; filename="${ascii.slice(0, 100)}"; filename*=UTF-8''${encodeURIComponent(name.slice(0, 200))}`;
+}
+
+type SniffedType = "application/pdf" | "image/png" | "image/jpeg" | null;
+
+/** Read the file signature. The client's declared MIME type is not trusted. */
+function sniffType(bytes: Uint8Array): SniffedType {
+  if (bytes.length >= 5 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 && bytes[4] === 0x2d) {
+    return "application/pdf";
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  return null;
 }
 
 function nowMs(config: PortalConfig): number {
@@ -293,8 +326,12 @@ async function readUploads(
   for (let i = 1; i <= config.maxUploadFiles; i++) {
     // workers-types declares get() as string-only; at runtime file inputs come back as File.
     const value = form.get(`document${i}`) as unknown as string | File | null;
-    if (!(value instanceof File) || value.size === 0) continue;
+    if (!(value instanceof File) || (value.size === 0 && !value.name)) continue;
     const name = value.name || `document${i}`;
+    if (value.size === 0) {
+      await files.del(staged);
+      return { error: `${name} is empty.` };
+    }
     if (name.length > MAX_FILE_NAME_LENGTH) {
       await files.del(staged);
       return { error: "A file name is too long." };
@@ -308,6 +345,10 @@ async function readUploads(
       return { error: `${name} is larger than the ${config.maxUploadBytes} byte limit.` };
     }
     const bytes = new Uint8Array(await value.arrayBuffer());
+    if (sniffType(bytes) !== value.type) {
+      await files.del(staged);
+      return { error: `${name} does not look like a ${value.type === "application/pdf" ? "PDF" : value.type === "image/png" ? "PNG" : "JPG"} file.` };
+    }
     const sha256 = await sha256Hex(bytes);
     const r2key = draftFileKey(sessionId, i, sha256);
     await files.put(r2key, bytes, value.type);
@@ -393,13 +434,26 @@ async function handleSubmit(
     } catch {
       return json({ error: "Request body must be valid JSON." }, 400);
     }
-    if (typeof body !== "object" || body === null) return json({ error: "Request body must be an object." }, 400);
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return json({ error: "Request body must be an object." }, 400);
+    }
     const record = body as Record<string, unknown>;
     for (const [k, v] of Object.entries(record)) {
       if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") fields[k] = String(v);
     }
     if (record["household"] !== undefined) {
-      const parsed = validateHousehold((record["household"] ?? {}) as Record<string, string>, config.maxFieldLength);
+      const raw = record["household"];
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        return json({ error: "household must be an object." }, 400);
+      }
+      const strings: Record<string, string> = {};
+      for (const [field, label] of Object.entries(HOUSEHOLD_LABELS)) {
+        const value = (raw as Record<string, unknown>)[field];
+        if (value === undefined) continue;
+        if (typeof value !== "string") return json({ error: `${label} must be a string.` }, 400);
+        strings[field] = value;
+      }
+      const parsed = validateHousehold(strings, config.maxFieldLength);
       if (!parsed.household) return json({ error: parsed.error }, 400);
       jsonHousehold = parsed.household;
     }
@@ -410,6 +464,9 @@ async function handleSubmit(
       }
       jsonUploads = [];
       for (const entry of record["files"] as Array<Record<string, unknown>>) {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+          return json({ error: "Each file needs a name, type and base64 data." }, 400);
+        }
         if (typeof entry["name"] !== "string" || typeof entry["type"] !== "string" || typeof entry["data"] !== "string") {
           return json({ error: "Each file needs a name, type and base64 data." }, 400);
         }
@@ -428,8 +485,14 @@ async function handleSubmit(
         } catch {
           return json({ error: `${entry["name"]} is not valid base64.` }, 400);
         }
+        if (bytes.length === 0) {
+          return json({ error: `${entry["name"]} is empty.` }, 400);
+        }
         if (bytes.length > config.maxUploadBytes) {
           return json({ error: `${entry["name"]} is larger than the ${config.maxUploadBytes} byte limit.` }, 400);
+        }
+        if (sniffType(bytes) !== entry["type"]) {
+          return json({ error: `${entry["name"]} does not look like its declared file type.` }, 400);
         }
         jsonUploads.push({ name: entry["name"], type: entry["type"], bytes });
       }
@@ -489,6 +552,11 @@ async function handleSubmit(
         ),
         400,
       );
+    }
+    if (session.submitted) {
+      const filed = await store.getSubmission(WEB_SCOPE, session.submitted.key);
+      if (filed) return html(confirmationPage(filed, true));
+      return html(submittedPage(session.submitted));
     }
     if (!session.household) {
       return html(errorPage("Incomplete application", "Household information is missing. Start again.", "/apply", "Start over"), 400);
@@ -578,7 +646,18 @@ async function handleSubmit(
   if (session) await fileStore.del(session.files.map((f) => f.r2key));
   const duplicate = result.outcome === "duplicate";
 
-  if (session) await store.deleteSession(session.id);
+  if (session) {
+    const fresh = await touchSession(store, session, config);
+    fresh.submitted = {
+      key: result.submission.key,
+      confirmationNumber: result.submission.confirmationNumber,
+      digest: result.submission.digest,
+      receivedAt: result.submission.receivedAt,
+    };
+    delete fresh.household;
+    fresh.files = [];
+    await store.putSession(fresh);
+  }
 
   if (slowMs > 0 && !duplicate) await sleep(slowMs);
   if (lease) await store.endSlow(lease);
@@ -663,6 +742,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "GET" && path === "/apply/documents") {
     const session = await loadSession(request, store, config);
     if (!session) return timedOut();
+    if (session.submitted) return html(submittedPage(session.submitted));
     if (!session.household) return redirect("/apply");
     await touchSession(store, session, config);
     return html(documentsPage());
@@ -691,6 +771,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "GET" && path === "/apply/review") {
     const session = await loadSession(request, store, config);
     if (!session) return timedOut();
+    if (session.submitted) return html(submittedPage(session.submitted));
     if (!session.household) return redirect("/apply");
     if (session.files.length === 0) return redirect("/apply/documents");
     await touchSession(store, session, config);
@@ -758,7 +839,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     return new Response(bytes.data as unknown as BodyInit, {
       headers: {
         "content-type": file.type,
-        "content-disposition": `attachment; filename="${file.name.replaceAll('"', "")}"`,
+        "content-disposition": contentDisposition(file.name),
       },
     });
   }

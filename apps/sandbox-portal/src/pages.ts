@@ -1,4 +1,4 @@
-import type { FileMeta, Household, Submission, SubmissionSummary } from "./store";
+import type { FileMeta, Household, Submission, SubmissionSummary, SubmittedRef } from "./store";
 
 export const TEST_BANNER = "TEST SYSTEM: this is a fake benefits portal for demos. No real benefits. No real data.";
 
@@ -110,7 +110,7 @@ export function reviewPage(household: Household, files: FileMeta[], key: string,
   return layout(
     "Step 3 of 3: Review",
     `<div class="steps">Step 1: Household &gt; Step 2: Documents &gt; <b>Step 3: Review</b></div>
-<div class="notice"><b>Check every field.</b> Pressing Submit sends this exact application. Your submission key is <span class="key">${escapeHtml(key)}</span>. If the page times out, Mano checks this key instead of submitting twice.</div>
+<div class="notice"><b>Check every field.</b> Pressing Submit sends this exact application. Your submission key is <span class="key">${escapeHtml(key)}</span>. Keep this number: if the page times out it proves what was received without filing twice.</div>
 <table class="form">
 <tr><td class="label">Full legal name</td><td>${escapeHtml(household.fullName)}</td></tr>
 <tr><td class="label">Date of birth</td><td>${escapeHtml(household.dateOfBirth)}</td></tr>
@@ -149,6 +149,19 @@ export function confirmationPage(sub: Submission, duplicate: boolean): string {
 <tr><td class="label">Submission key</td><td><span class="key">${escapeHtml(sub.key)}</span></td></tr>
 </table>
 <p>Write down your confirmation number. A caseworker will review your renewal.</p>
+<p><a href="/">Return to the home page</a></p>`,
+  );
+}
+
+export function submittedPage(ref: SubmittedRef): string {
+  return layout(
+    "Already submitted",
+    `<div class="notice"><b>This application was already submitted.</b> Nothing more needs filing. If you need to change details, start a new application.</div>
+<table class="form">
+<tr><td class="label">Confirmation number</td><td><span class="conf">${escapeHtml(ref.confirmationNumber)}</span></td></tr>
+<tr><td class="label">Received</td><td>${escapeHtml(new Date(ref.receivedAt).toUTCString())}</td></tr>
+<tr><td class="label">Submission key</td><td><span class="key">${escapeHtml(ref.key)}</span></td></tr>
+</table>
 <p><a href="/">Return to the home page</a></p>`,
   );
 }

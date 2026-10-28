@@ -36,7 +36,7 @@ function householdForm(overrides: Record<string, string> = {}): URLSearchParams 
   return params;
 }
 
-function pdfFile(name = "paystub.pdf", bytes = "fake-pdf-bytes"): File {
+function pdfFile(name = "paystub.pdf", bytes = "%PDF-fake-bytes"): File {
   return new File([bytes], name, { type: "application/pdf" });
 }
 
@@ -191,6 +191,66 @@ describe("renewal flow", () => {
     expect((await store.countSubmissions())).toBe(1);
   });
 
+  test("after filing, the review page shows the receipt instead of the draft", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const submit = await submitReview(store, files, config, cookie);
+    const confirmation = confirmationFrom(await submit.text());
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
+    const reviewText = await review.text();
+    expect(reviewText).toContain("already submitted");
+    expect(reviewText).toContain(confirmation);
+    expect(reviewText).toContain(TEST_BANNER);
+    const documents = await handleRequest(new Request(`${BASE}/apply/documents`, { headers: { cookie } }), store, files, config);
+    expect(await documents.text()).toContain("already submitted");
+  });
+
+  test("filing twice from one session returns the duplicate, not a timeout", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
+    const reviewText = await review.text();
+    const form = new URLSearchParams();
+    form.set("key", keyFromReview(reviewText));
+    form.set("digest", digestFromReview(reviewText));
+    const first = await handleRequest(
+      new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }),
+      store,
+      files,
+      config,
+    );
+    expect(first.status).toBe(200);
+    const second = await handleRequest(
+      new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }),
+      store,
+      files,
+      config,
+    );
+    expect(second.status).toBe(200);
+    const secondText = await second.text();
+    expect(secondText).toContain("Already received");
+    expect(confirmationFrom(secondText)).toBe(confirmationFrom(await first.text()));
+    expect(await store.countSubmissions()).toBe(1);
+  });
+
+  test("the review page speaks like an agency office", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
+    const reviewText = await review.text();
+    expect(reviewText).toContain("Keep this number");
+    expect(reviewText).not.toContain("Mano checks");
+  });
+
   test("a submit without the review digest is rejected", async () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
@@ -230,7 +290,7 @@ describe("idempotency", () => {
     const packet = {
       key: "resubmit-key",
       household: HOUSEHOLD,
-      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") }],
+      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
     };
     const post = () =>
       handleRequest(
@@ -258,7 +318,7 @@ describe("idempotency", () => {
     const packet = {
       key: "race-key",
       household: HOUSEHOLD,
-      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") }],
+      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
     };
     const responses = await Promise.all(
       Array.from({ length: 10 }, () =>
@@ -321,7 +381,7 @@ describe("idempotency", () => {
         body: JSON.stringify({
           key,
           household: HOUSEHOLD,
-          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("fake-pdf-bytes").toString("base64") }],
+          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-fake-bytes").toString("base64") }],
         }),
       }),
       store,
@@ -338,7 +398,7 @@ describe("idempotency", () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
     const config = testConfig();
-    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
+    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") };
     const post = (household: typeof HOUSEHOLD) =>
       handleRequest(
         new Request(`${BASE}/submissions`, {
@@ -370,7 +430,7 @@ describe("idempotency", () => {
         body: JSON.stringify({
           key: "digest-key",
           household: HOUSEHOLD,
-          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") }],
+          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
         }),
       }),
       store,
@@ -429,7 +489,7 @@ describe("idempotency", () => {
       config,
     );
     expect(web.status).toBe(200);
-    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
+    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") };
     const api = await handleRequest(
       new Request(`${BASE}/submissions`, {
         method: "POST",
@@ -473,7 +533,7 @@ describe("idempotency", () => {
         body: JSON.stringify({
           key,
           household: HOUSEHOLD,
-          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("fake-pdf-bytes").toString("base64") }],
+          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-fake-bytes").toString("base64") }],
         }),
       }),
       store,
@@ -492,7 +552,7 @@ describe("idempotency", () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
     const config = testConfig();
-    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
+    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") };
     await handleRequest(
       new Request(`${BASE}/submissions`, {
         method: "POST",
@@ -515,6 +575,37 @@ describe("idempotency", () => {
       config,
     );
     expect(web.status).toBe(404);
+  });
+
+  test("malformed JSON is rejected with 400, never a crash", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const post = (body: unknown) =>
+      handleRequest(
+        new Request(`${BASE}/submissions`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: AUTH },
+          body: JSON.stringify(body),
+        }),
+        store,
+        files,
+        config,
+      );
+    const cases: Array<[string, unknown, string]> = [
+      ["number field", { key: "k", household: { ...HOUSEHOLD, fullName: 42 }, files: [] }, "must be a string"],
+      ["string household", { key: "k", household: "x", files: [] }, "must be an object"],
+      ["array household", { key: "k", household: [], files: [] }, "must be an object"],
+      ["null file", { key: "k", household: HOUSEHOLD, files: [null] }, "name, type and base64 data"],
+      ["string file", { key: "k", household: HOUSEHOLD, files: ["x"] }, "name, type and base64 data"],
+      ["non-object body", [1, 2], "must be an object"],
+    ];
+    for (const [name, body, message] of cases) {
+      const res = await post(body);
+      expect(res.status, name).toBe(400);
+      expect(((await res.json()) as Record<string, string>)["error"], name).toContain(message);
+    }
+    expect(await store.countSubmissions()).toBe(0);
   });
 
   test("a submission without a key is rejected", async () => {
@@ -549,7 +640,7 @@ describe("slow mode", () => {
         body: JSON.stringify({
           key,
           household: HOUSEHOLD,
-          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") }],
+          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
         }),
       }),
       store,
@@ -669,6 +760,99 @@ describe("validation", () => {
     expect(await res.text()).toContain("PDF, PNG or JPG");
   });
 
+  test("documents reject bytes that do not match the declared type", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    const form = new FormData();
+    form.append("document1", new File(["plain text, no signature"], "fake.pdf", { type: "application/pdf" }));
+    const res = await handleRequest(
+      new Request(`${BASE}/apply/documents`, { method: "POST", headers: { cookie }, body: form }),
+      store,
+      files,
+      config,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("does not look like a PDF file");
+    expect(files.objects.size).toBe(0);
+    const api = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({
+          key: "k",
+          household: HOUSEHOLD,
+          files: [{ name: "fake.pdf", type: "application/pdf", data: Buffer.from("plain text, no signature").toString("base64") }],
+        }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(api.status).toBe(400);
+    expect(((await api.json()) as Record<string, string>)["error"]).toContain("does not look like");
+  });
+
+  test("documents reject empty files", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    const form = new FormData();
+    form.append("document1", new File([], "empty.pdf", { type: "application/pdf" }));
+    const res = await handleRequest(
+      new Request(`${BASE}/apply/documents`, { method: "POST", headers: { cookie }, body: form }),
+      store,
+      files,
+      config,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("is empty");
+    const api = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({
+          key: "k",
+          household: HOUSEHOLD,
+          files: [{ name: "empty.pdf", type: "application/pdf", data: "" }],
+        }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(api.status).toBe(400);
+    expect(((await api.json()) as Record<string, string>)["error"]).toContain("is empty");
+  });
+
+  test("PNG and JPEG signatures pass", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]).toString("base64");
+    const jpg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString("base64");
+    const res = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({
+          key: "images-key",
+          household: HOUSEHOLD,
+          files: [
+            { name: "scan.png", type: "image/png", data: png },
+            { name: "photo.jpg", type: "image/jpeg", data: jpg },
+          ],
+        }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(res.status).toBe(200);
+  });
+
   test("documents enforce the size cap", async () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
@@ -730,12 +914,12 @@ describe("blocker 5: file bytes in the file store", () => {
     expect(await store.countSubmissions()).toBe(1);
     const filed = await store.getSubmission("web", key);
     if (!filed) throw new Error("submission was not filed");
-    expect(JSON.stringify(filed)).not.toContain("fake-pdf-bytes");
+    expect(JSON.stringify(filed)).not.toContain("%PDF-");
     expect(filed.files[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(filed.files[0]?.r2key).toMatch(/^submissions\/web\/.+\/1-[0-9a-f]{8}$/);
     const bytes = await files.get(filed.files[0]!.r2key);
     expect(bytes?.type).toBe("application/pdf");
-    expect(Buffer.from(bytes!.data).toString()).toBe("fake-pdf-bytes");
+    expect(Buffer.from(bytes!.data).toString()).toBe("%PDF-fake-bytes");
     expect([...files.objects.keys()].some((k) => k.startsWith("drafts/"))).toBe(false);
   });
 
@@ -744,12 +928,12 @@ describe("blocker 5: file bytes in the file store", () => {
     const files = new MemoryFileStore();
     const config = testConfig();
     const cookie = await postHousehold(store, files, config);
-    await postDocuments(store, files, config, cookie, [pdfFile("first.pdf", "first-bytes")]);
+    await postDocuments(store, files, config, cookie, [pdfFile("first.pdf", "%PDF-first-bytes")]);
     expect(files.objects.size).toBe(1);
-    await postDocuments(store, files, config, cookie, [pdfFile("second.pdf", "second-bytes")]);
+    await postDocuments(store, files, config, cookie, [pdfFile("second.pdf", "%PDF-second-bytes")]);
     expect(files.objects.size).toBe(1);
     const remaining = await files.get([...files.objects.keys()][0]!);
-    expect(Buffer.from(remaining!.data).toString()).toBe("second-bytes");
+    expect(Buffer.from(remaining!.data).toString()).toBe("%PDF-second-bytes");
   });
 
   test("a conflict deletes the loser's objects and keeps the winner's bytes", async () => {
@@ -768,14 +952,14 @@ describe("blocker 5: file bytes in the file store", () => {
         files,
         config,
       );
-    const first = await post("Maria Santos", "winner-bytes");
+    const first = await post("Maria Santos", "%PDF-winner-bytes");
     expect(first.status).toBe(200);
-    const second = await post("Alex Rivera", "loser-bytes");
+    const second = await post("Alex Rivera", "%PDF-loser-bytes");
     expect(second.status).toBe(409);
     const keys = [...files.objects.keys()];
     expect(keys).toHaveLength(1);
     const kept = await files.get(keys[0]!);
-    expect(Buffer.from(kept!.data).toString()).toBe("winner-bytes");
+    expect(Buffer.from(kept!.data).toString()).toBe("%PDF-winner-bytes");
   });
 });
 
@@ -811,7 +995,7 @@ describe("blocker 8: scheduled cleanup", () => {
         body: JSON.stringify({
           key: "aging-key",
           household: HOUSEHOLD,
-          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") }],
+          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
         }),
       }),
       store,
@@ -1054,7 +1238,7 @@ describe("blocker 6: access control", () => {
     const packet = (key: string) => ({
       key,
       household: HOUSEHOLD,
-      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") }],
+      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
     });
     const post = (key: string) =>
       handleRequest(
@@ -1136,10 +1320,45 @@ describe("caseworker view", () => {
     const file = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}/file/0`, { headers: { authorization: AUTH } }), store, files, config);
     expect(file.status).toBe(200);
     expect(file.headers.get("content-type")).toBe("application/pdf");
-    expect(await file.text()).toBe("fake-pdf-bytes");
+    expect(await file.text()).toBe("%PDF-fake-bytes");
 
     const missing = await handleRequest(new Request(`${BASE}/caseworker/SR-00000000`, { headers: { authorization: AUTH } }), store, files, config);
     expect(missing.status).toBe(404);
+  });
+
+  test("downloads sanitize hostile file names", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const name = 'pay"stub\r\n.pdf';
+    const submit = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({
+          key: "hostile-name",
+          household: HOUSEHOLD,
+          files: [{ name, type: "application/pdf", data: Buffer.from("%PDF-x").toString("base64") }],
+        }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(submit.status).toBe(200);
+    const confirmation = ((await submit.json()) as Record<string, string>)["confirmationNumber"] ?? "";
+    const download = await handleRequest(
+      new Request(`${BASE}/caseworker/${confirmation}/file/0`, { headers: { authorization: AUTH } }),
+      store,
+      files,
+      config,
+    );
+    expect(download.status).toBe(200);
+    const disposition = download.headers.get("content-disposition") ?? "";
+    expect(disposition).not.toContain("\r");
+    expect(disposition).not.toContain("\n");
+    expect(disposition).toContain('filename="pay_stub__.pdf"');
+    expect(disposition).toContain("filename*=UTF-8''");
   });
 
   test("the list paginates 25 summaries at a time", async () => {
@@ -1147,7 +1366,7 @@ describe("caseworker view", () => {
     const files = new MemoryFileStore();
     let tick = 1000;
     const config = testConfig({ now: () => tick });
-    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
+    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") };
     for (let i = 0; i < 26; i++) {
       tick += 1000;
       const res = await handleRequest(
