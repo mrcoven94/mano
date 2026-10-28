@@ -4,9 +4,7 @@ compatibility_date = "2026-10-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
-[[routes]]
-pattern = "text.withmano.com/*"
-zone_name = "withmano.com"
+routes = [{ pattern = "text.withmano.com", custom_domain = true }]
 
 [durable_objects]
 bindings = [

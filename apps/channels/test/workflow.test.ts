@@ -54,7 +54,7 @@ describe("deploy-channels workflow", () => {
   it("serves only from text.withmano.com, never workers.dev", () => {
     const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
     expect(toml).toContain("workers_dev = false");
-    expect(toml).toContain('pattern = "text.withmano.com/*"');
+    expect(toml).toContain('routes = [{ pattern = "text.withmano.com", custom_domain = true }]');
   });
 
   it("never writes an empty optional secret", () => {
