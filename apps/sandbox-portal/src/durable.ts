@@ -1,5 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
-import { PortalStoreSql, type SessionData, type Submission, type SubmitInput, type SubmitResult } from "./store";
+import {
+  PortalStoreSql,
+  type SessionData,
+  type Submission,
+  type SubmissionReceipt,
+  type SubmitInput,
+  type SubmitResult,
+} from "./store";
 
 /** Durable Object wrapper. All logic lives in PortalStoreSql so unit tests stay runtime-free. */
 export class PortalStore extends DurableObject {
@@ -17,6 +24,22 @@ export class PortalStore extends DurableObject {
 
   deleteSession(id: string): Promise<void> {
     return this.inner().deleteSession(id);
+  }
+
+  deleteExpiredSessions(now: number): Promise<SessionData[]> {
+    return this.inner().deleteExpiredSessions(now);
+  }
+
+  getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null> {
+    return this.inner().getReceipt(scope, key);
+  }
+
+  retireOldSubmissions(olderThan: number): Promise<string[]> {
+    return this.inner().retireOldSubmissions(olderThan);
+  }
+
+  purgeOldReceipts(olderThan: number): Promise<number> {
+    return this.inner().purgeOldReceipts(olderThan);
   }
 
   getSubmission(scope: string, key: string): Promise<Submission | null> {

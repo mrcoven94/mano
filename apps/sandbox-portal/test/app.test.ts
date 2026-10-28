@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { DEFAULT_CONFIG, handleRequest, type PortalConfig } from "../src/app";
+import { DEFAULT_CONFIG, handleRequest, RECEIPT_RETENTION_MS, runCleanup, SUBMISSION_RETENTION_MS, type PortalConfig } from "../src/app";
 import { TEST_BANNER } from "../src/pages";
 import type { Household } from "../src/store";
 import { MemoryFileStore, MemoryStore } from "./memory-store";
@@ -774,6 +774,77 @@ describe("blocker 5: file bytes in the file store", () => {
     expect(keys).toHaveLength(1);
     const kept = await files.get(keys[0]!);
     expect(Buffer.from(kept!.data).toString()).toBe("winner-bytes");
+  });
+});
+
+describe("blocker 8: scheduled cleanup", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  test("expired drafts and their objects are deleted", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    expect(files.objects.size).toBe(1);
+    const sessionId = cookie.split("=")[1] ?? "";
+    const session = await store.getSession(sessionId);
+    if (!session) throw new Error("session was not created");
+    await store.putSession({ ...session, expiresAt: Date.now() - 1000 });
+    const report = await runCleanup(store, files, Date.now());
+    expect(report.expiredSessions).toBe(1);
+    expect(await store.getSession(sessionId)).toBeNull();
+    expect(files.objects.size).toBe(0);
+  });
+
+  test("old submissions retire to receipts, then purge", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const filedAt = Date.now();
+    const config = testConfig({ now: () => filedAt });
+    const submit = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({
+          key: "aging-key",
+          household: HOUSEHOLD,
+          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") }],
+        }),
+      }),
+      store,
+      files,
+      config,
+    );
+    const submitted = (await submit.json()) as Record<string, string>;
+    expect(files.objects.size).toBe(1);
+
+    const early = await runCleanup(store, files, filedAt + SUBMISSION_RETENTION_MS - DAY);
+    expect(early.retiredFiles).toBe(0);
+    expect((await store.listSubmissions(10)).length).toBe(1);
+
+    const retire = await runCleanup(store, files, filedAt + SUBMISSION_RETENTION_MS + DAY);
+    expect(retire.retiredFiles).toBe(1);
+    expect(files.objects.size).toBe(0);
+    expect((await store.listSubmissions(10)).length).toBe(0);
+
+    const receipt = (await (
+      await handleRequest(new Request(`${BASE}/submissions/aging-key`, { headers: { authorization: AUTH } }), store, files, config)
+    ).json()) as Record<string, unknown>;
+    expect(receipt["status"]).toBe("received");
+    expect(receipt["retired"]).toBe(true);
+    expect(receipt["confirmationNumber"]).toBe(submitted["confirmationNumber"]);
+    expect(receipt["digest"]).toBe(submitted["digest"]);
+
+    const purge = await runCleanup(store, files, filedAt + RECEIPT_RETENTION_MS + DAY);
+    expect(purge.purgedReceipts).toBe(1);
+    const gone = await handleRequest(
+      new Request(`${BASE}/submissions/aging-key`, { headers: { authorization: AUTH } }),
+      store,
+      files,
+      config,
+    );
+    expect(gone.status).toBe(404);
   });
 });
 

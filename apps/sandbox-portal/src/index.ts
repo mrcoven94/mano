@@ -1,4 +1,4 @@
-import { handleRequest, type PortalConfig } from "./app";
+import { handleRequest, runCleanup, type PortalConfig } from "./app";
 import { PortalStore } from "./durable";
 import { R2FileStore } from "./files";
 
@@ -42,5 +42,10 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const stub = env.PORTAL_STORE.get(env.PORTAL_STORE.idFromName("portal"));
     return handleRequest(request, stub, new R2FileStore(env.FILES), configFromEnv(env));
+  },
+
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const stub = env.PORTAL_STORE.get(env.PORTAL_STORE.idFromName("portal"));
+    ctx.waitUntil(runCleanup(stub, new R2FileStore(env.FILES), Date.now()));
   },
 };

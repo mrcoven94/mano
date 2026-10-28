@@ -188,3 +188,38 @@ describe("blocker 6: rate limits and slow leases", () => {
     expect(await store.tryBeginSlow(9000, 5000, 1)).not.toBeNull();
   });
 });
+
+describe("blocker 8: retention", () => {
+  test("MemoryStore: expired sessions are returned and removed", async () => {
+    const store = new MemoryStore();
+    await store.putSession({ id: "old", files: [], key: "k", createdAt: 0, expiresAt: 1000 });
+    await store.putSession({ id: "fresh", files: [], key: "k", createdAt: 0, expiresAt: 9999 });
+    const expired = await store.deleteExpiredSessions(2000);
+    expect(expired.map((s) => s.id)).toEqual(["old"]);
+    expect(await store.getSession("fresh")).not.toBeNull();
+  });
+
+  test("SQLite store: expired sessions are returned and removed", async () => {
+    const store = makeSqlStore();
+    await store.putSession({ id: "old", files: [], key: "k", createdAt: 0, expiresAt: 1000 });
+    await store.putSession({ id: "fresh", files: [], key: "k", createdAt: 0, expiresAt: 9999 });
+    const expired = await store.deleteExpiredSessions(2000);
+    expect(expired.map((s) => s.id)).toEqual(["old"]);
+    expect(await store.getSession("fresh")).not.toBeNull();
+  });
+
+  for (const [name, make] of [["MemoryStore", () => new MemoryStore()], ["SQLite store", () => makeSqlStore()]] as const) {
+    test(`${name}: retire keeps a receipt and returns file keys, purge removes it`, async () => {
+      const store = make();
+      const stored = await store.submit({ ...input("k", "digest-a"), receivedAt: 1000 });
+      if (stored.outcome !== "stored") throw new Error("expected stored");
+      expect(await store.retireOldSubmissions(2000)).toEqual(["submissions/web/k/1-abc"]);
+      expect(await store.getSubmission("web", "k")).toBeNull();
+      const receipt = await store.getReceipt("web", "k");
+      expect(receipt?.confirmationNumber).toBe(stored.submission.confirmationNumber);
+      expect(receipt?.digest).toBe("digest-a");
+      expect(await store.purgeOldReceipts(2000)).toBe(1);
+      expect(await store.getReceipt("web", "k")).toBeNull();
+    });
+  }
+});

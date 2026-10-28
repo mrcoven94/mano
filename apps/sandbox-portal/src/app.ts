@@ -55,6 +55,8 @@ const ALLOWED_UPLOAD_TYPES = new Set(["application/pdf", "image/png", "image/jpe
 const MAX_SLOW_MS = 60000;
 const MAX_KEY_LENGTH = 128;
 const MAX_FILE_NAME_LENGTH = 200;
+export const SUBMISSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const CASEWORKER_LIST_LIMIT = 100;
 const RATE_WINDOW_MS = 60_000;
 const SLOW_LEASE_TTL_MS = 65_000;
@@ -584,6 +586,27 @@ async function handleSubmit(
   return html(confirmationPage(result.submission, duplicate));
 }
 
+export interface CleanupReport {
+  expiredSessions: number;
+  retiredFiles: number;
+  purgedReceipts: number;
+}
+
+/**
+ * Scheduled cleanup. Drafts go after their timeout; submissions and their
+ * files go after 7 days, leaving a small receipt for 30 days so a late
+ * reconcile never sees not_found for something that was filed.
+ */
+export async function runCleanup(store: Store, fileStore: FileStore, now: number): Promise<CleanupReport> {
+  const expired = await store.deleteExpiredSessions(now);
+  await fileStore.del(expired.flatMap((s) => s.files.map((f) => f.r2key)));
+  const retiredKeys = await store.retireOldSubmissions(now - SUBMISSION_RETENTION_MS);
+  await fileStore.del(retiredKeys);
+  await store.purgeExpiredSlowLeases(now);
+  const purgedReceipts = await store.purgeOldReceipts(now - RECEIPT_RETENTION_MS);
+  return { expiredSessions: expired.length, retiredFiles: retiredKeys.length, purgedReceipts };
+}
+
 export async function handleRequest(request: Request, store: Store, fileStore: FileStore, config: PortalConfig): Promise<Response> {
   const res = await routeRequest(request, store, fileStore, config);
   const headers = new Headers(res.headers);
@@ -681,18 +704,34 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   const submissionMatch = /^\/submissions\/([^/]+)$/.exec(path);
   if (method === "GET" && submissionMatch?.[1]) {
     const key = decodeURIComponent(submissionMatch[1]);
-    const own = await store.getSubmission(await callerScope(request), key);
+    const scope = await callerScope(request);
+    const own = await store.getSubmission(scope, key);
     const sub = own ?? (await store.getSubmission(WEB_SCOPE, key));
-    if (!sub) return json({ key, status: "not_found" }, 404);
-    return json({
-      key: sub.key,
-      scope: sub.scope,
-      status: sub.status,
-      confirmationNumber: sub.confirmationNumber,
-      digest: sub.digest,
-      receivedAt: sub.receivedAt,
-      receivedAtIso: new Date(sub.receivedAt).toISOString(),
-    });
+    if (sub) {
+      return json({
+        key: sub.key,
+        scope: sub.scope,
+        status: sub.status,
+        confirmationNumber: sub.confirmationNumber,
+        digest: sub.digest,
+        receivedAt: sub.receivedAt,
+        receivedAtIso: new Date(sub.receivedAt).toISOString(),
+      });
+    }
+    const receipt = (await store.getReceipt(scope, key)) ?? (await store.getReceipt(WEB_SCOPE, key));
+    if (receipt) {
+      return json({
+        key: receipt.key,
+        scope: receipt.scope,
+        status: "received",
+        confirmationNumber: receipt.confirmationNumber,
+        digest: receipt.digest,
+        receivedAt: receipt.receivedAt,
+        receivedAtIso: new Date(receipt.receivedAt).toISOString(),
+        retired: true,
+      });
+    }
+    return json({ key, status: "not_found" }, 404);
   }
 
   if (method === "GET" && path === "/caseworker") {

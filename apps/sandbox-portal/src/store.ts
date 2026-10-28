@@ -68,11 +68,26 @@ export type SubmitResult =
   | { outcome: "duplicate"; submission: Submission }
   | { outcome: "conflict"; stored: Submission };
 
+/** Small receipt kept after the full submission is retired. */
+export interface SubmissionReceipt {
+  key: string;
+  scope: string;
+  confirmationNumber: string;
+  digest: string;
+  receivedAt: number;
+}
+
 export interface Store {
   getSession(id: string): Promise<SessionData | null>;
   putSession(session: SessionData): Promise<void>;
   deleteSession(id: string): Promise<void>;
+  /** Delete timed-out drafts and return them so their file objects go too. */
+  deleteExpiredSessions(now: number): Promise<SessionData[]>;
   getSubmission(scope: string, key: string): Promise<Submission | null>;
+  getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null>;
+  /** Retire old submissions to small receipts; returns their file keys for deletion. */
+  retireOldSubmissions(olderThan: number): Promise<string[]>;
+  purgeOldReceipts(olderThan: number): Promise<number>;
   checkRateLimit(ip: string, now: number, windowMs: number, max: number): Promise<boolean>;
   tryBeginSlow(now: number, ttlMs: number, max: number): Promise<string | null>;
   endSlow(leaseId: string): Promise<void>;
@@ -183,6 +198,14 @@ export class PortalStoreSql implements Store {
         id TEXT PRIMARY KEY,
         expires_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS receipts (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        confirmation TEXT NOT NULL,
+        digest TEXT NOT NULL,
+        received_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, key)
+      );
     `);
     this.ready = true;
   }
@@ -208,6 +231,50 @@ export class PortalStoreSql implements Store {
   async deleteSession(id: string): Promise<void> {
     this.ensureTables();
     this.sql.exec("DELETE FROM sessions WHERE id = ?", id);
+  }
+
+  async deleteExpiredSessions(now: number): Promise<SessionData[]> {
+    this.ensureTables();
+    const rows = this.sql.exec("SELECT data FROM sessions WHERE expires_at <= ?", now).toArray();
+    this.sql.exec("DELETE FROM sessions WHERE expires_at <= ?", now);
+    return rows.map((row) => JSON.parse((row as { data: string }).data) as SessionData);
+  }
+
+  async getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null> {
+    this.ensureTables();
+    const row = this.sql
+      .exec("SELECT key, scope, confirmation, digest, received_at FROM receipts WHERE scope = ? AND key = ?", scope, key)
+      .toArray()[0] as
+      | { key: string; scope: string; confirmation: string; digest: string; received_at: number }
+      | undefined;
+    return row
+      ? { key: row.key, scope: row.scope, confirmationNumber: row.confirmation, digest: row.digest, receivedAt: row.received_at }
+      : null;
+  }
+
+  async retireOldSubmissions(olderThan: number): Promise<string[]> {
+    this.ensureTables();
+    const rows = this.sql.exec("SELECT data FROM submissions WHERE received_at < ?", olderThan).toArray();
+    const r2keys: string[] = [];
+    for (const row of rows) {
+      const sub = JSON.parse((row as { data: string }).data) as Submission;
+      this.sql.exec(
+        "INSERT OR IGNORE INTO receipts (scope, key, confirmation, digest, received_at) VALUES (?, ?, ?, ?, ?)",
+        sub.scope,
+        sub.key,
+        sub.confirmationNumber,
+        sub.digest,
+        sub.receivedAt,
+      );
+      for (const file of sub.files) r2keys.push(file.r2key);
+    }
+    this.sql.exec("DELETE FROM submissions WHERE received_at < ?", olderThan);
+    return r2keys;
+  }
+
+  async purgeOldReceipts(olderThan: number): Promise<number> {
+    this.ensureTables();
+    return this.sql.exec("DELETE FROM receipts WHERE received_at < ?", olderThan).rowsWritten;
   }
 
   async getSubmission(scope: string, key: string): Promise<Submission | null> {

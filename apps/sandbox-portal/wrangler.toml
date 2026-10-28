@@ -14,6 +14,9 @@ new_sqlite_classes = ["PortalStore"]
 binding = "FILES"
 bucket_name = "mano-sandbox-portal-files"
 
+[triggers]
+crons = ["*/15 * * * *"]
+
 [vars]
 SESSION_TIMEOUT_MINUTES = "15"
 SLOW_MS_DEFAULT = "20000"

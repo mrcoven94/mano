@@ -1,5 +1,13 @@
 import type { FileStore } from "../src/files";
-import { newConfirmationNumber, type SessionData, type Store, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
+import {
+  newConfirmationNumber,
+  type SessionData,
+  type Store,
+  type Submission,
+  type SubmissionReceipt,
+  type SubmitInput,
+  type SubmitResult,
+} from "../src/store";
 
 function scopedKey(scope: string, key: string): string {
   return `${scope}
@@ -22,6 +30,55 @@ export class MemoryStore implements Store {
 
   async deleteSession(id: string): Promise<void> {
     this.sessions.delete(id);
+  }
+
+  async deleteExpiredSessions(now: number): Promise<SessionData[]> {
+    const expired: SessionData[] = [];
+    for (const [id, session] of this.sessions) {
+      if (session.expiresAt <= now) {
+        expired.push(structuredClone(session));
+        this.sessions.delete(id);
+      }
+    }
+    return expired;
+  }
+
+  receipts = new Map<string, SubmissionReceipt>();
+
+  async getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null> {
+    return this.receipts.get(scopedKey(scope, key)) ?? null;
+  }
+
+  async retireOldSubmissions(olderThan: number): Promise<string[]> {
+    const r2keys: string[] = [];
+    for (const [mapKey, sub] of this.submissions) {
+      if (sub.receivedAt < olderThan) {
+        if (!this.receipts.has(scopedKey(sub.scope, sub.key))) {
+          this.receipts.set(scopedKey(sub.scope, sub.key), {
+            key: sub.key,
+            scope: sub.scope,
+            confirmationNumber: sub.confirmationNumber,
+            digest: sub.digest,
+            receivedAt: sub.receivedAt,
+          });
+        }
+        for (const file of sub.files) r2keys.push(file.r2key);
+        this.submissions.delete(mapKey);
+        this.byConfirmation.delete(sub.confirmationNumber);
+      }
+    }
+    return r2keys;
+  }
+
+  async purgeOldReceipts(olderThan: number): Promise<number> {
+    let purged = 0;
+    for (const [mapKey, receipt] of this.receipts) {
+      if (receipt.receivedAt < olderThan) {
+        this.receipts.delete(mapKey);
+        purged += 1;
+      }
+    }
+    return purged;
   }
 
   async getSubmission(scope: string, key: string): Promise<Submission | null> {
