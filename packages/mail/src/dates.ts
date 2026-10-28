@@ -222,6 +222,30 @@ export function resolveDeadline(deadlineText: string | null, noticeDateText: str
 // verbs. Dates within one duty are compared with each other; anything
 // without a duty word is other, and unknown duties cannot be compared
 // by kind.
+// Duty from the letter's own words when the extraction is bare. The
+// model often returns just the date ("November 20, 2026"), which
+// names no duty; the clause around it does ("we must receive your
+// packet by ..."). One sentence can hold two dates with different
+// roles ("... by November 20, 2026, your coverage will end on
+// December 20, 2026"), so the lookup narrows to comma clauses, never
+// splitting the comma inside a date. The extraction's own verbs win;
+// the first duty found across the clauses stating the text wins
+// next; a date with no duty clause stays other.
+export function obligationInContext(deadlineText: string, fullText: string): Obligation {
+  const direct = obligationOf(deadlineText);
+  if (direct !== "other") return direct;
+  const want = deadlineText.toLowerCase().replace(/\s+/g, " ").trim();
+  if (want.length < 2) return "other";
+  for (const sentence of fullText.split(/(?<=[.!?])\s+/)) {
+    for (const clause of sentence.split(/;|,(?!\s*\d{4}\b)/)) {
+      if (!clause.toLowerCase().replace(/\s+/g, " ").includes(want)) continue;
+      const duty = obligationOf(clause);
+      if (duty !== "other") return duty;
+    }
+  }
+  return "other";
+}
+
 export function obligationOf(deadlineText: string): Obligation {
   const t = deadlineText.toLowerCase();
   if (/\b(appeal|hearing|grievance|reconsideration|dispute|contest|decision)\b/.test(t)) return "appeal";

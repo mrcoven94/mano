@@ -67,7 +67,7 @@ import {
   type GroupablePage,
   type PageExtraction,
 } from "./read.js";
-import { chronologyOf, obligationOf, parseWrittenDate, resolveDeadline } from "./dates.js";
+import { chronologyOf, obligationInContext, parseWrittenDate, resolveDeadline } from "./dates.js";
 import { scanContent, type ContentFlag } from "./safety.js";
 import { verifyExtraction, type DroppedField } from "./citations.js";
 import { readingModelFor } from "./model.js";
@@ -486,7 +486,9 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       if (!m.extraction?.readable) return;
       for (const d of m.extraction.deadlines) {
         if (!d.text) continue;
-        const obligation = obligationOf(d.text);
+        // Bare extractions take their duty from the sentence around
+        // them in the transcription.
+        const obligation = obligationInContext(d.text, m.extraction.fullText);
         const r = resolveDeadline(d.text, fields.noticeDate?.value ?? null);
         if (r.kind === "absolute" || r.kind === "relative") {
           const ruleCitation = cite(i, d.box);

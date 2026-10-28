@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   chronologyOf,
   findAmbiguousDate,
+  obligationInContext,
   obligationOf,
   parseAllDates,
   parseWrittenDate,
@@ -139,6 +140,27 @@ describe("obligationOf", () => {
   });
   it("does not mistake pay stubs for a payment", () => {
     expect(obligationOf("Send pay stubs for the last 30 days")).toBe("respond");
+  });
+});
+
+describe("obligationInContext", () => {
+  it("reads the duty from the sentence around a bare date", () => {
+    expect(obligationInContext("November 20, 2026", "We must receive your packet by November 20, 2026.")).toBe(
+      "respond",
+    );
+    expect(obligationInContext("December 20, 2026", "Coverage ends December 20, 2026.")).toBe("other");
+  });
+  it("prefers the extraction's own verbs, then the first duty clause", () => {
+    expect(obligationInContext("Respond by November 20, 2026", "Coverage ends November 20, 2026.")).toBe("respond");
+    expect(obligationInContext("November 20, 2026", "Noted November 20, 2026. Respond by November 20, 2026.")).toBe(
+      "respond",
+    );
+    expect(obligationInContext("November 20, 2026", "Unrelated body text here.")).toBe("other");
+  });
+  it("splits one sentence's two dates by clause", () => {
+    const text = "If we do not receive your packet by November 20, 2026, your coverage will end on December 20, 2026.";
+    expect(obligationInContext("November 20, 2026", text)).toBe("respond");
+    expect(obligationInContext("December 20, 2026", text)).toBe("other");
   });
 });
 
