@@ -18,7 +18,7 @@ export const metadata: Metadata = {
 };
 
 const faqs: [string, string][] = [
-  ["Is Mano really free?", "Keeping your help is always free: renewals, reminders, mail scans and documents have no limits, and you can make 3 applications a month. Plus is $8 a month or $60 a year for unlimited applications, a Mano that works every day without being asked, calls and waiting on hold, and a support team that answers the same day and helps with appeals. Faxes and mailed letters are at cost, and Mano tells you the price first."],
+  ["Is Mano really free?", "Keeping your help is always free: notices, renewals, reminders, benefit tracking, mail scans and Mano's own email inbox have no limits, and you can make 5 applications a month. Plus is $8 a month or $60 a year for unlimited applications, a Mano that works every day without being asked, calls and waiting on hold, and a support team that answers the same day and helps with appeals. Faxes and mailed letters are at cost, and Mano tells you the price first."],
   ["Does Mano decide if I get help?", "No. The office that runs the program decides. Mano prepares your application, sends it when you say yes, follows up and tells you what the office said."],
   ["Do I have to approve everything?", "Yes. Before anything goes out, Mano shows you who it is for, what it is for and the exact copy. If anything changes after you said yes, Mano asks you again."],
   ["Who can see my information?", "Only the people and offices you choose, for the reason you choose. You can see who has access and take it back at any time. Mano cannot pull back copies that were already sent, and it tells you which ones those are."],
