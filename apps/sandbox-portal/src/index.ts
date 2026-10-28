@@ -12,6 +12,8 @@ export interface Env {
   SLOW_MS_DEFAULT?: string;
   MAX_UPLOAD_BYTES?: string;
   MAX_UPLOAD_FILES?: string;
+  MAX_BODY_BYTES?: string;
+  MAX_FIELD_LENGTH?: string;
   RATE_LIMIT_PER_MINUTE?: string;
   SLOW_MAX_CONCURRENT?: string;
 }
@@ -28,6 +30,8 @@ function configFromEnv(env: Env): PortalConfig {
     slowMsDefault: num(env.SLOW_MS_DEFAULT, 20000),
     maxUploadBytes: num(env.MAX_UPLOAD_BYTES, 5 * 1024 * 1024),
     maxUploadFiles: num(env.MAX_UPLOAD_FILES, 3),
+    maxBodyBytes: num(env.MAX_BODY_BYTES, 24 * 1024 * 1024),
+    maxFieldLength: num(env.MAX_FIELD_LENGTH, 500),
     rateLimitPerMinute: num(env.RATE_LIMIT_PER_MINUTE, 60),
     slowMaxConcurrent: num(env.SLOW_MAX_CONCURRENT, 5),
     ...(env.SANDBOX_PORTAL_TOKEN ? { portalToken: env.SANDBOX_PORTAL_TOKEN } : {}),

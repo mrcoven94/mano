@@ -777,6 +777,132 @@ describe("blocker 5: file bytes in the file store", () => {
   });
 });
 
+describe("blocker 7: size limits run first", () => {
+  test("a content-length over the cap is rejected before the body is read", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig({ maxBodyBytes: 64 });
+    const res = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH, "content-length": "1000000" },
+        body: JSON.stringify({ key: "k" }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(res.status).toBe(413);
+  });
+
+  test("an oversized body is rejected while streaming", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig({ maxBodyBytes: 64 });
+    const api = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({ key: "k", padding: "x".repeat(1000) }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(api.status).toBe(413);
+    expect(((await api.json()) as Record<string, string>)["error"]).toContain("larger than");
+    const web = await handleRequest(
+      new Request(`${BASE}/apply/household`, { method: "POST", body: householdForm({ address: "y".repeat(1000) }) }),
+      store,
+      files,
+      config,
+    );
+    expect(web.status).toBe(413);
+    expect(await web.text()).toContain("Too large");
+  });
+
+  test("an oversized encoded file is rejected before decoding", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig({ maxUploadBytes: 10 });
+    const res = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({
+          key: "k",
+          household: HOUSEHOLD,
+          files: [{ name: "big.pdf", type: "application/pdf", data: "A".repeat(1000) }],
+        }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as Record<string, string>)["error"]).toContain("larger than");
+  });
+
+  test("the file count is checked before entries are touched", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig({ maxUploadFiles: 3 });
+    const res = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({ key: "k", household: HOUSEHOLD, files: [null, null, null, null] }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as Record<string, string>)["error"]).toContain("at most 3");
+  });
+
+  test("overlong fields and file names are rejected", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig({ maxFieldLength: 10 });
+    const web = await handleRequest(
+      new Request(`${BASE}/apply/household`, { method: "POST", body: householdForm({ fullName: "A very long name indeed" }) }),
+      store,
+      files,
+      config,
+    );
+    expect(web.status).toBe(400);
+    expect(await web.text()).toContain("too long");
+    const api = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({
+          key: "k",
+          household: HOUSEHOLD,
+          files: [{ name: `${"n".repeat(201)}.pdf`, type: "application/pdf", data: "eA==" }],
+        }),
+      }),
+      store,
+      files,
+      testConfig(),
+    );
+    expect(api.status).toBe(400);
+    expect(((await api.json()) as Record<string, string>)["error"]).toContain("too long");
+    const cookie = await postHousehold(store, files, testConfig());
+    const form = new FormData();
+    form.append("document1", new File(["x"], `${"n".repeat(201)}.pdf`, { type: "application/pdf" }));
+    const upload = await handleRequest(
+      new Request(`${BASE}/apply/documents`, { method: "POST", headers: { cookie }, body: form }),
+      store,
+      files,
+      testConfig(),
+    );
+    expect(upload.status).toBe(400);
+    expect(await upload.text()).toContain("too long");
+  });
+});
+
 describe("blocker 6: access control", () => {
   test("staff and API routes need the token", async () => {
     const store = new MemoryStore();

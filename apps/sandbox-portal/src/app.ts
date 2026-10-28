@@ -29,6 +29,8 @@ export interface PortalConfig {
   slowMsDefault: number;
   maxUploadBytes: number;
   maxUploadFiles: number;
+  maxBodyBytes: number;
+  maxFieldLength: number;
   rateLimitPerMinute: number;
   slowMaxConcurrent: number;
   /** Expected bearer token for the caseworker view and the JSON API. Unset means unconfigured. */
@@ -41,6 +43,8 @@ export const DEFAULT_CONFIG: PortalConfig = {
   slowMsDefault: 20000,
   maxUploadBytes: 5 * 1024 * 1024,
   maxUploadFiles: 3,
+  maxBodyBytes: 24 * 1024 * 1024,
+  maxFieldLength: 500,
   rateLimitPerMinute: 60,
   slowMaxConcurrent: 5,
 };
@@ -50,9 +54,59 @@ export const WEB_SCOPE = "web";
 const ALLOWED_UPLOAD_TYPES = new Set(["application/pdf", "image/png", "image/jpeg"]);
 const MAX_SLOW_MS = 60000;
 const MAX_KEY_LENGTH = 128;
+const MAX_FILE_NAME_LENGTH = 200;
 const CASEWORKER_LIST_LIMIT = 100;
 const RATE_WINDOW_MS = 60_000;
 const SLOW_LEASE_TTL_MS = 65_000;
+
+type CappedBody = { ok: true; bytes: Uint8Array } | { ok: false };
+
+async function readCappedBody(request: Request, maxBytes: number): Promise<CappedBody> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && declared !== "") {
+    const n = Number(declared);
+    if (Number.isInteger(n) && n > maxBytes) return { ok: false };
+  }
+  const reader = request.body?.getReader();
+  if (!reader) return { ok: true, bytes: new Uint8Array(0) };
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return { ok: false };
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return { ok: true, bytes };
+}
+
+function tooLargeResponse(asJson: boolean): Response {
+  const message = "The request body is larger than this office accepts.";
+  return asJson ? json({ error: message }, 413) : html(errorPage("Too large", message, "/", "Back to the home page"), 413);
+}
+
+/** Rebuild a form request from capped bytes so formData() never reads the wire itself. */
+function formRequestFromBytes(request: Request, bytes: Uint8Array): Request {
+  const headers = new Headers();
+  const contentType = request.headers.get("content-type");
+  if (contentType) headers.set("content-type", contentType);
+  return new Request(request.url, { method: "POST", headers, body: bytes as unknown as BodyInit });
+}
+
+/** Longest base64 string that can still decode within the byte cap. */
+function maxEncodedLength(maxBytes: number): number {
+  return Math.ceil(maxBytes / 3) * 4;
+}
 
 function nowMs(config: PortalConfig): number {
   return config.now ? config.now() : Date.now();
@@ -186,7 +240,22 @@ function timedOut(): Response {
   return html(timeoutPage(), 403, { "set-cookie": clearSessionCookie() });
 }
 
-function validateHousehold(data: Record<string, string>): { household?: Household; error?: string } {
+const HOUSEHOLD_LABELS: Record<keyof Household, string> = {
+  fullName: "Full legal name",
+  dateOfBirth: "Date of birth",
+  address: "Mailing address",
+  phone: "Phone number",
+  householdSize: "Household size",
+  monthlyIncome: "Monthly income",
+};
+
+function validateHousehold(
+  data: Record<string, string>,
+  maxFieldLength: number,
+): { household?: Household; error?: string } {
+  for (const [field, label] of Object.entries(HOUSEHOLD_LABELS)) {
+    if ((data[field] ?? "").length > maxFieldLength) return { error: `${label} is too long.` };
+  }
   const household: Household = {
     fullName: (data["fullName"] ?? "").trim(),
     dateOfBirth: (data["dateOfBirth"] ?? "").trim(),
@@ -223,6 +292,10 @@ async function readUploads(
     const value = form.get(`document${i}`) as unknown as string | File | null;
     if (!(value instanceof File) || value.size === 0) continue;
     const name = value.name || `document${i}`;
+    if (name.length > MAX_FILE_NAME_LENGTH) {
+      await files.del(staged);
+      return { error: "A file name is too long." };
+    }
     if (!ALLOWED_UPLOAD_TYPES.has(value.type)) {
       await files.del(staged);
       return { error: `${name} must be a PDF, PNG or JPG file.` };
@@ -309,9 +382,11 @@ async function handleSubmit(
   let jsonUploads: JsonUpload[] | null = null;
 
   if (isJson) {
+    const capped = await readCappedBody(request, config.maxBodyBytes);
+    if (!capped.ok) return tooLargeResponse(true);
     let body: unknown;
     try {
-      body = await request.json();
+      body = JSON.parse(new TextDecoder().decode(capped.bytes));
     } catch {
       return json({ error: "Request body must be valid JSON." }, 400);
     }
@@ -321,16 +396,25 @@ async function handleSubmit(
       if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") fields[k] = String(v);
     }
     if (record["household"] !== undefined) {
-      const parsed = validateHousehold((record["household"] ?? {}) as Record<string, string>);
+      const parsed = validateHousehold((record["household"] ?? {}) as Record<string, string>, config.maxFieldLength);
       if (!parsed.household) return json({ error: parsed.error }, 400);
       jsonHousehold = parsed.household;
     }
     if (record["files"] !== undefined) {
       if (!Array.isArray(record["files"])) return json({ error: "files must be an array." }, 400);
+      if (record["files"].length > config.maxUploadFiles) {
+        return json({ error: `Attach at most ${config.maxUploadFiles} files.` }, 400);
+      }
       jsonUploads = [];
       for (const entry of record["files"] as Array<Record<string, unknown>>) {
         if (typeof entry["name"] !== "string" || typeof entry["type"] !== "string" || typeof entry["data"] !== "string") {
           return json({ error: "Each file needs a name, type and base64 data." }, 400);
+        }
+        if (entry["name"].length > MAX_FILE_NAME_LENGTH) {
+          return json({ error: "A file name is too long." }, 400);
+        }
+        if (entry["data"].length > maxEncodedLength(config.maxUploadBytes)) {
+          return json({ error: `${entry["name"]} is larger than the ${config.maxUploadBytes} byte limit.` }, 400);
         }
         if (!ALLOWED_UPLOAD_TYPES.has(entry["type"])) {
           return json({ error: `${entry["name"]} must be a PDF, PNG or JPG file.` }, 400);
@@ -346,12 +430,11 @@ async function handleSubmit(
         }
         jsonUploads.push({ name: entry["name"], type: entry["type"], bytes });
       }
-      if (jsonUploads.length > config.maxUploadFiles) {
-        return json({ error: `Attach at most ${config.maxUploadFiles} files.` }, 400);
-      }
     }
   } else {
-    const form = await request.formData();
+    const capped = await readCappedBody(request, config.maxBodyBytes);
+    if (!capped.ok) return tooLargeResponse(wantsJson(request));
+    const form = await formRequestFromBytes(request, capped.bytes).formData();
     for (const [k, v] of form.entries()) {
       if (typeof v === "string") fields[k] = v;
     }
@@ -529,12 +612,14 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "GET" && path === "/apply") return html(householdPage());
 
   if (method === "POST" && path === "/apply/household") {
-    const form = await request.formData();
+    const capped = await readCappedBody(request, config.maxBodyBytes);
+    if (!capped.ok) return tooLargeResponse(false);
+    const form = await formRequestFromBytes(request, capped.bytes).formData();
     const fields: Record<string, string> = {};
     for (const [k, v] of form.entries()) {
       if (typeof v === "string") fields[k] = v;
     }
-    const parsed = validateHousehold(fields);
+    const parsed = validateHousehold(fields, config.maxFieldLength);
     if (!parsed.household) return html(householdPage(parsed.error, fields), 400);
     let session = await loadSession(request, store, config);
     if (!session) {
@@ -563,7 +648,9 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     const session = await loadSession(request, store, config);
     if (!session) return timedOut();
     if (!session.household) return redirect("/apply");
-    const form = await request.formData();
+    const capped = await readCappedBody(request, config.maxBodyBytes);
+    if (!capped.ok) return tooLargeResponse(false);
+    const form = await formRequestFromBytes(request, capped.bytes).formData();
     const parsed = await readUploads(form, config, session.id, fileStore);
     if (!parsed.files) {
       await touchSession(store, session, config);
