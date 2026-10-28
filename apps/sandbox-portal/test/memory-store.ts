@@ -1,5 +1,10 @@
 import { newConfirmationNumber, type SessionData, type Store, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
 
+function scopedKey(scope: string, key: string): string {
+  return `${scope}
+${key}`;
+}
+
 /** In-memory Store for tests and local contributors without wrangler. */
 export class MemoryStore implements Store {
   sessions = new Map<string, SessionData>();
@@ -18,8 +23,8 @@ export class MemoryStore implements Store {
     this.sessions.delete(id);
   }
 
-  async getSubmission(key: string): Promise<Submission | null> {
-    return this.submissions.get(key) ?? null;
+  async getSubmission(scope: string, key: string): Promise<Submission | null> {
+    return this.submissions.get(scopedKey(scope, key)) ?? null;
   }
 
   async getSubmissionByConfirmation(confirmation: string): Promise<Submission | null> {
@@ -28,7 +33,7 @@ export class MemoryStore implements Store {
 
   async submit(input: SubmitInput): Promise<SubmitResult> {
     // Check and insert with no await between, so concurrent callers cannot interleave.
-    const existing = this.submissions.get(input.key);
+    const existing = this.submissions.get(scopedKey(input.scope, input.key));
     if (existing) {
       if (existing.digest === input.digest) return { outcome: "duplicate", submission: structuredClone(existing) };
       return { outcome: "conflict", stored: structuredClone(existing) };
@@ -37,6 +42,7 @@ export class MemoryStore implements Store {
     while (this.byConfirmation.has(confirmationNumber)) confirmationNumber = newConfirmationNumber();
     const submission: Submission = {
       key: input.key,
+      scope: input.scope,
       confirmationNumber,
       household: structuredClone(input.household),
       files: structuredClone(input.files),
@@ -46,7 +52,7 @@ export class MemoryStore implements Store {
       slowMs: input.slowMs,
       source: input.source,
     };
-    this.submissions.set(submission.key, submission);
+    this.submissions.set(scopedKey(submission.scope, submission.key), submission);
     this.byConfirmation.set(submission.confirmationNumber, submission);
     return { outcome: "stored", submission: structuredClone(submission) };
   }

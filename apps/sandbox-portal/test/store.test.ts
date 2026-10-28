@@ -14,8 +14,8 @@ const HOUSEHOLD: Household = {
 
 const FILES: StoredFile[] = [{ name: "paystub.pdf", type: "application/pdf", size: 14, data: "ZmFrZS1wZGYtYnl0ZXM=" }];
 
-function input(key: string, digest = "digest-a", household: Household = HOUSEHOLD): SubmitInput {
-  return { key, household, files: FILES, digest, source: "api", slowMs: 0, receivedAt: Date.now() };
+function input(key: string, digest = "digest-a", household: Household = HOUSEHOLD, scope = "web"): SubmitInput {
+  return { key, scope, household, files: FILES, digest, source: "api", slowMs: 0, receivedAt: Date.now() };
 }
 
 function filed(result: SubmitResult): Submission {
@@ -62,7 +62,7 @@ describe("blocker 1: atomic submit", () => {
     const second = await store.submit(input("race-key", "digest-a", { ...HOUSEHOLD, fullName: "Somebody Else" }));
     expect(second.outcome).toBe("duplicate");
     expect(filed(second).confirmationNumber).toBe(filed(first).confirmationNumber);
-    const peeked = await store.getSubmission("race-key");
+    const peeked = await store.getSubmission("web", "race-key");
     expect(peeked?.household.fullName).toBe("Maria Santos");
     expect(peeked?.confirmationNumber).toBe(filed(first).confirmationNumber);
     expect((await store.listSubmissions(10)).length).toBe(1);
@@ -121,5 +121,28 @@ describe("blocker 2: packet digest", () => {
     if (conflict.outcome !== "conflict") throw new Error("expected a conflict");
     expect(conflict.stored.digest).toBe("digest-a");
     expect((await store.listSubmissions(10)).length).toBe(1);
+  });
+});
+
+describe("blocker 3: scopes", () => {
+  test("MemoryStore: the same key files independently in each scope", async () => {
+    const store = new MemoryStore();
+    const a = await store.submit(input("k", "digest-a", HOUSEHOLD, "api-1"));
+    const b = await store.submit(input("k", "digest-b", HOUSEHOLD, "api-2"));
+    expect(a.outcome).toBe("stored");
+    expect(b.outcome).toBe("stored");
+    expect(filed(a).confirmationNumber).not.toBe(filed(b).confirmationNumber);
+    expect((await store.getSubmission("api-1", "k"))?.digest).toBe("digest-a");
+    expect(await store.getSubmission("web", "k")).toBeNull();
+  });
+
+  test("SQLite store: the same key files independently in each scope", async () => {
+    const store = makeSqlStore();
+    const a = await store.submit(input("k", "digest-a", HOUSEHOLD, "api-1"));
+    const b = await store.submit(input("k", "digest-b", HOUSEHOLD, "api-2"));
+    expect(a.outcome).toBe("stored");
+    expect(b.outcome).toBe("stored");
+    expect(await store.getSubmission("web", "k")).toBeNull();
+    expect((await store.getSubmission("api-2", "k"))?.digest).toBe("digest-b");
   });
 });

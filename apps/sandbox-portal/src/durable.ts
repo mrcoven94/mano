@@ -19,8 +19,8 @@ export class PortalStore extends DurableObject {
     return this.inner().deleteSession(id);
   }
 
-  getSubmission(key: string): Promise<Submission | null> {
-    return this.inner().getSubmission(key);
+  getSubmission(scope: string, key: string): Promise<Submission | null> {
+    return this.inner().getSubmission(scope, key);
   }
 
   getSubmissionByConfirmation(confirmation: string): Promise<Submission | null> {

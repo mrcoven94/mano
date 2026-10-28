@@ -3,6 +3,7 @@ import {
   fromBase64,
   newId,
   packetDigest,
+  sha256Hex,
   toBase64,
   type Household,
   type SessionData,
@@ -39,6 +40,7 @@ export const DEFAULT_CONFIG: PortalConfig = {
 };
 
 const SESSION_COOKIE = "portal_session";
+export const WEB_SCOPE = "web";
 const ALLOWED_UPLOAD_TYPES = new Set(["application/pdf", "image/png", "image/jpeg"]);
 const MAX_SLOW_MS = 60000;
 const MAX_KEY_LENGTH = 128;
@@ -94,6 +96,17 @@ function wantsJson(request: Request): boolean {
   const contentType = request.headers.get("content-type") ?? "";
   const accept = request.headers.get("accept") ?? "";
   return contentType.includes("application/json") || accept.includes("application/json");
+}
+
+function bearerToken(request: Request): string | null {
+  const header = request.headers.get("authorization") ?? "";
+  const match = /^Bearer (.+)$/.exec(header.trim());
+  return match?.[1] ?? null;
+}
+
+/** JSON callers file in a namespace scoped to their token, so callers never share keys. */
+async function callerScope(request: Request): Promise<string> {
+  return `api-${await sha256Hex(bearerToken(request) ?? "")}`;
 }
 
 async function loadSession(request: Request, store: Store, config: PortalConfig): Promise<SessionData | null> {
@@ -185,6 +198,7 @@ function submissionJson(sub: Submission, duplicate: boolean): Response {
   return json(
     {
       key: sub.key,
+      scope: sub.scope,
       status: sub.status,
       confirmationNumber: sub.confirmationNumber,
       digest: sub.digest,
@@ -202,6 +216,7 @@ function conflictJson(stored: Submission): Response {
       error: "This key already filed a different application. Use a new key for a new application.",
       key: stored.key,
       received: {
+        scope: stored.scope,
         confirmationNumber: stored.confirmationNumber,
         digest: stored.digest,
         receivedAt: stored.receivedAt,
@@ -281,6 +296,7 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
   let files: StoredFile[] = [];
   let source: Submission["source"] = "web";
   let session: SessionData | null = null;
+  let scope = WEB_SCOPE;
 
   if (isJson) {
     source = "api";
@@ -288,9 +304,21 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
     household = jsonHousehold;
     files = jsonFiles ?? [];
     if (files.length === 0) return json({ error: "Attach at least one document." }, 400);
+    scope = await callerScope(request);
   } else {
     session = await loadSession(request, store, config);
     if (!session) return timedOut();
+    if (key !== session.key) {
+      return html(
+        errorPage(
+          "Wrong key",
+          "This form's key belongs to a different session. Go back to your review page and submit from there.",
+          "/apply/review",
+          "Back to review",
+        ),
+        400,
+      );
+    }
     if (!session.household) {
       return html(errorPage("Incomplete application", "Household information is missing. Start again.", "/apply", "Start over"), 400);
     }
@@ -303,8 +331,14 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
 
   const slowMs = resolveSlowMs(url, fields, config);
   const digest = await packetDigest(household, await digestStoredFiles(files));
+  if (source === "api") {
+    // The browser may have filed this exact packet under the web scope; a retry must not file it again.
+    const webFiled = await store.getSubmission(WEB_SCOPE, key);
+    if (webFiled && webFiled.digest === digest) return submissionJson(webFiled, true);
+  }
   const result = await store.submit({
     key,
+    scope,
     household,
     files,
     digest,
@@ -406,10 +440,12 @@ export async function handleRequest(request: Request, store: Store, config: Port
   const submissionMatch = /^\/submissions\/([^/]+)$/.exec(path);
   if (method === "GET" && submissionMatch?.[1]) {
     const key = decodeURIComponent(submissionMatch[1]);
-    const sub = await store.getSubmission(key);
+    const own = await store.getSubmission(await callerScope(request), key);
+    const sub = own ?? (await store.getSubmission(WEB_SCOPE, key));
     if (!sub) return json({ key, status: "not_found" }, 404);
     return json({
       key: sub.key,
+      scope: sub.scope,
       status: sub.status,
       confirmationNumber: sub.confirmationNumber,
       digest: sub.digest,

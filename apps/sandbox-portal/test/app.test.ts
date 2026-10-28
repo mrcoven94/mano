@@ -271,6 +271,111 @@ describe("idempotency", () => {
     expect(receipt["confirmationNumber"]).toBe(submitted["confirmationNumber"]);
   });
 
+  test("a web key from another session is rejected", async () => {
+    const store = new MemoryStore();
+    const config = testConfig();
+    const cookieA = await postHousehold(store, config);
+    await postDocuments(store, config, cookieA);
+    const reviewA = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie: cookieA } }), store, config);
+    const keyA = keyFromReview(await reviewA.text());
+    const cookieB = await postHousehold(store, config);
+    await postDocuments(store, config, cookieB);
+    const form = new URLSearchParams();
+    form.set("key", keyA);
+    const res = await handleRequest(
+      new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie: cookieB }, body: form }),
+      store,
+      config,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("different session");
+    expect((await store.listSubmissions(10)).length).toBe(0);
+  });
+
+  test("two API tokens file the same key independently", async () => {
+    const store = new MemoryStore();
+    const config = testConfig();
+    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
+    const post = (token: string, household: typeof HOUSEHOLD) =>
+      handleRequest(
+        new Request(`${BASE}/submissions`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify({ key: "shared-key", household, files: [file] }),
+        }),
+        store,
+        config,
+      );
+    const a = (await (await post("token-one", HOUSEHOLD)).json()) as Record<string, unknown>;
+    const b = (await (await post("token-two", { ...HOUSEHOLD, fullName: "Alex Rivera" })).json()) as Record<string, unknown>;
+    expect(a["duplicate"]).toBe(false);
+    expect(b["duplicate"]).toBe(false);
+    expect(a["confirmationNumber"]).not.toBe(b["confirmationNumber"]);
+    expect((await store.listSubmissions(10)).length).toBe(2);
+  });
+
+  test("an API retry of a browser filing duplicates instead of filing again", async () => {
+    const store = new MemoryStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, config);
+    await postDocuments(store, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+    const key = keyFromReview(await review.text());
+    const form = new URLSearchParams();
+    form.set("key", key);
+    const web = await handleRequest(
+      new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }),
+      store,
+      config,
+    );
+    const webConfirmation = confirmationFrom(await web.text());
+    const retry = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer gateway-token" },
+        body: JSON.stringify({
+          key,
+          household: HOUSEHOLD,
+          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("fake-pdf-bytes").toString("base64") }],
+        }),
+      }),
+      store,
+      config,
+    );
+    expect(retry.status).toBe(200);
+    const body = (await retry.json()) as Record<string, unknown>;
+    expect(body["duplicate"]).toBe(true);
+    expect(body["confirmationNumber"]).toBe(webConfirmation);
+    expect(body["scope"]).toBe("web");
+    expect((await store.listSubmissions(10)).length).toBe(1);
+  });
+
+  test("reconcile reads the caller's scope first, then the web scope", async () => {
+    const store = new MemoryStore();
+    const config = testConfig();
+    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
+    await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer token-one" },
+        body: JSON.stringify({ key: "scoped-key", household: HOUSEHOLD, files: [file] }),
+      }),
+      store,
+      config,
+    );
+    const own = (await (
+      await handleRequest(new Request(`${BASE}/submissions/scoped-key`, { headers: { authorization: "Bearer token-one" } }), store, config)
+    ).json()) as Record<string, string>;
+    expect(own["status"]).toBe("received");
+    expect(own["scope"]).toMatch(/^api-/);
+    const other = await handleRequest(
+      new Request(`${BASE}/submissions/scoped-key`, { headers: { authorization: "Bearer token-two" } }),
+      store,
+      config,
+    );
+    expect(other.status).toBe(404);
+  });
+
   test("a submission without a key is rejected", async () => {
     const store = new MemoryStore();
     const res = await handleRequest(

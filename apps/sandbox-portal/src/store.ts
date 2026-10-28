@@ -29,6 +29,8 @@ export type SubmissionStatus = "received";
 
 export interface Submission {
   key: string;
+  /** "web", or "api-<sha256 of the caller's token>" for JSON callers */
+  scope: string;
   confirmationNumber: string;
   household: Household;
   files: StoredFile[];
@@ -51,6 +53,7 @@ export interface FileDigest {
 
 export interface SubmitInput {
   key: string;
+  scope: string;
   household: Household;
   files: StoredFile[];
   digest: string;
@@ -68,11 +71,12 @@ export interface Store {
   getSession(id: string): Promise<SessionData | null>;
   putSession(session: SessionData): Promise<void>;
   deleteSession(id: string): Promise<void>;
-  getSubmission(key: string): Promise<Submission | null>;
+  getSubmission(scope: string, key: string): Promise<Submission | null>;
   getSubmissionByConfirmation(confirmation: string): Promise<Submission | null>;
   /**
-   * File one submission atomically. The first writer for a key wins; a later
-   * submit under the same key gets the stored winner back, never overwrites it.
+   * File one submission atomically within its scope. The first writer for a
+   * scope and key wins; a later submit under the same scope and key gets the
+   * stored winner back (duplicate) or a conflict, never overwrites it.
    */
   submit(input: SubmitInput): Promise<SubmitResult>;
   listSubmissions(limit: number): Promise<Submission[]>;
@@ -167,11 +171,13 @@ export class PortalStoreSql implements Store {
         expires_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS submissions (
-        key TEXT PRIMARY KEY,
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
         confirmation TEXT NOT NULL UNIQUE,
         digest TEXT NOT NULL,
         data TEXT NOT NULL,
-        received_at INTEGER NOT NULL
+        received_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, key)
       );
       CREATE INDEX IF NOT EXISTS idx_submissions_received ON submissions (received_at DESC);
     `);
@@ -201,10 +207,10 @@ export class PortalStoreSql implements Store {
     this.sql.exec("DELETE FROM sessions WHERE id = ?", id);
   }
 
-  async getSubmission(key: string): Promise<Submission | null> {
+  async getSubmission(scope: string, key: string): Promise<Submission | null> {
     this.ensureTables();
     const row = this.sql
-      .exec("SELECT data FROM submissions WHERE key = ?", key)
+      .exec("SELECT data FROM submissions WHERE scope = ? AND key = ?", scope, key)
       .toArray()[0] as { data: string } | undefined;
     return row ? (JSON.parse(row.data) as Submission) : null;
   }
@@ -222,6 +228,7 @@ export class PortalStoreSql implements Store {
     for (let attempt = 0; attempt < 10; attempt++) {
       const submission: Submission = {
         key: input.key,
+        scope: input.scope,
         confirmationNumber: newConfirmationNumber(),
         household: input.household,
         files: input.files,
@@ -234,7 +241,8 @@ export class PortalStoreSql implements Store {
       let written: number;
       try {
         written = this.sql.exec(
-          "INSERT INTO submissions (key, confirmation, digest, data, received_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (key) DO NOTHING",
+          "INSERT INTO submissions (scope, key, confirmation, digest, data, received_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (scope, key) DO NOTHING",
+          submission.scope,
           submission.key,
           submission.confirmationNumber,
           submission.digest,
@@ -247,7 +255,7 @@ export class PortalStoreSql implements Store {
         throw err;
       }
       if (written === 1) return { outcome: "stored", submission };
-      const existing = await this.getSubmission(input.key);
+      const existing = await this.getSubmission(input.scope, input.key);
       if (!existing) continue;
       if (existing.digest === input.digest) return { outcome: "duplicate", submission: existing };
       return { outcome: "conflict", stored: existing };
