@@ -91,7 +91,7 @@ export class ModalComputer implements Computer {
   }
 
   fileUploadHint(): string {
-    return "Clicking a file button opens a file dialog; type the full staged path into it and press Enter, then wait for the file name to appear.";
+    return "To attach a file, press Tab until a file button is focused, then press Enter; type the full staged path into the dialog and press Enter. One file per button; do not pick into a filled button again.";
   }
 
   liveViewUrl(): string | null {

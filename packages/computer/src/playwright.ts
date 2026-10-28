@@ -59,6 +59,7 @@ export class PlaywrightComputer implements Computer {
   private launched: LaunchedPage | null = null;
   private launching: Promise<LaunchedPage> | null = null;
   private staged: string[] = [];
+  private choosers = 0;
   private scratch: string | null = null;
   private origins: string[] | null;
   private closed = false;
@@ -101,9 +102,11 @@ export class PlaywrightComputer implements Computer {
           ...(profileDir ? { profileDir } : {}),
         })
         .then((launched) => {
-          // File pickers are answered with staged files in order; headless Chromium shows no dialog.
+          // File pickers are answered with staged files, cycling so a repeated
+          // click refills the same input instead of clearing it. Headless
+          // Chromium shows no dialog.
           launched.page.on("filechooser", (chooser) => {
-            const next = this.staged.shift();
+            const next = this.staged.length > 0 ? this.staged[this.choosers++ % this.staged.length] : undefined;
             void chooser.setFiles(next ? [next] : []);
           });
           this.launched = launched;
@@ -180,7 +183,7 @@ export class PlaywrightComputer implements Computer {
   }
 
   fileUploadHint(): string {
-    return "Clicking a file button attaches the next staged file automatically; click once and wait for the file name to appear.";
+    return "To attach a file, press Tab until a file button is focused, then press Enter; the staged file attaches automatically. One file per button; do not click a filled button again.";
   }
 
   liveViewUrl(): string | null {

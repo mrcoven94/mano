@@ -115,30 +115,46 @@ describe("executor", () => {
     expect(computer2.actions).toEqual([]);
   });
 
-  test("a browser filing reconciles through the caseworker record", async () => {
+  function caseworkerPage(key: string, applicant: string, receivedAt: string): string {
+    return (
+      `<span class="conf">SR-WEB11111</span><span class="key">${key}</span>` +
+      `<tr><td class="label">Applicant</td><td>${applicant}</td></tr>` +
+      `<tr><td class="label">Received</td><td>${receivedAt} via web</td></tr>`
+    );
+  }
+
+  function browserFetch(page: string) {
+    return (async (url: string) => {
+      if (url.endsWith("/caseworker/SR-WEB11111")) return new Response(page, { status: 200 });
+      return new Response(JSON.stringify({ status: "not_found" }), { status: 404 });
+    }) as unknown as typeof fetch;
+  }
+
+  async function runBrowser(page: string): Promise<{ outcome: string; message: string }> {
     const computer = new FakeComputer();
     const model = new FakeModelClient([[assistantMessage("KEY=key-1 CONFIRMATION=SR-WEB11111")]]);
-    const fetchImpl = (async (url: string) => {
-      if (url.endsWith("/submissions/key-1")) return new Response(JSON.stringify({ status: "not_found" }), { status: 404 });
-      if (url.endsWith("/caseworker/SR-WEB11111")) {
-        return new Response('<span class="conf">SR-WEB11111</span><span class="key">key-1</span>', { status: 200 });
-      }
-      return new Response("no route", { status: 404 });
-    }) as unknown as typeof fetch;
-    const executor = new Executor(computer, model, { model: "test-model", fetchImpl });
-    const result = await executor.execute({ portalUrl: "https://portal.test", household: HOUSEHOLD, files: [] });
+    const executor = new Executor(computer, model, { model: "test-model", fetchImpl: browserFetch(page) });
+    return executor.execute({ portalUrl: "https://portal.test", household: HOUSEHOLD, files: [] });
+  }
+
+  test("a browser filing reconciles through the caseworker record", async () => {
+    const result = await runBrowser(caseworkerPage("key-1", "Maria Santos", new Date().toUTCString()));
     expect(result).toMatchObject({ outcome: "filed", key: "key-1", confirmationNumber: "SR-WEB11111" });
   });
 
-  test("a caseworker record naming another key fails", async () => {
-    const computer = new FakeComputer();
-    const model = new FakeModelClient([[assistantMessage("KEY=key-1 CONFIRMATION=SR-WEB11111")]]);
-    const fetchImpl = (async (url: string) => {
-      if (url.endsWith("/submissions/key-1")) return new Response(JSON.stringify({ status: "not_found" }), { status: 404 });
-      return new Response('<span class="conf">SR-WEB11111</span><span class="key">key-2</span>', { status: 200 });
-    }) as unknown as typeof fetch;
-    const executor = new Executor(computer, model, { model: "test-model", fetchImpl });
-    const result = await executor.execute({ portalUrl: "https://portal.test", household: HOUSEHOLD, files: [] });
+  test("a misread key still files when the record is fresh and names the applicant", async () => {
+    const result = await runBrowser(caseworkerPage("key-2", "Maria Santos", new Date().toUTCString()));
+    expect(result).toMatchObject({ outcome: "filed", key: "key-2", confirmationNumber: "SR-WEB11111" });
+  });
+
+  test("a stale record naming another key fails", async () => {
+    const result = await runBrowser(caseworkerPage("key-2", "Maria Santos", "Wed, 01 Jan 2020 00:00:00 GMT"));
+    expect(result.outcome).toBe("failed");
+    expect(result.message).toContain("reconcile mismatch");
+  });
+
+  test("a fresh record naming another applicant fails", async () => {
+    const result = await runBrowser(caseworkerPage("key-2", "Someone Else", new Date().toUTCString()));
     expect(result.outcome).toBe("failed");
     expect(result.message).toContain("reconcile mismatch");
   });

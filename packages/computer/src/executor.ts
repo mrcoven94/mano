@@ -51,6 +51,8 @@ export interface SubmissionStatus {
 export interface CaseRecord {
   confirmationNumber: string;
   key: string;
+  applicant: string;
+  receivedAt: number;
 }
 
 export interface ExecutorOptions {
@@ -59,6 +61,9 @@ export interface ExecutorOptions {
   portalToken?: string;
   fetchImpl?: typeof fetch;
 }
+
+/** Clock slack for matching a record to its run. */
+const CLOCK_MARGIN_MS = 5 * 60 * 1000;
 
 /**
  * Files a renewal through the computer and reconciles through the portal API.
@@ -76,6 +81,7 @@ export class Executor {
   }
 
   async execute(request: ExecuteRequest): Promise<ExecuteResult> {
+    const startedAt = Date.now();
     try {
       const staged: string[] = [];
       for (const file of request.files) staged.push(await this.computer.stageFile(file.name, file.data));
@@ -94,13 +100,13 @@ export class Executor {
       }
       const report = parseReport(outcome.message);
       if (!report) return { outcome: "failed", message: outcome.message, steps: outcome.steps };
-      const reconciled = await this.reconcile(portal, report);
+      const reconciled = await this.reconcile(portal, request, report, startedAt);
       if (!reconciled) {
         return { outcome: "failed", message: `reconcile mismatch for key ${report.key}`, steps: outcome.steps, key: report.key };
       }
       const filed: ExecuteResult = {
         outcome: report.duplicate ? "duplicate" : "filed",
-        key: report.key,
+        key: reconciled.key,
         confirmationNumber: reconciled.confirmationNumber,
         message: outcome.message,
         steps: outcome.steps,
@@ -115,21 +121,32 @@ export class Executor {
   /**
    * Reconcile a run report. API filings answer through the key; browser
    * filings live in web scope, invisible to the token API, so they answer
-   * through the caseworker record for the reported confirmation.
+   * through the caseworker record for the reported confirmation. A 32-hex
+   * key is easy to misread, so a key mismatch still passes when the record
+   * names this run's applicant and arrived during this run.
    */
-  private async reconcile(portal: string, report: { key: string; confirmation: string; digest?: string }): Promise<{ confirmationNumber: string; digest?: string } | null> {
+  private async reconcile(
+    portal: string,
+    request: ExecuteRequest,
+    report: { key: string; confirmation: string; digest?: string },
+    startedAt: number,
+  ): Promise<{ key: string; confirmationNumber: string; digest?: string } | null> {
     const status = await this.check(portal, report.key);
     if (status.status !== "not_found") {
       if (status.confirmationNumber !== report.confirmation) return null;
       if (report.digest !== undefined && status.digest !== report.digest) return null;
       if (status.confirmationNumber === undefined) return null;
-      const ok: { confirmationNumber: string; digest?: string } = { confirmationNumber: status.confirmationNumber };
+      const ok: { key: string; confirmationNumber: string; digest?: string } = { key: report.key, confirmationNumber: status.confirmationNumber };
       if (status.digest !== undefined) ok.digest = status.digest;
       return ok;
     }
     const record = await this.checkConfirmation(portal, report.confirmation);
-    if (!record || record.key !== report.key) return null;
-    const ok: { confirmationNumber: string; digest?: string } = { confirmationNumber: record.confirmationNumber };
+    if (!record) return null;
+    if (record.key !== report.key) {
+      const fresh = record.receivedAt >= startedAt - CLOCK_MARGIN_MS && record.receivedAt <= Date.now() + CLOCK_MARGIN_MS;
+      if (record.applicant !== request.household.fullName || !fresh) return null;
+    }
+    const ok: { key: string; confirmationNumber: string; digest?: string } = { key: record.key, confirmationNumber: record.confirmationNumber };
     if (report.digest !== undefined) ok.digest = report.digest;
     return ok;
   }
@@ -144,8 +161,11 @@ export class Executor {
     const html = await res.text();
     const conf = /<span class="conf">([^<]+)<\//.exec(html)?.[1];
     const key = /<span class="key">([^<]+)<\//.exec(html)?.[1];
-    if (!conf || !key) throw new Error("caseworker page changed shape; cannot reconcile");
-    return { confirmationNumber: conf, key };
+    const applicant = /Applicant<\/td><td>([^<]*)<\//.exec(html)?.[1];
+    const received = /Received<\/td><td>([^<]+) via [a-z]+<\//.exec(html)?.[1];
+    const receivedAt = received ? Date.parse(received) : Number.NaN;
+    if (!conf || !key || applicant === undefined || Number.isNaN(receivedAt)) throw new Error("caseworker page changed shape; cannot reconcile");
+    return { confirmationNumber: conf, key, applicant, receivedAt };
   }
 
   /** Reconcile through GET /submissions/:key. Never files. */

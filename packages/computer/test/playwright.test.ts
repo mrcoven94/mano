@@ -140,9 +140,20 @@ describe("playwright stand-in", () => {
     chooser(page.chooserHandler);
     chooser(page.chooserHandler);
     await new Promise((r) => setTimeout(r, 10));
-    expect(filled).toEqual([[first], [second], []]);
+    expect(filled).toEqual([[first], [second], [first]]);
     await computer.close();
     expect(existsSync(first)).toBe(false);
+  });
+
+  test("a picker with nothing staged is cancelled", async () => {
+    const page = stubPage();
+    const computer = new PlaywrightComputer({ launcher: { launch: async () => ({ page, close: async () => undefined }) } });
+    await computer.goto("https://portal.test/apply");
+    const filled: Array<string | string[]> = [];
+    page.chooserHandler?.({ setFiles: async (paths) => void filled.push(paths) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(filled).toEqual([[]]);
+    await computer.close();
   });
 
   test("the stand-in has no live view", async () => {
