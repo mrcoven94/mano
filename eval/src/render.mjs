@@ -65,7 +65,7 @@ export async function renderPagePng(svg, seedStr, { unreadable = false } = {}) {
   const rng = rngFromString(seedStr);
   const angle = (rng() * 4 - 2).toFixed(2);
   const sigma = unreadable ? 1.8 + rng() : 0.3 + rng() * 0.5;
-  const fold = rng() < 0.3;
+  const fold = !unreadable && rng() < 0.3;
 
   const svgBuffer = Buffer.from(svg);
   let png = await sharp(svgBuffer, { density: 140 }).png().toBuffer();
@@ -77,6 +77,13 @@ export async function renderPagePng(svg, seedStr, { unreadable = false } = {}) {
     .affine([[1, shearX], [shearY, 1]], { background: { r: 255, g: 253, b: 245, alpha: 1 } })
     .blur(sigma)
     .toBuffer();
+  if (unreadable) {
+    // Mosaic in two passes (chained resizes do not compose): downscale,
+    // then nearest-neighbor back up. Nothing recoverable.
+    const pre = await sharp(png).metadata();
+    const small = await sharp(png).resize(48, null, { kernel: "lanczos3" }).png().toBuffer();
+    png = await sharp(small).resize(pre.width, pre.height, { kernel: "nearest", fit: "fill" }).png().toBuffer();
+  }
   const rotMeta = await sharp(png).metadata();
   const rw = rotMeta.width || 760;
   const rh = rotMeta.height || 1000;

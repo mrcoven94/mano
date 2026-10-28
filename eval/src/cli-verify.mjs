@@ -2,27 +2,24 @@
 // Run: pnpm --filter ./eval run verify
 // With MANO_EVAL_HELDOUT_SEED (via ws keys run) this also checks the
 // held-out hashes; without it the held-out check is loudly skipped.
-import { readFile } from "node:fs/promises";
-import { parseFrozen, verifyCode, verifyDev, verifyHeldout, verifySeedCommitment } from "./verify.mjs";
+import { readRecord, verifyCode, verifyDev, verifyPhotos, verifyHeldout, verifySeedCommitment } from "./verify.mjs";
 
+const record = await readRecord();
 let failed = false;
-const code = await verifyCode();
-console.log(`code hashes: ${code.ok ? "match" : "MISMATCH " + code.mismatches.join(", ")}`);
-if (!code.ok) failed = true;
-
-const dev = await verifyDev();
-console.log(`dev split: ${dev.ok ? "match" : "MISMATCH " + dev.mismatches.join(", ")}`);
-if (!dev.ok) failed = true;
+const show = (name, r) => {
+  console.log(`${name}: ${r.ok ? "match" : "MISMATCH " + r.mismatches.join(", ")}`);
+  if (!r.ok) failed = true;
+};
+show("code hashes", await verifyCode(record));
+show("dev split", await verifyDev(record));
+show("photos and tracks", await verifyPhotos(record));
 
 const seed = process.env.MANO_EVAL_HELDOUT_SEED;
 if (seed) {
-  const frozen = parseFrozen(await readFile(new URL("../FROZEN.md", import.meta.url), "utf8"));
-  const commitment = verifySeedCommitment(seed, frozen);
+  const commitment = verifySeedCommitment(seed, record);
   console.log(`seed commitment: ${commitment ? "match" : "MISMATCH (wrong seed for this freeze)"}`);
   if (!commitment) failed = true;
-  const heldout = await verifyHeldout(seed);
-  console.log(`held-out set: ${heldout.ok ? "match (100 households)" : "MISMATCH " + heldout.mismatches.join(", ")}`);
-  if (!heldout.ok) failed = true;
+  show("held-out set", await verifyHeldout(record, seed));
 } else {
   console.log("held-out set: SKIPPED (no MANO_EVAL_HELDOUT_SEED; run with ws keys run for the full check)");
 }

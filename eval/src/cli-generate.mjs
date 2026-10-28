@@ -10,7 +10,7 @@
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import { generateDevHouseholds, generateHeldoutHouseholds } from "./generator.mjs";
 import { toBaselineInputs, toAnswers } from "./inputs.mjs";
-import { renderPhoto, photoHouseholdIds, contentHash, renderHouseholdPhotos } from "./render.mjs";
+import { photoHouseholdIds, renderHouseholdPhotos, contentHash } from "./render.mjs";
 
 const devFull = generateDevHouseholds();
 let heldoutFull = [];
@@ -37,4 +37,4 @@ if (heldoutFull.length > 0) {
   await writeFile(new URL("../data/heldout-hashes.json", import.meta.url), JSON.stringify(hashes, null, 2) + "\n");
 }
 console.log(`dev households: ${devFull.length}, held-out households: ${heldoutFull.length}, dev photos rendered: ${photoCount}`);
-console.log("held-out plaintext and photos never touch the repo; hashes in data/heldout-hashes.json and FROZEN.md (run freeze)");
+console.log("held-out plaintext and photos never touch the repo; run freeze to write the freeze record");

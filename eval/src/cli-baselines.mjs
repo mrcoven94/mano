@@ -6,16 +6,21 @@
 // Live Meta calls happen only when META_MODEL_API_KEY is passed through;
 // otherwise the general agent prints "not run" instead of numbers.
 import { readFile } from "node:fs/promises";
-import { verifyCode, verifyDev } from "./verify.mjs";
+import { readRecord, verifyCode, verifyDev, verifyPhotos } from "./verify.mjs";
 import { photoTrackInput, sliceAnswers } from "./inputs.mjs";
 import { photoFilesByLetter } from "./render.mjs";
 import { runSystem } from "./harness.mjs";
 import { gradeAll, panelGrade, formatReport, formatPerScenario } from "./grader.mjs";
 
-const code = await verifyCode();
-const devCheck = await verifyDev();
-if (!code.ok || !devCheck.ok) {
-  console.error(`ABORT: frozen commitments do not match (code: ${code.mismatches.join(",") || "ok"}, dev: ${devCheck.mismatches.join(",") || "ok"}). Run verify for details.`);
+const record = await readRecord();
+const checks = [
+  ["code", await verifyCode(record)],
+  ["dev", await verifyDev(record)],
+  ["photos", await verifyPhotos(record)],
+];
+const bad = checks.filter(([, r]) => !r.ok);
+if (bad.length > 0) {
+  console.error(`ABORT: frozen commitments do not match (${bad.map(([n, r]) => `${n}: ${r.mismatches.join(",")}`).join("; ")}). Run verify for details.`);
   process.exit(1);
 }
 
@@ -27,16 +32,16 @@ const mode = hasKey
   : "offline (no META_MODEL_API_KEY)";
 
 const SYSTEMS = [
-  { name: "plain reminder tool", entry: new URL("./systems/reminder.mjs", import.meta.url).pathname, envAllow: [] },
-  { name: "date-regex extractor", entry: new URL("./systems/regex.mjs", import.meta.url).pathname, envAllow: [] },
-  { name: "general agent (one generic prompt)", entry: new URL("./systems/general-agent.mjs", import.meta.url).pathname, envAllow: ["META_MODEL_API_KEY"] },
+  { name: "plain reminder tool", entry: new URL("./systems/reminder.mjs", import.meta.url).pathname, envAllow: [], netAllow: [] },
+  { name: "deterministic parser", entry: new URL("./systems/parser.mjs", import.meta.url).pathname, envAllow: [], netAllow: [] },
+  { name: "general agent (one generic prompt)", entry: new URL("./systems/general-agent.mjs", import.meta.url).pathname, envAllow: ["META_MODEL_API_KEY"], netAllow: ["api.meta.ai", "security.cloudflare-dns.com"] },
 ];
 
 async function runTrack(trackName, trackInputs, trackAnswers, trackMode) {
   console.log(`# ${trackName} (${trackInputs.length} households)`);
   for (const sys of SYSTEMS) {
     const t0 = Date.now();
-    const { outputs } = await runSystem(sys.entry, trackInputs, { envAllow: sys.envAllow });
+    const { outputs } = await runSystem(sys.entry, trackInputs, { envAllow: sys.envAllow, netAllow: sys.netAllow });
     const elapsedMs = Date.now() - t0;
     const notRun = outputs.length > 0 && outputs.every((o) => o.status === "not run");
     if (notRun) {
@@ -46,7 +51,8 @@ async function runTrack(trackName, trackInputs, trackAnswers, trackMode) {
       console.log(formatPerScenario(outputs));
     } else {
       const graded = gradeAll(outputs, trackAnswers);
-      const costUsd = outputs.reduce((a, o) => a + (o.costUsd || 0), 0);
+      const known = outputs.map((o) => o.costUsd).filter((c) => c !== null && c !== undefined);
+      const costUsd = known.length > 0 ? known.reduce((a, c) => a + c, 0) : null;
       const sysMode = sys.envAllow.length > 0 ? trackMode : "deterministic";
       console.log(formatReport(sys.name, graded, { costUsd, elapsedMs, mode: sysMode }));
       console.log(formatPerScenario(outputs));
@@ -73,4 +79,4 @@ await runTrack("photo track", photoInputs, photoAnswers, mode);
 
 const panel = await panelGrade([], answers);
 console.log(`panel of non-Meta models: ${panel.status} (${panel.reason})`);
-console.log("held-out: frozen, not run. See FROZEN.md.");
+console.log("held-out: frozen, not run. See eval/data/heldout-hashes.json.");

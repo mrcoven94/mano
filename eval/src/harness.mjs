@@ -1,16 +1,20 @@
 // Subprocess harness: the system under test runs as a separate node process
-// that receives only input JSON (and image paths on the photo track). It
-// gets a scrubbed environment, a temp-dir cwd outside the repo, and argv
-// pointing only at its input and output files: no answers file, no
-// generator handle, no held-out seed. Only allow-listed keys pass through
-// (META_MODEL_API_KEY for the general agent).
+// that receives only input JSON (and staged image copies on the photo
+// track). The system code is copied into the run dir and the child runs
+// under Node's permission model: it may read only the run dir and the
+// system temp dir, and write only the run dir. Answers, the generator,
+// and the seed are never visible: the environment is scrubbed to PATH
+// plus allow-listed keys, argv names only the run dir files, and held-out
+// answers are never written to disk while a system runs.
 import { spawn } from "node:child_process";
-import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm, mkdir, copyFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname, basename } from "node:path";
 
 export async function withRunDir(fn) {
-  const dir = await mkdtemp(join(tmpdir(), "mano-eval-run-"));
+  // Resolved: the permission model checks literal path components, so any
+  // symlink (like /tmp on macOS) would demand its ancestors too.
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "mano-eval-run-")));
   try {
     return await fn(dir);
   } finally {
@@ -27,18 +31,60 @@ function scrubbedEnv(allow) {
 }
 
 // Run one system entry (node script taking --input <json> --out <json>)
-// over all inputs. Returns { outputs, runs } where runs records per-system
-// process facts for the report.
-export async function runSystem(entryFile, inputs, { envAllow = [], timeoutMs = 1500000 } = {}) {
+// over all inputs. netAllow lists the only hosts the child may reach
+// (the permission model denies network by default). Returns { outputs, runs }.
+export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [], timeoutMs = 1500000 } = {}) {
   return withRunDir(async (dir) => {
+    // Stage the system code, inputs, and photo copies inside the run dir.
+    const sysDir = join(dir, "sys", "systems");
+    await mkdir(sysDir, { recursive: true });
+    const stagedEntry = join(sysDir, basename(entryFile));
+    await copyFile(entryFile, stagedEntry);
+    const srcDir = dirname(dirname(entryFile));
+    for (const f of ["baselines.mjs", "tools.mjs"]) {
+      try {
+        await copyFile(join(srcDir, f), join(dir, "sys", f));
+      } catch { /* probe entries travel without the package */ }
+    }
+    const assetsDir = join(dir, "assets");
+    await mkdir(assetsDir, { recursive: true });
+    const stagedInputs = [];
+    for (const h of inputs) {
+      const letters = [];
+      for (const l of h.letters || []) {
+        if (!l.photos) {
+          letters.push(l);
+          continue;
+        }
+        const staged = [];
+        for (const p of l.photos) {
+          const dest = join(assetsDir, basename(p));
+          await copyFile(p, dest);
+          staged.push(dest);
+        }
+        letters.push({ ...l, photos: staged });
+      }
+      stagedInputs.push({ ...h, letters });
+    }
     const inputPath = join(dir, "input.json");
     const outputPath = join(dir, "output.json");
-    await writeFile(inputPath, JSON.stringify(inputs));
-    const child = spawn(process.execPath, [entryFile, "--input", inputPath, "--out", outputPath], {
-      cwd: dir,
-      env: scrubbedEnv(envAllow),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    await writeFile(inputPath, JSON.stringify(stagedInputs));
+    const realTmp = await realpath(tmpdir());
+    const child = spawn(
+      process.execPath,
+      [
+        // One value per flag: comma-joined values are treated as one path.
+        "--permission",
+        `--allow-fs-read=${realTmp}`,
+        `--allow-fs-read=${dir}`,
+        `--allow-fs-write=${dir}`,
+        ...netAllow.map((h) => `--allow-net=${h}`),
+        stagedEntry,
+        "--input", inputPath,
+        "--out", outputPath,
+      ],
+      { cwd: dir, env: scrubbedEnv(envAllow), stdio: ["ignore", "pipe", "pipe"] }
+    );
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d; });
@@ -71,7 +117,7 @@ export async function runSystem(entryFile, inputs, { envAllow = [], timeoutMs = 
           requested: [],
           failures: [{ letterId: "*", reason: "system_crashed" }],
           toolCalls: [],
-          costUsd: 0,
+          costUsd: null,
           elapsedMs: 0,
           stderr: stderr.slice(0, 1000),
         })),
