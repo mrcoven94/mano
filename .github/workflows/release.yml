@@ -1,0 +1,25 @@
+name: release
+# Publishes a GitHub release when a version tag lands. Tag vX.Y.Z to cut one;
+# notes are generated from release.yml grouping. Nothing else triggers this.
+on:
+  push:
+    tags: ["v[0-9]*.[0-9]*.[0-9]*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::tag must look like v1.2.3, got $tag"; exit 1; fi
+          if gh release view "$tag" --repo "${{ github.repository }}" > /dev/null 2>&1; then echo "release $tag already exists"; exit 0; fi
+          notes=$(gh api "repos/${{ github.repository }}/releases/generate-notes" -f tag_name="$tag" --jq .body)
+          gh release create "$tag" --repo "${{ github.repository }}" --title "$tag" --notes "$notes"

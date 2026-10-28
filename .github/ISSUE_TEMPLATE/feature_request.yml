@@ -1,0 +1,28 @@
+name: Feature request
+description: Ask for something Mano should do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use synthetic details only. Never paste real names, documents, case numbers or phone numbers.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Who is stuck, and what are they trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should Mano do?
+    validations:
+      required: true
+  - type: dropdown
+    id: who
+    attributes:
+      label: Who is it for?
+      options: [Residents, Agency staff, Nonprofit case managers, Developers, Other]
+    validations:
+      required: true

@@ -1,0 +1,35 @@
+name: label-pr
+# Labels every pull request by the session prefix in its title: "[Channels] ..."
+# gets the channels label. Creates the label on first use. When a title is
+# retitled, the old session label is removed.
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+permissions:
+  issues: write
+  pull-requests: read
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const sessions = ["app", "channels", "engine", "eval", "extensions", "forms", "guardian", "mail", "orgs", "phone", "platform", "program", "quality", "results", "screens", "ship", "site", "spine", "vault"];
+            const { owner, repo } = context.repo;
+            const number = context.payload.pull_request.number;
+            const title = context.payload.pull_request.title || "";
+            const match = title.match(/^\[([^\]]+)\]/);
+            const want = match ? match[1].trim().toLowerCase() : null;
+            const current = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number })).data.map((l) => l.name);
+            for (const name of current.filter((n) => sessions.includes(n) && n !== want)) {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name });
+            }
+            if (want && sessions.includes(want) && !current.includes(want)) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: want });
+              } catch {
+                await github.rest.issues.createLabel({ owner, repo, name: want, color: "0e8a16", description: `Work from the ${want} session.` });
+              }
+              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [want] });
+            }
