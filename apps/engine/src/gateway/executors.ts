@@ -99,10 +99,16 @@ export class SandboxExecutor implements Executor {
         { signal: controller.signal },
       );
       clearTimeout(timer);
+      // Only the contract's explicit absent response means absent. A 200
+      // without an external ID is malformed: the lookup is unavailable,
+      // never "did not happen".
       if (res.status === 404) return { found: false };
       if (!res.ok) throw new Error(`Sandbox portal check failed: ${res.status}`);
       const data = (await res.json()) as { externalId?: string };
-      return data.externalId ? { found: true, externalId: data.externalId } : { found: false };
+      if (typeof data.externalId === "string" && data.externalId) {
+        return { found: true, externalId: data.externalId };
+      }
+      throw new Error("Sandbox portal check returned malformed data: HTTP 200 without an external ID.");
     } catch (err) {
       clearTimeout(timer);
       if (err instanceof Error && err.name === "AbortError") {

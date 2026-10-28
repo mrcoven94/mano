@@ -30,9 +30,9 @@ describe("r2 item 11: single-use websocket tickets", () => {
     const person = personStub("r2i11-ticket");
     const sessionExp = Math.floor(Date.now() / 1000) + 3600;
     const ticket = await mintWsTicket("r2i11-ticket", sessionExp, TEST_SESSION_SECRET);
-    const first = await person.redeemWsTicket(ticket.ticket);
+    const first = await person.redeemWsTicket(ticket.ticket, "r2i11-ticket");
     expect(first).toMatchObject({ ok: true, subject: "r2i11-ticket" });
-    const replay = await person.redeemWsTicket(ticket.ticket);
+    const replay = await person.redeemWsTicket(ticket.ticket, "r2i11-ticket");
     expect(replay.ok).toBe(false);
     expect(replay.ok ? "" : replay.reason).toMatch(/already used/i);
   });
@@ -40,9 +40,17 @@ describe("r2 item 11: single-use websocket tickets", () => {
   it("rejects a ticket whose session already expired", async () => {
     const person = personStub("r2i11-expired");
     const ticket = await mintWsTicket("r2i11-expired", Math.floor(Date.now() / 1000) - 10, TEST_SESSION_SECRET);
-    const redeemed = await person.redeemWsTicket(ticket.ticket);
+    const redeemed = await person.redeemWsTicket(ticket.ticket, "r2i11-expired");
     expect(redeemed.ok).toBe(false);
     expect(redeemed.ok ? "" : redeemed.reason).toMatch(/expir/i);
+  });
+
+  it("rejects a ticket naming a different person than the route", async () => {
+    const person = personStub("r2i11-alice");
+    const ticket = await mintWsTicket("r2i11-eve", Math.floor(Date.now() / 1000) + 3600, TEST_SESSION_SECRET);
+    const redeemed = await person.redeemWsTicket(ticket.ticket, "r2i11-alice");
+    expect(redeemed.ok).toBe(false);
+    expect(redeemed.ok ? "" : redeemed.reason).toMatch(/different person/i);
   });
 
   it("issues tickets from an authenticated POST only", async () => {

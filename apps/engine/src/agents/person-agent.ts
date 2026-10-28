@@ -6,7 +6,7 @@ import {
   type ConsentRevokePayload,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
-import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, createExecutor, ensureGatewayTables } from "../gateway/index.js";
+import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, contentHashOf, createExecutor, ensureGatewayTables } from "../gateway/index.js";
 import type { ActionRequest, Approval, CheckOutcome } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
@@ -24,6 +24,9 @@ export interface GrantConsentInput {
   purpose: string;
   scope: string[];
   caseId: string;
+  // Optional ISO timestamp. The org drops the case from every read after
+  // it passes; unlike revocation, the case can be shared again after.
+  expiresAt?: string;
 }
 
 export interface RevokeConsentInput {
@@ -83,6 +86,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
         sql.exec(`DROP TABLE consents`);
       }
       sql.exec(`CREATE TABLE IF NOT EXISTS consents(recipient TEXT NOT NULL, case_id TEXT NOT NULL, purpose TEXT NOT NULL, PRIMARY KEY (recipient, case_id))`);
+      try {
+        sql.exec(`ALTER TABLE consents ADD COLUMN expires_at TEXT`);
+      } catch {
+        // The column already exists: additive migrations are idempotent.
+      }
       sql.exec(`CREATE TABLE IF NOT EXISTS ws_tickets(ticket_id TEXT PRIMARY KEY, redeemed_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS approval_reminders(approval_id TEXT PRIMARY KEY, reminded_at TEXT NOT NULL)`);
       // One stored outbound message per consent key. Retries resend the
@@ -107,7 +115,25 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return this.ctx.storage.sql;
   }
 
+  // Closes sockets whose session lapsed, including idle ones that will
+  // never send another message. Runs before every outbound broadcast so
+  // expired sessions stop receiving state.
+  private closeExpiredSockets(): void {
+    const now = Date.now();
+    for (const conn of this.getConnections<{ subject?: string; sessionExp?: number }>()) {
+      const exp = conn.state?.sessionExp;
+      if (typeof exp === "number" && exp * 1000 <= now) {
+        try {
+          conn.close(4408, "Session expired");
+        } catch {
+          // Already gone; the sweep is best-effort per socket.
+        }
+      }
+    }
+  }
+
   private syncState(): void {
+    this.closeExpiredSockets();
     const approvals = this.db().exec("SELECT * FROM approvals ORDER BY created_at DESC").toArray()
       .map((r) => approvalFromRow(r as Record<string, unknown>));
     const reminders = this.db().exec("SELECT approval_id, reminded_at FROM approval_reminders").toArray() as unknown as {
@@ -122,16 +148,18 @@ export class PersonAgent extends Agent<Env, PersonState> {
     });
   }
 
-  // Hibernating WebSocket: the worker forwards the upgrade with a
-  // single-use ticket, redeemed here, and the connection sleeps while
-  // idle. Sockets close once the session behind the ticket expires.
+  // Hibernating WebSocket: the worker redeems the single-use ticket
+  // BEFORE forwarding, then attaches the verified subject here. The
+  // ticket itself is never re-checked on connect: it is already spent.
+  // The connection sleeps while idle and closes once the session behind
+  // the ticket expires.
   async onConnect(connection: Connection, ctx: ConnectionContext): Promise<void> {
-    const ticket = ctx.request.headers.get("x-mano-ticket");
+    const subject = ctx.request.headers.get("x-mano-subject");
+    const sessionExp = Number(ctx.request.headers.get("x-mano-session-exp"));
     try {
-      if (!ticket) throw new Error("no ticket");
-      const redeemed = await this.redeemWsTicket(ticket);
-      if (!redeemed.ok) throw new Error(redeemed.reason);
-      connection.setState({ subject: redeemed.subject, sessionExp: redeemed.sessionExp });
+      if (!subject || !Number.isFinite(sessionExp)) throw new Error("no verified subject");
+      await this.assertSubject(subject);
+      connection.setState({ subject, sessionExp });
     } catch {
       connection.close(4403, "Forbidden");
     }
@@ -160,16 +188,24 @@ export class PersonAgent extends Agent<Env, PersonState> {
   }
 
   // Redeems a single-use connection ticket minted by the worker's
-  // authenticated ws-ticket route. Agent-to-worker only: no HTTP route
-  // reaches this method except through the WebSocket upgrade. Expected
-  // failures come back as a result, never a throw across RPC.
+  // authenticated ws-ticket route. The worker calls this BEFORE the SDK
+  // accepts the socket: the SDK sends agent state on accept, so any
+  // validation after forwarding leaks private state to bad tickets. The
+  // ticket's subject must equal the route's expected identity, and
+  // identity initializes from that expected value, never from a bare
+  // stranger token. Expected failures come back as a result, never a
+  // throw across RPC.
   async redeemWsTicket(
     ticket: string,
+    expectedSubject: string,
   ): Promise<{ ok: true; subject: string; sessionExp: number } | { ok: false; reason: string }> {
     const configured = getSessionSecret(this.env);
     if (!configured) return { ok: false, reason: "Sessions are not configured." };
     const claims = await verifyWsTicket(ticket, configured.secret);
     if (!claims) return { ok: false, reason: "Invalid or expired connection ticket." };
+    if (claims.sub !== expectedSubject) {
+      return { ok: false, reason: "This ticket is for a different person." };
+    }
     if (claims.sessionExp * 1000 <= Date.now()) {
       return { ok: false, reason: "The session behind this ticket expired." };
     }
@@ -179,11 +215,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
       return { ok: false, reason: "This connection ticket was already used." };
     }
     try {
-      await this.assertSubject(claims.sub);
+      await this.assertSubject(expectedSubject);
     } catch (err) {
       return { ok: false, reason: (err as Error).message };
     }
-    return { ok: true, subject: claims.sub, sessionExp: claims.sessionExp };
+    return { ok: true, subject: expectedSubject, sessionExp: claims.sessionExp };
   }
 
   private async assertSubject(verified: string) {
@@ -237,7 +273,10 @@ export class PersonAgent extends Agent<Env, PersonState> {
   }
 
   private listStoredConsents(): { recipient: string; purpose: string }[] {
-    const rows = this.db().exec("SELECT recipient, purpose FROM consents").toArray() as unknown as {
+    const rows = this.db().exec(
+      "SELECT recipient, purpose FROM consents WHERE expires_at IS NULL OR expires_at > ?",
+      new Date().toISOString(),
+    ).toArray() as unknown as {
       recipient: string;
       purpose: string;
     }[];
@@ -312,11 +351,12 @@ export class PersonAgent extends Agent<Env, PersonState> {
       await this.schedule(new Date(result.approval.remindAt), "processDueApprovals", { approvalId: result.approval.id });
       await this.schedule(new Date(result.approval.expiresAt), "processDueApprovals", { approvalId: result.approval.id });
     }
+    await this.scheduleRecoveryIfUnresolved();
     this.syncState();
     return result;
   }
 
-  // Recovers attempts left in_flight by a restart. The gateway
+  // Recovers attempts left unresolved by a restart. The gateway
   // reconciles each one against the stored request; the person is never
   // asked to approve again. Safe to call twice: recovery claims each key
   // before touching it.
@@ -324,12 +364,36 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const now = new Date();
     const cutoff = new Date(now.getTime() - maxAgeMs).toISOString();
     const recovered: { key: string; status: string }[] = [];
-    for (const attempt of this.store.listStaleAttempts(cutoff)) {
+    for (const attempt of this.store.listRecoverableAttempts(cutoff)) {
       const result = await this.gateway.recoverAttempt(attempt.key, now, cutoff);
-      if (result) recovered.push({ key: attempt.key, status: result.status });
+      if (!result) continue;
+      recovered.push({ key: attempt.key, status: result.status });
+      // Recovery executes shares outside approve(), so their consent
+      // effects apply here, from the persisted original approval.
+      if ((result.status === "completed" || result.status === "reconciled") && result.receipt) {
+        await this.applyShareOutcome(result.receipt.idempotencyKey);
+      }
     }
     if (recovered.length > 0) this.syncState();
     return { recovered };
+  }
+
+  // Applies the share outcome behind an idempotency key: the consent
+  // effect of the consumed approval that claimed it. Recovery runs this
+  // after executing a stranded share. Idempotent and safe to repeat.
+  async applyShareOutcome(idempotencyKey: string): Promise<{ applied: boolean }> {
+    const original = this.store.getApprovalByKey(idempotencyKey);
+    if (!original || original.actionType !== "share") return { applied: false };
+    this.recordConsentOutcome(original);
+    return { applied: true };
+  }
+
+  // Schedules a durable recovery run while any attempt is unresolved.
+  // processDueApprovals runs the sweep, so every unknown or stranded
+  // attempt is reconciled without the person asking again.
+  private async scheduleRecoveryIfUnresolved(): Promise<void> {
+    if (!this.store.hasUnresolvedAttempts()) return;
+    await this.schedule(new Date(Date.now() + 5 * 60_000), "processDueApprovals", {});
   }
 
   // Sends due reminders, expires past-due approvals and escalates ones
@@ -382,6 +446,9 @@ export class PersonAgent extends Agent<Env, PersonState> {
         }
       }
     }
+    // The durable recovery loop: while anything stays unresolved, another
+    // sweep runs in five minutes.
+    await this.scheduleRecoveryIfUnresolved();
     this.syncState();
     return out;
   }
@@ -396,21 +463,34 @@ export class PersonAgent extends Agent<Env, PersonState> {
     await this.assertSubject(verified);
     const result = await this.gateway.approveAndExecute(approvalId, verified);
     if (result.status === "completed" || result.status === "reconciled") {
-      const current = this.store.getApproval(approvalId);
-      if (current?.actionType === "share") this.recordConsentOutcome(current);
+      // Consent effects come from the persisted original approval behind
+      // the key, never from whichever approval triggered the outcome.
+      const key = result.receipt?.idempotencyKey;
+      const row = key ? this.store.getApprovalByKey(key) : null;
+      if (row?.actionType === "share") this.recordConsentOutcome(row);
     }
     this.store.audit({ event: "gateway.approve", approvalId, status: result.status });
+    await this.scheduleRecoveryIfUnresolved();
     this.syncState();
     return result;
   }
 
   private recordConsentOutcome(approval: { recipient: string; purpose: string; requestJson: string }) {
     try {
-      const stored = JSON.parse(approval.requestJson) as { payload?: { consent?: string; caseId?: string } };
+      const stored = JSON.parse(approval.requestJson) as {
+        payload?: { consent?: string; caseId?: string; expiresAt?: string };
+      };
       const caseId = stored.payload?.caseId;
       if (typeof caseId !== "string" || !caseId) return;
       if (stored.payload?.consent === "grant") {
-        this.db().exec("INSERT OR REPLACE INTO consents VALUES (?, ?, ?)", approval.recipient, caseId, approval.purpose);
+        const expiresAt = typeof stored.payload?.expiresAt === "string" ? stored.payload.expiresAt : null;
+        this.db().exec(
+          "INSERT OR REPLACE INTO consents VALUES (?, ?, ?, ?)",
+          approval.recipient,
+          caseId,
+          approval.purpose,
+          expiresAt,
+        );
       } else if (stored.payload?.consent === "revoke") {
         this.db().exec("DELETE FROM consents WHERE recipient = ? AND case_id = ?", approval.recipient, caseId);
         this.db().exec("INSERT OR IGNORE INTO revoked_cases VALUES (?, ?)", caseId, new Date().toISOString());
@@ -430,17 +510,35 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const orgAgentId = requireOrgAgentId(input.orgAgentId);
     if (!input.purpose || !input.caseId) throw new Error("Consent needs a purpose and a case ID.");
     if (!Array.isArray(input.scope)) throw new Error("Consent needs a scope list.");
+    if (input.expiresAt !== undefined) {
+      const at = new Date(input.expiresAt).getTime();
+      if (!Number.isFinite(at)) {
+        return { status: "blocked" as const, reason: "Consent expiry must be a valid ISO timestamp." };
+      }
+      if (at <= Date.now()) {
+        return { status: "blocked" as const, reason: "Consent expiry already passed." };
+      }
+    }
     if (this.revokedLocally(input.caseId)) {
       const reason = `Case ${input.caseId} was revoked and cannot be shared again.`;
       this.store.audit({ event: "consent.regrant_refused", caseId: input.caseId });
       return { status: "blocked" as const, reason };
     }
+    // The expiry is part of the key: the same grant retried resends one
+    // message, while a re-grant after expiry delivers fresh.
+    const idempotencyKey =
+      `consent-grant:${this.personId}:${input.caseId}` + (input.expiresAt ? `:${input.expiresAt}` : "");
     const req: ActionRequest = {
       type: "share",
       recipient: orgAgentId,
       purpose: input.purpose,
-      payload: { consent: "grant", caseId: input.caseId, scope: input.scope },
-      idempotencyKey: `consent-grant:${this.personId}:${input.caseId}`,
+      payload: {
+        consent: "grant",
+        caseId: input.caseId,
+        scope: input.scope,
+        ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+      },
+      idempotencyKey,
       actor: "foreground",
       personId: this.personId,
       sources: [{ kind: "profile", id: this.personId }],
@@ -488,7 +586,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const stub = this.env.ORG_AGENT.get(this.env.ORG_AGENT.idFromName(match[1]));
     const result = await (stub as unknown as OrgAgent).receiveConsent(message);
     if (!result.accepted) {
-      throw new DefiniteFailureError(result.reason ?? "The org rejected the consent message.");
+      const reason = result.reason ?? "The org rejected the consent message.";
+      // A retryable org failure (storage unavailable) stays uncertain so
+      // the gateway reconciles; anything else is a definite refusal.
+      if (result.retryable) throw new Error(reason);
+      throw new DefiniteFailureError(reason);
     }
     return { externalId: message.id };
   }
@@ -512,8 +614,19 @@ export class PersonAgent extends Agent<Env, PersonState> {
     consent: string,
     caseId: string,
   ): Promise<ProtocolMessage> {
+    // Two approvals can share one key, so the lookup selects the exact
+    // consumed row: approved status plus the attempt's content hash. A
+    // different action reusing the key is refused, never delivered.
+    const attempts = this.db().exec(
+      "SELECT request_hash FROM attempts WHERE idempotency_key = ?",
+      req.idempotencyKey,
+    ).toArray() as unknown as { request_hash: string | null }[];
+    const attemptHash = attempts[0]?.request_hash ?? "";
+    if (attemptHash && attemptHash !== (await contentHashOf(req))) {
+      throw new DefiniteFailureError("This idempotency key was already used with different content.");
+    }
     const rows = this.db().exec(
-      "SELECT approved_by FROM approvals WHERE idempotency_key = ?",
+      "SELECT approved_by FROM approvals WHERE idempotency_key = ? AND status = 'approved'",
       req.idempotencyKey,
     ).toArray() as unknown as { approved_by: string | null }[];
     const approvedByHumanId = rows[0]?.approved_by ?? null;
@@ -521,9 +634,13 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const scope = Array.isArray(req.payload.scope)
       ? req.payload.scope.filter((s): s is string => typeof s === "string")
       : [];
+    const expiresAt = consent === "grant" && typeof req.payload.expiresAt === "string" ? req.payload.expiresAt : null;
+    if (expiresAt !== null && !Number.isFinite(new Date(expiresAt).getTime())) {
+      throw new DefiniteFailureError("Share payload carries an invalid consent expiry.");
+    }
     const payload: ConsentGrantPayload | ConsentRevokePayload =
       consent === "grant"
-        ? { orgAgentId, purpose: req.purpose, scope }
+        ? { orgAgentId, purpose: req.purpose, scope, ...(expiresAt ? { expiresAt } : {}) }
         : { orgAgentId };
     const keys = await this.ensureKeypair();
     const message = await signMessage(

@@ -72,7 +72,7 @@ describe("r2 blocker 2: no stale write can revive an approval", () => {
                 recipient: current.recipient,
                 personId: current.personId,
               },
-              { personId: current.personId, requestHash: current.requestHash, now: new Date() },
+              { personId: current.personId, requestHash: current.requestHash },
             );
             if (consumed) await exec.execute(JSON.parse(consumed.requestJson) as ActionRequest);
           }

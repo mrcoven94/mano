@@ -153,11 +153,11 @@ export class SqlApprovalStore implements ApprovalStore {
     }
     // Status, owner, request hash and expiry are re-checked inside the
     // consuming statement itself, not from the snapshot the gateway read
-    // before its awaits.
+    // before its awaits. The clock is read here, at claim time.
     const updated = this.sql.exec(
       "UPDATE approvals SET status = 'approved', approved_by = ?" +
         " WHERE id = ? AND status = 'pending' AND person_id = ? AND request_hash = ? AND expires_at > ?",
-      humanId, id, guard.personId, guard.requestHash, guard.now.toISOString(),
+      humanId, id, guard.personId, guard.requestHash, new Date().toISOString(),
     );
     if (updated.rowsWritten !== 1) {
       if (inserted) this.sql.exec("DELETE FROM attempts WHERE idempotency_key = ?", attempt.key);
@@ -255,20 +255,27 @@ export class SqlApprovalStore implements ApprovalStore {
     return updated.rowsWritten === 1;
   }
 
-  claimStaleAttempt(key: string, olderThanIso: string, now: Date): boolean {
+  claimRecoverableAttempt(key: string, olderThanIso: string, now: Date): boolean {
     const updated = this.sql.exec(
-      "UPDATE attempts SET updated_at = ? WHERE idempotency_key = ? AND status = 'in_flight' AND updated_at < ?",
+      "UPDATE attempts SET updated_at = ? WHERE idempotency_key = ? AND status IN ('in_flight', 'unknown') AND updated_at < ?",
       now.toISOString(), key, olderThanIso,
     );
     return updated.rowsWritten === 1;
   }
 
-  listStaleAttempts(olderThanIso: string): Attempt[] {
+  listRecoverableAttempts(olderThanIso: string): Attempt[] {
     const rows = this.sql.exec(
-      `SELECT ${ATTEMPT_COLUMNS} FROM attempts WHERE status = 'in_flight' AND updated_at < ?`,
+      `SELECT ${ATTEMPT_COLUMNS} FROM attempts WHERE status IN ('in_flight', 'unknown') AND updated_at < ?`,
       olderThanIso,
     ).toArray() as unknown as Record<string, unknown>[];
     return rows.map(attemptFromRow);
+  }
+
+  hasUnresolvedAttempts(): boolean {
+    const rows = this.sql.exec(
+      "SELECT idempotency_key FROM attempts WHERE status IN ('in_flight', 'unknown') LIMIT 1",
+    ).toArray();
+    return rows.length > 0;
   }
 
   updateAttempt(key: string, status: Attempt["status"]): void {

@@ -91,7 +91,7 @@ describe("blocker 6: approvals, attempts and receipts survive eviction", () => {
     const approval = pendingApproval();
     first.putApproval(approval);
     const attempt = attemptFor(approval);
-    const guard = { personId: "maria", requestHash: "hash", now: new Date() };
+    const guard = { personId: "maria", requestHash: "hash" };
 
     const consumed = first.consumeApprovalAndClaim(approval.id, "maria", attempt, guard);
     expect(consumed?.status).toBe("approved");
@@ -125,7 +125,6 @@ describe("blocker 6: approvals, attempts and receipts survive eviction", () => {
       first.consumeApprovalAndClaim(approval.id, "maria", attempt, {
         personId: "maria",
         requestHash: "hash",
-        now: new Date(),
       }),
     ).toBeNull();
     expect(first.getApproval(approval.id)?.status).toBe("pending");
