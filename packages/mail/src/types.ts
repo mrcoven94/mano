@@ -155,6 +155,9 @@ export interface RunStats {
 export interface MailReading {
   letters: Letter[];
   deadlines: Deadline[];
+  // Informational dates that name no duty (coverage and benefit end
+  // dates), cited the same way as deadlines but never action dates.
+  datesToKnow: Deadline[];
   warnings: Warning[];
   questions: Question[];
   stats: RunStats;

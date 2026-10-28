@@ -99,6 +99,31 @@ describe("resolveDeadline", () => {
   it("still reads a bare before-date as the deadline itself", () => {
     expect(resolveDeadline("before December 12, 2026", null)).toEqual({ kind: "absolute", iso: "2026-12-12" });
   });
+  it("asks on caps and before-wording after a count instead of resolving", () => {
+    expect(resolveDeadline("within 10 days after November 25, 2026, but no later than November 30, 2026", null)).toEqual(
+      {
+        kind: "unsupported",
+        expression: "within 10 days after November 25, 2026, but no later than November 30, 2026",
+      },
+    );
+    expect(resolveDeadline("within 10 days before November 25, 2026", null)).toEqual({
+      kind: "unsupported",
+      expression: "within 10 days before November 25, 2026",
+    });
+  });
+  it("asks when one expression holds two dates", () => {
+    expect(resolveDeadline("due November 20, 2026, see November 2, 2026", null)).toEqual({
+      kind: "ambiguous",
+      expression: "due November 20, 2026, see November 2, 2026",
+    });
+    expect(resolveDeadline("within 10 days of November 25, 2026 or November 26, 2026", null).kind).toBe("ambiguous");
+  });
+  it("asks on ambiguity anywhere, even past a notice anchor", () => {
+    expect(resolveDeadline("60 days from the November 5 notice", "November 2, 2026")).toEqual({
+      kind: "ambiguous",
+      expression: "November 5",
+    });
+  });
 });
 
 describe("obligationOf", () => {

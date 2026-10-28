@@ -130,6 +130,11 @@ export type ResolvedDeadline =
 const RELATIVE_AFTER = /(\d{1,3})\s+(business\s+|calendar\s+)?days?\s+(?:from|after)\b([\s\S]*)/i;
 const RELATIVE_WITHIN = /\b(?:within|in)\s+(\d{1,3})\s+(business\s+|calendar\s+)?days?\b([\s\S]*)/i;
 const NOTICE_ANCHOR = /date of this notice|notice date|this notice|the notice/i;
+// Directions and caps the counter does not support. "10 days before
+// November 25" and "no later than November 30" following a count ask,
+// never resolve; bare "before December 12" still reads as the date
+// itself, because the date named is the deadline.
+const UNSUPPORTED_REST = /\b(before|prior to|earlier than|preceding|no later than|at the latest)\b/i;
 // A count with a time unit that the two supported patterns did not
 // match: "10 days before November 25", "within 2 weeks of receipt".
 // The parser cannot count it, so it must ask, never promote a nearby
@@ -159,21 +164,25 @@ export function resolveDeadline(deadlineText: string | null, noticeDateText: str
   if (!rel) {
     if (RELATIVE_LIKE.test(text)) return { kind: "unsupported", expression: text };
     // An ambiguous date anywhere in the expression asks, even when
-    // another date in it would parse.
+    // another date in it would parse. So does a second date: one
+    // expression holds one deadline.
     const ambiguous = findAmbiguousDate(text);
     if (ambiguous) return { kind: "ambiguous", expression: ambiguous };
     const iso = parseWrittenDate(text);
-    if (iso) return { kind: "absolute", iso };
-    return { kind: "none" };
+    if (!iso) return { kind: "none" };
+    if (parseAllDates(text).length > 1) return { kind: "ambiguous", expression: text };
+    return { kind: "absolute", iso };
   }
   const count = Number(rel[1]);
   const business = /business/i.test(rel[2] ?? "");
   const rest = (rel[3] ?? "").trim();
+  if (UNSUPPORTED_REST.test(rest)) return { kind: "unsupported", expression: text };
+  const ambiguous = findAmbiguousDate(rest);
+  if (ambiguous) return { kind: "ambiguous", expression: ambiguous };
   // Anchor named in the expression wins.
   const anchorInText = rest ? parseWrittenDate(rest) : null;
   if (anchorInText) {
-    const ambiguous = findAmbiguousDate(rest);
-    if (ambiguous) return { kind: "ambiguous", expression: ambiguous };
+    if (parseAllDates(rest).length > 1) return { kind: "ambiguous", expression: text };
     const iso = shiftDate(anchorInText, count, business);
     if (!iso) return { kind: "needs-anchor", expression: text };
     return {

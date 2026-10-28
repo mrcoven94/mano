@@ -116,7 +116,7 @@
           "sender": "Oakland Housing Authority",
           "program": null,
           "referenceNo": "H-88142",
-          "deadlineIso": "2026-12-12",
+          "deadlineIso": null,
           "scam": false,
           "plantedInstruction": false,
           "phones": [

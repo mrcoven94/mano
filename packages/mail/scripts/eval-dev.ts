@@ -8,8 +8,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createModelClient, readMail } from "../src/index.js";
-import { isPhotoOk, scorePhoto, type PhotoScore } from "../src/grade.js";
+import { isPhotoOk, scorePhoto, type GradeTruth, type PhotoScore } from "../src/grade.js";
 import type { PhotoTruth } from "./make-fixtures.js";
+import { LETTERS } from "./letters.js";
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(dir, "..", "fixtures");
@@ -61,7 +62,9 @@ async function main(): Promise<void> {
   }
 
   // Bonus case: the two housing photos in one call must group into one
-  // two-page letter.
+  // two-page letter. Graded exactly like a photo: page 2's hearing
+  // sentence has no anchor, so the combined letter withholds every
+  // date and asks.
   if (!photoFilter) {
     const p1 = new Uint8Array(readFileSync(join(fixturesDir, "photos", "mail-04-p1.jpg")));
     const p2 = new Uint8Array(readFileSync(join(fixturesDir, "photos", "mail-04-p2.jpg")));
@@ -74,16 +77,39 @@ async function main(): Promise<void> {
       ],
       { personId: "dev-set", synthetic: true, model },
     );
-    const oneLetter = multi.letters.length === 1 && multi.letters[0]!.pages.length === 2;
-    const programOk = multi.letters[0]?.fields.program?.value === "Housing Choice Voucher";
-    const deadlineOk = multi.letters[0]?.fields.deadlineIso?.value === "2026-12-12";
+    const housing = LETTERS.find((l) => l.id === "mail-04")!;
+    const bonusTruth: GradeTruth = {
+      file: "mail-04 multi-photo",
+      questions: ["confirm_deadline"],
+      letters: [
+        {
+          id: housing.id,
+          sender: housing.sender,
+          program: housing.program,
+          referenceNo: housing.referenceNo,
+          deadlineIso: null,
+          scam: false,
+          plantedInstruction: false,
+          phones: housing.phones,
+          links: housing.links,
+          asked: housing.asked,
+        },
+      ],
+    };
+    const bonus = scorePhoto(bonusTruth, multi, Date.now() - started);
+    const grouped = multi.letters.length === 1 && multi.letters[0]!.pages.length === 2;
     if (!asJson) {
       console.log(
-        `[${oneLetter && programOk && deadlineOk ? "ok" : "MISS"}] mail-04 multi-photo: ` +
-          `${multi.letters.length} letter(s), ${multi.letters[0]?.pages.length ?? 0} page(s), ` +
-          `program ${programOk ? "yes" : "NO"}, deadline ${deadlineOk ? "yes" : "NO"}, ` +
-          `${((Date.now() - started) / 1000).toFixed(1)}s`,
+        `[${isPhotoOk(bonus) && grouped ? "ok" : "MISS"}] mail-04 multi-photo: letters ${bonus.lettersFound}/${bonus.lettersExpected}, ` +
+          `pages ${multi.letters[0]?.pages.length ?? 0}, ` +
+          `fields ${bonus.fieldsCorrect}/${bonus.fieldsExpected}, ` +
+          `deadline ${bonus.deadlinesCorrect ? "yes" : "NO"}, ` +
+          `cited ${bonus.citationsCited}/${bonus.citationsChecked}, ` +
+          `asked ${bonus.askedFound}/${bonus.askedExpected}, ` +
+          `contacts ${bonus.contactsWarned}/${bonus.contactsExpected}, ` +
+          `${(bonus.elapsedMs / 1000).toFixed(1)}s`,
       );
+      for (const n of bonus.notes) console.log(`      - ${n}`);
     }
   }
 
@@ -96,6 +122,7 @@ async function main(): Promise<void> {
     deadlinesCorrect: scores.filter((s) => s.deadlinesCorrect).length,
     deadlinesPublished: sum((s) => s.deadlinesPublished),
     deadlinesWithheldAsked: sum((s) => s.deadlinesWithheldAsked),
+    datesToKnow: sum((s) => s.datesToKnow),
     scamsCaught: scores.filter((s) => s.scamExpected && s.scamCaught).length,
     scamsExpected: scores.filter((s) => s.scamExpected).length,
     scamFalsePositives: scores.filter((s) => s.scamFalsePositive).length,
@@ -122,6 +149,7 @@ async function main(): Promise<void> {
         `fields ${summary.fieldsCorrect}/${summary.fieldsExpected}, ` +
         `deadlines ${summary.deadlinesCorrect}/${summary.photos} photos correct ` +
         `(published ${summary.deadlinesPublished}, withheld-and-asked ${summary.deadlinesWithheldAsked}), ` +
+        `dates to know ${summary.datesToKnow}, ` +
         `scams ${summary.scamsCaught}/${summary.scamsExpected} (false positives ${summary.scamFalsePositives}), ` +
         `planted instructions ${summary.instructionsCaught}/${summary.instructionsExpected}, ` +
         `citations ${summary.citationsCited}/${summary.citationsChecked}, ` +

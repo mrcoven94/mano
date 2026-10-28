@@ -374,9 +374,9 @@ function markerInfo(marker: string | null): { num: number; of: number } | { cont
 // first: a sender, reference, notice date or subject present on two
 // pages with different values means two different notices, whatever
 // the markers say. Then positive continuation evidence is required:
-// page markers chaining on the same page count, or the same notice
-// date and the same subject on every page. Otherwise the pages stay
-// separate.
+// distinct page-marker numbers of one multi-page notice, or the same
+// notice date and the same subject on every page. Otherwise the pages
+// stay separate.
 export function validateMerge(members: GroupablePage[]): boolean {
   if (members.length < 2) return true;
   const values = (pick: (p: GroupablePage) => string | null): Set<string> =>
@@ -386,6 +386,7 @@ export function validateMerge(members: GroupablePage[]): boolean {
   if (values((p) => normNotice(p.extraction.noticeDate.text)).size > 1) return false;
   if (values((p) => normSubject(p.extraction.subject.text)).size > 1) return false;
   const totals = new Set<number>();
+  const numbers: number[] = [];
   let allNumbered = true;
   for (const p of members) {
     const m = markerInfo(p.extraction.pageMarker.text);
@@ -394,8 +395,23 @@ export function validateMerge(members: GroupablePage[]): boolean {
       break;
     }
     totals.add(m.of);
+    numbers.push(m.num);
   }
-  if (allNumbered && totals.size === 1 && [...totals][0]! > 1) return true;
+  // Markers chain only as distinct page numbers of one multi-page
+  // notice: two "page 1 of 2" pages are not a sequence. (True
+  // duplicates still merge below on same notice date and subject.)
+  // Gaps stay mergeable; the missing pages are asked about.
+  const total = [...totals][0];
+  if (
+    allNumbered &&
+    totals.size === 1 &&
+    total !== undefined &&
+    total > 1 &&
+    new Set(numbers).size === numbers.length &&
+    numbers.every((n) => n >= 1 && n <= total)
+  ) {
+    return true;
+  }
   return members.every(
     (p) => normNotice(p.extraction.noticeDate.text) !== null && normSubject(p.extraction.subject.text) !== null,
   );

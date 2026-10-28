@@ -30,12 +30,14 @@
 // Guarantees: a field publishes only with a real box and text found in
 // the transcription, else it becomes a question; unreadable pages
 // contribute nothing, though their contacts still warn; pages merge
-// only on continuation evidence with no contradictions; deadlines are
-// compared within their duty and any duty under doubt publishes
-// nothing; a deadline before the notice date or over a year out is
-// asked about; relative deadlines resolve from a cited anchor and
-// count rule, or ask; links, phones and addresses are never acted on
-// here and come back as warnings for the gateway.
+// only on continuation evidence with no contradictions; any open
+// deadline question, failed verification, or failed chronology check
+// withholds every date on the letter; dates that name no duty are
+// informational and go to datesToKnow, never deadlines; a deadline
+// before the notice date or over a year out is asked about; relative
+// deadlines resolve from a cited anchor and count rule, or ask;
+// links, phones and addresses are never acted on here and come back
+// as warnings for the gateway.
 // Content failures never throw; only invalid arguments do. Each file
 // has a time and token budget; past it the file stops early with a
 // question.
@@ -405,6 +407,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
   // Build letters.
   const letters: Letter[] = [];
   const deadlines: Deadline[] = [];
+  const datesToKnow: Deadline[] = [];
   groups.forEach((memberOrders, li) => {
     const letterId = `L${li + 1}`;
     const members = memberOrders
@@ -425,10 +428,11 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     const fields = mergeFields(members, cite);
     letters.push({ id: letterId, pages: letterPages, fields });
 
-    // Duties under doubt. An open deadline question, a deadline that
-    // failed verification, or a failed chronology check withholds every
-    // date of that duty; nothing under doubt publishes.
-    const blockedDuties = new Set<Obligation>();
+    // Letter-wide withholding. Any open deadline question, any
+    // deadline that failed verification, or any failed chronology
+    // check holds back every date on the letter: none publishes until
+    // the person confirms.
+    let letterBlocked = false;
     // Per-page questions and deadline checks.
     members.forEach((m, i) => {
       const ex = m.extraction;
@@ -453,20 +457,20 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
             `Check the letter before relying on it.`,
           citation: null,
         });
-        if (d.name === "deadline") blockedDuties.add(obligationOf(d.value));
+        if (d.name === "deadline") letterBlocked = true;
       }
     });
     checkMissingPages(members, letterId, cite, ask);
 
     // Resolve every deadline expression on every page against the
     // letter's notice date. Relative wording never promotes its
-    // anchor date. Dates are compared within their duty (respond,
-    // appeal, renew, pay): one duty with two dates is a conflict, and
-    // different duties publish independently. Bare dates name no duty;
-    // several on one page are separate statements and each publishes,
-    // while one notice restating different bare dates across its pages
-    // conflicts. Any duty with an open question, a failed
-    // verification, or a failed chronology check publishes nothing.
+    // anchor date. Dates of one duty (respond, appeal, renew, pay) are
+    // compared with each other: two dates for one duty is a conflict,
+    // asked about with cited candidates. Dates that name no duty are
+    // informational (coverage and benefit end dates): each publishes
+    // cited to datesToKnow, never to deadlines. Any open deadline
+    // question, failed verification, or failed chronology check
+    // withholds the whole letter.
     const resolved: {
       iso: string;
       text: string;
@@ -489,7 +493,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
           if (!ruleCitation) continue;
           const chrono = chronologyOf(r.iso, noticeIso);
           if (chrono !== "ok") {
-            blockedDuties.add(obligation);
+            letterBlocked = true;
             const key = `chrono:${d.text}`;
             if (!askedExpressions.has(key)) {
               askedExpressions.add(key);
@@ -524,7 +528,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
             countRule: r.kind === "relative" ? r.countRule : null,
           });
         } else if (r.kind === "needs-anchor" || r.kind === "ambiguous" || r.kind === "unsupported") {
-          blockedDuties.add(obligation);
+          letterBlocked = true;
           if (askedExpressions.has(r.expression)) continue;
           askedExpressions.add(r.expression);
           ask({
@@ -544,20 +548,19 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         }
       }
     });
-    // Withheld: no deadline of a conflicting duty is published until
+    // Withheld: a conflicting duty holds back the whole letter until
     // the person confirms. The question carries every candidate with
     // its own citation.
     const withholdConflict = (duty: Obligation, distinct: string[], entries: typeof resolved): void => {
-      blockedDuties.add(duty);
+      letterBlocked = true;
       const candidates: Cited<string>[] = [];
       for (const iso of distinct) {
         const entry = entries.find((e) => e.iso === iso)!;
         candidates.push({ value: iso, citation: entry.ruleCitation });
       }
-      const dutyLabel = duty === "other" ? "" : ` for its ${duty} duty`;
       warnings.push({
         kind: "conflicting_dates",
-        message: `Letter ${letterId} states more than one deadline${dutyLabel} (${distinct.join(", ")}). None was published.`,
+        message: `Letter ${letterId} states more than one deadline for its ${duty} duty (${distinct.join(", ")}). None was published.`,
         letterId,
         citation: candidates[0]?.citation ?? null,
         detail: distinct.join(", "),
@@ -565,7 +568,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       ask({
         kind: "confirm_deadline",
         letterId,
-        prompt: `Letter ${letterId} shows more than one deadline${dutyLabel} (${distinct.join(", ")}). Which dates are the real deadlines?`,
+        prompt: `Letter ${letterId} shows more than one deadline for its ${duty} duty (${distinct.join(", ")}). Which dates are the real deadlines?`,
         citation: null,
         candidates,
       });
@@ -575,29 +578,29 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       const distinct = [...new Set(entries.map((e) => e.iso))];
       if (distinct.length > 1) withholdConflict(duty, distinct, entries);
     }
-    {
-      const entries = resolved.filter((e) => e.obligation === "other");
-      const distinct = [...new Set(entries.map((e) => e.iso))];
-      const statingMembers = new Set(entries.map((e) => e.memberIdx));
-      if (distinct.length > 1 && statingMembers.size > 1) withholdConflict("other", distinct, entries);
-    }
     const published = new Set<string>();
-    for (const entry of resolved) {
-      if (blockedDuties.has(entry.obligation)) continue;
-      const key = `${entry.obligation}:${entry.iso}`;
-      if (published.has(key)) continue;
-      published.add(key);
-      if (!fields.deadlineIso) fields.deadlineIso = { value: entry.iso, citation: entry.ruleCitation };
-      deadlines.push({
-        letterId,
-        program: fields.program?.value ?? null,
-        dueDate: entry.iso,
-        dateText: entry.text,
-        obligation: entry.obligation,
-        citation: entry.ruleCitation,
-        anchor: entry.anchor,
-        countRule: entry.countRule,
-      });
+    if (!letterBlocked) {
+      for (const entry of resolved) {
+        const key = `${entry.obligation}:${entry.iso}`;
+        if (published.has(key)) continue;
+        published.add(key);
+        const item: Deadline = {
+          letterId,
+          program: fields.program?.value ?? null,
+          dueDate: entry.iso,
+          dateText: entry.text,
+          obligation: entry.obligation,
+          citation: entry.ruleCitation,
+          anchor: entry.anchor,
+          countRule: entry.countRule,
+        };
+        if (entry.obligation === "other") {
+          datesToKnow.push(item);
+        } else {
+          if (!fields.deadlineIso) fields.deadlineIso = { value: entry.iso, citation: entry.ruleCitation };
+          deadlines.push(item);
+        }
+      }
     }
 
     // Safety: every returned contact becomes a warning on its own,
@@ -672,6 +675,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
   return {
     letters,
     deadlines,
+    datesToKnow,
     warnings,
     questions,
     stats: {

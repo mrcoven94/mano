@@ -56,7 +56,7 @@ function clientFor(reads: string[], segment = '{"detections":[{"box_2d":[80,120,
 }
 
 describe("readMail", () => {
-  it("reads one photo into one cited letter with a deadline", async () => {
+  it("reads one photo into one cited letter with a date to know", async () => {
     const bytes = await photo();
     const model = clientFor([pageJson()]);
     const reading = await readMail([{ bytes, mimeType: "image/jpeg", name: "mail.jpg" }], {
@@ -75,15 +75,18 @@ describe("readMail", () => {
       page: 1,
       box: { ymin: 40, xmin: 60, ymax: 70, xmax: 400 },
     });
-    expect(letter.fields.deadlineIso?.value).toBe("2026-11-20");
-    expect(reading.deadlines).toEqual([
+    // A bare date names no duty, so it is a date to know, never a
+    // deadline, and deadlineIso stays empty.
+    expect(letter.fields.deadlineIso).toBeNull();
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.datesToKnow).toEqual([
       {
         letterId: "L1",
         program: "Medi-Cal",
         dueDate: "2026-11-20",
         dateText: "November 20, 2026",
         obligation: "other",
-        citation: letter.fields.deadlineIso!.citation,
+        citation: { file: "mail.jpg", page: 1, box: { ymin: 200, xmin: 60, ymax: 220, xmax: 300 } },
         anchor: null,
         countRule: null,
       },
@@ -143,12 +146,13 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.deadlines).toHaveLength(1);
-    const deadline = reading.deadlines[0]!;
-    expect(deadline.dueDate).toBe("2026-12-05");
-    expect(deadline.countRule).toBe("calendar days");
-    expect(deadline.anchor?.value).toBe("November 25, 2026");
-    expect(deadline.anchor?.citation).toEqual(deadline.citation);
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.datesToKnow).toHaveLength(1);
+    const known = reading.datesToKnow[0]!;
+    expect(known.dueDate).toBe("2026-12-05");
+    expect(known.countRule).toBe("calendar days");
+    expect(known.anchor?.value).toBe("November 25, 2026");
+    expect(known.anchor?.citation).toEqual(known.citation);
   });
 
   it("anchors relative deadlines to the notice date", async () => {
@@ -164,10 +168,11 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.deadlines).toHaveLength(1);
-    const deadline = reading.deadlines[0]!;
-    expect(deadline.dueDate).toBe("2027-01-01");
-    expect(deadline.anchor?.value).toBe("November 2, 2026");
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.datesToKnow).toHaveLength(1);
+    const known = reading.datesToKnow[0]!;
+    expect(known.dueDate).toBe("2027-01-01");
+    expect(known.anchor?.value).toBe("November 2, 2026");
   });
 
   it("asks instead of guessing at ambiguous dates", async () => {
@@ -235,7 +240,7 @@ describe("readMail", () => {
     expect(phone.citation).not.toBeNull();
   });
 
-  it("publishes each deadline on a page as its own obligation", async () => {
+  it("publishes bare dates as dates to know, never deadlines", async () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
@@ -251,8 +256,10 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.deadlines.map((d) => d.dueDate).sort()).toEqual(["2026-11-20", "2026-12-20"]);
-    expect(reading.deadlines.every((d) => d.citation)).toBe(true);
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
+    expect(reading.datesToKnow.map((d) => d.dueDate).sort()).toEqual(["2026-11-20", "2026-12-20"]);
+    expect(reading.datesToKnow.every((d) => d.citation)).toBe(true);
     expect(reading.warnings.map((w) => w.kind)).not.toContain("conflicting_dates");
   });
 
@@ -324,7 +331,7 @@ describe("readMail", () => {
       model,
     });
     expect(reading.letters).toHaveLength(2);
-    expect(reading.deadlines.map((d) => d.dueDate).sort()).toEqual(["2026-11-20", "2026-11-24"]);
+    expect(reading.datesToKnow.map((d) => d.dueDate).sort()).toEqual(["2026-11-20", "2026-11-24"]);
   });
 
   it("turns planted instructions into warnings, not actions", async () => {
@@ -338,7 +345,7 @@ describe("readMail", () => {
       model,
     });
     expect(reading.warnings.map((w) => w.kind)).toContain("instruction_in_content");
-    expect(reading.deadlines).toHaveLength(1);
+    expect(reading.datesToKnow).toHaveLength(1);
   });
 
   it("asks instead of guessing on unreadable pages", async () => {
@@ -432,20 +439,23 @@ describe("readMail", () => {
     expect(reading.questions.map((q) => q.kind)).toContain("missing_page");
   });
 
-  it("withholds conflicting deadlines and returns cited candidates", async () => {
+  it("withholds conflicting duty dates and returns cited candidates", async () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} page 1 of 2.`,
+        full_text: `${BASE_TEXT} Respond by November 20, 2026. page 1 of 2.`,
+        deadlines: [{ text: "Respond by November 20, 2026", box_2d: [200, 60, 220, 300] }],
         page_marker: { text: "page 1 of 2", box_2d: [300, 60, 320, 250] },
       }),
       pageJson({
-        full_text: "Sacramento County Medi-Cal Office. Case CA-2026-1. Second page. Due December 1, 2026. page 2 of 2.",
+        full_text:
+          "Sacramento County Medi-Cal Office. Case CA-2026-1. Second page. " +
+          "Respond by December 1, 2026. page 2 of 2.",
         sender: { text: "Sacramento County Medi-Cal Office", box_2d: [40, 60, 70, 400] },
         program: NIL,
         subject: NIL,
         asked: [],
-        deadlines: [{ text: "December 1, 2026", box_2d: [200, 60, 220, 300] }],
+        deadlines: [{ text: "Respond by December 1, 2026", box_2d: [200, 60, 220, 300] }],
         consequence: NIL,
         reference_no: { text: "CA-2026-1", box_2d: [110, 220, 130, 350] },
         notice_date: NIL,
@@ -463,6 +473,7 @@ describe("readMail", () => {
     expect(reading.letters).toHaveLength(1);
     expect(reading.warnings.map((w) => w.kind)).toContain("conflicting_dates");
     expect(reading.deadlines).toEqual([]);
+    expect(reading.datesToKnow).toEqual([]);
     expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
     expect(question.candidates?.map((c) => c.value).sort()).toEqual(["2026-11-20", "2026-12-01"]);
@@ -493,7 +504,7 @@ describe("readMail", () => {
       model,
     });
     expect(reading.letters).toHaveLength(2);
-    expect(reading.deadlines.map((d) => d.dueDate).sort()).toEqual(["2026-11-20", "2026-11-24"]);
+    expect(reading.datesToKnow.map((d) => d.dueDate).sort()).toEqual(["2026-11-20", "2026-11-24"]);
   });
 
   it("uses on-device detection when SAM fails", async () => {
@@ -591,7 +602,7 @@ describe("readMail", () => {
     expect(reading.questions.map((q) => q.kind)).toContain("unsupported_media");
   });
 
-  it("holds back a duty with an open deadline question but publishes other duties", async () => {
+  it("holds back the whole letter on any open deadline question", async () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
@@ -608,12 +619,12 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    // The ambiguous respond date blocks the clean one; the appeal duty
-    // it does not touch still publishes.
+    // One ambiguous date blocks every date on the letter, including
+    // the clean appeal date: withholding is letter-wide.
     expect(reading.questions.map((q) => q.kind)).toContain("confirm_deadline");
-    expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-12-01"]);
-    expect(reading.deadlines[0]!.obligation).toBe("appeal");
-    expect(reading.letters[0]!.fields.deadlineIso?.value).toBe("2026-12-01");
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.datesToKnow).toEqual([]);
+    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
   });
 
   it("withholds a deadline before the notice date and asks", async () => {

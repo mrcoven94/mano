@@ -204,6 +204,14 @@ describe("groupDeterministic", () => {
     expect(groups).not.toContainEqual([0, 1]);
     expect(ambiguous).toEqual([0, 1]);
   });
+  it("leaves same-number pages without date evidence unmerged", () => {
+    const { groups, ambiguous } = groupDeterministic([
+      page(0, "County Office", "CA-1", "page 1 of 2"),
+      page(1, "County Office", "CA-1", "page 1 of 2"),
+    ]);
+    expect(groups).not.toContainEqual([0, 1]);
+    expect(ambiguous).toEqual([0, 1]);
+  });
 });
 
 describe("validateMerge", () => {
@@ -253,6 +261,27 @@ describe("validateMerge", () => {
         page(1, "County Office", "CA-1", null, "November 2, 2026", "Renewal"),
       ]),
     ).toBe(true);
+  });
+  it("rejects two copies of one page number without same-notice evidence", () => {
+    expect(
+      validateMerge([page(0, "County Office", "CA-1", "page 1 of 2"), page(1, "County Office", "CA-1", "page 1 of 2")]),
+    ).toBe(false);
+  });
+  it("merges true duplicates on same notice date and subject", () => {
+    expect(
+      validateMerge([
+        page(0, "County Office", "CA-1", "page 1 of 2", "November 2, 2026", "Renewal"),
+        page(1, "County Office", "CA-1", "page 1 of 2", "November 2, 2026", "Renewal"),
+      ]),
+    ).toBe(true);
+  });
+  it("merges a gapped sequence and rejects out-of-range numbers", () => {
+    expect(
+      validateMerge([page(0, "County Office", "CA-1", "page 1 of 3"), page(1, "County Office", "CA-1", "page 3 of 3")]),
+    ).toBe(true);
+    expect(
+      validateMerge([page(0, "County Office", "CA-1", "page 1 of 2"), page(1, "County Office", "CA-1", "page 3 of 2")]),
+    ).toBe(false);
   });
 });
 

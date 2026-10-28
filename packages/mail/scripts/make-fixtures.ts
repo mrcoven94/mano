@@ -62,12 +62,12 @@ async function main(): Promise<void> {
       const asked = letter.askedByPage ? letter.askedByPage[p]! : letter.asked;
       const questions: QuestionKind[] = letter.pages.length > 1 ? ["missing_page"] : [];
       const truth = truthFor(letter, asked);
-      // Page 2 states no program on its own, but it restates the
-      // December 12 paperwork deadline, so the key keeps it. Its
-      // 14-day hearing sentence has no anchor date, so the photo must
-      // also ask about that deadline.
+      // Page 2 states no program on its own, and its 14-day hearing
+      // sentence has no anchor date, so the photo asks about its
+      // deadlines and publishes none: withholding is letter-wide.
       if (letter.id === "mail-04" && p === 1) {
         truth.program = null;
+        truth.deadlineIso = null;
         questions.push("confirm_deadline");
       }
       photos.push({ file, kind: "single", questions, letters: [truth] });

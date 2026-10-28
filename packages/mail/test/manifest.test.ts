@@ -15,15 +15,14 @@ function manifest(): { photos: ManifestPhoto[] } {
 }
 
 describe("dev-set manifest", () => {
-  it("keeps mail-04-p2's December 12 deadline and expects the hearing question", () => {
+  it("asks mail-04-p2's deadlines and publishes none", () => {
     const p2 = manifest().photos.find((p) => p.file === "mail-04-p2.jpg");
     expect(p2).toBeDefined();
     expect(p2!.letters).toHaveLength(1);
-    // Page 2 restates the paperwork deadline, so the key keeps it;
-    // dropping it must score a miss, not full marks.
-    expect(p2!.letters[0]!.deadlineIso).toBe("2026-12-12");
-    // Its 14-day hearing sentence has no anchor date, so the photo
-    // must ask about that deadline too.
+    // Page 2 restates the December 12 paperwork date but also carries
+    // the anchorless 14-day hearing sentence, so withholding is
+    // letter-wide: both asked, none published.
+    expect(p2!.letters[0]!.deadlineIso).toBeNull();
     expect(p2!.questions).toContain("missing_page");
     expect(p2!.questions).toContain("confirm_deadline");
   });

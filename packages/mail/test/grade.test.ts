@@ -73,12 +73,14 @@ function phoneWarning(file: string, phone: string): Warning {
 function reading(over: {
   letters?: Letter[];
   deadlines?: Deadline[];
+  datesToKnow?: Deadline[];
   warnings?: Warning[];
   questions?: Question[];
 }): MailReading {
   return {
     letters: over.letters ?? [],
     deadlines: over.deadlines ?? [],
+    datesToKnow: over.datesToKnow ?? [],
     warnings: over.warnings ?? [],
     questions: over.questions ?? [],
     stats: { files: 1, frames: 1, pages: 1, modelCalls: [], inputTokens: 10, outputTokens: 5, elapsedMs: 100, live: false },
@@ -172,5 +174,26 @@ describe("isPhotoOk", () => {
     const { t, r } = clean();
     t.letters[0]!.plantedInstruction = true;
     expect(isPhotoOk(scorePhoto(t, r, 100))).toBe(false);
+  });
+
+  it("fails on a wrong deadlineIso even when deadlines[] is right", () => {
+    const { t, r } = clean();
+    r.letters[0]!.fields.deadlineIso = { value: "2026-11-21", citation: cite("photo.jpg") };
+    const score = scorePhoto(t, r, 100);
+    expect(score.deadlinesCorrect).toBe(true);
+    expect(score.fieldsCorrect).toBe(score.fieldsExpected - 1);
+    expect(isPhotoOk(score)).toBe(false);
+  });
+
+  it("counts and citation-checks dates to know", () => {
+    const { t, r } = clean();
+    r.datesToKnow = [
+      { ...deadline("photo.jpg", "2026-12-20"), citation: { file: "photo.jpg", page: 1, box: { ymin: 0, xmin: 0, ymax: 1, xmax: 1 } } },
+    ];
+    const score = scorePhoto(t, r, 100);
+    expect(score.datesToKnow).toBe(1);
+    expect(score.citationsCited).toBe(score.citationsChecked - 1);
+    expect(score.notes.some((n) => n.includes("date-to-know[0] published without a real citation box"))).toBe(true);
+    expect(isPhotoOk(score)).toBe(false);
   });
 });
