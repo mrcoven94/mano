@@ -1729,3 +1729,81 @@ describe("review round 2 should-fix: a second application mints a fresh session"
     expect(await store.countSubmissions()).toBe(2);
   });
 });
+
+describe("follow-up: drafts are tracked until they are deleted", () => {
+  test("an upload tracks its drafts; submit releases them", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const sessionId = cookie.split("=")[1] ?? "";
+    const draft = (await store.getSession(sessionId))?.files[0]?.r2key ?? "";
+    expect(draft).toContain("drafts/");
+    expect(store.stagedObjects.has(draft)).toBe(true);
+    const submit = await submitReview(store, files, config, cookie);
+    expect(submit.status).toBe(200);
+    expect(store.stagedObjects.has(draft)).toBe(false);
+    expect(await files.get(draft)).toBeNull();
+  });
+
+  test("replacing drafts releases the old ones and tracks the new", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie, [pdfFile("paystub.pdf", "%PDF-first")]);
+    const sessionId = cookie.split("=")[1] ?? "";
+    const first = (await store.getSession(sessionId))?.files[0]?.r2key ?? "";
+    await postDocuments(store, files, config, cookie, [pdfFile("rent.pdf", "%PDF-second")]);
+    const second = (await store.getSession(sessionId))?.files[0]?.r2key ?? "";
+    expect(second).not.toBe(first);
+    expect(store.stagedObjects.has(first)).toBe(false);
+    expect(await files.get(first)).toBeNull();
+    expect(store.stagedObjects.has(second)).toBe(true);
+  });
+
+  test("touching a session refreshes its drafts so the sweep spares them", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const start = Date.now();
+    const config = testConfig({ now: () => start });
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const sessionId = cookie.split("=")[1] ?? "";
+    const draft = (await store.getSession(sessionId))?.files[0]?.r2key ?? "";
+    expect(store.stagedObjects.get(draft)).toBe(start);
+    const later = start + 5 * 60 * 1000;
+    const touched = await handleRequest(
+      new Request(`${BASE}/apply/documents`, { headers: { cookie } }),
+      store,
+      files,
+      testConfig({ now: () => later }),
+    );
+    expect(touched.status).toBe(200);
+    expect(store.stagedObjects.get(draft)).toBe(later);
+  });
+
+  test("a failed draft rollback stays tracked, and the sweep heals it", async () => {
+    const store = new MemoryStore();
+    const files = new FaultyFileStore();
+    files.failPutsAfter = 1;
+    files.failDels = true;
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    const form = new FormData();
+    form.append("document1", pdfFile("paystub.pdf", "%PDF-first"));
+    form.append("document2", pdfFile("rent.pdf", "%PDF-second"));
+    const res = await handleRequest(new Request(`${BASE}/apply/documents`, { method: "POST", headers: { cookie }, body: form }), store, files, config);
+    expect(res.status).toBe(500);
+    const orphan = [...files.objects.keys()].find((k) => k.startsWith("drafts/")) ?? "";
+    expect(orphan).not.toBe("");
+    expect(store.stagedObjects.has(orphan)).toBe(true);
+    files.failDels = false;
+    await store.trackStaged([{ key: orphan, createdAt: Date.now() - STAGED_RETENTION_MS - 1000 }]);
+    const report = await runCleanup(store, files, Date.now());
+    expect(report.sweptStaged).toBe(1);
+    expect(await files.get(orphan)).toBeNull();
+    expect(store.stagedObjects.has(orphan)).toBe(false);
+  });
+});
