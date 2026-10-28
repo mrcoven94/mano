@@ -161,7 +161,9 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
           headers.authorization = `Bearer ${key}`;
         }
         try {
-          const res = await fetchImpl(msg.url, { method: msg.method || "GET", headers, body: msg.body });
+          // Never follow redirects: a 302 off the allowlist must fail
+          // closed, not fetch a second, unchecked URL.
+          const res = await fetchImpl(msg.url, { method: msg.method || "GET", headers, body: msg.body, redirect: "error" });
           let json = null;
           try {
             json = await res.json();
