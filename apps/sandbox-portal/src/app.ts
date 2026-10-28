@@ -55,9 +55,10 @@ const ALLOWED_UPLOAD_TYPES = new Set(["application/pdf", "image/png", "image/jpe
 const MAX_SLOW_MS = 60000;
 const MAX_KEY_LENGTH = 128;
 const MAX_FILE_NAME_LENGTH = 200;
+const CASEWORKER_PER_PAGE = 25;
 export const SUBMISSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-const CASEWORKER_LIST_LIMIT = 100;
+
 const RATE_WINDOW_MS = 60_000;
 const SLOW_LEASE_TTL_MS = 65_000;
 
@@ -735,8 +736,12 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   }
 
   if (method === "GET" && path === "/caseworker") {
-    const subs = await store.listSubmissions(CASEWORKER_LIST_LIMIT);
-    return html(caseworkerListPage(subs));
+    const total = await store.countSubmissions();
+    const totalPages = Math.max(1, Math.ceil(total / CASEWORKER_PER_PAGE));
+    const asked = Number(url.searchParams.get("page") ?? "1");
+    const page = Number.isInteger(asked) && asked >= 1 ? Math.min(asked, totalPages) : 1;
+    const subs = await store.listSubmissionSummaries(CASEWORKER_PER_PAGE, (page - 1) * CASEWORKER_PER_PAGE);
+    return html(caseworkerListPage(subs, page, totalPages));
   }
 
   const fileMatch = /^\/caseworker\/([^/]+)\/file\/(\d+)$/.exec(path);

@@ -33,7 +33,7 @@ describe("blocker 1: atomic submit", () => {
     expect(results.filter((r) => r.outcome === "duplicate")).toHaveLength(49);
     const confirmations = new Set(results.map((r) => filed(r).confirmationNumber));
     expect(confirmations.size).toBe(1);
-    expect((await store.listSubmissions(10)).length).toBe(1);
+    expect((await store.countSubmissions())).toBe(1);
   });
 
   test("MemoryStore: a second packet under the same key never overwrites the receipt", async () => {
@@ -67,7 +67,7 @@ describe("blocker 1: atomic submit", () => {
     const peeked = await store.getSubmission("web", "race-key");
     expect(peeked?.household.fullName).toBe("Maria Santos");
     expect(peeked?.confirmationNumber).toBe(filed(first).confirmationNumber);
-    expect((await store.listSubmissions(10)).length).toBe(1);
+    expect((await store.countSubmissions())).toBe(1);
   });
 
   test("SQLite store: confirmation numbers are unique", async () => {
@@ -122,7 +122,7 @@ describe("blocker 2: packet digest", () => {
     expect(conflict.outcome).toBe("conflict");
     if (conflict.outcome !== "conflict") throw new Error("expected a conflict");
     expect(conflict.stored.digest).toBe("digest-a");
-    expect((await store.listSubmissions(10)).length).toBe(1);
+    expect((await store.countSubmissions())).toBe(1);
   });
 });
 
@@ -206,6 +206,21 @@ describe("blocker 8: retention", () => {
     const expired = await store.deleteExpiredSessions(2000);
     expect(expired.map((s) => s.id)).toEqual(["old"]);
     expect(await store.getSession("fresh")).not.toBeNull();
+  });
+
+  test("summaries carry metadata only, newest first, with limit and offset", async () => {
+    for (const store of [new MemoryStore(), makeSqlStore()]) {
+      for (let i = 0; i < 3; i++) {
+        await store.submit({ ...input(`k${i}`, `digest-${i}`, { ...HOUSEHOLD, fullName: `Person ${i}` }), receivedAt: 1000 + i });
+      }
+      expect(await store.countSubmissions()).toBe(3);
+      const first = await store.listSubmissionSummaries(2, 0);
+      expect(first.map((s) => s.applicant)).toEqual(["Person 2", "Person 1"]);
+      expect(first[0]).toEqual({ confirmationNumber: first[0]!.confirmationNumber, applicant: "Person 2", receivedAt: 1002, fileCount: 1 });
+      const second = await store.listSubmissionSummaries(2, 2);
+      expect(second.map((s) => s.applicant)).toEqual(["Person 0"]);
+      expect(JSON.stringify(first)).not.toContain("fullName");
+    }
   });
 
   for (const [name, make] of [["MemoryStore", () => new MemoryStore()], ["SQLite store", () => makeSqlStore()]] as const) {

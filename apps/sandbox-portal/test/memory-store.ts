@@ -5,6 +5,7 @@ import {
   type Store,
   type Submission,
   type SubmissionReceipt,
+  type SubmissionSummary,
   type SubmitInput,
   type SubmitResult,
 } from "../src/store";
@@ -115,11 +116,18 @@ export class MemoryStore implements Store {
     return { outcome: "stored", submission: structuredClone(submission) };
   }
 
-  async listSubmissions(limit: number): Promise<Submission[]> {
+  async listSubmissionSummaries(limit: number, offset: number): Promise<SubmissionSummary[]> {
     return [...this.submissions.values()]
-      .sort((a, b) => b.receivedAt - a.receivedAt)
-      .slice(0, limit)
-      .map((s) => structuredClone(s));
+      .sort(
+        (a, b) =>
+          b.receivedAt - a.receivedAt || (a.scope + a.key < b.scope + b.key ? -1 : a.scope + a.key > b.scope + b.key ? 1 : 0),
+      )
+      .slice(offset, offset + limit)
+      .map((s) => ({ confirmationNumber: s.confirmationNumber, applicant: s.household.fullName, receivedAt: s.receivedAt, fileCount: s.files.length }));
+  }
+
+  async countSubmissions(): Promise<number> {
+    return this.submissions.size;
   }
 
   rateBuckets = new Map<string, { windowStart: number; count: number }>();

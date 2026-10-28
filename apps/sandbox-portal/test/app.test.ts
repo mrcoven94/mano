@@ -183,12 +183,12 @@ describe("renewal flow", () => {
     );
     expect(rejected.status).toBe(400);
     expect(await rejected.text()).toContain("Changed since review");
-    expect((await store.listSubmissions(10)).length).toBe(0);
+    expect((await store.countSubmissions())).toBe(0);
 
     // A fresh review of the current draft submits fine.
     const fresh = await submitReview(store, files, config, cookie);
     expect(fresh.status).toBe(200);
-    expect((await store.listSubmissions(10)).length).toBe(1);
+    expect((await store.countSubmissions())).toBe(1);
   });
 
   test("a submit without the review digest is rejected", async () => {
@@ -248,7 +248,7 @@ describe("idempotency", () => {
     const second = (await (await post()).json()) as Record<string, unknown>;
     expect(second["duplicate"]).toBe(true);
     expect(second["confirmationNumber"]).toBe(first["confirmationNumber"]);
-    expect((await store.listSubmissions(10)).length).toBe(1);
+    expect((await store.countSubmissions())).toBe(1);
   });
 
   test("concurrent submits under one key file a single receipt", async () => {
@@ -278,7 +278,7 @@ describe("idempotency", () => {
     const bodies = (await Promise.all(responses.map((r) => r.json()))) as Array<Record<string, unknown>>;
     expect(new Set(bodies.map((b) => b["confirmationNumber"])).size).toBe(1);
     expect(bodies.filter((b) => b["duplicate"] === false)).toHaveLength(1);
-    expect((await store.listSubmissions(10)).length).toBe(1);
+    expect((await store.countSubmissions())).toBe(1);
   });
 
   test("unknown key reports not found", async () => {
@@ -331,7 +331,7 @@ describe("idempotency", () => {
     expect(retry.status).toBe(200);
     const body = (await retry.json()) as Record<string, unknown>;
     expect(body["duplicate"]).toBe(true);
-    expect((await store.listSubmissions(10)).length).toBe(1);
+    expect((await store.countSubmissions())).toBe(1);
   });
 
   test("a different packet under an existing key returns 409 with the received digest", async () => {
@@ -356,7 +356,7 @@ describe("idempotency", () => {
     const body = (await retry.json()) as { received: { confirmationNumber: string; digest: string } };
     expect(body.received.confirmationNumber).toBe(first["confirmationNumber"]);
     expect(body.received.digest).toBe(first["digest"]);
-    expect((await store.listSubmissions(10)).length).toBe(1);
+    expect((await store.countSubmissions())).toBe(1);
   });
 
   test("the receipt carries the digest the gateway can prove", async () => {
@@ -407,7 +407,7 @@ describe("idempotency", () => {
     );
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("different session");
-    expect((await store.listSubmissions(10)).length).toBe(0);
+    expect((await store.countSubmissions())).toBe(0);
   });
 
   test("the web and API scopes file the same key independently", async () => {
@@ -444,7 +444,7 @@ describe("idempotency", () => {
     const apiBody = (await api.json()) as Record<string, unknown>;
     expect(apiBody["duplicate"]).toBe(false);
     expect(apiBody["scope"]).toMatch(/^api-/);
-    expect((await store.listSubmissions(10)).length).toBe(2);
+    expect((await store.countSubmissions())).toBe(2);
   });
 
   test("an API retry of a browser filing duplicates instead of filing again", async () => {
@@ -485,7 +485,7 @@ describe("idempotency", () => {
     expect(body["duplicate"]).toBe(true);
     expect(body["confirmationNumber"]).toBe(webConfirmation);
     expect(body["scope"]).toBe("web");
-    expect((await store.listSubmissions(10)).length).toBe(1);
+    expect((await store.countSubmissions())).toBe(1);
   });
 
   test("reconcile reads the caller's scope first, then the web scope", async () => {
@@ -604,7 +604,7 @@ describe("session timeout", () => {
       config,
     );
     expect(submit.status).toBe(403);
-    expect((await store.listSubmissions(10)).length).toBe(0);
+    expect((await store.countSubmissions())).toBe(0);
   });
 });
 
@@ -723,11 +723,13 @@ describe("blocker 5: file bytes in the file store", () => {
     const config = testConfig();
     const cookie = await postHousehold(store, files, config);
     await postDocuments(store, files, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
+    const key = keyFromReview(await review.text());
     const submit = await submitReview(store, files, config, cookie);
     expect(submit.status).toBe(200);
-    const submissions = await store.listSubmissions(10);
-    expect(submissions).toHaveLength(1);
-    const filed = submissions[0]!;
+    expect(await store.countSubmissions()).toBe(1);
+    const filed = await store.getSubmission("web", key);
+    if (!filed) throw new Error("submission was not filed");
     expect(JSON.stringify(filed)).not.toContain("fake-pdf-bytes");
     expect(filed.files[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(filed.files[0]?.r2key).toMatch(/^submissions\/web\/.+\/1-[0-9a-f]{8}$/);
@@ -821,12 +823,12 @@ describe("blocker 8: scheduled cleanup", () => {
 
     const early = await runCleanup(store, files, filedAt + SUBMISSION_RETENTION_MS - DAY);
     expect(early.retiredFiles).toBe(0);
-    expect((await store.listSubmissions(10)).length).toBe(1);
+    expect((await store.countSubmissions())).toBe(1);
 
     const retire = await runCleanup(store, files, filedAt + SUBMISSION_RETENTION_MS + DAY);
     expect(retire.retiredFiles).toBe(1);
     expect(files.objects.size).toBe(0);
-    expect((await store.listSubmissions(10)).length).toBe(0);
+    expect((await store.countSubmissions())).toBe(0);
 
     const receipt = (await (
       await handleRequest(new Request(`${BASE}/submissions/aging-key`, { headers: { authorization: AUTH } }), store, files, config)
@@ -1071,7 +1073,7 @@ describe("blocker 6: access control", () => {
     expect(busy.status).toBe(503);
     expect(((await busy.json()) as Record<string, string>)["error"]).toContain("too many slow");
     expect((await first).status).toBe(200);
-    expect((await store.listSubmissions(10)).length).toBe(1);
+    expect((await store.countSubmissions())).toBe(1);
   });
 
   test("every response carries X-Robots-Tag: noindex", async () => {
@@ -1138,6 +1140,49 @@ describe("caseworker view", () => {
 
     const missing = await handleRequest(new Request(`${BASE}/caseworker/SR-00000000`, { headers: { authorization: AUTH } }), store, files, config);
     expect(missing.status).toBe(404);
+  });
+
+  test("the list paginates 25 summaries at a time", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    let tick = 1000;
+    const config = testConfig({ now: () => tick });
+    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
+    for (let i = 0; i < 26; i++) {
+      tick += 1000;
+      const res = await handleRequest(
+        new Request(`${BASE}/submissions`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: AUTH },
+          body: JSON.stringify({ key: `page-key-${i}`, household: { ...HOUSEHOLD, fullName: `Person ${i}` }, files: [file] }),
+        }),
+        store,
+        files,
+        config,
+      );
+      expect(res.status).toBe(200);
+    }
+    const page1 = await handleRequest(new Request(`${BASE}/caseworker`, { headers: { authorization: AUTH } }), store, files, config);
+    const page1Text = await page1.text();
+    expect(page1Text).toContain("Page 1 of 2");
+    expect(page1Text).toContain("Person 25");
+    expect(page1Text).not.toContain("Person 0");
+    const page2 = await handleRequest(
+      new Request(`${BASE}/caseworker?page=2`, { headers: { authorization: AUTH } }),
+      store,
+      files,
+      config,
+    );
+    const page2Text = await page2.text();
+    expect(page2Text).toContain("Page 2 of 2");
+    expect(page2Text).toContain("Person 0");
+    const clamped = await handleRequest(
+      new Request(`${BASE}/caseworker?page=99`, { headers: { authorization: AUTH } }),
+      store,
+      files,
+      config,
+    );
+    expect(await clamped.text()).toContain("Page 2 of 2");
   });
 });
 

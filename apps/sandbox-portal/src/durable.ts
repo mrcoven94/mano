@@ -4,6 +4,7 @@ import {
   type SessionData,
   type Submission,
   type SubmissionReceipt,
+  type SubmissionSummary,
   type SubmitInput,
   type SubmitResult,
 } from "./store";
@@ -70,7 +71,11 @@ export class PortalStore extends DurableObject {
     return this.inner().purgeExpiredSlowLeases(now);
   }
 
-  listSubmissions(limit: number): Promise<Submission[]> {
-    return this.inner().listSubmissions(limit);
+  listSubmissionSummaries(limit: number, offset: number): Promise<SubmissionSummary[]> {
+    return this.inner().listSubmissionSummaries(limit, offset);
+  }
+
+  countSubmissions(): Promise<number> {
+    return this.inner().countSubmissions();
   }
 }

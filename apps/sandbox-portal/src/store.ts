@@ -77,6 +77,14 @@ export interface SubmissionReceipt {
   receivedAt: number;
 }
 
+/** One row of the caseworker list. Metadata only, never file bytes. */
+export interface SubmissionSummary {
+  confirmationNumber: string;
+  applicant: string;
+  receivedAt: number;
+  fileCount: number;
+}
+
 export interface Store {
   getSession(id: string): Promise<SessionData | null>;
   putSession(session: SessionData): Promise<void>;
@@ -84,6 +92,8 @@ export interface Store {
   /** Delete timed-out drafts and return them so their file objects go too. */
   deleteExpiredSessions(now: number): Promise<SessionData[]>;
   getSubmission(scope: string, key: string): Promise<Submission | null>;
+  listSubmissionSummaries(limit: number, offset: number): Promise<SubmissionSummary[]>;
+  countSubmissions(): Promise<number>;
   getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null>;
   /** Retire old submissions to small receipts; returns their file keys for deletion. */
   retireOldSubmissions(olderThan: number): Promise<string[]>;
@@ -99,7 +109,6 @@ export interface Store {
    * stored winner back (duplicate) or a conflict, never overwrites it.
    */
   submit(input: SubmitInput): Promise<SubmitResult>;
-  listSubmissions(limit: number): Promise<Submission[]>;
 }
 
 const CONFIRM_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -184,6 +193,8 @@ export class PortalStoreSql implements Store {
         key TEXT NOT NULL,
         confirmation TEXT NOT NULL UNIQUE,
         digest TEXT NOT NULL,
+        applicant TEXT NOT NULL,
+        file_count INTEGER NOT NULL,
         data TEXT NOT NULL,
         received_at INTEGER NOT NULL,
         PRIMARY KEY (scope, key)
@@ -345,11 +356,13 @@ export class PortalStoreSql implements Store {
       let written: number;
       try {
         written = this.sql.exec(
-          "INSERT INTO submissions (scope, key, confirmation, digest, data, received_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (scope, key) DO NOTHING",
+          "INSERT INTO submissions (scope, key, confirmation, digest, applicant, file_count, data, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (scope, key) DO NOTHING",
           submission.scope,
           submission.key,
           submission.confirmationNumber,
           submission.digest,
+          submission.household.fullName,
+          submission.files.length,
           JSON.stringify(submission),
           submission.receivedAt,
         ).rowsWritten;
@@ -367,11 +380,24 @@ export class PortalStoreSql implements Store {
     throw new Error("could not file the submission");
   }
 
-  async listSubmissions(limit: number): Promise<Submission[]> {
+  async listSubmissionSummaries(limit: number, offset: number): Promise<SubmissionSummary[]> {
     this.ensureTables();
     return this.sql
-      .exec("SELECT data FROM submissions ORDER BY received_at DESC LIMIT ?", limit)
+      .exec(
+        "SELECT confirmation, applicant, received_at, file_count FROM submissions ORDER BY received_at DESC, scope ASC, key ASC LIMIT ? OFFSET ?",
+        limit,
+        offset,
+      )
       .toArray()
-      .map((row) => JSON.parse((row as { data: string }).data) as Submission);
+      .map((row) => {
+        const r = row as { confirmation: string; applicant: string; received_at: number; file_count: number };
+        return { confirmationNumber: r.confirmation, applicant: r.applicant, receivedAt: r.received_at, fileCount: r.file_count };
+      });
+  }
+
+  async countSubmissions(): Promise<number> {
+    this.ensureTables();
+    const row = this.sql.exec("SELECT COUNT(*) AS n FROM submissions").toArray()[0] as { n: number } | undefined;
+    return row?.n ?? 0;
   }
 }

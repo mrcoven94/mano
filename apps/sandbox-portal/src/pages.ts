@@ -1,4 +1,4 @@
-import type { Household, FileMeta, Submission } from "./store";
+import type { FileMeta, Household, Submission, SubmissionSummary } from "./store";
 
 export const TEST_BANNER = "TEST SYSTEM: this is a fake benefits portal for demos. No real benefits. No real data.";
 
@@ -169,18 +169,20 @@ export function errorPage(title: string, message: string, backHref: string, back
   );
 }
 
-export function caseworkerListPage(subs: Submission[]): string {
+export function caseworkerListPage(subs: SubmissionSummary[], page: number, totalPages: number): string {
   const rows =
     subs.length === 0
       ? `<tr><td colspan="4">No applications received yet.</td></tr>`
       : subs
           .map(
             (s) => `<tr><td><a href="/caseworker/${escapeHtml(s.confirmationNumber)}">${escapeHtml(s.confirmationNumber)}</a></td>
-<td>${escapeHtml(s.household.fullName)}</td>
+<td>${escapeHtml(s.applicant)}</td>
 <td>${escapeHtml(new Date(s.receivedAt).toUTCString())}</td>
-<td>${s.files.length} file(s)</td></tr>`,
+<td>${s.fileCount} file(s)</td></tr>`,
           )
           .join("");
+  const prev = page > 1 ? `<a href="/caseworker?page=${page - 1}">Previous page</a>` : "Previous page";
+  const next = page < totalPages ? `<a href="/caseworker?page=${page + 1}">Next page</a>` : "Next page";
   return layout(
     "Caseworker view",
     `<div class="notice"><b>Staff test view.</b> Applications submitted through the renewal portal appear below, newest first.</div>
@@ -188,6 +190,7 @@ export function caseworkerListPage(subs: Submission[]): string {
 <tr><td class="label">Confirmation</td><td class="label">Applicant</td><td class="label">Received</td><td class="label">Files</td></tr>
 ${rows}
 </table>
+<p>Page ${page} of ${totalPages}. ${prev} | ${next}</p>
 <p><a href="/">Back to the home page</a></p>`,
   );
 }
