@@ -699,9 +699,11 @@ async function handleSubmit(
   if (result.outcome === "conflict" || result.outcome === "conflict-retired") {
     await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
     // A losing attempt removes the filed copies it made, except keys the
-    // winning row references: the same file bytes under one key share one
-    // object, and deleting it would break the winner's download.
-    const referenced = result.outcome === "conflict" ? new Set(result.stored.files.map((f) => f.r2key)) : new Set<string>();
+    // current row references: the same file bytes under one key share one
+    // object, and deleting it would break the winner's download. A retired
+    // outcome re-reads the row first, in case one landed after the check.
+    const current = result.outcome === "conflict" ? result.stored : await store.getSubmission(scope, key);
+    const referenced = new Set(current?.files.map((f) => f.r2key) ?? []);
     await fileStore.del(copies.map((c) => c.to).filter((k) => !referenced.has(k))).catch(() => undefined);
     if (lease) await store.endSlow(lease);
     const stored = result.outcome === "conflict" ? result.stored : result.receipt;
@@ -718,8 +720,11 @@ async function handleSubmit(
   }
   if (result.outcome === "duplicate-retired") {
     await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-    // No live row references these copies; the receipt carries no file list.
-    await fileStore.del(copies.map((c) => c.to)).catch(() => undefined);
+    // The receipt carries no file list; re-read the row in case one landed
+    // after the check, and spare anything it references.
+    const current = await store.getSubmission(scope, key);
+    const referenced = new Set(current?.files.map((f) => f.r2key) ?? []);
+    await fileStore.del(copies.map((c) => c.to).filter((k) => !referenced.has(k))).catch(() => undefined);
     if (lease) await store.endSlow(lease);
     const kept = result.receipt;
     if (session) {

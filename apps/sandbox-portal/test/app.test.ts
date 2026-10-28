@@ -9,7 +9,7 @@ import {
   type PortalConfig,
 } from "../src/app";
 import { submissionFileKey } from "../src/files";
-import { sha256Hex } from "../src/store";
+import { packetDigest, sha256Hex, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
 import { TEST_BANNER } from "../src/pages";
 import type { Household } from "../src/store";
 import { MemoryFileStore, MemoryStore } from "./memory-store";
@@ -1805,5 +1805,74 @@ describe("follow-up: drafts are tracked until they are deleted", () => {
     expect(report.sweptStaged).toBe(1);
     expect(await files.get(orphan)).toBeNull();
     expect(store.stagedObjects.has(orphan)).toBe(false);
+  });
+});
+
+/** A store that files a twin row right after submit returns, simulating a row that lands between the receipt check and a loser's cleanup. */
+class LateRowStore extends MemoryStore {
+  inject: Submission | null = null;
+
+  override async submit(input: SubmitInput): Promise<SubmitResult> {
+    const result = await super.submit(input);
+    if (this.inject) {
+      const row = this.inject;
+      this.submissions.set(`${row.scope}\n${row.key}`, structuredClone(row));
+      this.byConfirmation.set(row.confirmationNumber, structuredClone(row));
+      this.inject = null;
+    }
+    return result;
+  }
+}
+
+describe("follow-up: losers delete only what the current row does not reference", () => {
+  test("a row that lands after a retired outcome keeps its bytes", async () => {
+    const store = new LateRowStore();
+    const files = new MemoryFileStore();
+    const filedAt = Date.now();
+    const config = testConfig({ now: () => filedAt });
+    const scope = `api-${await sha256Hex(TOKEN)}`;
+    const raw = new TextEncoder().encode("%PDF-bytes");
+    const fileSha = await sha256Hex(raw);
+    const filedKey = `submissions/${scope}/race-retire-key/1-${fileSha}`;
+    const digest = await packetDigest(HOUSEHOLD, [{ name: "paystub.pdf", type: "application/pdf", size: raw.length, sha256: fileSha }]);
+    const packet = {
+      key: "race-retire-key",
+      household: HOUSEHOLD,
+      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from(raw).toString("base64") }],
+    };
+    const post = () =>
+      handleRequest(
+        new Request(`${BASE}/submissions`, { method: "POST", headers: { "content-type": "application/json", authorization: AUTH }, body: JSON.stringify(packet) }),
+        store,
+        files,
+        config,
+      );
+    const original = ((await (await post()).json()) as Record<string, string>)["confirmationNumber"] ?? "";
+    await runCleanup(store, files, filedAt + SUBMISSION_RETENTION_MS + 1000);
+    expect(await store.countSubmissions()).toBe(0);
+    // The twin's copies land and its row files after our receipt check.
+    await files.put(filedKey, raw, "application/pdf");
+    store.inject = {
+      key: "race-retire-key",
+      scope,
+      confirmationNumber: "SR-TWINROW1",
+      household: HOUSEHOLD,
+      files: [{ name: "paystub.pdf", type: "application/pdf", size: raw.length, sha256: fileSha, r2key: filedKey }],
+      digest,
+      status: "received",
+      receivedAt: filedAt,
+      slowMs: 0,
+      source: "api",
+    };
+    const retry = await post();
+    expect(retry.status).toBe(200);
+    const body = (await retry.json()) as Record<string, unknown>;
+    expect(body["duplicate"]).toBe(true);
+    expect(body["retired"]).toBe(true);
+    expect(body["confirmationNumber"]).toBe(original);
+    expect(await files.get(filedKey)).not.toBeNull();
+    const download = await handleRequest(new Request(`${BASE}/caseworker/SR-TWINROW1/file/0`, { headers: { authorization: AUTH } }), store, files, config);
+    expect(download.status).toBe(200);
+    expect(await download.text()).toBe("%PDF-bytes");
   });
 });
