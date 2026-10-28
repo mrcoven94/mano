@@ -54,6 +54,11 @@ export interface GlobalStore {
   // a 1:1 chat ID can itself be a phone number.
   noteRoute(chatHash: string, handleHash: string): void;
   routeFor(chatHash: string): string | null;
+  // Handle hash to person ID, so account deletion finds every
+  // conversation a person owns. Returns true when the bind is new.
+  notePersonBind(handleHash: string, personId: string): boolean;
+  handlesForPerson(personId: string): string[];
+  clearPerson(personId: string): void;
   // High-watermark of feed event IDs already enqueued, so a page the
   // provider serves again (no next cursor) is not requeued.
   filterUnseen(ids: string[]): string[];
@@ -155,6 +160,28 @@ export class MemoryGlobalStore implements GlobalStore {
 
   routeFor(chatHash: string): string | null {
     return this.routes.get(chatHash) ?? null;
+  }
+
+  private personBinds = new Map<string, string>();
+
+  notePersonBind(handleHash: string, personId: string): boolean {
+    if (this.personBinds.get(handleHash) === personId) return false;
+    this.personBinds.set(handleHash, personId);
+    return true;
+  }
+
+  handlesForPerson(personId: string): string[] {
+    const out: string[] = [];
+    for (const [handleHash, bound] of this.personBinds) {
+      if (bound === personId) out.push(handleHash);
+    }
+    return out;
+  }
+
+  clearPerson(personId: string): void {
+    for (const [handleHash, bound] of this.personBinds) {
+      if (bound === personId) this.personBinds.delete(handleHash);
+    }
   }
 
   private seen: Set<string> = new Set();
@@ -268,6 +295,18 @@ export class GlobalLedger {
 
   routeFor(chatHash: string): string | null {
     return this.store.routeFor(chatHash);
+  }
+
+  notePersonBind(handleHash: string, personId: string): boolean {
+    return this.store.notePersonBind(handleHash, personId);
+  }
+
+  handlesForPerson(personId: string): string[] {
+    return this.store.handlesForPerson(personId);
+  }
+
+  clearPerson(personId: string): void {
+    this.store.clearPerson(personId);
   }
 
   filterUnseen(ids: string[]): string[] {

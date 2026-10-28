@@ -28,6 +28,7 @@ class SqlGlobalStore implements GlobalStore {
       "CREATE TABLE IF NOT EXISTS byte_reservations (res_key TEXT PRIMARY KEY, bytes INTEGER NOT NULL, day TEXT NOT NULL)",
     );
     this.sql.exec("CREATE TABLE IF NOT EXISTS chat_routes (chat_hash TEXT PRIMARY KEY, handle_hash TEXT NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS person_binds (handle_hash TEXT PRIMARY KEY, person_id TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS seen_ids (event_id TEXT PRIMARY KEY, seen_at_ms INTEGER NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS settled_spend (res_key TEXT PRIMARY KEY, day TEXT NOT NULL, amount_usd REAL NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS settled_bytes (res_key TEXT PRIMARY KEY, day TEXT NOT NULL, amount_bytes INTEGER NOT NULL)");
@@ -149,6 +150,25 @@ class SqlGlobalStore implements GlobalStore {
     return rows.length > 0 ? rows[0].handle_hash : null;
   }
 
+  notePersonBind(handleHash: string, personId: string): boolean {
+    const rows = this.sql.exec("SELECT person_id FROM person_binds WHERE handle_hash = ?", handleHash).toArray() as unknown as Array<{
+      person_id: string;
+    }>;
+    if (rows.length > 0 && rows[0].person_id === personId) return false;
+    this.sql.exec("INSERT OR REPLACE INTO person_binds (handle_hash, person_id) VALUES (?, ?)", handleHash, personId);
+    return rows.length === 0;
+  }
+
+  handlesForPerson(personId: string): string[] {
+    return (this.sql.exec("SELECT handle_hash FROM person_binds WHERE person_id = ?", personId).toArray() as unknown as Array<{
+      handle_hash: string;
+    }>).map((r) => r.handle_hash);
+  }
+
+  clearPerson(personId: string): void {
+    this.sql.exec("DELETE FROM person_binds WHERE person_id = ?", personId);
+  }
+
   filterUnseen(ids: string[]): string[] {
     if (ids.length === 0) return [];
     const marks = ids.map(() => "?").join(",");
@@ -253,6 +273,25 @@ export class ChannelStateDO implements DurableObject {
     if (request.method === "GET" && url.pathname === "/internal/route") {
       const chat = url.searchParams.get("chat") ?? "";
       return Response.json({ handleHash: chat ? this.ledger().routeFor(chat) : null });
+    }
+    if (request.method === "POST" && url.pathname === "/internal/person-bind") {
+      const body = (await request.json().catch(() => ({}))) as { handleHash?: unknown; personId?: unknown };
+      if (typeof body.handleHash !== "string" || typeof body.personId !== "string") {
+        return new Response("Bad bind.", { status: 400 });
+      }
+      return Response.json({ created: this.ledger().notePersonBind(body.handleHash, body.personId) });
+    }
+    if (request.method === "GET" && url.pathname === "/internal/person-handles") {
+      const person = url.searchParams.get("person") ?? "";
+      return Response.json({ handleHashes: person ? this.ledger().handlesForPerson(person) : [] });
+    }
+    if (request.method === "POST" && url.pathname === "/internal/person-unbind") {
+      const body = (await request.json().catch(() => ({}))) as { personId?: unknown };
+      if (typeof body.personId !== "string") {
+        return new Response("Bad unbind.", { status: 400 });
+      }
+      this.ledger().clearPerson(body.personId);
+      return Response.json({ ok: true });
     }
     if (request.method === "POST" && url.pathname === "/internal/seen-check") {
       const body = (await request.json().catch(() => ({}))) as { ids?: unknown };

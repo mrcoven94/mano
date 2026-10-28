@@ -158,13 +158,23 @@ export class ConversationDO implements DurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/internal/event") {
-      const body = (await request.json().catch(() => null)) as { handleHash?: unknown; event?: unknown } | null;
+      const body = (await request.json().catch(() => null)) as { handleHash?: unknown; personId?: unknown; event?: unknown } | null;
       if (!body || typeof body.handleHash !== "string" || !body.event) {
         return new Response("Bad event.", { status: 400 });
       }
       const { runner } = this.runner(body.handleHash);
       const event = body.event as NormalizedEvent;
       const result = await runner.handleEvent(event, "webhook");
+      // First sight of a handle binds it to its person. True once per
+      // handle: that is the create in create-or-route.
+      let personCreated: boolean | null = null;
+      if (typeof body.personId === "string" && body.personId) {
+        const bind = await globalStateStub(this.env).fetch("https://state/internal/person-bind", {
+          method: "POST",
+          body: JSON.stringify({ handleHash: body.handleHash, personId: body.personId }),
+        });
+        if (bind.ok) personCreated = ((await bind.json()) as { created?: unknown }).created === true;
+      }
       // Every event with a chat refreshes the chat route, keyed by hash,
       // so handle-less delivery receipts find this conversation later.
       if (event.chatId) {
@@ -185,7 +195,25 @@ export class ConversationDO implements DurableObject {
           await this.ctx.storage.setAlarm(Date.now() + batchMs);
         }
       }
-      return Response.json({ result });
+      return Response.json({ result, personCreated });
+    }
+    if (request.method === "POST" && url.pathname === "/internal/send-code") {
+      const body = (await request.json().catch(() => null)) as {
+        handleHash?: unknown;
+        to?: unknown;
+        message?: unknown;
+        idempotencyKey?: unknown;
+      } | null;
+      if (
+        !body || typeof body.handleHash !== "string" || typeof body.to !== "string" ||
+        typeof body.message !== "string" || typeof body.idempotencyKey !== "string" ||
+        !body.to || !body.message || !body.idempotencyKey
+      ) {
+        return new Response("Bad code send.", { status: 400 });
+      }
+      const { runner } = this.runner(body.handleHash);
+      const sent = await runner.sendCode(body.to, body.message, body.idempotencyKey);
+      return Response.json({ key: sent.key, state: sent.state, code: sent.code });
     }
     if (request.method === "POST" && url.pathname === "/internal/turn") {
       const body = (await request.json().catch(() => null)) as { handleHash?: unknown } | null;

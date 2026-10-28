@@ -1049,6 +1049,67 @@ export class ConversationRunner {
     }
   }
 
+  // One-off send for sign-in codes, outside any turn. The caller
+  // supplies the idempotency key, so a retry after a timeout replays
+  // instead of duplicating. Same lifecycle as bubbles: uncertain is
+  // never terminal, and closed or opted-out conversations still refuse.
+  async sendCode(to: string, message: string, idempotencyKey: string): Promise<SendBubbleResult> {
+    const { store, channel, logger, nowMs } = this.deps;
+    const generation = store.meta().generation;
+    const finish = (result: SendBubbleResult): SendBubbleResult => {
+      if (result.counted) this.countSent(1, nowMs());
+      return result;
+    };
+    const prior = store.outboundByKey(idempotencyKey);
+    if (prior && TERMINAL_SEND.has(prior.state)) {
+      return finish({ key: idempotencyKey, state: prior.state, code: prior.code, fresh: false, counted: false });
+    }
+    if (prior && (prior.state === "sending" || prior.state === "uncertain")) {
+      return this.resolveUncertainKey(idempotencyKey, { text: prior.text, chatId: prior.chatId, to }, generation);
+    }
+    const meta = store.meta();
+    if (meta.closed || meta.optedOut) {
+      const code = meta.closed ? "conversation_closed" : "opted_out";
+      if (!prior) {
+        store.addOutbound({
+          key: idempotencyKey, turn: 0, part: 0, tag: "code", text: message, attempts: 0, state: "refused", code,
+          chatId: null, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+        });
+      } else {
+        store.updateOutbound(idempotencyKey, { state: "refused", code, updatedAtMs: nowMs() });
+      }
+      logger.info("send_suppressed", { handle: this.logHandle(), key: idempotencyKey, code });
+      return finish({ key: idempotencyKey, state: "refused", code, fresh: false, counted: false });
+    }
+    if (!prior) {
+      store.addOutbound({
+        key: idempotencyKey, turn: 0, part: 0, tag: "code", text: message, attempts: 0, state: "planned", code: null,
+        chatId: null, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+      });
+    }
+    store.updateOutbound(idempotencyKey, { state: "sending", updatedAtMs: nowMs() });
+    try {
+      const result = await channel.send({ to, chatId: null, text: message, idempotencyKey });
+      this.checkGeneration(generation);
+      store.updateOutbound(idempotencyKey, {
+        state: "sent", messageId: result.messageId, chatId: result.chatId, updatedAtMs: nowMs(),
+      });
+      this.applyHeldReceipts(result.messageId, result.chatId);
+      logger.info("send_sent", { handle: this.logHandle(), key: idempotencyKey, message: result.messageId, duplicate: result.duplicate });
+      return finish({ key: idempotencyKey, state: "sent", code: null, fresh: true, counted: true });
+    } catch (err) {
+      if (err instanceof GenerationStopped) throw err;
+      if (err instanceof ChannelRefused) {
+        store.updateOutbound(idempotencyKey, { state: "refused", code: err.code, updatedAtMs: nowMs() });
+        logger.warn("send_refused", { handle: this.logHandle(), key: idempotencyKey, code: err.code, status: err.status });
+        return finish({ key: idempotencyKey, state: "refused", code: err.code, fresh: false, counted: true });
+      }
+      store.updateOutbound(idempotencyKey, { state: "uncertain", updatedAtMs: nowMs() });
+      logger.warn("send_uncertain", { handle: this.logHandle(), key: idempotencyKey });
+      return this.resolveUncertainKey(idempotencyKey, { text: message, chatId: null, to }, generation);
+    }
+  }
+
   // Retries every uncertain or stuck sending row with its stored
   // text. Runs on each alarm tick before turns, so an uncertain send
   // resolves as soon as the provider answers again. Sending rows are

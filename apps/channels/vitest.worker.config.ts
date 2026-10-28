@@ -13,6 +13,7 @@ export default defineConfig({
           MANO_HANDLE_PEPPER: "test-pepper-not-real",
           ENCRYPTION_KEK_B64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
           MANO_TEXT_NUMBER: "+18005550000",
+          INTERNAL_SECRET: "test-internal-secret-not-real",
         },
       },
     }),

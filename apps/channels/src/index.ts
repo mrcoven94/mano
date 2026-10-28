@@ -6,6 +6,7 @@ import {
   ATTACHMENT_RETENTION_MS,
   BlooioChannel,
   RecordingChannel,
+  buildAccountsDirectory,
   createLogger,
   errName,
   hashChatId,
@@ -126,15 +127,92 @@ export async function routeEvent(event: NormalizedEvent, env: Env): Promise<"rou
     logger.info("event_skipped", { eventId: event.id, type: event.rawType, reason: "unroutable" });
     return "skipped";
   }
+  // Create-or-route: a handle with no person resolves one (created in
+  // the engine once it lands) and routes to that person from then on.
+  const personId = event.handle
+    ? (await buildAccountsDirectory(env).resolvePerson(event.handle)).personId
+    : null;
   const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));
   const res = await stub.fetch("https://conversation/internal/event", {
     method: "POST",
-    body: JSON.stringify({ handleHash, event }),
+    body: JSON.stringify({ handleHash, personId, event }),
   });
   if (!res.ok) throw new Error(`Conversation route failed: ${res.status}`);
-  const data = (await res.json()) as { result?: string };
-  logger.info("event_routed", { eventId: event.id, type: event.rawType, handle: handleHash, result: data.result ?? "unknown" });
+  const data = (await res.json()) as { result?: string; personCreated?: unknown };
+  logger.info("event_routed", {
+    eventId: event.id,
+    type: event.rawType,
+    handle: handleHash,
+    result: data.result ?? "unknown",
+    personCreated: data.personCreated === true,
+  });
   return "routed";
+}
+
+function internalAllowed(request: Request, env: Env): boolean {
+  // Service-binding routes share the public fetch surface, so they need
+  // their own secret. Unset or mismatched fails closed.
+  const secret = env.INTERNAL_SECRET;
+  if (!secret) return false;
+  const given = request.headers.get("x-mano-internal") ?? "";
+  if (given.length !== secret.length) return false;
+  let diff = 0;
+  for (let i = 0; i < secret.length; i++) diff |= secret.charCodeAt(i) ^ given.charCodeAt(i);
+  return diff === 0;
+}
+
+// Sends a sign-in code over Mano's own line. Called by accounts through
+// the service binding, never by the public internet.
+export async function handleSendCode(request: Request, env: Env): Promise<Response> {
+  if (!internalAllowed(request, env)) return new Response("Forbidden.", { status: 403 });
+  const body = (await request.json().catch(() => null)) as {
+    to?: unknown;
+    message?: unknown;
+    idempotencyKey?: unknown;
+  } | null;
+  const to = typeof body?.to === "string" ? normalizeHandle(body.to) : null;
+  if (!to || typeof body?.message !== "string" || !body.message || typeof body?.idempotencyKey !== "string" || !body.idempotencyKey) {
+    return new Response("Bad code send.", { status: 400 });
+  }
+  const handleHash = await hashHandle(to, env.MANO_HANDLE_PEPPER);
+  const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));
+  const res = await stub.fetch("https://conversation/internal/send-code", {
+    method: "POST",
+    body: JSON.stringify({ handleHash, to, message: body.message, idempotencyKey: body.idempotencyKey }),
+  });
+  if (!res.ok) return new Response("Code send failed.", { status: 502 });
+  return Response.json(await res.json());
+}
+
+// Deletes every conversation a person owns. Accounts calls this when an
+// account is deleted; the person binds recorded at create-or-route say
+// which conversations those are.
+export async function handleDeletePerson(request: Request, env: Env): Promise<Response> {
+  if (!internalAllowed(request, env)) return new Response("Forbidden.", { status: 403 });
+  const body = (await request.json().catch(() => null)) as { personId?: unknown } | null;
+  if (!body || typeof body.personId !== "string" || !body.personId) {
+    return new Response("Bad delete.", { status: 400 });
+  }
+  const lookup = await globalStateStub(env).fetch(
+    `https://state/internal/person-handles?person=${encodeURIComponent(body.personId)}`,
+  );
+  if (!lookup.ok) throw new Error(`Person lookup failed: ${lookup.status}`);
+  const { handleHashes } = (await lookup.json()) as { handleHashes: string[] };
+  let deleted = 0;
+  for (const handleHash of handleHashes) {
+    const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));
+    const res = await stub.fetch("https://conversation/internal/delete", {
+      method: "POST",
+      body: JSON.stringify({ handleHash }),
+    });
+    if (res.ok) deleted += 1;
+  }
+  await globalStateStub(env).fetch("https://state/internal/person-unbind", {
+    method: "POST",
+    body: JSON.stringify({ personId: body.personId }),
+  });
+  createLogger().info("person_deleted", { deleted });
+  return Response.json({ deleted });
 }
 
 async function routeForChat(env: Env, chatId: string): Promise<string | null> {
@@ -270,6 +348,12 @@ export default {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === WEBHOOK_PATH) {
       return handleWebhook(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/internal/send-code") {
+      return handleSendCode(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/internal/delete-person") {
+      return handleDeletePerson(request, env);
     }
     // Ok and nothing else: strangers must not learn which keys are set.
     if (request.method === "GET" && url.pathname === "/health") {
