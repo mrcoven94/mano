@@ -70,7 +70,7 @@ describe("r2 blocker 2: guarded store transitions", () => {
     const store = openStore();
     const good = pendingApproval();
     store.putApproval(good);
-    const guard = { personId: "maria", requestHash: "hash-1", now: new Date() };
+    const guard = { personId: "maria", requestHash: "hash-1" };
     expect(store.consumeApprovalAndClaim(good.id, "maria", attemptFor(good), guard)).not.toBeNull();
 
     const wrongOwner = pendingApproval();

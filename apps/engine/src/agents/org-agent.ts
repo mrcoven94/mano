@@ -6,6 +6,7 @@ import {
 } from "@mano/protocol";
 import type { Env } from "../env.js";
 import { generateAgentKeypair, resolveAgentKey } from "./agent-keys.js";
+import { tryRecordDelivery } from "../consent-dedupe.js";
 
 export interface SharedCase {
   caseId: string;
@@ -18,6 +19,9 @@ export interface ConsentResult {
   accepted: boolean;
   reason?: string;
   duplicate?: boolean;
+  // True when the rejection is transient (storage unavailable): the
+  // sender must reconcile, never treat it as a definite refusal.
+  retryable?: boolean;
 }
 
 // Synced to staff screens: the org's active shared cases.
@@ -52,6 +56,11 @@ export class OrgAgent extends Agent<Env, OrgState> {
       // Each case is bound to the resident who first shared it. Only that
       // resident's later messages can change it.
       sql.exec(`CREATE TABLE IF NOT EXISTS case_owners(case_id TEXT PRIMARY KEY, person_id TEXT NOT NULL)`);
+      try {
+        sql.exec(`ALTER TABLE case_owners ADD COLUMN expires_at TEXT`);
+      } catch {
+        // The column already exists: additive migrations are idempotent.
+      }
       sql.exec(`CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT, detail TEXT, created_at TEXT)`);
       const stored = await ctx.storage.get<string>("orgId");
       if (stored) this.orgId = stored;
@@ -148,7 +157,9 @@ export class OrgAgent extends Agent<Env, OrgState> {
     }
     const now = new Date().toISOString();
     if (msg.type === "consent.revoke") {
-      if (!this.recordDelivery(msg.fromAgentId, msg.idempotencyKey)) return { accepted: true, duplicate: true };
+      const delivery = this.recordDelivery(msg.fromAgentId, msg.idempotencyKey);
+      if (delivery === "duplicate") return { accepted: true, duplicate: true };
+      if (delivery === "unavailable") return { accepted: false, reason: "The org cannot record this delivery right now. Retry.", retryable: true };
       this.appendEvent(msg.caseId, "revoke", sender, "", msg.id, now);
       this.audit("consent.revoke", { caseId: msg.caseId, from: msg.fromAgentId });
       this.syncState();
@@ -157,6 +168,15 @@ export class OrgAgent extends Agent<Env, OrgState> {
     if (typeof payload.purpose !== "string" || !payload.purpose) {
       return { accepted: false, reason: "Consent grant needs a purpose." };
     }
+    const expiresAt = payload.expiresAt;
+    if (expiresAt !== undefined) {
+      if (typeof expiresAt !== "string" || !Number.isFinite(new Date(expiresAt).getTime())) {
+        return { accepted: false, reason: "Consent grant carries an invalid expiry." };
+      }
+      if (new Date(expiresAt).getTime() <= Date.now()) {
+        return { accepted: false, reason: `Case ${msg.caseId} consent already expired.` };
+      }
+    }
     const revoked = this.db().exec(
       "SELECT id FROM case_events WHERE case_id = ? AND event = 'revoke'",
       msg.caseId,
@@ -164,7 +184,10 @@ export class OrgAgent extends Agent<Env, OrgState> {
     if (revoked.length > 0) {
       return { accepted: false, reason: `Case ${msg.caseId} was revoked and cannot be shared again.` };
     }
-    if (!this.recordDelivery(msg.fromAgentId, msg.idempotencyKey)) return { accepted: true, duplicate: true };
+    const delivery = this.recordDelivery(msg.fromAgentId, msg.idempotencyKey);
+    if (delivery === "duplicate") return { accepted: true, duplicate: true };
+    if (delivery === "unavailable") return { accepted: false, reason: "The org cannot record this delivery right now. Retry.", retryable: true };
+    this.db().exec("UPDATE case_owners SET expires_at = ? WHERE case_id = ?", expiresAt ?? null, msg.caseId);
     this.appendEvent(msg.caseId, "share", sender, payload.purpose, msg.id, now);
     this.audit("consent.grant", { caseId: msg.caseId, from: msg.fromAgentId });
     this.syncState();
@@ -175,7 +198,7 @@ export class OrgAgent extends Agent<Env, OrgState> {
   // sender; every later message must come from that same resident.
   private caseOwner(caseId: string, bindTo: string | null): string | null {
     if (bindTo) {
-      this.db().exec("INSERT OR IGNORE INTO case_owners VALUES (?, ?)", caseId, bindTo);
+      this.db().exec("INSERT OR IGNORE INTO case_owners(case_id, person_id) VALUES (?, ?)", caseId, bindTo);
     }
     const rows = this.db().exec("SELECT person_id FROM case_owners WHERE case_id = ?", caseId).toArray() as unknown as {
       person_id: string;
@@ -183,21 +206,22 @@ export class OrgAgent extends Agent<Env, OrgState> {
     return rows[0]?.person_id ?? null;
   }
 
-  // Records a delivery for dedupe. Insert-first with no preceding select:
-  // a constraint failure means a concurrent delivery recorded this same
-  // sender and key, so this one is a duplicate. Runs with no await
-  // between the checks above and the append below.
-  private recordDelivery(fromAgentId: string, idempotencyKey: string): boolean {
+  // Records a delivery for dedupe. Only a genuine duplicate key
+  // conflict counts as a duplicate; any other storage error is
+  // unavailable, never success. Runs with no await between the checks
+  // above and the append below.
+  private recordDelivery(fromAgentId: string, idempotencyKey: string): "recorded" | "duplicate" | "unavailable" {
     try {
-      this.db().exec("INSERT INTO processed_messages VALUES (?, ?)", fromAgentId, idempotencyKey);
-      return true;
+      return tryRecordDelivery(this.db(), fromAgentId, idempotencyKey);
     } catch {
-      return false;
+      return "unavailable";
     }
   }
 
   // Whether this org recorded a delivery under a sender and key. The
   // person's agent asks this to reconcile a share; agent-to-agent only.
+  // A pure historical fact: expiry is enforced on case reads, not by
+  // rewriting delivery history.
   async hasConsentRecord(fromAgentId: string, idempotencyKey: string): Promise<boolean> {
     const rows = this.db().exec(
       "SELECT idempotency_key FROM processed_messages WHERE sender_agent_id = ? AND idempotency_key = ?",
@@ -246,10 +270,14 @@ export class OrgAgent extends Agent<Env, OrgState> {
   }
 
   private activeCases(): SharedCase[] {
+    const now = new Date().toISOString();
     const rows = this.db().exec(
-      `SELECT case_id, person_id, purpose, MAX(at) AS shared_at FROM case_events
-       WHERE event = 'share' AND case_id NOT IN (SELECT case_id FROM case_events WHERE event = 'revoke')
-       GROUP BY case_id ORDER BY shared_at`,
+      `SELECT e.case_id, e.person_id, e.purpose, MAX(e.at) AS shared_at FROM case_events e
+       LEFT JOIN case_owners o ON o.case_id = e.case_id
+       WHERE e.event = 'share' AND e.case_id NOT IN (SELECT case_id FROM case_events WHERE event = 'revoke')
+       AND (o.expires_at IS NULL OR o.expires_at > ?)
+       GROUP BY e.case_id ORDER BY shared_at`,
+      now,
     ).toArray() as unknown as {
       case_id: string;
       person_id: string;

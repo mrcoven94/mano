@@ -66,6 +66,7 @@ import type { Env } from "./env.js";
 import { PersonAgent } from "./agents/person-agent.js";
 import { OrgAgent } from "./agents/org-agent.js";
 import { authenticate, getSessionSecret, mintWsTicket, sessionConfigured } from "./auth.js";
+import { createExecutor } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
 
@@ -123,14 +124,38 @@ async function readCappedJson(
   request: Request,
   maxBytes: number,
 ): Promise<{ ok: true; value: unknown } | { ok: false; response: Response }> {
+  const tooLarge = () => ({ ok: false as const, response: Response.json({ error: "Request body is too large." }, { status: 413 }) });
   const declared = request.headers.get("content-length");
-  if (declared && Number(declared) > maxBytes) {
-    return { ok: false, response: Response.json({ error: "Request body is too large." }, { status: 413 }) };
+  if (declared && Number(declared) > maxBytes) return tooLarge();
+  // Bytes, not UTF-16 units: astral-plane text can be twice the capped
+  // size in code units. Counted while streaming, chunk by chunk.
+  if (!request.body) {
+    try {
+      return { ok: true, value: JSON.parse(await request.text()) };
+    } catch {
+      return { ok: false, response: Response.json({ error: "Invalid JSON." }, { status: 400 }) };
+    }
   }
-  const text = await request.text();
-  if (text.length > maxBytes) {
-    return { ok: false, response: Response.json({ error: "Request body is too large." }, { status: 413 }) };
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return tooLarge();
+    }
+    chunks.push(value);
   }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const text = new TextDecoder().decode(merged);
   try {
     return { ok: true, value: JSON.parse(text) };
   } catch {
@@ -172,15 +197,24 @@ export function liveStatus(env: Env): LiveStatus {
   };
 }
 
-// False when a required live part is missing. Stand-ins keep local
+// False when a required live part is missing, including an executor
+// that cannot be constructed from config. Stand-ins keep local
 // development running, but /health never reports a partial engine as ok.
 export function healthOk(env: Env): boolean {
-  return (
-    Boolean(env.META_MODEL_API_KEY) &&
-    Boolean(env.ENCRYPTION_KEK_B64) &&
-    Boolean(env.FILES) &&
-    sessionConfigured(env)
-  );
+  if (
+    !env.META_MODEL_API_KEY ||
+    !env.ENCRYPTION_KEK_B64 ||
+    !env.FILES ||
+    !sessionConfigured(env)
+  ) {
+    return false;
+  }
+  try {
+    createExecutor(env);
+  } catch {
+    return false;
+  }
+  return true;
 }
 
 let loggedStartup = false;
@@ -246,12 +280,20 @@ export default {
             status: 400,
           });
         }
+        const ticket = url.searchParams.get("ticket");
+        if (!ticket) return FORBIDDEN();
         if (request.headers.get("Upgrade") !== "websocket") {
           return new Response("Expected websocket", { status: 426 });
         }
-        const ticket = url.searchParams.get("ticket");
-        if (!ticket) return FORBIDDEN();
-        return forwardToAgent(stub, `/ws`, request, { "x-mano-ticket": ticket });
+        // Redeemed here, before the SDK accepts the socket: the SDK sends
+        // agent state on accept, so forwarding first would leak private
+        // state to bad tickets. The ticket must name this route.
+        const redeemed = await agent.redeemWsTicket(ticket, personId);
+        if (!redeemed.ok) return FORBIDDEN();
+        return forwardToAgent(stub, `/ws`, request, {
+          "x-mano-subject": redeemed.subject,
+          "x-mano-session-exp": String(redeemed.sessionExp),
+        });
       }
       const claims = await authenticate(request, env);
       if (!claims || claims.kind !== "person" || claims.sub !== personId) return FORBIDDEN();
