@@ -433,6 +433,40 @@ mark{background:none;color:inherit}
   .im-step{padding:14px}
 }
 
+/* vault: everything you have proved, filled into every application */
+.h-vault{background:var(--bg2)}
+.vt-stage{display:grid;grid-template-columns:minmax(0,1fr) 240px minmax(0,1fr);gap:40px;align-items:center}
+.vt-col{display:grid;gap:14px;align-content:start}
+.vt-docs{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.vt-doc{position:relative;display:grid;gap:2px;padding:12px 16px 12px 22px;background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;opacity:.45;transform:translateX(0);transition:opacity .25s,transform .3s cubic-bezier(.3,1.6,.5,1),border-color .2s}
+.vt-doc::before{content:"";position:absolute;left:0;top:0;bottom:0;width:8px;background:var(--tint)}
+.vt-doc b{font-weight:600;font-size:.98rem}
+.vt-doc span{font-size:.84rem;color:var(--muted)}
+.vt-doc[data-used]{opacity:1;transform:translateX(8px);border-color:var(--border2)}
+.vt-mid{position:relative;display:grid;justify-items:center}
+.vt-mascot{position:absolute;top:-46px;right:6px;z-index:1;transform:rotate(8deg)}
+.vt-safe{width:100%;height:auto;overflow:visible}
+.vt-dial{transform-origin:104px 104px;transition:transform .7s cubic-bezier(.3,1.5,.5,1)}
+.vt-apps{display:grid;gap:8px}
+.vt-app{display:flex;justify-content:space-between;align-items:baseline;gap:12px;width:100%;text-align:left;padding:14px 16px;border-radius:14px;border:1px solid var(--border);background:#fff;cursor:pointer;transition:border-color .15s,transform .25s cubic-bezier(.3,1.6,.5,1),box-shadow .2s}
+.vt-app b{font-weight:600;font-size:.98rem}
+.vt-app span{font-size:.84rem;color:var(--muted);text-align:right}
+.vt-app:hover{border-color:var(--border2)}
+.vt-app[aria-pressed="true"]{border-color:var(--text);box-shadow:0 3px 0 var(--text);transform:translateX(-6px)}
+.vt-out{display:grid;gap:4px;padding:4px 2px 0}
+.vt-out p:first-child{font-family:var(--font-display),sans-serif;font-weight:700;font-size:1.3rem;letter-spacing:-.02em;color:var(--text)}
+.vt-out mark{background-image:linear-gradient(var(--hl),var(--hl));background-repeat:no-repeat;background-size:100% 100%;padding:0 .08em;animation:hlDraw .55s cubic-bezier(.6,0,.2,1) var(--d,.15s) both}
+.vt-out-small{font-size:.92rem}
+@media (max-width:1080px){.vt-stage{grid-template-columns:minmax(0,1fr) 180px minmax(0,1fr);gap:24px}}
+@media (max-width:820px){
+  .vt-stage{grid-template-columns:1fr;gap:28px}
+  .vt-mid{order:-1;width:160px;justify-self:center;margin-top:40px}
+  .vt-docs{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .vt-doc[data-used]{transform:none}
+  .vt-app[aria-pressed="true"]{transform:none}
+}
+@media (prefers-reduced-motion:reduce){.vt-dial,.vt-doc,.vt-app{transition:none}}
+
 /* needs: pick what you need help with */
 .nd-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:40px;align-items:start}
 .nd-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:6px}
