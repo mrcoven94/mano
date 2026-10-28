@@ -1,0 +1,4 @@
+.env
+heldout*.json
+!heldout-hashes.json
+photos-heldout/
