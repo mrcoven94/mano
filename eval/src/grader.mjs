@@ -11,19 +11,25 @@
 // scores: the report says "panel: not run".
 
 const arr = (v) => (Array.isArray(v) ? v : []);
-// Only status "ok" with a valid shape earns credit. Anything else zeroes
-// every score while still counting false positives from whatever was
-// predicted.
+// Only an explicit status "ok" with a valid full shape earns credit: a
+// string householdId plus every score field present as an array. Anything
+// else zeroes every score while still counting false positives from
+// whatever was predicted.
 const SHAPED_FIELDS = ["reminders", "packet", "refused", "enforced", "requested", "failures"];
+// A readable-copy request is explicit: the failure reason must say the
+// letter is unreadable, illegible, or cut off, or ask for a readable
+// copy. Any other reason (including a bare no_date_found) does not count.
+const READABLE_COPY_RE = /readable|legible|cut[\s_-]?off|missing page|re-?send|can ?not read|can't read/i;
 
 const fmtCost = (c) => (c === null || c === undefined ? "unknown" : `$${c.toFixed(4)}`);
 
 export function gradeHousehold(output, groundTruth, letterInfo = {}) {
-  const status = output.status === undefined ? "ok" : output.status;
-  const validShape = SHAPED_FIELDS.every((k) => output[k] === undefined || Array.isArray(output[k]));
+  const status = output.status;
+  const validShape = typeof output.householdId === "string"
+    && SHAPED_FIELDS.every((k) => Array.isArray(output[k]));
   const earnsCredit = status === "ok" && validShape;
   const wantDates = new Map(groundTruth.deadlines.map((d) => [d.letterId, d.dueDate]));
-  const askedIds = new Set(arr(output.failures).filter((f) => f && typeof f.letterId === "string").map((f) => f.letterId));
+  const askedIds = new Set(arr(output.failures).filter((f) => f && typeof f.letterId === "string" && typeof f.reason === "string" && READABLE_COPY_RE.test(f.reason)).map((f) => f.letterId));
   const byLetter = new Map();
   let totalPredictions = 0;
   for (const r of arr(output.reminders)) {

@@ -12,6 +12,7 @@
 // split only. Family C is public and burned; unseen wording lives in the
 // private pack, published after the final run.
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { rngForHousehold, pick, intBetween, shuffle } from "./rng.mjs";
 import { splitRequires } from "./inputs.mjs";
 import publicPackData from "./pack-public.json" with { type: "json" };
@@ -63,7 +64,22 @@ export const PUBLIC_PACK = validatePack(publicPackData);
 export function loadPrivatePack() {
   const p = process.env.MANO_EVAL_TEMPLATE_PACK;
   if (!p) throw new Error("MANO_EVAL_TEMPLATE_PACK is not set. The architect holds the private pack.");
-  return validatePack(JSON.parse(readFileSync(p, "utf8")));
+  let raw;
+  try {
+    raw = readFileSync(p, "utf8");
+  } catch {
+    throw new Error(`cannot read private pack at ${p}`);
+  }
+  // A JSON parse error echoes pack text, so it is replaced with a fixed
+  // message carrying only the file's SHA-256. Pack wording must never
+  // reach an error, a log, or a report.
+  let pack;
+  try {
+    pack = JSON.parse(raw);
+  } catch {
+    throw new Error(`private pack at ${p} is not valid JSON (sha256: ${createHash("sha256").update(raw).digest("hex")})`);
+  }
+  return validatePack(pack);
 }
 
 function fill(template, map) {
@@ -478,7 +494,8 @@ function workerName(rng, residentLast) {
 
 const ILLEGIBLE = "[This page is illegible. The text cannot be read.]\n\n[ILLEGIBLE]";
 
-function generateOne(seed, householdNum, split, heldoutPack = PUBLIC_PACK) {
+function generateOne(seed, householdNum, split, heldoutPack) {
+  if (split === "heldout" && !heldoutPack) throw new Error("held-out generation requires a private pack");
   const householdId = `hh-${String(householdNum).padStart(3, "0")}`;
   const rng = rngForHousehold(seed, householdId);
   const state = STATES[(householdNum - 1) % STATES.length];
@@ -606,7 +623,7 @@ function generateOne(seed, householdNum, split, heldoutPack = PUBLIC_PACK) {
 // Public dev split. Held-out split needs the secret seed.
 export function generateDevHouseholds() {
   const out = [];
-  for (let i = 0; i < DEV_COUNT; i++) out.push(generateOne(DEV_SEED, i + 1, "dev"));
+  for (let i = 0; i < DEV_COUNT; i++) out.push(generateOne(DEV_SEED, i + 1, "dev", PUBLIC_PACK));
   return out;
 }
 
@@ -616,10 +633,11 @@ export function generateHeldoutHouseholds(seed = getHeldoutSeed(), privatePack =
   return out;
 }
 
-// Backwards-compatible full generator for tests with an explicit seed.
-// Tests pass a fake private pack; without one the held-out portion also
-// draws from the public pack.
-export function generateHouseholds(seed = DEV_SEED, heldoutPack = PUBLIC_PACK) {
+// Full generator for tests with an explicit seed. Held-out rows require a
+// private pack and throw without one; tests pass the fake fixture. There
+// is no public-pack fallback: silently rendering held-out letters from
+// public wording would void the test.
+export function generateHouseholds(seed = DEV_SEED, heldoutPack = loadPrivatePack()) {
   const out = [];
   for (let i = 0; i < TOTAL_HOUSEHOLDS; i++) {
     const num = i + 1;
