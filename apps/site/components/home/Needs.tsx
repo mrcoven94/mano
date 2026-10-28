@@ -1,10 +1,12 @@
 "use client";
 import { useState } from "react";
 import Mascot from "@/components/Mascot";
+import { NeedIcon, NEED_TINT } from "./NeedIcons";
 
-/* What people come to Mano for. Pick a need to see the text a person sends, what Mano does and what they end up with.
+/* What people come to Mano for, as stickers. Pick a need to see the text a person sends, what Mano does and what they end up with.
    Every message here is made up. */
 
+const TILT = [-2, 1.5, -1, 2, -1.5, 1, -2.5, 1.5, -1];
 const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
 
 const NEEDS = [
@@ -86,7 +88,8 @@ export default function Needs() {
       <div className="nd-grid">
         <div className="nd-list" role="group" aria-label="What you need help with">
           {NEEDS.map((x, k) => (
-            <button key={x.key} className="nd-pick" aria-pressed={k === i} onClick={() => setI(k)}>
+            <button key={x.key} className="nd-pick" aria-pressed={k === i} onClick={() => setI(k)} style={{ "--tint": NEED_TINT[x.key], "--tilt": `${TILT[k]}deg` } as React.CSSProperties}>
+              <NeedIcon k={x.key} size={64} />
               <strong>{x.name}</strong>
               <span>{x.short}</span>
             </button>
