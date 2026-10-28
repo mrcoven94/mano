@@ -36,7 +36,7 @@ export default function Improve() {
     <div className="im">
       <div className="h-head">
         <h2 id="im-h">Mano is always improving.</h2>
-        <p className="lede">Every correction you make, every form it fills and every caseworker review makes Mano better for the next person. It is graded on paperwork it has never seen, and the results are public.</p>
+        <p className="lede">Mano learns as it applies. Every correction you make, every form it fills and every caseworker review makes Mano better for the next person. It is graded on paperwork it has never seen, and the results are public.</p>
       </div>
 
       <div className="im-grid">
