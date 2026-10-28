@@ -29,6 +29,10 @@ export interface PortalConfig {
   slowMsDefault: number;
   maxUploadBytes: number;
   maxUploadFiles: number;
+  rateLimitPerMinute: number;
+  slowMaxConcurrent: number;
+  /** Expected bearer token for the caseworker view and the JSON API. Unset means unconfigured. */
+  portalToken?: string;
   now?: () => number;
 }
 
@@ -37,6 +41,8 @@ export const DEFAULT_CONFIG: PortalConfig = {
   slowMsDefault: 20000,
   maxUploadBytes: 5 * 1024 * 1024,
   maxUploadFiles: 3,
+  rateLimitPerMinute: 60,
+  slowMaxConcurrent: 5,
 };
 
 const SESSION_COOKIE = "portal_session";
@@ -45,6 +51,8 @@ const ALLOWED_UPLOAD_TYPES = new Set(["application/pdf", "image/png", "image/jpe
 const MAX_SLOW_MS = 60000;
 const MAX_KEY_LENGTH = 128;
 const CASEWORKER_LIST_LIMIT = 100;
+const RATE_WINDOW_MS = 60_000;
+const SLOW_LEASE_TTL_MS = 65_000;
 
 function nowMs(config: PortalConfig): number {
   return config.now ? config.now() : Date.now();
@@ -107,6 +115,50 @@ function bearerToken(request: Request): string | null {
 /** JSON callers file in a namespace scoped to their token, so callers never share keys. */
 async function callerScope(request: Request): Promise<string> {
   return `api-${await sha256Hex(bearerToken(request) ?? "")}`;
+}
+
+type AuthState = "ok" | "denied" | "unconfigured";
+
+function equalHex(a: string, b: string): boolean {
+  // Constant-time compare without platform APIs. Both sides are SHA-256 hex, so lengths match.
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function authState(request: Request, config: PortalConfig): Promise<AuthState> {
+  if (!config.portalToken) return "unconfigured";
+  const presented = bearerToken(request);
+  if (!presented) return "denied";
+  const [a, b] = await Promise.all([sha256Hex(presented), sha256Hex(config.portalToken)]);
+  return equalHex(a, b) ? "ok" : "denied";
+}
+
+function authFailedResponse(path: string, state: AuthState): Response {
+  const wantsHtml = !path.startsWith("/submissions");
+  if (state === "unconfigured") {
+    const message = "This portal's access token is not configured, so staff and API access is off.";
+    return wantsHtml ? html(errorPage("Not configured", message, "/", "Back to the home page"), 503) : json({ error: message }, 503);
+  }
+  const message = "A valid access token is required.";
+  return wantsHtml
+    ? html(errorPage("Sign in required", "Staff and API access needs the portal access token. Put it in the Authorization header as a bearer token.", "/", "Back to the home page"), 401)
+    : json({ error: message }, 401);
+}
+
+function rateLimitedResponse(path: string): Response {
+  const message = "Too many requests. Wait a minute and try again.";
+  return path.startsWith("/submissions")
+    ? json({ error: message }, 429)
+    : html(errorPage("Too many requests", message, "/", "Back to the home page"), 429);
+}
+
+function slowBusyResponse(wantsHtml: boolean): Response {
+  const message = "The office is holding too many slow responses. Try again in a moment.";
+  return wantsHtml
+    ? html(errorPage("Office busy", message, "/apply/review", "Back to review"), 503)
+    : json({ error: message }, 503);
 }
 
 async function loadSession(request: Request, store: Store, config: PortalConfig): Promise<SessionData | null> {
@@ -401,6 +453,14 @@ async function handleSubmit(
       return submissionJson(webFiled, true);
     }
   }
+  let lease: string | null = null;
+  if (slowMs > 0) {
+    lease = await store.tryBeginSlow(nowMs(config), SLOW_LEASE_TTL_MS, config.slowMaxConcurrent);
+    if (!lease) {
+      await fileStore.del(uploadedKeys);
+      return slowBusyResponse(!isJson && !wantsJson(request));
+    }
+  }
   const result = await store.submit({
     key,
     scope,
@@ -415,6 +475,7 @@ async function handleSubmit(
     // Our bytes lost; drop the objects that are not the winner's.
     const winners = new Set(result.stored.files.map((f) => f.r2key));
     await fileStore.del(uploadedKeys.filter((k) => !winners.has(k)));
+    if (lease) await store.endSlow(lease);
     const stored = result.stored;
     if (isJson || wantsJson(request)) return conflictJson(stored);
     return html(
@@ -434,15 +495,34 @@ async function handleSubmit(
   if (session) await store.deleteSession(session.id);
 
   if (slowMs > 0 && !duplicate) await sleep(slowMs);
+  if (lease) await store.endSlow(lease);
 
   if (isJson || wantsJson(request)) return submissionJson(result.submission, duplicate);
   return html(confirmationPage(result.submission, duplicate));
 }
 
 export async function handleRequest(request: Request, store: Store, fileStore: FileStore, config: PortalConfig): Promise<Response> {
+  const res = await routeRequest(request, store, fileStore, config);
+  const headers = new Headers(res.headers);
+  headers.set("X-Robots-Tag", "noindex");
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+async function routeRequest(request: Request, store: Store, fileStore: FileStore, config: PortalConfig): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method.toUpperCase();
+
+  const auth = await authState(request, config);
+  if (auth !== "ok") {
+    const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+    const allowed = await store.checkRateLimit(ip, nowMs(config), RATE_WINDOW_MS, config.rateLimitPerMinute);
+    if (!allowed) return rateLimitedResponse(path);
+  }
+  const jsonPost = method === "POST" && path === "/submissions" && (request.headers.get("content-type") ?? "").includes("application/json");
+  const isProtected =
+    path === "/caseworker" || path.startsWith("/caseworker/") || (path.startsWith("/submissions") && (method === "GET" || jsonPost));
+  if (isProtected && auth !== "ok") return authFailedResponse(path, auth);
 
   if (method === "GET" && path === "/") return html(homePage());
 

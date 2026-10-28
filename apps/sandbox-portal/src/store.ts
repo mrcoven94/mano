@@ -73,6 +73,10 @@ export interface Store {
   putSession(session: SessionData): Promise<void>;
   deleteSession(id: string): Promise<void>;
   getSubmission(scope: string, key: string): Promise<Submission | null>;
+  checkRateLimit(ip: string, now: number, windowMs: number, max: number): Promise<boolean>;
+  tryBeginSlow(now: number, ttlMs: number, max: number): Promise<string | null>;
+  endSlow(leaseId: string): Promise<void>;
+  purgeExpiredSlowLeases(now: number): Promise<void>;
   getSubmissionByConfirmation(confirmation: string): Promise<Submission | null>;
   /**
    * File one submission atomically within its scope. The first writer for a
@@ -170,6 +174,15 @@ export class PortalStoreSql implements Store {
         PRIMARY KEY (scope, key)
       );
       CREATE INDEX IF NOT EXISTS idx_submissions_received ON submissions (received_at DESC);
+      CREATE TABLE IF NOT EXISTS rate_buckets (
+        ip TEXT PRIMARY KEY,
+        window_start INTEGER NOT NULL,
+        count INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS slow_leases (
+        id TEXT PRIMARY KEY,
+        expires_at INTEGER NOT NULL
+      );
     `);
     this.ready = true;
   }
@@ -211,6 +224,40 @@ export class PortalStoreSql implements Store {
       .exec("SELECT data FROM submissions WHERE confirmation = ?", confirmation)
       .toArray()[0] as { data: string } | undefined;
     return row ? (JSON.parse(row.data) as Submission) : null;
+  }
+
+  async checkRateLimit(ip: string, now: number, windowMs: number, max: number): Promise<boolean> {
+    this.ensureTables();
+    const row = this.sql
+      .exec("SELECT window_start, count FROM rate_buckets WHERE ip = ?", ip)
+      .toArray()[0] as { window_start: number; count: number } | undefined;
+    if (!row || row.window_start + windowMs <= now) {
+      this.sql.exec("INSERT OR REPLACE INTO rate_buckets (ip, window_start, count) VALUES (?, ?, 1)", ip, now);
+      return true;
+    }
+    if (row.count >= max) return false;
+    this.sql.exec("UPDATE rate_buckets SET count = count + 1 WHERE ip = ?", ip);
+    return true;
+  }
+
+  async tryBeginSlow(now: number, ttlMs: number, max: number): Promise<string | null> {
+    this.ensureTables();
+    this.sql.exec("DELETE FROM slow_leases WHERE expires_at <= ?", now);
+    const row = this.sql.exec("SELECT COUNT(*) AS n FROM slow_leases").toArray()[0] as { n: number } | undefined;
+    if ((row?.n ?? 0) >= max) return null;
+    const id = newId(8);
+    this.sql.exec("INSERT INTO slow_leases (id, expires_at) VALUES (?, ?)", id, now + ttlMs);
+    return id;
+  }
+
+  async endSlow(leaseId: string): Promise<void> {
+    this.ensureTables();
+    this.sql.exec("DELETE FROM slow_leases WHERE id = ?", leaseId);
+  }
+
+  async purgeExpiredSlowLeases(now: number): Promise<void> {
+    this.ensureTables();
+    this.sql.exec("DELETE FROM slow_leases WHERE expires_at <= ?", now);
   }
 
   async submit(input: SubmitInput): Promise<SubmitResult> {

@@ -31,6 +31,22 @@ export class PortalStore extends DurableObject {
     return this.inner().submit(input);
   }
 
+  checkRateLimit(ip: string, now: number, windowMs: number, max: number): Promise<boolean> {
+    return this.inner().checkRateLimit(ip, now, windowMs, max);
+  }
+
+  tryBeginSlow(now: number, ttlMs: number, max: number): Promise<string | null> {
+    return this.inner().tryBeginSlow(now, ttlMs, max);
+  }
+
+  endSlow(leaseId: string): Promise<void> {
+    return this.inner().endSlow(leaseId);
+  }
+
+  purgeExpiredSlowLeases(now: number): Promise<void> {
+    return this.inner().purgeExpiredSlowLeases(now);
+  }
+
   listSubmissions(limit: number): Promise<Submission[]> {
     return this.inner().listSubmissions(limit);
   }

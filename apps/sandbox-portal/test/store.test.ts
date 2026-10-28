@@ -148,3 +148,43 @@ describe("blocker 3: scopes", () => {
     expect((await store.getSubmission("api-2", "k"))?.digest).toBe("digest-b");
   });
 });
+
+describe("blocker 6: rate limits and slow leases", () => {
+  test("MemoryStore: fixed window allows the max, then resets", async () => {
+    const store = new MemoryStore();
+    expect(await store.checkRateLimit("1.2.3.4", 1000, 60_000, 2)).toBe(true);
+    expect(await store.checkRateLimit("1.2.3.4", 2000, 60_000, 2)).toBe(true);
+    expect(await store.checkRateLimit("1.2.3.4", 3000, 60_000, 2)).toBe(false);
+    expect(await store.checkRateLimit("5.6.7.8", 3000, 60_000, 2)).toBe(true);
+    expect(await store.checkRateLimit("1.2.3.4", 61_001, 60_000, 2)).toBe(true);
+  });
+
+  test("SQLite store: fixed window allows the max, then resets", async () => {
+    const store = makeSqlStore();
+    expect(await store.checkRateLimit("1.2.3.4", 1000, 60_000, 2)).toBe(true);
+    expect(await store.checkRateLimit("1.2.3.4", 2000, 60_000, 2)).toBe(true);
+    expect(await store.checkRateLimit("1.2.3.4", 3000, 60_000, 2)).toBe(false);
+    expect(await store.checkRateLimit("1.2.3.4", 61_001, 60_000, 2)).toBe(true);
+  });
+
+  test("MemoryStore: slow leases cap concurrency and expire", async () => {
+    const store = new MemoryStore();
+    const first = await store.tryBeginSlow(1000, 5000, 1);
+    expect(first).not.toBeNull();
+    expect(await store.tryBeginSlow(2000, 5000, 1)).toBeNull();
+    await store.endSlow(first!);
+    expect(await store.tryBeginSlow(3000, 5000, 1)).not.toBeNull();
+    expect(await store.tryBeginSlow(9000, 5000, 1)).not.toBeNull();
+  });
+
+  test("SQLite store: slow leases cap concurrency and expire", async () => {
+    const store = makeSqlStore();
+    const first = await store.tryBeginSlow(1000, 5000, 1);
+    expect(first).not.toBeNull();
+    expect(await store.tryBeginSlow(2000, 5000, 1)).toBeNull();
+    await store.endSlow(first!);
+    expect(await store.tryBeginSlow(3000, 5000, 1)).not.toBeNull();
+    await store.purgeExpiredSlowLeases(9000);
+    expect(await store.tryBeginSlow(9000, 5000, 1)).not.toBeNull();
+  });
+});

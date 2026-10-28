@@ -15,8 +15,11 @@ const HOUSEHOLD: Household = {
   monthlyIncome: "2400",
 };
 
+const TOKEN = "portal-test-token";
+const AUTH = `Bearer ${TOKEN}`;
+
 function testConfig(overrides: Partial<PortalConfig> = {}): PortalConfig {
-  return { ...DEFAULT_CONFIG, ...overrides };
+  return { ...DEFAULT_CONFIG, portalToken: TOKEN, ...overrides };
 }
 
 function cookieFrom(response: Response): string {
@@ -143,7 +146,7 @@ describe("renewal flow", () => {
     const confirmation = confirmationFrom(await submit.text());
     expect(confirmation).toMatch(/^SR-[A-Z2-9]{8}$/);
 
-    const status = await handleRequest(new Request(`${BASE}/submissions/${key}`), store, files, config);
+    const status = await handleRequest(new Request(`${BASE}/submissions/${key}`, { headers: { authorization: AUTH } }), store, files, config);
     expect(status.status).toBe(200);
     const statusJson = (await status.json()) as Record<string, string>;
     expect(statusJson["status"]).toBe("received");
@@ -233,7 +236,7 @@ describe("idempotency", () => {
       handleRequest(
         new Request(`${BASE}/submissions`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", authorization: AUTH },
           body: JSON.stringify(packet),
         }),
         store,
@@ -262,7 +265,7 @@ describe("idempotency", () => {
         handleRequest(
           new Request(`${BASE}/submissions`, {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", authorization: AUTH },
             body: JSON.stringify(packet),
           }),
           store,
@@ -281,7 +284,13 @@ describe("idempotency", () => {
   test("unknown key reports not found", async () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
-    const res = await handleRequest(new Request(`${BASE}/submissions/does-not-exist`), store, new MemoryFileStore(), testConfig());
+    const config = testConfig();
+    const res = await handleRequest(
+      new Request(`${BASE}/submissions/does-not-exist`, { headers: { authorization: AUTH } }),
+      store,
+      files,
+      config,
+    );
     expect(res.status).toBe(404);
     const body = (await res.json()) as Record<string, string>;
     expect(body["status"]).toBe("not_found");
@@ -308,7 +317,7 @@ describe("idempotency", () => {
     const retry = await handleRequest(
       new Request(`${BASE}/submissions`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key,
           household: HOUSEHOLD,
@@ -334,7 +343,7 @@ describe("idempotency", () => {
       handleRequest(
         new Request(`${BASE}/submissions`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", authorization: AUTH },
           body: JSON.stringify({ key: "conflict-key", household, files: [file] }),
         }),
         store,
@@ -357,7 +366,7 @@ describe("idempotency", () => {
     const submit = await handleRequest(
       new Request(`${BASE}/submissions`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key: "digest-key",
           household: HOUSEHOLD,
@@ -370,7 +379,7 @@ describe("idempotency", () => {
     );
     const submitted = (await submit.json()) as Record<string, string>;
     expect(submitted["digest"]).toMatch(/^[0-9a-f]{64}$/);
-    const receipt = (await (await handleRequest(new Request(`${BASE}/submissions/digest-key`), store, files, config)).json()) as Record<
+    const receipt = (await (await handleRequest(new Request(`${BASE}/submissions/digest-key`, { headers: { authorization: AUTH } }), store, files, config)).json()) as Record<
       string,
       string
     >;
@@ -401,27 +410,40 @@ describe("idempotency", () => {
     expect((await store.listSubmissions(10)).length).toBe(0);
   });
 
-  test("two API tokens file the same key independently", async () => {
+  test("the web and API scopes file the same key independently", async () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
     const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
+    const reviewText = await review.text();
+    const key = keyFromReview(reviewText);
+    const form = new URLSearchParams();
+    form.set("key", key);
+    form.set("digest", digestFromReview(reviewText));
+    const web = await handleRequest(
+      new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }),
+      store,
+      files,
+      config,
+    );
+    expect(web.status).toBe(200);
     const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
-    const post = (token: string, household: typeof HOUSEHOLD) =>
-      handleRequest(
-        new Request(`${BASE}/submissions`, {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-          body: JSON.stringify({ key: "shared-key", household, files: [file] }),
-        }),
-        store,
-        files,
-        config,
-      );
-    const a = (await (await post("token-one", HOUSEHOLD)).json()) as Record<string, unknown>;
-    const b = (await (await post("token-two", { ...HOUSEHOLD, fullName: "Alex Rivera" })).json()) as Record<string, unknown>;
-    expect(a["duplicate"]).toBe(false);
-    expect(b["duplicate"]).toBe(false);
-    expect(a["confirmationNumber"]).not.toBe(b["confirmationNumber"]);
+    const api = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({ key, household: { ...HOUSEHOLD, fullName: "Alex Rivera" }, files: [file] }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(api.status).toBe(200);
+    const apiBody = (await api.json()) as Record<string, unknown>;
+    expect(apiBody["duplicate"]).toBe(false);
+    expect(apiBody["scope"]).toMatch(/^api-/);
     expect((await store.listSubmissions(10)).length).toBe(2);
   });
 
@@ -447,7 +469,7 @@ describe("idempotency", () => {
     const retry = await handleRequest(
       new Request(`${BASE}/submissions`, {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: "Bearer gateway-token" },
+        headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key,
           household: HOUSEHOLD,
@@ -474,7 +496,7 @@ describe("idempotency", () => {
     await handleRequest(
       new Request(`${BASE}/submissions`, {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: "Bearer token-one" },
+        headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({ key: "scoped-key", household: HOUSEHOLD, files: [file] }),
       }),
       store,
@@ -482,17 +504,17 @@ describe("idempotency", () => {
       config,
     );
     const own = (await (
-      await handleRequest(new Request(`${BASE}/submissions/scoped-key`, { headers: { authorization: "Bearer token-one" } }), store, files, config)
+      await handleRequest(new Request(`${BASE}/submissions/scoped-key`, { headers: { authorization: AUTH } }), store, files, config)
     ).json()) as Record<string, string>;
     expect(own["status"]).toBe("received");
     expect(own["scope"]).toMatch(/^api-/);
-    const other = await handleRequest(
-      new Request(`${BASE}/submissions/scoped-key`, { headers: { authorization: "Bearer token-two" } }),
+    const web = await handleRequest(
+      new Request(`${BASE}/submissions/web-only-key`, { headers: { authorization: AUTH } }),
       store,
       files,
       config,
     );
-    expect(other.status).toBe(404);
+    expect(web.status).toBe(404);
   });
 
   test("a submission without a key is rejected", async () => {
@@ -502,7 +524,7 @@ describe("idempotency", () => {
     const res = await handleRequest(
       new Request(`${BASE}/submissions`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({ household: HOUSEHOLD }),
       }),
       store,
@@ -523,7 +545,7 @@ describe("slow mode", () => {
     const pending = handleRequest(
       new Request(`${BASE}/submissions?slowMs=1000`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key,
           household: HOUSEHOLD,
@@ -541,7 +563,7 @@ describe("slow mode", () => {
     let seen: Response | null = null;
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
-      const probe = await handleRequest(new Request(`${BASE}/submissions/${key}`), store, files, config);
+      const probe = await handleRequest(new Request(`${BASE}/submissions/${key}`, { headers: { authorization: AUTH } }), store, files, config);
       if (probe.status === 200) {
         seen = probe;
         break;
@@ -683,7 +705,7 @@ describe("blocker 5: file bytes in the file store", () => {
     expect(submit.status).toBe(200);
     const confirmation = confirmationFrom(await submit.text());
     const download = await handleRequest(
-      new Request(`${BASE}/caseworker/${confirmation}/file/0`),
+      new Request(`${BASE}/caseworker/${confirmation}/file/0`, { headers: { authorization: AUTH } }),
       store,
       files,
       config,
@@ -733,20 +755,20 @@ describe("blocker 5: file bytes in the file store", () => {
     const files = new MemoryFileStore();
     const config = testConfig();
     const file = (bytes: string) => ({ name: "paystub.pdf", type: "application/pdf", data: Buffer.from(bytes).toString("base64") });
-    const post = (token: string, name: string, bytes: string) =>
+    const post = (name: string, bytes: string) =>
       handleRequest(
         new Request(`${BASE}/submissions`, {
           method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          headers: { "content-type": "application/json", authorization: AUTH },
           body: JSON.stringify({ key: "fight-key", household: { ...HOUSEHOLD, fullName: name }, files: [file(bytes)] }),
         }),
         store,
         files,
         config,
       );
-    const first = await post("token-one", "Maria Santos", "winner-bytes");
+    const first = await post("Maria Santos", "winner-bytes");
     expect(first.status).toBe(200);
-    const second = await post("token-one", "Alex Rivera", "loser-bytes");
+    const second = await post("Alex Rivera", "loser-bytes");
     expect(second.status).toBe(409);
     const keys = [...files.objects.keys()];
     expect(keys).toHaveLength(1);
@@ -755,12 +777,137 @@ describe("blocker 5: file bytes in the file store", () => {
   });
 });
 
+describe("blocker 6: access control", () => {
+  test("staff and API routes need the token", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const anonymous = await handleRequest(new Request(`${BASE}/caseworker`), store, files, config);
+    expect(anonymous.status).toBe(401);
+    expect(await anonymous.text()).toContain("Sign in required");
+    const wrong = await handleRequest(
+      new Request(`${BASE}/caseworker`, { headers: { authorization: "Bearer wrong" } }),
+      store,
+      files,
+      config,
+    );
+    expect(wrong.status).toBe(401);
+    const api = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: "k" }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(api.status).toBe(401);
+    const receipt = await handleRequest(new Request(`${BASE}/submissions/k`), store, files, config);
+    expect(receipt.status).toBe(401);
+    const allowed = await handleRequest(new Request(`${BASE}/caseworker`, { headers: { authorization: AUTH } }), store, files, config);
+    expect(allowed.status).toBe(200);
+  });
+
+  test("without a configured token, staff and API access is off but the web flow stays open", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    delete config.portalToken;
+    const staff = await handleRequest(new Request(`${BASE}/caseworker`, { headers: { authorization: AUTH } }), store, files, config);
+    expect(staff.status).toBe(503);
+    const api = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({ key: "k" }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(api.status).toBe(503);
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const submit = await submitReview(store, files, config, cookie);
+    expect(submit.status).toBe(200);
+  });
+
+  test("unauthenticated callers are rate limited; token holders are not", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig({ rateLimitPerMinute: 3 });
+    for (let i = 0; i < 3; i++) {
+      const res = await handleRequest(new Request(`${BASE}/`), store, files, config);
+      expect(res.status).toBe(200);
+    }
+    const limited = await handleRequest(new Request(`${BASE}/`), store, files, config);
+    expect(limited.status).toBe(429);
+    expect(await limited.text()).toContain("Too many requests");
+    const authed = await handleRequest(new Request(`${BASE}/caseworker`, { headers: { authorization: AUTH } }), store, files, config);
+    expect(authed.status).toBe(200);
+  });
+
+  test("slow requests past the concurrency cap get a busy response without filing", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig({ slowMaxConcurrent: 1 });
+    const packet = (key: string) => ({
+      key,
+      household: HOUSEHOLD,
+      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") }],
+    });
+    const post = (key: string) =>
+      handleRequest(
+        new Request(`${BASE}/submissions?slowMs=600`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: AUTH },
+          body: JSON.stringify(packet(key)),
+        }),
+        store,
+        files,
+        config,
+      );
+    const first = post("slow-first");
+    await new Promise((r) => setTimeout(r, 50));
+    const busy = await post("slow-second");
+    expect(busy.status).toBe(503);
+    expect(((await busy.json()) as Record<string, string>)["error"]).toContain("too many slow");
+    expect((await first).status).toBe(200);
+    expect((await store.listSubmissions(10)).length).toBe(1);
+  });
+
+  test("every response carries X-Robots-Tag: noindex", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const home = await handleRequest(new Request(`${BASE}/`), store, files, config);
+    expect(home.headers.get("X-Robots-Tag")).toBe("noindex");
+    const missing = await handleRequest(new Request(`${BASE}/nope`), store, files, config);
+    expect(missing.headers.get("X-Robots-Tag")).toBe("noindex");
+    const denied = await handleRequest(new Request(`${BASE}/caseworker`), store, files, config);
+    expect(denied.headers.get("X-Robots-Tag")).toBe("noindex");
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const submit = await submitReview(store, files, config, cookie);
+    expect(submit.headers.get("X-Robots-Tag")).toBe("noindex");
+    const confirmation = confirmationFrom(await submit.text());
+    const download = await handleRequest(
+      new Request(`${BASE}/caseworker/${confirmation}/file/0`, { headers: { authorization: AUTH } }),
+      store,
+      files,
+      config,
+    );
+    expect(download.headers.get("X-Robots-Tag")).toBe("noindex");
+  });
+});
+
 describe("caseworker view", () => {
   test("lists submissions with detail and file download", async () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
     const config = testConfig();
-    const empty = await handleRequest(new Request(`${BASE}/caseworker`), store, files, config);
+    const empty = await handleRequest(new Request(`${BASE}/caseworker`, { headers: { authorization: AUTH } }), store, files, config);
     expect(await empty.text()).toContain("No applications received yet");
 
     const cookie = await postHousehold(store, files, config);
@@ -778,21 +925,21 @@ describe("caseworker view", () => {
     );
     const confirmation = confirmationFrom(await submit.text());
 
-    const list = await handleRequest(new Request(`${BASE}/caseworker`), store, files, config);
+    const list = await handleRequest(new Request(`${BASE}/caseworker`, { headers: { authorization: AUTH } }), store, files, config);
     const listText = await list.text();
     expect(listText).toContain(confirmation);
     expect(listText).toContain("Maria Santos");
 
-    const detail = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}`), store, files, config);
+    const detail = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}`, { headers: { authorization: AUTH } }), store, files, config);
     expect(detail.status).toBe(200);
     expect(await detail.text()).toContain("42 Test Street");
 
-    const file = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}/file/0`), store, files, config);
+    const file = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}/file/0`, { headers: { authorization: AUTH } }), store, files, config);
     expect(file.status).toBe(200);
     expect(file.headers.get("content-type")).toBe("application/pdf");
     expect(await file.text()).toBe("fake-pdf-bytes");
 
-    const missing = await handleRequest(new Request(`${BASE}/caseworker/SR-00000000`), store, files, config);
+    const missing = await handleRequest(new Request(`${BASE}/caseworker/SR-00000000`, { headers: { authorization: AUTH } }), store, files, config);
     expect(missing.status).toBe(404);
   });
 });
@@ -828,9 +975,9 @@ describe("test system labels", () => {
     const submitText = await submit.text();
     const confirmation = confirmationFrom(submitText);
     expect(submitText).toContain(TEST_BANNER);
-    const list = await handleRequest(new Request(`${BASE}/caseworker`), store, files, config);
+    const list = await handleRequest(new Request(`${BASE}/caseworker`, { headers: { authorization: AUTH } }), store, files, config);
     expect(await list.text()).toContain(TEST_BANNER);
-    const detail = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}`), store, files, config);
+    const detail = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}`, { headers: { authorization: AUTH } }), store, files, config);
     expect(await detail.text()).toContain(TEST_BANNER);
     const timeout = await handleRequest(new Request(`${BASE}/apply/review`), store, files, config);
     expect(await timeout.text()).toContain(TEST_BANNER);
