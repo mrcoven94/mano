@@ -193,7 +193,7 @@ export function metasToDigests(files: FileMeta[]): FileDigest[] {
 
 /** Minimal surface of Durable Object SQLite storage, so tests never import cloudflare:workers. */
 export interface SqlStorage {
-  exec(query: string, ...params: unknown[]): { toArray(): unknown[]; rowsWritten: number };
+  exec(query: string, ...params: unknown[]): { toArray(): unknown[] };
 }
 
 export class PortalStoreSql implements Store {
@@ -346,7 +346,7 @@ export class PortalStoreSql implements Store {
 
   async purgeOldReceipts(olderThan: number): Promise<number> {
     this.ensureTables();
-    return this.sql.exec("DELETE FROM receipts WHERE received_at < ?", olderThan).rowsWritten;
+    return this.sql.exec("DELETE FROM receipts WHERE received_at < ? RETURNING key", olderThan).toArray().length;
   }
 
   async getSubmission(scope: string, key: string): Promise<Submission | null> {
@@ -425,10 +425,11 @@ export class PortalStoreSql implements Store {
         slowMs: input.slowMs,
         source: input.source,
       };
-      let written: number;
+      let inserted: unknown[];
       try {
-        written = this.sql.exec(
-          "INSERT INTO submissions (scope, key, confirmation, digest, applicant, file_count, data, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (scope, key) DO NOTHING",
+        // RETURNING reports the insert; a conflicting key returns no row.
+        inserted = this.sql.exec(
+          "INSERT INTO submissions (scope, key, confirmation, digest, applicant, file_count, data, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (scope, key) DO NOTHING RETURNING confirmation",
           submission.scope,
           submission.key,
           submission.confirmationNumber,
@@ -437,13 +438,13 @@ export class PortalStoreSql implements Store {
           submission.files.length,
           JSON.stringify(submission),
           submission.receivedAt,
-        ).rowsWritten;
+        ).toArray();
       } catch (err) {
         // Another row already owns this confirmation number; ours touched nothing.
         if (isConfirmationConflict(err)) continue;
         throw err;
       }
-      if (written === 1) {
+      if (inserted.length === 1) {
         // A retire that landed between our receipt check and this insert owns
         // the key; yield to it instead of filing a second confirmation.
         const raced = await this.getReceipt(input.scope, input.key);

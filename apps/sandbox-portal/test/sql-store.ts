@@ -8,15 +8,15 @@ export function makeSqlStore(): PortalStoreSql {
     exec: (query: string, ...params: unknown[]) => {
       if (params.length === 0 && query.split(";").filter((part) => part.trim()).length > 1) {
         db.exec(query);
-        return { toArray: () => [] as unknown[], rowsWritten: 0 };
+        return { toArray: () => [] as unknown[] };
       }
       const stmt = db.prepare(query);
       const args = params as Array<string | number | bigint | Buffer | null>;
-      if (/^\s*SELECT/i.test(query)) {
-        return { toArray: () => stmt.all(...args) as unknown[], rowsWritten: 0 };
+      if (/^\s*SELECT/i.test(query) || /RETURNING/i.test(query)) {
+        return { toArray: () => stmt.all(...args) as unknown[] };
       }
-      const info = stmt.run(...args);
-      return { toArray: () => [], rowsWritten: Number(info.changes) };
+      stmt.run(...args);
+      return { toArray: () => [] as unknown[] };
     },
   };
   return new PortalStoreSql(sql);
