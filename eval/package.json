@@ -9,5 +9,8 @@
     "freeze": "node src/cli-freeze.mjs",
     "baselines": "node src/cli-baselines.mjs",
     "check": "node --test test/eval.test.mjs"
+  },
+  "dependencies": {
+    "sharp": "^0.34.3"
   }
 }
