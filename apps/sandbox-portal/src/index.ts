@@ -1,3 +1,29 @@
+/**
+ * Sandbox portal: a fake state benefits portal that every Mano demo submits
+ * to. Mano never touches a real benefits site; it practices here.
+ *
+ * What it does: a three-step renewal application (household info, document
+ * uploads, review and submit) with a session timeout, confirmation numbers,
+ * and a deliberately old-looking design. Every submission carries an
+ * idempotency key scoped to the caller; GET /submissions/:key reports
+ * received (with the packet digest) or not_found, so the action gateway
+ * reconciles after a timeout instead of submitting twice. Slow mode stores
+ * first, then holds the response past the caller's timeout. /caseworker
+ * lists submissions for staff. Every page is labeled as a test system.
+ *
+ * Run it: pnpm install, then pnpm --filter @mano/sandbox-portal dev.
+ * Copy .env.example to .dev.vars to change timeouts and limits. The
+ * caseworker view and JSON API need SANDBOX_PORTAL_TOKEN (wrangler secret
+ * put); without it they stay off. Local dev uses local Durable Object and
+ * R2 storage; create the bucket with: wrangler r2 bucket create
+ * mano-sandbox-portal-files.
+ *
+ * Test it: pnpm --filter @mano/sandbox-portal check (tsc plus vitest
+ * against in-memory stores; no Cloudflare account needed).
+ *
+ * Deploy it: pushing to main deploys through the GitHub Action. The action
+ * needs CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and SANDBOX_PORTAL_TOKEN.
+ */
 import { handleRequest, runCleanup, type PortalConfig } from "./app";
 import { PortalStore } from "./durable";
 import { R2FileStore } from "./files";
