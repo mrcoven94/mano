@@ -32,6 +32,8 @@ export interface Submission {
   confirmationNumber: string;
   household: Household;
   files: StoredFile[];
+  /** SHA-256 of the canonical packet: household fields plus each file's bytes */
+  digest: string;
   status: SubmissionStatus;
   receivedAt: number;
   /** response was deliberately held this long (slow mode demo) */
@@ -39,10 +41,19 @@ export interface Submission {
   source: "web" | "api";
 }
 
+/** File identity inside a packet digest. Bytes are hashed, never embedded. */
+export interface FileDigest {
+  name: string;
+  type: string;
+  size: number;
+  sha256: string;
+}
+
 export interface SubmitInput {
   key: string;
   household: Household;
   files: StoredFile[];
+  digest: string;
   source: Submission["source"];
   slowMs: number;
   receivedAt: number;
@@ -50,7 +61,8 @@ export interface SubmitInput {
 
 export type SubmitResult =
   | { outcome: "stored"; submission: Submission }
-  | { outcome: "duplicate"; submission: Submission };
+  | { outcome: "duplicate"; submission: Submission }
+  | { outcome: "conflict"; stored: Submission };
 
 export interface Store {
   getSession(id: string): Promise<SessionData | null>;
@@ -99,6 +111,40 @@ export function fromBase64(data: string): Uint8Array {
   return out;
 }
 
+export async function sha256Hex(data: string | Uint8Array): Promise<string> {
+  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+  const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Canonical packet encoding. Field order is fixed so equal packets digest equally. */
+export function canonicalPacket(household: Household, files: FileDigest[]): string {
+  return JSON.stringify({
+    household: {
+      address: household.address,
+      dateOfBirth: household.dateOfBirth,
+      fullName: household.fullName,
+      householdSize: household.householdSize,
+      monthlyIncome: household.monthlyIncome,
+      phone: household.phone,
+    },
+    files: files.map((f) => ({ name: f.name, type: f.type, size: f.size, sha256: f.sha256 })),
+  });
+}
+
+export async function packetDigest(household: Household, files: FileDigest[]): Promise<string> {
+  return sha256Hex(canonicalPacket(household, files));
+}
+
+/** Hash the bytes of base64-carried files for the packet digest. */
+export async function digestStoredFiles(files: StoredFile[]): Promise<FileDigest[]> {
+  const out: FileDigest[] = [];
+  for (const f of files) {
+    out.push({ name: f.name, type: f.type, size: f.size, sha256: await sha256Hex(fromBase64(f.data)) });
+  }
+  return out;
+}
+
 /** Minimal surface of Durable Object SQLite storage, so tests never import cloudflare:workers. */
 export interface SqlStorage {
   exec(query: string, ...params: unknown[]): { toArray(): unknown[]; rowsWritten: number };
@@ -123,6 +169,7 @@ export class PortalStoreSql implements Store {
       CREATE TABLE IF NOT EXISTS submissions (
         key TEXT PRIMARY KEY,
         confirmation TEXT NOT NULL UNIQUE,
+        digest TEXT NOT NULL,
         data TEXT NOT NULL,
         received_at INTEGER NOT NULL
       );
@@ -178,6 +225,7 @@ export class PortalStoreSql implements Store {
         confirmationNumber: newConfirmationNumber(),
         household: input.household,
         files: input.files,
+        digest: input.digest,
         status: "received",
         receivedAt: input.receivedAt,
         slowMs: input.slowMs,
@@ -186,9 +234,10 @@ export class PortalStoreSql implements Store {
       let written: number;
       try {
         written = this.sql.exec(
-          "INSERT INTO submissions (key, confirmation, data, received_at) VALUES (?, ?, ?, ?) ON CONFLICT (key) DO NOTHING",
+          "INSERT INTO submissions (key, confirmation, digest, data, received_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (key) DO NOTHING",
           submission.key,
           submission.confirmationNumber,
+          submission.digest,
           JSON.stringify(submission),
           submission.receivedAt,
         ).rowsWritten;
@@ -199,7 +248,9 @@ export class PortalStoreSql implements Store {
       }
       if (written === 1) return { outcome: "stored", submission };
       const existing = await this.getSubmission(input.key);
-      if (existing) return { outcome: "duplicate", submission: existing };
+      if (!existing) continue;
+      if (existing.digest === input.digest) return { outcome: "duplicate", submission: existing };
+      return { outcome: "conflict", stored: existing };
     }
     throw new Error("could not file the submission");
   }

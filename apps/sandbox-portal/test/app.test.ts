@@ -222,6 +222,55 @@ describe("idempotency", () => {
     expect((await store.listSubmissions(10)).length).toBe(1);
   });
 
+  test("a different packet under an existing key returns 409 with the received digest", async () => {
+    const store = new MemoryStore();
+    const config = testConfig();
+    const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
+    const post = (household: typeof HOUSEHOLD) =>
+      handleRequest(
+        new Request(`${BASE}/submissions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ key: "conflict-key", household, files: [file] }),
+        }),
+        store,
+        config,
+      );
+    const first = (await (await post(HOUSEHOLD)).json()) as Record<string, unknown>;
+    const retry = await post({ ...HOUSEHOLD, monthlyIncome: "9999" });
+    expect(retry.status).toBe(409);
+    const body = (await retry.json()) as { received: { confirmationNumber: string; digest: string } };
+    expect(body.received.confirmationNumber).toBe(first["confirmationNumber"]);
+    expect(body.received.digest).toBe(first["digest"]);
+    expect((await store.listSubmissions(10)).length).toBe(1);
+  });
+
+  test("the receipt carries the digest the gateway can prove", async () => {
+    const store = new MemoryStore();
+    const config = testConfig();
+    const submit = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          key: "digest-key",
+          household: HOUSEHOLD,
+          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") }],
+        }),
+      }),
+      store,
+      config,
+    );
+    const submitted = (await submit.json()) as Record<string, string>;
+    expect(submitted["digest"]).toMatch(/^[0-9a-f]{64}$/);
+    const receipt = (await (await handleRequest(new Request(`${BASE}/submissions/digest-key`), store, config)).json()) as Record<
+      string,
+      string
+    >;
+    expect(receipt["digest"]).toBe(submitted["digest"]);
+    expect(receipt["confirmationNumber"]).toBe(submitted["confirmationNumber"]);
+  });
+
   test("a submission without a key is rejected", async () => {
     const store = new MemoryStore();
     const res = await handleRequest(

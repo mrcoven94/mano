@@ -29,7 +29,10 @@ export class MemoryStore implements Store {
   async submit(input: SubmitInput): Promise<SubmitResult> {
     // Check and insert with no await between, so concurrent callers cannot interleave.
     const existing = this.submissions.get(input.key);
-    if (existing) return { outcome: "duplicate", submission: structuredClone(existing) };
+    if (existing) {
+      if (existing.digest === input.digest) return { outcome: "duplicate", submission: structuredClone(existing) };
+      return { outcome: "conflict", stored: structuredClone(existing) };
+    }
     let confirmationNumber = newConfirmationNumber();
     while (this.byConfirmation.has(confirmationNumber)) confirmationNumber = newConfirmationNumber();
     const submission: Submission = {
@@ -37,6 +40,7 @@ export class MemoryStore implements Store {
       confirmationNumber,
       household: structuredClone(input.household),
       files: structuredClone(input.files),
+      digest: input.digest,
       status: "received",
       receivedAt: input.receivedAt,
       slowMs: input.slowMs,

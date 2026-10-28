@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { Household, StoredFile, SubmitInput } from "../src/store";
+import { canonicalPacket, packetDigest, sha256Hex, type Household, type StoredFile, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
 import { MemoryStore } from "./memory-store";
 import { makeSqlStore } from "./sql-store";
 
@@ -14,8 +14,13 @@ const HOUSEHOLD: Household = {
 
 const FILES: StoredFile[] = [{ name: "paystub.pdf", type: "application/pdf", size: 14, data: "ZmFrZS1wZGYtYnl0ZXM=" }];
 
-function input(key: string, household: Household = HOUSEHOLD): SubmitInput {
-  return { key, household, files: FILES, source: "api", slowMs: 0, receivedAt: Date.now() };
+function input(key: string, digest = "digest-a", household: Household = HOUSEHOLD): SubmitInput {
+  return { key, household, files: FILES, digest, source: "api", slowMs: 0, receivedAt: Date.now() };
+}
+
+function filed(result: SubmitResult): Submission {
+  if (result.outcome === "conflict") throw new Error("unexpected conflict");
+  return result.submission;
 }
 
 describe("blocker 1: atomic submit", () => {
@@ -24,19 +29,19 @@ describe("blocker 1: atomic submit", () => {
     const results = await Promise.all(Array.from({ length: 50 }, () => store.submit(input("race-key"))));
     expect(results.filter((r) => r.outcome === "stored")).toHaveLength(1);
     expect(results.filter((r) => r.outcome === "duplicate")).toHaveLength(49);
-    const confirmations = new Set(results.map((r) => r.submission.confirmationNumber));
+    const confirmations = new Set(results.map((r) => filed(r).confirmationNumber));
     expect(confirmations.size).toBe(1);
     expect((await store.listSubmissions(10)).length).toBe(1);
   });
 
   test("MemoryStore: a second packet under the same key never overwrites the receipt", async () => {
     const store = new MemoryStore();
-    const first = await store.submit(input("same-key", HOUSEHOLD));
-    const second = await store.submit(input("same-key", { ...HOUSEHOLD, fullName: "Somebody Else" }));
+    const first = await store.submit(input("same-key", "digest-a", HOUSEHOLD));
+    const second = await store.submit(input("same-key", "digest-a", { ...HOUSEHOLD, fullName: "Somebody Else" }));
     expect(first.outcome).toBe("stored");
     expect(second.outcome).toBe("duplicate");
-    expect(second.submission.household.fullName).toBe("Maria Santos");
-    expect(second.submission.confirmationNumber).toBe(first.submission.confirmationNumber);
+    expect(filed(second).household.fullName).toBe("Maria Santos");
+    expect(filed(second).confirmationNumber).toBe(filed(first).confirmationNumber);
   });
 
   test("MemoryStore: confirmation numbers are unique", async () => {
@@ -44,6 +49,7 @@ describe("blocker 1: atomic submit", () => {
     const confirmations = new Set<string>();
     for (let i = 0; i < 50; i++) {
       const result = await store.submit(input(`key-${i}`));
+      if (result.outcome !== "stored") throw new Error("expected stored");
       confirmations.add(result.submission.confirmationNumber);
     }
     expect(confirmations.size).toBe(50);
@@ -51,14 +57,14 @@ describe("blocker 1: atomic submit", () => {
 
   test("SQLite store: first writer wins, receipt is never replaced", async () => {
     const store = makeSqlStore();
-    const first = await store.submit(input("race-key", HOUSEHOLD));
+    const first = await store.submit(input("race-key", "digest-a", HOUSEHOLD));
     expect(first.outcome).toBe("stored");
-    const second = await store.submit(input("race-key", { ...HOUSEHOLD, fullName: "Somebody Else" }));
+    const second = await store.submit(input("race-key", "digest-a", { ...HOUSEHOLD, fullName: "Somebody Else" }));
     expect(second.outcome).toBe("duplicate");
-    expect(second.submission.confirmationNumber).toBe(first.submission.confirmationNumber);
+    expect(filed(second).confirmationNumber).toBe(filed(first).confirmationNumber);
     const peeked = await store.getSubmission("race-key");
     expect(peeked?.household.fullName).toBe("Maria Santos");
-    expect(peeked?.confirmationNumber).toBe(first.submission.confirmationNumber);
+    expect(peeked?.confirmationNumber).toBe(filed(first).confirmationNumber);
     expect((await store.listSubmissions(10)).length).toBe(1);
   });
 
@@ -67,8 +73,53 @@ describe("blocker 1: atomic submit", () => {
     const confirmations = new Set<string>();
     for (let i = 0; i < 25; i++) {
       const result = await store.submit(input(`key-${i}`));
+      if (result.outcome === "conflict") throw new Error("unexpected conflict");
       confirmations.add(result.submission.confirmationNumber);
     }
     expect(confirmations.size).toBe(25);
+  });
+});
+
+describe("blocker 2: packet digest", () => {
+  const fileDigests = [{ name: "paystub.pdf", type: "application/pdf", size: 14, sha256: "abc" }];
+
+  test("equal packets digest equally, any change digests differently", async () => {
+    const a = await packetDigest(HOUSEHOLD, fileDigests);
+    const b = await packetDigest({ ...HOUSEHOLD }, [...fileDigests]);
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    const changedHousehold = await packetDigest({ ...HOUSEHOLD, monthlyIncome: "2401" }, fileDigests);
+    expect(changedHousehold).not.toBe(a);
+    const changedBytes = await packetDigest(HOUSEHOLD, [{ ...fileDigests[0]!, sha256: "abd" }]);
+    expect(changedBytes).not.toBe(a);
+    expect(canonicalPacket(HOUSEHOLD, fileDigests)).toContain('"fullName":"Maria Santos"');
+    expect(await sha256Hex("mano")).toHaveLength(64);
+  });
+
+  test("MemoryStore: same key and digest duplicates, different digest conflicts", async () => {
+    const store = new MemoryStore();
+    const first = await store.submit(input("k", "digest-a"));
+    expect(first.outcome).toBe("stored");
+    const dup = await store.submit(input("k", "digest-a"));
+    expect(dup.outcome).toBe("duplicate");
+    const conflict = await store.submit(input("k", "digest-b"));
+    expect(conflict.outcome).toBe("conflict");
+    if (conflict.outcome !== "conflict") throw new Error("expected a conflict");
+    if (first.outcome !== "stored") throw new Error("expected stored");
+    expect(conflict.stored.confirmationNumber).toBe(first.submission.confirmationNumber);
+    expect(conflict.stored.digest).toBe("digest-a");
+  });
+
+  test("SQLite store: same key and digest duplicates, different digest conflicts", async () => {
+    const store = makeSqlStore();
+    const first = await store.submit(input("k", "digest-a"));
+    expect(first.outcome).toBe("stored");
+    const dup = await store.submit(input("k", "digest-a"));
+    expect(dup.outcome).toBe("duplicate");
+    const conflict = await store.submit(input("k", "digest-b"));
+    expect(conflict.outcome).toBe("conflict");
+    if (conflict.outcome !== "conflict") throw new Error("expected a conflict");
+    expect(conflict.stored.digest).toBe("digest-a");
+    expect((await store.listSubmissions(10)).length).toBe(1);
   });
 });

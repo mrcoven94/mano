@@ -1,6 +1,8 @@
 import {
+  digestStoredFiles,
   fromBase64,
   newId,
+  packetDigest,
   toBase64,
   type Household,
   type SessionData,
@@ -185,11 +187,28 @@ function submissionJson(sub: Submission, duplicate: boolean): Response {
       key: sub.key,
       status: sub.status,
       confirmationNumber: sub.confirmationNumber,
+      digest: sub.digest,
       receivedAt: sub.receivedAt,
       receivedAtIso: new Date(sub.receivedAt).toISOString(),
       duplicate,
     },
     200,
+  );
+}
+
+function conflictJson(stored: Submission): Response {
+  return json(
+    {
+      error: "This key already filed a different application. Use a new key for a new application.",
+      key: stored.key,
+      received: {
+        confirmationNumber: stored.confirmationNumber,
+        digest: stored.digest,
+        receivedAt: stored.receivedAt,
+        receivedAtIso: new Date(stored.receivedAt).toISOString(),
+      },
+    },
+    409,
   );
 }
 
@@ -283,14 +302,29 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
   }
 
   const slowMs = resolveSlowMs(url, fields, config);
+  const digest = await packetDigest(household, await digestStoredFiles(files));
   const result = await store.submit({
     key,
     household,
     files,
+    digest,
     source,
     slowMs,
     receivedAt: nowMs(config),
   });
+  if (result.outcome === "conflict") {
+    const stored = result.stored;
+    if (isJson || wantsJson(request)) return conflictJson(stored);
+    return html(
+      errorPage(
+        "Key already used",
+        `This key already filed a different application (confirmation ${stored.confirmationNumber}). Start a new application for new details.`,
+        "/apply",
+        "Start a new application",
+      ),
+      409,
+    );
+  }
   const duplicate = result.outcome === "duplicate";
 
   if (session) await store.deleteSession(session.id);
@@ -378,6 +412,7 @@ export async function handleRequest(request: Request, store: Store, config: Port
       key: sub.key,
       status: sub.status,
       confirmationNumber: sub.confirmationNumber,
+      digest: sub.digest,
       receivedAt: sub.receivedAt,
       receivedAtIso: new Date(sub.receivedAt).toISOString(),
     });
