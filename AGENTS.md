@@ -79,3 +79,19 @@ This repository is public and MIT licensed. Build every part so a stranger can r
 - Commit as `7089067+mrcoven94@users.noreply.github.com`. If you are Muse Code, keep your own co-author trailer. Never add a trailer for a tool that did not write the change.
 - Tests with every change to the gateway, the protocol or anything that sends. `pnpm check` must pass before a pull request.
 - Put the Linear ticket ID (LAP-xxx) in the branch name and pull request title. When you finish, move the ticket to In Review with the preview URL.
+
+## How work ships
+
+We follow pstack's delivery standard and use a small set of shared agent skills. Skills live on David's machine at `~/.agents/skills/<name>/SKILL.md` (also in `~/.claude/skills` and `~/.codex/skills`); read the named skill before the step it covers. Contributors without them follow the rules below as written.
+
+1. **Define the unit before editing.** In the pull request description, state the smallest piece that can be verified on its own: its data shape, its states, what happens on failure, and the checks that will prove it works. Stop adding scope once that unit works.
+2. **Prove behavior with tests.** Test first where the brief specifies behavior (`tdd`). For a bug, reproduce it with a failing test before fixing it (`diagnosing-bugs`). Test the real path: a seeded fake or a manually called handler does not prove a recovery, a retry or an alarm works.
+3. **Make retries safe.** Check partial failure, duplicate events, stale reads, ownership boundaries and what happens on restart, for anything that stores, sends or spends.
+4. **File the pull request so a reviewer can trust it** (`file-pr`): lead with the problem, then what changed, then exactly what was verified and where (unit test, real-path test, local Worker, preview, production URL). Say plainly what was not verified.
+5. **Watch your own pull request** (`babysit-pr`): fix real CI failures and real review findings, rebase when main moves, and reply on the pull request (`leaving-pr-comments`). Do not merge; the architect reviews and merges.
+6. **Docs ship in the same change**: a header comment in the entry file, a short section of the root README.md when usage changes, and `docs/decisions.md` for a decision. No new Markdown files (hard rule 12).
+7. **Done means live.** A pushed branch is a backup and a green build is not delivery. Deploys happen through GitHub on merge; after a deploy, check the production URL and report the status code or screenshot.
+8. **Hand off at a boundary** (`handoff`): when context runs long or a phase ends, post the handoff (branch, commit, decisions, evidence, next step) as a pull request comment, never as a file.
+9. **When a brief is unclear,** question it against the code and docs first (`grill-with-docs`), then ask the architect in one pull request comment instead of guessing.
+
+Reviews from other models (`council`, `sol-loop`) and merge loops (`full-send`, `full-stop`) are run by the architect, not by build sessions.
