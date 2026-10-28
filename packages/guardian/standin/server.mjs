@@ -1,9 +1,10 @@
-// Stand-in for the guardian model endpoint. Speaks just enough of the
-// OpenAI chat completions API to exercise GlimmerChecker locally with no GPU
-// and no keys. Scripted by flags; request bodies are never logged.
+// Stand-in for the guardian model endpoint. Serves the single POST /check
+// route with scripted verdicts so GlimmerChecker runs end to end locally
+// with no GPU and no keys. Request bodies are never logged.
 //
 // Usage:
-//   node standin/server.mjs [--port N] [--mode pass|fix|block|bad-json|error|slow]
+//   node standin/server.mjs [--port N]
+//     [--mode pass|fix|block|bad-json|error|slow|contradictory|dup-keys]
 //     [--require-token TOKEN] [--delay-ms N]
 //
 // Prints "STANDIN_READY <url>" on stdout once listening.
@@ -20,17 +21,23 @@ const mode = flag("--mode", "pass");
 const requireToken = flag("--require-token", "stand-in-token");
 const delayMs = Number(flag("--delay-ms", "30000"));
 
+const META = {
+  model: { id: "stand-in", revision: "none" },
+  image: { tag: "none", digest: "none" },
+};
+
 const VERDICTS = {
   pass: { verdict: "pass", problems: [] },
   fix: { verdict: "fix", problems: ["State the exact amount before sending."] },
   block: { verdict: "block", problems: ["The recipient looks wrong."] },
+  contradictory: { verdict: "pass", problems: ["Wrong recipient"] },
 };
 
 const server = http.createServer((req, res) => {
   // Drain the body without logging it; it may hold resident content.
   req.resume();
   req.on("end", () => {
-    if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+    if (req.method !== "POST" || req.url !== "/check") {
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "not found" }));
       return;
@@ -48,21 +55,27 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ error: "stand-in error" }));
       return;
     }
+    const answer = () => {
+      if (mode === "slow") {
+        return JSON.stringify({ ...VERDICTS.pass, ...META });
+      }
+      if (mode === "bad-json") {
+        return "this is not json";
+      }
+      if (mode === "dup-keys") {
+        return '{"verdict":"pass","problems":[],"verdict":"pass"}';
+      }
+      return JSON.stringify({ ...(VERDICTS[mode] ?? VERDICTS.pass), ...META });
+    };
+    const send = () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(answer());
+    };
     if (mode === "slow") {
-      setTimeout(() => {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            choices: [{ message: { content: JSON.stringify(VERDICTS.pass) } }],
-          }),
-        );
-      }, delayMs);
+      setTimeout(send, delayMs);
       return;
     }
-    const content =
-      mode === "bad-json" ? "this is not json" : JSON.stringify(VERDICTS[mode] ?? VERDICTS.pass);
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ choices: [{ message: { content } }] }));
+    send();
   });
 });
 

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   GlimmerChecker,
+  MisconfiguredChecker,
   glimmerCheckerFromEnv,
 } from "../src/glimmer.js";
+import { RulesChecker } from "../src/rules.js";
 import type { CheckInput } from "../src/types.js";
 
 function passInput(): CheckInput {
@@ -11,14 +13,18 @@ function passInput(): CheckInput {
       type: "send",
       recipient: "Sunset Clinic",
       purpose: "Appointment letter",
-      payload: { claims: ["Ana Ruiz has an appointment on Friday."] },
+      payload: {
+        to: "Sunset Clinic",
+        body: "Ana Ruiz has an appointment on Friday. Reach her at ana.ruiz@example.com.",
+      },
       documentHash: null,
     },
     sources: [
       {
         kind: "message",
         id: "m1",
-        quote: "Ana Ruiz has an appointment on Friday.",
+        quote:
+          "Ana Ruiz has an appointment on Friday. Reach her at ana.ruiz@example.com.",
       },
     ],
     consents: [{ recipient: "Sunset Clinic", purpose: "Appointment letter" }],
@@ -39,18 +45,20 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function completion(content: string): unknown {
-  return { choices: [{ message: { content } }] };
-}
+const SERVER = {
+  model: { id: "stand-in", revision: "none" },
+  image: { tag: "none", digest: "none" },
+};
 
 describe("GlimmerChecker", () => {
-  it("returns the model verdict when the rules pass", async () => {
+  it("posts redacted input to the single route", async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse(completion('{"verdict": "pass", "problems": []}')),
+      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
     );
     const checker = new GlimmerChecker({
       url: "https://guardian.example.com",
       token: "token",
+      proxyAuth: { keyId: "key", secret: "secret" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     const result = await checker.check(passInput());
@@ -60,39 +68,136 @@ describe("GlimmerChecker", () => {
       string,
       RequestInit,
     ];
-    expect(calledUrl).toBe(
-      "https://guardian.example.com/v1/chat/completions",
-    );
+    expect(calledUrl).toBe("https://guardian.example.com/check");
+    expect(init.method).toBe("POST");
     expect(init.headers).toMatchObject({
       Authorization: "Bearer token",
       "Content-Type": "application/json",
+      "Modal-Key": "key",
+      "Modal-Secret": "secret",
     });
-    const body = JSON.parse(init.body as string) as Record<string, unknown>;
-    expect(body["response_format"]).toEqual({ type: "json_object" });
-    expect(body["temperature"]).toBe(0);
+    const sent = init.body as string;
+    expect(sent).not.toContain("ana.ruiz@example.com");
+    expect(sent).not.toContain("Sunset Clinic");
+    expect(sent).toContain("[EMAIL-1]");
+    expect(sent).toContain("[RECIPIENT]");
   });
 
-  it("passes through a fix verdict with its problems", async () => {
+  it("redacts known names before sending", async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse(
-        completion('{"verdict": "fix", "problems": ["State the exact date."]}'),
-      ),
+      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
+    );
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      knownEntities: { names: ["Ana Ruiz"] },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await checker.check(passInput());
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body as string).not.toContain("Ana Ruiz");
+  });
+
+  it("passes fix and block verdicts through", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        verdict: "fix",
+        problems: ["State the exact date."],
+        ...SERVER,
+      }),
     );
     const checker = new GlimmerChecker({
       url: "https://guardian.example.com/",
       token: "token",
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    const result = await checker.check(passInput());
-    expect(result).toEqual({
+    await expect(checker.check(passInput())).resolves.toEqual({
       verdict: "fix",
       problems: ["State the exact date."],
     });
   });
 
+  it("records the server model and image from the answer", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
+    );
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(checker.serverInfo).toBeNull();
+    await checker.check(passInput());
+    expect(checker.serverInfo).toEqual(SERVER);
+  });
+
+  it("ignores malformed server metadata but keeps the verdict", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ verdict: "pass", problems: [], model: "x" }),
+    );
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(checker.check(passInput())).resolves.toEqual({
+      verdict: "pass",
+      problems: [],
+    });
+    expect(checker.serverInfo).toBeNull();
+  });
+
+  it("blocks a pass that carries problems", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ verdict: "pass", problems: ["Wrong recipient"], ...SERVER }),
+    );
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await checker.check(passInput());
+    expect(result.verdict).toBe("block");
+    expect(result.problems.join(" ")).toMatch(/contradicted/);
+  });
+
+  it("blocks fix and block verdicts with no problems", async () => {
+    for (const verdict of ["fix", "block"]) {
+      const fetchImpl = vi.fn(async () =>
+        jsonResponse({ verdict, problems: [], ...SERVER }),
+      );
+      const checker = new GlimmerChecker({
+        url: "https://guardian.example.com",
+        token: "token",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      const result = await checker.check(passInput());
+      expect(result.verdict).toBe("block");
+      expect(result.problems.join(" ")).toMatch(/contradicted/);
+    }
+  });
+
+  it("blocks duplicated verdict keys", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response('{"verdict":"pass","problems":[],"verdict":"pass"}', {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await checker.check(passInput());
+    expect(result.verdict).toBe("block");
+    expect(result.problems.join(" ")).toMatch(/could not understand/);
+  });
+
   it("does not call the model when the rules already block", async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse(completion('{"verdict": "pass", "problems": []}')),
+      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
     );
     const checker = new GlimmerChecker({
       url: "https://guardian.example.com",
@@ -103,6 +208,7 @@ describe("GlimmerChecker", () => {
     expect(result.verdict).toBe("block");
     expect(result.problems.join(" ")).toMatch(/not from the person/);
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(checker.serverInfo).toBeNull();
   });
 
   it("blocks when the endpoint is down", async () => {
@@ -132,28 +238,6 @@ describe("GlimmerChecker", () => {
     const result = await checker.check(passInput());
     expect(result.verdict).toBe("block");
     expect(result.problems.join(" ")).toMatch(/timed out after 10 seconds/);
-  });
-
-  it("aborts the request after the configured timeout", async () => {
-    const fetchImpl = vi.fn(
-      async (_url: unknown, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => {
-            reject(
-              new DOMException("The operation timed out.", "TimeoutError"),
-            );
-          });
-        }),
-    );
-    const checker = new GlimmerChecker({
-      url: "https://guardian.example.com",
-      token: "token",
-      timeoutMs: 50,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-    const result = await checker.check(passInput());
-    expect(result.verdict).toBe("block");
-    expect(result.problems.join(" ")).toMatch(/timed out/);
   });
 
   it("blocks on an error status", async () => {
@@ -186,23 +270,9 @@ describe("GlimmerChecker", () => {
     expect(result.problems.join(" ")).toMatch(/could not understand/);
   });
 
-  it("blocks when the model answer is not strict JSON", async () => {
-    const fetchImpl = vi.fn(async () =>
-      jsonResponse(completion("looks fine to me")),
-    );
-    const checker = new GlimmerChecker({
-      url: "https://guardian.example.com",
-      token: "token",
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-    const result = await checker.check(passInput());
-    expect(result.verdict).toBe("block");
-    expect(result.problems.join(" ")).toMatch(/could not understand/);
-  });
-
   it("blocks when the verdict value is invalid", async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse(completion('{"verdict": "maybe", "problems": []}')),
+      jsonResponse({ verdict: "maybe", problems: [] }),
     );
     const checker = new GlimmerChecker({
       url: "https://guardian.example.com",
@@ -220,6 +290,7 @@ describe("GlimmerChecker", () => {
     const checker = new GlimmerChecker({
       url: "https://guardian.example.com",
       token: "token",
+      proxyAuth: { keyId: "key", secret: "secret" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     const results = await Promise.all([
@@ -235,17 +306,36 @@ describe("GlimmerChecker", () => {
 });
 
 describe("glimmerCheckerFromEnv", () => {
-  it("returns null when no endpoint is configured", () => {
-    expect(glimmerCheckerFromEnv({})).toBeNull();
+  it("returns rules only when explicitly asked", () => {
+    expect(glimmerCheckerFromEnv({ MANO_GUARDIAN_RULES_ONLY: "1" })).toBeInstanceOf(
+      RulesChecker,
+    );
     expect(
-      glimmerCheckerFromEnv({ MANO_GUARDIAN_URL: "https://x.example.com" }),
-    ).toBeNull();
+      glimmerCheckerFromEnv({ MANO_GUARDIAN_RULES_ONLY: "true" }),
+    ).toBeInstanceOf(RulesChecker);
   });
 
-  it("builds a checker from the environment", () => {
+  it("returns a blocking checker when the endpoint is half configured", async () => {
+    const inputs = [
+      {},
+      { MANO_GUARDIAN_URL: "https://x.example.com" },
+      { MANO_GUARDIAN_TOKEN: "token" },
+      { MANO_GUARDIAN_URL: "https://x.example.com", MANO_GUARDIAN_TOKEN: "  " },
+    ];
+    for (const env of inputs) {
+      const checker = glimmerCheckerFromEnv(env);
+      expect(checker).toBeInstanceOf(MisconfiguredChecker);
+      const result = await checker.check(passInput());
+      expect(result.verdict).toBe("block");
+    }
+  });
+
+  it("builds a model checker from a full configuration", () => {
     const checker = glimmerCheckerFromEnv({
       MANO_GUARDIAN_URL: "https://x.example.com",
       MANO_GUARDIAN_TOKEN: "token",
+      MANO_GUARDIAN_KEY_ID: "key",
+      MANO_GUARDIAN_KEY_SECRET: "secret",
     });
     expect(checker).toBeInstanceOf(GlimmerChecker);
   });

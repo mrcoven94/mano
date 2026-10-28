@@ -64,6 +64,22 @@ describe("GlimmerChecker against the local stand-in", () => {
     expect(fixResult.problems.length).toBeGreaterThan(0);
   });
 
+  it("blocks a contradictory answer", async () => {
+    const url = await startStandin("contradictory");
+    const checker = new GlimmerChecker({ url, token: TOKEN });
+    const result = await checker.check(passInput());
+    expect(result.verdict).toBe("block");
+    expect(result.problems.join(" ")).toMatch(/contradicted/);
+  });
+
+  it("blocks duplicated verdict keys", async () => {
+    const url = await startStandin("dup-keys");
+    const checker = new GlimmerChecker({ url, token: TOKEN });
+    const result = await checker.check(passInput());
+    expect(result.verdict).toBe("block");
+    expect(result.problems.join(" ")).toMatch(/could not understand/);
+  });
+
   it("blocks when the token is wrong", async () => {
     const url = await startStandin("pass");
     const checker = new GlimmerChecker({ url, token: "wrong-token" });
