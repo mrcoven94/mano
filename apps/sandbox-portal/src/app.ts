@@ -2,7 +2,6 @@ import {
   fromBase64,
   newId,
   toBase64,
-  uniqueConfirmationNumber,
   type Household,
   type SessionData,
   type StoredFile,
@@ -259,12 +258,6 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
     return isJson || wantsJson(request) ? json({ error: message }, 400) : html(errorPage("Bad key", message, "/apply/review", "Back to review"), 400);
   }
 
-  const existing = await store.getSubmission(key);
-  if (existing) {
-    if (isJson || wantsJson(request)) return submissionJson(existing, true);
-    return html(confirmationPage(existing, true));
-  }
-
   let household: Household | undefined;
   let files: StoredFile[] = [];
   let source: Submission["source"] = "web";
@@ -290,24 +283,22 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
   }
 
   const slowMs = resolveSlowMs(url, fields, config);
-  const submission: Submission = {
+  const result = await store.submit({
     key,
-    confirmationNumber: await uniqueConfirmationNumber(store),
     household,
     files,
-    status: "received",
-    receivedAt: nowMs(config),
-    slowMs,
     source,
-  };
-  await store.putSubmission(submission);
+    slowMs,
+    receivedAt: nowMs(config),
+  });
+  const duplicate = result.outcome === "duplicate";
 
   if (session) await store.deleteSession(session.id);
 
-  if (slowMs > 0) await sleep(slowMs);
+  if (slowMs > 0 && !duplicate) await sleep(slowMs);
 
-  if (isJson || wantsJson(request)) return submissionJson(submission, false);
-  return html(confirmationPage(submission, false));
+  if (isJson || wantsJson(request)) return submissionJson(result.submission, duplicate);
+  return html(confirmationPage(result.submission, duplicate));
 }
 
 export async function handleRequest(request: Request, store: Store, config: PortalConfig): Promise<Response> {

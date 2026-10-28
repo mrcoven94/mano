@@ -39,13 +39,30 @@ export interface Submission {
   source: "web" | "api";
 }
 
+export interface SubmitInput {
+  key: string;
+  household: Household;
+  files: StoredFile[];
+  source: Submission["source"];
+  slowMs: number;
+  receivedAt: number;
+}
+
+export type SubmitResult =
+  | { outcome: "stored"; submission: Submission }
+  | { outcome: "duplicate"; submission: Submission };
+
 export interface Store {
   getSession(id: string): Promise<SessionData | null>;
   putSession(session: SessionData): Promise<void>;
   deleteSession(id: string): Promise<void>;
   getSubmission(key: string): Promise<Submission | null>;
   getSubmissionByConfirmation(confirmation: string): Promise<Submission | null>;
-  putSubmission(submission: Submission): Promise<void>;
+  /**
+   * File one submission atomically. The first writer for a key wins; a later
+   * submit under the same key gets the stored winner back, never overwrites it.
+   */
+  submit(input: SubmitInput): Promise<SubmitResult>;
   listSubmissions(limit: number): Promise<Submission[]>;
 }
 
@@ -64,12 +81,9 @@ export function newConfirmationNumber(): string {
   return `SR-${chars.join("")}`;
 }
 
-export async function uniqueConfirmationNumber(store: Store): Promise<string> {
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const candidate = newConfirmationNumber();
-    if ((await store.getSubmissionByConfirmation(candidate)) === null) return candidate;
-  }
-  throw new Error("could not mint a unique confirmation number");
+function isConfirmationConflict(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("submissions.confirmation");
 }
 
 export function toBase64(bytes: Uint8Array): string {
@@ -87,7 +101,7 @@ export function fromBase64(data: string): Uint8Array {
 
 /** Minimal surface of Durable Object SQLite storage, so tests never import cloudflare:workers. */
 export interface SqlStorage {
-  exec(query: string, ...params: unknown[]): { toArray(): unknown[] };
+  exec(query: string, ...params: unknown[]): { toArray(): unknown[]; rowsWritten: number };
 }
 
 export class PortalStoreSql implements Store {
@@ -156,15 +170,38 @@ export class PortalStoreSql implements Store {
     return row ? (JSON.parse(row.data) as Submission) : null;
   }
 
-  async putSubmission(submission: Submission): Promise<void> {
+  async submit(input: SubmitInput): Promise<SubmitResult> {
     this.ensureTables();
-    this.sql.exec(
-      "INSERT OR REPLACE INTO submissions (key, confirmation, data, received_at) VALUES (?, ?, ?, ?)",
-      submission.key,
-      submission.confirmationNumber,
-      JSON.stringify(submission),
-      submission.receivedAt,
-    );
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const submission: Submission = {
+        key: input.key,
+        confirmationNumber: newConfirmationNumber(),
+        household: input.household,
+        files: input.files,
+        status: "received",
+        receivedAt: input.receivedAt,
+        slowMs: input.slowMs,
+        source: input.source,
+      };
+      let written: number;
+      try {
+        written = this.sql.exec(
+          "INSERT INTO submissions (key, confirmation, data, received_at) VALUES (?, ?, ?, ?) ON CONFLICT (key) DO NOTHING",
+          submission.key,
+          submission.confirmationNumber,
+          JSON.stringify(submission),
+          submission.receivedAt,
+        ).rowsWritten;
+      } catch (err) {
+        // Another row already owns this confirmation number; ours touched nothing.
+        if (isConfirmationConflict(err)) continue;
+        throw err;
+      }
+      if (written === 1) return { outcome: "stored", submission };
+      const existing = await this.getSubmission(input.key);
+      if (existing) return { outcome: "duplicate", submission: existing };
+    }
+    throw new Error("could not file the submission");
   }
 
   async listSubmissions(limit: number): Promise<Submission[]> {

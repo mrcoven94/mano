@@ -130,29 +130,54 @@ describe("idempotency", () => {
   test("resubmitting a key returns the original confirmation, no duplicate", async () => {
     const store = new MemoryStore();
     const config = testConfig();
-    const cookie = await postHousehold(store, config);
-    await postDocuments(store, config, cookie);
-    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
-    const key = keyFromReview(await review.text());
+    const packet = {
+      key: "resubmit-key",
+      household: HOUSEHOLD,
+      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") }],
+    };
+    const post = () =>
+      handleRequest(
+        new Request(`${BASE}/submissions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(packet),
+        }),
+        store,
+        config,
+      );
+    const first = (await (await post()).json()) as Record<string, unknown>;
+    expect(first["duplicate"]).toBe(false);
+    const second = (await (await post()).json()) as Record<string, unknown>;
+    expect(second["duplicate"]).toBe(true);
+    expect(second["confirmationNumber"]).toBe(first["confirmationNumber"]);
+    expect((await store.listSubmissions(10)).length).toBe(1);
+  });
 
-    const submitForm = new URLSearchParams();
-    submitForm.set("key", key);
-    const first = await handleRequest(
-      new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
-      store,
-      config,
+  test("concurrent submits under one key file a single receipt", async () => {
+    const store = new MemoryStore();
+    const config = testConfig();
+    const packet = {
+      key: "race-key",
+      household: HOUSEHOLD,
+      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") }],
+    };
+    const responses = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        handleRequest(
+          new Request(`${BASE}/submissions`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(packet),
+          }),
+          store,
+          config,
+        ),
+      ),
     );
-    const firstText = await first.text();
-    expect(firstText).not.toContain("Already received");
-
-    const second = await handleRequest(
-      new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
-      store,
-      config,
-    );
-    const secondText = await second.text();
-    expect(secondText).toContain("Already received");
-    expect(confirmationFrom(secondText)).toBe(confirmationFrom(firstText));
+    expect(responses.every((r) => r.status === 200)).toBe(true);
+    const bodies = (await Promise.all(responses.map((r) => r.json()))) as Array<Record<string, unknown>>;
+    expect(new Set(bodies.map((b) => b["confirmationNumber"])).size).toBe(1);
+    expect(bodies.filter((b) => b["duplicate"] === false)).toHaveLength(1);
     expect((await store.listSubmissions(10)).length).toBe(1);
   });
 
@@ -182,7 +207,11 @@ describe("idempotency", () => {
       new Request(`${BASE}/submissions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ key }),
+        body: JSON.stringify({
+          key,
+          household: HOUSEHOLD,
+          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("fake-pdf-bytes").toString("base64") }],
+        }),
       }),
       store,
       config,
