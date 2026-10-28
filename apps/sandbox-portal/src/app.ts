@@ -837,7 +837,9 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     const parsed = validateHousehold(fields, config.maxFieldLength);
     if (!parsed.household) return html(householdPage(parsed.error, fields), 400);
     let session = await loadLiveSession(request, store, fileStore, config);
-    if (!session) {
+    if (!session || session.submitted) {
+      // A submitted session starts over with a fresh session and key; the old
+      // row keeps its receipt reference until it expires.
       session = {
         id: newId(),
         files: [],

@@ -1814,3 +1814,31 @@ describe("review round 2 item 5: caller scope wins over web fallback", () => {
     expect(status["confirmationNumber"]).toBe(ownConfirmation);
   });
 });
+
+describe("review round 2 should-fix: a second application mints a fresh session", () => {
+  test("two filings with one cookie get separate sessions, keys, and confirmations", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const firstSubmit = await submitReview(store, files, config, cookie);
+    expect(firstSubmit.status).toBe(200);
+    const firstConfirmation = confirmationFrom(await firstSubmit.text());
+    const again = await handleRequest(
+      new Request(`${BASE}/apply/household`, { method: "POST", headers: { cookie }, body: householdForm({ fullName: "Second Applicant" }) }),
+      store,
+      files,
+      config,
+    );
+    expect(again.status).toBe(303);
+    const cookie2 = cookieFrom(again);
+    expect(cookie2).not.toBe(cookie);
+    await postDocuments(store, files, config, cookie2);
+    const secondSubmit = await submitReview(store, files, config, cookie2);
+    expect(secondSubmit.status).toBe(200);
+    const secondConfirmation = confirmationFrom(await secondSubmit.text());
+    expect(secondConfirmation).not.toBe(firstConfirmation);
+    expect(await store.countSubmissions()).toBe(2);
+  });
+});
