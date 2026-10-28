@@ -75,11 +75,16 @@ export interface Letter {
   fields: LetterFields;
 }
 
+// The duty a deadline puts on the resident: respond, appeal, renew,
+// pay, or other when the sentence names no duty.
+export type Obligation = "respond" | "appeal" | "renew" | "pay" | "other";
+
 export interface Deadline {
   letterId: string;
   program: string | null;
   dueDate: string;
   dateText: string;
+  obligation: Obligation;
   citation: Citation;
   // Relative deadlines ("60 days from the date of this notice") cite
   // the rule above and the anchor here, plus the count rule used.

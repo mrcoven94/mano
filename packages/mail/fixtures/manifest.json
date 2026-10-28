@@ -107,7 +107,8 @@
       "file": "mail-04-p2.jpg",
       "kind": "single",
       "questions": [
-        "missing_page"
+        "missing_page",
+        "confirm_deadline"
       ],
       "letters": [
         {
@@ -115,7 +116,7 @@
           "sender": "Oakland Housing Authority",
           "program": null,
           "referenceNo": "H-88142",
-          "deadlineIso": null,
+          "deadlineIso": "2026-12-12",
           "scam": false,
           "plantedInstruction": false,
           "phones": [

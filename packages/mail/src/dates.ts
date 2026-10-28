@@ -2,6 +2,8 @@
 // ("November 20, 2026"), so ISO-only matching misses them. This parses
 // the common US letter forms into YYYY-MM-DD, or returns null.
 
+import type { Obligation } from "./types.js";
+
 const MONTHS: Record<string, number> = {
   january: 1,
   jan: 1,
@@ -122,11 +124,18 @@ export type ResolvedDeadline =
     }
   | { kind: "needs-anchor"; expression: string }
   | { kind: "ambiguous"; expression: string }
+  | { kind: "unsupported"; expression: string }
   | { kind: "none" };
 
 const RELATIVE_AFTER = /(\d{1,3})\s+(business\s+|calendar\s+)?days?\s+(?:from|after)\b([\s\S]*)/i;
 const RELATIVE_WITHIN = /\b(?:within|in)\s+(\d{1,3})\s+(business\s+|calendar\s+)?days?\b([\s\S]*)/i;
 const NOTICE_ANCHOR = /date of this notice|notice date|this notice|the notice/i;
+// A count with a time unit that the two supported patterns did not
+// match: "10 days before November 25", "within 2 weeks of receipt".
+// The parser cannot count it, so it must ask, never promote a nearby
+// date. Bare "before December 12" is not relative-like: the date it
+// names is the deadline itself.
+const RELATIVE_LIKE = /\b\d{1,3}\s+(?:business\s+|calendar\s+)?(?:days?|weeks?|months?|years?)\b/i;
 
 function shiftDate(anchorIso: string, count: number, business: boolean): string | null {
   const [y, m, d] = anchorIso.split("-").map(Number);
@@ -148,10 +157,13 @@ export function resolveDeadline(deadlineText: string | null, noticeDateText: str
   const text = deadlineText.replace(/\s+/g, " ").trim();
   const rel = text.match(RELATIVE_AFTER) ?? text.match(RELATIVE_WITHIN);
   if (!rel) {
-    const iso = parseWrittenDate(text);
-    if (iso) return { kind: "absolute", iso };
+    if (RELATIVE_LIKE.test(text)) return { kind: "unsupported", expression: text };
+    // An ambiguous date anywhere in the expression asks, even when
+    // another date in it would parse.
     const ambiguous = findAmbiguousDate(text);
     if (ambiguous) return { kind: "ambiguous", expression: ambiguous };
+    const iso = parseWrittenDate(text);
+    if (iso) return { kind: "absolute", iso };
     return { kind: "none" };
   }
   const count = Number(rel[1]);
@@ -160,6 +172,8 @@ export function resolveDeadline(deadlineText: string | null, noticeDateText: str
   // Anchor named in the expression wins.
   const anchorInText = rest ? parseWrittenDate(rest) : null;
   if (anchorInText) {
+    const ambiguous = findAmbiguousDate(rest);
+    if (ambiguous) return { kind: "ambiguous", expression: ambiguous };
     const iso = shiftDate(anchorInText, count, business);
     if (!iso) return { kind: "needs-anchor", expression: text };
     return {
@@ -193,6 +207,38 @@ export function resolveDeadline(deadlineText: string | null, noticeDateText: str
     };
   }
   return { kind: "needs-anchor", expression: text };
+}
+
+// The duty a deadline sentence puts on the resident, read from its
+// verbs. Dates within one duty are compared with each other; anything
+// without a duty word is other, and unknown duties cannot be compared
+// by kind.
+export function obligationOf(deadlineText: string): Obligation {
+  const t = deadlineText.toLowerCase();
+  if (/\b(appeal|hearing|grievance|reconsideration|dispute|contest|decision)\b/.test(t)) return "appeal";
+  if (/\b(pay|payment|premium|amount due|balance due)\b/.test(t) && !/\bpay stubs?\b/.test(t)) return "pay";
+  if (/\b(renew|renewal|recertif|redetermin)\b/.test(t)) return "renew";
+  if (
+    /\b(respond|response|return|send|submit|provide|arrive|receive|paperwork|complete|deliver|mail|bring|due|deadline|no later than)\b/.test(
+      t,
+    )
+  ) {
+    return "respond";
+  }
+  return "other";
+}
+
+// A deadline before the notice date, or more than a year after it, is
+// withheld and asked about instead of published. Without a notice date
+// there is nothing to check against.
+export function chronologyOf(deadlineIso: string, noticeIso: string | null): "ok" | "before-notice" | "too-far" {
+  if (!noticeIso) return "ok";
+  if (deadlineIso < noticeIso) return "before-notice";
+  const [y, m, d] = noticeIso.split("-").map(Number);
+  const limit = new Date(Date.UTC(y! + 1, m! - 1, d));
+  const limitIso = `${limit.getUTCFullYear()}-${pad(limit.getUTCMonth() + 1)}-${pad(limit.getUTCDate())}`;
+  if (deadlineIso > limitIso) return "too-far";
+  return "ok";
 }
 
 // Every date found in reading order.

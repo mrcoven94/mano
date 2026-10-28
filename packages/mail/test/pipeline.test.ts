@@ -82,6 +82,7 @@ describe("readMail", () => {
         program: "Medi-Cal",
         dueDate: "2026-11-20",
         dateText: "November 20, 2026",
+        obligation: "other",
         citation: letter.fields.deadlineIso!.citation,
         anchor: null,
         countRule: null,
@@ -588,5 +589,142 @@ describe("readMail", () => {
     });
     expect(reading.letters).toEqual([]);
     expect(reading.questions.map((q) => q.kind)).toContain("unsupported_media");
+  });
+
+  it("holds back a duty with an open deadline question but publishes other duties", async () => {
+    const bytes = await photo();
+    const model = clientFor([
+      pageJson({
+        full_text: `${BASE_TEXT} Respond by November 20, 2026. Respond by 03/04/2027. Appeal by December 1, 2026.`,
+        deadlines: [
+          { text: "Respond by November 20, 2026", box_2d: [200, 60, 220, 300] },
+          { text: "Respond by 03/04/2027", box_2d: [230, 60, 250, 300] },
+          { text: "Appeal by December 1, 2026", box_2d: [250, 60, 270, 300] },
+        ],
+      }),
+    ]);
+    const reading = await readMail([{ bytes, mimeType: "image/jpeg", name: "mail.jpg" }], {
+      personId: "p1",
+      synthetic: true,
+      model,
+    });
+    // The ambiguous respond date blocks the clean one; the appeal duty
+    // it does not touch still publishes.
+    expect(reading.questions.map((q) => q.kind)).toContain("confirm_deadline");
+    expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-12-01"]);
+    expect(reading.deadlines[0]!.obligation).toBe("appeal");
+    expect(reading.letters[0]!.fields.deadlineIso?.value).toBe("2026-12-01");
+  });
+
+  it("withholds a deadline before the notice date and asks", async () => {
+    const bytes = await photo();
+    const model = clientFor([
+      pageJson({
+        full_text: `${BASE_TEXT} Respond by October 24, 2026.`,
+        deadlines: [{ text: "Respond by October 24, 2026", box_2d: [200, 60, 220, 300] }],
+      }),
+    ]);
+    const reading = await readMail([{ bytes, mimeType: "image/jpeg", name: "mail.jpg" }], {
+      personId: "p1",
+      synthetic: true,
+      model,
+    });
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
+    const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
+    expect(question.prompt).toContain("before its notice date");
+    expect(question.citation).not.toBeNull();
+  });
+
+  it("withholds two dates of one duty on a single page", async () => {
+    const bytes = await photo();
+    const model = clientFor([
+      pageJson({
+        full_text: `${BASE_TEXT} Respond by November 20, 2026. Respond by November 25, 2026.`,
+        deadlines: [
+          { text: "Respond by November 20, 2026", box_2d: [200, 60, 220, 300] },
+          { text: "Respond by November 25, 2026", box_2d: [230, 60, 250, 300] },
+        ],
+      }),
+    ]);
+    const reading = await readMail([{ bytes, mimeType: "image/jpeg", name: "mail.jpg" }], {
+      personId: "p1",
+      synthetic: true,
+      model,
+    });
+    expect(reading.warnings.map((w) => w.kind)).toContain("conflicting_dates");
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
+    const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
+    expect(question.candidates?.map((c) => c.value).sort()).toEqual(["2026-11-20", "2026-11-25"]);
+  });
+
+  it("publishes a repeated response date next to an appeal date on page 2", async () => {
+    const bytes = await photo();
+    const model = clientFor([
+      pageJson({
+        full_text: `${BASE_TEXT} Respond by November 20, 2026.`,
+        deadlines: [{ text: "Respond by November 20, 2026", box_2d: [200, 60, 220, 300] }],
+      }),
+      pageJson({
+        full_text:
+          "Sacramento County Medi-Cal Office. Re: Renewal. Case CA-2026-1. " +
+          "Notice date November 2, 2026. Respond by November 20, 2026. Appeal by December 1, 2026.",
+        program: NIL,
+        asked: [],
+        deadlines: [
+          { text: "Respond by November 20, 2026", box_2d: [200, 60, 220, 300] },
+          { text: "Appeal by December 1, 2026", box_2d: [230, 60, 250, 300] },
+        ],
+        consequence: NIL,
+        phones: [],
+      }),
+    ]);
+    const reading = await readMail(
+      [
+        { bytes, mimeType: "image/jpeg", name: "p1.jpg" },
+        { bytes, mimeType: "image/jpeg", name: "p2.jpg" },
+      ],
+      { personId: "p1", synthetic: true, model },
+    );
+    expect(reading.letters).toHaveLength(1);
+    expect(reading.warnings.map((w) => w.kind)).not.toContain("conflicting_dates");
+    expect(reading.deadlines.map((d) => d.dueDate).sort()).toEqual(["2026-11-20", "2026-12-01"]);
+    expect(reading.deadlines.map((d) => d.obligation).sort()).toEqual(["appeal", "respond"]);
+  });
+
+  it("warns for contacts returned on an unreadable page", async () => {
+    const bytes = await photo();
+    const model = clientFor([
+      pageJson({
+        readable: false,
+        readability_note: "too blurry",
+        full_text: "blurry words",
+        sender: { text: null, box_2d: null },
+        program: NIL,
+        subject: NIL,
+        asked: [],
+        deadlines: [],
+        consequence: NIL,
+        reference_no: NIL,
+        notice_date: NIL,
+        phones: [{ text: "(555) 100-2000", box_2d: [250, 60, 270, 220] }],
+        links: [{ text: "www.example.com/renew", box_2d: [280, 60, 300, 400] }],
+      }),
+    ]);
+    const reading = await readMail([{ bytes, mimeType: "image/jpeg", name: "blur.jpg" }], {
+      personId: "p1",
+      synthetic: true,
+      model,
+    });
+    expect(reading.questions.map((q) => q.kind)).toContain("unreadable_page");
+    expect(reading.deadlines).toEqual([]);
+    const kinds = reading.warnings.map((w) => w.kind);
+    expect(kinds).toContain("phone_unchecked");
+    expect(kinds).toContain("link_unchecked");
+    // The phone warning carries the returned box, so it came from the
+    // contact itself, not from scanning the transcription.
+    const phone = reading.warnings.find((w) => w.kind === "phone_unchecked")!;
+    expect(phone.citation).toEqual({ file: "blur.jpg", page: 1, box: { ymin: 250, xmin: 60, ymax: 270, xmax: 220 } });
   });
 });

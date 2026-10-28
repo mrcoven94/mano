@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { findAmbiguousDate, parseAllDates, parseWrittenDate, resolveDeadline } from "../src/dates.js";
+import {
+  chronologyOf,
+  findAmbiguousDate,
+  obligationOf,
+  parseAllDates,
+  parseWrittenDate,
+  resolveDeadline,
+} from "../src/dates.js";
 
 describe("parseWrittenDate", () => {
   it("parses full written dates", () => {
@@ -76,6 +83,47 @@ describe("resolveDeadline", () => {
     expect(resolveDeadline("due 03/04/2027", null)).toEqual({ kind: "ambiguous", expression: "03/04/2027" });
     expect(resolveDeadline("due January 5", null)).toEqual({ kind: "ambiguous", expression: "January 5" });
     expect(resolveDeadline("due November 20, 2026", null).kind).toBe("absolute");
+  });
+  it("withholds relative wording it cannot count instead of promoting a date", () => {
+    expect(resolveDeadline("10 days before November 25, 2026", null)).toEqual({
+      kind: "unsupported",
+      expression: "10 days before November 25, 2026",
+    });
+    expect(resolveDeadline("within 2 weeks of November 25, 2026", null).kind).toBe("unsupported");
+    expect(resolveDeadline("respond 3 days prior to November 25, 2026", null).kind).toBe("unsupported");
+  });
+  it("withholds a mixed expression when any date in it is ambiguous", () => {
+    const r = resolveDeadline("due 03/04/2027, see the November 5, 2026 notice", null);
+    expect(r).toEqual({ kind: "ambiguous", expression: "03/04/2027" });
+  });
+  it("still reads a bare before-date as the deadline itself", () => {
+    expect(resolveDeadline("before December 12, 2026", null)).toEqual({ kind: "absolute", iso: "2026-12-12" });
+  });
+});
+
+describe("obligationOf", () => {
+  it("reads the duty from the sentence verbs", () => {
+    expect(obligationOf("Respond by November 20, 2026")).toBe("respond");
+    expect(obligationOf("we must receive your packet by November 20, 2026")).toBe("respond");
+    expect(obligationOf("Appeal by December 1, 2026")).toBe("appeal");
+    expect(obligationOf("Ask in writing within 14 days of the decision notice")).toBe("appeal");
+    expect(obligationOf("within 14 days of the decision notice")).toBe("appeal");
+    expect(obligationOf("Renewal due November 20, 2026")).toBe("renew");
+    expect(obligationOf("Send your premium payment by December 5, 2026")).toBe("pay");
+    expect(obligationOf("November 20, 2026")).toBe("other");
+  });
+  it("does not mistake pay stubs for a payment", () => {
+    expect(obligationOf("Send pay stubs for the last 30 days")).toBe("respond");
+  });
+});
+
+describe("chronologyOf", () => {
+  it("accepts sane deadlines and flags the rest", () => {
+    expect(chronologyOf("2026-11-20", "2026-11-02")).toBe("ok");
+    expect(chronologyOf("2026-10-24", "2026-11-02")).toBe("before-notice");
+    expect(chronologyOf("2027-11-03", "2026-11-02")).toBe("too-far");
+    expect(chronologyOf("2027-11-02", "2026-11-02")).toBe("ok");
+    expect(chronologyOf("2026-10-24", null)).toBe("ok");
   });
 });
 

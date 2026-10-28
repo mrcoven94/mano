@@ -5,6 +5,7 @@ import {
   groupWithModel,
   parsePageExtraction,
   readPage,
+  validateMerge,
   type GroupablePage,
   type PageExtraction,
 } from "../src/read.js";
@@ -195,6 +196,64 @@ describe("groupDeterministic", () => {
     expect(groups).toEqual([[0], [1]]);
     expect(ambiguous).toEqual([]);
   });
+  it("never merges two page-1-of-2 notices with contradictory dates", () => {
+    const { groups, ambiguous } = groupDeterministic([
+      page(0, "County Office", "CA-1", "page 1 of 2", "November 2, 2026", "Renewal"),
+      page(1, "County Office", "CA-1", "page 1 of 2", "November 7, 2026", "Documents Needed"),
+    ]);
+    expect(groups).not.toContainEqual([0, 1]);
+    expect(ambiguous).toEqual([0, 1]);
+  });
+});
+
+describe("validateMerge", () => {
+  const page = (
+    index: number,
+    sender: string | null,
+    ref: string | null,
+    marker: string | null = null,
+    notice: string | null = null,
+    subject: string | null = null,
+  ): GroupablePage => ({
+    index,
+    extraction: extraction({
+      sender: field(sender),
+      referenceNo: field(ref),
+      pageMarker: field(marker),
+      noticeDate: field(notice),
+      subject: field(subject),
+    }),
+  });
+  it("accepts markers chaining with no contradictions", () => {
+    expect(
+      validateMerge([page(0, "County Office", "CA-1", "page 1 of 2"), page(1, "County Office", "CA-1", "page 2 of 2")]),
+    ).toBe(true);
+  });
+  it("rejects contradictions whatever the markers say", () => {
+    expect(
+      validateMerge([
+        page(0, "County Office", "CA-1", "page 1 of 2", "November 2, 2026", "Renewal"),
+        page(1, "County Office", "CA-1", "page 2 of 2", "November 7, 2026", "Renewal"),
+      ]),
+    ).toBe(false);
+    expect(
+      validateMerge([
+        page(0, "County Office", "CA-1", null, "November 2, 2026", "Renewal"),
+        page(1, "County Office", "CA-2", null, "November 2, 2026", "Renewal"),
+      ]),
+    ).toBe(false);
+  });
+  it("rejects merges with no positive evidence", () => {
+    expect(validateMerge([page(0, "County Office", "CA-1"), page(1, "County Office", "CA-1")])).toBe(false);
+  });
+  it("accepts the same notice date and subject on every page", () => {
+    expect(
+      validateMerge([
+        page(0, "County Office", "CA-1", null, "November 2, 2026", "Renewal"),
+        page(1, "County Office", "CA-1", null, "November 2, 2026", "Renewal"),
+      ]),
+    ).toBe(true);
+  });
 });
 
 describe("groupWithModel", () => {
@@ -239,6 +298,12 @@ describe("groupWithModel", () => {
       { synthetic: true },
     );
     expect(groups).toEqual([[0, 1]]);
+  });
+
+  it("rejects model merges with no continuation evidence", async () => {
+    const model = clientFor([[0, 1]]);
+    const { groups } = await groupWithModel([gpage(0, null, null), gpage(1, null, null)], model, { synthetic: true });
+    expect(groups).toEqual([[0], [1]]);
   });
 });
 

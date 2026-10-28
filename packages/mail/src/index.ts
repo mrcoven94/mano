@@ -29,11 +29,13 @@
 //
 // Guarantees: a field publishes only with a real box and text found in
 // the transcription, else it becomes a question; unreadable pages
-// contribute nothing; pages merge only on continuation evidence (page
-// markers, or same notice date and subject); conflicting deadlines are
-// withheld with cited candidates; relative deadlines resolve from a
-// cited anchor and count rule, or ask; links, phones and addresses are
-// never acted on here and come back as warnings for the gateway.
+// contribute nothing, though their contacts still warn; pages merge
+// only on continuation evidence with no contradictions; deadlines are
+// compared within their duty and any duty under doubt publishes
+// nothing; a deadline before the notice date or over a year out is
+// asked about; relative deadlines resolve from a cited anchor and
+// count rule, or ask; links, phones and addresses are never acted on
+// here and come back as warnings for the gateway.
 // Content failures never throw; only invalid arguments do. Each file
 // has a time and token budget; past it the file stops early with a
 // question.
@@ -63,7 +65,7 @@ import {
   type GroupablePage,
   type PageExtraction,
 } from "./read.js";
-import { resolveDeadline } from "./dates.js";
+import { chronologyOf, obligationOf, parseWrittenDate, resolveDeadline } from "./dates.js";
 import { scanContent, type ContentFlag } from "./safety.js";
 import { verifyExtraction, type DroppedField } from "./citations.js";
 import { readingModelFor } from "./model.js";
@@ -79,6 +81,7 @@ import type {
   LetterPage,
   MailReading,
   ModelCallStat,
+  Obligation,
   Question,
   ReadMailOptions,
   Warning,
@@ -422,6 +425,10 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     const fields = mergeFields(members, cite);
     letters.push({ id: letterId, pages: letterPages, fields });
 
+    // Duties under doubt. An open deadline question, a deadline that
+    // failed verification, or a failed chronology check withholds every
+    // date of that duty; nothing under doubt publishes.
+    const blockedDuties = new Set<Obligation>();
     // Per-page questions and deadline checks.
     members.forEach((m, i) => {
       const ex = m.extraction;
@@ -446,33 +453,60 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
             `Check the letter before relying on it.`,
           citation: null,
         });
+        if (d.name === "deadline") blockedDuties.add(obligationOf(d.value));
       }
     });
     checkMissingPages(members, letterId, cite, ask);
 
     // Resolve every deadline expression on every page against the
     // letter's notice date. Relative wording never promotes its
-    // anchor date. Several dates on one page are separate obligations
-    // and each publishes with its own citation; several dates spread
-    // across pages of one notice conflict, so all are withheld until
-    // the person confirms.
+    // anchor date. Dates are compared within their duty (respond,
+    // appeal, renew, pay): one duty with two dates is a conflict, and
+    // different duties publish independently. Bare dates name no duty;
+    // several on one page are separate statements and each publishes,
+    // while one notice restating different bare dates across its pages
+    // conflicts. Any duty with an open question, a failed
+    // verification, or a failed chronology check publishes nothing.
     const resolved: {
       iso: string;
       text: string;
       memberIdx: number;
+      obligation: Obligation;
       ruleCitation: Citation;
       anchor: Cited<string> | null;
       countRule: string | null;
     }[] = [];
     const askedExpressions = new Set<string>();
+    const noticeIso = fields.noticeDate ? parseWrittenDate(fields.noticeDate.value) : null;
     members.forEach((m, i) => {
       if (!m.extraction?.readable) return;
       for (const d of m.extraction.deadlines) {
         if (!d.text) continue;
+        const obligation = obligationOf(d.text);
         const r = resolveDeadline(d.text, fields.noticeDate?.value ?? null);
         if (r.kind === "absolute" || r.kind === "relative") {
           const ruleCitation = cite(i, d.box);
           if (!ruleCitation) continue;
+          const chrono = chronologyOf(r.iso, noticeIso);
+          if (chrono !== "ok") {
+            blockedDuties.add(obligation);
+            const key = `chrono:${d.text}`;
+            if (!askedExpressions.has(key)) {
+              askedExpressions.add(key);
+              ask({
+                kind: "confirm_deadline",
+                letterId,
+                prompt:
+                  chrono === "before-notice"
+                    ? `Letter ${letterId} gives a deadline of "${d.text}" before its notice date. ` +
+                      `Which date is the real deadline?`
+                    : `Letter ${letterId} gives a deadline of "${d.text}", more than a year after its notice date. ` +
+                      `Which date is the real deadline?`,
+                citation: ruleCitation,
+              });
+            }
+            continue;
+          }
           let anchor: Cited<string> | null = null;
           if (r.kind === "relative") {
             anchor =
@@ -484,11 +518,13 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
             iso: r.iso,
             text: d.text,
             memberIdx: i,
+            obligation,
             ruleCitation,
             anchor,
             countRule: r.kind === "relative" ? r.countRule : null,
           });
-        } else if (r.kind === "needs-anchor" || r.kind === "ambiguous") {
+        } else if (r.kind === "needs-anchor" || r.kind === "ambiguous" || r.kind === "unsupported") {
+          blockedDuties.add(obligation);
           if (askedExpressions.has(r.expression)) continue;
           askedExpressions.add(r.expression);
           ask({
@@ -498,26 +534,30 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
               r.kind === "needs-anchor"
                 ? `Letter ${letterId} gives its deadline as "${r.expression}" but the starting date is unclear. ` +
                   `What date does the deadline run from?`
-                : `Letter ${letterId} gives its deadline as "${r.expression}", which could be read more than one way. ` +
-                  `Which date is meant?`,
+                : r.kind === "ambiguous"
+                  ? `Letter ${letterId} gives its deadline as "${r.expression}", which could be read more than one way. ` +
+                    `Which date is meant?`
+                  : `Letter ${letterId} gives its deadline as "${r.expression}", which cannot be counted as written. ` +
+                    `Which date is meant?`,
             citation: cite(i, d.box),
           });
         }
       }
     });
-    const distinct = [...new Set(resolved.map((r) => r.iso))];
-    const statingMembers = new Set(resolved.map((r) => r.memberIdx));
-    if (distinct.length > 1 && statingMembers.size > 1) {
-      // Withheld: no deadline is published until the person confirms.
-      // The question carries every candidate with its own citation.
+    // Withheld: no deadline of a conflicting duty is published until
+    // the person confirms. The question carries every candidate with
+    // its own citation.
+    const withholdConflict = (duty: Obligation, distinct: string[], entries: typeof resolved): void => {
+      blockedDuties.add(duty);
       const candidates: Cited<string>[] = [];
       for (const iso of distinct) {
-        const entry = resolved.find((r) => r.iso === iso)!;
+        const entry = entries.find((e) => e.iso === iso)!;
         candidates.push({ value: iso, citation: entry.ruleCitation });
       }
+      const dutyLabel = duty === "other" ? "" : ` for its ${duty} duty`;
       warnings.push({
         kind: "conflicting_dates",
-        message: `Letter ${letterId} states more than one deadline across its pages (${distinct.join(", ")}). None was published.`,
+        message: `Letter ${letterId} states more than one deadline${dutyLabel} (${distinct.join(", ")}). None was published.`,
         letterId,
         citation: candidates[0]?.citation ?? null,
         detail: distinct.join(", "),
@@ -525,29 +565,43 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       ask({
         kind: "confirm_deadline",
         letterId,
-        prompt: `Letter ${letterId} shows more than one deadline (${distinct.join(", ")}). Which dates are the real deadlines?`,
+        prompt: `Letter ${letterId} shows more than one deadline${dutyLabel} (${distinct.join(", ")}). Which dates are the real deadlines?`,
         citation: null,
         candidates,
       });
-    } else {
-      const published = new Set<string>();
-      for (const entry of resolved) {
-        if (published.has(entry.iso)) continue;
-        published.add(entry.iso);
-        if (!fields.deadlineIso) fields.deadlineIso = { value: entry.iso, citation: entry.ruleCitation };
-        deadlines.push({
-          letterId,
-          program: fields.program?.value ?? null,
-          dueDate: entry.iso,
-          dateText: entry.text,
-          citation: entry.ruleCitation,
-          anchor: entry.anchor,
-          countRule: entry.countRule,
-        });
-      }
+    };
+    for (const duty of ["respond", "appeal", "renew", "pay"] as const) {
+      const entries = resolved.filter((e) => e.obligation === duty);
+      const distinct = [...new Set(entries.map((e) => e.iso))];
+      if (distinct.length > 1) withholdConflict(duty, distinct, entries);
+    }
+    {
+      const entries = resolved.filter((e) => e.obligation === "other");
+      const distinct = [...new Set(entries.map((e) => e.iso))];
+      const statingMembers = new Set(entries.map((e) => e.memberIdx));
+      if (distinct.length > 1 && statingMembers.size > 1) withholdConflict("other", distinct, entries);
+    }
+    const published = new Set<string>();
+    for (const entry of resolved) {
+      if (blockedDuties.has(entry.obligation)) continue;
+      const key = `${entry.obligation}:${entry.iso}`;
+      if (published.has(key)) continue;
+      published.add(key);
+      if (!fields.deadlineIso) fields.deadlineIso = { value: entry.iso, citation: entry.ruleCitation };
+      deadlines.push({
+        letterId,
+        program: fields.program?.value ?? null,
+        dueDate: entry.iso,
+        dateText: entry.text,
+        obligation: entry.obligation,
+        citation: entry.ruleCitation,
+        anchor: entry.anchor,
+        countRule: entry.countRule,
+      });
     }
 
-    // Safety: every contact becomes a warning on its own, then the
+    // Safety: every returned contact becomes a warning on its own,
+    // readable pages and unreadable ones alike, then the
     // transcription and every dropped field value are scanned for
     // anything the model transcribed but did not extract, or claimed
     // but could not verify. Duplicates collapse by kind and value.
@@ -570,9 +624,23 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         flagToWarning({ kind, label: "", match: value }, letterId, members, cite, { citation }),
       );
     };
-    for (const contact of fields.contacts) {
-      warnContact(contact.kind, contact.value, contact.citation);
-    }
+    // Contacts are read off every extraction before readability
+    // filtering: readable pages were already trimmed to verified
+    // fields, and unreadable pages keep their raw claims so nothing
+    // dialable goes unflagged.
+    members.forEach((m, i) => {
+      const ex = m.extraction;
+      if (!ex) return;
+      for (const p of ex.phones) {
+        if (p.text && p.text.trim()) warnContact("phone", p.text.trim(), cite(i, p.box));
+      }
+      for (const l of ex.links) {
+        if (l.text && l.text.trim()) warnContact("link", l.text.trim(), cite(i, l.box));
+      }
+      for (const a of ex.addresses) {
+        if (a.text && a.text.trim()) warnContact("address", a.text.trim(), cite(i, a.box));
+      }
+    });
     members.forEach((m, i) => {
       for (const d of m.dropped) {
         if (d.name === "phone number") warnContact("phone", d.value, cite(i, d.box));
