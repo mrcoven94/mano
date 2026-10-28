@@ -43,6 +43,26 @@ function keyFromReview(htmlText: string): string {
   return match[1];
 }
 
+function digestFromReview(htmlText: string): string {
+  const match = /name="digest" value="([^"]+)"/.exec(htmlText);
+  if (!match?.[1]) throw new Error("review page has no packet digest");
+  return match[1];
+}
+
+/** Submit exactly what the review page shows, like the browser does. */
+async function submitReview(store: MemoryStore, config: PortalConfig, cookie: string): Promise<Response> {
+  const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+  const reviewText = await review.text();
+  const form = new URLSearchParams();
+  form.set("key", keyFromReview(reviewText));
+  form.set("digest", digestFromReview(reviewText));
+  return handleRequest(
+    new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }),
+    store,
+    config,
+  );
+}
+
 function confirmationFrom(htmlText: string): string {
   const match = /class="conf">([^<]+)</.exec(htmlText);
   if (!match?.[1]) throw new Error("page has no confirmation number");
@@ -96,9 +116,12 @@ describe("renewal flow", () => {
     expect(reviewText).toContain("Maria Santos");
     expect(reviewText).toContain("paystub.pdf");
     const key = keyFromReview(reviewText);
+    const digest = digestFromReview(reviewText);
+    expect(digest).toMatch(/^[0-9a-f]{64}$/);
 
     const submitForm = new URLSearchParams();
     submitForm.set("key", key);
+    submitForm.set("digest", digest);
     const submit = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
       store,
@@ -113,6 +136,58 @@ describe("renewal flow", () => {
     const statusJson = (await status.json()) as Record<string, string>;
     expect(statusJson["status"]).toBe("received");
     expect(statusJson["confirmationNumber"]).toBe(confirmation);
+    expect(statusJson["digest"]).toBe(digest);
+  });
+
+  test("editing after review rejects the stale submit", async () => {
+    const store = new MemoryStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, config);
+    await postDocuments(store, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+    const stale = await review.text();
+    const staleForm = new URLSearchParams();
+    staleForm.set("key", keyFromReview(stale));
+    staleForm.set("digest", digestFromReview(stale));
+
+    // The household changes after the review page was shown.
+    const edit = await handleRequest(
+      new Request(`${BASE}/apply/household`, { method: "POST", headers: { cookie }, body: householdForm({ monthlyIncome: "9999" }) }),
+      store,
+      config,
+    );
+    expect(edit.status).toBe(303);
+
+    const rejected = await handleRequest(
+      new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: staleForm }),
+      store,
+      config,
+    );
+    expect(rejected.status).toBe(400);
+    expect(await rejected.text()).toContain("Changed since review");
+    expect((await store.listSubmissions(10)).length).toBe(0);
+
+    // A fresh review of the current draft submits fine.
+    const fresh = await submitReview(store, config, cookie);
+    expect(fresh.status).toBe(200);
+    expect((await store.listSubmissions(10)).length).toBe(1);
+  });
+
+  test("a submit without the review digest is rejected", async () => {
+    const store = new MemoryStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, config);
+    await postDocuments(store, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+    const form = new URLSearchParams();
+    form.set("key", keyFromReview(await review.text()));
+    const res = await handleRequest(
+      new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }),
+      store,
+      config,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("Changed since review");
   });
 
   test("review without household redirects back to step 1", async () => {
@@ -195,9 +270,11 @@ describe("idempotency", () => {
     const cookie = await postHousehold(store, config);
     await postDocuments(store, config, cookie);
     const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
-    const key = keyFromReview(await review.text());
+    const reviewText = await review.text();
+    const key = keyFromReview(reviewText);
     const submitForm = new URLSearchParams();
     submitForm.set("key", key);
+    submitForm.set("digest", digestFromReview(reviewText));
     await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
       store,
@@ -320,9 +397,11 @@ describe("idempotency", () => {
     const cookie = await postHousehold(store, config);
     await postDocuments(store, config, cookie);
     const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
-    const key = keyFromReview(await review.text());
+    const reviewText = await review.text();
+    const key = keyFromReview(reviewText);
     const form = new URLSearchParams();
     form.set("key", key);
+    form.set("digest", digestFromReview(reviewText));
     const web = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }),
       store,
@@ -540,7 +619,9 @@ describe("caseworker view", () => {
     await postDocuments(store, config, cookie);
     const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
     const submitForm = new URLSearchParams();
-    submitForm.set("key", keyFromReview(await review.text()));
+    const caseworkerReview = await review.text();
+    submitForm.set("key", keyFromReview(caseworkerReview));
+    submitForm.set("digest", digestFromReview(caseworkerReview));
     const submit = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
       store,
@@ -587,6 +668,7 @@ describe("test system labels", () => {
     expect(reviewText).toContain(TEST_BANNER);
     const submitForm = new URLSearchParams();
     submitForm.set("key", keyFromReview(reviewText));
+    submitForm.set("digest", digestFromReview(reviewText));
     const submit = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
       store,

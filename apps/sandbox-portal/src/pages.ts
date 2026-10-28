@@ -103,7 +103,7 @@ ${err}
   );
 }
 
-export function reviewPage(household: Household, files: StoredFile[], key: string): string {
+export function reviewPage(household: Household, files: StoredFile[], key: string, digest: string): string {
   const rows = files
     .map((f) => `<tr><td class="label">Attached file</td><td>${escapeHtml(f.name)} (${escapeHtml(f.type)}, ${f.size} bytes)</td></tr>`)
     .join("");
@@ -122,6 +122,7 @@ ${rows}
 </table>
 <form method="post" action="/submissions">
 <input type="hidden" name="key" value="${escapeHtml(key)}">
+<input type="hidden" name="digest" value="${escapeHtml(digest)}">
 <table class="form" style="margin-top:10px;">
 <tr><td class="label">Slow mode (demo)</td><td><label><input type="checkbox" name="slow" value="1"> Hold the response past the caller's timeout (the office still receives it)</label></td></tr>
 </table>

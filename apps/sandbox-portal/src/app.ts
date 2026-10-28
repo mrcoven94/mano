@@ -297,6 +297,7 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
   let source: Submission["source"] = "web";
   let session: SessionData | null = null;
   let scope = WEB_SCOPE;
+  let reviewedDigest = "";
 
   if (isJson) {
     source = "api";
@@ -327,10 +328,22 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
     }
     household = session.household;
     files = session.files;
+    reviewedDigest = fields["digest"] ?? "";
   }
 
   const slowMs = resolveSlowMs(url, fields, config);
   const digest = await packetDigest(household, await digestStoredFiles(files));
+  if (!isJson && reviewedDigest !== digest) {
+    return html(
+      errorPage(
+        "Changed since review",
+        "This application changed after the review page was shown. Review the current details and submit again.",
+        "/apply/review",
+        "Back to review",
+      ),
+      400,
+    );
+  }
   if (source === "api") {
     // The browser may have filed this exact packet under the web scope; a retry must not file it again.
     const webFiled = await store.getSubmission(WEB_SCOPE, key);
@@ -430,7 +443,8 @@ export async function handleRequest(request: Request, store: Store, config: Port
     if (!session.household) return redirect("/apply");
     if (session.files.length === 0) return redirect("/apply/documents");
     await touchSession(store, session, config);
-    return html(reviewPage(session.household, session.files, session.key));
+    const digest = await packetDigest(session.household, await digestStoredFiles(session.files));
+    return html(reviewPage(session.household, session.files, session.key, digest));
   }
 
   if (method === "POST" && path === "/submissions") {
