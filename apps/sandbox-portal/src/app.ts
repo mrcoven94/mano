@@ -814,11 +814,9 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   const method = request.method.toUpperCase();
 
   const auth = await authState(request, config);
-  if (auth !== "ok") {
-    const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-    const allowed = await store.checkRateLimit(ip, nowMs(config), RATE_WINDOW_MS, config.rateLimitPerMinute);
-    if (!allowed) return rateLimitedResponse(path);
-  }
+  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+  const allowed = await store.checkRateLimit(ip, nowMs(config), RATE_WINDOW_MS, config.rateLimitPerMinute);
+  if (!allowed) return rateLimitedResponse(path);
   const jsonPost = method === "POST" && path === "/submissions" && (request.headers.get("content-type") ?? "").includes("application/json");
   const isProtected =
     path === "/caseworker" || path.startsWith("/caseworker/") || (path.startsWith("/submissions") && (method === "GET" || jsonPost));

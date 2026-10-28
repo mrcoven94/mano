@@ -1267,19 +1267,21 @@ describe("blocker 6: access control", () => {
     expect(submit.status).toBe(200);
   });
 
-  test("unauthenticated callers are rate limited; token holders are not", async () => {
+  test("the per-IP limit applies to token holders too", async () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
     const config = testConfig({ rateLimitPerMinute: 3 });
     for (let i = 0; i < 3; i++) {
-      const res = await handleRequest(new Request(`${BASE}/`), store, files, config);
+      const res = await handleRequest(new Request(`${BASE}/caseworker`, { headers: { authorization: AUTH } }), store, files, config);
       expect(res.status).toBe(200);
     }
-    const limited = await handleRequest(new Request(`${BASE}/`), store, files, config);
+    const limited = await handleRequest(new Request(`${BASE}/caseworker`, { headers: { authorization: AUTH } }), store, files, config);
     expect(limited.status).toBe(429);
     expect(await limited.text()).toContain("Too many requests");
-    const authed = await handleRequest(new Request(`${BASE}/caseworker`, { headers: { authorization: AUTH } }), store, files, config);
-    expect(authed.status).toBe(200);
+    const anon = await handleRequest(new Request(`${BASE}/`), store, files, config);
+    expect(anon.status).toBe(429);
+    const otherIp = await handleRequest(new Request(`${BASE}/`, { headers: { "cf-connecting-ip": "203.0.113.7" } }), store, files, config);
+    expect(otherIp.status).toBe(200);
   });
 
   test("a retry rejected while all slow slots are busy leaves the filed attachment alone", async () => {
