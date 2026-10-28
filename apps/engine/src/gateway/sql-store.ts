@@ -1,11 +1,19 @@
-import type { Approval, Attempt, Receipt } from "./types.js";
-import type { ApprovalStore } from "./gateway.js";
+import type { ActionType, Approval, Attempt, Receipt } from "./types.js";
+import type { ApprovalStore, ConsumeGuard } from "./gateway.js";
 
 // The gateway store on the agent's own SQLite. Approvals, attempts,
 // receipts and audit rows live here, so eviction or redeploy never loses
 // them and a retry can never double-execute. All methods are synchronous:
 // paired writes with no await between them cannot interleave inside one
 // agent, which is what makes consume atomic.
+
+function addColumn(sql: SqlStorage, table: string, column: string, ddl: string): void {
+  try {
+    sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  } catch {
+    // The column already exists: additive migrations are idempotent.
+  }
+}
 
 export function ensureGatewayTables(sql: SqlStorage): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS approvals(
@@ -17,10 +25,15 @@ export function ensureGatewayTables(sql: SqlStorage): void {
     request_hash TEXT NOT NULL, problems_json TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS attempts(
     idempotency_key TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at TEXT NOT NULL)`);
+  addColumn(sql, "attempts", "request_hash", "TEXT");
+  addColumn(sql, "attempts", "action_type", "TEXT");
+  addColumn(sql, "attempts", "recipient", "TEXT");
+  addColumn(sql, "attempts", "person_id", "TEXT");
   sql.exec(`CREATE TABLE IF NOT EXISTS receipts(
     id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE NOT NULL, action_type TEXT NOT NULL,
     recipient TEXT NOT NULL, status TEXT NOT NULL, external_id TEXT NOT NULL,
     simulated INTEGER NOT NULL, created_at TEXT NOT NULL)`);
+  addColumn(sql, "receipts", "request_hash", "TEXT");
   sql.exec(`CREATE TABLE IF NOT EXISTS audit_log(
     id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL, detail TEXT NOT NULL,
     created_at TEXT NOT NULL)`);
@@ -30,6 +43,9 @@ const APPROVAL_COLUMNS =
   "id, action_type, recipient, purpose, document_hash, document_id, idempotency_key," +
   " status, approved_by, created_at, remind_at, expires_at, escalated, person_id," +
   " request_json, request_hash, problems_json";
+
+const ATTEMPT_COLUMNS =
+  "idempotency_key, status, updated_at, request_hash, action_type, recipient, person_id";
 
 export function approvalFromRow(r: Record<string, unknown>): Approval {
   return {
@@ -62,7 +78,20 @@ function receiptFromRow(r: Record<string, unknown>): Receipt {
     status: r.status as Receipt["status"],
     externalId: r.external_id as string,
     simulated: (r.simulated as number) === 1,
+    requestHash: (r.request_hash as string | null) ?? "",
     createdAt: r.created_at as string,
+  };
+}
+
+function attemptFromRow(r: Record<string, unknown>): Attempt {
+  return {
+    key: r.idempotency_key as string,
+    status: r.status as Attempt["status"],
+    updatedAt: r.updated_at as string,
+    requestHash: (r.request_hash as string | null) ?? "",
+    actionType: (r.action_type as ActionType | null) ?? "submit",
+    recipient: (r.recipient as string | null) ?? "",
+    personId: (r.person_id as string | null) ?? "",
   };
 }
 
@@ -71,6 +100,16 @@ export class SqlApprovalStore implements ApprovalStore {
 
   getApproval(id: string): Approval | null {
     const rows = this.sql.exec(`SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE id = ?`, id).toArray();
+    if (rows.length === 0) return null;
+    return approvalFromRow(rows[0] as Record<string, unknown>);
+  }
+
+  getApprovalByKey(key: string): Approval | null {
+    const rows = this.sql.exec(
+      `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE idempotency_key = ?` +
+        ` ORDER BY CASE status WHEN 'approved' THEN 0 ELSE 1 END, created_at DESC LIMIT 1`,
+      key,
+    ).toArray();
     if (rows.length === 0) return null;
     return approvalFromRow(rows[0] as Record<string, unknown>);
   }
@@ -84,34 +123,87 @@ export class SqlApprovalStore implements ApprovalStore {
     );
   }
 
-  consumeApprovalAndClaim(id: string, humanId: string, attempt: Attempt): Approval | null {
-    let inserted = false;
-    let adopted = false;
-    try {
-      this.sql.exec(
-        "INSERT INTO attempts(idempotency_key, status, updated_at) VALUES (?,?,?)",
-        attempt.key, attempt.status, attempt.updatedAt,
-      );
-      inserted = true;
-    } catch {
-      adopted = this.adoptUnknownAttempt(attempt.key, new Date(attempt.updatedAt));
-      if (!adopted) return null;
+  consumeApprovalAndClaim(id: string, humanId: string, attempt: Attempt, guard: ConsumeGuard): Approval | null {
+    // The attempt claim and the guarded approval update below run with no
+    // await between them, so no interleaving request can slip in.
+    const prior = this.getAttempt(attempt.key);
+    if (prior) {
+      if (prior.status !== "unknown" && prior.status !== "failed") return null;
+      if (prior.requestHash && attempt.requestHash && prior.requestHash !== attempt.requestHash) return null;
     }
+    let inserted = false;
+    let adoptedFrom: Attempt["status"] | null = null;
+    if (!prior) {
+      try {
+        this.sql.exec(
+          `INSERT INTO attempts(${ATTEMPT_COLUMNS}) VALUES (?,?,?,?,?,?,?)`,
+          attempt.key, attempt.status, attempt.updatedAt, attempt.requestHash,
+          attempt.actionType, attempt.recipient, attempt.personId,
+        );
+        inserted = true;
+      } catch {
+        return null;
+      }
+    } else if (prior.status === "unknown") {
+      if (!this.adoptUnknownAttempt(attempt.key, new Date(attempt.updatedAt))) return null;
+      adoptedFrom = "unknown";
+    } else {
+      if (!this.adoptFailedAttempt(attempt.key, new Date(attempt.updatedAt))) return null;
+      adoptedFrom = "failed";
+    }
+    // Status, owner, request hash and expiry are re-checked inside the
+    // consuming statement itself, not from the snapshot the gateway read
+    // before its awaits.
     const updated = this.sql.exec(
-      "UPDATE approvals SET status = 'approved', approved_by = ? WHERE id = ? AND status = 'pending'",
-      humanId, id,
+      "UPDATE approvals SET status = 'approved', approved_by = ?" +
+        " WHERE id = ? AND status = 'pending' AND person_id = ? AND request_hash = ? AND expires_at > ?",
+      humanId, id, guard.personId, guard.requestHash, guard.now.toISOString(),
     );
     if (updated.rowsWritten !== 1) {
       if (inserted) this.sql.exec("DELETE FROM attempts WHERE idempotency_key = ?", attempt.key);
-      else this.sql.exec("UPDATE attempts SET status = 'unknown' WHERE idempotency_key = ?", attempt.key);
+      else if (adoptedFrom) {
+        this.sql.exec("UPDATE attempts SET status = ? WHERE idempotency_key = ?", adoptedFrom, attempt.key);
+      }
       return null;
     }
     return this.getApproval(id);
   }
 
+  expireApproval(id: string): boolean {
+    return this.transition(id, "expired");
+  }
+
+  setApprovalBlocked(id: string): boolean {
+    return this.transition(id, "blocked");
+  }
+
+  markApprovalStale(id: string): boolean {
+    return this.transition(id, "stale");
+  }
+
+  private transition(id: string, to: Approval["status"]): boolean {
+    const updated = this.sql.exec(
+      "UPDATE approvals SET status = ? WHERE id = ? AND status = 'pending'",
+      to, id,
+    );
+    return updated.rowsWritten === 1;
+  }
+
+  setApprovalProblems(id: string, problems: string[]): void {
+    this.sql.exec("UPDATE approvals SET problems_json = ? WHERE id = ?", JSON.stringify(problems), id);
+  }
+
+  escalateApproval(id: string): boolean {
+    const updated = this.sql.exec(
+      "UPDATE approvals SET escalated = 1 WHERE id = ? AND status = 'pending'",
+      id,
+    );
+    return updated.rowsWritten === 1;
+  }
+
   getReceiptByKey(key: string): Receipt | null {
     const rows = this.sql.exec(
-      "SELECT id, idempotency_key, action_type, recipient, status, external_id, simulated, created_at FROM receipts WHERE idempotency_key = ?",
+      "SELECT id, idempotency_key, action_type, recipient, status, external_id, simulated, request_hash, created_at FROM receipts WHERE idempotency_key = ?",
       key,
     ).toArray();
     if (rows.length === 0) return null;
@@ -120,26 +212,26 @@ export class SqlApprovalStore implements ApprovalStore {
 
   putReceipt(r: Receipt): void {
     this.sql.exec(
-      "INSERT OR REPLACE INTO receipts(id, idempotency_key, action_type, recipient, status, external_id, simulated, created_at) VALUES (?,?,?,?,?,?,?,?)",
+      "INSERT OR REPLACE INTO receipts(id, idempotency_key, action_type, recipient, status, external_id, simulated, request_hash, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
       r.id, r.idempotencyKey, r.actionType, r.recipient, r.status, r.externalId,
-      r.simulated ? 1 : 0, r.createdAt,
+      r.simulated ? 1 : 0, r.requestHash, r.createdAt,
     );
   }
 
   getAttempt(key: string): Attempt | null {
     const rows = this.sql.exec(
-      "SELECT idempotency_key, status, updated_at FROM attempts WHERE idempotency_key = ?",
+      `SELECT ${ATTEMPT_COLUMNS} FROM attempts WHERE idempotency_key = ?`,
       key,
-    ).toArray() as unknown as { idempotency_key: string; status: Attempt["status"]; updated_at: string }[];
+    ).toArray() as unknown as Record<string, unknown>[];
     if (rows.length === 0) return null;
-    return { key: rows[0].idempotency_key, status: rows[0].status, updatedAt: rows[0].updated_at };
+    return attemptFromRow(rows[0]);
   }
 
   insertAttempt(a: Attempt): boolean {
     try {
       this.sql.exec(
-        "INSERT INTO attempts(idempotency_key, status, updated_at) VALUES (?,?,?)",
-        a.key, a.status, a.updatedAt,
+        `INSERT INTO attempts(${ATTEMPT_COLUMNS}) VALUES (?,?,?,?,?,?,?)`,
+        a.key, a.status, a.updatedAt, a.requestHash, a.actionType, a.recipient, a.personId,
       );
       return true;
     } catch {
@@ -148,11 +240,35 @@ export class SqlApprovalStore implements ApprovalStore {
   }
 
   adoptUnknownAttempt(key: string, now: Date): boolean {
+    return this.adoptFrom(key, "unknown", now);
+  }
+
+  adoptFailedAttempt(key: string, now: Date): boolean {
+    return this.adoptFrom(key, "failed", now);
+  }
+
+  private adoptFrom(key: string, from: Attempt["status"], now: Date): boolean {
     const updated = this.sql.exec(
-      "UPDATE attempts SET status = 'in_flight', updated_at = ? WHERE idempotency_key = ? AND status = 'unknown'",
-      now.toISOString(), key,
+      "UPDATE attempts SET status = 'in_flight', updated_at = ? WHERE idempotency_key = ? AND status = ?",
+      now.toISOString(), key, from,
     );
     return updated.rowsWritten === 1;
+  }
+
+  claimStaleAttempt(key: string, olderThanIso: string, now: Date): boolean {
+    const updated = this.sql.exec(
+      "UPDATE attempts SET updated_at = ? WHERE idempotency_key = ? AND status = 'in_flight' AND updated_at < ?",
+      now.toISOString(), key, olderThanIso,
+    );
+    return updated.rowsWritten === 1;
+  }
+
+  listStaleAttempts(olderThanIso: string): Attempt[] {
+    const rows = this.sql.exec(
+      `SELECT ${ATTEMPT_COLUMNS} FROM attempts WHERE status = 'in_flight' AND updated_at < ?`,
+      olderThanIso,
+    ).toArray() as unknown as Record<string, unknown>[];
+    return rows.map(attemptFromRow);
   }
 
   updateAttempt(key: string, status: Attempt["status"]): void {

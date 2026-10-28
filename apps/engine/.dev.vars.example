@@ -5,6 +5,10 @@
 META_MODEL_API_KEY= # gitleaks:allow (empty example value)
 ENCRYPTION_KEK_B64= # gitleaks:allow (empty example value)
 SESSION_SECRET= # gitleaks:allow (empty example value)
+OPERATOR_SECRET= # gitleaks:allow (empty example value)
+# Environment name. development allows the dev session secret and the
+# simulated executor and stand-in model without explicit choice.
+MANO_ENV=development
 # Model routing: with account and gateway IDs, calls go through
 # Cloudflare AI Gateway; without them, direct to the model API.
 CF_ACCOUNT_ID=

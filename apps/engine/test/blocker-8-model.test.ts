@@ -34,12 +34,15 @@ describe("blocker 8: the caller never picks the model", () => {
 
   it("lets the agent resolve synthetic from its own profile, not the request", async () => {
     const person = personStub("b8-person");
-    await person.setSyntheticFlag("b8maria", true);
+    // The operator=false guard stays as defense in depth; enforcement is
+    // covered over HTTP in r2-item-14 (wrong secret 403s, the operator
+    // secret flips the flag).
+    await person.setSyntheticFlag(true, "b8maria", true);
     expect(await person.getModelInfo("b8maria")).toEqual({
       synthetic: true,
       model: "muse-spark-1.3-contributor",
     });
-    await person.setSyntheticFlag("b8maria", false);
+    await person.setSyntheticFlag(true, "b8maria", false);
     expect(await person.getModelInfo("b8maria")).toEqual({ synthetic: false, model: "muse-spark-1.3" });
   });
 });

@@ -21,6 +21,10 @@ export interface ActionRequest {
   // gateway fills defaults (no sources, person origin) when they are absent.
   sources?: SourceCitation[];
   origin?: "person" | "content";
+  // Verified document bytes, attached by the gateway after it reads them
+  // from server storage. Never accepted from caller input: validation
+  // drops it, and hashes exclude it.
+  document?: { bytesB64: string; hash: string };
 }
 
 export interface Approval {
@@ -56,16 +60,28 @@ export interface Receipt {
   // True when a stand-in executor produced this receipt instead of a real
   // outside system. Simulated receipts must never read as real filings.
   simulated: boolean;
+  // Hash of the canonical request this receipt answers. Reuse of the key
+  // with different content is rejected instead of returning this receipt.
+  requestHash: string;
   createdAt: string;
 }
 
 // One execution claim for an idempotency key. in_flight while the executor
-// runs, unknown when a timeout left the outcome uncertain, done once a
-// receipt (or a definitive failure) is recorded.
+// runs, unknown when a timeout left the outcome uncertain, failed when the
+// action definitely did not happen (clean retry allowed), done once a
+// receipt is recorded.
 export interface Attempt {
   key: string;
-  status: "in_flight" | "unknown" | "done";
+  status: "in_flight" | "unknown" | "failed" | "done";
   updatedAt: string;
+  // Hash of the canonical request that claimed the key. A retry with
+  // different content under the same key is rejected.
+  requestHash: string;
+  // Routing context, so recovery can reconcile a stranded attempt without
+  // asking the person to approve again.
+  actionType: ActionType;
+  recipient: string;
+  personId: string;
 }
 
 export interface GatewayResult {
@@ -79,17 +95,34 @@ export interface Executor {
   // True when this executor simulates outside systems instead of calling
   // them. Receipts carry the flag so drills never read as real filings.
   readonly simulated: boolean;
-  execute(req: ActionRequest): Promise<{ externalId: string }>;
-  // Returns the recorded outcome for a key, or null when the executor has
-  // no record of it. After an unknown outcome the gateway calls check
-  // again before any new execution, so check must be authoritative and
-  // execute must stay safe to retry under the same key.
-  check(idempotencyKey: string): Promise<{ externalId: string } | null>;
+  // Runs the action. An execution may override the simulated label for
+  // its own receipt when the action is real even though the executor is
+  // a stand-in for other actions (consent delivery to a live org agent).
+  execute(req: ActionRequest): Promise<{ externalId: string; simulated?: boolean }>;
+  // Reconcile lookup with three outcomes: found, confirmed absent, or
+  // unavailable (thrown). Unavailable never counts as absent: the gateway
+  // keeps the attempt unknown and blocks. personId scopes the lookup to
+  // the person's own downstream keys.
+  check(idempotencyKey: string, personId: string): Promise<CheckOutcome>;
 }
+
+// The recorded outcome for a key: found carries the outside ID, absent
+// means the executor confirms it never ran this key.
+export type CheckOutcome = { found: true; externalId: string } | { found: false };
 
 export class TimeoutError extends Error {
   constructor(msg = "executor timed out") {
     super(msg);
     this.name = "TimeoutError";
+  }
+}
+
+// The action definitely did not happen: a 4xx from the portal, an org
+// rejection, a request the executor refused before acting. The gateway
+// records a failed attempt, which allows a clean retry with no reconcile.
+export class DefiniteFailureError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "DefiniteFailureError";
   }
 }
