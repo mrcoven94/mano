@@ -9,6 +9,7 @@ import Needs from "@/components/home/Needs";
 import Vault from "@/components/home/Vault";
 import Reach from "@/components/home/Reach";
 import Pricing from "@/components/home/Pricing";
+import OpenSource from "@/components/home/OpenSource";
 import Faq from "@/components/Faq";
 import Mascot from "@/components/Mascot";
 import { SMS_HREF, SMS_NUMBER, PLACEHOLDER_NOTE, REPO_URL } from "@/lib/site";
@@ -79,23 +80,7 @@ export default function Home() {
       </section>
 
       <section className="h-open" aria-labelledby="open-h">
-        <div className="wrap open-grid">
-          <div>
-            <h2 id="open-h">Open source, from the first commit.</h2>
-            <p className="lede">The code and the protocol that lets agents share a case are public. Any agency, nonprofit or developer can read how Mano works, build on it or run their own copy.</p>
-          </div>
-          <div>
-            <ul className="open-facts">
-              <li><b>Consent is a record.</b> Every share names who, why and until when, and can be taken back.</li>
-              <li><b>Every action is logged first.</b> Mano decides, writes it down, then acts. If anything is unclear, it stops.</li>
-              <li><b>Runs without our accounts.</b> Every part works locally with stand-ins, so you can try it today.</li>
-            </ul>
-            <div className="btn-row" style={{ marginTop: 32 }}>
-              <a className="btn btn-primary" href={REPO_URL}>Read the code</a>
-              <a className="btn btn-ghost" href={`${REPO_URL}#readme`}>Run your own</a>
-            </div>
-          </div>
-        </div>
+        <OpenSource />
       </section>
 
       <section id="pricing" className="h-price" aria-labelledby="pricing-h">
