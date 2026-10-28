@@ -1,3 +1,4 @@
+import type { FileStore } from "../src/files";
 import { newConfirmationNumber, type SessionData, type Store, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
 
 function scopedKey(scope: string, key: string): string {
@@ -62,5 +63,23 @@ export class MemoryStore implements Store {
       .sort((a, b) => b.receivedAt - a.receivedAt)
       .slice(0, limit)
       .map((s) => structuredClone(s));
+  }
+}
+
+/** In-memory FileStore for tests. */
+export class MemoryFileStore implements FileStore {
+  objects = new Map<string, { data: Uint8Array; type: string }>();
+
+  async put(key: string, data: Uint8Array, type: string): Promise<void> {
+    this.objects.set(key, { data: new Uint8Array(data), type });
+  }
+
+  async get(key: string): Promise<{ data: Uint8Array; type: string } | null> {
+    const found = this.objects.get(key);
+    return found ? { data: new Uint8Array(found.data), type: found.type } : null;
+  }
+
+  async del(keys: string[]): Promise<void> {
+    for (const key of keys) this.objects.delete(key);
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { canonicalPacket, packetDigest, sha256Hex, type Household, type StoredFile, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
+import { canonicalPacket, packetDigest, sha256Hex, type FileMeta, type Household, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
 import { MemoryStore } from "./memory-store";
 import { makeSqlStore } from "./sql-store";
 
@@ -12,7 +12,9 @@ const HOUSEHOLD: Household = {
   monthlyIncome: "2400",
 };
 
-const FILES: StoredFile[] = [{ name: "paystub.pdf", type: "application/pdf", size: 14, data: "ZmFrZS1wZGYtYnl0ZXM=" }];
+const FILES: FileMeta[] = [
+  { name: "paystub.pdf", type: "application/pdf", size: 14, sha256: "abc", r2key: "submissions/web/k/1-abc" },
+];
 
 function input(key: string, digest = "digest-a", household: Household = HOUSEHOLD, scope = "web"): SubmitInput {
   return { key, scope, household, files: FILES, digest, source: "api", slowMs: 0, receivedAt: Date.now() };

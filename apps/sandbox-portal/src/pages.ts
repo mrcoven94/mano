@@ -1,4 +1,4 @@
-import type { Household, StoredFile, Submission } from "./store";
+import type { Household, FileMeta, Submission } from "./store";
 
 export const TEST_BANNER = "TEST SYSTEM: this is a fake benefits portal for demos. No real benefits. No real data.";
 
@@ -103,7 +103,7 @@ ${err}
   );
 }
 
-export function reviewPage(household: Household, files: StoredFile[], key: string, digest: string): string {
+export function reviewPage(household: Household, files: FileMeta[], key: string, digest: string): string {
   const rows = files
     .map((f) => `<tr><td class="label">Attached file</td><td>${escapeHtml(f.name)} (${escapeHtml(f.type)}, ${f.size} bytes)</td></tr>`)
     .join("");

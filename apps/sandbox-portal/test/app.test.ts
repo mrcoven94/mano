@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG, handleRequest, type PortalConfig } from "../src/app";
 import { TEST_BANNER } from "../src/pages";
 import type { Household } from "../src/store";
-import { MemoryStore } from "./memory-store";
+import { MemoryFileStore, MemoryStore } from "./memory-store";
 
 const BASE = "https://portal.test";
 
@@ -50,8 +50,8 @@ function digestFromReview(htmlText: string): string {
 }
 
 /** Submit exactly what the review page shows, like the browser does. */
-async function submitReview(store: MemoryStore, config: PortalConfig, cookie: string): Promise<Response> {
-  const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+async function submitReview(store: MemoryStore, files: MemoryFileStore, config: PortalConfig, cookie: string): Promise<Response> {
+  const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
   const reviewText = await review.text();
   const form = new URLSearchParams();
   form.set("key", keyFromReview(reviewText));
@@ -59,6 +59,7 @@ async function submitReview(store: MemoryStore, config: PortalConfig, cookie: st
   return handleRequest(
     new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }),
     store,
+    files,
     config,
   );
 }
@@ -69,10 +70,11 @@ function confirmationFrom(htmlText: string): string {
   return match[1];
 }
 
-async function postHousehold(store: MemoryStore, config: PortalConfig): Promise<string> {
+async function postHousehold(store: MemoryStore, files: MemoryFileStore, config: PortalConfig): Promise<string> {
   const res = await handleRequest(
     new Request(`${BASE}/apply/household`, { method: "POST", body: householdForm() }),
     store,
+    files,
     config,
   );
   expect(res.status).toBe(303);
@@ -80,12 +82,19 @@ async function postHousehold(store: MemoryStore, config: PortalConfig): Promise<
   return cookieFrom(res);
 }
 
-async function postDocuments(store: MemoryStore, config: PortalConfig, cookie: string): Promise<void> {
+async function postDocuments(
+  store: MemoryStore,
+  files: MemoryFileStore,
+  config: PortalConfig,
+  cookie: string,
+  uploads: File[] = [pdfFile()],
+): Promise<void> {
   const form = new FormData();
-  form.append("document1", pdfFile());
+  uploads.forEach((upload, i) => form.append(`document${i + 1}`, upload));
   const res = await handleRequest(
     new Request(`${BASE}/apply/documents`, { method: "POST", headers: { cookie }, body: form }),
     store,
+    files,
     config,
   );
   expect(res.status).toBe(303);
@@ -95,7 +104,8 @@ async function postDocuments(store: MemoryStore, config: PortalConfig, cookie: s
 describe("home page", () => {
   test("labels itself a test system and links the application", async () => {
     const store = new MemoryStore();
-    const res = await handleRequest(new Request(`${BASE}/`), store, testConfig());
+    const files = new MemoryFileStore();
+    const res = await handleRequest(new Request(`${BASE}/`), store, new MemoryFileStore(), testConfig());
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(text).toContain(TEST_BANNER);
@@ -106,11 +116,12 @@ describe("home page", () => {
 describe("renewal flow", () => {
   test("household to documents to review to confirmation", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const cookie = await postHousehold(store, config);
-    await postDocuments(store, config, cookie);
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
 
-    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
     expect(review.status).toBe(200);
     const reviewText = await review.text();
     expect(reviewText).toContain("Maria Santos");
@@ -125,13 +136,14 @@ describe("renewal flow", () => {
     const submit = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
       store,
+      files,
       config,
     );
     expect(submit.status).toBe(200);
     const confirmation = confirmationFrom(await submit.text());
     expect(confirmation).toMatch(/^SR-[A-Z2-9]{8}$/);
 
-    const status = await handleRequest(new Request(`${BASE}/submissions/${key}`), store, config);
+    const status = await handleRequest(new Request(`${BASE}/submissions/${key}`), store, files, config);
     expect(status.status).toBe(200);
     const statusJson = (await status.json()) as Record<string, string>;
     expect(statusJson["status"]).toBe("received");
@@ -141,10 +153,11 @@ describe("renewal flow", () => {
 
   test("editing after review rejects the stale submit", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const cookie = await postHousehold(store, config);
-    await postDocuments(store, config, cookie);
-    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
     const stale = await review.text();
     const staleForm = new URLSearchParams();
     staleForm.set("key", keyFromReview(stale));
@@ -154,6 +167,7 @@ describe("renewal flow", () => {
     const edit = await handleRequest(
       new Request(`${BASE}/apply/household`, { method: "POST", headers: { cookie }, body: householdForm({ monthlyIncome: "9999" }) }),
       store,
+      files,
       config,
     );
     expect(edit.status).toBe(303);
@@ -161,6 +175,7 @@ describe("renewal flow", () => {
     const rejected = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: staleForm }),
       store,
+      files,
       config,
     );
     expect(rejected.status).toBe(400);
@@ -168,22 +183,24 @@ describe("renewal flow", () => {
     expect((await store.listSubmissions(10)).length).toBe(0);
 
     // A fresh review of the current draft submits fine.
-    const fresh = await submitReview(store, config, cookie);
+    const fresh = await submitReview(store, files, config, cookie);
     expect(fresh.status).toBe(200);
     expect((await store.listSubmissions(10)).length).toBe(1);
   });
 
   test("a submit without the review digest is rejected", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const cookie = await postHousehold(store, config);
-    await postDocuments(store, config, cookie);
-    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
     const form = new URLSearchParams();
     form.set("key", keyFromReview(await review.text()));
     const res = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }),
       store,
+      files,
       config,
     );
     expect(res.status).toBe(400);
@@ -192,10 +209,11 @@ describe("renewal flow", () => {
 
   test("review without household redirects back to step 1", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const start = await handleRequest(new Request(`${BASE}/apply`), store, config);
+    const start = await handleRequest(new Request(`${BASE}/apply`), store, files, config);
     expect(start.status).toBe(200);
-    const review = await handleRequest(new Request(`${BASE}/apply/review`), store, config);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`), store, files, config);
     expect(review.status).toBe(403);
     expect(await review.text()).toContain("timed out");
   });
@@ -204,6 +222,7 @@ describe("renewal flow", () => {
 describe("idempotency", () => {
   test("resubmitting a key returns the original confirmation, no duplicate", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
     const packet = {
       key: "resubmit-key",
@@ -218,6 +237,7 @@ describe("idempotency", () => {
           body: JSON.stringify(packet),
         }),
         store,
+        files,
         config,
       );
     const first = (await (await post()).json()) as Record<string, unknown>;
@@ -230,6 +250,7 @@ describe("idempotency", () => {
 
   test("concurrent submits under one key file a single receipt", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
     const packet = {
       key: "race-key",
@@ -245,6 +266,7 @@ describe("idempotency", () => {
             body: JSON.stringify(packet),
           }),
           store,
+          files,
           config,
         ),
       ),
@@ -258,7 +280,8 @@ describe("idempotency", () => {
 
   test("unknown key reports not found", async () => {
     const store = new MemoryStore();
-    const res = await handleRequest(new Request(`${BASE}/submissions/does-not-exist`), store, testConfig());
+    const files = new MemoryFileStore();
+    const res = await handleRequest(new Request(`${BASE}/submissions/does-not-exist`), store, new MemoryFileStore(), testConfig());
     expect(res.status).toBe(404);
     const body = (await res.json()) as Record<string, string>;
     expect(body["status"]).toBe("not_found");
@@ -266,10 +289,11 @@ describe("idempotency", () => {
 
   test("the same key reconciles across the web form and the JSON API", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const cookie = await postHousehold(store, config);
-    await postDocuments(store, config, cookie);
-    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
     const reviewText = await review.text();
     const key = keyFromReview(reviewText);
     const submitForm = new URLSearchParams();
@@ -278,6 +302,7 @@ describe("idempotency", () => {
     await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
       store,
+      files,
       config,
     );
     const retry = await handleRequest(
@@ -291,6 +316,7 @@ describe("idempotency", () => {
         }),
       }),
       store,
+      files,
       config,
     );
     expect(retry.status).toBe(200);
@@ -301,6 +327,7 @@ describe("idempotency", () => {
 
   test("a different packet under an existing key returns 409 with the received digest", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
     const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
     const post = (household: typeof HOUSEHOLD) =>
@@ -311,6 +338,7 @@ describe("idempotency", () => {
           body: JSON.stringify({ key: "conflict-key", household, files: [file] }),
         }),
         store,
+        files,
         config,
       );
     const first = (await (await post(HOUSEHOLD)).json()) as Record<string, unknown>;
@@ -324,6 +352,7 @@ describe("idempotency", () => {
 
   test("the receipt carries the digest the gateway can prove", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
     const submit = await handleRequest(
       new Request(`${BASE}/submissions`, {
@@ -336,11 +365,12 @@ describe("idempotency", () => {
         }),
       }),
       store,
+      files,
       config,
     );
     const submitted = (await submit.json()) as Record<string, string>;
     expect(submitted["digest"]).toMatch(/^[0-9a-f]{64}$/);
-    const receipt = (await (await handleRequest(new Request(`${BASE}/submissions/digest-key`), store, config)).json()) as Record<
+    const receipt = (await (await handleRequest(new Request(`${BASE}/submissions/digest-key`), store, files, config)).json()) as Record<
       string,
       string
     >;
@@ -350,18 +380,20 @@ describe("idempotency", () => {
 
   test("a web key from another session is rejected", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const cookieA = await postHousehold(store, config);
-    await postDocuments(store, config, cookieA);
-    const reviewA = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie: cookieA } }), store, config);
+    const cookieA = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookieA);
+    const reviewA = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie: cookieA } }), store, files, config);
     const keyA = keyFromReview(await reviewA.text());
-    const cookieB = await postHousehold(store, config);
-    await postDocuments(store, config, cookieB);
+    const cookieB = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookieB);
     const form = new URLSearchParams();
     form.set("key", keyA);
     const res = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie: cookieB }, body: form }),
       store,
+      files,
       config,
     );
     expect(res.status).toBe(400);
@@ -371,6 +403,7 @@ describe("idempotency", () => {
 
   test("two API tokens file the same key independently", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
     const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
     const post = (token: string, household: typeof HOUSEHOLD) =>
@@ -381,6 +414,7 @@ describe("idempotency", () => {
           body: JSON.stringify({ key: "shared-key", household, files: [file] }),
         }),
         store,
+        files,
         config,
       );
     const a = (await (await post("token-one", HOUSEHOLD)).json()) as Record<string, unknown>;
@@ -393,10 +427,11 @@ describe("idempotency", () => {
 
   test("an API retry of a browser filing duplicates instead of filing again", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const cookie = await postHousehold(store, config);
-    await postDocuments(store, config, cookie);
-    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
     const reviewText = await review.text();
     const key = keyFromReview(reviewText);
     const form = new URLSearchParams();
@@ -405,6 +440,7 @@ describe("idempotency", () => {
     const web = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: form }),
       store,
+      files,
       config,
     );
     const webConfirmation = confirmationFrom(await web.text());
@@ -419,6 +455,7 @@ describe("idempotency", () => {
         }),
       }),
       store,
+      files,
       config,
     );
     expect(retry.status).toBe(200);
@@ -431,6 +468,7 @@ describe("idempotency", () => {
 
   test("reconcile reads the caller's scope first, then the web scope", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
     const file = { name: "paystub.pdf", type: "application/pdf", data: Buffer.from("bytes").toString("base64") };
     await handleRequest(
@@ -440,16 +478,18 @@ describe("idempotency", () => {
         body: JSON.stringify({ key: "scoped-key", household: HOUSEHOLD, files: [file] }),
       }),
       store,
+      files,
       config,
     );
     const own = (await (
-      await handleRequest(new Request(`${BASE}/submissions/scoped-key`, { headers: { authorization: "Bearer token-one" } }), store, config)
+      await handleRequest(new Request(`${BASE}/submissions/scoped-key`, { headers: { authorization: "Bearer token-one" } }), store, files, config)
     ).json()) as Record<string, string>;
     expect(own["status"]).toBe("received");
     expect(own["scope"]).toMatch(/^api-/);
     const other = await handleRequest(
       new Request(`${BASE}/submissions/scoped-key`, { headers: { authorization: "Bearer token-two" } }),
       store,
+      files,
       config,
     );
     expect(other.status).toBe(404);
@@ -457,6 +497,8 @@ describe("idempotency", () => {
 
   test("a submission without a key is rejected", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
     const res = await handleRequest(
       new Request(`${BASE}/submissions`, {
         method: "POST",
@@ -464,7 +506,8 @@ describe("idempotency", () => {
         body: JSON.stringify({ household: HOUSEHOLD }),
       }),
       store,
-      testConfig(),
+      files,
+      config,
     );
     expect(res.status).toBe(400);
   });
@@ -473,6 +516,7 @@ describe("idempotency", () => {
 describe("slow mode", () => {
   test("stores the submission before holding the response", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
     const key = "slow-demo-key";
     let responded = false;
@@ -487,6 +531,7 @@ describe("slow mode", () => {
         }),
       }),
       store,
+      files,
       config,
     ).finally(() => {
       responded = true;
@@ -496,7 +541,7 @@ describe("slow mode", () => {
     let seen: Response | null = null;
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
-      const probe = await handleRequest(new Request(`${BASE}/submissions/${key}`), store, config);
+      const probe = await handleRequest(new Request(`${BASE}/submissions/${key}`), store, files, config);
       if (probe.status === 200) {
         seen = probe;
         break;
@@ -516,14 +561,15 @@ describe("slow mode", () => {
 describe("session timeout", () => {
   test("an expired session sees the timeout page and submits nothing", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const cookie = await postHousehold(store, config);
+    const cookie = await postHousehold(store, files, config);
     const sessionId = cookie.split("=")[1] ?? "";
     const session = await store.getSession(sessionId);
     if (!session) throw new Error("session was not created");
     await store.putSession({ ...session, expiresAt: Date.now() - 1000 });
 
-    const page = await handleRequest(new Request(`${BASE}/apply/documents`, { headers: { cookie } }), store, config);
+    const page = await handleRequest(new Request(`${BASE}/apply/documents`, { headers: { cookie } }), store, files, config);
     expect(page.status).toBe(403);
     expect(await page.text()).toContain("timed out");
 
@@ -532,6 +578,7 @@ describe("session timeout", () => {
     const submit = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
       store,
+      files,
       config,
     );
     expect(submit.status).toBe(403);
@@ -542,10 +589,12 @@ describe("session timeout", () => {
 describe("validation", () => {
   test("household requires every field", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
     const res = await handleRequest(
       new Request(`${BASE}/apply/household`, { method: "POST", body: householdForm({ fullName: "" }) }),
       store,
+      files,
       config,
     );
     expect(res.status).toBe(400);
@@ -554,10 +603,12 @@ describe("validation", () => {
 
   test("household size must be a whole number in range", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
     const res = await handleRequest(
       new Request(`${BASE}/apply/household`, { method: "POST", body: householdForm({ householdSize: "0" }) }),
       store,
+      files,
       config,
     );
     expect(res.status).toBe(400);
@@ -566,11 +617,13 @@ describe("validation", () => {
 
   test("documents require at least one file", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const cookie = await postHousehold(store, config);
+    const cookie = await postHousehold(store, files, config);
     const res = await handleRequest(
       new Request(`${BASE}/apply/documents`, { method: "POST", headers: { cookie }, body: new FormData() }),
       store,
+      files,
       config,
     );
     expect(res.status).toBe(400);
@@ -579,13 +632,15 @@ describe("validation", () => {
 
   test("documents reject other file types", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const cookie = await postHousehold(store, config);
+    const cookie = await postHousehold(store, files, config);
     const form = new FormData();
     form.append("document1", new File(["x"], "note.txt", { type: "text/plain" }));
     const res = await handleRequest(
       new Request(`${BASE}/apply/documents`, { method: "POST", headers: { cookie }, body: form }),
       store,
+      files,
       config,
     );
     expect(res.status).toBe(400);
@@ -594,13 +649,15 @@ describe("validation", () => {
 
   test("documents enforce the size cap", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig({ maxUploadBytes: 10 });
-    const cookie = await postHousehold(store, config);
+    const cookie = await postHousehold(store, files, config);
     const form = new FormData();
     form.append("document1", pdfFile());
     const res = await handleRequest(
       new Request(`${BASE}/apply/documents`, { method: "POST", headers: { cookie }, body: form }),
       store,
+      files,
       config,
     );
     expect(res.status).toBe(400);
@@ -608,16 +665,107 @@ describe("validation", () => {
   });
 });
 
+describe("blocker 5: file bytes in the file store", () => {
+  test("a 5 MB upload files and downloads intact", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    const big = new Uint8Array(5 * 1024 * 1024);
+    big.fill(7);
+    big[0] = 0x25;
+    big[1] = 0x50;
+    big[2] = 0x44;
+    big[3] = 0x46;
+    big[4] = 0x2d;
+    await postDocuments(store, files, config, cookie, [new File([big], "big.pdf", { type: "application/pdf" })]);
+    const submit = await submitReview(store, files, config, cookie);
+    expect(submit.status).toBe(200);
+    const confirmation = confirmationFrom(await submit.text());
+    const download = await handleRequest(
+      new Request(`${BASE}/caseworker/${confirmation}/file/0`),
+      store,
+      files,
+      config,
+    );
+    expect(download.status).toBe(200);
+    const roundTripped = new Uint8Array(await download.arrayBuffer());
+    expect(roundTripped.length).toBe(big.length);
+    expect(roundTripped[0]).toBe(0x25);
+    expect(roundTripped[big.length - 1]).toBe(7);
+  });
+
+  test("SQLite rows hold metadata only; bytes live under submission keys", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const submit = await submitReview(store, files, config, cookie);
+    expect(submit.status).toBe(200);
+    const submissions = await store.listSubmissions(10);
+    expect(submissions).toHaveLength(1);
+    const filed = submissions[0]!;
+    expect(JSON.stringify(filed)).not.toContain("fake-pdf-bytes");
+    expect(filed.files[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(filed.files[0]?.r2key).toMatch(/^submissions\/web\/.+\/1-[0-9a-f]{8}$/);
+    const bytes = await files.get(filed.files[0]!.r2key);
+    expect(bytes?.type).toBe("application/pdf");
+    expect(Buffer.from(bytes!.data).toString()).toBe("fake-pdf-bytes");
+    expect([...files.objects.keys()].some((k) => k.startsWith("drafts/"))).toBe(false);
+  });
+
+  test("replacing the draft deletes the previous draft objects", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie, [pdfFile("first.pdf", "first-bytes")]);
+    expect(files.objects.size).toBe(1);
+    await postDocuments(store, files, config, cookie, [pdfFile("second.pdf", "second-bytes")]);
+    expect(files.objects.size).toBe(1);
+    const remaining = await files.get([...files.objects.keys()][0]!);
+    expect(Buffer.from(remaining!.data).toString()).toBe("second-bytes");
+  });
+
+  test("a conflict deletes the loser's objects and keeps the winner's bytes", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const file = (bytes: string) => ({ name: "paystub.pdf", type: "application/pdf", data: Buffer.from(bytes).toString("base64") });
+    const post = (token: string, name: string, bytes: string) =>
+      handleRequest(
+        new Request(`${BASE}/submissions`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify({ key: "fight-key", household: { ...HOUSEHOLD, fullName: name }, files: [file(bytes)] }),
+        }),
+        store,
+        files,
+        config,
+      );
+    const first = await post("token-one", "Maria Santos", "winner-bytes");
+    expect(first.status).toBe(200);
+    const second = await post("token-one", "Alex Rivera", "loser-bytes");
+    expect(second.status).toBe(409);
+    const keys = [...files.objects.keys()];
+    expect(keys).toHaveLength(1);
+    const kept = await files.get(keys[0]!);
+    expect(Buffer.from(kept!.data).toString()).toBe("winner-bytes");
+  });
+});
+
 describe("caseworker view", () => {
   test("lists submissions with detail and file download", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const empty = await handleRequest(new Request(`${BASE}/caseworker`), store, config);
+    const empty = await handleRequest(new Request(`${BASE}/caseworker`), store, files, config);
     expect(await empty.text()).toContain("No applications received yet");
 
-    const cookie = await postHousehold(store, config);
-    await postDocuments(store, config, cookie);
-    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
     const submitForm = new URLSearchParams();
     const caseworkerReview = await review.text();
     submitForm.set("key", keyFromReview(caseworkerReview));
@@ -625,25 +773,26 @@ describe("caseworker view", () => {
     const submit = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
       store,
+      files,
       config,
     );
     const confirmation = confirmationFrom(await submit.text());
 
-    const list = await handleRequest(new Request(`${BASE}/caseworker`), store, config);
+    const list = await handleRequest(new Request(`${BASE}/caseworker`), store, files, config);
     const listText = await list.text();
     expect(listText).toContain(confirmation);
     expect(listText).toContain("Maria Santos");
 
-    const detail = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}`), store, config);
+    const detail = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}`), store, files, config);
     expect(detail.status).toBe(200);
     expect(await detail.text()).toContain("42 Test Street");
 
-    const file = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}/file/0`), store, config);
+    const file = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}/file/0`), store, files, config);
     expect(file.status).toBe(200);
     expect(file.headers.get("content-type")).toBe("application/pdf");
     expect(await file.text()).toBe("fake-pdf-bytes");
 
-    const missing = await handleRequest(new Request(`${BASE}/caseworker/SR-00000000`), store, config);
+    const missing = await handleRequest(new Request(`${BASE}/caseworker/SR-00000000`), store, files, config);
     expect(missing.status).toBe(404);
   });
 });
@@ -651,19 +800,20 @@ describe("caseworker view", () => {
 describe("test system labels", () => {
   test("every page says it is a test system", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
-    const cookie = await postHousehold(store, config);
+    const cookie = await postHousehold(store, files, config);
     const pages: Request[] = [new Request(`${BASE}/`), new Request(`${BASE}/apply`), new Request(`${BASE}/nope`)];
     for (const req of pages) {
-      expect(await (await handleRequest(req, store, config)).text()).toContain(TEST_BANNER);
+      expect(await (await handleRequest(req, store, files, config)).text()).toContain(TEST_BANNER);
     }
     const authed = [`${BASE}/apply/documents`];
     for (const url of authed) {
-      const res = await handleRequest(new Request(url, { headers: { cookie } }), store, config);
+      const res = await handleRequest(new Request(url, { headers: { cookie } }), store, files, config);
       expect(await res.text()).toContain(TEST_BANNER);
     }
-    await postDocuments(store, config, cookie);
-    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, config);
+    await postDocuments(store, files, config, cookie);
+    const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
     const reviewText = await review.text();
     expect(reviewText).toContain(TEST_BANNER);
     const submitForm = new URLSearchParams();
@@ -672,25 +822,28 @@ describe("test system labels", () => {
     const submit = await handleRequest(
       new Request(`${BASE}/submissions`, { method: "POST", headers: { cookie }, body: submitForm }),
       store,
+      files,
       config,
     );
     const submitText = await submit.text();
     const confirmation = confirmationFrom(submitText);
     expect(submitText).toContain(TEST_BANNER);
-    const list = await handleRequest(new Request(`${BASE}/caseworker`), store, config);
+    const list = await handleRequest(new Request(`${BASE}/caseworker`), store, files, config);
     expect(await list.text()).toContain(TEST_BANNER);
-    const detail = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}`), store, config);
+    const detail = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}`), store, files, config);
     expect(await detail.text()).toContain(TEST_BANNER);
-    const timeout = await handleRequest(new Request(`${BASE}/apply/review`), store, config);
+    const timeout = await handleRequest(new Request(`${BASE}/apply/review`), store, files, config);
     expect(await timeout.text()).toContain(TEST_BANNER);
   });
 
   test("redirects carry the test banner for clients that do not follow them", async () => {
     const store = new MemoryStore();
+    const files = new MemoryFileStore();
     const config = testConfig();
     const res = await handleRequest(
       new Request(`${BASE}/apply/household`, { method: "POST", body: householdForm() }),
       store,
+      files,
       config,
     );
     expect(res.status).toBe(303);

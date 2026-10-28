@@ -7,18 +7,19 @@ export interface Household {
   monthlyIncome: string;
 }
 
-export interface StoredFile {
+/** File metadata. Bytes live in the FileStore (R2); SQLite never holds them. */
+export interface FileMeta {
   name: string;
   type: string;
   size: number;
-  /** base64-encoded bytes */
-  data: string;
+  sha256: string;
+  r2key: string;
 }
 
 export interface SessionData {
   id: string;
   household?: Household;
-  files: StoredFile[];
+  files: FileMeta[];
   /** idempotency key minted for this session's submission */
   key: string;
   createdAt: number;
@@ -33,7 +34,7 @@ export interface Submission {
   scope: string;
   confirmationNumber: string;
   household: Household;
-  files: StoredFile[];
+  files: FileMeta[];
   /** SHA-256 of the canonical packet: household fields plus each file's bytes */
   digest: string;
   status: SubmissionStatus;
@@ -55,7 +56,7 @@ export interface SubmitInput {
   key: string;
   scope: string;
   household: Household;
-  files: StoredFile[];
+  files: FileMeta[];
   digest: string;
   source: Submission["source"];
   slowMs: number;
@@ -102,12 +103,6 @@ function isConfirmationConflict(err: unknown): boolean {
   return message.includes("submissions.confirmation");
 }
 
-export function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary);
-}
-
 export function fromBase64(data: string): Uint8Array {
   const binary = atob(data);
   const out = new Uint8Array(binary.length);
@@ -140,13 +135,8 @@ export async function packetDigest(household: Household, files: FileDigest[]): P
   return sha256Hex(canonicalPacket(household, files));
 }
 
-/** Hash the bytes of base64-carried files for the packet digest. */
-export async function digestStoredFiles(files: StoredFile[]): Promise<FileDigest[]> {
-  const out: FileDigest[] = [];
-  for (const f of files) {
-    out.push({ name: f.name, type: f.type, size: f.size, sha256: await sha256Hex(fromBase64(f.data)) });
-  }
-  return out;
+export function metasToDigests(files: FileMeta[]): FileDigest[] {
+  return files.map((f) => ({ name: f.name, type: f.type, size: f.size, sha256: f.sha256 }));
 }
 
 /** Minimal surface of Durable Object SQLite storage, so tests never import cloudflare:workers. */

@@ -10,6 +10,10 @@ class_name = "PortalStore"
 tag = "v1"
 new_sqlite_classes = ["PortalStore"]
 
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "mano-sandbox-portal-files"
+
 [vars]
 SESSION_TIMEOUT_MINUTES = "15"
 SLOW_MS_DEFAULT = "20000"

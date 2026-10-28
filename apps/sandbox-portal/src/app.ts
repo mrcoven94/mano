@@ -1,13 +1,13 @@
+import { draftFileKey, submissionFileKey, type FileStore } from "./files";
 import {
-  digestStoredFiles,
   fromBase64,
+  metasToDigests,
   newId,
   packetDigest,
   sha256Hex,
-  toBase64,
+  type FileMeta,
   type Household,
   type SessionData,
-  type StoredFile,
   type Store,
   type Submission,
 } from "./store";
@@ -158,25 +158,36 @@ function validateHousehold(data: Record<string, string>): { household?: Househol
   return { household };
 }
 
-async function readUploads(form: FormData, config: PortalConfig): Promise<{ files?: StoredFile[]; error?: string }> {
-  const files: StoredFile[] = [];
+async function readUploads(
+  form: FormData,
+  config: PortalConfig,
+  sessionId: string,
+  files: FileStore,
+): Promise<{ files?: FileMeta[]; error?: string }> {
+  const metas: FileMeta[] = [];
+  const staged: string[] = [];
   for (let i = 1; i <= config.maxUploadFiles; i++) {
     // workers-types declares get() as string-only; at runtime file inputs come back as File.
     const value = form.get(`document${i}`) as unknown as string | File | null;
     if (!(value instanceof File) || value.size === 0) continue;
+    const name = value.name || `document${i}`;
     if (!ALLOWED_UPLOAD_TYPES.has(value.type)) {
-      return { error: `${value.name || `document ${i}`} must be a PDF, PNG or JPG file.` };
+      await files.del(staged);
+      return { error: `${name} must be a PDF, PNG or JPG file.` };
     }
     if (value.size > config.maxUploadBytes) {
-      return {
-        error: `${value.name || `document ${i}`} is larger than the ${config.maxUploadBytes} byte limit.`,
-      };
+      await files.del(staged);
+      return { error: `${name} is larger than the ${config.maxUploadBytes} byte limit.` };
     }
     const bytes = new Uint8Array(await value.arrayBuffer());
-    files.push({ name: value.name || `document${i}`, type: value.type, size: value.size, data: toBase64(bytes) });
+    const sha256 = await sha256Hex(bytes);
+    const r2key = draftFileKey(sessionId, i, sha256);
+    await files.put(r2key, bytes, value.type);
+    staged.push(r2key);
+    metas.push({ name, type: value.type, size: value.size, sha256, r2key });
   }
-  if (files.length === 0) return { error: "Attach at least one document." };
-  return { files };
+  if (metas.length === 0) return { error: "Attach at least one document." };
+  return { files: metas };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -227,11 +238,23 @@ function conflictJson(stored: Submission): Response {
   );
 }
 
-async function handleSubmit(request: Request, url: URL, store: Store, config: PortalConfig): Promise<Response> {
+interface JsonUpload {
+  name: string;
+  type: string;
+  bytes: Uint8Array;
+}
+
+async function handleSubmit(
+  request: Request,
+  url: URL,
+  store: Store,
+  fileStore: FileStore,
+  config: PortalConfig,
+): Promise<Response> {
   const isJson = (request.headers.get("content-type") ?? "").includes("application/json");
   let fields: Record<string, string> = {};
   let jsonHousehold: Household | null = null;
-  let jsonFiles: StoredFile[] | null = null;
+  let jsonUploads: JsonUpload[] | null = null;
 
   if (isJson) {
     let body: unknown;
@@ -252,7 +275,7 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
     }
     if (record["files"] !== undefined) {
       if (!Array.isArray(record["files"])) return json({ error: "files must be an array." }, 400);
-      jsonFiles = [];
+      jsonUploads = [];
       for (const entry of record["files"] as Array<Record<string, unknown>>) {
         if (typeof entry["name"] !== "string" || typeof entry["type"] !== "string" || typeof entry["data"] !== "string") {
           return json({ error: "Each file needs a name, type and base64 data." }, 400);
@@ -269,9 +292,9 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
         if (bytes.length > config.maxUploadBytes) {
           return json({ error: `${entry["name"]} is larger than the ${config.maxUploadBytes} byte limit.` }, 400);
         }
-        jsonFiles.push({ name: entry["name"], type: entry["type"], size: bytes.length, data: entry["data"] });
+        jsonUploads.push({ name: entry["name"], type: entry["type"], bytes });
       }
-      if (jsonFiles.length > config.maxUploadFiles) {
+      if (jsonUploads.length > config.maxUploadFiles) {
         return json({ error: `Attach at most ${config.maxUploadFiles} files.` }, 400);
       }
     }
@@ -293,19 +316,28 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
   }
 
   let household: Household | undefined;
-  let files: StoredFile[] = [];
+  let files: FileMeta[] = [];
   let source: Submission["source"] = "web";
   let session: SessionData | null = null;
   let scope = WEB_SCOPE;
   let reviewedDigest = "";
+  let uploadedKeys: string[] = [];
 
   if (isJson) {
     source = "api";
     if (!jsonHousehold) return json({ error: "A JSON submission needs a household object." }, 400);
-    household = jsonHousehold;
-    files = jsonFiles ?? [];
-    if (files.length === 0) return json({ error: "Attach at least one document." }, 400);
+    const uploads = jsonUploads ?? [];
+    if (uploads.length === 0) return json({ error: "Attach at least one document." }, 400);
     scope = await callerScope(request);
+    household = jsonHousehold;
+    for (let i = 0; i < uploads.length; i++) {
+      const upload = uploads[i]!;
+      const sha256 = await sha256Hex(upload.bytes);
+      const r2key = submissionFileKey(scope, key, i + 1, sha256);
+      await fileStore.put(r2key, upload.bytes, upload.type);
+      uploadedKeys.push(r2key);
+      files.push({ name: upload.name, type: upload.type, size: upload.bytes.length, sha256, r2key });
+    }
   } else {
     session = await loadSession(request, store, config);
     if (!session) return timedOut();
@@ -327,13 +359,30 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
       return redirect("/apply/documents");
     }
     household = session.household;
-    files = session.files;
     reviewedDigest = fields["digest"] ?? "";
+    // Promote draft bytes to filed objects before the atomic submit records them.
+    const promoted: FileMeta[] = [];
+    const staged: string[] = [];
+    for (let i = 0; i < session.files.length; i++) {
+      const draft = session.files[i]!;
+      const bytes = await fileStore.get(draft.r2key);
+      if (!bytes) {
+        await fileStore.del(staged);
+        return html(errorPage("Missing document", "An uploaded document expired before submit. Attach it again.", "/apply/documents", "Back to documents"), 400);
+      }
+      const r2key = submissionFileKey(scope, key, i + 1, draft.sha256);
+      await fileStore.put(r2key, bytes.data, draft.type);
+      staged.push(r2key);
+      promoted.push({ ...draft, r2key });
+    }
+    files = promoted;
+    uploadedKeys = staged;
   }
 
   const slowMs = resolveSlowMs(url, fields, config);
-  const digest = await packetDigest(household, await digestStoredFiles(files));
+  const digest = await packetDigest(household, metasToDigests(files));
   if (!isJson && reviewedDigest !== digest) {
+    await fileStore.del(uploadedKeys);
     return html(
       errorPage(
         "Changed since review",
@@ -347,7 +396,10 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
   if (source === "api") {
     // The browser may have filed this exact packet under the web scope; a retry must not file it again.
     const webFiled = await store.getSubmission(WEB_SCOPE, key);
-    if (webFiled && webFiled.digest === digest) return submissionJson(webFiled, true);
+    if (webFiled && webFiled.digest === digest) {
+      await fileStore.del(uploadedKeys);
+      return submissionJson(webFiled, true);
+    }
   }
   const result = await store.submit({
     key,
@@ -360,6 +412,9 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
     receivedAt: nowMs(config),
   });
   if (result.outcome === "conflict") {
+    // Our bytes lost; drop the objects that are not the winner's.
+    const winners = new Set(result.stored.files.map((f) => f.r2key));
+    await fileStore.del(uploadedKeys.filter((k) => !winners.has(k)));
     const stored = result.stored;
     if (isJson || wantsJson(request)) return conflictJson(stored);
     return html(
@@ -372,6 +427,8 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
       409,
     );
   }
+  // Filed objects stay (a duplicate wrote identical bytes to identical keys); drafts go.
+  if (session) await fileStore.del(session.files.map((f) => f.r2key));
   const duplicate = result.outcome === "duplicate";
 
   if (session) await store.deleteSession(session.id);
@@ -382,7 +439,7 @@ async function handleSubmit(request: Request, url: URL, store: Store, config: Po
   return html(confirmationPage(result.submission, duplicate));
 }
 
-export async function handleRequest(request: Request, store: Store, config: PortalConfig): Promise<Response> {
+export async function handleRequest(request: Request, store: Store, fileStore: FileStore, config: PortalConfig): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method.toUpperCase();
@@ -427,11 +484,14 @@ export async function handleRequest(request: Request, store: Store, config: Port
     if (!session) return timedOut();
     if (!session.household) return redirect("/apply");
     const form = await request.formData();
-    const parsed = await readUploads(form, config);
+    const parsed = await readUploads(form, config, session.id, fileStore);
     if (!parsed.files) {
       await touchSession(store, session, config);
       return html(documentsPage(parsed.error), 400);
     }
+    // Replacing the draft drops the previous draft objects.
+    const replaced = session.files.map((f) => f.r2key).filter((k) => !parsed.files!.some((f) => f.r2key === k));
+    await fileStore.del(replaced);
     session.files = parsed.files;
     await touchSession(store, session, config);
     return redirect("/apply/review");
@@ -443,12 +503,12 @@ export async function handleRequest(request: Request, store: Store, config: Port
     if (!session.household) return redirect("/apply");
     if (session.files.length === 0) return redirect("/apply/documents");
     await touchSession(store, session, config);
-    const digest = await packetDigest(session.household, await digestStoredFiles(session.files));
+    const digest = await packetDigest(session.household, metasToDigests(session.files));
     return html(reviewPage(session.household, session.files, session.key, digest));
   }
 
   if (method === "POST" && path === "/submissions") {
-    return handleSubmit(request, url, store, config);
+    return handleSubmit(request, url, store, fileStore, config);
   }
 
   const submissionMatch = /^\/submissions\/([^/]+)$/.exec(path);
@@ -480,8 +540,11 @@ export async function handleRequest(request: Request, store: Store, config: Port
     if (!sub || !file) {
       return html(errorPage("Not found", "That file does not exist.", "/caseworker", "Back to the list"), 404);
     }
-    const bytes = fromBase64(file.data);
-    return new Response(bytes as unknown as BodyInit, {
+    const bytes = await fileStore.get(file.r2key);
+    if (!bytes) {
+      return html(errorPage("Not found", "That file does not exist.", "/caseworker", "Back to the list"), 404);
+    }
+    return new Response(bytes.data as unknown as BodyInit, {
       headers: {
         "content-type": file.type,
         "content-disposition": `attachment; filename="${file.name.replaceAll('"', "")}"`,

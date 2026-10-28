@@ -1,10 +1,12 @@
 import { handleRequest, type PortalConfig } from "./app";
 import { PortalStore } from "./durable";
+import { R2FileStore } from "./files";
 
 export { PortalStore };
 
 export interface Env {
   PORTAL_STORE: DurableObjectNamespace<PortalStore>;
+  FILES: R2Bucket;
   SESSION_TIMEOUT_MINUTES?: string;
   SLOW_MS_DEFAULT?: string;
   MAX_UPLOAD_BYTES?: string;
@@ -29,6 +31,6 @@ function configFromEnv(env: Env): PortalConfig {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const stub = env.PORTAL_STORE.get(env.PORTAL_STORE.idFromName("portal"));
-    return handleRequest(request, stub, configFromEnv(env));
+    return handleRequest(request, stub, new R2FileStore(env.FILES), configFromEnv(env));
   },
 };
