@@ -8,13 +8,13 @@ import Mascot from "@/components/Mascot";
 
 const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
 
-export function TeamHero({ before, phrase, after, lede, children, stage }: { before: string; phrase: string; after: string; lede: string; children: React.ReactNode; stage: React.ReactNode }) {
+export function TeamHero({ before, phrase, after, lede, children, stage }: { before: string; phrase: React.ReactNode; after: string; lede: string; children: React.ReactNode; stage: React.ReactNode }) {
   return (
     <div className="t-hero">
       <div className="wrap">
         <div className="t-hero-head">
           <div>
-            <h1>{before}<mark className="h-phrase">{phrase}</mark>{after}</h1>
+            <h1>{before}{typeof phrase === "string" ? <mark className="h-phrase">{phrase}</mark> : phrase}{after}</h1>
           </div>
           <div className="t-hero-side">
             <p className="h-lede">{lede}</p>
@@ -63,17 +63,41 @@ export function Steps({ id, title, art, artAlt, items }: { id: string; title: st
   );
 }
 
-export function Rules({ id, title, lede, facts }: { id: string; title: string; lede: string; facts: [string, string][] }) {
+/* One line of an activity log: when, who and what happened. A person or Mano, never a code name. */
+export type LogLine = { at: string; who: string; role?: string; text: string; mano?: boolean };
+
+export function AuditLog({ title, lines }: { title: string; lines: LogLine[] }) {
+  return (
+    <InView className="t-log" threshold={0.3}>
+      <p className="t-log-title">{title}</p>
+      <ol>
+        {lines.map((l, n) => (
+          <li key={n} className="rv" style={d(0.15 + n * 0.35)}>
+            {l.mano
+              ? <Mascot tile tone="orange" size={34} className="t-log-av" />
+              : <span className="t-log-av t-log-person" aria-hidden="true">{l.who.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>}
+            <div>
+              <p><b>{l.who}</b>{l.role && <span className="t-log-role"> {l.role}</span>}</p>
+              <p className="t-log-text">{l.text}</p>
+            </div>
+            <span className="t-log-at">{l.at}</span>
+          </li>
+        ))}
+      </ol>
+    </InView>
+  );
+}
+
+export function Rules({ id, title, lede, facts, log }: { id: string; title: string; lede: string; facts: [string, string][]; log?: { title: string; lines: LogLine[] } }) {
   return (
     <section className="t-rules" aria-labelledby={`${id}-h`}>
       <div className="wrap open-grid">
         <div>
           <h2 id={`${id}-h`}>{title}</h2>
           <p className="lede">{lede}</p>
+          {log && <ul className="open-facts">{facts.map(([b, x]) => <li key={b}><b>{b}</b> {x}</li>)}</ul>}
         </div>
-        <ul className="open-facts">
-          {facts.map(([b, x]) => <li key={b}><b>{b}</b> {x}</li>)}
-        </ul>
+        {log ? <AuditLog title={log.title} lines={log.lines} /> : <ul className="open-facts">{facts.map(([b, x]) => <li key={b}><b>{b}</b> {x}</li>)}</ul>}
       </div>
     </section>
   );

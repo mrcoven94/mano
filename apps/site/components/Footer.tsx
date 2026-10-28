@@ -23,7 +23,7 @@ export default function Footer() {
           <nav aria-label="Teams">
             <p className="mono">Teams</p>
             <ul>
-              <li><Link href="/government">For offices</Link></li>
+              <li><Link href="/government">For government</Link></li>
               <li><Link href="/organizations">For nonprofits</Link></li>
               <li><Link href="/partners">Partners</Link></li>
             </ul>

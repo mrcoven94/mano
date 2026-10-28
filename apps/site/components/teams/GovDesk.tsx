@@ -54,7 +54,7 @@ export default function GovDesk() {
       <div className="sc-card gd-case">
         <div className="gd-head">
           <div><p className="sc-label">Food benefits renewal · Case 0418</p><strong>Maria Lopez, household of 3</strong></div>
-          <span className="sc-tag">{phase === "review" ? "Complete" : phase === "approved" ? "Approved" : "Asked for more"}</span>
+          <span className={`sc-tag${phase === "approved" ? " ok" : ""}`}>{phase === "review" ? "Complete" : phase === "approved" ? "Approved" : "Asked for more"}</span>
         </div>
         <ul className="sc-rows">
           {findings.map(([t, s, cite]) => (
