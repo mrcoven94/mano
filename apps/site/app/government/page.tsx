@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Faq from "@/components/Faq";
 import GovDesk from "@/components/teams/GovDesk";
 import GovScenes from "@/components/teams/GovScenes";
+import Verified from "@/components/teams/Verified";
 import { TeamHero, Stage, Steps, Rules, Seat, Close } from "@/components/teams/Parts";
 
 const title = "Case management for government offices";
@@ -59,6 +60,8 @@ export default function Government() {
           <GovScenes />
         </div>
       </section>
+
+      <Verified id="gov-vf" eyebrow="When a case reaches you" office="Sample County" />
 
       <Rules
         id="gov-rules"

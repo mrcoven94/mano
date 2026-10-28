@@ -234,3 +234,32 @@
 .oc>div:last-child,.po-phone{width:100%;max-width:400px;justify-self:center}
 .t-steps+.t-seat-wrap .t-seat{background:#fff}
 @media (prefers-reduced-motion:reduce){.t-pulse,.t-sticker{animation:none}}
+
+/* verified: the case arrives with its documents, each fact showing its source */
+.t-vf{background:var(--bg2)}
+.t-vf .lede{margin-top:20px}
+.t-vf h2{max-width:14ch}
+.vf-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:64px;align-items:center}
+.vf-stage{display:grid;gap:14px}
+.vf-tabs{display:flex;flex-wrap:wrap;gap:8px}
+.vf-tab{padding:9px 16px;border-radius:999px;border:1px solid var(--border2);background:#fff;font-weight:600;font-size:.94rem;cursor:pointer;transition:border-color .15s,background .15s}
+.vf-tab:hover{border-color:var(--text)}
+.vf-tab[aria-pressed="true"]{background:var(--text);border-color:var(--text);color:#fff}
+.vf-case{background:#fff;border:1px solid var(--border);border-radius:20px;padding:22px;box-shadow:var(--shadow);display:grid;gap:14px}
+.vf-head b{display:block;font-weight:600;font-size:1.05rem}
+.vf-head small{font-size:.86rem;color:var(--muted)}
+.vf-case dl{margin:0;display:grid}
+.vf-case dl div{display:grid;grid-template-columns:120px 1fr;gap:12px;padding:10px 0;border-top:1px solid var(--border);font-size:.94rem}
+.vf-case dt{color:var(--faint)}
+.vf-case dd{margin:0;display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px}
+.vf-case dd b{font-weight:500}
+.vf-src{font-size:.8rem;padding:2px 9px;border-radius:999px;background:var(--pen-soft);color:var(--pen);white-space:nowrap}
+.vf-case dl div[data-flag] .vf-src{background:var(--alert-soft);color:var(--alert)}
+.vf-case dl div[data-flag] dd b{color:var(--alert)}
+.vf-checks{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.vf-checks li{display:flex;gap:10px;align-items:baseline;font-size:.92rem;color:var(--alert);font-weight:600}
+.vf-checks li[data-ok]{color:var(--green)}
+.vf-checks span{color:var(--text);font-weight:400}
+.vf-note{font-size:.92rem;color:var(--text);background:var(--hl);border-radius:10px;padding:10px 14px}
+@media (max-width:1080px){.vf-grid{grid-template-columns:1fr;gap:40px}}
+@media (max-width:560px){.vf-case dl div{grid-template-columns:1fr;gap:2px}.vf-case{padding:18px}}
