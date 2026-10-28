@@ -18,11 +18,15 @@ import {
 import { useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { RecordingPresets, createAudioPlayer, requestRecordingPermissionsAsync, useAudioRecorder, type AudioPlayer } from "expo-audio";
+import { deleteAsync } from "expo-file-system/legacy";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { DemoBanner, EmptyView, Title } from "../../components/ui";
+import { DemoBanner, EmptyView, LoadingView, Title } from "../../components/ui";
 import type { Attachment, ChatMessage, NewAttachment } from "../../lib/api/types";
+import { AuthError } from "../../lib/api/types";
 import { useAuth } from "../../lib/auth";
+import { trackCacheFile } from "../../lib/cache-files";
 import { useStrings } from "../../lib/i18n";
+import { submitMessage } from "../../lib/send";
 import { fileToB64, pickMailPhotos, pickMailVideo, takeMailPhoto, takeMailVideo, type PickedMedia } from "../../lib/media";
 import type { QueuedMessage } from "../../lib/queue";
 import { colors, radius, tapTarget, type } from "../../lib/theme";
@@ -56,7 +60,7 @@ function Bubble({ message, queuedLabel }: { message: ChatMessage; queuedLabel: s
 
 export default function Chat() {
   const s = useStrings();
-  const { client, session, mode, outbox } = useAuth();
+  const { client, session, mode, outbox, personStore, signOut } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [queued, setQueued] = useState<QueuedMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -74,12 +78,14 @@ export default function Chat() {
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
   const refresh = useCallback(async () => {
-    if (!session) return;
+    if (!session || !outbox) return;
     try {
-      await outbox.flush(async (item) => {
-        await client.sendMessage(session, item.text, item.attachments);
-      });
-    } catch {
+      await outbox.flush(session, (item) => client.sendMessage(session, item.text, item.attachments, item.id));
+    } catch (err) {
+      if (err instanceof AuthError) {
+        await signOut();
+        return;
+      }
       setOfflineNote(true);
     }
     try {
@@ -87,13 +93,17 @@ export default function Chat() {
       setMessages(server);
       setQueued(pending);
       setOfflineNote(pending.length > 0);
-    } catch {
+    } catch (err) {
+      if (err instanceof AuthError) {
+        await signOut();
+        return;
+      }
       setQueued(await outbox.list());
       setOfflineNote(true);
     } finally {
       setLoading(false);
     }
-  }, [client, session, outbox]);
+  }, [client, session, outbox, signOut]);
 
   useFocusEffect(
     useCallback(() => {
@@ -111,18 +121,22 @@ export default function Chat() {
   useEffect(() => () => playerRef.current?.remove(), []);
 
   const sendNow = async (body: string, attachments: NewAttachment[]): Promise<boolean> => {
-    if (!session) return false;
+    if (!session || !outbox) return false;
     if (!body.trim() && attachments.length === 0) return false;
     setSending(true);
     try {
-      await client.sendMessage(session, body.trim(), attachments);
-      setText("");
-      await refresh();
-      return true;
-    } catch {
-      await outbox.enqueue(body.trim(), attachments);
+      const report = await submitMessage(client, session, outbox, body.trim(), attachments);
       setText("");
       setQueued(await outbox.list());
+      setOfflineNote(report.kept.length > 0);
+      await refresh();
+      return report.kept.length === 0;
+    } catch (err) {
+      if (err instanceof AuthError) {
+        await signOut();
+        return false;
+      }
+      // Nothing was queued (a full outbox): keep the text so no mail is lost.
       setOfflineNote(true);
       return false;
     } finally {
@@ -209,6 +223,9 @@ export default function Chat() {
       }
       setRecording(false);
       setVoiceUri(recorder.uri);
+      if (recorder.uri && personStore) {
+        await trackCacheFile(personStore, recorder.uri).catch(() => {});
+      }
       return;
     }
     const permission = await requestRecordingPermissionsAsync();
@@ -235,14 +252,22 @@ export default function Chat() {
     }
   };
 
+  const discardVoice = async (uri: string | null): Promise<void> => {
+    setVoiceUri(null);
+    setVoicePlaying(false);
+    if (uri) await deleteAsync(uri, { idempotent: true }).catch(() => {});
+  };
+
   const sendVoice = async (): Promise<void> => {
     if (!voiceUri) return;
     try {
       const bytesB64 = await fileToB64(voiceUri);
+      const uri = voiceUri;
       setVoiceUri(null);
       setVoicePlaying(false);
       setAttachOpen(false);
       await sendNow(s.voiceSent, [{ kind: "voice", name: `voice-${Date.now()}.m4a`, mimeType: "audio/m4a", bytesB64 }]);
+      await deleteAsync(uri, { idempotent: true }).catch(() => {});
     } catch {
       // Unreadable recording: the person can record again.
     }
@@ -265,6 +290,14 @@ export default function Chat() {
 
   const all = [...messages, ...queuedAsMessages];
   const shown = [...all].reverse();
+
+  if (!session || !outbox) {
+    return (
+      <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
+        <LoadingView />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
@@ -344,10 +377,7 @@ export default function Chat() {
               <Text style={styles.sendText}>{s.send}</Text>
             </Pressable>
             <Pressable
-              onPress={() => {
-                setVoiceUri(null);
-                setVoicePlaying(false);
-              }}
+              onPress={() => void discardVoice(voiceUri)}
               style={styles.iconBtn}
               accessibilityRole="button"
               accessibilityLabel={s.mailCancel}

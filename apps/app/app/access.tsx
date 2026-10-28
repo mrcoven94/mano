@@ -6,8 +6,8 @@ import { Modal, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { Body, Btn, Card, DemoBanner, EmptyView, ErrorView, GhostBtn, LoadingView, Muted, Screen, Title } from "../components/ui";
 import { formatDate } from "../lib/dates";
-import type { Grant } from "../lib/api/types";
-import { EngineGapError } from "../lib/api/types";
+import type { Grant, RevokeResult } from "../lib/api/types";
+import { AuthError, EngineGapError } from "../lib/api/types";
 import { useAuth } from "../lib/auth";
 import { useLanguage, useStrings } from "../lib/i18n";
 import { colors, radius, type } from "../lib/theme";
@@ -15,11 +15,13 @@ import { colors, radius, type } from "../lib/theme";
 export default function Access() {
   const s = useStrings();
   const { language } = useLanguage();
-  const { client, session, mode } = useAuth();
+  const { client, session, mode, signOut } = useAuth();
   const [grants, setGrants] = useState<Grant[] | null>(null);
   const [gap, setGap] = useState(false);
   const [failed, setFailed] = useState(false);
   const [confirming, setConfirming] = useState<Grant | null>(null);
+  const [revokeResult, setRevokeResult] = useState<RevokeResult | null>(null);
+  const [notice, setNotice] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -29,10 +31,14 @@ export default function Access() {
     try {
       setGrants(await client.listGrants(session));
     } catch (err) {
+      if (err instanceof AuthError) {
+        await signOut();
+        return;
+      }
       if (err instanceof EngineGapError) setGap(true);
       else setFailed(true);
     }
-  }, [client, session]);
+  }, [client, session, signOut]);
 
   useFocusEffect(
     useCallback(() => {
@@ -44,15 +50,25 @@ export default function Access() {
     if (!session || !confirming) return;
     setBusy(true);
     try {
-      await client.revokeGrant(session, confirming.recipient, confirming.caseId);
-      setConfirming(null);
-      await load();
+      const result = await client.revokeGrant(session, confirming.recipient, confirming.caseId);
+      if (result.status === "completed") {
+        setConfirming(null);
+        setNotice(true);
+        await load();
+      } else {
+        setRevokeResult(result);
+      }
     } catch {
       setFailed(true);
       setConfirming(null);
     } finally {
       setBusy(false);
     }
+  };
+
+  const closeSheet = (): void => {
+    setConfirming(null);
+    setRevokeResult(null);
   };
 
   return (
@@ -86,23 +102,49 @@ export default function Access() {
                 {s.sharedOn}: {formatDate(g.grantedAt, language)}
               </Muted>
               <View style={styles.revoke}>
-                <GhostBtn title={s.revoke} onPress={() => setConfirming(g)} />
+                <GhostBtn
+                  title={s.revoke}
+                  onPress={() => {
+                    setNotice(false);
+                    setRevokeResult(null);
+                    setConfirming(g);
+                  }}
+                />
               </View>
             </Card>
           ))
         )}
       </View>
 
-      <Modal visible={confirming !== null} transparent animationType="fade" onRequestClose={() => setConfirming(null)}>
+      {notice ? (
+        <Card>
+          <Body>{s.revoked}</Body>
+        </Card>
+      ) : null}
+
+      <Modal visible={confirming !== null} transparent animationType="fade" onRequestClose={closeSheet}>
         <View style={styles.sheet}>
           <View style={styles.sheetCard}>
-            <Text style={[type.cardTitle, styles.org]}>{s.revokeTitle}</Text>
-            <Body>{confirming?.orgName}</Body>
-            <Text style={styles.warn}>{s.revokeWarn}</Text>
-            <View style={styles.sheetBtns}>
-              <Btn title={busy ? s.revoking : s.revokeConfirm} onPress={() => void revoke()} busy={busy} />
-              <GhostBtn title={s.revokeKeep} onPress={() => setConfirming(null)} />
-            </View>
+            {revokeResult ? (
+              <View>
+                <Text style={[type.cardTitle, styles.org]}>{s.revokeTitle}</Text>
+                <Body>{revokeResult.status === "needs_approval" ? s.revokeNeedsApproval : s.revokeBlocked}</Body>
+                {revokeResult.reason ? <Muted>{revokeResult.reason}</Muted> : null}
+                <View style={styles.sheetBtns}>
+                  <GhostBtn title={s.close} onPress={closeSheet} />
+                </View>
+              </View>
+            ) : (
+              <View>
+                <Text style={[type.cardTitle, styles.org]}>{s.revokeTitle}</Text>
+                <Body>{confirming?.orgName}</Body>
+                <Text style={styles.warn}>{s.revokeWarn}</Text>
+                <View style={styles.sheetBtns}>
+                  <Btn title={busy ? s.revoking : s.revokeConfirm} onPress={() => void revoke()} busy={busy} />
+                  <GhostBtn title={s.revokeKeep} onPress={closeSheet} />
+                </View>
+              </View>
+            )}
           </View>
         </View>
       </Modal>

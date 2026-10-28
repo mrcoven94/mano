@@ -22,6 +22,8 @@ const approvalRow = {
   purpose: "File renewal",
   documentHash: "abc123",
   documentId: "doc-1",
+  requestJson: "{\"type\":\"submit\"}",
+  requestHash: "req-1",
   idempotencyKey: "k-1",
   status: "pending",
   problems: [],
@@ -48,6 +50,15 @@ describe("EngineClient", () => {
     expect((init.headers as Headers).get("authorization")).toBe("Bearer live-token");
   });
 
+  it("sends the operation ID with chat messages", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ reply: "Hello." }));
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    await client.sendMessage(session, "Hi", [], "op-9");
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { clientOpId: string };
+    expect(body.clientOpId).toBe("op-9");
+  });
+
   it("uploads attachments before chatting", async () => {
     const fetchImpl = vi.fn(async (input: unknown) => {
       if (String(input).endsWith("/documents")) return jsonResponse({ id: "doc-9", hash: "h" });
@@ -64,20 +75,27 @@ describe("EngineClient", () => {
   it("refuses to approve when the reviewed hash moved", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ approvals: [approvalRow] }));
     const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
-    await expect(client.approve(session, "appr-1", "moved")).rejects.toBeInstanceOf(StaleApprovalError);
-    expect(fetchImpl).toHaveBeenCalledOnce();
+    await expect(client.approve(session, "appr-1", { documentHash: "moved", requestHash: "req-1" })).rejects.toBeInstanceOf(StaleApprovalError);
+    await expect(client.approve(session, "appr-1", { documentHash: "abc123", requestHash: "moved" })).rejects.toBeInstanceOf(StaleApprovalError);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const calls = fetchImpl.mock.calls as unknown as [string, RequestInit][];
+    for (const [url] of calls) {
+      expect(String(url)).not.toContain("/approve");
+    }
   });
 
   it("approves when the hash matches and maps the receipt", async () => {
     const fetchImpl = vi.fn(async (input: unknown, init?: RequestInit) => {
       if (String(input).endsWith("/approve")) {
         expect(init?.method).toBe("POST");
+        const sent = JSON.parse(init?.body as string) as Record<string, string>;
+        expect(sent).toEqual({ expectedDocumentHash: "abc123", expectedRequestHash: "req-1" });
         return jsonResponse({ status: "completed", receipt: { id: "r-1", externalId: "x-1", simulated: false } });
       }
       return jsonResponse({ approvals: [approvalRow] });
     });
     const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
-    const result = await client.approve(session, "appr-1", "abc123");
+    const result = await client.approve(session, "appr-1", { documentHash: "abc123", requestHash: "req-1" });
     expect(result.status).toBe("completed");
     expect(result.receiptId).toBe("r-1");
     expect(result.simulated).toBe(false);
@@ -86,7 +104,7 @@ describe("EngineClient", () => {
   it("refuses expired approvals without calling approve", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ approvals: [{ ...approvalRow, status: "expired" }] }));
     const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
-    await expect(client.approve(session, "appr-1", "abc123")).rejects.toBeInstanceOf(StaleApprovalError);
+    await expect(client.approve(session, "appr-1", { documentHash: "abc123", requestHash: "req-1" })).rejects.toBeInstanceOf(StaleApprovalError);
   });
 
   it("reads the document filename from content-disposition", async () => {
@@ -102,13 +120,33 @@ describe("EngineClient", () => {
   });
 
   it("maps revoke outcomes from the action route", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ status: "completed", receipt: { id: "r", externalId: "x", simulated: true } }));
+    const fetchImpl = vi.fn(async (input: unknown) => {
+      if (String(input).endsWith("/approvals")) return jsonResponse({ approvals: [] });
+      return jsonResponse({ status: "completed", receipt: { id: "r", externalId: "x", simulated: true } });
+    });
     const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
     const result = await client.revokeGrant(session, "org:county", "R-1");
     expect(result.status).toBe("completed");
-    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    const body = JSON.parse(init.body as string) as { payload: { consent: string; caseId: string } };
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const [, init] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as {
+      payload: { consent: string; caseId: string };
+      idempotencyKey: string;
+    };
     expect(body.payload).toEqual({ consent: "revoke", caseId: "R-1" });
+    expect(body.idempotencyKey).toBe("consent-revoke:maria-001:org:county:R-1");
+  });
+
+  it("reconciles a revoke already on file instead of reposting", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        approvals: [{ ...approvalRow, status: "approved", idempotencyKey: "consent-revoke:maria-001:org:county:R-1" }],
+      }),
+    );
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    const result = await client.revokeGrant(session, "org:county", "R-1");
+    expect(result.status).toBe("completed");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("turns 403 into AuthError", async () => {

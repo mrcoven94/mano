@@ -89,12 +89,14 @@ describe("Maria spine run", () => {
     await client.sendMessage(session, "mail", [{ kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
     const [approval] = await client.listApprovals(session);
     if (!approval?.documentHash) throw new Error("expected a bound approval");
-    await expect(client.approve(session, approval.id, "0".repeat(64))).rejects.toBeInstanceOf(StaleApprovalError);
-    const result = await client.approve(session, approval.id, approval.documentHash);
+    const good = { documentHash: approval.documentHash, requestHash: approval.requestHash };
+    await expect(client.approve(session, approval.id, { ...good, documentHash: "0".repeat(64) })).rejects.toBeInstanceOf(StaleApprovalError);
+    await expect(client.approve(session, approval.id, { ...good, requestHash: "0".repeat(64) })).rejects.toBeInstanceOf(StaleApprovalError);
+    const result = await client.approve(session, approval.id, good);
     expect(result.status).toBe("completed");
     expect(result.simulated).toBe(true);
     expect(result.receiptId).toBeTruthy();
-    await expect(client.approve(session, approval.id, approval.documentHash)).rejects.toBeInstanceOf(StaleApprovalError);
+    await expect(client.approve(session, approval.id, good)).rejects.toBeInstanceOf(StaleApprovalError);
   });
 
   it("brings the caseworker request after approval and closes on the pay stub", async () => {
@@ -104,7 +106,7 @@ describe("Maria spine run", () => {
     await client.sendMessage(session, "mail", [{ kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
     const [approval] = await client.listApprovals(session);
     if (!approval?.documentHash) throw new Error("expected a bound approval");
-    await client.approve(session, approval.id, approval.documentHash);
+    await client.approve(session, approval.id, { documentHash: approval.documentHash, requestHash: approval.requestHash });
     const afterApprove = await client.listMessages(session);
     expect(afterApprove.some((m) => m.text.includes("pay stub"))).toBe(true);
     const deadlines = await client.listDeadlines(session);
@@ -135,6 +137,21 @@ describe("Maria spine run", () => {
     expect(after.text).toContain("2 upcoming");
     const approvals = await client.sendMessage(session, "any approvals?", []);
     expect(approvals.text).toContain("1 thing");
+  });
+
+  it("returns the recorded reply when an operation ID repeats", async () => {
+    const client = makeClient();
+    const session = await signIn(client);
+    const photo = b64encode(utf8ToBytes("fake-photo-bytes"));
+    const first = await client.sendMessage(session, "mail", [
+      { kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: photo },
+    ], "op-1");
+    const count = (await client.listMessages(session)).length;
+    const second = await client.sendMessage(session, "mail", [
+      { kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: photo },
+    ], "op-1");
+    expect(second.id).toBe(first.id);
+    expect((await client.listMessages(session)).length).toBe(count);
   });
 
   it("revokes access to a case", async () => {

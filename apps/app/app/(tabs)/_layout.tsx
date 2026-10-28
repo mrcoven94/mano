@@ -2,15 +2,16 @@
 // tab carries the pending count; notification taps land here too.
 
 import { useCallback, useState } from "react";
-import { Tabs, useFocusEffect } from "expo-router";
+import { Redirect, Tabs, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { AuthError } from "../../lib/api/types";
 import { useAuth } from "../../lib/auth";
 import { useStrings } from "../../lib/i18n";
 import { colors } from "../../lib/theme";
 
 export default function TabsLayout() {
   const s = useStrings();
-  const { client, session } = useAuth();
+  const { client, session, status, signOut } = useAuth();
   const [pending, setPending] = useState(0);
 
   useFocusEffect(
@@ -19,9 +20,15 @@ export default function TabsLayout() {
       client
         .listApprovals(session)
         .then((all) => setPending(all.filter((a) => a.status === "pending").length))
-        .catch(() => setPending(0));
-    }, [client, session]),
+        .catch((err: unknown) => {
+          if (err instanceof AuthError) void signOut();
+          else setPending(0);
+        });
+    }, [client, session, signOut]),
   );
+
+  if (status === "signed-out") return <Redirect href="/(auth)/sign-in" />;
+  if (status === "loading" || !session) return null;
 
   return (
     <Tabs

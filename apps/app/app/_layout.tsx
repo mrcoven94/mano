@@ -1,7 +1,9 @@
-// App entry: loads the withmano.com typefaces, mounts the language and
-// session providers, and routes notification taps to the right screen.
+// App entry: loads the withmano.com typefaces, resolves the engine
+// (failing loudly at start when neither an engine URL nor the demo
+// flag is set), mounts the language and session providers, and routes
+// notification taps to the right screen.
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Stack, useRouter } from "expo-router";
 import { Geist_400Regular, Geist_500Medium, Geist_700Bold, useFonts as useGeist } from "@expo-google-fonts/geist";
 import {
@@ -12,12 +14,35 @@ import {
 import * as Notifications from "expo-notifications";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Body, Title } from "../components/ui";
 import { AuthProvider } from "../lib/auth";
+import { resolveClient, type ResolvedClient } from "../lib/client";
 import { easProjectId } from "../lib/config";
-import { LanguageProvider } from "../lib/i18n";
+import { LanguageProvider, useStrings } from "../lib/i18n";
 import { ensureNotificationSetup } from "../lib/notify";
 
 void SplashScreen.preventAutoHideAsync();
+
+function useResolvedClient(): { resolved: ResolvedClient | null; fatal: boolean } {
+  return useMemo(() => {
+    try {
+      return { resolved: resolveClient(), fatal: false };
+    } catch {
+      return { resolved: null, fatal: true };
+    }
+  }, []);
+}
+
+function FatalConfig() {
+  const s = useStrings();
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#FFFFFF", padding: 24, justifyContent: "center" }}>
+      <Title>{s.configErrorTitle}</Title>
+      <Body>{s.configErrorBody}</Body>
+    </SafeAreaView>
+  );
+}
 
 function NotificationsGate() {
   const router = useRouter();
@@ -36,6 +61,7 @@ function NotificationsGate() {
 export default function RootLayout() {
   const [geistLoaded] = useGeist({ Geist_400Regular, Geist_500Medium, Geist_700Bold });
   const [displayLoaded] = useDisplay({ SchibstedGrotesk_500Medium, SchibstedGrotesk_700Bold });
+  const clientState = useResolvedClient();
   const ready = geistLoaded && displayLoaded;
 
   useEffect(() => {
@@ -44,9 +70,18 @@ export default function RootLayout() {
 
   if (!ready) return null;
 
+  if (!clientState.resolved) {
+    return (
+      <LanguageProvider>
+        <StatusBar style="dark" />
+        <FatalConfig />
+      </LanguageProvider>
+    );
+  }
+
   return (
     <LanguageProvider>
-      <AuthProvider>
+      <AuthProvider initial={clientState.resolved}>
         <NotificationsGate />
         <StatusBar style="dark" />
         <Stack screenOptions={{ headerShown: false }}>

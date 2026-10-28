@@ -1,14 +1,22 @@
-// Picks the engine the app talks to. With EXPO_PUBLIC_ENGINE_URL set the
-// app uses the live engine; otherwise it uses the stand-in with recorded
-// synthetic responses and says so on screen. When the engine merges, this
-// file is the only place that changes.
+// Picks the engine the app talks to. An EXPO_PUBLIC_ENGINE_URL always
+// wins; otherwise the stand-in runs only with EXPO_PUBLIC_DEMO_MODE,
+// and anything else throws at start instead of demoing by accident.
+// When the engine merges, set the URL and the app switches.
 
 import { CryptoDigestAlgorithm, digest } from "expo-crypto";
 import { b64decode } from "./base64";
-import { engineUrl } from "./config";
+import { demoMode, engineUrl } from "./config";
+import { decideEngineMode } from "./mode";
 import { EngineClient } from "./api/engine";
 import { StandInClient, type Hasher } from "./api/standin";
 import type { EngineMode, ManoClient } from "./api/types";
+
+export class ConfigError extends Error {
+  constructor() {
+    super("Set EXPO_PUBLIC_ENGINE_URL or EXPO_PUBLIC_DEMO_MODE=true.");
+    this.name = "ConfigError";
+  }
+}
 
 function hexEncode(bytes: Uint8Array): string {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -32,7 +40,9 @@ let cached: ResolvedClient | null = null;
 export function resolveClient(): ResolvedClient {
   if (cached) return cached;
   const url = engineUrl();
-  if (url) {
+  const decision = decideEngineMode({ engineUrl: url, demo: demoMode() });
+  if ("error" in decision) throw new ConfigError();
+  if (decision.mode === "live" && url) {
     console.info(`[mano] engine: live at ${url}`);
     cached = { client: new EngineClient({ baseUrl: url, sha256B64: expoSha256B64 }), mode: "live" };
   } else {

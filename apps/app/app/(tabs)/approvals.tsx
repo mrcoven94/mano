@@ -7,10 +7,11 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Badge, Body, Card, DemoBanner, EmptyView, ErrorView, LoadingView, Muted, Screen, SectionTitle, Title } from "../../components/ui";
 import type { Approval } from "../../lib/api/types";
-import { EngineGapError } from "../../lib/api/types";
+import { AuthError, EngineGapError } from "../../lib/api/types";
 import { useAuth } from "../../lib/auth";
 import { formatDate } from "../../lib/dates";
 import { useLanguage, useStrings } from "../../lib/i18n";
+import { syncReminders } from "../../lib/notify";
 import { colors, tapTarget, type } from "../../lib/theme";
 
 function statusTone(status: Approval["status"]): "hl" | "alert" | "green" | "blue" {
@@ -31,7 +32,7 @@ export default function Approvals() {
   const s = useStrings();
   const { language } = useLanguage();
   const router = useRouter();
-  const { client, session, mode } = useAuth();
+  const { client, session, mode, signOut } = useAuth();
   const [approvals, setApprovals] = useState<Approval[] | null>(null);
   const [gap, setGap] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -42,11 +43,16 @@ export default function Approvals() {
     setGap(false);
     try {
       setApprovals(await client.listApprovals(session));
+      await syncReminders(language, client, session).catch(() => {});
     } catch (err) {
+      if (err instanceof AuthError) {
+        await signOut();
+        return;
+      }
       if (err instanceof EngineGapError) setGap(true);
       else setFailed(true);
     }
-  }, [client, session]);
+  }, [client, session, signOut, language]);
 
   useFocusEffect(
     useCallback(() => {

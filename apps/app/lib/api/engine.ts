@@ -34,6 +34,8 @@ interface EngineApprovalRow {
   purpose: string;
   documentHash: string | null;
   documentId: string | null;
+  requestJson: string;
+  requestHash: string;
   idempotencyKey: string;
   status: Approval["status"];
   problems: string[];
@@ -106,14 +108,16 @@ export class EngineClient implements ManoClient {
     throw new EngineGapError("GET /api/persons/:id/conversation");
   }
 
-  async sendMessage(session: Session, text: string, attachments: NewAttachment[]): Promise<ChatMessage> {
+  async sendMessage(session: Session, text: string, attachments: NewAttachment[], opId?: string): Promise<ChatMessage> {
     for (const a of attachments) {
-      await this.uploadDocument(session, a.name, a.mimeType, a.bytesB64);
+      await this.uploadDocument(session, a.name, a.mimeType, a.bytesB64, opId);
     }
     const note = attachments.length > 0 ? `\n\n[attached: ${attachments.map((a) => a.name).join(", ")}]` : "";
+    // The engine ignores clientOpId today; it travels so a retried send
+    // can be deduped once the chat route honors it.
     const res = await this.call(session, `/api/persons/${encodeURIComponent(session.personId)}/chat`, {
       method: "POST",
-      body: JSON.stringify({ message: `${text}${note}` }),
+      body: JSON.stringify({ message: `${text}${note}`, clientOpId: opId ?? null }),
     });
     const out = await this.json<{ reply: string }>(res);
     return {
@@ -138,6 +142,8 @@ export class EngineClient implements ManoClient {
       documentHash: a.documentHash,
       documentId: a.documentId,
       documentName: null,
+      requestJson: a.requestJson,
+      requestHash: a.requestHash,
       idempotencyKey: a.idempotencyKey,
       status: a.status,
       problems: a.problems,
@@ -157,19 +163,28 @@ export class EngineClient implements ManoClient {
     return { ...doc, hash: approval.documentHash ?? doc.hash };
   }
 
-  async approve(session: Session, approvalId: string, expectedHash: string | null): Promise<ApproveResult> {
+  async approve(
+    session: Session,
+    approvalId: string,
+    expected: { documentHash: string | null; requestHash: string },
+  ): Promise<ApproveResult> {
     const approvals = await this.listApprovals(session);
     const current = approvals.find((a) => a.id === approvalId);
     if (!current) throw new StaleApprovalError("stale");
     if (current.status !== "pending") throw new StaleApprovalError(current.status);
-    // The engine binds the approval to the hash server-side and refuses a
-    // moved document; the client checks first so the person never approves
-    // a version they did not review.
-    if (expectedHash !== current.documentHash) throw new StaleApprovalError("stale");
+    // The engine binds the approval to both hashes server-side and refuses
+    // anything that moved; the client checks first so the person never
+    // approves a version they did not review, then sends both hashes.
+    if (expected.documentHash !== current.documentHash || expected.requestHash !== current.requestHash) {
+      throw new StaleApprovalError("stale");
+    }
     const res = await this.call(
       session,
       `/api/persons/${encodeURIComponent(session.personId)}/approvals/${encodeURIComponent(approvalId)}/approve`,
-      { method: "POST", body: JSON.stringify({}) },
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedDocumentHash: expected.documentHash, expectedRequestHash: expected.requestHash }),
+      },
     );
     const out = await this.json<GatewayResultJson>(res);
     return {
@@ -189,11 +204,11 @@ export class EngineClient implements ManoClient {
     throw new EngineGapError("GET /api/persons/:id/documents");
   }
 
-  async uploadDocument(session: Session, name: string, mimeType: string, bytesB64: string): Promise<DocMeta> {
+  async uploadDocument(session: Session, name: string, mimeType: string, bytesB64: string, opId?: string): Promise<DocMeta> {
     void mimeType;
     const res = await this.call(session, `/api/persons/${encodeURIComponent(session.personId)}/documents`, {
       method: "POST",
-      body: JSON.stringify({ name, contentB64: bytesB64 }),
+      body: JSON.stringify({ name, contentB64: bytesB64, clientOpId: opId ?? null }),
     });
     const out = await this.json<{ id: string; hash: string }>(res);
     return {
@@ -228,6 +243,13 @@ export class EngineClient implements ManoClient {
   }
 
   async revokeGrant(session: Session, recipient: string, caseId: string): Promise<RevokeResult> {
+    const idempotencyKey = `consent-revoke:${session.personId}:${recipient}:${caseId}`;
+    // Reconcile before acting: the deterministic key names the person,
+    // the organization and the grant, so a row already on file answers
+    // without a second POST.
+    const existing = (await this.listApprovals(session)).find((a) => a.idempotencyKey === idempotencyKey);
+    if (existing?.status === "approved") return { status: "completed", reason: null };
+    if (existing?.status === "pending") return { status: "needs_approval", reason: null };
     const res = await this.call(session, `/api/persons/${encodeURIComponent(session.personId)}/action`, {
       method: "POST",
       body: JSON.stringify({
@@ -235,7 +257,7 @@ export class EngineClient implements ManoClient {
         recipient,
         purpose: "revoke access",
         payload: { consent: "revoke", caseId },
-        idempotencyKey: `consent-revoke:${session.personId}:${caseId}`,
+        idempotencyKey,
         actor: "foreground",
       }),
     });

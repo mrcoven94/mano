@@ -7,7 +7,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Body, Card, DemoBanner, EmptyView, ErrorView, LoadingView, Muted, Screen, Title } from "../components/ui";
 import type { DocMeta } from "../lib/api/types";
-import { EngineGapError } from "../lib/api/types";
+import { AuthError, EngineGapError } from "../lib/api/types";
 import { useAuth } from "../lib/auth";
 import { useStrings } from "../lib/i18n";
 import { colors, tapTarget, type } from "../lib/theme";
@@ -15,7 +15,7 @@ import { colors, tapTarget, type } from "../lib/theme";
 export default function Documents() {
   const s = useStrings();
   const router = useRouter();
-  const { client, session, mode } = useAuth();
+  const { client, session, mode, signOut } = useAuth();
   const [docs, setDocs] = useState<DocMeta[] | null>(null);
   const [gap, setGap] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -27,10 +27,14 @@ export default function Documents() {
     try {
       setDocs(await client.listDocuments(session));
     } catch (err) {
+      if (err instanceof AuthError) {
+        await signOut();
+        return;
+      }
       if (err instanceof EngineGapError) setGap(true);
       else setFailed(true);
     }
-  }, [client, session]);
+  }, [client, session, signOut]);
 
   useFocusEffect(
     useCallback(() => {

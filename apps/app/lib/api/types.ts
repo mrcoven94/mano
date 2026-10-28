@@ -63,6 +63,10 @@ export interface Approval {
   documentHash: string | null;
   documentId: string | null;
   documentName: string | null;
+  // The frozen request the engine executes verbatim, and the hash binding
+  // it. The screen renders all of it; the approval sends both hashes back.
+  requestJson: string;
+  requestHash: string;
   idempotencyKey: string;
   status: ApprovalStatus;
   problems: string[];
@@ -125,12 +129,19 @@ export interface ManoClient {
   requestCode(email: string): Promise<{ challengeId: string; maskedEmail: string }>;
   verifyCode(email: string, challengeId: string, code: string): Promise<Session>;
   listMessages(session: Session): Promise<ChatMessage[]>;
-  sendMessage(session: Session, text: string, attachments: NewAttachment[]): Promise<ChatMessage>;
+  // opId is the outbox operation ID, stable across retries, sent so the
+  // engine can dedupe a retried send.
+  sendMessage(session: Session, text: string, attachments: NewAttachment[], opId?: string): Promise<ChatMessage>;
   listApprovals(session: Session): Promise<Approval[]>;
   getApprovalDocument(session: Session, approval: Approval): Promise<ApprovalDocument>;
-  // The client re-reads the approval first and refuses when the bound
-  // document hash moved; expectedHash is what the person reviewed.
-  approve(session: Session, approvalId: string, expectedHash: string | null): Promise<ApproveResult>;
+  // The client re-reads the approval first and refuses when anything
+  // bound moved; expected carries the hashes the person reviewed, and
+  // both travel with the approval call.
+  approve(
+    session: Session,
+    approvalId: string,
+    expected: { documentHash: string | null; requestHash: string },
+  ): Promise<ApproveResult>;
   listDeadlines(session: Session): Promise<Deadline[]>;
   listDocuments(session: Session): Promise<DocMeta[]>;
   uploadDocument(session: Session, name: string, mimeType: string, bytesB64: string): Promise<DocMeta>;

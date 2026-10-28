@@ -4,13 +4,21 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen, Title } from "../components/ui";
+import { useAuth } from "../lib/auth";
 import { useLanguage, useStrings } from "../lib/i18n";
+import { syncReminders } from "../lib/notify";
 import type { Language } from "../lib/strings";
 import { colors, tapTarget, type } from "../lib/theme";
 
 export default function LanguageScreen() {
   const s = useStrings();
   const { language, setLanguage } = useLanguage();
+  const { client, session } = useAuth();
+
+  const pick = async (code: Language): Promise<void> => {
+    await setLanguage(code);
+    if (session) await syncReminders(code, client, session).catch(() => {});
+  };
 
   const options: { code: Language; label: string }[] = [
     { code: "en", label: s.english },
@@ -24,7 +32,7 @@ export default function LanguageScreen() {
         {options.map((o) => (
           <Pressable
             key={o.code}
-            onPress={() => void setLanguage(o.code)}
+            onPress={() => void pick(o.code)}
             accessibilityRole="radio"
             accessibilityState={{ checked: language === o.code }}
             style={[styles.row, language === o.code && styles.active]}

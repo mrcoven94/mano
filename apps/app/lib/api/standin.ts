@@ -72,6 +72,7 @@ export class StandInClient implements ManoClient {
   private grants: Grant[] = [];
   private docs: StoredDoc[] = [];
   private extraDeadlines: Deadline[] = [];
+  private completedOps = new Map<string, ChatMessage>();
   private seq = 0;
 
   constructor(options: StandInOptions) {
@@ -142,6 +143,17 @@ export class StandInClient implements ManoClient {
 
   private async currentApproval(): Promise<Approval> {
     const doc = await this.renewalDoc();
+    const requestJson = JSON.stringify({
+      type: "submit",
+      recipient: "sandbox:county-portal",
+      purpose: "File your SNAP renewal for case R-1042",
+      documentId: doc.meta.id,
+      payload: { caseId: "R-1042", office: "Springfield County SNAP office" },
+      idempotencyKey: "spine:renewal:maria-001",
+      actor: "foreground",
+      personId: MARIA.personId,
+    });
+    const requestHash = await this.sha256B64(b64encode(utf8ToBytes(requestJson)));
     return {
       id: APPROVAL_ID,
       actionType: "submit",
@@ -151,6 +163,8 @@ export class StandInClient implements ManoClient {
       documentHash: doc.meta.hash,
       documentId: doc.meta.id,
       documentName: doc.meta.name,
+      requestJson,
+      requestHash,
       idempotencyKey: "spine:renewal:maria-001",
       status: this.renewalApproved ? "approved" : "pending",
       problems: [],
@@ -194,10 +208,14 @@ export class StandInClient implements ManoClient {
     return [...this.messages];
   }
 
-  async sendMessage(session: Session, text: string, attachments: NewAttachment[]): Promise<ChatMessage> {
+  async sendMessage(session: Session, text: string, attachments: NewAttachment[], opId?: string): Promise<ChatMessage> {
     await this.wait();
     this.checkSession(session);
     this.seed();
+    // A retried operation returns its recorded reply instead of running
+    // the script again: reconcile before doing new work.
+    const recorded = opId ? this.completedOps.get(opId) : undefined;
+    if (recorded) return recorded;
     const userMsg: ChatMessage = {
       id: this.nextId("msg"),
       role: "user",
@@ -233,6 +251,7 @@ export class StandInClient implements ManoClient {
         status: "sent",
       });
     }
+    if (opId) this.completedOps.set(opId, agentMsg);
     return agentMsg;
   }
 
@@ -333,13 +352,19 @@ export class StandInClient implements ManoClient {
     return { id: doc.meta.id, name: doc.meta.name, bytesB64: doc.bytesB64, hash: doc.meta.hash, mimeType: doc.meta.mimeType };
   }
 
-  async approve(session: Session, approvalId: string, expectedHash: string | null): Promise<ApproveResult> {
+  async approve(
+    session: Session,
+    approvalId: string,
+    expected: { documentHash: string | null; requestHash: string },
+  ): Promise<ApproveResult> {
     await this.wait();
     this.checkSession(session);
     const current = await this.currentApproval();
     if (approvalId !== current.id) throw new StaleApprovalError("stale");
     if (current.status !== "pending") throw new StaleApprovalError(current.status);
-    if (expectedHash !== current.documentHash) throw new StaleApprovalError("stale");
+    if (expected.documentHash !== current.documentHash || expected.requestHash !== current.requestHash) {
+      throw new StaleApprovalError("stale");
+    }
     this.renewalApproved = {
       status: "completed",
       receiptId: this.nextId("receipt"),

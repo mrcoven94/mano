@@ -6,11 +6,12 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Badge, Card, DemoBanner, EmptyView, ErrorView, LoadingView, Muted, Screen, Title } from "../../components/ui";
 import type { Deadline } from "../../lib/api/types";
-import { EngineGapError } from "../../lib/api/types";
+import { AuthError, EngineGapError } from "../../lib/api/types";
 import { Body } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 import { daysUntil, formatDate } from "../../lib/dates";
 import { useLanguage, useStrings } from "../../lib/i18n";
+import { syncReminders } from "../../lib/notify";
 import { colors, type } from "../../lib/theme";
 
 function countdown(s: ReturnType<typeof useStrings>, dueAt: string): { text: string; tone: "hl" | "alert" | "green" | "blue" } {
@@ -25,7 +26,7 @@ export default function Deadlines() {
   const s = useStrings();
   const { language } = useLanguage();
   const router = useRouter();
-  const { client, session, mode } = useAuth();
+  const { client, session, mode, signOut } = useAuth();
   const [deadlines, setDeadlines] = useState<Deadline[] | null>(null);
   const [gap, setGap] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -37,11 +38,16 @@ export default function Deadlines() {
     try {
       const all = await client.listDeadlines(session);
       setDeadlines([...all].sort((a, b) => a.dueAt.localeCompare(b.dueAt)));
+      await syncReminders(language, client, session).catch(() => {});
     } catch (err) {
+      if (err instanceof AuthError) {
+        await signOut();
+        return;
+      }
       if (err instanceof EngineGapError) setGap(true);
       else setFailed(true);
     }
-  }, [client, session]);
+  }, [client, session, signOut, language]);
 
   useFocusEffect(
     useCallback(() => {

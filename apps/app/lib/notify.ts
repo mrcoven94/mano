@@ -5,7 +5,8 @@
 
 import { Platform } from "react-native";
 import * as Notifications from "expo-notifications";
-import type { Approval, Deadline } from "./api/types";
+import type { Approval, Deadline, ManoClient, Session } from "./api/types";
+import { planReminders } from "./reminders";
 import { stringsFor, type Language } from "./strings";
 
 const CHANNEL_ID = "mano-reminders";
@@ -37,8 +38,8 @@ export async function ensureNotificationSetup(projectId: string | null): Promise
   }
 }
 
-// Rebuilds local reminders from current data: one per pending approval
-// at its remind time, one per open deadline due within 48 hours.
+// Rebuilds local reminders from current data. Callers refresh after
+// every data load and language change; sign-out cancels everything.
 export async function refreshReminders(
   language: Language,
   approvals: Approval[],
@@ -48,33 +49,26 @@ export async function refreshReminders(
   if (Platform.OS === "web") return 0;
   const s = stringsFor(language);
   await Notifications.cancelAllScheduledNotificationsAsync();
-  let count = 0;
-  const pending = approvals.filter((a) => a.status === "pending").slice(0, 10);
-  for (const approval of pending) {
-    const at = new Date(approval.remindAt).getTime();
-    if (Number.isNaN(at) || at <= nowMs) continue;
+  const plan = planReminders(approvals, deadlines, nowMs);
+  for (const item of plan) {
+    const content =
+      item.kind === "approval"
+        ? { title: s.reminderApprovalTitle, body: s.reminderApprovalBody, data: { kind: "approval" } }
+        : { title: s.reminderDeadlineTitle, body: s.reminderDeadlineBody, data: { kind: "deadline" } };
     await Notifications.scheduleNotificationAsync({
-      content: { title: s.reminderApprovalTitle, body: s.reminderApprovalBody },
-      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(at) },
+      content,
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(item.fireAt) },
     });
-    count += 1;
   }
-  const soon = deadlines
-    .filter((d) => !d.done)
-    .filter((d) => {
-      const at = new Date(d.dueAt).getTime();
-      return !Number.isNaN(at) && at > nowMs && at - nowMs < 48 * 3600_000;
-    })
-    .slice(0, 10);
-  for (const deadline of soon) {
-    await Notifications.scheduleNotificationAsync({
-      content: { title: s.reminderDeadlineTitle, body: s.reminderDeadlineBody },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DATE,
-        date: new Date(new Date(deadline.dueAt).getTime() - 24 * 3600_000),
-      },
-    });
-    count += 1;
-  }
-  return count;
+  return plan.length;
+}
+
+// Fetches current data and rebuilds reminders. Gaps and failures mean
+// no reminders rather than wrong ones.
+export async function syncReminders(language: Language, client: ManoClient, session: Session): Promise<number> {
+  const [approvals, deadlines] = await Promise.all([
+    client.listApprovals(session).catch(() => [] as Approval[]),
+    client.listDeadlines(session).catch(() => [] as Deadline[]),
+  ]);
+  return refreshReminders(language, approvals, deadlines);
 }

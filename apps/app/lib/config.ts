@@ -12,3 +12,8 @@ export function easProjectId(): string | null {
   if (!raw || raw.trim() === "") return null;
   return raw.trim();
 }
+
+// Explicit opt-in to the stand-in engine. Nothing else enables it.
+export function demoMode(): boolean {
+  return process.env.EXPO_PUBLIC_DEMO_MODE === "true";
+}
