@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": { "node": ">=25" },
   "scripts": {
     "generate": "node src/cli-generate.mjs",
     "freeze": "node src/cli-freeze.mjs",

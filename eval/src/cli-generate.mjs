@@ -15,8 +15,11 @@ import { photoHouseholdIds, renderHouseholdPhotos, contentHash } from "./render.
 const devFull = generateDevHouseholds();
 let heldoutFull = [];
 const hasHeldoutSeed = Boolean(process.env.MANO_EVAL_HELDOUT_SEED);
-if (hasHeldoutSeed) {
+const hasPack = Boolean(process.env.MANO_EVAL_TEMPLATE_PACK);
+if (hasHeldoutSeed && hasPack) {
   heldoutFull = generateHeldoutHouseholds();
+} else if (hasHeldoutSeed) {
+  console.log("MANO_EVAL_TEMPLATE_PACK not set; generating dev split only. The architect holds the private pack.");
 } else {
   console.log("MANO_EVAL_HELDOUT_SEED not set; generating dev split only.");
 }

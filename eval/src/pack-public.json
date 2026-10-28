@@ -1,0 +1,183 @@
+{
+  "version": 1,
+  "note": "Public template pack. Families a and b are the original dev wording; family c was held out once and is now public (burned). Private held-out families live in a separate pack (see MANO_EVAL_TEMPLATE_PACK) with this same schema; the private pack is published after the final run. Pack author rules: leads and consequences must carry {due1} and {due2}; requirement sentences must use the need templates so canonical names always appear; never put trigger phrases (we need, send your, bring your, include, enclose, attach your, must include, return your) next to anything but a keyed name; conditional sentences must start with If.",
+  "families": {
+    "a": {
+      "subjectWord": "Re",
+      "needsIntro": "What we need from you:",
+      "needsStyle": "numbered",
+      "needForm": "{n}. {Form} (enclosed)",
+      "needDoc": "{n}. Your {Doc}",
+      "needAlt": "{n}. Proof of household income: your {A} or {B} from last month",
+      "needWorkAlt": "Include your {A} or {B} with dates and hours.",
+      "missingAgain": "Also bring your {Doc} to your interview so we can finish your case in one visit.",
+      "missingAgainUtility": "Bring your {Doc} to our office so we can set up your payment plan in one visit.",
+      "kinds": {
+        "medicaid_renewal": {
+          "subject": "{program} Renewal",
+          "greeting": "Dear {name},",
+          "lead": "Your {program} {coverage} is up for {formShort}. To keep your {coverage} without a break, your completed {formShort} packet must arrive {due1}.",
+          "interview": "Your phone interview is scheduled for {interview}. We will call you at the number we have on file. If you miss the call, call us at {tel} within 2 business days to reschedule.",
+          "consequence": "If we do not receive your packet {due2}, your {program} {coverage} will end on {end}. You may reapply, but there may be a gap.",
+          "closing": "Sincerely",
+          "enclosures": "Enclosures: {FormShort} form, return envelope, rights and responsibilities"
+        },
+        "snap_recert": {
+          "subject": "{program} Recertification",
+          "greeting": "Dear {name},",
+          "lead": "Your {program} {coverage} is up for {formShort}. To keep your {coverage} without a break, your completed {formShort} packet must arrive {due1}.",
+          "interview": "Your phone interview is scheduled for {interview}. We will call you at the number we have on file. If you miss the call, call us at {tel} within 2 business days to reschedule.",
+          "consequence": "If we do not receive your packet {due2}, your {program} {coverage} will end on {end}. You may reapply, but there may be a gap.",
+          "closing": "Sincerely",
+          "enclosures": "Enclosures: {FormShort} form, return envelope, rights and responsibilities"
+        },
+        "missing_docs": {
+          "subject": "Missing Documents for Your {program} Case",
+          "greeting": "Dear {name},",
+          "lead": "We are working on your {program} case and need one more item to finish: your {doc}. Send a copy {due1}. Do not send originals.",
+          "extra": "You can send it by mail in the enclosed envelope, bring it to our office at {officeAddr}, or call {tel} if you cannot get this document on time.",
+          "interview": null,
+          "consequence": "If we do not receive your {doc} {due2}, we may deny or close your case. If that happens you will get another notice with appeal rights.",
+          "closing": "Sincerely",
+          "enclosures": null
+        },
+        "work_hours": {
+          "subject": "{program} Work Hours Report",
+          "greeting": "Dear {name},",
+          "lead": "Your hours report for this month must arrive {due1}.",
+          "extra": "If you cannot meet the hours because of illness, caregiving, or another good cause, tell us and send any proof you have.",
+          "interview": null,
+          "consequence": "If we do not receive your hours {due2}, your {program} benefits may change starting {end}.",
+          "closing": "Sincerely",
+          "enclosures": null
+        },
+        "utility_shutoff": {
+          "subject": "Past Due Account",
+          "greeting": "Dear {name},",
+          "lead": "Your utility account is past due. The amount of {amount} was due on {past}. Pay in full or arrange a payment plan {due1} to avoid shutoff.",
+          "middle": "To set up a plan, call {utilTel} Monday through Friday, 8:00 AM to 6:00 PM, or visit our office. If service is shut off on or after {end}, a reconnection fee applies.\n\nIf you receive benefits or have a medical need for continuous service, call us right away to discuss options.",
+          "closing": "Sincerely",
+          "accountLine": "Account No.: {acct}"
+        }
+      }
+    },
+    "b": {
+      "subjectWord": "Subject",
+      "needsIntro": "Send these:",
+      "needsStyle": "bullets",
+      "needForm": "- {Form}: enclosed, sign and return it",
+      "needDoc": "- {Doc} (a copy, not the original)",
+      "needAlt": "- Income proof: your {A} or {B}",
+      "needWorkAlt": "- Attach your {A} or {B} showing dates and hours.",
+      "missingAgain": "Also bring your {Doc} when you come in so we can finish everything at once.",
+      "missingAgainUtility": "Bring your {Doc} to our office so your plan starts the same day.",
+      "kinds": {
+        "medicaid_renewal": {
+          "subject": "{program} Renewal",
+          "greeting": "Hello {name},",
+          "lead": "Your {program} deadline is {due1date}. Send these so your {formShort} packet arrives on time:",
+          "interview": "Your phone interview is scheduled for {interview}. We will call you at the number we have on file. If you miss the call, call us at {tel} within 2 business days to reschedule.",
+          "consequence": "A packet that arrives {due2} keeps your {coverage} going. After that, your {program} {coverage} ends on {end}.",
+          "closing": "Respectfully",
+          "enclosures": "Enclosures: {FormShort} form, return envelope"
+        },
+        "snap_recert": {
+          "subject": "{program} Recertification",
+          "greeting": "Hello {name},",
+          "lead": "Your {program} deadline is {due1date}. Send these so your {formShort} packet arrives on time:",
+          "interview": "Your phone interview is scheduled for {interview}. We will call you at the number we have on file. If you miss the call, call us at {tel} within 2 business days to reschedule.",
+          "consequence": "A packet that arrives {due2} keeps your {coverage} going. After that, your {program} {coverage} ends on {end}.",
+          "closing": "Respectfully",
+          "enclosures": "Enclosures: {FormShort} form, return envelope"
+        },
+        "missing_docs": {
+          "subject": "Missing Documents for Your {program} Case",
+          "greeting": "Hello {name},",
+          "lead": "Your {program} case is missing one item. Your deadline is {due1date}.",
+          "extra": "Mail a copy in the enclosed envelope or bring it to {officeAddr}. Do not send originals. If the deadline will pass before you have it, call {tel} right away.",
+          "interview": null,
+          "consequence": "A case without your {doc} {due2} may be denied or closed on {end}.",
+          "closing": "Respectfully",
+          "enclosures": null
+        },
+        "work_hours": {
+          "subject": "{program} Work Hours Report",
+          "greeting": "Hello {name},",
+          "lead": "Your {program} hours report is due {due1date}.",
+          "extra": "Good cause (illness, caregiving) excuses missing hours; tell us and send any proof you have.",
+          "interview": null,
+          "consequence": "Hours that arrive {due2} keep your benefits steady. Late hours may change your benefits starting {end}.",
+          "closing": "Respectfully",
+          "enclosures": null
+        },
+        "utility_shutoff": {
+          "subject": "Your past due balance",
+          "greeting": "Hello {name},",
+          "lead": "You owe {amount} since {past}. Your shutoff date is {due1date}: pay the balance or call {utilTel} to arrange a plan before then.",
+          "middle": "Our office is open Monday through Friday, 8:00 AM to 6:00 PM. After {end} without payment or a plan, service stops and a reconnection fee applies.\n\nMedical needs and benefit cases can discuss options; call us right away.",
+          "closing": "Respectfully",
+          "accountLine": "Account No.: {acct}"
+        }
+      }
+    },
+    "c": {
+      "subjectWord": "Regarding",
+      "needsIntro": null,
+      "needsStyle": "prose",
+      "needForm": "Your packet must include a {form}, which is enclosed with this notice.",
+      "needDoc": "We need your {doc}; send a copy and keep the original.",
+      "needAlt": "To show household income, send your {A} or {B} from last month.",
+      "needWorkAlt": "Your packet must include your {A} or {B} with dates and hours.",
+      "missingAgain": "Have your {Doc} ready at your interview to finish in one visit.",
+      "missingAgainUtility": "Bring your {Doc} with you so we can approve your plan on the spot.",
+      "kinds": {
+        "medicaid_renewal": {
+          "subject": "{program} Renewal",
+          "greeting": "ATTN: {name}",
+          "lead": "This notice covers your {program} {formShort}. Return everything {due1} so there is no break in your {coverage}.",
+          "interview": "Your phone interview is scheduled for {interview}. We will call you at the number we have on file. If you miss the call, call us at {tel} within 2 business days to reschedule.",
+          "consequence": "If your packet arrives {due2}, you stay covered. Otherwise your {program} {coverage} ends on {end}, and you would need to reapply.",
+          "closing": "Thank you",
+          "enclosures": "Enclosures: {FormShort} form, return envelope, rights and responsibilities"
+        },
+        "snap_recert": {
+          "subject": "{program} Recertification",
+          "greeting": "ATTN: {name}",
+          "lead": "This notice covers your {program} {formShort}. Return everything {due1} so there is no break in your {coverage}.",
+          "interview": "Your phone interview is scheduled for {interview}. We will call you at the number we have on file. If you miss the call, call us at {tel} within 2 business days to reschedule.",
+          "consequence": "If your packet arrives {due2}, you stay covered. Otherwise your {program} {coverage} ends on {end}, and you would need to reapply.",
+          "closing": "Thank you",
+          "enclosures": "Enclosures: {FormShort} form, return envelope, rights and responsibilities"
+        },
+        "missing_docs": {
+          "subject": "Missing Documents for Your {program} Case",
+          "greeting": "ATTN: {name}",
+          "lead": "To finish your {program} case, return the missing item {due1}.",
+          "extra": "Mail it with the enclosed envelope or visit us at {officeAddr}. If you cannot get this document in time, call {tel} before the date above.",
+          "interview": null,
+          "consequence": "Without your {doc} {due2}, your case may close on {end}. A closed case gets a new notice with appeal rights.",
+          "closing": "Thank you",
+          "enclosures": null
+        },
+        "work_hours": {
+          "subject": "{program} Work Hours Report",
+          "greeting": "ATTN: {name}",
+          "lead": "Your {program} hours for this month must show at least 80 hours and must arrive {due1}.",
+          "extra": null,
+          "interview": null,
+          "consequence": "If your hours arrive {due2}, nothing changes. Otherwise your benefits may change starting {end}.",
+          "closing": "Thank you",
+          "enclosures": null
+        },
+        "utility_shutoff": {
+          "subject": "Past due notice",
+          "greeting": "ATTN: {name}",
+          "lead": "This is your shutoff warning. The balance of {amount} has been unpaid since {past}. Settle it {due1} to keep your service on.",
+          "middle": "Pay in full or phone {utilTel} to set up a plan. Without payment or a plan, shutoff happens on or after {end} plus a reconnection fee.",
+          "closing": "Thank you",
+          "accountLine": "Account No.: {acct}"
+        }
+      }
+    }
+  }
+}

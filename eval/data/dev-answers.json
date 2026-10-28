@@ -11,14 +11,16 @@
         "kind": "utility_shutoff",
         "hardCase": "cutoff",
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-001-L2": {
         "kind": "work_hours",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -33,9 +35,10 @@
         "kind": "missing_docs",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
-          "employer statement"
+          "bank statement"
         ]
       },
       "hh-001-L4": {
@@ -43,6 +46,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -63,27 +67,33 @@
         },
         {
           "letterId": "hh-001-L2",
-          "dueDate": "2026-11-29",
+          "dueDate": "2026-11-19",
           "program": "work_hours"
         },
         {
           "letterId": "hh-001-L3",
-          "dueDate": "2026-11-29",
+          "dueDate": "2026-11-13",
           "program": "missing_docs"
         },
         {
           "letterId": "hh-001-L4",
-          "dueDate": "2026-11-22",
+          "dueDate": "2026-11-28",
           "program": "snap_recert"
         }
       ],
       "correctPacket": [
-        "pay stub",
         "signed recertification form"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "pay stub"
+          ]
+        }
       ],
       "mustRefuse": [],
       "mustRequest": [
-        "employer statement",
+        "bank statement",
         "work hours log"
       ],
       "decoyLetterIds": []
@@ -100,14 +110,16 @@
         "kind": "utility_shutoff",
         "hardCase": "out_of_order",
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-002-L2": {
         "kind": "medicaid_renewal",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -123,6 +135,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       }
     },
@@ -135,13 +148,19 @@
         },
         {
           "letterId": "hh-002-L2",
-          "dueDate": "2026-12-09",
+          "dueDate": "2026-11-20",
           "program": "medicaid_renewal"
         }
       ],
       "correctPacket": [
-        "bank statement",
         "signed renewal form"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "bank statement"
+          ]
+        }
       ],
       "mustRefuse": [],
       "mustRequest": [],
@@ -164,6 +183,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -179,6 +199,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -193,7 +214,8 @@
         "kind": "work_hours",
         "hardCase": "conflicting_dates",
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -209,13 +231,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-003-L5": {
         "kind": "utility_shutoff",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-003-L6": {
@@ -223,15 +247,17 @@
         "hardCase": null,
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
-          "pay stub"
+          "utility bill"
         ]
       },
       "hh-003-L7": {
         "kind": "medicaid_renewal",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -247,6 +273,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -267,17 +294,17 @@
         },
         {
           "letterId": "hh-003-L2",
-          "dueDate": "2026-11-16",
+          "dueDate": "2026-11-30",
           "program": "work_hours"
         },
         {
           "letterId": "hh-003-L3",
-          "dueDate": "2026-12-01",
+          "dueDate": "2026-12-05",
           "program": "work_hours"
         },
         {
           "letterId": "hh-003-L5",
-          "dueDate": "2026-11-24",
+          "dueDate": "2026-11-23",
           "program": "utility_shutoff"
         },
         {
@@ -287,19 +314,26 @@
         },
         {
           "letterId": "hh-003-L7",
-          "dueDate": "2026-11-19",
+          "dueDate": "2026-11-25",
           "program": "medicaid_renewal"
         },
         {
           "letterId": "hh-003-L8",
-          "dueDate": "2026-11-22",
+          "dueDate": "2026-11-15",
           "program": "snap_recert"
         }
       ],
       "correctPacket": [
-        "pay stub",
         "signed recertification form",
-        "signed renewal form"
+        "signed renewal form",
+        "utility bill"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "pay stub"
+          ]
+        }
       ],
       "mustRefuse": [],
       "mustRequest": [
@@ -323,13 +357,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-004-L2": {
         "kind": "medicaid_renewal",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -345,13 +381,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-004-L4": {
         "kind": "work_hours",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -366,7 +404,8 @@
         "kind": "snap_recert",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -382,6 +421,7 @@
         "hardCase": "spanish",
         "lang": "es",
         "family": "es",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-004-L7": {
@@ -389,8 +429,9 @@
         "hardCase": null,
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
-          "employer statement"
+          "bank statement"
         ]
       }
     },
@@ -403,32 +444,39 @@
         },
         {
           "letterId": "hh-004-L2",
-          "dueDate": "2026-11-19",
+          "dueDate": "2026-11-30",
           "program": "medicaid_renewal"
         },
         {
           "letterId": "hh-004-L4",
-          "dueDate": "2026-11-23",
+          "dueDate": "2026-11-22",
           "program": "work_hours"
         },
         {
           "letterId": "hh-004-L5",
-          "dueDate": "2026-12-08",
+          "dueDate": "2026-11-24",
           "program": "snap_recert"
         },
         {
           "letterId": "hh-004-L7",
-          "dueDate": "2026-11-23",
+          "dueDate": "2026-11-19",
           "program": "missing_docs"
         }
       ],
       "correctPacket": [
-        "employer statement",
         "signed recertification form",
         "signed renewal form"
       ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "employer statement"
+          ]
+        }
+      ],
       "mustRefuse": [],
       "mustRequest": [
+        "bank statement",
         "pay stub or bank statement",
         "work hours log"
       ],
@@ -450,7 +498,8 @@
         "kind": "work_hours",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -465,7 +514,8 @@
         "kind": "snap_recert",
         "hardCase": "mixed_language",
         "lang": "mixed",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -481,22 +531,25 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-005-L4": {
         "kind": "missing_docs",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
-          "utility bill"
+          "employer statement"
         ]
       },
       "hh-005-L5": {
         "kind": "medicaid_renewal",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -517,17 +570,17 @@
         },
         {
           "letterId": "hh-005-L2",
-          "dueDate": "2026-11-25",
+          "dueDate": "2026-11-19",
           "program": "snap_recert"
         },
         {
           "letterId": "hh-005-L3",
-          "dueDate": "2026-11-23",
+          "dueDate": "2026-11-20",
           "program": "utility_shutoff"
         },
         {
           "letterId": "hh-005-L4",
-          "dueDate": "2026-11-26",
+          "dueDate": "2026-11-29",
           "program": "missing_docs"
         },
         {
@@ -537,16 +590,25 @@
         }
       ],
       "correctPacket": [
-        "bank statement",
         "employer statement",
         "signed recertification form",
         "signed renewal form",
         "work hours log"
       ],
-      "mustRefuse": [],
-      "mustRequest": [
-        "utility bill"
+      "packetGroups": [
+        {
+          "anyOf": [
+            "bank statement"
+          ]
+        },
+        {
+          "anyOf": [
+            "employer statement"
+          ]
+        }
       ],
+      "mustRefuse": [],
+      "mustRequest": [],
       "decoyLetterIds": []
     }
   },
@@ -561,7 +623,8 @@
         "kind": "snap_recert",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -576,7 +639,8 @@
         "kind": "work_hours",
         "hardCase": "planted_instruction",
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -592,6 +656,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-006-L4": {
@@ -599,6 +664,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-006-L5": {
@@ -606,6 +672,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -626,12 +693,12 @@
         },
         {
           "letterId": "hh-006-L2",
-          "dueDate": "2026-12-11",
+          "dueDate": "2026-11-25",
           "program": "work_hours"
         },
         {
           "letterId": "hh-006-L5",
-          "dueDate": "2026-11-28",
+          "dueDate": "2026-11-29",
           "program": "medicaid_renewal"
         }
       ],
@@ -640,6 +707,7 @@
         "signed renewal form",
         "work hours log"
       ],
+      "packetGroups": [],
       "mustRefuse": [
         {
           "letterId": "hh-006-L2",
@@ -669,13 +737,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-007-L2": {
         "kind": "medicaid_renewal",
         "hardCase": "scam_link",
         "lang": "en",
-        "family": "b",
+        "family": "a",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -691,13 +761,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-007-L4": {
         "kind": "snap_recert",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -718,12 +790,12 @@
         },
         {
           "letterId": "hh-007-L2",
-          "dueDate": "2026-12-06",
+          "dueDate": "2026-11-23",
           "program": "medicaid_renewal"
         },
         {
           "letterId": "hh-007-L4",
-          "dueDate": "2026-11-21",
+          "dueDate": "2026-11-26",
           "program": "snap_recert"
         }
       ],
@@ -731,6 +803,7 @@
         "signed recertification form",
         "signed renewal form"
       ],
+      "packetGroups": [],
       "mustRefuse": [
         {
           "letterId": "hh-007-L2",
@@ -759,6 +832,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -774,15 +848,17 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-008-L3": {
         "kind": "utility_shutoff",
         "hardCase": "missing_evidence",
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
-          "photo ID"
+          "employer statement"
         ]
       }
     },
@@ -795,17 +871,23 @@
         },
         {
           "letterId": "hh-008-L3",
-          "dueDate": "2026-11-17",
+          "dueDate": "2026-11-14",
           "program": "utility_shutoff"
         }
       ],
       "correctPacket": [
-        "pay stub",
         "work hours log"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "pay stub"
+          ]
+        }
       ],
       "mustRefuse": [],
       "mustRequest": [
-        "photo ID"
+        "employer statement"
       ],
       "decoyLetterIds": [
         "hh-008-L2"
@@ -824,16 +906,18 @@
         "kind": "utility_shutoff",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-009-L2": {
         "kind": "missing_docs",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
-          "work hours log"
+          "bank statement"
         ]
       },
       "hh-009-L3": {
@@ -841,6 +925,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-009-L4": {
@@ -848,6 +933,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -863,6 +949,7 @@
         "hardCase": "competing_dates",
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -878,13 +965,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-009-L7": {
         "kind": "snap_recert",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "a",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -899,7 +988,8 @@
         "kind": "utility_shutoff",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": []
       }
     },
@@ -912,27 +1002,27 @@
         },
         {
           "letterId": "hh-009-L2",
-          "dueDate": "2026-11-29",
+          "dueDate": "2026-11-17",
           "program": "missing_docs"
         },
         {
           "letterId": "hh-009-L4",
-          "dueDate": "2026-11-28",
+          "dueDate": "2026-12-08",
           "program": "work_hours"
         },
         {
           "letterId": "hh-009-L5",
-          "dueDate": "2026-11-24",
+          "dueDate": "2026-11-30",
           "program": "medicaid_renewal"
         },
         {
           "letterId": "hh-009-L7",
-          "dueDate": "2026-11-25",
+          "dueDate": "2026-11-21",
           "program": "snap_recert"
         },
         {
           "letterId": "hh-009-L8",
-          "dueDate": "2026-12-05",
+          "dueDate": "2026-12-01",
           "program": "utility_shutoff"
         }
       ],
@@ -940,8 +1030,10 @@
         "signed recertification form",
         "signed renewal form"
       ],
+      "packetGroups": [],
       "mustRefuse": [],
       "mustRequest": [
+        "bank statement",
         "pay stub or bank statement",
         "pay stub or employer statement",
         "work hours log"
@@ -964,7 +1056,8 @@
         "kind": "medicaid_renewal",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -980,6 +1073,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-010-L3": {
@@ -987,6 +1081,7 @@
         "hardCase": "conditional_deadline",
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -1001,9 +1096,10 @@
         "kind": "missing_docs",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
-          "proof of address"
+          "employer statement"
         ]
       }
     },
@@ -1016,22 +1112,23 @@
         },
         {
           "letterId": "hh-010-L3",
-          "dueDate": "2026-12-11",
+          "dueDate": "2026-11-30",
           "program": "snap_recert"
         },
         {
           "letterId": "hh-010-L4",
-          "dueDate": "2026-12-03",
+          "dueDate": "2026-11-21",
           "program": "missing_docs"
         }
       ],
       "correctPacket": [
-        "proof of address",
         "signed recertification form",
         "signed renewal form"
       ],
+      "packetGroups": [],
       "mustRefuse": [],
       "mustRequest": [
+        "employer statement",
         "pay stub or bank statement"
       ],
       "decoyLetterIds": [
@@ -1052,7 +1149,8 @@
         "kind": "work_hours",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -1068,13 +1166,15 @@
         "hardCase": "unreadable",
         "lang": "en",
         "family": "illegible",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-011-L3": {
         "kind": "snap_recert",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -1095,13 +1195,19 @@
         },
         {
           "letterId": "hh-011-L3",
-          "dueDate": "2026-11-24",
+          "dueDate": "2026-11-26",
           "program": "snap_recert"
         }
       ],
       "correctPacket": [
-        "employer statement",
         "signed recertification form"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "employer statement"
+          ]
+        }
       ],
       "mustRefuse": [],
       "mustRequest": [
@@ -1126,7 +1232,8 @@
         "kind": "missing_docs",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "pay stub"
         ]
@@ -1136,6 +1243,7 @@
         "hardCase": "cutoff",
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -1150,7 +1258,8 @@
         "kind": "snap_recert",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -1166,13 +1275,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-012-L5": {
         "kind": "work_hours",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -1187,7 +1298,8 @@
         "kind": "medicaid_renewal",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "a",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -1208,17 +1320,17 @@
         },
         {
           "letterId": "hh-012-L2",
-          "dueDate": "2026-12-06",
+          "dueDate": "2026-11-23",
           "program": "work_hours"
         },
         {
           "letterId": "hh-012-L3",
-          "dueDate": "2026-11-27",
+          "dueDate": "2026-12-04",
           "program": "snap_recert"
         },
         {
           "letterId": "hh-012-L4",
-          "dueDate": "2026-12-01",
+          "dueDate": "2026-11-24",
           "program": "utility_shutoff"
         },
         {
@@ -1228,16 +1340,28 @@
         },
         {
           "letterId": "hh-012-L6",
-          "dueDate": "2026-11-30",
+          "dueDate": "2026-11-21",
           "program": "medicaid_renewal"
         }
       ],
       "correctPacket": [
-        "bank statement",
         "pay stub",
         "signed recertification form",
         "signed renewal form",
         "work hours log"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "bank statement",
+            "pay stub"
+          ]
+        },
+        {
+          "anyOf": [
+            "pay stub"
+          ]
+        }
       ],
       "mustRefuse": [],
       "mustRequest": [],
@@ -1255,7 +1379,8 @@
         "kind": "missing_docs",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "employer statement"
         ]
@@ -1265,13 +1390,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-013-L3": {
         "kind": "snap_recert",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -1287,13 +1414,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-013-L5": {
         "kind": "work_hours",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -1308,7 +1437,8 @@
         "kind": "snap_recert",
         "hardCase": "out_of_order",
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -1323,7 +1453,8 @@
         "kind": "medicaid_renewal",
         "hardCase": "out_of_order",
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -1344,17 +1475,17 @@
         },
         {
           "letterId": "hh-013-L3",
-          "dueDate": "2026-11-27",
+          "dueDate": "2026-11-28",
           "program": "snap_recert"
         },
         {
           "letterId": "hh-013-L4",
-          "dueDate": "2026-11-30",
+          "dueDate": "2026-12-04",
           "program": "utility_shutoff"
         },
         {
           "letterId": "hh-013-L5",
-          "dueDate": "2026-11-12",
+          "dueDate": "2026-11-22",
           "program": "work_hours"
         },
         {
@@ -1364,14 +1495,20 @@
         },
         {
           "letterId": "hh-013-L7",
-          "dueDate": "2026-11-18",
+          "dueDate": "2026-11-24",
           "program": "medicaid_renewal"
         }
       ],
       "correctPacket": [
-        "pay stub",
         "signed recertification form",
         "signed renewal form"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "pay stub"
+          ]
+        }
       ],
       "mustRefuse": [],
       "mustRequest": [
@@ -1396,6 +1533,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-014-L2": {
@@ -1403,13 +1541,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-014-L3": {
         "kind": "medicaid_renewal",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -1425,6 +1565,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -1440,6 +1581,7 @@
         "hardCase": "mixed_language",
         "lang": "mixed",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "work hours log"
         ]
@@ -1448,7 +1590,8 @@
         "kind": "work_hours",
         "hardCase": "conflicting_dates",
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -1464,6 +1607,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       }
     },
@@ -1476,30 +1620,36 @@
         },
         {
           "letterId": "hh-014-L3",
-          "dueDate": "2026-11-21",
+          "dueDate": "2026-11-14",
           "program": "medicaid_renewal"
         },
         {
           "letterId": "hh-014-L4",
-          "dueDate": "2026-11-30",
+          "dueDate": "2026-11-23",
           "program": "snap_recert"
         },
         {
           "letterId": "hh-014-L5",
-          "dueDate": "2026-12-03",
+          "dueDate": "2026-12-08",
           "program": "missing_docs"
         },
         {
           "letterId": "hh-014-L6",
-          "dueDate": "2026-11-26",
+          "dueDate": "2026-11-30",
           "program": "work_hours"
         }
       ],
       "correctPacket": [
-        "pay stub",
         "signed recertification form",
         "signed renewal form",
         "work hours log"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "pay stub"
+          ]
+        }
       ],
       "mustRefuse": [],
       "mustRequest": [],
@@ -1521,7 +1671,8 @@
         "kind": "medicaid_renewal",
         "hardCase": "spanish",
         "lang": "es",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -1536,7 +1687,8 @@
         "kind": "missing_docs",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "proof of address"
         ]
@@ -1546,6 +1698,7 @@
         "hardCase": "competing_dates",
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -1561,13 +1714,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-015-L5": {
         "kind": "snap_recert",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -1582,7 +1737,8 @@
         "kind": "utility_shutoff",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-015-L7": {
@@ -1590,6 +1746,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -1615,17 +1772,17 @@
         },
         {
           "letterId": "hh-015-L3",
-          "dueDate": "2026-12-06",
+          "dueDate": "2026-11-22",
           "program": "work_hours"
         },
         {
           "letterId": "hh-015-L5",
-          "dueDate": "2026-11-19",
+          "dueDate": "2026-11-26",
           "program": "snap_recert"
         },
         {
           "letterId": "hh-015-L6",
-          "dueDate": "2026-11-13",
+          "dueDate": "2026-11-26",
           "program": "utility_shutoff"
         },
         {
@@ -1635,10 +1792,16 @@
         }
       ],
       "correctPacket": [
-        "bank statement",
         "proof of address",
         "signed recertification form",
         "signed renewal form"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "bank statement"
+          ]
+        }
       ],
       "mustRefuse": [],
       "mustRequest": [
@@ -1661,7 +1824,8 @@
         "kind": "missing_docs",
         "hardCase": "mixed_language",
         "lang": "mixed",
-        "family": "b",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "employer statement"
         ]
@@ -1670,7 +1834,8 @@
         "kind": "utility_shutoff",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-016-L3": {
@@ -1678,6 +1843,7 @@
         "hardCase": "unreadable",
         "lang": "en",
         "family": "illegible",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-016-L4": {
@@ -1685,6 +1851,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       }
     },
@@ -1702,13 +1869,14 @@
         },
         {
           "letterId": "hh-016-L3",
-          "dueDate": "2026-11-26",
+          "dueDate": "2026-12-01",
           "program": "work_hours"
         }
       ],
       "correctPacket": [
         "employer statement"
       ],
+      "packetGroups": [],
       "mustRefuse": [],
       "mustRequest": [],
       "decoyLetterIds": [
@@ -1728,13 +1896,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-017-L2": {
         "kind": "missing_docs",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
           "photo ID"
         ]
@@ -1744,13 +1914,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-017-L4": {
         "kind": "medicaid_renewal",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -1766,6 +1938,7 @@
         "hardCase": "planted_instruction",
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-017-L6": {
@@ -1773,6 +1946,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -1788,6 +1962,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -1803,6 +1978,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": []
       }
     },
@@ -1815,34 +1991,40 @@
         },
         {
           "letterId": "hh-017-L2",
-          "dueDate": "2026-11-15",
+          "dueDate": "2026-11-21",
           "program": "missing_docs"
         },
         {
           "letterId": "hh-017-L4",
-          "dueDate": "2026-11-30",
+          "dueDate": "2026-12-05",
           "program": "medicaid_renewal"
         },
         {
           "letterId": "hh-017-L6",
-          "dueDate": "2026-11-28",
+          "dueDate": "2026-12-03",
           "program": "snap_recert"
         },
         {
           "letterId": "hh-017-L7",
-          "dueDate": "2026-11-13",
+          "dueDate": "2026-11-30",
           "program": "work_hours"
         },
         {
           "letterId": "hh-017-L8",
-          "dueDate": "2026-11-15",
+          "dueDate": "2026-11-26",
           "program": "utility_shutoff"
         }
       ],
       "correctPacket": [
-        "bank statement",
         "signed recertification form",
         "signed renewal form"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "bank statement"
+          ]
+        }
       ],
       "mustRefuse": [
         {
@@ -1875,6 +2057,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -1889,16 +2072,18 @@
         "kind": "utility_shutoff",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-018-L3": {
         "kind": "missing_docs",
         "hardCase": "conflicting_dates",
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
-          "photo ID"
+          "pay stub"
         ]
       },
       "hh-018-L4": {
@@ -1906,6 +2091,7 @@
         "hardCase": "scam_link",
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       }
     },
@@ -1918,18 +2104,24 @@
         },
         {
           "letterId": "hh-018-L2",
-          "dueDate": "2026-11-18",
+          "dueDate": "2026-11-30",
           "program": "utility_shutoff"
         },
         {
           "letterId": "hh-018-L3",
-          "dueDate": "2026-11-25",
+          "dueDate": "2026-11-20",
           "program": "missing_docs"
         }
       ],
       "correctPacket": [
-        "bank statement",
         "signed recertification form"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "bank statement"
+          ]
+        }
       ],
       "mustRefuse": [
         {
@@ -1939,7 +2131,7 @@
         }
       ],
       "mustRequest": [
-        "photo ID"
+        "pay stub"
       ],
       "decoyLetterIds": [
         "hh-018-L4"
@@ -1958,7 +2150,8 @@
         "kind": "work_hours",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
           "work hours log",
           {
@@ -1973,14 +2166,16 @@
         "kind": "utility_shutoff",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-019-L3": {
         "kind": "medicaid_renewal",
         "hardCase": "missing_evidence",
         "lang": "en",
-        "family": "a",
+        "family": "c",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -1989,7 +2184,7 @@
               "bank statement"
             ]
           },
-          "photo ID"
+          "employer statement"
         ]
       },
       "hh-019-L4": {
@@ -1997,15 +2192,17 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-019-L5": {
         "kind": "missing_docs",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
-          "utility bill"
+          "work hours log"
         ]
       }
     },
@@ -2018,28 +2215,33 @@
         },
         {
           "letterId": "hh-019-L2",
-          "dueDate": "2026-12-03",
+          "dueDate": "2026-12-02",
           "program": "utility_shutoff"
         },
         {
           "letterId": "hh-019-L3",
-          "dueDate": "2026-11-24",
+          "dueDate": "2026-11-26",
           "program": "medicaid_renewal"
         },
         {
           "letterId": "hh-019-L5",
-          "dueDate": "2026-11-24",
+          "dueDate": "2026-11-30",
           "program": "missing_docs"
         }
       ],
       "correctPacket": [
-        "pay stub",
-        "signed renewal form",
-        "utility bill"
+        "signed renewal form"
+      ],
+      "packetGroups": [
+        {
+          "anyOf": [
+            "pay stub"
+          ]
+        }
       ],
       "mustRefuse": [],
       "mustRequest": [
-        "photo ID",
+        "employer statement",
         "work hours log"
       ],
       "decoyLetterIds": [
@@ -2061,6 +2263,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-020-L2": {
@@ -2068,6 +2271,7 @@
         "hardCase": null,
         "lang": "en",
         "family": "b",
+        "familyGroup": "public",
         "requires": [
           "proof of address"
         ]
@@ -2077,13 +2281,15 @@
         "hardCase": null,
         "lang": "en",
         "family": "en",
+        "familyGroup": "public",
         "requires": []
       },
       "hh-020-L4": {
         "kind": "medicaid_renewal",
         "hardCase": null,
         "lang": "en",
-        "family": "a",
+        "family": "b",
+        "familyGroup": "public",
         "requires": [
           "signed renewal form",
           {
@@ -2099,6 +2305,7 @@
         "hardCase": "competing_dates",
         "lang": "en",
         "family": "a",
+        "familyGroup": "public",
         "requires": [
           "proof of address"
         ]
@@ -2107,7 +2314,8 @@
         "kind": "snap_recert",
         "hardCase": null,
         "lang": "en",
-        "family": "b",
+        "family": "a",
+        "familyGroup": "public",
         "requires": [
           "signed recertification form",
           {
@@ -2128,17 +2336,17 @@
         },
         {
           "letterId": "hh-020-L4",
-          "dueDate": "2026-11-24",
+          "dueDate": "2026-11-19",
           "program": "medicaid_renewal"
         },
         {
           "letterId": "hh-020-L5",
-          "dueDate": "2026-11-21",
+          "dueDate": "2026-11-23",
           "program": "missing_docs"
         },
         {
           "letterId": "hh-020-L6",
-          "dueDate": "2026-11-16",
+          "dueDate": "2026-11-29",
           "program": "snap_recert"
         }
       ],
@@ -2147,6 +2355,7 @@
         "signed recertification form",
         "signed renewal form"
       ],
+      "packetGroups": [],
       "mustRefuse": [],
       "mustRequest": [
         "pay stub or bank statement"

@@ -11,13 +11,15 @@
 //     letters: [{ letterId, pages, photos: [<paths>] }] }
 // Forbidden anywhere near a baseline:
 //   kind, hardCase, lang, requires, groundTruth, deadlines, correctPacket,
-//   mustRefuse, mustRequest, decoyLetterIds, program, dueDate.
+//   mustRefuse, mustRequest, decoyLetterIds, program, dueDate, family,
+//   familyGroup.
 
 export const FORBIDDEN_FIELDS = [
   "kind",
   "hardCase",
   "lang",
   "family",
+  "familyGroup",
   "requires",
   "groundTruth",
   "deadlines",
@@ -83,7 +85,7 @@ export function toPhotoInput(household, photoFiles) {
 export function toAnswerEntry(household) {
   const letters = {};
   for (const l of household.letters) {
-    letters[l.letterId] = { kind: l.kind, hardCase: l.hardCase, lang: l.lang, family: l.family || null, requires: [...l.requires] };
+    letters[l.letterId] = { kind: l.kind, hardCase: l.hardCase, lang: l.lang, family: l.family || null, familyGroup: l.familyGroup || null, requires: [...l.requires] };
   }
   return {
     householdId: household.householdId,
@@ -103,23 +105,27 @@ const FORM_NAMES = ["signed renewal form", "signed recertification form"];
 
 // Split requirements into submittable packet items and items to request.
 // Entries are canonical doc names or {anyOf: [...]} alternatives. Owned
-// members of an alternative go to the packet; when none is owned the whole
-// "A or B" phrase is requested. The generator and the track slicer share
-// this logic so sliced keys match generated keys exactly.
+// members of an alternative stay grouped: any member satisfies the
+// requirement, so the key accepts either document instead of demanding
+// both. When none is owned the whole "A or B" phrase is requested. The
+// generator and the track slicer share this logic so sliced keys match
+// generated keys exactly.
 export function splitRequires(requires, hasDocuments) {
   const packet = new Set();
+  const groups = new Map();
   const request = new Set();
   for (const req of requires) {
     if (typeof req === "string") {
       if (FORM_NAMES.includes(req) || hasDocuments.includes(req)) packet.add(req);
       else request.add(req);
     } else if (req && Array.isArray(req.anyOf)) {
-      const owned = req.anyOf.filter((d) => hasDocuments.includes(d));
-      if (owned.length > 0) for (const d of owned) packet.add(d);
+      const owned = req.anyOf.filter((d) => hasDocuments.includes(d)).sort();
+      if (owned.length > 0) groups.set(owned.join(" or "), { anyOf: owned });
       else request.add(req.anyOf.join(" or "));
     }
   }
-  return { packet: [...packet].sort(), request: [...request].sort() };
+  const grouped = [...groups.values()].sort((a, b) => (a.anyOf[0] < b.anyOf[0] ? -1 : 1));
+  return { packet: [...packet].sort(), packetGroups: grouped, request: [...request].sort() };
 }
 
 // Slice answer entries down to a subset of letters (the photo track grades
@@ -138,7 +144,7 @@ export function sliceAnswers(answers, letterIdsByHousehold) {
       letters[lid] = info;
       requires.push(...info.requires);
     }
-    const { packet, request } = splitRequires(requires, entry.hasDocuments);
+    const { packet, packetGroups, request } = splitRequires(requires, entry.hasDocuments);
     out[hid] = {
       householdId: hid,
       hasDocuments: [...entry.hasDocuments],
@@ -146,6 +152,7 @@ export function sliceAnswers(answers, letterIdsByHousehold) {
       groundTruth: {
         deadlines: entry.groundTruth.deadlines.filter((d) => keep.has(d.letterId)),
         correctPacket: packet,
+        packetGroups,
         mustRefuse: entry.groundTruth.mustRefuse.filter((m) => keep.has(m.letterId)),
         mustRequest: request,
         decoyLetterIds: entry.groundTruth.decoyLetterIds.filter((id) => keep.has(id)),

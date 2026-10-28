@@ -2,9 +2,10 @@
 // Verifies frozen commitments first and aborts on mismatch. Held-out
 // households are never loaded here. Each system under test runs as a
 // separate process that receives only its inputs. Two tracks: text (all
-// dev letters as text) and photo (photographed letters as images).
-// Live Meta calls happen only when META_MODEL_API_KEY is passed through;
-// otherwise the general agent prints "not run" instead of numbers.
+// dev letters as text) and photo (photographed letters as images). The
+// child is offline; the general agent's model calls travel through the
+// parent broker, which holds META_MODEL_API_KEY. Without the key the
+// general agent prints "not run" instead of numbers.
 import { readFile } from "node:fs/promises";
 import { readRecord, verifyCode, verifyDev, verifyPhotos } from "./verify.mjs";
 import { photoTrackInput, sliceAnswers } from "./inputs.mjs";
@@ -32,16 +33,16 @@ const mode = hasKey
   : "offline (no META_MODEL_API_KEY)";
 
 const SYSTEMS = [
-  { name: "plain reminder tool", entry: new URL("./systems/reminder.mjs", import.meta.url).pathname, envAllow: [], netAllow: [] },
-  { name: "deterministic parser", entry: new URL("./systems/parser.mjs", import.meta.url).pathname, envAllow: [], netAllow: [] },
-  { name: "general agent (one generic prompt)", entry: new URL("./systems/general-agent.mjs", import.meta.url).pathname, envAllow: ["META_MODEL_API_KEY"], netAllow: ["api.meta.ai", "security.cloudflare-dns.com"] },
+  { name: "plain reminder tool", entry: new URL("./systems/reminder.mjs", import.meta.url).pathname, envAllow: [], broker: false },
+  { name: "deterministic parser", entry: new URL("./systems/parser.mjs", import.meta.url).pathname, envAllow: [], broker: false },
+  { name: "general agent (one generic prompt)", entry: new URL("./systems/general-agent.mjs", import.meta.url).pathname, envAllow: [], broker: true },
 ];
 
 async function runTrack(trackName, trackInputs, trackAnswers, trackMode) {
   console.log(`# ${trackName} (${trackInputs.length} households)`);
   for (const sys of SYSTEMS) {
     const t0 = Date.now();
-    const { outputs } = await runSystem(sys.entry, trackInputs, { envAllow: sys.envAllow, netAllow: sys.netAllow });
+    const { outputs } = await runSystem(sys.entry, trackInputs, { envAllow: sys.envAllow, broker: sys.broker });
     const elapsedMs = Date.now() - t0;
     const notRun = outputs.length > 0 && outputs.every((o) => o.status === "not run");
     if (notRun) {
@@ -53,7 +54,7 @@ async function runTrack(trackName, trackInputs, trackAnswers, trackMode) {
       const graded = gradeAll(outputs, trackAnswers);
       const known = outputs.map((o) => o.costUsd).filter((c) => c !== null && c !== undefined);
       const costUsd = known.length > 0 ? known.reduce((a, c) => a + c, 0) : null;
-      const sysMode = sys.envAllow.length > 0 ? trackMode : "deterministic";
+      const sysMode = sys.broker ? trackMode : "deterministic";
       console.log(formatReport(sys.name, graded, { costUsd, elapsedMs, mode: sysMode }));
       console.log(formatPerScenario(outputs));
     }
