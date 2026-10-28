@@ -1,5 +1,13 @@
 import { describe, expect, test } from "vitest";
-import { DEFAULT_CONFIG, handleRequest, RECEIPT_RETENTION_MS, runCleanup, SUBMISSION_RETENTION_MS, type PortalConfig } from "../src/app";
+import {
+  DEFAULT_CONFIG,
+  handleRequest,
+  RECEIPT_RETENTION_MS,
+  runCleanup,
+  STAGED_RETENTION_MS,
+  SUBMISSION_RETENTION_MS,
+  type PortalConfig,
+} from "../src/app";
 import { submissionFileKey } from "../src/files";
 import { sha256Hex } from "../src/store";
 import { TEST_BANNER } from "../src/pages";
@@ -1537,5 +1545,168 @@ describe("test system labels", () => {
     );
     expect(res.status).toBe(303);
     expect(await res.text()).toContain(TEST_BANNER);
+  });
+});
+
+/** A file store that fails on demand, to prove deletes and retries stay ordered. */
+class FaultyFileStore extends MemoryFileStore {
+  failPutsAfter = Number.POSITIVE_INFINITY;
+  failDels = false;
+  puts = 0;
+
+  override async put(key: string, data: Uint8Array, type: string): Promise<void> {
+    if (this.puts >= this.failPutsAfter) throw new Error("R2 put failed");
+    this.puts += 1;
+    await super.put(key, data, type);
+  }
+
+  override async del(keys: string[]): Promise<void> {
+    if (this.failDels && keys.length > 0) throw new Error("R2 del failed");
+    await super.del(keys);
+  }
+}
+
+describe("review round 2 item 3: staged bytes are tracked and deletes are ordered", () => {
+  test("a lazy expiry deletes the draft bytes and the session row", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    expect(files.objects.size).toBe(1);
+    const sessionId = cookie.split("=")[1] ?? "";
+    const session = await store.getSession(sessionId);
+    if (!session) throw new Error("session was not created");
+    await store.putSession({ ...session, expiresAt: Date.now() - 1000 });
+    const res = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
+    expect(res.status).toBe(403);
+    expect(await store.getSession(sessionId)).toBeNull();
+    expect(files.objects.size).toBe(0);
+  });
+
+  test("a del failure during lazy expiry keeps the row and the bytes for the next attempt", async () => {
+    const store = new MemoryStore();
+    const files = new FaultyFileStore();
+    files.failDels = true;
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const sessionId = cookie.split("=")[1] ?? "";
+    const session = await store.getSession(sessionId);
+    if (!session) throw new Error("session was not created");
+    await store.putSession({ ...session, expiresAt: Date.now() - 1000 });
+    const res = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
+    expect(res.status).toBe(403);
+    expect(await store.getSession(sessionId)).not.toBeNull();
+    expect(files.objects.size).toBe(1);
+    files.failDels = false;
+    const retry = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
+    expect(retry.status).toBe(403);
+    expect(await store.getSession(sessionId)).toBeNull();
+    expect(files.objects.size).toBe(0);
+  });
+
+  test("a mid-upload put failure returns 500 and leaves no bytes behind", async () => {
+    const store = new MemoryStore();
+    const files = new FaultyFileStore();
+    files.failPutsAfter = 1;
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    const form = new FormData();
+    form.append("document1", pdfFile("paystub.pdf", "%PDF-first"));
+    form.append("document2", pdfFile("rent.pdf", "%PDF-second"));
+    const res = await handleRequest(new Request(`${BASE}/apply/documents`, { method: "POST", headers: { cookie }, body: form }), store, files, config);
+    expect(res.status).toBe(500);
+    expect(files.objects.size).toBe(0);
+    const sessionId = cookie.split("=")[1] ?? "";
+    expect((await store.getSession(sessionId))?.files).toEqual([]);
+  });
+
+  test("a copy failure after the row write returns 500, stays reconcilable, and a retry completes the bytes", async () => {
+    const store = new MemoryStore();
+    const files = new FaultyFileStore();
+    files.failPutsAfter = 1;
+    const filedAt = Date.now();
+    const config = testConfig({ now: () => filedAt });
+    const packet = {
+      key: "copy-fail-key",
+      household: HOUSEHOLD,
+      files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
+    };
+    const post = () =>
+      handleRequest(
+        new Request(`${BASE}/submissions`, { method: "POST", headers: { "content-type": "application/json", authorization: AUTH }, body: JSON.stringify(packet) }),
+        store,
+        files,
+        config,
+      );
+    const first = await post();
+    expect(first.status).toBe(500);
+    const failure = (await first.json()) as Record<string, string>;
+    const confirmation = failure["confirmationNumber"] ?? "";
+    expect(confirmation).not.toBe("");
+    const status = (await (
+      await handleRequest(new Request(`${BASE}/submissions/copy-fail-key`, { headers: { authorization: AUTH } }), store, files, config)
+    ).json()) as Record<string, unknown>;
+    expect(status["status"]).toBe("received");
+    expect(status["confirmationNumber"]).toBe(confirmation);
+    files.failPutsAfter = Number.POSITIVE_INFINITY;
+    const again = await post();
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as Record<string, unknown>)["duplicate"]).toBe(true);
+    const download = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}/file/0`, { headers: { authorization: AUTH } }), store, files, config);
+    expect(download.status).toBe(200);
+    expect(await download.text()).toBe("%PDF-bytes");
+  });
+
+  test("cleanup deletes file bytes before rows, so a del failure keeps both for the next run", async () => {
+    const store = new MemoryStore();
+    const files = new FaultyFileStore();
+    const filedAt = Date.now();
+    const config = testConfig({ now: () => filedAt });
+    const res = await handleRequest(
+      new Request(`${BASE}/submissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: AUTH },
+        body: JSON.stringify({
+          key: "aging-key",
+          household: HOUSEHOLD,
+          files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
+        }),
+      }),
+      store,
+      files,
+      config,
+    );
+    expect(res.status).toBe(200);
+    const scope = `api-${await sha256Hex(TOKEN)}`;
+    files.failDels = true;
+    await expect(runCleanup(store, files, filedAt + SUBMISSION_RETENTION_MS + 1000)).rejects.toThrow("R2 del failed");
+    expect(await store.countSubmissions()).toBe(1);
+    expect(files.objects.size).toBeGreaterThan(0);
+    files.failDels = false;
+    const report = await runCleanup(store, files, filedAt + SUBMISSION_RETENTION_MS + 1000);
+    expect(report.retiredFiles).toBe(1);
+    expect(await store.countSubmissions()).toBe(0);
+    expect(await store.getReceipt(scope, "aging-key")).not.toBeNull();
+    expect([...files.objects.keys()].some((k) => k.startsWith("submissions/"))).toBe(false);
+  });
+
+  test("cleanup sweeps abandoned staging older than an hour and leaves fresh staging alone", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const now = Date.now();
+    await files.put("staging/old-attempt/0-abc", new TextEncoder().encode("%PDF-old"), "application/pdf");
+    await files.put("staging/new-attempt/0-def", new TextEncoder().encode("%PDF-new"), "application/pdf");
+    await store.trackStaged([
+      { key: "staging/old-attempt/0-abc", createdAt: now - STAGED_RETENTION_MS - 1000 },
+      { key: "staging/new-attempt/0-def", createdAt: now },
+    ]);
+    const report = await runCleanup(store, files, now);
+    expect(report.sweptStaged).toBe(1);
+    expect(await files.get("staging/old-attempt/0-abc")).toBeNull();
+    expect(await files.get("staging/new-attempt/0-def")).not.toBeNull();
+    expect(await store.listStaleStaged(now - STAGED_RETENTION_MS)).toEqual([]);
+    expect(store.stagedObjects.has("staging/new-attempt/0-def")).toBe(true);
   });
 });

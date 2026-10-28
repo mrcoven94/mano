@@ -190,22 +190,17 @@ describe("blocker 6: rate limits and slow leases", () => {
 });
 
 describe("blocker 8: retention", () => {
-  test("MemoryStore: expired sessions are returned and removed", async () => {
-    const store = new MemoryStore();
-    await store.putSession({ id: "old", files: [], key: "k", createdAt: 0, expiresAt: 1000 });
-    await store.putSession({ id: "fresh", files: [], key: "k", createdAt: 0, expiresAt: 9999 });
-    const expired = await store.deleteExpiredSessions(2000);
-    expect(expired.map((s) => s.id)).toEqual(["old"]);
-    expect(await store.getSession("fresh")).not.toBeNull();
-  });
-
-  test("SQLite store: expired sessions are returned and removed", async () => {
-    const store = makeSqlStore();
-    await store.putSession({ id: "old", files: [], key: "k", createdAt: 0, expiresAt: 1000 });
-    await store.putSession({ id: "fresh", files: [], key: "k", createdAt: 0, expiresAt: 9999 });
-    const expired = await store.deleteExpiredSessions(2000);
-    expect(expired.map((s) => s.id)).toEqual(["old"]);
-    expect(await store.getSession("fresh")).not.toBeNull();
+  test("expired sessions list without deleting, then delete by id", async () => {
+    for (const store of [new MemoryStore(), makeSqlStore()]) {
+      await store.putSession({ id: "old", files: [], key: "k", createdAt: 0, expiresAt: 1000 });
+      await store.putSession({ id: "fresh", files: [], key: "k", createdAt: 0, expiresAt: 9999 });
+      const expired = await store.listExpiredSessions(2000);
+      expect(expired.map((s) => s.id)).toEqual(["old"]);
+      expect(await store.getSession("old")).not.toBeNull();
+      await store.deleteSessions(expired.map((s) => s.id));
+      expect(await store.getSession("old")).toBeNull();
+      expect(await store.getSession("fresh")).not.toBeNull();
+    }
   });
 
   test("summaries carry metadata only, newest first, with limit and offset", async () => {
@@ -224,17 +219,34 @@ describe("blocker 8: retention", () => {
   });
 
   for (const [name, make] of [["MemoryStore", () => new MemoryStore()], ["SQLite store", () => makeSqlStore()]] as const) {
-    test(`${name}: retire keeps a receipt and returns file keys, purge removes it`, async () => {
+    test(`${name}: retire lists, writes receipts, then deletes; purge removes receipts`, async () => {
       const store = make();
       const stored = await store.submit({ ...input("k", "digest-a"), receivedAt: 1000 });
       if (stored.outcome !== "stored") throw new Error("expected stored");
-      expect(await store.retireOldSubmissions(2000)).toEqual(["submissions/web/k/1-abc"]);
+      const old = await store.listOldSubmissions(2000, 500);
+      expect(old.map((s) => s.key)).toEqual(["k"]);
+      expect(await store.getSubmission("web", "k")).not.toBeNull();
+      await store.writeReceipts(
+        old.map((sub) => ({ key: sub.key, scope: sub.scope, confirmationNumber: sub.confirmationNumber, digest: sub.digest, receivedAt: sub.receivedAt })),
+      );
+      await store.deleteSubmissions([{ scope: "web", key: "k" }]);
       expect(await store.getSubmission("web", "k")).toBeNull();
       const receipt = await store.getReceipt("web", "k");
       expect(receipt?.confirmationNumber).toBe(stored.submission.confirmationNumber);
       expect(receipt?.digest).toBe("digest-a");
       expect(await store.purgeOldReceipts(2000)).toBe(1);
       expect(await store.getReceipt("web", "k")).toBeNull();
+    });
+
+    test(`${name}: staged objects track, list stale, and untrack`, async () => {
+      const store = make();
+      await store.trackStaged([
+        { key: "staging/a/1-x", createdAt: 1000 },
+        { key: "staging/b/1-y", createdAt: 9000 },
+      ]);
+      expect(await store.listStaleStaged(5000)).toEqual(["staging/a/1-x"]);
+      await store.untrackStaged(["staging/a/1-x"]);
+      expect(await store.listStaleStaged(5000)).toEqual([]);
     });
   }
 });

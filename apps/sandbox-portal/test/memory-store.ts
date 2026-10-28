@@ -2,6 +2,7 @@ import type { FileStore } from "../src/files";
 import {
   newConfirmationNumber,
   type SessionData,
+  type StagedEntry,
   type Store,
   type Submission,
   type SubmissionReceipt,
@@ -33,15 +34,34 @@ export class MemoryStore implements Store {
     this.sessions.delete(id);
   }
 
-  async deleteExpiredSessions(now: number): Promise<SessionData[]> {
+  async listExpiredSessions(now: number): Promise<SessionData[]> {
     const expired: SessionData[] = [];
-    for (const [id, session] of this.sessions) {
-      if (session.expiresAt <= now) {
-        expired.push(structuredClone(session));
-        this.sessions.delete(id);
-      }
+    for (const session of this.sessions.values()) {
+      if (session.expiresAt <= now) expired.push(structuredClone(session));
     }
     return expired;
+  }
+
+  async deleteSessions(ids: string[]): Promise<void> {
+    for (const id of ids) this.sessions.delete(id);
+  }
+
+  stagedObjects = new Map<string, number>();
+
+  async trackStaged(entries: StagedEntry[]): Promise<void> {
+    for (const entry of entries) this.stagedObjects.set(entry.key, entry.createdAt);
+  }
+
+  async untrackStaged(keys: string[]): Promise<void> {
+    for (const key of keys) this.stagedObjects.delete(key);
+  }
+
+  async listStaleStaged(olderThan: number): Promise<string[]> {
+    const stale: string[] = [];
+    for (const [key, createdAt] of this.stagedObjects) {
+      if (createdAt < olderThan) stale.push(key);
+    }
+    return stale;
   }
 
   receipts = new Map<string, SubmissionReceipt>();
@@ -50,25 +70,28 @@ export class MemoryStore implements Store {
     return this.receipts.get(scopedKey(scope, key)) ?? null;
   }
 
-  async retireOldSubmissions(olderThan: number): Promise<string[]> {
-    const r2keys: string[] = [];
-    for (const [mapKey, sub] of this.submissions) {
-      if (sub.receivedAt < olderThan) {
-        if (!this.receipts.has(scopedKey(sub.scope, sub.key))) {
-          this.receipts.set(scopedKey(sub.scope, sub.key), {
-            key: sub.key,
-            scope: sub.scope,
-            confirmationNumber: sub.confirmationNumber,
-            digest: sub.digest,
-            receivedAt: sub.receivedAt,
-          });
-        }
-        for (const file of sub.files) r2keys.push(file.r2key);
-        this.submissions.delete(mapKey);
+  async listOldSubmissions(olderThan: number, limit: number): Promise<Submission[]> {
+    return [...this.submissions.values()]
+      .filter((sub) => sub.receivedAt < olderThan)
+      .slice(0, limit)
+      .map((sub) => structuredClone(sub));
+  }
+
+  async writeReceipts(receipts: SubmissionReceipt[]): Promise<void> {
+    for (const receipt of receipts) {
+      const mapKey = scopedKey(receipt.scope, receipt.key);
+      if (!this.receipts.has(mapKey)) this.receipts.set(mapKey, structuredClone(receipt));
+    }
+  }
+
+  async deleteSubmissions(keys: Array<{ scope: string; key: string }>): Promise<void> {
+    for (const { scope, key } of keys) {
+      const sub = this.submissions.get(scopedKey(scope, key));
+      if (sub) {
+        this.submissions.delete(scopedKey(scope, key));
         this.byConfirmation.delete(sub.confirmationNumber);
       }
     }
-    return r2keys;
   }
 
   async purgeOldReceipts(olderThan: number): Promise<number> {

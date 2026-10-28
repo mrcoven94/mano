@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   PortalStoreSql,
   type SessionData,
+  type StagedEntry,
   type Submission,
   type SubmissionReceipt,
   type SubmissionSummary,
@@ -27,16 +28,40 @@ export class PortalStore extends DurableObject {
     return this.inner().deleteSession(id);
   }
 
-  deleteExpiredSessions(now: number): Promise<SessionData[]> {
-    return this.inner().deleteExpiredSessions(now);
+  listExpiredSessions(now: number): Promise<SessionData[]> {
+    return this.inner().listExpiredSessions(now);
+  }
+
+  deleteSessions(ids: string[]): Promise<void> {
+    return this.inner().deleteSessions(ids);
+  }
+
+  trackStaged(entries: StagedEntry[]): Promise<void> {
+    return this.inner().trackStaged(entries);
+  }
+
+  untrackStaged(keys: string[]): Promise<void> {
+    return this.inner().untrackStaged(keys);
+  }
+
+  listStaleStaged(olderThan: number): Promise<string[]> {
+    return this.inner().listStaleStaged(olderThan);
   }
 
   getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null> {
     return this.inner().getReceipt(scope, key);
   }
 
-  retireOldSubmissions(olderThan: number): Promise<string[]> {
-    return this.inner().retireOldSubmissions(olderThan);
+  listOldSubmissions(olderThan: number, limit: number): Promise<Submission[]> {
+    return this.inner().listOldSubmissions(olderThan, limit);
+  }
+
+  writeReceipts(receipts: SubmissionReceipt[]): Promise<void> {
+    return this.inner().writeReceipts(receipts);
+  }
+
+  deleteSubmissions(keys: Array<{ scope: string; key: string }>): Promise<void> {
+    return this.inner().deleteSubmissions(keys);
   }
 
   purgeOldReceipts(olderThan: number): Promise<number> {

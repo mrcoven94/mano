@@ -94,19 +94,31 @@ export interface SubmissionSummary {
   fileCount: number;
 }
 
+export interface StagedEntry {
+  key: string;
+  createdAt: number;
+}
+
 export interface Store {
   getSession(id: string): Promise<SessionData | null>;
   putSession(session: SessionData): Promise<void>;
   deleteSession(id: string): Promise<void>;
-  /** Delete timed-out drafts and return them so their file objects go too. */
-  deleteExpiredSessions(now: number): Promise<SessionData[]>;
+  /** Timed-out drafts, listed without deleting so R2 goes first and rows after. */
+  listExpiredSessions(now: number): Promise<SessionData[]>;
+  deleteSessions(ids: string[]): Promise<void>;
   getSubmission(scope: string, key: string): Promise<Submission | null>;
   listSubmissionSummaries(limit: number, offset: number): Promise<SubmissionSummary[]>;
   countSubmissions(): Promise<number>;
   getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null>;
-  /** Retire old submissions to small receipts; returns their file keys for deletion. */
-  retireOldSubmissions(olderThan: number): Promise<string[]>;
+  /** Old submissions, listed without deleting so receipts and R2 go first. */
+  listOldSubmissions(olderThan: number, limit: number): Promise<Submission[]>;
+  writeReceipts(receipts: SubmissionReceipt[]): Promise<void>;
+  deleteSubmissions(keys: Array<{ scope: string; key: string }>): Promise<void>;
   purgeOldReceipts(olderThan: number): Promise<number>;
+  /** Record attempt-staging objects; the record clears only after the R2 delete succeeds. */
+  trackStaged(entries: StagedEntry[]): Promise<void>;
+  untrackStaged(keys: string[]): Promise<void>;
+  listStaleStaged(olderThan: number): Promise<string[]>;
   checkRateLimit(ip: string, now: number, windowMs: number, max: number): Promise<boolean>;
   tryBeginSlow(now: number, ttlMs: number, max: number): Promise<string | null>;
   endSlow(leaseId: string): Promise<void>;
@@ -226,6 +238,10 @@ export class PortalStoreSql implements Store {
         received_at INTEGER NOT NULL,
         PRIMARY KEY (scope, key)
       );
+      CREATE TABLE IF NOT EXISTS staged_objects (
+        r2key TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL
+      );
     `);
     this.ready = true;
   }
@@ -253,11 +269,37 @@ export class PortalStoreSql implements Store {
     this.sql.exec("DELETE FROM sessions WHERE id = ?", id);
   }
 
-  async deleteExpiredSessions(now: number): Promise<SessionData[]> {
+  async listExpiredSessions(now: number): Promise<SessionData[]> {
     this.ensureTables();
-    const rows = this.sql.exec("SELECT data FROM sessions WHERE expires_at <= ?", now).toArray();
-    this.sql.exec("DELETE FROM sessions WHERE expires_at <= ?", now);
-    return rows.map((row) => JSON.parse((row as { data: string }).data) as SessionData);
+    return this.sql
+      .exec("SELECT data FROM sessions WHERE expires_at <= ?", now)
+      .toArray()
+      .map((row) => JSON.parse((row as { data: string }).data) as SessionData);
+  }
+
+  async deleteSessions(ids: string[]): Promise<void> {
+    this.ensureTables();
+    for (const id of ids) this.sql.exec("DELETE FROM sessions WHERE id = ?", id);
+  }
+
+  async trackStaged(entries: StagedEntry[]): Promise<void> {
+    this.ensureTables();
+    for (const entry of entries) {
+      this.sql.exec("INSERT OR REPLACE INTO staged_objects (r2key, created_at) VALUES (?, ?)", entry.key, entry.createdAt);
+    }
+  }
+
+  async untrackStaged(keys: string[]): Promise<void> {
+    this.ensureTables();
+    for (const key of keys) this.sql.exec("DELETE FROM staged_objects WHERE r2key = ?", key);
+  }
+
+  async listStaleStaged(olderThan: number): Promise<string[]> {
+    this.ensureTables();
+    return this.sql
+      .exec("SELECT r2key FROM staged_objects WHERE created_at < ?", olderThan)
+      .toArray()
+      .map((row) => (row as { r2key: string }).r2key);
   }
 
   async getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null> {
@@ -272,24 +314,31 @@ export class PortalStoreSql implements Store {
       : null;
   }
 
-  async retireOldSubmissions(olderThan: number): Promise<string[]> {
+  async listOldSubmissions(olderThan: number, limit: number): Promise<Submission[]> {
     this.ensureTables();
-    const rows = this.sql.exec("SELECT data FROM submissions WHERE received_at < ?", olderThan).toArray();
-    const r2keys: string[] = [];
-    for (const row of rows) {
-      const sub = JSON.parse((row as { data: string }).data) as Submission;
+    return this.sql
+      .exec("SELECT data FROM submissions WHERE received_at < ? LIMIT ?", olderThan, limit)
+      .toArray()
+      .map((row) => JSON.parse((row as { data: string }).data) as Submission);
+  }
+
+  async writeReceipts(receipts: SubmissionReceipt[]): Promise<void> {
+    this.ensureTables();
+    for (const receipt of receipts) {
       this.sql.exec(
         "INSERT OR IGNORE INTO receipts (scope, key, confirmation, digest, received_at) VALUES (?, ?, ?, ?, ?)",
-        sub.scope,
-        sub.key,
-        sub.confirmationNumber,
-        sub.digest,
-        sub.receivedAt,
+        receipt.scope,
+        receipt.key,
+        receipt.confirmationNumber,
+        receipt.digest,
+        receipt.receivedAt,
       );
-      for (const file of sub.files) r2keys.push(file.r2key);
     }
-    this.sql.exec("DELETE FROM submissions WHERE received_at < ?", olderThan);
-    return r2keys;
+  }
+
+  async deleteSubmissions(keys: Array<{ scope: string; key: string }>): Promise<void> {
+    this.ensureTables();
+    for (const { scope, key } of keys) this.sql.exec("DELETE FROM submissions WHERE scope = ? AND key = ?", scope, key);
   }
 
   async purgeOldReceipts(olderThan: number): Promise<number> {

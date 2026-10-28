@@ -59,6 +59,9 @@ const MAX_FILE_NAME_LENGTH = 200;
 const CASEWORKER_PER_PAGE = 25;
 export const SUBMISSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** Staging objects outlive no attempt; an hour is far past the slowest one. */
+export const STAGED_RETENTION_MS = 60 * 60 * 1000;
+const RETIRE_BATCH_LIMIT = 500;
 
 const RATE_WINDOW_MS = 60_000;
 const SLOW_LEASE_TTL_MS = 65_000;
@@ -110,6 +113,37 @@ function formRequestFromBytes(request: Request, bytes: Uint8Array): Request {
 /** Longest base64 string that can still decode within the byte cap. */
 function maxEncodedLength(maxBytes: number): number {
   return Math.ceil(maxBytes / 3) * 4;
+}
+
+/**
+ * Stage one attempt object: written to R2, then recorded. If recording fails
+ * the object is removed again so it never sits untracked.
+ */
+async function stageFile(
+  fileStore: FileStore,
+  store: Store,
+  key: string,
+  bytes: Uint8Array,
+  type: string,
+  now: number,
+): Promise<void> {
+  await fileStore.put(key, bytes, type);
+  try {
+    await store.trackStaged([{ key, createdAt: now }]);
+  } catch (err) {
+    await fileStore.del([key]).catch(() => undefined);
+    throw err;
+  }
+}
+
+/**
+ * Release attempt objects: deleted from R2 first, unrecorded only after the
+ * delete succeeds, so a failure stays tracked for the cleanup sweep.
+ */
+async function releaseStaged(fileStore: FileStore, store: Store, keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  await fileStore.del(keys);
+  await store.untrackStaged(keys);
 }
 
 /** Attachment header that cannot break out of the filename parameter. */
@@ -251,16 +285,24 @@ function slowBusyResponse(wantsHtml: boolean): Response {
     : json({ error: message }, 503);
 }
 
-async function loadSession(request: Request, store: Store, config: PortalConfig): Promise<SessionData | null> {
+async function loadLiveSession(
+  request: Request,
+  store: Store,
+  fileStore: FileStore,
+  config: PortalConfig,
+): Promise<SessionData | null> {
   const id = readSessionId(request);
   if (!id) return null;
   const session = await store.getSession(id);
   if (!session) return null;
-  if (session.expiresAt <= nowMs(config)) {
-    await store.deleteSession(id);
+  if (session.expiresAt > nowMs(config)) return session;
+  try {
+    await fileStore.del(session.files.map((f) => f.r2key));
+  } catch {
     return null;
   }
-  return session;
+  await store.deleteSession(id);
+  return null;
 }
 
 async function touchSession(store: Store, session: SessionData, config: PortalConfig): Promise<SessionData> {
@@ -323,37 +365,42 @@ async function readUploads(
 ): Promise<{ files?: FileMeta[]; error?: string }> {
   const metas: FileMeta[] = [];
   const staged: string[] = [];
-  for (let i = 1; i <= config.maxUploadFiles; i++) {
-    // workers-types declares get() as string-only; at runtime file inputs come back as File.
-    const value = form.get(`document${i}`) as unknown as string | File | null;
-    if (!(value instanceof File) || (value.size === 0 && !value.name)) continue;
-    const name = value.name || `document${i}`;
-    if (value.size === 0) {
-      await files.del(staged);
-      return { error: `${name} is empty.` };
+  try {
+    for (let i = 1; i <= config.maxUploadFiles; i++) {
+      // workers-types declares get() as string-only; at runtime file inputs come back as File.
+      const value = form.get(`document${i}`) as unknown as string | File | null;
+      if (!(value instanceof File) || (value.size === 0 && !value.name)) continue;
+      const name = value.name || `document${i}`;
+      if (value.size === 0) {
+        await files.del(staged);
+        return { error: `${name} is empty.` };
+      }
+      if (name.length > MAX_FILE_NAME_LENGTH) {
+        await files.del(staged);
+        return { error: "A file name is too long." };
+      }
+      if (!ALLOWED_UPLOAD_TYPES.has(value.type)) {
+        await files.del(staged);
+        return { error: `${name} must be a PDF, PNG or JPG file.` };
+      }
+      if (value.size > config.maxUploadBytes) {
+        await files.del(staged);
+        return { error: `${name} is larger than the ${config.maxUploadBytes} byte limit.` };
+      }
+      const bytes = new Uint8Array(await value.arrayBuffer());
+      if (sniffType(bytes) !== value.type) {
+        await files.del(staged);
+        return { error: `${name} does not look like a ${value.type === "application/pdf" ? "PDF" : value.type === "image/png" ? "PNG" : "JPG"} file.` };
+      }
+      const sha256 = await sha256Hex(bytes);
+      const r2key = draftFileKey(sessionId, i, sha256);
+      await files.put(r2key, bytes, value.type);
+      staged.push(r2key);
+      metas.push({ name, type: value.type, size: value.size, sha256, r2key });
     }
-    if (name.length > MAX_FILE_NAME_LENGTH) {
-      await files.del(staged);
-      return { error: "A file name is too long." };
-    }
-    if (!ALLOWED_UPLOAD_TYPES.has(value.type)) {
-      await files.del(staged);
-      return { error: `${name} must be a PDF, PNG or JPG file.` };
-    }
-    if (value.size > config.maxUploadBytes) {
-      await files.del(staged);
-      return { error: `${name} is larger than the ${config.maxUploadBytes} byte limit.` };
-    }
-    const bytes = new Uint8Array(await value.arrayBuffer());
-    if (sniffType(bytes) !== value.type) {
-      await files.del(staged);
-      return { error: `${name} does not look like a ${value.type === "application/pdf" ? "PDF" : value.type === "image/png" ? "PNG" : "JPG"} file.` };
-    }
-    const sha256 = await sha256Hex(bytes);
-    const r2key = draftFileKey(sessionId, i, sha256);
-    await files.put(r2key, bytes, value.type);
-    staged.push(r2key);
-    metas.push({ name, type: value.type, size: value.size, sha256, r2key });
+  } catch {
+    await files.del(staged).catch(() => undefined);
+    throw new Error("upload failed");
   }
   if (metas.length === 0) return { error: "Attach at least one document." };
   return { files: metas };
@@ -540,18 +587,18 @@ async function handleSubmit(
         const upload = uploads[i]!;
         const sha256 = await sha256Hex(upload.bytes);
         const staged = stagingAttemptKey(attemptId, i + 1, sha256);
-        await fileStore.put(staged, upload.bytes, upload.type);
+        await stageFile(fileStore, store, staged, upload.bytes, upload.type, nowMs(config));
         stagedKeys.push(staged);
         const r2key = submissionFileKey(scope, key, i + 1, sha256);
         copies.push({ from: staged, to: r2key });
         files.push({ name: upload.name, type: upload.type, size: upload.bytes.length, sha256, r2key });
       }
     } catch {
-      await fileStore.del(stagedKeys).catch(() => undefined);
+      await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
       return json({ error: "The office could not store the attachments. Try again." }, 500);
     }
   } else {
-    session = await loadSession(request, store, config);
+    session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
     if (key !== session.key) {
       return html(
@@ -598,7 +645,7 @@ async function handleSubmit(
     // The browser may have filed this exact packet under the web scope; a retry must not file it again.
     const webFiled = await store.getSubmission(WEB_SCOPE, key);
     if (webFiled && webFiled.digest === digest) {
-      await fileStore.del(stagedKeys).catch(() => undefined);
+      await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
       return submissionJson(webFiled, true);
     }
   }
@@ -606,7 +653,7 @@ async function handleSubmit(
   if (slowMs > 0) {
     lease = await store.tryBeginSlow(nowMs(config), SLOW_LEASE_TTL_MS, config.slowMaxConcurrent);
     if (!lease) {
-      await fileStore.del(stagedKeys).catch(() => undefined);
+      await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
       return slowBusyResponse(!isJson && !wantsJson(request));
     }
   }
@@ -621,7 +668,7 @@ async function handleSubmit(
     receivedAt: nowMs(config),
   });
   if (result.outcome === "conflict") {
-    await fileStore.del(stagedKeys).catch(() => undefined);
+    await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
     if (lease) await store.endSlow(lease);
     const stored = result.stored;
     if (isJson || wantsJson(request)) return conflictJson(stored);
@@ -650,14 +697,14 @@ async function handleSubmit(
       await fileStore.put(pair.to, bytes.data, bytes.type);
     }
   } catch {
-    await fileStore.del(stagedKeys).catch(() => undefined);
+    await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
     if (lease) await store.endSlow(lease);
     const message = `The application was filed as ${receipt.confirmationNumber} but a file failed to save. Reconcile with key ${key} instead of refiling.`;
     return isJson || wantsJson(request)
       ? json({ error: message, key, confirmationNumber: receipt.confirmationNumber }, 500)
       : html(errorPage("Filing incomplete", message, "/", "Back to the home page"), 500);
   }
-  await fileStore.del(stagedKeys).catch(() => undefined);
+  await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
   // Drafts belong to this session and no receipt references them; dropping them is safe.
   if (session) await fileStore.del(session.files.map((f) => f.r2key)).catch(() => undefined);
 
@@ -685,21 +732,39 @@ export interface CleanupReport {
   expiredSessions: number;
   retiredFiles: number;
   purgedReceipts: number;
+  sweptStaged: number;
 }
 
 /**
  * Scheduled cleanup. Drafts go after their timeout; submissions and their
  * files go after 7 days, leaving a small receipt for 30 days so a late
- * reconcile never sees not_found for something that was filed.
+ * reconcile never sees not_found for something that was filed. Every phase
+ * deletes file bytes before its rows, so a failure keeps both for the next
+ * run, and abandoned staging older than an hour is swept the same way.
  */
 export async function runCleanup(store: Store, fileStore: FileStore, now: number): Promise<CleanupReport> {
-  const expired = await store.deleteExpiredSessions(now);
+  const expired = await store.listExpiredSessions(now);
   await fileStore.del(expired.flatMap((s) => s.files.map((f) => f.r2key)));
-  const retiredKeys = await store.retireOldSubmissions(now - SUBMISSION_RETENTION_MS);
+  await store.deleteSessions(expired.map((s) => s.id));
+  const old = await store.listOldSubmissions(now - SUBMISSION_RETENTION_MS, RETIRE_BATCH_LIMIT);
+  await store.writeReceipts(
+    old.map((sub) => ({
+      key: sub.key,
+      scope: sub.scope,
+      confirmationNumber: sub.confirmationNumber,
+      digest: sub.digest,
+      receivedAt: sub.receivedAt,
+    })),
+  );
+  const retiredKeys = old.flatMap((sub) => sub.files.map((f) => f.r2key));
   await fileStore.del(retiredKeys);
+  await store.deleteSubmissions(old.map((sub) => ({ scope: sub.scope, key: sub.key })));
+  const stale = await store.listStaleStaged(now - STAGED_RETENTION_MS);
+  await fileStore.del(stale);
+  await store.untrackStaged(stale);
   await store.purgeExpiredSlowLeases(now);
   const purgedReceipts = await store.purgeOldReceipts(now - RECEIPT_RETENTION_MS);
-  return { expiredSessions: expired.length, retiredFiles: retiredKeys.length, purgedReceipts };
+  return { expiredSessions: expired.length, retiredFiles: retiredKeys.length, purgedReceipts, sweptStaged: stale.length };
 }
 
 export async function handleRequest(request: Request, store: Store, fileStore: FileStore, config: PortalConfig): Promise<Response> {
@@ -739,7 +804,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     }
     const parsed = validateHousehold(fields, config.maxFieldLength);
     if (!parsed.household) return html(householdPage(parsed.error, fields), 400);
-    let session = await loadSession(request, store, config);
+    let session = await loadLiveSession(request, store, fileStore, config);
     if (!session) {
       session = {
         id: newId(),
@@ -755,7 +820,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   }
 
   if (method === "GET" && path === "/apply/documents") {
-    const session = await loadSession(request, store, config);
+    const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
     if (session.submitted) return html(submittedPage(session.submitted));
     if (!session.household) return redirect("/apply");
@@ -764,27 +829,38 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   }
 
   if (method === "POST" && path === "/apply/documents") {
-    const session = await loadSession(request, store, config);
+    const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
     if (!session.household) return redirect("/apply");
     const capped = await readCappedBody(request, config.maxBodyBytes);
     if (!capped.ok) return tooLargeResponse(false);
     const form = await formRequestFromBytes(request, capped.bytes).formData();
-    const parsed = await readUploads(form, config, session.id, fileStore);
+    let parsed: { files?: FileMeta[]; error?: string };
+    try {
+      parsed = await readUploads(form, config, session.id, fileStore);
+    } catch {
+      return html(errorPage("Upload failed", "The office could not store the attachments. Try again.", "/apply/documents", "Back to documents"), 500);
+    }
     if (!parsed.files) {
       await touchSession(store, session, config);
       return html(documentsPage(parsed.error), 400);
     }
-    // Replacing the draft drops the previous draft objects.
+    // Replacing the draft drops the previous draft objects. If that fails the
+    // session keeps pointing at them and the new drafts go away instead.
     const replaced = session.files.map((f) => f.r2key).filter((k) => !parsed.files!.some((f) => f.r2key === k));
-    await fileStore.del(replaced);
+    try {
+      await fileStore.del(replaced);
+    } catch {
+      await fileStore.del(parsed.files!.map((f) => f.r2key)).catch(() => undefined);
+      return html(errorPage("Upload failed", "The office could not store the attachments. Try again.", "/apply/documents", "Back to documents"), 500);
+    }
     session.files = parsed.files;
     await touchSession(store, session, config);
     return redirect("/apply/review");
   }
 
   if (method === "GET" && path === "/apply/review") {
-    const session = await loadSession(request, store, config);
+    const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
     if (session.submitted) return html(submittedPage(session.submitted));
     if (!session.household) return redirect("/apply");
