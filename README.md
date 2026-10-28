@@ -10,6 +10,15 @@ Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026
 
 Under construction during the hackathon. Everything in this repository was written from October 26, 2026 onward.
 
+## Team
+
+Three members: David Coven, Claude and Muse.
+
+- David decides what gets built, owns the accounts and approves every merge.
+- Claude is the architect. It plans the work, writes each build session's brief, orchestrates the sessions and reviews what they produce.
+- Muse writes the code. Each part of Mano is built by a Muse Code session running Muse Spark, working from one brief and one ticket.
+- Other models handle evaluation and review: an independent critique of every pull request from a model outside the build, plus a panel of open-weight models for changes that touch security, personal data or anything irreversible. A session never reviews its own work.
+
 ## Layout
 
 | Path | What |
