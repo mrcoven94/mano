@@ -35,11 +35,26 @@ export async function rescoreRun(inDir: string, outDir: string): Promise<RunRepo
     const subset = rescored.filter((r) => r.suite === build.suite);
     if (subset.length > 0) suites[build.suite] = scoreSuite(build, subset, report.prices);
   }
+  for (const [name, score] of Object.entries(report.suites)) {
+    if (!(name in suites)) suites[name] = score;
+  }
+  const fingerprints: RunReport["fingerprints"] = {};
+  for (const r of rescored) {
+    if (r.suite === "safety-holdout") continue;
+    const version = suites[r.suite]?.version ?? 0;
+    fingerprints[r.caseId] = {
+      suite: r.suite,
+      version,
+      hardPass: r.checks.every((c) => c.pass),
+      judgeMean: r.judge ? (r.judge.helpful + r.judge.accurate + r.judge.plain + r.judge.warm) / 4 : null,
+    };
+  }
   const out: RunReport = {
     ...report,
     runId: `${report.runId}-rescored`,
     finishedAt: new Date().toISOString(),
     suites,
+    fingerprints,
     gateFailed: Object.values(suites).some((s) => s.gateFailed),
   };
   writeRun(outDir, out, rescored);

@@ -1,6 +1,7 @@
 // smoke: run the 25-case smoke subset and gate it against a baseline.
-// Usage: node src/bin/smoke.ts [--baseline runs/main/report.json] [--out runs/smoke] [--broken]
-// Prints the PR comment to stdout and exits 1 when the gate fails.
+// Usage: node src/bin/smoke.ts [--baseline runs/main/latest.json] [--out runs/smoke] [--broken]
+// Prints the PR comment to stdout. Exits 0 on pass, 1 on fail, 2 on neutral
+// (not gate-eligible: stand-ins, no baseline, or provisional calibration).
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -32,21 +33,28 @@ if (baselinePath) {
   try {
     baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as RunReport;
   } catch {
-    console.error(`note: no readable baseline at ${baselinePath}; gating on safety only`);
+    console.error(`note: no readable baseline at ${baselinePath}`);
   }
 }
 
-const { report, results, paths, judge } = await runBench({ broken, onlyCaseIds: new Set(SMOKE_CASE_IDS) });
+const { report, results, paths, judge, skippedSuites, expectedCaseIds } = await runBench({ broken, onlyCaseIds: new Set(SMOKE_CASE_IDS) });
+if (skippedSuites.length > 0) {
+  console.error(`requested suites skipped: ${skippedSuites.join(", ")}`);
+  process.exitCode = 1;
+}
 const finishedAt = new Date().toISOString();
 const full = finishReport(report, {
   runId: `smoke-${startedAt.slice(0, 16).replace(/[-:T]/g, "")}`,
   startedAt, finishedAt, gitSha: gitSha(), broken,
   paths, judge, dns: dnsFromEnv(process.env).mode, env: process.env,
-});
+}, { results, expectedCaseIds, requireHoldout: false });
 writeRun(out, full, results);
 const gate = evalGate(full, baseline);
 console.log(prComment(full, baseline, gate, "main's last nightly run"));
-if (!gate.pass) {
+if (gate.status === "fail") {
   console.error(`smoke gate FAILED: ${gate.reasons.join("; ")}`);
   process.exitCode = 1;
+} else if (gate.status === "neutral") {
+  console.error(`smoke gate NEUTRAL: ${gate.reasons.join("; ")}`);
+  process.exitCode = 2;
 }

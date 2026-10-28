@@ -30,20 +30,25 @@ if (process.argv.includes("--list")) {
   process.exit(0);
 }
 
-const { report, results, paths, judge } = await runBench({
+const { report, results, paths, judge, skippedSuites, expectedCaseIds } = await runBench({
   suites: suiteArg ? [suiteArg] : undefined,
   broken,
 });
+if (skippedSuites.length > 0) {
+  console.error(`requested suites skipped: ${skippedSuites.join(", ")}`);
+  process.exitCode = 1;
+}
 const finishedAt = new Date().toISOString();
 const full = finishReport(report, {
   runId: `${startedAt.slice(0, 10)}-local`,
   startedAt, finishedAt, gitSha: gitSha(), broken,
   paths, judge, dns: dnsFromEnv(process.env).mode, env: process.env,
-});
+}, { results, expectedCaseIds, requireHoldout: false });
 writeRun(out, full, results);
 for (const s of Object.values(full.suites)) {
   console.log(`${s.suite}: hard ${(s.hardCheckPassRate * 100).toFixed(1)}% judge ${s.judgeMean.toFixed(2)} gate ${s.gateFailed ? "FAIL" : "pass"} p50/p95 ${s.p50Ms}/${s.p95Ms}ms $${s.usdPer1kAnswers.toFixed(2)}/1k`);
 }
 console.log(`judge ${full.judge.id} agreement ${Math.round(full.calibration.agreement * 100)}% kept=${full.calibration.kept}`);
+console.log(full.eligibility.eligible ? "gate-eligible" : `not gate-eligible: ${full.eligibility.reasons.join("; ")}`);
 console.log(`wrote ${out}`);
 if (full.gateFailed) process.exitCode = 1;

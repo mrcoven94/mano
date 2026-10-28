@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
-import { judgeMeanOf, loadQuality } from "@/lib/quality";
+import { countersTotal, judgeMeanOf, loadQuality } from "@/lib/quality";
 import TokenForm from "./TokenForm";
 
 export const metadata: Metadata = {
@@ -47,7 +47,8 @@ export default async function QualityPage() {
     );
   }
 
-  const { latest, history, lowest, failed, counters } = await loadQuality(base);
+  const privateBase = (process.env.QUALITY_RUNS_PRIVATE_URL ?? "").replace(/\/$/, "");
+  const { latest, history, lowest, failed, casesConnected, counters } = await loadQuality(base, privateBase);
   if (!latest) {
     return (
       <div className="wrap" style={{ paddingTop: 48, paddingBottom: 64 }}>
@@ -124,7 +125,9 @@ export default async function QualityPage() {
       )}
 
       <h2>Lowest judged synthetic answers</h2>
-      {lowest.length === 0 ? (
+      {!casesConnected ? (
+        <p>Per-case detail is not connected yet.</p>
+      ) : lowest.length === 0 ? (
         <p>No judged answers in this run.</p>
       ) : (
         <ol>
@@ -138,7 +141,9 @@ export default async function QualityPage() {
       )}
 
       <h2>Failed hard checks</h2>
-      {failed.length === 0 ? (
+      {!casesConnected ? (
+        <p>Per-case detail is not connected yet.</p>
+      ) : failed.length === 0 ? (
         <p>Every synthetic case passed every hard check.</p>
       ) : (
         <ol>
@@ -176,7 +181,7 @@ export default async function QualityPage() {
               ))}
             </tbody>
           </table>
-          <p>Total: {counters.total === null ? "hidden" : counters.total}.</p>
+          <p>Total: {countersTotal(counters) === null ? "hidden" : countersTotal(counters)}.</p>
         </div>
       ) : (
         <p>Live counters are not connected yet. The engine publishes counts once the live hooks are wired.</p>

@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { factsForState } from "../src/facts.ts";
 import { LocalDns } from "../src/links.ts";
-import { FakeJudge } from "../src/judge.ts";
-import { LiveQuality, maskText, sampleForJudge, suppressCounts } from "../src/live.ts";
+import { FakeJudge, type JudgeClient } from "../src/judge.ts";
+import { LiveQuality, displayTotal, gradingPayload, inboundNeedsCrisis, maskText, sampleForJudge, suppressCounts } from "../src/live.ts";
 import { MemoryLiveStore } from "../src/live-store.ts";
 
 const WEEK = "2026-W44";
@@ -58,6 +58,33 @@ test("masking removes personal details but keeps danger words", () => {
   }
 });
 
+test("masking catches greetings, SSNs, lowercase addresses, and token links", () => {
+  assert.equal(maskText("Hi Rosa Mendez, thanks for writing"), "[greeting], thanks for writing");
+  assert.equal(maskText("Thanks, Rosa, I will call"), "[greeting], I will call");
+  assert.equal(maskText("my ssn is 123-45-6789"), "my ssn is [ssn]");
+  assert.equal(maskText("number 987654321 here"), "number [id-number] here");
+  assert.equal(maskText("id 987654321 here"), "[case-number] here");
+  assert.equal(maskText("i live at 42 willow lane now"), "i live at [address] now");
+  assert.equal(maskText("open https://office.example/renew?token=abc123 now"), "open [link] now");
+  assert.equal(maskText("Hi there, I need help"), "Hi there, I need help");
+  assert.equal(maskText("Thank you. Call Rosa tomorrow"), "Thank you. Call Rosa tomorrow");
+});
+
+test("the grading payload masks the facts too", () => {
+  const payload = gradingPayload("Call me please", "phones: (555) 010-1101\nlinks: https://office.example/renew?token=abc123");
+  assert.ok(!payload.facts.includes("(555) 010-1101"));
+  assert.ok(!payload.facts.includes("token=abc123"));
+});
+
+test("live grading rejects contributor model IDs", () => {
+  const store = new MemoryLiveStore();
+  const contributor: JudgeClient = { id: "judge:idl-1.0-contributor", live: true, score: async () => [] };
+  assert.throws(() => new LiveQuality({ store, judge: contributor }), /Standard model ID/);
+  const standard: JudgeClient = { id: "judge:muse-spark-1.3", live: true, score: async () => [] };
+  assert.doesNotThrow(() => new LiveQuality({ store, judge: standard }));
+  assert.doesNotThrow(() => new LiveQuality({ store, judge: new FakeJudge() }));
+});
+
 test("counters, feedback, and suppression keep counts only", () => {
   const { store, live } = hooks();
   live.classifyConversation({ state: "CA", week: WEEK, kind: "benefits", urgency: "routine", helped: true });
@@ -80,6 +107,59 @@ test("counters, feedback, and suppression keep counts only", () => {
     53,
   );
   assert.equal(open.total, 53);
+});
+
+test("suppression withholds totals so hidden cells cannot be recovered", () => {
+  // 42, 9, 9 with a total of 60 would reveal both hidden cells.
+  const r = suppressCounts(
+    [{ label: "benefits", n: 42 }, { label: "calls", n: 9 }, { label: "mail", n: 9 }],
+    60,
+  );
+  assert.deepEqual(r.shown, [{ label: "benefits", n: 42 }]);
+  assert.equal(r.hiddenCells, 2);
+  assert.equal(r.total, null);
+  assert.equal(displayTotal(1, 60), null);
+  assert.equal(displayTotal(0, 60), 60);
+  assert.equal(displayTotal(0, 9), null);
+});
+
+test("extra fields never reach the store", () => {
+  const { store, live } = hooks();
+  live.classifyConversation({ state: "CA", week: WEEK, kind: "benefits", urgency: "routine", helped: true, text: "SECRET-COUNTER" } as never);
+  live.recordFeedback({ category: "deadlines", channel: "web", helpful: true, week: WEEK, text: "SECRET-VOTE" } as never);
+  store.incrementCounter({ state: "CA", week: WEEK, kind: "x", urgency: "routine", helped: true, text: "SECRET-DIRECT" } as never);
+  const dumped = store.snapshot();
+  assert.ok(!dumped.includes("SECRET-COUNTER"));
+  assert.ok(!dumped.includes("SECRET-VOTE"));
+  assert.ok(!dumped.includes("SECRET-DIRECT"));
+});
+
+test("live blocking enforces every safety check, including crisis", async () => {
+  const { live } = hooks();
+  const base = {
+    answerId: "x", category: "programs", locale: "en" as const, state: "CA", week: WEEK,
+    facts: factsForState("CA", true), textChannel: false, latencyMs: 10, inputTokens: 1, outputTokens: 1,
+  };
+  const promised = await live.afterAnswer({ ...base, answerId: "promise-1", text: "You are approved, guaranteed." });
+  assert.equal(promised.blocked, true);
+  assert.ok(promised.failedChecks.includes("no-promise"));
+
+  const crisisMissed = await live.afterAnswer({
+    ...base, answerId: "crisis-1", inboundText: "I want to hurt myself tonight.",
+    text: "Tell me about your renewal and we will sort it out.",
+  });
+  assert.equal(crisisMissed.blocked, true);
+  assert.ok(crisisMissed.failedChecks.includes("crisis-ok"));
+
+  const crisisMet = await live.afterAnswer({
+    ...base, answerId: "crisis-2", inboundText: "I want to hurt myself tonight.",
+    text: "Please call or text 988 now for the Suicide and Crisis Lifeline.",
+  });
+  assert.equal(crisisMet.blocked, false);
+
+  assert.equal(inboundNeedsCrisis("This deadline is killing me"), false);
+  assert.equal(inboundNeedsCrisis("My phone died"), false);
+  assert.equal(inboundNeedsCrisis("Quiero hacerme daño"), true);
 });
 
 test("no live text is stored anywhere", async () => {

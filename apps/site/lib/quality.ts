@@ -1,6 +1,9 @@
-/* Staff quality page data. Reads nightly run JSON from R2 through QUALITY_RUNS_URL
-   and optional live counters from QUALITY_COUNTERS_URL. Anything that names a
-   model or provider is stripped before render; staff never see those names. */
+/* Staff quality page data. Reads nightly run aggregates from the public runs URL
+   and per-case detail from the private runs URL, server-side only. The holdout
+   never appears per-case. Anything that names a model or provider is stripped
+   before render; staff never see those names. */
+
+import { displayTotal, stripModelNames } from "@mano/quality";
 
 export interface SuiteRow {
   version: number;
@@ -91,11 +94,21 @@ function stripRun(raw: Record<string, unknown>): LatestRun {
   };
 }
 
-export async function loadQuality(base: string): Promise<{
+function cleanCase(c: CaseRow): CaseRow {
+  return {
+    ...c,
+    answer: { text: stripModelNames(c.answer.text) },
+    checks: c.checks.map((r) => ({ ...r, detail: r.detail === undefined ? undefined : stripModelNames(r.detail) })),
+    judge: c.judge ? { ...c.judge, reason: stripModelNames(c.judge.reason) } : null,
+  };
+}
+
+export async function loadQuality(base: string, privateBase: string): Promise<{
   latest: LatestRun | null;
   history: HistoryRow[];
   lowest: CaseRow[];
   failed: CaseRow[];
+  casesConnected: boolean;
   counters: CountersDoc | null;
 }> {
   const raw = await fetchJson<Record<string, unknown>>(`${base}/latest.json`);
@@ -103,16 +116,19 @@ export async function loadQuality(base: string): Promise<{
   const history = (await fetchJson<HistoryRow[]>(`${base}/history.json`)) ?? [];
   let lowest: CaseRow[] = [];
   let failed: CaseRow[] = [];
-  if (latest) {
-    const cases = (await fetchJson<CaseRow[]>(`${base}/${latest.runId}/cases.json`)) ?? [];
-    const judged = cases.filter((c) => c.judge !== null);
+  let casesConnected = false;
+  if (latest && privateBase) {
+    const cases = (await fetchJson<CaseRow[]>(`${privateBase}/runs/${latest.runId}/cases.json`)) ?? [];
+    casesConnected = cases.length > 0;
+    const visible = cases.filter((c) => c.suite !== "safety-holdout").map(cleanCase);
+    const judged = visible.filter((c) => c.judge !== null);
     judged.sort((a, b) => mean(b.judge!) - mean(a.judge!));
     lowest = judged.slice(-5).reverse();
-    failed = cases.filter((c) => c.checks.some((r) => !r.pass)).slice(0, 10);
+    failed = visible.filter((c) => c.checks.some((r) => !r.pass)).slice(0, 10);
   }
   const countersUrl = process.env.QUALITY_COUNTERS_URL ?? "";
   const counters = countersUrl ? await fetchJson<CountersDoc>(countersUrl) : null;
-  return { latest, history: history.slice(-14), lowest, failed, counters };
+  return { latest, history: history.slice(-14), lowest, failed, casesConnected, counters };
 }
 
 function mean(j: NonNullable<CaseRow["judge"]>): number {
@@ -121,4 +137,10 @@ function mean(j: NonNullable<CaseRow["judge"]>): number {
 
 export function judgeMeanOf(j: CaseRow["judge"]): number | null {
   return j ? mean(j) : null;
+}
+
+// Totals are withheld whenever any cell is suppressed, so hidden counts
+// cannot be recovered by subtraction. Enforced here as well as at the source.
+export function countersTotal(doc: CountersDoc): number | null {
+  return displayTotal(doc.hiddenCells, doc.total);
 }

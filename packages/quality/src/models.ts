@@ -69,10 +69,24 @@ export class FakeModelClient implements ModelClient {
   }
 }
 
+export const DEFAULT_JUDGE_MODEL_ID = "muse-spark-1.3";
+
+// The judge must never be the same model that wrote the answers. Both IDs
+// come from config; CI sets them as plain workflow variables and fails when
+// they match. The default judge ID counts, so an explicit serving ID equal to
+// the default is also rejected.
+export function assertJudgeServingDiffer(env: NodeJS.ProcessEnv = process.env): void {
+  const judge = env.MANO_MODEL_JUDGE_ID || DEFAULT_JUDGE_MODEL_ID;
+  const serving = env.MANO_MODEL_BENCH_ID ?? "";
+  if (serving && judge === serving) {
+    throw new Error(`judge model ID must differ from the serving model ID (both ${judge})`);
+  }
+}
+
 export function judgeClientFromEnv(env: NodeJS.ProcessEnv = process.env): ModelClient {
-  const key = env.MANO_MODEL_API_KEY ?? "";
+  const key = env.META_MODEL_API_KEY ?? "";
   const base = env.MANO_MODEL_BASE_URL ?? "";
-  const id = env.MANO_MODEL_JUDGE_ID ?? "muse-spark-1.3";
+  const id = env.MANO_MODEL_JUDGE_ID || DEFAULT_JUDGE_MODEL_ID;
   if (key && base) return new MetaModelClient(id, base, key);
   return new FakeModelClient();
 }

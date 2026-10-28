@@ -5,7 +5,7 @@
 import { calibrationFacts, buildCalibrationSet, agreement, CALIBRATION_LABELS_PROVISIONAL } from "./calibration.ts";
 import { gateFailures, hardCheckPassRate, runHardChecks, type CheckResult } from "./checks.ts";
 import { dnsFromEnv, type DnsClient } from "./links.ts";
-import { judgeClientFromEnv } from "./models.ts";
+import { assertJudgeServingDiffer, judgeClientFromEnv } from "./models.ts";
 import { FakeJudge, JUDGE_AGREEMENT_MIN, MetaJudge, judgeAll, judgeMean, type JudgeClient, type JudgeScore } from "./judge.ts";
 import { buildHoldoutSuite } from "./suites/holdout-suite.ts";
 import { loadHoldout } from "./holdout.ts";
@@ -52,6 +52,18 @@ export interface PathInfo {
   detail: string;
 }
 
+export interface CaseFingerprint {
+  suite: string;
+  version: number;
+  hardPass: boolean;
+  judgeMean: number | null;
+}
+
+export interface GateEligibility {
+  eligible: boolean;
+  reasons: string[];
+}
+
 export interface RunReport {
   runId: string;
   startedAt: string;
@@ -67,6 +79,10 @@ export interface RunReport {
   calibration: { agreement: number; kept: boolean; provisional: boolean };
   holdout: { configured: boolean; reason?: string; pinMatch?: boolean };
   prices: { inputPer1k: number; outputPer1k: number; configured: boolean };
+  // Per-case scores for matched baselines. The holdout never appears here;
+  // only its suite aggregates are public.
+  fingerprints: Record<string, CaseFingerprint>;
+  eligibility: GateEligibility;
 }
 
 export interface RunOptions {
@@ -130,21 +146,34 @@ function judgeForSuite(judge: JudgeClient | null | undefined, env: NodeJS.Proces
   return model.live ? new MetaJudge(model) : new FakeJudge();
 }
 
-export async function runBench(opts: RunOptions = {}): Promise<{ report: Partial<RunReport> & Pick<RunReport, "suites">; results: CaseResult[]; paths: Record<string, PathInfo>; judge: JudgeClient }> {
+export interface BenchOutcome {
+  report: Partial<RunReport> & Pick<RunReport, "suites">;
+  results: CaseResult[];
+  paths: Record<string, PathInfo>;
+  judge: JudgeClient;
+  skippedSuites: string[];
+  expectedCaseIds: string[];
+}
+
+export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
   const env = opts.env ?? process.env;
+  assertJudgeServingDiffer(env);
   const dns = opts.dns ?? dnsFromEnv(env);
   const judge = judgeForSuite(opts.judge, env);
   const broken = opts.broken ?? env.MANO_QUALITY_BROKEN === "1";
-  const wanted = new Set(opts.suites ?? ["chat", "text", "letters", "safety", "safety-holdout"]);
+  const wanted = new Set(opts.suites ?? ["chat", "text", "letters", "safety"]);
 
   const builds: SuiteBuild[] = [];
   for (const suite of buildAllSuites()) {
     if (wanted.has(suite.suite)) builds.push(suite);
   }
   const holdout = loadHoldout(env.MANO_QUALITY_HOLDOUT_PATH, env.MANO_QUALITY_HOLDOUT_SHA256);
-  if (wanted.has("safety-holdout") && holdout.configured && holdout.cases) {
+  const holdoutWanted = wanted.has("safety-holdout");
+  if (holdoutWanted && holdout.configured && holdout.cases) {
     builds.push(buildHoldoutSuite(holdout.cases, holdout.version ?? 1));
   }
+  const built = new Set(builds.map((b) => b.suite));
+  const skippedSuites = [...wanted].filter((s) => !built.has(s as SuiteBuild["suite"]));
 
   const loaded = await loadAllAnswerPaths(broken);
   const paths: Record<string, PathInfo> = {};
@@ -206,6 +235,9 @@ export async function runBench(opts: RunOptions = {}): Promise<{ report: Partial
   const calAgreement = agreement(calScores, cal.map((c) => c.label));
 
   void JUDGE_AGREEMENT_MIN;
+  const expectedCaseIds = opts.onlyCaseIds
+    ? [...opts.onlyCaseIds]
+    : builds.flatMap((b) => b.cases.map((c) => c.id));
   return {
     report: {
       suites,
@@ -217,14 +249,53 @@ export async function runBench(opts: RunOptions = {}): Promise<{ report: Partial
     results,
     paths,
     judge,
+    skippedSuites,
+    expectedCaseIds,
   };
 }
 
+export interface FinishInput {
+  results: CaseResult[];
+  expectedCaseIds: string[];
+  requireHoldout: boolean;
+}
+
+// A run is gate-eligible only when every case ran against production code
+// with the live judge, coverage matches the expected case list exactly, the
+// judge is calibrated on hand labels, and (for full runs) the holdout verified.
 export function finishReport(
   partial: Partial<RunReport> & Pick<RunReport, "suites">,
   ctx: { runId: string; startedAt: string; finishedAt: string; gitSha: string | null; broken: boolean; paths: Record<string, PathInfo>; judge: JudgeClient; dns: string; env: NodeJS.ProcessEnv },
+  input: FinishInput,
 ): RunReport {
   const caseCount = Object.values(partial.suites).reduce((s, suite) => s + suite.cases, 0);
+  const calibration = partial.calibration ?? { agreement: 0, kept: false, provisional: true };
+  const holdout = partial.holdout ?? { configured: false };
+  const fingerprints: Record<string, CaseFingerprint> = {};
+  for (const r of input.results) {
+    if (r.suite === "safety-holdout") continue;
+    const version = partial.suites[r.suite]?.version ?? 0;
+    fingerprints[r.caseId] = {
+      suite: r.suite,
+      version,
+      hardPass: r.checks.every((c) => c.pass),
+      judgeMean: r.judge ? (r.judge.helpful + r.judge.accurate + r.judge.plain + r.judge.warm) / 4 : null,
+    };
+  }
+  const ran = new Set(input.results.map((r) => r.caseId));
+  const missing = input.expectedCaseIds.filter((id) => !ran.has(id));
+  const expected = new Set(input.expectedCaseIds);
+  const extra = input.results.map((r) => r.caseId).filter((id) => !expected.has(id));
+  const reasons: string[] = [];
+  for (const [suite, info] of Object.entries(ctx.paths)) {
+    if (suite in partial.suites && !info.live) reasons.push(`suite ${suite} ran on a stand-in path`);
+  }
+  if (!ctx.judge.live) reasons.push("judge is a stand-in");
+  if (calibration.provisional) reasons.push("calibration labels are provisional");
+  else if (!calibration.kept) reasons.push(`judge agreement ${Math.round(calibration.agreement * 100)}% is under 80%`);
+  if (missing.length > 0) reasons.push(`missing cases: ${missing.join(", ")}`);
+  if (extra.length > 0) reasons.push(`unexpected cases: ${extra.join(", ")}`);
+  if (input.requireHoldout && !holdout.configured) reasons.push(`holdout not verified (${holdout.reason ?? "unconfigured"})`);
   return {
     runId: ctx.runId,
     startedAt: ctx.startedAt,
@@ -237,8 +308,10 @@ export function finishReport(
     paths: ctx.paths,
     judge: { id: ctx.judge.id, live: ctx.judge.live },
     dns: ctx.dns,
-    calibration: partial.calibration ?? { agreement: 0, kept: false, provisional: true },
-    holdout: partial.holdout ?? { configured: false },
+    calibration,
+    holdout,
     prices: pricesFromEnv(ctx.env),
+    fingerprints,
+    eligibility: { eligible: reasons.length === 0, reasons },
   };
 }

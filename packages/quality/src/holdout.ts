@@ -40,7 +40,7 @@ function isBenchCase(v: unknown): v is BenchCase {
   );
 }
 
-export function loadHoldout(path: string | undefined, expectedSha: string | undefined): HoldoutLoad {
+export function loadHoldout(path: string | undefined, expectedSha: string | undefined, pin: string | null = HOLDOUT_SHA256_PIN): HoldoutLoad {
   if (!path) return { configured: false, reason: "MANO_QUALITY_HOLDOUT_PATH is not set" };
   let raw: string;
   try {
@@ -50,6 +50,9 @@ export function loadHoldout(path: string | undefined, expectedSha: string | unde
   }
   const sha256 = sha256Hex(raw);
   if (!expectedSha) return { configured: false, reason: "MANO_QUALITY_HOLDOUT_SHA256 is not set; refusing to run an unverified holdout", sha256 };
+  if (pin !== null && expectedSha !== pin) {
+    return { configured: false, reason: "holdout SHA-256 does not match the committed pin; refusing to run", sha256, pinMatch: false };
+  }
   if (sha256 !== expectedSha) {
     return { configured: false, reason: "holdout SHA-256 does not match; refusing to run", sha256, pinMatch: false };
   }
@@ -64,8 +67,7 @@ export function loadHoldout(path: string | undefined, expectedSha: string | unde
     return { configured: false, reason: `holdout must be version ${HOLDOUT_VERSION} with ${HOLDOUT_CASE_COUNT} cases`, sha256, pinMatch: true };
   }
   if (!doc.cases.every(isBenchCase)) {
-    return { configured: false, reason: "holdout holds a malformed case", sha256, pinMatch: true };
+    return { configured: false, reason: "holdout holds a malformed case", sha256, pinMatch: false };
   }
-  const pinMatch = HOLDOUT_SHA256_PIN === null ? true : HOLDOUT_SHA256_PIN === sha256;
-  return { configured: true, version: HOLDOUT_VERSION, cases: doc.cases as BenchCase[], sha256, pinMatch };
+  return { configured: true, version: HOLDOUT_VERSION, cases: doc.cases as BenchCase[], sha256, pinMatch: true };
 }

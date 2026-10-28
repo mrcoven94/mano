@@ -4,8 +4,12 @@ on:
     paths:
       - "packages/quality/**"
       - "apps/engine/**"
+      - "apps/channels/**"
+      - "packages/channels/**"
+      - "packages/mail/**"
       - "packages/protocol/**"
       - "eval/**"
+      - ".github/workflows/quality-*.yml"
 permissions:
   contents: read
   pull-requests: write
@@ -18,6 +22,19 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Require the model key
+        env:
+          META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
+        run: |
+          [ -n "$META_MODEL_API_KEY" ] || { echo "META_MODEL_API_KEY is not set"; exit 1; }
+      - name: Judge and serving IDs must differ
+        env:
+          MANO_MODEL_JUDGE_ID: ${{ vars.MANO_MODEL_JUDGE_ID }}
+          MANO_MODEL_BENCH_ID: ${{ vars.MANO_MODEL_BENCH_ID }}
+        run: |
+          [ -n "$MANO_MODEL_JUDGE_ID" ] || { echo "MANO_MODEL_JUDGE_ID variable is not set"; exit 1; }
+          [ -n "$MANO_MODEL_BENCH_ID" ] || { echo "MANO_MODEL_BENCH_ID variable is not set"; exit 1; }
+          [ "$MANO_MODEL_JUDGE_ID" != "$MANO_MODEL_BENCH_ID" ] || { echo "judge and serving model IDs must differ"; exit 1; }
       - run: pnpm install --no-frozen-lockfile
       - name: Fetch main baseline
         run: |
@@ -25,9 +42,10 @@ jobs:
           curl -fsSL "${{ vars.QUALITY_RUNS_URL }}/latest.json" -o runs/baseline.json || echo "no baseline yet"
       - name: Run smoke subset
         env:
-          MANO_MODEL_API_KEY: ${{ secrets.MANO_MODEL_API_KEY }}
+          META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
           MANO_MODEL_BASE_URL: ${{ secrets.MANO_MODEL_BASE_URL }}
-          MANO_MODEL_JUDGE_ID: ${{ secrets.MANO_MODEL_BENCH_ID }}
+          MANO_MODEL_JUDGE_ID: ${{ vars.MANO_MODEL_JUDGE_ID }}
+          MANO_MODEL_BENCH_ID: ${{ vars.MANO_MODEL_BENCH_ID }}
         run: |
           set -o pipefail
           cd packages/quality
@@ -48,6 +66,9 @@ jobs:
           else
             gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
           fi
-      - name: Fail on gate failure
+      # Exit 0 is a pass, 1 a failure, 2 neutral (stand-ins, no baseline, or
+      # provisional calibration). GitHub has no neutral job outcome from the
+      # inside, so neutral fails the job: it must never show green.
+      - name: Gate the pull request
         if: env.exit != '0'
         run: exit 1

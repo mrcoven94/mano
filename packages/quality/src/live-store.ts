@@ -61,18 +61,37 @@ export class MemoryLiveStore implements LiveStore {
   private votes = new Map<string, { row: Omit<FeedbackRow, "week">; week: string; n: number }>();
 
   recordAnswerOutcome(r: AnswerOutcome): void {
-    this.outcomes.push({ ...r, failedChecks: [...r.failedChecks] });
+    // Approved fields only, copied one by one. A spread would persist any
+    // extra field the caller attached, including text.
+    this.outcomes.push({
+      category: r.category,
+      failedChecks: [...r.failedChecks],
+      blocked: r.blocked,
+      latencyMs: r.latencyMs,
+      inputTokens: r.inputTokens,
+      outputTokens: r.outputTokens,
+      week: r.week,
+    });
   }
 
   recordJudgeSample(r: JudgeSample): void {
-    this.samples.push({ ...r });
+    this.samples.push({
+      category: r.category,
+      helpful: r.helpful,
+      accurate: r.accurate,
+      plain: r.plain,
+      warm: r.warm,
+      pass: r.pass,
+      week: r.week,
+    });
   }
 
   incrementCounter(k: CounterKey): void {
-    const key = counterKey(k);
+    const clean: CounterKey = { state: k.state, week: k.week, kind: k.kind, urgency: k.urgency, helped: k.helped };
+    const key = counterKey(clean);
     const found = this.counts.get(key);
     if (found) found.n++;
-    else this.counts.set(key, { key: { ...k }, n: 1 });
+    else this.counts.set(key, { key: clean, n: 1 });
   }
 
   recordFeedback(r: FeedbackRow): void {

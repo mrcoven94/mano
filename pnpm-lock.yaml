@@ -115,6 +115,9 @@ importers:
 
   apps/site:
     dependencies:
+      '@mano/quality':
+        specifier: workspace:*
+        version: link:../../packages/quality
       next:
         specifier: 15.5.28
         version: 15.5.28(react-dom@19.1.1(react@19.1.1))(react@19.1.1)

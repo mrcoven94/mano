@@ -16,32 +16,64 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Require the model key
+        env:
+          META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
+        run: |
+          [ -n "$META_MODEL_API_KEY" ] || { echo "META_MODEL_API_KEY is not set"; exit 1; }
+      - name: Judge and serving IDs must differ
+        env:
+          MANO_MODEL_JUDGE_ID: ${{ vars.MANO_MODEL_JUDGE_ID }}
+          MANO_MODEL_BENCH_ID: ${{ vars.MANO_MODEL_BENCH_ID }}
+        run: |
+          [ -n "$MANO_MODEL_JUDGE_ID" ] || { echo "MANO_MODEL_JUDGE_ID variable is not set"; exit 1; }
+          [ -n "$MANO_MODEL_BENCH_ID" ] || { echo "MANO_MODEL_BENCH_ID variable is not set"; exit 1; }
+          [ "$MANO_MODEL_JUDGE_ID" != "$MANO_MODEL_BENCH_ID" ] || { echo "judge and serving model IDs must differ"; exit 1; }
       - run: pnpm install --no-frozen-lockfile
       - name: Restore history
         run: |
-          mkdir -p runs-staging
-          curl -fsSL "${{ vars.QUALITY_RUNS_URL }}/history.json" -o runs-staging/history.json || echo "no history yet"
+          mkdir -p runs-staging/public
+          curl -fsSL "${{ vars.QUALITY_RUNS_URL }}/history.json" -o runs-staging/public/history.json || echo "no history yet"
       - name: Restore holdout
-        if: ${{ secrets.MANO_QUALITY_HOLDOUT != '' }}
+        env:
+          HOLDOUT: ${{ secrets.MANO_QUALITY_HOLDOUT }}
+          HOLDOUT_SHA: ${{ secrets.MANO_QUALITY_HOLDOUT_SHA256 }}
         run: |
-          printf '%s' '${{ secrets.MANO_QUALITY_HOLDOUT }}' > /tmp/holdout.json
-          echo "MANO_QUALITY_HOLDOUT_PATH=/tmp/holdout.json" >> "$GITHUB_ENV"
-          echo "MANO_QUALITY_HOLDOUT_SHA256=${{ secrets.MANO_QUALITY_HOLDOUT_SHA256 }}" >> "$GITHUB_ENV"
+          if [ -n "$HOLDOUT" ]; then
+            printf '%s' "$HOLDOUT" > /tmp/holdout.json
+            echo "MANO_QUALITY_HOLDOUT_PATH=/tmp/holdout.json" >> "$GITHUB_ENV"
+            echo "MANO_QUALITY_HOLDOUT_SHA256=$HOLDOUT_SHA" >> "$GITHUB_ENV"
+          else
+            echo "no holdout secret; the nightly fails without a verified holdout"
+          fi
       - name: Run every suite
         env:
-          MANO_MODEL_API_KEY: ${{ secrets.MANO_MODEL_API_KEY }}
+          META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
           MANO_MODEL_BASE_URL: ${{ secrets.MANO_MODEL_BASE_URL }}
-          MANO_MODEL_JUDGE_ID: ${{ secrets.MANO_MODEL_BENCH_ID }}
+          MANO_MODEL_JUDGE_ID: ${{ vars.MANO_MODEL_JUDGE_ID }}
+          MANO_MODEL_BENCH_ID: ${{ vars.MANO_MODEL_BENCH_ID }}
         run: |
           cd packages/quality
           node src/bin/nightly.ts --out ../../runs-staging
-      - name: Upload to R2
+      # public/ holds aggregates only and is world-readable. private/ holds
+      # per-case data and diagnostics and must never get a public policy.
+      - name: Upload public runs
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
         run: |
           pip install --quiet awscli
-          aws s3 sync runs-staging s3://mano-quality \
+          aws s3 sync runs-staging/public s3://mano-quality \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --no-progress
+      - name: Upload private runs
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          aws s3 sync runs-staging/private s3://mano-quality/private \
             --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
             --no-progress

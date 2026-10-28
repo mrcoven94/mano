@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
   "description": "Mano quality: the offline bench over synthetic cases and the live hooks that keep scores and counts only, never text.",
   "scripts": {
     "check": "tsc --noEmit && node --test test/*.test.ts",

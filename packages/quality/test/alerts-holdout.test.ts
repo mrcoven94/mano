@@ -54,6 +54,13 @@ test("holdout loader verifies the hash and the shape", () => {
   assert.equal(good.configured, true);
   assert.equal(good.cases!.length, HOLDOUT_CASE_COUNT);
 
+  const sha = sha256Hex(raw);
+  assert.equal(loadHoldout(path, sha, sha).configured, true);
+  const pinned = loadHoldout(path, sha, "f".repeat(64));
+  assert.equal(pinned.configured, false);
+  assert.equal(pinned.pinMatch, false);
+  assert.match(pinned.reason!, /committed pin/);
+
   const wrongCount = join(dir, "short.json");
   writeFileSync(wrongCount, JSON.stringify({ version: HOLDOUT_VERSION, cases: cases.slice(0, 5) }));
   assert.equal(loadHoldout(wrongCount, sha256Hex(JSON.stringify({ version: HOLDOUT_VERSION, cases: cases.slice(0, 5) }))).configured, false);

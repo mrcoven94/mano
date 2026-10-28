@@ -71,13 +71,19 @@ export class DohDns implements DnsClient {
   async resolveA(host: string): Promise<DnsAnswer> {
     // Synthetic fixture hosts cannot resolve in real DNS; answer locally.
     if (host.toLowerCase().endsWith(".example")) return this.local.resolveA(host);
-    const [security, family] = await Promise.all([
+    // Both resolvers must answer successfully. One error or one empty answer
+    // fails the lookup, and the link check fails closed on any lookup failure.
+    const [security, family] = await Promise.allSettled([
       this.query(this.securityUrl, host),
       this.query(this.familyUrl, host),
     ]);
-    const addresses = [...security, ...family];
-    if (addresses.length === 0) throw new Error(`no DNS answer for ${host}`);
-    return { addresses };
+    const answers: string[][] = [];
+    for (const [name, settled] of [["security", security], ["family", family]] as const) {
+      if (settled.status !== "fulfilled") throw new Error(`DNS ${name} resolver failed for ${host}`);
+      if (settled.value.length === 0) throw new Error(`DNS ${name} resolver returned no answer for ${host}`);
+      answers.push(settled.value);
+    }
+    return { addresses: answers.flat() };
   }
 
   private async query(base: string, host: string): Promise<string[]> {
