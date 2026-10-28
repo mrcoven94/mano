@@ -27,11 +27,16 @@ Three members: David Coven, Claude and Muse.
 | `apps/sandbox-portal` | A fake benefits portal every demo submits to, on Cloudflare Workers |
 | `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text |
 | `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel |
+| `packages/accounts` | One person, one account: phone and email sign-in, linking, merge, the account page |
 | `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits |
 | `packages/protocol` | The open message format agents use to work a case together |
 | `packages/guardian` | The checker that reviews every outside action before a person approves it |
 | `eval` | The held-out test: scenarios, baselines and results |
 | `docs` | Decisions and design notes |
+
+## Accounts
+
+Texting Mano creates the account. The same person signs in on the web at `/sign-in` with that phone number (a 6-digit code by text) or with email through WorkOS, and manages sign-in methods at `/account`. Details live in the header comment of `packages/accounts/src/index.ts`; run its checks with `pnpm --filter @mano/accounts run check`.
 
 ## Sandbox portal
 
