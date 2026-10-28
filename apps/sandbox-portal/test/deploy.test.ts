@@ -41,3 +41,12 @@ describe("review round 2 item 7: deploy refuses empty secrets", () => {
     expect(yaml).toContain("shell: bash");
   });
 });
+
+describe("follow-up: the portal serves only its custom domain", () => {
+  test("workers.dev is off and the custom domain route is set", async () => {
+    const toml = readFileSync(join(here, "..", "wrangler.toml"), "utf8");
+    expect(toml).toContain("workers_dev = false");
+    expect(toml).toContain('pattern = "sandbox.withmano.com"');
+    expect(toml).toContain("custom_domain = true");
+  });
+});
