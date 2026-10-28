@@ -472,4 +472,13 @@ mark{background:none;color:inherit}
 .cmp-group th{padding-top:28px;font-family:var(--font-display),sans-serif;font-weight:700;font-size:1.02rem;border-bottom:1px solid var(--border2)}
 .cmp-yes{display:inline-block;width:20px;height:20px;border-radius:50%;background:var(--pen-soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.4l2.9 2.8 6-6.4' fill='none' stroke='%232443D6' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/14px no-repeat;vertical-align:middle}
 .cmp-no{color:var(--faint)}
+.sup{margin-top:20px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:48px;padding:40px;border:1px solid var(--border);border-radius:20px;background:var(--pen-soft)}
+.sup-head h3{margin-top:12px;font-family:var(--font-display),sans-serif;font-weight:700;font-size:1.7rem;letter-spacing:-.03em;line-height:1.1}
+.sup-head p{margin-top:12px;color:var(--muted);line-height:1.55}
+.sup-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.sup-list li{display:grid;gap:6px;padding:18px 20px;border-radius:14px;background:#fff;box-shadow:0 1px 2px rgba(18,18,18,.05)}
+.sup-list b{font-weight:600;color:var(--text)}
+.sup-list span{color:var(--muted);font-size:.94rem;line-height:1.5}
+@media (max-width:900px){.sup{grid-template-columns:1fr;gap:24px;padding:28px 20px}}
+@media (max-width:560px){.sup-list{grid-template-columns:1fr}}
 @media (max-width:720px){.cmp{font-size:.88rem}.cmp th,.cmp td{padding:12px 8px}.cmp td,.cmp thead th+th{width:26%}}

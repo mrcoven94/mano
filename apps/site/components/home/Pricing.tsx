@@ -1,10 +1,11 @@
 import Link from "next/link";
 import PlusPrice from "./PlusPrice";
 
-/* Two plans and a full side by side. Free covers getting help; Plus pays for the things that cost money to run. */
+/* Two plans and a full side by side. Keeping help is free for everyone; Plus adds unlimited applications, a Mano that
+   works every day without being asked, and a support team. Faxes and mail cost real money, so they are at cost on both. */
 
 const FREE = [
-  "Unlimited applications, for every program you qualify for",
+  "3 applications a month",
   "Unlimited renewals, deadlines and reminders",
   "Unlimited mail scans and documents",
   "Every benefit tracked in one place",
@@ -12,35 +13,48 @@ const FREE = [
 ];
 
 const PLUS: [string, string][] = [
-  ["Its own computer.", "Mano creates and signs in to your county, landlord and utility accounts for you, with your OK for each one, and keeps them signed in."],
-  ["Its own phone number and email.", "Offices call and write to Mano directly, so nothing gets lost in your voicemail or inbox."],
-  ["Unlimited calls.", "Mano calls for you, waits on hold and hands you the call when a person picks up."],
-  ["Unlimited faxes and mailed letters.", "Including certified mail when you need proof it arrived."],
-  ["Credit repair, done for you.", "Disputes written, mailed and followed until they are answered."],
-  ["A priority line.", "Reach a real person fast when something cannot wait."],
+  ["Unlimited applications.", "Every program you qualify for, as many as you need, every month."],
+  ["Always on.", "Mano checks your accounts and portals every day, finds new help you qualify for and starts renewals early, without being asked."],
+  ["Its own computer and email.", "Mano creates and signs in to your county, landlord and utility accounts, with your OK for each one."],
+  ["Calls and waiting on hold.", "Mano calls the office for you and hands you the phone when a person picks up."],
+  ["A support team that knows your case.", "Real people, ready when you need more than Mano."],
+];
+
+const SUPPORT: [string, string][] = [
+  ["Answers the same day.", "Text support and hear back from a person who has read your file, so you never explain it twice."],
+  ["Help when you are turned down.", "Mano reads the denial and writes the appeal, and a person checks it before it goes. If there is a hearing, you will be ready for it."],
+  ["Ready for every interview.", "Practice the questions the office will ask and get a list of exactly what to bring."],
+  ["First in line when it is urgent.", "A shutoff or eviction notice moves your case to the front, any day of the week."],
+  ["A yearly checkup.", "Once a year a person goes over everything you get and finds what you are missing."],
+  ["Someone on your side.", "If an office is not answering, support follows up with them until your case moves."],
 ];
 
 type Cell = string | boolean;
 const ROWS: [string, [string, Cell, Cell][]][] = [
   ["Getting help", [
-    ["Applications", "Unlimited", "Unlimited"],
+    ["Applications", "3 a month", "Unlimited"],
     ["Programs checked for you", "Every one", "Every one"],
     ["Renewals, deadlines and reminders", "Unlimited", "Unlimited"],
     ["Mail scans and documents", "Unlimited", "Unlimited"],
     ["Benefit tracking", true, true],
   ]],
   ["Mano does it for you", [
-    ["Its own computer for websites and accounts", false, true],
-    ["Its own phone number and email", false, true],
-    ["Calls and waiting on hold", false, "Unlimited"],
-    ["Faxes and mailed letters", false, "Unlimited"],
-    ["Credit disputes", "Written for you", "Mailed and followed"],
-    ["Priority line to a person", false, true],
+    ["Always on, checks every day", false, true],
+    ["Its own computer and email", false, true],
+    ["Calls and waiting on hold", false, true],
+    ["Credit disputes", "Written for you", "Written and followed up"],
+    ["Faxes and mailed letters", "At cost", "At cost"],
+  ]],
+  ["Support", [
+    ["Same-day answers from a person", false, true],
+    ["Appeals when you are turned down", "Denial explained", "Written and checked"],
+    ["Interview practice", false, true],
+    ["Urgent cases first", false, true],
+    ["Yearly checkup", false, true],
   ]],
   ["Always included", [
     ["You approve everything before it is sent", true, true],
     ["Share a case with your caseworker", true, true],
-    ["Usage limits", "None", "None"],
   ]],
 ];
 
@@ -54,8 +68,8 @@ export default function Pricing() {
   return (
     <>
       <div className="h-head">
-        <h2 id="pricing-h">Getting help is free, and it stays free.</h2>
-        <p className="lede">Plus is $8 a month. It gives Mano its own computer, phone number and email, so it can do every step for you, start to finish.</p>
+        <h2 id="pricing-h">Keeping your help is free, always.</h2>
+        <p className="lede">Renewals, reminders and mail are free for everyone. Plus is $8 a month for unlimited applications, a Mano that works every day without being asked and a support team that knows your case.</p>
       </div>
 
       <div className="price-grid">
@@ -63,7 +77,7 @@ export default function Pricing() {
           <div className="price-top">
             <h3>Free</h3>
             <p className="amt">$0<small> forever</small></p>
-            <p>Everything you need to get help and keep it.</p>
+            <p>Mano works whenever you text it.</p>
           </div>
           <ul>{FREE.map((x) => <li key={x}>{x}</li>)}</ul>
         </article>
@@ -71,7 +85,7 @@ export default function Pricing() {
           <div className="price-top">
             <h3>Plus</h3>
             <PlusPrice />
-            <p>Mano handles the calls, the mail and the logins too.</p>
+            <p>Mano works every day, and people back it up.</p>
           </div>
           <ul className="price-rich">
             <li>Everything in Free</li>
@@ -80,6 +94,17 @@ export default function Pricing() {
           <a className="btn btn-primary price-cta" href="#get-mano">Start Plus</a>
           <p className="price-fine">Cancel any time with one text.</p>
         </article>
+      </div>
+
+      <div className="sup">
+        <div className="sup-head">
+          <span className="sc-label">Included with Plus</span>
+          <h3>Support that knows your case.</h3>
+          <p>Mano does the paperwork. When you need a person, there is one who has already read your file.</p>
+        </div>
+        <ul className="sup-list">
+          {SUPPORT.map(([b, t]) => <li key={b}><b>{b}</b><span>{t}</span></li>)}
+        </ul>
       </div>
 
       <div className="cmp-wrap">
@@ -98,7 +123,7 @@ export default function Pricing() {
           ))}
         </table>
       </div>
-      <p className="price-note">Unlimited means no caps for your own household. Organizations pay per staff seat. <Link href="/organizations">See plans for teams</Link></p>
+      <p className="price-note">Faxes and mailed letters cost what the post office and phone company charge. Mano tries the free way first and tells you the price before anything costs money. Organizations pay per staff seat. <Link href="/organizations">See plans for teams</Link></p>
     </>
   );
 }
