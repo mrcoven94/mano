@@ -2,6 +2,7 @@
 import { useState } from "react";
 import Mascot from "@/components/Mascot";
 import { REPO_URL } from "@/lib/site";
+import { NeedIcon } from "./NeedIcons";
 
 /* Open source, shown rather than told: the consent record, the action log and the three commands to run it.
    Taking consent back rewrites the record live. Every value is made up. */
@@ -44,6 +45,12 @@ const RUN: Line[] = [
   { t: [s("Every package checked. Stand-ins used for 3 services.")], hot: true },
 ];
 
+const FACTS: [icon: string, title: string, text: string][] = [
+  ["check", "Consent is a record.", "Every share names who, why and until when, and can be taken back."],
+  ["clipboard", "Every action is logged first.", "Mano decides, writes it down, then acts. If anything is unclear, it stops."],
+  ["code", "Runs without our accounts.", "Every part works locally with stand-ins, so you can try it today."],
+];
+
 const TABS = [["consent", "Consent"], ["log", "Action log"], ["run", "Run it"]] as const;
 type Tab = (typeof TABS)[number][0];
 
@@ -58,9 +65,9 @@ export default function OpenSource() {
         <h2 id="open-h">Open source, from the first commit.</h2>
         <p className="lede">The code and the protocol that lets agents share a case are public. Any agency, nonprofit or developer can read how Mano works, build on it or run their own copy.</p>
         <ul className="open-facts">
-          <li><b>Consent is a record.</b> Every share names who, why and until when, and can be taken back.</li>
-          <li><b>Every action is logged first.</b> Mano decides, writes it down, then acts. If anything is unclear, it stops.</li>
-          <li><b>Runs without our accounts.</b> Every part works locally with stand-ins, so you can try it today.</li>
+          {FACTS.map(([icon, b, t]) => (
+            <li key={b}><NeedIcon k={icon} size={44} /><span><b>{b}</b> {t}</span></li>
+          ))}
         </ul>
         <div className="btn-row" style={{ marginTop: 32 }}>
           <a className="btn btn-primary" href={REPO_URL}>Read the code</a>

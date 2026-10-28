@@ -1,9 +1,10 @@
 import Link from "next/link";
 import PlusPrice from "./PlusPrice";
 import { NeedIcon } from "./NeedIcons";
-import { Wave } from "@/components/Mascot";
+import Mascot, { Wave } from "@/components/Mascot";
+import { SMS_HREF } from "@/lib/site";
 
-/* Two plans and a full side by side. Keeping help is free for everyone; Plus adds unlimited applications, a Mano that
+/* Two plans, the full side by side folded under them, then the support that comes with Plus. Keeping help is free for everyone; Plus adds unlimited applications, a Mano that
    works every day without being asked, and a support team. Faxes and mail cost real money, so they are at cost on both. */
 
 const FREE = [
@@ -79,14 +80,18 @@ export default function Pricing() {
 
       <div className="price-grid">
         <article className="price">
+          <Mascot tile tone="orange" size={56} className="price-mascot" />
           <div className="price-top">
             <h3>Free</h3>
             <p className="amt">$0<small> forever</small></p>
             <p>Mano works whenever you text it.</p>
           </div>
           <ul>{FREE.map((x) => <li key={x}>{x}</li>)}</ul>
+          <a className="btn btn-ghost price-cta" href={SMS_HREF}>Text Mano</a>
+          <p className="price-fine">No card, no sign up. Just text.</p>
         </article>
         <article className="price plus">
+          <Mascot tile wave tone="orange" size={56} className="price-mascot" />
           <div className="price-top">
             <h3>Plus</h3>
             <PlusPrice />
@@ -100,6 +105,24 @@ export default function Pricing() {
           <p className="price-fine">Cancel any time with one text.</p>
         </article>
       </div>
+
+      <details className="cmp-wrap">
+        <summary>Compare every feature</summary>
+        <table className="cmp">
+          <caption className="sr-only">Free and Plus, side by side</caption>
+          <thead>
+            <tr><td /><th scope="col">Free</th><th scope="col">Plus</th></tr>
+          </thead>
+          {ROWS.map(([group, rows]) => (
+            <tbody key={group}>
+              <tr className="cmp-group"><th scope="rowgroup" colSpan={2}>{group}</th><td /></tr>
+              {rows.map(([name, a, b]) => (
+                <tr key={name}><th scope="row">{name}</th><td><Mark v={a} /></td><td><Mark v={b} /></td></tr>
+              ))}
+            </tbody>
+          ))}
+        </table>
+      </details>
 
       <div className="sup">
         <div className="sup-head">
@@ -118,23 +141,6 @@ export default function Pricing() {
             </li>
           ))}
         </ul>
-      </div>
-
-      <div className="cmp-wrap">
-        <table className="cmp">
-          <caption className="sr-only">Free and Plus, side by side</caption>
-          <thead>
-            <tr><th scope="col"><span className="sc-label">Compare plans</span></th><th scope="col">Free</th><th scope="col">Plus</th></tr>
-          </thead>
-          {ROWS.map(([group, rows]) => (
-            <tbody key={group}>
-              <tr className="cmp-group"><th scope="rowgroup" colSpan={3}>{group}</th></tr>
-              {rows.map(([name, a, b]) => (
-                <tr key={name}><th scope="row">{name}</th><td><Mark v={a} /></td><td><Mark v={b} /></td></tr>
-              ))}
-            </tbody>
-          ))}
-        </table>
       </div>
       <p className="price-note">Faxes and mailed letters cost what the post office and phone company charge. Mano tries the free way first and tells you the price before anything costs money. Organizations pay per staff seat. <Link href="/organizations">See plans for teams</Link></p>
     </>
