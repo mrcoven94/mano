@@ -651,6 +651,28 @@ async function handleSubmit(
       return slowBusyResponse(!isJson && !wantsJson(request));
     }
   }
+  // Attachments land on their final keys before the receipt exists, so a copy
+  // failure leaves not_found instead of a received row with missing bytes.
+  // Copies are idempotent: twins write identical bytes to identical keys.
+  // A missing source with a present target means a twin attempt already copied.
+  try {
+    for (const pair of copies) {
+      const bytes = await fileStore.get(pair.from);
+      if (!bytes) {
+        const twin = await fileStore.get(pair.to);
+        if (!twin) throw new Error(`staged object missing: ${pair.from}`);
+        continue;
+      }
+      await fileStore.put(pair.to, bytes.data, bytes.type);
+    }
+  } catch {
+    await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
+    if (lease) await store.endSlow(lease);
+    const message = "The office could not store the attachments. Try again.";
+    return isJson || wantsJson(request)
+      ? json({ error: message }, 500)
+      : html(errorPage("Filing failed", message, "/apply/review", "Back to review"), 500);
+  }
   const result = await store.submit({
     key,
     scope,
@@ -663,6 +685,11 @@ async function handleSubmit(
   });
   if (result.outcome === "conflict" || result.outcome === "conflict-retired") {
     await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
+    // A losing attempt removes the filed copies it made, except keys the
+    // winning row references: the same file bytes under one key share one
+    // object, and deleting it would break the winner's download.
+    const referenced = result.outcome === "conflict" ? new Set(result.stored.files.map((f) => f.r2key)) : new Set<string>();
+    await fileStore.del(copies.map((c) => c.to).filter((k) => !referenced.has(k))).catch(() => undefined);
     if (lease) await store.endSlow(lease);
     const stored = result.outcome === "conflict" ? result.stored : result.receipt;
     if (isJson || wantsJson(request)) return conflictJson(stored);
@@ -678,6 +705,8 @@ async function handleSubmit(
   }
   if (result.outcome === "duplicate-retired") {
     await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
+    // No live row references these copies; the receipt carries no file list.
+    await fileStore.del(copies.map((c) => c.to)).catch(() => undefined);
     if (lease) await store.endSlow(lease);
     const kept = result.receipt;
     if (session) {
@@ -707,26 +736,8 @@ async function handleSubmit(
   }
   const duplicate = result.outcome === "duplicate";
   const receipt = result.submission;
-  // Copies are idempotent: a duplicate writes identical bytes to identical keys.
-  // A missing source with a present target means a twin attempt already copied.
-  try {
-    for (const pair of copies) {
-      const bytes = await fileStore.get(pair.from);
-      if (!bytes) {
-        const twin = await fileStore.get(pair.to);
-        if (!twin) throw new Error(`staged object missing: ${pair.from}`);
-        continue;
-      }
-      await fileStore.put(pair.to, bytes.data, bytes.type);
-    }
-  } catch {
-    await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-    if (lease) await store.endSlow(lease);
-    const message = `The application was filed as ${receipt.confirmationNumber} but a file failed to save. Reconcile with key ${key} instead of refiling.`;
-    return isJson || wantsJson(request)
-      ? json({ error: message, key, confirmationNumber: receipt.confirmationNumber }, 500)
-      : html(errorPage("Filing incomplete", message, "/", "Back to the home page"), 500);
-  }
+  // A duplicate's copies are identical bytes on keys the winner's row
+  // references, so they stay; only losing attempts clean up.
   await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
   // Drafts belong to this session and no receipt references them; dropping them is safe.
   if (session) await fileStore.del(session.files.map((f) => f.r2key)).catch(() => undefined);

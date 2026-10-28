@@ -387,6 +387,15 @@ describe("idempotency", () => {
     expect(body.received.confirmationNumber).toBe(first["confirmationNumber"]);
     expect(body.received.digest).toBe(first["digest"]);
     expect((await store.countSubmissions())).toBe(1);
+    // The loser shares the winner's file bytes, so its cleanup must spare the winner's objects.
+    const download = await handleRequest(
+      new Request(`${BASE}/caseworker/${first["confirmationNumber"]}/file/0`, { headers: { authorization: AUTH } }),
+      store,
+      files,
+      config,
+    );
+    expect(download.status).toBe(200);
+    expect(await download.text()).toBe("%PDF-bytes");
   });
 
   test("the receipt carries the digest the gateway can prove", async () => {
@@ -1556,7 +1565,7 @@ describe("review round 2 item 3: staged bytes are tracked and deletes are ordere
     expect((await store.getSession(sessionId))?.files).toEqual([]);
   });
 
-  test("a copy failure after the row write returns 500, stays reconcilable, and a retry completes the bytes", async () => {
+  test("a copy failure files nothing, and a retry files clean the first time", async () => {
     const store = new MemoryStore();
     const files = new FaultyFileStore();
     files.failPutsAfter = 1;
@@ -1576,18 +1585,17 @@ describe("review round 2 item 3: staged bytes are tracked and deletes are ordere
       );
     const first = await post();
     expect(first.status).toBe(500);
-    const failure = (await first.json()) as Record<string, string>;
-    const confirmation = failure["confirmationNumber"] ?? "";
-    expect(confirmation).not.toBe("");
-    const status = (await (
-      await handleRequest(new Request(`${BASE}/submissions/copy-fail-key`, { headers: { authorization: AUTH } }), store, files, config)
-    ).json()) as Record<string, unknown>;
-    expect(status["status"]).toBe("received");
-    expect(status["confirmationNumber"]).toBe(confirmation);
+    expect((await first.json()) as Record<string, unknown>).not.toHaveProperty("confirmationNumber");
+    const status = await handleRequest(new Request(`${BASE}/submissions/copy-fail-key`, { headers: { authorization: AUTH } }), store, files, config);
+    expect(status.status).toBe(404);
+    expect(((await status.json()) as Record<string, unknown>)["status"]).toBe("not_found");
+    expect(await store.countSubmissions()).toBe(0);
     files.failPutsAfter = Number.POSITIVE_INFINITY;
     const again = await post();
     expect(again.status).toBe(200);
-    expect(((await again.json()) as Record<string, unknown>)["duplicate"]).toBe(true);
+    const retry = (await again.json()) as Record<string, unknown>;
+    expect(retry["duplicate"]).toBe(false);
+    const confirmation = retry["confirmationNumber"] as string;
     const download = await handleRequest(new Request(`${BASE}/caseworker/${confirmation}/file/0`, { headers: { authorization: AUTH } }), store, files, config);
     expect(download.status).toBe(200);
     expect(await download.text()).toBe("%PDF-bytes");
