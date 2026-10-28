@@ -30,6 +30,10 @@ test("smoke watches every path that can change answers", () => {
   }
 });
 
+test("smoke comment step tolerates a missing run log", () => {
+  assert.ok(smoke.includes("[ -f runs/smoke.log ]"), "unconditional sed fails the step under bash -e");
+});
+
 test("nightly handles secrets through env only", () => {
   assert.ok(!/^ *if:.*secrets\./m.test(nightly), "nightly gates a step on a secret");
   assert.ok(nightly.includes("HOLDOUT: ${{ secrets.MANO_QUALITY_HOLDOUT }}"), "holdout must ride env");

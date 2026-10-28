@@ -58,7 +58,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BODY=$(sed -n '/## Quality smoke/,$p' runs/smoke.log)
+          BODY=""
+          [ -f runs/smoke.log ] && BODY=$(sed -n '/## Quality smoke/,$p' runs/smoke.log)
           [ -z "$BODY" ] && BODY="## Quality smoke: error"$'\n\nThe smoke run failed before scoring. See the action log.'
           EXISTING=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -q '.[] | select(.body | startswith("## Quality smoke")) | .id' | head -1)
           if [ -n "$EXISTING" ]; then
