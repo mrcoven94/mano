@@ -13,6 +13,10 @@ export class ConsentDeliveringExecutor implements Executor {
     private inner: Executor,
     private deliverShare: (req: ActionRequest) => Promise<{ externalId: string }>,
     private checkShare: (idempotencyKey: string) => Promise<CheckOutcome>,
+    // The persisted attempt's action type for a key. Reconcile routing
+    // reads this, never the key itself: key prefixes are
+    // caller-controlled and can point a submit at the consent store.
+    private actionTypeOf: (idempotencyKey: string) => string | null,
   ) {
     // Share delivery is Mano-internal protocol; the flag tracks whether
     // outside systems are simulated, which the inner executor decides.
@@ -34,7 +38,9 @@ export class ConsentDeliveringExecutor implements Executor {
   async check(idempotencyKey: string, personId: string): Promise<CheckOutcome> {
     // Shares never touch the inner executor, so they reconcile by asking
     // the org whether it recorded the key, not by asking the inner check.
-    if (idempotencyKey.startsWith("consent-grant:") || idempotencyKey.startsWith("consent-revoke:")) {
+    // The attempt row decides: a key the caller shaped like a consent
+    // key still reconciles as whatever action actually ran under it.
+    if (this.actionTypeOf(idempotencyKey) === "share") {
       return this.checkShare(idempotencyKey);
     }
     return this.inner.check(idempotencyKey, personId);
