@@ -287,6 +287,9 @@ mark{background:none;color:inherit}
 .close-num{display:inline-block;margin-top:40px;font-family:var(--font-display),sans-serif;font-weight:700;font-size:clamp(1.8rem,3.6vw,2.6rem);letter-spacing:-.02em;text-decoration:none;background-image:linear-gradient(var(--hl),var(--hl));background-size:100% 40%;background-position:0 88%;background-repeat:no-repeat;padding:0 .12em;font-variant-numeric:tabular-nums}
 .h-close .btn-row{justify-content:center;margin-top:32px}
 .h-close .note{margin-top:16px}
+.text-qr{margin-top:32px}
+.text-qr svg{width:168px;height:168px}
+.text-qr .note{margin-top:8px}
 
 @media (max-width:1080px){
   .tr,.open-grid{grid-template-columns:1fr;gap:56px}

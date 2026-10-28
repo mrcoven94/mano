@@ -12,7 +12,8 @@ import Pricing from "@/components/home/Pricing";
 import OpenSource from "@/components/home/OpenSource";
 import Faq from "@/components/Faq";
 import Mascot from "@/components/Mascot";
-import { SMS_HREF, SMS_NUMBER, PLACEHOLDER_NOTE, REPO_URL } from "@/lib/site";
+import TextQr from "@/components/TextQr";
+import { SMS_HREF, SMS_NUMBER, SMS_IS_PLACEHOLDER, PLACEHOLDER_NOTE, REPO_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: { absolute: "Mano: AI that helps you pay rent, get food, medicine and child care" },
@@ -101,7 +102,7 @@ export default function Home() {
             <a className="btn btn-primary btn-lg" href={SMS_HREF}>Text Mano</a>
             <a className="btn btn-ghost btn-lg" href="/government">For government</a>
           </div>
-          {PLACEHOLDER_NOTE && <p className="note">{PLACEHOLDER_NOTE}</p>}
+          {SMS_IS_PLACEHOLDER ? <p className="note">{PLACEHOLDER_NOTE}</p> : <TextQr />}
         </div>
       </section>
     </div>

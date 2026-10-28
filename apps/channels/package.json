@@ -1,0 +1,26 @@
+{
+  "name": "channels",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit && vitest run --config vitest.node.config.ts && vitest run --config vitest.worker.config.ts",
+    "test": "vitest run --config vitest.node.config.ts",
+    "test:worker": "vitest run --config vitest.worker.config.ts",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "webhook:create": "node scripts/create-webhook.mjs"
+  },
+  "dependencies": {
+    "@mano/channels": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.8",
+    "@cloudflare/workers-types": "^4.20251001.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.30.0"
+  }
+}
