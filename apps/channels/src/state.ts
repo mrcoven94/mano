@@ -29,6 +29,8 @@ class SqlGlobalStore implements GlobalStore {
     );
     this.sql.exec("CREATE TABLE IF NOT EXISTS chat_routes (chat_hash TEXT PRIMARY KEY, handle_hash TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS seen_ids (event_id TEXT PRIMARY KEY, seen_at_ms INTEGER NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS settled_spend (res_key TEXT PRIMARY KEY, day TEXT NOT NULL, amount_usd REAL NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS settled_bytes (res_key TEXT PRIMARY KEY, day TEXT NOT NULL, amount_bytes INTEGER NOT NULL)");
     if (this.sql.exec("SELECT id FROM global_state WHERE id = 1").toArray().length === 0) {
       this.sql.exec("INSERT INTO global_state (id, cursor, spend_day, spent_usd) VALUES (1, NULL, '', 0)");
     }
@@ -78,6 +80,9 @@ class SqlGlobalStore implements GlobalStore {
 
   settleSpend(key: string, day: string, actualUsd: number): void {
     this.sql.exec("DELETE FROM spend_reservations WHERE res_key = ?", key);
+    const known = this.sql.exec("SELECT res_key FROM settled_spend WHERE res_key = ?", key).toArray().length > 0;
+    if (known) return;
+    this.sql.exec("INSERT INTO settled_spend (res_key, day, amount_usd) VALUES (?, ?, ?)", key, day, actualUsd);
     const state = this.state();
     if (state.spendDay === day) {
       state.spentUsd += actualUsd;
@@ -88,8 +93,13 @@ class SqlGlobalStore implements GlobalStore {
     this.save(state);
   }
 
+  releaseSpend(key: string): void {
+    this.sql.exec("DELETE FROM spend_reservations WHERE res_key = ?", key);
+  }
+
   pruneSpendReservations(day: string): void {
     this.sql.exec("DELETE FROM spend_reservations WHERE day != ?", day);
+    this.sql.exec("DELETE FROM settled_spend WHERE day != ?", day);
   }
 
   byteReservations(day: string): ByteReservation[] {
@@ -106,6 +116,9 @@ class SqlGlobalStore implements GlobalStore {
 
   settleBytes(key: string, day: string, actualBytes: number): void {
     this.sql.exec("DELETE FROM byte_reservations WHERE res_key = ?", key);
+    const known = this.sql.exec("SELECT res_key FROM settled_bytes WHERE res_key = ?", key).toArray().length > 0;
+    if (known) return;
+    this.sql.exec("INSERT INTO settled_bytes (res_key, day, amount_bytes) VALUES (?, ?, ?)", key, day, actualBytes);
     const state = this.state();
     if (state.byteDay === day) {
       state.bytesUsed += actualBytes;
@@ -116,8 +129,13 @@ class SqlGlobalStore implements GlobalStore {
     this.save(state);
   }
 
+  releaseBytes(key: string): void {
+    this.sql.exec("DELETE FROM byte_reservations WHERE res_key = ?", key);
+  }
+
   pruneByteReservations(day: string): void {
     this.sql.exec("DELETE FROM byte_reservations WHERE day != ?", day);
+    this.sql.exec("DELETE FROM settled_bytes WHERE day != ?", day);
   }
 
   noteRoute(chatHash: string, handleHash: string): void {
@@ -193,6 +211,22 @@ export class ChannelStateDO implements DurableObject {
       const result = this.ledger().settle(body.key, body.actualUsd);
       logger.info("spend_recorded", { spentUsd: result.spentUsd });
       return Response.json(result);
+    }
+    if (request.method === "POST" && url.pathname === "/internal/spend-release") {
+      const body = (await request.json().catch(() => ({}))) as { key?: unknown };
+      if (typeof body.key !== "string") {
+        return new Response("Bad release.", { status: 400 });
+      }
+      this.ledger().release(body.key);
+      return Response.json({ ok: true });
+    }
+    if (request.method === "POST" && url.pathname === "/internal/bytes-release") {
+      const body = (await request.json().catch(() => ({}))) as { key?: unknown };
+      if (typeof body.key !== "string") {
+        return new Response("Bad release.", { status: 400 });
+      }
+      this.ledger().byteRelease(body.key);
+      return Response.json({ ok: true });
     }
     if (request.method === "POST" && url.pathname === "/internal/bytes-reserve") {
       const body = (await request.json().catch(() => ({}))) as { key?: unknown; bytes?: unknown };

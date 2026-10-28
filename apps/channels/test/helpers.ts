@@ -116,9 +116,15 @@ export function makeHarness(
     settle: async (key: string, actualUsd: number) => {
       h.ledger.settle(key, actualUsd);
     },
+    release: async (key: string) => {
+      h.ledger.release(key);
+    },
     byteReserve: async (key: string, bytes: number) => h.ledger.byteReserve(key, bytes),
     byteSettle: async (key: string, actualBytes: number) => {
       h.ledger.byteSettle(key, actualBytes);
+    },
+    byteRelease: async (key: string) => {
+      h.ledger.byteRelease(key);
     },
   };
   h.runner = new ConversationRunner({

@@ -18,6 +18,9 @@ export interface TurnInput {
 }
 
 export interface ResponderResult {
+  // The raw answer. The worker sanitizes it before splitting, so the
+  // bubbles it persists and sends are final.
+  text: string;
   bubbles: string[];
   inputChars: number;
   outputChars: number;
@@ -153,6 +156,7 @@ export class SparkResponder implements Responder {
         const text = extractOutputText(data).trim();
         if (!text) throw new Error("Model returned no text.");
         return {
+          text,
           bubbles: splitBubbles(text),
           inputChars: input.length,
           outputChars: text.length,
@@ -190,6 +194,7 @@ export class StandInResponder implements Responder {
     this.prompts.push(turn);
     const text = this.replies.length > 0 ? this.replies.shift()! : "Thanks for your message. A live answer needs a model key.";
     return {
+      text,
       bubbles: splitBubbles(text),
       inputChars: JSON.stringify(turn).length,
       outputChars: text.length,

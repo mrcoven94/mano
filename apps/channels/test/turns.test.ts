@@ -22,7 +22,7 @@ describe("slow answers", () => {
         maxAttempts: 1,
         respond: async () => {
           const text = await gate;
-          return { bubbles: [text], inputChars: 10, outputChars: text.length, model: "stand-in", attempts: 1 };
+          return { text, bubbles: [text], inputChars: 10, outputChars: text.length, model: "stand-in", attempts: 1 };
         },
       },
     });
@@ -185,6 +185,23 @@ describe("attachments", () => {
     expect(h.files.files.size).toBe(1);
   });
 
+  it("releases the budget hold on a photo-only turn", async () => {
+    const h = makeHarness({ fetchFn: photoFetch(), config: MEDIA });
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_photo_only",
+        text: null,
+        occurredAtMs: h.now,
+        attachments: [{ url: "https://cdn.example.test/p1.jpg", mediaType: "image/jpeg", size: 21 }],
+      }),
+      "webhook",
+    );
+    await runTurnAfterBatch(h);
+    expect(h.files.files.size).toBe(1);
+    expect(h.ledger.spent().spentUsd).toBe(0);
+    expect(h.ledger.reserve("probe:1", 5).allowed).toBe(true);
+  });
+
   it("holds files when the global byte budget is spent", async () => {
     const h = makeHarness({ fetchFn: photoFetch(), byteBudget: 1, config: MEDIA });
     await h.runner.handleEvent(
@@ -233,6 +250,21 @@ describe("link safety", () => {
     expect(h.lines.join("\n")).not.toContain("evil.test");
   });
 
+  it("strips uppercase and bare links from replies", async () => {
+    const fetched: string[] = [];
+    const h = makeHarness({
+      fetchFn: dohFetch(fetched),
+      replies: ["Open HTTPS://EVIL.TEST/trap or evil.test/again for more."],
+    });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_caps", text: "Links?", occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h);
+    const answer = h.channel.sends.find((s) => s.text.includes("Open "))!;
+    expect(answer.text).not.toContain("EVIL.TEST");
+    expect(answer.text).not.toContain("evil.test");
+    expect(answer.text.match(/\(link removed\)/g)).toHaveLength(2);
+    expect(fetched.filter((u) => u.includes("name=evil.test"))).not.toHaveLength(0);
+  });
+
   it("refuses attachments off the provider media hosts without fetching", async () => {
     const fetched: string[] = [];
     const h = makeHarness({ fetchFn: dohFetch(fetched), config: { mediaHosts: ["cdn.example.test"] } });
@@ -248,6 +280,56 @@ describe("link safety", () => {
     await runTurnAfterBatch(h);
     expect(h.files.files.size).toBe(0);
     expect(fetched).toHaveLength(0);
+  });
+
+  it("keeps every bubble under the cap after links come out", async () => {
+    const fetched: string[] = [];
+    const blockAll = (async (url: unknown) => {
+      fetched.push(String(url));
+      return new Response(JSON.stringify({ Status: 0, Answer: [{ data: "0.0.0.0" }] }), { status: 200 });
+    }) as typeof fetch;
+    // One long sentence: short bare links that each grow when replaced,
+    // so splitting first would overflow the bubble.
+    const links = Array.from({ length: 10 }, (_, i) => `qx${i}.aa`).join(" ");
+    const reply = `${"word ".repeat(100)}${links} end.`;
+    const h = makeHarness({ fetchFn: blockAll, replies: [reply] });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_cap", text: "Long?", occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h);
+    expect(h.channel.sends.length).toBeGreaterThan(1);
+    for (const send of h.channel.sends) {
+      expect(send.text.length).toBeLessThanOrEqual(600);
+    }
+    const joined = h.channel.sends.map((s) => s.text).join(" ");
+    expect(joined).toContain("(link removed)");
+    expect(joined).not.toContain("qx0.aa");
+  });
+
+  it("replays persisted bubbles without checking links again", async () => {
+    const fetched: string[] = [];
+    const h = makeHarness({
+      fetchFn: dohFetch(fetched),
+      replies: ["Read https://ok.test/guide and https://evil.test/trap."],
+    });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_replay", text: "Links?", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    const realUpdate = h.store.updateOutbound.bind(h.store);
+    let fails = 1;
+    h.store.updateOutbound = ((...args: Parameters<typeof realUpdate>) => {
+      if (fails > 0) {
+        fails -= 1;
+        throw new Error("storage down");
+      }
+      return realUpdate(...args);
+    }) as typeof realUpdate;
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    h.store.updateOutbound = realUpdate;
+    const dohBefore = fetched.filter((u) => u.includes("dns-query")).length;
+    expect(dohBefore).toBeGreaterThan(0);
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    expect(fetched.filter((u) => u.includes("dns-query"))).toHaveLength(dohBefore);
+    const answer = h.channel.sends.find((s) => s.text.includes("Read "))!;
+    expect(answer.text).toContain("https://ok.test/guide");
+    expect(answer.text).not.toContain("evil.test");
   });
 
   it("checks every redirect hop before following it", async () => {

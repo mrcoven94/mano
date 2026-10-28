@@ -24,6 +24,7 @@ import {
   lifecycleStateFor,
   parseApprovalReply,
   sha256Hex,
+  splitBubbles,
   stripBlockedLinks,
   type Channel,
   type Logger,
@@ -45,8 +46,10 @@ import { attachmentDocumentId, fetchAttachment, saveAttachment, type FileStore }
 export interface SpendLedger {
   reserve(key: string, worstUsd: number): Promise<{ allowed: boolean; spentUsd: number }>;
   settle(key: string, actualUsd: number): Promise<void>;
+  release(key: string): Promise<void>;
   byteReserve(key: string, bytes: number): Promise<{ allowed: boolean; bytesUsed: number }>;
   byteSettle(key: string, actualBytes: number): Promise<void>;
+  byteRelease(key: string): Promise<void>;
 }
 
 export interface RunnerConfig {
@@ -94,7 +97,7 @@ export type HandleResult =
   | "activity"
   | "opted-out";
 
-export type TurnResult = "ran" | "waiting" | "idle" | "running" | "stopped";
+export type TurnResult = "ran" | "waiting" | "idle" | "running" | "stopped" | "retry";
 
 // The conversation was deleted mid-turn: the generation moved on. The
 // turn stops without writing so it cannot recreate wiped data.
@@ -144,6 +147,51 @@ export function partitionByChat(
     else groups.set(key, [item]);
   }
   return [...groups.values()];
+}
+
+// Retry backoff from a persisted attempt count: 5 seconds, doubling to
+// a 5 minute ceiling. The count survives crashes, so a stuck turn or
+// send backs off instead of spinning the alarm.
+export function retryDelayMs(attempts: number): number {
+  return Math.min(5000 * 2 ** Math.max(0, attempts - 1), 300000);
+}
+
+// Groups one chat's pending input into complete turns under the text
+// cap, oldest first. Every item fits on its own (oversized texts split
+// at buffer time), so every chunk is non-empty and nothing is cut.
+export function chunkByTextCap(
+  pending: import("./store.js").PendingInbound[],
+  cap: number,
+): import("./store.js").PendingInbound[][] {
+  const chunks: import("./store.js").PendingInbound[][] = [];
+  let current: import("./store.js").PendingInbound[] = [];
+  let joinedLen = 0;
+  let nonEmpty = 0;
+  for (const item of pending) {
+    const len = item.text?.length ?? 0;
+    const sep = nonEmpty > 0 && len > 0 ? 1 : 0;
+    if (current.length > 0 && joinedLen + sep + len > cap) {
+      chunks.push(current);
+      current = [];
+      joinedLen = 0;
+      nonEmpty = 0;
+    }
+    const freshSep = nonEmpty > 0 && len > 0 ? 1 : 0;
+    current.push(item);
+    joinedLen += freshSep + len;
+    if (len > 0) nonEmpty += 1;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+// Splits one oversized text into cap-sized pieces for buffering. The
+// pieces rejoin in order across turns; attachments stay on the first.
+export function splitTextCap(text: string, cap: number): string[] {
+  if (text.length <= cap) return [text];
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i += cap) out.push(text.slice(i, i + cap));
+  return out;
 }
 
 // Out-of-order delivery events resolve by rank, with two guards: failed
@@ -231,14 +279,20 @@ export class ConversationRunner {
       meta.optedOut = false;
       meta.lastInboundMs = nowMs();
       store.saveMeta(meta);
-      store.addPending({
-        eventId: event.id,
-        receivedAtMs: nowMs(),
-        chatId: event.chatId ?? meta.chatId ?? "",
-        to: event.handle ?? meta.to ?? "",
-        text: event.text,
-        attachments: event.attachments,
-        fromReconcile: source === "reconcile",
+      // Oversized texts split into cap-sized pieces now, so the turn
+      // runner never has to cut. Continuation pieces take derived IDs;
+      // the event still dedupes on its own ID.
+      const pieces = text ? splitTextCap(text, TURN_TEXT_CAP) : [null];
+      pieces.forEach((piece, i) => {
+        store.addPending({
+          eventId: i === 0 ? event.id : `${event.id}#${i + 1}`,
+          receivedAtMs: nowMs(),
+          chatId: event.chatId ?? meta.chatId ?? "",
+          to: event.handle ?? meta.to ?? "",
+          text: piece,
+          attachments: i === 0 ? event.attachments : [],
+          fromReconcile: source === "reconcile",
+        });
       });
       logger.info("inbound_queued", {
         handle: this.logHandle(),
@@ -370,9 +424,9 @@ export class ConversationRunner {
 
   private async runDueTurnInner(): Promise<TurnResult> {
     const { store, nowMs, logger } = this.deps;
-    // Fast path stays synchronous when nothing is uncertain, so the
+    // Fast path stays synchronous when nothing needs resolving, so the
     // batch decision below sees the same state as the caller.
-    if (store.outbounds().some((r) => r.state === "uncertain")) {
+    if (store.outbounds().some((r) => r.state === "uncertain" || r.state === "sending")) {
       try {
         await this.resolveUncertain();
       } catch (err) {
@@ -395,9 +449,9 @@ export class ConversationRunner {
           logger.info("turn_stopped", { handle: this.logHandle(), turn: unfinished.turn });
           return "stopped";
         }
-        throw err;
+        return this.noteInfraError(unfinished.turn, err);
       }
-      return "ran";
+      return this.afterTurns();
     }
     const meta = store.meta();
     if (meta.running) {
@@ -407,33 +461,44 @@ export class ConversationRunner {
       store.saveMeta(meta);
     }
     const pending = store.pending();
-    if (pending.length === 0) return "idle";
+    if (pending.length === 0) return this.needsRetry() ? "retry" : "idle";
     if (nowMs() - meta.lastInboundMs < this.deps.config.batchMs) return "waiting";
+    // A turn finishes only after a persisted final outcome. An
+    // infrastructure error keeps the turn row and its input and returns
+    // "retry": the alarm re-arms with backoff and the turn resumes.
+    let retried = false;
     try {
       await this.runGuarded(async () => {
-        for (const items of partitionByChat(pending, store.meta().chatId)) {
-          const turnMeta = store.meta();
-          turnMeta.turn += 1;
-          store.saveMeta(turnMeta);
-          const turn = turnMeta.turn;
-          const chatId = [...items].reverse().find((i) => i.chatId)?.chatId ?? turnMeta.chatId;
-          const to = [...items].reverse().find((i) => i.to)?.to ?? turnMeta.to;
-          store.startTurn({
-            turn,
-            itemsJson: JSON.stringify(items),
-            chatId,
-            to,
-            answerJson: null,
-            costUsd: null,
-            costSettled: false,
-            state: "started",
-            createdAtMs: nowMs(),
-            updatedAtMs: nowMs(),
-          });
-          try {
-            await this.runTurnBody(turn, items, null, generation);
-          } finally {
-            this.finishTurnRow(turn, items);
+        for (const group of partitionByChat(pending, store.meta().chatId)) {
+          for (const items of chunkByTextCap(group, TURN_TEXT_CAP)) {
+            const turnMeta = store.meta();
+            turnMeta.turn += 1;
+            store.saveMeta(turnMeta);
+            const turn = turnMeta.turn;
+            const chatId = [...items].reverse().find((i) => i.chatId)?.chatId ?? turnMeta.chatId;
+            const to = [...items].reverse().find((i) => i.to)?.to ?? turnMeta.to;
+            try {
+              store.startTurn({
+                turn,
+                itemsJson: JSON.stringify(items),
+                chatId,
+                to,
+                answerJson: null,
+                costUsd: null,
+                costSettled: false,
+                attempts: 0,
+                state: "started",
+                createdAtMs: nowMs(),
+                updatedAtMs: nowMs(),
+              });
+              await this.runTurnBody(turn, items, null, generation);
+              this.finishTurnRow(turn, items);
+            } catch (err) {
+              if (err instanceof GenerationStopped) throw err;
+              await this.noteInfraError(turn, err);
+              retried = true;
+              return;
+            }
           }
         }
       });
@@ -444,7 +509,54 @@ export class ConversationRunner {
       }
       throw err;
     }
-    return "ran";
+    if (retried) return "retry";
+    return this.afterTurns();
+  }
+
+  // An infrastructure error (ledger, network, storage) is not an
+  // outcome: the turn row and its input stay, the spend hold releases
+  // so the retry can reserve again, and the caller re-arms. The release
+  // itself is best-effort: a failing ledger must not wedge the retry,
+  // which reserves idempotently under the same key.
+  private async noteInfraError(turn: number, err: unknown): Promise<"retry"> {
+    const { store, logger, nowMs } = this.deps;
+    store.bumpTurnAttempt(turn, nowMs());
+    try {
+      await this.deps.spend.release(`${this.deps.config.handleHash}:${turn}`);
+    } catch (releaseErr) {
+      logger.warn("turn_release_failed", {
+        handle: this.logHandle(),
+        turn,
+        err: releaseErr instanceof Error ? releaseErr.message : "unknown",
+      });
+    }
+    logger.warn("turn_infra_error", {
+      handle: this.logHandle(),
+      turn,
+      err: err instanceof Error ? err.message : "unknown",
+    });
+    return "retry";
+  }
+
+  // Work remains when a turn never finished or a send never resolved.
+  // The alarm must re-arm until none remains, even with no new input.
+  needsRetry(): boolean {
+    if (this.store.unfinishedTurn()) return true;
+    return this.store.outbounds().some((r) => r.state === "uncertain" || r.state === "sending");
+  }
+
+  // Backoff for the next attempt: the unfinished turn's count, else the
+  // most-retried stuck send.
+  retryAfterMs(): number {
+    const unfinished = this.store.unfinishedTurn();
+    if (unfinished) return retryDelayMs(Math.max(1, unfinished.attempts));
+    const stuck = this.store.outbounds().filter((r) => r.state === "uncertain" || r.state === "sending");
+    const attempts = stuck.reduce((max, r) => Math.max(max, r.attempts), 0);
+    return retryDelayMs(Math.max(1, attempts));
+  }
+
+  private afterTurns(): TurnResult {
+    return this.needsRetry() ? "retry" : "ran";
   }
 
   private checkGeneration(generation: number): void {
@@ -511,7 +623,10 @@ export class ConversationRunner {
       { hourKey: meta.hourKey, hourCount: meta.hourCount, dayKey: meta.dayKey, dayCount: meta.dayCount },
       nowMs(),
     );
-    const turnText = texts.join("\n").slice(0, TURN_TEXT_CAP);
+    // Chunks arrive under the cap by construction (buffer-time split
+    // plus chunkByTextCap), so the join is never cut: every input
+    // reaches the responder exactly once, across as many turns as needed.
+    const turnText = texts.join("\n");
     const reserveKey = `${config.handleHash}:${turn}`;
     const worstUsd = estimateCostUsd(
       (turnText.length + INPUT_SLACK_CHARS) * this.deps.responder.maxAttempts,
@@ -550,7 +665,13 @@ export class ConversationRunner {
         this.checkGeneration(generation);
         const answer = await this.respondWithInterim(turn, turnText, saved, chatId, to, generation);
         if (answer.ok) {
-          answer.bubbles.forEach((text, i) => bubbles.push({ part: i + 1, tag: "", text }));
+          // Links come out before splitting: the persisted bubbles are
+          // final, capped, and identical on every replay.
+          const cleaned = await stripBlockedLinks(answer.text, new LinkChecker({ fetchFn: this.deps.fetchFn }));
+          if (cleaned.removed > 0) {
+            logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: cleaned.removed });
+          }
+          splitBubbles(cleaned.text).forEach((text, i) => bubbles.push({ part: i + 1, tag: "", text }));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
@@ -561,6 +682,9 @@ export class ConversationRunner {
           store.markTurnSettled(turn, nowMs());
         }
       } else {
+        // A textless turn costs nothing: settle zero to release the hold
+        // instead of holding the whole budget.
+        await this.deps.spend.settle(reserveKey, 0);
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
       }
@@ -585,15 +709,14 @@ export class ConversationRunner {
     saved: number,
     generation: number,
   ): Promise<void> {
-    const { store, logger, fetchFn } = this.deps;
-    const checker = new LinkChecker({ fetchFn });
+    const { store, logger } = this.deps;
+    // Bubbles arrive final: model text was sanitized before splitting
+    // and capped by the splitter, and the static texts carry no links
+    // (pinned by test). Nothing here mutates them, so a replayed turn
+    // sends byte-identical bubbles under the same keys.
     let fresh = 0;
     for (const bubble of bubbles) {
-      const cleaned = await stripBlockedLinks(bubble.text, checker);
-      if (cleaned.removed > 0) {
-        logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: cleaned.removed });
-      }
-      const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: cleaned.text, chatId, to, generation });
+      const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation });
       if (row.fresh) fresh += 1;
       if (bubble.tag === "" && bubble.part === 0 && row.state === "sent") {
         const introduced = store.meta();
@@ -612,7 +735,7 @@ export class ConversationRunner {
     chatId: string | null,
     to: string | null,
     generation: number,
-  ): Promise<{ ok: true; bubbles: string[]; costUsd: number } | { ok: false; costUsd: number }> {
+  ): Promise<{ ok: true; text: string; costUsd: number } | { ok: false; costUsd: number }> {
     const { responder, config, logger } = this.deps;
     let done = false;
     let interimSent = false;
@@ -634,7 +757,7 @@ export class ConversationRunner {
       const result = await responder.respond({ texts: [turnText], attachmentCount });
       const costUsd =
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
-      return { ok: true, bubbles: result.bubbles, costUsd };
+      return { ok: true, text: result.text, costUsd };
     } catch (err) {
       logger.warn("responder_failed", { handle: this.logHandle(), turn, err: err instanceof Error ? err.message : "unknown" });
       const costUsd = err instanceof ResponderFailed ? attemptCost(err.inputChars, err.attempts) : 0;
@@ -693,7 +816,7 @@ export class ConversationRunner {
           mediaHosts: config.mediaHosts,
         });
         if (!fetched.bytes) {
-          await spend.byteSettle(byteKey, 0);
+          await spend.byteRelease(byteKey);
           logger.warn("attachment_refused", { handle: this.logHandle(), turn, reason: fetched.reason });
           continue;
         }
@@ -707,7 +830,7 @@ export class ConversationRunner {
         store.saveMeta(counted);
         saved += 1;
       } catch (err) {
-        await spend.byteSettle(byteKey, 0);
+        await spend.byteRelease(byteKey);
         logger.warn("attachment_failed", { handle: this.logHandle(), turn, err: err instanceof Error ? err.message : "unknown" });
       }
     }
@@ -753,7 +876,7 @@ export class ConversationRunner {
       const code = meta.closed ? "conversation_closed" : "opted_out";
       if (!prior) {
         store.addOutbound({
-          key, turn: opts.turn, part: opts.part, tag: opts.tag, text: opts.text, state: "refused", code,
+          key, turn: opts.turn, part: opts.part, tag: opts.tag, text: opts.text, attempts: 0, state: "refused", code,
           chatId: opts.chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
         });
       } else {
@@ -764,7 +887,7 @@ export class ConversationRunner {
     }
     if (!prior) {
       store.addOutbound({
-        key, turn: opts.turn, part: opts.part, tag: opts.tag, text: opts.text, state: "planned", code: null,
+        key, turn: opts.turn, part: opts.part, tag: opts.tag, text: opts.text, attempts: 0, state: "planned", code: null,
         chatId: opts.chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
       });
     }
@@ -843,20 +966,23 @@ export class ConversationRunner {
         store.updateOutbound(key, { state: "refused", code: err.code, updatedAtMs: nowMs() });
         return finish({ key, state: "refused", code: err.code, fresh: false, counted: true });
       }
-      store.updateOutbound(key, { state: "uncertain", updatedAtMs: nowMs() });
-      logger.warn("send_still_uncertain", { handle: this.logHandle(), key });
+      const attempts = (store.outboundByKey(key)?.attempts ?? 0) + 1;
+      store.updateOutbound(key, { state: "uncertain", attempts, updatedAtMs: nowMs() });
+      logger.warn("send_still_uncertain", { handle: this.logHandle(), key, attempts });
       return finish({ key, state: "uncertain", code: null, fresh: false, counted: false });
     }
   }
 
-  // Retries every uncertain send with its stored text. Runs on each
-  // alarm tick before turns, so an uncertain send resolves as soon as
-  // the provider answers again.
+  // Retries every uncertain or stuck sending row with its stored
+  // text. Runs on each alarm tick before turns, so an uncertain send
+  // resolves as soon as the provider answers again. Sending rows are
+  // safe to take: turns never overlap, so a sending row seen here is a
+  // crash remnant, not a live send.
   async resolveUncertain(): Promise<number> {
     const generation = this.store.meta().generation;
     let resolved = 0;
     for (const row of this.store.outbounds()) {
-      if (row.state !== "uncertain") continue;
+      if (row.state !== "uncertain" && row.state !== "sending") continue;
       const result = await this.resolveUncertainKey(
         row.key,
         { text: row.text, chatId: row.chatId, to: this.store.meta().to },

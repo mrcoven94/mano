@@ -24,7 +24,7 @@ function sqliteStorage(db: DatabaseSync): SqlStorage {
   } as unknown as SqlStorage;
 }
 
-function testDo() {
+function testDo(opts: { batchMs?: string; failSpendReserve?: () => boolean } = {}) {
   const db = new DatabaseSync(":memory:");
   let alarm: number | null = null;
   const ctx = {
@@ -40,10 +40,17 @@ function testDo() {
       },
     },
   } as unknown as DurableObjectState;
-  const okStub = { fetch: async () => new Response(JSON.stringify({ ok: true })) };
+  const stateStub = {
+    fetch: async (url: string) => {
+      if (url.endsWith("/internal/spend-reserve") && opts.failSpendReserve?.()) {
+        throw new Error("ledger down");
+      }
+      return new Response(JSON.stringify({ ok: true }));
+    },
+  };
   const env = {
-    CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => okStub },
-    TURN_BATCH_MS: "2500",
+    CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stateStub },
+    TURN_BATCH_MS: opts.batchMs ?? "2500",
     MANO_HANDLE_PEPPER: "test-pepper-not-real",
   } as unknown as Env;
   const postEvent = async (event: Record<string, unknown>): Promise<string> => {
@@ -56,8 +63,19 @@ function testDo() {
     expect(res.status).toBe(200);
     return ((await res.json()) as { result: string }).result;
   };
+  const postTurn = async (): Promise<string> => {
+    const res = await new ConversationDO(ctx, env).fetch(
+      new Request("https://conversation/internal/turn", {
+        method: "POST",
+        body: JSON.stringify({ handleHash: "hash-alarm" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { result: string }).result;
+  };
   return {
     postEvent,
+    postTurn,
     get alarm() {
       return alarm;
     },
@@ -104,5 +122,21 @@ describe("duplicate redelivery and the batch alarm", () => {
     expect(d.alarm).toBeNull();
     expect(await d.postEvent(receipt)).toBe("duplicate");
     expect(d.alarm).toBeNull();
+  });
+
+  it("re-arms with backoff when a turn errors on infrastructure", async () => {
+    let down = true;
+    const d = testDo({ batchMs: "0", failSpendReserve: () => down });
+    expect(await d.postEvent(inbound("evt_alarm_retry"))).toBe("queued");
+    d.clearAlarm();
+    const before = Date.now();
+    expect(await d.postTurn()).toBe("retry");
+    expect(d.alarm).not.toBeNull();
+    expect(d.alarm! - before).toBeGreaterThanOrEqual(4000);
+    expect(d.alarm! - before).toBeLessThanOrEqual(6000);
+    down = false;
+    // The ledger answers but refuses the budget (stub shape): the turn
+    // reaches its final limited outcome instead of retrying forever.
+    expect(await d.postTurn()).toBe("ran");
   });
 });

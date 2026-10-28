@@ -11,7 +11,7 @@ permissions:
   contents: read
 jobs:
   deploy:
-    if: github.ref_name == 'main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     defaults:
       run:

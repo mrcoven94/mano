@@ -47,6 +47,38 @@ describe("GlobalLedger reservations", () => {
   });
 });
 
+describe("settlement idempotency", () => {
+  const NOW = Date.parse("2026-10-28T12:00:00Z");
+
+  it("counts a repeated spend settlement once", () => {
+    const ledger = new GlobalLedger(new MemoryGlobalStore(), () => NOW, 5);
+    ledger.reserve("t:1", 4);
+    ledger.settle("t:1", 1.5);
+    ledger.settle("t:1", 1.5);
+    expect(ledger.spent().spentUsd).toBeCloseTo(1.5);
+  });
+
+  it("releases a hold without recording spend", () => {
+    const ledger = new GlobalLedger(new MemoryGlobalStore(), () => NOW, 5);
+    ledger.reserve("t:1", 4.5);
+    expect(ledger.reserve("t:2", 1).allowed).toBe(false);
+    ledger.release("t:1");
+    expect(ledger.reserve("t:2", 1).allowed).toBe(true);
+    expect(ledger.spent().spentUsd).toBe(0);
+  });
+
+  it("counts a repeated byte settlement once and releases byte holds", () => {
+    const ledger = new GlobalLedger(new MemoryGlobalStore(), () => NOW, 5, 100);
+    ledger.byteReserve("f:1", 60);
+    ledger.byteSettle("f:1", 60);
+    ledger.byteSettle("f:1", 60);
+    expect(ledger.byteReserve("f:2", 41).allowed).toBe(false);
+    expect(ledger.byteReserve("f:2", 40).allowed).toBe(true);
+    ledger.byteRelease("f:2");
+    expect(ledger.byteReserve("f:3", 40).allowed).toBe(true);
+  });
+});
+
 describe("sweepExpiredFiles", () => {
   it("deletes files older than 30 days and keeps the rest", async () => {
     const { MemoryFileStore } = await import("../src/files.js");

@@ -21,6 +21,8 @@ export interface OutboundRow {
   // The bubble text, so an uncertain send can replay the exact same body
   // under its key later. Stored, never logged.
   text: string;
+  // Failed attempts to resolve this send. Drives retry backoff.
+  attempts: number;
   state: OutboundState;
   code: string | null;
   chatId: string | null;
@@ -69,6 +71,9 @@ export interface PersistedTurn {
   answerJson: string | null;
   costUsd: number | null;
   costSettled: boolean;
+  // Infrastructure failures while running this turn. Drives retry
+  // backoff; the turn retries until it reaches a final outcome.
+  attempts: number;
   state: "started" | "finished";
   createdAtMs: number;
   updatedAtMs: number;
@@ -141,6 +146,7 @@ export interface ConversationStore {
   answerApproval(id: string, decision: "yes" | "no"): void;
   startTurn(row: PersistedTurn): void;
   unfinishedTurn(): PersistedTurn | null;
+  bumpTurnAttempt(turn: number, atMs: number): void;
   updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number): void;
   markTurnSettled(turn: number, atMs: number): void;
   finishTurn(turn: number, atMs: number): void;
@@ -259,6 +265,11 @@ export class MemoryStore implements ConversationStore {
   markTurnSettled(turn: number, atMs: number): void {
     const row = this.turnRows.get(turn);
     if (row) this.turnRows.set(turn, { ...row, costSettled: true, updatedAtMs: atMs });
+  }
+
+  bumpTurnAttempt(turn: number, atMs: number): void {
+    const row = this.turnRows.get(turn);
+    if (row) this.turnRows.set(turn, { ...row, attempts: row.attempts + 1, updatedAtMs: atMs });
   }
 
   finishTurn(turn: number, atMs: number): void {

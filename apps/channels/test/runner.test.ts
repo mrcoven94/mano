@@ -35,6 +35,34 @@ describe("turn batching", () => {
     expect(await h.runner.runDueTurn()).toBe("idle");
   });
 
+  it("answers over-cap input across turns, each input exactly once", async () => {
+    const h = makeHarness({ replies: ["First answer.", "Second answer."] });
+    const a = "a".repeat(4000);
+    const b = "b".repeat(4000);
+    await h.runner.handleEvent(inboundEvent({ id: "evt_a", text: a, occurredAtMs: h.now }), "webhook");
+    await h.runner.handleEvent(inboundEvent({ id: "evt_b", text: b, occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h);
+    const prompts = (h.responder as unknown as { prompts: Array<{ texts: string[] }> }).prompts;
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0].texts).toEqual([a]);
+    expect(prompts[1].texts).toEqual([b]);
+    expect(h.store.meta().turn).toBe(2);
+    expect(h.store.pending()).toHaveLength(0);
+  });
+
+  it("carries the remainder of one oversized message into the next turn", async () => {
+    const h = makeHarness({ replies: ["Answer one.", "Answer two."] });
+    const big = "x".repeat(6000);
+    await h.runner.handleEvent(inboundEvent({ id: "evt_big", text: big, occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h);
+    const prompts = (h.responder as unknown as { prompts: Array<{ texts: string[] }> }).prompts;
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0].texts[0]).toHaveLength(4000);
+    expect(prompts[1].texts[0]).toHaveLength(2000);
+    expect(prompts[0].texts[0] + prompts[1].texts[0]).toBe(big);
+    expect(h.store.pending()).toHaveLength(0);
+  });
+
   it("runs one turn at a time, in order", async () => {
     let release!: (text: string) => void;
     const gate = new Promise<string>((resolve) => {
@@ -46,7 +74,7 @@ describe("turn batching", () => {
         maxAttempts: 1,
         respond: async () => {
           const text = await gate;
-          return { bubbles: [text], inputChars: 10, outputChars: text.length, model: "stand-in", attempts: 1 };
+          return { text, bubbles: [text], inputChars: 10, outputChars: text.length, model: "stand-in", attempts: 1 };
         },
       },
     });
@@ -134,6 +162,7 @@ describe("interrupted turns", () => {
       answerJson: opts.answerJson ?? null,
       costUsd: opts.costUsd ?? null,
       costSettled: opts.costSettled ?? false,
+      attempts: 0,
       state: "started",
       createdAtMs: h.now - 4000,
       updatedAtMs: h.now - 4000,
@@ -164,7 +193,7 @@ describe("interrupted turns", () => {
       costSettled: true,
     });
     h.store.addOutbound({
-      key: introKey, turn: 5, part: 0, tag: "", text: INTRO_BUBBLE, state: "sent", code: null,
+      key: introKey, turn: 5, part: 0, tag: "", text: INTRO_BUBBLE, attempts: 0, state: "sent", code: null,
       chatId: TEST_CHAT, messageId: "msg_intro_5", createdAtMs: h.now, updatedAtMs: h.now,
     });
     expect(await h.runner.runDueTurn()).toBe("ran");
@@ -220,7 +249,7 @@ describe("delete", () => {
         maxAttempts: 1,
         respond: async () => {
           await gate;
-          return { bubbles: ["Late."], inputChars: 10, outputChars: 5, model: "stand-in", attempts: 1 };
+          return { text: "Late.", bubbles: ["Late."], inputChars: 10, outputChars: 5, model: "stand-in", attempts: 1 };
         },
       },
     });
@@ -254,8 +283,10 @@ describe("delete", () => {
       spend: {
         reserve: async (key: string, worst: number) => h.ledger.reserve(key, worst),
         settle: async (key: string, actual: number) => void h.ledger.settle(key, actual),
+        release: async (key: string) => void h.ledger.release(key),
         byteReserve: async (key: string, bytes: number) => h.ledger.byteReserve(key, bytes),
         byteSettle: async (key: string, actual: number) => void h.ledger.byteSettle(key, actual),
+        byteRelease: async (key: string) => void h.ledger.byteRelease(key),
       },
       logger: h.logger,
       nowMs: () => h.now,
@@ -403,6 +434,78 @@ describe("send reconcile", () => {
   });
 });
 
+describe("infrastructure retries", () => {
+  it("keeps the turn and its input when settlement fails, then resumes", async () => {
+    const h = makeHarness({ replies: ["Answer."] });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hi.", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    const realSettle = h.ledger.settle.bind(h.ledger);
+    let fails = 1;
+    h.ledger.settle = (key: string, actual: number) => {
+      if (fails > 0) {
+        fails -= 1;
+        throw new Error("ledger down");
+      }
+      return realSettle(key, actual);
+    };
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(h.store.pending()).toHaveLength(1);
+    expect(h.store.unfinishedTurn()).toMatchObject({ turn: 1, attempts: 1 });
+    expect(h.channel.sends).toHaveLength(0);
+    expect(h.lines.join("\n")).toContain("turn_infra_error");
+    expect(h.runner.retryAfterMs()).toBe(5000);
+    // The hold released: other conversations can still reserve.
+    expect(h.ledger.reserve("probe:1", 5).allowed).toBe(true);
+    h.ledger.release("probe:1");
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    expect(h.channel.sends.map((s) => s.text)).toContain("Answer.");
+    expect(h.store.pending()).toHaveLength(0);
+    expect(h.store.unfinishedTurn()).toBeNull();
+  });
+
+  it("retries when the reservation itself fails, without calling the model", async () => {
+    const h = makeHarness({ replies: ["Answer."] });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hi.", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    const realReserve = h.ledger.reserve.bind(h.ledger);
+    let fails = 1;
+    h.ledger.reserve = (key: string, worst: number) => {
+      if (fails > 0) {
+        fails -= 1;
+        throw new Error("ledger down");
+      }
+      return realReserve(key, worst);
+    };
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(h.store.pending()).toHaveLength(1);
+    expect((h.responder as unknown as { prompts: unknown[] }).prompts).toHaveLength(0);
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    expect(h.channel.sends.map((s) => s.text)).toContain("Answer.");
+  });
+
+  it("retries uncertain replies on later alarms with no new input", async () => {
+    const h = makeHarness({ replies: ["Answer."] });
+    let down = true;
+    const inner = h.channel.send.bind(h.channel);
+    h.channel.send = async (input) => {
+      if (down) throw new ChannelUncertain("Provider down in test.", 1);
+      return inner(input);
+    };
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hi.", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    const firstDelay = h.runner.retryAfterMs();
+    expect(firstDelay).toBe(5000);
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(h.runner.retryAfterMs()).toBeGreaterThan(firstDelay);
+    down = false;
+    expect(await h.runner.runDueTurn()).toBe("idle");
+    expect(h.channel.sends).toHaveLength(2);
+    expect(new Set(h.channel.sends.map((s) => s.idempotencyKey)).size).toBe(2);
+    expect(h.runner.needsRetry()).toBe(false);
+  });
+});
+
 describe("refusals", () => {
   it("records a 403 once and never retries it", async () => {
     const h = makeHarness({ replies: ["Answer."] });
@@ -518,7 +621,7 @@ describe("limits", () => {
       responder: {
         name: "metered",
         maxAttempts: 1,
-        respond: async () => ({ bubbles: ["Answer."], inputChars: 1000, outputChars: 1000, model: "muse-spark-1.3", attempts: 2 }),
+        respond: async () => ({ text: "Answer.", bubbles: ["Answer."], inputChars: 1000, outputChars: 1000, model: "muse-spark-1.3", attempts: 2 }),
       },
       config: { usdPer1kChars: 0.01 },
     });

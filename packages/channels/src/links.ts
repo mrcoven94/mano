@@ -1,6 +1,7 @@
 // Links are checked before use. Every host resolves over DNS-over-HTTPS:
 // an answer of 0.0.0.0 means blocked, and a lookup error also blocks.
-// Anything shown to a person checks against the family filter.
+// Anything shown to a person checks against both the family and the
+// security filters.
 
 export const SECURITY_DOH_BASE = "https://security.cloudflare-dns.com/dns-query";
 export const FAMILY_DOH_BASE = "https://family.cloudflare-dns.com/dns-query";
@@ -13,7 +14,12 @@ export interface LinkCheckResult {
   host: string;
 }
 
-const LINK_PATTERN = /\bhttps?:\/\/[^\s<>"')\]]+/g;
+// Anything Messages would render tappable: full URLs in any scheme
+// case, www. hosts, and bare domains with a dotted alpha TLD. Numbers
+// (1.2), single-letter trails (Section 4.b) and the domain inside an
+// email address do not match.
+const LINK_PATTERN =
+  /\bhttps?:\/\/[^\s<>"')\]]+|\b(?<!@)(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?::\d{1,5})?(?:\/[^\s<>"')\]]*)?/gi;
 const TRAILING_PUNCT = /[.,;:!?)\]]+$/;
 
 export function extractLinks(text: string): string[] {
@@ -48,7 +54,8 @@ export class LinkChecker {
   async checkUrl(url: string, family = false): Promise<LinkCheckResult> {
     let host: string;
     try {
-      const parsed = new URL(url);
+      const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `https://${url}`;
+      const parsed = new URL(candidate);
       if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
         return { ok: false, reason: "bad_url", host: "" };
       }
@@ -63,26 +70,33 @@ export class LinkChecker {
   async checkHost(host: string, family = false): Promise<LinkCheckResult> {
     const normalized = host.toLowerCase();
     if (!normalized || normalized.includes(" ")) return { ok: false, reason: "bad_url", host: normalized };
+    // Person-visible hosts clear both filters; either one blocks.
+    const bases = family ? [this.familyBase, this.securityBase] : [this.securityBase];
+    for (const base of bases) {
+      const verdict = await this.lookup(base, normalized);
+      if (!verdict.ok) return verdict;
+    }
+    return { ok: true, reason: "clean", host: normalized };
+  }
+
+  private async lookup(base: string, host: string): Promise<LinkCheckResult> {
     try {
-      const base = family ? this.familyBase : this.securityBase;
-      const res = await this.fetchFn(`${base}?name=${encodeURIComponent(normalized)}&type=A`, {
+      const res = await this.fetchFn(`${base}?name=${encodeURIComponent(host)}&type=A`, {
         signal: AbortSignal.timeout(this.timeoutMs),
         headers: { accept: "application/dns-json" },
       });
-      if (!res.ok) return { ok: false, reason: "lookup_error", host: normalized };
+      if (!res.ok) return { ok: false, reason: "lookup_error", host };
       const data = (await res.json().catch(() => null)) as {
         Status?: unknown;
         Answer?: Array<{ data?: unknown }> | unknown;
       } | null;
       if (!data || data.Status !== 0 || !Array.isArray(data.Answer) || data.Answer.length === 0) {
-        return { ok: false, reason: "lookup_error", host: normalized };
+        return { ok: false, reason: "lookup_error", host };
       }
       const blocked = data.Answer.some((a) => typeof a?.data === "string" && a.data.trim() === "0.0.0.0");
-      return blocked
-        ? { ok: false, reason: "blocked", host: normalized }
-        : { ok: true, reason: "clean", host: normalized };
+      return blocked ? { ok: false, reason: "blocked", host } : { ok: true, reason: "clean", host };
     } catch {
-      return { ok: false, reason: "lookup_error", host: normalized };
+      return { ok: false, reason: "lookup_error", host };
     }
   }
 }

@@ -36,7 +36,8 @@ describe("deploy-channels workflow", () => {
   });
 
   it("runs only on main, including manual dispatches", () => {
-    expect(yaml).toContain("if: github.ref_name == 'main'");
+    expect(yaml).toContain("if: github.ref == 'refs/heads/main'");
+    expect(yaml).not.toContain("github.ref_name");
   });
 
   it("names the same text-number variable the site reads", () => {

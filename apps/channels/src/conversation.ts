@@ -48,6 +48,13 @@ class StateSpendLedger implements SpendLedger {
     });
   }
 
+  async release(key: string): Promise<void> {
+    await this.stub.fetch("https://state/internal/spend-release", {
+      method: "POST",
+      body: JSON.stringify({ key }),
+    });
+  }
+
   async byteReserve(key: string, bytes: number): Promise<{ allowed: boolean; bytesUsed: number }> {
     const res = await this.stub.fetch("https://state/internal/bytes-reserve", {
       method: "POST",
@@ -60,6 +67,13 @@ class StateSpendLedger implements SpendLedger {
     await this.stub.fetch("https://state/internal/bytes-settle", {
       method: "POST",
       body: JSON.stringify({ key, actualBytes }),
+    });
+  }
+
+  async byteRelease(key: string): Promise<void> {
+    await this.stub.fetch("https://state/internal/bytes-release", {
+      method: "POST",
+      body: JSON.stringify({ key }),
     });
   }
 }
@@ -101,8 +115,12 @@ export class ConversationDO implements DurableObject {
     this.logger = createLogger();
   }
 
-  private runTurnSerialized(handleHash: string): Promise<import("./runner.js").TurnResult> {
-    const next = this.turnChain.then(() => this.runner(handleHash).runner.runDueTurn());
+  private runTurnSerialized(handleHash: string): Promise<{ result: import("./runner.js").TurnResult; retryAfterMs: number }> {
+    const next = this.turnChain.then(async () => {
+      const { runner } = this.runner(handleHash);
+      const result = await runner.runDueTurn();
+      return { result, retryAfterMs: runner.retryAfterMs() };
+    });
     this.turnChain = next.then(
       () => undefined,
       () => undefined,
@@ -171,14 +189,15 @@ export class ConversationDO implements DurableObject {
     if (request.method === "POST" && url.pathname === "/internal/turn") {
       const body = (await request.json().catch(() => null)) as { handleHash?: unknown } | null;
       if (!body || typeof body.handleHash !== "string") return new Response("Bad turn.", { status: 400 });
-      const result = await this.runTurnSerialized(body.handleHash);
+      const { result, retryAfterMs } = await this.runTurnSerialized(body.handleHash);
+      const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
       if (result === "waiting") {
-        const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
         await this.ctx.storage.setAlarm(Date.now() + batchMs);
+      } else if (result === "retry") {
+        await this.ctx.storage.setAlarm(Date.now() + retryAfterMs);
       } else if (result === "ran") {
         const store = new SqlConversationStore(this.ctx.storage.sql);
         if (store.pending().length > 0) {
-          const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
           await this.ctx.storage.setAlarm(Date.now() + batchMs);
         }
       }
@@ -236,9 +255,11 @@ export class ConversationDO implements DurableObject {
   }
 
   async alarm(): Promise<void> {
-    const result = await this.runTurnSerialized(this.ctx.id.name ?? this.ctx.id.toString());
-    if (result === "waiting" || (result === "ran" && new SqlConversationStore(this.ctx.storage.sql).pending().length > 0)) {
-      const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
+    const { result, retryAfterMs } = await this.runTurnSerialized(this.ctx.id.name ?? this.ctx.id.toString());
+    const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
+    if (result === "retry") {
+      await this.ctx.storage.setAlarm(Date.now() + retryAfterMs);
+    } else if (result === "waiting" || (result === "ran" && new SqlConversationStore(this.ctx.storage.sql).pending().length > 0)) {
       await this.ctx.storage.setAlarm(Date.now() + batchMs);
     }
   }

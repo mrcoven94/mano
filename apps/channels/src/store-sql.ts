@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS outbounds (
   part INTEGER NOT NULL,
   tag TEXT NOT NULL,
   bubble_text TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL,
   code TEXT,
   chat_id TEXT,
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS turns (
   answer_json TEXT,
   cost_usd REAL,
   cost_settled INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
@@ -123,12 +125,20 @@ export class SqlConversationStore implements ConversationStore {
   constructor(sql: SqlStorage) {
     this.sql = sql;
     this.sql.exec(SCHEMA);
-    // Pre-launch migration for dev databases created before uncertain
-    // sends stored their bubble text.
-    try {
-      this.sql.exec("ALTER TABLE outbounds ADD COLUMN bubble_text TEXT NOT NULL DEFAULT ''");
-    } catch {
-      // The column already exists.
+    // Pre-launch migrations for dev databases created before the
+    // review fixes added columns. Nothing has been deployed, so a plain
+    // ALTER per column is enough; the first schema change after launch
+    // gets a real migration.
+    for (const ddl of [
+      "ALTER TABLE outbounds ADD COLUMN bubble_text TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE outbounds ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE turns ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+    ]) {
+      try {
+        this.sql.exec(ddl);
+      } catch {
+        // The column already exists.
+      }
     }
     const existing = firstRow(this.sql.exec("SELECT id FROM meta WHERE id = 1"));
     if (!existing) {
@@ -235,12 +245,13 @@ export class SqlConversationStore implements ConversationStore {
 
   addOutbound(row: OutboundRow): void {
     this.sql.exec(
-      "INSERT OR IGNORE INTO outbounds (idem_key, turn, part, tag, bubble_text, state, code, chat_id, message_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO outbounds (idem_key, turn, part, tag, bubble_text, attempts, state, code, chat_id, message_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       row.key,
       row.turn,
       row.part,
       row.tag,
       row.text,
+      row.attempts,
       row.state,
       row.code,
       row.chatId,
@@ -257,6 +268,7 @@ export class SqlConversationStore implements ConversationStore {
       part: number;
       tag: string;
       bubble_text: string;
+      attempts: number;
       state: OutboundRow["state"];
       code: string | null;
       chat_id: string | null;
@@ -271,6 +283,7 @@ export class SqlConversationStore implements ConversationStore {
       part: row.part,
       tag: row.tag,
       text: row.bubble_text,
+      attempts: row.attempts,
       state: row.state,
       code: row.code,
       chatId: row.chat_id,
@@ -295,6 +308,7 @@ export class SqlConversationStore implements ConversationStore {
       turn: "turn",
       part: "part",
       tag: "tag",
+      attempts: "attempts",
       state: "state",
       code: "code",
       chatId: "chat_id",
@@ -321,6 +335,7 @@ export class SqlConversationStore implements ConversationStore {
       part: number;
       tag: string;
       bubble_text: string;
+      attempts: number;
       state: OutboundRow["state"];
       code: string | null;
       chat_id: string | null;
@@ -333,6 +348,7 @@ export class SqlConversationStore implements ConversationStore {
       part: r.part,
       tag: r.tag,
       text: r.bubble_text,
+      attempts: r.attempts,
       state: r.state,
       code: r.code,
       chatId: r.chat_id,
@@ -415,7 +431,7 @@ export class SqlConversationStore implements ConversationStore {
 
   startTurn(row: PersistedTurn): void {
     this.sql.exec(
-      "INSERT OR REPLACE INTO turns (turn, items_json, chat_id, handle_to, answer_json, cost_usd, cost_settled, state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO turns (turn, items_json, chat_id, handle_to, answer_json, cost_usd, cost_settled, attempts, state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       row.turn,
       row.itemsJson,
       row.chatId,
@@ -423,6 +439,7 @@ export class SqlConversationStore implements ConversationStore {
       row.answerJson,
       row.costUsd,
       row.costSettled ? 1 : 0,
+      row.attempts,
       row.state,
       row.createdAtMs,
       row.updatedAtMs,
@@ -438,6 +455,7 @@ export class SqlConversationStore implements ConversationStore {
       answer_json: string | null;
       cost_usd: number | null;
       cost_settled: number;
+      attempts: number;
       state: PersistedTurn["state"];
       created_at_ms: number;
       updated_at_ms: number;
@@ -451,6 +469,7 @@ export class SqlConversationStore implements ConversationStore {
       answerJson: row.answer_json,
       costUsd: row.cost_usd,
       costSettled: row.cost_settled === 1,
+      attempts: row.attempts,
       state: row.state,
       createdAtMs: row.created_at_ms,
       updatedAtMs: row.updated_at_ms,
@@ -463,6 +482,10 @@ export class SqlConversationStore implements ConversationStore {
 
   markTurnSettled(turn: number, atMs: number): void {
     this.sql.exec("UPDATE turns SET cost_settled = 1, updated_at_ms = ? WHERE turn = ?", atMs, turn);
+  }
+
+  bumpTurnAttempt(turn: number, atMs: number): void {
+    this.sql.exec("UPDATE turns SET attempts = attempts + 1, updated_at_ms = ? WHERE turn = ?", atMs, turn);
   }
 
   finishTurn(turn: number, atMs: number): void {
