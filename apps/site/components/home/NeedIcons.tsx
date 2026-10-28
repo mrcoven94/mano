@@ -104,6 +104,46 @@ const ICONS: Record<string, React.ReactNode> = {
       <Face x={32} y={37} />
     </>
   ),
+  phone: (
+    <>
+      <rect {...S} fill="#DCE3FB" x="16" y="4" width="32" height="56" rx="8" />
+      <path {...S} fill="#FFFDF9" d="M23 16H41A3 3 0 0 1 44 19V27A3 3 0 0 1 41 30H30L25 34V30H23A3 3 0 0 1 20 27V19A3 3 0 0 1 23 16Z" />
+      <Face x={32} y={42} w={10} />
+    </>
+  ),
+  app: (
+    <>
+      <rect {...S} fill="#FFB26B" x="8" y="8" width="48" height="48" rx="15" />
+      <Face x={32} y={30} />
+    </>
+  ),
+  laptop: (
+    <>
+      <rect {...S} fill="#E4E0F5" x="12" y="12" width="40" height="30" rx="5" />
+      <path {...S} fill="#FFFDF9" d="M5 50H59L55 56H9Z" />
+      <Face x={32} y={25} />
+    </>
+  ),
+  code: (
+    <>
+      <rect {...S} fill="#121212" x="6" y="10" width="52" height="44" rx="9" />
+      <path stroke="#FFE14A" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" fill="none" d="M22 25L15 32L22 39M42 25L49 32L42 39M35 22L29 42" />
+    </>
+  ),
+  pencil: (
+    <g transform="rotate(-40 32 32)">
+      <rect {...S} fill="#FFE14A" x="12" y="22" width="34" height="20" rx="3" />
+      <path {...S} fill="#F7DFC3" d="M46 22L58 32L46 42Z" />
+      <rect {...S} fill="#FF8F6B" x="5" y="22" width="9" height="20" rx="3" />
+      <Face x={29} y={30} w={9} />
+    </g>
+  ),
+  check: (
+    <>
+      <circle {...S} fill="#CFE3D6" cx="32" cy="32" r="24" />
+      <path {...S} fill="none" strokeWidth="4" d="M21 33L29 41L44 24" />
+    </>
+  ),
   now: (
     <>
       <path {...S} fill="none" d="M5 14L10 17M59 14L54 17M32 3V8" />

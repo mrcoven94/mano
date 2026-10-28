@@ -25,14 +25,15 @@ p{margin:0;color:var(--muted)}
 section{padding:128px 0}
 
 /* buttons, pills */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:46px;padding:0 22px;border-radius:12px;font-weight:500;font-size:.98rem;text-decoration:none;border:1px solid transparent;cursor:pointer;transition:background .15s,border-color .15s,transform .15s;white-space:nowrap}
-.btn:active{transform:scale(.98)}
-.btn-primary{background:var(--text);color:var(--ink)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:46px;padding:0 22px;border-radius:999px;font-weight:500;font-size:.98rem;text-decoration:none;border:1px solid transparent;cursor:pointer;transition:background .15s,border-color .15s,transform .15s;white-space:nowrap}
+.btn:hover{transform:translateY(-2px)}
+.btn:active{transform:translateY(1px)}
+.btn-primary{background:var(--text);color:var(--ink);box-shadow:0 1px 0 rgba(255,255,255,.12) inset,0 10px 20px -10px rgba(18,18,18,.55)}
 .btn-primary:hover{background:#2B2B2B}
-.btn-ghost{background:#fff;color:var(--text);border-color:var(--border2)}
-.btn-ghost:hover{background:var(--fill2)}
+.btn-ghost{background:var(--bg2);color:var(--text);border-color:transparent}
+.btn-ghost:hover{background:var(--bg3)}
 .btn-lg{min-height:54px;padding:0 28px;font-size:1.02rem}
-.btn-sm{min-height:40px;padding:0 16px;font-size:.92rem;border-radius:10px}
+.btn-sm{min-height:40px;padding:0 16px;font-size:.92rem;border-radius:999px}
 .btn-row{display:flex;gap:10px;flex-wrap:wrap}
 .note{font-size:.8rem;color:var(--faint)}
 
@@ -66,13 +67,14 @@ section{padding:128px 0}
 
 /* faq */
 .faq-grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:64px;align-items:start}
-.faq-list{}
-details.faq{}
-details.faq summary{cursor:pointer;padding:22px 0;font-weight:550;font-size:1.02rem;list-style:none;display:flex;justify-content:space-between;gap:20px;align-items:center;color:var(--text)}
+.faq-list{display:grid;gap:10px}
+details.faq{background:var(--bg2);border-radius:18px;padding:0 22px;transition:background .2s,box-shadow .2s}
+details.faq[open]{background:#fff;box-shadow:0 1px 2px rgba(18,18,18,.06),0 14px 30px -18px rgba(18,18,18,.3)}
+details.faq summary{cursor:pointer;padding:20px 0;font-weight:550;font-size:1.02rem;list-style:none;display:flex;justify-content:space-between;gap:20px;align-items:center;color:var(--text)}
 details.faq summary::-webkit-details-marker{display:none}
-details.faq summary::after{content:"";width:9px;height:9px;flex:none;transform:rotate(45deg) translateY(-3px);transition:transform .2s}
-details.faq[open] summary::after{transform:rotate(225deg) translateY(-2px)}
-details.faq p{padding:0 0 24px;max-width:640px;font-size:.98rem}
+details.faq summary::after{content:"+";flex:none;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:#fff;font-size:1.3rem;font-weight:500;line-height:1;color:var(--text);transition:transform .25s cubic-bezier(.3,1.6,.5,1),background .2s}
+details.faq[open] summary::after{transform:rotate(45deg);background:var(--hl)}
+details.faq p{padding:0 0 22px;max-width:640px;font-size:.98rem}
 
 /* footer */
 .site-footer{padding:72px 0 40px;margin-top:0}
@@ -104,3 +106,12 @@ details.faq p{padding:0 0 24px;max-width:640px;font-size:.98rem}
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;animation-delay:0s!important;transition-duration:.01ms!important;scroll-behavior:auto!important}
 }
 
+
+.faq-side{position:sticky;top:100px}
+.faq-ask{display:flex;align-items:center;gap:14px;margin-top:32px;max-width:380px;padding:18px;border-radius:22px;background:var(--pen-soft);text-decoration:none;transition:transform .3s cubic-bezier(.3,1.6,.5,1)}
+.faq-ask:hover{transform:translateY(-3px) rotate(-1deg)}
+.faq-ask svg{flex:none;transform:rotate(-8deg)}
+.faq-ask b{display:block;font-weight:600;color:var(--text)}
+.faq-ask small{display:block;margin-top:2px;font-size:.9rem;color:var(--muted);line-height:1.4}
+@media (max-width:1080px){.faq-side{position:static}}
+.dv-stage .btn-ghost,.h-open .btn-ghost,.h-share .btn-ghost,.h-vault .btn-ghost,.t-steps .btn-ghost,.t-vf .btn-ghost{background:#fff}

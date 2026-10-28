@@ -6,8 +6,8 @@
 
 /* hero */
 .t-hero{padding:72px 0 96px}
-.t-hero-head{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:56px;align-items:end}
-.t-hero h1{font-size:clamp(2.9rem,6.6vw,5.8rem);letter-spacing:-.02em;line-height:.98;max-width:12ch}
+.t-hero-head{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:64px;align-items:center}
+.t-hero h1{font-size:clamp(2.5rem,4.8vw,4.3rem);letter-spacing:-.02em;line-height:1.02;max-width:14ch}
 .t-hero .h-lede{margin-top:0}
 .t-hero .h-ctas{justify-content:flex-start}
 
@@ -163,7 +163,9 @@
 
 /* pricing strip */
 .team section.t-seat-wrap{padding:0 0 96px}
-.t-seat{display:flex;justify-content:space-between;align-items:center;gap:32px;flex-wrap:wrap;border-radius:20px;padding:36px 40px;background:var(--bg2)}
+.t-seat{display:flex;align-items:center;gap:28px;flex-wrap:wrap;border-radius:28px;padding:36px 40px;background:var(--pen-soft)}
+.t-seat-copy{flex:1;min-width:260px}
+.t-seat-mascot{flex:none;transform:rotate(-8deg)}
 .t-seat-h{font-size:clamp(1.8rem,3vw,2.5rem);margin-top:12px}
 .t-seat p:not(.sc-label){margin-top:10px}
 .t-steps{background:var(--bg2)}
@@ -233,7 +235,7 @@
 .t-pulse{animation:pulse 2.2s ease-out 1.2s infinite}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(36,67,214,.45)}70%,100%{box-shadow:0 0 0 10px rgba(36,67,214,0)}}
 .oc>div:last-child,.po-phone{width:100%;max-width:400px;justify-self:center}
-.t-steps+.t-seat-wrap .t-seat{background:#fff}
+.t-steps+.t-seat-wrap .t-seat{background:var(--pen-soft)}
 @media (prefers-reduced-motion:reduce){.t-pulse,.t-sticker{animation:none}}
 
 /* verified: the case arrives with its documents, each fact showing its source */
@@ -320,3 +322,5 @@
 .t-report-rows span{color:var(--muted)}
 .t-report-rows span:last-child{text-align:right;color:var(--text);font-weight:500}
 @media (max-width:720px){.t-report{grid-template-columns:repeat(2,minmax(0,1fr))}.t-report-rows li{grid-template-columns:1fr auto}.t-report-rows li span:nth-child(2){display:none}}
+
+.share-card>.nd-icon{margin:0}

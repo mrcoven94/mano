@@ -2,6 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import InView from "@/components/InView";
 import Mascot from "@/components/Mascot";
+import { NeedIcon } from "@/components/home/NeedIcons";
 
 /* Building blocks for the offices, nonprofits and partners pages, in the home page's paper and ink,
    with Mano's waving hand wherever Mano speaks. */
@@ -40,7 +41,16 @@ export function Stage({ id, label, hint, children }: { id?: string; label: strin
   );
 }
 
-export function Steps({ id, title, art, artAlt, items }: { id: string; title: string; art: string; artAlt: string; items: [step: string, card: React.ReactNode][] }) {
+function Arrow() {
+  return (
+    <svg viewBox="0 0 60 40" width="60" height="40">
+      <path d="M4 26C18 8 36 6 52 18" fill="none" stroke="#121212" strokeWidth="2.6" strokeLinecap="round" />
+      <path d="M44 12L53 19L43 24" fill="none" stroke="#121212" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function Steps({ id, title, art, artAlt, items }: { id: string; title: string; art: string; artAlt: string; items: [step: string, card: React.ReactNode, icon: string][] }) {
   return (
     <section className="t-steps" aria-labelledby={`${id}-h`} id={id}>
       <div className="wrap">
@@ -51,12 +61,13 @@ export function Steps({ id, title, art, artAlt, items }: { id: string; title: st
           <Image className="t-art" src={art} width={320} height={240} alt={artAlt} unoptimized />
         </div>
         <InView as="ol" className="share-flow" threshold={0.3}>
-          {items.map(([step, card], n) => (
+          {items.map(([step, card, icon], n) => [
+            n > 0 && <li key={`a${n}`} className="share-arrow" aria-hidden="true"><Arrow /></li>,
             <li key={step} className="share-step rv" style={d(0.1 + n * 0.4)}>
               <p className="share-n">{step}</p>
-              <div className="share-card">{card}</div>
-            </li>
-          ))}
+              <div className="share-card"><NeedIcon k={icon} size={40} />{card}</div>
+            </li>,
+          ])}
         </InView>
       </div>
     </section>
@@ -108,7 +119,8 @@ export function Seat({ title, text, href }: { title: string; text: string; href:
     <section className="t-seat-wrap" aria-label="Pricing">
       <div className="wrap">
         <div className="t-seat">
-          <div><p className="sc-label">Pricing</p><h2 className="t-seat-h">{title}</h2><p>{text}</p></div>
+          <Mascot tile wave tone="orange" size={72} className="t-seat-mascot" />
+          <div className="t-seat-copy"><p className="sc-label">Pricing</p><h2 className="t-seat-h">{title}</h2><p>{text}</p></div>
           <a className="btn btn-primary" href={href}>Talk to us</a>
         </div>
       </div>

@@ -89,21 +89,21 @@ export default function Government() {
               <p className="share-big">Sample County Human Services</p>
               <p className="share-small">Programs, hours and the documents you ask for, written from public sources. It cannot message residents, request records or send notices.</p>
             </>
-          )],
+          ), "programs"],
           ["Claim it", (
             <>
               <p className="sc-label">Claimed Oct 20</p>
               <p className="share-big">Office agent, 12 staff seats</p>
               <p className="share-small">Your profile becomes an agent. Each caseworker gets their own, with your policies and programs.</p>
             </>
-          )],
+          ), "housing"],
           ["Give it one policy", (
             <>
               <p className="sc-label">Reviewed by staff</p>
               <p className="share-big">Food benefits renewal is live</p>
               <p className="share-small">Mano drafts the questions, proof list and notices. Your staff review them before they serve anyone.</p>
             </>
-          )],
+          ), "clipboard"],
         ]}
       />
 

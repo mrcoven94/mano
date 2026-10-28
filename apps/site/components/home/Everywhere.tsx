@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Mascot from "@/components/Mascot";
+import { NeedIcon } from "./NeedIcons";
 import { REPO_URL, SMS_HREF, SMS_NUMBER } from "@/lib/site";
 
 /* One Mano on every device. Each tab continues the same conversation, then the last one hands over the code. */
@@ -10,10 +11,10 @@ const EARLY = "mailto:hello@withmano.com?subject=Mano%20early%20access";
 const INSTALL = `git clone ${REPO_URL}\ncd mano && pnpm install\npnpm check`;
 
 const TABS = [
-  { key: "text", label: "Text or iMessage", title: "No app needed.", text: "Any phone that can text works. Send Mano a photo of a letter or ask a question, the same way you would text a friend." },
-  { key: "app", label: "iPhone and Android", title: "Everything in one place.", text: "The app shows what is ready to send, what is due next and every letter Mano has read for you." },
-  { key: "web", label: "Computer", title: "Pick up where you left off.", text: "Open Mano in any browser to read long forms on a bigger screen, print copies or upload a stack of documents." },
-  { key: "own", label: "Run your own", title: "Download the whole system.", text: "Mano is open source. An agency, nonprofit or developer can download it, read every line and run their own copy." },
+  { key: "text", icon: "phone", sub: "Any phone", label: "Text or iMessage", title: "No app needed.", text: "Any phone that can text works. Send Mano a photo of a letter or ask a question, the same way you would text a friend." },
+  { key: "app", icon: "app", sub: "Early access", label: "iPhone and Android", title: "Everything in one place.", text: "The app shows what is ready to send, what is due next and every letter Mano has read for you." },
+  { key: "web", icon: "laptop", sub: "Any browser", label: "Computer", title: "Pick up where you left off.", text: "Open Mano in any browser to read long forms on a bigger screen, print copies or upload a stack of documents." },
+  { key: "own", icon: "code", sub: "Open source", label: "Run your own", title: "Download the whole system.", text: "Mano is open source. An agency, nonprofit or developer can download it, read every line and run their own copy." },
 ] as const;
 
 type Key = (typeof TABS)[number]["key"];
@@ -26,12 +27,15 @@ function Bubble({ me, children, t }: { me?: boolean; children: React.ReactNode; 
   );
 }
 
-function Phone({ children, title }: { children: React.ReactNode; title: string }) {
+function Phone({ children, title, input = "iMessage" }: { children: React.ReactNode; title: string; input?: string }) {
   return (
     <div className="dv-phone">
-      <div className="dv-notch" />
-      <div className="dv-top"><Mascot tile tone="orange" size={26} /><span>{title}</span></div>
-      <div className="dv-screen">{children}</div>
+      <div className="dv-glass">
+        <div className="dv-status" aria-hidden="true"><span>9:41</span><span className="dv-island" /><span className="dv-sig"><i /><i /><i /><b /></span></div>
+        <div className="dv-top"><Mascot tile tone="orange" size={34} /><span>{title}</span></div>
+        <div className="dv-screen">{children}</div>
+        <div className="dv-input" aria-hidden="true"><span>{input}</span><i /></div>
+      </div>
     </div>
   );
 }
@@ -63,7 +67,10 @@ export default function Everywhere() {
 
       <div className="dv-tabs" role="tablist" aria-label="Ways to use Mano">
         {TABS.map((t) => (
-          <button key={t.key} role="tab" id={`dv-${t.key}`} aria-selected={k === t.key} aria-controls="dv-panel" className="dv-tab" onClick={() => setK(t.key)}>{t.label}</button>
+          <button key={t.key} role="tab" id={`dv-${t.key}`} aria-selected={k === t.key} aria-controls="dv-panel" className="dv-tab" onClick={() => setK(t.key)}>
+            <NeedIcon k={t.icon} size={40} />
+            <span><b>{t.label}</b><small>{t.sub}</small></span>
+          </button>
         ))}
       </div>
 
@@ -92,7 +99,7 @@ export default function Everywhere() {
             </Phone>
           )}
           {k === "app" && (
-            <Phone title="Good evening, Maria">
+            <Phone title="Good evening, Maria" input="Ask Mano anything">
               <div className="dv-card hot rv" style={d(0.1)}><small>Ready to send</small><b>Food benefits renewal</b><span className="dv-pill">Review</span></div>
               <div className="dv-card rv" style={d(0.35)}><small>Due next</small><b>Health coverage, Jan 31</b><span className="dv-meta">Mano starts Jan 6</span></div>
               <div className="dv-card rv" style={d(0.6)}><small>Mail</small><b>3 letters read this week</b><span className="dv-meta">1 scam blocked</span></div>

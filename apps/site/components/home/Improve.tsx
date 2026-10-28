@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Mascot from "@/components/Mascot";
+import { NeedIcon } from "./NeedIcons";
 import { REPO_URL } from "@/lib/site";
 
 /* Mano is always improving: four loops, each with a small demo. The test step lets a visitor open each kind of case. */
@@ -8,10 +9,10 @@ import { REPO_URL } from "@/lib/site";
 const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
 
 const STEPS = [
-  { key: "correct", title: "You correct it once", text: "Tell Mano something changed and it fixes every open application, then remembers for next time." },
-  { key: "learn", title: "It learns the form and you", text: "Each form Mano fills makes the next one faster. What it learns about your life stays private to you, and it uses that to see what you need next and start early." },
-  { key: "review", title: "A caseworker checks the work", text: "A real caseworker reviews sample packets. What they flag goes back into how Mano prepares the next one." },
-  { key: "test", title: "Every mistake becomes a test", text: "Mano is graded on paperwork it has never seen, next to a reminder app and a general AI agent with the same tools." },
+  { key: "correct", icon: "pencil", title: "You correct it once", text: "Tell Mano something changed and it fixes every open application, then remembers for next time." },
+  { key: "learn", icon: "clipboard", title: "It learns the form and you", text: "Each form Mano fills makes the next one faster. What it learns about your life stays private to you, and it uses that to see what you need next and start early." },
+  { key: "review", icon: "chat", title: "A caseworker checks the work", text: "A real caseworker reviews sample packets. What they flag goes back into how Mano prepares the next one." },
+  { key: "test", icon: "check", title: "Every mistake becomes a test", text: "Mano is graded on paperwork it has never seen, next to a reminder app and a general AI agent with the same tools." },
 ] as const;
 
 type Key = (typeof STEPS)[number]["key"];
@@ -44,7 +45,8 @@ export default function Improve() {
           {STEPS.map((s, n) => (
             <li key={s.key}>
               <button className="im-step" aria-pressed={k === s.key} onClick={() => setK(s.key)}>
-                                <span><strong>{s.title}</strong><span className="im-text">{s.text}</span></span>
+                                <NeedIcon k={s.icon} size={44} />
+                <span><strong>{s.title}</strong><span className="im-text">{s.text}</span></span>
               </button>
             </li>
           ))}

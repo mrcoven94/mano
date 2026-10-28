@@ -83,21 +83,21 @@ export default function Organizations() {
               <p className="share-big">6 case managers, 412 families</p>
               <p className="share-small">Each case manager gets an agent with their cases, deadlines and your program rules.</p>
             </>
-          )],
+          ), "clipboard"],
           ["Families connect", (
             <>
               <p className="sc-label">By text, in their own Mano</p>
               <p className="share-big">&ldquo;Share my renewal with Northside?&rdquo;</p>
               <p className="share-small">Each family chooses what to share with you. Families who don&rsquo;t use Mano are still on your caseload.</p>
             </>
-          )],
+          ), "chat"],
           ["Approve and send", (
             <>
               <p className="sc-label">Every morning</p>
               <p className="share-big">Drafts ready to send</p>
               <p className="share-small">Your team approves every send. When you are ready, launch your own program.</p>
             </>
-          )],
+          ), "check"],
         ]}
       />
 
