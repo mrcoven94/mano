@@ -10,6 +10,8 @@ export interface Computer {
   goto(url: string): Promise<void>;
   /** Stage a file the run needs (for file pickers). Returns the path to pick. */
   stageFile(name: string, data: Uint8Array): Promise<string>;
+  /** How file picking works here, in words for the model. */
+  fileUploadHint(): string;
   /** A live view of the screen for the person, or null when there is none. */
   liveViewUrl(): string | null;
   /** Stop the computer and release it. Safe to call twice. */

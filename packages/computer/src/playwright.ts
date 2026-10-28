@@ -141,7 +141,7 @@ export class PlaywrightComputer implements Computer {
           break;
         }
         case "keypress":
-          await page.keyboard.press(action.keys.join("+"));
+          await page.keyboard.press(action.keys.map(normalizeKey).join("+"));
           break;
         case "move":
           await page.mouse.move(action.x, action.y);
@@ -179,6 +179,10 @@ export class PlaywrightComputer implements Computer {
     return path;
   }
 
+  fileUploadHint(): string {
+    return "Clicking a file button attaches the next staged file automatically; click once and wait for the file name to appear.";
+  }
+
   liveViewUrl(): string | null {
     return null;
   }
@@ -203,6 +207,12 @@ export class PlaywrightComputer implements Computer {
     if (here === "about:blank") return;
     if (!this.origins.includes(new URL(here).origin)) await page.goBack();
   }
+}
+
+const KEY_ALIASES: Record<string, string> = { Ctrl: "Control" };
+
+function normalizeKey(key: string): string {
+  return KEY_ALIASES[key] ?? key;
 }
 
 function clickButton(button: "left" | "right" | "wheel" | "back" | "forward"): "left" | "right" | "middle" {

@@ -34,6 +34,10 @@ export class FakeComputer implements Computer {
     return `/staged/${name}`;
   }
 
+  fileUploadHint(): string {
+    return "test picker hint";
+  }
+
   liveViewUrl(): string | null {
     return this.viewUrl;
   }

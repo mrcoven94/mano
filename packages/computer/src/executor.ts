@@ -1,4 +1,4 @@
-import type { SafetyCheck } from "./actions";
+import type { ComputerAction, SafetyCheck } from "./actions";
 import type { Computer } from "./computer";
 import { runLoop } from "./loop";
 import type { ModelClient } from "./model";
@@ -27,6 +27,7 @@ export interface ExecuteRequest {
   maxSteps?: number;
   onSafetyCheck?: (check: SafetyCheck) => Promise<boolean>;
   onCredentialsNeeded?: (liveViewUrl: string | null) => Promise<void>;
+  onTurn?: (turn: { step: number; call: ComputerAction[] } | { step: number; message: string }) => void;
 }
 
 export type ExecuteOutcome = "filed" | "duplicate" | "infeasible" | "failed";
@@ -74,11 +75,12 @@ export class Executor {
       for (const file of request.files) staged.push(await this.computer.stageFile(file.name, file.data));
       const portal = request.portalUrl.replace(/\/$/, "");
       await this.computer.goto(`${portal}/apply`);
-      const outcome = await runLoop(this.computer, this.model, taskText(request, staged), {
+      const outcome = await runLoop(this.computer, this.model, taskText(request, staged, this.computer.fileUploadHint()), {
         model: request.model ?? this.options.model,
         ...(request.maxSteps !== undefined ? { maxSteps: request.maxSteps } : {}),
-        ...(request.onSafetyCheck ? { onSafetyCheck: request.onSafetyCheck } : {}),
+        onSafetyCheck: request.onSafetyCheck ?? defaultSafetyPolicy,
         ...(request.onCredentialsNeeded ? { onCredentialsNeeded: request.onCredentialsNeeded } : {}),
+        ...(request.onTurn ? { onTurn: request.onTurn } : {}),
       });
       if (outcome.status !== "done") {
         const message = outcome.status === "infeasible" ? outcome.message : outcomeMessage(outcome);
@@ -120,12 +122,12 @@ export class Executor {
   }
 }
 
-function taskText(request: ExecuteRequest, staged: string[]): string {
+function taskText(request: ExecuteRequest, staged: string[], uploadHint: string): string {
   const lines = [
     "File a benefits renewal on the portal now open in this browser.",
     "Steps: fill the household form, attach the documents, review, and submit.",
     `Household (type exactly): ${JSON.stringify(request.household)}`,
-    staged.length > 0 ? `Files to attach (pick these paths in the file dialog): ${staged.join(", ")}` : "No files to attach.",
+    staged.length > 0 ? `Files to attach: ${staged.join(", ")}. ${uploadHint}` : "No files to attach.",
     "The review page shows a submission key and a packet digest; read both carefully.",
     "After submitting, the confirmation page shows a confirmation number; read it carefully.",
     "When done, reply with exactly one line and nothing else:",
@@ -139,6 +141,15 @@ function parseReport(message: string): { key: string; confirmation: string; dige
   const match = /^(DUPLICATE )?KEY=(\S+) CONFIRMATION=(\S+) DIGEST=([0-9a-f]{64})/m.exec(message.trim());
   if (!match?.[2] || !match[3] || !match[4]) return null;
   return { duplicate: match[1] !== undefined, key: match[2], confirmation: match[3], digest: match[4] };
+}
+
+/**
+ * Default safety policy. The blanket per-action confirmation is acknowledged:
+ * running the batch through this harness is the confirmation. Any other code
+ * stops the run unless the caller approves it.
+ */
+async function defaultSafetyPolicy(check: SafetyCheck): Promise<boolean> {
+  return check.code === "computer_action_requires_confirmation";
 }
 
 function outcomeMessage(outcome: { status: string; steps: number }): string {

@@ -94,6 +94,23 @@ describe("observe-act loop", () => {
     expect(computer.actions).toEqual([]);
   });
 
+  test("replay stops at 29 pairs instead of sending a refused request", async () => {
+    const computer = new FakeComputer();
+    const turns = Array.from({ length: 29 }, (_, i) => [computerCall(`call-${i}`, [{ type: "wait" }])]);
+    const model = new FakeModelClient(turns);
+    const outcome = await runLoop(computer, model, "do the thing", { model: MODEL, maxSteps: 35 });
+    expect(outcome).toEqual({ status: "step_budget", steps: 29 });
+    expect(model.requests).toHaveLength(29);
+  });
+
+  test("each turn is reported through the progress callback", async () => {
+    const computer = new FakeComputer();
+    const model = new FakeModelClient([[computerCall("call-1", [{ type: "wait" }])], [assistantMessage("done")]]);
+    const turns: unknown[] = [];
+    await runLoop(computer, model, "do the thing", { model: MODEL, onTurn: (turn) => void turns.push(turn) });
+    expect(turns).toEqual([{ step: 1, call: [{ type: "wait" }] }, { step: 2, message: "done" }]);
+  });
+
   test("the step budget stops a run that never finishes", async () => {
     const computer = new FakeComputer();
     const model = new FakeModelClient([

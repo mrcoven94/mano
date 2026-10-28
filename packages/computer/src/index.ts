@@ -8,8 +8,9 @@
  * Backends: PlaywrightComputer drives real Chromium on this machine (the
  * local stand-in; needs `npx playwright install chromium` once).
  * ModalComputer drives a hosted desktop through the session service in
- * modal/ (deploy it with the Modal app there). Each person gets a browser
- * profile: a directory for Playwright, a Modal volume for Modal.
+ * modal/ (deploy it from that directory with `modal deploy app.py`, with
+ * the modal client and fastapi in the local Python). Each person gets a
+ * browser profile: a directory for Playwright, a Modal volume for Modal.
  *
  * The Executor files a renewal on the sandbox portal through the computer
  * and reconciles through GET /submissions/:key. Logins and two-factor

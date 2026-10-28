@@ -1,30 +1,28 @@
 import { describe, expect, test, vi } from "vitest";
 import { ModalComputer } from "../src/modal";
 
-function service(responses: Record<string, { status: number; body: unknown }>) {
+function service() {
   const calls: Array<{ url: string; init?: unknown }> = [];
   const fetchImpl = vi.fn(async (url: string, init?: unknown) => {
     calls.push({ url, init });
-    const path = new URL(url).pathname;
-    const found = responses[path] ?? { status: 404, body: { error: "no route" } };
-    const body = found.body instanceof Uint8Array ? found.body : JSON.stringify(found.body);
-    return new Response(body, { status: found.status });
+    const parsed = new URL(url);
+    const key = `${parsed.host}${parsed.pathname}`;
+    if (key === "computer.test/sessions" && (init as { method?: string })?.method === "POST") {
+      return new Response(JSON.stringify({ id: "sess-1", control_url: "https://control.test/", live_view_url: "https://live.test/sess-1" }), { status: 200 });
+    }
+    if (key === "control.test/screenshot") return new Response(new Uint8Array([137, 80, 78, 71]), { status: 200 });
+    if (key === "control.test/act") return new Response(JSON.stringify({ applied: 1 }), { status: 200 });
+    if (key === "control.test/goto") return new Response(JSON.stringify({}), { status: 200 });
+    if (key === "control.test/stage") return new Response(JSON.stringify({ path: "/uploads/a.pdf" }), { status: 200 });
+    if (key === "computer.test/sessions/sess-1") return new Response(JSON.stringify({}), { status: 200 });
+    return new Response(JSON.stringify({ error: "no route" }), { status: 404 });
   }) as unknown as typeof fetch;
   return { fetchImpl, calls };
 }
 
 describe("modal desktop client", () => {
-  const routes = {
-    "/sessions": { status: 200, body: { id: "sess-1", live_view_url: "https://live.test/sess-1" } },
-    "/sessions/sess-1/screenshot": { status: 200, body: new Uint8Array([137, 80, 78, 71]) },
-    "/sessions/sess-1/act": { status: 200, body: { applied: 1 } },
-    "/sessions/sess-1/goto": { status: 200, body: {} },
-    "/sessions/sess-1/stage": { status: 200, body: { path: "/uploads/a.pdf" } },
-    "/sessions/sess-1": { status: 200, body: {} },
-  };
-
-  test("starts one session lazily and drives it", async () => {
-    const { fetchImpl, calls } = service(routes);
+  test("starts one session lazily and drives it through the control URL", async () => {
+    const { fetchImpl, calls } = service();
     const computer = new ModalComputer({ baseUrl: "https://computer.test", profile: "maria", width: 1280, height: 800, fetchImpl });
     expect(computer.liveViewUrl()).toBeNull();
     await computer.goto("https://portal.test/apply");
@@ -34,31 +32,36 @@ describe("modal desktop client", () => {
     const path = await computer.stageFile("a.pdf", new TextEncoder().encode("%PDF-a"));
     expect(path).toBe("/uploads/a.pdf");
     expect(computer.liveViewUrl()).toBe("https://live.test/sess-1");
-    const posts = calls.filter((c) => (c.init as { method?: string } | undefined)?.method === "POST");
-    expect(posts.map((c) => new URL(c.url).pathname)).toEqual(["/sessions", "/sessions/sess-1/goto", "/sessions/sess-1/act", "/sessions/sess-1/stage"]);
-    const created = JSON.parse((posts[0]?.init as { body: string }).body) as Record<string, unknown>;
+    const urls = calls.map((c) => c.url);
+    expect(urls).toEqual([
+      "https://computer.test/sessions",
+      "https://control.test/goto",
+      "https://control.test/screenshot",
+      "https://control.test/act",
+      "https://control.test/stage",
+    ]);
+    const created = JSON.parse((calls[0]?.init as { body: string }).body) as Record<string, unknown>;
     expect(created).toMatchObject({ profile: "maria", width: 1280, height: 800 });
-    const staged = JSON.parse((posts[3]?.init as { body: string }).body) as Record<string, unknown>;
+    const staged = JSON.parse((calls[4]?.init as { body: string }).body) as Record<string, unknown>;
     expect(staged["name"]).toBe("a.pdf");
     expect(Buffer.from(staged["data_base64"] as string, "base64").toString()).toBe("%PDF-a");
     await computer.close();
+    expect(calls[calls.length - 1]?.url).toBe("https://computer.test/sessions/sess-1");
+    expect((calls[calls.length - 1]?.init as { method?: string })?.method).toBe("DELETE");
     expect(fetchImpl).toHaveBeenCalledTimes(6);
-    const last = calls[calls.length - 1];
-    expect(new URL(last?.url ?? "").pathname).toBe("/sessions/sess-1");
-    expect((last?.init as { method?: string })?.method).toBe("DELETE");
     await computer.close();
     expect(fetchImpl).toHaveBeenCalledTimes(6);
   });
 
   test("a failing service surfaces errors", async () => {
-    const { fetchImpl } = service({ "/sessions": { status: 500, body: { error: "down" } } });
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: "down" }), { status: 500 })) as unknown as typeof fetch;
     const computer = new ModalComputer({ baseUrl: "https://computer.test", profile: "maria", fetchImpl });
     await expect(computer.screenshot()).rejects.toThrow("status 500");
     await computer.close();
   });
 
   test("use after close throws", async () => {
-    const { fetchImpl } = service(routes);
+    const { fetchImpl } = service();
     const computer = new ModalComputer({ baseUrl: "https://computer.test", profile: "maria", fetchImpl });
     await computer.close();
     await expect(computer.goto("https://portal.test")).rejects.toThrow("closed");

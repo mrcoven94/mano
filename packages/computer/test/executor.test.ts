@@ -41,6 +41,9 @@ describe("executor", () => {
     expect(computer.urls).toEqual(["https://portal.test/apply"]);
     expect(computer.staged.map((f) => f.name)).toEqual(["paystub.pdf"]);
     expect(computer.closes).toBe(1);
+    const firstInput = JSON.stringify(model.requests[0]?.input);
+    expect(firstInput).toContain("test picker hint");
+    expect(firstInput).toContain("/staged/paystub.pdf");
     expect(spy).toHaveBeenCalledOnce();
     const [url, init] = spy.mock.calls[0] as [string, { headers: Record<string, string> }];
     expect(url).toBe("https://portal.test/submissions/key-1");
@@ -73,6 +76,26 @@ describe("executor", () => {
     const result = await executor.execute({ portalUrl: "https://portal.test", household: HOUSEHOLD, files: [] });
     expect(result.outcome).toBe("failed");
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  test("the blanket confirmation is acknowledged, anything else stops the run", async () => {
+    const computer = new FakeComputer();
+    const call = computerCall("call-1", [{ type: "click", button: "left", x: 1, y: 1 }]);
+    call["pending_safety_checks"] = [{ id: "csc-1", code: "computer_action_requires_confirmation", message: "Confirm." }];
+    const model = new FakeModelClient([[call], [assistantMessage(`KEY=key-1 CONFIRMATION=SR-FILED11 DIGEST=${DIGEST}`)]]);
+    const executor = new Executor(computer, model, { model: "test-model", fetchImpl: receivedFetch("SR-FILED11").fetchImpl });
+    const result = await executor.execute({ portalUrl: "https://portal.test", household: HOUSEHOLD, files: [] });
+    expect(result.outcome).toBe("filed");
+
+    const computer2 = new FakeComputer();
+    const flagged = computerCall("call-1", [{ type: "click", button: "left", x: 1, y: 1 }]);
+    flagged["pending_safety_checks"] = [{ id: "csc-2", code: "malicious_instructions", message: "Unsafe." }];
+    const model2 = new FakeModelClient([[flagged]]);
+    const executor2 = new Executor(computer2, model2, { model: "test-model" });
+    const blocked = await executor2.execute({ portalUrl: "https://portal.test", household: HOUSEHOLD, files: [] });
+    expect(blocked.outcome).toBe("failed");
+    expect(blocked.message).toContain("safety check was declined");
+    expect(computer2.actions).toEqual([]);
   });
 
   test("the computer always stops, even when the model throws", async () => {
