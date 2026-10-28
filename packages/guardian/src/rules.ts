@@ -52,7 +52,7 @@ interface PayloadSchema {
   extra: string[];
 }
 
-const PAYLOAD_SCHEMAS: Record<ActionType, PayloadSchema> = {
+export const PAYLOAD_SCHEMAS: Record<ActionType, PayloadSchema> = {
   send: { destinations: ["to"], content: ["subject", "body", "text"], extra: [] },
   submit: { destinations: [], content: ["text"], extra: ["formId"] },
   call: { destinations: [], content: ["script", "text"], extra: [] },

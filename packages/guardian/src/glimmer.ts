@@ -1,4 +1,4 @@
-import { redactCheckInput, type KnownEntities } from "./redact.js";
+import { buildModelRequest, type KnownEntities } from "./redact.js";
 import { RulesChecker } from "./rules.js";
 import type { CheckInput, CheckResult, Checker, Verdict } from "./types.js";
 
@@ -118,7 +118,7 @@ export class GlimmerChecker implements Checker {
       response = await this.fetchImpl(`${this.url}/check`, {
         method: "POST",
         headers,
-        body: JSON.stringify(redactCheckInput(input, this.knownEntities)),
+        body: JSON.stringify(buildModelRequest(input, this.knownEntities)),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {

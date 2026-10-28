@@ -163,6 +163,73 @@ describe("GlimmerChecker", () => {
     }
   });
 
+  it("sends known fields only, with distinct labels for distinct paths", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
+    );
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const body = "See https://example.com/Claim and https://example.com/claim.";
+    const input: CheckInput = {
+      action: {
+        type: "send",
+        recipient: "https://example.com/Claim",
+        purpose: "Renewal notice",
+        payload: {
+          to: "https://example.com/Claim",
+          body,
+        },
+        documentHash: "abc123",
+      },
+      sources: [{ kind: "message", id: "1975-06-30", quote: body }],
+      consents: [
+        { recipient: "https://example.com/Claim", purpose: "Renewal notice" },
+      ],
+      origin: "person",
+    };
+    (input.action as unknown as Record<string, unknown>)["cc"] =
+      "attacker@example.com";
+    (input as unknown as Record<string, unknown>)["note"] = "SSN 999-99-9999";
+    const result = await checker.check(input);
+    expect(result).toEqual({ verdict: "pass", problems: [] });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const sent = init.body as string;
+    for (const secret of [
+      "attacker@example.com",
+      "999-99-9999",
+      "1975-06-30",
+      "https://example.com/Claim",
+      "https://example.com/claim",
+    ]) {
+      expect(sent).not.toContain(secret);
+    }
+    const wire = JSON.parse(sent) as Record<string, unknown>;
+    expect(Object.keys(wire).sort()).toEqual([
+      "action",
+      "consents",
+      "origin",
+      "sources",
+    ]);
+    const action = wire["action"] as Record<string, unknown>;
+    expect(Object.keys(action).sort()).toEqual([
+      "payload",
+      "purpose",
+      "recipient",
+      "type",
+    ]);
+    expect(action["recipient"]).toBe("[RECIPIENT]");
+    const payload = action["payload"] as Record<string, unknown>;
+    expect(Object.keys(payload).sort()).toEqual(["body", "to"]);
+    expect(payload["body"]).toBe("See [RECIPIENT] and [URL-1]");
+    const sources = wire["sources"] as Record<string, unknown>[];
+    expect(Object.keys(sources[0] ?? {}).sort()).toEqual(["id", "kind", "quote"]);
+    expect(sources[0]?.["id"]).toBe("[DATE]");
+  });
+
   it("redacts known names before sending", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ verdict: "pass", problems: [], ...SERVER }),

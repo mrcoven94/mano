@@ -35,6 +35,20 @@ export interface CheckInput {
 
 export type Verdict = "pass" | "fix" | "block";
 
+// The request the model checker sends: built explicitly from the validated
+// schema fields the checker needs. Unknown fields never leave Mano.
+export interface ModelRequest {
+  action: {
+    type: ActionType;
+    recipient: string;
+    purpose: string;
+    payload: unknown;
+  };
+  sources: { kind: SourceKind; id: string; quote?: string }[];
+  consents: { recipient: string; purpose: string }[];
+  origin: Origin;
+}
+
 export interface CheckResult {
   verdict: Verdict;
   problems: string[];

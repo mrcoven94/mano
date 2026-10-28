@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redact, redactCheckInput } from "../src/redact.js";
+import { redact, buildModelRequest } from "../src/redact.js";
 import type { CheckInput } from "../src/types.js";
 
 // All people, numbers and addresses below are invented for tests.
@@ -76,6 +76,11 @@ describe("redact", () => {
     expect(out).toContain("[ADDRESS]");
   });
 
+  it("redacts bare dates", () => {
+    expect(redact("filed on 2026-10-28")).toBe("filed on [DATE]");
+    expect(redact("filed on 10/28/2026")).toBe("filed on [DATE]");
+  });
+
   it("redacts JSON birth-date fields", () => {
     const out = redact('{"name":"x","dob":"03/14/1988"}');
     expect(out).toBe('{"name":"x","dob":"[DATE OF BIRTH]"}');
@@ -84,7 +89,7 @@ describe("redact", () => {
   });
 });
 
-describe("redactCheckInput", () => {
+describe("buildModelRequest", () => {
   function checkInput(): CheckInput {
     return {
       action: {
@@ -113,7 +118,7 @@ describe("redactCheckInput", () => {
   }
 
   it("removes personal details but keeps destinations comparable", () => {
-    const redacted = redactCheckInput(checkInput(), {
+    const redacted = buildModelRequest(checkInput(), {
       names: ["Maria Lopez", "Ana Ruiz"],
     });
     const wire = JSON.stringify(redacted);
@@ -145,7 +150,7 @@ describe("redactCheckInput", () => {
   });
 
   it("labels the same destination the same way everywhere", () => {
-    const redacted = redactCheckInput(checkInput());
+    const redacted = buildModelRequest(checkInput());
     const quote = redacted.sources[0]?.quote ?? "";
     const payload = redacted.action.payload as { to: string };
     // The same email twice gets the same label.
@@ -156,7 +161,7 @@ describe("redactCheckInput", () => {
         payload: { text: "a@example.com then a@example.com" },
       },
     };
-    const scrubbed = redactCheckInput(twice);
+    const scrubbed = buildModelRequest(twice);
     expect((scrubbed.action.payload as { text: string }).text).toBe(
       "[EMAIL-1] then [EMAIL-1]",
     );
@@ -166,7 +171,7 @@ describe("redactCheckInput", () => {
 
   it("does not mutate the input", () => {
     const input = checkInput();
-    redactCheckInput(input);
+    buildModelRequest(input);
     expect(input.action.recipient).toBe("Caseworker Ana Ruiz");
   });
 
@@ -175,28 +180,58 @@ describe("redactCheckInput", () => {
     input.action.payload = {
       text: "Write to Benefits@example.com, not benefits@example.com.",
     };
-    const redacted = redactCheckInput(input);
+    const redacted = buildModelRequest(input);
     const text = (redacted.action.payload as { text: string }).text;
     expect(text).toBe("Write to [EMAIL-1], not [EMAIL-2].");
   });
 
-  it("redacts source ids and payload keys", () => {
+  it("redacts source ids and drops unknown fields", () => {
     const input = checkInput();
     input.sources = [
       {
         kind: "message",
-        id: "msg-ana.ruiz@example.com",
+        id: "1975-06-30",
         quote: "See the attached file.",
-      },
+        note: "SSN 123-45-6789",
+      } as CheckInput["sources"][number],
     ];
     input.action.payload = {
       text: "See the attached file.",
-      "note-4821 Clement Street": "See the attached file.",
+      cc: "attacker@example.com",
     };
-    const redacted = redactCheckInput(input);
+    const withExtras = input as unknown as Record<string, unknown>;
+    withExtras["note"] = "Call (415) 555-0100.";
+    (input.action as unknown as Record<string, unknown>)["cc"] =
+      "attacker@example.com";
+    const redacted = buildModelRequest(input);
     const wire = JSON.stringify(redacted);
-    expect(wire).not.toContain("ana.ruiz@example.com");
-    expect(wire).not.toContain("4821 Clement Street");
-    expect(redacted.sources[0]?.id).toBe("[EMAIL-1]");
+    for (const secret of [
+      "1975-06-30",
+      "SSN 123-45-6789",
+      "attacker@example.com",
+      "(415) 555-0100",
+    ]) {
+      expect(wire).not.toContain(secret);
+    }
+    expect(redacted.sources[0]?.id).toBe("[DATE]");
+    expect(redacted.action.payload).toEqual({ text: "See the attached file." });
+    expect(wire).not.toContain("documentHash");
+  });
+
+  it("labels case-distinct paths distinctly", () => {
+    const input = checkInput();
+    input.action.type = "send";
+    input.action.recipient = "https://example.com/Claim";
+    input.action.payload = {
+      to: "https://example.com/Claim",
+      body: "See https://example.com/Claim and https://example.com/claim.",
+    };
+    input.consents = [
+      { recipient: "https://example.com/Claim", purpose: "Income check" },
+    ];
+    const redacted = buildModelRequest(input);
+    const payload = redacted.action.payload as { to: string; body: string };
+    expect(payload.to).toBe("[RECIPIENT]");
+    expect(payload.body).toBe("See [RECIPIENT] and [URL-1]");
   });
 });

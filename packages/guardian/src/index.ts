@@ -35,6 +35,7 @@ export type {
   CheckResult,
   CheckSource,
   Checker,
+  ModelRequest,
   Origin,
   SourceKind,
   Verdict,
@@ -48,6 +49,6 @@ export {
   glimmerCheckerFromEnv,
 } from "./glimmer.js";
 export type { ProxyAuth, ServerInfo } from "./glimmer.js";
-export { redact, redactCheckInput } from "./redact.js";
+export { buildModelRequest, redact } from "./redact.js";
 export type { KnownEntities } from "./redact.js";
 export { canonicalRecipient } from "./rules.js";
