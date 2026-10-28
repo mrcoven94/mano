@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Faq from "@/components/Faq";
 import OrgConsent from "@/components/teams/OrgConsent";
 import OrgScenes from "@/components/teams/OrgScenes";
+import Verified from "@/components/teams/Verified";
 import { TeamHero, Stage, Steps, Rules, Seat, Close } from "@/components/teams/Parts";
 
 const title = "Case management for nonprofits";
@@ -54,6 +55,8 @@ export default function Organizations() {
           <OrgScenes />
         </div>
       </section>
+
+      <Verified id="org-vf" eyebrow="When a family shares a case" office="Northside Family Center" />
 
       <Rules
         id="org-rules"
