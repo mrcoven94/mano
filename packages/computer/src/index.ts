@@ -28,7 +28,7 @@ import { PlaywrightComputer } from "./playwright";
 
 export { isComputerCall, outputText, type ComputerAction, type ComputerCall, type SafetyCheck } from "./actions";
 export type { Computer, ComputerOptions } from "./computer";
-export { Executor, type ExecuteFile, type ExecuteOutcome, type ExecuteRequest, type ExecuteResult, type ExecutorOptions, type HouseholdFields, type SubmissionStatus } from "./executor";
+export { Executor, type CaseRecord, type ExecuteFile, type ExecuteOutcome, type ExecuteRequest, type ExecuteResult, type ExecutorOptions, type HouseholdFields, type SubmissionStatus } from "./executor";
 export { LOOP_INSTRUCTIONS, runLoop, type LoopOptions, type LoopOutcome } from "./loop";
 export { FakeModelClient, FetchModelClient, type ModelClient, type ResponsePayload, type ResponseRequest } from "./model";
 export { ModalComputer, type ModalComputerOptions } from "./modal";

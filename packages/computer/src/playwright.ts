@@ -209,10 +209,11 @@ export class PlaywrightComputer implements Computer {
   }
 }
 
-const KEY_ALIASES: Record<string, string> = { Ctrl: "Control" };
+const KEY_ALIASES: Record<string, string> = { ctrl: "Control", control: "Control", return: "Enter" };
 
 function normalizeKey(key: string): string {
-  return KEY_ALIASES[key] ?? key;
+  if (key.length === 1) return key;
+  return KEY_ALIASES[key.toLowerCase()] ?? key;
 }
 
 function clickButton(button: "left" | "right" | "wheel" | "back" | "forward"): "left" | "right" | "middle" {

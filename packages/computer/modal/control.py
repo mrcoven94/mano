@@ -19,18 +19,21 @@ UPLOADS = "/uploads"
 SCREENSHOT_PATH = "/tmp/shot.png"
 
 KEY_NAMES = {
-    "Ctrl": "ctrl",
     "Enter": "Return",
     "ArrowLeft": "Left",
     "ArrowRight": "Right",
     "ArrowUp": "Up",
     "ArrowDown": "Down",
-    "Control": "ctrl",
-    "Meta": "Super",
-    "Shift": "shift",
-    "Alt": "alt",
     " ": "space",
 }
+
+MODIFIERS = {"ctrl": "ctrl", "control": "ctrl", "meta": "Super", "super": "Super", "shift": "shift", "alt": "alt"}
+
+
+def key_name(key):
+    if key in KEY_NAMES:
+        return KEY_NAMES[key]
+    return MODIFIERS.get(key.lower(), key)
 
 
 def run(*args):
@@ -62,7 +65,7 @@ def apply_action(action):
         finally:
             run("xdotool", "mouseup", "1")
     elif kind == "keypress":
-        keys = "+".join(KEY_NAMES.get(k, k) for k in action.get("keys", []))
+        keys = "+".join(key_name(k) for k in action.get("keys", []))
         if not keys:
             raise ValueError("keypress needs at least one key")
         run("xdotool", "key", keys)

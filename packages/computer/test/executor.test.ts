@@ -59,6 +59,23 @@ describe("executor", () => {
     expect(result.confirmationNumber).toBe("SR-OLD11111");
   });
 
+  test("a report without a digest still files, taking the digest from reconcile", async () => {
+    const computer = new FakeComputer();
+    const model = new FakeModelClient([[assistantMessage("KEY=key-1 CONFIRMATION=SR-FILED11")]]);
+    const executor = new Executor(computer, model, { model: "test-model", fetchImpl: receivedFetch("SR-FILED11").fetchImpl });
+    const result = await executor.execute({ portalUrl: "https://portal.test", household: HOUSEHOLD, files: [] });
+    expect(result).toMatchObject({ outcome: "filed", digest: DIGEST });
+  });
+
+  test("a mismatched digest fails instead of claiming a filing", async () => {
+    const computer = new FakeComputer();
+    const model = new FakeModelClient([[assistantMessage(`KEY=key-1 CONFIRMATION=SR-FILED11 DIGEST=${"c".repeat(64)}`)]]);
+    const executor = new Executor(computer, model, { model: "test-model", fetchImpl: receivedFetch("SR-FILED11").fetchImpl });
+    const result = await executor.execute({ portalUrl: "https://portal.test", household: HOUSEHOLD, files: [] });
+    expect(result.outcome).toBe("failed");
+    expect(result.message).toContain("reconcile mismatch");
+  });
+
   test("a reconcile mismatch fails instead of claiming a filing", async () => {
     const computer = new FakeComputer();
     const model = new FakeModelClient([[assistantMessage(`KEY=key-1 CONFIRMATION=SR-WRONG111 DIGEST=${DIGEST}`)]]);
@@ -96,6 +113,43 @@ describe("executor", () => {
     expect(blocked.outcome).toBe("failed");
     expect(blocked.message).toContain("safety check was declined");
     expect(computer2.actions).toEqual([]);
+  });
+
+  test("a browser filing reconciles through the caseworker record", async () => {
+    const computer = new FakeComputer();
+    const model = new FakeModelClient([[assistantMessage("KEY=key-1 CONFIRMATION=SR-WEB11111")]]);
+    const fetchImpl = (async (url: string) => {
+      if (url.endsWith("/submissions/key-1")) return new Response(JSON.stringify({ status: "not_found" }), { status: 404 });
+      if (url.endsWith("/caseworker/SR-WEB11111")) {
+        return new Response('<span class="conf">SR-WEB11111</span><span class="key">key-1</span>', { status: 200 });
+      }
+      return new Response("no route", { status: 404 });
+    }) as unknown as typeof fetch;
+    const executor = new Executor(computer, model, { model: "test-model", fetchImpl });
+    const result = await executor.execute({ portalUrl: "https://portal.test", household: HOUSEHOLD, files: [] });
+    expect(result).toMatchObject({ outcome: "filed", key: "key-1", confirmationNumber: "SR-WEB11111" });
+  });
+
+  test("a caseworker record naming another key fails", async () => {
+    const computer = new FakeComputer();
+    const model = new FakeModelClient([[assistantMessage("KEY=key-1 CONFIRMATION=SR-WEB11111")]]);
+    const fetchImpl = (async (url: string) => {
+      if (url.endsWith("/submissions/key-1")) return new Response(JSON.stringify({ status: "not_found" }), { status: 404 });
+      return new Response('<span class="conf">SR-WEB11111</span><span class="key">key-2</span>', { status: 200 });
+    }) as unknown as typeof fetch;
+    const executor = new Executor(computer, model, { model: "test-model", fetchImpl });
+    const result = await executor.execute({ portalUrl: "https://portal.test", household: HOUSEHOLD, files: [] });
+    expect(result.outcome).toBe("failed");
+    expect(result.message).toContain("reconcile mismatch");
+  });
+
+  test("checkConfirmation returns null on 404 and throws on a changed page", async () => {
+    const computer = new FakeComputer();
+    const model = new FakeModelClient();
+    const missing = (async () => new Response("gone", { status: 404 })) as unknown as typeof fetch;
+    expect(await new Executor(computer, model, { model: "t", fetchImpl: missing }).checkConfirmation("https://p.test", "SR-X")).toBeNull();
+    const changed = (async () => new Response("<p>redesigned</p>", { status: 200 })) as unknown as typeof fetch;
+    await expect(new Executor(computer, model, { model: "t", fetchImpl: changed }).checkConfirmation("https://p.test", "SR-X")).rejects.toThrow("changed shape");
   });
 
   test("the computer always stops, even when the model throws", async () => {
