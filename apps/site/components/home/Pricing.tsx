@@ -5,17 +5,19 @@ import PlusPrice from "./PlusPrice";
    works every day without being asked, and a support team. Faxes and mail cost real money, so they are at cost on both. */
 
 const FREE = [
-  "3 applications a month",
+  "5 applications a month",
+  "Unlimited notices, read and explained",
   "Unlimited renewals, deadlines and reminders",
+  "Unlimited benefit tracking",
+  "Its own email inbox, so offices write to Mano directly",
   "Unlimited mail scans and documents",
-  "Every benefit tracked in one place",
   "Text, iMessage, the app and the web",
 ];
 
 const PLUS: [string, string][] = [
   ["Unlimited applications.", "Every program you qualify for, as many as you need, every month."],
   ["Always on.", "Mano checks your accounts and portals every day, finds new help you qualify for and starts renewals early, without being asked."],
-  ["Its own computer and email.", "Mano creates and signs in to your county, landlord and utility accounts, with your OK for each one."],
+  ["Its own computer.", "Mano creates and signs in to your county, landlord and utility accounts, with your OK for each one."],
   ["Calls and waiting on hold.", "Mano calls the office for you and hands you the phone when a person picks up."],
   ["A support team that knows your case.", "Real people, ready when you need more than Mano."],
 ];
@@ -32,15 +34,17 @@ const SUPPORT: [string, string][] = [
 type Cell = string | boolean;
 const ROWS: [string, [string, Cell, Cell][]][] = [
   ["Getting help", [
-    ["Applications", "3 a month", "Unlimited"],
+    ["Applications", "5 a month", "Unlimited"],
     ["Programs checked for you", "Every one", "Every one"],
+    ["Notices read and explained", "Unlimited", "Unlimited"],
     ["Renewals, deadlines and reminders", "Unlimited", "Unlimited"],
+    ["Benefit tracking", "Unlimited", "Unlimited"],
+    ["Its own email inbox", true, true],
     ["Mail scans and documents", "Unlimited", "Unlimited"],
-    ["Benefit tracking", true, true],
   ]],
   ["Mano does it for you", [
     ["Always on, checks every day", false, true],
-    ["Its own computer and email", false, true],
+    ["Its own computer for websites and accounts", false, true],
     ["Calls and waiting on hold", false, true],
     ["Credit disputes", "Written for you", "Written and followed up"],
     ["Faxes and mailed letters", "At cost", "At cost"],
@@ -69,7 +73,7 @@ export default function Pricing() {
     <>
       <div className="h-head">
         <h2 id="pricing-h">Keeping your help is free, always.</h2>
-        <p className="lede">Renewals, reminders and mail are free for everyone. Plus is $8 a month for unlimited applications, a Mano that works every day without being asked and a support team that knows your case.</p>
+        <p className="lede">Notices, renewals, tracking, mail and Mano&rsquo;s own email inbox are free for everyone, with 5 applications a month. Plus is $8 a month for unlimited applications, a Mano that works every day without being asked and a support team that knows your case.</p>
       </div>
 
       <div className="price-grid">
