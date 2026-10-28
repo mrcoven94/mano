@@ -23,9 +23,11 @@ Three members: David Coven, Claude and Muse.
 
 | Path | What |
 | --- | --- |
-| `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway, channels and phone |
+| `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway |
 | `apps/sandbox-portal` | A fake benefits portal every demo submits to, on Cloudflare Workers |
+| `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text |
 | `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel |
+| `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits |
 | `packages/protocol` | The open message format agents use to work a case together |
 | `eval` | The held-out test: scenarios, baselines and results |
 | `docs` | Decisions and design notes |

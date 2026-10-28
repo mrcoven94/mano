@@ -1,0 +1,39 @@
+name = "mano-channels"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [
+  { name = "CONVERSATION", class_name = "ConversationDO" },
+  { name = "CHANNEL_STATE", class_name = "ChannelStateDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ConversationDO", "ChannelStateDO"]
+
+[[queues.producers]]
+binding = "EVENTS"
+queue = "mano-channel-events"
+
+[[queues.consumers]]
+queue = "mano-channel-events"
+max_batch_size = 10
+max_retries = 5
+dead_letter_queue = "mano-channel-events-dlq"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "mano-channel-files"
+
+[triggers]
+crons = ["* * * * *"]
+
+# Secrets (never commit values; set with wrangler secret put):
+#   BLOOIO_API_KEY, BLOOIO_CHANNEL_ID, BLOOIO_WEBHOOK_SECRET,
+#   MANO_HANDLE_PEPPER, ENCRYPTION_KEK_B64, META_MODEL_API_KEY
+# Optional tuning (plain vars or secrets):
+#   CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER,
+#   MANO_TEXT_DAILY_BUDGET_USD, MANO_TEXT_USD_PER_1K_CHARS,
+#   TURN_BATCH_MS, TURN_INTERIM_MS

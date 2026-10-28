@@ -1,0 +1,69 @@
+name: deploy-channels
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/channels/**"
+      - "packages/channels/**"
+      - ".github/workflows/deploy-channels.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/channels
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: pnpm install --no-frozen-lockfile
+        working-directory: .
+      - run: pnpm --filter channels --filter @mano/channels run check
+        working-directory: .
+      - name: Create queue and bucket
+        run: |
+          pnpm exec wrangler queues create mano-channel-events || true
+          pnpm exec wrangler queues create mano-channel-events-dlq || true
+          pnpm exec wrangler r2 bucket create mano-channel-files || true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Set required secrets
+        run: |
+          for name in BLOOIO_API_KEY BLOOIO_CHANNEL_ID MANO_HANDLE_PEPPER ENCRYPTION_KEK_B64 META_MODEL_API_KEY; do
+            printenv "$name" | pnpm exec wrangler secret put "$name"
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BLOOIO_API_KEY: ${{ secrets.BLOOIO_API_KEY }}
+          BLOOIO_CHANNEL_ID: ${{ secrets.BLOOIO_CHANNEL_ID }}
+          MANO_HANDLE_PEPPER: ${{ secrets.MANO_HANDLE_PEPPER }}
+          ENCRYPTION_KEK_B64: ${{ secrets.ENCRYPTION_KEK_B64 }}
+          META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
+      # BLOOIO_WEBHOOK_SECRET is set after webhook:create runs against the
+      # deployed worker; re-run this workflow then. Until it is set the
+      # webhook fails closed with 500.
+      - name: Set webhook secret and optional vars
+        run: |
+          for name in BLOOIO_WEBHOOK_SECRET CF_ACCOUNT_ID AI_GATEWAY_ID AI_GATEWAY_PROVIDER MANO_TEXT_DAILY_BUDGET_USD MANO_TEXT_USD_PER_1K_CHARS; do
+            if [ -n "$(printenv "$name")" ]; then printenv "$name" | pnpm exec wrangler secret put "$name"; fi
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BLOOIO_WEBHOOK_SECRET: ${{ secrets.BLOOIO_WEBHOOK_SECRET }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          AI_GATEWAY_ID: ${{ secrets.AI_GATEWAY_ID }}
+          AI_GATEWAY_PROVIDER: ${{ secrets.AI_GATEWAY_PROVIDER }}
+          MANO_TEXT_DAILY_BUDGET_USD: ${{ secrets.MANO_TEXT_DAILY_BUDGET_USD }}
+          MANO_TEXT_USD_PER_1K_CHARS: ${{ secrets.MANO_TEXT_USD_PER_1K_CHARS }}

@@ -6,7 +6,8 @@ const E164 = LIVE ? RAW : "+15550100147";
 const DIGITS = E164.slice(2);
 
 export const SMS_NUMBER = `(${DIGITS.slice(0, 3)}) ${DIGITS.slice(3, 6)}-${DIGITS.slice(6)}`;
-export const SMS_HREF = `sms:${E164}`;
+/* ?&body opens Messages with the text filled in on iPhone and Android. */
+export const SMS_HREF = `sms:${E164}?&body=${encodeURIComponent("Hi Mano")}`;
 export const SMS_IS_PLACEHOLDER = !LIVE;
 export const PLACEHOLDER_NOTE = LIVE ? "" : `Placeholder number ${SMS_NUMBER} until launch`;
 export const REPO_URL = "https://github.com/mrcoven94/mano";
