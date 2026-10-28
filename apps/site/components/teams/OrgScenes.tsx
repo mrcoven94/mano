@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import SceneTabs from "./SceneTabs";
 import { ManoHead, ManoSays, d } from "./Parts";
 
@@ -31,29 +32,88 @@ function MorningScene() {
   );
 }
 
+const PROGRAMS: { name: string; rules: [string, string][]; ask: string; done: string }[] = [
+  {
+    name: "Emergency rent",
+    rules: [["Budget", "$120,000"], ["Award", "Up to $1,500, once a year"], ["Who qualifies", "Renters in Sample County with a late notice"], ["Proof", "The notice and the lease"]],
+    ask: "Northside can cover up to $1,500 of rent when there is a late notice. You have one from Oct 3. Want me to apply?",
+    done: "Done. I sent your notice and lease. Northside will decide within 3 days.",
+  },
+  {
+    name: "Food",
+    rules: [["Budget", "$40,000"], ["Award", "$100 grocery card, monthly"], ["Who qualifies", "Families waiting on food benefits"], ["Proof", "The food benefits application"]],
+    ask: "Northside gives a $100 grocery card each month while food benefits are pending. Yours is pending. Want me to apply?",
+    done: "Done. Your first card arrives this week.",
+  },
+  {
+    name: "Cash aid",
+    rules: [["Budget", "$60,000"], ["Award", "Up to $400, once"], ["Who qualifies", "Anyone in Sample County facing a sudden loss of income"], ["Proof", "One pay stub or a letter from work"]],
+    ask: "Northside has emergency cash, up to $400, for a sudden loss of income. Your hours were cut. Want me to apply?",
+    done: "Done. I attached your last pay stub. Northside will decide within 2 days.",
+  },
+  {
+    name: "Child care",
+    rules: [["Budget", "$50,000"], ["Award", "Up to $500 a month"], ["Who qualifies", "Working parents with a child under 5"], ["Proof", "A pay stub and the provider's name"]],
+    ask: "Northside helps pay for child care, up to $500 a month, for working parents. Leo is 4. Want me to apply?",
+    done: "Done. I added Little Oaks as your provider. Northside will decide within 5 days.",
+  },
+  {
+    name: "Guaranteed income",
+    rules: [["Budget", "$240,000"], ["Award", "$500 a month for 12 months"], ["Who qualifies", "Single parents earning under $30,000"], ["Proof", "Last year's income"]],
+    ask: "Northside is choosing 40 single parents for $500 a month for a year. You qualify. Want me to enter you?",
+    done: "Done. Northside picks families on Dec 1, and I will tell you either way.",
+  },
+];
+
 function ProgramScene() {
-  const rules: [string, string][] = [
-    ["Budget", "$50,000"],
-    ["Award", "Up to $500, once"],
-    ["Who qualifies", "Families with a child under 5 in Sample County"],
-    ["Proof", "One document showing the address"],
-  ];
+  const [p, setP] = useState(0);
+  const prog = PROGRAMS[p];
   return (
     <div className="sc sc-apply">
       <div className="sc-card t-rules-card">
-        <div className="sc-card-head"><span>Winter family grant</span><span className="sc-label">Your rules</span></div>
-        <dl>
-          {rules.map(([k, v], n) => (
-            <div key={k}><dt>{k}</dt><dd><span className="type" style={{ ...d(0.3 + n * 0.7), "--n": v.length } as React.CSSProperties}>{v}</span></dd></div>
+        <div className="t-prog-picks" role="group" aria-label="Kind of program">
+          {PROGRAMS.map((x, n) => <button key={x.name} className="vf-tab" aria-pressed={n === p} onClick={() => setP(n)}>{x.name}</button>)}
+        </div>
+        <dl key={p}>
+          {prog.rules.map(([k, v], n) => (
+            <div key={k}><dt>{k}</dt><dd><span className="type" style={{ ...d(0.2 + n * 0.5), "--n": v.length } as React.CSSProperties}>{v}</span></dd></div>
           ))}
         </dl>
-        <p className="sc-foot rv" style={d(3.2)}>Mano drafts the application.</p>
+        <p className="sc-foot">Your rules, your budget. Mano drafts the application.</p>
       </div>
-      <div className="sc-thread">
+      <div className="sc-thread" key={p}>
         <p className="sc-label">Text message to a family who qualifies</p>
-        <ManoSays style={d(3.8)}>Northside Family Center opened a winter grant: up to $500 for families with a child under 5. You look like a fit. Want me to apply?</ManoSays>
-        <p className="bub me rv" style={d(4.9)}>Yes please</p>
-        <ManoSays style={d(5.6)}>Done. I attached your lease. Northside will decide within 5 days.</ManoSays>
+        <ManoSays style={d(2.4)}>{prog.ask}</ManoSays>
+        <p className="bub me rv" style={d(3.4)}>Yes please</p>
+        <ManoSays style={d(4.1)}>{prog.done}</ManoSays>
+      </div>
+    </div>
+  );
+}
+
+function ReportScene() {
+  const nums: [string, string][] = [
+    ["412", "families served"],
+    ["$186,400", "given out"],
+    ["3 days", "from asking to help"],
+    ["87%", "still housed 90 days later"],
+  ];
+  const rows: [string, string, string][] = [
+    ["Emergency rent", "118 families", "$141,000"],
+    ["Food", "203 families", "$20,300"],
+    ["Child care", "41 families", "$25,100"],
+  ];
+  return (
+    <div className="sc">
+      <div className="sc-card">
+        <div className="sc-card-head"><span>Quarterly report for Sample Foundation</span><span className="sc-label">July to September</span></div>
+        <ul className="t-report">
+          {nums.map(([b, t], n) => <li key={t} className="rv" style={d(0.3 + n * 0.25)}><b>{b}</b><span>{t}</span></li>)}
+        </ul>
+        <ul className="t-report-rows">
+          {rows.map(([a, b, c], n) => <li key={a} className="rv" style={d(1.4 + n * 0.25)}><strong>{a}</strong><span>{b}</span><span>{c}</span></li>)}
+        </ul>
+        <p className="sc-foot rv" style={d(2.4)}>Built from every case as it happens. Ready to send as a PDF or a spreadsheet.</p>
       </div>
     </div>
   );
@@ -91,7 +151,8 @@ export default function OrgScenes() {
       label="More of what your agent does"
       scenes={[
         { key: "org-morning", tab: "Start the day with drafts ready", Scene: MorningScene },
-        { key: "org-program", tab: "Run your own grant program", Scene: ProgramScene },
+        { key: "org-program", tab: "Run your own programs", Scene: ProgramScene },
+        { key: "org-report", tab: "Reports that write themselves", Scene: ReportScene },
         { key: "org-trail", tab: "Know where every case stands", Scene: TrailScene },
       ]}
     />

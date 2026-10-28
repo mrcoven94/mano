@@ -7,7 +7,7 @@ import Mascot from "./Mascot";
 
 const links = [
   { href: "/", label: "For people", sub: "Free to start" },
-  { href: "/government", label: "For offices", sub: "Case management" },
+  { href: "/government", label: "For government", sub: "Case management" },
   { href: "/organizations", label: "For nonprofits", sub: "Case management" },
   { href: "/partners", label: "Partners", sub: "Offer your service" },
   { href: "/#pricing", label: "Pricing", sub: "Free and Plus" },

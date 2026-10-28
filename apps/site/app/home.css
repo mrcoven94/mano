@@ -57,6 +57,7 @@ mark{background:none;color:inherit}
 .sc-rows small{display:block;color:var(--muted);font-size:.86rem;margin-top:1px}
 .sc-tick{width:18px;height:18px;color:var(--pen);background:var(--pen-soft);border-radius:50%;padding:2px}
 .sc-tag{font-size:.88rem;color:var(--pen);white-space:nowrap;font-weight:500}
+.sc-tag.ok{color:var(--green)}
 .sc-foot{margin-top:6px;padding-top:14px;font-size:.9rem;color:var(--muted)}
 
 /* apply */
@@ -266,6 +267,7 @@ mark{background:none;color:inherit}
   .sc-card{padding:18px}
   .sc-rows li{grid-template-columns:20px 1fr;row-gap:6px}
   .sc-rows .sc-tag{font-size:.88rem;color:var(--pen);white-space:nowrap;font-weight:500}
+.sc-tag.ok{color:var(--green)}
   .sc-field{grid-template-columns:1fr;gap:4px}
   .sc-formbody{padding:18px}
         .tr-stage{min-height:0;display:grid;gap:16px}

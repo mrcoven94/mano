@@ -3,6 +3,7 @@ import Faq from "@/components/Faq";
 import GovDesk from "@/components/teams/GovDesk";
 import GovScenes from "@/components/teams/GovScenes";
 import Verified from "@/components/teams/Verified";
+import Reach from "@/components/home/Reach";
 import { TeamHero, Stage, Steps, Rules, Seat, Close } from "@/components/teams/Parts";
 
 const title = "Case management for government offices";
@@ -45,6 +46,12 @@ export default function Government() {
         </div>
       </section>
 
+      <section className="h-reach" aria-labelledby="rc-h">
+        <div className="wrap">
+          <Reach />
+        </div>
+      </section>
+
       <Verified id="gov-vf" office="Sample County" />
 
       <Rules
@@ -58,6 +65,16 @@ export default function Government() {
           ["Agents say they are automated", "on every call, and that the call is transcribed."],
           ["Your systems, seal and authority", "stay yours."],
         ]}
+        log={{
+          title: "Case 0418 · Food benefits renewal",
+          lines: [
+            { at: "10:41", who: "J. Park", role: "Eligibility worker", text: "Approved the renewal." },
+            { at: "10:41", who: "Mano", mano: true, text: "Recorded the approval for this exact copy, before doing anything." },
+            { at: "10:42", who: "Mano", mano: true, text: "Entered the case in the county system." },
+            { at: "10:42", who: "Mano", mano: true, text: "Read the screen back. Everything matches." },
+            { at: "10:43", who: "Mano", mano: true, text: "Sent Maria her approval notice, in Spanish." },
+          ],
+        }}
       />
 
       <Steps

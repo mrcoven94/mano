@@ -114,7 +114,7 @@ export default function Home() {
           <a className="close-num" href={SMS_HREF}>{SMS_NUMBER}</a>
           <div className="btn-row">
             <a className="btn btn-primary btn-lg" href={SMS_HREF}>Text Mano</a>
-            <a className="btn btn-ghost btn-lg" href="/government">For offices</a>
+            <a className="btn btn-ghost btn-lg" href="/government">For government</a>
           </div>
           <p className="note">{PLACEHOLDER_NOTE}</p>
         </div>
