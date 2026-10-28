@@ -11,7 +11,7 @@ const INSTALL = `git clone ${REPO_URL}\ncd mano && pnpm install\npnpm check`;
 
 const TABS = [
   { key: "text", label: "Text or iMessage", title: "No app needed.", text: "Any phone that can text works. Send Mano a photo of a letter or ask a question, the same way you would text a friend." },
-  { key: "app", label: "iPhone and Android", title: "Everything in one place.", text: "The app shows what needs your yes, what is due next and every letter Mano has read for you." },
+  { key: "app", label: "iPhone and Android", title: "Everything in one place.", text: "The app shows what is ready to send, what is due next and every letter Mano has read for you." },
   { key: "web", label: "Computer", title: "Pick up where you left off.", text: "Open Mano in any browser to read long forms on a bigger screen, print copies or upload a stack of documents." },
   { key: "own", label: "Run your own", title: "Download the whole system.", text: "Mano is open source. An agency, nonprofit or developer can download it, read every line and run their own copy." },
 ] as const;
@@ -88,12 +88,12 @@ export default function Everywhere() {
               <Bubble me t={0.4}>What is this one?</Bubble>
               <Bubble t={1.1}>Your food benefits renewal. It is due <mark>November 14</mark>. Want me to fill it out?</Bubble>
               <Bubble me t={2}>Yes please</Bubble>
-              <Bubble t={2.7}>Done. Open the app or tap here to see the exact copy before I send it.</Bubble>
+              <Bubble t={2.7}>Done. It&rsquo;s in the app too.</Bubble>
             </Phone>
           )}
           {k === "app" && (
             <Phone title="Good evening, Maria">
-              <div className="dv-card hot rv" style={d(0.1)}><small>Needs your yes</small><b>Food benefits renewal</b><span className="dv-pill">Review</span></div>
+              <div className="dv-card hot rv" style={d(0.1)}><small>Ready to send</small><b>Food benefits renewal</b><span className="dv-pill">Review</span></div>
               <div className="dv-card rv" style={d(0.35)}><small>Due next</small><b>Health coverage, Jan 31</b><span className="dv-meta">Mano starts Jan 6</span></div>
               <div className="dv-card rv" style={d(0.6)}><small>Mail</small><b>3 letters read this week</b><span className="dv-meta">1 scam blocked</span></div>
               <div className="dv-card rv" style={d(0.85)}><small>Shared</small><b>Northside Family Center</b><span className="dv-meta">Renewal only</span></div>
@@ -101,12 +101,11 @@ export default function Everywhere() {
           )}
           {k === "web" && (
             <div className="dv-browser">
-              <div className="sc-bar"><span className="sc-dots" aria-hidden="true"><i /><i /><i /></span><span className="sc-url">Mano</span></div>
               <div className="dv-web">
                 <nav aria-hidden="true"><b><Mascot tile tone="orange" size={20} />mano</b><span className="on">Messages</span><span>Applications</span><span>Documents</span><span>Deadlines</span></nav>
                 <div className="dv-web-thread">
                   <p className="sc-label">Earlier, by text</p>
-                  <Bubble t={0.1}>Done. Open the app or tap here to see the exact copy before I send it.</Bubble>
+                  <Bubble t={0.1}>Done. It&rsquo;s in the app too.</Bubble>
                   <p className="sc-label">Now, on your laptop</p>
                   <Bubble me t={0.6}>Can you print the renewal for my records?</Bubble>
                   <Bubble t={1.3}>Here it is, 4 pages and your 2 pay stubs. I marked the pages you still need to sign.</Bubble>

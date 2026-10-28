@@ -35,7 +35,6 @@ function PolicyScene() {
         <ul className="sc-rows tight">
           {proof.map(([q, c], n) => <li key={q} className="rv t-cited" style={d(3.8 + n * 0.45)}><Check /><div><strong>{q}</strong></div><span className="t-cite">{c}</span></li>)}
         </ul>
-        <p className="sc-foot rv" style={d(4.8)}>Nothing serves residents until your staff approve it.</p>
       </div>
     </div>
   );
@@ -81,7 +80,7 @@ function NoticeScene() {
         <p className="t-notice-h rv" style={d(0.4)}>Su renovación fue aprobada.</p>
         <p className="t-notice rv" style={d(0.9)}>{plain}</p>
         <ul className="t-docs rv" style={d(1.8)}><li>Same facts as template 6.1</li><li>Reading level: grade 5</li><li>Language she asked for</li></ul>
-        <p className="sc-foot rv" style={d(2.4)}>Waiting for staff to approve the exact text. Nothing is sent before that.</p>
+        <p className="sc-foot rv" style={d(2.4)}>Ready for staff to approve.</p>
       </div>
     </div>
   );

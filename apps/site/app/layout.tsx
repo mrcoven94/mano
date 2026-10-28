@@ -13,7 +13,7 @@ const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono", display: 
 export const metadata: Metadata = {
   metadataBase: new URL("https://withmano.com"),
   title: { default: "Mano", template: "%s | Mano" },
-  description: "Mano is AI that helps you pay rent, get food benefits, keep the lights on, afford medicine and find child care. It finds the help, fills out the forms and keeps it coming. You approve every step.",
+  description: "Mano is AI that helps you pay rent, get food benefits, keep the lights on, afford medicine and find child care. It finds the help, fills out the forms and keeps it coming.",
   openGraph: { siteName: "Mano", type: "website" },
 };
 

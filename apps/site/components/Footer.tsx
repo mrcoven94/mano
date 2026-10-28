@@ -9,7 +9,7 @@ export default function Footer() {
         <div className="foot">
           <div>
             <Link href="/" className="brand"><Mascot size={30} tile tone="orange" className="brand-mark" />mano</Link>
-            <p style={{ marginTop: 16, maxWidth: 320, fontSize: ".95rem" }}>An agent for every person. It applies for help, reads your mail and asks before anything is sent.</p>
+            <p style={{ marginTop: 16, maxWidth: 320, fontSize: ".95rem" }}>An agent for every person. It applies for help, reads your mail and keeps your help coming.</p>
           </div>
           <nav aria-label="Footer">
             <p className="mono">Mano</p>

@@ -21,21 +21,10 @@ const faqs: [string, string][] = [
   ["Does Mano replace case managers?", "No. Mano does the paperwork around the work. Case managers keep the relationships, the judgment calls and every approval."],
 ];
 
-const request = `{
-  "type": "consent.request",
-  "from": "org:northside-family-center",
-  "asked_by": "staff:dana",
-  "to": "person:maria-lopez",
-  "purpose": "food-benefits-renewal",
-  "documents": ["pay-stub-2026-10-24"],
-  "until": "2026-12-31"
-}`;
-
 export default function Organizations() {
   return (
     <div className="team">
       <TeamHero
-        eyebrow="For nonprofits and case managers"
         before="Keep more families "
         phrase="housed and fed"
         after="."
@@ -49,18 +38,16 @@ export default function Organizations() {
       <section className="t-more" aria-labelledby="org-more-h">
         <div className="wrap">
           <div className="h-head">
-            <p className="h-eyebrow">The rest of the week</p>
             <h2 id="org-more-h">The paperwork, done before you get to it.</h2>
           </div>
           <OrgScenes />
         </div>
       </section>
 
-      <Verified id="org-vf" eyebrow="When a family shares a case" office="Northside Family Center" />
+      <Verified id="org-vf" office="Northside Family Center" />
 
       <Rules
         id="org-rules"
-        eyebrow="Your team keeps every judgment call"
         title="Families choose what you see."
         lede="Every request names who is asking, for what and until when. The family answers in their own Mano, and their answer is kept with the case."
         facts={[
@@ -70,13 +57,10 @@ export default function Organizations() {
           ["The agent never contacts a family", "without your say."],
           ["Mano never sells personal data.", ""],
         ]}
-        file="consent-request.json"
-        code={request}
       />
 
       <Steps
         id="org-start"
-        eyebrow="How a team starts"
         title="Set up your team’s caseload."
         art="/art/casework.svg"
         artAlt="Mano and a case manager looking at a document together"
@@ -98,7 +82,7 @@ export default function Organizations() {
           ["Approve and send", (
             <>
               <p className="sc-label">Every morning</p>
-              <p className="share-big">Drafts waiting for your yes</p>
+              <p className="share-big">Drafts ready to send</p>
               <p className="share-small">Your team approves every send. When you are ready, launch your own program.</p>
             </>
           )],

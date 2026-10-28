@@ -25,7 +25,7 @@ function MorningScene() {
             </li>
           ))}
         </ul>
-        <p className="sc-foot rv" style={d(2.6)}>2 drafts ready, 1 question for you. Nothing is sent until you approve it.</p>
+        <p className="sc-foot rv" style={d(2.6)}>2 drafts ready, 1 question for you.</p>
       </div>
     </div>
   );
@@ -47,7 +47,7 @@ function ProgramScene() {
             <div key={k}><dt>{k}</dt><dd><span className="type" style={{ ...d(0.3 + n * 0.7), "--n": v.length } as React.CSSProperties}>{v}</span></dd></div>
           ))}
         </dl>
-        <p className="sc-foot rv" style={d(3.2)}>Mano drafts the application. Your team approves it before it opens.</p>
+        <p className="sc-foot rv" style={d(3.2)}>Mano drafts the application.</p>
       </div>
       <div className="sc-thread">
         <p className="sc-label">Text message to a family who qualifies</p>
@@ -62,7 +62,7 @@ function ProgramScene() {
 function TrailScene() {
   const steps: [string, string, string, boolean][] = [
     ["Dana approved the draft", "Northside, Oct 27", "9:12 AM", true],
-    ["Maria approved the exact copy", "Copy 7f3a c19e", "9:40 AM", true],
+    ["Maria said yes", "Food benefits renewal", "9:40 AM", true],
     ["Submitted to Sample County", "Received as case 0418. Checked once, sent once.", "9:41 AM", true],
     ["County approved the renewal", "J. Park, eligibility worker", "Oct 29", true],
     ["Notice explained to Maria", "In Spanish, the language she asked for", "Oct 29", false],

@@ -39,11 +39,11 @@ export function ApplyScene() {
             <li key={t} className="rv" style={d(2.2 + n * 0.5)}>
               <Check />
               <div><strong>{t}</strong><small>{s}</small></div>
-              <span className="sc-tag">Waiting for your yes</span>
+              <span className="sc-tag">Ready to send</span>
             </li>
           ))}
         </ul>
-        <p className="sc-foot rv" style={d(4.4)}>One text, four applications. Nothing has been sent.</p>
+        <p className="sc-foot rv" style={d(4.4)}>One text, four applications.</p>
       </div>
     </div>
   );
@@ -60,8 +60,7 @@ export function FormScene() {
   return (
     <div className="sc sc-form">
       <div className="sc-browser">
-        <div className="sc-bar"><span className="sc-dots" aria-hidden="true"><i /><i /><i /></span><span className="sc-url">apply.samplecounty.example/child-care</span></div>
-        <div className="sc-formbody">
+                <div className="sc-formbody">
           <p className="sc-label">Sample County</p>
           <h3>Child care assistance</h3>
           {fields.map(([l, v], n) => (
@@ -101,12 +100,12 @@ export function MailScene() {
         <li className="rv" style={d(1.6)}>
           <span className="sc-label">Renewal</span>
           <strong>Food benefits renewal</strong>
-          <p><mark>Due November 14.</mark> I filled it out from last year. It needs your yes.</p>
+          <p><mark>Due November 14.</mark> I filled it out from last year.</p>
         </li>
         <li className="rv" style={d(2.5)}>
           <span className="sc-label">Bill</span>
           <strong>Water bill, $96 past due</strong>
-          <p>You qualify for help paying it. I started the application, and it needs your yes.</p>
+          <p>You qualify for help paying it. I started the application.</p>
         </li>
         <li className="rv is-alert" style={d(3.4)}>
           <span className="sc-label">Warning</span>
@@ -119,34 +118,26 @@ export function MailScene() {
 }
 
 export function RenewScene() {
-  const months = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar"];
-  /* position on the six-month track, from Oct 1 */
-  const at = (month: number, day: number, days: number) => (month + day / days) / 6;
-  const rows: [string, string, number, number, string, boolean][] = [
-    ["Power bill help", "Renewed Oct 12", at(0, 1, 31), at(0, 12, 31), "Approved Oct 19", true],
-    ["Food benefits", "Due Nov 14", at(0, 20, 31), at(1, 14, 30), "Ready for your yes", false],
-    ["Water bill help", "Due Jan 31", at(3, 6, 31), at(3, 31, 31), "Mano starts Jan 6", false],
-    ["Child care", "Due Mar 15", at(4, 20, 28), at(5, 15, 31), "Mano starts Feb 20", false],
+  const rows: [string, string, string, boolean][] = [
+    ["Power bill help", "Renewed Oct 12", "Approved Oct 19", true],
+    ["Food benefits", "Due Nov 14", "Ready to send", false],
+    ["Water bill help", "Due Jan 31", "Mano starts Jan 6", false],
+    ["Child care", "Due Mar 15", "Mano starts Feb 20", false],
   ];
   return (
     <div className="sc sc-renew">
       <div className="sc-card">
-        <div className="sc-card-head"><span>Your renewals</span><span className="sc-label">Next six months</span></div>
-        <div className="rn-grid">
-          <div className="rn-months" aria-hidden="true">{months.map((m) => <span key={m}>{m}</span>)}</div>
-          {rows.map(([t, due, a, b, s, done], n) => (
-            <div key={t} className="rn-row rv" style={d(0.4 + n * 0.5)}>
-              <div className="rn-name"><strong>{t}</strong><small>{due}</small></div>
-              <div className="rn-track">
-                <span className={`rn-bar${done ? " done" : ""}`} style={{ left: `${a * 100}%`, width: `${(b - a) * 100}%`, ...d(0.7 + n * 0.5) }} />
-                <span className="rn-due" style={{ left: `${b * 100}%` }} />
-              </div>
-              <div className={`rn-status${done ? " done" : ""}`}>{done && <Check />}{s}</div>
-            </div>
+        <div className="sc-card-head"><span>Your renewals</span></div>
+        <ul className="rn-list">
+          {rows.map(([t, due, s, done], n) => (
+            <li key={t} className="rv" style={d(0.4 + n * 0.4)}>
+              <strong>{t}</strong>
+              <span>{due}</span>
+              <span className={done ? "rn-done" : n === 1 ? "rn-next" : undefined}>{done && <Check />}{s}</span>
+            </li>
           ))}
-          <span className="rn-today" style={{ "--today": at(0, 26, 31) } as React.CSSProperties} aria-hidden="true"><span>Today</span></span>
-        </div>
-        <p className="sc-foot rv" style={d(2.8)}>Mano starts every renewal three weeks early, so the help never stops.</p>
+        </ul>
+        <p className="sc-foot rv" style={d(2.2)}>Mano starts every renewal three weeks early, so the help never stops.</p>
       </div>
     </div>
   );

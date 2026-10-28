@@ -27,7 +27,6 @@ export default function Partners() {
   return (
     <div className="team">
       <TeamHero
-        eyebrow="For partners and developers"
         before="Offered only when it "
         phrase="helps"
         after="."
@@ -41,7 +40,6 @@ export default function Partners() {
       <section className="t-more" aria-labelledby="pt-more-h">
         <div className="wrap">
           <div className="h-head">
-            <p className="h-eyebrow">The rules every partner follows</p>
             <h2 id="pt-more-h">People stay in charge of every service.</h2>
           </div>
           <PartnerScenes />
@@ -51,7 +49,6 @@ export default function Partners() {
       <section className="t-rules" aria-labelledby="pt-kinds-h">
         <div className="wrap open-grid">
           <div>
-            <p className="h-eyebrow">Where services fit</p>
             <h2 id="pt-kinds-h">Services people ask Mano about.</h2>
             <p className="lede">People come to Mano to pay rent, keep the lights on, feed their families and get care. A service belongs here if it helps with that, and says plainly what it costs and what it uses.</p>
             <ul className="t-chips">{kinds.map((k) => <li key={k}>{k}</li>)}</ul>

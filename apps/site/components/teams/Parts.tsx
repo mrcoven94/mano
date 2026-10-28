@@ -8,13 +8,12 @@ import Mascot from "@/components/Mascot";
 
 const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
 
-export function TeamHero({ eyebrow, before, phrase, after, lede, children, stage }: { eyebrow: string; before: string; phrase: string; after: string; lede: string; children: React.ReactNode; stage: React.ReactNode }) {
+export function TeamHero({ before, phrase, after, lede, children, stage }: { before: string; phrase: string; after: string; lede: string; children: React.ReactNode; stage: React.ReactNode }) {
   return (
     <div className="t-hero">
       <div className="wrap">
         <div className="t-hero-head">
           <div>
-            <p className="h-eyebrow">{eyebrow}</p>
             <h1>{before}<mark className="h-phrase">{phrase}</mark>{after}</h1>
           </div>
           <div className="t-hero-side">
@@ -41,13 +40,12 @@ export function Stage({ id, label, hint, children }: { id?: string; label: strin
   );
 }
 
-export function Steps({ id, eyebrow, title, art, artAlt, items }: { id: string; eyebrow: string; title: string; art: string; artAlt: string; items: [step: string, card: React.ReactNode][] }) {
+export function Steps({ id, title, art, artAlt, items }: { id: string; title: string; art: string; artAlt: string; items: [step: string, card: React.ReactNode][] }) {
   return (
     <section className="t-steps" aria-labelledby={`${id}-h`} id={id}>
       <div className="wrap">
         <div className="t-steps-head">
           <div className="h-head">
-            <p className="h-eyebrow">{eyebrow}</p>
             <h2 id={`${id}-h`}>{title}</h2>
           </div>
           <Image className="t-art" src={art} width={320} height={240} alt={artAlt} unoptimized />
@@ -55,7 +53,7 @@ export function Steps({ id, eyebrow, title, art, artAlt, items }: { id: string; 
         <InView as="ol" className="share-flow" threshold={0.3}>
           {items.map(([step, card], n) => (
             <li key={step} className="share-step rv" style={d(0.1 + n * 0.4)}>
-              <p className="share-n"><span>0{n + 1}</span>{step}</p>
+              <p className="share-n">{step}</p>
               <div className="share-card">{card}</div>
             </li>
           ))}
@@ -65,22 +63,17 @@ export function Steps({ id, eyebrow, title, art, artAlt, items }: { id: string; 
   );
 }
 
-export function Rules({ id, eyebrow, title, lede, facts, file, code }: { id: string; eyebrow: string; title: string; lede: string; facts: [string, string][]; file: string; code: string }) {
+export function Rules({ id, title, lede, facts }: { id: string; title: string; lede: string; facts: [string, string][] }) {
   return (
     <section className="t-rules" aria-labelledby={`${id}-h`}>
       <div className="wrap open-grid">
         <div>
-          <p className="h-eyebrow">{eyebrow}</p>
           <h2 id={`${id}-h`}>{title}</h2>
           <p className="lede">{lede}</p>
-          <ul className="open-facts">
-            {facts.map(([b, x]) => <li key={b}><b>{b}</b> {x}</li>)}
-          </ul>
         </div>
-        <figure className="code" aria-label={`Example: ${file}`}>
-          <figcaption><span className="sc-label">{file}</span><span className="sc-label">Example</span></figcaption>
-          <pre><code>{code}</code></pre>
-        </figure>
+        <ul className="open-facts">
+          {facts.map(([b, x]) => <li key={b}><b>{b}</b> {x}</li>)}
+        </ul>
       </div>
     </section>
   );
