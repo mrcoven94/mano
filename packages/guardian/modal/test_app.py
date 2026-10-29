@@ -132,6 +132,14 @@ class WarmUps(unittest.TestCase):
         self.assertEqual(fake.now, minutes(37))
 
 
+class Verdicts(unittest.TestCase):
+    def test_the_review_never_leaves_the_server(self):
+        text = '{"review":"The payload sends to [EMAIL-1].","verdict":"block","problems":["Wrong address."]}'
+        self.assertEqual(
+            app.parse_verdict(text), {"verdict": "block", "problems": ["Wrong address."]}
+        )
+
+
 class MinContainers(unittest.TestCase):
     def test_defaults_to_scale_to_zero(self):
         self.assertEqual(app.min_containers_from_env(None), 0)
