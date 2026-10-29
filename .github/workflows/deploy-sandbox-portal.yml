@@ -7,15 +7,23 @@ on:
       - ".github/workflows/deploy-sandbox-portal.yml"
 permissions:
   contents: read
+# Serialize deploys so two pushes cannot deploy over each other. Never cancel: a started deploy runs to the end.
+concurrency:
+  group: deploy-sandbox-portal
+  cancel-in-progress: false
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: sandbox-portal-production
+      url: ${{ vars.SANDBOX_PORTAL_URL }}
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: pnpm
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm --filter @mano/sandbox-portal check
       - run: npm install -g wrangler

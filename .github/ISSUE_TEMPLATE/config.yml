@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security issue
+    url: https://github.com/mrcoven94/mano/blob/main/SECURITY.md
+    about: How to report a vulnerability privately.

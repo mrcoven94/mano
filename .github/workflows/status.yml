@@ -1,0 +1,34 @@
+name: status
+# Refreshes the "live versus in progress" table in README.md. Opens a pull
+# request when the table changes; never pushes to main.
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: status
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node scripts/status.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STATUS_SANDBOX_PORTAL_URL: ${{ vars.SANDBOX_PORTAL_URL }}
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: status/refresh-table
+          delete-branch: true
+          title: Refresh live versus in progress table
+          body: |
+            Automated refresh from `node scripts/status.mjs`: health checks plus
+            the latest deploy per environment. Review the table diff, then merge.
+          commit-message: Refresh live versus in progress table
