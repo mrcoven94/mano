@@ -24,6 +24,8 @@ describe("r3 should-fix: health, labels and byte caps", () => {
       META_MODEL_API_KEY: "k",
       ENCRYPTION_KEK_B64: "k",
       SESSION_SECRET: "s",
+      MANO_ENGINE_AGENT_TOKEN: "t",
+      MANO_HANDLE_GRANT_SECRET: "g",
     };
     expect(healthOk(full as never)).toBe(false);
     expect(healthOk({ ...full, MANO_ENV: "development" } as never)).toBe(true);
