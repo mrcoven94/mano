@@ -10,6 +10,7 @@
 // generation, turn number), the generation itself, and a handle grant
 // minted for this handle only. The agent forwards the grant to the
 // engine with its own token; it never holds the grant secret.
+import { guardReply } from "@mano/persona";
 import { mintHandleGrant } from "@mano/protocol";
 
 import { boundFetch } from "./fetch.js";
@@ -24,6 +25,20 @@ export const AGENT_TIMESTAMP_HEADER = "x-mano-timestamp";
 // Above the agent's own settle timeout, so a slow turn falls back
 // instead of hanging the conversation.
 export const AGENT_RESPONDER_TIMEOUT_MS = 100_000;
+
+// Sent instead of an approval question that would not reach the person
+// word for word. It asks for nothing, so no YES can follow it.
+export const APPROVAL_REFUSED_TEXT =
+  "I prepared that request, but I could not show it to you exactly here, so I am not asking you to approve it and nothing was sent. Please do not reply YES to it.";
+
+// The text line sends the question exactly when the voice guard leaves
+// it unchanged and it holds no link the link check could strip. The
+// agent runs the same check before it asks; this one also catches a
+// reply whose text dropped or changed the question on the way.
+export function approvalSurvivesTextLine(text: string, approval: unknown): boolean {
+  if (typeof approval !== "string" || !approval || !text.includes(approval)) return false;
+  return guardReply(approval).text === approval && !/https?:\/\/|www\./i.test(approval);
+}
 
 export type AgentVerifyFailure = "missing" | "bad_timestamp" | "stale" | "bad_signature";
 
@@ -61,6 +76,7 @@ export interface AgentResponderOptions {
 interface AgentTurnResponse {
   status?: unknown;
   text?: unknown;
+  approval?: unknown;
 }
 
 export class AgentResponder implements Responder {
@@ -119,6 +135,16 @@ export class AgentResponder implements Responder {
       });
       const data = (await res.json().catch(() => null)) as AgentTurnResponse | null;
       const text = typeof data?.text === "string" ? data.text.trim() : "";
+      if (res.ok && data?.status === "waiting_approval" && text && !approvalSurvivesTextLine(text, data.approval)) {
+        return {
+          text: APPROVAL_REFUSED_TEXT,
+          bubbles: splitBubbles(APPROVAL_REFUSED_TEXT),
+          inputChars,
+          outputChars: APPROVAL_REFUSED_TEXT.length,
+          model: "agent",
+          attempts: 1,
+        };
+      }
       if (res.ok && (data?.status === "replied" || data?.status === "waiting_approval") && text) {
         return {
           text,

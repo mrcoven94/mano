@@ -10,6 +10,8 @@
 // same approval until Engine reports a definite outcome, so a retry
 // reconciles it instead of filing again. The pointer also records the
 // Channels deletion generation; after a deletion it is never answered.
+import { guardReply } from "@mano/persona";
+
 import type { EngineApproval } from "./engine.js";
 import type { KeyValue } from "./storage.js";
 
@@ -64,6 +66,16 @@ export function renderQuestion(approval: EngineApproval): string {
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+// True when the text line would carry the question word for word: the
+// shared voice guard (which drops any sentence naming a model or
+// provider, and rewrites dashes and markdown) leaves it unchanged, and it
+// holds no link for the link check to strip. Anything else cannot be put
+// to a YES, because the person would approve content they never saw.
+// Channels runs the same check before sending (packages/channels).
+export function presentsExactly(question: string): boolean {
+  return guardReply(question).text === question && !/https?:\/\/|www\./i.test(question);
 }
 
 export async function savePending(kv: KeyValue, pending: PendingApproval, expiresAt: string): Promise<void> {

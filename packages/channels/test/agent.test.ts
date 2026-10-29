@@ -158,7 +158,8 @@ describe("agent turn identity and grant", () => {
   });
 
   it("accepts a reply that carries an approval question", async () => {
-    const fetchFn = (async () => Response.json({ status: "waiting_approval", text: "Reply YES to send exactly this." })) as typeof fetch;
+    const approval = "Ready to send: renewal. Name: Rosa Testcase. Reply YES to send exactly this, or NO to stop.";
+    const fetchFn = (async () => Response.json({ status: "waiting_approval", text: `It is ready.\n\n${approval}`, approval })) as typeof fetch;
     const result = await withGrant(fetchFn).respond({ texts: ["file it"], attachmentCount: 0, turnKey: { generation: 0, turn: 1 } });
     expect(result.model).toBe("agent");
     expect(result.text).toContain("Reply YES");
@@ -196,5 +197,39 @@ describe("agent deletion notice", () => {
     expect(
       await notifyAgentDeleted({ agentUrl: "https://a", secret: "s", grantSecret: "g", handleHash: HANDLE, generation: 1, fetchFn }),
     ).toBe(false);
+  });
+});
+
+describe("approval questions on the text line", () => {
+  function answering(body: Record<string, unknown>): AgentResponder {
+    return new AgentResponder({
+      agentUrl: "https://agent.example",
+      secret: "secret",
+      grantSecret: "g",
+      handleHash: HANDLE,
+      fallback: new StandInResponder(["fallback reply"]),
+      fetchFn: (async () => Response.json(body)) as typeof fetch,
+    });
+  }
+
+  it("refuses a question the voice guard would change, rather than send an altered one", async () => {
+    const approval = "Ready to send: renewal. Name: Claude Testcase; Phone: 555-0100. Reply YES to send exactly this, or NO to stop.";
+    const result = await answering({ status: "waiting_approval", text: `Ready.\n\n${approval}`, approval }).respond({
+      texts: ["file it"],
+      attachmentCount: 0,
+      turnKey: KEY,
+    });
+    expect(result.text).not.toContain("Reply YES");
+    expect(result.text).toMatch(/not.*approve|do not reply yes/i);
+  });
+
+  it("refuses an approval reply whose text does not carry the question word for word", async () => {
+    const approval = "Ready to send: renewal. Name: Rosa Testcase. Reply YES to send exactly this, or NO to stop.";
+    const result = await answering({ status: "waiting_approval", text: "Ready. Reply YES to send it.", approval }).respond({
+      texts: ["file it"],
+      attachmentCount: 0,
+      turnKey: KEY,
+    });
+    expect(result.text).not.toContain("Reply YES");
   });
 });

@@ -225,7 +225,10 @@ async function runTurn(deps: TurnDeps & { kv: KeyValue }, body: TurnBody, turnAt
   const question = proposed && proposed.turnId === body.turnId ? proposed.question : null;
   const text = [settled.status === "failed" ? "" : settled.text, question ?? ""].filter(Boolean).join("\n\n");
   if (!text) return failure(502, "failed", settled.reason);
-  return reply(text, question ? "waiting_approval" : settled.status);
+  if (!question) return reply(text, settled.status);
+  // The question also travels on its own, so Channels can check it goes
+  // out word for word.
+  return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question } };
 }
 
 // True for the first turn after a quiet stretch. Every turn pushes the

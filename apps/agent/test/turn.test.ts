@@ -7,6 +7,8 @@ import { handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/tur
 import startFormDraft from "../agent/tools/start_form_draft.js";
 import remind from "../agent/tools/remind.js";
 import { getReminderStore, resetReminderStores } from "../agent/lib/reminder-store.js";
+import { guardReply } from "@mano/persona";
+
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
@@ -53,7 +55,8 @@ async function fakeAgent(input: AgentTurnInput) {
       generation: input.generation,
       turnAtMs: input.turnAtMs,
     });
-    await startFormDraft.execute(fields, ctx);
+    const name = /Claude Testcase/.test(input.message) ? "Claude Testcase" : fields.fullName;
+    await startFormDraft.execute({ ...fields, fullName: name }, ctx);
     return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop" };
   }
   return { status: "replied" as const, text: `Answer ${agentCalls.length}`, reason: "stop" };
@@ -142,6 +145,23 @@ describe("approval by text", () => {
     const yes = await send(turn("turn_yes_000004", "yes"));
     expect(yes.status).toBe(200);
     expect(engine.executor.calls).toHaveLength(1);
+  });
+});
+
+describe("the approval question reaches the person exactly", () => {
+  it("the question survives the text line's voice guard word for word", async () => {
+    const ask = await send(turn("turn_exact00001", "Please file my renewal"));
+    const question = ask.body.text.slice(ask.body.text.indexOf("Ready to send:"));
+    expect(question).toContain("Name: Rosa Testcase");
+    expect(guardReply(ask.body.text).text).toContain(question);
+  });
+
+  it("a draft the text line would alter is never put to a YES", async () => {
+    const ask = await send(turn("turn_exact00002", "Please file my renewal for Claude Testcase"));
+    expect(ask.body.text).not.toContain("Reply YES");
+    expect(engine.approvals()[0].status).toBe("rejected");
+    await send(turn("turn_exact00003", "YES"));
+    expect(engine.executor.calls).toHaveLength(0);
   });
 });
 

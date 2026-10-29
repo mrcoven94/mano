@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { loadPending, renderQuestion, savePending } from "../lib/pending.js";
+import { loadPending, presentsExactly, renderQuestion, savePending } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { StorageUnavailable, getKeyValue } from "../lib/storage.js";
 
@@ -57,6 +57,15 @@ export default defineTool({
     if (result.status !== "needs_approval" || !result.approval) {
       return { status: result.status, reason: result.reason ?? "Engine did not hold it for approval.", sent: false };
     }
+    const question = renderQuestion(result.approval);
+    if (!presentsExactly(question)) {
+      await engine.reject(result.approval.id).catch(() => undefined);
+      return {
+        status: "cannot_show_exactly",
+        sent: false,
+        note: "This draft cannot be shown word for word over text, so it was not put to a yes and nothing was sent. Tell the person plainly, without repeating the details, and offer to help another way.",
+      };
+    }
     // One question waits at a time: the one it replaces can never be
     // answered, so Engine closes it.
     if (previous?.state === "asked" && previous.approvalId !== result.approval.id) {
@@ -71,7 +80,7 @@ export default defineTool({
         state: "asked",
         turnId,
         purpose: result.approval.purpose,
-        question: renderQuestion(result.approval),
+        question,
       },
       result.approval.expiresAt,
     );
