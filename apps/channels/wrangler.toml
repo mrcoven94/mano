@@ -40,6 +40,10 @@ bucket_name = "mano-channel-files"
 [triggers]
 crons = ["* * * * *"]
 
+# Real texts go only to a Standard model ID, with store: false.
+[vars]
+MANO_REPLY_MODEL = "muse-spark-1.3"
+
 # Secrets (never commit values; set with wrangler secret put):
 #   BLOOIO_API_KEY, BLOOIO_CHANNEL_ID, BLOOIO_WEBHOOK_SECRET,
 #   MANO_HANDLE_PEPPER, ENCRYPTION_KEK_B64, META_MODEL_API_KEY
