@@ -9,14 +9,27 @@ import type { Env } from "../env.js";
 import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, contentHashOf, createExecutor, ensureGatewayTables } from "../gateway/index.js";
 import type { ActionRequest, Approval, CheckOutcome } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
+import {
+  ACCOUNTS_REGISTRY_NAME,
+  decryptIdentityValue,
+  encryptIdentityValue,
+  identityHash,
+  normalizeIdentity,
+  scrubAuditDetail,
+  validateThreadInput,
+  type ActivityEntry,
+  type DataCounts,
+  type ThreadMessage,
+} from "../accounts.js";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
-import { getDocumentBytes, putDocument } from "../files.js";
+import { documentR2Key, getDocumentBytes, putDocument } from "../files.js";
 import { checkLinkSafety, redactBlockedLinks } from "../link-safety.js";
 import { base64ToBytes, bytesToBase64 } from "../hash.js";
 import { createModelClient, defaultModelFor } from "../model-client.js";
 import { getSessionSecret, verifyWsTicket } from "../auth.js";
 import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
 import { ConsentDeliveringExecutor } from "./person-executor.js";
+import type { AccountsRegistry } from "./accounts-registry.js";
 import type { OrgAgent } from "./org-agent.js";
 
 export interface GrantConsentInput {
@@ -80,6 +93,19 @@ export class PersonAgent extends Agent<Env, PersonState> {
       sql.exec(`CREATE TABLE IF NOT EXISTS profile(id TEXT PRIMARY KEY, display_name TEXT, synthetic INTEGER NOT NULL DEFAULT 0, public_key_b64 TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS conversation(id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)`);
+      try {
+        sql.exec(`ALTER TABLE conversation ADD COLUMN channel TEXT`);
+      } catch {
+        // The column already exists: additive migrations are idempotent.
+      }
+      // Accounts: identities as keyed hash plus encrypted value, the
+      // sign-in activity log, the session epoch, merge idempotency keys,
+      // and the delete tombstone.
+      sql.exec(`CREATE TABLE IF NOT EXISTS identities(handle_hash TEXT PRIMARY KEY, handle TEXT NOT NULL, value_enc TEXT NOT NULL, claimed_at TEXT NOT NULL)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS activity(id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, event TEXT NOT NULL, detail_json TEXT NOT NULL)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS accounts_meta(k TEXT PRIMARY KEY, v TEXT NOT NULL)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS move_keys(key TEXT PRIMARY KEY, from_id TEXT NOT NULL, into_id TEXT NOT NULL, created_at TEXT NOT NULL)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS tombstone(deleted_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS deadlines(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
       // One consent row per recipient and case, so revocation deletes the
@@ -280,6 +306,10 @@ export class PersonAgent extends Agent<Env, PersonState> {
     if (claims.sessionExp * 1000 <= Date.now()) {
       return { ok: false, reason: "The session behind this ticket expired." };
     }
+    if (this.deleted()) return { ok: false, reason: "This person was deleted." };
+    if ((claims.gen ?? 0) !== this.sessionEpoch()) {
+      return { ok: false, reason: "The session behind this ticket was revoked." };
+    }
     try {
       this.db().exec("INSERT INTO ws_tickets VALUES (?, ?)", claims.ticketId, new Date().toISOString());
     } catch {
@@ -293,10 +323,44 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { ok: true, subject: expectedSubject, sessionExp: claims.sessionExp };
   }
 
+  private deleted(): boolean {
+    return this.db().exec("SELECT deleted_at FROM tombstone LIMIT 1").toArray().length > 0;
+  }
+
   private async assertSubject(verified: string) {
     if (!verified) throw new Error("Forbidden: no verified subject.");
+    if (this.deleted()) throw new Error("This person was deleted.");
     if (!this.personId) await this.setIdentity(verified);
     else if (this.personId !== verified) throw new Error("Forbidden: subject mismatch.");
+  }
+
+  // Service path for accounts routes. The worker is the agent's only
+  // caller and passes service=true only after it verified the
+  // server-to-server key, so this binds identity from the explicit
+  // person ID the same way assertSubject binds it from a token.
+  private async assertService(service: unknown, personId: string) {
+    if (service !== true) throw new Error("Forbidden: accounts calls need the service route.");
+    if (typeof personId !== "string" || !personId) throw new Error("Forbidden: no person.");
+    if (this.deleted()) throw new Error("This person was deleted.");
+    if (!this.personId) await this.setIdentity(personId);
+    else if (this.personId !== personId) throw new Error("Forbidden: subject mismatch.");
+  }
+
+  private sessionEpoch(): number {
+    const rows = this.db().exec("SELECT v FROM accounts_meta WHERE k = 'session_epoch'").toArray() as unknown as {
+      v: string;
+    }[];
+    const epoch = Number(rows[0]?.v ?? 0);
+    return Number.isInteger(epoch) && epoch >= 0 ? epoch : 0;
+  }
+
+  // The worker's revocation check. Side-effect free: a fresh agent
+  // reports epoch 0 without initializing, so a mere check never
+  // creates a person. Throws only on a bound-agent mismatch.
+  async getSessionEpoch(personId: string): Promise<{ epoch: number; tombstoned: boolean }> {
+    if (this.deleted()) return { epoch: 0, tombstoned: true };
+    if (this.personId && this.personId !== personId) throw new Error("Forbidden: subject mismatch.");
+    return { epoch: this.sessionEpoch(), tombstoned: false };
   }
 
   async setIdentity(personId: string) {
@@ -358,7 +422,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     await this.assertSubject(verified);
     const id = crypto.randomUUID();
     this.db().exec(
-      "INSERT INTO conversation(id, role, content, created_at) VALUES (?, 'user', ?, ?)",
+      "INSERT INTO conversation(id, role, content, channel, created_at) VALUES (?, 'user', ?, 'web', ?)",
       id,
       message,
       new Date().toISOString(),

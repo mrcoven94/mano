@@ -13,12 +13,17 @@ export interface SessionClaims {
   org: string | null;
   iat: number;
   exp: number;
+  // Session generation: the person's epoch when the token was minted.
+  // Revoking bumps the epoch, so older generations stop verifying.
+  // Absent on tokens minted before generations existed; those read as 0.
+  gen?: number;
 }
 
 export interface SessionMintInput {
   kind: SessionKind;
   sub: string;
   org?: string;
+  gen?: number;
 }
 
 // Dev-only fallback. It exists only when MANO_ENV=development is set
@@ -85,12 +90,16 @@ export async function mintSessionToken(
   if (!input.sub || typeof input.sub !== "string") throw new Error("Session subject must be a non-empty string.");
   if (input.kind !== "person" && input.kind !== "staff") throw new Error("Session kind must be person or staff.");
   if (input.kind === "staff" && !input.org) throw new Error("Staff sessions must carry an org ID.");
+  if (input.gen !== undefined && (!Number.isInteger(input.gen) || input.gen < 0)) {
+    throw new Error("Session generation must be a non-negative integer.");
+  }
   const claims: SessionClaims = {
     kind: input.kind,
     sub: input.sub,
     org: input.org ?? null,
     iat: Math.floor(nowMs / 1000),
     exp: Math.floor(nowMs / 1000) + ttlSeconds,
+    ...(input.gen !== undefined ? { gen: input.gen } : {}),
   };
   const payload = b64urlEncode(new TextEncoder().encode(JSON.stringify(claims)));
   const sig = await crypto.subtle.sign(
@@ -122,7 +131,15 @@ export async function verifySessionToken(
     if (claims.kind === "staff" && (typeof claims.org !== "string" || !claims.org)) return null;
     if (typeof claims.exp !== "number" || claims.exp * 1000 <= now.getTime()) return null;
     if (typeof claims.iat !== "number" || claims.iat * 1000 > now.getTime() + 60_000) return null;
-    return { kind: claims.kind, sub: claims.sub, org: claims.org ?? null, iat: claims.iat, exp: claims.exp };
+    if (claims.gen !== undefined && (!Number.isInteger(claims.gen) || claims.gen < 0)) return null;
+    return {
+      kind: claims.kind,
+      sub: claims.sub,
+      org: claims.org ?? null,
+      iat: claims.iat,
+      exp: claims.exp,
+      ...(claims.gen !== undefined ? { gen: claims.gen } : {}),
+    };
   } catch {
     return null;
   }
@@ -157,6 +174,9 @@ export interface WsTicketClaims {
   ticketId: string;
   iat: number;
   exp: number;
+  // Generation of the session behind the ticket. Redeeming fails when
+  // the person's epoch moved on (sign out everywhere kills tickets).
+  gen?: number;
 }
 
 // A 60-second single-use ticket for one WebSocket upgrade. Minted by an
@@ -167,8 +187,10 @@ export async function mintWsTicket(
   sessionExp: number,
   secret: string,
   nowMs = Date.now(),
+  gen = 0,
 ): Promise<{ ticket: string; ticketId: string; expiresAt: number }> {
   if (!sub || typeof sub !== "string") throw new Error("Ticket subject must be a non-empty string.");
+  if (!Number.isInteger(gen) || gen < 0) throw new Error("Ticket generation must be a non-negative integer.");
   const ticketId = crypto.randomUUID();
   const claims: WsTicketClaims = {
     kind: "ws-ticket",
@@ -177,6 +199,7 @@ export async function mintWsTicket(
     ticketId,
     iat: Math.floor(nowMs / 1000),
     exp: Math.floor(nowMs / 1000) + 60,
+    gen,
   };
   const payload = b64urlEncode(new TextEncoder().encode(JSON.stringify(claims)));
   const sig = await crypto.subtle.sign(
@@ -208,7 +231,16 @@ export async function verifyWsTicket(
     if (typeof claims.ticketId !== "string" || !claims.ticketId) return null;
     if (typeof claims.sessionExp !== "number") return null;
     if (typeof claims.exp !== "number" || claims.exp * 1000 <= now.getTime()) return null;
-    return { kind: "ws-ticket", sub: claims.sub, sessionExp: claims.sessionExp, ticketId: claims.ticketId, iat: claims.iat, exp: claims.exp };
+    if (claims.gen !== undefined && (!Number.isInteger(claims.gen) || claims.gen < 0)) return null;
+    return {
+      kind: "ws-ticket",
+      sub: claims.sub,
+      sessionExp: claims.sessionExp,
+      ticketId: claims.ticketId,
+      iat: claims.iat,
+      exp: claims.exp,
+      gen: claims.gen ?? 0,
+    };
   } catch {
     return null;
   }
