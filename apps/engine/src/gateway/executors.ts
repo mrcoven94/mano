@@ -1,5 +1,6 @@
 import type { ActionRequest, CheckOutcome, Executor } from "./types.js";
 import { DefiniteFailureError, TimeoutError } from "./types.js";
+import { boundFetch } from "../fetch.js";
 
 // In-memory stand-in: records calls, invents external IDs, and can fail
 // once with a timeout for reconcile tests. Receipts are always labeled
@@ -44,7 +45,7 @@ export class SandboxExecutor implements Executor {
   constructor(
     private baseUrl: string,
     private timeoutMs = 15000,
-    private fetchFn: typeof fetch = fetch,
+    private fetchFn: typeof fetch = boundFetch,
   ) {}
 
   private downstreamKey(req: ActionRequest): string {

@@ -360,6 +360,19 @@ export default {
           return Response.json({ error: message }, { status: 500 });
         }
       }
+      if (rest === "/memory" && request.method === "GET") {
+        return Response.json({ memories: await agent.listMemory(claims.sub) });
+      }
+      if (rest === "/memory" && request.method === "POST") {
+        const read = await readCappedJson(request, MAX_ACTION_BODY);
+        if (!read.ok) return read.response;
+        const { content, source } = (read.value ?? {}) as { content?: unknown; source?: unknown };
+        if (typeof content !== "string" || typeof source !== "string" || !content) {
+          return Response.json({ error: "Body needs content and source strings." }, { status: 400 });
+        }
+        const id = await agent.addMemory(claims.sub, content, source);
+        return Response.json({ id });
+      }
       const approveMatch = rest.match(/^\/approvals\/([^/]+)\/approve$/);
       if (approveMatch && request.method === "POST") {
         const approvalId = decodeURIComponent(approveMatch[1]);

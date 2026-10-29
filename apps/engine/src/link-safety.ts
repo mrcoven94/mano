@@ -1,3 +1,5 @@
+import { boundFetch } from "./fetch.js";
+
 export interface DohAnswer {
   Answer?: { data: string; type: number }[];
   Status?: number;
@@ -37,7 +39,7 @@ export async function checkLinkSafety(
   url: string,
   opts: { forDisplay?: boolean; fetchFn?: FetchFn } = {},
 ): Promise<{ allowed: boolean; reason?: string }> {
-  const fetchFn = opts.fetchFn ?? fetch;
+  const fetchFn = opts.fetchFn ?? boundFetch;
   let host: string;
   try {
     host = new URL(url).hostname;

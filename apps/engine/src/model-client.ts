@@ -2,6 +2,7 @@
 // for person data, contributor IDs for synthetic data only. The agent
 // decides which side a request is on from its own profile record; callers
 // never pick.
+import { boundFetch } from "./fetch.js";
 
 export const STANDARD_MODEL_IDS = ["muse-spark-1.3"];
 export const CONTRIBUTOR_MODEL_IDS = ["muse-spark-1.3-contributor"];
@@ -99,7 +100,7 @@ export class MetaModelClient {
     this.allowlist = new Set([...STANDARD_MODEL_IDS, ...CONTRIBUTOR_MODEL_IDS, ...(opts.allowExtra ?? [])]);
     this.timeoutMs = opts.timeoutMs ?? 15000;
     this.maxRetries = opts.maxRetries ?? 2;
-    this.fetchFn = opts.fetchFn ?? fetch;
+    this.fetchFn = opts.fetchFn ?? boundFetch;
   }
 
   private isContributorId(id: string): boolean {

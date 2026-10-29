@@ -381,7 +381,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { reply: redacted.text, evidence: ev };
   }
 
-  async addMemory(content: string, source: string) {
+  async addMemory(verified: string, content: string, source: string) {
+    await this.assertSubject(verified);
     const id = crypto.randomUUID();
     this.db().exec(
       "INSERT INTO memory(id, content, source, created_at) VALUES (?, ?, ?, ?)",
@@ -393,7 +394,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return id;
   }
 
-  async listMemory() {
+  async listMemory(verified: string) {
+    await this.assertSubject(verified);
     return [...this.db().exec("SELECT * FROM memory ORDER BY created_at").toArray()];
   }
 
