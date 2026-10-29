@@ -15,7 +15,7 @@ jobs:
       - uses: actions/github-script@v8
         with:
           script: |
-            const sessions = ["app", "channels", "engine", "eval", "extensions", "forms", "guardian", "mail", "orgs", "phone", "platform", "program", "quality", "results", "screens", "ship", "site", "spine", "vault"];
+            const sessions = ["accounts", "agent", "app", "channels", "engine", "eval", "extensions", "forms", "guardian", "lead", "mail", "orgs", "pages", "phone", "platform", "program", "quality", "results", "screens", "ship", "site", "spine", "vault"];
             const { owner, repo } = context.repo;
             const number = context.payload.pull_request.number;
             const title = context.payload.pull_request.title || "";
