@@ -5,9 +5,9 @@ import { ActionGateway } from "../src/gateway/gateway.js";
 import { SqlApprovalStore, ensureGatewayTables } from "../src/gateway/sql-store.js";
 import type { ActionRequest, Executor } from "../src/gateway/types.js";
 
-// Round 5, item 3 against real SQLite: the persisted audit_log row for
-// a blocked URL carries scheme, host and the SHA-256 of the rest. The
-// synthetic sentinel in the query string must not appear in the row.
+// Round 5, item 3 against real SQLite, tightened in round 7: the
+// persisted audit_log row for a blocked URL carries only its SHA-256.
+// No part of the URL, the synthetic sentinel included, appears in the row.
 
 function openTestStorage() {
   const db = new DatabaseSync(":memory:");
@@ -25,7 +25,7 @@ function openTestStorage() {
 }
 
 describe("r5 item 3: persisted audit rows redact blocked URLs", () => {
-  it("stores no path or query in audit_log", async () => {
+  it("stores no part of the URL in audit_log", async () => {
     const storage = openTestStorage();
     ensureGatewayTables(storage as never);
     const store = new SqlApprovalStore(storage as never);
@@ -60,9 +60,9 @@ describe("r5 item 3: persisted audit rows redact blocked URLs", () => {
       detail: string;
     }[];
     expect(rows.length).toBe(1);
-    expect(rows[0].detail).toContain("https://portal.example.com");
     expect(rows[0].detail).not.toContain(sentinel);
+    expect(rows[0].detail).not.toContain("portal.example.com");
     expect(rows[0].detail).not.toContain("/renewal/form");
-    expect(rows[0].detail).toMatch(/portal\.example\.com#[0-9a-f]{64}/);
+    expect(JSON.parse(rows[0].detail).urlHash).toMatch(/^[0-9a-f]{64}$/);
   });
 });
