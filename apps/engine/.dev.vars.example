@@ -1,0 +1,22 @@
+# Engine local config. Copy to .dev.vars (never commit it) and fill in
+# values from Infisical with `ws keys`. Names only here, never values.
+#
+# Required for live model calls and documents:
+META_MODEL_API_KEY= # gitleaks:allow (empty example value)
+ENCRYPTION_KEK_B64= # gitleaks:allow (empty example value)
+SESSION_SECRET= # gitleaks:allow (empty example value)
+OPERATOR_SECRET= # gitleaks:allow (empty example value)
+# Environment name. development allows the dev session secret and the
+# simulated executor and stand-in model without explicit choice.
+MANO_ENV=development
+# Model routing: with account and gateway IDs, calls go through
+# Cloudflare AI Gateway; without them, direct to the model API.
+CF_ACCOUNT_ID=
+AI_GATEWAY_ID=
+AI_GATEWAY_PROVIDER=
+# Extra allowlisted model IDs, comma separated (rarely needed):
+MODEL_ALLOWLIST_EXTRA=
+# Executor: simulated (default) or sandbox. Sandbox mode needs the
+# sandbox agency portal URL from the Spine session:
+EXECUTOR_MODE=
+SANDBOX_BASE_URL=

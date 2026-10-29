@@ -1,0 +1,26 @@
+name = "mano-engine"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [
+  { name = "PERSON_AGENT", class_name = "PersonAgent" },
+  { name = "ORG_AGENT", class_name = "OrgAgent" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PersonAgent", "OrgAgent"]
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "mano-files"
+
+# Secrets (never commit values):
+#   wrangler secret put META_MODEL_API_KEY  (reads from stdin)
+#   wrangler secret put ENCRYPTION_KEK_B64
+#   wrangler secret put SESSION_SECRET
+#   wrangler secret put OPERATOR_SECRET  (marks people synthetic via the admin route)
+# Optional model routing (see .dev.vars.example):
+#   CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA

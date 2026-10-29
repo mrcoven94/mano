@@ -36,6 +36,7 @@ A held-out test, frozen before any tuning: renewal and document scenarios with u
 - Shared relational data in PlanetScale Postgres through Hyperdrive.
 - Agent computers on Modal Sandboxes (sponsor credits, per-second billing, the same platform as the Glimmer guardian); Cloudflare Browser Run for simple browsing and login handoff. Muse Spark 1.3 drives the computer (Wonder's computer tool was not enabled on our key on Oct 26).
 - Website and staff screens on Vercel (`apps/site`, Next.js). Resident app in `apps/app` (React Native with Expo; Android builds through EAS need no Apple account).
+- Model calls go through Cloudflare AI Gateway once CF_ACCOUNT_ID and AI_GATEWAY_ID are set; until then the client calls api.meta.ai directly (Oct 26 smoke run confirmed the direct path with a synthetic prompt).
 
 ## Changes
 
