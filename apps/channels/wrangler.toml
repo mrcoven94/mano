@@ -46,4 +46,5 @@ crons = ["* * * * *"]
 # Optional tuning (plain vars or secrets):
 #   CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER,
 #   MANO_TEXT_DAILY_BUDGET_USD, MANO_TEXT_USD_PER_1K_CHARS,
-#   TURN_BATCH_MS, TURN_INTERIM_MS, BLOOIO_MEDIA_HOSTS
+#   TURN_BATCH_MS, TURN_INTERIM_MS, BLOOIO_MEDIA_HOSTS,
+#   MANO_TEXT_NUMBER (our line's number, checked against channel_address)

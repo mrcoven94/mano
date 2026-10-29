@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
+import { hashHandle, parseBlooioEvent } from "@mano/channels";
 import type { Env } from "../src/env.js";
 
 const workerEnv = env as unknown as Env;
@@ -55,6 +56,57 @@ describe("ConversationDO on SQLite", () => {
     expect(turn.status).toBe(200);
     const outcome = ((await turn.json()) as { result: string }).result;
     expect(["ran", "idle"]).toContain(outcome);
+    const standin = await stub.fetch("https://conversation/internal/standin");
+    expect(standin.status).toBe(200);
+    const recorded = (await standin.json()) as {
+      sends: Array<{ key: string; state: string; message: string | null }>;
+      turn: number;
+      introduced: boolean;
+      pending: number;
+    };
+    expect(recorded.turn).toBe(1);
+    expect(recorded.introduced).toBe(true);
+    expect(recorded.pending).toBe(0);
+    expect(recorded.sends.length).toBeGreaterThan(0);
+    expect(recorded.sends.every((s) => s.state === "sent" && !!s.message)).toBe(true);
+  });
+
+  it("answers a 2026-10-01 event with no id or channel_id", async () => {
+    // Exact docs payload shape, parsed by the real parser, then run on
+    // the real DO: dedupe key, sender handle and reply all derive from
+    // the message_id-bearing envelope.
+    const parsed = parseBlooioEvent({
+      type: "message.received",
+      api_version: "2026-10-01",
+      // Live timestamp: the DO files anything older than its cutoff as stale.
+      created_at: Date.now(),
+      organization_id: "org_EXAMPLE",
+      data: {
+        kind: "received",
+        message_type: "text",
+        text: "Hi Mano",
+        sender: "+15551234567",
+        recipient: "+18005550000",
+        channel_address: "+18005550000",
+        chat_id: "chat_EXAMPLE_do",
+        message_id: "msg_EXAMPLE_do",
+        protocol: "imessage",
+        attachments: [],
+      },
+    });
+    expect(parsed?.id).toBe("message.received:msg_EXAMPLE_do");
+    expect(parsed?.handle).toBe("+15551234567");
+    if (!parsed?.handle) throw new Error("docs payload has no handle");
+    const handleHash = await hashHandle(parsed.handle, workerEnv.MANO_HANDLE_PEPPER);
+    const stub = stubFor(`do-docs-${Date.now()}`);
+    expect(await postEvent(stub, handleHash, { ...parsed })).toBe("queued");
+    expect(await postEvent(stub, handleHash, { ...parsed })).toBe("duplicate");
+    await new Promise((r) => setTimeout(r, 3000));
+    const turn = await stub.fetch("https://conversation/internal/turn", {
+      method: "POST",
+      body: JSON.stringify({ handleHash }),
+    });
+    expect(turn.status).toBe(200);
     const standin = await stub.fetch("https://conversation/internal/standin");
     expect(standin.status).toBe(200);
     const recorded = (await standin.json()) as {

@@ -71,6 +71,46 @@ describe("parseBlooioEvent", () => {
     });
   });
 
+  it("parses the 2026-10-01 webhook shape with no top-level id or channel_id", () => {
+    // Shape from the Blooio docs 2026-10-01 message.received example: the
+    // envelope carries type, api_version and created_at; data carries the
+    // message with sender, recipient, channel_address, chat_id, message_id
+    // and text, and no direction.
+    const event = parseBlooioEvent({
+      type: "message.received",
+      api_version: "2026-10-01",
+      created_at: 1730000000000,
+      organization_id: "org_EXAMPLE",
+      data: {
+        kind: "received",
+        message_type: "text",
+        text: "Hi Mano",
+        sender: "+15551234567",
+        recipient: "+15557654321",
+        channel_address: "+15557654321",
+        chat_id: "chat_EXAMPLE",
+        message_id: "msg_EXAMPLE",
+        protocol: "imessage",
+        attachments: [],
+      },
+    });
+    expect(event).toMatchObject({
+      id: "message.received:msg_EXAMPLE",
+      kind: "message.received",
+      channelId: null,
+      channelAddress: "+15557654321",
+      chatId: "chat_EXAMPLE",
+      messageId: "msg_EXAMPLE",
+      handle: "+15551234567",
+      direction: "inbound",
+      text: "Hi Mano",
+    });
+  });
+
+  it("still rejects an event with neither id nor message_id", () => {
+    expect(parseBlooioEvent({ type: "message.received", data: { text: "Hi" } })).toBeNull();
+  });
+
   it("marks unknown types ignored and rejects junk", () => {
     expect(parseBlooioEvent({ id: "evt_x", type: "safety.state_changed", data: {} })?.kind).toBe("ignored");
     expect(parseBlooioEvent({ nope: true })).toBeNull();

@@ -34,6 +34,9 @@ export interface NormalizedEvent {
   rawType: string;
   channelId: string | null;
   channelType: string | null;
+  // Our own line's address on this event (number or alias), when the
+  // provider includes it. Ingress checks it against MANO_TEXT_NUMBER.
+  channelAddress: string | null;
   chatId: string | null;
   messageId: string | null;
   // Set when the event belongs to a group chat. The worker records group

@@ -19,6 +19,9 @@ export interface Env {
   TURN_BATCH_MS?: string;
   TURN_INTERIM_MS?: string;
   BLOOIO_MEDIA_HOSTS?: string;
+  // Our line's own number or alias, checked against the channel_address
+  // on inbound webhooks when both are present. Public value; optional.
+  MANO_TEXT_NUMBER?: string;
 }
 
 export function numberEnv(value: string | undefined, fallback: number): number {

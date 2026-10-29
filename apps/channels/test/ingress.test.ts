@@ -98,6 +98,62 @@ describe("webhook ingress", () => {
     expect(sent).toHaveLength(0);
   });
 
+  it("accepts the 2026-10-01 shape with no id or channel_id", async () => {
+    const sent: unknown[] = [];
+    const now = Math.floor(Date.now() / 1000);
+    const body = JSON.stringify({
+      type: "message.received",
+      api_version: "2026-10-01",
+      created_at: 1730000000000,
+      organization_id: "org_EXAMPLE",
+      data: {
+        kind: "received",
+        message_type: "text",
+        text: "Hi Mano",
+        sender: "+15551234567",
+        recipient: "+15557654321",
+        channel_address: "+15557654321",
+        chat_id: "chat_EXAMPLE",
+        message_id: "msg_EXAMPLE",
+        protocol: "imessage",
+        attachments: [],
+      },
+    });
+    const res = await handleWebhook(
+      await signedRequest(body, now),
+      { ...hookEnv(sent), MANO_TEXT_NUMBER: "+15557654321" },
+    );
+    expect(res.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      id: "message.received:msg_EXAMPLE",
+      handle: "+15551234567",
+      direction: "inbound",
+      text: "Hi Mano",
+    });
+  });
+
+  it("ignores an event whose address names another line", async () => {
+    const sent: unknown[] = [];
+    const now = Math.floor(Date.now() / 1000);
+    const body = envelope({}, { channel_id: undefined, channel_address: "+15550009999" });
+    const res = await handleWebhook(
+      await signedRequest(body, now),
+      { ...hookEnv(sent), MANO_TEXT_NUMBER: "+18005550000" },
+    );
+    expect(res.status).toBe(202);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("skips the address check when our number is not configured", async () => {
+    const sent: unknown[] = [];
+    const now = Math.floor(Date.now() / 1000);
+    const body = envelope({}, { channel_id: undefined, channel_address: "+15550009999" });
+    const res = await handleWebhook(await signedRequest(body, now), hookEnv(sent));
+    expect(res.status).toBe(200);
+    expect(sent).toHaveLength(1);
+  });
+
   it("fails closed when the webhook secret is not set", async () => {
     const sent: unknown[] = [];
     const now = Math.floor(Date.now() / 1000);
@@ -168,7 +224,8 @@ describe("routeEvent", () => {
     const routed = await routeEvent(
       {
         id: "evt_r1", kind: "message.received", rawType: "message.received", channelId: CHANNEL_ID,
-        channelType: "blooio", chatId: "chat_hook", messageId: "msg_in_1", group: null, handle: "+15550001001",
+        channelType: "blooio",
+        channelAddress: null, chatId: "chat_hook", messageId: "msg_in_1", group: null, handle: "+15550001001",
         direction: "inbound", text: "Hi", attachments: [], errorCode: null, errorMessage: null, occurredAtMs: 0,
       },
       env,
@@ -178,7 +235,8 @@ describe("routeEvent", () => {
     const skipped = await routeEvent(
       {
         id: "evt_r2", kind: "typing.started", rawType: "typing.started", channelId: CHANNEL_ID,
-        channelType: "blooio", chatId: "chat_hook", messageId: null, group: null, handle: null,
+        channelType: "blooio",
+        channelAddress: null, chatId: "chat_hook", messageId: null, group: null, handle: null,
         direction: null, text: null, attachments: [], errorCode: null, errorMessage: null, occurredAtMs: 0,
       },
       env,
@@ -212,7 +270,8 @@ describe("routeEvent", () => {
     routes.set(await hashChatId("chat_hook", "test-pepper-not-real"), "hash-owner");
     const receipt: NormalizedEvent = {
       id: "evt_feed_rcpt", kind: "message.delivered", rawType: "message.delivered", channelId: CHANNEL_ID,
-      channelType: "blooio", chatId: "chat_hook", messageId: "msg_out_1", group: null, handle: null,
+      channelType: "blooio",
+      channelAddress: null, chatId: "chat_hook", messageId: "msg_out_1", group: null, handle: null,
       direction: "outbound", text: null, attachments: [], errorCode: null, errorMessage: null, occurredAtMs: 1_790_000_001_000,
     };
     expect(await routeEvent({ ...receipt }, env)).toBe("routed");
