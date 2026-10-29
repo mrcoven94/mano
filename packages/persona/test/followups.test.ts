@@ -133,3 +133,24 @@ describe("PR 67 review round 2", () => {
     }
   });
 });
+
+describe("listed names count only inside an identity construction (lead decision)", () => {
+  it("passes real benefits help that names a company", () => {
+    for (const text of [
+      "I'd check whether Amazon takes your EBT card.",
+      "You can look it up on Google Maps.",
+      "Walmart and Amazon accept SNAP online.",
+      "If your phone is locked, call Apple support.",
+      "I can help you renew Apple Health.",
+    ]) {
+      expect(containsProviderName(text), text).toBe(false);
+      expect(guardReply(text), text).toEqual({ text, changes: [] });
+    }
+  });
+
+  it("replaces an identity construction with a listed name", () => {
+    for (const text of ["I use Google to answer.", "Meta made me.", "Google made me.", "I'm based on Amazon Nova.", "I'm Google's assistant."]) {
+      expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
+    }
+  });
+});

@@ -52,8 +52,10 @@ function idPattern(modelIds: readonly string[]): RegExp | null {
 
 // Mano describes itself one way only. Two rules decide a sentence that
 // identifies the assistant as anything but Mano:
-// 1. A self-reference (I, I'm, my, this is, you're talking with) that
-//    contains a name from AI_NAMES, a finite list, in any case.
+// 1. A name from AI_NAMES, a finite list, in any case, inside an
+//    identity construction about the assistant ("I'm X", "this is X",
+//    "X made me", "I use X to answer"). Anywhere else a listed company
+//    passes, so "Walmart and Amazon accept SNAP online" is still help.
 // 2. For names not on the list, only a capitalized "I'm X", "my name is
 //    X", or the assistant itself made, built or created by X.
 // Benefits program names that contain a listed name are exempt.
@@ -61,7 +63,20 @@ const AI_NAMES = [
   "meta", "muse", "spark", "glimmer", "llama", "openai", "chatgpt", "gpt", "google", "gemini", "bard", "anthropic",
   "claude", "microsoft", "copilot", "bing", "amazon", "alexa", "nova", "apple", "siri", "mistral", "deepseek", "grok", "xai",
 ];
-const AI_NAME_PATTERN = new RegExp(`\\b(?:${AI_NAMES.join("|")})\\b`, "i");
+const NAME = `(?:${AI_NAMES.join("|")})`;
+const FILLER = "(?:(?:a|an|the|your|just|actually) )?(?:(?:ai|virtual|voice|digital|assistant|model|bot|chatbot|version|helper) )*";
+const SELF = "(?:i|i was|i am|i'm|i’m|im|mano|mano is|mano was)";
+const MAKER = "(?:made|built|created|developed|trained|powered|designed|programmed|engineered)";
+const IDENTITY_WITH_NAME = [
+  `\\b(?:i am|i'm|i’m|im|my name is|you(?:'re|’re| are) (?:talking|chatting|texting) (?:to|with)) ${FILLER}${NAME}\\b`,
+  `\\bthis is ${FILLER}${NAME}\\b(?!['’]s (?!(?:ai |virtual )?(?:assistant|model|bot|chatbot)\\b))`,
+  `\\b${SELF}(?: (?:an?|the) (?:[\\w-]+ )?(?:assistant|ai|model|bot|chatbot))? ${MAKER} (?:by|on|at) ${FILLER}${NAME}\\b`,
+  `\\b(?:i run|i am based|i'm based|i’m based|im based|mano runs|mano is based|mano was built) on ${FILLER}${NAME}\\b`,
+  `\\b(?:i|mano) (?:use|uses) ${NAME} to (?:answer|reply|respond|think|talk|write)\\b`,
+  `\\b${NAME} (?:made|built|created|developed|trained|powers|runs|designed) (?:me|mano)\\b`,
+  `\\bmy (?:maker|creator|developer|provider|company|model) is ${FILLER}${NAME}\\b`,
+  `\\b(?:i am|i'm|i’m|im|this is|my name is)(?: (?:a|an|the|your))? ${NAME}['’]s (?:ai |virtual )?(?:assistant|model|bot|chatbot)\\b`,
+].map((source) => new RegExp(source, "i"));
 const PROGRAM_NAMES = /\bapple health\b/gi;
 
 const OTHER_SELF = [
@@ -72,7 +87,8 @@ const OTHER_SELF = [
 ];
 
 function selfIdentifiesAsOther(sentence: string): boolean {
-  if (SELF_REFERENCE.test(sentence) && AI_NAME_PATTERN.test(sentence.replace(PROGRAM_NAMES, " ").replace(ORDINARY_PHRASES, " "))) return true;
+  const plain = sentence.replace(PROGRAM_NAMES, " ").replace(ORDINARY_PHRASES, " ");
+  if (IDENTITY_WITH_NAME.some((pattern) => pattern.test(plain))) return true;
   return OTHER_SELF.some((pattern) => pattern.test(sentence));
 }
 

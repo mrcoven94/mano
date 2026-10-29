@@ -141,3 +141,11 @@ describe("PR 67 review round 2, through the send path", () => {
     }
   });
 });
+
+describe("listed names in benefits help, through the send path (lead decision)", () => {
+  it("sends a reply about Amazon and EBT unchanged", async () => {
+    const reply = "I'd check whether Amazon takes your EBT card.";
+    const h = makeHarness({ replies: [reply] });
+    expect((await say(h, "evt_1", "can i use snap online")).slice(1)).toEqual([reply]);
+  });
+});
