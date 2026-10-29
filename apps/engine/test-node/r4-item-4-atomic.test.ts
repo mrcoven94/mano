@@ -55,16 +55,26 @@ function nodeTransact<T>(sql: ReturnType<typeof openOrgTables>, fn: () => T): T 
 
 function apply(
   sql: ReturnType<typeof openOrgTables>,
-  fromAgentId: string,
-  key: string,
+  scope: { fromAgentId: string; idempotencyKey: string; event: "share" | "revoke" },
   append: () => void,
 ) {
-  return applyConsentDelivery(sql, fromAgentId, key, append, (fn) => nodeTransact(sql, fn));
+  return applyConsentDelivery(sql, scope, append, (fn) => nodeTransact(sql, fn));
+}
+
+function appendEvent(
+  sql: ReturnType<typeof openOrgTables>,
+  o: { caseId: string; event: "share" | "revoke"; person: string; messageId: string; key: string },
+) {
+  sql.exec(
+    "INSERT INTO case_events(case_id, event, person_id, purpose, message_id, at, idempotency_key) VALUES (?,?,?,?,?,?,?)",
+    o.caseId, o.event, o.person, "", o.messageId, new Date().toISOString(), o.key,
+  );
 }
 
 describe("r4 item 4: delivery marker and event are atomic", () => {
   it("documents the hole: a marker alone reads as done", () => {
     const sql = openOrgTables();
+    const scope = { fromAgentId: "person:r4i4", idempotencyKey: "key-crash", event: "revoke" as const };
     // The crash state: marker written, event never appended.
     expect(tryRecordDelivery(sql, "person:r4i4", "key-crash")).toBe("recorded");
     expect(count(sql, "case_events")).toBe(0);
@@ -72,49 +82,63 @@ describe("r4 item 4: delivery marker and event are atomic", () => {
     const marker = sql.exec("SELECT idempotency_key FROM processed_messages WHERE sender_agent_id = ? AND idempotency_key = ?", "person:r4i4", "key-crash").toArray();
     expect(marker.length).toBe(1);
     // The event record tells the truth: nothing happened.
-    expect(consentEventRecorded(sql, "key-crash")).toBe(false);
+    expect(consentEventRecorded(sql, scope)).toBe(false);
   });
 
   it("applies the missing event when only the marker survived", () => {
     const sql = openOrgTables();
+    const scope = { fromAgentId: "person:r4i4", idempotencyKey: "key-retry", event: "revoke" as const };
     sql.exec("INSERT INTO processed_messages VALUES (?, ?)", "person:r4i4", "key-retry");
-    const out = apply(sql, "person:r4i4", "key-retry", () => {
-      sql.exec(
-        "INSERT INTO case_events(case_id, event, person_id, purpose, message_id, at, idempotency_key) VALUES (?,?,?,?,?,?,?)",
-        "case-r4i4", "revoke", "r4i4", "", "msg-1", new Date().toISOString(), "key-retry",
-      );
+    const out = apply(sql, scope, () => {
+      appendEvent(sql, { caseId: "case-r4i4", event: "revoke", person: "r4i4", messageId: "msg-1", key: "key-retry" });
     });
     expect(out).toBe("applied");
-    expect(consentEventRecorded(sql, "key-retry")).toBe(true);
+    expect(consentEventRecorded(sql, scope)).toBe(true);
     expect(count(sql, "case_events")).toBe(1);
   });
 
   it("reports a genuine duplicate only when the event exists", () => {
     const sql = openOrgTables();
+    const scope = { fromAgentId: "person:r4i4", idempotencyKey: "key-dup", event: "revoke" as const };
     const append = () => {
-      sql.exec(
-        "INSERT INTO case_events(case_id, event, person_id, purpose, message_id, at, idempotency_key) VALUES (?,?,?,?,?,?,?)",
-        "case-r4i4", "revoke", "r4i4", "", "msg-1", new Date().toISOString(), "key-dup",
-      );
+      appendEvent(sql, { caseId: "case-r4i4", event: "revoke", person: "r4i4", messageId: "msg-1", key: "key-dup" });
     };
-    expect(apply(sql, "person:r4i4", "key-dup", append)).toBe("applied");
-    expect(apply(sql, "person:r4i4", "key-dup", append)).toBe("duplicate");
+    expect(apply(sql, scope, append)).toBe("applied");
+    expect(apply(sql, scope, append)).toBe("duplicate");
     expect(count(sql, "case_events")).toBe(1);
   });
 
   it("rolls the marker back when the append fails", () => {
     const sql = openOrgTables();
-    const out = apply(sql, "person:r4i4", "key-fail", () => {
+    const scope = { fromAgentId: "person:r4i4", idempotencyKey: "key-fail", event: "revoke" as const };
+    const out = apply(sql, scope, () => {
       throw new Error("storage exploded mid-write");
     });
     expect(out).toBe("unavailable");
     expect(count(sql, "processed_messages")).toBe(0);
     // A later retry starts clean.
-    expect(apply(sql, "person:r4i4", "key-fail", () => {
-      sql.exec(
-        "INSERT INTO case_events(case_id, event, person_id, purpose, message_id, at, idempotency_key) VALUES (?,?,?,?,?,?,?)",
-        "case-r4i4", "revoke", "r4i4", "", "msg-2", new Date().toISOString(), "key-fail",
-      );
+    expect(apply(sql, scope, () => {
+      appendEvent(sql, { caseId: "case-r4i4", event: "revoke", person: "r4i4", messageId: "msg-2", key: "key-fail" });
     })).toBe("applied");
+  });
+
+  it("keeps two senders under one key apart", () => {
+    const sql = openOrgTables();
+    const eve = { fromAgentId: "person:eve", idempotencyKey: "key-shared", event: "share" as const };
+    const alice = { fromAgentId: "person:alice", idempotencyKey: "key-shared", event: "revoke" as const };
+    expect(apply(sql, eve, () => {
+      appendEvent(sql, { caseId: "case-eve", event: "share", person: "eve", messageId: "msg-e1", key: "key-shared" });
+    })).toBe("applied");
+    // Eve's delivery must not satisfy Alice's reconcile, and a grant
+    // must not satisfy a revoke consult, even under the same key.
+    expect(consentEventRecorded(sql, alice)).toBe(false);
+    expect(consentEventRecorded(sql, { ...eve, event: "revoke" })).toBe(false);
+    expect(consentEventRecorded(sql, eve)).toBe(true);
+    // Alice's own action still applies beside it, not as its duplicate.
+    expect(apply(sql, alice, () => {
+      appendEvent(sql, { caseId: "case-alice", event: "revoke", person: "alice", messageId: "msg-a1", key: "key-shared" });
+    })).toBe("applied");
+    expect(consentEventRecorded(sql, alice)).toBe(true);
+    expect(count(sql, "case_events")).toBe(2);
   });
 });

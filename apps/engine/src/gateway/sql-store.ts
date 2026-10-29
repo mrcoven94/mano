@@ -255,6 +255,19 @@ export class SqlApprovalStore implements ApprovalStore {
     return updated.rowsWritten === 1;
   }
 
+  adoptForRecoveryIfApprovalLive(key: string, now: Date): boolean {
+    // One statement: the attempt moves only while its approval is still
+    // consumed and unexpired. Both timestamps are server-written UTC ISO,
+    // so the lexical comparison is exact.
+    const updated = this.sql.exec(
+      "UPDATE attempts SET status = 'in_flight', updated_at = ? WHERE idempotency_key = ?" +
+        " AND status IN ('in_flight', 'unknown')" +
+        " AND EXISTS(SELECT 1 FROM approvals WHERE idempotency_key = ? AND status = 'approved' AND expires_at > ?)",
+      now.toISOString(), key, key, now.toISOString(),
+    );
+    return updated.rowsWritten === 1;
+  }
+
   claimRecoverableAttempt(key: string, olderThanIso: string, now: Date): boolean {
     const updated = this.sql.exec(
       "UPDATE attempts SET updated_at = ? WHERE idempotency_key = ? AND status IN ('in_flight', 'unknown') AND updated_at < ?",

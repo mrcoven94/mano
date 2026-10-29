@@ -39,7 +39,10 @@ describe("r4 item 4: revoke delivery and reconcile", () => {
     const revokeKey = revoke.approval!.idempotencyKey;
 
     // The org recorded the revoke: reconcile sees the event record.
-    expect(await org.hasConsentRecord("person:r4i4-revoke", revokeKey)).toBe(true);
+    expect(await org.hasConsentRecord("person:r4i4-revoke", revokeKey, "revoke")).toBe(true);
+    // The grant consult under the same key stays empty: a revoke record
+    // never satisfies a grant reconcile.
+    expect(await org.hasConsentRecord("person:r4i4-revoke", revokeKey, "share")).toBe(false);
     expect((await org.listCases("r4i4-revoke-county")).map((c) => c.caseId)).not.toContain("case-r4i4-revoke");
 
     // Same key retried: the gateway replays the receipt without
@@ -48,6 +51,6 @@ describe("r4 item 4: revoke delivery and reconcile", () => {
     expect(again.status).toBe("completed");
     expect(again.receipt!.idempotencyKey).toBe(revokeKey);
     expect((await org.listCases("r4i4-revoke-county")).map((c) => c.caseId)).not.toContain("case-r4i4-revoke");
-    expect(await org.hasConsentRecord("person:r4i4-revoke", revokeKey)).toBe(true);
+    expect(await org.hasConsentRecord("person:r4i4-revoke", revokeKey, "revoke")).toBe(true);
   });
 });

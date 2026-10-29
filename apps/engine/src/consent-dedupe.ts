@@ -23,13 +23,34 @@ export function tryRecordDelivery(
   return rows.length > 0 ? "recorded" : "duplicate";
 }
 
-// Whether a consent event was recorded under an idempotency key.
-// Reconcile reads this record, never the dedupe marker: a marker can
-// survive a crash that the event did not.
-export function consentEventRecorded(sql: SqlExec, idempotencyKey: string): boolean {
+// The resident behind a sender agent ID. Person agents send as
+// person:<id>; anything else matches literally.
+export function senderPerson(fromAgentId: string): string {
+  return fromAgentId.startsWith("person:") ? fromAgentId.slice("person:".length) : fromAgentId;
+}
+
+export type ConsentEventType = "share" | "revoke";
+
+// A delivery's full scope. Keys are caller-controlled, so two people
+// (or a grant and a revoke) can share one; the person and the event
+// type tell deliveries apart. The organization is scoped structurally:
+// each org agent answers only from its own tables.
+export interface DeliveryScope {
+  fromAgentId: string;
+  idempotencyKey: string;
+  event: ConsentEventType;
+}
+
+// Whether this sender's event of this type was recorded under a key.
+// Reconcile reads this record, never the dedupe marker and never a
+// key alone: a marker can survive a crash that the event did not, and
+// another sender's event under the same key must not satisfy this one.
+export function consentEventRecorded(sql: SqlExec, scope: DeliveryScope): boolean {
   const rows = sql.exec(
-    "SELECT id FROM case_events WHERE idempotency_key = ? LIMIT 1",
-    idempotencyKey,
+    "SELECT id FROM case_events WHERE idempotency_key = ? AND person_id = ? AND event = ? LIMIT 1",
+    scope.idempotencyKey,
+    senderPerson(scope.fromAgentId),
+    scope.event,
   ).toArray();
   return rows.length > 0;
 }
@@ -40,21 +61,21 @@ export type DeliveryApply = "applied" | "duplicate" | "unavailable";
 // so a revoke is never marked done before it happens. The transaction
 // runner is injected because Durable Objects forbid SQL BEGIN: callers
 // pass storage.transactionSync (which rolls back on throw). A duplicate
-// marker with no event (a crash landed between the writes, or a legacy
-// row) falls through and appends the missing event instead of reporting
-// done. Any failure rolls back and reports unavailable.
+// marker with no matching event (a crash landed between the writes, a
+// legacy row, or a foreign delivery under the same key) falls through
+// and appends the missing event instead of reporting done. Any failure
+// rolls back and reports unavailable.
 export function applyConsentDelivery(
   sql: SqlExec,
-  fromAgentId: string,
-  idempotencyKey: string,
+  scope: DeliveryScope,
   append: () => void,
   transact: <T>(fn: () => T) => T,
 ): DeliveryApply {
   try {
     return transact(() => {
       if (
-        tryRecordDelivery(sql, fromAgentId, idempotencyKey) === "duplicate" &&
-        consentEventRecorded(sql, idempotencyKey)
+        tryRecordDelivery(sql, scope.fromAgentId, scope.idempotencyKey) === "duplicate" &&
+        consentEventRecorded(sql, scope)
       ) {
         return "duplicate" as const;
       }

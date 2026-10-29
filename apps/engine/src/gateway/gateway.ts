@@ -55,6 +55,11 @@ export interface ApprovalStore {
   // Compare-and-set for clean retries: moves a failed attempt back to
   // in_flight. False unless the attempt exists and is failed.
   adoptFailedAttempt(key: string, now: Date): boolean;
+  // Compare-and-set for recovery: moves an unknown or orphaned in_flight
+  // attempt back to in_flight only while its approval is still consumed
+  // and unexpired, checked in the same statement. False otherwise, so a
+  // window that lapses during recovery's awaited checks cannot execute.
+  adoptForRecoveryIfApprovalLive(key: string, now: Date): boolean;
   // Claims an unresolved attempt for recovery: refreshes its timestamp
   // so a second recovery cannot claim it too.
   claimRecoverableAttempt(key: string, olderThanIso: string, now: Date): boolean;
@@ -159,6 +164,19 @@ export class MemoryApprovalStore implements ApprovalStore {
     this.attempts.set(key, { ...current, status: "in_flight", updatedAt: now.toISOString() });
     return true;
   }
+  adoptForRecoveryIfApprovalLive(key: string, now: Date) {
+    const current = this.attempts.get(key);
+    if (!current || (current.status !== "unknown" && current.status !== "in_flight")) return false;
+    const live = [...this.approvals.values()].some(
+      (a) =>
+        a.idempotencyKey === key &&
+        a.status === "approved" &&
+        new Date(a.expiresAt).getTime() > now.getTime(),
+    );
+    if (!live) return false;
+    this.attempts.set(key, { ...current, status: "in_flight", updatedAt: now.toISOString() });
+    return true;
+  }
   claimRecoverableAttempt(key: string, olderThanIso: string, now: Date) {
     const current = this.attempts.get(key);
     if (!current) return false;
@@ -207,6 +225,20 @@ export type LinkCheckFn = (
 
 const defaultLinkCheck: LinkCheckFn = (url, opts) =>
   checkLinkSafety(url, { forDisplay: opts.forDisplay });
+
+// Audit-safe form of a URL: scheme and host in clear, path, query and
+// fragment replaced by a hash of the rest. Query strings carry personal
+// details, which must never land in the audit log.
+export async function redactUrlForAudit(url: string): Promise<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return `unparseable-url#${(await sha256Hex(url)).slice(0, 16)}`;
+  }
+  const rest = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  return `${parsed.protocol}//${parsed.host}#${(await sha256Hex(rest)).slice(0, 16)}`;
+}
 
 export interface GatewayOptions {
   policyOverrides?: Partial<Record<string, PolicyDecision>>;
@@ -356,7 +388,7 @@ export class ActionGateway {
     for (const url of collectActionUrls(req)) {
       const verdict = await this.linkCheck(url, { forDisplay: false });
       if (!verdict.allowed) {
-        this.store.audit({ event: "gateway.link_block", url, reason: verdict.reason });
+        this.store.audit({ event: "gateway.link_block", url: await redactUrlForAudit(url), reason: verdict.reason });
         return { status: "blocked", reason: `Blocked before acting: link check failed for ${url}: ${verdict.reason ?? "blocked"}` };
       }
     }
@@ -803,10 +835,15 @@ export class ActionGateway {
       return { status: "blocked", reason: check.reason };
     }
     if (check.problems.length > 0) this.store.setApprovalProblems(approval.id, check.problems);
-    if (attempt.status === "unknown" && !this.store.adoptUnknownAttempt(key, now)) {
+    // The window can lapse during the awaited checks above, so approval
+    // liveness is re-verified here, in the same step that claims the key
+    // for execution, with a fresh clock. Only then may it execute.
+    if (!this.store.adoptForRecoveryIfApprovalLive(key, new Date())) {
       const receipt = this.store.getReceiptByKey(key);
       if (receipt) return { status: "completed", receipt };
-      return null;
+      this.store.updateAttempt(key, "failed");
+      this.store.audit({ event: "gateway.recover_expired", key });
+      return { status: "blocked", reason: "Approval expired before the stranded attempt could be recovered." };
     }
     return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now);
   }

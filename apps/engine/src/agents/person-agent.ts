@@ -170,6 +170,21 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { closed: this.closeExpiredSockets() };
   }
 
+  // Arms a close at the given session expiry. True when the scheduler
+  // accepts it; false (audited) when the scheduler rejects it, in which
+  // case the caller must close the socket. The callback is a parameter
+  // so tests can force a real scheduler rejection with an unknown name;
+  // production always arms the session close.
+  async armSocketExpiry(sessionExp: number, callback: keyof PersonAgent = "closeExpiredSessionSockets"): Promise<boolean> {
+    try {
+      await this.schedule(new Date(sessionExp * 1000), callback, {});
+      return true;
+    } catch (err) {
+      this.store.audit({ event: "ws.schedule_failed", detail: String(err) });
+      return false;
+    }
+  }
+
   private syncState(): void {
     this.closeExpiredSockets();
     const approvals = this.db().exec("SELECT * FROM approvals ORDER BY created_at DESC").toArray()
@@ -203,12 +218,12 @@ export class PersonAgent extends Agent<Env, PersonState> {
       }
       connection.setState({ subject, sessionExp });
       // Every socket arms its own close at session expiry, so idle
-      // sockets die on time with no broadcast to sweep them. If arming
-      // fails the backstops still apply: message checks and sweeps.
-      try {
-        await this.schedule(new Date(sessionExp * 1000), "closeExpiredSessionSockets", {});
-      } catch (err) {
-        this.store.audit({ event: "ws.schedule_failed", detail: String(err) });
+      // sockets die on time with no broadcast to sweep them. A socket
+      // that cannot be armed is closed on the spot: leaving it open
+      // would idle past expiry with no alarm to kill it.
+      if (!(await this.armSocketExpiry(sessionExp))) {
+        connection.close(4403, "Could not schedule session expiry.");
+        return;
       }
     } catch {
       connection.close(4403, "Forbidden");
@@ -744,8 +759,14 @@ export class PersonAgent extends Agent<Env, PersonState> {
     if (!stored) return { found: false };
     const match = ORG_AGENT_ID.exec(stored.toAgentId);
     if (!match) return { found: false };
+    // The reconcile consults for this sender's message of this type: a
+    // foreign delivery under the same caller-controlled key, or a grant
+    // where this revoke was asked, must not count as found. Anything but
+    // the two consent message types reconciles absent, fail closed.
+    const event = stored.type === "consent.grant" ? "share" : stored.type === "consent.revoke" ? "revoke" : null;
+    if (!event) return { found: false };
     const stub = this.env.ORG_AGENT.get(this.env.ORG_AGENT.idFromName(match[1]));
-    const recorded = await (stub as unknown as OrgAgent).hasConsentRecord(stored.fromAgentId, idempotencyKey);
+    const recorded = await (stub as unknown as OrgAgent).hasConsentRecord(stored.fromAgentId, idempotencyKey, event);
     return recorded ? { found: true, externalId: stored.id } : { found: false };
   }
 
