@@ -6,6 +6,8 @@ Mano gives every person an agent that applies for help, fills out any form, read
 
 Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026) on Meta's Muse models. Everything in this repository was written from October 26, 2026 onward.
 
+Public usage and build stats are at [withmano.com/stats](https://withmano.com/stats).
+
 ## Try it now
 
 - Text Mano at (801) 920-3370. The current number is always on the site.
@@ -77,6 +79,7 @@ Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. To
 | `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway | landing during the hackathon |
 | `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text | live |
 | `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits | live |
+| `packages/meter` | The usage recorder every model client calls after each request: counts and cost, never content. Its history reporter folds git plus GitHub history into per-day and per-session counts | live |
 | `packages/protocol` | The open message format agents use to work a case together | landing during the hackathon |
 | `packages/guardian` | The checker that reviews every outside action before a person approves it | live |
 | `packages/quality` | The nightly answer-quality bench | landing during the hackathon |

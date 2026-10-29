@@ -40,6 +40,10 @@ bucket_name = "mano-channel-files"
 [triggers]
 crons = ["* * * * *"]
 
+[[analytics_engine_datasets]]
+binding = "METER"
+dataset = "mano_model_usage"
+
 # Secrets (never commit values; set with wrangler secret put):
 #   BLOOIO_API_KEY, BLOOIO_CHANNEL_ID, BLOOIO_WEBHOOK_SECRET,
 #   MANO_HANDLE_PEPPER, ENCRYPTION_KEK_B64, META_MODEL_API_KEY

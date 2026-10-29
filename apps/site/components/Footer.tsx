@@ -35,6 +35,7 @@ export default function Footer() {
               <p className="foot-h">Build</p>
               <ul>
                 <li><a href={REPO_URL}>Source code</a></li>
+                <li><Link href="/stats">Usage stats</Link></li>
                 <li><a href={`${REPO_URL}/blob/main/LICENSE`}>MIT license</a></li>
                 <li><a href="mailto:hello@withmano.com">hello@withmano.com</a></li>
               </ul>

@@ -72,6 +72,7 @@ export default function OpenSource() {
         <div className="btn-row" style={{ marginTop: 32 }}>
           <a className="btn btn-primary" href={REPO_URL}>Read the code</a>
           <a className="btn btn-ghost" href={`${REPO_URL}#readme`}>Run your own</a>
+          <a className="btn btn-ghost" href="/stats">Usage stats</a>
         </div>
       </div>
 

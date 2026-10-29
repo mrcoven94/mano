@@ -12,6 +12,7 @@ export * from "./verify.js";
 export * from "./blooio.js";
 export * from "./recording.js";
 export * from "./responder.js";
+export * from "./metered.js";
 export * from "./bubbles.js";
 export * from "./approvals.js";
 export * from "./limits.js";

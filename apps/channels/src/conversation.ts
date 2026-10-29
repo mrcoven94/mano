@@ -10,12 +10,15 @@ import {
   StandInResponder,
   buildModelBaseUrl,
   createLogger,
+  errName,
   hashChatId,
+  meterResponder,
   type Channel,
   type Logger,
   type NormalizedEvent,
   type Responder,
 } from "@mano/channels";
+import { AnalyticsEngineSink, MeterRecorder } from "@mano/meter";
 import { DEFAULT_MEDIA_HOSTS, DEFAULT_RUNNER_CONFIG, ConversationRunner, type SpendLedger } from "./runner.js";
 
 export function parseMediaHosts(raw: string | undefined): string[] {
@@ -90,16 +93,30 @@ export function buildChannel(env: Env): Channel {
   return new RecordingChannel();
 }
 
-export function buildResponder(env: Env): Responder {
-  if (env.META_MODEL_API_KEY) {
-    const endpoint = buildModelBaseUrl({
-      accountId: env.CF_ACCOUNT_ID,
-      gatewayId: env.AI_GATEWAY_ID,
-      provider: env.AI_GATEWAY_PROVIDER,
-    });
-    return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
-  }
-  return new StandInResponder();
+export function buildMeter(env: Env): MeterRecorder {
+  const sinks = env.METER ? [new AnalyticsEngineSink(env.METER)] : [];
+  return new MeterRecorder(sinks);
+}
+
+export function buildResponder(env: Env, opts: { meter?: MeterRecorder; logger?: Logger } = {}): Responder {
+  const inner = env.META_MODEL_API_KEY
+    ? (() => {
+        const endpoint = buildModelBaseUrl({
+          accountId: env.CF_ACCOUNT_ID,
+          gatewayId: env.AI_GATEWAY_ID,
+          provider: env.AI_GATEWAY_PROVIDER,
+        });
+        return new SparkResponder({
+          apiKey: env.META_MODEL_API_KEY,
+          baseUrl: endpoint.url,
+          collectLogs: endpoint.via === "direct",
+        });
+      })()
+    : new StandInResponder();
+  const logger = opts.logger;
+  return meterResponder(inner, opts.meter ?? buildMeter(env), {
+    onMeterError: logger ? (err) => logger.warn("meter_failed", { err: errName(err) }) : undefined,
+  });
 }
 
 export class ConversationDO implements DurableObject {
@@ -131,7 +148,7 @@ export class ConversationDO implements DurableObject {
 
   private runner(handleHash: string): { runner: ConversationRunner; channel: Channel; responder: Responder } {
     const channel = buildChannel(this.env);
-    const responder = buildResponder(this.env);
+    const responder = buildResponder(this.env, { logger: this.logger });
     const runner = new ConversationRunner({
       store: new SqlConversationStore(this.ctx.storage.sql),
       channel,

@@ -1,0 +1,49 @@
+name: meter-history
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  history:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Verify required secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          check() {
+            if [ -z "$1" ]; then echo "::error::missing required secret $2"; missing=1; fi
+          }
+          check "$CLOUDFLARE_API_TOKEN" CLOUDFLARE_API_TOKEN
+          check "$CLOUDFLARE_ACCOUNT_ID" CLOUDFLARE_ACCOUNT_ID
+          exit $missing
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Collect history summary
+        run: |
+          set -euo pipefail
+          day=$(date -u +%F)
+          node packages/meter/history/collect.mjs --out "meter-history-${day}.json"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload summary to R2
+        run: |
+          set -euo pipefail
+          day=$(date -u +%F)
+          pnpm dlx wrangler@4 r2 bucket create mano-meter || true
+          pnpm dlx wrangler@4 r2 object put "mano-meter/meter/history/${day}.json" \
+            --file="meter-history-${day}.json" --remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

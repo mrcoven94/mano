@@ -11,6 +11,9 @@ export interface Env {
   MANO_HANDLE_PEPPER: string;
   ENCRYPTION_KEK_B64: string;
   META_MODEL_API_KEY?: string;
+  // Analytics Engine dataset for model usage records. Absent locally,
+  // where the recorder keeps its shape but writes nowhere.
+  METER?: AnalyticsEngineDataset;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;

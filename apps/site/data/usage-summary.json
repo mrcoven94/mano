@@ -1,0 +1,35 @@
+{
+  "day": "2026-10-29",
+  "totals": {
+    "calls": 16,
+    "errors": 1,
+    "inputTokens": 1705,
+    "outputTokens": 305,
+    "estimatedCostUsd": 0.00408
+  },
+  "byPackage": {
+    "channels": {
+      "calls": 16,
+      "errors": 1,
+      "inputTokens": 1705,
+      "outputTokens": 305,
+      "estimatedCostUsd": 0.00408
+    }
+  },
+  "byModel": {
+    "muse-spark-1.3": {
+      "calls": 13,
+      "errors": 1,
+      "inputTokens": 1664,
+      "outputTokens": 264,
+      "estimatedCostUsd": 0.00408
+    },
+    "stand-in": {
+      "calls": 3,
+      "errors": 0,
+      "inputTokens": 41,
+      "outputTokens": 41,
+      "estimatedCostUsd": 0
+    }
+  }
+}

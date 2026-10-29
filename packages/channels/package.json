@@ -10,6 +10,9 @@
     "check": "tsc --noEmit && vitest run",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@mano/meter": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
