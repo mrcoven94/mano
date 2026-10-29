@@ -31,12 +31,12 @@
 // the transcription, else it becomes a question; unreadable pages
 // contribute nothing, though their contacts still warn; pages merge
 // only on continuation evidence with no contradictions; a deadline
-// publishes only from its full sentence under the strict rule
-// (obligation phrase, exactly one date, no hedges, no second
-// expression); bare dates never publish, becoming dates to know or
-// questions; any open deadline question, failed verification,
-// failed chronology check, or missing page withholds every date on
-// the letter, and every withheld cited date joins the question;
+// publishes only when its whole sentence is one of the closed forms
+// in src/gate.ts with exactly one date and nothing left over, and
+// every other deadline sentence asks; any open deadline question,
+// failed verification, failed chronology check, or missing page
+// withholds every date on the letter, and every withheld sentence,
+// cited, joins each deadline and missing-page question;
 // links, phones and addresses are never acted on here and come back
 // as warnings for the gateway.
 // Content failures never throw; only invalid arguments do. Each file
@@ -68,18 +68,8 @@ import {
   type GroupablePage,
   type PageExtraction,
 } from "./read.js";
-import {
-  chronologyOf,
-  countDeadlineExpressions,
-  findAmbiguousDate,
-  findHedge,
-  hasObligationPhrase,
-  isRelativeExpression,
-  obligationOf,
-  parseWrittenDate,
-  resolveDeadline,
-  sentenceContaining,
-} from "./dates.js";
+import { parseAllDates, parseWrittenDate, sentenceContaining } from "./dates.js";
+import { gateSentence, trimSentence, type AskReason } from "./gate.js";
 import { scanContent, type ContentFlag } from "./safety.js";
 import { verifyExtraction, type DroppedField } from "./citations.js";
 import { readingModelFor } from "./model.js";
@@ -89,6 +79,7 @@ import type {
   Citation,
   Contact,
   Deadline,
+  DeadlineCandidate,
   InputFile,
   Letter,
   LetterFields,
@@ -104,7 +95,8 @@ import type {
 export type { InputFile, MailReading, ReadMailOptions };
 export * from "./types.js";
 export * from "./model.js";
-export { parseWrittenDate, parseAllDates, resolveDeadline } from "./dates.js";
+export { parseWrittenDate, parseAllDates } from "./dates.js";
+export { gateSentence } from "./gate.js";
 export { scanContent, findInstructions, findLinks, findPhones, screenScam } from "./safety.js";
 
 const MAX_FILES = 10;
@@ -476,169 +468,97 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     // contradict the dates on the pages in hand.
     if (checkMissingPages(members, letterId, cite, ask)) letterBlocked = true;
 
-    // Resolve every deadline expression on every page against the
-    // letter's notice date. A deadline publishes only from the full
-    // sentence that states it, under the strict rule: the sentence
-    // holds an obligation phrase (a relative count obligates by
-    // construction), exactly one date, no hedge words, and no second
-    // deadline expression. Bare dates never publish: with an
-    // obligation phrase in their sentence they become a question,
-    // without one a date to know. Dates of one duty are compared
-    // with each other and conflict when they differ. Any open
-    // deadline question, failed verification, failed chronology
-    // check, or missing page withholds the whole letter.
-    interface ResolvedEntry {
+    // Every sentence the reader returned as a deadline goes through
+    // the publish gate (src/gate.ts): it publishes only as one of the
+    // closed whole-sentence forms, becomes a date to know when it
+    // names no duty and states one plain date, or asks. Dates of one
+    // duty that differ conflict. Any question, failed verification or
+    // missing page withholds every date on the letter, and every
+    // withheld sentence, cited, joins each of the letter's deadline
+    // and missing-page questions.
+    interface GatedEntry {
       iso: string;
       text: string;
-      memberIdx: number;
+      sentence: string;
       obligation: Obligation;
-      ruleCitation: Citation;
+      citation: Citation;
       anchor: Cited<string> | null;
       countRule: string | null;
     }
-    const resolvedDeadlines: ResolvedEntry[] = [];
-    const resolvedToKnow: ResolvedEntry[] = [];
-    // Every resolved date the letter withholds, each cited, joins the
-    // letter's deadline questions below.
-    const withheldCandidates: Cited<string>[] = [];
-    const askedExpressions = new Set<string>();
+    const resolvedDeadlines: GatedEntry[] = [];
+    const resolvedToKnow: GatedEntry[] = [];
+    const withheld: DeadlineCandidate[] = [];
+    const candidateOf = (sentence: string, citation: Citation): DeadlineCandidate => ({
+      sentence,
+      dates: parseAllDates(sentence),
+      citation,
+    });
     const noticeIso = fields.noticeDate ? parseWrittenDate(fields.noticeDate.value) : null;
+    const gated = new Set<string>();
     members.forEach((m, i) => {
       if (!m.extraction?.readable) return;
       for (const d of m.extraction.deadlines) {
         if (!d.text) continue;
-        const sentence = sentenceContaining(d.text, m.extraction.fullText) ?? d.text;
-        const r = resolveDeadline(d.text, fields.noticeDate?.value ?? null);
-        if (r.kind === "needs-anchor" || r.kind === "ambiguous" || r.kind === "unsupported") {
+        const citation = cite(i, d.box);
+        if (!citation) continue;
+        const sentence = trimSentence(sentenceContaining(d.text, m.extraction.fullText) ?? d.text);
+        if (gated.has(`${i}:${sentence}`)) continue;
+        gated.add(`${i}:${sentence}`);
+        const verdict = gateSentence(sentence, noticeIso);
+        if (verdict.kind === "no-date") continue;
+        if (verdict.kind === "ask") {
           letterBlocked = true;
-          if (askedExpressions.has(r.expression)) continue;
-          askedExpressions.add(r.expression);
-          ask({
-            kind: "confirm_deadline",
-            letterId,
-            prompt:
-              r.kind === "needs-anchor"
-                ? `Letter ${letterId} gives its deadline as "${r.expression}" but the starting date is unclear. ` +
-                  `What date does the deadline run from?`
-                : r.kind === "ambiguous"
-                  ? `Letter ${letterId} gives its deadline as "${r.expression}", which could be read more than one way. ` +
-                    `Which date is meant?`
-                  : `Letter ${letterId} gives its deadline as "${r.expression}", which cannot be counted as written. ` +
-                    `Which date is meant?`,
-            citation: cite(i, d.box),
+          withheld.push(candidateOf(sentence, citation));
+          ask({ kind: "confirm_deadline", letterId, prompt: askPrompt(letterId, sentence, verdict.reason), citation });
+          continue;
+        }
+        if (verdict.kind === "date-to-know") {
+          resolvedToKnow.push({
+            iso: verdict.iso,
+            text: d.text,
+            sentence,
+            obligation: "other",
+            citation,
+            anchor: null,
+            countRule: null,
           });
           continue;
         }
-        if (r.kind !== "absolute" && r.kind !== "relative") continue;
-        const ruleCitation = cite(i, d.box);
-        if (!ruleCitation) continue;
-        const bare = !hasObligationPhrase(d.text) && !isRelativeExpression(d.text);
-        if (bare) {
-          if (hasObligationPhrase(sentence)) {
-            letterBlocked = true;
-            const key = `bare:${d.text}`;
-            if (!askedExpressions.has(key)) {
-              askedExpressions.add(key);
-              ask({
-                kind: "confirm_deadline",
-                letterId,
-                prompt:
-                  `Letter ${letterId} gives the date "${d.text}" without saying what it is for. ` +
-                  `What must be done by that date?`,
-                citation: ruleCitation,
-              });
-            }
-          } else {
-            resolvedToKnow.push({
-              iso: r.iso,
-              text: d.text,
-              memberIdx: i,
-              obligation: "other",
-              ruleCitation,
-              anchor: null,
-              countRule: null,
-            });
-          }
-          continue;
-        }
-        const sentenceAmbiguous = findAmbiguousDate(sentence);
-        const hedge = findHedge(sentence, { allowIf: r.kind === "relative" });
-        if (sentenceAmbiguous || hedge || countDeadlineExpressions(sentence) > 1) {
-          letterBlocked = true;
-          const key = `strict:${d.text}`;
-          if (!askedExpressions.has(key)) {
-            askedExpressions.add(key);
-            ask({
-              kind: "confirm_deadline",
-              letterId,
-              prompt: sentenceAmbiguous
-                ? `Letter ${letterId} gives its deadline as "${sentenceAmbiguous}", which could be read more than one way. ` +
-                  `Which date is meant?`
-                : hedge
-                  ? `Letter ${letterId} states its deadline as "${d.text}" but hedges ("${hedge}"). ` +
-                    `Which date is the real deadline, if any?`
-                  : `Letter ${letterId} states more than one deadline in one sentence ("${d.text}"). ` +
-                    `Which dates are the real deadlines?`,
-              citation: ruleCitation,
-            });
-          }
-          continue;
-        }
-        const chrono = chronologyOf(r.iso, noticeIso);
-        if (chrono !== "ok") {
-          letterBlocked = true;
-          withheldCandidates.push({ value: r.iso, citation: ruleCitation });
-          const key = `chrono:${d.text}`;
-          if (!askedExpressions.has(key)) {
-            askedExpressions.add(key);
-            ask({
-              kind: "confirm_deadline",
-              letterId,
-              prompt:
-                chrono === "before-notice"
-                  ? `Letter ${letterId} gives a deadline of "${d.text}" before its notice date. ` +
-                    `Which date is the real deadline?`
-                  : `Letter ${letterId} gives a deadline of "${d.text}", more than a year after its notice date. ` +
-                    `Which date is the real deadline?`,
-              citation: ruleCitation,
-            });
-          }
-          continue;
-        }
         let anchor: Cited<string> | null = null;
-        if (r.kind === "relative") {
+        if (verdict.count) {
           anchor =
-            r.anchorSource === "notice-date" && fields.noticeDate
-              ? { value: fields.noticeDate.value, citation: fields.noticeDate.citation }
-              : { value: r.anchorText, citation: ruleCitation };
+            verdict.count.anchorText === null
+              ? fields.noticeDate
+                ? { value: fields.noticeDate.value, citation: fields.noticeDate.citation }
+                : null
+              : { value: verdict.count.anchorText, citation };
         }
         resolvedDeadlines.push({
-          iso: r.iso,
+          iso: verdict.iso,
           text: d.text,
-          memberIdx: i,
-          obligation: obligationOf(d.text),
-          ruleCitation,
+          sentence,
+          obligation: verdict.obligation,
+          citation,
           anchor,
-          countRule: r.kind === "relative" ? r.countRule : null,
+          countRule: verdict.count ? "calendar days" : null,
         });
       }
     });
-    // Withheld: a conflicting duty holds back the whole letter until
-    // the person confirms. The question carries every candidate with
-    // its own citation.
-    const withholdConflict = (duty: Obligation, distinct: string[], entries: ResolvedEntry[]): void => {
+    for (const duty of ["respond", "appeal", "renew", "pay", "other"] as const) {
+      const entries = resolvedDeadlines.filter((e) => e.obligation === duty);
+      const distinct = [...new Set(entries.map((e) => e.iso))];
+      if (distinct.length < 2) continue;
       letterBlocked = true;
-      const candidates: Cited<string>[] = [];
-      for (const iso of distinct) {
+      const candidates = distinct.map((iso) => {
         const entry = entries.find((e) => e.iso === iso)!;
-        candidates.push({ value: iso, citation: entry.ruleCitation });
-      }
+        return candidateOf(entry.sentence, entry.citation);
+      });
       const dutyLabel = duty === "other" ? "" : ` for its ${duty} duty`;
       warnings.push({
         kind: "conflicting_dates",
         message: `Letter ${letterId} states more than one deadline${dutyLabel} (${distinct.join(", ")}). None was published.`,
         letterId,
-        citation: candidates[0]?.citation ?? null,
+        citation: candidates[0]!.citation,
         detail: distinct.join(", "),
       });
       ask({
@@ -648,55 +568,42 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         citation: null,
         candidates,
       });
-    };
-    for (const duty of ["respond", "appeal", "renew", "pay", "other"] as const) {
-      const entries = resolvedDeadlines.filter((e) => e.obligation === duty);
-      const distinct = [...new Set(entries.map((e) => e.iso))];
-      if (distinct.length > 1) withholdConflict(duty, distinct, entries);
     }
-    const published = new Set<string>();
-    const publishEntry = (entry: ResolvedEntry, toKnow: boolean): void => {
-      const key = `${entry.obligation}:${entry.iso}`;
-      if (published.has(key)) return;
-      published.add(key);
-      const item: Deadline = {
-        letterId,
-        program: fields.program?.value ?? null,
-        dueDate: entry.iso,
-        dateText: entry.text,
-        obligation: entry.obligation,
-        citation: entry.ruleCitation,
-        anchor: entry.anchor,
-        countRule: entry.countRule,
-      };
-      if (toKnow) {
-        datesToKnow.push(item);
-      } else {
-        if (!fields.deadlineIso) fields.deadlineIso = { value: entry.iso, citation: entry.ruleCitation };
-        deadlines.push(item);
-      }
-    };
     if (!letterBlocked) {
-      for (const entry of resolvedDeadlines) publishEntry(entry, false);
-      for (const entry of resolvedToKnow) publishEntry(entry, true);
-    } else {
-      // Every resolved date the letter withholds joins every one of
-      // its deadline questions as a cited candidate.
+      const published = new Set<string>();
+      const publish = (entry: GatedEntry, list: Deadline[]): void => {
+        const key = `${entry.obligation}:${entry.iso}`;
+        if (published.has(key)) return;
+        published.add(key);
+        list.push({
+          letterId,
+          program: fields.program?.value ?? null,
+          dueDate: entry.iso,
+          dateText: entry.text,
+          obligation: entry.obligation,
+          citation: entry.citation,
+          anchor: entry.anchor,
+          countRule: entry.countRule,
+        });
+      };
       for (const entry of resolvedDeadlines) {
-        withheldCandidates.push({ value: entry.iso, citation: entry.ruleCitation });
+        if (!fields.deadlineIso) fields.deadlineIso = { value: entry.iso, citation: entry.citation };
+        publish(entry, deadlines);
       }
-      const seen = new Set<string>();
-      const candidates = withheldCandidates.filter((c) => {
-        if (seen.has(c.value)) return false;
-        seen.add(c.value);
-        return true;
-      });
-      if (candidates.length > 0) {
-        for (const q of questions) {
-          if (q.letterId !== letterId || q.kind !== "confirm_deadline") continue;
-          const have = new Set((q.candidates ?? []).map((c) => c.value));
-          q.candidates = [...(q.candidates ?? []), ...candidates.filter((c) => !have.has(c.value))];
-        }
+      for (const entry of resolvedToKnow) publish(entry, datesToKnow);
+    } else {
+      for (const entry of [...resolvedDeadlines, ...resolvedToKnow]) withheld.push(candidateOf(entry.sentence, entry.citation));
+      const key = (c: DeadlineCandidate): string => `${c.citation.file}:${c.citation.page}:${c.sentence}`;
+      for (const q of questions) {
+        if (q.letterId !== letterId) continue;
+        if (q.kind !== "confirm_deadline" && q.kind !== "missing_page") continue;
+        const have = new Set((q.candidates ?? []).map(key));
+        const add = withheld.filter((c) => {
+          if (have.has(key(c))) return false;
+          have.add(key(c));
+          return true;
+        });
+        q.candidates = [...(q.candidates ?? []), ...add];
       }
     }
 
@@ -1040,6 +947,24 @@ function flagToWarning(
         citation,
         detail: flag.detail,
       };
+  }
+}
+
+function askPrompt(letterId: string, sentence: string, reason: AskReason): string {
+  const said = `Letter ${letterId} says "${sentence}".`;
+  switch (reason) {
+    case "ambiguous-date":
+      return `${said} A date in it could be read more than one way, so no deadline was set. Which date is meant?`;
+    case "notice-date":
+      return `${said} That date is the letter's own notice date, so no deadline was set. What must be done, and by when?`;
+    case "before-notice":
+      return `${said} That deadline falls before the letter's notice date, so it was not set. Which date is the real deadline?`;
+    case "too-far":
+      return `${said} That deadline is more than a year after the notice date, so it was not set. Which date is the real deadline?`;
+    case "no-notice-date":
+      return `${said} The count starts from the notice date, which could not be read. What is the notice date?`;
+    case "unrecognized":
+      return `${said} It does not state one clear deadline, so none was set. Which date, if any, is the deadline?`;
   }
 }
 

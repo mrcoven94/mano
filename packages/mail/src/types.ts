@@ -127,9 +127,16 @@ export interface Question {
   letterId: string | null;
   prompt: string;
   citation: Citation | null;
-  // Conflicting deadline candidates, each with its own citation. The
-  // deadline stays unpublished until the person confirms one.
-  candidates?: Cited<string>[];
+  // Every deadline sentence the letter withheld, each cited. No
+  // deadline on the letter publishes until the person confirms one.
+  candidates?: DeadlineCandidate[];
+}
+
+export interface DeadlineCandidate {
+  sentence: string;
+  // Every full date the sentence names, in reading order (YYYY-MM-DD).
+  dates: string[];
+  citation: Citation;
 }
 
 export interface ModelCallStat {

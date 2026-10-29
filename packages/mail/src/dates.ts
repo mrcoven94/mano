@@ -2,8 +2,6 @@
 // ("November 20, 2026"), so ISO-only matching misses them. This parses
 // the common US letter forms into YYYY-MM-DD, or returns null.
 
-import type { Obligation } from "./types.js";
-
 const MONTHS: Record<string, number> = {
   january: 1,
   jan: 1,
@@ -105,234 +103,25 @@ export function findAmbiguousDate(text: string): string | null {
   return null;
 }
 
-// Deadline resolution. Absolute dates pass through. Relative
-// expressions ("within 10 days of November 25, 2026", "60 days from
-// the date of this notice") resolve by counting from an anchor: a date
-// named in the expression, or the notice date when the expression
-// points at it. Counting is calendar days unless the letter says
-// business days. A date inside relative wording is never promoted to
-// the deadline, and a missing or unclear anchor asks the person.
-export type ResolvedDeadline =
-  | { kind: "absolute"; iso: string }
-  | {
-      kind: "relative";
-      iso: string;
-      anchorIso: string;
-      anchorText: string;
-      anchorSource: "expression" | "notice-date";
-      count: number;
-      countRule: "calendar days" | "business days";
-    }
-  | { kind: "needs-anchor"; expression: string }
-  | { kind: "ambiguous"; expression: string }
-  | { kind: "unsupported"; expression: string }
-  | { kind: "none" };
-
-const RELATIVE_AFTER = /(\d{1,3})\s+(business\s+|calendar\s+)?days?\s+(?:from|after)\b([\s\S]*)/i;
-const RELATIVE_WITHIN = /\b(?:within|in)\s+(\d{1,3})\s+(business\s+|calendar\s+)?days?\b([\s\S]*)/i;
-const NOTICE_ANCHOR = /date of this notice|notice date|this notice|the notice/i;
-// Directions and caps the counter does not support. "10 days before
-// November 25" and "no later than November 30" following a count ask,
-// never resolve; bare "before December 12" still reads as the date
-// itself, because the date named is the deadline.
-const UNSUPPORTED_REST = /\b(before|prior to|earlier than|preceding|no later than|at the latest)\b/i;
-// A count with a time unit that the two supported patterns did not
-// match: "10 days before November 25", "within 2 weeks of receipt".
-// The parser cannot count it, so it must ask, never promote a nearby
-// date. Bare "before December 12" is not relative-like: the date it
-// names is the deadline itself.
-const RELATIVE_LIKE = /\b\d{1,3}\s+(?:business\s+|calendar\s+)?(?:days?|weeks?|months?|years?)\b/i;
-
-function shiftDate(anchorIso: string, count: number, business: boolean): string | null {
-  const [y, m, d] = anchorIso.split("-").map(Number);
-  const date = new Date(Date.UTC(y!, m! - 1, d));
-  let added = 0;
-  let guard = 0;
-  while (added < count && guard < 1000) {
-    guard += 1;
-    date.setUTCDate(date.getUTCDate() + 1);
-    const day = date.getUTCDay();
-    if (!business || (day !== 0 && day !== 6)) added += 1;
-  }
-  if (added < count) return null;
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
-}
-
-export function resolveDeadline(deadlineText: string | null, noticeDateText: string | null): ResolvedDeadline {
-  if (!deadlineText || !deadlineText.trim()) return { kind: "none" };
-  const text = deadlineText.replace(/\s+/g, " ").trim();
-  const rel = text.match(RELATIVE_AFTER) ?? text.match(RELATIVE_WITHIN);
-  if (!rel) {
-    if (RELATIVE_LIKE.test(text)) return { kind: "unsupported", expression: text };
-    // An ambiguous date anywhere in the expression asks, even when
-    // another date in it would parse. So does a second date: one
-    // expression holds one deadline.
-    const ambiguous = findAmbiguousDate(text);
-    if (ambiguous) return { kind: "ambiguous", expression: ambiguous };
-    const iso = parseWrittenDate(text);
-    if (!iso) return { kind: "none" };
-    if (parseAllDates(text).length > 1) return { kind: "ambiguous", expression: text };
-    return { kind: "absolute", iso };
-  }
-  const count = Number(rel[1]);
-  const business = /business/i.test(rel[2] ?? "");
-  const rest = (rel[3] ?? "").trim();
-  if (UNSUPPORTED_REST.test(rest)) return { kind: "unsupported", expression: text };
-  // Ambiguity anywhere in the whole expression asks, including ahead
-  // of the count ("Respond by 03/04/2027 or within 10 days after
-  // November 25, 2026"). So does a second date outside the relative
-  // construction itself.
-  const ambiguous = findAmbiguousDate(text);
-  if (ambiguous) return { kind: "ambiguous", expression: ambiguous };
-  const remainder = text.replace(rel[0], " ");
-  if (parseWrittenDate(remainder) || findAmbiguousDate(remainder)) {
-    return { kind: "ambiguous", expression: text };
-  }
-  // Anchor named in the expression wins.
-  const anchorInText = rest ? parseWrittenDate(rest) : null;
-  if (anchorInText) {
-    if (parseAllDates(rest).length > 1) return { kind: "ambiguous", expression: text };
-    const iso = shiftDate(anchorInText, count, business);
-    if (!iso) return { kind: "needs-anchor", expression: text };
-    return {
-      kind: "relative",
-      iso,
-      anchorIso: anchorInText,
-      anchorText: rest
-        .replace(/^[,\s]+/, "")
-        .replace(/^of\s+/i, "")
-        .replace(/[.,;\s]+$/, "")
-        .slice(0, 120),
-      anchorSource: "expression",
-      count,
-      countRule: business ? "business days" : "calendar days",
-    };
-  }
-  // Otherwise the expression must point at the notice date.
-  if (NOTICE_ANCHOR.test(rest) || NOTICE_ANCHOR.test(text)) {
-    const anchorIso = noticeDateText ? parseWrittenDate(noticeDateText) : null;
-    if (!anchorIso) return { kind: "needs-anchor", expression: text };
-    const iso = shiftDate(anchorIso, count, business);
-    if (!iso) return { kind: "needs-anchor", expression: text };
-    return {
-      kind: "relative",
-      iso,
-      anchorIso,
-      anchorText: "the date of this notice",
-      anchorSource: "notice-date",
-      count,
-      countRule: business ? "business days" : "calendar days",
-    };
-  }
-  return { kind: "needs-anchor", expression: text };
-}
-
-// The duty a deadline text states, read from its own verbs. Dates
-// within one duty are compared with each other. This never looks at
-// surrounding text: bare dates take no duty from their clause.
-export function obligationOf(deadlineText: string): Obligation {
-  const t = deadlineText.toLowerCase();
-  if (/\b(appeal|hearing|grievance|reconsideration|dispute|contest|decision)\b/.test(t)) return "appeal";
-  if (/\b(pay|payment|premium|amount due|balance due)\b/.test(t) && !/\bpay stubs?\b/.test(t)) return "pay";
-  if (/\b(renew|renewal|recertif|redetermin)\b/.test(t)) return "renew";
-  if (
-    /\b(respond|response|return|send|submit|provide|arrive|receive|paperwork|complete|deliver|mail|bring|due|deadline|no later than)\b/.test(
-      t,
-    )
-  ) {
-    return "respond";
-  }
-  return "other";
-}
-
-// The strict publish rule works on sentences, not fragments. A
-// deadline publishes only from the full sentence that states it:
-// the sentence holds an obligation phrase, exactly one date, no
-// hedge words, and no second deadline expression.
-const OBLIGATION_PHRASES: RegExp[] = [
-  /\bmust\b/i,
-  /\bdue\b(?!\s+to\b)/i,
-  /\brespond\s+by\b/i,
-  /\bresponse\s+by\b/i,
-  /\bsend\b[\s\S]{0,80}?\bby\b/i,
-  /\breturn\b[\s\S]{0,80}?\bby\b/i,
-  /\bappeal\b[\s\S]{0,80}?\bby\b/i,
-  /\brenew\b[\s\S]{0,80}?\bby\b/i,
-  /\bno later than\b/i,
-];
-const PAY_BY = /\bpay\b[\s\S]{0,80}?\bby\b/i;
-const PAY_STUB = /\bpay stubs?\b/i;
-
-// Obligation phrases: must, due, respond/response by, send/return/
-// appeal/pay/renew ... by, no later than. "Due to" is causal, not a
-// deadline, and pay stubs are a document, not a payment.
-export function hasObligationPhrase(text: string): boolean {
-  if (OBLIGATION_PHRASES.some((re) => re.test(text))) return true;
-  return PAY_BY.test(text) && !PAY_STUB.test(text);
-}
-
-// Hedge words that make a date uncertain: may, might, could, will
-// arrive, if. The month May is not a hedge. Callers allow "if" for
-// relative expressions: a conditional deadline ("if you disagree,
-// you have 60 days ...") is still a deadline with a clear date.
-export function findHedge(text: string, opts?: { allowIf?: boolean }): string | null {
-  if (/\bmay\b(?!\s+\d)/i.test(text)) return "may";
-  if (/\bmight\b/i.test(text)) return "might";
-  if (/\bcould\b/i.test(text)) return "could";
-  if (/\bwill arrive\b/i.test(text)) return "will arrive";
-  if (!opts?.allowIf && /\bif\b/i.test(text)) return "if";
-  return null;
-}
-
-export function isRelativeExpression(text: string): boolean {
-  return RELATIVE_AFTER.test(text) || RELATIVE_WITHIN.test(text);
-}
-
-// Deadline expressions in a sentence: relative constructions plus
-// absolute dates outside them. Overlapping after/within matches of
-// one construction ("within 10 days after November 25") count once.
-export function countDeadlineExpressions(text: string): number {
-  const spans: { start: number; end: number }[] = [];
-  for (const re of [RELATIVE_AFTER, RELATIVE_WITHIN]) {
-    const m = text.match(re);
-    if (m && m.index !== undefined) spans.push({ start: m.index, end: m.index + m[0].length });
-  }
-  spans.sort((a, b) => a.start - b.start);
-  const merged: { start: number; end: number }[] = [];
-  for (const s of spans) {
-    const last = merged[merged.length - 1];
-    if (last && s.start < last.end) last.end = Math.max(last.end, s.end);
-    else merged.push({ ...s });
-  }
-  let remainder = text;
-  for (const s of [...merged].sort((a, b) => b.start - a.start)) {
-    remainder = `${remainder.slice(0, s.start)} ${remainder.slice(s.end)}`;
-  }
-  return merged.length + parseAllDates(remainder).length;
-}
+// One full date with its year, in any form parseWrittenDate reads, as
+// a regex source for building whole-sentence patterns.
+const MONTH_NAMES = Object.keys(MONTHS).join("|");
+export const DATE_PATTERN =
+  `(?:(?:${MONTH_NAMES})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?,?\\s+\\d{4}` +
+  `|\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${MONTH_NAMES})\\.?\\s*,?\\s*\\d{4}` +
+  `|\\d{1,2}[/-]\\d{1,2}[/-]\\d{4}|20\\d{2}-\\d{2}-\\d{2})`;
 
 // First sentence of the transcription stating the extracted text,
-// or null. Matching ignores case and whitespace.
+// or null. Sentences end at end punctuation or a blank line, so a
+// letterhead never runs into the first sentence of the body.
+// Matching ignores case and whitespace.
 export function sentenceContaining(text: string, fullText: string): string | null {
   const want = text.toLowerCase().replace(/\s+/g, " ").trim();
   if (want.length < 2) return null;
-  for (const sentence of fullText.split(/(?<=[.!?])\s+/)) {
+  for (const sentence of fullText.split(/(?<=[.!?])\s+|\n\s*\n/)) {
     if (sentence.toLowerCase().replace(/\s+/g, " ").includes(want)) return sentence;
   }
   return null;
-}
-
-// A deadline before the notice date, or more than a year after it, is
-// withheld and asked about instead of published. Without a notice date
-// there is nothing to check against.
-export function chronologyOf(deadlineIso: string, noticeIso: string | null): "ok" | "before-notice" | "too-far" {
-  if (!noticeIso) return "ok";
-  if (deadlineIso < noticeIso) return "before-notice";
-  const [y, m, d] = noticeIso.split("-").map(Number);
-  const limit = new Date(Date.UTC(y! + 1, m! - 1, d));
-  const limitIso = `${limit.getUTCFullYear()}-${pad(limit.getUTCMonth() + 1)}-${pad(limit.getUTCDate())}`;
-  if (deadlineIso > limitIso) return "too-far";
-  return "ok";
 }
 
 // Every date found in reading order.

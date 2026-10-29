@@ -152,9 +152,7 @@ describe("readMail", () => {
     expect(reading.deadlines).toHaveLength(1);
     const deadline = reading.deadlines[0]!;
     expect(deadline.dueDate).toBe("2026-12-05");
-    // The tag reads the bare count only; routing follows the relative
-    // construction, which obligates by itself.
-    expect(deadline.obligation).toBe("other");
+    expect(deadline.obligation).toBe("respond");
     expect(deadline.countRule).toBe("calendar days");
     expect(deadline.anchor?.value).toBe("November 25, 2026");
     expect(deadline.anchor?.citation).toEqual(deadline.citation);
@@ -164,8 +162,8 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} Ask for reconsideration 60 days from the date of this notice.`,
-        deadlines: [{ text: "60 days from the date of this notice", box_2d: [200, 60, 220, 300] }],
+        full_text: `${BASE_TEXT} Ask for reconsideration within 60 days of the date of this notice.`,
+        deadlines: [{ text: "within 60 days of the date of this notice", box_2d: [200, 60, 220, 300] }],
       }),
     ]);
     const reading = await readMail([{ bytes, mimeType: "image/jpeg", name: "mail.jpg" }], {
@@ -177,7 +175,7 @@ describe("readMail", () => {
     expect(reading.deadlines).toHaveLength(1);
     const deadline = reading.deadlines[0]!;
     expect(deadline.dueDate).toBe("2027-01-01");
-    expect(deadline.obligation).toBe("other");
+    expect(deadline.obligation).toBe("appeal");
     expect(deadline.anchor?.value).toBe("November 2, 2026");
   });
 
@@ -485,7 +483,7 @@ describe("readMail", () => {
     expect(reading.datesToKnow).toEqual([]);
     expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
-    expect(question.candidates?.map((c) => c.value).sort()).toEqual(["2026-11-20", "2026-12-01"]);
+    expect(question.candidates?.flatMap((c) => c.dates).sort()).toEqual(["2026-11-20", "2026-12-01"]);
     expect(question.candidates?.every((c) => c.citation.file === "p1.jpg" || c.citation.file === "p2.jpg")).toBe(true);
   });
 
@@ -656,7 +654,7 @@ describe("readMail", () => {
     expect(reading.deadlines).toEqual([]);
     expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
-    expect(question.prompt).toContain("before its notice date");
+    expect(question.candidates?.map((c) => c.sentence)).toEqual(["Respond by October 24, 2026"]);
     expect(question.citation).not.toBeNull();
   });
 
@@ -680,7 +678,7 @@ describe("readMail", () => {
     expect(reading.deadlines).toEqual([]);
     expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
-    expect(question.candidates?.map((c) => c.value).sort()).toEqual(["2026-11-20", "2026-11-25"]);
+    expect(question.candidates?.flatMap((c) => c.dates).sort()).toEqual(["2026-11-20", "2026-11-25"]);
   });
 
   it("publishes a repeated response date next to an appeal date on page 2", async () => {
@@ -752,7 +750,7 @@ describe("readMail", () => {
     expect(phone.citation).toEqual({ file: "blur.jpg", page: 1, box: { ymin: 250, xmin: 60, ymax: 270, xmax: 220 } });
   });
 
-  it("files a hedged renewal-and-coverage sentence as a date to know", async () => {
+  it("asks on a conditional coverage-end sentence instead of filing it", async () => {
     const bytes = await photo();
     const sentence = "If it arrives late, your renewal may be denied and your coverage may end on December 20, 2026.";
     const model = clientFor([
@@ -775,8 +773,8 @@ describe("readMail", () => {
       model,
     });
     expect(reading.deadlines).toEqual([]);
-    expect(reading.questions).toEqual([]);
-    expect(reading.datesToKnow.map((d) => d.dueDate)).toEqual(["2026-12-20"]);
+    expect(reading.datesToKnow).toEqual([]);
+    expect(reading.questions[0]?.candidates?.map((c) => c.sentence)).toEqual([sentence.replace(/\.$/, "")]);
   });
 
   it("files a will-arrive payment date as a date to know", async () => {
@@ -856,7 +854,7 @@ describe("readMail", () => {
       model,
     });
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
-    expect(question.prompt).toContain('hedges ("may")');
+    expect(question.candidates?.map((c) => c.sentence)).toEqual([sentence.replace(/\.$/, "")]);
     expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
   });
@@ -915,32 +913,6 @@ describe("readMail", () => {
     expect(reading.datesToKnow).toEqual([]);
   });
 
-  it("asks on a bare anchor fragment instead of publishing it", async () => {
-    const bytes = await photo();
-    const model = clientFor([
-      pageJson({
-        full_text: "County Office. Case CA-1. You must respond within 10 days after November 25, 2026.",
-        sender: { text: "County Office", box_2d: [40, 60, 70, 400] },
-        program: NIL,
-        subject: NIL,
-        asked: [],
-        deadlines: [{ text: "November 25", box_2d: [200, 60, 220, 300] }],
-        consequence: NIL,
-        reference_no: { text: "CA-1", box_2d: [110, 220, 130, 350] },
-        notice_date: NIL,
-        phones: [],
-      }),
-    ]);
-    const reading = await readMail([{ bytes, mimeType: "image/jpeg", name: "mail.jpg" }], {
-      personId: "p1",
-      synthetic: true,
-      model,
-    });
-    expect(reading.questions.map((q) => q.kind)).toEqual(["confirm_deadline"]);
-    expect(reading.deadlines).toEqual([]);
-    expect(reading.datesToKnow).toEqual([]);
-  });
-
   it("asks on a bare date whose sentence states a duty", async () => {
     const bytes = await photo();
     const model = clientFor([
@@ -963,7 +935,7 @@ describe("readMail", () => {
       model,
     });
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
-    expect(question.prompt).toContain("without saying what it is for");
+    expect(question.candidates?.map((c) => c.sentence)).toEqual(["We must receive your packet by November 20, 2026"]);
     expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
   });
@@ -1024,7 +996,7 @@ describe("readMail", () => {
     });
     expect(reading.deadlines).toEqual([]);
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
-    expect(question.candidates?.map((c) => c.value).sort()).toEqual(["2026-10-23", "2026-11-24"]);
+    expect(question.candidates?.flatMap((c) => c.dates).sort()).toEqual(["2026-10-23", "2026-11-24"]);
     expect(question.candidates?.every((c) => c.citation.file === "mail.jpg")).toBe(true);
   });
 
@@ -1050,8 +1022,176 @@ describe("readMail", () => {
       model,
     });
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
-    expect(question.prompt).toContain("more than one deadline in one sentence");
+    expect(question.candidates?.map((c) => c.sentence)).toEqual([
+      "Respond by November 20, 2026 or within 10 days of receipt",
+    ]);
     expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
+  });
+});
+
+describe("readMail publish gate", () => {
+  async function readSentence(
+    sentence: string,
+    deadlines: { text: string; box_2d: number[] }[],
+    over: Record<string, unknown> = {},
+  ) {
+    const bytes = await photo();
+    const model = clientFor([
+      pageJson({
+        full_text: `County Office. Case CA-1. Notice date November 2, 2026. ${sentence}`,
+        sender: { text: "County Office", box_2d: [40, 60, 70, 400] },
+        program: NIL,
+        subject: NIL,
+        asked: [],
+        deadlines,
+        consequence: NIL,
+        reference_no: { text: "CA-1", box_2d: [110, 220, 130, 350] },
+        notice_date: { text: "November 2, 2026", box_2d: [135, 60, 150, 300] },
+        phones: [],
+        ...over,
+      }),
+    ]);
+    return readMail([{ bytes, mimeType: "image/jpeg", name: "mail.jpg" }], {
+      personId: "p1",
+      synthetic: true,
+      model,
+    });
+  }
+
+  const dl = (text: string, ymin = 200): { text: string; box_2d: number[] } => ({
+    text,
+    box_2d: [ymin, 60, ymin + 20, 300],
+  });
+  const BOX = { ymin: 200, xmin: 60, ymax: 220, xmax: 300 };
+
+  // Review 5: each must ask, citing the sentence, and publish nothing.
+  it.each([
+    ["negation (review 5)", "You must not respond before November 20, 2026.", "November 20, 2026", ["2026-11-20"]],
+    [
+      "alternative count (review 5)",
+      "You must respond within 10 days after November 25, 2026 or within 20 days after that date.",
+      "within 10 days after November 25, 2026",
+      ["2026-11-25"],
+    ],
+    ["permission after a date (review 5)", "You may respond after November 20, 2026.", "November 20, 2026", ["2026-11-20"]],
+    ["alternative dates (review 5)", "Respond by November 20 or December 1, 2026.", "December 1, 2026", ["2026-12-01"]],
+    ["negated payment (review 5)", "Do not pay before November 20, 2026.", "November 20, 2026", ["2026-11-20"]],
+    ["negated duty", "You do not need to respond by November 20, 2026.", "November 20, 2026", ["2026-11-20"]],
+    ["alternative duty", "Send the form or call our office by November 20, 2026.", "November 20, 2026", ["2026-11-20"]],
+    ["leading condition", "If you moved, send proof of address by November 20, 2026.", "November 20, 2026", ["2026-11-20"]],
+    [
+      "trailing condition",
+      "Return the form by November 20, 2026 if you want to keep your benefits.",
+      "November 20, 2026",
+      ["2026-11-20"],
+    ],
+    [
+      "unless clause",
+      "Your benefits will end on December 31, 2026 unless you renew by December 15, 2026.",
+      "December 15, 2026",
+      ["2026-12-31", "2026-12-15"],
+    ],
+    [
+      "conditional count from the notice",
+      "If you disagree, you have 60 days from the date of this notice to file an appeal.",
+      "60 days from the date of this notice",
+      [],
+    ],
+    ["agency receipt", "We must receive your packet by November 20, 2026.", "November 20, 2026", ["2026-11-20"]],
+    ["words left over", "Respond by November 20, 2026 to keep your benefits.", "November 20, 2026", ["2026-11-20"]],
+    ["business days", "Submit the form within 10 business days after November 25, 2026.", "November 25, 2026", ["2026-11-25"]],
+  ])("asks on %s", async (_label, sentence, extracted, dates) => {
+    const reading = await readSentence(sentence, [dl(extracted)]);
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.datesToKnow).toEqual([]);
+    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
+    expect(reading.questions).toHaveLength(1);
+    expect(reading.questions[0]).toMatchObject({
+      kind: "confirm_deadline",
+      citation: { file: "mail.jpg", page: 1, box: BOX },
+      candidates: [{ sentence: sentence.replace(/\.$/, ""), dates, citation: { file: "mail.jpg", page: 1, box: BOX } }],
+    });
+  });
+
+  // Each allowed form publishes exactly one correct date.
+  it.each([
+    ["by", "Return your signed form and pay stubs by December 5, 2026.", "December 5, 2026", "2026-12-05", null],
+    ["on or before", "You must respond on or before December 12, 2026.", "December 12, 2026", "2026-12-12", null],
+    ["no later than", "You must renew your case no later than December 15, 2026.", "December 15, 2026", "2026-12-15", null],
+    [
+      "within days of a date",
+      "You must respond within 10 days of November 25, 2026.",
+      "within 10 days of November 25, 2026",
+      "2026-12-05",
+      "November 25, 2026",
+    ],
+    [
+      "within days of the notice",
+      "Request a hearing within 30 days of the date of this notice.",
+      "within 30 days of the date of this notice",
+      "2026-12-02",
+      "November 2, 2026",
+    ],
+    ["due", "Payment due December 13, 2026.", "Payment due December 13, 2026.", "2026-12-13", null],
+  ])("publishes the %s form", async (_label, sentence, extracted, iso, anchor) => {
+    const reading = await readSentence(sentence, [dl(extracted)]);
+    expect(reading.questions).toEqual([]);
+    expect(reading.datesToKnow).toEqual([]);
+    expect(reading.deadlines).toHaveLength(1);
+    expect(reading.deadlines[0]).toMatchObject({ dueDate: iso, citation: { file: "mail.jpg", page: 1, box: BOX } });
+    expect(reading.deadlines[0]!.anchor?.value ?? null).toBe(anchor);
+    expect(reading.letters[0]!.fields.deadlineIso?.value).toBe(iso);
+  });
+
+  it("computes a counted date from the sentence when the reader returned only the anchor", async () => {
+    const reading = await readSentence("You must respond within 10 days after November 25, 2026.", [dl("November 25")]);
+    expect(reading.questions).toEqual([]);
+    expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-12-05"]);
+  });
+
+  it("files a will-receive arrival and an interview as dates to know", async () => {
+    const reading = await readSentence(
+      "You will receive your new card on November 20, 2026. Your interview is on December 1, 2026.",
+      [dl("November 20, 2026"), dl("December 1, 2026", 230)],
+    );
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.questions).toEqual([]);
+    expect(reading.datesToKnow.map((d) => d.dueDate)).toEqual(["2026-11-20", "2026-12-01"]);
+  });
+
+  it("files a stated amount already due as a date to know", async () => {
+    const sentence = "Your payment of $45.00 for November 2026 was due on November 15, 2026.";
+    const reading = await readSentence(sentence, [dl("November 15, 2026")]);
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.questions).toEqual([]);
+    expect(reading.datesToKnow.map((d) => d.dueDate)).toEqual(["2026-11-15"]);
+  });
+
+  it("asks when the deadline is the notice date itself", async () => {
+    const reading = await readSentence("Respond by November 2, 2026.", [dl("November 2, 2026")]);
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.questions.map((q) => q.kind)).toEqual(["confirm_deadline"]);
+  });
+
+  it("puts every withheld sentence on every deadline and missing-page question of the letter", async () => {
+    const reading = await readSentence(
+      "Return the form by November 20, 2026. You must not respond before November 18, 2026. page 1 of 2.",
+      [dl("Return the form by November 20, 2026."), dl("November 18, 2026", 230)],
+      { page_marker: { text: "page 1 of 2", box_2d: [300, 60, 320, 250] } },
+    );
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.datesToKnow).toEqual([]);
+    expect(reading.questions.map((q) => q.kind).sort()).toEqual(["confirm_deadline", "missing_page"]);
+    for (const q of reading.questions) {
+      expect(q.candidates?.map((c) => [c.sentence, c.dates])).toEqual(
+        expect.arrayContaining([
+          ["Return the form by November 20, 2026", ["2026-11-20"]],
+          ["You must not respond before November 18, 2026", ["2026-11-18"]],
+        ]),
+      );
+      expect(q.candidates).toHaveLength(2);
+      expect(q.candidates?.every((c) => c.citation.file === "mail.jpg")).toBe(true);
+    }
   });
 });
