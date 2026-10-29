@@ -1656,6 +1656,27 @@ describe("readMail deadline proposals", () => {
     expect(proposal.reasons.some((r) => r.includes("page 2"))).toBe(true);
   });
 
+  it("never lists the proposed sentence's own date as another date", async () => {
+    const reading = await read(`${HEAD}It must arrive by November 25, 2026.`, [dl("It must arrive by November 25, 2026.")]);
+    const proposal = confirms(reading)[0]!.proposal!;
+    expect(proposal.dueDate).toBe("2026-11-25");
+    expect(proposal.reasons.some((r) => r.includes("also mentions"))).toBe(false);
+  });
+
+  it("does not propose a date before the notice date when a later pick exists", async () => {
+    const past = "The amount of $155.56 was due on October 23, 2026.";
+    const pay = "Pay in full or arrange a payment plan by November 24, 2026 to avoid shutoff.";
+    const reading = await read(`${HEAD}${past} ${pay}`, [dl(past), dl(pay, 230)]);
+    expect(confirms(reading)[0]!.proposal).toMatchObject({ dueDate: "2026-11-24", sentence: pay.replace(/\.$/, "") });
+  });
+
+  it("quotes a qualifier with the words after it across a line break", async () => {
+    const reading = await read(`${HEAD}Return the form by December 5, 2026.\n\nIf\nyou moved, call us.`, [
+      dl("Return the form by December 5, 2026."),
+    ]);
+    expect(confirms(reading)[0]!.proposal!.reasons).toContain('the letter says "if you moved"');
+  });
+
   it("never proposes for a letter flagged as a scam", async () => {
     const reading = await read(
       "URGENT: your benefits are locked. Verify your account immediately at http://benefits-unlock.example/login. " +
