@@ -12,7 +12,8 @@
     "next": "15.5.28",
     "react": "19.1.1",
     "react-dom": "19.1.1",
-    "react-qr-code": "^2.2.0"
+    "react-qr-code": "^2.2.0",
+    "@mano/pages": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
