@@ -7,6 +7,10 @@ export interface Env {
   SESSION_SECRET?: string;
   MANO_ENV?: string;
   OPERATOR_SECRET?: string;
+  // The agent's service token, and the secret Channels signs handle
+  // grants with. Without both, the agent path refuses every request.
+  MANO_ENGINE_AGENT_TOKEN?: string;
+  MANO_HANDLE_GRANT_SECRET?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;

@@ -411,6 +411,15 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return id;
   }
 
+  // Forget deletes the row itself. Forgetting an ID that is already gone
+  // answers the same, so a retried forget is safe.
+  async forgetMemory(verified: string, memoryId: string) {
+    await this.assertSubject(verified);
+    this.db().exec("DELETE FROM memory WHERE id = ?", memoryId);
+    this.store.audit({ event: "memory.forgotten", memoryHash: await auditDigest(memoryId) });
+    return { id: memoryId, forgotten: true as const };
+  }
+
   async listMemory(verified: string) {
     await this.assertSubject(verified);
     return [...this.db().exec("SELECT * FROM memory ORDER BY created_at").toArray()];
@@ -532,6 +541,13 @@ export class PersonAgent extends Agent<Env, PersonState> {
     await this.assertSubject(verified);
     const rows = this.db().exec("SELECT * FROM approvals ORDER BY created_at DESC").toArray();
     return rows.map((r) => approvalFromRow(r as Record<string, unknown>));
+  }
+
+  async reject(approvalId: string, verified: string) {
+    await this.assertSubject(verified);
+    const result = await this.gateway.rejectApproval(approvalId, verified);
+    this.syncState();
+    return result;
   }
 
   async approve(approvalId: string, verified: string) {

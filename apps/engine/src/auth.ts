@@ -1,9 +1,13 @@
-// Session tokens: the only identity the engine trusts.
+// Session tokens and the agent's service credential (at the end of this
+// file): the only identities the engine trusts.
 //
 // A token is `v1.<base64url claims>.<base64url HMAC-SHA256>`. Person routes
 // accept person tokens whose subject matches the route; org routes accept
 // staff tokens carrying the matching org ID. Caller-supplied names
 // (`x-person-id`, bare bearer names) are never identity.
+
+import { personIdForHandle, verifyHandleGrant } from "@mano/protocol";
+import { timingSafeEqual } from "./hash.js";
 
 export type SessionKind = "person" | "staff";
 
@@ -212,4 +216,43 @@ export async function verifyWsTicket(
   } catch {
     return null;
   }
+}
+
+// The agent's service credential. The agent never holds SESSION_SECRET,
+// so it cannot mint a session for anyone. It sends its own token as the
+// Bearer and, in x-mano-handle-grant, the handle grant Channels signed for
+// the person who just texted. Only that person's routes accept it, and
+// only the routes in AGENT_ROUTES.
+export const HANDLE_GRANT_HEADER = "x-mano-handle-grant";
+
+export interface AgentEnv {
+  MANO_ENGINE_AGENT_TOKEN?: string;
+  MANO_HANDLE_GRANT_SECRET?: string;
+}
+
+const AGENT_ROUTES: readonly (readonly [string, RegExp])[] = [
+  ["GET", /^\/memory$/],
+  ["POST", /^\/memory$/],
+  ["DELETE", /^\/memory\/[^/]+$/],
+  ["POST", /^\/action$/],
+  ["GET", /^\/approvals$/],
+  ["POST", /^\/approvals\/[^/]+\/(approve|reject)$/],
+];
+
+export function agentMayUse(method: string, personRoute: string): boolean {
+  return AGENT_ROUTES.some(([m, path]) => m === method && path.test(personRoute));
+}
+
+// The person the agent may act for, or null for any missing, wrong,
+// forged or expired part. Either secret unset means the path is closed.
+export async function authenticateAgent(request: Request, env: AgentEnv): Promise<{ personId: string } | null> {
+  if (!env.MANO_ENGINE_AGENT_TOKEN || !env.MANO_HANDLE_GRANT_SECRET) return null;
+  const auth = request.headers.get("authorization");
+  if (!auth || !auth.startsWith("Bearer ")) return null;
+  if (!timingSafeEqual(auth.slice("Bearer ".length).trim(), env.MANO_ENGINE_AGENT_TOKEN)) return null;
+  const grant = request.headers.get(HANDLE_GRANT_HEADER);
+  if (!grant) return null;
+  const claims = await verifyHandleGrant(grant, env.MANO_HANDLE_GRANT_SECRET);
+  if (!claims) return null;
+  return { personId: personIdForHandle(claims.handle) };
 }

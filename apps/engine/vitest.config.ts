@@ -12,6 +12,8 @@ export default defineConfig({
           SESSION_SECRET: "test-session-secret-not-real",
           MANO_ENV: "development",
           OPERATOR_SECRET: "test-operator-secret-not-real",
+          MANO_ENGINE_AGENT_TOKEN: "test-agent-token-not-real",
+          MANO_HANDLE_GRANT_SECRET: "test-handle-grant-secret-not-real",
         },
       },
     }),

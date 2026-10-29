@@ -69,11 +69,12 @@ describe("r3 blocker 4: reconcile keeps the original action", () => {
     expect(first.status).toBe("blocked");
     expect(store.getAttempt(key)?.status).toBe("unknown");
 
+    // Since one approval holds each key, the different action is refused
+    // when it asks, before any approval, reconcile or execute.
     const revoke = await gw.requestAction(baseReq({ idempotencyKey: key, payload: { consent: "revoke" } }));
-    expect(revoke.status).toBe("needs_approval");
-    const second = await gw.approveAndExecute(revoke.approval!.id, "maria");
-    expect(second.status).toBe("blocked");
-    expect(second.reason).toMatch(/different content/);
+    expect(revoke.status).toBe("blocked");
+    expect(revoke.reason).toMatch(/different content/);
+    expect(checks).toBe(1);
     expect(calls.length).toBe(1);
     expect(store.getAttempt(key)?.status).toBe("unknown");
   });

@@ -6,6 +6,10 @@ META_MODEL_API_KEY= # gitleaks:allow (empty example value)
 ENCRYPTION_KEK_B64= # gitleaks:allow (empty example value)
 SESSION_SECRET= # gitleaks:allow (empty example value)
 OPERATOR_SECRET= # gitleaks:allow (empty example value)
+# The agent's service credential: its token, and the secret Channels
+# signs handle grants with. Both unset means the agent path is closed.
+MANO_ENGINE_AGENT_TOKEN= # gitleaks:allow (empty example value)
+MANO_HANDLE_GRANT_SECRET= # gitleaks:allow (empty example value)
 # Environment name. development allows the dev session secret and the
 # simulated executor and stand-in model without explicit choice.
 MANO_ENV=development

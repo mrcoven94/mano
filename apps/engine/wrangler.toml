@@ -2,6 +2,11 @@ name = "mano-engine"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 compatibility_flags = ["nodejs_compat"]
+# Served only on the custom domain: no workers.dev URL and no preview URLs,
+# so the account subdomain is never used.
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "engine.withmano.com", custom_domain = true }]
 
 [durable_objects]
 bindings = [
@@ -22,5 +27,10 @@ bucket_name = "mano-files"
 #   wrangler secret put ENCRYPTION_KEK_B64
 #   wrangler secret put SESSION_SECRET
 #   wrangler secret put OPERATOR_SECRET  (marks people synthetic via the admin route)
+#   wrangler secret put MANO_ENGINE_AGENT_TOKEN  (the agent's service token)
+#   wrangler secret put MANO_HANDLE_GRANT_SECRET  (Channels signs handle grants with it)
+#   EXECUTOR_MODE (simulated or sandbox) and SANDBOX_BASE_URL for sandbox
+# Production sets all of these from the engine-production GitHub
+# environment in .github/workflows/deploy-engine.yml.
 # Optional model routing (see .dev.vars.example):
 #   CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA

@@ -124,6 +124,37 @@ export class SqlApprovalStore implements ApprovalStore {
     );
   }
 
+  createApprovalForKey(a: Approval): Approval {
+    this.sql.exec(
+      `INSERT INTO approvals(${APPROVAL_COLUMNS}) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?` +
+        " WHERE NOT EXISTS (SELECT 1 FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected'))",
+      a.id, a.actionType, a.recipient, a.purpose, a.documentHash, a.documentId,
+      a.idempotencyKey, a.status, a.approvedByHumanId, a.createdAt, a.remindAt, a.expiresAt,
+      a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems),
+      a.idempotencyKey,
+    );
+    const rows = this.sql.exec(
+      `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected')` +
+        " ORDER BY CASE status WHEN 'rejected' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, created_at LIMIT 1",
+      a.idempotencyKey,
+    ).toArray();
+    return rows.length > 0 ? approvalFromRow(rows[0] as Record<string, unknown>) : a;
+  }
+
+  rejectApprovalsForKey(key: string, personId: string): void {
+    this.sql.exec(
+      "UPDATE approvals SET status = 'rejected' WHERE idempotency_key = ? AND person_id = ? AND status = 'pending'",
+      key, personId,
+    );
+  }
+
+  keyDeclined(key: string): boolean {
+    return (
+      this.sql.exec("SELECT 1 FROM approvals WHERE idempotency_key = ? AND status = 'rejected' LIMIT 1", key).toArray()
+        .length > 0
+    );
+  }
+
   consumeApprovalAndClaim(id: string, humanId: string, attempt: Attempt, guard: ConsumeGuard): Approval | null {
     // The attempt claim and the guarded approval update below run with no
     // await between them, so no interleaving request can slip in.
@@ -157,7 +188,8 @@ export class SqlApprovalStore implements ApprovalStore {
     // before its awaits. The clock is read here, at claim time.
     const updated = this.sql.exec(
       "UPDATE approvals SET status = 'approved', approved_by = ?" +
-        " WHERE id = ? AND status = 'pending' AND person_id = ? AND request_hash = ? AND expires_at > ?",
+        " WHERE id = ? AND status = 'pending' AND person_id = ? AND request_hash = ? AND expires_at > ?" +
+        " AND NOT EXISTS (SELECT 1 FROM approvals d WHERE d.idempotency_key = approvals.idempotency_key AND d.status = 'rejected')",
       humanId, id, guard.personId, guard.requestHash, new Date().toISOString(),
     );
     if (updated.rowsWritten !== 1) {
