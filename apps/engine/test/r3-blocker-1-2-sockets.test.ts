@@ -116,14 +116,16 @@ describe("r3 blockers 1 and 2: tickets are redeemed before any state flows", () 
   });
 
   it("closes an idle socket past session expiry on the next broadcast", async () => {
-    const ticket = await ticketFor("r3sock-idle", 1);
+    // A 2-second session: the upgrade must land before the ticket dies
+    // even when the full suite loads the worker.
+    const ticket = await ticketFor("r3sock-idle", 2);
     const res = await upgrade("r3sock-idle", ticket);
     expect(res.status).toBe(101);
     const seen = listen(res.webSocket!);
     await waitFor(seen.messages, 1, "agent state");
 
-    // The 1-second session lapses while the socket sits idle.
-    await new Promise((r) => setTimeout(r, 1500));
+    // The session lapses while the socket sits idle.
+    await new Promise((r) => setTimeout(r, 2500));
     // Any state-changing call broadcasts, and the broadcast sweeps
     // expired sockets without waiting for a client message.
     const action = await SELF.fetch("https://mano.test/api/persons/r3sock-idle/action", {

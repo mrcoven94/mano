@@ -82,15 +82,17 @@ describe("r4 item 1: sockets close at session expiry", () => {
   });
 
   it("closes an idle socket when the scheduled expiry fires", async () => {
-    const res = await upgrade("r4s1-idle", await ticketFor("r4s1-idle", 1));
+    // A 2-second session: the upgrade must land before the ticket dies
+    // even when the full suite loads the worker.
+    const res = await upgrade("r4s1-idle", await ticketFor("r4s1-idle", 2));
     expect(res.status).toBe(101);
     const seen = listen(res.webSocket!);
     await waitFor(seen.messages, 1, "agent state");
 
-    // The 1-second session lapses while the socket sits idle with no
-    // broadcast to sweep it. The scheduled close fires on its own; the
-    // explicit call afterwards only proves the handler is idempotent.
-    await new Promise((r) => setTimeout(r, 1500));
+    // The session lapses while the socket sits idle with no broadcast
+    // to sweep it. The scheduled close fires on its own; the explicit
+    // call afterwards only proves the handler is idempotent.
+    await new Promise((r) => setTimeout(r, 2500));
     const close = await Promise.race([
       seen.closed,
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Idle socket was not closed.")), 5000)),

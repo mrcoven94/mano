@@ -6,7 +6,13 @@ import {
 } from "@mano/protocol";
 import type { Env } from "../env.js";
 import { generateAgentKeypair, resolveAgentKey } from "./agent-keys.js";
-import { applyConsentDelivery, consentEventRecorded } from "../consent-dedupe.js";
+import {
+  applyConsentDelivery,
+  consentEventRecorded,
+  senderPerson,
+  type ConsentEventType,
+  type DeliveryScope,
+} from "../consent-dedupe.js";
 
 export interface SharedCase {
   caseId: string;
@@ -179,7 +185,8 @@ export class OrgAgent extends Agent<Env, OrgState> {
     }
     const now = new Date().toISOString();
     if (msg.type === "consent.revoke") {
-      const delivery = this.applyDelivery(msg.fromAgentId, msg.idempotencyKey, () => {
+      const scope: DeliveryScope = { fromAgentId: msg.fromAgentId, idempotencyKey: msg.idempotencyKey, event: "revoke" };
+      const delivery = this.applyDelivery(scope, () => {
         this.appendEvent(msg.caseId, "revoke", sender, "", msg.id, now, msg.idempotencyKey);
       });
       if (delivery === "duplicate") return { accepted: true, duplicate: true };
@@ -209,7 +216,8 @@ export class OrgAgent extends Agent<Env, OrgState> {
     if (revoked.length > 0) {
       return { accepted: false, reason: `Case ${msg.caseId} was revoked and cannot be shared again.` };
     }
-    const delivery = this.applyDelivery(msg.fromAgentId, msg.idempotencyKey, () => {
+    const scope: DeliveryScope = { fromAgentId: msg.fromAgentId, idempotencyKey: msg.idempotencyKey, event: "share" };
+    const delivery = this.applyDelivery(scope, () => {
       this.db().exec("UPDATE case_owners SET expires_at_ms = ? WHERE case_id = ?", expiresAtMs, msg.caseId);
       this.appendEvent(msg.caseId, "share", sender, payload.purpose as string, msg.id, now, msg.idempotencyKey);
     });
@@ -234,21 +242,19 @@ export class OrgAgent extends Agent<Env, OrgState> {
 
   // Marker plus event in one Durable Object transaction. SQL BEGIN
   // is forbidden here; transactionSync rolls back on throw.
-  private applyDelivery(fromAgentId: string, idempotencyKey: string, append: () => void) {
-    return applyConsentDelivery(this.db(), fromAgentId, idempotencyKey, append, (fn) =>
-      this.ctx.storage.transactionSync(fn),
-    );
+  private applyDelivery(scope: DeliveryScope, append: () => void) {
+    return applyConsentDelivery(this.db(), scope, append, (fn) => this.ctx.storage.transactionSync(fn));
   }
 
-  // Whether this org recorded a consent event under a delivery key.
-  // The person's agent asks this to reconcile a share; agent-to-agent
-  // only. Reads the event record, never the dedupe marker: a marker can
-  // survive a crash that the event did not. The sender stays on the
-  // signature for the agent-to-agent contract; keys embed the sender, so
-  // the key alone identifies the record. A pure historical fact: expiry
-  // is enforced on case reads, not by rewriting delivery history.
-  async hasConsentRecord(_fromAgentId: string, idempotencyKey: string): Promise<boolean> {
-    return consentEventRecorded(this.db(), idempotencyKey);
+  // Whether this org recorded this sender's event of this type under a
+  // delivery key. The person's agent asks this to reconcile a share;
+  // agent-to-agent only. The sender and the type are part of the match:
+  // keys are caller-controlled, so another sender's event (or a grant
+  // where a revoke was asked) must never satisfy this reconcile. A pure
+  // historical fact: expiry is enforced on case reads, not by rewriting
+  // delivery history.
+  async hasConsentRecord(fromAgentId: string, idempotencyKey: string, event: ConsentEventType): Promise<boolean> {
+    return consentEventRecorded(this.db(), { fromAgentId, idempotencyKey, event });
   }
 
   private async keyForSender(fromAgentId: string): Promise<string | null> {
@@ -311,8 +317,4 @@ export class OrgAgent extends Agent<Env, OrgState> {
       sharedAt: r.shared_at,
     }));
   }
-}
-
-function senderPerson(fromAgentId: string): string {
-  return fromAgentId.startsWith("person:") ? fromAgentId.slice("person:".length) : fromAgentId;
 }
