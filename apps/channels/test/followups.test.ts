@@ -118,7 +118,7 @@ describe("PR 67 review, through the send path", () => {
 
 describe("PR 67 review round 2, through the send path", () => {
   it("replaces a self-reference that names a listed AI company or assistant (blocker 1)", async () => {
-    for (const reply of ["This is Google Assistant. How can I help?", "I'm Alexa, your helper.", "You're chatting with Siri."]) {
+    for (const reply of ["This is Google Assistant. How can I help?", "I'm Alexa, your helper.", "I was made by Apple, I'm Siri."]) {
       const h = makeHarness({ replies: [reply] });
       const sent = (await say(h, "evt_1", "who is this")).slice(1).join(" ");
       expect(sent, reply).toContain(SELF_DESCRIPTION);
@@ -155,5 +155,40 @@ describe("a caseworker named Claude, through the send path (lead decision)", () 
     const reply = "Your caseworker Claude will call Friday.";
     const h = makeHarness({ replies: [reply] });
     expect((await say(h, "evt_1", "when will they call")).slice(1)).toEqual([reply]);
+  });
+});
+
+describe("PR 67 review round 3, through the send path", () => {
+  it("puts 988 and 911 on a crisis turn the narrow detector missed (1)", async () => {
+    const h = makeHarness({ replies: ["Can you tell me more?"] });
+    const answer = (await say(h, "evt_1", "I am going to jump off a bridge")).slice(1).join(" ");
+    expect(answer).toMatch(/\b988\b/);
+    expect(answer).toMatch(/\b911\b/);
+  });
+
+  it("adds only the missing number (1)", async () => {
+    const h = makeHarness({ replies: ["Please call 911 right now. I'm here."] });
+    const answer = (await say(h, "evt_1", "I am going to jump off a bridge")).slice(1);
+    expect(answer.join(" ")).toMatch(/\b988\b/);
+    expect(answer).not.toContain(CRISIS_LINE);
+    expect(answer.join(" ")).toContain("Please call 911 right now. I'm here.");
+  });
+
+  it("replaces a maker clause with Meta anywhere in the sentence (2b)", async () => {
+    const h = makeHarness({ replies: ["I'm Mano, powered by Meta. I can help with your renewal."] });
+    expect((await say(h, "evt_1", "who are you")).slice(1)).toEqual(["I'm Mano, an automated assistant. I can help with your renewal."]);
+  });
+
+  it("sends an Amazon Fresh EBT explanation unchanged (2d)", async () => {
+    const reply = "This is the Amazon Fresh page where you can use your EBT card.";
+    const h = makeHarness({ replies: [reply] });
+    expect((await say(h, "evt_1", "where do i shop online")).slice(1)).toEqual([reply]);
+  });
+
+  it("still replaces our own stack anywhere and other names in first-person identity (2a, 2c)", async () => {
+    for (const reply of ["Mano runs on Llama.", "I am Amazon Nova.", "My name is Google."]) {
+      const h = makeHarness({ replies: [reply] });
+      expect((await say(h, "evt_1", "who are you")).slice(1), reply).toEqual([SELF_DESCRIPTION]);
+    }
   });
 });

@@ -57,7 +57,7 @@ describe("holdCrisisLines (review blocker 2)", () => {
   });
 
   it("survives the guard dropping a sentence that named a provider", () => {
-    const guarded = guardReply(crisisFloor("Call 988 or 911 through ChatGPT.")).text;
+    const guarded = guardReply(crisisFloor("Call 988 or 911 through Llama.")).text;
     expect(holdCrisisLines([guarded]).join(" ")).toContain("988");
     expect(holdCrisisLines([guarded]).join(" ")).toContain("911");
   });

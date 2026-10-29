@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SELF_DESCRIPTION, containsProviderName, guardReply } from "../src/guard.js";
-import { isCrisis, mightBeCrisis } from "../src/crisis.js";
+import { CRISIS_LINE, holdCrisisLines, isCrisis, mightBeCrisis } from "../src/crisis.js";
 import { PROBES } from "../src/probes.js";
 
 describe("self-identity is a class (follow-up 2)", () => {
@@ -88,7 +88,7 @@ describe("PR 67 review", () => {
   });
 
   it("still catches explicit assistant identities that start with This is (should 3)", () => {
-    for (const text of ["This is Nova, your assistant.", "This is Google Assistant speaking."]) {
+    for (const text of ["This is Nova, your assistant.", "This is Google Assistant speaking.", "This is ChatGPT, made by OpenAI."]) {
       expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
     }
   });
@@ -101,9 +101,7 @@ describe("PR 67 review round 2", () => {
       "this is google assistant",
       "I'm Alexa.",
       "My maker is Amazon.",
-      "You're talking with Copilot from Microsoft.",
       "I am built on xAI's Grok.",
-      "This is Nova.",
     ]) {
       expect(containsProviderName(text), text).toBe(true);
       expect(guardReply(text).text.startsWith(SELF_DESCRIPTION), text).toBe(true);
@@ -163,14 +161,43 @@ describe("model words split in two (lead decision)", () => {
   });
 
   it("still replaces those words inside identity constructions", () => {
-    for (const text of ["I'm Claude.", "I'm powered by Meta.", "Powered by Meta.", "This is Gemini.", "I'm a Gemini model."]) {
+    for (const text of ["I'm Claude.", "I'm powered by Meta.", "Powered by Meta.", "This is Gemini, your assistant.", "I'm a Gemini model."]) {
       expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
     }
   });
 
-  it("keeps product-only words counting anywhere", () => {
-    for (const text of ["Ask ChatGPT about it.", "Llama is fine.", "Use Copilot for that.", "Grok can tell you."]) {
+  it("keeps our own stack counting anywhere (round 3 narrowed this to muse, glimmer, llama and model IDs)", () => {
+    for (const text of ["Llama is fine.", "Ask Muse for help.", "The glimmer model can tell you.", "Try gpt-4o."]) {
       expect(containsProviderName(text), text).toBe(true);
     }
+  });
+});
+
+describe("PR 67 review round 3", () => {
+  it("counts meta and spark after a maker or power verb anywhere in the sentence (2b)", () => {
+    for (const text of ["I'm Mano, powered by Meta.", "I was built on Spark.", "Mano is made by Meta.", "I'm running on Muse Spark."]) {
+      expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
+    }
+  });
+
+  it("counts other names only in a first-person identity or a maker clause (2c)", () => {
+    for (const text of ["Ask ChatGPT about it.", "Copilot can draft that email.", "You can look it up on Google Maps.", "This is the Amazon Fresh page where you can use your EBT card."]) {
+      expect(guardReply(text), text).toEqual({ text, changes: [] });
+    }
+    for (const text of ["I'm ChatGPT.", "My name is Google.", "I was made by Microsoft.", "This is Nova, your assistant."]) {
+      expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
+    }
+  });
+});
+
+describe("holdCrisisLines adds only what is missing (round 3, 1)", () => {
+  it("adds 988 when only 911 is there, 911 when only 988 is there, both when neither", () => {
+    const only911 = holdCrisisLines(["Please call 911 right now."]);
+    expect(only911.join(" ")).toMatch(/\b988\b/);
+    expect(only911).not.toContain(CRISIS_LINE);
+    const only988 = holdCrisisLines(["Please call or text 988."]);
+    expect(only988.join(" ")).toMatch(/\b911\b/);
+    expect(only988).not.toContain(CRISIS_LINE);
+    expect(holdCrisisLines(["Can you tell me more?"])[0]).toBe(CRISIS_LINE);
   });
 });

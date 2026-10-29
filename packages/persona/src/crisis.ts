@@ -53,10 +53,19 @@ export function crisisFloor(reply: string): string {
   return namesCrisisLines(reply) ? reply : `${CRISIS_LINE} ${reply}`.trim();
 }
 
+// Said when a crisis reply names one number but not the other.
+export const LINE_988 = "You can also call or text 988 anytime, it's free and open 24/7.";
+export const LINE_911 = "If you're in danger right now, call 911.";
+
 // The last check on a crisis turn's outgoing bubbles, after the guard,
-// the link check and truncation: if either number is gone, CRISIS_LINE
-// goes first. Callers cap the bubble count after this, so it is never
-// the line that gets cut.
+// the link check and truncation. With neither number, CRISIS_LINE goes
+// first; with one, only the missing line is added, first. Callers cap
+// the bubble count after this, so the added line is never the one cut.
 export function holdCrisisLines(bubbles: readonly string[]): string[] {
-  return namesCrisisLines(bubbles.join(" ")) ? [...bubbles] : [CRISIS_LINE, ...bubbles];
+  const text = bubbles.join(" ");
+  const has988 = /\b988\b/.test(text);
+  const has911 = /\b911\b/.test(text);
+  if (has988 && has911) return [...bubbles];
+  if (!has988 && !has911) return [CRISIS_LINE, ...bubbles];
+  return [has988 ? LINE_911 : LINE_988, ...bubbles];
 }

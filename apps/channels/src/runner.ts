@@ -35,7 +35,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { guardReply, holdCrisisLines, isCrisis, mightBeCrisis } from "@mano/persona";
+import { guardReply, holdCrisisLines, mightBeCrisis } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -666,13 +666,10 @@ export class ConversationRunner {
     // plus chunkByTextCap), so the join is never cut: every input
     // reaches the responder exactly once, across as many turns as needed.
     const turnText = texts.join("\n");
-    // Classified before admission and before any model work: a crisis
-    // reply never depends on the budget, the limits or the model.
-    const crisis = isCrisis(turnText);
-    // Where no model runs (over a limit, out of budget, a failed call),
-    // the broad check decides, so a missed disclosure is never met with
-    // silence or a deduped busy notice.
-    const noModelCrisis = crisis || mightBeCrisis(turnText);
+    // One crisis detector for every path, classified before admission
+    // and before any model work. It is broad on purpose: a match makes
+    // the reply name 988 and 911, and over-triggering is accepted.
+    const crisis = mightBeCrisis(turnText);
     const history = this.history(meta.introduced);
     const historyChars = history.reduce((sum, h) => sum + h.text.length, 0);
     const { responder } = this.deps;
@@ -691,7 +688,7 @@ export class ConversationRunner {
         spentUsd: budgeted.spentUsd,
         crisis,
       });
-      if (noModelCrisis) {
+      if (crisis) {
         // No model and no cost: the deterministic crisis reply, past any limit.
         const bubbles = [
           ...(meta.introduced ? [] : [{ part: 0, tag: "", text: INTRO_BUBBLE }]),
@@ -740,7 +737,7 @@ export class ConversationRunner {
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
         } else {
-          bubbles.push(...this.answerBubbles(turn, noModelCrisis ? [] : [FAILURE_BUBBLE], noModelCrisis));
+          bubbles.push(...this.answerBubbles(turn, crisis ? [] : [FAILURE_BUBBLE], crisis));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());

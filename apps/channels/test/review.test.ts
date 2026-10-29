@@ -54,13 +54,13 @@ describe("crisis protection does not depend on the model (review blocker 1)", ()
 
 describe("the final bubbles of a crisis turn always name 988 and 911 (review blocker 2)", () => {
   it("restores the numbers when the guard drops the sentence that held them", async () => {
-    const h = makeHarness({ replies: ["Call 988 or 911 through ChatGPT."] });
+    const h = makeHarness({ replies: ["Call 988 or 911 through Llama."] });
     await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: CRISIS_TEXT, occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     const answer = sent(h).slice(1).join(" ");
     expect(answer).toContain("988");
     expect(answer).toContain("911");
-    expect(answer).not.toContain("ChatGPT");
+    expect(answer).not.toContain("Llama");
   });
 
   it("restores the numbers when bubble truncation drops them", async () => {
