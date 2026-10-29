@@ -83,7 +83,7 @@ test("live grading accepts only the exact judge identity", () => {
   const store = new MemoryLiveStore();
   const env = { MANO_MODEL_JUDGE_ID: "muse-spark-1.3" };
   const contributor: JudgeClient = { id: "judge:idl-1.0-contributor", live: true, score: async () => [] };
-  assert.throws(() => new LiveQuality({ store, judge: contributor, env }), /requires judge/);
+  assert.throws(() => new LiveQuality({ store, judge: contributor, env }), /contributor/);
   const other: JudgeClient = { id: "judge:some-other-model", live: true, score: async () => [] };
   assert.throws(() => new LiveQuality({ store, judge: other, env }), /requires judge/);
   const exact: JudgeClient = { id: "judge:muse-spark-1.3", live: true, score: async () => [] };
@@ -91,6 +91,16 @@ test("live grading accepts only the exact judge identity", () => {
   assert.doesNotThrow(() => new LiveQuality({ store, judge: new FakeJudge() }));
   assert.equal(expectedJudgeId({ env }), "judge:muse-spark-1.3");
   assert.equal(expectedJudgeId({ judgeId: "custom-id" }), "judge:custom-id");
+});
+
+test("a -contributor judge is refused for live grading even when configured", () => {
+  const store = new MemoryLiveStore();
+  const configured: JudgeClient = { id: "judge:muse-spark-1.3-contributor", live: true, score: async () => [] };
+  const env = { MANO_MODEL_JUDGE_ID: "muse-spark-1.3-contributor" };
+  assert.throws(() => new LiveQuality({ store, judge: configured, env }), /contributor/);
+  assert.throws(() => new LiveQuality({ store, judge: configured, judgeId: "muse-spark-1.3-contributor" }), /contributor/);
+  const upper: JudgeClient = { id: "judge:Muse-Spark-1.3-CONTRIBUTOR", live: true, score: async () => [] };
+  assert.throws(() => new LiveQuality({ store, judge: upper, judgeId: "Muse-Spark-1.3-CONTRIBUTOR" }), /contributor/);
 });
 
 test("counters, feedback, and suppression keep counts only", () => {

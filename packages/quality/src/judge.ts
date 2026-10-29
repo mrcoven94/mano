@@ -3,6 +3,7 @@
 // and unlabeled, never told which version wrote them. The judge only stays if
 // it agrees with the hand-labeled set on 80% of pass/fail calls.
 
+import { createHash } from "node:crypto";
 import type { ModelClient } from "./models.ts";
 import { containsPromise, extractAmounts, extractDates, extractPhones, extractUrls } from "./checks.ts";
 import { mulberry32, shuffle } from "./prng.ts";
@@ -52,12 +53,27 @@ function clampScore(n: unknown): number {
   return Math.min(5, Math.max(1, v));
 }
 
+// A judge reply can quote the answers it scored, holdout answers included, so
+// a parse failure reports a fixed reason and a short hash of the reply, never
+// the reply or the parser's own message (which quotes it).
+export class JudgeReplyError extends Error {
+  constructor(reason: "no-array" | "bad-json" | "wrong-count", reply: string) {
+    super(`judge reply unusable (${reason}), sha256 ${createHash("sha256").update(reply).digest("hex").slice(0, 12)}`);
+    this.name = "JudgeReplyError";
+  }
+}
+
 export function parseJudgeScores(text: string, count: number): JudgeScore[] {
   const start = text.indexOf("[");
   const end = text.lastIndexOf("]");
-  if (start === -1 || end === -1 || end <= start) throw new Error("judge did not return a JSON array");
-  const parsed = JSON.parse(text.slice(start, end + 1)) as unknown;
-  if (!Array.isArray(parsed) || parsed.length !== count) throw new Error(`judge returned ${Array.isArray(parsed) ? parsed.length : "?"} scores for ${count} answers`);
+  if (start === -1 || end === -1 || end <= start) throw new JudgeReplyError("no-array", text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    throw new JudgeReplyError("bad-json", text);
+  }
+  if (!Array.isArray(parsed) || parsed.length !== count) throw new JudgeReplyError("wrong-count", text);
   return (parsed as Record<string, unknown>[]).map((s) => ({
     helpful: clampScore(s.helpful),
     accurate: clampScore(s.accurate),

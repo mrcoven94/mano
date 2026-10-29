@@ -130,6 +130,11 @@ export class LiveQuality {
     // Live grading touches real content, so it accepts only the exact
     // configured judge identity. Anything else, contributor or unknown, is
     // refused. The fake judge is allowed because it never calls a model.
+    // A -contributor ID is never allowed on real content, whatever the
+    // configuration says, so the suffix check comes before the identity check.
+    if (deps.judge?.live && /-contributor$/i.test(deps.judge.id)) {
+      throw new Error("live grading refuses -contributor model IDs; real content goes to a Standard ID only");
+    }
     if (deps.judge?.live && deps.judge.id !== expectedJudgeId(deps)) {
       throw new Error(`live grading requires judge ${expectedJudgeId(deps)}, not ${deps.judge.id}`);
     }

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { agreement, buildCalibrationSet } from "../src/calibration.ts";
-import { FakeJudge, JUDGE_BATCH_SIZE, judgeAll, judgeMean, parseJudgeScores } from "../src/judge.ts";
+import { FakeJudge, JUDGE_BATCH_SIZE, MetaJudge, judgeAll, judgeMean, parseJudgeScores } from "../src/judge.ts";
 import type { JudgeItem } from "../src/judge.ts";
 
 const item: JudgeItem = { answer: "a", facts: "f", reference: "r" };
@@ -48,4 +48,24 @@ test("fake judge agrees with calibration labels over 80%", async () => {
   const rate = agreement(scores, cal.map((c) => c.label));
   assert.ok(rate >= 0.8, `agreement ${rate}`);
   assert.ok(judgeMean(scores) > 0);
+});
+
+test("judge parse errors never echo the response text", async () => {
+  const marker = "HOLDOUT-MARKER-7f3a renewal is due November";
+  const replies = [
+    `[{"helpful": 5, "reason": "${marker}" ,,]`,
+    `${marker} no array at all`,
+    `[{"helpful":5,"accurate":5,"plain":5,"warm":5,"pass":true,"reason":"${marker}"}]`,
+  ];
+  for (const reply of replies) {
+    const model = { id: "m", live: true, complete: async () => ({ text: reply, inputTokens: 1, outputTokens: 1 }) };
+    const judge = new MetaJudge(model);
+    const err = await judgeAll([item, item], judge).then(() => null, (e: unknown) => e as Error);
+    assert.ok(err, "judgeAll should reject a malformed reply");
+    assert.ok(!err.message.includes("HOLDOUT-MARKER"), `message leaks: ${err.message}`);
+    assert.ok(!String(err.stack).includes("HOLDOUT-MARKER"), "stack leaks the response");
+    assert.ok(!JSON.stringify(err).includes("HOLDOUT-MARKER"), "error fields leak the response");
+    assert.equal((err as { cause?: unknown }).cause, undefined, "cause carries the parser error");
+    assert.match(err.message, /^judge reply unusable \([a-z-]+\), sha256 [0-9a-f]{12}$/);
+  }
 });
