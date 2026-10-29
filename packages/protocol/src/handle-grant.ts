@@ -27,6 +27,12 @@ export function personIdForHandle(handleHash: string): string {
   return `handle-${handleHash}`;
 }
 
+// The handle hash behind a handle person, or null for any other person.
+export function handleForPersonId(personId: string): string | null {
+  const match = /^handle-([0-9a-f]{64})$/.exec(personId);
+  return match ? match[1] : null;
+}
+
 function b64urlEncode(bytes: Uint8Array): string {
   let s = "";
   for (const b of bytes) s += String.fromCharCode(b);
