@@ -76,6 +76,7 @@ import {
 } from "./read.js";
 import { dateOccurrences, headerDates, parseAllDates, parseWrittenDate, recoverSentence, splitSentences } from "./dates.js";
 import {
+  chronologyOf,
   gateSentence,
   isDeadlineSentence,
   qualifierPhrases,
@@ -594,8 +595,11 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       const dates = letterTexts.flatMap(dateOccurrences);
       const header = letterTexts.flatMap(headerDates);
       if (header.length === 1) dates.splice(dates.indexOf(header[0]!), 1);
-      const own = verdict.kind === "deadline" ? verdict.iso : (verdict.kind === "ask" ? verdict.count?.resultIso : undefined);
-      const others = [...new Set(dates)].filter((iso) => iso !== own && !(verdict.kind === "ask" && iso === verdict.count?.fromIso));
+      // Dates the deadline sentence itself names, and its counted result,
+      // are its own; every other date in the letter asks.
+      const own = new Set(parseAllDates(sentence));
+      if (verdict.kind === "ask" && verdict.count) own.add(verdict.count.resultIso);
+      const others = [...new Set(dates)].filter((iso) => !own.has(iso));
       if (others.length > 0) {
         reasons.push(`the letter also mentions ${others.map(spoken).join(", ")}`);
         for (const s of sentences) {
@@ -1069,8 +1073,10 @@ function proposeDeadline(
     const dates = parseAllDates(p.sentence);
     return dates.length === 1 ? { p, tier: 2, dueDate: dates[0]!, count: null } : null;
   });
+  // A date before the notice date, or more than a year after it, is
+  // never the proposal.
   const best = scored
-    .filter((x): x is NonNullable<typeof x> => x !== null)
+    .filter((x): x is NonNullable<typeof x> => x !== null && chronologyOf(x.dueDate, noticeIso) === "ok")
     .sort((a, b) => a.tier - b.tier)[0];
   if (!best) return null;
   const why = [...new Set(reasons)];

@@ -152,7 +152,7 @@ const QUALIFIER = new RegExp(
     "cancelled", "canceled", "disregard", "void", "no longer", "ignore", "optional",
   ]
     .map((w) => w.replace(/ /g, String.raw`\s+`))
-    .join("|")})\b(?:[ \t]+[A-Za-z'-]+){0,4}`,
+    .join("|")})\b(?:\s+[A-Za-z'-]+){0,4}`,
   "gi",
 );
 
