@@ -1578,3 +1578,91 @@ describe("readMail review 8", () => {
     expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
   });
 });
+
+describe("readMail deadline proposals", () => {
+  const HEAD = "County CalFresh Office\nNotice Date: November 4, 2026\n\nDear Maria Santos,\n\n";
+  const RETURN = "Return your signed recertification form and the proofs listed below by December 5, 2026.";
+  const LATE = "If your recertification is late, your benefits may stop after December 31, 2026.";
+  const BOX = { ymin: 200, xmin: 60, ymax: 220, xmax: 300 };
+  async function read(fullText: string, deadlines: { text: string; box_2d: number[] }[], over: Record<string, unknown> = {}) {
+    const bytes = await photo();
+    const model = clientFor([
+      pageJson({
+        full_text: fullText,
+        sender: { text: "County CalFresh Office", box_2d: [40, 60, 70, 400] },
+        program: NIL,
+        subject: NIL,
+        asked: [],
+        deadlines,
+        consequence: NIL,
+        reference_no: NIL,
+        notice_date: { text: "November 4, 2026", box_2d: [135, 60, 150, 300] },
+        phones: [],
+        ...over,
+      }),
+    ]);
+    return readMail([{ bytes, mimeType: "image/jpeg", name: "mail.jpg" }], { personId: "p1", synthetic: true, model });
+  }
+  const dl = (text: string, ymin = 200): { text: string; box_2d: number[] } => ({ text, box_2d: [ymin, 60, ymin + 20, 300] });
+  const confirms = (reading: Awaited<ReturnType<typeof read>>) =>
+    reading.questions.filter((q) => q.kind === "confirm_deadline");
+
+  it("proposes the reader's sentence and date with plain reasons and the other dates quoted", async () => {
+    const reading = await read(`${HEAD}${RETURN}\n\n${LATE}`, [dl(RETURN)]);
+    expect(reading.deadlines).toEqual([]);
+    expect(confirms(reading)).toHaveLength(1);
+    const proposal = confirms(reading)[0]!.proposal!;
+    expect(proposal).toMatchObject({
+      letterId: "L1",
+      sentence: RETURN.replace(/\.$/, ""),
+      citation: { file: "mail.jpg", page: 1, box: BOX },
+      dueDate: "2026-12-05",
+      count: null,
+    });
+    expect(proposal.reasons.some((r) => r.includes("December 31, 2026"))).toBe(true);
+    expect(proposal.reasons.some((r) => r.toLowerCase().includes("if your recertification is late"))).toBe(true);
+    expect(proposal.others).toEqual([{ sentence: LATE.replace(/\.$/, ""), dates: ["2026-12-31"], citation: null }]);
+  });
+
+  it("has no proposal when the reader picked no deadline", async () => {
+    const reading = await read(`${HEAD}${RETURN}\n\n${LATE}`, []);
+    expect(confirms(reading)).toHaveLength(1);
+    expect(confirms(reading)[0]!.proposal).toBeUndefined();
+  });
+
+  it("proposes a counted deadline's computed date with its count", async () => {
+    const counted = "Request a hearing within 30 days of the date of this notice.";
+    const reading = await read(`${HEAD}${counted}`, [dl(counted)]);
+    const proposal = confirms(reading)[0]!.proposal!;
+    expect(proposal.dueDate).toBe("2026-12-04");
+    expect(proposal.count).toEqual({ days: 30, fromIso: "2026-11-04", resultIso: "2026-12-04" });
+    expect(proposal.reasons.some((r) => r.includes("November 4, 2026"))).toBe(true);
+  });
+
+  it("proposes the one date in a sentence outside the grammar", async () => {
+    const receive = "We must receive your completed renewal packet by November 20, 2026.";
+    const reading = await read(`${HEAD}${receive}`, [dl("November 20, 2026")]);
+    expect(confirms(reading)[0]!.proposal).toMatchObject({ sentence: receive.replace(/\.$/, ""), dueDate: "2026-11-20" });
+  });
+
+  it("asks once per letter, with the missing page as a reason", async () => {
+    const reading = await read(`${HEAD}Return the form by December 5, 2026.\n\npage 1 of 2`, [dl("Return the form by December 5, 2026.")], {
+      page_marker: { text: "page 1 of 2", box_2d: [300, 60, 320, 250] },
+    });
+    expect(confirms(reading)).toHaveLength(1);
+    const proposal = confirms(reading)[0]!.proposal!;
+    expect(proposal.dueDate).toBe("2026-12-05");
+    expect(proposal.reasons.some((r) => r.includes("page 2"))).toBe(true);
+  });
+
+  it("never proposes for a letter flagged as a scam", async () => {
+    const reading = await read(
+      "URGENT: your benefits are locked. Verify your account immediately at http://benefits-unlock.example/login. " +
+        "Return the form by December 5, 2026.",
+      [dl("Return the form by December 5, 2026.")],
+      { notice_date: NIL, links: [{ text: "http://benefits-unlock.example/login", box_2d: [300, 60, 320, 400] }] },
+    );
+    expect(reading.warnings.map((w) => w.kind)).toContain("scam_suspect");
+    expect(reading.questions.some((q) => q.proposal)).toBe(false);
+  });
+});
