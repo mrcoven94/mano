@@ -1,0 +1,40 @@
+name: guardian-modal
+
+# The only way the guardian model reaches production. Merging to main with
+# changes under packages/guardian/modal/ redeploys it. Never run
+# `modal deploy` from a laptop for production.
+#
+# Needs two repository secrets, set by the architect:
+#   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
+# The `mano-guardian` Modal secret (holding MANO_GUARDIAN_TOKEN) is created
+# once by David and is not managed here.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/guardian/modal/**"
+      - ".github/workflows/guardian-modal.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "modal==1.6.2"
+      - name: Cache model weights (CPU, no GPU billed)
+        run: modal run packages/guardian/modal/app.py::download
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      - name: Deploy the guardian endpoint
+        run: modal deploy packages/guardian/modal/app.py
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}

@@ -1,0 +1,112 @@
+name: guardian-check
+
+# Gates guardian pull requests: the Modal app must import under the pinned
+# SDK, expose exactly one authenticated route, refuse blank tokens, strictly
+# parse verdicts, and match its pinned model and image.
+on:
+  pull_request:
+    paths:
+      - "packages/guardian/**"
+      - ".github/workflows/guardian-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/guardian/**"
+      - ".github/workflows/guardian-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  modal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "modal==1.6.2"
+      - name: Import the app and check its shape
+        run: python - <<'EOF'
+          import json
+          import sys
+          import urllib.request
+          import warnings
+
+          sys.path.insert(0, "packages/guardian/modal")
+          warnings.filterwarnings("ignore")
+          import app  # noqa: E402  (must import under the pinned SDK)
+
+          # Exactly one web route.
+          assert app.app.registered_web_endpoints == ["check"], (
+              app.app.registered_web_endpoints
+          )
+
+          # Blank tokens refuse to start.
+          for bad in (None, "", "   "):
+              try:
+                  app.require_token(bad)
+              except RuntimeError:
+                  pass
+              else:
+                  raise AssertionError(f"accepted blank token {bad!r}")
+          assert app.require_token("x") == "x"
+
+          # Strict verdict parsing.
+          assert app.parse_verdict('{"verdict":"pass","problems":[]}') == {
+              "verdict": "pass",
+              "problems": [],
+          }
+          for bad in (
+              "nope",
+              "[]",
+              '{"verdict":"maybe","problems":[]}',
+              '{"verdict":"pass","problems":["x"]}',
+              '{"verdict":"fix","problems":[]}',
+              '{"verdict":"block","problems":[]}',
+              '{"verdict":"block","problems":[1]}',
+              '{"verdict":"block","problems":[],"verdict":"pass"}',
+          ):
+              try:
+                  app.parse_verdict(bad)
+              except ValueError:
+                  pass
+              else:
+                  raise AssertionError(f"accepted bad verdict {bad}")
+
+          # Auth, concurrency, and single-route wiring present; retired
+          # options and extra surfaces absent.
+          source = open("packages/guardian/modal/app.py").read()
+          for wanted in (
+              "requires_proxy_auth=True",
+              "modal.concurrent",
+              "revision=MODEL_REVISION",
+              "vllm-openai@{IMAGE_DIGEST}",
+          ):
+              assert wanted in source, wanted
+          assert source.count("revision=MODEL_REVISION") == 2
+          assert source.count("fastapi_endpoint") == 1
+          for banned in (
+              "allow_concurrent_inputs",
+              "from_registry(IMAGE_TAG)",
+              "web_server",
+              "asgi_app",
+              "/invocations",
+              "subprocess",
+          ):
+              assert banned not in source, banned
+
+          # The model pin matches Hugging Face, the image pin Docker Hub.
+          with urllib.request.urlopen(
+              f"https://huggingface.co/api/models/{app.MODEL_ID}"
+          ) as response:
+              head = json.load(response)["sha"]
+          assert head == app.MODEL_REVISION, (head, app.MODEL_REVISION)
+          with urllib.request.urlopen(
+              "https://hub.docker.com/v2/repositories/vllm/vllm-openai/tags/v0.32.0"
+          ) as response:
+              digest = json.load(response)["digest"]
+          assert digest == app.IMAGE_DIGEST, (digest, app.IMAGE_DIGEST)
+
+          print("guardian modal app: ok")
+          EOF

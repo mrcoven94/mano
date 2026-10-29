@@ -29,12 +29,17 @@ Three members: David Coven, Claude and Muse.
 | `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel |
 | `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits |
 | `packages/protocol` | The open message format agents use to work a case together |
+| `packages/guardian` | The checker that reviews every outside action before a person approves it |
 | `eval` | The held-out test: scenarios, baselines and results |
 | `docs` | Decisions and design notes |
 
 ## Sandbox portal
 
 `apps/sandbox-portal` is a fake state benefits portal: a three-step renewal application with uploads, confirmation numbers, and idempotency keys the action gateway reconciles against. Demos submit here; Mano never touches a real benefits site. Run it with `pnpm --filter @mano/sandbox-portal dev` (details in the header comment of its `src/index.ts`). Pushing to `main` deploys it.
+
+## Guardian
+
+`packages/guardian` reviews every outside action after the gateway policy check and before a person approves it. The rules checker needs no keys; the model checker runs the rules first and only calls the guardian model (Muse Glimmer on Modal, scale to zero) when they pass. Local rules-only runs set `MANO_GUARDIAN_RULES_ONLY=1`; without an endpoint and without that flag, checks block. The local stand-in (`node packages/guardian/standin/server.mjs`) serves the `/check` route for development. Details in the header comment of its `src/index.ts`. Pushing to `main` redeploys the model endpoint.
 
 ## Prior work
 
