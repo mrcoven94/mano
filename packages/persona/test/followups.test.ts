@@ -224,3 +224,15 @@ describe("PR 67 review round 4", () => {
     }
   });
 });
+
+describe("in danger of losing or of being (lead decision)", () => {
+  it("is not a crisis for either check, while explicit danger still is", () => {
+    for (const text of ["I am in danger of losing my benefits.", "we're in danger of being evicted", "We are in danger of being cut off", "she's in danger of being dropped from Medicaid"]) {
+      expect(mightBeCrisis(text), text).toBe(false);
+      expect(isCrisis(text), text).toBe(false);
+    }
+    for (const text of ["I'm in danger", "I am in immediate danger", "I'm not safe"]) {
+      expect(mightBeCrisis(text), text).toBe(true);
+    }
+  });
+});

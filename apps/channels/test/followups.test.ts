@@ -229,3 +229,21 @@ describe("PR 67 review round 4, through the send path", () => {
     }
   });
 });
+
+describe("the most common benefits sentence is not a crisis (lead decision)", () => {
+  it("sends no crisis line for in danger of losing or of being", async () => {
+    for (const message of ["I am in danger of losing my benefits.", "we're in danger of being evicted"]) {
+      const h = makeHarness({ replies: ["Let's look at the letter. What date is on it?"] });
+      const sent = await say(h, "evt_1", message);
+      expect(sent.slice(1), message).toEqual(["Let's look at the letter. What date is on it?"]);
+      expect(sent, message).not.toContain(CRISIS_LINE);
+    }
+  });
+
+  it("still opens with the crisis line for explicit danger", async () => {
+    for (const message of ["I'm in danger", "I am in immediate danger", "I'm not safe here"]) {
+      const h = makeHarness({ replies: ["Can you tell me more?"] });
+      expect((await say(h, "evt_1", message)).slice(1)[0], message).toBe(CRISIS_LINE);
+    }
+  });
+});
