@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   initialSettleState,
   reduceSettleEvent,
-  renderRequest,
   settleStream,
   SettleTimeout,
   startIndexFor,
@@ -49,29 +48,15 @@ describe("settle reducer", () => {
     expect(result.text).toBe("On it.");
   });
 
-  it("renders a parked approval question as text", async () => {
+  it("fails closed when a turn parks on Eve input instead of an Engine approval", async () => {
     const result = await settleStream(
       streamOf([
-        event("input.requested", {
-          requests: [
-            {
-              requestId: "req_1",
-              kind: "question",
-              prompt: "Submit the renewal to the county?\n\nReply YES to approve or NO to cancel.",
-              options: [
-                { id: "yes", label: "Yes" },
-                { id: "no", label: "No" },
-              ],
-            },
-          ],
-        }),
+        event("input.requested", { requests: [{ requestId: "req_1", prompt: "Submit it?" }] }),
         event("turn.waiting", { on: "input" }),
       ]),
       { timeoutMs: 1000 },
     );
-    expect(result.status).toBe("waiting_input");
-    expect(result.text).toContain("Submit the renewal");
-    expect(result.text).toContain("1) Yes");
+    expect(result).toEqual({ status: "failed", text: "", reason: "input" });
   });
 
   it("fails the turn on failure events and empty closes", async () => {
@@ -86,8 +71,7 @@ describe("settle reducer", () => {
     await expect(settleStream(hanging, { timeoutMs: 20 })).rejects.toBeInstanceOf(SettleTimeout);
   });
 
-  it("renders requests without options as the bare prompt", () => {
-    expect(renderRequest({ prompt: "What is your county?" })).toBe("What is your county?");
+  it("ignores events that do not end the turn", () => {
     expect(reduceSettleEvent(initialSettleState(), event("step.started", {}))).toBeNull();
   });
 

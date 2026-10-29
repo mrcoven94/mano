@@ -90,7 +90,7 @@ META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
 | `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel | live |
 | `apps/sandbox-portal` | The fake state benefits portal every demo submits to, on Cloudflare Workers | live |
 | `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway | landing during the hackathon |
-| `apps/agent` | The agent brain on Eve by Vercel: memory, tools, approvals and reminders behind one turn route | landing during the hackathon |
+| `apps/agent` | The agent brain on Eve by Vercel: reads each text, remembers and proposes actions through the engine, keeps reminders | landing during the hackathon |
 | `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text | live |
 | `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits | live |
 | `packages/persona` | Mano's voice: the soul, the fast and deep paths, the voice guard, the crisis floor and the persona probes | live |
