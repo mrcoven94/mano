@@ -12,7 +12,9 @@ export default defineTool({
     const handleHash = requireHandleHash(ctx);
     const store = await getReminderStore();
     if (!store) throw new StorageUnavailable("Cancelling reminders");
-    const cancelled = await store.cancel(reminderId, handleHash);
-    return { cancelled };
+    const outcome = await store.cancel(reminderId, handleHash);
+    // "sending" means it may already be on its way: say so, never that it
+    // was cancelled.
+    return { cancelled: outcome === "cancelled", alreadySending: outcome === "sending", found: outcome !== "not_found" };
   },
 });

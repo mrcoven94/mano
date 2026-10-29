@@ -6,9 +6,11 @@ import { getReminderStore } from "../lib/reminder-store.js";
 const CLAIM_LIMIT = 25;
 
 // Every minute, delivers due reminders as texts through Channels. Each
-// row is claimed before delivery and marked sent only after Channels
-// accepts it; a crash in between leaves the claim to expire so the next
-// run picks the row up, and Channels dedupes on the reminder ID.
+// row is claimed right before its own delivery, so a cancellation that
+// lands while earlier rows are being sent still stops it, and is marked
+// sent only after Channels accepts it; a crash in between leaves the
+// claim to expire so a later run retries, and Channels dedupes on the
+// reminder ID.
 export default defineSchedule({
   cron: "* * * * *",
   async run() {
@@ -23,8 +25,9 @@ export default defineSchedule({
       console.warn("mano: durable storage is not configured; the reminder dispatcher has nothing to read.");
       return;
     }
-    const due = await store.claimDue(Date.now(), CLAIM_LIMIT);
-    for (const reminder of due) {
+    for (const id of await store.dueIds(Date.now(), CLAIM_LIMIT)) {
+      const reminder = await store.beginSend(id, Date.now());
+      if (!reminder) continue;
       try {
         await deliverToChannels({
           channelsUrl,
@@ -37,7 +40,7 @@ export default defineSchedule({
         await store.markSent(reminder.id, Date.now());
         console.log(JSON.stringify({ type: "mano_reminder_sent", reminder: reminder.id }));
       } catch (err) {
-        await store.releaseClaim(reminder.id);
+        await store.releaseSend(reminder.id);
         console.warn(
           JSON.stringify({
             type: "mano_reminder_failed",

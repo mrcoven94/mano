@@ -31,7 +31,6 @@ export default defineTool({
       text: text.trim(),
       dueAtMs: parsed.dueAtMs,
       createdAtMs: turnAtMs,
-      claimedAtMs: null,
       sentAtMs: null,
     });
     return { reminderId: saved.id, dueAt: new Date(saved.dueAtMs).toISOString(), text: saved.text };
