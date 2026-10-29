@@ -37,6 +37,22 @@
 //   GET  /api/persons/:id/memory
 //   POST /api/persons/:id/memory              { content, source }
 //   DELETE /api/persons/:id/memory/:memoryId  forget: deletes the row
+//
+//   Service routes (agent token or Channels token, plus a handle grant;
+//   the person must be handle-<hash> from the grant):
+//   POST /api/persons/:id/reminders            { id, text, dueAt, generation } (agent)
+//   GET  /api/persons/:id/reminders            (agent)
+//   POST /api/persons/:id/reminders/:rid/cancel  (agent)
+//   POST /api/persons/:id/turns                { turnId, receivedAt } (agent)
+//   GET  /api/persons/:id/turns/:turnId        (agent)
+//   POST /api/persons/:id/turns/:turnId/complete  (agent)
+//   PUT  /api/persons/:id/pending-approval     { approvalId, generation } (agent)
+//   GET  /api/persons/:id/pending-approval?generation=N  (agent)
+//   DELETE /api/persons/:id/pending-approval   (agent)
+//   DELETE /api/persons/:id/conversation       everything the agent kept (agent, Channels)
+//
+// Due reminders go out from the person's alarm through Channels'
+// agent-send route at MANO_CHANNELS_URL, signed with MANO_AGENT_SECRET.
 //   POST /api/persons/:id/documents            { name, contentB64 }
 //   GET  /api/persons/:id/documents/:docId     decrypted bytes, owner only
 //   POST /api/persons/:id/ws-ticket            one 60-second single-use ticket for /ws
@@ -74,12 +90,20 @@
 // through GitHub by pushing. Never run a production deploy from a laptop.
 import type { Env } from "./env.js";
 import { PersonAgent } from "./agents/person-agent.js";
+import {
+  AgentStateInputError,
+  parsePointerInput,
+  parseReminderInput,
+  parseTurnInput,
+  requireGeneration,
+  requireIdentity,
+} from "./agents/agent-state.js";
 import { OrgAgent } from "./agents/org-agent.js";
 import {
   HANDLE_GRANT_HEADER,
-  agentMayUse,
   authenticate,
-  authenticateAgent,
+  authenticateService,
+  serviceMayUse,
   getSessionSecret,
   mintWsTicket,
   sessionConfigured,
@@ -225,7 +249,10 @@ export function healthOk(env: Env): boolean {
     !env.FILES ||
     !sessionConfigured(env) ||
     !env.MANO_ENGINE_AGENT_TOKEN ||
-    !env.MANO_HANDLE_GRANT_SECRET
+    !env.MANO_HANDLE_GRANT_SECRET ||
+    !env.MANO_ENGINE_CHANNELS_TOKEN ||
+    !env.MANO_CHANNELS_URL ||
+    !env.MANO_AGENT_SECRET
   ) {
     return false;
   }
@@ -235,6 +262,82 @@ export function healthOk(env: Env): boolean {
     return false;
   }
   return true;
+}
+
+// Reminders, the turn ledger, the pending approval pointer and the
+// conversation delete. Null when the route is none of these.
+async function handleAgentState(
+  agent: PersonAgent,
+  subject: string,
+  request: Request,
+  rest: string,
+  url: URL,
+): Promise<Response | null> {
+  const body = async (): Promise<Record<string, unknown>> => {
+    const read = await readCappedJson(request, MAX_ACTION_BODY);
+    if (!read.ok) throw read.response;
+    const value = read.value;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw Response.json({ error: "Body must be a JSON object." }, { status: 400 });
+    }
+    return value as Record<string, unknown>;
+  };
+  const method = request.method;
+  try {
+    if (rest === "/reminders" && method === "POST") {
+      const input = await body();
+      parseReminderInput(input);
+      const out = await agent.createReminder(subject, input);
+      return Response.json(out, { status: out.status === "conflict" ? 409 : out.status === "created" ? 201 : 200 });
+    }
+    if (rest === "/reminders" && method === "GET") {
+      return Response.json({ reminders: await agent.listReminders(subject) });
+    }
+    const cancelMatch = rest.match(/^\/reminders\/([^/]+)\/cancel$/);
+    if (cancelMatch && method === "POST") {
+      const out = await agent.cancelReminder(subject, requireIdentity(decodeURIComponent(cancelMatch[1])));
+      if (!out.reminder) return Response.json({ error: "Reminder not found." }, { status: 404 });
+      return Response.json(out);
+    }
+    if (rest === "/turns" && method === "POST") {
+      const input = await body();
+      parseTurnInput(input);
+      const out = await agent.putTurn(subject, input);
+      return Response.json(out, { status: out.created ? 201 : 200 });
+    }
+    const turnMatch = rest.match(/^\/turns\/([^/]+)(\/complete)?$/);
+    if (turnMatch && ((method === "GET" && !turnMatch[2]) || (method === "POST" && turnMatch[2]))) {
+      const turnId = requireIdentity(decodeURIComponent(turnMatch[1]));
+      const turn = turnMatch[2] ? await agent.completeTurn(subject, turnId) : await agent.getTurn(subject, turnId);
+      if (!turn) return Response.json({ error: "Turn not found." }, { status: 404 });
+      return Response.json({ turn });
+    }
+    if (rest === "/pending-approval" && method === "PUT") {
+      const input = await body();
+      parsePointerInput(input);
+      const pointer = await agent.setPendingApproval(subject, input);
+      if (!pointer) return Response.json({ error: "Approval not found." }, { status: 404 });
+      return Response.json({ pointer });
+    }
+    if (rest === "/pending-approval" && method === "GET") {
+      const raw = url.searchParams.get("generation");
+      const generation = raw !== null && /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
+      return Response.json({ pointer: await agent.getPendingApproval(subject, requireGeneration(generation)) });
+    }
+    if (rest === "/pending-approval" && method === "DELETE") {
+      return Response.json(await agent.clearPendingApproval(subject));
+    }
+    if (rest === "/conversation" && method === "DELETE") {
+      return Response.json({ removed: await agent.deleteConversation(subject) });
+    }
+    return null;
+  } catch (err) {
+    if (err instanceof Response) return err;
+    if (err instanceof AgentStateInputError) {
+      return Response.json({ error: (err as Error).message }, { status: 400 });
+    }
+    throw err;
+  }
 }
 
 let loggedStartup = false;
@@ -321,20 +424,28 @@ export default {
           "x-mano-session-exp": String(redeemed.sessionExp),
         });
       }
-      // Two callers: the person's own session, or the agent with a handle
-      // grant for exactly this person, on the agent's routes only. A grant
-      // header always means the agent path, never a session.
+      // Two kinds of caller: the person's own session, or a service (the
+      // agent, or Channels) with a handle grant for exactly this person, on
+      // that service's routes only. A grant header always means the service
+      // path, never a session.
       let subject: string;
       let sessionExp: number | null = null;
+      let service: "agent" | "channels" | null = null;
       if (request.headers.has(HANDLE_GRANT_HEADER)) {
-        const agentCaller = await authenticateAgent(request, env);
-        if (!agentCaller || agentCaller.personId !== personId || !agentMayUse(request.method, rest)) return FORBIDDEN();
-        subject = agentCaller.personId;
+        const caller = await authenticateService(request, env);
+        if (!caller || caller.personId !== personId || !serviceMayUse(caller.service, request.method, rest)) return FORBIDDEN();
+        subject = caller.personId;
+        service = caller.service;
       } else {
         const claims = await authenticate(request, env);
         if (!claims || claims.kind !== "person" || claims.sub !== personId) return FORBIDDEN();
         subject = claims.sub;
         sessionExp = claims.exp;
+      }
+      // The agent's per-person state lives here, for services only.
+      if (service) {
+        const stateResponse = await handleAgentState(agent, subject, request, rest, url);
+        if (stateResponse) return stateResponse;
       }
       if (rest === "/ws-ticket" && request.method === "POST") {
         const configured = getSessionSecret(env);

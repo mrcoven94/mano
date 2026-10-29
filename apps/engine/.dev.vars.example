@@ -10,6 +10,12 @@ OPERATOR_SECRET= # gitleaks:allow (empty example value)
 # signs handle grants with. Both unset means the agent path is closed.
 MANO_ENGINE_AGENT_TOKEN= # gitleaks:allow (empty example value)
 MANO_HANDLE_GRANT_SECRET= # gitleaks:allow (empty example value)
+# Channels' token for deleting a conversation's state here.
+MANO_ENGINE_CHANNELS_TOKEN= # gitleaks:allow (empty example value)
+# Due reminders go through Channels' agent-send route, signed with the
+# secret Channels verifies agent requests with.
+MANO_CHANNELS_URL=
+MANO_AGENT_SECRET= # gitleaks:allow (empty example value)
 # Environment name. development allows the dev session secret and the
 # simulated executor and stand-in model without explicit choice.
 MANO_ENV=development

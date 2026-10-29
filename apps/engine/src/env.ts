@@ -11,6 +11,13 @@ export interface Env {
   // grants with. Without both, the agent path refuses every request.
   MANO_ENGINE_AGENT_TOKEN?: string;
   MANO_HANDLE_GRANT_SECRET?: string;
+  // Channels' own token for the one route it calls here: deleting a
+  // person's conversation state. It needs a handle grant too.
+  MANO_ENGINE_CHANNELS_TOKEN?: string;
+  // Due reminders go out through Channels' agent-send route at this base
+  // URL, signed with the secret Channels verifies agent requests with.
+  MANO_CHANNELS_URL?: string;
+  MANO_AGENT_SECRET?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;

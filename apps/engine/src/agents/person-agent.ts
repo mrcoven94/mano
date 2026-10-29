@@ -19,6 +19,36 @@ import { createModelClient, defaultModelFor } from "../model-client.js";
 import { getSessionSecret, verifyWsTicket } from "../auth.js";
 import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
 import { ConsentDeliveringExecutor } from "./person-executor.js";
+import { handleForPersonId } from "@mano/protocol";
+import { sendToChannels } from "../channels-send.js";
+import {
+  cancelReminder,
+  claimDueReminders,
+  clearPendingPointer,
+  completeTurn,
+  createReminder,
+  ensureAgentStateTables,
+  finishReminder,
+  getPendingPointer,
+  getTurn,
+  listReminders,
+  nextReminderRunMs,
+  parsePointerInput,
+  parseReminderInput,
+  parseTurnInput,
+  putTurnIfAbsent,
+  removeConversationState,
+  requireGeneration,
+  requireIdentity,
+  setPendingPointer,
+  type DeliveryOutcome,
+} from "./agent-state.js";
+
+// A delivery run holds its claim this long; a run that crashed is
+// reclaimed after it. Retries back off from 30 seconds to an hour and
+// stop after MAX_REMINDER_ATTEMPTS.
+const REMINDER_LEASE_MS = 2 * 60_000;
+const MAX_REMINDER_ATTEMPTS = 8;
 import type { OrgAgent } from "./org-agent.js";
 
 export interface GrantConsentInput {
@@ -79,6 +109,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     ctx.blockConcurrencyWhile(async () => {
       const sql = ctx.storage.sql;
       ensureGatewayTables(sql);
+      ensureAgentStateTables(sql);
       sql.exec(`CREATE TABLE IF NOT EXISTS profile(id TEXT PRIMARY KEY, display_name TEXT, synthetic INTEGER NOT NULL DEFAULT 0, public_key_b64 TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS conversation(id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)`);
@@ -423,6 +454,117 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async listMemory(verified: string) {
     await this.assertSubject(verified);
     return [...this.db().exec("SELECT * FROM memory ORDER BY created_at").toArray()];
+  }
+
+  // Reminders. The caller names each one: the same ID returns the
+  // reminder it already names, and two IDs stay two reminders even at the
+  // same time. A durable alarm delivers due ones through Channels.
+  async createReminder(verified: string, input: unknown) {
+    await this.assertSubject(verified);
+    const { id, text, dueAtMs, generation } = parseReminderInput(input);
+    const out = createReminder(this.db(), { id, text, dueAtMs, generation }, Date.now());
+    if ("conflict" in out) return { status: "conflict" as const, reminder: out.conflict };
+    if (out.created) {
+      this.store.audit({ event: "reminder.created", reminderHash: await auditDigest(id) });
+      await this.schedule(new Date(Math.max(dueAtMs, Date.now())), "deliverDueReminders", {});
+    }
+    return { status: out.created ? ("created" as const) : ("existing" as const), reminder: out.reminder };
+  }
+
+  async listReminders(verified: string) {
+    await this.assertSubject(verified);
+    return listReminders(this.db());
+  }
+
+  async cancelReminder(verified: string, id: unknown) {
+    await this.assertSubject(verified);
+    const reminderId = requireIdentity(id);
+    const out = cancelReminder(this.db(), reminderId, Date.now());
+    if (out.cancelled) this.store.audit({ event: "reminder.cancelled", reminderHash: await auditDigest(reminderId) });
+    return out;
+  }
+
+  // The alarm callback. Claims every due reminder in one statement, sends
+  // each through Channels under a key fixed by its ID, and settles each
+  // only while this run still holds the claim. Then arms the next run.
+  async deliverDueReminders() {
+    const handleHash = handleForPersonId(this.personId);
+    const token = crypto.randomUUID();
+    const claimed = claimDueReminders(this.db(), Date.now(), REMINDER_LEASE_MS, token);
+    for (const reminder of claimed) {
+      let outcome: DeliveryOutcome;
+      if (!handleHash) {
+        outcome = { kind: "failed" };
+      } else {
+        const result = await sendToChannels(this.env, {
+          handleHash,
+          key: `reminder:${reminder.id}`,
+          text: reminder.text,
+          generation: reminder.generation,
+        });
+        outcome =
+          result !== "retry"
+            ? { kind: result }
+            : reminder.attempts >= MAX_REMINDER_ATTEMPTS
+              ? { kind: "failed" }
+              : { kind: "retry", atMs: Date.now() + Math.min(30_000 * 2 ** (reminder.attempts - 1), 3_600_000) };
+      }
+      if (finishReminder(this.db(), reminder.id, token, outcome, Date.now())) {
+        this.store.audit({ event: `reminder.${outcome.kind}`, reminderHash: await auditDigest(reminder.id) });
+      }
+    }
+    const next = nextReminderRunMs(this.db(), REMINDER_LEASE_MS);
+    if (next !== null) await this.schedule(new Date(Math.max(next, Date.now() + 1000)), "deliverDueReminders", {});
+    return { claimed: claimed.length };
+  }
+
+  // The turn ledger: the first receive time of a turn is kept forever, so
+  // a retried turn reuses its original timing and mutation identities.
+  async putTurn(verified: string, input: unknown) {
+    await this.assertSubject(verified);
+    const { turnId, receivedAt } = parseTurnInput(input);
+    return putTurnIfAbsent(this.db(), turnId, receivedAt);
+  }
+
+  async getTurn(verified: string, turnId: unknown) {
+    await this.assertSubject(verified);
+    return getTurn(this.db(), requireIdentity(turnId));
+  }
+
+  async completeTurn(verified: string, turnId: unknown) {
+    await this.assertSubject(verified);
+    return completeTurn(this.db(), requireIdentity(turnId), new Date().toISOString());
+  }
+
+  // The pending approval pointer, stored with the conversation generation
+  // it was set under. It must name one of this person's approvals.
+  async setPendingApproval(verified: string, input: unknown) {
+    await this.assertSubject(verified);
+    const { approvalId, generation } = parsePointerInput(input);
+    const approval = this.store.getApproval(approvalId);
+    if (!approval || approval.personId !== this.personId) return null;
+    return setPendingPointer(this.db(), approval.id, generation, new Date().toISOString());
+  }
+
+  async getPendingApproval(verified: string, generation: unknown) {
+    await this.assertSubject(verified);
+    return getPendingPointer(this.db(), requireGeneration(generation));
+  }
+
+  async clearPendingApproval(verified: string) {
+    await this.assertSubject(verified);
+    return { cleared: clearPendingPointer(this.db()) };
+  }
+
+  // Channels deleted this person's conversation: cancel reminders, clear
+  // the ledger and the pointer, reject pending approvals and delete
+  // memory, all in one transaction. The answer counts what was removed.
+  async deleteConversation(verified: string) {
+    await this.assertSubject(verified);
+    const removed = this.ctx.storage.transactionSync(() => removeConversationState(this.db(), Date.now()));
+    this.store.audit({ event: "conversation.deleted", ...removed });
+    this.syncState();
+    return removed;
   }
 
   async requestAction(raw: unknown, verified: string) {
