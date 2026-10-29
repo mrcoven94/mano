@@ -95,6 +95,17 @@ export interface PersistedTurn {
   updatedAtMs: number;
 }
 
+// An agent-started delivery (reminder, nudge) keyed by the agent's own
+// idempotency key. Recorded before the first send, so a redelivery
+// resumes the same turn instead of doubling the text.
+export interface AgentSendRow {
+  key: string;
+  turn: number;
+  state: "sending" | "sent";
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
 export interface ConversationMeta {
   turn: number;
   introduced: boolean;
@@ -182,6 +193,9 @@ export interface ConversationStore {
   finishTurn(turn: number, atMs: number): void;
   // Finished turns, newest first.
   recentTurns(limit: number): PersistedTurn[];
+  agentSend(key: string): AgentSendRow | null;
+  startAgentSend(row: AgentSendRow): void;
+  finishAgentSend(key: string, atMs: number): void;
   wipe(deletedAtMs: number): void;
 }
 
@@ -326,6 +340,21 @@ export class MemoryStore implements ConversationStore {
       .map((r) => ({ ...r }));
   }
 
+  private agentSendRows = new Map<string, AgentSendRow>();
+
+  agentSend(key: string): AgentSendRow | null {
+    return this.agentSendRows.get(key) ?? null;
+  }
+
+  startAgentSend(row: AgentSendRow): void {
+    if (!this.agentSendRows.has(row.key)) this.agentSendRows.set(row.key, { ...row });
+  }
+
+  finishAgentSend(key: string, atMs: number): void {
+    const row = this.agentSendRows.get(key);
+    if (row) this.agentSendRows.set(key, { ...row, state: "sent", updatedAtMs: atMs });
+  }
+
   wipe(deletedAtMs: number): void {
     const generation = this.metaRow.generation + 1;
     const turn = this.metaRow.turn;
@@ -337,6 +366,7 @@ export class MemoryStore implements ConversationStore {
     this.heldReceipts = [];
     this.approvalRows.clear();
     this.turnRows.clear();
+    this.agentSendRows.clear();
   }
 }
 

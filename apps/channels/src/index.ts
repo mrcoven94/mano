@@ -3,6 +3,8 @@
 // routes events to one ConversationDO per handle; a cron reconciles
 // anything the webhook missed through the same queue.
 import {
+  AGENT_SIGNATURE_HEADER,
+  AGENT_TIMESTAMP_HEADER,
   ATTACHMENT_RETENTION_MS,
   BlooioChannel,
   RecordingChannel,
@@ -13,6 +15,7 @@ import {
   lifecycleStateFor,
   normalizeHandle,
   parseBlooioEvent,
+  verifyAgentRequest,
   verifySignature,
   type Channel,
   type NormalizedEvent,
@@ -25,6 +28,7 @@ export { ConversationDO } from "./conversation.js";
 export { ChannelStateDO } from "./state.js";
 
 const WEBHOOK_PATH = "/webhooks/blooio";
+const AGENT_SEND_PATH = "/internal/agent-send";
 const RECONCILE_LIMIT = 100;
 const RECONCILE_MAX_PAGES = 5;
 const SWEEP_LIMIT = 1000;
@@ -269,11 +273,60 @@ export async function sweepExpiredFiles(files: FileStore, nowMs: number): Promis
   return { deleted };
 }
 
+// Agent-started deliveries (reminders, nudges). Authenticated by HMAC
+// over the raw body with the shared agent secret, then routed to the
+// conversation, which sends through the normal outbound path. Terminal
+// outcomes (unknown, closed, opted out) are handled 200s; only budget
+// (429) and infra (500) ask the agent to retry.
+export async function handleAgentSend(request: Request, env: Env): Promise<Response> {
+  const started = Date.now();
+  const logger = createLogger();
+  const rawBytes = new Uint8Array(await request.arrayBuffer());
+  const check = await verifyAgentRequest(
+    env.MANO_AGENT_SECRET,
+    request.headers.get(AGENT_TIMESTAMP_HEADER),
+    request.headers.get(AGENT_SIGNATURE_HEADER),
+    rawBytes,
+    Math.floor(started / 1000),
+  );
+  if (!check.ok) {
+    logger.warn("agent_send_rejected", { reason: check.reason ?? "unknown" });
+    return new Response("Bad signature.", { status: 401 });
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(rawBytes));
+  } catch {
+    return new Response("Bad JSON.", { status: 400 });
+  }
+  const body = parsed as { handleHash?: unknown; key?: unknown; text?: unknown };
+  if (typeof body.handleHash !== "string" || !body.handleHash || typeof body.key !== "string" || !body.key || typeof body.text !== "string" || !body.text) {
+    return new Response("Bad agent send.", { status: 400 });
+  }
+  const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(body.handleHash));
+  const res = await stub.fetch("https://conversation/internal/agent-send", {
+    method: "POST",
+    body: JSON.stringify({ handleHash: body.handleHash, key: body.key, text: body.text }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { sent?: unknown; reason?: unknown };
+  logger.info("agent_send_routed", {
+    handle: body.handleHash,
+    sent: data.sent === true,
+    reason: typeof data.reason === "string" ? data.reason : null,
+    status: res.status,
+    durationMs: Date.now() - started,
+  });
+  return Response.json({ sent: data.sent ?? false, reason: data.reason ?? null }, { status: res.status });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === WEBHOOK_PATH) {
       return handleWebhook(request, env);
+    }
+    if (request.method === "POST" && url.pathname === AGENT_SEND_PATH) {
+      return handleAgentSend(request, env);
     }
     // Ok and nothing else: strangers must not learn which keys are set.
     if (request.method === "GET" && url.pathname === "/health") {

@@ -1030,6 +1030,7 @@ export class ConversationRunner {
       const result = await responder.respond({ texts: [turnText], attachmentCount, history }, { onHeadsUp });
       const costUsd =
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
+      logger.info("turn_answered", { handle: this.logHandle(), turn, model: result.model, attempts: result.attempts });
       return { ok: true, text: result.text, costUsd, tapback: result.tapback ?? null };
     } catch (err) {
       logger.warn("responder_failed", {
@@ -1397,6 +1398,85 @@ export class ConversationRunner {
       expiresAtMs: now + opts.ttlMs,
     });
     this.deps.logger.info("approval_requested", { handle: this.logHandle(), approval: opts.id });
+  }
+
+  // Sends one agent-started text (reminder, nudge) through the normal
+  // outbound path: consent and STOP refuse, per-handle limits and the
+  // spend ledger apply, links are checked, and every bubble carries its
+  // deterministic key. The agent's key dedupes redeliveries: a retry
+  // resumes the same turn, so a crash between claim and send can neither
+  // lose nor double the text. Budget refusal returns instead of throwing
+  // so the caller answers 429 and the agent retries later; anything
+  // else terminal (unknown, closed, opted out) is a handled 200.
+  async sendAgentText(opts: { key: string; text: string }): Promise<{
+    sent: boolean;
+    reason?: "empty" | "unknown" | "closed" | "opted_out" | "budget";
+    duplicate?: boolean;
+  }> {
+    const { store, logger, nowMs, config } = this.deps;
+    const text = opts.text.trim().slice(0, TURN_TEXT_CAP);
+    if (!text) return { sent: false, reason: "empty" };
+    const prior = store.agentSend(opts.key);
+    if (prior?.state === "sent") return { sent: true, duplicate: true };
+    const meta = store.meta();
+    if (meta.optedOut) return { sent: false, reason: "opted_out" };
+    if (meta.closed) return { sent: false, reason: "closed" };
+    const chatId = meta.chatId;
+    const to = meta.to;
+    if (!chatId && !to) return { sent: false, reason: "unknown" };
+    let turn: number;
+    if (prior) {
+      turn = prior.turn;
+    } else {
+      const bumped = store.meta();
+      bumped.turn += 1;
+      store.saveMeta(bumped);
+      turn = bumped.turn;
+      store.startAgentSend({ key: opts.key, turn, state: "sending", createdAtMs: nowMs(), updatedAtMs: nowMs() });
+    }
+    const over = handleOverLimit(
+      { hourKey: meta.hourKey, hourCount: meta.hourCount, dayKey: meta.dayKey, dayCount: meta.dayCount },
+      nowMs(),
+    );
+    const reserveKey = `${config.handleHash}:agent:${opts.key}`;
+    const costUsd = estimateCostUsd(text.length, 0, config.usdPer1kChars);
+    const budgeted = over ? { allowed: false, spentUsd: 0 } : await this.deps.spend.reserve(reserveKey, costUsd);
+    if (over || !budgeted.allowed) {
+      logger.info("agent_send_limited", {
+        handle: this.logHandle(),
+        turn,
+        reason: over ?? "budget",
+        spentUsd: budgeted.spentUsd,
+      });
+      return { sent: false, reason: "budget" };
+    }
+    try {
+      this.checkGeneration(store.meta().generation);
+      const final = await this.finalizeBubbles(text);
+      if (final.removed > 0) {
+        logger.warn("agent_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
+      }
+      const bubbles: import("./store.js").AnswerBubble[] = final.bubbles.map((bubble, i) => ({
+        part: i + 1,
+        tag: "agent",
+        text: bubble,
+      }));
+      const generation = store.meta().generation;
+      await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
+      this.checkSendsResolved(turn, generation);
+      await this.deps.spend.settle(reserveKey, costUsd);
+      store.finishAgentSend(opts.key, nowMs());
+      logger.info("agent_sent", { handle: this.logHandle(), turn, bubbles: bubbles.length });
+      return { sent: true };
+    } catch (err) {
+      if (err instanceof GenerationStopped) throw err;
+      try {
+        await this.deps.spend.release(reserveKey);
+      } catch (releaseErr) {
+        logger.warn("agent_release_failed", { handle: this.logHandle(), turn, err: errName(releaseErr) });
+      }
+      throw err;
+    }
   }
 
   private async answerApproval(

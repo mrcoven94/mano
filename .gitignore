@@ -6,6 +6,8 @@ node_modules/
 .wrangler/
 .next/
 .vercel/
+.eve/
+.output/
 dist/
 coverage/
 *.log

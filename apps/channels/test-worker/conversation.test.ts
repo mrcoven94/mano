@@ -211,6 +211,28 @@ describe("ConversationDO on SQLite", () => {
     expect(await res.json()).toEqual({ ok: true, filesDeleted: 0 });
     expect(await postEvent(stub, "hash-del", inbound("evt_do_del", "Hello."))).toBe("queued");
   });
+
+  it("delivers an agent-started text and dedupes its key", async () => {
+    const stub = stubFor(`do-agent-${Date.now()}`);
+    await postEvent(stub, "hash-agent", inbound("evt_do_agent", "Hello."));
+    const send = { handleHash: "hash-agent", key: "rem_worker_1", text: "Reminder: call the office" };
+    const first = await stub.fetch("https://conversation/internal/agent-send", {
+      method: "POST",
+      body: JSON.stringify(send),
+    });
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ sent: true });
+    const retry = await stub.fetch("https://conversation/internal/agent-send", {
+      method: "POST",
+      body: JSON.stringify(send),
+    });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ sent: true, duplicate: true });
+    const standin = await stub.fetch("https://conversation/internal/standin");
+    const recorded = (await standin.json()) as { sends: Array<{ state: string; message: string | null }> };
+    expect(recorded.sends).toHaveLength(1);
+    expect(recorded.sends[0].state).toBe("sent");
+  });
 });
 
 describe("ChannelStateDO", () => {

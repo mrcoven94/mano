@@ -96,6 +96,13 @@ CREATE TABLE IF NOT EXISTS turns (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_sends (
+  agent_key TEXT PRIMARY KEY,
+  turn INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
 `;
 
 interface MetaRow {
@@ -533,10 +540,43 @@ export class SqlConversationStore implements ConversationStore {
     this.sql.exec("UPDATE turns SET state = 'finished', updated_at_ms = ? WHERE turn = ?", atMs, turn);
   }
 
+  agentSend(key: string): import("./store.js").AgentSendRow | null {
+    const row = firstRow<{
+      agent_key: string;
+      turn: number;
+      state: import("./store.js").AgentSendRow["state"];
+      created_at_ms: number;
+      updated_at_ms: number;
+    }>(this.sql.exec("SELECT * FROM agent_sends WHERE agent_key = ?", key));
+    if (!row) return null;
+    return {
+      key: row.agent_key,
+      turn: row.turn,
+      state: row.state,
+      createdAtMs: row.created_at_ms,
+      updatedAtMs: row.updated_at_ms,
+    };
+  }
+
+  startAgentSend(row: import("./store.js").AgentSendRow): void {
+    this.sql.exec(
+      "INSERT OR IGNORE INTO agent_sends (agent_key, turn, state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?)",
+      row.key,
+      row.turn,
+      row.state,
+      row.createdAtMs,
+      row.updatedAtMs,
+    );
+  }
+
+  finishAgentSend(key: string, atMs: number): void {
+    this.sql.exec("UPDATE agent_sends SET state = 'sent', updated_at_ms = ? WHERE agent_key = ?", atMs, key);
+  }
+
   wipe(deletedAtMs: number): void {
     const meta = this.meta();
     this.sql.exec(
-      "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns; DELETE FROM inbound_messages;",
+      "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns; DELETE FROM inbound_messages; DELETE FROM agent_sends;",
     );
     this.saveMeta({ ...defaultMeta(), generation: meta.generation + 1, turn: meta.turn, deletedAtMs });
   }

@@ -3,6 +3,7 @@
 // runner for exactly one conversation. Internal routes only; the worker
 // reaches them from the queue consumer, never from the public internet.
 import {
+  AgentResponder,
   BlooioChannel,
   RecordingChannel,
   boundFetch,
@@ -10,6 +11,7 @@ import {
   StandInResponder,
   buildModelBaseUrl,
   createLogger,
+  errName,
   hashChatId,
   type Channel,
   type Logger,
@@ -93,17 +95,25 @@ export function buildChannel(env: Env): Channel {
 // Real texts go only to a Standard model ID (AGENTS.md rule 7). A
 // missing or -contributor ID fails closed to the stand-in, which calls
 // no model.
-export function buildResponder(env: Env): Responder {
+function buildFallbackResponder(env: Env): Responder {
   const model = env.MANO_REPLY_MODEL ?? "";
-  if (env.META_MODEL_API_KEY && model && !model.endsWith("-contributor")) {
-    const endpoint = buildModelBaseUrl({
-      accountId: env.CF_ACCOUNT_ID,
-      gatewayId: env.AI_GATEWAY_ID,
-      provider: env.AI_GATEWAY_PROVIDER,
-    });
-    return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, model, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
+  if (!env.META_MODEL_API_KEY || !model || model.endsWith("-contributor")) return new StandInResponder();
+  const endpoint = buildModelBaseUrl({
+    accountId: env.CF_ACCOUNT_ID,
+    gatewayId: env.AI_GATEWAY_ID,
+    provider: env.AI_GATEWAY_PROVIDER,
+  });
+  return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, model, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
+}
+
+export function buildResponder(env: Env, handleHash?: string): Responder {
+  const fallback = buildFallbackResponder(env);
+  // The agent answers when configured; otherwise the plain model answer
+  // stays the responder, and the agent falls back to it per turn.
+  if (env.AGENT_URL && env.MANO_AGENT_SECRET && handleHash) {
+    return new AgentResponder({ agentUrl: env.AGENT_URL, secret: env.MANO_AGENT_SECRET, handleHash, fallback });
   }
-  return new StandInResponder();
+  return fallback;
 }
 
 export class ConversationDO implements DurableObject {
@@ -135,7 +145,7 @@ export class ConversationDO implements DurableObject {
 
   private runner(handleHash: string): { runner: ConversationRunner; channel: Channel; responder: Responder } {
     const channel = buildChannel(this.env);
-    const responder = buildResponder(this.env);
+    const responder = buildResponder(this.env, handleHash);
     const runner = new ConversationRunner({
       store: new SqlConversationStore(this.ctx.storage.sql),
       channel,
@@ -228,6 +238,34 @@ export class ConversationDO implements DurableObject {
         ttlMs: typeof body.ttlMs === "number" ? body.ttlMs : 15 * 60 * 1000,
       });
       return Response.json({ ok: true });
+    }
+    if (request.method === "POST" && url.pathname === "/internal/agent-send") {
+      const body = (await request.json().catch(() => null)) as {
+        handleHash?: unknown;
+        key?: unknown;
+        text?: unknown;
+      } | null;
+      if (
+        !body ||
+        typeof body.handleHash !== "string" ||
+        typeof body.key !== "string" ||
+        !body.key ||
+        typeof body.text !== "string" ||
+        !body.text
+      ) {
+        return new Response("Bad agent send.", { status: 400 });
+      }
+      const { runner } = this.runner(body.handleHash);
+      try {
+        const result = await runner.sendAgentText({ key: body.key, text: body.text });
+        if (!result.sent && result.reason === "budget") {
+          return Response.json({ sent: false, reason: "budget" }, { status: 429 });
+        }
+        return Response.json(result);
+      } catch (err) {
+        this.logger.warn("agent_send_failed", { handle: body.handleHash, err: errName(err) });
+        return new Response("Agent send failed.", { status: 500 });
+      }
     }
     if (request.method === "POST" && url.pathname === "/internal/delete") {
       const body = (await request.json().catch(() => null)) as { handleHash?: unknown } | null;

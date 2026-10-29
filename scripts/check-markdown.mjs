@@ -10,12 +10,19 @@ const allowed = new Set([
   "docs/decisions.md",
   "docs/protocol.md",
   "docs/third-party.md",
+  // Eve reads these at fixed paths; they are agent config, not docs.
+  "apps/agent/agent/instructions.md",
 ]);
+
+// Eve skill cards live at agent/skills/<name>/SKILL.md.
+function isSkillCard(f) {
+  return f.startsWith("apps/agent/agent/skills/") && f.endsWith("/SKILL.md");
+}
 
 const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { encoding: "utf8" })
   .split("\n")
   .filter((f) => /\.mdx?$/i.test(f));
-const stray = files.filter((f) => !allowed.has(f));
+const stray = files.filter((f) => !allowed.has(f) && !isSkillCard(f));
 
 if (stray.length > 0) {
   console.error("Markdown files outside the allowlist (AGENTS.md, hard rule 12):");
