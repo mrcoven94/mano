@@ -61,7 +61,8 @@ SYSTEM_PROMPT = "\n".join(
 
 try:
     # Lives in the web image. The import check runs without it.
-    from fastapi import JSONResponse, Request
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
 except ImportError:  # pragma: no cover
     Request = Any  # type: ignore[assignment,misc]
     JSONResponse = Any  # type: ignore[assignment,misc]
@@ -159,15 +160,17 @@ class Guardian:
             gpu_memory_utilization=0.90,
             max_model_len=8192,
             generation_config="auto",
-            disable_log_requests=True,
         )
 
     @modal.method()
     def complete(self, body: dict[str, Any]) -> dict[str, Any]:
         from vllm import SamplingParams
+        from vllm.sampling_params import StructuredOutputsParams
 
         params = SamplingParams(
-            temperature=0.0, max_tokens=256, guided_json=GUARDIAN_SCHEMA
+            temperature=0.0,
+            max_tokens=256,
+            structured_outputs=StructuredOutputsParams(json=GUARDIAN_SCHEMA),
         )
         outputs = self.engine.chat(
             [
