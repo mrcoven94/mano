@@ -71,6 +71,11 @@ export const DEFAULT_MEDIA_HOSTS = ["bucket.blooio.com"];
 // How much of the conversation the model sees: the last few finished
 // turns, oldest dropped first past the character cap.
 export const HISTORY_TURNS = 6;
+
+// Over a limit or out of budget, every message still gets the busy text
+// with its safety line, up to this many per person per day. Past the
+// cap only a message that might be a crisis gets a reply.
+export const BUSY_DAILY_CAP = 20;
 export const HISTORY_CHARS = 4000;
 
 export const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "handleHash"> = {
@@ -697,7 +702,7 @@ export class ConversationRunner {
         await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
         this.checkSendsResolved(turn, generation);
       } else {
-        const noticed = await this.sendBusyOnce(turn, chatId, to, over ?? "budget", nowMs());
+        const noticed = await this.sendBusy(turn, chatId, to, nowMs());
         store.updateTurnAnswer(turn, JSON.stringify(noticed ? [{ part: 0, tag: "busy", text: BUSY_BUBBLE }] : []), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
       }
@@ -932,10 +937,18 @@ export class ConversationRunner {
     return final.map((text, i) => ({ part: i + 1, tag: "", text }));
   }
 
+  private guardOptions(): { modelIds: string[] } {
+    const model = this.deps.responder.model;
+    return { modelIds: model ? [model] : [] };
+  }
+
+  private isVoiced(text: string): boolean {
+    return guardReply(text, this.guardOptions()).changes.length === 0;
+  }
+
   // The voice guard. Logs which rules fired, never the text.
   private guard(text: string, where: { turn: number; part: number; tag: string }): string {
-    const model = this.deps.responder.model;
-    const guarded = guardReply(text, { modelIds: model ? [model] : [] });
+    const guarded = guardReply(text, this.guardOptions());
     if (guarded.changes.length > 0) {
       const { turn, part, tag } = where;
       this.deps.logger.info("voice_guarded", { handle: this.logHandle(), turn, part, tag, changes: guarded.changes.join(",") });
@@ -943,21 +956,21 @@ export class ConversationRunner {
     return guarded.text;
   }
 
-  private async sendBusyOnce(
-    turn: number,
-    chatId: string | null,
-    to: string | null,
-    reason: string,
-    nowMs: number,
-  ): Promise<boolean> {
+  // The day's busy count rides in busyNoticeKey ("busy:<day>:<count>"),
+  // so no schema change is needed. A key from an older deploy counts as
+  // zero for the day.
+  private async sendBusy(turn: number, chatId: string | null, to: string | null, nowMs: number): Promise<boolean> {
     const meta = this.store.meta();
-    const key = reason === "hour" ? `hour:${hourKeyFor(nowMs)}` : reason === "day" ? `day:${dayKeyFor(nowMs)}` : `budget:${dayKeyFor(nowMs)}`;
-    if (meta.busyNoticeKey === key) return false;
-    meta.busyNoticeKey = key;
+    const day = dayKeyFor(nowMs);
+    const match = /^busy:([^:]+):(\d+)$/.exec(meta.busyNoticeKey ?? "");
+    const count = match && match[1] === day ? Number(match[2]) : 0;
+    if (count >= BUSY_DAILY_CAP) return false;
+    meta.busyNoticeKey = `busy:${day}:${count + 1}`;
     this.store.saveMeta(meta);
     await this.sendBubble({ turn, part: 0, tag: "busy", text: BUSY_BUBBLE, chatId, to });
     return true;
   }
+
 
   // Downloads run only after the turn passed admission, and only inside
   // the per-handle and global daily byte budgets. Each file reserves the
@@ -1132,6 +1145,14 @@ export class ConversationRunner {
         if (err instanceof GenerationStopped) throw err;
         logger.warn("lookup_failed", { handle: this.logHandle(), key, err: errName(err) });
       }
+    }
+    // A row stored before the voice guard shipped may hold text the guard
+    // would change. Its key is bound to that exact payload, so it is
+    // never rewritten, and it is never replayed: it ends failed.
+    if (!this.isVoiced(opts.text)) {
+      store.updateOutbound(key, { state: "failed", code: "unguarded_legacy", updatedAtMs: nowMs() });
+      logger.warn("send_failed", { handle: this.logHandle(), key, code: "unguarded_legacy", status: null });
+      return finish({ key, state: "failed", code: "unguarded_legacy", fresh: false, counted: false });
     }
     try {
       const result = await channel.send({ to: opts.to ?? "", chatId: opts.chatId, text: opts.text, idempotencyKey: key });
