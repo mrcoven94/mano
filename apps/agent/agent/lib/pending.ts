@@ -47,11 +47,15 @@ export function renderQuestion(approval: EngineApproval): string {
     .filter(([, v]) => typeof v === "string" || typeof v === "number")
     .sort(([a], [b]) => order(a) - order(b))
     .map(([k, v]) => `${LABELS[k] ?? k}: ${v}`);
+  // One paragraph: the text line flattens line breaks, so fields are
+  // separated in the sentence itself.
   return [
     `Ready to send: ${approval.purpose} (to ${approval.recipient}).`,
-    ...lines,
+    lines.length > 0 ? `${lines.join("; ")}.` : "",
     "Reply YES to send exactly this, or NO to stop.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export async function savePending(kv: KeyValue, pending: PendingApproval, expiresAt: string): Promise<void> {

@@ -95,7 +95,7 @@ describe("approval by text", () => {
     const ask = await send(turn("turn_ask_000001", "Please file my renewal"));
     expect(ask.status).toBe(200);
     expect(ask.body.text).toContain("Reply YES");
-    expect(ask.body.text).toMatch(/Name: Rosa Testcase\nDate of birth: 1990-02-03\nAddress: 12 Sample Street, Testville/);
+    expect(ask.body.text).toContain("Name: Rosa Testcase; Date of birth: 1990-02-03; Address: 12 Sample Street, Testville;");
     const [approval] = engine.approvals();
     expect(approval.status).toBe("pending");
     expect(engine.executor.calls).toHaveLength(0);
