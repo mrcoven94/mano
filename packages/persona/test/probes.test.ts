@@ -64,3 +64,11 @@ describe("probe detector (review blocker 4)", () => {
     expect(checkProbe(probe("david-name"), fast("I'm Mano. It means hand."))).toEqual([]);
   });
 });
+
+describe("probe detector, lowercase identities (review round 2, blocker 2)", () => {
+  it("fails a reply with a lowercase provider identity", () => {
+    for (const text of ["My provider is meta.", "I am meta.", "I am muse glimmer."]) {
+      expect(checkProbe(probe("model"), fast(text)), text).toContain("provider-name");
+    }
+  });
+});

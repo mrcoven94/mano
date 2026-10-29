@@ -30,7 +30,13 @@ const MODEL_ID_PATTERN = /\b(?:muse|spark|llama|gpt|claude|gemini|mistral|grok)[
 // me muse on it" and "a meta question" pass.
 const WORD_NAMES = ["muse", "spark", "meta", "llama", "claude", "gemini", "bard", "mistral", "grok", "copilot"];
 const WORD_PATTERN = new RegExp(`\\b(?:${WORD_NAMES.join("|")})\\b`, "gi");
-const AI_CONTEXT = /\b(?:ai|model|bot|chatbot|built|made|trained|powered|run|runs|running|use|uses|using|developed|created|company|behind|based)\b/i;
+const AI_CONTEXT = /\b(?:ai|model|bot|chatbot|built|made|trained|powered|run|runs|running|use|uses|using|developed|created|company|behind|based|provider)\b/i;
+// A direct identity statement right before the name: "I am meta", "my
+// provider is meta", "i run on llama", "built by meta".
+const IDENTITY_PATTERN = new RegExp(
+  `\\b(?:i am|i'm|i’m|im|this is|my (?:provider|model|maker|creator|company) is|(?:i )?runs? on|(?:built|made|powered|created|developed|trained) (?:by|on)|based on)\\s+(?:(?:a|an|the|just|actually)\\s+)?(?:${WORD_NAMES.join("|")})\\b`,
+  "i",
+);
 
 function escapePattern(word: string): string {
   return word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -43,15 +49,17 @@ function idPattern(modelIds: readonly string[]): RegExp | null {
 }
 
 function sentenceNamesProvider(sentence: string, ids: RegExp | null): boolean {
-  if (ALWAYS_PATTERN.test(sentence) || MODEL_ID_PATTERN.test(sentence) || ids?.test(sentence)) return true;
+  if (ALWAYS_PATTERN.test(sentence) || MODEL_ID_PATTERN.test(sentence) || IDENTITY_PATTERN.test(sentence) || ids?.test(sentence)) return true;
   for (const match of sentence.matchAll(WORD_PATTERN)) {
     if (match[0] !== match[0].toLowerCase() || AI_CONTEXT.test(sentence)) return true;
   }
   return false;
 }
 
+const SENTENCE_BREAK = /((?<=[.!?…])\s+|\n+)/;
+
 function sentences(text: string): string[] {
-  return text.split(/(?<=[.!?…])\s+|\n+/);
+  return text.split(SENTENCE_BREAK).filter((_, i) => i % 2 === 0);
 }
 
 export function containsProviderName(text: string, modelIds: readonly string[] = []): boolean {
@@ -101,19 +109,27 @@ export function removeDashes(text: string): string {
     .replace(/[ \t]*,[ \t]*$/gm, "");
 }
 
-// Rewrites or drops every sentence that names a model or provider.
+// Rewrites or drops every sentence that names a model or provider. The
+// kept sentences keep their own breaks, and a dropped line break
+// survives, so no two lines merge into a new sentence on the next pass.
 function removeProviderNames(text: string, ids: RegExp | null): { text: string; selfDescribed: boolean } {
   let selfDescribed = false;
-  const kept: string[] = [];
-  for (const sentence of sentences(text)) {
-    if (!sentenceNamesProvider(sentence, ids)) {
-      kept.push(sentence);
-    } else if (SELF_REFERENCE.test(sentence) && !selfDescribed) {
-      selfDescribed = true;
-      kept.push(SELF_DESCRIPTION);
+  let out = "";
+  let gap = "";
+  const parts = text.split(SENTENCE_BREAK);
+  for (let i = 0; i < parts.length; i += 2) {
+    gap += i > 0 ? parts[i - 1] : "";
+    let sentence: string | null = parts[i];
+    if (sentenceNamesProvider(sentence, ids)) {
+      sentence = SELF_REFERENCE.test(sentence) && !selfDescribed ? SELF_DESCRIPTION : null;
+      if (sentence) selfDescribed = true;
     }
+    if (sentence === null) continue;
+    if (out) out += gap.includes("\n") ? "\n" : " ";
+    out += sentence;
+    gap = "";
   }
-  return { text: kept.join(" "), selfDescribed };
+  return { text: out, selfDescribed };
 }
 
 function tidy(text: string): string {

@@ -141,3 +141,28 @@ describe("guardReply real model identifiers (review blocker 4)", () => {
     }
   });
 });
+
+describe("guardReply lowercase identity statements (review round 2, blocker 2)", () => {
+  it("catches direct identity and provider statements with lowercase names", () => {
+    for (const text of ["My provider is meta.", "I am meta.", "I am muse glimmer."]) {
+      expect(containsProviderName(text), text).toBe(true);
+      expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
+    }
+    expect(containsProviderName("i run on llama")).toBe(true);
+    expect(containsProviderName("built by meta")).toBe(true);
+    expect(containsProviderName("powered by muse")).toBe(true);
+  });
+
+  it("keeps passing ordinary words next to ordinary verbs", () => {
+    for (const text of ["I'm feeling a spark of hope.", "I am going to muse on it.", "That's a meta question."]) {
+      expect(guardReply(text).changes, text).toEqual([]);
+    }
+  });
+});
+
+describe("guardReply keeps sentence boundaries (review round 2, blocker 1)", () => {
+  it("is idempotent when it drops a sentence between lines", () => {
+    const once = guardReply("There is a spark of hope\nUnlike Gemini, it costs nothing.\nI use this to help you.").text;
+    expect(guardReply(once)).toEqual({ text: once, changes: [] });
+  });
+});
