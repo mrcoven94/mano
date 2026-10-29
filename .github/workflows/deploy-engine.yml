@@ -92,21 +92,24 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - run: pnpm exec wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      # Values go in on stdin, never on a command line.
-      - name: Set required secrets
+      # One version carries the code and every secret binding, and one
+      # deploy activates it, so production never serves a version with
+      # partial config, and a rotation never mixes old and new values. The
+      # secrets file is built from the environment by jq (values are never
+      # printed or put on a command line), lives in the runner's temp dir
+      # with mode 600, and is removed when the step ends, pass or fail.
+      - name: Deploy code and secrets as one version
         run: |
           set -euo pipefail
-          printf '%s' "$META_MODEL_API_KEY" | pnpm exec wrangler secret put META_MODEL_API_KEY
-          printf '%s' "$ENCRYPTION_KEK_B64" | pnpm exec wrangler secret put ENCRYPTION_KEK_B64
-          printf '%s' "$SESSION_SECRET" | pnpm exec wrangler secret put SESSION_SECRET
-          printf '%s' "$OPERATOR_SECRET" | pnpm exec wrangler secret put OPERATOR_SECRET
-          printf '%s' "$MANO_ENGINE_AGENT_TOKEN" | pnpm exec wrangler secret put MANO_ENGINE_AGENT_TOKEN
-          printf '%s' "$MANO_HANDLE_GRANT_SECRET" | pnpm exec wrangler secret put MANO_HANDLE_GRANT_SECRET
-          printf '%s' "$EXECUTOR_MODE" | pnpm exec wrangler secret put EXECUTOR_MODE
+          umask 077
+          secrets_file="$RUNNER_TEMP/engine-secrets.json"
+          trap 'rm -f "$secrets_file"' EXIT
+          jq -n 'env | {
+              META_MODEL_API_KEY, ENCRYPTION_KEK_B64, SESSION_SECRET, OPERATOR_SECRET,
+              MANO_ENGINE_AGENT_TOKEN, MANO_HANDLE_GRANT_SECRET, EXECUTOR_MODE,
+              SANDBOX_BASE_URL, CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA
+            } | with_entries(select(.value != null and .value != ""))' > "$secrets_file"
+          pnpm exec wrangler deploy --secrets-file "$secrets_file"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -117,27 +120,13 @@ jobs:
           MANO_ENGINE_AGENT_TOKEN: ${{ secrets.MANO_ENGINE_AGENT_TOKEN }}
           MANO_HANDLE_GRANT_SECRET: ${{ secrets.MANO_HANDLE_GRANT_SECRET }}
           EXECUTOR_MODE: ${{ secrets.EXECUTOR_MODE }}
-      - name: Set optional secrets
-        run: |
-          set -euo pipefail
-          maybe() {
-            if [ -n "$1" ]; then printf '%s' "$1" | pnpm exec wrangler secret put "$2"; fi
-          }
-          maybe "$SANDBOX_BASE_URL" SANDBOX_BASE_URL
-          maybe "$CF_ACCOUNT_ID" CF_ACCOUNT_ID
-          maybe "$AI_GATEWAY_ID" AI_GATEWAY_ID
-          maybe "$AI_GATEWAY_PROVIDER" AI_GATEWAY_PROVIDER
-          maybe "$MODEL_ALLOWLIST_EXTRA" MODEL_ALLOWLIST_EXTRA
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SANDBOX_BASE_URL: ${{ secrets.SANDBOX_BASE_URL }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           AI_GATEWAY_ID: ${{ secrets.AI_GATEWAY_ID }}
           AI_GATEWAY_PROVIDER: ${{ secrets.AI_GATEWAY_PROVIDER }}
           MODEL_ALLOWLIST_EXTRA: ${{ secrets.MODEL_ALLOWLIST_EXTRA }}
       # The custom domain's certificate can take a few minutes on the first
-      # deploy, so the check retries before it fails the run.
+      # deploy, so the check retries for a 200, then requires ok:true.
       - name: Check production health
         run: |
           set -euo pipefail
@@ -145,10 +134,9 @@ jobs:
             status=$(curl -s -o "$RUNNER_TEMP/health.json" -w '%{http_code}' https://engine.withmano.com/health || true)
             if [ "$status" = "200" ]; then
               cat "$RUNNER_TEMP/health.json"
-              if ! grep -q '"ok":true' "$RUNNER_TEMP/health.json"; then
-                echo "::warning::engine is up but reports ok:false; a required part is missing"
-              fi
-              exit 0
+              if jq -e '.ok == true' "$RUNNER_TEMP/health.json" > /dev/null; then exit 0; fi
+              echo "::error::engine answers but reports ok:false; a required part is missing"
+              exit 1
             fi
             echo "attempt $attempt: HTTP $status"
             sleep 15
