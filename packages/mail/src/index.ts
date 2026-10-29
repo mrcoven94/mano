@@ -153,6 +153,25 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       Date.now() - spend.startMs > MAX_MS_PER_FILE
     );
   };
+  // One deadline per file, shared by every model call and retry for it.
+  const deadlineFor = (file: string): number => (fileSpend.get(file)?.startMs ?? Date.now()) + MAX_MS_PER_FILE;
+  const budgetAsked = new Set<string>();
+  const askBudget = (file: string): void => {
+    if (budgetAsked.has(file)) return;
+    budgetAsked.add(file);
+    warnings.push({
+      kind: "model_error",
+      message: `Stopped reading ${file} early: it exceeded the per-photo time or token budget.`,
+      letterId: null,
+      citation: null,
+    });
+    ask({
+      kind: "budget_exceeded",
+      letterId: null,
+      prompt: `${file} took too long or cost too much to finish. Photograph fewer letters per photo, or film shorter clips.`,
+      citation: null,
+    });
+  };
 
   for (const file of files) {
     fileSpend.set(file.name, { input: 0, output: 0, startMs: Date.now() });
@@ -227,7 +246,11 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     const frameDets: Detection[][] = [];
     const methods = new Set<SegmentMethod>();
     for (const frame of frames) {
-      const seg = await segmentFrame(frame.image, opts.model);
+      if (overBudget(file.name)) {
+        askBudget(file.name);
+        break;
+      }
+      const seg = await segmentFrame(frame.image, opts.model, { deadline: deadlineFor(file.name) });
       modelCalls.push({
         model: "sam-3.1",
         purpose: "segment",
@@ -298,33 +321,19 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
   // transcription. Unverified fields are dropped and become questions.
   // A file past its budget stops early: its unread pages are dropped
   // and one question says so.
-  const budgetAsked = new Set<string>();
   const skipped = new Set<number>();
   for (const page of pages) {
     if (overBudget(page.file)) {
-      if (!budgetAsked.has(page.file)) {
-        budgetAsked.add(page.file);
-        warnings.push({
-          kind: "model_error",
-          message: `Stopped reading ${page.file} early: it exceeded the per-photo time or token budget.`,
-          letterId: null,
-          citation: null,
-        });
-        ask({
-          kind: "budget_exceeded",
-          letterId: null,
-          prompt:
-            `${page.file} took too long or cost too much to finish. ` +
-            `Photograph fewer letters per photo, or film shorter clips.`,
-          citation: null,
-        });
-      }
+      askBudget(page.file);
       skipped.add(page.order);
       continue;
     }
     try {
       const readBuffer = await downscaleForModel(page.image);
-      const extraction = await readPage(readBuffer, opts.model, { synthetic: opts.synthetic });
+      const extraction = await readPage(readBuffer, opts.model, {
+        synthetic: opts.synthetic,
+        deadline: deadlineFor(page.file),
+      });
       page.extraction = extraction;
       if (extraction.readable) {
         page.dropped = verifyExtraction(extraction, extraction.fullText);
@@ -390,7 +399,10 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     if (blocked) {
       ambPages.forEach((p) => groups.push([p.index]));
     } else try {
-      const grouped = await groupWithModel(ambPages, opts.model, { synthetic: opts.synthetic });
+      const grouped = await groupWithModel(ambPages, opts.model, {
+        synthetic: opts.synthetic,
+        deadline: Math.min(...ambPages.map((p) => deadlineFor(pages[p.index]!.file))),
+      });
       modelCalls.push({
         model: readingModelFor(opts.synthetic),
         purpose: "group",

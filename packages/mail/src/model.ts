@@ -47,8 +47,21 @@ export interface ResponsesResult {
   raw: unknown;
 }
 
+// A deadline (epoch ms) shared by a request and all of its retries, so
+// a file's budget bounds the time spent waiting on the model.
+export interface CallOptions {
+  deadline?: number;
+}
+
+export class BudgetExceeded extends Error {
+  constructor() {
+    super("Model call skipped: the file's time budget is spent.");
+    this.name = "BudgetExceeded";
+  }
+}
+
 export interface ModelClient {
-  responses(req: ResponsesRequest): Promise<ResponsesResult>;
+  responses(req: ResponsesRequest, opts?: CallOptions): Promise<ResponsesResult>;
   readonly live: boolean;
 }
 
@@ -146,20 +159,25 @@ export class MetaModelClient implements ModelClient {
     this.allowExtra = new Set(opts.allowExtra ?? []);
     this.timeoutMs = opts.timeoutMs ?? 60000;
     this.maxRetries = opts.maxRetries ?? 2;
-    this.fetchFn = opts.fetchFn ?? fetch;
+    // workerd throws "Illegal invocation" when fetch runs with any
+    // receiver but the global, and this.fetchFn(...) passes the client.
+    this.fetchFn = opts.fetchFn ?? ((input, init) => globalThis.fetch(input, init));
     this.synthetic = opts.synthetic ?? false;
   }
 
-  async responses(req: ResponsesRequest): Promise<ResponsesResult> {
+  async responses(req: ResponsesRequest, opts: CallOptions = {}): Promise<ResponsesResult> {
     checkModelAllowed(req.model, this.allowExtra);
     if (!this.synthetic && isContributorId(req.model)) {
       throw new Error("Contributor models are only allowed for synthetic data.");
     }
     const body = { ...req, store: false as const };
     let lastErr: unknown;
+    const deadline = opts.deadline ?? Infinity;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw attempt === 0 ? new BudgetExceeded() : lastErr;
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      const timer = setTimeout(() => controller.abort(), Math.min(this.timeoutMs, remaining));
       try {
         const res = await this.fetchFn(`${this.baseUrl}/responses`, {
           method: "POST",
@@ -186,8 +204,9 @@ export class MetaModelClient implements ModelClient {
       } catch (err) {
         clearTimeout(timer);
         lastErr = err;
-        if (attempt < this.maxRetries && isRetryable(err)) {
-          await new Promise((r) => setTimeout(r, 200 * 2 ** attempt));
+        const backoff = 200 * 2 ** attempt;
+        if (attempt < this.maxRetries && isRetryable(err) && Date.now() + backoff < deadline) {
+          await new Promise((r) => setTimeout(r, backoff));
           continue;
         }
         throw err instanceof Error ? err : new Error("Model request failed.");
@@ -248,14 +267,16 @@ export interface RecordedEntry {
 export class RecordedModelClient implements ModelClient {
   readonly live = false;
   calls: ResponsesRequest[] = [];
+  callOptions: (CallOptions | undefined)[] = [];
   private entries: RecordedEntry[];
 
   constructor(entries: RecordedEntry[]) {
     this.entries = entries;
   }
 
-  async responses(req: ResponsesRequest): Promise<ResponsesResult> {
+  async responses(req: ResponsesRequest, opts?: CallOptions): Promise<ResponsesResult> {
     this.calls.push(req);
+    this.callOptions.push(opts);
     for (let i = 0; i < this.entries.length; i++) {
       const entry = this.entries[i]!;
       if (entry.match(req)) {

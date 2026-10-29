@@ -279,7 +279,7 @@ export function parsePageExtraction(text: string): PageExtraction {
 export async function readPage(
   pageJpeg: Buffer,
   model: ModelClient,
-  opts: { synthetic: boolean; maxAttempts?: number },
+  opts: { synthetic: boolean; maxAttempts?: number; deadline?: number },
 ): Promise<PageExtraction> {
   const started = Date.now();
   const maxAttempts = opts.maxAttempts ?? 3;
@@ -304,7 +304,7 @@ export async function readPage(
       text: { format: { type: "json_schema", name: "mail_page", schema: PAGE_SCHEMA, strict: true } },
       // Two stacked letters need room for both transcriptions.
       max_output_tokens: 8000,
-    });
+    }, { deadline: opts.deadline });
     last = res.text;
     // Usage sums across attempts: every retry spends tokens.
     if (res.usage) {
@@ -500,7 +500,7 @@ const GROUP_SCHEMA = {
 export async function groupWithModel(
   pages: GroupablePage[],
   model: ModelClient,
-  opts: { synthetic: boolean },
+  opts: { synthetic: boolean; deadline?: number },
 ): Promise<{ groups: number[][]; usage: PageExtraction["usage"]; elapsedMs: number }> {
   const started = Date.now();
   const summaries = pages.map((p) => {
@@ -540,7 +540,7 @@ export async function groupWithModel(
     ],
     text: { format: { type: "json_schema", name: "mail_groups", schema: GROUP_SCHEMA, strict: true } },
     max_output_tokens: 1000,
-  });
+  }, { deadline: opts.deadline });
   const elapsedMs = Date.now() - started;
   try {
     const data = JSON.parse(res.text) as { groups?: unknown };

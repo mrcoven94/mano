@@ -160,7 +160,11 @@ export function fullFrameDetection(): Detection {
   return { box: { ymin: 0, xmin: 0, ymax: 1000, xmax: 1000 }, label: "page", score: 0 };
 }
 
-export async function segmentFrame(image: NormalizedImage, model: ModelClient): Promise<SegmentResult> {
+export async function segmentFrame(
+  image: NormalizedImage,
+  model: ModelClient,
+  opts: { deadline?: number } = {},
+): Promise<SegmentResult> {
   const started = Date.now();
   try {
     const res = await model.responses({
@@ -177,7 +181,7 @@ export async function segmentFrame(image: NormalizedImage, model: ModelClient): 
       ],
       text: { format: { type: "json_schema", name: "mail_detections", schema: SEGMENT_SCHEMA, strict: true } },
       max_output_tokens: 2000,
-    });
+    }, { deadline: opts.deadline });
     const detections = parseDetections(res.text);
     if (detections.length > 0) {
       return { detections, method: "sam", usage: res.usage, elapsedMs: Date.now() - started };
