@@ -32,6 +32,14 @@ export interface ApprovalStore {
   // claimed the attempt.
   getApprovalByKey(key: string): Approval | null;
   putApproval(a: Approval): void;
+  // One live approval per action key. Inserts a only when no pending,
+  // approved or rejected approval holds its key, in one step, and returns
+  // whichever approval holds the key afterwards (a itself when inserted).
+  createApprovalForKey(a: Approval): Approval;
+  // A NO is terminal for the key: every pending approval under it, the
+  // person's own, becomes rejected in one step.
+  rejectApprovalsForKey(key: string, personId: string): void;
+  keyDeclined(key: string): boolean;
   // Atomically moves a pending approval to approved and records the
   // execution attempt. Returns null when the approval is not pending, the
   // owner, hash or expiry no longer match, or the key is already claimed
@@ -42,8 +50,6 @@ export interface ApprovalStore {
   // only when the row is still pending, so a stale snapshot can never
   // revive an expired, consumed or blocked approval.
   expireApproval(id: string): boolean;
-  // pending to rejected only, so a NO can never undo a consumed approval.
-  rejectApproval(id: string): boolean;
   setApprovalBlocked(id: string): boolean;
   markApprovalStale(id: string): boolean;
   setApprovalProblems(id: string, problems: string[]): void;
@@ -76,6 +82,10 @@ export interface ApprovalStore {
   audit<const T extends { event: string }>(entry: T & AuditEntry<T>): void;
 }
 
+// Statuses that hold an action key, in the order a lookup prefers them:
+// a NO first, then the consumed approval, then the live one.
+export const KEY_HOLDING: readonly Approval["status"][] = ["rejected", "approved", "pending"];
+
 function transition(store: Map<string, Approval>, id: string, to: Approval["status"]): boolean {
   const current = store.get(id);
   if (!current || current.status !== "pending") return false;
@@ -103,9 +113,31 @@ export class MemoryApprovalStore implements ApprovalStore {
   putApproval(a: Approval) {
     this.approvals.set(a.id, a);
   }
+  createApprovalForKey(a: Approval): Approval {
+    const holders = [...this.approvals.values()].filter(
+      (x) => x.idempotencyKey === a.idempotencyKey && KEY_HOLDING.includes(x.status),
+    );
+    if (holders.length === 0) {
+      this.approvals.set(a.id, a);
+      return a;
+    }
+    holders.sort((x, y) => KEY_HOLDING.indexOf(x.status) - KEY_HOLDING.indexOf(y.status) || (x.createdAt < y.createdAt ? -1 : 1));
+    return holders[0];
+  }
+  rejectApprovalsForKey(key: string, personId: string) {
+    for (const a of this.approvals.values()) {
+      if (a.idempotencyKey === key && a.personId === personId && a.status === "pending") {
+        this.approvals.set(a.id, { ...a, status: "rejected" });
+      }
+    }
+  }
+  keyDeclined(key: string) {
+    return [...this.approvals.values()].some((a) => a.idempotencyKey === key && a.status === "rejected");
+  }
   consumeApprovalAndClaim(id: string, humanId: string, attempt: Attempt, guard: ConsumeGuard): Approval | null {
     const current = this.approvals.get(id);
     if (!current || current.status !== "pending") return null;
+    if (this.keyDeclined(current.idempotencyKey)) return null;
     if (current.personId !== guard.personId) return null;
     if (current.requestHash !== guard.requestHash) return null;
     if (new Date(current.expiresAt).getTime() <= Date.now()) return null;
@@ -124,9 +156,6 @@ export class MemoryApprovalStore implements ApprovalStore {
   }
   expireApproval(id: string) {
     return transition(this.approvals, id, "expired");
-  }
-  rejectApproval(id: string) {
-    return transition(this.approvals, id, "rejected");
   }
   setApprovalBlocked(id: string) {
     return transition(this.approvals, id, "blocked");
@@ -491,8 +520,17 @@ export class ActionGateway {
         expiresAt: win.expiresAt.toISOString(),
         escalated: win.escalated,
       };
-      this.store.putApproval(approval);
-      return { status: "needs_approval", approval };
+      const holder = this.store.createApprovalForKey(approval);
+      if (holder.id === approval.id) return { status: "needs_approval", approval };
+      if (holder.status === "rejected") return { status: "blocked", reason: approvalGoneReason("rejected") };
+      if (holder.requestHash !== approval.requestHash || holder.personId !== approval.personId) {
+        this.store.audit({ event: "gateway.key_reuse", keyHash });
+        return { status: "blocked", reason: "This idempotency key was already used with different content." };
+      }
+      // A retry of the same action: the person answers the approval they
+      // already have, never a second one.
+      if (holder.status === "pending") return { status: "needs_approval", approval: holder };
+      return { status: "blocked", reason: "This action was already approved. Approve it again to retry it." };
     }
 
     const frozen = await freezeActionRequest(req, docRead.bytes);
@@ -505,9 +543,11 @@ export class ActionGateway {
     return this.execute(this.enrichWithDocument(req, docRead.bytes, frozen.documentHash), now);
   }
 
-  // A person's NO. Ends a pending approval at once, guarded so it races
-  // safely with an approve: whichever reaches the pending row first wins.
-  // A second NO on a declined approval answers the same.
+  // A person's NO. Ends the action at once: every pending approval under
+  // its key is rejected in one step, and the key stays declined, so no
+  // retry or duplicate can run it. Guarded on pending, so it races safely
+  // with an approve: whichever reaches the row first wins. A second NO on
+  // a declined approval answers the same.
   async rejectApproval(approvalId: string, humanId: string): Promise<GatewayResult> {
     const approval = this.store.getApproval(approvalId);
     if (!approval) return { status: "blocked", reason: "Approval not found." };
@@ -515,7 +555,9 @@ export class ActionGateway {
       return { status: "blocked", reason: "This approval belongs to a different person." };
     }
     const approvalHash = await auditDigest(approval.id);
-    if (approval.status === "pending") this.store.rejectApproval(approval.id);
+    if (approval.status === "pending" || approval.status === "rejected") {
+      this.store.rejectApprovalsForKey(approval.idempotencyKey, approval.personId);
+    }
     const fresh = this.store.getApproval(approval.id) ?? approval;
     if (fresh.status !== "rejected") return { status: "blocked", reason: approvalGoneReason(fresh.status) };
     this.store.audit({ event: "gateway.reject", approvalHash });
@@ -529,6 +571,7 @@ export class ActionGateway {
   ): Promise<GatewayResult> {
     const approval = this.store.getApproval(approvalId);
     if (!approval) return { status: "blocked", reason: "Approval not found." };
+    if (this.store.keyDeclined(approval.idempotencyKey)) return { status: "blocked", reason: approvalGoneReason("rejected") };
     // Every audit digest is computed here, before any expiry check or
     // claim, so nothing awaits between the final claim and execute.
     const hashes: AuditHashes = {
@@ -611,6 +654,7 @@ export class ActionGateway {
       requestHash: approval.requestHash,
     });
     if (!consumed) {
+      if (this.store.keyDeclined(approval.idempotencyKey)) return { status: "blocked", reason: approvalGoneReason("rejected") };
       const fresh = this.store.getApproval(approvalId);
       // The claim reads a fresh clock, so a window that lapsed during
       // the awaits above lands here: report expiry, not a phantom race.
@@ -669,6 +713,9 @@ export class ActionGateway {
     // check is still open when the executor starts.
     if (new Date(approval.expiresAt).getTime() < Date.now()) {
       return { status: "blocked", reason: "Approval expired." };
+    }
+    if (this.store.keyDeclined(approval.idempotencyKey)) {
+      return { status: "blocked", reason: approvalGoneReason("rejected") };
     }
     if (check.problems.length > 0) this.store.setApprovalProblems(approval.id, check.problems);
     if (attempt.status === "failed" || attempt.status === "unknown") {
@@ -868,6 +915,10 @@ export class ActionGateway {
     // The window can lapse during the awaited checks above, so approval
     // liveness is re-verified here, in the same step that claims the key
     // for execution, with a fresh clock. Only then may it execute.
+    if (this.store.keyDeclined(key)) {
+      this.store.updateAttempt(key, "failed");
+      return { status: "blocked", reason: approvalGoneReason("rejected") };
+    }
     if (!this.store.adoptForRecoveryIfApprovalLive(key, new Date())) {
       const receipt = this.store.getReceiptByKey(key);
       if (receipt) return { status: "completed", receipt };
