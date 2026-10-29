@@ -5,7 +5,7 @@ import { ActionGateway } from "../src/gateway/gateway.js";
 import { SqlApprovalStore, ensureGatewayTables } from "../src/gateway/sql-store.js";
 import { DefiniteFailureError, TimeoutError } from "../src/gateway/types.js";
 import type { ActionRequest, Executor } from "../src/gateway/types.js";
-import { ensureAgentStateTables, removeConversationState } from "../src/agents/agent-state.js";
+import { currentGeneration, ensureAgentStateTables, removeConversationState } from "../src/agents/agent-state.js";
 
 // The conversation generation fence on the gateway, on real SQLite. A
 // delete lands while a request is in its awaited preparation; the commit
@@ -57,7 +57,7 @@ function open(checkerDelayMs = 0, policyOverrides?: Record<string, "allow" | "as
       },
     },
   });
-  const deleteConversation = () => removeConversationState(sql, Date.now());
+  const deleteConversation = () => removeConversationState(sql, Date.now(), currentGeneration(sql) + 1);
   const duringChecks = (fn: () => void) => {
     delayOnce = fn;
   };

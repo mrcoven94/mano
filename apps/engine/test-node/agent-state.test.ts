@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
   cancelReminder,
+  clearPendingPointer,
   claimDueReminders,
   completeTurn,
   createReminder,
@@ -152,7 +153,7 @@ describe("generation fence", () => {
     const sql = openDb();
     approvalRow(sql, "appr-old", "pending", "k-old", 0);
     putTurnIfAbsent(sql, "turn-old", "2026-11-01T15:00:00.000Z", 0);
-    removeConversationState(sql, T0);
+    removeConversationState(sql, T0, 1);
     expect(currentGeneration(sql)).toBe(1);
     expect(createReminder(sql, reminder("late", 0), T0)).toEqual({ stale: true });
     expect(putTurnIfAbsent(sql, "turn-late", "2026-11-01T15:00:00.000Z", 0)).toEqual({ stale: true });
@@ -178,6 +179,21 @@ describe("turn ledger", () => {
 });
 
 describe("pending approval pointer", () => {
+  it("is cleared only by the approval and generation it holds", () => {
+    const sql = openDb();
+    approvalRow(sql, "appr-old", "pending", "k-old", 0);
+    setPendingPointer(sql, "appr-old", 0, "2026-11-01T15:00:00.000Z");
+    removeConversationState(sql, T0, 1);
+    approvalRow(sql, "appr-new", "pending", "k-new", 1);
+    setPendingPointer(sql, "appr-new", 1, "2026-11-01T15:10:00.000Z");
+    // A stale turn from the deleted conversation tries to clear it.
+    expect(clearPendingPointer(sql, "appr-new", 0)).toBe(false);
+    expect(clearPendingPointer(sql, "appr-old", 1)).toBe(false);
+    expect(getPendingPointer(sql, 1)?.approvalId).toBe("appr-new");
+    expect(clearPendingPointer(sql, "appr-new", 1)).toBe(true);
+    expect(getPendingPointer(sql, 1)).toBeNull();
+  });
+
   it("reads as nothing under a different generation", () => {
     const sql = openDb();
     approvalRow(sql, "appr-1", "pending", "k-1", 0);
@@ -226,7 +242,7 @@ describe("conversation delete", () => {
       { id: "appr-unresolved", status: "revoked" },
     ]);
     expect(finishReminder(sql, "d-1", "run-1", { kind: "sent" }, T0 + 3)).toBe(false);
-    expect(removeConversationState(sql, T0 + 4)).toEqual({
+    expect(removeConversationState(sql, T0 + 4, 5)).toEqual({
       generation: 5,
       remindersCancelled: 0,
       remindersInFlight: 1,
@@ -236,5 +252,25 @@ describe("conversation delete", () => {
       approvalsRevoked: 0,
       memoriesDeleted: 0,
     });
+  });
+
+  it("a retried delete to the same generation keeps the next conversation and returns the original counts", () => {
+    const sql = openDb();
+    createReminder(sql, reminder("old:0"), T0 - 1000);
+    sql.exec("INSERT INTO memory(id, content) VALUES ('m-old', 'a')");
+    const first = removeConversationState(sql, T0, 1);
+    expect(first).toMatchObject({ generation: 1, remindersCancelled: 1, memoriesDeleted: 1 });
+
+    // The response was lost; the new conversation starts writing.
+    createReminder(sql, reminder("new:0", 1), T0 + 1);
+    putTurnIfAbsent(sql, "turn-new", "2026-11-01T15:10:00.000Z", 1);
+    sql.exec("INSERT INTO memory(id, content, generation) VALUES ('m-new', 'b', 1)");
+
+    expect(removeConversationState(sql, T0 + 2, 1)).toEqual(first);
+    expect(removeConversationState(sql, T0 + 3, 0)).toEqual(first);
+    expect(currentGeneration(sql)).toBe(1);
+    expect(getReminder(sql, "new:0")?.status).toBe("scheduled");
+    expect(sql.exec("SELECT id FROM memory").toArray()).toEqual([{ id: "m-new" }]);
+    expect(sql.exec("SELECT turn_id FROM turns").toArray()).toEqual([{ turn_id: "turn-new" }]);
   });
 });

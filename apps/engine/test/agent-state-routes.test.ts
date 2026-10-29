@@ -187,7 +187,10 @@ describe("pending approval pointer", () => {
     const other = (await (await call(h, "GET", "/pending-approval?generation=1")).json()) as { pointer: unknown };
     expect(other.pointer).toBeNull();
     expect((await call(h, "PUT", "/pending-approval", { approvalId: crypto.randomUUID(), generation: 0 })).status).toBe(404);
-    expect(await (await call(h, "DELETE", "/pending-approval")).json()).toEqual({ cleared: true });
+    expect(await (await call(h, "DELETE", "/pending-approval", { approvalId: crypto.randomUUID(), generation: 0 })).json()).toEqual({
+      cleared: false,
+    });
+    expect(await (await call(h, "DELETE", "/pending-approval", { approvalId, generation: 0 })).json()).toEqual({ cleared: true });
     expect((await (await call(h, "GET", "/pending-approval?generation=0")).json()) as unknown).toEqual({ pointer: null });
   });
 });
@@ -205,7 +208,8 @@ describe("conversation delete", () => {
     await call(h, "POST", "/memory", { content: "Prefers texts.", source: "text", generation: 0 });
 
     expect((await call(h, "GET", "/reminders", undefined, { token: CHANNELS_TOKEN })).status).toBe(403);
-    const res = await call(h, "DELETE", "/conversation", undefined, { token: CHANNELS_TOKEN });
+    expect((await call(h, "DELETE", "/conversation", undefined, { token: CHANNELS_TOKEN })).status).toBe(400);
+    const res = await call(h, "DELETE", "/conversation", { generation: 1 }, { token: CHANNELS_TOKEN });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       removed: {
@@ -226,17 +230,23 @@ describe("conversation delete", () => {
     const approvals = (await (await call(h, "GET", "/approvals")).json()) as { approvals: { id: string; status: string }[] };
     expect(approvals.approvals.find((a) => a.id === approvalId)?.status).toBe("rejected");
     expect(((await (await call(h, "GET", "/memory")).json()) as { memories: unknown[] }).memories).toEqual([]);
-    const again = (await (await call(h, "DELETE", "/conversation")).json()) as { removed: Record<string, unknown> };
+    // A retry of the same delete, after the new conversation wrote: the
+    // same answer, and the new conversation's memory survives.
+    expect((await call(h, "POST", "/memory", { content: "New conversation.", source: "text", generation: 1 })).status).toBe(200);
+    const again = (await (await call(h, "DELETE", "/conversation", { generation: 1 }, { token: CHANNELS_TOKEN })).json()) as {
+      removed: Record<string, unknown>;
+    };
     expect(again.removed).toEqual({
-      generation: 2,
-      remindersCancelled: 0,
+      generation: 1,
+      remindersCancelled: 2,
       remindersInFlight: 0,
-      turnsDeleted: 0,
-      pendingPointerCleared: false,
-      approvalsRejected: 0,
+      turnsDeleted: 1,
+      pendingPointerCleared: true,
+      approvalsRejected: 1,
       approvalsRevoked: 0,
-      memoriesDeleted: 0,
+      memoriesDeleted: 2,
     });
+    expect(((await (await call(h, "GET", "/memory")).json()) as { memories: unknown[] }).memories.length).toBe(1);
   });
 });
 
@@ -372,6 +382,34 @@ describe("the delivery wake-up", () => {
 
     await lose();
     await runInDurableObject(stubFor(h), async (instance) => {
+      await (instance as PersonAgent).onStart();
+    });
+    expect((await deliverySchedules(h)).length).toBe(1);
+  });
+
+  it("restart recovery keeps exactly one wake-up when a crash left extra schedules", async () => {
+    const h = handle("crash-wakeup");
+    recordChannels();
+    await call(h, "POST", "/reminders", { id: "crash:0", text: "Once.", dueAt: "2026-12-01T15:00:00.000Z", generation: 0 });
+    // Fault injection: a crash between creating a schedule and recording
+    // it leaves an unrecorded delivery schedule, and the record is lost.
+    await runInDurableObject(stubFor(h), async (instance, state) => {
+      const agent = instance as PersonAgent;
+      await agent.schedule(new Date("2026-12-01T15:00:00.000Z"), "deliverDueReminders", {});
+      await agent.schedule(new Date("2026-12-02T15:00:00.000Z"), "deliverDueReminders", {});
+      state.storage.sql.exec("DELETE FROM reminder_wakeup");
+    });
+    expect((await deliverySchedules(h)).length).toBe(3);
+    await runInDurableObject(stubFor(h), async (instance) => {
+      await (instance as PersonAgent).onStart();
+    });
+    const wakeups = await deliverySchedules(h);
+    expect(wakeups.length).toBe(1);
+    expect(wakeups[0].time).toBe(Date.parse("2026-12-01T15:00:00.000Z") / 1000);
+
+    // With the record intact but an extra schedule beside it.
+    await runInDurableObject(stubFor(h), async (instance) => {
+      await (instance as PersonAgent).schedule(new Date("2026-12-03T15:00:00.000Z"), "deliverDueReminders", {});
       await (instance as PersonAgent).onStart();
     });
     expect((await deliverySchedules(h)).length).toBe(1);

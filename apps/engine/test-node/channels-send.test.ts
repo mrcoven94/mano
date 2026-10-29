@@ -39,6 +39,31 @@ describe("Channels agent-send client", () => {
   it("maps Channels' answers", async () => {
     expect(await sendToChannels(ENV, SEND, answering(() => Response.json({ sent: true })))).toBe("sent");
     expect(await sendToChannels(ENV, SEND, answering(() => Response.json({ sent: false, reason: "opted_out" })))).toBe("dropped");
+    // Only an explicit, well-formed answer is terminal. Anything Channels
+    // did not clearly say stays uncertain and retries under the same key.
+    const unclear: [string, () => Response][] = [
+      ["truncated JSON", () => new Response('{"sent":fal', { status: 200 })],
+      ["an empty object", () => Response.json({})],
+      ["sent:false with no reason", () => Response.json({ sent: false })],
+      ["sent as a string", () => Response.json({ sent: "true" })],
+      ["an array", () => Response.json([true])],
+      ["an empty body", () => new Response("", { status: 200 })],
+      [
+        "a body that fails to read",
+        () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new Error("connection reset"));
+              },
+            }),
+            { status: 200 },
+          ),
+      ],
+    ];
+    for (const [label, res] of unclear) {
+      expect(await sendToChannels(ENV, SEND, answering(res)), label).toBe("retry");
+    }
     expect(await sendToChannels(ENV, SEND, answering(() => new Response("bad", { status: 400 })))).toBe("failed");
     for (const status of [401, 429, 500, 503]) {
       expect(await sendToChannels(ENV, SEND, answering(() => new Response("", { status })))).toBe("retry");
