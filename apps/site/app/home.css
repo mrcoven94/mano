@@ -287,9 +287,12 @@ mark{background:none;color:inherit}
 .close-num{display:inline-block;margin-top:40px;font-family:var(--font-display),sans-serif;font-weight:700;font-size:clamp(1.8rem,3.6vw,2.6rem);letter-spacing:-.02em;text-decoration:none;background-image:linear-gradient(var(--hl),var(--hl));background-size:100% 40%;background-position:0 88%;background-repeat:no-repeat;padding:0 .12em;font-variant-numeric:tabular-nums}
 .h-close .btn-row{justify-content:center;margin-top:32px}
 .h-close .note{margin-top:16px}
-.text-qr{margin-top:32px}
-.text-qr svg{width:168px;height:168px}
-.text-qr .note{margin-top:8px}
+.text-qr{display:inline-flex;align-items:center;gap:18px;margin-top:40px;padding:12px 26px 12px 12px;border-radius:26px;background:var(--bg2);text-align:left;transform:rotate(-1deg)}
+.text-qr-code{flex:none;padding:10px;border:3px solid #fff;border-radius:18px;background:#fff;box-shadow:0 1px 2px rgba(18,18,18,.06)}
+.text-qr-code svg{width:112px;height:112px}
+.text-qr p{max-width:21ch;color:var(--muted);font-size:.98rem;line-height:1.45}
+.text-qr b{display:block;color:var(--text);font-weight:600;margin-bottom:2px}
+@media (max-width:720px){.text-qr{display:none}}
 
 @media (max-width:1080px){
   .tr,.open-grid{grid-template-columns:1fr;gap:56px}
