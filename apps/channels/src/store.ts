@@ -11,6 +11,10 @@ export interface PendingInbound {
   text: string | null;
   attachments: EventAttachment[];
   fromReconcile: boolean;
+  // Set when the whole message this piece came from might be a crisis.
+  // A long text is split into pieces at buffer time, and a crisis word
+  // can straddle the split, so the check runs on the rejoined message.
+  crisis?: boolean;
 }
 
 export interface OutboundRow {

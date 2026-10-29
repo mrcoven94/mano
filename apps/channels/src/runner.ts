@@ -172,6 +172,18 @@ export function partitionByChat(
   return [...groups.values()];
 }
 
+// The full text of each message in a group: pieces split from one long
+// text at buffer time ("evt#2", "evt#3") join back without a separator,
+// separate messages with a newline.
+export function rejoinPieces(items: import("./store.js").PendingInbound[]): string {
+  let out = "";
+  items.forEach((item, i) => {
+    if (i > 0) out += /#\d+$/.test(item.eventId) ? "" : "\n";
+    out += item.text ?? "";
+  });
+  return out;
+}
+
 // Retry backoff from a persisted attempt count: 5 seconds, doubling to
 // a 5 minute ceiling. The count survives crashes, so a stuck turn or
 // send backs off instead of spinning the alarm.
@@ -503,7 +515,9 @@ export class ConversationRunner {
     try {
       await this.runGuarded(async () => {
         for (const group of partitionByChat(pending, store.meta().chatId)) {
-          for (const items of chunkByTextCap(group, TURN_TEXT_CAP)) {
+          const groupCrisis = mightBeCrisis(rejoinPieces(group));
+          for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP)) {
+            const items = groupCrisis ? chunk.map((item) => ({ ...item, crisis: true })) : chunk;
             const turnMeta = store.meta();
             turnMeta.turn += 1;
             store.saveMeta(turnMeta);
@@ -648,11 +662,21 @@ export class ConversationRunner {
     const texts = items.map((i) => i.text).filter((t): t is string => !!t && t.length > 0);
     const attachments = items.flatMap((i) => i.attachments);
 
+    // One crisis detector for every path, classified before approvals,
+    // admission and any model work, on the whole message even when the
+    // buffer split it. It is broad on purpose: a match makes the reply
+    // name 988 and 911, and over-triggering is accepted.
+    const crisis = mightBeCrisis(texts.join("\n")) || items.some((i) => i.crisis === true);
+
     const approval = texts.length === 1 && attachments.length === 0 ? parseApprovalReply(texts[0]) : null;
     if (approval && store.pendingApprovals(nowMs()).length > 0) {
-      const answered = await this.answerApproval(approval.code, approval.decision, turn, chatId, to);
+      // A crisis reply goes first; the decision is still recorded.
+      const crisisBubbles = crisis ? this.answerBubbles(turn, [], true) : [];
+      if (crisisBubbles.length > 0) await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation);
+      const recordedPart = crisisBubbles.length + 1;
+      const answered = await this.answerApproval(approval.code, approval.decision, turn, chatId, to, recordedPart);
       if (answered) {
-        store.updateTurnAnswer(turn, JSON.stringify([{ part: 1, tag: "", text: APPROVAL_RECORDED_BUBBLE }]), 0, nowMs());
+        store.updateTurnAnswer(turn, JSON.stringify([...crisisBubbles, { part: recordedPart, tag: "", text: APPROVAL_RECORDED_BUBBLE }]), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
         return;
       }
@@ -666,10 +690,6 @@ export class ConversationRunner {
     // plus chunkByTextCap), so the join is never cut: every input
     // reaches the responder exactly once, across as many turns as needed.
     const turnText = texts.join("\n");
-    // One crisis detector for every path, classified before admission
-    // and before any model work. It is broad on purpose: a match makes
-    // the reply name 988 and 911, and over-triggering is accepted.
-    const crisis = crisisTurn(turnText);
     const history = this.history(meta.introduced);
     const historyChars = history.reduce((sum, h) => sum + h.text.length, 0);
     const { responder } = this.deps;
@@ -1255,6 +1275,7 @@ export class ConversationRunner {
     turn: number,
     chatId: string | null,
     to: string | null,
+    part = 1,
   ): Promise<boolean> {
     const { store, logger, nowMs } = this.deps;
     const codeHash = await sha256Hex(code);
@@ -1262,7 +1283,7 @@ export class ConversationRunner {
     if (!match) return false;
     store.answerApproval(match.id, decision);
     logger.info("approval_answered", { handle: this.logHandle(), approval: match.id, decision });
-    await this.sendBubble({ turn, part: 1, tag: "", text: APPROVAL_RECORDED_BUBBLE, chatId, to });
+    await this.sendBubble({ turn, part, tag: "", text: APPROVAL_RECORDED_BUBBLE, chatId, to });
     return true;
   }
 }
