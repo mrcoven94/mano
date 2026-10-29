@@ -669,7 +669,7 @@ describe("opt-out and close", () => {
 });
 
 describe("limits", () => {
-  it("says busy once an hour, then stays quiet", async () => {
+  it("says busy, with its safety line, to every message over the limit", async () => {
     const h = makeHarness();
     const meta = h.store.meta();
     meta.hourKey = new Date(h.now).toISOString().slice(0, 13);
@@ -682,7 +682,7 @@ describe("limits", () => {
     await h.runner.handleEvent(inboundEvent({ id: "evt_2", text: "Two.", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     const busy = h.channel.sends.filter((s) => s.text.includes("busy"));
-    expect(busy).toHaveLength(1);
+    expect(busy).toHaveLength(2);
     expect((h.responder as unknown as { prompts: unknown[] }).prompts).toHaveLength(0);
     h.advance(3600_000 + 1000);
     await h.runner.handleEvent(inboundEvent({ id: "evt_3", text: "Later.", occurredAtMs: h.now }), "webhook");

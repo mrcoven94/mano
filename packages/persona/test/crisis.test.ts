@@ -49,15 +49,15 @@ describe("crisisFloor", () => {
   });
 });
 
-describe("holdCrisisLines (review blocker 2)", () => {
-  it("puts the crisis line first when the final bubbles miss either number", () => {
+describe("holdCrisisLines (review blocker 2, made structural in PR 67 round 4)", () => {
+  it("always puts the crisis line first, once", () => {
     expect(holdCrisisLines(["I'm here with you."])).toEqual([CRISIS_LINE, "I'm here with you."]);
-    expect(holdCrisisLines(["Call 988 now.", "Or 911."])).toEqual(["Call 988 now.", "Or 911."]);
+    expect(holdCrisisLines(["Call 988 now.", "Or 911."])).toEqual([CRISIS_LINE, "Call 988 now.", "Or 911."]);
     expect(holdCrisisLines([])).toEqual([CRISIS_LINE]);
   });
 
   it("survives the guard dropping a sentence that named a provider", () => {
-    const guarded = guardReply(crisisFloor("Call 988 or 911 through Meta.")).text;
+    const guarded = guardReply(crisisFloor("Call 988 or 911 through Llama.")).text;
     expect(holdCrisisLines([guarded]).join(" ")).toContain("988");
     expect(holdCrisisLines([guarded]).join(" ")).toContain("911");
   });

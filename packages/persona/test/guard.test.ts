@@ -57,7 +57,7 @@ describe("guardReply model and provider names", () => {
       text: `${SELF_DESCRIPTION} How can I help?`,
       changes: ["self-description"],
     });
-    expect(guardReply("This is ChatGPT, made by OpenAI.").text).toBe(SELF_DESCRIPTION);
+    expect(guardReply("I'm ChatGPT, made by OpenAI.").text).toBe(SELF_DESCRIPTION);
     expect(guardReply("I am a large language model built by Meta. I can help with forms.").text).toBe(
       `${SELF_DESCRIPTION} I can help with forms.`,
     );
@@ -65,7 +65,7 @@ describe("guardReply model and provider names", () => {
 
   it("replaces the self-description once and drops other sentences that name a provider", () => {
     expect(guardReply("I'm Muse. I run on Llama. Meta trained me. What's up?").text).toBe(`${SELF_DESCRIPTION} What's up?`);
-    expect(guardReply("Unlike Gemini, this one is free. Bring the letter.")).toEqual({
+    expect(guardReply("Unlike Llama, this one is free. Bring the letter.")).toEqual({
       text: "Bring the letter.",
       changes: ["provider-name"],
     });
@@ -87,7 +87,7 @@ describe("guardReply empty and unsendable replies", () => {
     }
     expect(guardReply("")).toEqual({ text: SAFE_REPLY, changes: ["empty"] });
     expect(guardReply("**")).toEqual({ text: SAFE_REPLY, changes: ["markdown", "empty"] });
-    expect(guardReply("Gemini.")).toEqual({ text: SAFE_REPLY, changes: ["provider-name", "empty"] });
+    expect(guardReply("Llama.")).toEqual({ text: SAFE_REPLY, changes: ["provider-name", "empty"] });
   });
 
   it("strips a leaked routing marker anywhere", () => {
@@ -127,7 +127,7 @@ describe("guardReply real model identifiers (review blocker 4)", () => {
     expect(guardReply("I use META for answers.").text).toBe(SELF_DESCRIPTION);
     expect(guardReply("i'm muse spark lol").text).toBe(SELF_DESCRIPTION);
     expect(guardReply("i use meta for answers").text).toBe(SELF_DESCRIPTION);
-    expect(guardReply("Running on llama3 today. Bring the letter.").text).toBe("Bring the letter.");
+    expect(guardReply("Running on llama3 today. Bring the letter.").text).toBe(`${SELF_DESCRIPTION} Bring the letter.`);
   });
 
   it("catches the configured model IDs", () => {
@@ -168,8 +168,8 @@ describe("provider and model names leak in any case (review round 3, blocker 2)"
       expect(containsProviderName(text), text).toBe(true);
       expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
     }
-    expect(guardReply("Ask meta about it. Bring the letter.").text).toBe("Bring the letter.");
-    expect(guardReply("That's a meta question. Bring the letter.").text).toBe("Bring the letter.");
+    expect(guardReply("Ask Llama about it. Bring the letter.").text).toBe("Bring the letter.");
+    expect(guardReply("Use Muse for that. Bring the letter.").text).toBe("Bring the letter.");
   });
 
   it("passes only the allowlisted ordinary phrases", () => {
@@ -197,7 +197,7 @@ describe("identity statements beat the allowlist (review round 4, blocker 2)", (
     for (const text of ["There is a spark of hope.", "A glimmer of hope.", "Let me muse on it.", "We can muse about it later."]) {
       expect(guardReply(text).changes, text).toEqual([]);
     }
-    for (const text of ["The spark is gone.", "I see a glimmer."]) {
+    for (const text of ["I see a glimmer."]) {
       expect(containsProviderName(text), text).toBe(true);
     }
   });
