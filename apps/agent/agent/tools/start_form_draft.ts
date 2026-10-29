@@ -1,7 +1,16 @@
+// Prepares a benefits renewal and asks for the person's yes. The draft
+// goes to Engine only, which freezes the exact request, hashes it and
+// holds it pending; nothing leaves Mano until the person texts YES to the
+// question rendered from that frozen request.
+import { createHash } from "node:crypto";
+
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { addDraft, formDrafts } from "../lib/forms.js";
+import { engineFromEnv, personIdFor } from "../lib/engine.js";
+import { renderQuestion, savePending } from "../lib/pending.js";
+import { requireTurn } from "../lib/person.js";
+import { StorageUnavailable, getKeyValue } from "../lib/storage.js";
 
 const inputSchema = z.object({
   fullName: z.string().min(1).max(200),
@@ -12,53 +21,51 @@ const inputSchema = z.object({
   monthlyIncome: z.number().min(0),
 });
 
-export function portalBaseUrl(): string {
-  const url = process.env.MANO_PORTAL_URL;
-  if (!url) throw new Error("The forms system is not configured (MANO_PORTAL_URL). Say so and offer to prepare the answers instead.");
-  return url.replace(/\/$/, "");
-}
+export const RENEWAL_RECIPIENT = "sandbox-agency-portal";
+export const RENEWAL_PURPOSE = "Food benefits renewal in the sandbox agency portal";
 
-// Starts a renewal draft in the sandbox portal with the household page
-// filled in. A draft is preparation, not a submission: nothing leaves
-// Mano until the person approves the exact version. A re-run of this
-// step can leave a second unsubmitted draft behind; drafts are cheap
-// and the tool returns the live one.
 export default defineTool({
   description:
-    "Start a renewal draft with the person's household details filled in. Call it once you have every field; ask for what is missing first. Starting a draft submits nothing.",
+    "Prepare the person's benefits renewal with their household details. Call it once you have every field; ask for what is missing first. It sends nothing: the person gets the exact version to approve with YES.",
   inputSchema,
   label: {
-    start: ({ fullName }) => `Start a draft for ${fullName}`,
+    start: () => "Prepare the renewal",
   },
-  async execute(input) {
-    const base = portalBaseUrl();
-    const body = new URLSearchParams({
-      fullName: input.fullName,
-      dateOfBirth: input.dateOfBirth,
-      address: input.address,
-      phone: input.phone,
-      householdSize: String(input.householdSize),
-      monthlyIncome: String(input.monthlyIncome),
+  async execute(input, ctx) {
+    const { handleHash, turnId } = requireTurn(ctx);
+    const engine = engineFromEnv();
+    if (!engine) throw new Error("Preparing forms is not available right now. Say so and offer to collect the answers.");
+    const kv = await getKeyValue();
+    if (!kv) throw new StorageUnavailable("Preparing forms");
+    const personId = personIdFor(handleHash);
+    const payload = { ...input };
+    const contentKey = createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
+    const result = await engine.proposeAction(personId, {
+      type: "submit",
+      recipient: RENEWAL_RECIPIENT,
+      purpose: RENEWAL_PURPOSE,
+      payload,
+      idempotencyKey: `${turnId}:renewal:${contentKey}`,
     });
-    const res = await fetch(`${base}/apply/household`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body,
-      redirect: "manual",
-    });
-    if (res.status !== 303) {
-      throw new Error(`The forms system did not start a draft (status ${res.status}). Say so and offer to try again.`);
+    if (result.status !== "needs_approval" || !result.approval) {
+      return { status: result.status, reason: result.reason ?? "Engine did not hold it for approval.", sent: false };
     }
-    const setCookie = res.headers.get("set-cookie") ?? "";
-    const session = /portal_session=([^;]+)/.exec(setCookie)?.[1];
-    if (!session) throw new Error("The forms system did not return a draft session. Say so and offer to try again.");
-    const draft = {
-      draftId: `draft_${Date.now().toString(36)}`,
-      sessionCookie: `portal_session=${session}`,
-      applicantName: input.fullName,
-      startedAt: new Date().toISOString(),
+    await savePending(
+      kv,
+      {
+        approvalId: result.approval.id,
+        personId,
+        turnId,
+        purpose: result.approval.purpose,
+        question: renderQuestion(result.approval),
+      },
+      result.approval.expiresAt,
+    );
+    return {
+      approvalId: result.approval.id,
+      status: "waiting_for_yes",
+      sent: false,
+      note: "The exact approval question goes to the person with your reply. Do not ask it yourself; say in one short sentence that it is ready for their yes.",
     };
-    formDrafts.update((drafts) => addDraft(drafts, draft));
-    return { draftId: draft.draftId, applicantName: draft.applicantName, nextStep: "documents" };
   },
 });
