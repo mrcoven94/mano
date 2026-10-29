@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   PortalStoreSql,
   type SessionData,
+  type StagedClaim,
   type StagedEntry,
   type Submission,
   type SubmissionReceipt,
@@ -24,6 +25,10 @@ export class PortalStore extends DurableObject {
     return this.inner().putSession(session);
   }
 
+  renewSession(session: SessionData, now: number): Promise<boolean> {
+    return this.inner().renewSession(session, now);
+  }
+
   deleteSession(id: string): Promise<void> {
     return this.inner().deleteSession(id);
   }
@@ -32,8 +37,8 @@ export class PortalStore extends DurableObject {
     return this.inner().listExpiredSessions(now);
   }
 
-  deleteSessions(ids: string[]): Promise<void> {
-    return this.inner().deleteSessions(ids);
+  deleteSessionIfExpired(id: string, now: number): Promise<SessionData | null> {
+    return this.inner().deleteSessionIfExpired(id, now);
   }
 
   trackStaged(entries: StagedEntry[]): Promise<void> {
@@ -44,8 +49,12 @@ export class PortalStore extends DurableObject {
     return this.inner().untrackStaged(keys);
   }
 
-  listStaleStaged(olderThan: number): Promise<string[]> {
-    return this.inner().listStaleStaged(olderThan);
+  listTrackedStaged(): Promise<StagedEntry[]> {
+    return this.inner().listTrackedStaged();
+  }
+
+  claimUnreferencedStaged(claims: StagedClaim[]): Promise<string[]> {
+    return this.inner().claimUnreferencedStaged(claims);
   }
 
   getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null> {

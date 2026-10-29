@@ -8,8 +8,8 @@ import {
   SUBMISSION_RETENTION_MS,
   type PortalConfig,
 } from "../src/app";
-import { submissionFileKey } from "../src/files";
-import { packetDigest, sha256Hex, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
+import { submissionFileKey, trackedOwner } from "../src/files";
+import { packetDigest, sha256Hex, type StagedEntry, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
 import { TEST_BANNER } from "../src/pages";
 import type { Household } from "../src/store";
 import { MemoryFileStore, MemoryStore } from "./memory-store";
@@ -922,16 +922,18 @@ describe("blocker 5: file bytes in the file store", () => {
     );
     expect(download.status).toBe(200);
     expect(await download.text()).toBe(firstBytes);
-    expect(files.objects.size).toBe(1);
+    // The loser's bytes stay tracked until the sweep proves them unreferenced.
+    expect(files.objects.size).toBe(2);
     const [hashA, hashB] = await Promise.all([sha256Hex(firstBytes), sha256Hex(secondBytes)]);
     expect(hashA.slice(0, 8)).toBe(hashB.slice(0, 8));
     expect(submissionFileKey("web", "prefix-key", 1, hashA)).not.toBe(submissionFileKey("web", "prefix-key", 1, hashB));
   });
 
-  test("a conflict deletes the loser's objects and keeps the winner's bytes", async () => {
+  test("a conflict keeps the loser's objects tracked; the sweep deletes them once unreferenced", async () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
-    const config = testConfig();
+    const filedAt = Date.now();
+    const config = testConfig({ now: () => filedAt });
     const file = (bytes: string) => ({ name: "paystub.pdf", type: "application/pdf", data: Buffer.from(bytes).toString("base64") });
     const post = (name: string, bytes: string) =>
       handleRequest(
@@ -948,10 +950,22 @@ describe("blocker 5: file bytes in the file store", () => {
     expect(first.status).toBe(200);
     const second = await post("Alex Rivera", "%PDF-loser-bytes");
     expect(second.status).toBe(409);
-    const keys = [...files.objects.keys()];
-    expect(keys).toHaveLength(1);
-    const kept = await files.get(keys[0]!);
-    expect(Buffer.from(kept!.data).toString()).toBe("%PDF-winner-bytes");
+    const scope = `api-${await sha256Hex(TOKEN)}`;
+    const loserKey = `submissions/${scope}/fight-key/1-${await sha256Hex("%PDF-loser-bytes")}`;
+    const winnerKey = `submissions/${scope}/fight-key/1-${await sha256Hex("%PDF-winner-bytes")}`;
+    expect([...files.objects.keys()].sort()).toEqual([loserKey, winnerKey].sort());
+    expect(store.stagedObjects.has(loserKey)).toBe(true);
+    expect(store.stagedObjects.has(winnerKey)).toBe(false);
+    const kept = await store.getSubmission(scope, "fight-key");
+    expect(kept?.files[0]?.r2key).toBe(winnerKey);
+    // While the winner row stands, the sweep spares both objects.
+    expect((await runCleanup(store, files, filedAt + 1000)).sweptStaged).toBe(0);
+    expect(files.objects.size).toBe(2);
+    // Retirement deletes the winner bytes and row; the same sweep then takes the loser bytes.
+    const retired = await runCleanup(store, files, filedAt + SUBMISSION_RETENTION_MS + 1000);
+    expect(retired.retiredFiles).toBe(1);
+    expect(retired.sweptStaged).toBe(1);
+    expect(files.objects.size).toBe(0);
   });
 });
 
@@ -1648,8 +1662,7 @@ describe("review round 2 item 3: staged bytes are tracked and deletes are ordere
     expect(report.sweptStaged).toBe(1);
     expect(await files.get("staging/old-attempt/0-abc")).toBeNull();
     expect(await files.get("staging/new-attempt/0-def")).not.toBeNull();
-    expect(await store.listStaleStaged(now - STAGED_RETENTION_MS)).toEqual([]);
-    expect(store.stagedObjects.has("staging/new-attempt/0-def")).toBe(true);
+    expect((await store.listTrackedStaged()).map((e) => e.key)).toEqual(["staging/new-attempt/0-def"]);
   });
 });
 
@@ -1784,7 +1797,7 @@ describe("follow-up: drafts are tracked until they are deleted", () => {
     expect(store.stagedObjects.get(draft)).toBe(later);
   });
 
-  test("a failed draft rollback stays tracked, and the sweep heals it", async () => {
+  test("an old draft outlives its age while its session is alive; the sweep heals it after expiry", async () => {
     const store = new MemoryStore();
     const files = new FaultyFileStore();
     files.failPutsAfter = 1;
@@ -1800,8 +1813,18 @@ describe("follow-up: drafts are tracked until they are deleted", () => {
     expect(orphan).not.toBe("");
     expect(store.stagedObjects.has(orphan)).toBe(true);
     files.failDels = false;
+    // Backdate past the old hourly cutoff: a live session keeps its drafts anyway.
     await store.trackStaged([{ key: orphan, createdAt: Date.now() - STAGED_RETENTION_MS - 1000 }]);
+    const spared = await runCleanup(store, files, Date.now());
+    expect(spared.sweptStaged).toBe(0);
+    expect(await files.get(orphan)).not.toBeNull();
+    expect(store.stagedObjects.has(orphan)).toBe(true);
+    const sessionId = cookie.split("=")[1] ?? "";
+    const session = await store.getSession(sessionId);
+    if (!session) throw new Error("session was not created");
+    await store.putSession({ ...session, expiresAt: Date.now() - 1000 });
     const report = await runCleanup(store, files, Date.now());
+    expect(report.expiredSessions).toBe(1);
     expect(report.sweptStaged).toBe(1);
     expect(await files.get(orphan)).toBeNull();
     expect(store.stagedObjects.has(orphan)).toBe(false);
@@ -1824,7 +1847,7 @@ class LateRowStore extends MemoryStore {
   }
 }
 
-describe("follow-up: losers delete only what the current row does not reference", () => {
+describe("follow-up: losers keep their copies tracked for the guarded sweep", () => {
   test("a row that lands after a retired outcome keeps its bytes", async () => {
     const store = new LateRowStore();
     const files = new MemoryFileStore();
@@ -1874,5 +1897,147 @@ describe("follow-up: losers delete only what the current row does not reference"
     const download = await handleRequest(new Request(`${BASE}/caseworker/SR-TWINROW1/file/0`, { headers: { authorization: AUTH } }), store, files, config);
     expect(download.status).toBe(200);
     expect(await download.text()).toBe("%PDF-bytes");
+    // The loser's copies stay tracked, and the sweep spares them while the
+    // twin row references them.
+    expect(store.stagedObjects.has(filedKey)).toBe(true);
+    const spared = await runCleanup(store, files, filedAt + 1000);
+    expect(spared.sweptStaged).toBe(0);
+    expect(await files.get(filedKey)).not.toBeNull();
+    // Once the twin row is gone, the same sweep deletes them.
+    await store.deleteSubmissions([{ scope, key: "race-retire-key" }]);
+    const swept = await runCleanup(store, files, filedAt + 1000);
+    expect(swept.sweptStaged).toBe(1);
+    expect(await files.get(filedKey)).toBeNull();
+    expect(store.stagedObjects.has(filedKey)).toBe(false);
+  });
+});
+
+describe("review round 4: the sweep deletes by live reference", () => {
+  test("trackedOwner reads the guard out of the key", () => {
+    expect(trackedOwner("drafts/abc123/1-deadbeef")).toEqual({ kind: "session", sessionId: "abc123" });
+    expect(trackedOwner("staging/attempt-1/1-deadbeef")).toEqual({ kind: "attempt" });
+    expect(trackedOwner("submissions/web/my-key/1-deadbeef")).toEqual({ kind: "submission", scope: "web", key: "my-key" });
+    expect(trackedOwner("submissions/api-abc/key/with/slashes/2-deadbeef")).toEqual({ kind: "submission", scope: "api-abc", key: "key/with/slashes" });
+    expect(trackedOwner("something-else/entirely")).toEqual({ kind: "attempt" });
+  });
+
+  test("a touch racing the sweep on an expired session times out without renewing or leaking", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const sessionId = cookie.split("=")[1] ?? "";
+    const draft = (await store.getSession(sessionId))?.files[0]?.r2key ?? "";
+    const session = await store.getSession(sessionId);
+    if (!session) throw new Error("session was not created");
+    await store.putSession({ ...session, expiresAt: Date.now() - 1000 });
+    const [review, report] = await Promise.all([
+      handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config),
+      runCleanup(store, files, Date.now()),
+    ]);
+    expect(review.status).toBe(403);
+    expect(report.expiredSessions).toBeLessThanOrEqual(1);
+    // Exactly one of them reaped the session; either way nothing is renewed and nothing leaks.
+    expect(await store.getSession(sessionId)).toBeNull();
+    expect(await files.get(draft)).toBeNull();
+    expect(store.stagedObjects.has(draft)).toBe(false);
+  });
+
+  test("a touch racing the sweep on a live session renews and keeps its drafts", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const sessionId = cookie.split("=")[1] ?? "";
+    const before = (await store.getSession(sessionId))?.expiresAt ?? 0;
+    const draft = (await store.getSession(sessionId))?.files[0]?.r2key ?? "";
+    const [review, report] = await Promise.all([
+      handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config),
+      runCleanup(store, files, Date.now()),
+    ]);
+    expect(review.status).toBe(200);
+    expect(report.expiredSessions).toBe(0);
+    expect(report.sweptStaged).toBe(0);
+    expect((await store.getSession(sessionId))?.expiresAt ?? 0).toBeGreaterThanOrEqual(before);
+    expect(await files.get(draft)).not.toBeNull();
+    expect(store.stagedObjects.has(draft)).toBe(true);
+  });
+
+  test("a failed tracking refresh never commits the renewal", async () => {
+    // Tracking fails only for keys whose bytes already exist: staging (record
+    // first) succeeds, but the touch refresh that follows throws.
+    class RefreshFailStore extends MemoryStore {
+      constructor(private readonly bytes: MemoryFileStore) {
+        super();
+      }
+      override async trackStaged(entries: StagedEntry[]): Promise<void> {
+        for (const entry of entries) {
+          if (this.bytes.objects.has(entry.key)) throw new Error("tracking refresh failed");
+        }
+        await super.trackStaged(entries);
+      }
+    }
+    const files = new MemoryFileStore();
+    const store = new RefreshFailStore(files);
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    const sessionId = cookie.split("=")[1] ?? "";
+    const before = (await store.getSession(sessionId))?.expiresAt ?? 0;
+    const form = new FormData();
+    form.append("document1", pdfFile("paystub.pdf", "%PDF-first"));
+    await expect(
+      handleRequest(new Request(`${BASE}/apply/documents`, { method: "POST", headers: { cookie }, body: form }), store, files, config),
+    ).rejects.toThrow("tracking refresh failed");
+    const after = await store.getSession(sessionId);
+    expect(after?.expiresAt).toBe(before);
+    expect(after?.files).toEqual([]);
+  });
+
+  test("staging and copies are tracked before their bytes are written", async () => {
+    const events: string[] = [];
+    class OrderFileStore extends MemoryFileStore {
+      override async put(key: string, data: Uint8Array, type: string): Promise<void> {
+        events.push(`put:${key}`);
+        await super.put(key, data, type);
+      }
+    }
+    class OrderStore extends MemoryStore {
+      override async trackStaged(entries: StagedEntry[]): Promise<void> {
+        for (const entry of entries) events.push(`track:${entry.key}`);
+        await super.trackStaged(entries);
+      }
+    }
+    const store = new OrderStore();
+    const files = new OrderFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie);
+    const sessionId = cookie.split("=")[1] ?? "";
+    const draft = (await store.getSession(sessionId))?.files[0]?.r2key ?? "";
+    expect(events.indexOf(`track:${draft}`)).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf(`track:${draft}`)).toBeLessThan(events.indexOf(`put:${draft}`));
+    const submit = await submitReview(store, files, config, cookie);
+    expect(submit.status).toBe(200);
+    const filed = events.find((e) => e.startsWith("track:submissions/"))?.slice("track:".length) ?? "";
+    expect(filed).not.toBe("");
+    expect(events.indexOf(`track:${filed}`)).toBeLessThan(events.indexOf(`put:${filed}`));
+  });
+
+  test("a sweep del failure re-tracks its claims for the next run", async () => {
+    const store = new MemoryStore();
+    const files = new FaultyFileStore();
+    const now = Date.now();
+    await files.put("staging/old-attempt/0-abc", new TextEncoder().encode("%PDF-old"), "application/pdf");
+    await store.trackStaged([{ key: "staging/old-attempt/0-abc", createdAt: now - STAGED_RETENTION_MS - 1000 }]);
+    files.failDels = true;
+    await expect(runCleanup(store, files, now)).rejects.toThrow("cleanup could not delete swept objects");
+    expect(await files.get("staging/old-attempt/0-abc")).not.toBeNull();
+    expect(store.stagedObjects.has("staging/old-attempt/0-abc")).toBe(true);
+    files.failDels = false;
+    const later = await runCleanup(store, files, now + STAGED_RETENTION_MS + 1000);
+    expect(later.sweptStaged).toBe(1);
+    expect(await files.get("staging/old-attempt/0-abc")).toBeNull();
   });
 });

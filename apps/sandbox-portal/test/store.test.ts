@@ -190,14 +190,18 @@ describe("blocker 6: rate limits and slow leases", () => {
 });
 
 describe("blocker 8: retention", () => {
-  test("expired sessions list without deleting, then delete by id", async () => {
+  test("expired sessions list without deleting, then delete only if still expired", async () => {
     for (const store of [new MemoryStore(), makeSqlStore()]) {
       await store.putSession({ id: "old", files: [], key: "k", createdAt: 0, expiresAt: 1000 });
       await store.putSession({ id: "fresh", files: [], key: "k", createdAt: 0, expiresAt: 9999 });
       const expired = await store.listExpiredSessions(2000);
       expect(expired.map((s) => s.id)).toEqual(["old"]);
       expect(await store.getSession("old")).not.toBeNull();
-      await store.deleteSessions(expired.map((s) => s.id));
+      // A renewal that lands after the listing wins: the re-checked delete spares it.
+      expect(await store.renewSession({ id: "fresh", files: [], key: "k", createdAt: 0, expiresAt: 99999 }, 2000)).toBe(true);
+      expect(await store.deleteSessionIfExpired("fresh", 2000)).toBeNull();
+      const reaped = await store.deleteSessionIfExpired("old", 2000);
+      expect(reaped?.id).toBe("old");
       expect(await store.getSession("old")).toBeNull();
       expect(await store.getSession("fresh")).not.toBeNull();
     }
@@ -238,15 +242,69 @@ describe("blocker 8: retention", () => {
       expect(await store.getReceipt("web", "k")).toBeNull();
     });
 
-    test(`${name}: staged objects track, list stale, and untrack`, async () => {
+    test(`${name}: staged objects track, list, claim by guard, and untrack`, async () => {
       const store = make();
       await store.trackStaged([
         { key: "staging/a/1-x", createdAt: 1000 },
         { key: "staging/b/1-y", createdAt: 9000 },
       ]);
-      expect(await store.listStaleStaged(5000)).toEqual(["staging/a/1-x"]);
-      await store.untrackStaged(["staging/a/1-x"]);
-      expect(await store.listStaleStaged(5000)).toEqual([]);
+      expect(await store.listTrackedStaged()).toEqual([
+        { key: "staging/a/1-x", createdAt: 1000 },
+        { key: "staging/b/1-y", createdAt: 9000 },
+      ]);
+      expect(await store.claimUnreferencedStaged([{ key: "staging/a/1-x", guard: { kind: "attempt", olderThan: 5000 } }])).toEqual(["staging/a/1-x"]);
+      expect(await store.claimUnreferencedStaged([{ key: "staging/b/1-y", guard: { kind: "attempt", olderThan: 5000 } }])).toEqual([]);
+      await store.untrackStaged(["staging/b/1-y"]);
+      expect(await store.listTrackedStaged()).toEqual([]);
+    });
+
+    test(`${name}: renew refuses an expired or missing session and leaves the row alone`, async () => {
+      const store = make();
+      await store.putSession({ id: "s", files: [], key: "k", createdAt: 0, expiresAt: 1000 });
+      expect(await store.renewSession({ id: "s", files: [], key: "k", createdAt: 0, expiresAt: 99999 }, 2000)).toBe(false);
+      expect((await store.getSession("s"))?.expiresAt).toBe(1000);
+      expect(await store.renewSession({ id: "missing", files: [], key: "k", createdAt: 0, expiresAt: 99999 }, 2000)).toBe(false);
+      expect(await store.renewSession({ id: "s", files: [], key: "k", createdAt: 0, expiresAt: 99999 }, 500)).toBe(true);
+      expect((await store.getSession("s"))?.expiresAt).toBe(99999);
+    });
+
+    test(`${name}: a draft claim fails while its owner session is alive, whatever its age`, async () => {
+      const store = make();
+      await store.putSession({ id: "live", files: [], key: "k", createdAt: 0, expiresAt: 99999 });
+      await store.putSession({ id: "dead", files: [], key: "k", createdAt: 0, expiresAt: 1000 });
+      await store.trackStaged([
+        { key: "drafts/live/1-x", createdAt: 1000 },
+        { key: "drafts/dead/1-y", createdAt: 1000 },
+        { key: "drafts/gone/1-z", createdAt: 1000 },
+      ]);
+      expect(
+        await store.claimUnreferencedStaged([
+          { key: "drafts/live/1-x", guard: { kind: "session", sessionId: "live", now: 50000 } },
+          { key: "drafts/dead/1-y", guard: { kind: "session", sessionId: "dead", now: 50000 } },
+          { key: "drafts/gone/1-z", guard: { kind: "session", sessionId: "gone", now: 50000 } },
+        ]),
+      ).toEqual(["drafts/dead/1-y", "drafts/gone/1-z"]);
+      expect((await store.listTrackedStaged()).map((e) => e.key)).toEqual(["drafts/live/1-x"]);
+    });
+
+    test(`${name}: a filed-copy claim fails while its submission row exists`, async () => {
+      const store = make();
+      const filed = await store.submit({ ...input("k", "digest-a"), receivedAt: 1000 });
+      if (filed.outcome !== "stored") throw new Error("expected stored");
+      await store.trackStaged([
+        { key: "submissions/web/k/1-x", createdAt: 1000 },
+        { key: "submissions/web/gone/1-y", createdAt: 1000 },
+      ]);
+      expect(
+        await store.claimUnreferencedStaged([
+          { key: "submissions/web/k/1-x", guard: { kind: "submission", scope: "web", key: "k" } },
+          { key: "submissions/web/gone/1-y", guard: { kind: "submission", scope: "web", key: "gone" } },
+        ]),
+      ).toEqual(["submissions/web/gone/1-y"]);
+      await store.deleteSubmissions([{ scope: "web", key: "k" }]);
+      expect(await store.claimUnreferencedStaged([{ key: "submissions/web/k/1-x", guard: { kind: "submission", scope: "web", key: "k" } }])).toEqual([
+        "submissions/web/k/1-x",
+      ]);
     });
 
     test(`${name}: submit after retirement returns the original receipt or 409`, async () => {

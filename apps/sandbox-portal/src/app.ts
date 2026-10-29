@@ -1,4 +1,4 @@
-import { draftFileKey, stagingAttemptKey, submissionFileKey, type FileStore } from "./files";
+import { draftFileKey, stagingAttemptKey, submissionFileKey, trackedOwner, type FileStore } from "./files";
 import {
   fromBase64,
   metasToDigests,
@@ -8,6 +8,7 @@ import {
   type FileMeta,
   type Household,
   type SessionData,
+  type StagedClaim,
   type Store,
   type Submission,
 } from "./store";
@@ -116,8 +117,9 @@ function maxEncodedLength(maxBytes: number): number {
 }
 
 /**
- * Stage one attempt object: written to R2, then recorded. If recording fails
- * the object is removed again so it never sits untracked.
+ * Stage one attempt object: recorded first, then written. If the write fails
+ * the record is removed again; if that removal fails too, the sweep still
+ * finds the record and deletes whatever the write left behind.
  */
 async function stageFile(
   fileStore: FileStore,
@@ -127,11 +129,12 @@ async function stageFile(
   type: string,
   now: number,
 ): Promise<void> {
-  await fileStore.put(key, bytes, type);
+  await store.trackStaged([{ key, createdAt: now }]);
   try {
-    await store.trackStaged([{ key, createdAt: now }]);
+    await fileStore.put(key, bytes, type);
   } catch (err) {
     await fileStore.del([key]).catch(() => undefined);
+    await store.untrackStaged([key]).catch(() => undefined);
     throw err;
   }
 }
@@ -305,19 +308,34 @@ async function loadLiveSession(
   return null;
 }
 
-async function touchSession(store: Store, session: SessionData, config: PortalConfig): Promise<SessionData> {
+/**
+ * Renew a session. Tracking refreshes first: if it throws, the renewal never
+ * commits, so a session never points at bytes the sweep took. Null means the
+ * session lapsed (or the sweep reaped it) between load and renewal, and the
+ * caller must treat it as expired.
+ */
+async function touchSession(store: Store, session: SessionData, config: PortalConfig): Promise<SessionData | null> {
   const now = nowMs(config);
+  if (session.files.length > 0) {
+    await store.trackStaged(session.files.map((f) => ({ key: f.r2key, createdAt: now })));
+  }
   const fresh: SessionData = {
     ...session,
     expiresAt: now + config.sessionTimeoutMinutes * 60 * 1000,
   };
-  await store.putSession(fresh);
-  // Drafts are tracked for the sweep, so a touch refreshes their age: a long
-  // session must never look abandoned while it is still alive.
-  if (fresh.files.length > 0) {
-    await store.trackStaged(fresh.files.map((f) => ({ key: f.r2key, createdAt: now })));
-  }
-  return fresh;
+  const renewed = await store.renewSession(fresh, now);
+  return renewed ? fresh : null;
+}
+
+/**
+ * Save the cleared post-submit session. The submit already succeeded, so a
+ * session that lapsed mid-request still gets its confirmation marker, saved
+ * with the old expiry: the row dies on schedule and the sweep takes it. The
+ * cleared session holds no files, so this cannot point at deleted bytes.
+ */
+async function saveSubmittedSession(store: Store, cleared: SessionData, config: PortalConfig): Promise<void> {
+  const fresh = await touchSession(store, cleared, config);
+  if (!fresh) await store.putSession(cleared);
 }
 
 function timedOut(): Response {
@@ -668,7 +686,10 @@ async function handleSubmit(
   // failure leaves not_found instead of a received row with missing bytes.
   // Copies are idempotent: twins write identical bytes to identical keys.
   // A missing source with a present target means a twin attempt already copied.
+  // The destination keys are tracked first, so a failed copy still leaves a
+  // record the sweep can delete; the winner untracks them once its row owns them.
   try {
+    await store.trackStaged(copies.map((c) => ({ key: c.to, createdAt: nowMs(config) })));
     for (const pair of copies) {
       const bytes = await fileStore.get(pair.from);
       if (!bytes) {
@@ -680,6 +701,8 @@ async function handleSubmit(
     }
   } catch {
     await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
+    // The destination keys stay tracked: no row references them, so the sweep
+    // deletes whatever the failed copy left behind.
     if (lease) await store.endSlow(lease);
     const message = "The office could not store the attachments. Try again.";
     return isJson || wantsJson(request)
@@ -698,13 +721,10 @@ async function handleSubmit(
   });
   if (result.outcome === "conflict" || result.outcome === "conflict-retired") {
     await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-    // A losing attempt removes the filed copies it made, except keys the
-    // current row references: the same file bytes under one key share one
-    // object, and deleting it would break the winner's download. A retired
-    // outcome re-reads the row first, in case one landed after the check.
-    const current = result.outcome === "conflict" ? result.stored : await store.getSubmission(scope, key);
-    const referenced = new Set(current?.files.map((f) => f.r2key) ?? []);
-    await fileStore.del(copies.map((c) => c.to).filter((k) => !referenced.has(k))).catch(() => undefined);
+    // A losing attempt never deletes its filed copies itself: a re-read then
+    // delete still races a new winner filing under this key. The copies stay
+    // tracked, and the sweep deletes them only while no submission row
+    // references them, which is the same guard that decided this attempt lost.
     if (lease) await store.endSlow(lease);
     const stored = result.outcome === "conflict" ? result.stored : result.receipt;
     if (isJson || wantsJson(request)) return conflictJson(stored);
@@ -720,20 +740,16 @@ async function handleSubmit(
   }
   if (result.outcome === "duplicate-retired") {
     await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-    // The receipt carries no file list; re-read the row in case one landed
-    // after the check, and spare anything it references.
-    const current = await store.getSubmission(scope, key);
-    const referenced = new Set(current?.files.map((f) => f.r2key) ?? []);
-    await fileStore.del(copies.map((c) => c.to).filter((k) => !referenced.has(k))).catch(() => undefined);
+    // Same as a losing attempt: the copies stay tracked for the sweep, which
+    // deletes them only while no submission row references them.
     if (lease) await store.endSlow(lease);
     const kept = result.receipt;
     if (session) {
       await releaseStaged(fileStore, store, session.files.map((f) => f.r2key)).catch(() => undefined);
       const cleared: SessionData = { ...session, files: [] };
       delete cleared.household;
-      const fresh = await touchSession(store, cleared, config);
-      fresh.submitted = { key: kept.key, confirmationNumber: kept.confirmationNumber, digest: kept.digest, receivedAt: kept.receivedAt };
-      await store.putSession(fresh);
+      cleared.submitted = { key: kept.key, confirmationNumber: kept.confirmationNumber, digest: kept.digest, receivedAt: kept.receivedAt };
+      await saveSubmittedSession(store, cleared, config);
     }
     if (isJson || wantsJson(request)) {
       return json(
@@ -755,8 +771,10 @@ async function handleSubmit(
   }
   const duplicate = result.outcome === "duplicate";
   const receipt = result.submission;
-  // A duplicate's copies are identical bytes on keys the winner's row
-  // references, so they stay; only losing attempts clean up.
+  // The winner's row owns the filed copies now, so they leave tracking; a
+  // duplicate's copies are identical bytes on the same keys. If the untrack
+  // fails the sweep still spares them while the row references them.
+  await store.untrackStaged(copies.map((c) => c.to)).catch(() => undefined);
   await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
   // Drafts belong to this session and no receipt references them; dropping them is safe.
   if (session) await releaseStaged(fileStore, store, session.files.map((f) => f.r2key)).catch(() => undefined);
@@ -765,15 +783,13 @@ async function handleSubmit(
     // Touch the cleared session so the released drafts are not re-tracked.
     const cleared: SessionData = { ...session, files: [] };
     delete cleared.household;
-    const fresh = await touchSession(store, cleared, config);
-    fresh.submitted = {
+    cleared.submitted = {
       key: receipt.key,
       confirmationNumber: receipt.confirmationNumber,
       digest: receipt.digest,
       receivedAt: receipt.receivedAt,
     };
-    fresh.files = [];
-    await store.putSession(fresh);
+    await saveSubmittedSession(store, cleared, config);
   }
 
   if (slowMs > 0 && !duplicate) await sleep(slowMs);
@@ -791,16 +807,23 @@ export interface CleanupReport {
 }
 
 /**
- * Scheduled cleanup. Drafts go after their timeout; submissions and their
- * files go after 7 days, leaving a small receipt for 30 days so a late
- * reconcile never sees not_found for something that was filed. Every phase
- * deletes file bytes before its rows, so a failure keeps both for the next
- * run, and abandoned staging older than an hour is swept the same way.
+ * Scheduled cleanup. Drafts go after their session lapses; submissions and
+ * their files go after 7 days, leaving a small receipt for 30 days so a late
+ * reconcile never sees not_found for something that was filed. A tracked
+ * object goes only when nothing references it: the session and submission
+ * guards decide by live reference, not age. Every claim checks its guard in
+ * the same statement as the untrack, so a renewal that lands first always wins.
  */
 export async function runCleanup(store: Store, fileStore: FileStore, now: number): Promise<CleanupReport> {
   const expired = await store.listExpiredSessions(now);
-  await releaseStaged(fileStore, store, expired.flatMap((s) => s.files.map((f) => f.r2key)));
-  await store.deleteSessions(expired.map((s) => s.id));
+  // The listing is a snapshot: each row is re-checked inside its own delete,
+  // so a touch that landed after the listing keeps its session and drafts.
+  const reaped: SessionData[] = [];
+  for (const session of expired) {
+    const gone = await store.deleteSessionIfExpired(session.id, now);
+    if (gone) reaped.push(gone);
+  }
+  await releaseStaged(fileStore, store, reaped.flatMap((s) => s.files.map((f) => f.r2key)));
   const old = await store.listOldSubmissions(now - SUBMISSION_RETENTION_MS, RETIRE_BATCH_LIMIT);
   await store.writeReceipts(
     old.map((sub) => ({
@@ -814,12 +837,25 @@ export async function runCleanup(store: Store, fileStore: FileStore, now: number
   const retiredKeys = old.flatMap((sub) => sub.files.map((f) => f.r2key));
   await fileStore.del(retiredKeys);
   await store.deleteSubmissions(old.map((sub) => ({ scope: sub.scope, key: sub.key })));
-  const stale = await store.listStaleStaged(now - STAGED_RETENTION_MS);
-  await fileStore.del(stale);
-  await store.untrackStaged(stale);
+  const tracked = await store.listTrackedStaged();
+  const claims: StagedClaim[] = tracked.map((entry) => {
+    const owner = trackedOwner(entry.key);
+    if (owner.kind === "session") return { key: entry.key, guard: { kind: "session", sessionId: owner.sessionId, now } };
+    if (owner.kind === "submission") return { key: entry.key, guard: { kind: "submission", scope: owner.scope, key: owner.key } };
+    return { key: entry.key, guard: { kind: "attempt", olderThan: now - STAGED_RETENTION_MS } };
+  });
+  const claimed = await store.claimUnreferencedStaged(claims);
+  // The claim already untracked these rows; if the R2 delete fails they are
+  // re-tracked, so the next run retries instead of leaking untracked objects.
+  try {
+    await fileStore.del(claimed);
+  } catch {
+    await store.trackStaged(claimed.map((key) => ({ key, createdAt: now }))).catch(() => undefined);
+    throw new Error("cleanup could not delete swept objects");
+  }
   await store.purgeExpiredSlowLeases(now);
   const purgedReceipts = await store.purgeOldReceipts(now - RECEIPT_RETENTION_MS);
-  return { expiredSessions: expired.length, retiredFiles: retiredKeys.length, purgedReceipts, sweptStaged: stale.length };
+  return { expiredSessions: reaped.length, retiredFiles: retiredKeys.length, purgedReceipts, sweptStaged: claimed.length };
 }
 
 export async function handleRequest(request: Request, store: Store, fileStore: FileStore, config: PortalConfig): Promise<Response> {
@@ -858,6 +894,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     const parsed = validateHousehold(fields, config.maxFieldLength);
     if (!parsed.household) return html(householdPage(parsed.error, fields), 400);
     let session = await loadLiveSession(request, store, fileStore, config);
+    let isNew = false;
     if (!session || session.submitted) {
       // A submitted session starts over with a fresh session and key; the old
       // row keeps its receipt reference until it expires.
@@ -868,9 +905,17 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
         createdAt: nowMs(config),
         expiresAt: 0,
       };
+      isNew = true;
     }
     session.household = parsed.household;
+    if (isNew) {
+      // A new session has no row to renew; it is created, never renewed.
+      session.expiresAt = nowMs(config) + config.sessionTimeoutMinutes * 60 * 1000;
+      await store.putSession(session);
+      return redirect("/apply/documents", sessionCookie(session.id));
+    }
     const fresh = await touchSession(store, session, config);
+    if (!fresh) return timedOut();
     return redirect("/apply/documents", sessionCookie(fresh.id));
   }
 
@@ -879,7 +924,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     if (!session) return timedOut();
     if (session.submitted) return html(submittedPage(session.submitted));
     if (!session.household) return redirect("/apply");
-    await touchSession(store, session, config);
+    if (!(await touchSession(store, session, config))) return timedOut();
     return html(documentsPage());
   }
 
@@ -897,7 +942,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
       return html(errorPage("Upload failed", "The office could not store the attachments. Try again.", "/apply/documents", "Back to documents"), 500);
     }
     if (!parsed.files) {
-      await touchSession(store, session, config);
+      if (!(await touchSession(store, session, config))) return timedOut();
       return html(documentsPage(parsed.error), 400);
     }
     // Replacing the draft drops the previous draft objects. If that fails the
@@ -910,7 +955,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
       return html(errorPage("Upload failed", "The office could not store the attachments. Try again.", "/apply/documents", "Back to documents"), 500);
     }
     session.files = parsed.files;
-    await touchSession(store, session, config);
+    if (!(await touchSession(store, session, config))) return timedOut();
     return redirect("/apply/review");
   }
 
@@ -920,7 +965,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     if (session.submitted) return html(submittedPage(session.submitted));
     if (!session.household) return redirect("/apply");
     if (session.files.length === 0) return redirect("/apply/documents");
-    await touchSession(store, session, config);
+    if (!(await touchSession(store, session, config))) return timedOut();
     const digest = await packetDigest(session.household, metasToDigests(session.files));
     return html(reviewPage(session.household, session.files, session.key, digest));
   }

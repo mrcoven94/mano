@@ -2,6 +2,7 @@ import type { FileStore } from "../src/files";
 import {
   newConfirmationNumber,
   type SessionData,
+  type StagedClaim,
   type StagedEntry,
   type Store,
   type Submission,
@@ -23,11 +24,21 @@ export class MemoryStore implements Store {
   byConfirmation = new Map<string, Submission>();
 
   async getSession(id: string): Promise<SessionData | null> {
-    return this.sessions.get(id) ?? null;
+    // A copy, like SQL deserializing a fresh row: mutating it without saving changes nothing.
+    const found = this.sessions.get(id);
+    return found ? structuredClone(found) : null;
   }
 
   async putSession(session: SessionData): Promise<void> {
     this.sessions.set(session.id, structuredClone(session));
+  }
+
+  async renewSession(session: SessionData, now: number): Promise<boolean> {
+    // Check and write with no await between, so concurrent callers cannot interleave.
+    const current = this.sessions.get(session.id);
+    if (!current || current.expiresAt <= now) return false;
+    this.sessions.set(session.id, structuredClone(session));
+    return true;
   }
 
   async deleteSession(id: string): Promise<void> {
@@ -42,8 +53,12 @@ export class MemoryStore implements Store {
     return expired;
   }
 
-  async deleteSessions(ids: string[]): Promise<void> {
-    for (const id of ids) this.sessions.delete(id);
+  async deleteSessionIfExpired(id: string, now: number): Promise<SessionData | null> {
+    // Check and delete with no await between, so a renewal cannot slip in.
+    const current = this.sessions.get(id);
+    if (!current || current.expiresAt > now) return null;
+    this.sessions.delete(id);
+    return structuredClone(current);
   }
 
   stagedObjects = new Map<string, number>();
@@ -56,12 +71,30 @@ export class MemoryStore implements Store {
     for (const key of keys) this.stagedObjects.delete(key);
   }
 
-  async listStaleStaged(olderThan: number): Promise<string[]> {
-    const stale: string[] = [];
-    for (const [key, createdAt] of this.stagedObjects) {
-      if (createdAt < olderThan) stale.push(key);
+  async listTrackedStaged(): Promise<StagedEntry[]> {
+    return [...this.stagedObjects]
+      .map(([key, createdAt]) => ({ key, createdAt }))
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  }
+
+  async claimUnreferencedStaged(claims: StagedClaim[]): Promise<string[]> {
+    // Each guard check and untrack runs with no await between, like one SQL statement.
+    const claimed: string[] = [];
+    for (const claim of claims) {
+      const createdAt = this.stagedObjects.get(claim.key);
+      if (createdAt === undefined) continue;
+      const guard = claim.guard;
+      const held =
+        guard.kind === "attempt"
+          ? createdAt >= guard.olderThan
+          : guard.kind === "session"
+            ? (this.sessions.get(guard.sessionId)?.expiresAt ?? 0) > guard.now
+            : this.submissions.has(`${guard.scope}\n${guard.key}`);
+      if (held) continue;
+      this.stagedObjects.delete(claim.key);
+      claimed.push(claim.key);
     }
-    return stale;
+    return claimed;
   }
 
   receipts = new Map<string, SubmissionReceipt>();

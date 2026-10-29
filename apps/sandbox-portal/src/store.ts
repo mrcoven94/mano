@@ -101,13 +101,39 @@ export interface StagedEntry {
   createdAt: number;
 }
 
+/**
+ * Why a tracked object may be deleted. Attempt staging belongs to no
+ * session, so age alone guards it; drafts and filed copies live while a
+ * session or submission references them, whatever their age.
+ */
+export type StagedGuard =
+  | { kind: "attempt"; olderThan: number }
+  | { kind: "session"; sessionId: string; now: number }
+  | { kind: "submission"; scope: string; key: string };
+
+export interface StagedClaim {
+  key: string;
+  guard: StagedGuard;
+}
+
 export interface Store {
   getSession(id: string): Promise<SessionData | null>;
   putSession(session: SessionData): Promise<void>;
+  /**
+   * Renew a session only if it is still unexpired, checked in the same
+   * statement as the write. False means the session lapsed mid-request
+   * (or the sweep reaped it) and the caller must treat it as expired.
+   */
+  renewSession(session: SessionData, now: number): Promise<boolean>;
   deleteSession(id: string): Promise<void>;
   /** Timed-out drafts, listed without deleting so R2 goes first and rows after. */
   listExpiredSessions(now: number): Promise<SessionData[]>;
-  deleteSessions(ids: string[]): Promise<void>;
+  /**
+   * Delete one session only if it is still expired, checked in the same
+   * statement as the delete. A renewal that lands after the listing wins,
+   * and the sweep leaves that session alone.
+   */
+  deleteSessionIfExpired(id: string, now: number): Promise<SessionData | null>;
   getSubmission(scope: string, key: string): Promise<Submission | null>;
   listSubmissionSummaries(limit: number, offset: number): Promise<SubmissionSummary[]>;
   countSubmissions(): Promise<number>;
@@ -120,7 +146,14 @@ export interface Store {
   /** Record attempt-staging objects; the record clears only after the R2 delete succeeds. */
   trackStaged(entries: StagedEntry[]): Promise<void>;
   untrackStaged(keys: string[]): Promise<void>;
-  listStaleStaged(olderThan: number): Promise<string[]>;
+  listTrackedStaged(): Promise<StagedEntry[]>;
+  /**
+   * Untrack each claimed key only if its guard holds, checked in the same
+   * statement as the delete, and return the keys the caller may now delete
+   * from R2. A renewal that lands first keeps the draft referenced, so the
+   * claim fails and the bytes stay.
+   */
+  claimUnreferencedStaged(claims: StagedClaim[]): Promise<string[]>;
   checkRateLimit(ip: string, now: number, windowMs: number, max: number): Promise<boolean>;
   tryBeginSlow(now: number, ttlMs: number, max: number): Promise<string | null>;
   endSlow(leaseId: string): Promise<void>;
@@ -272,6 +305,14 @@ export class PortalStoreSql implements Store {
     this.sql.exec("DELETE FROM sessions WHERE id = ?", id);
   }
 
+  async renewSession(session: SessionData, now: number): Promise<boolean> {
+    this.ensureTables();
+    return (
+      this.sql.exec("UPDATE sessions SET data = ?, expires_at = ? WHERE id = ? AND expires_at > ? RETURNING id", JSON.stringify(session), session.expiresAt, session.id, now).toArray()
+        .length === 1
+    );
+  }
+
   async listExpiredSessions(now: number): Promise<SessionData[]> {
     this.ensureTables();
     return this.sql
@@ -280,9 +321,12 @@ export class PortalStoreSql implements Store {
       .map((row) => JSON.parse((row as { data: string }).data) as SessionData);
   }
 
-  async deleteSessions(ids: string[]): Promise<void> {
+  async deleteSessionIfExpired(id: string, now: number): Promise<SessionData | null> {
     this.ensureTables();
-    for (const id of ids) this.sql.exec("DELETE FROM sessions WHERE id = ?", id);
+    const row = this.sql.exec("DELETE FROM sessions WHERE id = ? AND expires_at <= ? RETURNING data", id, now).toArray()[0] as
+      | { data: string }
+      | undefined;
+    return row ? (JSON.parse(row.data) as SessionData) : null;
   }
 
   async trackStaged(entries: StagedEntry[]): Promise<void> {
@@ -297,12 +341,42 @@ export class PortalStoreSql implements Store {
     for (const key of keys) this.sql.exec("DELETE FROM staged_objects WHERE r2key = ?", key);
   }
 
-  async listStaleStaged(olderThan: number): Promise<string[]> {
+  async listTrackedStaged(): Promise<StagedEntry[]> {
     this.ensureTables();
     return this.sql
-      .exec("SELECT r2key FROM staged_objects WHERE created_at < ?", olderThan)
+      .exec("SELECT r2key, created_at FROM staged_objects ORDER BY r2key")
       .toArray()
-      .map((row) => (row as { r2key: string }).r2key);
+      .map((row) => {
+        const r = row as { r2key: string; created_at: number };
+        return { key: r.r2key, createdAt: r.created_at };
+      });
+  }
+
+  async claimUnreferencedStaged(claims: StagedClaim[]): Promise<string[]> {
+    this.ensureTables();
+    const claimed: string[] = [];
+    for (const claim of claims) {
+      let rows: unknown[];
+      if (claim.guard.kind === "attempt") {
+        rows = this.sql.exec("DELETE FROM staged_objects WHERE r2key = ? AND created_at < ? RETURNING r2key", claim.key, claim.guard.olderThan).toArray();
+      } else if (claim.guard.kind === "session") {
+        rows = this.sql.exec(
+          "DELETE FROM staged_objects WHERE r2key = ? AND NOT EXISTS (SELECT 1 FROM sessions WHERE id = ? AND expires_at > ?) RETURNING r2key",
+          claim.key,
+          claim.guard.sessionId,
+          claim.guard.now,
+        ).toArray();
+      } else {
+        rows = this.sql.exec(
+          "DELETE FROM staged_objects WHERE r2key = ? AND NOT EXISTS (SELECT 1 FROM submissions WHERE scope = ? AND key = ?) RETURNING r2key",
+          claim.key,
+          claim.guard.scope,
+          claim.guard.key,
+        ).toArray();
+      }
+      if (rows.length === 1) claimed.push(claim.key);
+    }
+    return claimed;
   }
 
   async getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null> {
