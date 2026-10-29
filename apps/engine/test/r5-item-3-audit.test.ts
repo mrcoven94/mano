@@ -42,6 +42,6 @@ describe("r5 item 3: audit log redacts blocked URLs", () => {
     expect(logged).not.toContain("/renewal/form");
     expect(logged).not.toContain("Victim-Case-9");
     expect(logged).not.toContain("ssn=1234");
-    expect(blocks[0].url).toMatch(/^https:\/\/portal\.example\.com#[0-9a-f]{16}$/);
+    expect(blocks[0].url).toMatch(/^https:\/\/portal\.example\.com#[0-9a-f]{64}$/);
   });
 });

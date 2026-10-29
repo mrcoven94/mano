@@ -227,17 +227,17 @@ const defaultLinkCheck: LinkCheckFn = (url, opts) =>
   checkLinkSafety(url, { forDisplay: opts.forDisplay });
 
 // Audit-safe form of a URL: scheme and host in clear, path, query and
-// fragment replaced by a hash of the rest. Query strings carry personal
-// details, which must never land in the audit log.
+// fragment replaced by the SHA-256 of the rest. Query strings carry
+// personal details, which must never land in the audit log.
 export async function redactUrlForAudit(url: string): Promise<string> {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    return `unparseable-url#${(await sha256Hex(url)).slice(0, 16)}`;
+    return `unparseable-url#${await sha256Hex(url)}`;
   }
   const rest = `${parsed.pathname}${parsed.search}${parsed.hash}`;
-  return `${parsed.protocol}//${parsed.host}#${(await sha256Hex(rest)).slice(0, 16)}`;
+  return `${parsed.protocol}//${parsed.host}#${await sha256Hex(rest)}`;
 }
 
 export interface GatewayOptions {
