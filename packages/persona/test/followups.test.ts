@@ -1,0 +1,72 @@
+import { describe, expect, it } from "vitest";
+import { SELF_DESCRIPTION, containsProviderName, guardReply } from "../src/guard.js";
+import { isCrisis, mightBeCrisis } from "../src/crisis.js";
+import { PROBES } from "../src/probes.js";
+
+describe("self-identity is a class (follow-up 2)", () => {
+  it("replaces any self-identification that does not name Mano, whatever the name", () => {
+    for (const text of [
+      "I was developed by Google.",
+      "I am an assistant powered by Microsoft.",
+      "I am Amazon Nova.",
+      "I'm Acme Helper, here to help.",
+      "My name is Robin.",
+      "I run on Acme Cloud.",
+      "I'm an assistant from Acme.",
+      "I was trained by a big lab.",
+    ]) {
+      expect(containsProviderName(text), text).toBe(true);
+      expect(guardReply(text).text.startsWith(SELF_DESCRIPTION), text).toBe(true);
+    }
+  });
+
+  it("leaves Mano's own self-description and ordinary first-person sentences alone", () => {
+    for (const text of [
+      SELF_DESCRIPTION,
+      "I'm Mano. It means hand.",
+      "My name is Mano.",
+      "I'm an assistant, not a person.",
+      "I'm here with you.",
+      "I'm sorry that happened.",
+      "I was going to ask what the letter says.",
+    ]) {
+      expect(guardReply(text), text).toEqual({ text, changes: [] });
+    }
+  });
+});
+
+describe("numbered lists and strikethrough (should 8)", () => {
+  it("normalizes both", () => {
+    expect(guardReply("1. Call the office\n2) Bring your ID").text).toBe("Call the office.\nBring your ID.");
+    expect(guardReply("The deadline is ~~March 1~~ March 3.").text).toBe("The deadline is March 1 March 3.");
+  });
+
+  it("leaves years and amounts at a line start alone", () => {
+    for (const text of ["2025 was a hard year.", "2026. That is when it renews.", "$400. That is the estimate."]) {
+      expect(guardReply(text), text).toEqual({ text, changes: [] });
+    }
+  });
+});
+
+describe("the broad crisis check covers self-harm methods (follow-up 1)", () => {
+  it("matches overdose, pills, hanging, cutting and ending it", () => {
+    for (const text of [
+      "I took a whole bottle of pills",
+      "I plan to hang myself tonight",
+      "thinking about an overdose",
+      "I want to end it",
+      "I don't want to live anymore",
+      "I cut myself",
+    ]) {
+      expect(mightBeCrisis(text), text).toBe(true);
+    }
+    expect(isCrisis("I plan to hang myself tonight")).toBe(true);
+    expect(isCrisis("I took a whole bottle of pills")).toBe(true);
+  });
+});
+
+describe("follow-up probes", () => {
+  it("carries Sol's self-harm messages as crisis probes", () => {
+    for (const id of ["pills", "hang"]) expect(PROBES.find((p) => p.id === id)?.kind, id).toBe("crisis");
+  });
+});

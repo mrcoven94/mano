@@ -50,7 +50,24 @@ function idPattern(modelIds: readonly string[]): RegExp | null {
   return new RegExp(`(?<![\\w.-])(?:${loose.join("|")})(?![\\w-])`, "i");
 }
 
+// Mano describes itself one way only. A sentence where the assistant
+// names itself or its maker as anything but Mano is a self-description
+// to replace, whatever the name: no provider list needed.
+const OTHER_SELF = [
+  /\bi (?:was|am|'m|’m)\b[^.!?\n]*?\b(?:developed|built|made|created|trained|designed|programmed|powered|engineered|owned) (?:by|at|on)\s+(?!mano\b)\S/i,
+  /\bi (?:run|operate|live) on\s+(?!mano\b)\S/i,
+  /\bmy name is\s+(?!mano\b)\S/i,
+  /\bassistant (?:from|by|made by|built by|of)\s+(?!mano\b)\S/i,
+  // Case-sensitive on purpose: the name after it is capitalized.
+  /\b(?:[Ii](?:'m|’m| am)|[Tt]his is|[Yy]ou(?:'re|’re| are) (?:talking|chatting|texting) (?:to|with)) (?:an? |the )?(?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version) )*(?:called |named )?(?!Mano\b)[A-Z]/,
+];
+
+function selfIdentifiesAsOther(sentence: string): boolean {
+  return OTHER_SELF.some((pattern) => pattern.test(sentence));
+}
+
 function sentenceNamesProvider(sentence: string, ids: RegExp | null): boolean {
+  if (selfIdentifiesAsOther(sentence)) return true;
   if (ALWAYS_PATTERN.test(sentence) || MODEL_ID_PATTERN.test(sentence) || ids?.test(sentence)) return true;
   if (!WORD_PATTERN.test(sentence)) return false;
   return IDENTITY_STATEMENT.test(sentence) || WORD_PATTERN.test(sentence.replace(ORDINARY_PHRASES, " "));
@@ -87,6 +104,8 @@ export function stripMarkdown(text: string): string {
     .replace(/^[ \t]*>[ \t]?/gm, "")
     .replace(/^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm, "")
     .replace(/^[ \t]*[-*+•◦▪‣○●][ \t]+(.+)$/gm, (_m, line: string) => endSentence(line))
+    .replace(/^[ \t]*\d{1,2}[.)][ \t]+(.+)$/gm, (_m, line: string) => endSentence(line))
+    .replace(/~~(?=\S)(.+?)(?<=\S)~~/g, "$1")
     .replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, "$2")
     .replace(/(^|[^\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?!\w)/g, "$1$2")
     .replace(/(^|[^\w])_(?=\S)([^_\n]+?)(?<=\S)_(?!\w)/g, "$1$2")

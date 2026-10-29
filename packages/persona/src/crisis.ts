@@ -16,7 +16,7 @@ export const SAFETY_LINE = "If you're in danger or thinking about hurting yourse
 // housing or money words too. The one exception is "in danger of
 // losing", which is a benefits question.
 const SELF_HARM =
-  /\b(?:suicid(?:e|al)|kill(?:ing)? myself|end (?:my life|it all)|(?:want|wanna) to die|wanna die|better off dead|(?:hurt|hurting|harm|harming|cut|cutting) myself|self harm|(?:don'?t|do not) want to (?:be here|live))\b/;
+  /\b(?:suicid(?:e|al)|kill(?:ing)? myself|hang(?:ing)? myself|end (?:my life|it all)|(?:want|wanna) to die|wanna die|better off dead|(?:hurt|hurting|harm|harming|cut|cutting) myself|self harm|overdos\w*|(?:took|take|taking|swallowed) (?:a |the )?(?:whole )?(?:bottle|handful) of|(?:don'?t|do not) want to (?:be here|live))\b/;
 const VIOLENCE =
   /\b(?:(?:hit|hits|hitting|beat|beats|beating|hurt|hurts|hurting|choked?|choking|kick(?:s|ed|ing)?|attack(?:s|ed|ing)?|abus(?:es|ed|ing)) (?:me|us|my (?:kids?|children|son|daughter|baby))|(?:being|been|was|got) (?:abused|hit|beaten|attacked|choked)|abusive|domestic (?:abuse|violence)|(?:threaten(?:s|ed)?|going|gonna|wants?|tried|trying) to kill (?:me|us|myself|him|her|them)|kill me)\b/;
 const DANGER = /\b(?:immediate danger|in danger(?! of losing\b)|not safe|unsafe|(?:don'?t|do not) feel safe)\b/;
@@ -25,7 +25,7 @@ const DANGER = /\b(?:immediate danger|in danger(?! of losing\b)|not safe|unsafe|
 // (over a limit, out of budget, a failed call), so a match costs one
 // fixed text and silence is never the answer.
 const POSSIBLE_CRISIS =
-  /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*)\b/;
+  /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut myself|cutting|end it|end my life|(?:don'?t|do not) want to (?:live|be here)|jump off)\b/;
 
 function normalize(text: string): string {
   return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]/g, " ").replace(/\s+/g, " ")} `;
