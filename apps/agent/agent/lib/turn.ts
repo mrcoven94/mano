@@ -13,7 +13,7 @@ import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineResult, type PersonEngine } from "./engine.js";
-import { claimTurn, finishTurn, releaseTurn, type TurnResponse } from "./ledger.js";
+import { claimTurn, failTurn, finishTurn, type TurnResponse } from "./ledger.js";
 import { clearPending, loadPending, type PendingApproval } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 import type { KeyValue } from "./storage.js";
@@ -239,7 +239,7 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
     response = failure(502, "error");
   }
   if (response.httpStatus === 200) await finishTurn(kv, body.turnId, body.handleHash, claim.receivedAtMs, response);
-  else if (response.httpStatus !== 504) await releaseTurn(kv, body.turnId);
+  else if (response.httpStatus !== 504) await failTurn(kv, body.turnId, body.handleHash, claim.receivedAtMs, claim.attempt);
   console.log(
     JSON.stringify({
       type: "mano_turn",

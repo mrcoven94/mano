@@ -59,6 +59,14 @@ describe("reminders keyed by turn", () => {
     expect(await store!.listForHandle(HANDLE)).toHaveLength(1);
   });
 
+  it("two different reminders at the same time in one turn are both kept", async () => {
+    vi.stubEnv("MANO_ENV", "development");
+    await remind.execute({ text: "call the office", when: "tomorrow at 9" }, ctx("turn_pair000001"));
+    await remind.execute({ text: "bring the pay stub", when: "tomorrow at 9" }, ctx("turn_pair000001"));
+    const store = await getReminderStore();
+    expect((await store!.listForHandle(HANDLE)).map((r) => r.text).sort()).toEqual(["bring the pay stub", "call the office"]);
+  });
+
   it("a different turn sets its own reminder", async () => {
     vi.stubEnv("MANO_ENV", "development");
     const input = { text: "call the county", when: "tomorrow at 9" };

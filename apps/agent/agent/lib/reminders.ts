@@ -35,10 +35,13 @@ export interface ReminderStore {
   cancel(id: string, handleHash: string): Promise<boolean>;
 }
 
-// One reminder per turn and due time: a replayed or recovered turn
-// derives the same ID, so it finds the row it already made.
-export function reminderIdFor(turnId: string, dueAtMs: number): string {
-  return `rem_${createHash("sha256").update(`${turnId}\n${dueAtMs}`).digest("hex").slice(0, 24)}`;
+// One reminder per turn, due time and wording: a replayed or recovered
+// turn derives the same ID, so it finds the row it already made, while
+// two different reminders set for the same time stay two rows. Case,
+// spacing and punctuation do not change the identity.
+export function reminderIdFor(turnId: string, dueAtMs: number, text: string): string {
+  const words = text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return `rem_${createHash("sha256").update(`${turnId}\n${dueAtMs}\n${words}`).digest("hex").slice(0, 24)}`;
 }
 
 // In-memory store for local dev and tests. Production uses KV: Vercel

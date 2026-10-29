@@ -5,6 +5,8 @@ import { engineFrom } from "../agent/lib/engine.js";
 import { getKeyValue, resetKeyValue, type KeyValue } from "../agent/lib/storage.js";
 import { handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/turn.js";
 import startFormDraft from "../agent/tools/start_form_draft.js";
+import remind from "../agent/tools/remind.js";
+import { getReminderStore, resetReminderStores } from "../agent/lib/reminder-store.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
@@ -165,6 +167,29 @@ describe("turn replay and recovery", () => {
     const other = await send(turn("turn_dupe000001", "hello", "f".repeat(64)));
     expect(other.status).toBe(409);
     expect(agentCalls).toHaveLength(1);
+  });
+
+  it("a turn that failed after setting a reminder, retried later, still makes one reminder", async () => {
+    resetReminderStores();
+    let now = Date.parse("2026-10-30T15:00:00Z");
+    let attempt = 0;
+    const flaky = deps({
+      now: () => now,
+      runAgent: async (input) => {
+        attempt += 1;
+        const ctx = toolCtx({ handleHash: input.handleHash, turnId: input.turnId, grant: input.grant, turnAtMs: input.turnAtMs });
+        await remind.execute({ text: "call the county office", when: "in 2 minutes" }, ctx);
+        if (attempt === 1) throw new Error("model call failed after the tool ran");
+        return { status: "replied", text: "Set.", reason: "stop" };
+      },
+    });
+    const first = await send(turn("turn_flaky00001", "Remind me in 2 minutes to call the county office."), flaky);
+    expect(first.status).toBe(502);
+    now += 60_000;
+    const retry = await send(turn("turn_flaky00001", "Remind me in 2 minutes to call the county office."), flaky);
+    expect(retry.status).toBe(200);
+    const store = await getReminderStore();
+    expect(await store!.listForHandle(HANDLE)).toHaveLength(1);
   });
 
   it("a turn still running is not run a second time", async () => {

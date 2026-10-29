@@ -25,7 +25,7 @@ export default defineTool({
     const invalid = validateDue(parsed.dueAtMs, turnAtMs);
     if (invalid) throw new Error(invalid);
     const saved = await store.create({
-      id: reminderIdFor(turnId, parsed.dueAtMs),
+      id: reminderIdFor(turnId, parsed.dueAtMs, text),
       handleHash,
       generation,
       text: text.trim(),
