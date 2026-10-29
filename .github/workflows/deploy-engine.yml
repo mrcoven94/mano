@@ -64,6 +64,9 @@ jobs:
           check "$OPERATOR_SECRET" OPERATOR_SECRET
           check "$MANO_ENGINE_AGENT_TOKEN" MANO_ENGINE_AGENT_TOKEN
           check "$MANO_HANDLE_GRANT_SECRET" MANO_HANDLE_GRANT_SECRET
+          check "$MANO_ENGINE_CHANNELS_TOKEN" MANO_ENGINE_CHANNELS_TOKEN
+          check "$MANO_CHANNELS_URL" MANO_CHANNELS_URL
+          check "$MANO_AGENT_SECRET" MANO_AGENT_SECRET
           check "$EXECUTOR_MODE" EXECUTOR_MODE
           if [ "$EXECUTOR_MODE" = "sandbox" ]; then check "$SANDBOX_BASE_URL" SANDBOX_BASE_URL; fi
           exit $missing
@@ -76,6 +79,9 @@ jobs:
           OPERATOR_SECRET: ${{ secrets.OPERATOR_SECRET }}
           MANO_ENGINE_AGENT_TOKEN: ${{ secrets.MANO_ENGINE_AGENT_TOKEN }}
           MANO_HANDLE_GRANT_SECRET: ${{ secrets.MANO_HANDLE_GRANT_SECRET }}
+          MANO_ENGINE_CHANNELS_TOKEN: ${{ secrets.MANO_ENGINE_CHANNELS_TOKEN }}
+          MANO_CHANNELS_URL: ${{ secrets.MANO_CHANNELS_URL }}
+          MANO_AGENT_SECRET: ${{ secrets.MANO_AGENT_SECRET }}
           EXECUTOR_MODE: ${{ secrets.EXECUTOR_MODE }}
           SANDBOX_BASE_URL: ${{ secrets.SANDBOX_BASE_URL }}
       - uses: pnpm/action-setup@v6
@@ -106,7 +112,8 @@ jobs:
           trap 'rm -f "$secrets_file"' EXIT
           jq -n 'env | {
               META_MODEL_API_KEY, ENCRYPTION_KEK_B64, SESSION_SECRET, OPERATOR_SECRET,
-              MANO_ENGINE_AGENT_TOKEN, MANO_HANDLE_GRANT_SECRET, EXECUTOR_MODE,
+              MANO_ENGINE_AGENT_TOKEN, MANO_HANDLE_GRANT_SECRET, MANO_ENGINE_CHANNELS_TOKEN,
+              MANO_CHANNELS_URL, MANO_AGENT_SECRET, EXECUTOR_MODE,
               SANDBOX_BASE_URL, CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA
             } | with_entries(select(.value != null and .value != ""))' > "$secrets_file"
           pnpm exec wrangler deploy --secrets-file "$secrets_file"
@@ -119,6 +126,9 @@ jobs:
           OPERATOR_SECRET: ${{ secrets.OPERATOR_SECRET }}
           MANO_ENGINE_AGENT_TOKEN: ${{ secrets.MANO_ENGINE_AGENT_TOKEN }}
           MANO_HANDLE_GRANT_SECRET: ${{ secrets.MANO_HANDLE_GRANT_SECRET }}
+          MANO_ENGINE_CHANNELS_TOKEN: ${{ secrets.MANO_ENGINE_CHANNELS_TOKEN }}
+          MANO_CHANNELS_URL: ${{ secrets.MANO_CHANNELS_URL }}
+          MANO_AGENT_SECRET: ${{ secrets.MANO_AGENT_SECRET }}
           EXECUTOR_MODE: ${{ secrets.EXECUTOR_MODE }}
           SANDBOX_BASE_URL: ${{ secrets.SANDBOX_BASE_URL }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
