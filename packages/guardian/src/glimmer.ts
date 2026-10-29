@@ -1,6 +1,6 @@
 import { buildModelRequest, type KnownEntities } from "./redact.js";
 import { RulesChecker } from "./rules.js";
-import type { CheckInput, CheckResult, Checker, Verdict } from "./types.js";
+import type { CheckInput, CheckResult, Checker, Verdict, WarmState } from "./types.js";
 
 export const DEFAULT_GUARDIAN_MODEL =
   "RedHatAI/Muse-Glimmer-30B-FP8-block@1deb4641ff84f9a728dd11b27cac1f6a02a9ed14";
@@ -117,9 +117,11 @@ export class GlimmerChecker implements Checker {
 
   // Asks the endpoint to start the model and keep it up for about ten
   // minutes, so a check soon after finds it ready. Call it when a
-  // conversation starts. Returns whether the endpoint accepted; a failure
-  // changes nothing, since a cold check still blocks.
-  async warm(): Promise<boolean> {
+  // conversation starts. "ready" means the model is loaded now, "starting"
+  // that it is on its way (a cold start takes minutes), "failed" that the
+  // endpoint refused or could not be reached. A failure changes nothing,
+  // since a cold check still blocks.
+  async warm(): Promise<WarmState> {
     try {
       const response = await this.fetchImpl(this.url, {
         method: "POST",
@@ -127,9 +129,15 @@ export class GlimmerChecker implements Checker {
         body: JSON.stringify({ warm: true }),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
-      return response.ok;
+      if (!response.ok) return "failed";
+      const body = (await response.json()) as unknown;
+      const ready =
+        typeof body === "object" &&
+        body !== null &&
+        (body as Record<string, unknown>)["ready"] === true;
+      return ready ? "ready" : "starting";
     } catch {
-      return false;
+      return "failed";
     }
   }
 

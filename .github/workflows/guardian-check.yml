@@ -56,19 +56,21 @@ jobs:
           assert app.require_token("x") == "x"
 
           # Strict verdict parsing.
-          assert app.parse_verdict('{"verdict":"pass","problems":[]}') == {
+          assert app.parse_verdict('{"review":"ok","verdict":"pass","problems":[]}') == {
               "verdict": "pass",
               "problems": [],
           }
           for bad in (
               "nope",
               "[]",
-              '{"verdict":"maybe","problems":[]}',
-              '{"verdict":"pass","problems":["x"]}',
-              '{"verdict":"fix","problems":[]}',
-              '{"verdict":"block","problems":[]}',
-              '{"verdict":"block","problems":[1]}',
-              '{"verdict":"block","problems":[],"verdict":"pass"}',
+              '{"verdict":"pass","problems":[]}',
+              '{"review":null,"verdict":"pass","problems":[]}',
+              '{"review":"r","verdict":"maybe","problems":[]}',
+              '{"review":"r","verdict":"pass","problems":["x"]}',
+              '{"review":"r","verdict":"fix","problems":[]}',
+              '{"review":"r","verdict":"block","problems":[]}',
+              '{"review":"r","verdict":"block","problems":[1]}',
+              '{"review":"r","verdict":"block","problems":[],"verdict":"pass"}',
           ):
               try:
                   app.parse_verdict(bad)

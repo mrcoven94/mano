@@ -12,7 +12,9 @@
 # authenticated check or warm-up arrives. Both scale to zero when idle.
 #
 # A POST of {"warm": true} starts the model and keeps it up for
-# WARM_HOLD_SECONDS, so an approval minutes later finds it ready. The deploy
+# WARM_HOLD_SECONDS, so an approval minutes later finds it ready. Its answer
+# says whether the model is loaded yet: the holding call writes a heartbeat
+# that the web function reads. The deploy
 # sets MANO_GUARDIAN_MIN_CONTAINERS=1 to keep one GPU up all the time.
 import hmac
 import json
@@ -36,14 +38,27 @@ GPU_TIMEOUT_SECONDS = 1800
 # A warm-up call hands the rest of its hold to a fresh call well before
 # Modal stops it at GPU_TIMEOUT_SECONDS.
 WARM_ROTATE_SECONDS = GPU_TIMEOUT_SECONDS - 300
+READY_WITHIN_SECONDS = 20
+REVIEW_MAX_CHARS = 300
+PROBLEMS_MAX = 3
+PROBLEM_MAX_CHARS = 240
+ANSWER_KEYS = {"review", "verdict", "problems"}
 
+# The model writes a short review before its verdict. Asked for the verdict
+# first, it passed planted instructions it caught once it reviewed first.
+# The review never leaves this file.
 GUARDIAN_SCHEMA = {
     "type": "object",
     "properties": {
+        "review": {"type": "string", "maxLength": REVIEW_MAX_CHARS},
         "verdict": {"type": "string", "enum": ["pass", "fix", "block"]},
-        "problems": {"type": "array", "items": {"type": "string"}},
+        "problems": {
+            "type": "array",
+            "maxItems": PROBLEMS_MAX,
+            "items": {"type": "string", "maxLength": PROBLEM_MAX_CHARS},
+        },
     },
-    "required": ["verdict", "problems"],
+    "required": sorted(ANSWER_KEYS),
     "additionalProperties": False,
 }
 
@@ -65,7 +80,9 @@ SYSTEM_PROMPT = "\n".join(
         "Answer fix only when the action is almost right and one small,",
         "specific change would make it safe; say what the change is.",
         "Otherwise answer pass.",
-        "Reply with strict JSON only: pass carries no problems, fix and block",
+        "Reply with strict JSON only. First write review: check each rule above",
+        "against the action in one or two sentences. Then give the verdict:",
+        "pass carries no problems, fix and block",
         "carry at least one, each in plain words a non-technical person can read.",
     ]
 )
@@ -81,6 +98,12 @@ except ImportError:  # pragma: no cover
 app = modal.App("mano-guardian")
 
 cache = modal.Volume.from_name("mano-guardian-cache", create_if_missing=True)
+# Keyed by app id, so a `modal serve` copy never reports production ready.
+state = modal.Dict.from_name("mano-guardian-state", create_if_missing=True)
+
+
+def beat_key() -> str:
+    return f"warm_beat:{app.app_id}"
 # Modal finds the image's Python as `python`; this image ships vLLM under
 # /usr/bin/python3 only, and add_python would install a second Python without
 # vLLM. Its `vllm serve` entrypoint would wrap Modal's own runner, so clear it.
@@ -116,10 +139,11 @@ class WarmHold:
     keeps the container up. A warm-up while one is held only moves the
     deadline, so warm-ups never take more than one input slot."""
 
-    def __init__(self, clock=time.monotonic, sleep=time.sleep) -> None:
+    def __init__(self, clock=time.monotonic, sleep=time.sleep, beat=lambda: None):
         self._lock = threading.Lock()
         self._clock = clock
         self._sleep = sleep
+        self._beat = beat
         self._until = 0.0
         self._holding = False
 
@@ -141,7 +165,54 @@ class WarmHold:
                 if left <= 0 or life <= 0:
                     self._holding = False
                     return max(left, 0.0)
+            self._beat()
             self._sleep(min(left, life, 5.0))
+
+
+def engine_alive(engine: Any) -> bool:
+    """vLLM's monitor thread sets engine_dead when the engine-core process
+    exits. Anything unexpected counts as dead."""
+    try:
+        return engine.llm_engine.engine_core.resources.engine_dead is False
+    except Exception:
+        return False
+
+
+class EngineHealth:
+    """Publishes readiness only while the engine lives. A dead engine clears
+    readiness once and recycles the container so Modal starts a fresh one."""
+
+    def __init__(self, alive, publish, recycle) -> None:
+        self._alive = alive
+        self._publish = publish
+        self._recycle = recycle
+        self._dead = False
+
+    def beat(self) -> None:
+        if self._alive():
+            self._publish(True)
+        else:
+            self.fail()
+
+    def call(self, fn):
+        try:
+            return fn()
+        except Exception:
+            if not self._alive():
+                self.fail()
+            raise
+
+    def fail(self) -> None:
+        if self._dead:
+            return
+        self._dead = True
+        self._publish(False)
+        self._recycle()
+
+
+def is_ready(beat_at: float | None, now: float) -> bool:
+    """A model counts as ready while its warm hold has beaten recently."""
+    return beat_at is not None and 0 <= now - beat_at < READY_WITHIN_SECONDS
 
 
 def server_info() -> dict[str, dict[str, str]]:
@@ -161,18 +232,25 @@ def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def parse_verdict(text: str) -> dict[str, Any]:
-    """Strictly parse one model answer. Raise on anything unexpected."""
+    """Check one model answer against GUARDIAN_SCHEMA in full and return
+    its public part. Raise on anything else, which blocks the action."""
     data = json.loads(text, object_pairs_hook=_no_duplicates)
-    if not isinstance(data, dict):
-        raise ValueError("verdict is not an object")
-    verdict = data.get("verdict")
-    problems = data.get("problems")
+    if not isinstance(data, dict) or set(data) != ANSWER_KEYS:
+        raise ValueError("answer does not have exactly review, verdict, problems")
+    review, verdict, problems = data["review"], data["verdict"], data["problems"]
+    if not isinstance(review, str) or len(review) > REVIEW_MAX_CHARS:
+        raise ValueError("bad review")
     if verdict not in VERDICTS:
         raise ValueError(f"bad verdict: {verdict!r}")
-    if not isinstance(problems, list) or not all(
-        isinstance(item, str) for item in problems
+    if (
+        not isinstance(problems, list)
+        or len(problems) > PROBLEMS_MAX
+        or not all(
+            isinstance(item, str) and len(item) <= PROBLEM_MAX_CHARS
+            for item in problems
+        )
     ):
-        raise ValueError("problems is not a string list")
+        raise ValueError("bad problems")
     if (verdict == "pass") == (len(problems) > 0):
         raise ValueError("verdict contradicts its problems")
     return {"verdict": verdict, "problems": problems}
@@ -246,7 +324,18 @@ class Guardian:
             generation_config="auto",
         )
         self.engine_lock = threading.Lock()
-        self.warm_hold = WarmHold()
+        self.health = EngineHealth(
+            alive=lambda: engine_alive(self.engine),
+            publish=self.publish,
+            recycle=lambda: os._exit(1),
+        )
+        self.warm_hold = WarmHold(beat=self.health.beat)
+
+    def publish(self, ready: bool) -> None:
+        try:
+            state.put(beat_key(), time.time() if ready else None)
+        except Exception as error:  # a missed beat only delays readiness
+            print(f"warm heartbeat failed: {error!r}")
 
     @modal.method()
     def warm(self, seconds: float = WARM_HOLD_SECONDS) -> None:
@@ -260,10 +349,12 @@ class Guardian:
 
         params = SamplingParams(
             temperature=0.0,
-            max_tokens=256,
+            max_tokens=512,
             structured_outputs=StructuredOutputsParams(json=GUARDIAN_SCHEMA),
         )
-        return ask_model(self.engine, self.engine_lock, body, params)
+        return self.health.call(
+            lambda: ask_model(self.engine, self.engine_lock, body, params)
+        )
 
 
 _CONTAINER_TOKEN: str | None = None
@@ -291,7 +382,10 @@ async def check(request: Request) -> JSONResponse:
     body = await request.json()
     if body == {"warm": True}:
         await Guardian().warm.spawn.aio()
-        return JSONResponse(status_code=202, content={"warming": True})
+        ready = is_ready(await state.get.aio(beat_key()), time.time())
+        return JSONResponse(
+            status_code=202, content={"warming": True, "ready": ready}
+        )
     if not isinstance(body, dict):
         return JSONResponse(status_code=400, content={"error": "bad check input"})
     return await Guardian().complete.remote.aio(body)

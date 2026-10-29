@@ -1,6 +1,6 @@
 // Stand-in for the guardian model endpoint. Serves the single POST /check
 // route with scripted verdicts so GlimmerChecker runs end to end locally
-// with no GPU and no keys. A body of {"warm":true} gets 202. Request bodies
+// with no GPU and no keys. A body of {"warm":true} gets 202 with ready true. Request bodies
 // are never logged.
 //
 // Usage:
@@ -55,7 +55,7 @@ const server = http.createServer((req, res) => {
     }
     if (body === '{"warm":true}') {
       res.writeHead(202, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ warming: true }));
+      res.end(JSON.stringify({ warming: true, ready: true }));
       return;
     }
     if (mode === "error") {

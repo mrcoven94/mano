@@ -84,14 +84,16 @@ describe("GlimmerChecker", () => {
   });
 
   it("sends a warm-up with the same auth headers", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ warming: true }, 202));
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ warming: true, ready: false }, 202),
+    );
     const checker = new GlimmerChecker({
       url: "https://guardian.example.com",
       token: "token",
       proxyAuth: { keyId: "key", secret: "secret" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    await expect(checker.warm()).resolves.toBe(true);
+    await expect(checker.warm()).resolves.toBe("starting");
     const [calledUrl, init] = fetchImpl.mock.calls[0] as unknown as [
       string,
       RequestInit,
@@ -105,6 +107,18 @@ describe("GlimmerChecker", () => {
     });
   });
 
+  it("reports ready once the endpoint says the model is loaded", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ warming: true, ready: true }, 202),
+    );
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(checker.warm()).resolves.toBe("ready");
+  });
+
   it("reports a failed warm-up without throwing", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new TypeError("network down");
@@ -114,7 +128,7 @@ describe("GlimmerChecker", () => {
       token: "token",
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    await expect(checker.warm()).resolves.toBe(false);
+    await expect(checker.warm()).resolves.toBe("failed");
   });
 
   it("sends no personal detail of any kind", async () => {
@@ -505,7 +519,7 @@ describe("the default fetch", () => {
         url: "https://guardian.example.com",
         token: "token",
       });
-      await expect(checker.warm()).resolves.toBe(true);
+      await expect(checker.warm()).resolves.toBe("starting");
       await expect(checker.check(passInput())).resolves.toEqual({
         verdict: "pass",
         problems: [],

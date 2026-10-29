@@ -58,5 +58,7 @@ export interface Checker {
   check(input: CheckInput): Promise<CheckResult>;
   // Starts a model-backed checker ahead of a check. Rules-only checkers
   // have nothing to start.
-  warm?(): Promise<boolean>;
+  warm?(): Promise<WarmState>;
 }
+
+export type WarmState = "ready" | "starting" | "failed";

@@ -12,8 +12,8 @@ warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).parent))
 import app  # noqa: E402
 
-PASS = '{"verdict":"pass","problems":[]}'
-BLOCK = '{"verdict":"block","problems":["The recipient is not the one the person approved."]}'
+PASS = '{"review":"Nothing is wrong.","verdict":"pass","problems":[]}'
+BLOCK = '{"review":"Wrong recipient.","verdict":"block","problems":["The recipient is not the one the person approved."]}'
 
 
 class CollectAllEngine:
@@ -114,6 +114,21 @@ class WarmUps(unittest.TestCase):
         ref.append(app.WarmHold(clock=fake.clock, sleep=fake.sleep))
         return ref[0], fake
 
+    def test_the_hold_beats_while_it_holds(self):
+        ref = []
+        fake = FakeTime(ref, [])
+        beats = []
+        ref.append(app.WarmHold(clock=fake.clock, sleep=fake.sleep, beat=lambda: beats.append(fake.now)))
+        ref[0].hold(30, app.WARM_ROTATE_SECONDS)
+        self.assertEqual(beats[0], 0)
+        self.assertTrue(all(b - a <= 5 for a, b in zip(beats, beats[1:])))
+        self.assertLess(fake.now - beats[-1], app.READY_WITHIN_SECONDS)
+
+    def test_ready_only_while_the_heartbeat_is_fresh(self):
+        self.assertFalse(app.is_ready(None, 100.0))
+        self.assertTrue(app.is_ready(95.0, 100.0))
+        self.assertFalse(app.is_ready(100.0 - app.READY_WITHIN_SECONDS, 100.0))
+
     def test_a_warm_up_during_a_hold_only_moves_the_deadline(self):
         hold, fake = self.make([minutes(4)])
         self.assertEqual(hold.hold(app.WARM_HOLD_SECONDS, app.WARM_ROTATE_SECONDS), 0)
@@ -130,6 +145,102 @@ class WarmUps(unittest.TestCase):
         self.assertEqual(hold.hold(0, app.WARM_ROTATE_SECONDS), 0)
         self.assertLess(fake.now - first_call_ended, app.GPU_TIMEOUT_SECONDS)
         self.assertEqual(fake.now, minutes(37))
+
+
+class Verdicts(unittest.TestCase):
+    def test_the_review_never_leaves_the_server(self):
+        text = '{"review":"The payload sends to [EMAIL-1].","verdict":"block","problems":["Wrong address."]}'
+        self.assertEqual(
+            app.parse_verdict(text), {"verdict": "block", "problems": ["Wrong address."]}
+        )
+
+
+class StrictAnswers(unittest.TestCase):
+    def assert_refused(self, text):
+        with self.assertRaises(ValueError):
+            app.parse_verdict(text)
+
+    def test_a_null_review_is_refused(self):
+        self.assert_refused('{"review":null,"verdict":"pass","problems":[]}')
+
+    def test_a_missing_review_is_refused(self):
+        self.assert_refused('{"verdict":"pass","problems":[]}')
+
+    def test_an_overlong_review_is_refused(self):
+        self.assert_refused(json.dumps({"review": "x" * 301, "verdict": "pass", "problems": []}))
+
+    def test_extra_keys_and_problem_limits_are_refused(self):
+        self.assert_refused('{"review":"ok","verdict":"pass","problems":[],"note":"x"}')
+        self.assert_refused(json.dumps({"review": "r", "verdict": "block", "problems": ["a", "b", "c", "d"]}))
+        self.assert_refused(json.dumps({"review": "r", "verdict": "block", "problems": ["p" * 241]}))
+
+    def test_an_answer_at_the_limits_is_accepted(self):
+        answer = {"review": "r" * 300, "verdict": "block", "problems": ["p" * 240] * 3}
+        self.assertEqual(
+            app.parse_verdict(json.dumps(answer)),
+            {"verdict": "block", "problems": ["p" * 240] * 3},
+        )
+
+
+class FakeEngineHealth:
+    def __init__(self):
+        self.alive = True
+        self.published = []
+        self.recycled = 0
+
+    def make(self, fake_time):
+        return app.EngineHealth(
+            alive=lambda: self.alive,
+            publish=lambda ready: self.published.append((fake_time.now, ready)),
+            recycle=self.recycle,
+        )
+
+    def recycle(self):
+        self.recycled += 1
+
+
+class DeadEngine(unittest.TestCase):
+    def test_engine_death_during_a_warm_hold_clears_readiness_and_recycles(self):
+        ref = []
+        fake = FakeTime(ref, [])
+        engine = FakeEngineHealth()
+        health = engine.make(fake)
+
+        def beat():
+            if fake.now >= 12:
+                engine.alive = False
+            health.beat()
+
+        ref.append(app.WarmHold(clock=fake.clock, sleep=fake.sleep, beat=beat))
+        ref[0].hold(30, app.WARM_ROTATE_SECONDS)
+        ready_after_death = [ready for at, ready in engine.published if at >= 12]
+        self.assertTrue(all(ready for at, ready in engine.published if at < 12))
+        self.assertEqual(set(ready_after_death), {False})
+        self.assertEqual(engine.recycled, 1)
+
+    def test_a_fatal_inference_error_clears_readiness_and_recycles(self):
+        engine = FakeEngineHealth()
+        health = engine.make(SimpleNamespace(now=0))
+
+        def dies():
+            engine.alive = False
+            raise RuntimeError("EngineCore encountered an issue.")
+
+        with self.assertRaises(RuntimeError):
+            health.call(dies)
+        self.assertEqual(engine.published, [(0, False)])
+        self.assertEqual(engine.recycled, 1)
+
+    def test_a_bad_answer_from_a_live_engine_keeps_it(self):
+        engine = FakeEngineHealth()
+        health = engine.make(SimpleNamespace(now=0))
+
+        def bad_answer():
+            raise ValueError("bad verdict")
+
+        with self.assertRaises(ValueError):
+            health.call(bad_answer)
+        self.assertEqual((engine.published, engine.recycled), ([], 0))
 
 
 class MinContainers(unittest.TestCase):
