@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 async function recalled(): Promise<string[]> {
-  return recallFacts(engineFromEnv()!.forHandle(HANDLE, await grantFor(HANDLE)));
+  return recallFacts(engineFromEnv()!.forHandle(HANDLE, await grantFor(HANDLE), 0));
 }
 
 describe("person memory in Engine", () => {

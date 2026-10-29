@@ -13,7 +13,7 @@ export default defineTool({
     when: z.string().min(1).max(200).describe("When, in the person's own words."),
   }),
   async execute({ text, when }, ctx) {
-    const { turnId, turnAtMs, generation } = requireTurn(ctx);
+    const { turnId, turnAtMs } = requireTurn(ctx);
     const engine = personEngine(ctx);
     if (!engine) throw new Error("Setting reminders is not available right now. Say so plainly and do not promise it.");
     const parsed = parseWhen(when, turnAtMs);
@@ -26,7 +26,6 @@ export default defineTool({
       id: reminderIdFor(turnId, parsed.dueAtMs, text),
       text: text.trim(),
       dueAt: new Date(parsed.dueAtMs).toISOString(),
-      generation,
     });
     return { reminderId: saved.id, dueAt: saved.dueAt, text: saved.text };
   },

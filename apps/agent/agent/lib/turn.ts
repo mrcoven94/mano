@@ -121,12 +121,12 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
   switch (result.status) {
     case "completed":
     case "reconciled": {
-      await engine.clearPointer();
+      await engine.clearPointer(approvalId);
       const purpose = result.approval?.purpose ?? (await engine.approval(approvalId))?.purpose ?? "your request";
       return doneText(purpose, result.receipt);
     }
     case "stale":
-      await engine.clearPointer();
+      await engine.clearPointer(approvalId);
       return "That changed after you saw it, so nothing was sent. Want me to prepare it again?";
     case "in_progress":
       return CHECKING;
@@ -137,12 +137,12 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       const approval = await engine.approval(approvalId);
       if (approval?.status === "approved") {
         if (approval.outcome?.attempt === "done" && approval.outcome.receipt) {
-          await engine.clearPointer();
+          await engine.clearPointer(approvalId);
           return doneText(approval.purpose, approval.outcome.receipt);
         }
         return CHECKING;
       }
-      await engine.clearPointer();
+      await engine.clearPointer(approvalId);
       return "That approval can no longer be used, so nothing was sent. Want me to prepare it again?";
     }
   }
@@ -154,13 +154,13 @@ async function answerNo(engine: PersonEngine, approval: EngineApproval | null, a
   }
   const result = await engine.reject(approvalId);
   if (result.status === "rejected") {
-    await engine.clearPointer();
+    await engine.clearPointer(approvalId);
     return "Okay, I did not send it. Nothing left Mano.";
   }
   if ((await engine.approval(approvalId))?.status === "approved") {
     return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
   }
-  await engine.clearPointer();
+  await engine.clearPointer(approvalId);
   return "That request had already expired or changed, so nothing was sent.";
 }
 
@@ -206,7 +206,7 @@ async function runTurn(
   replay: boolean,
 ): Promise<TurnResponse> {
   const message = turnText(body);
-  const pointer = await engine.getPointer(body.generation);
+  const pointer = await engine.getPointer();
   const decision = body.attachmentCount === 0 ? parseDecision(body.texts.join(" ")) : null;
   if (decision && pointer) return decide(engine, pointer.approvalId, decision);
   if (decision) {
@@ -279,7 +279,7 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
   }
   const body = parseBody(parsed);
   if (!body) return Response.json({ status: "error", text: "", reason: "bad_turn" }, { status: 400 });
-  const engine = deps.engine?.forHandle(body.handleHash, body.grant);
+  const engine = deps.engine?.forHandle(body.handleHash, body.grant, body.generation);
   if (!engine) {
     console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "engine" }));
     return Response.json({ status: "error", text: "", reason: "engine" }, { status: 503 });
@@ -292,7 +292,11 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
     turnAtMs = Date.parse(turn.firstReceivedAt);
     replay = turn.status === "complete";
   } catch (err) {
-    console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "ledger", status: err instanceof EngineError ? err.status : null }));
+    const status = err instanceof EngineError ? err.status : null;
+    // 409 is Engine's generation fence: this turn is from a conversation
+    // that was deleted, so it never runs.
+    if (status === 409) return Response.json({ status: "stale", text: "" }, { status: 409 });
+    console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "ledger", status }));
     return Response.json({ status: "error", text: "", reason: "ledger" }, { status: 503 });
   }
 
@@ -346,14 +350,16 @@ export async function handlePresented(request: Request, deps: { secret: string |
   ) {
     return Response.json({ ok: false, reason: "bad_report" }, { status: 400 });
   }
-  const engine = deps.engine?.forHandle(handleHash, grant);
+  const engine = deps.engine?.forHandle(handleHash, grant, generation);
   if (!engine) return Response.json({ ok: false, reason: "engine" }, { status: 503 });
   const approval = waitingProposals(await engine.listApprovals()).find((a) => a.id === approvalId);
   if (!approval || presentationHash(renderQuestion(approval)) !== textHash) {
     console.warn(JSON.stringify({ type: "mano_presented_mismatch", handle: handleHash }));
     return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
   }
-  await engine.setPointer(approvalId, generation);
+  if (!(await engine.setPointer(approvalId))) {
+    return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
+  }
   return Response.json({ ok: true });
 }
 

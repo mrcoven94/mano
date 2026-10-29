@@ -113,10 +113,14 @@ export class PersonEngine {
   readonly personId: string;
   private fetchFn: typeof fetch;
 
+  // generation: the Channels deletion generation this turn runs under.
+  // Every write carries it and Engine re-checks it at the write, so
+  // nothing prepared before a deletion lands after it.
   constructor(
     private cfg: EngineConfig,
     handleHash: string,
     private grant: string,
+    readonly generation: number,
   ) {
     this.personId = personIdFor(handleHash);
     this.fetchFn = cfg.fetchFn ?? boundFetch;
@@ -153,9 +157,11 @@ export class PersonEngine {
   // conflict (same ID, different stored content) also returns the stored
   // reminder: the ID is derived from the turn, the due time and the
   // wording, so it is the same reminder said differently.
-  async createReminder(input: { id: string; text: string; dueAt: string; generation: number }): Promise<EngineReminder> {
-    const res = await this.call("POST", "/reminders", input);
+  async createReminder(input: { id: string; text: string; dueAt: string }): Promise<EngineReminder> {
+    const res = await this.call("POST", "/reminders", { ...input, generation: this.generation });
     const body = (await res.json().catch(() => null)) as { reminder?: EngineReminder } | null;
+    // A 409 without a reminder is the generation fence: the conversation
+    // was deleted after this turn began.
     if ((res.ok || res.status === 409) && body?.reminder) return body.reminder;
     throw new EngineError(res.status);
   }
@@ -181,26 +187,38 @@ export class PersonEngine {
 
   // The turn as Engine first recorded it: firstReceivedAt never changes.
   async putTurn(turnId: string, receivedAt: string): Promise<EngineTurn> {
-    const out = (await this.json("POST", "/turns", { turnId, receivedAt })) as { turn: EngineTurn };
+    const out = (await this.json("POST", "/turns", { turnId, receivedAt, generation: this.generation })) as { turn: EngineTurn };
     return out.turn;
   }
 
   async completeTurn(turnId: string): Promise<void> {
-    await this.json("POST", `/turns/${encodeURIComponent(turnId)}/complete`);
+    await this.json("POST", `/turns/${encodeURIComponent(turnId)}/complete`, { generation: this.generation });
   }
 
-  async getPointer(generation: number): Promise<EnginePointer | null> {
-    const out = (await this.json("GET", `/pending-approval?generation=${generation}`)) as { pointer?: EnginePointer | null };
+  async getPointer(): Promise<EnginePointer | null> {
+    const out = (await this.json("GET", `/pending-approval?generation=${this.generation}`)) as { pointer?: EnginePointer | null };
     return out.pointer ?? null;
   }
 
-  async setPointer(approvalId: string, generation: number): Promise<EnginePointer> {
-    const out = (await this.json("PUT", "/pending-approval", { approvalId, generation })) as { pointer: EnginePointer };
-    return out.pointer;
+  // null when Engine refused: the approval is not this person's, or not of
+  // the current generation.
+  async setPointer(approvalId: string): Promise<EnginePointer | null> {
+    const res = await this.call("PUT", "/pending-approval", { approvalId, generation: this.generation });
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return ((await res.json()) as { pointer: EnginePointer }).pointer;
   }
 
-  async clearPointer(): Promise<void> {
-    await this.json("DELETE", "/pending-approval");
+  // Compare-and-delete: clears only while the pointer still names this
+  // approval under this generation.
+  async clearPointer(approvalId: string): Promise<void> {
+    await this.json("DELETE", "/pending-approval", { approvalId, generation: this.generation });
   }
 
   async listMemory(): Promise<MemoryRow[]> {
@@ -213,7 +231,7 @@ export class PersonEngine {
   }
 
   async addMemory(content: string): Promise<string> {
-    const out = (await this.json("POST", "/memory", { content, source: "agent" })) as { id?: unknown };
+    const out = (await this.json("POST", "/memory", { content, source: "agent", generation: this.generation })) as { id?: unknown };
     if (typeof out.id !== "string") throw new EngineError(502);
     return out.id;
   }
@@ -223,7 +241,9 @@ export class PersonEngine {
   }
 
   async proposeAction(proposal: ActionProposal): Promise<EngineResult> {
-    return parseResult(await this.json("POST", "/action", { ...proposal, actor: "foreground", origin: "person" }));
+    return parseResult(
+      await this.json("POST", "/action", { ...proposal, actor: "foreground", origin: "person", generation: this.generation }),
+    );
   }
 
   async approve(approvalId: string): Promise<EngineResult> {
@@ -242,11 +262,11 @@ export class PersonEngine {
 }
 
 export interface Engine {
-  forHandle(handleHash: string, grant: string): PersonEngine;
+  forHandle(handleHash: string, grant: string, generation: number): PersonEngine;
 }
 
 export function engineFrom(cfg: EngineConfig | null): Engine | null {
-  return cfg ? { forHandle: (handleHash, grant) => new PersonEngine(cfg, handleHash, grant) } : null;
+  return cfg ? { forHandle: (handleHash, grant, generation) => new PersonEngine(cfg, handleHash, grant, generation) } : null;
 }
 
 export function engineFromEnv(): Engine | null {

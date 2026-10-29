@@ -13,7 +13,7 @@ let engine: EngineDouble;
 let grant: string;
 
 function ctx(turnId: string) {
-  return toolCtx({ handleHash: HANDLE, turnId, grant, generation: 4 });
+  return toolCtx({ handleHash: HANDLE, turnId, grant, generation: 0 });
 }
 
 beforeEach(async () => {
@@ -34,7 +34,7 @@ describe("reminders in Engine", () => {
     const out = await remind.execute({ text: "call the county", when: "tomorrow at 9" }, ctx("turn_aaaaaaaa3"));
     expect(out).toMatchObject({ text: "call the county" });
     const [saved] = engine.remindersOf(PERSON);
-    expect(saved).toMatchObject({ text: "call the county", generation: 4, status: "scheduled" });
+    expect(saved).toMatchObject({ text: "call the county", generation: 0, status: "scheduled" });
   });
 
   it("refuses when Engine is not configured", async () => {

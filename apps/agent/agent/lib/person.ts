@@ -49,6 +49,7 @@ export function requireTurn(ctx: Ctx): TurnIdentity {
 export function personEngine(ctx: Ctx): PersonEngine | null {
   const engine = engineFromEnv();
   const grant = attribute(ctx, "grant");
-  if (!engine || !grant) return null;
-  return engine.forHandle(requireHandleHash(ctx), grant);
+  const generation = Number(attribute(ctx, "generation"));
+  if (!engine || !grant || !Number.isInteger(generation) || generation < 0) return null;
+  return engine.forHandle(requireHandleHash(ctx), grant, generation);
 }

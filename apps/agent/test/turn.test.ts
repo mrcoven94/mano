@@ -8,7 +8,7 @@ import { handlePresented, handleTurn, type AgentTurnInput, type TurnDeps } from 
 import remind from "../agent/tools/remind.js";
 import startFormDraft from "../agent/tools/start_form_draft.js";
 import { toolCtx } from "./ctx.js";
-import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
+import { ENGINE_AGENT_TOKEN, ENGINE_CHANNELS_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
 const PRESENTATION_VECTOR = "33f67fe9f135d7efc24d4fbe91c1ed3c8bc540adde738809768ff2c8cbdb1245";
 const SECRET = "turn-test-secret";
@@ -48,7 +48,9 @@ async function fakeAgent(input: AgentTurnInput) {
   if (/renewal/i.test(input.message)) {
     const ctx = toolCtx({ handleHash: input.handleHash, turnId: input.turnId, grant: input.grant, generation: input.generation, turnAtMs: input.turnAtMs });
     const name = /Claude Testcase/.test(input.message) ? "Claude Testcase" : fields.fullName;
-    await startFormDraft.execute({ ...fields, fullName: name }, ctx);
+    // The voice guard rewrites dashes, so this address cannot be shown word for word.
+    const address = /with a dash/.test(input.message) ? "12 Sample Street \u2014 Unit 4, Testville" : fields.address;
+    await startFormDraft.execute({ ...fields, fullName: name, address }, ctx);
     return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop" };
   }
   return { status: "replied" as const, text: `Answer ${agentCalls.length}`, reason: "stop" };
@@ -181,8 +183,14 @@ describe("the approval question reaches the person exactly", () => {
     expect(guardReply(ask.body.text).text).toContain(ask.body.approval);
   });
 
+  it("a person named Claude Testcase sees their own name in the question", async () => {
+    const ask = await send(turn("turn_exact00004", "Please file my renewal for Claude Testcase"));
+    expect(ask.body.approval).toContain("Name: Claude Testcase");
+    expect(guardReply(ask.body.text).text).toContain(ask.body.approval);
+  });
+
   it("a draft the text line would alter is never put to a YES", async () => {
-    const ask = await send(turn("turn_exact00002", "Please file my renewal for Claude Testcase"));
+    const ask = await send(turn("turn_exact00002", "Please file my renewal, address with a dash"));
     expect(ask.body.text).not.toContain("Reply YES");
     expect(engine.approvals()[0].status).toBe("rejected");
     await send(turn("turn_exact00003", "YES"));
@@ -224,7 +232,7 @@ describe("uncertain and refused outcomes", () => {
     // Engine's recovery sweep reconciles it without the agent.
     checkDown = false;
     const [approval] = engine.approvals();
-    await engine.gateway.approveAndExecute(approval.id, approval.personId);
+    await engine.gatewayFor(approval.personId).approveAndExecute(approval.id, approval.personId);
     const yes = await send(turn("turn_yes_000015", "YES"));
     expect(yes.body.text).toMatch(/^Done/);
     expect(engine.executor.calls).toHaveLength(1);
@@ -234,18 +242,36 @@ describe("uncertain and refused outcomes", () => {
     await send(turn("turn_ask_000012", "Please file my renewal"));
     const [approval] = engine.approvals();
     // The YES went through in Engine but its answer never reached Mano.
-    await engine.gateway.approveAndExecute(approval.id, approval.personId);
+    await engine.gatewayFor(approval.personId).approveAndExecute(approval.id, approval.personId);
     const no = await send(turn("turn_no_0000012", "no"));
     expect(no.body.text).not.toMatch(/did not send|nothing left/i);
     expect(no.body.text).toMatch(/already/i);
   });
 });
 
+async function deleteConversation(generation: number) {
+  const res = await engine.fetch(`${ENGINE_URL}/api/persons/${personIdFor(HANDLE)}/conversation`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${ENGINE_CHANNELS_TOKEN}`, "x-mano-handle-grant": grants.get(HANDLE)! },
+    body: JSON.stringify({ generation }),
+  });
+  return (await res.json()) as { removed: Record<string, number | boolean> };
+}
+
 describe("after a deletion", () => {
   it("a YES in the new conversation never approves a draft from before the deletion", async () => {
     await send(turn("turn_ask_000013", "Please file my renewal"));
+    const { removed } = await deleteConversation(1);
+    expect(removed).toMatchObject({ generation: 1, pendingPointerCleared: true, approvalsRejected: 1 });
     await send(turn("turn_yes_000013", "YES", HANDLE, 1));
     expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  it("a turn from before the deletion is refused and writes nothing", async () => {
+    await deleteConversation(1);
+    const stale = await send(turn("turn_old_000013", "remind me of something", HANDLE, 0));
+    expect(stale.status).toBe(409);
+    expect(agentCalls).toHaveLength(0);
   });
 });
 

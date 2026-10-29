@@ -30,10 +30,10 @@ export default defineTool({
     start: () => "Prepare the renewal",
   },
   async execute(input, ctx) {
-    const { turnId, generation } = requireTurn(ctx);
+    const { turnId } = requireTurn(ctx);
     const engine = personEngine(ctx);
     if (!engine) throw new Error("Preparing forms is not available right now. Say so and offer to collect the answers.");
-    const pointer = await engine.getPointer(generation);
+    const pointer = await engine.getPointer();
     if (pointer) {
       const answerable = await engine.approval(pointer.approvalId);
       if (answerable?.status === "approved") {
@@ -64,7 +64,7 @@ export default defineTool({
     }
     // One question waits at a time: earlier proposals, shown or not, can
     // never be answered now, so Engine closes them.
-    if (pointer) await engine.clearPointer();
+    if (pointer) await engine.clearPointer(pointer.approvalId);
     for (const earlier of waitingProposals(await engine.listApprovals(), result.approval.id)) {
       await engine.reject(earlier.id).catch(() => undefined);
     }
