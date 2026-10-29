@@ -61,12 +61,13 @@ def check_body(recipient):
 class OverlappingChecks(unittest.TestCase):
     def test_each_check_gets_its_own_verdict(self):
         engine = CollectAllEngine()
+        engine_lock = threading.Lock()
         results = {}
 
         def run(name, recipient, delay):
             time.sleep(delay)
             try:
-                results[name] = app.ask_model(engine, check_body(recipient), None)["verdict"]
+                results[name] = app.ask_model(engine, engine_lock, check_body(recipient), None)["verdict"]
             except RuntimeError as error:
                 results[name] = f"error: {error}"
 

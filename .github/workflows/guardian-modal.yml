@@ -29,6 +29,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install "modal==1.6.2"
+      - name: Test the app
+        run: python -m unittest discover -s packages/guardian/modal -v
       - name: Cache model weights (CPU, no GPU billed)
         run: modal run packages/guardian/modal/app.py::download
         env:

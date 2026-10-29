@@ -13,6 +13,7 @@
 import hmac
 import json
 import os
+import threading
 from typing import Any
 
 import modal
@@ -123,16 +124,23 @@ def parse_verdict(text: str) -> dict[str, Any]:
     return {"verdict": verdict, "problems": problems}
 
 
-def ask_model(engine: Any, body: dict[str, Any], params: Any) -> dict[str, Any]:
-    """Ask the model about one action and return its parsed verdict."""
-    outputs = engine.chat(
-        [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(body)},
-        ],
-        sampling_params=params,
-        use_tqdm=False,
-    )
+def ask_model(
+    engine: Any, engine_lock: threading.Lock, body: dict[str, Any], params: Any
+) -> dict[str, Any]:
+    """Ask the model about one action and return its parsed verdict.
+
+    vLLM's offline LLM returns every request that finished during a call, not
+    only the caller's, so one caller at a time holds the engine.
+    """
+    with engine_lock:
+        outputs = engine.chat(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(body)},
+            ],
+            sampling_params=params,
+            use_tqdm=False,
+        )
     if not outputs or not outputs[0].outputs:
         raise RuntimeError("the model returned no output")
     output = outputs[0].outputs[0]
@@ -181,6 +189,7 @@ class Guardian:
             max_model_len=8192,
             generation_config="auto",
         )
+        self.engine_lock = threading.Lock()
 
     @modal.method()
     def complete(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -192,7 +201,7 @@ class Guardian:
             max_tokens=256,
             structured_outputs=StructuredOutputsParams(json=GUARDIAN_SCHEMA),
         )
-        return ask_model(self.engine, body, params)
+        return ask_model(self.engine, self.engine_lock, body, params)
 
 
 _CONTAINER_TOKEN: str | None = None
