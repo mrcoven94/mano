@@ -28,7 +28,7 @@ const DANGER = /\b(?:immediate danger|in danger(?! of losing\b)|not safe|unsafe|
 // (over a limit, out of budget, a failed call), so a match costs one
 // fixed text and silence is never the answer.
 const POSSIBLE_CRISIS =
-  /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut myself|cutting|end it|end my life|(?:don'?t|do not) want to (?:live|be here)|jump off)\b/;
+  /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut myself|cut my|cutting|slit\w*|wrists?|throw(?:ing)? myself|jump(?:ing)? off|kill myself|end it|end my life|(?:not|don'?t|do not) want to (?:live|be here)|better off dead)\b/;
 
 function normalize(text: string): string {
   return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]/g, " ").replace(/\s+/g, " ")} `;
@@ -53,19 +53,10 @@ export function crisisFloor(reply: string): string {
   return namesCrisisLines(reply) ? reply : `${CRISIS_LINE} ${reply}`.trim();
 }
 
-// Said when a crisis reply names one number but not the other.
-export const LINE_988 = "You can also call or text 988 anytime, it's free and open 24/7.";
-export const LINE_911 = "If you're in danger right now, call 911.";
-
-// The last check on a crisis turn's outgoing bubbles, after the guard,
-// the link check and truncation. With neither number, CRISIS_LINE goes
-// first; with one, only the missing line is added, first. Callers cap
-// the bubble count after this, so the added line is never the one cut.
+// The last step on a crisis turn's outgoing bubbles, after the guard,
+// the link check and splitting: the fixed CRISIS_LINE, naming 988 and
+// 911, is always the first bubble and appears once. Callers cap the
+// bubbles after it, so the cap can never drop it.
 export function holdCrisisLines(bubbles: readonly string[]): string[] {
-  const text = bubbles.join(" ");
-  const has988 = /\b988\b/.test(text);
-  const has911 = /\b911\b/.test(text);
-  if (has988 && has911) return [...bubbles];
-  if (!has988 && !has911) return [CRISIS_LINE, ...bubbles];
-  return [has988 ? LINE_911 : LINE_988, ...bubbles];
+  return [CRISIS_LINE, ...bubbles.filter((b) => b !== CRISIS_LINE)];
 }

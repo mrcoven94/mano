@@ -118,7 +118,8 @@ describe("PR 67 review, through the send path", () => {
 
 describe("PR 67 review round 2, through the send path", () => {
   it("replaces a self-reference that names a listed AI company or assistant (blocker 1)", async () => {
-    for (const reply of ["This is Google Assistant. How can I help?", "I'm Alexa, your helper.", "I was made by Apple, I'm Siri."]) {
+    // Round 4 rule 4: companies count in first person or a maker clause only.
+    for (const reply of ["I'm Google Assistant. How can I help?", "I'm Alexa, your helper.", "I was made by Apple, I'm Siri."]) {
       const h = makeHarness({ replies: [reply] });
       const sent = (await say(h, "evt_1", "who is this")).slice(1).join(" ");
       expect(sent, reply).toContain(SELF_DESCRIPTION);
@@ -166,11 +167,10 @@ describe("PR 67 review round 3, through the send path", () => {
     expect(answer).toMatch(/\b911\b/);
   });
 
-  it("adds only the missing number (1)", async () => {
+  it("keeps the model's own words after the crisis line (1, made structural in round 4)", async () => {
     const h = makeHarness({ replies: ["Please call 911 right now. I'm here."] });
     const answer = (await say(h, "evt_1", "I am going to jump off a bridge")).slice(1);
-    expect(answer.join(" ")).toMatch(/\b988\b/);
-    expect(answer).not.toContain(CRISIS_LINE);
+    expect(answer[0]).toBe(CRISIS_LINE);
     expect(answer.join(" ")).toContain("Please call 911 right now. I'm here.");
   });
 
@@ -189,6 +189,43 @@ describe("PR 67 review round 3, through the send path", () => {
     for (const reply of ["Mano runs on Llama.", "I am Amazon Nova.", "My name is Google."]) {
       const h = makeHarness({ replies: [reply] });
       expect((await say(h, "evt_1", "who are you")).slice(1), reply).toEqual([SELF_DESCRIPTION]);
+    }
+  });
+});
+
+describe("PR 67 review round 4, through the send path", () => {
+  it("always opens a crisis answer with the fixed crisis line, and the cap never drops it (1)", async () => {
+    const long = Array.from({ length: 100 }, () => "I'm here with you and we will get through tonight together.").join(" ");
+    const h = makeHarness({ replies: [`Please call 911 now. ${long} Call 988.`] });
+    const answer = (await say(h, "evt_1", "I want to die")).slice(1);
+    expect(answer[0]).toBe(CRISIS_LINE);
+    expect(answer.length).toBeLessThanOrEqual(4);
+    expect(answer.join(" ")).toMatch(/\b988\b/);
+    expect(answer.join(" ")).toMatch(/\b911\b/);
+  });
+
+  it("opens with the crisis line for Sol's two inputs, even after a generic reply (2)", async () => {
+    for (const message of ["I want to slit my wrists", "I am going to throw myself off a bridge"]) {
+      const h = makeHarness({ replies: ["Can you tell me more?"] });
+      const answer = (await say(h, "evt_1", message)).slice(1);
+      expect(answer[0], message).toBe(CRISIS_LINE);
+    }
+  });
+
+  it("catches our stack anywhere (3)", async () => {
+    for (const reply of ["I'm Mano, Meta's assistant.", "You're talking with Spark."]) {
+      const h = makeHarness({ replies: [reply] });
+      expect((await say(h, "evt_1", "who are you")).slice(1), reply).toEqual([SELF_DESCRIPTION]);
+    }
+  });
+
+  it("sends Sol's two benefits sentences unchanged (4)", async () => {
+    for (const reply of [
+      "This is the Amazon Fresh page, where a virtual assistant can help you use your EBT card.",
+      'On the renewal form, write "My name is Maria Garcia" and sign page 2.',
+    ]) {
+      const h = makeHarness({ replies: [reply] });
+      expect((await say(h, "evt_1", "what do i do")).slice(1), reply).toEqual([reply]);
     }
   });
 });

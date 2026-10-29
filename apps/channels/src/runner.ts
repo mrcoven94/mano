@@ -35,7 +35,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { guardReply, holdCrisisLines, mightBeCrisis } from "@mano/persona";
+import { CRISIS_LINE, SAFE_REPLY, guardReply, holdCrisisLines, mightBeCrisis } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -924,14 +924,20 @@ export class ConversationRunner {
   }
 
   // The answer bubbles exactly as sendBubble will send them: each one
-  // through the same send-time guard, then, for a crisis turn, the
-  // check that 988 and 911 are still there, then the bubble cap. The
-  // crisis check is the last change to the text: the guard is
-  // idempotent, so sendBubble's own pass leaves these bubbles as they are.
+  // through the same send-time guard. On a crisis turn the fixed crisis
+  // line is the first bubble, once, and only the bubbles after it are
+  // capped, so neither the guard nor the cap can remove 988 and 911.
+  // The guard is idempotent, so sendBubble's own pass changes nothing.
   private answerBubbles(turn: number, texts: string[], crisis: boolean): import("./store.js").AnswerBubble[] {
     const voiced = texts.map((text, i) => this.guard(text, { turn, part: i + 1, tag: "" }));
-    const final = crisis ? holdCrisisLines(voiced).slice(0, MAX_BUBBLES) : voiced;
-    return final.map((text, i) => ({ part: i + 1, tag: "", text }));
+    if (!crisis) return voiced.map((text, i) => ({ part: i + 1, tag: "", text }));
+    // The model may have written the crisis line into its own text.
+    const rest = splitBubbles(voiced.join(" ").split(CRISIS_LINE).join(" "))
+      .map((text, i) => this.guard(text, { turn, part: i + 2, tag: "" }))
+      .filter((text) => text !== SAFE_REPLY);
+    return holdCrisisLines(rest)
+      .slice(0, MAX_BUBBLES)
+      .map((text, i) => ({ part: i + 1, tag: "", text }));
   }
 
   private guardOptions(): { modelIds: string[] } {

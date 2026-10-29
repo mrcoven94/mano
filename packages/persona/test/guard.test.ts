@@ -57,7 +57,7 @@ describe("guardReply model and provider names", () => {
       text: `${SELF_DESCRIPTION} How can I help?`,
       changes: ["self-description"],
     });
-    expect(guardReply("This is ChatGPT, made by OpenAI.").text).toBe(SELF_DESCRIPTION);
+    expect(guardReply("I'm ChatGPT, made by OpenAI.").text).toBe(SELF_DESCRIPTION);
     expect(guardReply("I am a large language model built by Meta. I can help with forms.").text).toBe(
       `${SELF_DESCRIPTION} I can help with forms.`,
     );
@@ -127,7 +127,7 @@ describe("guardReply real model identifiers (review blocker 4)", () => {
     expect(guardReply("I use META for answers.").text).toBe(SELF_DESCRIPTION);
     expect(guardReply("i'm muse spark lol").text).toBe(SELF_DESCRIPTION);
     expect(guardReply("i use meta for answers").text).toBe(SELF_DESCRIPTION);
-    expect(guardReply("Running on llama3 today. Bring the letter.").text).toBe("Bring the letter.");
+    expect(guardReply("Running on llama3 today. Bring the letter.").text).toBe(`${SELF_DESCRIPTION} Bring the letter.`);
   });
 
   it("catches the configured model IDs", () => {

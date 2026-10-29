@@ -21,35 +21,29 @@ export interface GuardResult {
   changes: GuardChange[];
 }
 
-// What counts as naming the model or its maker, in three tiers:
-// A. Our own stack (muse, glimmer, llama, "muse spark", any model ID,
-//    and the configured IDs) counts anywhere, in any case.
-// B. "meta" and "spark" count after a maker or power verb anywhere in
-//    the sentence ("I'm Mano, powered by Meta").
-// C. Every other company or product counts only when the assistant
-//    identifies itself: "I'm X", "my name is X", "I was made by X",
-//    "X made me", "this is X, your assistant". Anywhere else it is
-//    benefits help: "Walmart and Amazon accept SNAP online", "This is
-//    the Amazon Fresh page".
-// Names not on any list count only in "my name is X", a capitalized
-// "I'm X", or the assistant itself made or built by X.
+// What counts as naming the model or its maker, in two tiers:
+// A. Our own stack (meta, spark, muse, glimmer, llama, any model ID and
+//    the configured IDs) counts anywhere, in any case, except four
+//    idioms: "spark of hope", "glimmer of hope", "muse on", "muse about".
+// B. Every other company or product counts only in a direct first-person
+//    "I'm X" or "my name is X" outside quotation marks, or a maker or
+//    power clause about the assistant ("I was made by X", "X made me").
+//    Anywhere else it is benefits help: "Walmart and Amazon accept SNAP
+//    online", "your caseworker Claude".
+// Names on no list count only in "my name is X", a capitalized "I'm X",
+// or the assistant itself made or built by X, outside quotation marks.
 
-const STACK_WORDS = ["muse", "glimmer", "llama"];
-const STACK_PATTERN = new RegExp(`\\b(?:muse spark|${STACK_WORDS.join("|")})\\b`, "i");
+const STACK_PATTERN = /\b(?:meta|spark|muse|glimmer|llama)\b/i;
 const MODEL_ID_PATTERN = /\b(?:muse|spark|glimmer|llama|gpt|claude|gemini|mistral|grok)[-_. ]?(?:[a-z]+[-_. ]?)?\d[\w.-]*/i;
-// The only uses of a stack word Mano may send, unless the sentence also
-// makes an identity statement. Each is covered by a test.
 const ORDINARY_PHRASES = /\b(?:spark of hope|glimmer of hope|muse (?:on|about))\b/gi;
+// An identity statement beats the idioms: "I'm powered by the spark of hope" still leaks.
 const IDENTITY_STATEMENT =
   /\b(?:i am|i'm|i’m|im|my name is|this is|powered by|built (?:on|by)|made by|trained by|runs? on|running on|based on|models?|assistant from)\b/i;
-
-const MAKER_CLAUSE_STACK =
-  /\b(?:powered|built|made|created|developed|trained|designed|running|runs?|based)\b[^.!?\n]*?\b(?:by|on|with|from)\s+(?:the\s+)?(?:muse\s+)?(?:meta|spark)\b/i;
+const QUOTED = /"[^"\n]*"|“[^”\n]*”/g;
 
 const OTHER_NAMES = [
-  "meta", "spark", "openai", "chatgpt", "gpt", "google", "gemini", "bard", "anthropic", "claude", "microsoft", "copilot",
-  "bing", "amazon", "alexa", "nova", "apple", "siri", "mistral", "deepseek", "grok", "xai",
-  "muse", "glimmer", "llama", "large language model", "language model", "llm", "ai model",
+  "openai", "chatgpt", "gpt", "google", "gemini", "bard", "anthropic", "claude", "microsoft", "copilot", "bing", "amazon",
+  "alexa", "nova", "apple", "siri", "mistral", "deepseek", "grok", "xai", "large language model", "language model", "llm", "ai model",
 ];
 const NAME = `(?:${OTHER_NAMES.join("|")})`;
 const ASSISTANT_WORD = "(?:ai|virtual|voice|digital|assistant|model|bot|chatbot|version|helper)";
@@ -58,29 +52,23 @@ const FILLER = `(?:(?:a|an|the|your|just|actually) )?(?:${ASSISTANT_WORD} )*`;
 const I_AM = "(?:i am|i'm|i’m|im)";
 const SELF = "(?:i|i was|i am|i'm|i’m|im|mano|mano is|mano was)";
 const MAKER = "(?:made|built|created|developed|trained|powered|designed|programmed|engineered)";
-const IDENTITY_WITH_NAME = [
-  // "I'm Claude", "my name is the Spark". A bare "a" or "an" counts
-  // only with an assistant word after the name, so "I'm a Gemini" passes.
+const OTHER_IDENTITY = [
+  // Direct first person. A bare "a" or "an" counts only with an
+  // assistant word after the name, so "I'm a Gemini" passes.
   `\\b(?:${I_AM}|my name is) (?:(?:the|your|just|actually) )?(?:${ASSISTANT_WORD} )*${NAME}\\b`,
   `\\b${I_AM} (?:a|an) (?:large )?(?:language model|llm|ai model)\\b`,
-  `\\b${I_AM} (?:a|an) (?:${ASSISTANT_WORD} )*${NAME}(?:['’]s)? (?:ai |virtual )?${ASSISTANT_NOUN}\\b`,
-  `\\b(?:${I_AM}|my name is)(?: (?:a|an|the|your))? ${NAME}['’]s (?:ai |virtual )?${ASSISTANT_NOUN}\\b`,
-  `\\b${I_AM} (?:a|an|the|your) (?:[\\w-]+ )?${ASSISTANT_NOUN} (?:from|by|made by|built by|of) ${FILLER}${NAME}\\b`,
+  `\\b${I_AM} (?:a|an) (?:${ASSISTANT_WORD} )*${NAME} (?:ai |virtual )?${ASSISTANT_NOUN}\\b`,
+  // Maker and power clauses about the assistant.
   `\\b${SELF}(?: (?:an?|the) (?:[\\w-]+ )?(?:assistant|ai|model|bot|chatbot))? ${MAKER} (?:by|on|at) ${FILLER}${NAME}\\b`,
   `^\\s*(?:powered|built|made|created|developed|trained) (?:by|on) ${FILLER}${NAME}\\b`,
   `\\b(?:i run|i am based|i'm based|i’m based|im based|mano runs|mano is based|mano was built) on ${FILLER}${NAME}\\b`,
   `\\b(?:i|mano) (?:use|uses) ${NAME} (?:to|for) (?:answer|answers|reply|replies|respond|think|talk|write)\\b`,
   `\\b${NAME} (?:made|built|created|developed|trained|powers|runs|designed) (?:me|mano)\\b`,
   `\\bmy (?:maker|creator|developer|provider|company|model) is ${FILLER}${NAME}\\b`,
-  // "This is" only as an assistant introducing itself: "this is X, your
-  // assistant", "this is X Assistant", "this is X, made by Y".
-  `\\bthis is (?:the )?${NAME}\\b[^.!?\\n]*?,? (?:your|an?) (?:[\\w-]+ )?${ASSISTANT_NOUN}\\b`,
-  `\\bthis is (?:the )?${NAME} assistant\\b`,
-  `\\bthis is (?:the )?${NAME},? ${MAKER} (?:by|on) \\S`,
 ].map((source) => new RegExp(source, "i"));
 const PROGRAM_NAMES = /\bapple health\b/gi;
 
-const OTHER_SELF = [
+const UNLISTED_SELF = [
   /\bi(?: was| am|'m|’m)(?: (?:an?|the) (?:[\w-]+ )?(?:assistant|ai|model|bot|chatbot))? (?:developed|built|made|created|trained|designed|programmed|powered|engineered) (?:by|at|on)\s+(?!mano\b)\S/i,
   /\bmy name is\s+(?!mano\b)\S/i,
   // Case-sensitive on purpose: the name after it is capitalized. An
@@ -103,16 +91,18 @@ function idPattern(modelIds: readonly string[]): RegExp | null {
 }
 
 function selfIdentifiesAsOther(sentence: string): boolean {
-  const plain = sentence.replace(PROGRAM_NAMES, " ").replace(ORDINARY_PHRASES, " ");
-  if (IDENTITY_WITH_NAME.some((pattern) => pattern.test(plain)) || MAKER_CLAUSE_STACK.test(plain)) return true;
-  return OTHER_SELF.some((pattern) => pattern.test(sentence));
+  const unquoted = sentence.replace(QUOTED, " ").replace(PROGRAM_NAMES, " ");
+  return OTHER_IDENTITY.some((pattern) => pattern.test(unquoted)) || UNLISTED_SELF.some((pattern) => pattern.test(unquoted));
 }
 
-function sentenceNamesProvider(sentence: string, ids: RegExp | null): boolean {
-  if (selfIdentifiesAsOther(sentence)) return true;
+function namesOurStack(sentence: string, ids: RegExp | null): boolean {
   if (MODEL_ID_PATTERN.test(sentence) || ids?.test(sentence)) return true;
   if (!STACK_PATTERN.test(sentence)) return false;
   return IDENTITY_STATEMENT.test(sentence) || STACK_PATTERN.test(sentence.replace(ORDINARY_PHRASES, " "));
+}
+
+function sentenceNamesProvider(sentence: string, ids: RegExp | null): boolean {
+  return namesOurStack(sentence, ids) || selfIdentifiesAsOther(sentence);
 }
 
 const SENTENCE_BREAK = /((?<=[.!?…])\s+|\n+)/;
@@ -182,7 +172,8 @@ function removeProviderNames(text: string, ids: RegExp | null): { text: string; 
     gap += i > 0 ? parts[i - 1] : "";
     let sentence: string | null = parts[i];
     if (sentenceNamesProvider(sentence, ids)) {
-      sentence = (SELF_REFERENCE.test(sentence) || selfIdentifiesAsOther(sentence)) && !selfDescribed ? SELF_DESCRIPTION : null;
+      const describesSelf = SELF_REFERENCE.test(sentence) || IDENTITY_STATEMENT.test(sentence) || selfIdentifiesAsOther(sentence);
+      sentence = describesSelf && !selfDescribed ? SELF_DESCRIPTION : null;
       if (sentence) selfDescribed = true;
     }
     if (sentence === null) continue;

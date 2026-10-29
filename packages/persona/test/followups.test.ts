@@ -88,7 +88,9 @@ describe("PR 67 review", () => {
   });
 
   it("still catches explicit assistant identities that start with This is (should 3)", () => {
-    for (const text of ["This is Nova, your assistant.", "This is Google Assistant speaking.", "This is ChatGPT, made by OpenAI."]) {
+    // Round 4 rule 4 retired "this is X" for companies; these now count
+    // only through a first-person identity or a maker clause.
+    for (const text of ["I'm Nova, your assistant.", "I'm Google Assistant.", "I'm ChatGPT, made by OpenAI."]) {
       expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
     }
   });
@@ -97,8 +99,8 @@ describe("PR 67 review", () => {
 describe("PR 67 review round 2", () => {
   it("replaces self-references naming a listed company or assistant, in any case (blocker 1)", () => {
     for (const text of [
-      "This is Google Assistant. How can I help?",
-      "this is google assistant",
+      "I'm Google Assistant. How can I help?",
+      "i'm google assistant",
       "I'm Alexa.",
       "My maker is Amazon.",
       "I am built on xAI's Grok.",
@@ -155,13 +157,13 @@ describe("listed names count only inside an identity construction (lead decision
 
 describe("model words split in two (lead decision)", () => {
   it("passes people's names and ordinary words outside identity constructions", () => {
-    for (const text of ["Your caseworker Claude will call Friday.", "I'm a Gemini.", "That's a meta question.", "There's a nova of options.", "I'm a Medicaid expert, more or less."]) {
+    for (const text of ["Your caseworker Claude will call Friday.", "I'm a Gemini.", "There's a nova of options.", "I'm a Medicaid expert, more or less."]) {
       expect(guardReply(text), text).toEqual({ text, changes: [] });
     }
   });
 
   it("still replaces those words inside identity constructions", () => {
-    for (const text of ["I'm Claude.", "I'm powered by Meta.", "Powered by Meta.", "This is Gemini, your assistant.", "I'm a Gemini model."]) {
+    for (const text of ["I'm Claude.", "I'm powered by Meta.", "Powered by Meta.", "I'm Gemini, your assistant.", "I'm a Gemini model."]) {
       expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
     }
   });
@@ -184,20 +186,41 @@ describe("PR 67 review round 3", () => {
     for (const text of ["Ask ChatGPT about it.", "Copilot can draft that email.", "You can look it up on Google Maps.", "This is the Amazon Fresh page where you can use your EBT card."]) {
       expect(guardReply(text), text).toEqual({ text, changes: [] });
     }
-    for (const text of ["I'm ChatGPT.", "My name is Google.", "I was made by Microsoft.", "This is Nova, your assistant."]) {
+    for (const text of ["I'm ChatGPT.", "My name is Google.", "I was made by Microsoft.", "Microsoft made me."]) {
       expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
     }
   });
 });
 
-describe("holdCrisisLines adds only what is missing (round 3, 1)", () => {
-  it("adds 988 when only 911 is there, 911 when only 988 is there, both when neither", () => {
-    const only911 = holdCrisisLines(["Please call 911 right now."]);
-    expect(only911.join(" ")).toMatch(/\b988\b/);
-    expect(only911).not.toContain(CRISIS_LINE);
-    const only988 = holdCrisisLines(["Please call or text 988."]);
-    expect(only988.join(" ")).toMatch(/\b911\b/);
-    expect(only988).not.toContain(CRISIS_LINE);
-    expect(holdCrisisLines(["Can you tell me more?"])[0]).toBe(CRISIS_LINE);
+describe("PR 67 review round 4", () => {
+  it("always puts the crisis line first, once (1)", () => {
+    expect(holdCrisisLines(["Please call 911 right now."])[0]).toBe(CRISIS_LINE);
+    expect(holdCrisisLines(["Call 988 or 911, I'm here."])[0]).toBe(CRISIS_LINE);
+    expect(holdCrisisLines([CRISIS_LINE, "I'm here."]).filter((b) => b === CRISIS_LINE)).toHaveLength(1);
+  });
+
+  it("widens the broad check (2)", () => {
+    for (const text of ["I want to slit my wrists", "I am going to throw myself off a bridge", "I'm going to cut my arm", "I'd be better off dead", "I do not want to be here"]) {
+      expect(mightBeCrisis(text), text).toBe(true);
+    }
+  });
+
+  it("counts meta and spark anywhere, outside the idioms (3)", () => {
+    for (const text of ["I'm Mano, Meta's assistant.", "You're talking with Spark.", "Ask Meta about it."]) {
+      expect(containsProviderName(text), text).toBe(true);
+    }
+    for (const text of ["There is a spark of hope.", "Your caseworker Claude will call Friday."]) {
+      expect(guardReply(text), text).toEqual({ text, changes: [] });
+    }
+  });
+
+  it("ignores names inside quotation marks and descriptions of other assistants (4)", () => {
+    for (const text of [
+      'On the renewal form, write "My name is Maria Garcia" and sign page 2.',
+      "On the form, type “I'm Maria” in box 3.",
+      "This is the Amazon Fresh page, where a virtual assistant can help you use your EBT card.",
+    ]) {
+      expect(guardReply(text), text).toEqual({ text, changes: [] });
+    }
   });
 });
