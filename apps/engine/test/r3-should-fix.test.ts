@@ -26,6 +26,9 @@ describe("r3 should-fix: health, labels and byte caps", () => {
       SESSION_SECRET: "s",
       MANO_ENGINE_AGENT_TOKEN: "t",
       MANO_HANDLE_GRANT_SECRET: "g",
+      MANO_ENGINE_CHANNELS_TOKEN: "c",
+      MANO_CHANNELS_URL: "https://channels.test",
+      MANO_AGENT_SECRET: "a",
     };
     expect(healthOk(full as never)).toBe(false);
     expect(healthOk({ ...full, MANO_ENV: "development" } as never)).toBe(true);

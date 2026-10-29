@@ -27,7 +27,15 @@ async function memoryList(env: Env): Promise<Response> {
 describe("production config gate", () => {
   it("serves business routes only with complete production config", async () => {
     expect((await memoryList(production())).status).toBe(200);
-    for (const missing of ["MANO_ENGINE_AGENT_TOKEN", "MANO_HANDLE_GRANT_SECRET", "META_MODEL_API_KEY", "EXECUTOR_MODE"] as const) {
+    for (const missing of [
+      "MANO_ENGINE_AGENT_TOKEN",
+      "MANO_HANDLE_GRANT_SECRET",
+      "MANO_ENGINE_CHANNELS_TOKEN",
+      "MANO_CHANNELS_URL",
+      "MANO_AGENT_SECRET",
+      "META_MODEL_API_KEY",
+      "EXECUTOR_MODE",
+    ] as const) {
       const env = production({ [missing]: undefined });
       expect((await memoryList(env)).status, `without ${missing}`).toBe(503);
       const health = await worker.fetch(new Request("https://engine.test/health"), env);
