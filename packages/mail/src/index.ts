@@ -31,11 +31,12 @@
 // the transcription, else it becomes a question; unreadable pages
 // contribute nothing, though their contacts still warn; pages merge
 // only on continuation evidence with no contradictions; a letter
-// publishes at most one deadline, and only when its transcription has
-// exactly one deadline sentence, returned by the reader and recovered
-// verbatim, with no condition or audience in its paragraph, the line
-// before it or the headings above it, that parses whole into an
-// absolute form under src/gate.ts; counted deadlines ask, showing the
+// publishes at most one deadline, and only when, across all its pages,
+// it has exactly one deadline sentence, returned by the reader and
+// recovered verbatim, that parses whole into an absolute form under
+// src/gate.ts, with no condition, audience or cancellation word
+// anywhere in the letter and no other date apart from a single notice
+// date alone on a header line; counted deadlines ask, showing the
 // count and the date counted from; any open deadline question, failed
 // verification, failed chronology check, or missing page withholds
 // every date on the letter, and every withheld sentence joins each
@@ -73,10 +74,10 @@ import {
   type GroupablePage,
   type PageExtraction,
 } from "./read.js";
-import { parseAllDates, parseWrittenDate, recoverSentence, sentencesInContext } from "./dates.js";
+import { dateOccurrences, headerDates, parseAllDates, parseWrittenDate, recoverSentence, splitSentences } from "./dates.js";
 import {
+  findQualifiers,
   gateSentence,
-  hasQualifyingContext,
   isDeadlineSentence,
   type AskReason,
   type DayCount,
@@ -493,16 +494,16 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     if (checkMissingPages(members, letterId, cite, ask)) letterBlocked = true;
 
     // A letter publishes at most one deadline, and only when all of
-    // these hold: its whole transcription has exactly one deadline
-    // sentence (src/gate.ts isDeadlineSentence), whether or not the
-    // reader returned it; that sentence was returned and recovered
-    // verbatim from the original transcription; nothing in its
-    // paragraph, the line before it or the headings above it sets a
-    // condition or an audience; and it parses whole into an absolute
-    // form under the gate's grammar. Counted deadlines ask, showing the
-    // count. Anything else withholds every date on the letter, and
-    // every withheld sentence joins each deadline and missing-page
-    // question.
+    // these hold across all its pages: the transcription has exactly
+    // one deadline sentence (src/gate.ts isDeadlineSentence), whether
+    // or not the reader returned it; that sentence was returned and
+    // recovered verbatim; no condition, audience or cancellation word
+    // appears anywhere in the letter; it parses whole into an absolute
+    // form under the gate's grammar; and the letter names no date but
+    // that one, apart from a single notice date alone on a header line.
+    // Counted deadlines ask, showing the count. Anything else withholds
+    // every date on the letter, and every withheld sentence joins each
+    // deadline and missing-page question.
     interface GatedEntry {
       iso: string;
       text: string;
@@ -512,11 +513,12 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     }
     interface DeadlineSentence {
       sentence: string;
-      context: string;
       cited: { text: string; citation: Citation } | null;
     }
     const toKnow: GatedEntry[] = [];
     const found: DeadlineSentence[] = [];
+    const sentences: DeadlineSentence[] = [];
+    const letterTexts: string[] = [];
     const withheld: DeadlineCandidate[] = [];
     const candidateOf = (sentence: string, citation: Citation | null, count?: DayCount): DeadlineCandidate => ({
       sentence,
@@ -533,6 +535,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     members.forEach((m, i) => {
       const ex = m.extraction;
       if (!ex?.readable) return;
+      letterTexts.push(ex.fullText);
       const returned = new Map<string, { text: string; citation: Citation }>();
       for (const d of ex.deadlines) {
         if (!d.text) continue;
@@ -545,10 +548,11 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         }
         if (!returned.has(sentence)) returned.set(sentence, { text: d.text, citation });
       }
-      for (const { sentence, context } of sentencesInContext(ex.fullText)) {
+      for (const sentence of splitSentences(ex.fullText)) {
         const cited = returned.get(sentence) ?? null;
+        sentences.push({ sentence, cited });
         if (isDeadlineSentence(sentence)) {
-          if (!found.some((f) => f.sentence === sentence)) found.push({ sentence, context, cited });
+          if (!found.some((f) => f.sentence === sentence)) found.push({ sentence, cited });
           continue;
         }
         if (!cited) continue;
@@ -583,17 +587,29 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         candidates,
       });
     } else if (found.length === 1) {
-      const { sentence, context, cited } = found[0]!;
+      const { sentence, cited } = found[0]!;
       const citation = cited?.citation ?? null;
       const verdict = gateSentence(sentence, noticeIso);
-      if (hasQualifyingContext(context)) {
-        withhold(sentence, citation, askPrompt(letterId, sentence, { reason: "qualified" }));
+      const qualifiers = findQualifiers(letterTexts.join("\n\n"));
+      const dates = letterTexts.flatMap(dateOccurrences);
+      const header = letterTexts.flatMap(headerDates);
+      if (header.length === 1) dates.splice(dates.indexOf(header[0]!), 1);
+      const others = [...new Set(dates)].filter((iso) => verdict.kind !== "deadline" || iso !== verdict.iso);
+      if (qualifiers.length > 0) {
+        withhold(sentence, citation, askPrompt(letterId, sentence, { reason: "qualified", words: qualifiers }));
       } else if (verdict.kind === "ask") {
         withhold(sentence, citation, askPrompt(letterId, sentence, verdict), verdict.count);
       } else if (verdict.kind !== "deadline") {
         withhold(sentence, citation, askPrompt(letterId, sentence, { reason: "unrecognized" }));
       } else if (!cited) {
         withhold(sentence, null, askPrompt(letterId, sentence, { reason: "uncited" }));
+      } else if (others.length > 0) {
+        withhold(sentence, citation, askPrompt(letterId, sentence, { reason: "other-dates", dates: others }));
+        for (const s of sentences) {
+          if (s.sentence !== sentence && parseAllDates(s.sentence).some((iso) => others.includes(iso))) {
+            withheld.push(candidateOf(s.sentence, s.cited?.citation ?? null));
+          }
+        }
       } else {
         deadline = { iso: verdict.iso, text: cited.text, sentence, obligation: verdict.obligation, citation: cited.citation };
       }
@@ -1000,7 +1016,12 @@ function spoken(iso: string): string {
   return `${MONTH_NAMES[m! - 1]} ${d}, ${y}`;
 }
 
-type AskWhy = { reason: AskReason | "unrecovered" | "uncited" | "qualified"; count?: DayCount };
+type AskWhy = {
+  reason: AskReason | "unrecovered" | "uncited" | "qualified" | "other-dates";
+  count?: DayCount;
+  words?: string[];
+  dates?: string[];
+};
 
 function askPrompt(letterId: string, sentence: string, why: AskWhy): string {
   const said = `Letter ${letterId} says "${sentence}".`;
@@ -1023,7 +1044,15 @@ function askPrompt(letterId: string, sentence: string, why: AskWhy): string {
       );
     }
     case "qualified":
-      return `${said} The text around it sets a condition or says who it is for, so no deadline was set. Does this deadline apply to you?`;
+      return (
+        `${said} The letter also says "${why.words!.join('", "')}", which can set a condition, ` +
+        `name who it is for or withdraw it, so no deadline was set. Does this deadline apply to you?`
+      );
+    case "other-dates":
+      return (
+        `${said} The letter also names ${why.dates!.map(spoken).join(", ")}, so no deadline was set. ` +
+        `Which date, if any, is the deadline?`
+      );
     case "uncited":
       return `${said} It reads like a deadline but could not be pointed to on the photo, so no deadline was set. Which date, if any, is the deadline?`;
     case "unrecovered":

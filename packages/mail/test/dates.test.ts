@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { findAmbiguousDate, parseAllDates, parseWrittenDate, recoverSentence, splitSentences } from "../src/dates.js";
+import {
+  dateOccurrences,
+  findAmbiguousDate,
+  headerDates,
+  parseAllDates,
+  parseWrittenDate,
+  recoverSentence,
+  splitSentences,
+} from "../src/dates.js";
 
 describe("parseWrittenDate", () => {
   it("parses full written dates", () => {
@@ -75,6 +83,34 @@ describe("parseAllDates", () => {
     expect(parseAllDates("Sent November 2, 2026. Due November 20, 2026. Due November 20, 2026.")).toEqual([
       "2026-11-02",
       "2026-11-20",
+    ]);
+  });
+});
+
+describe("headerDates", () => {
+  it("finds a notice date alone on a header line, label allowed", () => {
+    expect(headerDates("County Office\nNotice Date: November 2, 2026\n\nDear Maria,\nReturn it by December 5, 2026.")).toEqual([
+      "2026-11-02",
+    ]);
+  });
+  it("ignores dates inside a sentence or below the salutation", () => {
+    expect(headerDates("County Office. Notice date November 2, 2026.")).toEqual([]);
+    expect(headerDates("County Office\nDear Maria,\nNovember 2, 2026")).toEqual([]);
+  });
+});
+
+describe("dateOccurrences", () => {
+  it("reads abbreviated months and keeps every occurrence", () => {
+    expect(dateOccurrences("Before 15 Nov. 2026. By Nov. 20, 2026. By November 20, 2026.")).toEqual([
+      "2026-11-15",
+      "2026-11-20",
+      "2026-11-20",
+    ]);
+  });
+  it("keeps an abbreviated date inside one sentence", () => {
+    expect(splitSentences("Submit proof before 15 Nov. 2026. Submit proof by November 20, 2026.")).toEqual([
+      "Submit proof before 15 Nov 2026",
+      "Submit proof by November 20, 2026",
     ]);
   });
 });

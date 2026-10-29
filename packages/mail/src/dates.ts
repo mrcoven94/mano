@@ -117,46 +117,41 @@ export const DATE_PATTERN =
 // asks instead of losing a condition.
 const SALUTATION_LINE = /^[ \t]*dear(?:[ \t]+[A-Za-z][A-Za-z.'-]*){1,5}[ \t]*[,:]?[ \t]*$/gim;
 
-export interface SentenceInContext {
-  sentence: string;
-  // The sentence's paragraph, the last line before that paragraph, and
-  // every heading line above it: where a condition or an audience
-  // ("If you moved:", "For county staff only.") qualifies it.
-  context: string;
+// "15 Nov. 2026" must not end a sentence at "Nov.": abbreviated month
+// names lose their period before anything is split.
+export function normalizeMonthAbbreviations(text: string): string {
+  return text.replace(/\b(jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec)\./gi, "$1");
 }
 
-const tidy = (s: string): string => s.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "");
-// A heading is a short line that does not end a sentence.
-const isHeading = (line: string): boolean => !/[.!?]\s*$/.test(line) && line.trim().split(/\s+/).length <= 12;
-
-// The transcription's sentences with their context. Sentences end at
-// end punctuation, a blank line or a salutation line, so a letterhead
-// never runs into the body. Whitespace is collapsed and trailing
-// punctuation removed.
-export function sentencesInContext(fullText: string): SentenceInContext[] {
-  const paragraphs = fullText
+// The transcription's sentences. Sentences end at end punctuation, a
+// blank line or a salutation line, so a letterhead never runs into the
+// body. Whitespace is collapsed and trailing punctuation removed.
+export function splitSentences(fullText: string): string[] {
+  return normalizeMonthAbbreviations(fullText)
     .replace(SALUTATION_LINE, "\n\n")
-    .split(/\n\s*\n/)
-    .map((p) => p.split("\n").filter((l) => l.trim().length > 0))
-    .filter((lines) => lines.length > 0);
-  const out: SentenceInContext[] = [];
-  const headingsAbove: string[] = [];
-  let lineBefore = "";
-  for (const lines of paragraphs) {
-    const paragraph = lines.join(" ");
-    const context = [paragraph, lineBefore, ...headingsAbove].join("\n");
-    for (const raw of paragraph.split(/(?<=[.!?])\s+/)) {
-      const sentence = tidy(raw);
-      if (sentence) out.push({ sentence, context });
-    }
-    headingsAbove.push(...lines.filter(isHeading));
-    lineBefore = lines[lines.length - 1]!;
+    .split(/(?<=[.!?])\s+|\n\s*\n/)
+    .map((s) => s.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, ""))
+    .filter((s) => s.length > 0);
+}
+
+// The header block runs from the top of the page to the salutation or
+// the first line that ends a sentence. A notice or letter date counts
+// as the header date only on a line of its own there, with at most a
+// label before it.
+const HEADER_DATE_LINE = new RegExp(
+  String.raw`^\s*(?:(?:notice\s+date|date\s+of\s+notice|letter\s+date|date\s+mailed|mailing\s+date|issue\s+date|dated|date)\s*:?\s*)?(${DATE_PATTERN})\s*$`,
+  "i",
+);
+
+export function headerDates(fullText: string): string[] {
+  const out: string[] = [];
+  for (const line of normalizeMonthAbbreviations(fullText).split("\n")) {
+    if (/^\s*dear\b/i.test(line) || /[.!?]\s*$/.test(line)) break;
+    const m = line.match(HEADER_DATE_LINE);
+    const iso = m ? parseWrittenDate(m[1]!) : null;
+    if (iso) out.push(iso);
   }
   return out;
-}
-
-export function splitSentences(fullText: string): string[] {
-  return sentencesInContext(fullText).map((s) => s.sentence);
 }
 
 // The one sentence of the original transcription that contains the
@@ -164,16 +159,16 @@ export function splitSentences(fullText: string): string[] {
 // or more than one contains it: the extraction is never gated in its
 // place.
 export function recoverSentence(text: string, fullText: string): string | null {
-  const want = text.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "").toLowerCase();
+  const want = normalizeMonthAbbreviations(text).replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "").toLowerCase();
   if (want.length < 2) return null;
   const found = [...new Set(splitSentences(fullText).filter((s) => s.toLowerCase().includes(want)))];
   return found.length === 1 ? found[0]! : null;
 }
 
-// Every date found in reading order.
-export function parseAllDates(text: string): string[] {
-  const out: string[] = [];
-  const cleaned = text.replace(/\s+/g, " ");
+// Every date the parser accepts, in reading order, once per
+// occurrence.
+export function dateOccurrences(text: string): string[] {
+  const cleaned = normalizeMonthAbbreviations(text).replace(/\s+/g, " ");
   const monthNames = Object.keys(MONTHS).join("|");
   const patterns: RegExp[] = [
     new RegExp(`\\b(${monthNames})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?,?\\s+\\d{4}\\b`, "gi"),
@@ -189,9 +184,10 @@ export function parseAllDates(text: string): string[] {
     }
   }
   hits.sort((a, b) => a.index - b.index);
-  for (const h of hits) {
-    const iso = parseWrittenDate(h.text);
-    if (iso && !out.includes(iso)) out.push(iso);
-  }
-  return out;
+  return hits.map((h) => parseWrittenDate(h.text)).filter((iso): iso is string => iso !== null);
+}
+
+// Every distinct date in reading order.
+export function parseAllDates(text: string): string[] {
+  return [...new Set(dateOccurrences(text))];
 }

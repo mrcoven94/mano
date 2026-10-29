@@ -140,13 +140,23 @@ export function isDeadlineSentence(sentence: string): boolean {
   return DEADLINE_WORD.test(sentence) && (DATE_OR_COUNT.test(sentence) || parseAllDates(sentence).length > 0);
 }
 
-// Conditions and audiences that make a deadline someone else's or
-// not yet owed, looked for in the sentence's paragraph, the line before
-// it and the headings above it.
-const QUALIFIER = /\b(?:if|only|unless|except|when|staff|office\s+use|for\s+county|applies\s+to|does\s+not\s+apply)\b/i;
+// Conditions, audiences and cancellations that make a deadline
+// someone else's, not yet owed, or withdrawn. Searched across the whole
+// letter, salutation and headings included, before anything is
+// stripped. Returns every distinct word found.
+const QUALIFIER = new RegExp(
+  String.raw`\b(?:${[
+    "if applicable", "if", "only", "unless", "except", "when", "dear county staff", "staff",
+    "office use", "caseworker use", "for county", "applies to", "does not apply", "not required",
+    "cancelled", "canceled", "disregard", "void", "no longer", "ignore", "optional",
+  ]
+    .map((w) => w.replace(/ /g, String.raw`\s+`))
+    .join("|")})\b`,
+  "gi",
+);
 
-export function hasQualifyingContext(context: string): boolean {
-  return QUALIFIER.test(context);
+export function findQualifiers(letterText: string): string[] {
+  return [...new Set([...letterText.matchAll(QUALIFIER)].map((m) => m[0].toLowerCase().replace(/\s+/g, " ")))];
 }
 
 // A date to know states one plain date and names no duty: no

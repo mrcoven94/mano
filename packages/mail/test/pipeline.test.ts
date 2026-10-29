@@ -16,9 +16,11 @@ async function photo(): Promise<Buffer> {
   return sharp(Buffer.from(svg)).jpeg({ quality: 85 }).toBuffer();
 }
 
+// The notice date sits alone on a header line, the one date a letter may
+// name besides its deadline.
 const BASE_TEXT =
-  "Sacramento County Medi-Cal Office. Re: Renewal. Case CA-2026-1. Notice date November 2, 2026. " +
-  "Your renewal is due November 20, 2026. Send the signed renewal form. Coverage ends December 20, 2026. " +
+  "Sacramento County Medi-Cal Office\nRe: Renewal\nCase CA-2026-1\nNotice date November 2, 2026\n\n" +
+  "Your renewal is due November 20, 2026. Send the signed renewal form. Late forms stop coverage. " +
   "Call (555) 100-2000.";
 
 // BASE_TEXT without its deadline sentence, for tests that state their own.
@@ -34,7 +36,7 @@ function pageJson(over: Record<string, unknown> = {}): string {
     subject: { text: "Renewal", box_2d: [110, 60, 130, 200] },
     asked: [{ text: "Send the signed renewal form", box_2d: [150, 60, 170, 400] }],
     deadlines: [{ text: "November 20, 2026", box_2d: [200, 60, 220, 300] }],
-    consequence: { text: "Coverage ends December 20, 2026", box_2d: [230, 60, 245, 400] },
+    consequence: { text: "Late forms stop coverage", box_2d: [230, 60, 245, 400] },
     reference_no: { text: "CA-2026-1", box_2d: [110, 220, 130, 350] },
     notice_date: { text: "November 2, 2026", box_2d: [135, 60, 150, 300] },
     phones: [{ text: "(555) 100-2000", box_2d: [250, 60, 270, 220] }],
@@ -245,7 +247,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${INFO_TEXT} Benefits stop January 31, 2027.`,
+        full_text: `${INFO_TEXT} Coverage ends December 20, 2026. Benefits stop January 31, 2027.`,
         deadlines: [
           { text: "December 20, 2026", box_2d: [200, 60, 220, 300] },
           { text: "January 31, 2027", box_2d: [230, 60, 250, 300] },
@@ -335,7 +337,7 @@ describe("readMail", () => {
     expect(reading.deadlines.map((d) => d.dueDate).sort()).toEqual(["2026-11-20", "2026-11-24"]);
   });
 
-  it("turns planted instructions into warnings, not actions", async () => {
+  it("turns planted instructions into warnings and withholds the letter's deadline", async () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
@@ -349,7 +351,9 @@ describe("readMail", () => {
       model,
     });
     expect(reading.warnings.map((w) => w.kind)).toContain("instruction_in_content");
-    expect(reading.deadlines).toHaveLength(1);
+    // "Ignore" is a cancellation word, so the letter asks.
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.questions.map((q) => q.kind)).toContain("confirm_deadline");
   });
 
   it("asks instead of guessing on unreadable pages", async () => {
@@ -952,7 +956,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: "County Office. Case CA-1. Notice date November 2, 2026. Respond by November 20, 2026. page 1 of 2.",
+        full_text: "County Office\nCase CA-1\nNotice date November 2, 2026\n\nRespond by November 20, 2026. page 1 of 2.",
         sender: { text: "County Office", box_2d: [40, 60, 70, 400] },
         program: NIL,
         subject: NIL,
@@ -1047,7 +1051,7 @@ describe("readMail publish gate", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `County Office. Case CA-1. Notice date November 2, 2026. ${sentence}`,
+        full_text: `County Office\nCase CA-1\nNotice date November 2, 2026\n\n${sentence}`,
         sender: { text: "County Office", box_2d: [40, 60, 70, 400] },
         program: NIL,
         subject: NIL,
@@ -1217,7 +1221,7 @@ describe("readMail review 6", () => {
     text,
     box_2d: [ymin, 60, ymin + 20, 300],
   });
-  const HEAD = "County Office. Notice date November 2, 2026.";
+  const HEAD = "County Office\nNotice date November 2, 2026\n\n";
   const expectNothingPublished = (reading: Awaited<ReturnType<typeof readText>>): void => {
     expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
