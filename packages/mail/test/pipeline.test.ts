@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readMail } from "../src/index.js";
 import { ffmpegAvailable } from "../src/media.js";
 import { RecordedModelClient, recordedText } from "../src/model.js";
+import { LETTERS } from "../scripts/letters.js";
 
 async function photo(): Promise<Buffer> {
   const { default: sharp } = await import("sharp");
@@ -1674,7 +1675,21 @@ describe("readMail deadline proposals", () => {
     const reading = await read(`${HEAD}Return the form by December 5, 2026.\n\nIf\nyou moved, call us.`, [
       dl("Return the form by December 5, 2026."),
     ]);
-    expect(confirms(reading)[0]!.proposal!.reasons).toContain('the letter says "if you moved"');
+    expect(confirms(reading)[0]!.proposal!.reasons).toContain('the letter says "If you moved, call us."');
+  });
+
+  it("quotes the whole sentence each qualifier and date sits in, on mail-02's text", async () => {
+    const letter = LETTERS.find((l) => l.id === "mail-02")!;
+    const reading = await read(letter.pages[0]!, [dl(RETURN)]);
+    const reasons = confirms(reading)[0]!.proposal!.reasons;
+    expect(reasons).toEqual(
+      expect.arrayContaining([
+        'the letter says "Child care receipts if you pay for child care"',
+        'the letter says "If your recertification is late, your benefits may stop after December 31, 2026."',
+        'the letter says "If you need help, call (555) 254-7040."',
+        'the letter also mentions December 31, 2026, in "If your recertification is late, your benefits may stop after December 31, 2026."',
+      ]),
+    );
   });
 
   it("never proposes for a letter flagged as a scam", async () => {
