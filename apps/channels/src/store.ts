@@ -11,6 +11,9 @@ export interface PendingInbound {
   text: string | null;
   attachments: EventAttachment[];
   fromReconcile: boolean;
+  // The provider's id for the inbound message, for tapbacks and inline
+  // replies. Null on continuation pieces and older rows.
+  messageId?: string | null;
   // Set when the whole message this piece came from might be a crisis.
   // A long text is split into pieces at buffer time, and a crisis word
   // can straddle the split, so the check runs on the rejoined message.
@@ -31,6 +34,9 @@ export interface OutboundRow {
   code: string | null;
   chatId: string | null;
   messageId: string | null;
+  // The inbound message this bubble answers inline. Part of the payload
+  // bound to the idempotency key, so a replay sends it unchanged.
+  replyTo?: string | null;
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -59,8 +65,12 @@ export interface ApprovalRow {
 
 export interface AnswerBubble {
   part: number;
+  // "" for a text bubble, "react" for a tapback, whose text is the
+  // tapback and messageId the message it goes on.
   tag: string;
   text: string;
+  messageId?: string | null;
+  replyTo?: string | null;
 }
 
 // A turn persisted before any external call. Pending input is cleared
@@ -97,6 +107,9 @@ export interface ConversationMeta {
   dayCount: number;
   busyNoticeKey: string | null;
   lastInboundMs: number;
+  // When the person started typing, 0 when they are not. A turn waits
+  // while they type, up to TYPING_HOLD_CAP_MS.
+  typingSinceMs: number;
   byteDayKey: string;
   byteDayCount: number;
   // Bumped on every delete. Idempotency keys carry the generation, and
@@ -123,6 +136,7 @@ export function defaultMeta(): ConversationMeta {
     dayCount: 0,
     busyNoticeKey: null,
     lastInboundMs: 0,
+    typingSinceMs: 0,
     byteDayKey: "",
     byteDayCount: 0,
     generation: 0,

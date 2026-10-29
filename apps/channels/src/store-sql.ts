@@ -116,6 +116,7 @@ interface MetaRow {
   byte_day_count: number;
   generation: number;
   deleted_at_ms: number;
+  typing_since_ms?: number;
 }
 
 function firstRow<T>(cursor: SqlStorageCursor<Record<string, SqlStorageValue>>): T | null {
@@ -167,6 +168,10 @@ export class SqlConversationStore implements ConversationStore {
       "ALTER TABLE outbounds ADD COLUMN bubble_text TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE outbounds ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE turns ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+      // Native iMessage (LAP-636): tapbacks, inline replies, typing hold.
+      "ALTER TABLE pending ADD COLUMN message_id TEXT",
+      "ALTER TABLE outbounds ADD COLUMN reply_to TEXT",
+      "ALTER TABLE meta ADD COLUMN typing_since_ms INTEGER NOT NULL DEFAULT 0",
     ]) {
       try {
         this.sql.exec(ddl);
@@ -215,6 +220,7 @@ export class SqlConversationStore implements ConversationStore {
       dayCount: row.day_count,
       busyNoticeKey: row.busy_notice_key,
       lastInboundMs: row.last_inbound_ms,
+      typingSinceMs: row.typing_since_ms ?? 0,
       byteDayKey: row.byte_day_key ?? "",
       byteDayCount: row.byte_day_count ?? 0,
       generation: row.generation ?? 0,
@@ -224,7 +230,7 @@ export class SqlConversationStore implements ConversationStore {
 
   saveMeta(meta: ConversationMeta): void {
     this.sql.exec(
-      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ? WHERE id = 1",
+      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ?, typing_since_ms = ? WHERE id = 1",
       meta.turn,
       meta.introduced ? 1 : 0,
       meta.closed ? 1 : 0,
@@ -242,12 +248,13 @@ export class SqlConversationStore implements ConversationStore {
       meta.byteDayCount,
       meta.generation,
       meta.deletedAtMs,
+      meta.typingSinceMs,
     );
   }
 
   addPending(item: PendingInbound): void {
     this.sql.exec(
-      "INSERT OR IGNORE INTO pending (event_id, received_at_ms, chat_id, handle_to, text, attachments_json, from_reconcile) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO pending (event_id, received_at_ms, chat_id, handle_to, text, attachments_json, from_reconcile, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       item.eventId,
       item.receivedAtMs,
       item.chatId,
@@ -255,6 +262,7 @@ export class SqlConversationStore implements ConversationStore {
       item.text,
       JSON.stringify(item.attachments),
       item.fromReconcile ? 1 : 0,
+      item.messageId ?? null,
     );
   }
 
@@ -267,6 +275,7 @@ export class SqlConversationStore implements ConversationStore {
       text: string | null;
       attachments_json: string;
       from_reconcile: number;
+      message_id: string | null;
     }>;
     return rows.map((r) => ({
       eventId: r.event_id,
@@ -276,6 +285,7 @@ export class SqlConversationStore implements ConversationStore {
       text: r.text,
       attachments: JSON.parse(r.attachments_json) as EventAttachment[],
       fromReconcile: r.from_reconcile === 1,
+      messageId: r.message_id ?? null,
     }));
   }
 
@@ -287,7 +297,7 @@ export class SqlConversationStore implements ConversationStore {
 
   addOutbound(row: OutboundRow): void {
     this.sql.exec(
-      "INSERT OR IGNORE INTO outbounds (idem_key, turn, part, tag, bubble_text, attempts, state, code, chat_id, message_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO outbounds (idem_key, turn, part, tag, bubble_text, attempts, state, code, chat_id, message_id, created_at_ms, updated_at_ms, reply_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       row.key,
       row.turn,
       row.part,
@@ -300,6 +310,7 @@ export class SqlConversationStore implements ConversationStore {
       row.messageId,
       row.createdAtMs,
       row.updatedAtMs,
+      row.replyTo ?? null,
     );
   }
 
@@ -315,6 +326,7 @@ export class SqlConversationStore implements ConversationStore {
       code: string | null;
       chat_id: string | null;
       message_id: string | null;
+      reply_to?: string | null;
       created_at_ms: number;
       updated_at_ms: number;
     }>(this.sql.exec("SELECT * FROM outbounds WHERE idem_key = ?", key));
@@ -330,6 +342,7 @@ export class SqlConversationStore implements ConversationStore {
       code: row.code,
       chatId: row.chat_id,
       messageId: row.message_id,
+      replyTo: row.reply_to ?? null,
       createdAtMs: row.created_at_ms,
       updatedAtMs: row.updated_at_ms,
     };
@@ -382,6 +395,7 @@ export class SqlConversationStore implements ConversationStore {
       code: string | null;
       chat_id: string | null;
       message_id: string | null;
+      reply_to?: string | null;
       created_at_ms: number;
       updated_at_ms: number;
     }>).map((r) => ({
@@ -395,6 +409,7 @@ export class SqlConversationStore implements ConversationStore {
       code: r.code,
       chatId: r.chat_id,
       messageId: r.message_id,
+      replyTo: r.reply_to ?? null,
       createdAtMs: r.created_at_ms,
       updatedAtMs: r.updated_at_ms,
     }));

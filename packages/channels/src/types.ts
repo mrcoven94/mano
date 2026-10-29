@@ -28,9 +28,8 @@ export interface EventGroup {
   name: string | null;
 }
 
-// The tapbacks Mano may send. Dislike and question are left out on
-// purpose: they read as judgment from an assistant.
-export type Tapback = "love" | "like" | "laugh" | "emphasize";
+import type { Tapback } from "@mano/persona";
+export type { Tapback };
 
 export interface NormalizedEvent {
   id: string;

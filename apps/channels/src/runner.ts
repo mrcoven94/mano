@@ -35,7 +35,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { CRISIS_LINE, SAFE_REPLY, crisisTurn, guardReply, holdCrisisLines } from "@mano/persona";
+import { CRISIS_LINE, SAFE_REPLY, allowedTapback, guardReply, holdCrisisLines, mightBeCrisis } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -60,6 +60,9 @@ export interface RunnerConfig {
   handleHash: string;
   batchMs: number;
   interimMs: number;
+  // How often the typing indicator is sent again while Mano works, so it
+  // stays up across the fast and deep paths.
+  typingRefreshMs: number;
   budgetUsd: number;
   usdPer1kChars: number;
   maxInboundAgeMs: number;
@@ -76,11 +79,17 @@ export const HISTORY_TURNS = 6;
 // with its safety line, up to this many per person per day. Past the
 // cap only a message that might be a crisis gets a reply.
 export const BUSY_DAILY_CAP = 20;
+
+// A turn waits while the person is typing, so a burst of texts gets one
+// answer, but never longer than this after they started: a stuck typing
+// indicator cannot hold a reply back.
+export const TYPING_HOLD_CAP_MS = 8000;
 export const HISTORY_CHARS = 4000;
 
 export const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "handleHash"> = {
   batchMs: 2500,
   interimMs: 20000,
+  typingRefreshMs: 10000,
   budgetUsd: 5,
   usdPer1kChars: 0.001,
   maxInboundAgeMs: 5 * 60 * 1000,
@@ -172,6 +181,16 @@ export function partitionByChat(
   return [...groups.values()];
 }
 
+// In a burst of two or more texts, the reply answers the one question
+// that is not the latest message, shown inline under it. With no such
+// question, or more than one, the reply is not threaded.
+export function inlineReplyTarget(items: import("./store.js").PendingInbound[]): string | null {
+  const texts = items.filter((i) => (i.text ?? "").trim().length > 0 && i.messageId);
+  if (texts.length < 2) return null;
+  const earlier = texts.slice(0, -1).filter((i) => /\?\s*$/.test(i.text ?? ""));
+  return earlier.length === 1 && !/\?\s*$/.test(texts[texts.length - 1].text ?? "") ? (earlier[0].messageId ?? null) : null;
+}
+
 // The full text of each message in a group: pieces split from one long
 // text at buffer time ("evt#2", "evt#3") join back without a separator,
 // separate messages with a newline.
@@ -257,7 +276,16 @@ export class ConversationRunner {
   // "queued" when the caller must (re)schedule the batch alarm.
   async handleEvent(event: NormalizedEvent, source: "webhook" | "reconcile"): Promise<HandleResult> {
     const { store, logger, nowMs, config } = this.deps;
-    if (event.kind === "ignored" || event.kind === "typing.started" || event.kind === "typing.stopped") {
+    if (event.kind === "typing.started" || event.kind === "typing.stopped") {
+      if (!store.hasEvent(event.id)) store.recordEvent(event.id, event.kind, nowMs());
+      if (event.direction !== "outbound") {
+        const meta = store.meta();
+        meta.typingSinceMs = event.kind === "typing.started" ? nowMs() : 0;
+        store.saveMeta(meta);
+      }
+      return "recorded";
+    }
+    if (event.kind === "ignored") {
       if (!store.hasEvent(event.id)) store.recordEvent(event.id, event.kind, nowMs());
       return "recorded";
     }
@@ -337,6 +365,7 @@ export class ConversationRunner {
           text: piece,
           attachments: i === 0 ? event.attachments : [],
           fromReconcile: source === "reconcile",
+          messageId: i === 0 ? event.messageId : null,
         });
       });
       logger.info("inbound_queued", {
@@ -372,7 +401,20 @@ export class ConversationRunner {
       return "recorded";
     }
 
-    if (event.kind === "reaction") return "activity";
+    // A tapback from the person is acknowledgement only. It never answers
+    // an approval here: Engine and the Agent own approvals, so Channels
+    // records it and passes it on.
+    if (event.kind === "reaction") {
+      const onMano = event.messageId ? store.outboundByMessageId(event.messageId) !== null : false;
+      logger.info("reaction_received", {
+        handle: this.logHandle(),
+        eventId: event.id,
+        reaction: event.reaction?.value ?? null,
+        action: event.reaction?.action ?? null,
+        onMano,
+      });
+      return "activity";
+    }
 
     if (event.kind === "chat.closed") {
       const meta = store.meta();
@@ -508,6 +550,7 @@ export class ConversationRunner {
     const pending = store.pending();
     if (pending.length === 0) return this.needsRetry() ? "retry" : "idle";
     if (nowMs() - meta.lastInboundMs < this.deps.config.batchMs) return "waiting";
+    if (meta.typingSinceMs > 0 && nowMs() - meta.typingSinceMs < TYPING_HOLD_CAP_MS) return "waiting";
     // A turn finishes only after a persisted final outcome. An
     // infrastructure error keeps the turn row and its input and returns
     // "retry": the alarm re-arms with backoff and the turn resumes.
@@ -667,6 +710,12 @@ export class ConversationRunner {
     // buffer split it. It is broad on purpose: a match makes the reply
     // name 988 and 911, and over-triggering is accepted.
     const crisis = mightBeCrisis(texts.join("\n")) || items.some((i) => i.crisis === true);
+    // A crisis turn never sends the friendly intro, and later turns do not
+    // send it either.
+    if (crisis && !meta.introduced) {
+      meta.introduced = true;
+      store.saveMeta(meta);
+    }
 
     const approval = texts.length === 1 && attachments.length === 0 ? parseApprovalReply(texts[0]) : null;
     if (approval && store.pendingApprovals(nowMs()).length > 0) {
@@ -710,10 +759,7 @@ export class ConversationRunner {
       });
       if (crisis) {
         // No model and no cost: the deterministic crisis reply, past any limit.
-        const bubbles = [
-          ...(meta.introduced ? [] : [{ part: 0, tag: "", text: INTRO_BUBBLE }]),
-          ...this.answerBubbles(turn, [], true),
-        ];
+        const bubbles = this.answerBubbles(turn, [], true);
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
         await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
@@ -731,14 +777,19 @@ export class ConversationRunner {
       return;
     }
 
+    let typingTimer: ReturnType<typeof setInterval> | undefined;
     if (chatId) {
       await this.bestEffort("mark_read", () => this.deps.channel.markRead(chatId));
       await this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started"));
+      typingTimer = setInterval(() => {
+        void this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started"));
+      }, config.typingRefreshMs);
     }
     try {
       const saved = await this.saveAttachments(turn, attachments);
       const bubbles: import("./store.js").AnswerBubble[] = [];
-      if (!meta.introduced) bubbles.push({ part: 0, tag: "", text: INTRO_BUBBLE });
+      // A crisis turn opens with the crisis line, never the friendly intro.
+      if (!meta.introduced && !crisis) bubbles.push({ part: 0, tag: "", text: INTRO_BUBBLE });
       if (saved > 0) bubbles.push({ part: 0, tag: "ack", text: attachmentAck(saved) });
       if (turnText) {
         this.checkGeneration(generation);
@@ -752,7 +803,15 @@ export class ConversationRunner {
           if (final.removed > 0) {
             logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
           }
-          bubbles.push(...this.answerBubbles(turn, final.bubbles, crisis));
+          const tapback = allowedTapback(answer.tapback, turnText, crisis);
+          const latest = [...items].reverse().find((i) => i.messageId)?.messageId ?? null;
+          if (tapback && latest) bubbles.push({ part: 0, tag: "react", text: tapback, messageId: latest });
+          // A tapback alone is a full reply: no text, so no safe line either.
+          const reactionOnly = answer.tapback != null && !crisis && answer.text.trim().length === 0;
+          const answered = reactionOnly ? [] : this.answerBubbles(turn, final.bubbles, crisis);
+          const replyTo = inlineReplyTarget(items);
+          if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
+          bubbles.push(...answered);
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
@@ -773,6 +832,7 @@ export class ConversationRunner {
       await this.sendBubbles(turn, bubbles, chatId, to, saved, generation);
       this.checkSendsResolved(turn, generation);
     } finally {
+      clearInterval(typingTimer);
       if (chatId) await this.bestEffort("typing_stopped", () => this.deps.channel.setTyping(chatId, "stopped"));
     }
   }
@@ -833,7 +893,17 @@ export class ConversationRunner {
     // sends byte-identical bubbles under the same keys.
     let fresh = 0;
     for (const bubble of bubbles) {
-      const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation });
+      if (bubble.tag === "react") {
+        // Not a message and not counted: adding the same tapback again on
+        // a resumed turn changes nothing, so it is sent best effort.
+        const target = bubble.messageId;
+        if (chatId && target) {
+          await this.bestEffort("tapback_failed", () => this.deps.channel.react(chatId, target, bubble.text as import("@mano/channels").Tapback));
+          logger.info("tapback_sent", { handle: this.logHandle(), turn, tapback: bubble.text });
+        }
+        continue;
+      }
+      const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation, replyTo: bubble.replyTo ?? null });
       if (row.fresh) fresh += 1;
       if (bubble.tag === "" && bubble.part === 0 && row.state === "sent") {
         const introduced = store.meta();
@@ -857,7 +927,7 @@ export class ConversationRunner {
     to: string | null,
     generation: number,
     crisis: boolean,
-  ): Promise<{ ok: true; text: string; costUsd: number } | { ok: false; costUsd: number }> {
+  ): Promise<{ ok: true; text: string; costUsd: number; tapback: import("@mano/channels").Tapback | null } | { ok: false; costUsd: number }> {
     const { responder, config, logger } = this.deps;
     let done = false;
     let interimSent = false;
@@ -888,7 +958,7 @@ export class ConversationRunner {
       const result = await responder.respond({ texts: [turnText], attachmentCount, history }, { onHeadsUp });
       const costUsd =
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
-      return { ok: true, text: result.text, costUsd };
+      return { ok: true, text: result.text, costUsd, tapback: result.tapback ?? null };
     } catch (err) {
       logger.warn("responder_failed", {
         handle: this.logHandle(),
@@ -933,7 +1003,7 @@ export class ConversationRunner {
       const items = JSON.parse(row.itemsJson) as import("./store.js").PendingInbound[];
       const person = items.map((i) => i.text ?? "").filter((t) => t.length > 0).join("\n");
       const bubbles = row.answerJson ? (JSON.parse(row.answerJson) as import("./store.js").AnswerBubble[]) : [];
-      const mano = bubbles.map((b) => b.text).join(" ");
+      const mano = bubbles.filter((b) => b.tag !== "react").map((b) => b.text).join(" ");
       if (person) messages.push({ role: "person", text: person });
       if (mano) messages.push({ role: "mano", text: mano });
     }
@@ -1065,6 +1135,7 @@ export class ConversationRunner {
     to: string | null;
     force?: boolean;
     generation?: number;
+    replyTo?: string | null;
   }): Promise<SendBubbleResult> {
     const { store, channel, logger, nowMs, config } = this.deps;
     opts = { ...opts, text: this.guard(opts.text, { turn: opts.turn, part: opts.part, tag: opts.tag }) };
@@ -1103,12 +1174,12 @@ export class ConversationRunner {
     if (!prior) {
       store.addOutbound({
         key, turn: opts.turn, part: opts.part, tag: opts.tag, text: opts.text, attempts: 0, state: "planned", code: null,
-        chatId: opts.chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+        chatId: opts.chatId, messageId: null, replyTo: opts.replyTo ?? null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
       });
     }
     store.updateOutbound(key, { state: "sending", updatedAtMs: nowMs() });
     try {
-      const result = await channel.send({ to: opts.to ?? "", chatId: opts.chatId, text: opts.text, idempotencyKey: key });
+      const result = await channel.send({ to: opts.to ?? "", chatId: opts.chatId, text: opts.text, idempotencyKey: key, replyTo: opts.replyTo ?? null });
       // The conversation may have been deleted mid-send. Never write the
       // result into a newer generation.
       this.checkGeneration(generation);
@@ -1189,7 +1260,9 @@ export class ConversationRunner {
       return finish({ key, state: "failed", code: "unguarded_legacy", fresh: false, counted: false });
     }
     try {
-      const result = await channel.send({ to: opts.to ?? "", chatId: opts.chatId, text: opts.text, idempotencyKey: key });
+      // The replay carries the stored reply target: the key is bound to
+      // the exact body, so it must not change.
+      const result = await channel.send({ to: opts.to ?? "", chatId: opts.chatId, text: opts.text, idempotencyKey: key, replyTo: row?.replyTo ?? null });
       this.checkGeneration(generation);
       store.updateOutbound(key, {
         state: "sent", messageId: result.messageId, chatId: result.chatId, updatedAtMs: nowMs(),

@@ -26,7 +26,8 @@ describe("crisis protection does not depend on the model (review blocker 1)", ()
       const h = makeHarness({ responder: failing(err) });
       await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: CRISIS_TEXT, occurredAtMs: h.now }), "webhook");
       await runTurnAfterBatch(h);
-      expect(sent(h)).toEqual([INTRO_BUBBLE, CRISIS_LINE]);
+      // LAP-636: a crisis turn opens with the crisis line, no intro.
+      expect(sent(h)).toEqual([CRISIS_LINE]);
       expect(sent(h)).not.toContain(FAILURE_BUBBLE);
     }
   });
@@ -57,7 +58,7 @@ describe("the final bubbles of a crisis turn always name 988 and 911 (review blo
     const h = makeHarness({ replies: ["Call 988 or 911 through Llama."] });
     await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: CRISIS_TEXT, occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
-    const answer = sent(h).slice(1).join(" ");
+    const answer = sent(h).join(" ");
     expect(answer).toContain("988");
     expect(answer).toContain("911");
     expect(answer).not.toContain("Llama");
@@ -68,7 +69,7 @@ describe("the final bubbles of a crisis turn always name 988 and 911 (review blo
     const h = makeHarness({ replies: [`${long} Call 988 or 911.`] });
     await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: CRISIS_TEXT, occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
-    const answer = sent(h).slice(1);
+    const answer = sent(h);
     expect(answer[0]).toBe(CRISIS_LINE);
     expect(answer.length).toBeLessThanOrEqual(4);
   });
@@ -108,7 +109,7 @@ describe("the crisis check is the last step before a crisis turn is sent (review
     const h = makeHarness({ replies: ["Call 988 or 911, there is a spark of hope\nI use this to help you."] });
     await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: CRISIS_TEXT, occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
-    const answer = sent(h).slice(1).join(" ");
+    const answer = sent(h).join(" ");
     expect(answer).toContain("988");
     expect(answer).toContain("911");
   });

@@ -5,7 +5,7 @@
 // which the caller sends at once before the deep call at medium effort.
 // When the engine merges, its person agent becomes the Responder behind
 // this same interface.
-import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisFloor, mightBeCrisis, routeReply } from "@mano/persona";
+import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisFloor, mightBeCrisis, routeReply, splitTapback, type Tapback } from "@mano/persona";
 import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 
@@ -48,6 +48,9 @@ export interface ResponderResult {
   model: string;
   // Every request attempt across both calls, including retries.
   attempts: number;
+  // A tapback the model chose for the person's latest message, from a
+  // leading "REACT: love" line. The text may then be empty.
+  tapback?: Tapback | null;
 }
 
 export interface RespondHooks {
@@ -234,8 +237,9 @@ export class SparkResponder implements Responder {
     return this.result(deep.text, fast.attempts + deep.attempts, Math.max(fast.inputChars, deep.inputChars));
   }
 
-  private result(text: string, attempts: number, inputChars: number): ResponderResult {
-    return { text, bubbles: splitBubbles(text), inputChars, outputChars: text.length, model: this.model, attempts };
+  private result(raw: string, attempts: number, inputChars: number): ResponderResult {
+    const { tapback, text } = splitTapback(raw);
+    return { text, bubbles: splitBubbles(text), inputChars, outputChars: raw.length, model: this.model, attempts, tapback };
   }
 
   // One model call, retried on 429, 5xx, network errors and empty
@@ -351,7 +355,10 @@ export class StandInResponder implements Responder {
       await hooks.onHeadsUp?.(route.headsUp);
       text = this.replies.shift() ?? STAND_IN_REPLY;
     }
+    const split = splitTapback(text);
+    text = split.text;
     return {
+      tapback: split.tapback,
       text,
       bubbles: splitBubbles(text),
       inputChars: JSON.stringify(turn).length,
