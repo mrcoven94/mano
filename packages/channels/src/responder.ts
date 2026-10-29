@@ -5,10 +5,15 @@ import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 
 export const STANDARD_MODEL_ID = "muse-spark-1.3";
-// The model never writes more than this: 600 tokens at roughly 4
-// characters each fits the 4-by-600 bubble cap with room to spare.
-export const MAX_OUTPUT_TOKENS = 600;
-export const MAX_OUTPUT_CHARS = 2400;
+// Live finding: reasoning alone burns ~600-1100 tokens on a greeting,
+// so 600 starved every answer (status incomplete, reason
+// max_output_tokens). 2048 leaves room for reasoning plus a short
+// reply; usage will say if harder questions need more.
+export const MAX_OUTPUT_TOKENS = 2048;
+// Worst-case output for spend reservations: 2048 tokens at roughly 4
+// characters each. Replies stay short by instruction and the bubble
+// cap; this only bounds the reservation.
+export const MAX_OUTPUT_CHARS = 8200;
 // Slack for the system prompt when reserving the worst-case turn cost.
 export const INPUT_SLACK_CHARS = 1000;
 
@@ -38,14 +43,18 @@ export interface Responder {
 }
 
 // A failed model call still spent its attempts. The caller settles them.
+// The reason is a safe machine string (http status or run status, never
+// provider text) so logs can say why without leaking anything.
 export class ResponderFailed extends Error {
   readonly attempts: number;
   readonly inputChars: number;
-  constructor(message: string, attempts: number, inputChars: number) {
+  readonly reason: string;
+  constructor(message: string, attempts: number, inputChars: number, reason = "request_error") {
     super(message);
     this.name = "ResponderFailed";
     this.attempts = attempts;
     this.inputChars = inputChars;
+    this.reason = reason;
   }
 }
 
@@ -146,13 +155,13 @@ export class SparkResponder implements Responder {
           body: JSON.stringify({ model: STANDARD_MODEL_ID, input, store: false, max_output_tokens: MAX_OUTPUT_TOKENS }),
         });
         if (res.status !== 429 && res.status < 500 && !res.ok) {
-          throw new ResponderFailed(`Model request failed: ${res.status}`, attempt, input.length);
+          throw new ResponderFailed(`Model request failed: ${res.status}`, attempt, input.length, `http_${res.status}`);
         }
         const data: unknown = await res.json().catch(() => ({}));
         if (res.status === 429 || res.status >= 500) throw new Error(`Model request failed: ${res.status}`);
         const status = (data as { status?: unknown })?.status;
         if (typeof status === "string" && status !== "completed") {
-          throw new ResponderFailed(`Model run ${status}.`, attempt, input.length);
+          throw new ResponderFailed(`Model run ${status}.`, attempt, input.length, `run_${status}`);
         }
         const text = extractOutputText(data).trim();
         if (!text) throw new Error("Model returned no text.");

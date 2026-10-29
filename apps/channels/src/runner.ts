@@ -821,7 +821,12 @@ export class ConversationRunner {
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
       return { ok: true, text: result.text, costUsd };
     } catch (err) {
-      logger.warn("responder_failed", { handle: this.logHandle(), turn, err: errName(err) });
+      logger.warn("responder_failed", {
+        handle: this.logHandle(),
+        turn,
+        err: errName(err),
+        reason: err instanceof ResponderFailed ? err.reason : null,
+      });
       const costUsd = err instanceof ResponderFailed ? attemptCost(err.inputChars, err.attempts) : 0;
       return { ok: false, costUsd };
     } finally {
