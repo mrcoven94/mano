@@ -143,7 +143,8 @@ export function isDeadlineSentence(sentence: string): boolean {
 // Conditions, audiences and cancellations that make a deadline
 // someone else's, not yet owed, or withdrawn. Searched across the whole
 // letter, salutation and headings included, before anything is
-// stripped. Returns every distinct word found.
+// stripped. Returns each hit with up to four words after it, so the
+// person sees what was found ("if you moved"), at most three of them.
 const QUALIFIER = new RegExp(
   String.raw`\b(?:${[
     "if applicable", "if", "only", "unless", "except", "when", "dear county staff", "staff",
@@ -151,12 +152,13 @@ const QUALIFIER = new RegExp(
     "cancelled", "canceled", "disregard", "void", "no longer", "ignore", "optional",
   ]
     .map((w) => w.replace(/ /g, String.raw`\s+`))
-    .join("|")})\b`,
+    .join("|")})\b(?:[ \t]+[A-Za-z'-]+){0,4}`,
   "gi",
 );
 
-export function findQualifiers(letterText: string): string[] {
-  return [...new Set([...letterText.matchAll(QUALIFIER)].map((m) => m[0].toLowerCase().replace(/\s+/g, " ")))];
+export function qualifierPhrases(letterText: string): string[] {
+  const phrases = [...letterText.matchAll(QUALIFIER)].map((m) => m[0].toLowerCase().replace(/\s+/g, " ").trim());
+  return [...new Set(phrases)].slice(0, 3);
 }
 
 // A date to know states one plain date and names no duty: no

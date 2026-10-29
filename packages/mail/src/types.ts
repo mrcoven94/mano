@@ -126,6 +126,24 @@ export interface Question {
   // Every deadline sentence the letter withheld, each cited. No
   // deadline on the letter publishes until the person confirms one.
   candidates?: DeadlineCandidate[];
+  // On a confirm_deadline question: the date Mano would hold if the
+  // person says yes. Absent when the reader picked no deadline and on
+  // letters flagged as scams. Nothing is scheduled until they confirm.
+  proposal?: DeadlineProposal;
+}
+
+export interface DeadlineProposal {
+  letterId: string;
+  // The reader's pick, verbatim from the letter's transcription.
+  sentence: string;
+  citation: Citation;
+  // The date the sentence parsed to, or the counted result.
+  dueDate: string;
+  count: { days: number; fromIso: string; resultIso: string } | null;
+  // Why it was not set without asking, in plain words.
+  reasons: string[];
+  // Every other withheld sentence, quoted with its dates.
+  others: DeadlineCandidate[];
 }
 
 export interface DeadlineCandidate {
@@ -135,9 +153,6 @@ export interface DeadlineCandidate {
   // Null for a deadline-like sentence the reader did not mark on the
   // photo: no box means no citation.
   citation: Citation | null;
-  // A counted deadline: the count, the date it was counted from (the
-  // reader's notice date or a date in the sentence), and the result.
-  count?: { days: number; fromIso: string; resultIso: string };
 }
 
 export interface ModelCallStat {

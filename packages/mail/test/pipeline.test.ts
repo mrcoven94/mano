@@ -154,7 +154,7 @@ describe("readMail", () => {
     expect(reading.datesToKnow).toEqual([]);
     expect(reading.deadlines).toEqual([]);
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
-    expect(question.candidates?.[0]?.count).toEqual({ days: 10, fromIso: "2026-11-25", resultIso: "2026-12-05" });
+    expect(question.proposal?.count).toEqual({ days: 10, fromIso: "2026-11-25", resultIso: "2026-12-05" });
     expect(question.prompt).toContain("December 5, 2026");
   });
 
@@ -174,7 +174,7 @@ describe("readMail", () => {
     expect(reading.datesToKnow).toEqual([]);
     expect(reading.deadlines).toEqual([]);
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
-    expect(question.candidates?.[0]?.count).toEqual({ days: 60, fromIso: "2026-11-02", resultIso: "2027-01-01" });
+    expect(question.proposal?.count).toEqual({ days: 60, fromIso: "2026-11-02", resultIso: "2027-01-01" });
     expect(question.prompt).toContain("November 2, 2026");
   });
 
@@ -974,7 +974,8 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.questions.map((q) => q.kind)).toEqual(["missing_page"]);
+    expect(reading.questions.map((q) => q.kind)).toEqual(["missing_page", "confirm_deadline"]);
+    expect(reading.questions[1]!.proposal).toMatchObject({ dueDate: "2026-11-20", sentence: "Respond by November 20, 2026" });
     expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
     expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
@@ -1144,7 +1145,7 @@ describe("readMail publish gate", () => {
   it("asks with the count from the sentence when the reader returned only the anchor", async () => {
     const reading = await readSentence("You must respond within 10 days after November 25, 2026.", [dl("November 25")]);
     expect(reading.deadlines).toEqual([]);
-    expect(reading.questions[0]?.candidates?.[0]?.count).toEqual({ days: 10, fromIso: "2026-11-25", resultIso: "2026-12-05" });
+    expect(reading.questions[0]?.proposal?.count).toEqual({ days: 10, fromIso: "2026-11-25", resultIso: "2026-12-05" });
   });
 
   it("files a will-receive arrival and an interview as dates to know", async () => {
@@ -1451,10 +1452,10 @@ describe("readMail review 7", () => {
       { notice_date: { text: "November 10, 2026", box_2d: [135, 60, 150, 300] } },
     );
     expectWithheld(reading);
-    const candidate = asked(reading)
-      .flatMap((q) => q.candidates ?? [])
-      .find((c) => c.sentence === "Respond within 10 days of the date of this notice")!;
-    expect(candidate.count).toEqual({ days: 10, fromIso: "2026-11-10", resultIso: "2026-11-20" });
+    const proposal = asked(reading)[0]!.proposal!;
+    expect(proposal.sentence).toBe("Respond within 10 days of the date of this notice");
+    expect(proposal.count).toEqual({ days: 10, fromIso: "2026-11-10", resultIso: "2026-11-20" });
+    expect(proposal.reasons.some((r) => r.includes("November 10, 2026"))).toBe(true);
   });
 
   it("finding 4: a count from a correct notice date still asks instead of publishing", async () => {
@@ -1462,7 +1463,7 @@ describe("readMail review 7", () => {
       dl("Respond within 10 days of the date of this notice."),
     ]);
     expectWithheld(reading);
-    expect(asked(reading)[0]!.candidates?.[0]?.count).toEqual({ days: 10, fromIso: "2026-11-02", resultIso: "2026-11-12" });
+    expect(asked(reading)[0]!.proposal?.count).toEqual({ days: 10, fromIso: "2026-11-02", resultIso: "2026-11-12" });
   });
 
   it("finding 5: a budget spent before segmentation returns the budget question instead of throwing", async () => {
