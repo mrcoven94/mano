@@ -36,3 +36,8 @@ A held-out test, frozen before any tuning: renewal and document scenarios with u
 - Shared relational data in PlanetScale Postgres through Hyperdrive.
 - Agent computers on Modal Sandboxes (sponsor credits, per-second billing, the same platform as the Glimmer guardian); Cloudflare Browser Run for simple browsing and login handoff. Muse Spark 1.3 drives the computer (Wonder's computer tool was not enabled on our key on Oct 26).
 - Website and staff screens on Vercel (`apps/site`, Next.js). Resident app in `apps/app` (React Native with Expo; Android builds through EAS need no Apple account).
+
+## Changes
+
+- **October 29, 2026, how Mano is built.** One Claude Code session leads and builds through one builder agent per workstream; GPT Sol reviews every pull request; the lead merges with merge commits after the merge gate in `AGENTS.md`. The separate architect thread and the Meter workstream (LAP-602) are retired. Commits carry no AI co-author trailers.
+- **October 29, 2026, Meta models only at runtime.** Following the hackathon's ruling, every model Mano calls at runtime is a Meta model, including on-device ones. Speech output on calls (previously Deepgram) is dropped: Mano does not speak on phone calls; fax stays. The browser's built-in speech is allowed because it is not a model call.

@@ -4,7 +4,7 @@ name: guardian-modal
 # changes under packages/guardian/modal/ redeploys it. Never run
 # `modal deploy` from a laptop for production.
 #
-# Needs two repository secrets, set by the architect:
+# Needs two secrets in the guardian-production environment, set by a maintainer:
 #   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
 # The `mano-guardian` Modal secret (holding MANO_GUARDIAN_TOKEN) is created
 # once by David and is not managed here.

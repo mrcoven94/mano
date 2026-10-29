@@ -90,12 +90,12 @@ Not run yet. The Results session will publish the headline here after the final 
 
 ## Team
 
-Three members: David Coven, Claude and Muse.
+David Coven decides what gets built and owns the accounts. The code is written with coding agents, and every model Mano itself calls at runtime is a Meta model.
 
-- David decides what gets built, owns the accounts and approves every merge.
-- Claude is the architect. It plans the work, writes each build session's brief, orchestrates the sessions and reviews what they produce.
-- Muse writes the code. Each part of Mano is built by a Muse Code session running Muse Spark, working from one brief and one ticket.
-- Other models handle evaluation and review: an independent critique of every pull request from a model outside the build, plus a panel of open-weight models for changes that touch security, personal data or anything irreversible. A session never reviews its own work.
+- From October 26 to 29, Muse Code sessions built the first parts, one session per workstream.
+- From October 29, one Claude Code session leads: it plans the work, briefs a builder agent for each workstream, reads every diff and merges.
+- GPT Sol reviews every pull request at its current head, with a multi-model panel for changes that touch auth, personal data or anything that sends. Nothing merges on its author's word.
+- `AGENTS.md` is the full operating manual, and anyone can run the same process.
 
 ## Prior work
 
