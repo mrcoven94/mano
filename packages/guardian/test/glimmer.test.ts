@@ -486,6 +486,36 @@ describe("GlimmerChecker", () => {
   });
 });
 
+describe("the default fetch", () => {
+  // workerd throws "Illegal invocation" when fetch runs with any receiver
+  // other than the global object.
+  function strictFetch(this: unknown, ..._args: Parameters<typeof fetch>) {
+    if (this !== undefined && this !== globalThis) {
+      return Promise.reject(new TypeError("Illegal invocation"));
+    }
+    return Promise.resolve(
+      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
+    );
+  }
+
+  it("runs with the global receiver, as workerd requires", async () => {
+    vi.stubGlobal("fetch", strictFetch);
+    try {
+      const checker = new GlimmerChecker({
+        url: "https://guardian.example.com",
+        token: "token",
+      });
+      await expect(checker.warm()).resolves.toBe(true);
+      await expect(checker.check(passInput())).resolves.toEqual({
+        verdict: "pass",
+        problems: [],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("glimmerCheckerFromEnv", () => {
   it("returns rules only when explicitly asked", () => {
     expect(glimmerCheckerFromEnv({ MANO_GUARDIAN_RULES_ONLY: "1" })).toBeInstanceOf(
