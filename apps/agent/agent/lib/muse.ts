@@ -151,8 +151,25 @@ function meteringMiddleware(opts: {
       } catch (err) {
         return failed(err, elapsed());
       }
-      const tap = new TransformStream({
-        transform(chunk, controller) {
+      // Read the provider stream by hand rather than piping it: a pipe
+      // forwards a source rejection untouched, and that error carries
+      // the request body. Every chunk and every failure passes here.
+      const reader = result.stream.getReader();
+      const stream = new ReadableStream<(typeof result.stream extends ReadableStream<infer C> ? C : never)>({
+        async pull(controller) {
+          let next: Awaited<ReturnType<typeof reader.read>>;
+          try {
+            next = await reader.read();
+          } catch (err) {
+            console.log(JSON.stringify({ type: "mano_model_call", model: modelId, status: "stream_error", latencyMs: elapsed() }));
+            controller.error(sanitizeModelError(err));
+            return;
+          }
+          if (next.done) {
+            controller.close();
+            return;
+          }
+          const chunk = next.value;
           const part = chunk as { type?: unknown; finishReason?: unknown; usage?: unknown; error?: unknown };
           if (part?.type === "error") {
             console.log(JSON.stringify({ type: "mano_model_call", model: modelId, status: "stream_error", latencyMs: elapsed() }));
@@ -166,8 +183,11 @@ function meteringMiddleware(opts: {
           }
           controller.enqueue(chunk);
         },
+        cancel(reason) {
+          return reader.cancel(reason).catch(() => undefined);
+        },
       });
-      return { ...result, stream: result.stream.pipeThrough(tap) };
+      return { ...result, stream };
     },
   };
 }

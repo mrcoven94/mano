@@ -156,4 +156,42 @@ describe("model errors", () => {
     for (const err of seen) expect(inspect(err, { depth: Infinity })).not.toContain(MARKER);
     expect(logs.join("\n")).not.toContain(MARKER);
   });
+
+  it("a stream that fails underneath, after the first chunk, surfaces no content", async () => {
+    stubFetch(() => {
+      const first = `data: ${JSON.stringify(chunk({ role: "assistant", content: "par" }))}\n\n`;
+      let sent = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (!sent) {
+            sent = true;
+            controller.enqueue(new TextEncoder().encode(first));
+            return;
+          }
+          controller.error(Object.assign(new TypeError(`socket reset while sending ${MARKER}`), { cause: { body: MARKER } }));
+        },
+      });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    });
+    const { model } = createMuseModel({ apiKey: "test-key" });
+    const seen: unknown[] = [];
+    const result = streamText({
+      model,
+      prompt: `My address is ${MARKER}`,
+      maxRetries: 0,
+      onError: ({ error }) => {
+        seen.push(error);
+      },
+    });
+    try {
+      for await (const part of result.fullStream) {
+        if (part.type === "error") seen.push(part.error);
+      }
+    } catch (err) {
+      seen.push(err);
+    }
+    expect(seen.length).toBeGreaterThan(0);
+    for (const err of seen) expect(inspect(err, { depth: Infinity })).not.toContain(MARKER);
+    expect(logs.join("\n")).not.toContain(MARKER);
+  });
 });
