@@ -78,7 +78,7 @@ Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. To
 | `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text | live |
 | `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits | live |
 | `packages/protocol` | The open message format agents use to work a case together | landing during the hackathon |
-| `packages/guardian` | The checker that reviews each action before it runs | landing during the hackathon |
+| `packages/guardian` | The checker that reviews every outside action before a person approves it | live |
 | `packages/quality` | The nightly answer-quality bench | landing during the hackathon |
 | `apps/app` | The resident app in React Native (iOS, Android, web) | landing during the hackathon |
 | `eval` | The held-out test: scenarios, baselines and results | landing during the hackathon |
