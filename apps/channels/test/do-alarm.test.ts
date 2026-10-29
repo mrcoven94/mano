@@ -45,6 +45,9 @@ function testDo(opts: { batchMs?: string; failSpendReserve?: () => boolean } = {
       if (url.endsWith("/internal/spend-reserve") && opts.failSpendReserve?.()) {
         throw new Error("ledger down");
       }
+      if (url.endsWith("/internal/code-reserve")) {
+        return Response.json({ allowed: true, count: 0 });
+      }
       return new Response(JSON.stringify({ ok: true }));
     },
   };
@@ -73,9 +76,36 @@ function testDo(opts: { batchMs?: string; failSpendReserve?: () => boolean } = {
     expect(res.status).toBe(200);
     return ((await res.json()) as { result: string }).result;
   };
+  const postCode = async (key: string, code = "123456"): Promise<Record<string, unknown>> => {
+    const res = await new ConversationDO(ctx, env).fetch(
+      new Request("https://conversation/internal/send-code", {
+        method: "POST",
+        body: JSON.stringify({ handleHash: "hash-alarm", to: "+15550001009", code, idempotencyKey: key, personId: "person_alarm" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    return (await res.json()) as Record<string, unknown>;
+  };
+  const seedUncertainCode = (key: string, to: string, text: string): void => {
+    db.prepare(
+      "INSERT INTO outbounds (idem_key, turn, part, tag, bubble_text, handle_to, attempts, state, code, chat_id, message_id, created_at_ms, updated_at_ms) VALUES (?, 0, 0, 'code', ?, ?, 0, 'uncertain', NULL, NULL, NULL, ?, ?)",
+    ).run(key, text, to, Date.now(), Date.now());
+  };
+  const fireAlarm = async (): Promise<void> => {
+    await new ConversationDO(ctx, env).alarm();
+  };
+  const readOutbox = async (): Promise<Array<{ key: string; state: string }>> => {
+    const res = await new ConversationDO(ctx, env).fetch(new Request("https://conversation/internal/standin"));
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { sends: Array<{ key: string; state: string }> }).sends;
+  };
   return {
     postEvent,
     postTurn,
+    postCode,
+    seedUncertainCode,
+    fireAlarm,
+    readOutbox,
     get alarm() {
       return alarm;
     },
@@ -138,5 +168,38 @@ describe("duplicate redelivery and the batch alarm", () => {
     // The ledger answers but refuses the budget (stub shape): the turn
     // reaches its final limited outcome instead of retrying forever.
     expect(await d.postTurn()).toBe("ran");
+  });
+});
+
+describe("code sends and the recovery alarm", () => {
+  const CODE_TEXT = "Your Mano code is 123456. It expires in 10 minutes.";
+
+  it("arms nothing when the code send resolves", async () => {
+    const d = testDo();
+    expect(await d.postCode("code-alarm-1")).toMatchObject({ key: "code-alarm-1", state: "sent" });
+    expect(d.alarm).toBeNull();
+  });
+
+  it("arms the alarm when a code send leaves an uncertain send behind", async () => {
+    const d = testDo();
+    await d.postCode("code-alarm-2");
+    d.clearAlarm();
+    d.seedUncertainCode("code-alarm-stuck", "+15550001009", CODE_TEXT);
+    const before = Date.now();
+    await d.postCode("code-alarm-3");
+    expect(d.alarm).not.toBeNull();
+    expect(d.alarm! - before).toBeGreaterThanOrEqual(4000);
+    expect(d.alarm! - before).toBeLessThanOrEqual(6000);
+  });
+
+  it("recovers an uncertain code on the alarm with its stored recipient", async () => {
+    const d = testDo();
+    await d.postCode("code-alarm-4");
+    d.seedUncertainCode("code-alarm-lost", "+15550001009", CODE_TEXT);
+    d.clearAlarm();
+    await d.fireAlarm();
+    const sends = await d.readOutbox();
+    expect(sends).toContainEqual({ key: "code-alarm-lost", state: "sent", message: expect.any(String), code: null });
+    expect(d.alarm).toBeNull();
   });
 });

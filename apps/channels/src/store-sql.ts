@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS meta (
   last_inbound_ms INTEGER NOT NULL,
   byte_day_key TEXT NOT NULL DEFAULT '',
   byte_day_count INTEGER NOT NULL DEFAULT 0,
+  code_hour_key TEXT NOT NULL DEFAULT '',
+  code_hour_count INTEGER NOT NULL DEFAULT 0,
   generation INTEGER NOT NULL DEFAULT 0,
   deleted_at_ms INTEGER NOT NULL DEFAULT 0
 );
@@ -56,6 +58,7 @@ CREATE TABLE IF NOT EXISTS outbounds (
   part INTEGER NOT NULL,
   tag TEXT NOT NULL,
   bubble_text TEXT NOT NULL DEFAULT '',
+  handle_to TEXT,
   attempts INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL,
   code TEXT,
@@ -114,6 +117,8 @@ interface MetaRow {
   last_inbound_ms: number;
   byte_day_key: string;
   byte_day_count: number;
+  code_hour_key: string;
+  code_hour_count: number;
   generation: number;
   deleted_at_ms: number;
 }
@@ -137,6 +142,9 @@ export class SqlConversationStore implements ConversationStore {
       "ALTER TABLE outbounds ADD COLUMN bubble_text TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE outbounds ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE turns ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE outbounds ADD COLUMN handle_to TEXT",
+      "ALTER TABLE meta ADD COLUMN code_hour_key TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE meta ADD COLUMN code_hour_count INTEGER NOT NULL DEFAULT 0",
     ]) {
       try {
         this.sql.exec(ddl);
@@ -187,6 +195,8 @@ export class SqlConversationStore implements ConversationStore {
       lastInboundMs: row.last_inbound_ms,
       byteDayKey: row.byte_day_key ?? "",
       byteDayCount: row.byte_day_count ?? 0,
+      codeHourKey: row.code_hour_key ?? "",
+      codeHourCount: row.code_hour_count ?? 0,
       generation: row.generation ?? 0,
       deletedAtMs: row.deleted_at_ms ?? 0,
     };
@@ -194,7 +204,7 @@ export class SqlConversationStore implements ConversationStore {
 
   saveMeta(meta: ConversationMeta): void {
     this.sql.exec(
-      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ? WHERE id = 1",
+      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, code_hour_key = ?, code_hour_count = ?, generation = ?, deleted_at_ms = ? WHERE id = 1",
       meta.turn,
       meta.introduced ? 1 : 0,
       meta.closed ? 1 : 0,
@@ -210,6 +220,8 @@ export class SqlConversationStore implements ConversationStore {
       meta.lastInboundMs,
       meta.byteDayKey,
       meta.byteDayCount,
+      meta.codeHourKey,
+      meta.codeHourCount,
       meta.generation,
       meta.deletedAtMs,
     );
@@ -257,12 +269,13 @@ export class SqlConversationStore implements ConversationStore {
 
   addOutbound(row: OutboundRow): void {
     this.sql.exec(
-      "INSERT OR IGNORE INTO outbounds (idem_key, turn, part, tag, bubble_text, attempts, state, code, chat_id, message_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO outbounds (idem_key, turn, part, tag, bubble_text, handle_to, attempts, state, code, chat_id, message_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       row.key,
       row.turn,
       row.part,
       row.tag,
       row.text,
+      row.to,
       row.attempts,
       row.state,
       row.code,
@@ -280,6 +293,7 @@ export class SqlConversationStore implements ConversationStore {
       part: number;
       tag: string;
       bubble_text: string;
+      handle_to: string | null;
       attempts: number;
       state: OutboundRow["state"];
       code: string | null;
@@ -295,6 +309,7 @@ export class SqlConversationStore implements ConversationStore {
       part: row.part,
       tag: row.tag,
       text: row.bubble_text,
+      to: row.handle_to ?? null,
       attempts: row.attempts,
       state: row.state,
       code: row.code,
@@ -347,6 +362,7 @@ export class SqlConversationStore implements ConversationStore {
       part: number;
       tag: string;
       bubble_text: string;
+      handle_to: string | null;
       attempts: number;
       state: OutboundRow["state"];
       code: string | null;
@@ -360,6 +376,7 @@ export class SqlConversationStore implements ConversationStore {
       part: r.part,
       tag: r.tag,
       text: r.bubble_text,
+      to: r.handle_to ?? null,
       attempts: r.attempts,
       state: r.state,
       code: r.code,

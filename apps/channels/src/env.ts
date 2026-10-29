@@ -22,6 +22,8 @@ export interface Env {
   // Our line's own number or alias, checked against the channel_address
   // on inbound webhooks when both are present. Public value; optional.
   MANO_TEXT_NUMBER?: string;
+  // Guards the /internal/* service routes accounts calls. Unset fails closed.
+  INTERNAL_SECRET?: string;
 }
 
 export function numberEnv(value: string | undefined, fallback: number): number {

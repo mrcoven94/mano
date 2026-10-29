@@ -86,6 +86,7 @@ export function makeHarness(
     config?: Partial<RunnerConfig>;
     budgetUsd?: number;
     byteBudget?: number;
+    codeBudget?: number;
     startMs?: number;
     fetchFn?: typeof fetch;
   } = {},
@@ -112,8 +113,9 @@ export function makeHarness(
       h.now += ms;
     },
   };
-  h.ledger = new GlobalLedger(new MemoryGlobalStore(), () => h.now, opts.budgetUsd ?? 5, opts.byteBudget);
+  h.ledger = new GlobalLedger(new MemoryGlobalStore(), () => h.now, opts.budgetUsd ?? 5, opts.byteBudget, opts.codeBudget);
   const spend: SpendLedger = {
+    codeReserve: async () => h.ledger.codeReserve(),
     reserve: async (key: string, worstUsd: number) => h.ledger.reserve(key, worstUsd),
     settle: async (key: string, actualUsd: number) => {
       h.ledger.settle(key, actualUsd);

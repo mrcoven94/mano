@@ -45,6 +45,17 @@ describe("GlobalLedger reservations", () => {
     ledger.saveCursor("cursor_9");
     expect(ledger.cursor()).toBe("cursor_9");
   });
+
+  it("caps sign-in codes globally per hour, separately from spend", () => {
+    let now = Date.parse("2026-10-28T12:00:00Z");
+    const ledger = new GlobalLedger(new MemoryGlobalStore(), () => now, 5, undefined, 2);
+    expect(ledger.codeReserve()).toEqual({ allowed: true, count: 1 });
+    expect(ledger.codeReserve()).toEqual({ allowed: true, count: 2 });
+    expect(ledger.codeReserve()).toEqual({ allowed: false, count: 2 });
+    expect(ledger.spent().spentUsd).toBe(0);
+    now += 3600_000;
+    expect(ledger.codeReserve()).toEqual({ allowed: true, count: 1 });
+  });
 });
 
 describe("settlement idempotency", () => {

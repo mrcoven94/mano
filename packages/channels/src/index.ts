@@ -18,4 +18,5 @@ export * from "./limits.js";
 export * from "./crypto.js";
 export * from "./log.js";
 export * from "./links.js";
+export * from "./accounts.js";
 export * from "./fetch.js";

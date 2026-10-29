@@ -193,7 +193,7 @@ describe("interrupted turns", () => {
       costSettled: true,
     });
     h.store.addOutbound({
-      key: introKey, turn: 5, part: 0, tag: "", text: INTRO_BUBBLE, attempts: 0, state: "sent", code: null,
+      key: introKey, turn: 5, part: 0, tag: "", text: INTRO_BUBBLE, to: TEST_HANDLE, attempts: 0, state: "sent", code: null,
       chatId: TEST_CHAT, messageId: "msg_intro_5", createdAtMs: h.now, updatedAtMs: h.now,
     });
     expect(await h.runner.runDueTurn()).toBe("ran");
@@ -281,6 +281,7 @@ describe("delete", () => {
       files: h.files,
       kekB64: TEST_KEK_B64,
       spend: {
+        codeReserve: async () => h.ledger.codeReserve(),
         reserve: async (key: string, worst: number) => h.ledger.reserve(key, worst),
         settle: async (key: string, actual: number) => void h.ledger.settle(key, actual),
         release: async (key: string) => void h.ledger.release(key),
