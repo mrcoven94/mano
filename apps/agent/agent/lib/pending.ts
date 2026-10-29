@@ -39,8 +39,13 @@ export function renderQuestion(approval: EngineApproval): string {
   } catch {
     // Unreadable frozen request: the question shows purpose and recipient only.
   }
+  const order = (k: string) => {
+    const i = Object.keys(LABELS).indexOf(k);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  };
   const lines = Object.entries(payload)
     .filter(([, v]) => typeof v === "string" || typeof v === "number")
+    .sort(([a], [b]) => order(a) - order(b))
     .map(([k, v]) => `${LABELS[k] ?? k}: ${v}`);
   return [
     `Ready to send: ${approval.purpose} (to ${approval.recipient}).`,
