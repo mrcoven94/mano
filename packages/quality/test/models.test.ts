@@ -15,6 +15,12 @@ test("model client uses META_MODEL_API_KEY and stays fake without it", () => {
   assert.equal(oldNameIgnored.live, false);
 });
 
+test("model base URL defaults instead of silently standing in", () => {
+  const live = judgeClientFromEnv({ META_MODEL_API_KEY: "k" });
+  assert.equal(live.live, true);
+  assert.equal(live.id, "muse-spark-1.3");
+});
+
 test("judge and serving model IDs must differ", () => {
   assert.throws(
     () => assertJudgeServingDiffer({ MANO_MODEL_JUDGE_ID: "same-id", MANO_MODEL_BENCH_ID: "same-id" }),

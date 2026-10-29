@@ -1,4 +1,4 @@
-// smoke: run the 25-case smoke subset and gate it against a baseline.
+// smoke: run the 28-case smoke subset and gate it against a baseline.
 // Usage: node src/bin/smoke.ts [--baseline runs/main/latest.json] [--out runs/smoke] [--broken]
 // Prints the PR comment to stdout. Exits 0 on pass, 1 on fail, 2 on neutral
 // (not gate-eligible: stand-ins, no baseline, or provisional calibration).
