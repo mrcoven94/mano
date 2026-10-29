@@ -95,14 +95,50 @@ function selfIdentifiesAsOther(sentence: string): boolean {
   return OTHER_IDENTITY.some((pattern) => pattern.test(unquoted)) || UNLISTED_SELF.some((pattern) => pattern.test(unquoted));
 }
 
+// Underscores, zero-width characters and similar join words for a
+// regex but not for a reader: "Meta_AI" and "_muse_spark_1.3_" name the
+// stack. Matching runs on a copy with them turned into spaces.
+function separated(text: string): string {
+  return text.replace(/[​-‍⁠﻿]/g, "").replace(/_+/g, " ");
+}
+
+// Quoted text is what the person should write or what a document says,
+// never Mano describing itself. Each quoted span, single, double or
+// curly, even across sentences, is swapped for a token before the text
+// is split into sentences and restored afterwards. An apostrophe inside
+// a word ("I'm") is not a quote mark.
+const QUOTE_SPANS = [
+  /"[^"\n]*"/g,
+  /“[^”\n]*”/g,
+  /(?<![\w'’])'(?=\S)(?:[^'\n]|'(?=\w))*?(?<=\S)'(?!\w)/g,
+  /‘(?:[^’\n]|’(?=\w))*?’(?!\w)/g,
+];
+const QUOTE_TOKEN = /⁣(\d+)⁣/g;
+
+function protectQuotes(text: string): { text: string; quotes: string[] } {
+  const quotes: string[] = [];
+  let out = text;
+  for (const pattern of QUOTE_SPANS) {
+    out = out.replace(pattern, (span) => `⁣${quotes.push(span) - 1}⁣`);
+  }
+  return { text: out, quotes };
+}
+
+function restoreQuotes(text: string, quotes: readonly string[]): string {
+  return text.replace(QUOTE_TOKEN, (_m, i: string) => quotes[Number(i)] ?? "");
+}
+
 function namesOurStack(sentence: string, ids: RegExp | null): boolean {
+  sentence = separated(sentence);
   if (MODEL_ID_PATTERN.test(sentence) || ids?.test(sentence)) return true;
   if (!STACK_PATTERN.test(sentence)) return false;
   return IDENTITY_STATEMENT.test(sentence) || STACK_PATTERN.test(sentence.replace(ORDINARY_PHRASES, " "));
 }
 
-function sentenceNamesProvider(sentence: string, ids: RegExp | null): boolean {
-  return namesOurStack(sentence, ids) || selfIdentifiesAsOther(sentence);
+// The sentence arrives with its quotes as tokens. Our stack counts even
+// inside quotes; every other name counts only outside them.
+function sentenceNamesProvider(sentence: string, ids: RegExp | null, quotes: readonly string[]): boolean {
+  return namesOurStack(restoreQuotes(sentence, quotes), ids) || selfIdentifiesAsOther(separated(sentence));
 }
 
 const SENTENCE_BREAK = /((?<=[.!?…])\s+|\n+)/;
@@ -113,7 +149,8 @@ function sentences(text: string): string[] {
 
 export function containsProviderName(text: string, modelIds: readonly string[] = []): boolean {
   const ids = idPattern(modelIds);
-  return sentences(text).some((s) => sentenceNamesProvider(s, ids));
+  const guarded = protectQuotes(text);
+  return sentences(guarded.text).some((s) => sentenceNamesProvider(s, ids, guarded.quotes));
 }
 
 export interface GuardOptions {
@@ -163,7 +200,7 @@ export function removeDashes(text: string): string {
 // Rewrites or drops every sentence that names a model or provider. The
 // kept sentences keep their own breaks, and a dropped line break
 // survives, so no two lines merge into a new sentence on the next pass.
-function removeProviderNames(text: string, ids: RegExp | null): { text: string; selfDescribed: boolean } {
+function removeProviderNames(text: string, ids: RegExp | null, quotes: readonly string[]): { text: string; selfDescribed: boolean } {
   let selfDescribed = false;
   let out = "";
   let gap = "";
@@ -171,8 +208,9 @@ function removeProviderNames(text: string, ids: RegExp | null): { text: string; 
   for (let i = 0; i < parts.length; i += 2) {
     gap += i > 0 ? parts[i - 1] : "";
     let sentence: string | null = parts[i];
-    if (sentenceNamesProvider(sentence, ids)) {
-      const describesSelf = SELF_REFERENCE.test(sentence) || IDENTITY_STATEMENT.test(sentence) || selfIdentifiesAsOther(sentence);
+    if (sentenceNamesProvider(sentence, ids, quotes)) {
+      const plain = separated(sentence);
+      const describesSelf = SELF_REFERENCE.test(plain) || IDENTITY_STATEMENT.test(plain) || selfIdentifiesAsOther(plain);
       sentence = describesSelf && !selfDescribed ? SELF_DESCRIPTION : null;
       if (sentence) selfDescribed = true;
     }
@@ -181,7 +219,7 @@ function removeProviderNames(text: string, ids: RegExp | null): { text: string; 
     out += sentence;
     gap = "";
   }
-  return { text: out, selfDescribed };
+  return { text: restoreQuotes(out, quotes), selfDescribed };
 }
 
 function tidy(text: string): string {
@@ -206,8 +244,9 @@ export function guardReply(raw: string, opts: GuardOptions = {}): GuardResult {
   const undashed = removeDashes(text);
   if (undashed !== text) changes.push("dash");
   text = undashed;
-  if (sentences(text).some((s) => sentenceNamesProvider(s, ids))) {
-    const named = removeProviderNames(text, ids);
+  const guarded = protectQuotes(text);
+  if (sentences(guarded.text).some((s) => sentenceNamesProvider(s, ids, guarded.quotes))) {
+    const named = removeProviderNames(guarded.text, ids, guarded.quotes);
     changes.push(named.selfDescribed ? "self-description" : "provider-name");
     text = named.text;
   }
