@@ -27,7 +27,8 @@ jobs:
           python-version: "3.12"
       - run: pip install "modal==1.6.2"
       - name: Import the app and check its shape
-        run: python - <<'EOF'
+        run: |
+          python - <<'EOF'
           import json
           import sys
           import urllib.request
