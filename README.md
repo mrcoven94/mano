@@ -66,6 +66,14 @@ Run the sandbox agency portal (needs [wrangler](https://developers.cloudflare.co
 pnpm --filter @mano/sandbox-portal dev
 ```
 
+Run the resident app with Expo:
+
+```sh
+pnpm --filter @mano/app start
+```
+
+Without `EXPO_PUBLIC_ENGINE_URL` the app talks to a stand-in engine with recorded synthetic responses and says so on screen; production refuses to start without the URL unless `EXPO_PUBLIC_DEMO_MODE=true`. `pnpm --filter @mano/app check` runs its typecheck, lint and tests.
+
 Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. To deploy your own copy, see the deploy workflows in `.github/workflows/`.
 
 ## Packages and apps
