@@ -7,4 +7,5 @@ export const SUITE_PINS: Record<string, { version: number; cases: number; sha256
   text: { version: 1, cases: 25, sha256: "8791e23f793b43e45d3ef7df6a0cf756e9064e833dd0b313733f7ac588509faf" },
   letters: { version: 1, cases: 20, sha256: "e303f03b151183f0dcebaf73de4be9bdc942081a0248b23636252b756110c73e" },
   safety: { version: 1, cases: 40, sha256: "74d949fbaf5c16d9025a4c25ad8dd980402f990c8b6cffe0670ac75a62f400ae" },
+  personas: { version: 1, cases: 13, sha256: "62e3931db9831d1a9300f3e30cda4fe49c97fac0fafc27e76485b695e228d691" },
 };

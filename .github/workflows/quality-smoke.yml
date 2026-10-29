@@ -13,6 +13,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  checks: write
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -68,8 +69,23 @@ jobs:
             gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
           fi
       # Exit 0 is a pass, 1 a failure, 2 neutral (stand-ins, no baseline, or
-      # provisional calibration). GitHub has no neutral job outcome from the
-      # inside, so neutral fails the job: it must never show green.
+      # provisional calibration). Neutral posts a real neutral check run and
+      # exits 0; failure is reserved for an eligible run that fails the gate.
+      - name: Report neutral check
+        if: env.exit == '2'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REASONS=$(sed -n '/Neutral because:/,$p' runs/smoke.log | tail -n +2 | head -20)
+          [ -z "$REASONS" ] && REASONS="not gate-eligible; see the smoke log."
+          gh api "repos/${{ github.repository }}/check-runs" \
+            -f name="quality smoke (neutral)" \
+            -f head_sha="${{ github.event.pull_request.head.sha }}" \
+            -f status="completed" \
+            -f conclusion="neutral" \
+            -f output[title]="Not gate-eligible" \
+            -f output[summary]="$REASONS" \
+            --jq .id
       - name: Gate the pull request
-        if: env.exit != '0'
+        if: env.exit == '1'
         run: exit 1

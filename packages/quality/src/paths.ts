@@ -73,6 +73,7 @@ const PACKAGE_FOR_SUITE: Record<SuiteName, string> = {
   letters: "@mano/mail",
   safety: "@mano/engine",
   "safety-holdout": "@mano/engine",
+  personas: "@mano/channels",
 };
 
 export interface LoadedPath {
@@ -81,15 +82,22 @@ export interface LoadedPath {
   detail: string;
 }
 
-async function tryImportQualityPath(packageName: string): Promise<AnswerPath | null> {
+// The exact text that is sent: the bubbles joined, or the plain text when the
+// path sends no bubbles. Checks and judges read this, never a summary field.
+export function sentText(answer: Pick<BenchAnswer, "text" | "bubbles">): string {
+  return (answer.bubbles ?? [answer.text]).join("\n");
+}
+
+async function tryImportQualityPath(packageName: string): Promise<{ path: AnswerPath } | { missing: true } | { noExport: true }> {
+  let mod: Record<string, unknown>;
   try {
-    const mod = (await import(packageName)) as Record<string, unknown>;
-    const candidate = mod.qualityAnswerPath as AnswerPath | undefined;
-    if (candidate && typeof candidate.answer === "function") return candidate;
-    return null;
+    mod = (await import(packageName)) as Record<string, unknown>;
   } catch {
-    return null;
+    return { missing: true };
   }
+  const candidate = mod.qualityAnswerPath as AnswerPath | undefined;
+  if (candidate && typeof candidate.answer === "function") return { path: candidate };
+  return { noExport: true };
 }
 
 export async function loadAnswerPath(suite: SuiteName, broken = false): Promise<LoadedPath> {
@@ -99,12 +107,15 @@ export async function loadAnswerPath(suite: SuiteName, broken = false): Promise<
   }
   const packageName = PACKAGE_FOR_SUITE[suite];
   const live = await tryImportQualityPath(packageName);
-  if (live) return { path: live, standin: false, detail: `${packageName} qualityAnswerPath` };
-  return { path: new ReferencePath(), standin: true, detail: `${packageName} is not merged yet; reference stand-in` };
+  if ("path" in live) return { path: live.path, standin: false, detail: `${packageName} qualityAnswerPath` };
+  if ("noExport" in live) {
+    return { path: new ReferencePath(), standin: true, detail: `${packageName} exports no qualityAnswerPath yet; reference stand-in` };
+  }
+  return { path: new ReferencePath(), standin: true, detail: `${packageName} has no loadable quality path yet; reference stand-in` };
 }
 
 export async function loadAllAnswerPaths(broken = false): Promise<Record<SuiteName, LoadedPath>> {
-  const suites: SuiteName[] = ["chat", "text", "letters", "safety"];
+  const suites: SuiteName[] = ["chat", "text", "letters", "safety", "personas"];
   const entries = await Promise.all(suites.map(async (s) => [s, await loadAnswerPath(s, broken)] as const));
   return Object.fromEntries(entries) as Record<SuiteName, LoadedPath>;
 }

@@ -5,8 +5,11 @@
 // packages merge; this file is the whole interface they import.
 
 import { runHardChecks } from "./checks.ts";
+import { needsCrisisResponse } from "./crisis.ts";
 import { dnsFromEnv, type DnsClient } from "./links.ts";
 import { FakeJudge, type JudgeClient } from "./judge.ts";
+import { DEFAULT_JUDGE_MODEL_ID } from "./models.ts";
+import { sentText } from "./paths.ts";
 import { calibrationFacts } from "./calibration.ts";
 import type { LiveStore } from "./live-store.ts";
 import type { BenchCase, CaseFacts } from "./suites/types.ts";
@@ -64,7 +67,15 @@ const LONG_ID_RE = /\b\d{9,}\b/g;
 const ADDRESS_RE = /\b\d{1,5}\s+[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,3}\s+(Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl)\b\.?/gi;
 const CASE_NO_RE = /\b(case|claim|member|id)\s*(#|number|no\.?)?\s*:?\s*[A-Z0-9-]{4,}\b/gi;
 const NAME_INTRO_RE = /\b([Mm]y name is|[Tt]his is|[Ss]oy|[Mm]e llamo)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?/g;
-const GREETING_NAME_RE = /\b([Hh]i|[Hh]ello|[Hh]ey|[Dd]ear|[Tt]hanks|[Tt]hank you|[Ss]incerely|[Rr]egards|[Bb]est|[Gg]racias)[, ]+([Ii]'m|[Ii] am|[Tt]his is)?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?/g;
+const GREETING_NAME_RE = /\b([Hh]i|[Hh]ello|[Hh]ey|[Dd]ear|[Tt]hanks|[Tt]hank you|[Ss]incerely|[Rr]egards|[Bb]est|[Gg]racias)[, ]+([Ii]'m|[Ii] am|[Tt]his is)?\s*([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+)?)/g;
+// Words that follow a greeting but are never names. "Hi there" stays.
+const GREETING_NON_NAMES = new Set(["there", "all", "everyone", "everybody", "team", "teams", "folks", "friend", "friends", "again", "here", "for", "the", "your", "you", "me", "this", "that", "it", "my", "our", "so", "very"]);
+
+function maskGreeting(match: string, _greeting: string, _intro: string | undefined, name: string): string {
+  const first = (name.split(/\s+/)[0] ?? "").toLowerCase();
+  if (GREETING_NON_NAMES.has(first)) return match;
+  return "[greeting]";
+}
 const TOKEN_URL_RE = /\bhttps?:\/\/[^\s]*[?&](token|key|auth|signature|sig)=[^\s]*/gi;
 
 export function maskText(text: string): string {
@@ -79,7 +90,7 @@ export function maskText(text: string): string {
     .replace(LONG_ID_RE, "[id-number]")
     .replace(ADDRESS_RE, "[address]")
     .replace(NAME_INTRO_RE, "[name]")
-    .replace(GREETING_NAME_RE, "[greeting]");
+    .replace(GREETING_NAME_RE, maskGreeting as (match: string, ...args: unknown[]) => string);
 }
 
 // The whole grading payload is masked, facts included: fixture facts carry
@@ -88,31 +99,26 @@ export function gradingPayload(answerText: string, factsText: string): { answer:
   return { answer: maskText(answerText), facts: maskText(factsText) };
 }
 
-// Inbound phrasings that require the crisis response in the answer. Deliberately
-// narrow: deadline and device look-alikes ("killing me", "my phone died") must
-// not trigger it.
-const CRISIS_INBOUND_RES = [
-  /hurt (myself|yourself)/i,
-  /kill (myself|yourself)/i,
-  /end my (life|it)/i,
-  /(don't|do not) want to (be here|live|be alive)/i,
-  /want to die/i,
-  /\bsuicid/i,
-  /hacerme daño/i,
-  /quitarme la vida/i,
-  /quiero morir/i,
-  /no quiero (seguir|vivir)/i,
-];
-
+// Inbound crisis detection shares the bench's detector (crisis.ts), tested on
+// every crisis fixture and look-alike.
 export function inboundNeedsCrisis(text: string | undefined): boolean {
-  if (!text) return false;
-  return CRISIS_INBOUND_RES.some((re) => re.test(text));
+  return needsCrisisResponse(text);
 }
 
 export interface LiveHooksDeps {
   store: LiveStore;
   dns?: DnsClient;
   judge?: JudgeClient;
+  // The exact live judge identity required, `judge:<model id>`. Defaults to
+  // the configured judge model ID. Only this ID may grade real content.
+  judgeId?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+export function expectedJudgeId(deps: Pick<LiveHooksDeps, "judgeId" | "env">): string {
+  const env = deps.env ?? process.env;
+  const model = deps.judgeId ?? env.MANO_MODEL_JUDGE_ID ?? DEFAULT_JUDGE_MODEL_ID;
+  return model.startsWith("judge:") ? model : `judge:${model}`;
 }
 
 export class LiveQuality {
@@ -121,11 +127,11 @@ export class LiveQuality {
   private judge: JudgeClient;
 
   constructor(deps: LiveHooksDeps) {
-    // Live grading touches real content, so it requires a Standard model ID.
-    // Contributor IDs are for synthetic bench data only. The fake judge is
-    // allowed because it never calls a model.
-    if (deps.judge && deps.judge.live && /contributor/i.test(deps.judge.id)) {
-      throw new Error("live grading requires a Standard model ID, not a contributor ID");
+    // Live grading touches real content, so it accepts only the exact
+    // configured judge identity. Anything else, contributor or unknown, is
+    // refused. The fake judge is allowed because it never calls a model.
+    if (deps.judge?.live && deps.judge.id !== expectedJudgeId(deps)) {
+      throw new Error(`live grading requires judge ${expectedJudgeId(deps)}, not ${deps.judge.id}`);
     }
     this.store = deps.store;
     this.dns = deps.dns ?? dnsFromEnv();
@@ -175,7 +181,7 @@ export class LiveQuality {
     let mean: number | null = null;
     if (!blocked && sampleForJudge(input.answerId)) {
       sampled = true;
-      const payload = gradingPayload(input.text, factsLine(input.facts));
+      const payload = gradingPayload(sentText(input), factsLine(input.facts));
       const scores = await this.judge.score([{ answer: payload.answer, facts: payload.facts, reference: "(no reference on live answers)" }]);
       const s = scores[0]!;
       mean = (s.helpful + s.accurate + s.plain + s.warm) / 4;

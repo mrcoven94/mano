@@ -34,10 +34,18 @@ test("smoke comment step tolerates a missing run log", () => {
   assert.ok(smoke.includes("[ -f runs/smoke.log ]"), "unconditional sed fails the step under bash -e");
 });
 
+test("neutral smoke posts a neutral check and only failure fails", () => {
+  assert.ok(smoke.includes("checks: write"), "neutral check run needs checks permission");
+  assert.ok(smoke.includes("/check-runs"), "neutral result is not posted through the Checks API");
+  assert.ok(smoke.includes('conclusion="neutral"'), "neutral check run lacks a neutral conclusion");
+  assert.ok(smoke.includes("if: env.exit == '1'"), "neutral must not fail the job");
+});
+
 test("nightly handles secrets through env only", () => {
   assert.ok(!/^ *if:.*secrets\./m.test(nightly), "nightly gates a step on a secret");
   assert.ok(nightly.includes("HOLDOUT: ${{ secrets.MANO_QUALITY_HOLDOUT }}"), "holdout must ride env");
   assert.ok(!nightly.includes("printf '%s' '${{"), "holdout is pasted into shell source");
   assert.ok(nightly.includes('printf \'%s\' "$HOLDOUT"'), "holdout is not written from env");
-  assert.ok(nightly.includes("s3://mano-quality/private"), "private runs have no upload path");
+  assert.ok(nightly.includes("s3://mano-quality-private"), "private runs lack a separate bucket");
+  assert.ok(!nightly.includes("s3://mano-quality/private"), "private data shares the public bucket");
 });

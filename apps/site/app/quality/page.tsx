@@ -47,8 +47,7 @@ export default async function QualityPage() {
     );
   }
 
-  const privateBase = (process.env.QUALITY_RUNS_PRIVATE_URL ?? "").replace(/\/$/, "");
-  const { latest, history, lowest, failed, casesConnected, counters } = await loadQuality(base, privateBase);
+  const { latest, history, lowest, failed, casesConnected, counters } = await loadQuality(base);
   if (!latest) {
     return (
       <div className="wrap" style={{ paddingTop: 48, paddingBottom: 64 }}>

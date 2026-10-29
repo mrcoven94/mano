@@ -55,8 +55,9 @@ jobs:
         run: |
           cd packages/quality
           node src/bin/nightly.ts --out ../../runs-staging
-      # public/ holds aggregates only and is world-readable. private/ holds
-      # per-case data and diagnostics and must never get a public policy.
+      # public/ holds aggregates only and syncs to the world-readable bucket.
+      # private/ holds per-case data and diagnostics and syncs to a separate
+      # private bucket; a prefix is not access control.
       - name: Upload public runs
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -74,6 +75,6 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
         run: |
-          aws s3 sync runs-staging/private s3://mano-quality/private \
+          aws s3 sync runs-staging/private s3://mano-quality-private \
             --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
             --no-progress

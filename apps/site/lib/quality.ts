@@ -3,7 +3,7 @@
    never appears per-case. Anything that names a model or provider is stripped
    before render; staff never see those names. */
 
-import { displayTotal, stripModelNames } from "@mano/quality";
+import { displayTotal, r2CredsFromEnv, scrubStaffCase, signedPrivateGet } from "@mano/quality";
 
 export interface SuiteRow {
   version: number;
@@ -63,6 +63,22 @@ async function fetchJson<T>(url: string): Promise<T | null> {
   }
 }
 
+// Per-case data lives in the private bucket and is fetched server-side with
+// R2 credentials. Without credentials there is no fallback: the page says the
+// detail is not connected rather than reaching anywhere public for it.
+async function fetchPrivateJson<T>(key: string): Promise<T | null> {
+  const creds = r2CredsFromEnv(process.env);
+  if (!creds) return null;
+  try {
+    const signed = signedPrivateGet(creds, key);
+    const res = await fetch(signed.url, { cache: "no-store", headers: signed.headers });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 function stripRun(raw: Record<string, unknown>): LatestRun {
   const suites: Record<string, SuiteRow> = {};
   for (const [name, s] of Object.entries((raw.suites ?? {}) as Record<string, SuiteRow>)) {
@@ -95,15 +111,10 @@ function stripRun(raw: Record<string, unknown>): LatestRun {
 }
 
 function cleanCase(c: CaseRow): CaseRow {
-  return {
-    ...c,
-    answer: { text: stripModelNames(c.answer.text) },
-    checks: c.checks.map((r) => ({ ...r, detail: r.detail === undefined ? undefined : stripModelNames(r.detail) })),
-    judge: c.judge ? { ...c.judge, reason: stripModelNames(c.judge.reason) } : null,
-  };
+  return scrubStaffCase(c);
 }
 
-export async function loadQuality(base: string, privateBase: string): Promise<{
+export async function loadQuality(base: string): Promise<{
   latest: LatestRun | null;
   history: HistoryRow[];
   lowest: CaseRow[];
@@ -117,8 +128,8 @@ export async function loadQuality(base: string, privateBase: string): Promise<{
   let lowest: CaseRow[] = [];
   let failed: CaseRow[] = [];
   let casesConnected = false;
-  if (latest && privateBase) {
-    const cases = (await fetchJson<CaseRow[]>(`${privateBase}/runs/${latest.runId}/cases.json`)) ?? [];
+  if (latest) {
+    const cases = (await fetchPrivateJson<CaseRow[]>(`runs/${latest.runId}/cases.json`)) ?? [];
     casesConnected = cases.length > 0;
     const visible = cases.filter((c) => c.suite !== "safety-holdout").map(cleanCase);
     const judged = visible.filter((c) => c.judge !== null);

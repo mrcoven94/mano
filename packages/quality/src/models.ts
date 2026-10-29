@@ -70,6 +70,7 @@ export class FakeModelClient implements ModelClient {
 }
 
 export const DEFAULT_JUDGE_MODEL_ID = "muse-spark-1.3";
+export const DEFAULT_MODEL_BASE_URL = "https://api.meta.ai/v1";
 
 // The judge must never be the same model that wrote the answers. Both IDs
 // come from config; CI sets them as plain workflow variables and fails when
@@ -85,9 +86,9 @@ export function assertJudgeServingDiffer(env: NodeJS.ProcessEnv = process.env): 
 
 export function judgeClientFromEnv(env: NodeJS.ProcessEnv = process.env): ModelClient {
   const key = env.META_MODEL_API_KEY ?? "";
-  const base = env.MANO_MODEL_BASE_URL ?? "";
+  const base = env.MANO_MODEL_BASE_URL || DEFAULT_MODEL_BASE_URL;
   const id = env.MANO_MODEL_JUDGE_ID || DEFAULT_JUDGE_MODEL_ID;
-  if (key && base) return new MetaModelClient(id, base, key);
+  if (key) return new MetaModelClient(id, base, key);
   return new FakeModelClient();
 }
 

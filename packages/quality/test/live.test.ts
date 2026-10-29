@@ -6,7 +6,7 @@ import test from "node:test";
 import { factsForState } from "../src/facts.ts";
 import { LocalDns } from "../src/links.ts";
 import { FakeJudge, type JudgeClient } from "../src/judge.ts";
-import { LiveQuality, displayTotal, gradingPayload, inboundNeedsCrisis, maskText, sampleForJudge, suppressCounts } from "../src/live.ts";
+import { LiveQuality, displayTotal, expectedJudgeId, gradingPayload, inboundNeedsCrisis, maskText, sampleForJudge, suppressCounts } from "../src/live.ts";
 import { MemoryLiveStore } from "../src/live-store.ts";
 
 const WEEK = "2026-W44";
@@ -68,6 +68,9 @@ test("masking catches greetings, SSNs, lowercase addresses, and token links", ()
   assert.equal(maskText("open https://office.example/renew?token=abc123 now"), "open [link] now");
   assert.equal(maskText("Hi there, I need help"), "Hi there, I need help");
   assert.equal(maskText("Thank you. Call Rosa tomorrow"), "Thank you. Call Rosa tomorrow");
+  assert.equal(maskText("hi rosa, are you there"), "[greeting], are you there");
+  assert.equal(maskText("thanks juan perez for the photo"), "[greeting] for the photo");
+  assert.equal(maskText("hello everyone, good news"), "hello everyone, good news");
 });
 
 test("the grading payload masks the facts too", () => {
@@ -76,13 +79,18 @@ test("the grading payload masks the facts too", () => {
   assert.ok(!payload.facts.includes("token=abc123"));
 });
 
-test("live grading rejects contributor model IDs", () => {
+test("live grading accepts only the exact judge identity", () => {
   const store = new MemoryLiveStore();
+  const env = { MANO_MODEL_JUDGE_ID: "muse-spark-1.3" };
   const contributor: JudgeClient = { id: "judge:idl-1.0-contributor", live: true, score: async () => [] };
-  assert.throws(() => new LiveQuality({ store, judge: contributor }), /Standard model ID/);
-  const standard: JudgeClient = { id: "judge:muse-spark-1.3", live: true, score: async () => [] };
-  assert.doesNotThrow(() => new LiveQuality({ store, judge: standard }));
+  assert.throws(() => new LiveQuality({ store, judge: contributor, env }), /requires judge/);
+  const other: JudgeClient = { id: "judge:some-other-model", live: true, score: async () => [] };
+  assert.throws(() => new LiveQuality({ store, judge: other, env }), /requires judge/);
+  const exact: JudgeClient = { id: "judge:muse-spark-1.3", live: true, score: async () => [] };
+  assert.doesNotThrow(() => new LiveQuality({ store, judge: exact, env }));
   assert.doesNotThrow(() => new LiveQuality({ store, judge: new FakeJudge() }));
+  assert.equal(expectedJudgeId({ env }), "judge:muse-spark-1.3");
+  assert.equal(expectedJudgeId({ judgeId: "custom-id" }), "judge:custom-id");
 });
 
 test("counters, feedback, and suppression keep counts only", () => {
@@ -160,6 +168,33 @@ test("live blocking enforces every safety check, including crisis", async () => 
   assert.equal(inboundNeedsCrisis("This deadline is killing me"), false);
   assert.equal(inboundNeedsCrisis("My phone died"), false);
   assert.equal(inboundNeedsCrisis("Quiero hacerme daño"), true);
+});
+
+test("the live judge grades the sent bubbles, masked", async () => {
+  const seen: string[] = [];
+  const capturing: JudgeClient = {
+    id: "capturing-judge", live: false,
+    score: async (batch) => {
+      for (const item of batch) seen.push(item.answer);
+      return batch.map(() => ({ helpful: 5, accurate: 5, plain: 5, warm: 5, pass: true, reason: "" }));
+    },
+  };
+  const store = new MemoryLiveStore();
+  const live = new LiveQuality({ store, dns: new LocalDns(), judge: capturing });
+  const ids: string[] = [];
+  for (let i = 0; ids.length < 1; i++) {
+    if (sampleForJudge(`bubbles-${i}`)) ids.push(`bubbles-${i}`);
+  }
+  await live.afterAnswer({
+    answerId: ids[0]!, text: "WRONG SUMMARY",
+    bubbles: ["Your SNAP renewal is due November 15, 2026.", "Thanks, Rosa."],
+    category: "deadlines", locale: "en", state: "CA", week: WEEK, facts: factsForState("CA", false),
+    textChannel: true, latencyMs: 10, inputTokens: 1, outputTokens: 1,
+  });
+  assert.equal(seen.length, 1);
+  assert.ok(!seen[0]!.includes("WRONG SUMMARY"));
+  assert.ok(seen[0]!.includes("November 15, 2026"));
+  assert.ok(!seen[0]!.includes("Rosa"));
 });
 
 test("no live text is stored anywhere", async () => {

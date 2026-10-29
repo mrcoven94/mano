@@ -5,11 +5,12 @@
 import { sha256Hex, stableStringify } from "../prng.ts";
 import { buildChatCases, CHAT_SUITE_VERSION } from "./chat.ts";
 import { buildLettersCases, LETTERS_SUITE_VERSION } from "./letters.ts";
+import { buildPersonasCases, PERSONAS_SUITE_VERSION } from "./personas.ts";
 import { buildSafetyCases, SAFETY_SUITE_VERSION } from "./safety.ts";
 import { buildTextCases, TEXT_SUITE_VERSION } from "./text.ts";
 import type { BenchCase, SuiteBuild, SuiteName } from "./types.ts";
 
-export const SUITE_NAMES: SuiteName[] = ["chat", "text", "letters", "safety"];
+export const SUITE_NAMES: SuiteName[] = ["chat", "text", "letters", "safety", "personas"];
 
 export const SUITE_VERSIONS: Record<SuiteName, number> = {
   chat: CHAT_SUITE_VERSION,
@@ -17,6 +18,7 @@ export const SUITE_VERSIONS: Record<SuiteName, number> = {
   letters: LETTERS_SUITE_VERSION,
   safety: SAFETY_SUITE_VERSION,
   "safety-holdout": 1,
+  personas: PERSONAS_SUITE_VERSION,
 };
 
 export function buildSuite(suite: SuiteName): SuiteBuild {
@@ -24,6 +26,7 @@ export function buildSuite(suite: SuiteName): SuiteBuild {
     suite === "chat" ? buildChatCases()
     : suite === "text" ? buildTextCases()
     : suite === "letters" ? buildLettersCases()
+    : suite === "personas" ? buildPersonasCases()
     : buildSafetyCases();
   return { suite, version: SUITE_VERSIONS[suite]!, cases, sha256: sha256Hex(stableStringify(cases)) };
 }

@@ -4,7 +4,7 @@
 
 import { runHardChecks } from "./checks.ts";
 import { LocalDns } from "./links.ts";
-import { scoreSuite, type CaseResult, type RunReport } from "./run.ts";
+import { attachJudgeGate, scoreSuite, type CaseResult, type RunReport } from "./run.ts";
 import { buildAllSuites } from "./suites/build.ts";
 import type { BenchCase } from "./suites/types.ts";
 import { readRun, writeRun } from "./report.ts";
@@ -30,6 +30,7 @@ export async function rescoreRun(inDir: string, outDir: string): Promise<RunRepo
     );
     rescored.push({ ...r, checks });
   }
+  attachJudgeGate(rescored);
   const suites: RunReport["suites"] = {};
   for (const build of buildAllSuites()) {
     const subset = rescored.filter((r) => r.suite === build.suite);

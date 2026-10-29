@@ -11,7 +11,7 @@ import { LocalDns } from "../src/links.ts";
 import { FakeJudge } from "../src/judge.ts";
 import { rescoreRun } from "../src/rescore.ts";
 import { compareMatched, evalGate, prComment, publicReport, readRun, writeNightlyStaging, writeRun } from "../src/report.ts";
-import { finishReport, runBench, scoreSuite, type CaseResult, type RunReport } from "../src/run.ts";
+import { attachJudgeGate, finishReport, runBench, scoreSuite, type CaseResult, type RunReport } from "../src/run.ts";
 import { buildSuite } from "../src/suites/build.ts";
 import { SMOKE_CASE_IDS } from "../src/smoke.ts";
 
@@ -67,6 +67,42 @@ test("full runs require a verified holdout", async () => {
   assert.ok(full.eligibility.reasons.some((r) => r.includes("holdout not verified")));
 });
 
+test("a judge fail gates safety cases but not chat cases", () => {
+  const prices = { inputPer1k: 0, outputPer1k: 0, configured: false };
+  const failed = { helpful: 1, accurate: 1, plain: 1, warm: 1, pass: false, reason: "all ones" };
+  const safety: CaseResult = {
+    caseId: "safety-01", suite: "safety",
+    answer: { text: "Your case is approved. No need to send anything.", actions: [] },
+    checks: [{ id: "language", pass: true }],
+    judge: failed, latencyMs: 1, inputTokens: 1, outputTokens: 1,
+  };
+  attachJudgeGate([safety]);
+  assert.equal(scoreSuite(buildSuite("safety"), [safety], prices).gateFailed, true);
+  const chat: CaseResult = {
+    caseId: "chat-ca-01", suite: "chat",
+    answer: { text: "x", actions: [] },
+    checks: [{ id: "language", pass: true }],
+    judge: failed, latencyMs: 1, inputTokens: 1, outputTokens: 1,
+  };
+  attachJudgeGate([chat]);
+  assert.equal(chat.checks.some((c) => c.id === "judge-pass"), false);
+  assert.equal(scoreSuite(buildSuite("chat"), [chat], prices).gateFailed, false);
+});
+
+test("the bench judge grades the sent bubbles", async () => {
+  const seen: string[] = [];
+  const capturing = {
+    id: "capturing-judge", live: false,
+    score: async (batch: { answer: string }[]) => {
+      for (const item of batch) seen.push(item.answer);
+      return batch.map(() => ({ helpful: 5, accurate: 5, plain: 5, warm: 5, pass: true, reason: "" }));
+    },
+  };
+  await runBench({ ...base, onlyCaseIds: new Set(["text-16"]), judge: capturing });
+  const reference = buildSuite("text").cases.find((c) => c.id === "text-16")!;
+  assert.ok(seen.includes(reference.referenceBubbles!.join("\n")));
+});
+
 test("answer errors fail the run", () => {
   const build = buildSuite("chat");
   const errored: CaseResult = {
@@ -91,13 +127,13 @@ test("baselines compare matching cases at the same suite version", async () => {
   };
 
   const m = compareMatched(baseline, current);
-  assert.equal(m.matched, 25);
+  assert.equal(m.matched, 28);
   assert.equal(m.hardBefore, 1);
   assert.equal(m.hardAfter, 0);
 
   const gate = evalGate(current, baseline);
   assert.equal(gate.status, "fail");
-  assert.ok(gate.reasons.some((r) => r.includes("25 matching cases")));
+  assert.ok(gate.reasons.some((r) => r.includes("28 matching cases")));
 
   const same = evalGate(baseline, eligible(good.full));
   assert.equal(same.status, "pass");
@@ -125,7 +161,7 @@ test("only eligible runs become latest.json; the rest are diagnostics", async ()
   const ok = writeNightlyStaging(join(dir, "eligible"), eligible(full), results);
   assert.equal(ok.eligible, true);
   const latest = JSON.parse(readFileSync(join(dir, "eligible", "public", "latest.json"), "utf8")) as RunReport;
-  assert.equal(Object.keys(latest.fingerprints).length, 25);
+  assert.equal(Object.keys(latest.fingerprints).length, 28);
   const history = JSON.parse(readFileSync(join(dir, "eligible", "public", "history.json"), "utf8")) as unknown[];
   assert.equal(history.length, 1);
 });

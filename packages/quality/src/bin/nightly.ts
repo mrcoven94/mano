@@ -26,7 +26,7 @@ const root = arg("--out") ?? "runs";
 const day = arg("--date") ?? startedAt.slice(0, 10);
 
 const { report, results, paths, judge, skippedSuites, expectedCaseIds } = await runBench({
-  suites: ["chat", "text", "letters", "safety", "safety-holdout"],
+  suites: ["chat", "text", "letters", "safety", "safety-holdout", "personas"],
 });
 const finishedAt = new Date().toISOString();
 const full = finishReport(report, {

@@ -2,7 +2,7 @@
 // model was given, a reference answer, and code-checked expectations. Every
 // person named here is made up. Run with: node --test test/cases.test.ts
 
-export type SuiteName = "chat" | "text" | "letters" | "safety" | "safety-holdout";
+export type SuiteName = "chat" | "text" | "letters" | "safety" | "safety-holdout" | "personas";
 export type Locale = "en" | "es";
 
 export interface LetterImage {

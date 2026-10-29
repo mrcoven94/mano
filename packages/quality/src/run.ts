@@ -9,7 +9,7 @@ import { assertJudgeServingDiffer, judgeClientFromEnv } from "./models.ts";
 import { FakeJudge, JUDGE_AGREEMENT_MIN, MetaJudge, judgeAll, judgeMean, type JudgeClient, type JudgeScore } from "./judge.ts";
 import { buildHoldoutSuite } from "./suites/holdout-suite.ts";
 import { loadHoldout } from "./holdout.ts";
-import { loadAllAnswerPaths, type BenchAnswer } from "./paths.ts";
+import { loadAllAnswerPaths, sentText, type BenchAnswer } from "./paths.ts";
 import { buildAllSuites, buildSuite } from "./suites/build.ts";
 import type { BenchCase, SuiteBuild, SuiteName } from "./suites/types.ts";
 
@@ -108,6 +108,21 @@ function pricesFromEnv(env: NodeJS.ProcessEnv): RunReport["prices"] {
   return { inputPer1k: configured ? input : 0, outputPer1k: configured ? output : 0, configured };
 }
 
+// A judge fail on a safety case fails the gate. The judge verdict becomes a
+// hard check on safety results so the normal gate machinery applies. Other
+// suites keep the judge as a score, not a gate.
+export function attachJudgeGate(results: CaseResult[]): void {
+  for (const r of results) {
+    if (r.suite !== "safety" && r.suite !== "safety-holdout") continue;
+    if (!r.judge || r.checks.some((c) => c.id === "judge-pass")) continue;
+    r.checks.push({
+      id: "judge-pass",
+      pass: r.judge.pass,
+      detail: r.judge.pass ? "judge passed" : `judge failed: ${r.judge.reason}`,
+    });
+  }
+}
+
 export function scoreSuite(suite: SuiteBuild, results: CaseResult[], prices: RunReport["prices"]): SuiteScore {
   const allChecks = results.flatMap((r) => r.checks);
   const casesPassing = results.filter((r) => r.checks.every((c) => c.pass)).length;
@@ -161,7 +176,7 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
   const dns = opts.dns ?? dnsFromEnv(env);
   const judge = judgeForSuite(opts.judge, env);
   const broken = opts.broken ?? env.MANO_QUALITY_BROKEN === "1";
-  const wanted = new Set(opts.suites ?? ["chat", "text", "letters", "safety"]);
+  const wanted = new Set(opts.suites ?? ["chat", "text", "letters", "safety", "personas"]);
 
   const builds: SuiteBuild[] = [];
   for (const suite of buildAllSuites()) {
@@ -214,7 +229,7 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
         inputTokens: answer.inputTokens, outputTokens: answer.outputTokens,
       };
       results.push(result);
-      judgeItems.push({ result, item: { answer: answer.text, facts: calibrationFacts(c), reference: c.reference } });
+      judgeItems.push({ result, item: { answer: sentText(answer), facts: calibrationFacts(c), reference: c.reference } });
     }
   }
 
@@ -222,6 +237,7 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
   scores.forEach((s, i) => {
     judgeItems[i]!.result.judge = s;
   });
+  attachJudgeGate(results);
 
   const prices = pricesFromEnv(env);
   const suites: Record<string, SuiteScore> = {};
