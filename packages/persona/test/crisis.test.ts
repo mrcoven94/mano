@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CRISIS_LINE, crisisFloor, isCrisis } from "../src/crisis.js";
+import { CRISIS_LINE, crisisFloor, holdCrisisLines, isCrisis } from "../src/crisis.js";
 import { guardReply } from "../src/guard.js";
 
 describe("isCrisis", () => {
@@ -47,5 +47,19 @@ describe("crisisFloor", () => {
 
   it("writes the crisis line in the voice the guard enforces", () => {
     expect(guardReply(CRISIS_LINE)).toEqual({ text: CRISIS_LINE, changes: [] });
+  });
+});
+
+describe("holdCrisisLines (review blocker 2)", () => {
+  it("puts the crisis line first when the final bubbles miss either number", () => {
+    expect(holdCrisisLines(["I'm here with you."])).toEqual([CRISIS_LINE, "I'm here with you."]);
+    expect(holdCrisisLines(["Call 988 now.", "Or 911."])).toEqual(["Call 988 now.", "Or 911."]);
+    expect(holdCrisisLines([])).toEqual([CRISIS_LINE]);
+  });
+
+  it("survives the guard dropping a sentence that named a provider", () => {
+    const guarded = guardReply(crisisFloor("Call 988 or 911 through Meta.")).text;
+    expect(holdCrisisLines([guarded]).join(" ")).toContain("988");
+    expect(holdCrisisLines([guarded]).join(" ")).toContain("911");
   });
 });

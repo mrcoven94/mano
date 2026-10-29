@@ -35,7 +35,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { guardReply } from "@mano/persona";
+import { CRISIS_LINE, guardReply, holdCrisisLines, isCrisis } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -661,6 +661,9 @@ export class ConversationRunner {
     // plus chunkByTextCap), so the join is never cut: every input
     // reaches the responder exactly once, across as many turns as needed.
     const turnText = texts.join("\n");
+    // Classified before admission and before any model work: a crisis
+    // reply never depends on the budget, the limits or the model.
+    const crisis = isCrisis(turnText);
     const history = this.history(meta.introduced);
     const historyChars = history.reduce((sum, h) => sum + h.text.length, 0);
     const { responder } = this.deps;
@@ -677,10 +680,20 @@ export class ConversationRunner {
         turn,
         reason: over ?? "budget",
         spentUsd: budgeted.spentUsd,
+        crisis,
       });
-      const noticed = await this.sendBusyOnce(turn, chatId, to, over ?? "budget", nowMs());
-      store.updateTurnAnswer(turn, JSON.stringify(noticed ? [{ part: 0, tag: "busy", text: BUSY_BUBBLE }] : []), 0, nowMs());
-      store.markTurnSettled(turn, nowMs());
+      if (crisis) {
+        // No model and no cost: the deterministic crisis reply, past any limit.
+        const bubbles = [...(meta.introduced ? [] : [{ part: 0, tag: "", text: INTRO_BUBBLE }]), { part: 1, tag: "", text: CRISIS_LINE }];
+        store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
+        store.markTurnSettled(turn, nowMs());
+        await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
+        this.checkSendsResolved(turn, generation);
+      } else {
+        const noticed = await this.sendBusyOnce(turn, chatId, to, over ?? "budget", nowMs());
+        store.updateTurnAnswer(turn, JSON.stringify(noticed ? [{ part: 0, tag: "busy", text: BUSY_BUBBLE }] : []), 0, nowMs());
+        store.markTurnSettled(turn, nowMs());
+      }
       // Over a limit nothing is downloaded: admission failed, so the
       // turn's attachments are dropped with the turn.
       if (attachments.length > 0) {
@@ -700,21 +713,23 @@ export class ConversationRunner {
       if (saved > 0) bubbles.push({ part: 0, tag: "ack", text: attachmentAck(saved) });
       if (turnText) {
         this.checkGeneration(generation);
-        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation);
+        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation, crisis);
         if (answer.ok) {
           // Links come out before splitting, and each final bubble is
           // checked again: a split must never leave an unchecked link
-          // behind. The persisted bubbles are final and capped.
+          // behind. The persisted bubbles are final and capped. A crisis
+          // turn's final bubbles must still name 988 and 911.
           const final = await this.finalizeBubbles(turn, answer.text);
           if (final.removed > 0) {
             logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
           }
-          final.bubbles.forEach((text, i) => bubbles.push({ part: i + 1, tag: "", text }));
+          const answerBubbles = crisis ? holdCrisisLines(final.bubbles).slice(0, MAX_BUBBLES) : final.bubbles;
+          answerBubbles.forEach((text, i) => bubbles.push({ part: i + 1, tag: "", text }));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
         } else {
-          bubbles.push({ part: 1, tag: "", text: FAILURE_BUBBLE });
+          bubbles.push({ part: 1, tag: "", text: crisis ? CRISIS_LINE : FAILURE_BUBBLE });
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
@@ -813,6 +828,7 @@ export class ConversationRunner {
     chatId: string | null,
     to: string | null,
     generation: number,
+    crisis: boolean,
   ): Promise<{ ok: true; text: string; costUsd: number } | { ok: false; costUsd: number }> {
     const { responder, config, logger } = this.deps;
     let done = false;
@@ -833,7 +849,7 @@ export class ConversationRunner {
       estimateCostUsd(inputChars * attempts, 0, config.usdPer1kChars);
     try {
       const onHeadsUp = async (text: string): Promise<void> => {
-        if (done || interimSent) return;
+        if (done || interimSent || crisis) return;
         interimSent = true;
         try {
           await this.sendHeadsUp(turn, text, chatId, to, generation);
@@ -860,7 +876,12 @@ export class ConversationRunner {
     }
   }
 
-  private async sendHeadsUp(turn: number, text: string, chatId: string | null, to: string | null, generation: number): Promise<void> {
+  // The heads-up is model text, so it gets the same voice guard and
+  // link check as the final answer before it is sent.
+  private async sendHeadsUp(turn: number, raw: string, chatId: string | null, to: string | null, generation: number): Promise<void> {
+    const checked = await stripBlockedLinks(this.guard(raw, { turn, part: 0, tag: "headsup" }), new LinkChecker({ fetchFn: this.deps.fetchFn }));
+    if (checked.removed > 0) this.deps.logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: checked.removed });
+    const text = checked.text;
     this.checkGeneration(generation);
     if (!this.store.meta().introduced) {
       const intro = await this.sendBubble({ turn, part: 0, tag: "", text: INTRO_BUBBLE, chatId, to, generation });
@@ -896,7 +917,8 @@ export class ConversationRunner {
 
   // The voice guard. Logs which rules fired, never the text.
   private guard(text: string, where: { turn: number; part: number; tag: string }): string {
-    const guarded = guardReply(text);
+    const model = this.deps.responder.model;
+    const guarded = guardReply(text, { modelIds: model ? [model] : [] });
     if (guarded.changes.length > 0) {
       const { turn, part, tag } = where;
       this.deps.logger.info("voice_guarded", { handle: this.logHandle(), turn, part, tag, changes: guarded.changes.join(",") });

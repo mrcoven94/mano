@@ -64,3 +64,11 @@ export function namesCrisisLines(reply: string): boolean {
 export function crisisFloor(reply: string): string {
   return namesCrisisLines(reply) ? reply : `${CRISIS_LINE} ${reply}`.trim();
 }
+
+// The last check on a crisis turn's outgoing bubbles, after the guard,
+// the link check and truncation: if either number is gone, CRISIS_LINE
+// goes first. Callers cap the bubble count after this, so it is never
+// the line that gets cut.
+export function holdCrisisLines(bubbles: readonly string[]): string[] {
+  return namesCrisisLines(bubbles.join(" ")) ? [...bubbles] : [CRISIS_LINE, ...bubbles];
+}
