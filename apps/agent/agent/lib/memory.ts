@@ -1,40 +1,50 @@
 // Person memory: durable facts Mano remembers across turns (household,
-// county, deadlines, what the person asked for). Today this is an Eve
-// session-state slot, read at the start of each turn through a dynamic
-// instruction. When Engine (LAP-500) merges its person memory API, this
-// module's store swaps to Engine's API behind the same interface and
-// nothing else changes.
-import { defineState } from "eve/context";
+// county, deadlines, what the person asked for). Engine owns it, on the
+// person's own record; the agent reads it at the start of each turn and
+// writes through the remember and forget tools. Nothing is cached here.
+import { EngineClient } from "./engine.js";
 
-export interface PersonMemory {
-  facts: string[];
-  updatedAt: string | null;
-}
-
-export const initialPersonMemory = (): PersonMemory => ({ facts: [], updatedAt: null });
-
-export const personMemory = defineState<PersonMemory>("mano.person", initialPersonMemory);
-
-export const MAX_FACTS = 50;
+export const MAX_RECALLED_FACTS = 50;
 export const MAX_FACT_CHARS = 500;
 
-export function addFact(memory: PersonMemory, fact: string, now: string = new Date().toISOString()): PersonMemory {
-  const clean = fact.trim().replace(/\s+/g, " ");
-  if (!clean) return memory;
-  const facts = memory.facts.filter((f) => f.toLowerCase() !== clean.toLowerCase());
-  facts.push(clean.slice(0, MAX_FACT_CHARS));
-  return { facts: facts.slice(-MAX_FACTS), updatedAt: now };
+export function normalizeFact(fact: string): string {
+  return fact.trim().replace(/\s+/g, " ").slice(0, MAX_FACT_CHARS);
 }
 
-export function removeFact(memory: PersonMemory, fact: string, now: string = new Date().toISOString()): PersonMemory {
-  const want = fact.trim().toLowerCase();
-  const facts = memory.facts.filter((f) => f.toLowerCase() !== want);
-  return facts.length === memory.facts.length ? memory : { facts, updatedAt: now };
+function sameFact(a: string, b: string): boolean {
+  return normalizeFact(a).toLowerCase() === normalizeFact(b).toLowerCase();
+}
+
+export async function recallFacts(engine: EngineClient, personId: string): Promise<string[]> {
+  const rows = await engine.listMemory(personId);
+  return rows.map((r) => r.content).slice(-MAX_RECALLED_FACTS);
+}
+
+export async function rememberFact(engine: EngineClient, personId: string, fact: string): Promise<{ saved: boolean }> {
+  const clean = normalizeFact(fact);
+  if (!clean) return { saved: false };
+  const rows = await engine.listMemory(personId);
+  if (rows.some((r) => sameFact(r.content, clean))) return { saved: true };
+  await engine.addMemory(personId, clean);
+  return { saved: true };
+}
+
+export type ForgetOutcome = { removed: true } | { removed: false; reason: "not_found" | "deletion_unavailable" };
+
+export async function forgetFact(engine: EngineClient, personId: string, fact: string): Promise<ForgetOutcome> {
+  const matches = (await engine.listMemory(personId)).filter((r) => sameFact(r.content, fact));
+  if (matches.length === 0) return { removed: false, reason: "not_found" };
+  for (const row of matches) {
+    if ((await engine.deleteMemory(personId, row.id)) === "unsupported") {
+      return { removed: false, reason: "deletion_unavailable" };
+    }
+  }
+  return { removed: true };
 }
 
 // Renders the memory block the model sees at the start of each turn.
 // Empty memory renders nothing, so new people pay no context for it.
-export function renderMemory(memory: PersonMemory): string | null {
-  if (memory.facts.length === 0) return null;
-  return ["What you remember about this person:", ...memory.facts.map((f) => `- ${f}`)].join("\n");
+export function renderMemory(facts: string[]): string | null {
+  if (facts.length === 0) return null;
+  return ["What you remember about this person:", ...facts.map((f) => `- ${f}`)].join("\n");
 }
