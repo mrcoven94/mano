@@ -12,11 +12,14 @@ export const CRISIS_LINE =
 // One sentence, added to every reply Mano sends without the model.
 export const SAFETY_LINE = "If you're in danger or thinking about hurting yourself, call 911 or text 988.";
 
+// An overdose needs a harm signal (swallowed, took all, downed, too
+// many, a whole bottle) plus a substance, so "a bottle of water" or
+// "my meds every morning" does not count.
 // Self-harm, violence and explicit danger count anywhere, next to
 // housing or money words too. The one exception is "in danger of
 // losing", which is a benefits question.
 const SELF_HARM =
-  /\b(?:suicid(?:e|al)|kill(?:ing)? myself|hang(?:ing)? myself|end (?:my life|it all)|(?:want|wanna) to die|wanna die|better off dead|(?:hurt|hurting|harm|harming|cut|cutting) myself|self harm|overdos\w*|(?:took|take|taking|swallowed) (?:a |the )?(?:whole )?(?:bottle|handful) of|(?:don'?t|do not) want to (?:be here|live))\b/;
+  /\b(?:suicid(?:e|al)|kill(?:ing)? myself|hang(?:ing)? myself|end (?:my life|it all)|(?:want|wanna) to die|wanna die|better off dead|(?:hurt|hurting|harm|harming|cut|cutting) myself|self harm|overdos\w*|(?:swallowed|took all|take all|downed|took (?:a|the) (?:whole|entire)|took too many|took a (?:handful|bunch))\b[^.!?]{0,30}\b(?:pills|meds|medications?|medicines?|tablets|painkillers)|(?:swallowed|took all|downed) (?:a |the )?(?:whole|entire) bottle|(?:don'?t|do not) want to (?:be here|live))\b/;
 const VIOLENCE =
   /\b(?:(?:hit|hits|hitting|beat|beats|beating|hurt|hurts|hurting|choked?|choking|kick(?:s|ed|ing)?|attack(?:s|ed|ing)?|abus(?:es|ed|ing)) (?:me|us|my (?:kids?|children|son|daughter|baby))|(?:being|been|was|got) (?:abused|hit|beaten|attacked|choked)|abusive|domestic (?:abuse|violence)|(?:threaten(?:s|ed)?|going|gonna|wants?|tried|trying) to kill (?:me|us|myself|him|her|them)|kill me)\b/;
 const DANGER = /\b(?:immediate danger|in danger(?! of losing\b)|not safe|unsafe|(?:don'?t|do not) feel safe)\b/;

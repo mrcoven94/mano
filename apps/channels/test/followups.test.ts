@@ -115,3 +115,29 @@ describe("PR 67 review, through the send path", () => {
     expect(h.channel.sends).toEqual([]);
   });
 });
+
+describe("PR 67 review round 2, through the send path", () => {
+  it("replaces a self-reference that names a listed AI company or assistant (blocker 1)", async () => {
+    for (const reply of ["This is Google Assistant. How can I help?", "I'm Alexa, your helper.", "You're chatting with Siri."]) {
+      const h = makeHarness({ replies: [reply] });
+      const sent = (await say(h, "evt_1", "who is this")).slice(1).join(" ");
+      expect(sent, reply).toContain(SELF_DESCRIPTION);
+      expect(sent, reply).not.toMatch(/google|alexa|siri/i);
+    }
+  });
+
+  it("sends a sentence about a form created by the county unchanged (regression 2)", async () => {
+    const reply = "I'm reviewing a renewal form created by the county. Sign page 2.";
+    const h = makeHarness({ replies: [reply] });
+    expect((await say(h, "evt_1", "can you check this")).slice(1)).toEqual([reply]);
+  });
+
+  it("does not treat a bottle of water or formula as a crisis (regression 3)", async () => {
+    for (const message of ["I took a bottle of water to my SNAP interview.", "I take a bottle of formula to daycare."]) {
+      const h = makeHarness({ replies: ["Good, that works."] });
+      const sent = await say(h, "evt_1", message);
+      expect(sent.slice(1), message).toEqual(["Good, that works."]);
+      expect(sent.join(" "), message).not.toContain(CRISIS_LINE);
+    }
+  });
+});

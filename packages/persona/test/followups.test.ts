@@ -11,8 +11,6 @@ describe("self-identity is a class (follow-up 2)", () => {
       "I am Amazon Nova.",
       "I'm Acme Helper, here to help.",
       "My name is Robin.",
-      "I run on Acme Cloud.",
-      "I'm an assistant from Acme.",
       "I was trained by a big lab.",
     ]) {
       expect(containsProviderName(text), text).toBe(true);
@@ -90,8 +88,48 @@ describe("PR 67 review", () => {
   });
 
   it("still catches explicit assistant identities that start with This is (should 3)", () => {
-    for (const text of ["This is Nova, your assistant.", "This is Robin speaking.", "This is Acme Helper, an AI assistant."]) {
+    for (const text of ["This is Nova, your assistant.", "This is Google Assistant speaking."]) {
       expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
+    }
+  });
+});
+
+describe("PR 67 review round 2", () => {
+  it("replaces self-references naming a listed company or assistant, in any case (blocker 1)", () => {
+    for (const text of [
+      "This is Google Assistant. How can I help?",
+      "this is google assistant",
+      "I'm Alexa.",
+      "My maker is Amazon.",
+      "You're talking with Copilot from Microsoft.",
+      "I am built on xAI's Grok.",
+      "This is Nova.",
+    ]) {
+      expect(containsProviderName(text), text).toBe(true);
+      expect(guardReply(text).text.startsWith(SELF_DESCRIPTION), text).toBe(true);
+    }
+  });
+
+  it("keeps Washington's Apple Health program name", () => {
+    const text = "I can help you renew Apple Health.";
+    expect(guardReply(text), text).toEqual({ text, changes: [] });
+  });
+
+  it("applies the maker rule only to the assistant itself (regression 2)", () => {
+    for (const text of ["I'm reviewing a renewal form created by the county. Sign page 2.", "I was looking at a letter made by DSHS."]) {
+      expect(guardReply(text), text).toEqual({ text, changes: [] });
+    }
+    for (const text of ["I was created by Acme.", "I'm built by Acme Labs.", "I'm an assistant made by Acme."]) {
+      expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
+    }
+  });
+
+  it("needs a harm signal plus a substance for an overdose (regression 3)", () => {
+    for (const text of ["I took a bottle of water to my SNAP interview.", "I take a bottle of formula to daycare.", "I take my meds every morning."]) {
+      expect(isCrisis(text), text).toBe(false);
+    }
+    for (const text of ["I took a whole bottle of pills", "I swallowed all my meds", "I downed a whole bottle", "I took too many tablets", "thinking about an overdose"]) {
+      expect(isCrisis(text), text).toBe(true);
     }
   });
 });

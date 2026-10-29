@@ -50,22 +50,29 @@ function idPattern(modelIds: readonly string[]): RegExp | null {
   return new RegExp(`(?<![\\w.-])(?:${loose.join("|")})(?![\\w-])`, "i");
 }
 
-// Mano describes itself one way only. A sentence where the assistant
-// names itself or its maker as anything but Mano is a self-description
-// to replace, whatever the name: no provider list needed.
+// Mano describes itself one way only. Two rules decide a sentence that
+// identifies the assistant as anything but Mano:
+// 1. A self-reference (I, I'm, my, this is, you're talking with) that
+//    contains a name from AI_NAMES, a finite list, in any case.
+// 2. For names not on the list, only a capitalized "I'm X", "my name is
+//    X", or the assistant itself made, built or created by X.
+// Benefits program names that contain a listed name are exempt.
+const AI_NAMES = [
+  "meta", "muse", "spark", "glimmer", "llama", "openai", "chatgpt", "gpt", "google", "gemini", "bard", "anthropic",
+  "claude", "microsoft", "copilot", "bing", "amazon", "alexa", "nova", "apple", "siri", "mistral", "deepseek", "grok", "xai",
+];
+const AI_NAME_PATTERN = new RegExp(`\\b(?:${AI_NAMES.join("|")})\\b`, "i");
+const PROGRAM_NAMES = /\bapple health\b/gi;
+
 const OTHER_SELF = [
-  /\bi(?: was| am|'m|’m)\b[^.!?\n]*?\b(?:developed|built|made|created|trained|designed|programmed|powered|engineered|owned) (?:by|at|on)\s+(?!mano\b)\S/i,
-  /\bi (?:run|operate|live) on\s+(?!mano\b)\S/i,
+  /\bi(?: was| am|'m|’m)(?: (?:an?|the) (?:[\w-]+ )?(?:assistant|ai|model|bot|chatbot))? (?:developed|built|made|created|trained|designed|programmed|powered|engineered) (?:by|at|on)\s+(?!mano\b)\S/i,
   /\bmy name is\s+(?!mano\b)\S/i,
-  /\bassistant (?:from|by|made by|built by|of)\s+(?!mano\b)\S/i,
   // Case-sensitive on purpose: the name after it is capitalized.
-  /\b(?:[Ii](?:'m|’m| am)|[Yy]ou(?:'re|’re| are) (?:talking|chatting|texting) (?:to|with)) (?:an? |the )?(?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version) )*(?:called |named )?(?!Mano\b)[A-Z]/,
-  // "This is" only as an assistant introducing itself, so "This is
-  // Ohio's renewal form" stays an explanation.
-  /\b[Tt]his is (?!Mano\b)[A-Z][\w'’-]*(?: [A-Z][\w'’-]*)*(?:,? (?:your|an?|the) (?:[\w-]+ )?assistant\b| speaking\b| here to help\b)/,
+  /\b[Ii](?:'m|’m| am) (?:an? |the )?(?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version) )*(?:called |named )?(?!Mano\b)[A-Z]/,
 ];
 
 function selfIdentifiesAsOther(sentence: string): boolean {
+  if (SELF_REFERENCE.test(sentence) && AI_NAME_PATTERN.test(sentence.replace(PROGRAM_NAMES, " ").replace(ORDINARY_PHRASES, " "))) return true;
   return OTHER_SELF.some((pattern) => pattern.test(sentence));
 }
 
@@ -94,7 +101,7 @@ export interface GuardOptions {
 
 // A sentence that names a provider and talks about the speaker is a
 // self-description: "I'm Muse Spark!", "This is ChatGPT", "Mano runs on Llama".
-const SELF_REFERENCE = /\b(?:i|i'm|i’m|im|me|my|myself|mano|this is|you'?re (?:talking|chatting|texting) (?:to|with))\b/i;
+const SELF_REFERENCE = /\b(?:i|i'm|i’m|im|me|my|myself|mano|this is|you(?:'re|’re| are) (?:talking|chatting|texting) (?:to|with))\b/i;
 
 const DASHES = "‒–—―";
 
