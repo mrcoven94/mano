@@ -218,41 +218,72 @@ export async function verifyWsTicket(
   }
 }
 
-// The agent's service credential. The agent never holds SESSION_SECRET,
-// so it cannot mint a session for anyone. It sends its own token as the
-// Bearer and, in x-mano-handle-grant, the handle grant Channels signed for
-// the person who just texted. Only that person's routes accept it, and
-// only the routes in AGENT_ROUTES.
+// Service credentials. The agent never holds SESSION_SECRET, so it cannot
+// mint a session for anyone. A service sends its own token as the Bearer
+// and, in x-mano-handle-grant, the handle grant Channels signed for the
+// person who just texted. Only that person's routes accept it, and only
+// the routes in SERVICE_ROUTES for that service.
 export const HANDLE_GRANT_HEADER = "x-mano-handle-grant";
 
-export interface AgentEnv {
+export interface ServiceEnv {
   MANO_ENGINE_AGENT_TOKEN?: string;
+  MANO_ENGINE_CHANNELS_TOKEN?: string;
   MANO_HANDLE_GRANT_SECRET?: string;
 }
 
-const AGENT_ROUTES: readonly (readonly [string, RegExp])[] = [
-  ["GET", /^\/memory$/],
-  ["POST", /^\/memory$/],
-  ["DELETE", /^\/memory\/[^/]+$/],
-  ["POST", /^\/action$/],
-  ["GET", /^\/approvals$/],
-  ["POST", /^\/approvals\/[^/]+\/(approve|reject)$/],
-];
+// Two services call person routes, each with its own token plus a handle
+// grant: the agent on the routes it needs, Channels only to delete a
+// conversation's state.
+export type Service = "agent" | "channels";
 
-export function agentMayUse(method: string, personRoute: string): boolean {
-  return AGENT_ROUTES.some(([m, path]) => m === method && path.test(personRoute));
+const SERVICE_ROUTES: Record<Service, readonly (readonly [string, RegExp])[]> = {
+  agent: [
+    ["GET", /^\/memory$/],
+    ["POST", /^\/memory$/],
+    ["DELETE", /^\/memory\/[^/]+$/],
+    ["POST", /^\/action$/],
+    ["GET", /^\/approvals$/],
+    ["POST", /^\/approvals\/[^/]+\/(approve|reject)$/],
+    ["GET", /^\/reminders$/],
+    ["POST", /^\/reminders$/],
+    ["POST", /^\/reminders\/[^/]+\/cancel$/],
+    ["POST", /^\/turns$/],
+    ["GET", /^\/turns\/[^/]+$/],
+    ["POST", /^\/turns\/[^/]+\/complete$/],
+    ["GET", /^\/pending-approval$/],
+    ["PUT", /^\/pending-approval$/],
+    ["DELETE", /^\/pending-approval$/],
+    ["GET", /^\/conversation$/],
+    ["DELETE", /^\/conversation$/],
+  ],
+  channels: [["DELETE", /^\/conversation$/]],
+};
+
+export function serviceMayUse(service: Service, method: string, personRoute: string): boolean {
+  return SERVICE_ROUTES[service].some(([m, path]) => m === method && path.test(personRoute));
 }
 
-// The person the agent may act for, or null for any missing, wrong,
-// forged or expired part. Either secret unset means the path is closed.
-export async function authenticateAgent(request: Request, env: AgentEnv): Promise<{ personId: string } | null> {
-  if (!env.MANO_ENGINE_AGENT_TOKEN || !env.MANO_HANDLE_GRANT_SECRET) return null;
+// The calling service and the person it may act for, or null for any
+// missing, wrong, forged or expired part. The grant secret unset closes
+// both services; a service whose token is unset is closed.
+export async function authenticateService(
+  request: Request,
+  env: ServiceEnv,
+): Promise<{ service: Service; personId: string } | null> {
+  if (!env.MANO_HANDLE_GRANT_SECRET) return null;
   const auth = request.headers.get("authorization");
   if (!auth || !auth.startsWith("Bearer ")) return null;
-  if (!timingSafeEqual(auth.slice("Bearer ".length).trim(), env.MANO_ENGINE_AGENT_TOKEN)) return null;
+  const token = auth.slice("Bearer ".length).trim();
+  const service: Service | null =
+    env.MANO_ENGINE_AGENT_TOKEN && timingSafeEqual(token, env.MANO_ENGINE_AGENT_TOKEN)
+      ? "agent"
+      : env.MANO_ENGINE_CHANNELS_TOKEN && timingSafeEqual(token, env.MANO_ENGINE_CHANNELS_TOKEN)
+        ? "channels"
+        : null;
+  if (!service) return null;
   const grant = request.headers.get(HANDLE_GRANT_HEADER);
   if (!grant) return null;
   const claims = await verifyHandleGrant(grant, env.MANO_HANDLE_GRANT_SECRET);
   if (!claims) return null;
-  return { personId: personIdForHandle(claims.handle) };
+  return { service, personId: personIdForHandle(claims.handle) };
 }

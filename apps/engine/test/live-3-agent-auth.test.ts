@@ -42,13 +42,14 @@ const ACTION = () =>
     actor: "foreground",
     sources: [],
     origin: "person",
+    generation: 0,
   });
 
 describe("agent service credential", () => {
   it("acts for the granted person on memory, action and approvals", async () => {
     const added = await asAgent(PERSON_A, "/memory", {
       method: "POST",
-      body: JSON.stringify({ content: "Has a renewal due Nov 30.", source: "text" }),
+      body: JSON.stringify({ content: "Has a renewal due Nov 30.", source: "text", generation: 0 }),
     });
     expect(added.status).toBe(200);
     const { id } = (await added.json()) as { id: string };
@@ -83,7 +84,7 @@ describe("agent service credential", () => {
     const added = await SELF.fetch(`https://engine.test/api/persons/${PERSON_B}/memory`, {
       method: "POST",
       headers: { authorization: `Bearer ${sessionB}`, "content-type": "application/json" },
-      body: JSON.stringify({ content: "B's private note.", source: "text" }),
+      body: JSON.stringify({ content: "B's private note.", source: "text", generation: 0 }),
     });
     const { id } = (await added.json()) as { id: string };
 
@@ -97,7 +98,7 @@ describe("agent service credential", () => {
       ["POST", `/approvals/${crypto.randomUUID()}/approve`],
       ["POST", `/approvals/${crypto.randomUUID()}/reject`],
     ] as const) {
-      const body = method === "POST" ? JSON.stringify({ content: "x", source: "text" }) : undefined;
+      const body = method === "POST" ? JSON.stringify({ content: "x", source: "text", generation: 0 }) : undefined;
       expect((await asAgent(PERSON_B, path, { method, body })).status, `${method} ${path} on B`).toBe(403);
       expect((await asAgent("maria", path, { method, body })).status, `${method} ${path} on maria`).toBe(403);
     }

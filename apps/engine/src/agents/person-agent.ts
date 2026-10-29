@@ -19,6 +19,50 @@ import { createModelClient, defaultModelFor } from "../model-client.js";
 import { getSessionSecret, verifyWsTicket } from "../auth.js";
 import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
 import { ConsentDeliveringExecutor } from "./person-executor.js";
+import { handleForPersonId } from "@mano/protocol";
+import { sendToChannels } from "../channels-send.js";
+import {
+  cancelReminder,
+  claimDueReminders,
+  clearPendingPointer,
+  clearWakeup,
+  completeTurn,
+  createReminder,
+  currentGeneration,
+  ensureAgentStateTables,
+  finishReminder,
+  getPendingPointer,
+  getTurn,
+  getWakeup,
+  handOffReminder,
+  listReminders,
+  nextReminderRunMs,
+  parseGenerationInput,
+  parsePointerInput,
+  parseReminderInput,
+  parseTurnInput,
+  putTurnIfAbsent,
+  removeConversationState,
+  requireGeneration,
+  requireIdentity,
+  setPendingPointer,
+  setWakeup,
+  type DeliveryOutcome,
+} from "./agent-state.js";
+import { CURRENT_GENERATION } from "../gateway/sql-store.js";
+
+// A delivery run holds its claim this long; a run that crashed is
+// reclaimed after it. Retries back off from 30 seconds to an hour and
+// stop after MAX_REMINDER_ATTEMPTS.
+const REMINDER_LEASE_MS = 2 * 60_000;
+const MAX_REMINDER_ATTEMPTS = 8;
+// The answer when a write was prepared under a conversation generation
+// that a delete has since moved past: nothing was written.
+export const STALE_STATE = { stale: true } as const;
+
+// One delivery run claims at most this many; a run that leaves more due
+// re-arms the wake-up for now.
+const REMINDER_BATCH = 25;
 import type { OrgAgent } from "./org-agent.js";
 
 export interface GrantConsentInput {
@@ -79,8 +123,14 @@ export class PersonAgent extends Agent<Env, PersonState> {
     ctx.blockConcurrencyWhile(async () => {
       const sql = ctx.storage.sql;
       ensureGatewayTables(sql);
+      ensureAgentStateTables(sql);
       sql.exec(`CREATE TABLE IF NOT EXISTS profile(id TEXT PRIMARY KEY, display_name TEXT, synthetic INTEGER NOT NULL DEFAULT 0, public_key_b64 TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)`);
+      try {
+        sql.exec("ALTER TABLE memory ADD COLUMN generation INTEGER NOT NULL DEFAULT 0");
+      } catch {
+        // The column already exists: additive migrations are idempotent.
+      }
       sql.exec(`CREATE TABLE IF NOT EXISTS conversation(id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS deadlines(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_at TEXT NOT NULL)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
@@ -177,6 +227,12 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // case the caller must close the socket. The callback is a parameter
   // so tests can force a real scheduler rejection with an unknown name;
   // production always arms the session close.
+  // Each wake of the agent recovers outstanding reminders: the wake-up is
+  // re-armed from the table, so a lost schedule never strands one.
+  async onStart() {
+    await this.armReminderWakeup();
+  }
+
   async armSocketExpiry(sessionExp: number, callback: keyof PersonAgent = "closeExpiredSessionSockets"): Promise<boolean> {
     try {
       await this.schedule(new Date(sessionExp * 1000), callback, {});
@@ -398,16 +454,22 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { reply: redacted.text, evidence: ev };
   }
 
-  async addMemory(verified: string, content: string, source: string) {
+  // generation: the conversation generation the caller prepared this
+  // under, or the current one. The insert commits only while it is current.
+  async addMemory(verified: string, content: string, source: string, generation?: number) {
     await this.assertSubject(verified);
+    const prepared = generation ?? currentGeneration(this.db());
     const id = crypto.randomUUID();
-    this.db().exec(
-      "INSERT INTO memory(id, content, source, created_at) VALUES (?, ?, ?, ?)",
+    const written = this.db().exec(
+      `INSERT INTO memory(id, content, source, created_at, generation) SELECT ?, ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?`,
       id,
       content,
       source,
       new Date().toISOString(),
-    );
+      prepared,
+      prepared,
+    ).rowsWritten;
+    if (written === 0) return STALE_STATE;
     return id;
   }
 
@@ -425,9 +487,183 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return [...this.db().exec("SELECT * FROM memory ORDER BY created_at").toArray()];
   }
 
-  async requestAction(raw: unknown, verified: string) {
+  // Reminders. The caller names each one: the same ID returns the
+  // reminder it already names, and two IDs stay two reminders even at the
+  // same time. One durable wake-up per person delivers due ones through
+  // Channels; every change that can move the earliest deadline re-arms it.
+  async createReminder(verified: string, input: unknown) {
     await this.assertSubject(verified);
-    const result = await this.gateway.requestAction(raw);
+    const { id, text, dueAtMs, generation } = parseReminderInput(input);
+    const out = createReminder(this.db(), { id, text, dueAtMs, generation }, Date.now());
+    if ("stale" in out) return STALE_STATE;
+    if ("conflict" in out) return { status: "conflict" as const, reminder: out.conflict };
+    if (out.created) this.store.audit({ event: "reminder.created", reminderHash: await auditDigest(id) });
+    // An existing reminder re-arms too: a retry repairs a lost wake-up.
+    await this.armReminderWakeup();
+    return { status: out.created ? ("created" as const) : ("existing" as const), reminder: out.reminder };
+  }
+
+  async listReminders(verified: string) {
+    await this.assertSubject(verified);
+    return listReminders(this.db());
+  }
+
+  async cancelReminder(verified: string, id: unknown) {
+    await this.assertSubject(verified);
+    const reminderId = requireIdentity(id);
+    const out = cancelReminder(this.db(), reminderId, Date.now());
+    if (out.cancelled) {
+      this.store.audit({ event: "reminder.cancelled", reminderHash: await auditDigest(reminderId) });
+      await this.armReminderWakeup();
+    }
+    return out;
+  }
+
+  // Moves the one wake-up to the earliest outstanding deadline, or removes
+  // it when nothing is outstanding. Serialized, so two callers can never
+  // leave two wake-ups behind; a wake-up that no longer exists is rebuilt.
+  private wakeupChain: Promise<void> = Promise.resolve();
+  armReminderWakeup(): Promise<void> {
+    const run = this.wakeupChain.then(() => this.moveReminderWakeup());
+    this.wakeupChain = run.catch(() => {});
+    return run;
+  }
+
+  private async moveReminderWakeup(): Promise<void> {
+    // Reconcile first: a crash between creating a schedule and recording
+    // it can leave delivery schedules nobody tracks. Keep only the
+    // recorded one, if it still exists; cancel every other.
+    let current = getWakeup(this.db());
+    let recordedExists = false;
+    for (const schedule of await this.listSchedules()) {
+      if (schedule.callback !== "deliverDueReminders") continue;
+      if (current && schedule.id === current.scheduleId) recordedExists = true;
+      else await this.cancelSchedule(schedule.id);
+    }
+    if (current && !recordedExists) {
+      clearWakeup(this.db());
+      current = null;
+    }
+    const next = nextReminderRunMs(this.db(), REMINDER_LEASE_MS);
+    if (next === null) {
+      if (current) await this.cancelSchedule(current.scheduleId);
+      clearWakeup(this.db());
+      return;
+    }
+    const atMs = Math.max(next, Date.now());
+    if (current && (current.atMs === next || (next <= Date.now() && current.atMs <= Date.now()))) return;
+    if (current) await this.cancelSchedule(current.scheduleId);
+    const schedule = await this.schedule(new Date(atMs), "deliverDueReminders", {});
+    setWakeup(this.db(), schedule.id, atMs);
+  }
+
+  // The wake-up callback. Claims a bounded batch of due reminders in one
+  // statement; for each, the handoff re-checks the claim, cancellation and
+  // generation in SQL right before Channels is called, so a reminder
+  // cancelled or deleted while earlier ones were sending never goes out.
+  // Settles each only while this run still holds the claim, then re-arms.
+  async deliverDueReminders() {
+    clearWakeup(this.db());
+    const handleHash = handleForPersonId(this.personId);
+    const token = crypto.randomUUID();
+    const claimed = claimDueReminders(this.db(), Date.now(), REMINDER_LEASE_MS, token, REMINDER_BATCH);
+    let sent = 0;
+    for (const reminder of claimed) {
+      if (!handOffReminder(this.db(), reminder.id, token, Date.now())) continue;
+      let outcome: DeliveryOutcome;
+      if (!handleHash) {
+        outcome = { kind: "failed" };
+      } else {
+        const result = await sendToChannels(this.env, {
+          handleHash,
+          key: `reminder:${reminder.id}`,
+          text: reminder.text,
+          generation: reminder.generation,
+        });
+        outcome =
+          result !== "retry"
+            ? { kind: result }
+            : reminder.attempts >= MAX_REMINDER_ATTEMPTS
+              ? { kind: "failed" }
+              : { kind: "retry", atMs: Date.now() + Math.min(30_000 * 2 ** (reminder.attempts - 1), 3_600_000) };
+      }
+      if (finishReminder(this.db(), reminder.id, token, outcome, Date.now())) {
+        if (outcome.kind === "sent") sent += 1;
+        this.store.audit({ event: `reminder.${outcome.kind}`, reminderHash: await auditDigest(reminder.id) });
+      }
+    }
+    await this.armReminderWakeup();
+    return { claimed: claimed.length, sent };
+  }
+
+  // The turn ledger: the first receive time of a turn is kept forever, so
+  // a retried turn reuses its original timing and mutation identities.
+  async putTurn(verified: string, input: unknown) {
+    await this.assertSubject(verified);
+    const { turnId, receivedAt, generation } = parseTurnInput(input);
+    const out = putTurnIfAbsent(this.db(), turnId, receivedAt, generation);
+    if ("stale" in out) return STALE_STATE;
+    return out;
+  }
+
+  async getTurn(verified: string, turnId: unknown) {
+    await this.assertSubject(verified);
+    return getTurn(this.db(), requireIdentity(turnId));
+  }
+
+  async completeTurn(verified: string, turnId: unknown, input: unknown) {
+    await this.assertSubject(verified);
+    const out = completeTurn(this.db(), requireIdentity(turnId), new Date().toISOString(), parseGenerationInput(input).generation);
+    if (out && "stale" in out) return STALE_STATE;
+    return out;
+  }
+
+  // The pending approval pointer, stored with the conversation generation
+  // it was set under. It must name one of this person's approvals made
+  // under the current generation.
+  async setPendingApproval(verified: string, input: unknown) {
+    await this.assertSubject(verified);
+    const { approvalId, generation } = parsePointerInput(input);
+    if (generation !== currentGeneration(this.db())) return STALE_STATE;
+    return setPendingPointer(this.db(), approvalId, generation, new Date().toISOString());
+  }
+
+  async getPendingApproval(verified: string, generation: unknown) {
+    await this.assertSubject(verified);
+    return getPendingPointer(this.db(), requireGeneration(generation));
+  }
+
+  // Compare-and-delete: the caller names the approval and the generation
+  // it prepared the clear under.
+  async clearPendingApproval(verified: string, input: unknown) {
+    await this.assertSubject(verified);
+    const { approvalId, generation } = parsePointerInput(input);
+    return { cleared: clearPendingPointer(this.db(), approvalId, generation) };
+  }
+
+  async getConversation(verified: string) {
+    await this.assertSubject(verified);
+    return { generation: currentGeneration(this.db()) };
+  }
+
+  // Channels deleted this person's conversation, moving it to generation
+  // N: in one transaction, move to N, cancel reminders, clear the ledger
+  // and the pointer, reject pending approvals, revoke approved ones that
+  // have not finished, and delete memory. Already at N or past it, it is
+  // a no-op that answers with the recorded counts of that delete.
+  async deleteConversation(verified: string, input: unknown) {
+    await this.assertSubject(verified);
+    const toGeneration = parseGenerationInput(input).generation;
+    const removed = this.ctx.storage.transactionSync(() => removeConversationState(this.db(), Date.now(), toGeneration));
+    this.store.audit({ event: "conversation.deleted", ...removed });
+    await this.armReminderWakeup();
+    this.syncState();
+    return removed;
+  }
+
+  async requestAction(raw: unknown, verified: string, generation?: number) {
+    await this.assertSubject(verified);
+    const result = await this.gateway.requestAction(raw, new Date(), { generation });
     this.store.audit({ event: "gateway.request", status: result.status });
     if (result.status === "needs_approval" && result.approval) {
       // Durable schedules drive the reminder and the expiry; each firing
@@ -537,10 +773,24 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return out;
   }
 
+  // Each approval with its action's outcome: the attempt status under its
+  // key (in_flight, unknown, failed, done, or null before any attempt) and
+  // the receipt once one exists, so a caller can tell filed from unknown.
   async listApprovals(verified: string) {
     await this.assertSubject(verified);
     const rows = this.db().exec("SELECT * FROM approvals ORDER BY created_at DESC").toArray();
-    return rows.map((r) => approvalFromRow(r as Record<string, unknown>));
+    return rows.map((r) => {
+      const approval = approvalFromRow(r as Record<string, unknown>);
+      const attempt = this.store.getAttempt(approval.idempotencyKey);
+      const receipt = this.store.getReceiptByKey(approval.idempotencyKey);
+      return {
+        ...approval,
+        outcome: {
+          attempt: attempt?.status ?? null,
+          receipt: receipt ? { externalId: receipt.externalId, simulated: receipt.simulated } : null,
+        },
+      };
+    });
   }
 
   async reject(approvalId: string, verified: string) {

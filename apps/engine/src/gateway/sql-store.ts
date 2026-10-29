@@ -16,7 +16,14 @@ function addColumn(sql: SqlStorage, table: string, column: string, ddl: string):
   }
 }
 
+// The person's current conversation generation, as a SQL expression, so
+// a write can check it in the same statement that writes.
+export const CURRENT_GENERATION = "(SELECT generation FROM conversation_state WHERE slot = 1)";
+
 export function ensureGatewayTables(sql: SqlStorage): void {
+  sql.exec(`CREATE TABLE IF NOT EXISTS conversation_state(
+    slot INTEGER PRIMARY KEY CHECK (slot = 1), generation INTEGER NOT NULL)`);
+  sql.exec("INSERT OR IGNORE INTO conversation_state(slot, generation) VALUES (1, 0)");
   sql.exec(`CREATE TABLE IF NOT EXISTS approvals(
     id TEXT PRIMARY KEY, action_type TEXT NOT NULL, recipient TEXT NOT NULL,
     purpose TEXT NOT NULL, document_hash TEXT, document_id TEXT,
@@ -24,6 +31,7 @@ export function ensureGatewayTables(sql: SqlStorage): void {
     created_at TEXT NOT NULL, remind_at TEXT NOT NULL, expires_at TEXT NOT NULL,
     escalated INTEGER NOT NULL, person_id TEXT NOT NULL, request_json TEXT NOT NULL,
     request_hash TEXT NOT NULL, problems_json TEXT NOT NULL)`);
+  addColumn(sql, "approvals", "generation", "INTEGER NOT NULL DEFAULT 0");
   sql.exec(`CREATE TABLE IF NOT EXISTS attempts(
     idempotency_key TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at TEXT NOT NULL)`);
   addColumn(sql, "attempts", "request_hash", "TEXT");
@@ -117,28 +125,51 @@ export class SqlApprovalStore implements ApprovalStore {
 
   putApproval(a: Approval): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO approvals(${APPROVAL_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      // A rewrite keeps the generation the row was recorded under.
+      `INSERT OR REPLACE INTO approvals(${APPROVAL_COLUMNS}, generation) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` +
+        `COALESCE((SELECT generation FROM approvals WHERE id = ?), ${CURRENT_GENERATION}))`,
       a.id, a.actionType, a.recipient, a.purpose, a.documentHash, a.documentId,
       a.idempotencyKey, a.status, a.approvedByHumanId, a.createdAt, a.remindAt, a.expiresAt,
-      a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems),
+      a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems), a.id,
     );
   }
 
-  createApprovalForKey(a: Approval): Approval {
-    this.sql.exec(
-      `INSERT INTO approvals(${APPROVAL_COLUMNS}) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?` +
-        " WHERE NOT EXISTS (SELECT 1 FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected'))",
+  generation(): number {
+    const row = this.sql.exec(`SELECT ${CURRENT_GENERATION} AS g`).toArray()[0] as { g: number | null } | undefined;
+    return Number(row?.g ?? 0);
+  }
+
+  createApprovalForKey(a: Approval, generation: number): Approval | null {
+    const inserted = this.sql.exec(
+      `INSERT INTO approvals(${APPROVAL_COLUMNS}, generation) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?` +
+        " WHERE NOT EXISTS (SELECT 1 FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected', 'revoked'))" +
+        ` AND ${CURRENT_GENERATION} = ?`,
       a.id, a.actionType, a.recipient, a.purpose, a.documentHash, a.documentId,
       a.idempotencyKey, a.status, a.approvedByHumanId, a.createdAt, a.remindAt, a.expiresAt,
-      a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems),
-      a.idempotencyKey,
-    );
+      a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems), generation,
+      a.idempotencyKey, generation,
+    ).rowsWritten;
+    if (inserted > 0) return a;
+    if (this.generation() !== generation) return null;
     const rows = this.sql.exec(
-      `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected')` +
-        " ORDER BY CASE status WHEN 'rejected' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, created_at LIMIT 1",
+      `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected', 'revoked')` +
+        " ORDER BY CASE status WHEN 'rejected' THEN 0 WHEN 'revoked' THEN 1 WHEN 'approved' THEN 2 ELSE 3 END, created_at LIMIT 1",
       a.idempotencyKey,
     ).toArray();
-    return rows.length > 0 ? approvalFromRow(rows[0] as Record<string, unknown>) : a;
+    return rows.length > 0 ? approvalFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+
+  approvalCurrent(id: string): boolean {
+    return (
+      this.sql.exec(`SELECT 1 FROM approvals WHERE id = ? AND generation = ${CURRENT_GENERATION}`, id).toArray().length > 0
+    );
+  }
+
+  approvalAuthorized(id: string): boolean {
+    return (
+      this.sql.exec(`SELECT 1 FROM approvals WHERE id = ? AND status = 'approved' AND generation = ${CURRENT_GENERATION}`, id)
+        .toArray().length > 0
+    );
   }
 
   rejectApprovalsForKey(key: string, personId: string): void {
@@ -189,7 +220,8 @@ export class SqlApprovalStore implements ApprovalStore {
     const updated = this.sql.exec(
       "UPDATE approvals SET status = 'approved', approved_by = ?" +
         " WHERE id = ? AND status = 'pending' AND person_id = ? AND request_hash = ? AND expires_at > ?" +
-        " AND NOT EXISTS (SELECT 1 FROM approvals d WHERE d.idempotency_key = approvals.idempotency_key AND d.status = 'rejected')",
+        " AND NOT EXISTS (SELECT 1 FROM approvals d WHERE d.idempotency_key = approvals.idempotency_key AND d.status = 'rejected')" +
+        ` AND generation = ${CURRENT_GENERATION}`,
       humanId, id, guard.personId, guard.requestHash, new Date().toISOString(),
     );
     if (updated.rowsWritten !== 1) {
@@ -260,13 +292,21 @@ export class SqlApprovalStore implements ApprovalStore {
     return attemptFromRow(rows[0]);
   }
 
-  insertAttempt(a: Attempt): boolean {
+  insertAttempt(a: Attempt, generation?: number): boolean {
     try {
-      this.sql.exec(
-        `INSERT INTO attempts(${ATTEMPT_COLUMNS}) VALUES (?,?,?,?,?,?,?)`,
-        a.key, a.status, a.updatedAt, a.requestHash, a.actionType, a.recipient, a.personId,
+      if (generation === undefined) {
+        this.sql.exec(
+          `INSERT INTO attempts(${ATTEMPT_COLUMNS}) VALUES (?,?,?,?,?,?,?)`,
+          a.key, a.status, a.updatedAt, a.requestHash, a.actionType, a.recipient, a.personId,
+        );
+        return true;
+      }
+      return (
+        this.sql.exec(
+          `INSERT INTO attempts(${ATTEMPT_COLUMNS}) SELECT ?,?,?,?,?,?,? WHERE ${CURRENT_GENERATION} = ?`,
+          a.key, a.status, a.updatedAt, a.requestHash, a.actionType, a.recipient, a.personId, generation,
+        ).rowsWritten > 0
       );
-      return true;
     } catch {
       return false;
     }
@@ -295,7 +335,8 @@ export class SqlApprovalStore implements ApprovalStore {
     const updated = this.sql.exec(
       "UPDATE attempts SET status = 'in_flight', updated_at = ? WHERE idempotency_key = ?" +
         " AND status IN ('in_flight', 'unknown')" +
-        " AND EXISTS(SELECT 1 FROM approvals WHERE idempotency_key = ? AND status = 'approved' AND expires_at > ?)",
+        " AND EXISTS(SELECT 1 FROM approvals WHERE idempotency_key = ? AND status = 'approved' AND expires_at > ?" +
+        ` AND generation = ${CURRENT_GENERATION})`,
       now.toISOString(), key, key, now.toISOString(),
     );
     return updated.rowsWritten === 1;

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { HANDLE_GRANT_MAX_TTL_SECONDS, mintHandleGrant, personIdForHandle, verifyHandleGrant } from "../src/index.js";
+import {
+  HANDLE_GRANT_MAX_TTL_SECONDS,
+  handleForPersonId,
+  mintHandleGrant,
+  personIdForHandle,
+  verifyHandleGrant,
+} from "../src/index.js";
 
 const SECRET = "test-handle-grant-secret-not-real";
 const HANDLE = "a".repeat(64);
@@ -10,6 +16,8 @@ describe("handle grants", () => {
     const claims = await verifyHandleGrant(grant, SECRET);
     expect(claims?.handle).toBe(HANDLE);
     expect(personIdForHandle(HANDLE)).toBe(`handle-${HANDLE}`);
+    expect(handleForPersonId(personIdForHandle(HANDLE))).toBe(HANDLE);
+    expect(handleForPersonId("maria")).toBeNull();
   });
 
   it("rejects a grant signed with another secret or edited in transit", async () => {
