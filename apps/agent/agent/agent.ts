@@ -1,12 +1,12 @@
 // @mano/agent: Mano's brain. One Eve agent answers turns with person
 // memory, tools, a yes-or-no approval gate and reminders; Channels
 // calls POST /channels/mano/turn and gets the reply text back. Muse
-// runs through the Meta Model API directly (standard tier for real
-// people, contributor tier when MANO_DATA_CLASS=synthetic). Run:
-// pnpm --filter @mano/agent dev (needs META_MODEL_API_KEY, else a
-// stand-in answers). Test: pnpm --filter @mano/agent check (tsc plus
-// vitest, no keys) and MANO_DATA_CLASS=synthetic pnpm
-// --filter @mano/agent eval (live voice evals, needs the key).
+// runs through the Meta Model API directly, always on the Standard
+// model ID with store:false. Run: pnpm --filter @mano/agent dev (needs
+// META_MODEL_API_KEY, else a stand-in answers). Test: pnpm --filter
+// @mano/agent check (tsc plus vitest, no keys) and pnpm --filter
+// @mano/agent eval (live voice evals on synthetic messages, needs the
+// key).
 import { defineAgent } from "eve";
 import { mockModel } from "eve/evals";
 
