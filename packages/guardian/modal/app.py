@@ -39,6 +39,10 @@ GPU_TIMEOUT_SECONDS = 1800
 # Modal stops it at GPU_TIMEOUT_SECONDS.
 WARM_ROTATE_SECONDS = GPU_TIMEOUT_SECONDS - 300
 READY_WITHIN_SECONDS = 20
+REVIEW_MAX_CHARS = 300
+PROBLEMS_MAX = 3
+PROBLEM_MAX_CHARS = 240
+ANSWER_KEYS = {"review", "verdict", "problems"}
 
 # The model writes a short review before its verdict. Asked for the verdict
 # first, it passed planted instructions it caught once it reviewed first.
@@ -46,15 +50,15 @@ READY_WITHIN_SECONDS = 20
 GUARDIAN_SCHEMA = {
     "type": "object",
     "properties": {
-        "review": {"type": "string", "maxLength": 300},
+        "review": {"type": "string", "maxLength": REVIEW_MAX_CHARS},
         "verdict": {"type": "string", "enum": ["pass", "fix", "block"]},
         "problems": {
             "type": "array",
-            "maxItems": 3,
-            "items": {"type": "string", "maxLength": 240},
+            "maxItems": PROBLEMS_MAX,
+            "items": {"type": "string", "maxLength": PROBLEM_MAX_CHARS},
         },
     },
-    "required": ["review", "verdict", "problems"],
+    "required": sorted(ANSWER_KEYS),
     "additionalProperties": False,
 }
 
@@ -165,6 +169,47 @@ class WarmHold:
             self._sleep(min(left, life, 5.0))
 
 
+def engine_alive(engine: Any) -> bool:
+    """vLLM's monitor thread sets engine_dead when the engine-core process
+    exits. Anything unexpected counts as dead."""
+    try:
+        return engine.llm_engine.engine_core.resources.engine_dead is False
+    except Exception:
+        return False
+
+
+class EngineHealth:
+    """Publishes readiness only while the engine lives. A dead engine clears
+    readiness once and recycles the container so Modal starts a fresh one."""
+
+    def __init__(self, alive, publish, recycle) -> None:
+        self._alive = alive
+        self._publish = publish
+        self._recycle = recycle
+        self._dead = False
+
+    def beat(self) -> None:
+        if self._alive():
+            self._publish(True)
+        else:
+            self.fail()
+
+    def call(self, fn):
+        try:
+            return fn()
+        except Exception:
+            if not self._alive():
+                self.fail()
+            raise
+
+    def fail(self) -> None:
+        if self._dead:
+            return
+        self._dead = True
+        self._publish(False)
+        self._recycle()
+
+
 def is_ready(beat_at: float | None, now: float) -> bool:
     """A model counts as ready while its warm hold has beaten recently."""
     return beat_at is not None and 0 <= now - beat_at < READY_WITHIN_SECONDS
@@ -187,18 +232,25 @@ def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def parse_verdict(text: str) -> dict[str, Any]:
-    """Strictly parse one model answer. Raise on anything unexpected."""
+    """Check one model answer against GUARDIAN_SCHEMA in full and return
+    its public part. Raise on anything else, which blocks the action."""
     data = json.loads(text, object_pairs_hook=_no_duplicates)
-    if not isinstance(data, dict):
-        raise ValueError("verdict is not an object")
-    verdict = data.get("verdict")
-    problems = data.get("problems")
+    if not isinstance(data, dict) or set(data) != ANSWER_KEYS:
+        raise ValueError("answer does not have exactly review, verdict, problems")
+    review, verdict, problems = data["review"], data["verdict"], data["problems"]
+    if not isinstance(review, str) or len(review) > REVIEW_MAX_CHARS:
+        raise ValueError("bad review")
     if verdict not in VERDICTS:
         raise ValueError(f"bad verdict: {verdict!r}")
-    if not isinstance(problems, list) or not all(
-        isinstance(item, str) for item in problems
+    if (
+        not isinstance(problems, list)
+        or len(problems) > PROBLEMS_MAX
+        or not all(
+            isinstance(item, str) and len(item) <= PROBLEM_MAX_CHARS
+            for item in problems
+        )
     ):
-        raise ValueError("problems is not a string list")
+        raise ValueError("bad problems")
     if (verdict == "pass") == (len(problems) > 0):
         raise ValueError("verdict contradicts its problems")
     return {"verdict": verdict, "problems": problems}
@@ -272,11 +324,16 @@ class Guardian:
             generation_config="auto",
         )
         self.engine_lock = threading.Lock()
-        self.warm_hold = WarmHold(beat=self.beat)
+        self.health = EngineHealth(
+            alive=lambda: engine_alive(self.engine),
+            publish=self.publish,
+            recycle=lambda: os._exit(1),
+        )
+        self.warm_hold = WarmHold(beat=self.health.beat)
 
-    def beat(self) -> None:
+    def publish(self, ready: bool) -> None:
         try:
-            state.put(beat_key(), time.time())
+            state.put(beat_key(), time.time() if ready else None)
         except Exception as error:  # a missed beat only delays readiness
             print(f"warm heartbeat failed: {error!r}")
 
@@ -295,7 +352,9 @@ class Guardian:
             max_tokens=512,
             structured_outputs=StructuredOutputsParams(json=GUARDIAN_SCHEMA),
         )
-        return ask_model(self.engine, self.engine_lock, body, params)
+        return self.health.call(
+            lambda: ask_model(self.engine, self.engine_lock, body, params)
+        )
 
 
 _CONTAINER_TOKEN: str | None = None

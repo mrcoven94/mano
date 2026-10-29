@@ -12,8 +12,8 @@ warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).parent))
 import app  # noqa: E402
 
-PASS = '{"verdict":"pass","problems":[]}'
-BLOCK = '{"verdict":"block","problems":["The recipient is not the one the person approved."]}'
+PASS = '{"review":"Nothing is wrong.","verdict":"pass","problems":[]}'
+BLOCK = '{"review":"Wrong recipient.","verdict":"block","problems":["The recipient is not the one the person approved."]}'
 
 
 class CollectAllEngine:
