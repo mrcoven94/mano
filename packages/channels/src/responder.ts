@@ -59,6 +59,9 @@ export interface RespondHooks {
 
 export interface Responder {
   readonly name: string;
+  // The model ID it calls, when it calls one. The voice guard catches a
+  // reply that names it.
+  readonly model?: string;
   // Worst-case attempts for one respond call, for cost reservations.
   readonly maxAttempts: number;
   // Worst-case characters beyond the person's text and history, and of

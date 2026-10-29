@@ -120,3 +120,24 @@ describe("guardReply idempotence", () => {
     }
   });
 });
+
+describe("guardReply real model identifiers (review blocker 4)", () => {
+  it("catches model IDs and names in any case", () => {
+    expect(guardReply("I am muse-spark-1.3.").text).toBe(SELF_DESCRIPTION);
+    expect(guardReply("I use META for answers.").text).toBe(SELF_DESCRIPTION);
+    expect(guardReply("i'm muse spark lol").text).toBe(SELF_DESCRIPTION);
+    expect(guardReply("i use meta for answers").text).toBe(SELF_DESCRIPTION);
+    expect(guardReply("Running on llama3 today. Bring the letter.").text).toBe("Bring the letter.");
+  });
+
+  it("catches the configured model IDs", () => {
+    expect(containsProviderName("I run on acme-reply-7.", ["acme-reply-7"])).toBe(true);
+    expect(guardReply("I run on acme-reply-7.", { modelIds: ["acme-reply-7-contributor"] }).text).toBe(SELF_DESCRIPTION);
+  });
+
+  it("still passes ordinary words used as words", () => {
+    for (const text of ["A spark of hope.", "Let me muse on it.", "That's a meta question.", "Llamas are calm."]) {
+      expect(guardReply(text).changes, text).toEqual([]);
+    }
+  });
+});

@@ -1,9 +1,9 @@
 // Every word the worker sends on its own, in Mano's voice. The
 // introduction says Mano is an automated assistant, not a person
 // (AGENTS.md rule 3). The failure reply is the voice guard's safe line.
-import { SAFE_REPLY } from "@mano/persona";
+import { INTRO_LINE, SAFE_REPLY } from "@mano/persona";
 
-export const INTRO_BUBBLE = "Hey, it's Mano. I'm an automated assistant, not a person. I help with benefits, letters and forms.";
+export const INTRO_BUBBLE = INTRO_LINE;
 
 export const INTERIM_BUBBLE = "Working on it. I will reply shortly.";
 

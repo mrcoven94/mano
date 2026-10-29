@@ -23,7 +23,7 @@ describe.skipIf(!apiKey)("persona probes, live", () => {
       let raw: string;
       try {
         const result = await responder.respond(
-          { texts: [probe.text], attachmentCount: 0 },
+          { texts: [probe.text], attachmentCount: 0, history: probe.history },
           { onHeadsUp: async (text) => void heard.push({ at: performance.now(), text }) },
         );
         raw = result.text;
@@ -33,8 +33,9 @@ describe.skipIf(!apiKey)("persona probes, live", () => {
         continue;
       }
       const totalMs = performance.now() - started;
-      const reply = guardReply(raw);
-      const headsUp = heard[0] ? guardReply(heard[0].text) : null;
+      const modelIds = [model];
+      const reply = guardReply(raw, { modelIds });
+      const headsUp = heard[0] ? guardReply(heard[0].text, { modelIds }) : null;
       const changes: GuardChange[] = [...(headsUp?.changes ?? []), ...reply.changes];
       const run: ProbeRun = {
         path: heard[0] ? "deep" : "fast",
@@ -42,7 +43,7 @@ describe.skipIf(!apiKey)("persona probes, live", () => {
         headsUp: headsUp?.text ?? null,
         firstTextMs: heard[0] ? heard[0].at - started : totalMs,
       };
-      const failed = checkProbe(probe, run);
+      const failed = checkProbe(probe, run, { modelIds });
       if (failed.length > 0) failures += 1;
       rows.push(
         [

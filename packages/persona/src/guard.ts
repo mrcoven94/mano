@@ -18,16 +18,50 @@ export interface GuardResult {
   changes: GuardChange[];
 }
 
-// Names that are also English words match only in their capitalized
-// form, so "a spark of hope" and "the museum" pass.
-const NAMES_EXACT_CASE = ["Muse", "Spark", "Meta", "Llama", "LLaMA", "Claude", "Gemini", "Bard", "Mistral", "DeepSeek", "Grok", "Copilot"];
-const NAMES_ANY_CASE = ["meta ai", "openai", "chatgpt", "gpt", "anthropic", "google ai", "deepmind", "language model", "llms?", "ai model"];
+// Always a model or provider, in any case. Model IDs match by shape
+// (muse-spark-1.3, llama3, gpt-4o), and callers add their configured IDs.
+const ALWAYS_NAMES = ["muse spark", "meta ai", "openai", "chatgpt", "gpt", "anthropic", "google ai", "deepmind", "deepseek", "language model", "llms?", "ai model"];
+const ALWAYS_PATTERN = new RegExp(`\\b(?:${ALWAYS_NAMES.join("|")})\\b`, "i");
+const MODEL_ID_PATTERN = /\b(?:muse|spark|llama|gpt|claude|gemini|mistral|grok)[-_.]?(?:[a-z]+[-_.]?)?\d[\w.-]*/i;
 
-const EXACT_PATTERN = new RegExp(`\\b(?:${NAMES_EXACT_CASE.join("|")})\\b`);
-const ANY_PATTERN = new RegExp(`\\b(?:${NAMES_ANY_CASE.join("|")})\\b`, "i");
+// Names that are also English words. Any capital letters make them a
+// name ("Muse", "META"); all lowercase, they count only next to words
+// about how an assistant is built or run, so "a spark of hope", "let
+// me muse on it" and "a meta question" pass.
+const WORD_NAMES = ["muse", "spark", "meta", "llama", "claude", "gemini", "bard", "mistral", "grok", "copilot"];
+const WORD_PATTERN = new RegExp(`\\b(?:${WORD_NAMES.join("|")})\\b`, "gi");
+const AI_CONTEXT = /\b(?:ai|model|bot|chatbot|built|made|trained|powered|run|runs|running|use|uses|using|developed|created|company|behind|based)\b/i;
 
-export function containsProviderName(text: string): boolean {
-  return EXACT_PATTERN.test(text) || ANY_PATTERN.test(text);
+function escapePattern(word: string): string {
+  return word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// A configured ID also matches without its -contributor suffix.
+function idPattern(modelIds: readonly string[]): RegExp | null {
+  const ids = [...new Set(modelIds.flatMap((id) => [id, id.replace(/-contributor$/, "")]).filter((id) => id.length > 0))];
+  return ids.length > 0 ? new RegExp(`(?<![\\w.-])(?:${ids.map(escapePattern).join("|")})(?![\\w-])`, "i") : null;
+}
+
+function sentenceNamesProvider(sentence: string, ids: RegExp | null): boolean {
+  if (ALWAYS_PATTERN.test(sentence) || MODEL_ID_PATTERN.test(sentence) || ids?.test(sentence)) return true;
+  for (const match of sentence.matchAll(WORD_PATTERN)) {
+    if (match[0] !== match[0].toLowerCase() || AI_CONTEXT.test(sentence)) return true;
+  }
+  return false;
+}
+
+function sentences(text: string): string[] {
+  return text.split(/(?<=[.!?…])\s+|\n+/);
+}
+
+export function containsProviderName(text: string, modelIds: readonly string[] = []): boolean {
+  const ids = idPattern(modelIds);
+  return sentences(text).some((s) => sentenceNamesProvider(s, ids));
+}
+
+export interface GuardOptions {
+  // The model IDs this deployment calls, so a reply naming one is caught.
+  modelIds?: readonly string[];
 }
 
 // A sentence that names a provider and talks about the speaker is a
@@ -68,11 +102,11 @@ export function removeDashes(text: string): string {
 }
 
 // Rewrites or drops every sentence that names a model or provider.
-function removeProviderNames(text: string): { text: string; selfDescribed: boolean } {
+function removeProviderNames(text: string, ids: RegExp | null): { text: string; selfDescribed: boolean } {
   let selfDescribed = false;
   const kept: string[] = [];
-  for (const sentence of text.split(/(?<=[.!?…])\s+|\n+/)) {
-    if (!containsProviderName(sentence)) {
+  for (const sentence of sentences(text)) {
+    if (!sentenceNamesProvider(sentence, ids)) {
       kept.push(sentence);
     } else if (SELF_REFERENCE.test(sentence) && !selfDescribed) {
       selfDescribed = true;
@@ -91,7 +125,8 @@ function tidy(text: string): string {
     .trim();
 }
 
-export function guardReply(raw: string): GuardResult {
+export function guardReply(raw: string, opts: GuardOptions = {}): GuardResult {
+  const ids = idPattern(opts.modelIds ?? []);
   const changes: GuardChange[] = [];
   let text = raw;
   const unrouted = text.replace(/(^|[^A-Za-z])DEEP:[ \t]*/g, "$1 ");
@@ -103,8 +138,8 @@ export function guardReply(raw: string): GuardResult {
   const undashed = removeDashes(text);
   if (undashed !== text) changes.push("dash");
   text = undashed;
-  if (containsProviderName(text)) {
-    const named = removeProviderNames(text);
+  if (sentences(text).some((s) => sentenceNamesProvider(s, ids))) {
+    const named = removeProviderNames(text, ids);
     changes.push(named.selfDescribed ? "self-description" : "provider-name");
     text = named.text;
   }
