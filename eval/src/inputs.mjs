@@ -17,6 +17,7 @@ export const FORBIDDEN_FIELDS = [
   "kind",
   "hardCase",
   "lang",
+  "family",
   "requires",
   "groundTruth",
   "deadlines",
@@ -82,7 +83,7 @@ export function toPhotoInput(household, photoFiles) {
 export function toAnswerEntry(household) {
   const letters = {};
   for (const l of household.letters) {
-    letters[l.letterId] = { kind: l.kind, hardCase: l.hardCase, lang: l.lang, requires: [...l.requires] };
+    letters[l.letterId] = { kind: l.kind, hardCase: l.hardCase, lang: l.lang, family: l.family || null, requires: [...l.requires] };
   }
   return {
     householdId: household.householdId,
@@ -100,6 +101,27 @@ export function toAnswers(households) {
 
 const FORM_NAMES = ["signed renewal form", "signed recertification form"];
 
+// Split requirements into submittable packet items and items to request.
+// Entries are canonical doc names or {anyOf: [...]} alternatives. Owned
+// members of an alternative go to the packet; when none is owned the whole
+// "A or B" phrase is requested. The generator and the track slicer share
+// this logic so sliced keys match generated keys exactly.
+export function splitRequires(requires, hasDocuments) {
+  const packet = new Set();
+  const request = new Set();
+  for (const req of requires) {
+    if (typeof req === "string") {
+      if (FORM_NAMES.includes(req) || hasDocuments.includes(req)) packet.add(req);
+      else request.add(req);
+    } else if (req && Array.isArray(req.anyOf)) {
+      const owned = req.anyOf.filter((d) => hasDocuments.includes(d));
+      if (owned.length > 0) for (const d of owned) packet.add(d);
+      else request.add(req.anyOf.join(" or "));
+    }
+  }
+  return { packet: [...packet].sort(), request: [...request].sort() };
+}
+
 // Slice answer entries down to a subset of letters (the photo track grades
 // photographed letters only). Packet and request sets recompute from the
 // kept letters' requires plus the household inventory, exactly as generation
@@ -116,21 +138,16 @@ export function sliceAnswers(answers, letterIdsByHousehold) {
       letters[lid] = info;
       requires.push(...info.requires);
     }
-    const packet = new Set();
-    const request = new Set();
-    for (const req of requires) {
-      if (FORM_NAMES.includes(req) || entry.hasDocuments.includes(req)) packet.add(req);
-      else request.add(req);
-    }
+    const { packet, request } = splitRequires(requires, entry.hasDocuments);
     out[hid] = {
       householdId: hid,
       hasDocuments: [...entry.hasDocuments],
       letters,
       groundTruth: {
         deadlines: entry.groundTruth.deadlines.filter((d) => keep.has(d.letterId)),
-        correctPacket: [...packet].sort(),
+        correctPacket: packet,
         mustRefuse: entry.groundTruth.mustRefuse.filter((m) => keep.has(m.letterId)),
-        mustRequest: [...request].sort(),
+        mustRequest: request,
         decoyLetterIds: entry.groundTruth.decoyLetterIds.filter((id) => keep.has(id)),
       },
     };
