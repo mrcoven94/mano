@@ -15,14 +15,15 @@ describe("phone sign-in", () => {
   });
 
   it("sends the same response whether or not the phone has an account", async () => {
-    const { service, channels } = testSetup();
+    const { service, channels, codes } = testSetup();
     await service.routeTextHandle("phone", PHONE_A);
     const known = await service.requestPhoneCode(PHONE_A);
     const unknown = await service.requestPhoneCode(PHONE_B);
     expect(known).toEqual({ ok: true });
     expect(unknown).toEqual({ ok: true });
-    expect(channels.sends).toHaveLength(1);
-    expect(channels.sends[0].toE164).toBe(PHONE_A);
+    // Both phones get a real send; the response never reveals which has an account.
+    await codes.flushSends();
+    expect(channels.sends.map((s) => s.toE164).sort()).toEqual([PHONE_A, PHONE_B].sort());
   });
 
   it("limits sends to 3 per phone per hour and caps attempts at 5", async () => {

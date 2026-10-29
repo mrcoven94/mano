@@ -6,12 +6,26 @@ export async function POST(request: Request) {
   const token = sessionFrom(request);
   if (!token) return NextResponse.json({ error: "Signed out." }, { status: 401 });
   try {
-    const body = (await request.json().catch(() => ({}))) as { previewId?: unknown; confirmed?: unknown };
+    const body = (await request.json().catch(() => ({}))) as {
+      previewId?: unknown;
+      confirmed?: unknown;
+      idempotencyKey?: unknown;
+    };
     if (typeof body.previewId !== "string" || typeof body.confirmed !== "boolean") {
       return NextResponse.json({ error: "Confirm the merge." }, { status: 400 });
     }
+    if (body.idempotencyKey !== undefined && typeof body.idempotencyKey !== "string") {
+      return NextResponse.json({ error: "Confirm the merge." }, { status: 400 });
+    }
     const { service } = accounts();
-    return NextResponse.json(await service.confirmMerge(token, body.previewId, body.confirmed));
+    return NextResponse.json(
+      await service.confirmMerge(
+        token,
+        body.previewId,
+        body.confirmed,
+        typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined,
+      ),
+    );
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });
   }

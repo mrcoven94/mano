@@ -18,7 +18,8 @@ export interface SignInResult {
 export interface AccountsClient {
   requestPhoneCode(phone: string): Promise<{ ok: true }>;
   verifyPhoneCode(phone: string, code: string): Promise<SignInResult>;
-  startEmailSignIn(state: string, provider?: "authkit" | "GoogleOAuth"): Promise<{ url: string }>;
+  // State is optional: the server generates and binds it. A caller value is ignored.
+  startEmailSignIn(state?: string, provider?: "authkit" | "GoogleOAuth"): Promise<{ url: string }>;
   completeEmailSignIn(code: string, sessionToken?: string): Promise<SignInResult & { linked: boolean }>;
   verifyPhoneForSession(
     sessionToken: string,
@@ -40,9 +41,11 @@ export interface AccountsClient {
     sessionToken: string,
     previewId: string,
     confirmed: boolean,
+    idempotencyKey?: string,
   ): Promise<import("./types").AccountView>;
   signOutEverywhere(sessionToken: string): Promise<void>;
   deleteAccount(sessionToken: string): Promise<void>;
+  retryDeleteAccount(jobId: string, sessionToken?: string): Promise<void>;
   getThread(sessionToken: string): Promise<
     { id: string; role: "user" | "assistant"; content: string; channel: "text" | "web" | "app"; createdAt: string }[]
   >;
@@ -81,8 +84,8 @@ export class HttpAccountsClient implements AccountsClient {
     return this.call<SignInResult>("/accounts/phone/verify", { phone, code });
   }
 
-  async startEmailSignIn(state: string, provider: "authkit" | "GoogleOAuth" = "authkit"): Promise<{ url: string }> {
-    return this.call<{ url: string }>("/accounts/email/start", { state, provider });
+  async startEmailSignIn(state?: string, provider: "authkit" | "GoogleOAuth" = "authkit"): Promise<{ url: string }> {
+    return this.call<{ url: string }>("/accounts/email/start", { provider, ...(state ? { state } : {}) });
   }
 
   async completeEmailSignIn(code: string, sessionToken?: string): Promise<SignInResult & { linked: boolean }> {
@@ -121,10 +124,10 @@ export class HttpAccountsClient implements AccountsClient {
     );
   }
 
-  async confirmMerge(sessionToken: string, previewId: string, confirmed: boolean) {
+  async confirmMerge(sessionToken: string, previewId: string, confirmed: boolean, idempotencyKey?: string) {
     return this.call<import("./types").AccountView>(
       "/accounts/merge/confirm",
-      { previewId, confirmed },
+      { previewId, confirmed, ...(idempotencyKey ? { idempotencyKey } : {}) },
       sessionToken,
     );
   }
@@ -135,6 +138,10 @@ export class HttpAccountsClient implements AccountsClient {
 
   async deleteAccount(sessionToken: string): Promise<void> {
     await this.call<{ ok: true }>("/accounts/delete", {}, sessionToken);
+  }
+
+  async retryDeleteAccount(jobId: string, sessionToken?: string): Promise<void> {
+    await this.call<{ ok: true }>("/accounts/delete/retry", { jobId }, sessionToken);
   }
 
   async getThread(sessionToken: string) {

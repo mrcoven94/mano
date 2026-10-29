@@ -49,7 +49,7 @@ describe("email sign-in through WorkOS", () => {
       "workos-code-005",
     );
     const signed = await service.completeEmailSignIn("workos-code-005");
-    const link = store.getWorkosLink("user_synth_004");
+    const link = await store.getWorkosLink("user_synth_004");
     expect(link?.personId).toBe(signed.personId);
     expect(link?.organizationId).toBe("org_acme");
   });

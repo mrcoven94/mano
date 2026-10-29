@@ -50,11 +50,11 @@ export default function SignInForm() {
     setEmailBusy(true);
     setError("");
     try {
-      const state = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+      // The server generates the login state. The client sends none.
       const res = await fetch("/api/accounts/email/start", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ state, provider }),
+        body: JSON.stringify({ provider }),
       });
       const data = (await res.json()) as { url?: string; error?: string };
       if (!res.ok || !data.url) {

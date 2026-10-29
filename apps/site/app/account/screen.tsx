@@ -23,8 +23,12 @@ async function post<T>(path: string, body: Record<string, unknown>): Promise<T> 
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(data.error || "Request failed.");
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string; jobId?: unknown };
+  if (!res.ok) {
+    const err = new Error(data.error || "Request failed.") as Error & { jobId?: string };
+    if (typeof data.jobId === "string") err.jobId = data.jobId;
+    throw err;
+  }
   return data;
 }
 
@@ -37,7 +41,11 @@ export default function AccountScreen() {
   const [removeCode, setRemoveCode] = useState("");
   const [mergePhone, setMergePhone] = useState("");
   const [mergeCode, setMergeCode] = useState("");
-  const [mergePreview, setMergePreview] = useState<{ previewId: string; preview: { confirmText: string } } | null>(null);
+  const [mergePreview, setMergePreview] = useState<{
+    previewId: string;
+    preview: { confirmText: string };
+    idempotencyKey: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -104,7 +112,8 @@ export default function AccountScreen() {
         "/api/accounts/merge/preview",
         { fromPersonId: proof.ownerPersonId },
       );
-      setMergePreview(preview);
+      // One key per preview: retries and double taps merge once.
+      setMergePreview({ ...preview, idempotencyKey: crypto.randomUUID() });
     } catch (err) {
       setError((err as Error).message);
     }
@@ -117,6 +126,7 @@ export default function AccountScreen() {
       const account = await post<{ identities: MaskedIdentity[] }>("/api/accounts/merge/confirm", {
         previewId: mergePreview.previewId,
         confirmed,
+        idempotencyKey: mergePreview.idempotencyKey,
       });
       setIdentities(account.identities);
       setMergePreview(null);
@@ -137,17 +147,36 @@ export default function AccountScreen() {
   async function deleteAccount() {
     const ok = window.confirm("Delete your Mano account, thread and documents? This cannot be undone.");
     if (!ok) return;
-    await post("/api/accounts/delete", {});
-    window.location.href = "/";
+    setError("");
+    try {
+      await post("/api/accounts/delete", {});
+      window.location.href = "/";
+    } catch (err) {
+      // A partial delete is saved server-side and safe to retry.
+      const message = (err as Error).message;
+      if (message.includes("retry")) {
+        const retry = window.confirm("Delete did not finish. It is saved. Try again now?");
+        if (!retry) return;
+        const res = await fetch("/api/accounts/delete/retry", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jobId: (err as { jobId?: string }).jobId ?? "" }),
+        });
+        if (res.ok) {
+          window.location.href = "/";
+          return;
+        }
+      }
+      setError(message);
+    }
   }
 
   async function addEmail() {
     setError("");
-    const state = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
     const res = await fetch("/api/accounts/email/start", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ state, provider: "authkit" }),
+      body: JSON.stringify({ provider: "authkit" }),
     });
     const data = (await res.json()) as { url?: string; error?: string };
     if (!res.ok || !data.url) {

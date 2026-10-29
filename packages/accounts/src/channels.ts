@@ -57,3 +57,39 @@ export class BindingChannels implements ChannelsPort {
     return (await res.json()) as { deleted: number };
   }
 }
+
+// Live Channels client for callers without a service binding (the site on
+// Vercel). Same two routes over HTTPS with a server-to-server credential
+// (MANO_CHANNELS_KEY). Base URL and key arrive from config, never code.
+export class HttpChannels implements ChannelsPort {
+  readonly live = true;
+  private baseUrl: string;
+  private apiKey: string;
+  private fetchFn: typeof fetch;
+
+  constructor(baseUrl: string, apiKey: string, fetchFn: typeof fetch = fetch) {
+    if (!baseUrl || !apiKey) throw new Error("Accounts are not configured.");
+    this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.apiKey = apiKey;
+    this.fetchFn = fetchFn;
+  }
+
+  async sendCode(toE164: string, message: string): Promise<void> {
+    const res = await this.fetchFn(`${this.baseUrl}/internal/send-code`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
+      body: JSON.stringify({ to: toE164, message }),
+    });
+    if (!res.ok) throw new Error("Code send failed.");
+  }
+
+  async deleteConversationsForPerson(personId: string): Promise<{ deleted: number }> {
+    const res = await this.fetchFn(`${this.baseUrl}/internal/delete-person`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
+      body: JSON.stringify({ personId }),
+    });
+    if (!res.ok) throw new Error("Conversation delete failed.");
+    return (await res.json()) as { deleted: number };
+  }
+}

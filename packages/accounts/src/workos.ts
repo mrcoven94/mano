@@ -31,11 +31,22 @@ export interface WorkOSUser {
   organizationId: string | null;
 }
 
+export interface WorkOSAuthOptions {
+  // PKCE S256 challenge for the authorize URL.
+  codeChallenge?: string;
+  // PKCE verifier for the code exchange. Must match the challenge.
+  codeVerifier?: string;
+}
+
 export interface WorkOSPort {
   live: boolean;
-  authorizationUrl(state: string, provider?: AuthKitProvider): string;
-  authenticateWithCode(code: string): Promise<WorkOSUser>;
+  authorizationUrl(state: string, provider?: AuthKitProvider, options?: WorkOSAuthOptions): string;
+  authenticateWithCode(code: string, options?: WorkOSAuthOptions): Promise<WorkOSUser>;
   getUser(userId: string): Promise<WorkOSUser | null>;
+  // Remove the WorkOS-side user when its email leaves the Mano account,
+  // so sign-in through that identity fails afterwards. Stand-in removes
+  // its local copy; live calls the WorkOS user delete endpoint.
+  deleteUser(userId: string): Promise<void>;
 }
 
 export function workosConfigured(env: {
@@ -56,17 +67,21 @@ export class FetchWorkOS implements WorkOSPort {
     this.fetchFn = fetchFn;
   }
 
-  authorizationUrl(state: string, provider: AuthKitProvider = "authkit"): string {
+  authorizationUrl(state: string, provider: AuthKitProvider = "authkit", options?: WorkOSAuthOptions): string {
     const url = new URL(`${this.config.baseUrl}/user_management/authorize`);
     url.searchParams.set("client_id", this.config.clientId);
     url.searchParams.set("redirect_uri", this.config.redirectUri);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("provider", provider);
     url.searchParams.set("state", state);
+    if (options?.codeChallenge) {
+      url.searchParams.set("code_challenge", options.codeChallenge);
+      url.searchParams.set("code_challenge_method", "S256");
+    }
     return url.toString();
   }
 
-  async authenticateWithCode(code: string): Promise<WorkOSUser> {
+  async authenticateWithCode(code: string, options?: WorkOSAuthOptions): Promise<WorkOSUser> {
     const res = await this.fetchFn(`${this.config.baseUrl}/user_management/authenticate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -75,6 +90,7 @@ export class FetchWorkOS implements WorkOSPort {
         client_id: this.config.clientId,
         client_secret: this.config.apiKey,
         code,
+        ...(options?.codeVerifier ? { code_verifier: options.codeVerifier } : {}),
       }),
     });
     if (!res.ok) throw new Error("WorkOS sign-in failed.");
@@ -90,6 +106,15 @@ export class FetchWorkOS implements WorkOSPort {
     if (res.status === 404) return null;
     if (!res.ok) throw new Error("WorkOS user lookup failed.");
     return toWorkOSUser((await res.json()) as Record<string, unknown>);
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    const res = await this.fetchFn(
+      `${this.config.baseUrl}/user_management/users/${encodeURIComponent(userId)}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${this.config.apiKey}` } },
+    );
+    if (res.status === 404) return;
+    if (!res.ok) throw new Error("WorkOS user delete failed.");
   }
 }
 
@@ -116,8 +141,9 @@ export class StandInWorkOS implements WorkOSPort {
     this.redirectUri = redirectUri;
   }
 
-  authorizationUrl(state: string, _provider: AuthKitProvider = "authkit"): string {
+  authorizationUrl(state: string, _provider: AuthKitProvider = "authkit", _options?: WorkOSAuthOptions): string {
     void _provider;
+    void _options;
     return `${this.redirectUri}?standin=1&state=${encodeURIComponent(state)}`;
   }
 
@@ -127,7 +153,8 @@ export class StandInWorkOS implements WorkOSPort {
     this.codes.set(code, user.id);
   }
 
-  async authenticateWithCode(code: string): Promise<WorkOSUser> {
+  async authenticateWithCode(code: string, _options?: WorkOSAuthOptions): Promise<WorkOSUser> {
+    void _options;
     const userId = this.codes.get(code);
     if (!userId) throw new Error("WorkOS sign-in failed.");
     this.codes.delete(code);
@@ -138,5 +165,12 @@ export class StandInWorkOS implements WorkOSPort {
 
   async getUser(userId: string): Promise<WorkOSUser | null> {
     return this.users.get(userId) ?? null;
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    this.users.delete(userId);
+    for (const [code, id] of [...this.codes]) {
+      if (id === userId) this.codes.delete(code);
+    }
   }
 }

@@ -35,7 +35,7 @@ export interface EngineAccountsPort {
     approvals: number;
     consents: number;
   }>;
-  moveData(fromPersonId: string, intoPersonId: string): Promise<void>;
+  moveData(fromPersonId: string, intoPersonId: string, idempotencyKey?: string): Promise<void>;
   deleteData(personId: string): Promise<void>;
   audit(personId: string, event: string, detail: Record<string, unknown>): Promise<void>;
   activityLog(personId: string): Promise<{ at: string; event: string; detail: Record<string, unknown> }[]>;
@@ -152,7 +152,8 @@ export class StandInEngineAccounts implements EngineAccountsPort {
     };
   }
 
-  async moveData(fromPersonId: string, intoPersonId: string): Promise<void> {
+  async moveData(fromPersonId: string, intoPersonId: string, idempotencyKey?: string): Promise<void> {
+    void idempotencyKey;
     const from = this.ensure(fromPersonId);
     const into = this.ensure(intoPersonId);
     into.conversation.push(...from.conversation);
@@ -194,5 +195,121 @@ export class StandInEngineAccounts implements EngineAccountsPort {
 
   async activityLog(personId: string): Promise<{ at: string; event: string; detail: Record<string, unknown> }[]> {
     return [...(this.auditLog.get(personId) ?? [])];
+  }
+}
+
+// Live engine client. Contract for the engine-side accounts routes, which
+// land in a follow-up after the engine PR merges. All routes take a
+// server-to-server credential (MANO_ENGINE_SERVICE_KEY) as a Bearer token,
+// never a person session. Session tokens returned are engine v1 tokens
+// (`v1.<claims>.<sig>`, HMAC-signed, 24h expiry per the engine auth module);
+// the site stores them in the session cookie and passes them back as
+// Bearer on engine person routes, which verify them.
+//
+//   POST {base}/api/accounts/route            {handle, value} -> {personId, created}
+//   POST {base}/api/accounts/workos/exchange  {workosUserId, email} -> {personId, sessionToken}
+//   POST {base}/api/accounts/sessions         {personId} -> {sessionToken}
+//   POST {base}/api/accounts/sessions/revoke  {personId} -> {ok}
+//   GET  {base}/api/accounts/persons/:id/thread        -> ThreadMessage[]
+//   POST {base}/api/accounts/persons/:id/thread        {role, content, channel} -> ThreadMessage
+//   GET  {base}/api/accounts/persons/:id/counts        -> {conversationMessages, documents, approvals, consents}
+//   POST {base}/api/accounts/move              {fromPersonId, intoPersonId, idempotencyKey?} -> {ok}
+//   POST {base}/api/accounts/persons/:id/delete        -> {ok}
+//   POST {base}/api/accounts/persons/:id/audit {event, detail} -> {ok}
+//   GET  {base}/api/accounts/persons/:id/activity      -> [{at, event, detail}]
+export interface HttpEngineAccountsConfig {
+  baseUrl: string;
+  serviceKey: string;
+  fetchFn?: typeof fetch;
+}
+
+export class HttpEngineAccounts implements EngineAccountsPort {
+  live = true;
+  private baseUrl: string;
+  private serviceKey: string;
+  private fetchFn: typeof fetch;
+
+  constructor(config: HttpEngineAccountsConfig) {
+    if (!config.baseUrl || !config.serviceKey) throw new Error("Accounts are not configured.");
+    this.baseUrl = config.baseUrl.replace(/\/$/, "");
+    this.serviceKey = config.serviceKey;
+    this.fetchFn = config.fetchFn ?? fetch;
+  }
+
+  private async call<T>(method: string, path: string, body?: Record<string, unknown>): Promise<T> {
+    const res = await this.fetchFn(`${this.baseUrl}${path}`, {
+      method,
+      headers: { "content-type": "application/json", authorization: `Bearer ${this.serviceKey}` },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) throw new Error("The accounts service is unavailable. Try again.");
+    return (await res.json()) as T;
+  }
+
+  async createOrRoute(handle: "phone" | "email", value: string): Promise<{ personId: string; created: boolean }> {
+    return this.call("POST", "/api/accounts/route", { handle, value });
+  }
+
+  async exchangeWorkos(workosUserId: string, email: string | null): Promise<{ personId: string; sessionToken: string }> {
+    return this.call("POST", "/api/accounts/workos/exchange", { workosUserId, email });
+  }
+
+  async mintSession(personId: string): Promise<string> {
+    const out = await this.call<{ sessionToken: string }>("POST", "/api/accounts/sessions", { personId });
+    return out.sessionToken;
+  }
+
+  async revokeSessions(personId: string): Promise<void> {
+    await this.call("POST", "/api/accounts/sessions/revoke", { personId });
+  }
+
+  async getThread(personId: string): Promise<ThreadMessage[]> {
+    return this.call("GET", `/api/accounts/persons/${encodeURIComponent(personId)}/thread`);
+  }
+
+  async appendThread(personId: string, message: Omit<ThreadMessage, "id" | "createdAt">): Promise<ThreadMessage> {
+    return this.call("POST", `/api/accounts/persons/${encodeURIComponent(personId)}/thread`, { ...message });
+  }
+
+  async getDataCounts(personId: string): Promise<{
+    conversationMessages: number;
+    documents: number;
+    approvals: number;
+    consents: number;
+  }> {
+    return this.call("GET", `/api/accounts/persons/${encodeURIComponent(personId)}/counts`);
+  }
+
+  async moveData(fromPersonId: string, intoPersonId: string, idempotencyKey?: string): Promise<void> {
+    await this.call("POST", "/api/accounts/move", { fromPersonId, intoPersonId, idempotencyKey });
+  }
+
+  async deleteData(personId: string): Promise<void> {
+    await this.call("POST", `/api/accounts/persons/${encodeURIComponent(personId)}/delete`);
+  }
+
+  async audit(personId: string, event: string, detail: Record<string, unknown>): Promise<void> {
+    await this.call("POST", `/api/accounts/persons/${encodeURIComponent(personId)}/audit`, { event, detail });
+  }
+
+  async activityLog(personId: string): Promise<{ at: string; event: string; detail: Record<string, unknown> }[]> {
+    return this.call("GET", `/api/accounts/persons/${encodeURIComponent(personId)}/activity`);
+  }
+}
+
+// Read the expiry out of an engine v1 session token without verifying it.
+// The engine verifies the signature on use; the site only uses this to stop
+// sending expired tokens. Returns null for stand-in tokens (demo/tests),
+// which carry no claims and are only valid outside production.
+export function parseSessionExpiry(token: string): number | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3 || parts[0] !== "v1" || !parts[1]) return null;
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const bin = typeof Buffer !== "undefined" ? Buffer.from(b64, "base64").toString("binary") : atob(b64);
+    const claims = JSON.parse(bin) as { exp?: unknown };
+    return typeof claims.exp === "number" ? claims.exp * 1000 : null;
+  } catch {
+    return null;
   }
 }
