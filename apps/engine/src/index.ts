@@ -223,7 +223,9 @@ export function healthOk(env: Env): boolean {
     !env.META_MODEL_API_KEY ||
     !env.ENCRYPTION_KEK_B64 ||
     !env.FILES ||
-    !sessionConfigured(env)
+    !sessionConfigured(env) ||
+    !env.MANO_ENGINE_AGENT_TOKEN ||
+    !env.MANO_HANDLE_GRANT_SECRET
   ) {
     return false;
   }
@@ -246,6 +248,12 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/health") return Response.json({ ok: healthOk(env), live: liveStatus(env) });
+
+    // Outside development, a partly configured engine answers only
+    // /health: no business request runs while required config is missing.
+    if (url.pathname.startsWith("/api/") && env.MANO_ENV !== "development" && !healthOk(env)) {
+      return Response.json({ error: "The engine is not fully configured." }, { status: 503 });
+    }
 
     // Without a session secret (and outside explicit development) no
     // authenticated route can verify anyone, so all of them fail closed.
