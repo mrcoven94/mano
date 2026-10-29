@@ -34,9 +34,9 @@ describe("guardReply markdown", () => {
     expect(guardReply("Use the `Renew` button.").text).toBe("Use the Renew button.");
   });
 
-  it("turns bullets into sentences so they still read after bubbles join", () => {
+  it("turns a bullet list into sentences on one line, one bubble (voice v2)", () => {
     expect(guardReply("- Bring your ID\n* Bring the letter.\n• Ask for a receipt").text).toBe(
-      "Bring your ID.\nBring the letter.\nAsk for a receipt.",
+      "Bring your ID. Bring the letter. Ask for a receipt.",
     );
   });
 

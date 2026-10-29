@@ -35,7 +35,7 @@ describe("self-identity is a class (follow-up 2)", () => {
 
 describe("numbered lists and strikethrough (should 8)", () => {
   it("normalizes both", () => {
-    expect(guardReply("1. Call the office\n2) Bring your ID").text).toBe("Call the office.\nBring your ID.");
+    expect(guardReply("1. Call the office\n2) Bring your ID").text).toBe("Call the office. Bring your ID.");
     expect(guardReply("The deadline is ~~March 1~~ March 3.").text).toBe("The deadline is March 1 March 3.");
   });
 

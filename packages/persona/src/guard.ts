@@ -164,6 +164,9 @@ const SELF_REFERENCE = /\b(?:i|i'm|i’m|im|me|my|myself|mano|this is|you(?:'re|
 
 const DASHES = "‒–—―";
 
+const LIST_MARK = /^[ \t]*(?:[-*+•◦▪‣○●]|\d{1,2}[.)])[ \t]+/;
+const LIST_BLOCK = /(?:^[ \t]*(?:[-*+•◦▪‣○●]|\d{1,2}[.)])[ \t]+.+(?:\n|$)){2,}/gm;
+
 export function stripMarkdown(text: string): string {
   return text
     .replace(/^[ \t]*```.*$/gm, "")
@@ -172,6 +175,8 @@ export function stripMarkdown(text: string): string {
     .replace(/^[ \t]*#{1,6}[ \t]+(.+?)[ \t#]*$/gm, (_m, line: string) => endSentence(line))
     .replace(/^[ \t]*>[ \t]?/gm, "")
     .replace(/^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm, "")
+    // A checklist stays in one bubble: two or more list lines join into one.
+    .replace(LIST_BLOCK, (block) => `${block.trim().split("\n").map((line) => endSentence(line.replace(LIST_MARK, "").trim())).join(" ")}\n`)
     .replace(/^[ \t]*[-*+•◦▪‣○●][ \t]+(.+)$/gm, (_m, line: string) => endSentence(line))
     .replace(/^[ \t]*\d{1,2}[.)][ \t]+(.+)$/gm, (_m, line: string) => endSentence(line))
     .replace(/~~(?=\S)(.+?)(?<=\S)~~/g, "$1")
@@ -235,7 +240,7 @@ export function guardReply(raw: string, opts: GuardOptions = {}): GuardResult {
   const ids = idPattern(opts.modelIds ?? []);
   const changes: GuardChange[] = [];
   let text = raw;
-  const unrouted = text.replace(/(^|[^A-Za-z])DEEP:[ \t]*/g, "$1 ");
+  const unrouted = text.replace(/(^|[^A-Za-z])REACT:[ \t]*[a-z]*/gi, "$1 ").replace(/(^|[^A-Za-z])DEEP:[ \t]*/g, "$1 ");
   if (unrouted !== text) changes.push("route-marker");
   text = unrouted;
   const unmarked = stripMarkdown(text);
