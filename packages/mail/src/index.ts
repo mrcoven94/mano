@@ -74,12 +74,20 @@ import {
   type GroupablePage,
   type PageExtraction,
 } from "./read.js";
-import { dateOccurrences, headerDates, parseAllDates, parseWrittenDate, recoverSentence, splitSentences } from "./dates.js";
+import {
+  dateOccurrences,
+  headerDates,
+  parseAllDates,
+  parseWrittenDate,
+  recoverSentence,
+  splitSentences,
+  verbatimSentences,
+} from "./dates.js";
 import {
   chronologyOf,
   gateSentence,
+  hasQualifier,
   isDeadlineSentence,
-  qualifierPhrases,
   type AskReason,
   type DayCount,
 } from "./gate.js";
@@ -601,7 +609,11 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       if (verdict.kind === "ask" && verdict.count) own.add(verdict.count.resultIso);
       const others = [...new Set(dates)].filter((iso) => !own.has(iso));
       if (others.length > 0) {
-        reasons.push(`the letter also mentions ${others.map(spoken).join(", ")}`);
+        for (const iso of others) {
+          const quoted = verbatimSentences(letterText).filter((q) => dateOccurrences(q).includes(iso));
+          if (quoted.length === 0) reasons.push(`the letter also mentions ${spoken(iso)}`);
+          for (const q of quoted) reasons.push(`the letter also mentions ${spoken(iso)}, in "${q}"`);
+        }
         for (const s of sentences) {
           if (s.sentence !== sentence && parseAllDates(s.sentence).some((iso) => others.includes(iso))) {
             hold(s.sentence, s.cited?.citation ?? null);
@@ -614,7 +626,9 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         hold(sentence, cited?.citation ?? null);
       }
     }
-    for (const phrase of qualifierPhrases(letterText)) reasons.push(`the letter says "${phrase}"`);
+    for (const quoted of verbatimSentences(letterText)) {
+      if (hasQualifier(quoted)) reasons.push(`the letter says "${quoted}"`);
+    }
     if (reasons.length > 0) letterBlocked = true;
 
     const asDeadline = (entry: GatedEntry): Deadline => ({

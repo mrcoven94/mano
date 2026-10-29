@@ -154,6 +154,22 @@ export function headerDates(fullText: string): string[] {
   return out;
 }
 
+// The letter's sentences as written, for quoting to the person: only
+// whitespace is collapsed. A salutation line and each list item stand
+// alone, and "15 Nov. 2026" or a "3." list marker never ends one.
+const MONTH_ABBR = "(?:jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec)";
+const LIST_MARKER = /^(?:\d{1,2}[.)]|[-\u2022*])\s+/;
+const QUOTE_BREAK = new RegExp(String.raw`(?<=[.!?])(?<!\b${MONTH_ABBR}\.)(?<!^\d{1,2}[.)])\s+`, "i");
+
+export function verbatimSentences(fullText: string): string[] {
+  return fullText
+    .replace(SALUTATION_LINE, "\n\n$&\n\n")
+    .split(/\n\s*\n|\n(?=[ \t]*(?:\d{1,2}[.)]|[-\u2022*])[ \t])/)
+    .flatMap((block) => block.replace(/\s+/g, " ").trim().split(QUOTE_BREAK))
+    .map((s) => s.trim().replace(LIST_MARKER, ""))
+    .filter((s) => s.length > 0);
+}
+
 // The one sentence of the original transcription that contains the
 // extracted text, ignoring case and whitespace. Null when no sentence
 // or more than one contains it: the extraction is never gated in its
