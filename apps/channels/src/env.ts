@@ -26,6 +26,9 @@ export interface Env {
   MANO_TEXT_NUMBER?: string;
   // Mano's agent: answers turns when set, with the plain responder as
   // fallback. The secret signs both directions of agent traffic.
+  // Provider API base URL override, for a local stand-in of the provider
+  // in end-to-end runs. Unset in production.
+  BLOOIO_BASE_URL?: string;
   AGENT_URL?: string;
   MANO_AGENT_SECRET?: string;
   // Signs the per-turn handle grant the agent forwards to the engine, so
