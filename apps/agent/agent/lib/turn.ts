@@ -1,27 +1,30 @@
 // One synchronous turn from Channels, without the Eve wiring (which
 // lives in channels/mano.ts and arrives here as runAgent).
 //
-// Order: authenticate the signed body, claim its turn ID in the ledger
-// (replays get the stored answer), warm Guardian when a conversation
-// starts, then either answer a waiting approval question or run the
-// agent. A plain YES or NO while a question waits is
-// the person's decision on that exact Engine approval and never goes to
-// the model; anything else is an ordinary turn. When a turn proposes an
-// action, its reply ends with the question rendered from the request
-// Engine froze.
+// Order: authenticate the signed body, record the turn in Engine's
+// ledger (which keeps the first receive time, so a retried turn derives
+// the same reminder and timing), warm Guardian when a conversation
+// starts, then either answer the approval question Engine holds as
+// answerable or run the agent. A plain YES or NO to that question is the
+// person's decision on that exact Engine approval and never goes to the
+// model. When a turn proposes an action, its reply ends with the question
+// rendered from the request Engine froze, and the question travels on its
+// own too so Channels can check it goes out word for word and report it.
+//
+// A retried turn runs again: every mutation it makes is keyed by the turn
+// (reminders, memory) or held by Engine (approvals), so a rerun converges
+// instead of doing anything twice.
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
-import { EngineError, personIdFor, type Engine, type PersonEngine } from "./engine.js";
-import { raiseGenerationFloor } from "./deletion.js";
-import { claimTurn, failTurn, finishTurn, type TurnResponse } from "./ledger.js";
-import { clearPending, loadPending, presentationHash, savePending, type PendingApproval } from "./pending.js";
+import { EngineError, type Engine, type EngineApproval, type PersonEngine } from "./engine.js";
+import { presentationHash, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
-import type { KeyValue } from "./storage.js";
 
 const MAX_TEXTS = 10;
 const MAX_TEXT_CHARS = 4000;
-const TURN_ID = /^[A-Za-z0-9_.:-]{8,200}$/;
+// Engine's identity rule for turn IDs.
+const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9:_-]{7,127}$/;
 // A person quiet this long is starting a new conversation.
 const CONVERSATION_GAP_MS = 15 * 60_000;
 
@@ -37,14 +40,21 @@ export interface AgentTurnInput {
 
 export interface TurnDeps {
   secret: string | undefined;
-  kv: KeyValue | null;
   engine: Engine | null;
   runAgent(input: AgentTurnInput): Promise<SettleResult>;
   // Starts Guardian ahead of the conversation's first check; runs in the
   // background and never affects the turn.
   warmGuardian?: () => Promise<unknown>;
   background?: (work: Promise<unknown>) => void;
+  // Last turn time per handle in this process, for the warm-up gap. Best
+  // effort: another instance may warm again, which costs one request.
+  lastTurnAt?: Map<string, number>;
   now?: () => number;
+}
+
+export interface TurnResponse {
+  httpStatus: number;
+  body: { status: string; text: string; reason?: string; approval?: string; approvalId?: string };
 }
 
 interface TurnBody {
@@ -100,114 +110,124 @@ const failure = (httpStatus: number, status: string, reason?: string): TurnRespo
 const CHECKING =
   "I'm checking whether it went through. It will not be sent twice. Reply YES in a few minutes and I will check again.";
 
-async function setChecking(kv: KeyValue, pending: PendingApproval): Promise<void> {
-  await savePending(kv, { ...pending, state: "checking" }, new Date(Date.now() + 24 * 3600_000).toISOString());
+function doneText(purpose: string, receipt: { externalId: string; simulated: boolean } | null | undefined): string {
+  const label = receipt?.simulated ? " This was a simulated filing." : "";
+  const confirmation = receipt ? ` Confirmation ${receipt.externalId}.` : "";
+  return `Done. Sent: ${purpose}.${confirmation}${label}`;
 }
 
-// After an answer that is not a definite outcome, Engine's own record of
-// the approval decides: consumed means execution started, so the
-// outcome is unknown until Engine reconciles it.
-async function consumed(engine: PersonEngine, pending: PendingApproval): Promise<boolean> {
-  return (await engine.approvalStatus(pending.approvalId)) === "approved";
-}
-
-async function answerYes(kv: KeyValue, engine: PersonEngine, pending: PendingApproval): Promise<string> {
-  if (pending.state === "prepared") {
-    return "I haven't shown you that one yet, so nothing was approved and nothing was sent. Ask me to show it again.";
-  }
-  const result = await engine.approve(pending.approvalId);
+async function answerYes(engine: PersonEngine, approvalId: string): Promise<string> {
+  const result = await engine.approve(approvalId);
   switch (result.status) {
     case "completed":
     case "reconciled": {
-      await clearPending(kv, pending.personId);
-      const receipt = result.receipt;
-      const label = receipt?.simulated ? " This was a simulated filing." : "";
-      const confirmation = receipt ? ` Confirmation ${receipt.externalId}.` : "";
-      return `Done. Sent: ${pending.purpose}.${confirmation}${label}`;
+      await engine.clearPointer();
+      const purpose = result.approval?.purpose ?? (await engine.approval(approvalId))?.purpose ?? "your request";
+      return doneText(purpose, result.receipt);
     }
     case "stale":
-      await clearPending(kv, pending.personId);
+      await engine.clearPointer();
       return "That changed after you saw it, so nothing was sent. Want me to prepare it again?";
     case "in_progress":
-      await setChecking(kv, pending);
       return CHECKING;
-    default:
-      if (await consumed(engine, pending)) {
-        await setChecking(kv, pending);
+    default: {
+      // Not a definite outcome: Engine's own record decides. A consumed
+      // approval whose attempt settled carries its receipt; one still
+      // unknown keeps the pointer until Engine reconciles it.
+      const approval = await engine.approval(approvalId);
+      if (approval?.status === "approved") {
+        if (approval.outcome?.attempt === "done" && approval.outcome.receipt) {
+          await engine.clearPointer();
+          return doneText(approval.purpose, approval.outcome.receipt);
+        }
         return CHECKING;
       }
-      await clearPending(kv, pending.personId);
+      await engine.clearPointer();
       return "That approval can no longer be used, so nothing was sent. Want me to prepare it again?";
+    }
   }
 }
 
-async function answerNo(kv: KeyValue, engine: PersonEngine, pending: PendingApproval): Promise<string> {
-  if (pending.state === "checking") {
-    return "It may already have gone through, so I cannot cancel it. I'm checking. Reply YES and I will check again.";
-  }
-  const result = await engine.reject(pending.approvalId);
-  if (result.status === "rejected") {
-    await clearPending(kv, pending.personId);
-    return "Okay, I did not send it. Nothing left Mano.";
-  }
-  if (await consumed(engine, pending)) {
-    await setChecking(kv, pending);
+async function answerNo(engine: PersonEngine, approval: EngineApproval | null, approvalId: string): Promise<string> {
+  if (approval?.status === "approved") {
     return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
   }
-  await clearPending(kv, pending.personId);
+  const result = await engine.reject(approvalId);
+  if (result.status === "rejected") {
+    await engine.clearPointer();
+    return "Okay, I did not send it. Nothing left Mano.";
+  }
+  if ((await engine.approval(approvalId))?.status === "approved") {
+    return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
+  }
+  await engine.clearPointer();
   return "That request had already expired or changed, so nothing was sent.";
 }
 
-async function decide(
-  kv: KeyValue,
-  engine: PersonEngine | null,
-  pending: PendingApproval,
-  decision: "yes" | "no",
-): Promise<TurnResponse> {
-  if (!engine) {
-    return reply("I cannot reach the system that holds that request right now. Please try again in a few minutes.");
-  }
+async function decide(engine: PersonEngine, approvalId: string, decision: "yes" | "no"): Promise<TurnResponse> {
   try {
-    return reply(decision === "yes" ? await answerYes(kv, engine, pending) : await answerNo(kv, engine, pending));
+    if (decision === "yes") return reply(await answerYes(engine, approvalId));
+    return reply(await answerNo(engine, await engine.approval(approvalId), approvalId));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_decision_failed", decision, status: err instanceof EngineError ? err.status : null }));
-    if (decision === "no" && pending.state !== "checking") {
-      return reply("Nothing was sent. I could not close that request just now, so reply NO again to cancel it.");
-    }
+    if (decision === "no") return reply("I could not confirm that just now, so reply NO again to cancel it.");
     return reply("I could not confirm that just now. Reply YES again to retry; it will not be sent twice.");
   }
 }
 
-// A pointer from before a deletion is never answered. An approval still
-// waiting for its answer is rejected in Engine; one already consumed is
-// left to Engine's own reconciliation.
-async function dropStalePending(kv: KeyValue, engine: PersonEngine | null, pending: PendingApproval): Promise<void> {
-  if (engine && pending.state !== "checking") {
-    await engine.reject(pending.approvalId).catch((err) => {
-      console.warn(JSON.stringify({ type: "mano_reject_failed", status: err instanceof EngineError ? err.status : null }));
-    });
+// A YES or NO with no answerable question. Proposals not yet shown are
+// never approved; a NO closes them.
+async function answerUnshown(engine: PersonEngine, waiting: EngineApproval[], decision: "yes" | "no"): Promise<TurnResponse> {
+  if (decision === "yes") {
+    return reply("I haven't shown you that one yet, so nothing was approved and nothing was sent. Ask me to show it again.");
   }
-  await clearPending(kv, pending.personId);
+  for (const approval of waiting) await engine.reject(approval.id).catch(() => undefined);
+  return reply("Okay, nothing was sent.");
 }
 
-async function runTurn(deps: TurnDeps & { kv: KeyValue }, body: TurnBody, turnAtMs: number): Promise<TurnResponse> {
-  const engine = deps.engine?.forHandle(body.handleHash, body.grant) ?? null;
-  const personId = engine?.personId ?? null;
+// A retried YES or NO whose first run already settled the question (so
+// the pointer is gone) gets the same answer again: the newest agent
+// proposal this decision could have settled is asked again, and Engine's
+// approve and reject are idempotent for the same person.
+async function answerAgain(engine: PersonEngine, approvals: EngineApproval[], decision: "yes" | "no"): Promise<TurnResponse | null> {
+  const settled = approvals
+    .filter((a) => a.idempotencyKey.startsWith("agent:") && a.status === (decision === "yes" ? "approved" : "rejected"))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  if (!settled) return null;
+  if (decision === "no") return reply("Okay, I did not send it. Nothing left Mano.");
+  return decide(engine, settled.id, "yes");
+}
+
+async function runTurn(
+  deps: TurnDeps,
+  engine: PersonEngine,
+  body: TurnBody,
+  turnAtMs: number,
+  replay: boolean,
+): Promise<TurnResponse> {
   const message = turnText(body);
-  let waiting = personId ? await loadPending(deps.kv, personId) : null;
-  if (waiting && waiting.generation !== body.generation) {
-    await dropStalePending(deps.kv, engine, waiting);
-    waiting = null;
+  const pointer = await engine.getPointer(body.generation);
+  const decision = body.attachmentCount === 0 ? parseDecision(body.texts.join(" ")) : null;
+  if (decision && pointer) return decide(engine, pointer.approvalId, decision);
+  if (decision) {
+    const approvals = await engine.listApprovals();
+    const waiting = waitingProposals(approvals);
+    if (waiting.length > 0) return answerUnshown(engine, waiting, decision);
+    if (replay) {
+      const again = await answerAgain(engine, approvals, decision);
+      if (again) return again;
+    }
   }
-  const decision = waiting && body.attachmentCount === 0 ? parseDecision(body.texts.join(" ")) : null;
-  if (waiting && decision) return decide(deps.kv, engine, waiting, decision);
 
   const context: string[] = [];
   if (body.texts.some(detectCrisis)) context.push(CRISIS_LINE);
-  if (waiting) {
-    context.push(
-      `A yes-or-no approval question is waiting for this person:\n${waiting.question}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`,
-    );
+  if (pointer) {
+    const answerable = await engine.approval(pointer.approvalId);
+    if (answerable) {
+      context.push(
+        `A yes-or-no approval question is waiting for this person:\n${renderQuestion(answerable)}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`,
+      );
+    }
   }
   let settled: SettleResult;
   try {
@@ -224,24 +244,23 @@ async function runTurn(deps: TurnDeps & { kv: KeyValue }, body: TurnBody, turnAt
     if (err instanceof SettleTimeout) return failure(504, "timeout");
     throw err;
   }
-  const proposed = personId ? await loadPending(deps.kv, personId) : null;
-  const question = proposed && proposed.turnId === body.turnId ? proposed.question : null;
+  const proposed = proposedIn(await engine.listApprovals(), body.turnId);
+  const question = proposed ? renderQuestion(proposed) : null;
   const text = [settled.status === "failed" ? "" : settled.text, question ?? ""].filter(Boolean).join("\n\n");
   if (!text) return failure(502, "failed", settled.reason);
-  if (!question) return reply(text, settled.status);
-  // The question also travels on its own, so Channels can check it goes
-  // out word for word.
-  return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: proposed!.approvalId } };
+  if (!proposed || !question) return reply(text, settled.status);
+  return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: proposed.id } };
 }
 
-// True for the first turn after a quiet stretch. Every turn pushes the
-// stretch forward, so a running conversation warms Guardian once.
-async function conversationStarts(kv: KeyValue, handleHash: string, nowMs: number): Promise<boolean> {
-  const key = `mano:active:${handleHash}`;
-  if (await kv.putIfAbsent(key, nowMs, CONVERSATION_GAP_MS)) return true;
-  await kv.put(key, nowMs, CONVERSATION_GAP_MS);
-  return false;
+// True for the first turn after a quiet stretch, as far as this process
+// has seen.
+function conversationStarts(seen: Map<string, number>, handleHash: string, nowMs: number): boolean {
+  const last = seen.get(handleHash);
+  seen.set(handleHash, nowMs);
+  return last === undefined || nowMs - last > CONVERSATION_GAP_MS;
 }
+
+const processTurns = new Map<string, number>();
 
 export async function handleTurn(request: Request, deps: TurnDeps): Promise<Response> {
   const now = deps.now ?? Date.now;
@@ -260,86 +279,81 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
   }
   const body = parseBody(parsed);
   if (!body) return Response.json({ status: "error", text: "", reason: "bad_turn" }, { status: 400 });
-  const { kv } = deps;
-  if (!kv) {
-    console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "storage" }));
-    return Response.json({ status: "error", text: "", reason: "storage" }, { status: 503 });
+  const engine = deps.engine?.forHandle(body.handleHash, body.grant);
+  if (!engine) {
+    console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "engine" }));
+    return Response.json({ status: "error", text: "", reason: "engine" }, { status: 503 });
   }
 
-  // A turn from before the conversation's latest deletion is refused.
-  if ((await raiseGenerationFloor(kv, body.handleHash, body.generation)) > body.generation) {
-    return Response.json({ status: "stale", text: "" }, { status: 409 });
+  let turnAtMs: number;
+  let replay: boolean;
+  try {
+    const turn = await engine.putTurn(body.turnId, new Date(receivedMs).toISOString());
+    turnAtMs = Date.parse(turn.firstReceivedAt);
+    replay = turn.status === "complete";
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "ledger", status: err instanceof EngineError ? err.status : null }));
+    return Response.json({ status: "error", text: "", reason: "ledger" }, { status: 503 });
   }
 
-  const claim = await claimTurn(kv, body.turnId, body.handleHash, receivedMs);
-  if (claim.kind === "replay") return Response.json(claim.response.body, { status: claim.response.httpStatus });
-  if (claim.kind !== "run") {
-    return Response.json({ status: claim.kind === "busy" ? "in_progress" : "conflict", text: "" }, { status: 409 });
-  }
-
-  if (deps.warmGuardian && (await conversationStarts(kv, body.handleHash, receivedMs))) {
+  if (deps.warmGuardian && conversationStarts(deps.lastTurnAt ?? processTurns, body.handleHash, receivedMs)) {
     const warming = deps.warmGuardian().catch(() => undefined);
     if (deps.background) deps.background(warming);
   }
 
   let response: TurnResponse;
   try {
-    response = await runTurn({ ...deps, kv }, body, claim.receivedAtMs);
+    response = await runTurn(deps, engine, body, turnAtMs, replay);
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_turn_error", handle: body.handleHash, err: err instanceof Error ? err.name : "unknown" }));
     response = failure(502, "error");
   }
-  if (response.httpStatus === 200) await finishTurn(kv, body.turnId, body.handleHash, claim.receivedAtMs, response);
-  else if (response.httpStatus !== 504) await failTurn(kv, body.turnId, body.handleHash, claim.receivedAtMs, claim.attempt);
+  if (response.httpStatus === 200) {
+    await engine.completeTurn(body.turnId).catch(() => undefined);
+  }
   console.log(
-    JSON.stringify({
-      type: "mano_turn",
-      handle: body.handleHash,
-      status: response.body.status,
-      attempt: claim.attempt,
-      latencyMs: now() - receivedMs,
-    }),
+    JSON.stringify({ type: "mano_turn", handle: body.handleHash, status: response.body.status, latencyMs: now() - receivedMs }),
   );
   return Response.json(response.body, { status: response.httpStatus });
 }
 
 // Channels' report that a reply carrying an approval question went out:
-// the approval ID and the hash of the question text it sent. Signed like
-// a turn. Only a matching report for the waiting, still unpresented
-// question moves it to "presented"; anything else is 409 and changes
+// the approval ID and the hash of the question text it sent, plus the
+// generation and a grant. Signed like a turn. Only a report matching a
+// waiting agent proposal, rendered now from what Engine froze, makes it
+// answerable (Engine's pointer); anything else is 409 and changes
 // nothing. Repeating a matching report is fine.
-export async function handlePresented(request: Request, deps: { secret: string | undefined; kv: KeyValue | null }): Promise<Response> {
+export async function handlePresented(request: Request, deps: { secret: string | undefined; engine: Engine | null }): Promise<Response> {
   const raw = new Uint8Array(await request.arrayBuffer());
   const check = verifyRequest(deps.secret, request.headers.get(TIMESTAMP_HEADER), request.headers.get(SIGNATURE_HEADER), raw);
   if (!check.ok) return new Response("Unauthorized.", { status: 401 });
-  let body: { handleHash?: unknown; approvalId?: unknown; textHash?: unknown };
+  let body: { handleHash?: unknown; approvalId?: unknown; textHash?: unknown; generation?: unknown; grant?: unknown };
   try {
     body = JSON.parse(new TextDecoder().decode(raw));
   } catch {
     return Response.json({ ok: false, reason: "bad_json" }, { status: 400 });
   }
-  const { handleHash, approvalId, textHash } = body;
+  const { handleHash, approvalId, textHash, generation, grant } = body;
   if (
     typeof handleHash !== "string" ||
     !/^[0-9a-f]{64}$/.test(handleHash) ||
     typeof approvalId !== "string" ||
-    typeof textHash !== "string"
+    typeof textHash !== "string" ||
+    typeof generation !== "number" ||
+    !Number.isInteger(generation) ||
+    generation < 0 ||
+    typeof grant !== "string"
   ) {
     return Response.json({ ok: false, reason: "bad_report" }, { status: 400 });
   }
-  if (!deps.kv) return Response.json({ ok: false, reason: "storage" }, { status: 503 });
-  const pending = await loadPending(deps.kv, personIdFor(handleHash));
-  const matches =
-    pending !== null &&
-    pending.approvalId === approvalId &&
-    pending.state !== "checking" &&
-    presentationHash(pending.question) === textHash;
-  if (!matches) {
+  const engine = deps.engine?.forHandle(handleHash, grant);
+  if (!engine) return Response.json({ ok: false, reason: "engine" }, { status: 503 });
+  const approval = waitingProposals(await engine.listApprovals()).find((a) => a.id === approvalId);
+  if (!approval || presentationHash(renderQuestion(approval)) !== textHash) {
     console.warn(JSON.stringify({ type: "mano_presented_mismatch", handle: handleHash }));
     return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
   }
-  if (pending.state === "prepared") {
-    await savePending(deps.kv, { ...pending, state: "presented" }, new Date(Date.now() + 24 * 3600_000).toISOString());
-  }
+  await engine.setPointer(approvalId, generation);
   return Response.json({ ok: true });
 }
+

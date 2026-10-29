@@ -34,7 +34,7 @@ describe("person memory in Engine", () => {
   it("remembers a fact on the person's Engine record, once", async () => {
     await remember.execute({ fact: "Lives in Salt Lake County" }, ctx);
     await remember.execute({ fact: "  lives in salt lake county " }, ctx);
-    expect(engine.memory.get(personIdFor(HANDLE))?.map((r) => r.content)).toEqual(["Lives in Salt Lake County"]);
+    expect(engine.memoryOf(personIdFor(HANDLE))).toEqual(["Lives in Salt Lake County"]);
     expect(renderMemory(await recalled())).toContain("Salt Lake County");
     expect(renderMemory([])).toBeNull();
   });
@@ -50,7 +50,7 @@ describe("person memory in Engine", () => {
     const other = "9".repeat(64);
     const borrowed = toolCtx({ handleHash: other, turnId: "turn_memory0002", grant: await grantFor(HANDLE) });
     await expect(remember.execute({ fact: "x" }, borrowed)).rejects.toThrow(/403/);
-    expect(engine.memory.get(personIdFor(other))).toBeUndefined();
+    expect(engine.memoryOf(personIdFor(other))).toEqual([]);
   });
 
   it("memory tools refuse when Engine is not configured or the turn has no grant", async () => {

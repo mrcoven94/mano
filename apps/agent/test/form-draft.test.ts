@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import startFormDraft from "../agent/tools/start_form_draft.js";
-import { resetKeyValue } from "../agent/lib/storage.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
@@ -15,20 +14,18 @@ const fields = {
   monthlyIncome: 1800,
 };
 
+let engine: EngineDouble;
+let outside: string[];
 let grant: string;
+
 function ctx(turnId: string) {
   return toolCtx({ handleHash: HANDLE, turnId, grant });
 }
 
-let engine: EngineDouble;
-let outside: string[];
-
 beforeEach(async () => {
   grant = await grantFor(HANDLE);
-  resetKeyValue();
   engine = new EngineDouble();
   outside = [];
-  vi.stubEnv("MANO_ENV", "development");
   vi.stubEnv("ENGINE_URL", ENGINE_URL);
   vi.stubEnv("MANO_ENGINE_AGENT_TOKEN", ENGINE_AGENT_TOKEN);
   vi.stubEnv("MANO_PORTAL_URL", "http://portal.test");
@@ -43,7 +40,6 @@ beforeEach(async () => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
-  resetKeyValue();
 });
 
 describe("starting a form draft", () => {
@@ -57,6 +53,12 @@ describe("starting a form draft", () => {
     expect(approvals[0].actionType).toBe("submit");
     expect(JSON.parse(approvals[0].requestJson).payload).toMatchObject(fields);
     expect(out.approvalId).toBe(approvals[0].id);
+  });
+
+  it("a newer draft closes the one before it", async () => {
+    await startFormDraft.execute(fields, ctx("turn_form000003"));
+    await startFormDraft.execute({ ...fields, householdSize: 4 }, ctx("turn_form000004"));
+    expect(engine.approvals().map((a) => a.status).sort()).toEqual(["pending", "rejected"]);
   });
 
   it("refuses when Engine is not configured, and still sends nothing", async () => {

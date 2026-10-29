@@ -43,9 +43,44 @@ export interface EngineApproval {
   status: string;
   recipient: string;
   purpose: string;
+  idempotencyKey: string;
   requestJson: string;
   requestHash: string;
+  createdAt: string;
   expiresAt: string;
+  // What became of a consumed approval: the attempt's state and, once it
+  // settled, its receipt. Requested from Engine (see the PR 60 comment);
+  // absent means unknown, and the agent then never claims an outcome.
+  outcome?: {
+    attempt: "in_flight" | "unknown" | "failed" | "done" | null;
+    receipt: { externalId: string; simulated: boolean } | null;
+  };
+}
+
+// Engine's per-person agent state (reminders, turn ledger, approval
+// pointer), shapes as Engine's agent-state routes return them.
+export type ReminderStatus = "scheduled" | "sending" | "sent" | "dropped" | "failed" | "cancelled";
+
+export interface EngineReminder {
+  id: string;
+  text: string;
+  dueAt: string;
+  generation: number;
+  status: ReminderStatus;
+  attempts: number;
+}
+
+export interface EngineTurn {
+  turnId: string;
+  firstReceivedAt: string;
+  status: "open" | "complete";
+  completedAt: string | null;
+}
+
+export interface EnginePointer {
+  approvalId: string;
+  generation: number;
+  setAt: string;
 }
 
 export interface EngineResult {
@@ -109,6 +144,65 @@ export class PersonEngine {
     return res.json();
   }
 
+  async listApprovals(): Promise<EngineApproval[]> {
+    const out = (await this.json("GET", "/approvals")) as { approvals?: unknown };
+    return Array.isArray(out.approvals) ? (out.approvals as EngineApproval[]) : [];
+  }
+
+  // Creates the reminder, or returns the one this ID already names. A
+  // conflict (same ID, different stored content) also returns the stored
+  // reminder: the ID is derived from the turn, the due time and the
+  // wording, so it is the same reminder said differently.
+  async createReminder(input: { id: string; text: string; dueAt: string; generation: number }): Promise<EngineReminder> {
+    const res = await this.call("POST", "/reminders", input);
+    const body = (await res.json().catch(() => null)) as { reminder?: EngineReminder } | null;
+    if ((res.ok || res.status === 409) && body?.reminder) return body.reminder;
+    throw new EngineError(res.status);
+  }
+
+  async listReminders(): Promise<EngineReminder[]> {
+    const out = (await this.json("GET", "/reminders")) as { reminders?: unknown };
+    return Array.isArray(out.reminders) ? (out.reminders as EngineReminder[]) : [];
+  }
+
+  // null when Engine has no such reminder for this person.
+  async cancelReminder(id: string): Promise<{ reminder: EngineReminder; cancelled: boolean } | null> {
+    const res = await this.call("POST", `/reminders/${encodeURIComponent(id)}/cancel`);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return (await res.json()) as { reminder: EngineReminder; cancelled: boolean };
+  }
+
+  // The turn as Engine first recorded it: firstReceivedAt never changes.
+  async putTurn(turnId: string, receivedAt: string): Promise<EngineTurn> {
+    const out = (await this.json("POST", "/turns", { turnId, receivedAt })) as { turn: EngineTurn };
+    return out.turn;
+  }
+
+  async completeTurn(turnId: string): Promise<void> {
+    await this.json("POST", `/turns/${encodeURIComponent(turnId)}/complete`);
+  }
+
+  async getPointer(generation: number): Promise<EnginePointer | null> {
+    const out = (await this.json("GET", `/pending-approval?generation=${generation}`)) as { pointer?: EnginePointer | null };
+    return out.pointer ?? null;
+  }
+
+  async setPointer(approvalId: string, generation: number): Promise<EnginePointer> {
+    const out = (await this.json("PUT", "/pending-approval", { approvalId, generation })) as { pointer: EnginePointer };
+    return out.pointer;
+  }
+
+  async clearPointer(): Promise<void> {
+    await this.json("DELETE", "/pending-approval");
+  }
+
   async listMemory(): Promise<MemoryRow[]> {
     const out = (await this.json("GET", "/memory")) as { memories?: unknown };
     const rows = Array.isArray(out.memories) ? out.memories : [];
@@ -136,14 +230,10 @@ export class PersonEngine {
     return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/approve`));
   }
 
-  // The approval's own status, or null when Engine has no such approval.
-  // "approved" means it was consumed: execution started, whatever the
-  // last answer said.
-  async approvalStatus(approvalId: string): Promise<string | null> {
-    const out = (await this.json("GET", "/approvals")) as { approvals?: unknown };
-    const rows = Array.isArray(out.approvals) ? (out.approvals as Record<string, unknown>[]) : [];
-    const row = rows.find((r) => r.id === approvalId);
-    return typeof row?.status === "string" ? row.status : null;
+  // One approval of this person, or null. Status "approved" means it was
+  // consumed: execution started, whatever the last answer said.
+  async approval(approvalId: string): Promise<EngineApproval | null> {
+    return (await this.listApprovals()).find((a) => a.id === approvalId) ?? null;
   }
 
   async reject(approvalId: string): Promise<EngineResult> {

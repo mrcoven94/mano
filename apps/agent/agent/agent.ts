@@ -6,12 +6,16 @@
 // Meta Model API directly, always on the Standard model ID with
 // store:false.
 //
-// Run: pnpm --filter @mano/agent dev. Without META_MODEL_API_KEY a
-// stand-in answers; without ENGINE_URL memory and forms say they are
-// unavailable; without KV the agent refuses turns unless MANO_ENV is
-// development, which keeps its state in process memory. Test: pnpm
-// --filter @mano/agent check (tsc plus vitest, no keys) and pnpm
-// --filter @mano/agent eval (live voice evals on synthetic messages).
+// Engine also holds the agent's own state for each person (reminders,
+// which its alarm delivers through Channels, the turn ledger and the
+// approval pointer), so the agent keeps no store of its own.
+//
+// Run: pnpm --filter @mano/agent dev, with Engine running (locally,
+// pnpm --filter @mano/engine dev). Without META_MODEL_API_KEY a stand-in
+// answers; without ENGINE_URL and MANO_ENGINE_AGENT_TOKEN the turn route
+// answers 503. Test: pnpm --filter @mano/agent check (tsc plus vitest,
+// no keys, against Engine's own auth, gateway and agent-state code) and
+// pnpm --filter @mano/agent eval (live voice evals on synthetic messages).
 import { defineAgent } from "eve";
 import { mockModel } from "eve/evals";
 
@@ -32,7 +36,7 @@ if (!process.env.META_MODEL_API_KEY) {
   console.warn("mano: META_MODEL_API_KEY is not set; the agent answers with a stand-in.");
 }
 if (!process.env.ENGINE_URL || !process.env.MANO_ENGINE_AGENT_TOKEN) {
-  console.warn("mano: ENGINE_URL or MANO_ENGINE_AGENT_TOKEN is not set; memory and forms are unavailable.");
+  console.warn("mano: ENGINE_URL or MANO_ENGINE_AGENT_TOKEN is not set; turns are refused until Engine is configured.");
 }
 
 export default defineAgent({

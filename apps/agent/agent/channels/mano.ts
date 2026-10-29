@@ -11,9 +11,7 @@ import { glimmerCheckerFromEnv } from "@mano/guardian";
 
 import { handleDeleted } from "../lib/deletion.js";
 import { engineFromEnv } from "../lib/engine.js";
-import { getReminderStore } from "../lib/reminder-store.js";
 import { settleStream, startIndexFor, type StreamEventLike } from "../lib/settle.js";
-import { getKeyValue } from "../lib/storage.js";
 import { handlePresented, handleTurn } from "../lib/turn.js";
 
 export const TURN_PATH = "/channels/mano/turn";
@@ -38,7 +36,6 @@ export default defineChannel({
     POST(TURN_PATH, async (request, { from, resolveSession, waitUntil }) =>
       handleTurn(request, {
         secret: process.env.MANO_AGENT_SECRET,
-        kv: await getKeyValue(),
         engine: engineFromEnv(),
         warmGuardian: () => warmGuardian(),
         background: (work) => waitUntil(work),
@@ -73,14 +70,11 @@ export default defineChannel({
       }),
     ),
     POST(PRESENTED_PATH, async (request) =>
-      handlePresented(request, { secret: process.env.MANO_AGENT_SECRET, kv: await getKeyValue() }),
+      handlePresented(request, { secret: process.env.MANO_AGENT_SECRET, engine: engineFromEnv() }),
     ),
     POST(DELETED_PATH, async (request, { from }) =>
       handleDeleted(request, {
         secret: process.env.MANO_AGENT_SECRET,
-        kv: await getKeyValue(),
-        engine: engineFromEnv(),
-        reminders: await getReminderStore(),
         resetSession: (handleHash) => from(handleHash).reset({ reason: "Conversation deleted" }),
       }),
     ),

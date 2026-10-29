@@ -1,20 +1,19 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { requireHandleHash } from "../lib/person.js";
-import { getReminderStore } from "../lib/reminder-store.js";
-import { StorageUnavailable } from "../lib/storage.js";
+import { personEngine } from "../lib/person.js";
 
 export default defineTool({
   description: "Cancel one pending reminder by its ID. List reminders first when the person names one by words instead.",
   inputSchema: z.object({ reminderId: z.string().min(1) }),
   async execute({ reminderId }, ctx) {
-    const handleHash = requireHandleHash(ctx);
-    const store = await getReminderStore();
-    if (!store) throw new StorageUnavailable("Cancelling reminders");
-    const outcome = await store.cancel(reminderId, handleHash);
-    // "sending" means it may already be on its way: say so, never that it
-    // was cancelled.
-    return { cancelled: outcome === "cancelled", alreadySending: outcome === "sending", found: outcome !== "not_found" };
+    const engine = personEngine(ctx);
+    if (!engine) throw new Error("Cancelling reminders is not available right now. Say so plainly.");
+    const out = await engine.cancelReminder(reminderId);
+    if (!out) return { cancelled: false, found: false };
+    // A reminder already claimed for delivery may be on its way: say so,
+    // never that it was cancelled.
+    const alreadySending = !out.cancelled && (out.reminder.status === "sending" || out.reminder.status === "sent");
+    return { cancelled: out.cancelled, alreadySending, found: true };
   },
 });

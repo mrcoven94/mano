@@ -1,36 +1,19 @@
-// The one approval question waiting on a person, as a pointer to
-// Engine's approval. Engine owns the frozen request, its hash, expiry and
-// execution; the agent keeps only which approval its last question was
-// about, so a texted YES or NO reaches exactly that approval. The
-// question is rendered from the request Engine froze, so the person reads
-// the exact content their yes would send.
+// Approvals the agent proposes, as Engine holds them. Engine owns the
+// frozen request, its hash, expiry and execution, and keeps the one
+// pointer to the approval that may be answered by text. That pointer is
+// set only after Channels reports the question reached the person word
+// for word, so an approval with no pointer has not been shown, and a YES
+// to it approves nothing. Engine reads the pointer only under the current
+// Channels deletion generation, so nothing from before a deletion is ever
+// answered.
 //
-// "prepared" means the agent returned the question but Channels has not
-// confirmed it reached the person word for word; a YES then approves
-// nothing. "presented" waits for the person's YES or NO, and starts only
-// when Channels reports the approval ID and the hash of the exact text
-// it sent. "checking" means Engine took
-// the YES but the outcome is not known yet: the pointer then holds the
-// same approval until Engine reports a definite outcome, so a retry
-// reconciles it instead of filing again. The pointer also records the
-// Channels deletion generation; after a deletion it is never answered.
-import { createHash } from "node:crypto";
+// The question is rendered from the request Engine froze, never from the
+// model's words, so the person reads the exact content their yes sends.
+import { createHash, randomUUID } from "node:crypto";
 
 import { guardReply } from "@mano/persona";
 
 import type { EngineApproval } from "./engine.js";
-import type { KeyValue } from "./storage.js";
-
-export interface PendingApproval {
-  approvalId: string;
-  personId: string;
-  generation: number;
-  state: "prepared" | "presented" | "checking";
-  // The turn that proposed it, so that turn's reply carries the question.
-  turnId: string;
-  purpose: string;
-  question: string;
-}
 
 const LABELS: Record<string, string> = {
   fullName: "Name",
@@ -41,13 +24,34 @@ const LABELS: Record<string, string> = {
   monthlyIncome: "Monthly income",
 };
 
-const MAX_TTL_MS = 24 * 3600_000;
+const AGENT_KEY_PREFIX = "agent:";
 
-function pendingKey(personId: string): string {
-  return `mano:pending:${personId}`;
+// Every proposal gets its own key. Engine closes an approval by closing
+// every approval under its key, so two proposals never share one; the
+// turn ID in the key tells which turn proposed it.
+export function proposalKey(turnId: string): string {
+  return `${AGENT_KEY_PREFIX}${turnId}:${randomUUID().slice(0, 8)}`;
 }
 
-export function renderQuestion(approval: EngineApproval): string {
+function isAgentProposal(approval: EngineApproval): boolean {
+  return approval.idempotencyKey.startsWith(AGENT_KEY_PREFIX);
+}
+
+// The approval this turn proposed and Engine still holds, newest first.
+export function proposedIn(approvals: EngineApproval[], turnId: string): EngineApproval | null {
+  return (
+    approvals
+      .filter((a) => a.status === "pending" && a.idempotencyKey.startsWith(`${AGENT_KEY_PREFIX}${turnId}:`))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null
+  );
+}
+
+// Agent proposals still waiting that are not the answerable one.
+export function waitingProposals(approvals: EngineApproval[], exceptId: string | null = null): EngineApproval[] {
+  return approvals.filter((a) => a.status === "pending" && isAgentProposal(a) && a.id !== exceptId);
+}
+
+export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">): string {
   let payload: Record<string, unknown> = {};
   try {
     const frozen = JSON.parse(approval.requestJson) as { payload?: Record<string, unknown> };
@@ -78,8 +82,7 @@ export function renderQuestion(approval: EngineApproval): string {
 // shared voice guard (which drops any sentence naming a model or
 // provider, and rewrites dashes and markdown) leaves it unchanged, and it
 // holds no link for the link check to strip. Anything else cannot be put
-// to a YES, because the person would approve content they never saw.
-// Channels runs the same check before sending (packages/channels).
+// to a YES. Channels runs the same check before sending.
 export function presentsExactly(question: string): boolean {
   return guardReply(question).text === question && !/https?:\/\/|www\./i.test(question);
 }
@@ -90,17 +93,4 @@ export function presentsExactly(question: string): boolean {
 // same hash over what it sent.
 export function presentationHash(text: string): string {
   return createHash("sha256").update(text.replace(/\s+/g, " ").trim()).digest("hex");
-}
-
-export async function savePending(kv: KeyValue, pending: PendingApproval, expiresAt: string): Promise<void> {
-  const ttlMs = Math.min(MAX_TTL_MS, Math.max(60_000, new Date(expiresAt).getTime() - Date.now()));
-  await kv.put(pendingKey(pending.personId), pending, Number.isFinite(ttlMs) ? ttlMs : MAX_TTL_MS);
-}
-
-export function loadPending(kv: KeyValue, personId: string): Promise<PendingApproval | null> {
-  return kv.get<PendingApproval>(pendingKey(personId));
-}
-
-export function clearPending(kv: KeyValue, personId: string): Promise<void> {
-  return kv.delete(pendingKey(personId));
 }
