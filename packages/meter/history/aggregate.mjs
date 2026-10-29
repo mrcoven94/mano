@@ -11,7 +11,8 @@
 // trailer counts as muse-code; a "Co-Authored-By: Claude" trailer counts as
 // architect (a commit with both counts as muse-code); anything else,
 // including bots, counts as person. A session is the "[Name]" prefix of a
-// commit subject or PR title, or "unprefixed" when there is none.
+// commit subject or PR title when it matches SESSION_ALLOWLIST, "other"
+// for any other bracket text, or "unprefixed" when there is none.
 //
 // A review round is a PR comment written by the repo owner that reads as an
 // architect review: its body matches REVIEW_PATTERN below. A multi-model
@@ -20,6 +21,25 @@
 // separately; on this repo most review happens in comments.
 
 export const UNPREFIXED = "unprefixed";
+
+// Bracket text that is not a known session. Titles are content, so a
+// session name only enters the report when it matches this list.
+export const OTHER_SESSION = "other";
+
+export const SESSION_ALLOWLIST = [
+  "Engine",
+  "Channels",
+  "Mail",
+  "Forms",
+  "Guardian",
+  "Eval",
+  "Quality",
+  "Ship",
+  "App",
+  "Accounts",
+  "Meter",
+  "Agent",
+];
 
 export const AUTHOR_CLASSES = ["muse-code", "architect", "person"];
 
@@ -33,7 +53,8 @@ export const MULTI_MODEL_PATTERN = /sol\s*6\.1|panel/i;
 export function sessionFromTitle(title) {
   const match = /^\s*\[([^\]]+)\]/.exec(title ?? "");
   const name = match ? match[1].trim() : "";
-  return name === "" ? UNPREFIXED : name;
+  if (name === "") return UNPREFIXED;
+  return SESSION_ALLOWLIST.includes(name) ? name : OTHER_SESSION;
 }
 
 export function classifyCommit(body) {

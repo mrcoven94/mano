@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ResponderFailed, STANDARD_MODEL_ID, SparkResponder, StandInResponder, buildResponderInput } from "../src/responder.js";
+import { ResponderFailed, STANDARD_MODEL_ID, SparkResponder, StandInResponder, buildResponderInput, extractUsage } from "../src/responder.js";
 import { RecordingChannel } from "../src/recording.js";
 import { ChannelRefused, ChannelUncertain } from "../src/channel.js";
 
@@ -94,6 +94,32 @@ describe("SparkResponder", () => {
     const badKey = new SparkResponder({ apiKey: "test-key-not-real", fetchFn: denied as typeof fetch, maxRetries: 0 });
     const deniedErr = await badKey.respond({ texts: ["Hi"], attachmentCount: 0 }).catch((e: unknown) => e);
     expect((deniedErr as ResponderFailed).reason).toBe("http_401");
+  });
+});
+
+describe("extractUsage", () => {
+  it("reads input, output and reasoning tokens from the usage object", async () => {
+    const fetchFn = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          status: "completed",
+          usage: { input_tokens: 200, output_tokens: 900, output_tokens_details: { reasoning_tokens: 800 } },
+          output: [{ content: [{ type: "output_text", text: "Short." }] }],
+        }),
+        { status: 200 },
+      ),
+    );
+    const responder = new SparkResponder({ apiKey: "test-key-not-real", fetchFn: fetchFn as typeof fetch });
+    const result = await responder.respond({ texts: ["Hi"], attachmentCount: 0 });
+    expect(result.usage).toEqual({ inputTokens: 200, outputTokens: 900, reasoningTokens: 800 });
+  });
+
+  it("reports zeros for missing or malformed usage, never failing the turn", () => {
+    expect(extractUsage({})).toEqual({ inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
+    expect(extractUsage(null)).toEqual({ inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
+    expect(
+      extractUsage({ usage: { input_tokens: "200", output_tokens: -5, output_tokens_details: { reasoning_tokens: 1.9 } } }),
+    ).toEqual({ inputTokens: 0, outputTokens: 0, reasoningTokens: 1 });
   });
 });
 

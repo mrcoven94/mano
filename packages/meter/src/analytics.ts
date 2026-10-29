@@ -24,10 +24,34 @@ export interface AnalyticsEngineDatasetLike {
   writeDataPoint(point: AnalyticsEnginePoint): void;
 }
 
+// Positional column layout: blob N is POINT_BLOB_KEYS[N-1], double N
+// is POINT_DOUBLE_KEYS[N-1]. The nightly AE export
+// (history/ae-export.mjs) mirrors these lists to read points back; the
+// ae-export test fails if the two drift apart. Append new fields at the
+// end only: old points keep their positions.
+export const POINT_BLOB_KEYS = [
+  "package",
+  "purpose",
+  "provider",
+  "model",
+  "dataClass",
+  "environment",
+  "status",
+  "at",
+] as const;
+
+export const POINT_DOUBLE_KEYS = [
+  "inputTokens",
+  "outputTokens",
+  "reasoningTokens",
+  "latencyMs",
+  "estimatedCostUsd",
+] as const;
+
 export function recordToPoint(record: UsageRecord): AnalyticsEnginePoint {
   return {
-    blobs: [record.package, record.purpose, record.provider, record.model, record.dataClass, record.status, record.at],
-    doubles: [record.inputTokens, record.outputTokens, record.latencyMs, record.estimatedCostUsd],
+    blobs: POINT_BLOB_KEYS.map((key) => record[key]),
+    doubles: POINT_DOUBLE_KEYS.map((key) => record[key]),
     indexes: [record.model],
   };
 }

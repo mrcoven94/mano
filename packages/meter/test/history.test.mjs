@@ -3,6 +3,8 @@ import {
   COMMITS_BODY_FORMAT,
   COMMITS_FORMAT,
   NUMSTAT_FORMAT,
+  OTHER_SESSION,
+  SESSION_ALLOWLIST,
   UNPREFIXED,
   addCommits,
   addPrs,
@@ -24,9 +26,16 @@ const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
 
 describe("sessionFromTitle", () => {
-  it("takes the [Session] prefix", () => {
+  it("takes the [Session] prefix when it is allowlisted", () => {
     expect(sessionFromTitle("[Channels] LAP-508: texts")).toBe("Channels");
-    expect(sessionFromTitle("  [Site] LAP-496: pages")).toBe("Site");
+    for (const name of SESSION_ALLOWLIST) {
+      expect(sessionFromTitle(`[${name}] LAP-1: work`)).toBe(name);
+    }
+  });
+  it("counts any other bracket text as other", () => {
+    expect(sessionFromTitle("[Site] LAP-496: pages")).toBe(OTHER_SESSION);
+    expect(sessionFromTitle("[channels] lowercase")).toBe(OTHER_SESSION);
+    expect(sessionFromTitle("[Call +1-555-010-0000 now] spam")).toBe(OTHER_SESSION);
   });
   it("falls back to unprefixed", () => {
     expect(sessionFromTitle("AGENTS.md: how work ships")).toBe(UNPREFIXED);
@@ -276,14 +285,14 @@ describe("counts only", () => {
     addCommits(
       summary,
       joinCommits(
-        [{ sha: SHA_A, day: "2026-10-28", session: sessionFromTitle(`[S] ${sentinels[1]}`) }],
+        [{ sha: SHA_A, day: "2026-10-28", session: sessionFromTitle(`[${sentinels[1]}] ${sentinels[1]}`) }],
         new Map([[SHA_A, `fix ${sentinels[0]} ${sentinels[3]}\n\nCo-Authored-By: Muse Code <a>`]]),
         new Map([[SHA_A, 9]]),
       ),
     );
     addPrs(summary, [
       summarizePr(
-        { number: 7, title: `[S] ${sentinels[1]}`, state: "OPEN", createdAt: "2026-10-28T00:00:00Z" },
+        { number: 7, title: `[${sentinels[1]}] ${sentinels[1]}`, state: "OPEN", createdAt: "2026-10-28T00:00:00Z" },
         { comments: [{ author: { login: "o" }, body: `note ${sentinels[0]} ${sentinels[3]}` }], reviews: [] },
         "o",
       ),

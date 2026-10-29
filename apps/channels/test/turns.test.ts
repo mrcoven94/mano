@@ -22,7 +22,7 @@ describe("slow answers", () => {
         maxAttempts: 1,
         respond: async () => {
           const text = await gate;
-          return { text, bubbles: [text], inputChars: 10, outputChars: text.length, model: "stand-in", attempts: 1 };
+          return { text, bubbles: [text], inputChars: 10, outputChars: text.length, model: "stand-in", attempts: 1, usage: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 } };
         },
       },
     });

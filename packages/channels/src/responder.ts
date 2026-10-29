@@ -26,6 +26,16 @@ export interface TurnInput {
   history?: Array<{ role: "person" | "mano"; text: string }>;
 }
 
+// Token counts the provider reported for the answering attempt.
+// Output includes reasoning; reasoning is split out for display.
+export interface ModelUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+}
+
+export const ZERO_USAGE: ModelUsage = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
+
 export interface ResponderResult {
   // The raw answer. The worker sanitizes it before splitting, so the
   // bubbles it persists and sends are final.
@@ -36,6 +46,9 @@ export interface ResponderResult {
   model: string;
   // Every request attempt, including retries. Spend counts all of them.
   attempts: number;
+  // Provider-reported usage for the answering attempt. Zeros when the
+  // provider reported none (or when no model was called).
+  usage: ModelUsage;
 }
 
 export interface Responder {
@@ -96,6 +109,25 @@ export function extractOutputText(data: unknown): string {
     }
   }
   return parts.join("");
+}
+
+// Reads the /responses usage object defensively: numbers only,
+// anything else is zero. A missing or malformed usage never fails
+// the turn; the meter records what the provider actually said.
+export function extractUsage(data: unknown): ModelUsage {
+  const usage = (data as { usage?: unknown } | null)?.usage;
+  if (typeof usage !== "object" || usage === null) return { ...ZERO_USAGE };
+  const record = usage as Record<string, unknown>;
+  const details = (typeof record.output_tokens_details === "object" && record.output_tokens_details !== null
+    ? record.output_tokens_details
+    : {}) as Record<string, unknown>;
+  const pick = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  return {
+    inputTokens: pick(record.input_tokens),
+    outputTokens: pick(record.output_tokens),
+    reasoningTokens: pick(details.reasoning_tokens),
+  };
 }
 
 export interface SparkResponderOptions {
@@ -184,6 +216,7 @@ export class SparkResponder implements Responder {
           outputChars: text.length,
           model: STANDARD_MODEL_ID,
           attempts: attempt,
+          usage: extractUsage(data),
         };
       } catch (err) {
         if (err instanceof ResponderFailed) throw err;
@@ -222,6 +255,7 @@ export class StandInResponder implements Responder {
       outputChars: text.length,
       model: "stand-in",
       attempts: 1,
+      usage: { ...ZERO_USAGE },
     };
   }
 }

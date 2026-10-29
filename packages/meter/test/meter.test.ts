@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   AnalyticsEngineSink,
   JsonLinesSink,
-  MAX_LABEL_LENGTH,
   MemorySink,
   MeterRecorder,
   NullSink,
@@ -31,8 +30,10 @@ function input(overrides: Partial<UsageInput> = {}): UsageInput {
     provider: "meta",
     model: "muse-spark-1.3",
     dataClass: "real",
+    environment: "local",
     inputTokens: 1000,
     outputTokens: 100,
+    reasoningTokens: 60,
     latencyMs: 250,
     status: "ok",
     ...overrides,
@@ -43,26 +44,45 @@ describe("buildRecord", () => {
   it("builds a record with estimated cost and timestamp", () => {
     const record = buildRecord(input(), { at: "2026-10-29T00:00:00.000Z" });
     expect(record.package).toBe("channels");
+    expect(record.environment).toBe("local");
+    expect(record.reasoningTokens).toBe(60);
     expect(record.estimatedCostUsd).toBe(estimateCostUsd("muse-spark-1.3", 1000, 100));
     expect(record.estimatedCostUsd).toBeGreaterThan(0);
     expect(record.at).toBe("2026-10-29T00:00:00.000Z");
     expect(Object.keys(record).sort()).toEqual([...RECORD_KEYS].sort());
   });
 
-  it("rejects unknown packages, data classes and statuses", () => {
+  it("rejects unknown packages, purposes, providers, data classes, environments and statuses", () => {
     expect(() => buildRecord(input({ package: "portal" as never }))).toThrow("Unknown meter package");
+    expect(() => buildRecord(input({ purpose: "answer this now please" as never }))).toThrow("Unknown meter purpose");
+    expect(() => buildRecord(input({ provider: "whoever" as never }))).toThrow("Unknown meter provider");
     expect(() => buildRecord(input({ dataClass: "test" as never }))).toThrow("dataClass");
+    expect(() => buildRecord(input({ environment: "staging" as never }))).toThrow("environment");
     expect(() => buildRecord(input({ status: "timeout" as never }))).toThrow("status");
   });
 
-  it("rejects empty labels and labels long enough to smuggle content", () => {
-    expect(() => buildRecord(input({ purpose: "" }))).toThrow("purpose");
-    expect(() => buildRecord(input({ purpose: "x".repeat(MAX_LABEL_LENGTH + 1) }))).toThrow("short label");
+  it("rejects model IDs outside the tight pattern", () => {
+    expect(() => buildRecord(input({ model: "muse spark" }))).toThrow("model");
+    expect(() => buildRecord(input({ model: "muse-spark-1.3; DROP" }))).toThrow("model");
+    expect(() => buildRecord(input({ model: "" }))).toThrow("model");
+    expect(buildRecord(input({ model: "stand-in" })).model).toBe("stand-in");
+  });
+
+  it("range-checks explicit timestamps", () => {
+    expect(() => buildRecord(input(), { at: "not a date" })).toThrow("not a date");
+    expect(() => buildRecord(input(), { at: "2020-01-01T00:00:00.000Z" })).toThrow("plausible range");
+    expect(() =>
+      buildRecord(input(), { at: "2026-10-29T00:00:00.000Z", now: () => Date.parse("2026-10-20T00:00:00.000Z") }),
+    ).toThrow("plausible range");
+    expect(
+      buildRecord(input(), { at: "2026-10-29T00:00:00.000Z", now: () => Date.parse("2026-10-29T12:00:00.000Z") }).at,
+    ).toBe("2026-10-29T00:00:00.000Z");
   });
 
   it("rejects non-finite counts and floors fractions", () => {
     expect(() => buildRecord(input({ inputTokens: Number.NaN }))).toThrow("inputTokens");
     expect(buildRecord(input({ outputTokens: 99.9 })).outputTokens).toBe(99);
+    expect(buildRecord(input({ reasoningTokens: -5 })).reasoningTokens).toBe(0);
     expect(buildRecord(input({ latencyMs: -5 })).latencyMs).toBe(0);
   });
 });
@@ -122,8 +142,17 @@ describe("AnalyticsEngineSink", () => {
     sink.write(record);
     expect(points).toHaveLength(1);
     expect(points[0]).toEqual(recordToPoint(record));
-    expect(points[0].blobs).toContain("muse-spark-1.3");
-    expect(points[0].doubles).toEqual([1000, 100, 250, record.estimatedCostUsd]);
+    expect(points[0].blobs).toEqual([
+      "channels",
+      "answer-texts",
+      "meta",
+      "muse-spark-1.3",
+      "real",
+      "local",
+      "ok",
+      "2026-10-29T00:00:00.000Z",
+    ]);
+    expect(points[0].doubles).toEqual([1000, 100, 60, 250, record.estimatedCostUsd]);
     expect(points[0].indexes).toEqual(["muse-spark-1.3"]);
   });
 
@@ -154,20 +183,23 @@ describe("JSON lines sink", () => {
     expect(formatLine(record)).toBe(JSON.stringify(record));
   });
 
-  it("summarizes a day by package and model", () => {
+  it("summarizes a day by package, model and environment", () => {
     const records = [
       buildRecord(input({})),
-      buildRecord(input({ package: "mail", status: "error", inputTokens: 10, outputTokens: 0 })),
-      buildRecord(input({ model: "stand-in", inputTokens: 5, outputTokens: 5 })),
+      buildRecord(input({ package: "mail", status: "error", inputTokens: 10, outputTokens: 0, reasoningTokens: 0 })),
+      buildRecord(input({ model: "stand-in", inputTokens: 5, outputTokens: 5, reasoningTokens: 0, environment: "ci" })),
     ];
     const summary = summarizeDay(records, "2026-10-29");
     expect(summary.day).toBe("2026-10-29");
     expect(summary.totals.calls).toBe(3);
     expect(summary.totals.errors).toBe(1);
     expect(summary.totals.inputTokens).toBe(1015);
+    expect(summary.totals.reasoningTokens).toBe(60);
     expect(summary.byPackage.mail.errors).toBe(1);
     expect(summary.byModel["stand-in"].calls).toBe(1);
     expect(summary.byModel["stand-in"].estimatedCostUsd).toBe(0);
+    expect(summary.byEnvironment.local.calls).toBe(2);
+    expect(summary.byEnvironment.ci.calls).toBe(1);
     expect(summary.totals.estimatedCostUsd).toBeCloseTo(records[0].estimatedCostUsd + records[1].estimatedCostUsd, 8);
   });
 

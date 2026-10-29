@@ -1,16 +1,14 @@
 // Tests for the /stats aggregations. Unit cases build records through
-// the real buildRecord (never hand-shaped cost math), and the file
-// cases load the checked-in site snapshots and assert they are
-// internally consistent.
+// the real buildRecord (never hand-shaped cost math), and the loader
+// cases prove R2 lines round-trip back into identical summaries.
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import * as path from "node:path";
 import { buildRecord, type UsageInput, type UsageRecord } from "../src/record.js";
 import { estimateCostUsd } from "../src/rates.js";
-import { parseLine, summarizeDay } from "../src/jsonl.js";
+import { formatLine, parseLine } from "../src/jsonl.js";
 import {
+  daysForWindow,
   filterRecordsSince,
+  isHistoryFile,
   percentile,
   sinceDayForWindow,
   summarizeHistory,
@@ -19,26 +17,25 @@ import {
   type HistoryFile,
 } from "../src/stats.js";
 
-const DATA_DIR = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "../../../apps/site/data");
-
-function record(over: Partial<UsageInput> & { at?: string; latencyMs?: number }): UsageRecord {
+function record(over: Partial<UsageInput> & { at?: string }): UsageRecord {
   const { at, ...input } = over;
-  const built = buildRecord(
+  return buildRecord(
     {
       package: "channels",
       purpose: "answer-texts",
       provider: "meta",
       model: "muse-spark-1.3",
       dataClass: "synthetic",
+      environment: "local",
       inputTokens: 100,
       outputTokens: 20,
+      reasoningTokens: 12,
       latencyMs: 10,
       status: "ok",
       ...input,
     },
     at ? { at } : {},
   );
-  return built;
 }
 
 describe("percentile", () => {
@@ -55,21 +52,25 @@ describe("percentile", () => {
 });
 
 describe("summarizeUsage", () => {
-  it("splits Meta share, models, cost and latency", () => {
+  it("splits Meta share, models, cost and latency over model calls only", () => {
     const records = [
-      record({ inputTokens: 100, outputTokens: 20, latencyMs: 10 }),
-      record({ inputTokens: 300, outputTokens: 60, latencyMs: 30 }),
-      record({ provider: "stand-in", model: "stand-in", inputTokens: 40, outputTokens: 40, latencyMs: 0 }),
+      record({ inputTokens: 100, outputTokens: 20, reasoningTokens: 12, latencyMs: 10 }),
+      record({ inputTokens: 300, outputTokens: 60, reasoningTokens: 40, latencyMs: 30 }),
+      record({ provider: "stand-in", model: "stand-in", inputTokens: 40, outputTokens: 40, reasoningTokens: 0, latencyMs: 0 }),
     ];
     const summary = summarizeUsage(records);
     expect(summary.calls).toBe(3);
     expect(summary.errors).toBe(0);
     expect(summary.tokens).toBe(560);
+    expect(summary.reasoningTokens).toBe(52);
     expect(summary.metaCalls).toBe(2);
-    expect(summary.metaCallShare).toBeCloseTo(2 / 3, 10);
-    expect(summary.metaTokenShare).toBeCloseTo(480 / 560, 10);
+    expect(summary.testDoubleCalls).toBe(1);
+    // The stand-in answered without calling a model, so it is out of
+    // both Meta denominators.
+    expect(summary.metaCallShare).toBe(1);
+    expect(summary.metaTokenShare).toBe(1);
     expect(summary.byModel.map((r) => r.model)).toEqual(["muse-spark-1.3", "stand-in"]);
-    expect(summary.byModel[0]).toMatchObject({ calls: 2, tokens: 480 });
+    expect(summary.byModel[0]).toMatchObject({ calls: 2, tokens: 480, reasoningTokens: 52 });
     expect(summary.byModel[1]).toMatchObject({ calls: 1, tokens: 80, estimatedCostUsd: 0 });
     expect(summary.estimatedCostUsd).toBe(
       estimateCostUsd("muse-spark-1.3", 400, 80),
@@ -78,17 +79,30 @@ describe("summarizeUsage", () => {
     expect(summary.latencyP95Ms).toBe(30);
   });
 
-  it("counts errors and keeps production separate from test traffic", () => {
+  it("counts production by environment, never by data class", () => {
     const records = [
-      record({ status: "error", outputTokens: 0, dataClass: "real" }),
-      record({ provider: "stand-in", model: "stand-in", dataClass: "real" }),
-      record({ dataClass: "synthetic" }),
+      record({ status: "error", outputTokens: 0, reasoningTokens: 0, dataClass: "real", environment: "local" }),
+      record({ provider: "stand-in", model: "stand-in", dataClass: "real", environment: "production" }),
+      record({ dataClass: "synthetic", environment: "production" }),
     ];
     const summary = summarizeUsage(records);
     expect(summary.errors).toBe(1);
+    // The real-but-local error is not production; the synthetic-but-
+    // production record is.
     expect(summary.productionCalls).toBe(2);
-    expect(summary.productionMetaCallShare).toBeCloseTo(1 / 2, 10);
-    expect(summary.productionMetaTokenShare).toBeCloseTo(100 / 220, 10);
+    expect(summary.productionMetaCallShare).toBe(1);
+    expect(summary.productionMetaTokenShare).toBe(1);
+  });
+
+  it("feeds latency percentiles from answered calls only", () => {
+    const records = [
+      record({ latencyMs: 10 }),
+      record({ latencyMs: 30 }),
+      record({ status: "error", latencyMs: 5000, outputTokens: 0, reasoningTokens: 0 }),
+    ];
+    const summary = summarizeUsage(records);
+    expect(summary.latencyP50Ms).toBe(10);
+    expect(summary.latencyP95Ms).toBe(30);
   });
 
   it("reports null shares and latencies when there is nothing to share", () => {
@@ -101,10 +115,15 @@ describe("summarizeUsage", () => {
     expect(summary.productionCalls).toBe(0);
     expect(summary.productionMetaCallShare).toBeNull();
     expect(summary.range).toBeNull();
-    const synthetic = summarizeUsage([record({ dataClass: "synthetic" })]);
-    expect(synthetic.productionCalls).toBe(0);
-    expect(synthetic.productionMetaCallShare).toBeNull();
-    expect(synthetic.range).toEqual({ from: synthetic.range!.from, to: synthetic.range!.from });
+    const local = summarizeUsage([record({ environment: "local" })]);
+    expect(local.productionCalls).toBe(0);
+    expect(local.productionMetaCallShare).toBeNull();
+    expect(local.range).toEqual({ from: local.range!.from, to: local.range!.from });
+    const doublesOnly = summarizeUsage([
+      record({ provider: "stand-in", model: "stand-in", environment: "production" }),
+    ]);
+    expect(doublesOnly.productionCalls).toBe(1);
+    expect(doublesOnly.productionMetaCallShare).toBeNull();
   });
 });
 
@@ -123,6 +142,31 @@ describe("filterRecordsSince", () => {
   it("computes a last-N-days cutoff in UTC", () => {
     expect(sinceDayForWindow(7, new Date("2026-10-29T03:00:00.000Z"))).toBe("2026-10-23");
     expect(sinceDayForWindow(1, new Date("2026-10-29T03:00:00.000Z"))).toBe("2026-10-29");
+  });
+
+  it("lists the explicit days in a window", () => {
+    expect(daysForWindow(1, new Date("2026-10-29T03:00:00.000Z"))).toEqual(["2026-10-29"]);
+    expect(daysForWindow(3, new Date("2026-10-29T03:00:00.000Z"))).toEqual(["2026-10-27", "2026-10-28", "2026-10-29"]);
+  });
+});
+
+describe("isHistoryFile", () => {
+  const file: HistoryFile = {
+    generatedAt: "2026-10-29T00:00:00.000Z",
+    repo: "example/mano",
+    days: {},
+    sessions: {},
+    prs: [],
+  };
+
+  it("accepts the collector shape and rejects anything else", () => {
+    expect(isHistoryFile(file)).toBe(true);
+    expect(isHistoryFile({ ...file, generatedAt: null })).toBe(true);
+    expect(isHistoryFile(null)).toBe(false);
+    expect(isHistoryFile([])).toBe(false);
+    expect(isHistoryFile({ ...file, prs: {} })).toBe(false);
+    expect(isHistoryFile({ ...file, days: null })).toBe(false);
+    expect(isHistoryFile({ ...file, repo: 7 })).toBe(false);
   });
 });
 
@@ -217,45 +261,17 @@ describe("summarizeHistory", () => {
   });
 });
 
-describe("checked-in snapshots", () => {
-  it("usage summary matches the checked-in usage lines", () => {
-    const usage = JSON.parse(readFileSync(path.join(DATA_DIR, "usage.json"), "utf8")) as UsageRecord[];
-    expect(usage.length).toBeGreaterThan(0);
-    const summary = summarizeUsage(usage);
-    expect(summary.calls).toBe(usage.length);
-    expect(summary.range).not.toBeNull();
-    const daySummary = JSON.parse(readFileSync(path.join(DATA_DIR, "usage-summary.json"), "utf8"));
-    expect(daySummary).toEqual(summarizeDay(usage, summary.range!.from));
-    const jsonl = readFileSync(path.join(DATA_DIR, `usage-${summary.range!.from}.jsonl`), "utf8")
-      .trim()
-      .split("\n")
-      .map(parseLine);
-    expect(jsonl).toEqual(usage);
-  });
-
-  it("history snapshot is internally consistent", () => {
-    const history = JSON.parse(readFileSync(path.join(DATA_DIR, "history.json"), "utf8")) as HistoryFile;
-    expect(history.repo).toBe("mrcoven94/mano");
-    expect(history.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    const numbers = history.prs.map((pr) => pr.number);
-    expect([...numbers].sort((a, b) => a - b)).toEqual(numbers);
-    for (const pr of history.prs) {
-      expect(Object.keys(pr).sort()).toEqual(
-        ["comments", "formalReviews", "mergedDay", "multiModelReviews", "number", "openToMergeSeconds", "openedDay", "ownerComments", "reviewRounds", "session", "state"].sort(),
-      );
-      expect(pr.mergedDay === null).toBe(pr.openToMergeSeconds === null);
-    }
-    // Day buckets and session rows fold the same PRs, so the review
-    // totals agree three ways.
-    const summary = summarizeHistory(history);
-    expect(summary.prsMerged).toBeGreaterThan(0);
-    expect(summary.reviewRounds).toBe(history.prs.reduce((n, pr) => n + pr.reviewRounds, 0));
-    expect(summary.reviewRounds).toBe(
-      Object.values(history.sessions).reduce((n, s) => n + s.reviewRounds, 0),
-    );
-    const dayOpened = Object.values(history.days).reduce((n, d) => n + d.prsOpened, 0);
-    expect(dayOpened).toBe(history.prs.length);
-    expect(summary.museLineShare).toBeGreaterThanOrEqual(0);
-    expect(summary.museLineShare).toBeLessThanOrEqual(1);
+describe("R2 round trip", () => {
+  it("formats, parses and re-validates lines into identical summaries", () => {
+    const direct = [
+      record({ at: "2026-10-29T01:00:00.000Z" }),
+      record({ provider: "stand-in", model: "stand-in", at: "2026-10-29T02:00:00.000Z" }),
+    ];
+    const reloaded = direct.map((r) => {
+      const parsed = parseLine(formatLine(r));
+      return buildRecord(parsed, { at: parsed.at });
+    });
+    expect(reloaded).toEqual(direct);
+    expect(summarizeUsage(reloaded)).toEqual(summarizeUsage(direct));
   });
 });

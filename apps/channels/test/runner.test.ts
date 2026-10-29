@@ -74,7 +74,7 @@ describe("turn batching", () => {
         maxAttempts: 1,
         respond: async () => {
           const text = await gate;
-          return { text, bubbles: [text], inputChars: 10, outputChars: text.length, model: "stand-in", attempts: 1 };
+          return { text, bubbles: [text], inputChars: 10, outputChars: text.length, model: "stand-in", attempts: 1, usage: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 } };
         },
       },
     });
@@ -249,7 +249,7 @@ describe("delete", () => {
         maxAttempts: 1,
         respond: async () => {
           await gate;
-          return { text: "Late.", bubbles: ["Late."], inputChars: 10, outputChars: 5, model: "stand-in", attempts: 1 };
+          return { text: "Late.", bubbles: ["Late."], inputChars: 10, outputChars: 5, model: "stand-in", attempts: 1, usage: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 } };
         },
       },
     });
@@ -543,6 +543,7 @@ describe("infrastructure retries", () => {
           outputChars: 1000,
           model: "muse-spark-1.3",
           attempts: 1,
+          usage: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 },
         }),
       },
     });
@@ -713,7 +714,7 @@ describe("limits", () => {
       responder: {
         name: "metered",
         maxAttempts: 1,
-        respond: async () => ({ text: "Answer.", bubbles: ["Answer."], inputChars: 1000, outputChars: 1000, model: "muse-spark-1.3", attempts: 2 }),
+        respond: async () => ({ text: "Answer.", bubbles: ["Answer."], inputChars: 1000, outputChars: 1000, model: "muse-spark-1.3", attempts: 2, usage: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 } }),
       },
       config: { usdPer1kChars: 0.01 },
     });

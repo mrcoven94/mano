@@ -18,7 +18,7 @@ import {
   type NormalizedEvent,
   type Responder,
 } from "@mano/channels";
-import { AnalyticsEngineSink, MeterRecorder } from "@mano/meter";
+import { AnalyticsEngineSink, METER_ENVIRONMENTS, MeterRecorder, type MeterEnvironment } from "@mano/meter";
 import { DEFAULT_MEDIA_HOSTS, DEFAULT_RUNNER_CONFIG, ConversationRunner, type SpendLedger } from "./runner.js";
 
 export function parseMediaHosts(raw: string | undefined): string[] {
@@ -98,7 +98,20 @@ export function buildMeter(env: Env): MeterRecorder {
   return new MeterRecorder(sinks);
 }
 
-export function buildResponder(env: Env, opts: { meter?: MeterRecorder; logger?: Logger } = {}): Responder {
+// Meter environment for records from this worker. An explicit valid
+// ENVIRONMENT wins; otherwise the METER binding decides, since it is
+// bound on deploys and absent locally.
+export function environmentEnv(env: Env): MeterEnvironment {
+  if (env.ENVIRONMENT && (METER_ENVIRONMENTS as readonly string[]).includes(env.ENVIRONMENT)) {
+    return env.ENVIRONMENT as MeterEnvironment;
+  }
+  return env.METER ? "production" : "local";
+}
+
+export function buildResponder(
+  env: Env,
+  opts: { meter?: MeterRecorder; logger?: Logger; waitUntil?: (promise: Promise<unknown>) => void } = {},
+): Responder {
   const inner = env.META_MODEL_API_KEY
     ? (() => {
         const endpoint = buildModelBaseUrl({
@@ -115,6 +128,8 @@ export function buildResponder(env: Env, opts: { meter?: MeterRecorder; logger?:
     : new StandInResponder();
   const logger = opts.logger;
   return meterResponder(inner, opts.meter ?? buildMeter(env), {
+    environment: environmentEnv(env),
+    waitUntil: opts.waitUntil,
     onMeterError: logger ? (err) => logger.warn("meter_failed", { err: errName(err) }) : undefined,
   });
 }
@@ -148,7 +163,10 @@ export class ConversationDO implements DurableObject {
 
   private runner(handleHash: string): { runner: ConversationRunner; channel: Channel; responder: Responder } {
     const channel = buildChannel(this.env);
-    const responder = buildResponder(this.env, { logger: this.logger });
+    const responder = buildResponder(this.env, {
+      logger: this.logger,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    });
     const runner = new ConversationRunner({
       store: new SqlConversationStore(this.ctx.storage.sql),
       channel,

@@ -67,6 +67,7 @@ export interface DayBucket {
   errors: number;
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens: number;
   estimatedCostUsd: number;
 }
 
@@ -75,10 +76,11 @@ export interface DailySummary {
   totals: DayBucket;
   byPackage: Record<string, DayBucket>;
   byModel: Record<string, DayBucket>;
+  byEnvironment: Record<string, DayBucket>;
 }
 
 function emptyBucket(): DayBucket {
-  return { calls: 0, errors: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 };
+  return { calls: 0, errors: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, estimatedCostUsd: 0 };
 }
 
 function add(bucket: DayBucket, record: UsageRecord): void {
@@ -86,17 +88,20 @@ function add(bucket: DayBucket, record: UsageRecord): void {
   if (record.status === "error") bucket.errors += 1;
   bucket.inputTokens += record.inputTokens;
   bucket.outputTokens += record.outputTokens;
+  bucket.reasoningTokens += record.reasoningTokens;
   bucket.estimatedCostUsd = Math.round((bucket.estimatedCostUsd + record.estimatedCostUsd) * 1e8) / 1e8;
 }
 
 export function summarizeDay(records: UsageRecord[], day: string): DailySummary {
-  const summary: DailySummary = { day, totals: emptyBucket(), byPackage: {}, byModel: {} };
+  const summary: DailySummary = { day, totals: emptyBucket(), byPackage: {}, byModel: {}, byEnvironment: {} };
   for (const record of records) {
     add(summary.totals, record);
     summary.byPackage[record.package] ??= emptyBucket();
     add(summary.byPackage[record.package], record);
     summary.byModel[record.model] ??= emptyBucket();
     add(summary.byModel[record.model], record);
+    summary.byEnvironment[record.environment] ??= emptyBucket();
+    add(summary.byEnvironment[record.environment], record);
   }
   return summary;
 }

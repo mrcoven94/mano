@@ -1,7 +1,7 @@
 // Stats for the public usage page (/stats on withmano.com). Pure
 // functions over meter records and history reports: no I/O, no fetch,
-// no secrets. The site renders checked-in snapshots; the tests prove
-// the snapshots match fresh recorder and collector output.
+// no secrets. The site loads records and history from R2 (see ./r2.js)
+// and folds them through these functions.
 import type { UsageRecord } from "./record.js";
 
 export type { UsageRecord } from "./record.js";
@@ -19,28 +19,41 @@ export interface ModelRow {
   calls: number;
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens: number;
   tokens: number;
   estimatedCostUsd: number;
 }
+
+// Providers that answer without calling a model. Their records stay in
+// the totals and model rows, but Meta shares are shares of model
+// calls, so test doubles are out of the denominator. A package adds
+// its double here in the PR that wires it. The page shows the excluded
+// count, so the denominator is inspectable.
+export const TEST_DOUBLE_PROVIDERS: readonly string[] = ["stand-in"];
 
 export interface UsageSummary {
   calls: number;
   errors: number;
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens: number;
   tokens: number;
   estimatedCostUsd: number;
   metaCalls: number;
   metaTokens: number;
-  // Share of calls and tokens served by Meta models. Null when the
-  // denominator is zero so the page can say none were recorded.
+  testDoubleCalls: number;
+  // Share of model calls and model tokens served by Meta models.
+  // Null when the denominator is zero so the page can say none were
+  // recorded.
   metaCallShare: number | null;
   metaTokenShare: number | null;
   byModel: ModelRow[];
   latencyP50Ms: number | null;
   latencyP95Ms: number | null;
-  // Production means dataClass "real". Everything else is test or CI
-  // traffic and is reported separately, never as production.
+  // Production means environment "production". A stand-in can serve
+  // real traffic and CI can replay real prompts, so data class never
+  // decides this. Everything else is reported separately, never as
+  // production.
   productionCalls: number;
   productionTokens: number;
   productionMetaCallShare: number | null;
@@ -61,13 +74,18 @@ export function summarizeUsage(records: UsageRecord[]): UsageSummary {
   let errors = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let reasoningTokens = 0;
   let estimatedCostUsd = 0;
   let metaCalls = 0;
   let metaTokens = 0;
+  let testDoubleCalls = 0;
+  let testDoubleTokens = 0;
   let productionCalls = 0;
   let productionTokens = 0;
   let productionMetaCalls = 0;
   let productionMetaTokens = 0;
+  let productionTestDoubleCalls = 0;
+  let productionTestDoubleTokens = 0;
   const latencies: number[] = [];
   const days: string[] = [];
   const models = new Map<string, ModelRow>();
@@ -75,33 +93,47 @@ export function summarizeUsage(records: UsageRecord[]): UsageSummary {
     if (record.status === "error") errors += 1;
     inputTokens += record.inputTokens;
     outputTokens += record.outputTokens;
+    reasoningTokens += record.reasoningTokens;
     estimatedCostUsd = roundCost(estimatedCostUsd + record.estimatedCostUsd);
     const tokens = record.inputTokens + record.outputTokens;
+    const isTestDouble = TEST_DOUBLE_PROVIDERS.includes(record.provider);
+    if (isTestDouble) {
+      testDoubleCalls += 1;
+      testDoubleTokens += tokens;
+    }
     if (record.provider === "meta") {
       metaCalls += 1;
       metaTokens += tokens;
     }
-    if (record.dataClass === "real") {
+    if (record.environment === "production") {
       productionCalls += 1;
       productionTokens += tokens;
+      if (isTestDouble) {
+        productionTestDoubleCalls += 1;
+        productionTestDoubleTokens += tokens;
+      }
       if (record.provider === "meta") {
         productionMetaCalls += 1;
         productionMetaTokens += tokens;
       }
     }
-    latencies.push(record.latencyMs);
+    // Latency is the latency of answers. Failed attempts carry no
+    // per-attempt timing, so only ok records feed the percentiles.
+    if (record.status === "ok") latencies.push(record.latencyMs);
     days.push(record.at.slice(0, 10));
     const row = models.get(record.model) ?? {
       model: record.model,
       calls: 0,
       inputTokens: 0,
       outputTokens: 0,
+      reasoningTokens: 0,
       tokens: 0,
       estimatedCostUsd: 0,
     };
     row.calls += 1;
     row.inputTokens += record.inputTokens;
     row.outputTokens += record.outputTokens;
+    row.reasoningTokens += record.reasoningTokens;
     row.tokens += tokens;
     row.estimatedCostUsd = roundCost(row.estimatedCostUsd + record.estimatedCostUsd);
     models.set(record.model, row);
@@ -112,19 +144,21 @@ export function summarizeUsage(records: UsageRecord[]): UsageSummary {
     errors,
     inputTokens,
     outputTokens,
+    reasoningTokens,
     tokens: inputTokens + outputTokens,
     estimatedCostUsd,
     metaCalls,
     metaTokens,
-    metaCallShare: share(metaCalls, records.length),
-    metaTokenShare: share(metaTokens, inputTokens + outputTokens),
+    testDoubleCalls,
+    metaCallShare: share(metaCalls, records.length - testDoubleCalls),
+    metaTokenShare: share(metaTokens, inputTokens + outputTokens - testDoubleTokens),
     byModel: [...models.values()].sort((a, b) => b.calls - a.calls || (a.model < b.model ? -1 : 1)),
     latencyP50Ms: percentile(latencies, 50),
     latencyP95Ms: percentile(latencies, 95),
     productionCalls,
     productionTokens,
-    productionMetaCallShare: share(productionMetaCalls, productionCalls),
-    productionMetaTokenShare: share(productionMetaTokens, productionTokens),
+    productionMetaCallShare: share(productionMetaCalls, productionCalls - productionTestDoubleCalls),
+    productionMetaTokenShare: share(productionMetaTokens, productionTokens - productionTestDoubleTokens),
     range: days.length > 0 ? { from: days[0]!, to: days[days.length - 1]! } : null,
   };
 }
@@ -141,6 +175,18 @@ export function sinceDayForWindow(days: number, today: Date = new Date()): strin
   const cutoff = new Date(today);
   cutoff.setUTCDate(cutoff.getUTCDate() - (days - 1));
   return cutoff.toISOString().slice(0, 10);
+}
+
+// The explicit UTC day list for a "last N days" window ending today.
+// The site fetches exactly these day files from R2.
+export function daysForWindow(days: number, today: Date = new Date()): string[] {
+  const out: string[] = [];
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const day = new Date(today);
+    day.setUTCDate(day.getUTCDate() - i);
+    out.push(day.toISOString().slice(0, 10));
+  }
+  return out;
 }
 
 // Build history file shape, matching history/collect.mjs output.
@@ -187,6 +233,19 @@ export interface HistoryFile {
   days: Record<string, HistoryDay>;
   sessions: Record<string, HistorySession>;
   prs: HistoryPr[];
+}
+
+// Shape guard for the history file the loader reads from R2. A file
+// that fails this is treated as absent, never rendered halfway.
+export function isHistoryFile(value: unknown): value is HistoryFile {
+  if (typeof value !== "object" || value === null) return false;
+  const file = value as Record<string, unknown>;
+  if (typeof file.repo !== "string") return false;
+  if (file.generatedAt !== null && typeof file.generatedAt !== "string") return false;
+  if (typeof file.days !== "object" || file.days === null) return false;
+  if (typeof file.sessions !== "object" || file.sessions === null) return false;
+  if (!Array.isArray(file.prs)) return false;
+  return true;
 }
 
 export interface HistorySummary {
