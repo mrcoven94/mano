@@ -31,7 +31,7 @@ describe("every busy, over-limit and failure reply names 988 and 911 (review rou
 
   it("when the budget denies the turn", async () => {
     const h = makeHarness({ budgetUsd: 0 });
-    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: UNDETECTED, occurredAtMs: h.now }), "webhook");
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "can you look at my letter", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     expect(h.channel.sends.map((s) => s.text)).toEqual([BUSY_BUBBLE]);
     expect(names988And911(h.channel.sends[0].text)).toBe(true);

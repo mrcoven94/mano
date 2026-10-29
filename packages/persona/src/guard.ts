@@ -25,28 +25,35 @@ export interface GuardResult {
 // (muse-spark-1.3, llama3, gpt-4o), and callers add their configured IDs.
 const ALWAYS_NAMES = ["muse spark", "meta ai", "openai", "chatgpt", "gpt", "anthropic", "google ai", "deepmind", "deepseek", "language model", "llms?", "ai model"];
 const ALWAYS_PATTERN = new RegExp(`\\b(?:${ALWAYS_NAMES.join("|")})\\b`, "i");
-const MODEL_ID_PATTERN = /\b(?:muse|spark|llama|gpt|claude|gemini|mistral|grok)[-_.]?(?:[a-z]+[-_.]?)?\d[\w.-]*/i;
+const MODEL_ID_PATTERN = /\b(?:muse|spark|glimmer|llama|gpt|claude|gemini|mistral|grok)[-_. ]?(?:[a-z]+[-_. ]?)?\d[\w.-]*/i;
 
 // Every other model or provider name is a leak in any case, anywhere:
-// Mano never needs to say them. The only exceptions are these ordinary
-// phrases, each covered by a test.
+// Mano never needs to say them. A sentence that also makes an identity
+// statement always leaks. Otherwise only these exact idioms are exempt,
+// each covered by a test.
 const WORD_NAMES = ["muse", "spark", "glimmer", "meta", "llama", "claude", "gemini", "bard", "mistral", "grok", "copilot"];
 const WORD_PATTERN = new RegExp(`\\b(?:${WORD_NAMES.join("|")})\\b`, "i");
-const ORDINARY_PHRASES = /\b(?:(?:a|the) spark|spark of (?:hope|joy|life)|(?:a|the) glimmer|glimmer of hope|muse (?:on|about|over))\b/gi;
+const IDENTITY_STATEMENT =
+  /\b(?:i am|i'm|i’m|im|my name is|this is|powered by|built (?:on|by)|made by|trained by|runs? on|running on|based on|models?|assistant from)\b/i;
+const ORDINARY_PHRASES = /\b(?:spark of hope|glimmer of hope|muse (?:on|about))\b/gi;
 
 function escapePattern(word: string): string {
   return word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// A configured ID also matches without its -contributor suffix.
+// A configured ID also matches without its -contributor suffix, and
+// with any separators between its parts ("muse spark 1.3").
 function idPattern(modelIds: readonly string[]): RegExp | null {
   const ids = [...new Set(modelIds.flatMap((id) => [id, id.replace(/-contributor$/, "")]).filter((id) => id.length > 0))];
-  return ids.length > 0 ? new RegExp(`(?<![\\w.-])(?:${ids.map(escapePattern).join("|")})(?![\\w-])`, "i") : null;
+  if (ids.length === 0) return null;
+  const loose = ids.map((id) => id.split(/[-_.\s]+/).map(escapePattern).join("[-_.\\s\\u2010-\\u2015]*"));
+  return new RegExp(`(?<![\\w.-])(?:${loose.join("|")})(?![\\w-])`, "i");
 }
 
 function sentenceNamesProvider(sentence: string, ids: RegExp | null): boolean {
   if (ALWAYS_PATTERN.test(sentence) || MODEL_ID_PATTERN.test(sentence) || ids?.test(sentence)) return true;
-  return WORD_PATTERN.test(sentence.replace(ORDINARY_PHRASES, " "));
+  if (!WORD_PATTERN.test(sentence)) return false;
+  return IDENTITY_STATEMENT.test(sentence) || WORD_PATTERN.test(sentence.replace(ORDINARY_PHRASES, " "));
 }
 
 const SENTENCE_BREAK = /((?<=[.!?…])\s+|\n+)/;

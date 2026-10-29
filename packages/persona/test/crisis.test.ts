@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CRISIS_LINE, SAFETY_LINE, crisisFloor, holdCrisisLines, isCrisis, namesCrisisLines } from "../src/crisis.js";
+import { CRISIS_LINE, SAFETY_LINE, crisisFloor, holdCrisisLines, isCrisis, mightBeCrisis, namesCrisisLines } from "../src/crisis.js";
 import { SAFE_REPLY, guardReply } from "../src/guard.js";
 
 describe("isCrisis", () => {
@@ -24,7 +24,6 @@ describe("isCrisis", () => {
       "this deadline is killing me",
       "my back is killing me",
       "am I in danger of losing my benefits",
-      "is it not safe to sign this",
       "the rent increase is hurting my budget",
       "hi",
       "I need diapers and I'm broke until friday",
@@ -83,7 +82,6 @@ describe("isCrisis, direct disclosures (review round 3, blocker 1)", () => {
   it("keeps benefits and money worries out", () => {
     for (const text of [
       "I am in danger of losing my benefits.",
-      "my apartment is unsafe and the landlord won't fix it, can I get help with rent",
       "this deadline is killing me",
       "losing SNAP would kill my budget",
     ]) {
@@ -97,5 +95,25 @@ describe("SAFETY_LINE", () => {
     expect(namesCrisisLines(SAFETY_LINE)).toBe(true);
     expect(guardReply(SAFETY_LINE)).toEqual({ text: SAFETY_LINE, changes: [] });
     expect(namesCrisisLines(SAFE_REPLY)).toBe(true);
+  });
+});
+
+describe("explicit danger wins over the benefits exclusion (review round 4, blocker 1b)", () => {
+  it("treats explicit danger as a crisis even next to housing or money words", () => {
+    for (const text of ["I am in immediate danger. My landlord is outside.", "I am not safe in my apartment", "my apartment is unsafe, he is outside"]) {
+      expect(isCrisis(text), text).toBe(true);
+    }
+    expect(isCrisis("I am in danger of losing my benefits.")).toBe(false);
+  });
+});
+
+describe("mightBeCrisis (review round 4, blocker 1a)", () => {
+  it("is broad and has no exclusions", () => {
+    for (const text of ["things at home got really bad tonight", "I'm scared", "he threatened me", "I am not safe in my apartment", "is it safe to stay here"]) {
+      expect(mightBeCrisis(text), text).toBe(true);
+    }
+    for (const text of ["hello", "what does SNAP stand for", "ok thanks"]) {
+      expect(mightBeCrisis(text), text).toBe(false);
+    }
   });
 });

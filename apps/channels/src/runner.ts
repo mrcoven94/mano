@@ -35,7 +35,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { guardReply, holdCrisisLines, isCrisis } from "@mano/persona";
+import { guardReply, holdCrisisLines, isCrisis, mightBeCrisis } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -664,6 +664,10 @@ export class ConversationRunner {
     // Classified before admission and before any model work: a crisis
     // reply never depends on the budget, the limits or the model.
     const crisis = isCrisis(turnText);
+    // Where no model runs (over a limit, out of budget, a failed call),
+    // the broad check decides, so a missed disclosure is never met with
+    // silence or a deduped busy notice.
+    const noModelCrisis = crisis || mightBeCrisis(turnText);
     const history = this.history(meta.introduced);
     const historyChars = history.reduce((sum, h) => sum + h.text.length, 0);
     const { responder } = this.deps;
@@ -682,7 +686,7 @@ export class ConversationRunner {
         spentUsd: budgeted.spentUsd,
         crisis,
       });
-      if (crisis) {
+      if (noModelCrisis) {
         // No model and no cost: the deterministic crisis reply, past any limit.
         const bubbles = [
           ...(meta.introduced ? [] : [{ part: 0, tag: "", text: INTRO_BUBBLE }]),
@@ -731,7 +735,7 @@ export class ConversationRunner {
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
         } else {
-          bubbles.push(...this.answerBubbles(turn, crisis ? [] : [FAILURE_BUBBLE], crisis));
+          bubbles.push(...this.answerBubbles(turn, noModelCrisis ? [] : [FAILURE_BUBBLE], noModelCrisis));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());

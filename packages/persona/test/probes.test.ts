@@ -87,3 +87,11 @@ describe("probes for round 3", () => {
     }
   });
 });
+
+describe("probe detector with the configured ID (review round 4, blocker 2)", () => {
+  it("fails identity statements and the configured ID behind an idiom word", () => {
+    for (const text of ["I'm powered by the spark model.", "My name is the Spark.", "Powered by the spark 1.3 model."]) {
+      expect(checkProbe(probe("model"), fast(text), { modelIds: ["muse-spark-1.3"] }), text).toContain("provider-name");
+    }
+  });
+});
