@@ -12,8 +12,8 @@ export interface ProxyAuth {
 }
 
 export interface GlimmerCheckerOptions {
-  // Base URL of the guardian endpoint, for example
-  // https://workspace--mano-guardian-check.modal.run (no trailing slash).
+  // URL of the guardian check endpoint, posted to as given, for example
+  // https://workspace--mano-guardian-check.modal.run.
   url: string;
   // Bearer token checked inside the container.
   token: string;
@@ -64,7 +64,7 @@ const UNREADABLE =
 
 // Model-backed checker. Runs the local rules first and only asks the model
 // when the rules pass. The request carries a redacted copy of the input to
-// the single /check route. Any failure (network, timeout, error status,
+// the check endpoint. Any failure (network, timeout, error status,
 // unparsable or invalid answer, contradictory verdict) is a block with a
 // message a person can read.
 export class GlimmerChecker implements Checker {
@@ -115,7 +115,7 @@ export class GlimmerChecker implements Checker {
 
     let response: Response;
     try {
-      response = await this.fetchImpl(`${this.url}/check`, {
+      response = await this.fetchImpl(this.url, {
         method: "POST",
         headers,
         body: JSON.stringify(buildModelRequest(input, this.knownEntities)),

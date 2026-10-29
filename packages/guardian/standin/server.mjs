@@ -7,7 +7,7 @@
 //     [--mode pass|fix|block|bad-json|error|slow|contradictory|dup-keys]
 //     [--require-token TOKEN] [--delay-ms N]
 //
-// Prints "STANDIN_READY <url>" on stdout once listening.
+// Prints "STANDIN_READY <url>" on stdout once listening, with the /check path.
 import http from "node:http";
 
 const args = process.argv.slice(2);
@@ -82,5 +82,5 @@ const server = http.createServer((req, res) => {
 server.listen(port, "127.0.0.1", () => {
   const address = server.address();
   const actual = typeof address === "object" && address ? address.port : port;
-  console.log(`STANDIN_READY http://127.0.0.1:${actual}`);
+  console.log(`STANDIN_READY http://127.0.0.1:${actual}/check`);
 });

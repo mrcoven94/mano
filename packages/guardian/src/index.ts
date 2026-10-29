@@ -14,8 +14,8 @@
  * for the model checker, and use glimmerCheckerFromEnv(). A
  * half-configured endpoint blocks everything instead of silently
  * dropping to rules-only. With no endpoint, run the local stand-in:
- * node standin/server.mjs prints STANDIN_READY with a URL that serves
- * the single /check route in --mode
+ * node standin/server.mjs prints STANDIN_READY with the URL of its
+ * single check route; it answers in --mode
  * pass|fix|block|bad-json|error|slow|contradictory|dup-keys.
  *
  * Test it: pnpm --filter @mano/guardian check (tsc plus vitest: unit

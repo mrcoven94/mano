@@ -68,7 +68,7 @@ describe("GlimmerChecker", () => {
       string,
       RequestInit,
     ];
-    expect(calledUrl).toBe("https://guardian.example.com/check");
+    expect(calledUrl).toBe("https://guardian.example.com");
     expect(init.method).toBe("POST");
     expect(init.headers).toMatchObject({
       Authorization: "Bearer token",
