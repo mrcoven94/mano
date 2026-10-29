@@ -41,6 +41,7 @@ export type {
   Origin,
   SourceKind,
   Verdict,
+  WarmState,
 } from "./types.js";
 export { RulesChecker } from "./rules.js";
 export {

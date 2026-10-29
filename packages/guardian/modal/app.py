@@ -12,7 +12,9 @@
 # authenticated check or warm-up arrives. Both scale to zero when idle.
 #
 # A POST of {"warm": true} starts the model and keeps it up for
-# WARM_HOLD_SECONDS, so an approval minutes later finds it ready. The deploy
+# WARM_HOLD_SECONDS, so an approval minutes later finds it ready. Its answer
+# says whether the model is loaded yet: the holding call writes a heartbeat
+# that the web function reads. The deploy
 # sets MANO_GUARDIAN_MIN_CONTAINERS=1 to keep one GPU up all the time.
 import hmac
 import json
@@ -36,6 +38,7 @@ GPU_TIMEOUT_SECONDS = 1800
 # A warm-up call hands the rest of its hold to a fresh call well before
 # Modal stops it at GPU_TIMEOUT_SECONDS.
 WARM_ROTATE_SECONDS = GPU_TIMEOUT_SECONDS - 300
+READY_WITHIN_SECONDS = 20
 
 # The model writes a short review before its verdict. Asked for the verdict
 # first, it passed planted instructions it caught once it reviewed first.
@@ -91,6 +94,12 @@ except ImportError:  # pragma: no cover
 app = modal.App("mano-guardian")
 
 cache = modal.Volume.from_name("mano-guardian-cache", create_if_missing=True)
+# Keyed by app id, so a `modal serve` copy never reports production ready.
+state = modal.Dict.from_name("mano-guardian-state", create_if_missing=True)
+
+
+def beat_key() -> str:
+    return f"warm_beat:{app.app_id}"
 # Modal finds the image's Python as `python`; this image ships vLLM under
 # /usr/bin/python3 only, and add_python would install a second Python without
 # vLLM. Its `vllm serve` entrypoint would wrap Modal's own runner, so clear it.
@@ -126,10 +135,11 @@ class WarmHold:
     keeps the container up. A warm-up while one is held only moves the
     deadline, so warm-ups never take more than one input slot."""
 
-    def __init__(self, clock=time.monotonic, sleep=time.sleep) -> None:
+    def __init__(self, clock=time.monotonic, sleep=time.sleep, beat=lambda: None):
         self._lock = threading.Lock()
         self._clock = clock
         self._sleep = sleep
+        self._beat = beat
         self._until = 0.0
         self._holding = False
 
@@ -151,7 +161,13 @@ class WarmHold:
                 if left <= 0 or life <= 0:
                     self._holding = False
                     return max(left, 0.0)
+            self._beat()
             self._sleep(min(left, life, 5.0))
+
+
+def is_ready(beat_at: float | None, now: float) -> bool:
+    """A model counts as ready while its warm hold has beaten recently."""
+    return beat_at is not None and 0 <= now - beat_at < READY_WITHIN_SECONDS
 
 
 def server_info() -> dict[str, dict[str, str]]:
@@ -256,7 +272,13 @@ class Guardian:
             generation_config="auto",
         )
         self.engine_lock = threading.Lock()
-        self.warm_hold = WarmHold()
+        self.warm_hold = WarmHold(beat=self.beat)
+
+    def beat(self) -> None:
+        try:
+            state.put(beat_key(), time.time())
+        except Exception as error:  # a missed beat only delays readiness
+            print(f"warm heartbeat failed: {error!r}")
 
     @modal.method()
     def warm(self, seconds: float = WARM_HOLD_SECONDS) -> None:
@@ -301,7 +323,10 @@ async def check(request: Request) -> JSONResponse:
     body = await request.json()
     if body == {"warm": True}:
         await Guardian().warm.spawn.aio()
-        return JSONResponse(status_code=202, content={"warming": True})
+        ready = is_ready(await state.get.aio(beat_key()), time.time())
+        return JSONResponse(
+            status_code=202, content={"warming": True, "ready": ready}
+        )
     if not isinstance(body, dict):
         return JSONResponse(status_code=400, content={"error": "bad check input"})
     return await Guardian().complete.remote.aio(body)

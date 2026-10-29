@@ -114,6 +114,21 @@ class WarmUps(unittest.TestCase):
         ref.append(app.WarmHold(clock=fake.clock, sleep=fake.sleep))
         return ref[0], fake
 
+    def test_the_hold_beats_while_it_holds(self):
+        ref = []
+        fake = FakeTime(ref, [])
+        beats = []
+        ref.append(app.WarmHold(clock=fake.clock, sleep=fake.sleep, beat=lambda: beats.append(fake.now)))
+        ref[0].hold(30, app.WARM_ROTATE_SECONDS)
+        self.assertEqual(beats[0], 0)
+        self.assertTrue(all(b - a <= 5 for a, b in zip(beats, beats[1:])))
+        self.assertLess(fake.now - beats[-1], app.READY_WITHIN_SECONDS)
+
+    def test_ready_only_while_the_heartbeat_is_fresh(self):
+        self.assertFalse(app.is_ready(None, 100.0))
+        self.assertTrue(app.is_ready(95.0, 100.0))
+        self.assertFalse(app.is_ready(100.0 - app.READY_WITHIN_SECONDS, 100.0))
+
     def test_a_warm_up_during_a_hold_only_moves_the_deadline(self):
         hold, fake = self.make([minutes(4)])
         self.assertEqual(hold.hold(app.WARM_HOLD_SECONDS, app.WARM_ROTATE_SECONDS), 0)
