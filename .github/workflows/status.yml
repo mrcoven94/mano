@@ -22,6 +22,7 @@ jobs:
       - run: node scripts/status.mjs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STATUS_SANDBOX_PORTAL_URL: ${{ vars.SANDBOX_PORTAL_URL }}
       - uses: peter-evans/create-pull-request@v7
         with:
           branch: status/refresh-table

@@ -10,7 +10,7 @@ Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026
 
 - Text Mano at (801) 920-3370. The current number is always on the site.
 - Visit the site: [withmano.com](https://withmano.com).
-- The resident app (iOS, Android, web) is in progress. Until it ships, ask for early access at [hello@withmano.com](mailto:hello@withmano.com?subject=Mano%20early%20access).
+- The resident app (iOS, Android, web) is in progress.
 
 Demo submissions go to our own sandbox agency portal, our own phone lines and our own fax number. Synthetic people only, never real resident data.
 
@@ -25,7 +25,7 @@ flowchart LR
     agent --> forms[Forms and renewals]
     agent --> gateway[Action gateway: decide, approve, act]
     gateway --> portal[Sandbox agency portal]
-    gateway --> phone[Phone and fax]
+    gateway --> phone[Phone and fax, in progress]
     agent <--> protocol[Open protocol]
     protocol <--> staff[Staff agent: shared cases only]
 ```
@@ -36,9 +36,9 @@ flowchart LR
 | Piece | Status | URL | Last deploy |
 | --- | --- | --- | --- |
 | Site | live | https://withmano.com | none |
-| Sandbox portal | live | https://mano-sandbox-portal.scholarfund.workers.dev | none |
+| Sandbox portal | in progress | [Deployments panel](https://github.com/mrcoven94/mano/deployments) | none |
 | Engine | in progress | not deployed yet | none |
-| Channels | in progress | not deployed yet | none |
+| Channels | live | https://text.withmano.com/health | none |
 | Guardian | in progress | not deployed yet | none |
 | Quality | in progress | not deployed yet | none |
 <!-- status:end -->
@@ -74,8 +74,9 @@ Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. To
 | --- | --- | --- |
 | `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel | live |
 | `apps/sandbox-portal` | The fake state benefits portal every demo submits to, on Cloudflare Workers | live |
-| `apps/engine` | The agent engine: one agent per person and per organization, the action gateway, channels and phone | landing during the hackathon |
-| `apps/channels` | Texting over iMessage and SMS | landing during the hackathon |
+| `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway | landing during the hackathon |
+| `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text | live |
+| `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits | live |
 | `packages/protocol` | The open message format agents use to work a case together | landing during the hackathon |
 | `packages/guardian` | The checker that reviews each action before it runs | landing during the hackathon |
 | `packages/quality` | The nightly answer-quality bench | landing during the hackathon |

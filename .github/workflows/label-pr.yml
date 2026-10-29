@@ -7,7 +7,7 @@ on:
     types: [opened, edited, synchronize]
 permissions:
   issues: write
-  pull-requests: read
+  pull-requests: write
 jobs:
   label:
     runs-on: ubuntu-latest

@@ -9,10 +9,17 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# Serialize deploys so two pushes cannot deploy over each other. Never cancel: a started deploy runs to the end.
+concurrency:
+  group: deploy-channels
+  cancel-in-progress: false
 jobs:
   deploy:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment:
+      name: channels-production
+      url: https://text.withmano.com/health
     defaults:
       run:
         working-directory: apps/channels
@@ -45,6 +52,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: pnpm
       - run: pnpm install --no-frozen-lockfile
         working-directory: .
       - run: pnpm --filter channels --filter @mano/channels run check

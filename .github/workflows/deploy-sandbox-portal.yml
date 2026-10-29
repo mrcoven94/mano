@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: sandbox-portal-production
-      url: https://mano-sandbox-portal.scholarfund.workers.dev
+      url: ${{ vars.SANDBOX_PORTAL_URL }}
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
