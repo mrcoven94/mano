@@ -13,11 +13,14 @@ import { colors, tapTarget, type } from "../lib/theme";
 export default function LanguageScreen() {
   const s = useStrings();
   const { language, setLanguage } = useLanguage();
-  const { client, session } = useAuth();
+  const { client, session, generation, isCurrentGeneration } = useAuth();
 
   const pick = async (code: Language): Promise<void> => {
     await setLanguage(code);
-    if (session) await syncReminders(code, client, session).catch(() => {});
+    if (session) {
+      const gen = generation;
+      await syncReminders(code, client, session, () => isCurrentGeneration(gen)).catch(() => {});
+    }
   };
 
   const options: { code: Language; label: string }[] = [

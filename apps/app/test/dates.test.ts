@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { daysUntil, formatDate } from "../lib/dates";
+import { daysUntil, formatDate, msUntilExpiry } from "../lib/dates";
 
 describe("dates", () => {
   it("counts whole days up", () => {
@@ -14,5 +14,12 @@ describe("dates", () => {
     expect(formatDate("2026-11-15T17:00:00.000Z", "en")).toContain("2026");
     expect(formatDate("2026-11-15T17:00:00.000Z", "es")).toContain("2026");
     expect(formatDate("not-a-date", "en")).toBe("not-a-date");
+  });
+
+  it("measures the session time left for the expiry timer", () => {
+    const now = new Date("2026-10-28T12:00:00.000Z").getTime();
+    expect(msUntilExpiry("2026-10-28T13:00:00.000Z", now)).toBe(3_600_000);
+    expect(msUntilExpiry("2026-10-28T11:59:00.000Z", now)).toBeLessThan(0);
+    expect(msUntilExpiry("not-a-date", now)).toBe(0);
   });
 });

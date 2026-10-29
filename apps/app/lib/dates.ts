@@ -13,6 +13,12 @@ export function formatDate(iso: string, language: Language): string {
   }).format(date);
 }
 
+export function msUntilExpiry(expiresAt: string, nowMs = Date.now()): number {
+  const at = new Date(expiresAt).getTime();
+  if (Number.isNaN(at)) return 0;
+  return at - nowMs;
+}
+
 export function daysUntil(iso: string, nowMs = Date.now()): number {
   const at = new Date(iso).getTime();
   if (Number.isNaN(at)) return 0;

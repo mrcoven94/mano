@@ -1,17 +1,20 @@
 // One document in full. Share saves a copy through the system sheet;
-// the bytes shown are the bytes the agent holds.
+// the bytes shown are the bytes the agent holds. Links in the preview
+// go through the engine's link check before they open anywhere.
 
 import { useCallback, useState } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { File, Paths } from "expo-file-system";
+import * as Linking from "expo-linking";
 import * as Sharing from "expo-sharing";
-import { DocPreview, shortHash } from "../../components/doc";
+import { DocPreview } from "../../components/doc";
+import { shortHash } from "../../lib/doc-show";
 import { Body, Card, ErrorView, GhostBtn, LoadingView, Muted, Screen, Title } from "../../components/ui";
 import { b64decode } from "../../lib/base64";
 import type { ApprovalDocument } from "../../lib/api/types";
 import { AuthError } from "../../lib/api/types";
-import { useAuth } from "../../lib/auth";
+import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { trackCacheFile } from "../../lib/cache-files";
 import { useStrings } from "../../lib/i18n";
 import { colors, type } from "../../lib/theme";
@@ -23,10 +26,12 @@ export default function DocumentViewer() {
   const [doc, setDoc] = useState<ApprovalDocument | null>(null);
   const [failed, setFailed] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [linkBlocked, setLinkBlocked] = useState(false);
 
   const load = useCallback(async () => {
     if (!session) return;
     setFailed(false);
+    setLinkBlocked(false);
     try {
       setDoc(await client.downloadDocument(session, id ?? ""));
     } catch (err) {
@@ -44,8 +49,33 @@ export default function DocumentViewer() {
     }, [load]),
   );
 
+  // The loaded bytes belong to the session. When it ends the viewer
+  // forgets them at once, even before the route gate moves away.
+  useClearOnSignOut(() => {
+    setDoc(null);
+    setLinkBlocked(false);
+  });
+
+  const handleLink = useCallback(
+    async (url: string) => {
+      if (!session) return;
+      try {
+        const verdict = await client.checkLink(session, url);
+        if (!verdict.allowed) {
+          setLinkBlocked(true);
+          return;
+        }
+        await Linking.openURL(url);
+      } catch {
+        // If the safety check itself fails, the link stays shut.
+        setLinkBlocked(true);
+      }
+    },
+    [client, session],
+  );
+
   const share = async (): Promise<void> => {
-    if (!doc || Platform.OS === "web") return;
+    if (!doc || !session || Platform.OS === "web") return;
     setSharing(true);
     try {
       if (!(await Sharing.isAvailableAsync())) return;
@@ -77,8 +107,13 @@ export default function DocumentViewer() {
               {s.docHash}: {shortHash(doc.hash)}
             </Muted>
             <View style={styles.preview}>
-              <DocPreview doc={doc} />
+              <DocPreview
+                doc={doc}
+                cacheStore={personStore ?? undefined}
+                onLink={(url) => void handleLink(url)}
+              />
             </View>
+            {linkBlocked ? <Muted style={styles.warn}>{s.linkBlocked}</Muted> : null}
           </Card>
           {Platform.OS !== "web" ? (
             <GhostBtn title={sharing ? s.sending : s.share} onPress={() => void share()} />
@@ -94,4 +129,5 @@ export default function DocumentViewer() {
 const styles = StyleSheet.create({
   name: { color: colors.text, marginBottom: 4 },
   preview: { marginTop: 12 },
+  warn: { color: colors.alert, marginTop: 8 },
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AuthError, type Session } from "../lib/api/types";
+import { AuthError, UnreconciledSendError, type Session } from "../lib/api/types";
 import { MemoryStore } from "../lib/kv";
 import { Outbox } from "../lib/queue";
 
@@ -129,5 +129,32 @@ describe("Outbox", () => {
     for (let i = 0; i < 20; i++) await outbox.enqueue("alice", `m-${i}`, []);
     await expect(outbox.enqueue("alice", "overflow", [])).rejects.toThrow("outbox is full");
     expect(await outbox.list()).toHaveLength(20);
+  });
+
+  it("holds an unreconciled send until the person retries it", async () => {
+    const store = new MemoryStore();
+    const outbox = new Outbox(store);
+    const first = await outbox.enqueue("alice", "one", []);
+    await outbox.enqueue("alice", "two", []);
+    const sent: string[] = [];
+    const report = await outbox.flush(ALICE, async (item) => {
+      if (item.id === first.id) throw new UnreconciledSendError(item.id);
+      sent.push(item.text);
+    });
+    expect(report.held).toEqual([first.id]);
+    expect(sent).toHaveLength(0);
+    // The next automatic flush leaves the held item alone.
+    const again = await outbox.flush(ALICE, async (item) => {
+      sent.push(item.text);
+    });
+    expect(sent).toHaveLength(0);
+    expect(again.kept).toContain(first.id);
+    // The person's own retry releases it, in order.
+    await outbox.release(first.id);
+    const retry = await outbox.flush(ALICE, async (item) => {
+      sent.push(item.text);
+    });
+    expect(sent).toEqual(["one", "two"]);
+    expect(retry.held).toEqual([]);
   });
 });

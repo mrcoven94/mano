@@ -15,7 +15,7 @@ import {
   MAIL_REPLY,
   MARIA,
   PAYSTUB_REPLY,
-  approvalNoticeText,
+  approvalNoticePdfB64,
   approvalsReply,
   deadlinesReply,
   electricBillText,
@@ -305,14 +305,14 @@ export class StandInClient implements ManoClient {
           bytesB64: first.bytesB64,
         });
       }
-      const noticeB64 = b64encode(utf8ToBytes(approvalNoticeText()));
+      const noticeB64 = approvalNoticePdfB64();
       this.docs.unshift({
         meta: {
           id: "doc-approval-notice",
-          name: "County approval notice.txt",
+          name: "County approval notice.pdf",
           hash: await this.sha256B64(noticeB64),
-          size: utf8ToBytes(approvalNoticeText()).length,
-          mimeType: "text/plain",
+          size: Math.ceil((noticeB64.length * 3) / 4),
+          mimeType: "application/pdf",
           createdAt: this.iso(),
         },
         bytesB64: noticeB64,
@@ -477,5 +477,13 @@ export class StandInClient implements ManoClient {
     this.seed();
     this.grants = this.grants.filter((g) => !(g.recipient === recipient && g.caseId === caseId));
     return { status: "completed", reason: null };
+  }
+
+  async checkLink(session: Session, url: string): Promise<{ allowed: boolean; reason: string | null }> {
+    await this.wait();
+    this.checkSession(session);
+    // Recorded verdicts: encrypted pages load, everything else stays shut.
+    if (/^https:\/\/[^/\s]+/i.test(url)) return { allowed: true, reason: null };
+    return { allowed: false, reason: "Blocked in the demo." };
   }
 }

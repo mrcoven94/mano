@@ -8,7 +8,7 @@ import { Badge, Card, DemoBanner, EmptyView, ErrorView, LoadingView, Muted, Scre
 import type { Deadline } from "../../lib/api/types";
 import { AuthError, EngineGapError } from "../../lib/api/types";
 import { Body } from "../../components/ui";
-import { useAuth } from "../../lib/auth";
+import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { daysUntil, formatDate } from "../../lib/dates";
 import { useLanguage, useStrings } from "../../lib/i18n";
 import { syncReminders } from "../../lib/notify";
@@ -26,7 +26,7 @@ export default function Deadlines() {
   const s = useStrings();
   const { language } = useLanguage();
   const router = useRouter();
-  const { client, session, mode, signOut } = useAuth();
+  const { client, session, mode, generation, isCurrentGeneration, signOut } = useAuth();
   const [deadlines, setDeadlines] = useState<Deadline[] | null>(null);
   const [gap, setGap] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -38,7 +38,8 @@ export default function Deadlines() {
     try {
       const all = await client.listDeadlines(session);
       setDeadlines([...all].sort((a, b) => a.dueAt.localeCompare(b.dueAt)));
-      await syncReminders(language, client, session).catch(() => {});
+      const gen = generation;
+      await syncReminders(language, client, session, () => isCurrentGeneration(gen)).catch(() => {});
     } catch (err) {
       if (err instanceof AuthError) {
         await signOut();
@@ -47,7 +48,13 @@ export default function Deadlines() {
       if (err instanceof EngineGapError) setGap(true);
       else setFailed(true);
     }
-  }, [client, session, signOut, language]);
+  }, [client, session, signOut, language, generation, isCurrentGeneration]);
+
+  useClearOnSignOut(() => {
+    setDeadlines(null);
+    setGap(false);
+    setFailed(false);
+  });
 
   useFocusEffect(
     useCallback(() => {

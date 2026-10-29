@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AuthError, type ManoClient, type Session } from "../lib/api/types";
+import { AuthError, UnreconciledSendError, type ManoClient, type Session } from "../lib/api/types";
 import { MemoryStore } from "../lib/kv";
 import { Outbox } from "../lib/queue";
 import { submitMessage } from "../lib/send";
@@ -50,6 +50,18 @@ describe("submitMessage", () => {
     });
     await expect(submitMessage(client, sessionFor("alice"), outbox, "hi", [])).rejects.toBeInstanceOf(AuthError);
     expect(await outbox.list()).toHaveLength(0);
+  });
+
+  it("reports held sends instead of retrying them", async () => {
+    const outbox = new Outbox(new MemoryStore());
+    const { client } = stubClient(async (opId) => {
+      throw new UnreconciledSendError(opId ?? null);
+    });
+    const report = await submitMessage(client, sessionFor("alice"), outbox, "hi", []);
+    expect(report.sent).toHaveLength(0);
+    expect(report.held).toEqual([report.opId]);
+    const pending = await outbox.list();
+    expect(pending[0]?.held).toBe(true);
   });
 
   it("reuses the same operation ID across a retry", async () => {

@@ -69,17 +69,10 @@ export function renewalPacketText(): string {
   );
 }
 
-export function approvalNoticeText(): string {
-  return (
-    "SPRINGFIELD COUNTY SNAP OFFICE\n" +
-    "Notice of approval - case R-1042\n" +
-    "\n" +
-    "Maria Torres,\n" +
-    "Your SNAP renewal is approved. Your benefits continue with no gap.\n" +
-    "Next renewal: November 2027.\n" +
-    "\n" +
-    "(Synthetic notice for the Mano demo.)\n"
-  );
+// The county answer as a one-page PDF, base64. It carries the same
+// text as the renewal story, so the viewer gets a real render target.
+export function approvalNoticePdfB64(): string {
+  return "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAzMjIgPj4Kc3RyZWFtCkJUIC9GMSAxOCBUZiA3MiA3MjAgVGQgKFNQUklOR0ZJRUxEIENPVU5UWSBTTkFQIE9GRklDRSkgVGogMCAtMzAgVGQgL0YxIDEyIFRmIChOb3RpY2Ugb2YgYXBwcm92YWwgLSBjYXNlIFItMTA0MikgVGogMCAtMzAgVGQgKE1hcmlhIFRvcnJlcywpIFRqIDAgLTIwIFRkIChZb3VyIFNOQVAgcmVuZXdhbCBpcyBhcHByb3ZlZC4gWW91ciBiZW5lZml0cyBjb250aW51ZSB3aXRoIG5vIGdhcC4pIFRqIDAgLTIwIFRkIChOZXh0IHJlbmV3YWw6IE5vdmVtYmVyIDIwMjcuKSBUaiAwIC00MCBUZCAoKFN5bnRoZXRpYyBub3RpY2UgZm9yIHRoZSBNYW5vIGRlbW8uKSkgVGogRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDA2MTQgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo2ODQKJSVFT0Y=";
 }
 
 export function snapLetterText(): string {

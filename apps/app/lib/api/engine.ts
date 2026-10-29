@@ -19,7 +19,7 @@ import type {
   RevokeResult,
   Session,
 } from "./types";
-import { AuthError, EngineGapError, StaleApprovalError } from "./types";
+import { AuthError, EngineGapError, StaleApprovalError, UnreconciledSendError } from "./types";
 
 export interface EngineOptions {
   baseUrl: string;
@@ -109,16 +109,27 @@ export class EngineClient implements ManoClient {
   }
 
   async sendMessage(session: Session, text: string, attachments: NewAttachment[], opId?: string): Promise<ChatMessage> {
-    for (const a of attachments) {
-      await this.uploadDocument(session, a.name, a.mimeType, a.bytesB64, opId);
+    // The engine ignores clientOpId today, so no failure here can be
+    // reconciled: anything past an auth rejection holds for the
+    // person's own retry instead of resending blindly. The op ID still
+    // travels so a repeat dedupes once the engine honors it (PR 2).
+    try {
+      for (const a of attachments) {
+        await this.uploadDocument(session, a.name, a.mimeType, a.bytesB64, opId);
+      }
+      const note = attachments.length > 0 ? `\n\n[attached: ${attachments.map((a) => a.name).join(", ")}]` : "";
+      const res = await this.call(session, `/api/persons/${encodeURIComponent(session.personId)}/chat`, {
+        method: "POST",
+        body: JSON.stringify({ message: `${text}${note}`, clientOpId: opId ?? null }),
+      });
+      return await this.chatReply(res);
+    } catch (err) {
+      if (err instanceof AuthError || err instanceof EngineGapError) throw err;
+      throw new UnreconciledSendError(opId ?? null);
     }
-    const note = attachments.length > 0 ? `\n\n[attached: ${attachments.map((a) => a.name).join(", ")}]` : "";
-    // The engine ignores clientOpId today; it travels so a retried send
-    // can be deduped once the chat route honors it.
-    const res = await this.call(session, `/api/persons/${encodeURIComponent(session.personId)}/chat`, {
-      method: "POST",
-      body: JSON.stringify({ message: `${text}${note}`, clientOpId: opId ?? null }),
-    });
+  }
+
+  private async chatReply(res: Response): Promise<ChatMessage> {
     const out = await this.json<{ reply: string }>(res);
     return {
       id: `live-${Date.now()}`,
@@ -240,6 +251,12 @@ export class EngineClient implements ManoClient {
 
   async listGrants(_session: Session): Promise<Grant[]> {
     throw new EngineGapError("GET /api/persons/:id/consents");
+  }
+
+  async checkLink(session: Session, url: string): Promise<{ allowed: boolean; reason: string | null }> {
+    const res = await this.call(session, "/api/check-link", { method: "POST", body: JSON.stringify({ url }) });
+    const out = await this.json<{ allowed: boolean; reason?: string }>(res);
+    return { allowed: out.allowed === true, reason: out.reason ?? null };
   }
 
   async revokeGrant(session: Session, recipient: string, caseId: string): Promise<RevokeResult> {

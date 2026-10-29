@@ -1,10 +1,11 @@
 // App entry: loads the withmano.com typefaces, resolves the engine
 // (failing loudly at start when neither an engine URL nor the demo
-// flag is set), mounts the language and session providers, and routes
-// notification taps to the right screen.
+// flag is set), mounts the language and session providers, guards
+// every route on the session, and routes notification taps to the
+// right screen.
 
 import { useEffect, useMemo } from "react";
-import { Stack, useRouter } from "expo-router";
+import { Stack, useRouter, useSegments } from "expo-router";
 import { Geist_400Regular, Geist_500Medium, Geist_700Bold, useFonts as useGeist } from "@expo-google-fonts/geist";
 import {
   SchibstedGrotesk_500Medium,
@@ -16,11 +17,12 @@ import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Body, Title } from "../components/ui";
-import { AuthProvider } from "../lib/auth";
+import { AuthProvider, useAuth } from "../lib/auth";
 import { resolveClient, type ResolvedClient } from "../lib/client";
 import { easProjectId } from "../lib/config";
 import { LanguageProvider, useStrings } from "../lib/i18n";
 import { ensureNotificationSetup } from "../lib/notify";
+import { sessionRouteGuard } from "../lib/route-guard";
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -42,6 +44,22 @@ function FatalConfig() {
       <Body>{s.configErrorBody}</Body>
     </SafeAreaView>
   );
+}
+
+function SessionGate() {
+  const { status } = useAuth();
+  const segments = useSegments();
+  const router = useRouter();
+  useEffect(() => {
+    // Dismissing drops every detail screen from the stack; the replace
+    // then lands on sign-in even when the app booted straight into a
+    // deep link with nothing to dismiss.
+    if (sessionRouteGuard(status, segments[0]) === "sign-in") {
+      router.dismissAll();
+      router.replace("/(auth)/sign-in");
+    }
+  }, [status, segments, router]);
+  return null;
 }
 
 function NotificationsGate() {
@@ -82,6 +100,7 @@ export default function RootLayout() {
   return (
     <LanguageProvider>
       <AuthProvider initial={clientState.resolved}>
+        <SessionGate />
         <NotificationsGate />
         <StatusBar style="dark" />
         <Stack screenOptions={{ headerShown: false }}>

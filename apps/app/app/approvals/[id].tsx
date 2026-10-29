@@ -1,21 +1,23 @@
 // One approval in full: everything the executor will use, the exact
 // document, and both binding hashes. Approve stays disabled until the
-// current document has loaded and matched its hash, the request parses
-// to a known shape, and the document has actually been shown. Every
-// loads clears the last state, and stale loads cannot overwrite it.
+// gate in lib/approve-gate says yes: pending, current, loaded,
+// hash-matched, actually rendered and a known request shape. Every
+// load clears the last state, and stale loads cannot overwrite it.
 
 import { useCallback, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import * as Linking from "expo-linking";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Badge, Body, Btn, Card, ErrorView, LoadingView, Muted, Screen, Title } from "../../components/ui";
-import { DocPreview, currentPlatform, shortHash, sniffMime } from "../../components/doc";
+import { DocPreview, currentPlatform } from "../../components/doc";
 import { parseActionView, type ParsedAction } from "../../lib/action-view";
+import { approvalGate } from "../../lib/approve-gate";
 import { approveOutcome } from "../../lib/approve-result";
 import type { ActionType, Approval, ApprovalDocument, ApproveResult } from "../../lib/api/types";
 import { AuthError, StaleApprovalError } from "../../lib/api/types";
-import { useAuth } from "../../lib/auth";
+import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { formatDate } from "../../lib/dates";
-import { canShowInApp } from "../../lib/doc-show";
+import { canShowBytes, shortHash } from "../../lib/doc-show";
 import { useLanguage, useStrings } from "../../lib/i18n";
 import { syncReminders } from "../../lib/notify";
 import { colors, type } from "../../lib/theme";
@@ -35,11 +37,13 @@ export default function ApprovalDetail() {
   const { language } = useLanguage();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { client, session, mode, signOut } = useAuth();
+  const { client, session, mode, personStore, generation: sessionGeneration, isCurrentGeneration, signOut } = useAuth();
   const [approval, setApproval] = useState<Approval | null>(null);
   const [action, setAction] = useState<ParsedAction | null>(null);
   const [doc, setDoc] = useState<ApprovalDocument | null>(null);
   const [docState, setDocState] = useState<DocState>("loading");
+  const [docShown, setDocShown] = useState(false);
+  const [linkBlocked, setLinkBlocked] = useState(false);
   const [receipt, setReceipt] = useState<ApproveResult | null>(null);
   const [failed, setFailed] = useState(false);
   const [stale, setStale] = useState(false);
@@ -56,6 +60,8 @@ export default function ApprovalDetail() {
     setAction(null);
     setDoc(null);
     setDocState("loading");
+    setDocShown(false);
+    setLinkBlocked(false);
     setReceipt(null);
     try {
       const all = await client.listApprovals(session);
@@ -94,6 +100,22 @@ export default function ApprovalDetail() {
     }, [load]),
   );
 
+  // The approval and its document belong to the session. When it ends
+  // the screen forgets them at once, even before the route gate moves
+  // away.
+  useClearOnSignOut(() => {
+    generation.current += 1;
+    setApproval(null);
+    setAction(null);
+    setDoc(null);
+    setDocState("loading");
+    setDocShown(false);
+    setLinkBlocked(false);
+    setReceipt(null);
+    setStale(false);
+    setFailed(false);
+  });
+
   const approve = async (): Promise<void> => {
     if (!session || !approval) return;
     setBusy(true);
@@ -113,7 +135,8 @@ export default function ApprovalDetail() {
         await load();
         return;
       }
-      await syncReminders(language, client, session).catch(() => {});
+      const gen = sessionGeneration;
+      await syncReminders(language, client, session, () => isCurrentGeneration(gen)).catch(() => {});
     } catch (err) {
       if (err instanceof StaleApprovalError) {
         setStale(true);
@@ -128,13 +151,44 @@ export default function ApprovalDetail() {
     }
   };
 
-  const hashMatches =
-    approval && (!approval.documentHash || (doc && doc.id === approval.documentId && doc.hash === approval.documentHash));
-  const shown = approval && (!approval.documentId || (doc && canShowInApp(sniffMime(doc), currentPlatform())));
-  const actionKnown = action && action.kind !== "unknown";
-  const canApprove =
-    approval?.status === "pending" && !stale && !receipt && docState === "ready" && hashMatches && shown && actionKnown && !busy;
+  const hashMatches = Boolean(
+    approval && (!approval.documentHash || (doc && doc.id === approval.documentId && doc.hash === approval.documentHash)),
+  );
+  const viewable = Boolean(approval && doc && canShowBytes(doc.mimeType, doc.bytesB64, currentPlatform()));
+  const actionKnown = Boolean(action && action.kind !== "unknown");
+  const gate = approval
+    ? approvalGate({
+        status: approval.status,
+        stale,
+        decided: receipt !== null,
+        busy,
+        docState,
+        hasDocument: approval.documentId !== null,
+        hashMatches,
+        rendered: docShown,
+        actionKnown,
+      })
+    : { canApprove: false as const, reason: "not-pending" as const };
+  const canApprove = gate.canApprove;
   const outcome = receipt ? approveOutcome(receipt) : null;
+
+  const handleLink = useCallback(
+    async (url: string) => {
+      if (!session) return;
+      try {
+        const verdict = await client.checkLink(session, url);
+        if (!verdict.allowed) {
+          setLinkBlocked(true);
+          return;
+        }
+        await Linking.openURL(url);
+      } catch {
+        // If the safety check itself fails, the link stays shut.
+        setLinkBlocked(true);
+      }
+    },
+    [client, session],
+  );
 
   return (
     <Screen>
@@ -195,13 +249,23 @@ export default function ApprovalDetail() {
                 <Muted>{s.loadingDocument}</Muted>
               ) : doc && hashMatches ? (
                 <View>
-                  <DocPreview doc={doc} />
+                  <DocPreview
+                    doc={doc}
+                    cacheStore={personStore ?? undefined}
+                    onShown={(shown) => setDocShown(shown)}
+                    onLink={(url) => void handleLink(url)}
+                  />
                   <View style={styles.hashRow}>
                     <Muted>
                       {s.docHash}: {shortHash(doc.hash)}
                     </Muted>
                   </View>
-                  {shown ? <Muted style={styles.match}>{s.docHashMatch}</Muted> : <Muted style={styles.warn}>{s.docCannotShow}</Muted>}
+                  {viewable ? (
+                    <Muted style={styles.match}>{s.docHashMatch}</Muted>
+                  ) : (
+                    <Muted style={styles.warn}>{s.docCannotShow}</Muted>
+                  )}
+                  {linkBlocked ? <Muted style={styles.warn}>{s.linkBlocked}</Muted> : null}
                 </View>
               ) : (
                 <Body>{s.staleNote}</Body>
@@ -250,10 +314,11 @@ export default function ApprovalDetail() {
             </Card>
           ) : approval.status === "pending" && !stale ? (
             <View>
-              {docState === "loading" ? <Muted style={styles.note}>{s.loadingDocument}</Muted> : null}
-              {docState === "ready" && !shown ? <Muted style={styles.note}>{s.docCannotShow}</Muted> : null}
-              {docState === "ready" && shown && !actionKnown ? <Muted style={styles.note}>{s.requestUnknown}</Muted> : null}
-              {docState === "ready" && shown && actionKnown ? <Muted style={styles.note}>{s.approveNote}</Muted> : null}
+              {gate.reason === "loading-doc" ? <Muted style={styles.note}>{s.loadingDocument}</Muted> : null}
+              {gate.reason === "not-shown" && !viewable ? <Muted style={styles.note}>{s.docCannotShow}</Muted> : null}
+              {gate.reason === "not-shown" && viewable ? <Muted style={styles.note}>{s.loadingDocument}</Muted> : null}
+              {gate.reason === "unknown-action" ? <Muted style={styles.note}>{s.requestUnknown}</Muted> : null}
+              {gate.reason === "ready" ? <Muted style={styles.note}>{s.approveNote}</Muted> : null}
               <Btn title={busy ? s.approving : s.approve} onPress={() => void approve()} busy={busy} disabled={!canApprove} />
             </View>
           ) : null}

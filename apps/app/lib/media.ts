@@ -3,7 +3,9 @@
 // the file system. Screens call these; the queue and client only see
 // bytes, so tests never touch Expo modules.
 
+import { Platform } from "react-native";
 import { File } from "expo-file-system";
+import { deleteAsync } from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { b64encode } from "./base64";
 
@@ -31,11 +33,23 @@ async function toPicked(
   kind: "photo" | "video",
   index: number,
 ): Promise<PickedMedia> {
+  const bytesB64 = asset.base64 ?? (await fileToB64(asset.uri));
+  // The picker hands us a cache copy; once the bytes are out, the file
+  // goes, so mail photos never linger on the disk outside the outbox.
+  if (Platform.OS === "web") {
+    try {
+      if (asset.uri.startsWith("blob:")) URL.revokeObjectURL(asset.uri);
+    } catch {
+      // Already gone.
+    }
+  } else {
+    await deleteAsync(asset.uri, { idempotent: true }).catch(() => {});
+  }
   return {
     kind,
     name: mediaName(asset, kind, index),
     mimeType: asset.mimeType ?? (kind === "photo" ? "image/jpeg" : "video/mp4"),
-    bytesB64: asset.base64 ?? (await fileToB64(asset.uri)),
+    bytesB64,
     localUri: asset.uri,
   };
 }

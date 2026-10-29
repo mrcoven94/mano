@@ -4,11 +4,13 @@
 //
 // Every item is bound to its resident: a flush under another session
 // drops foreign items instead of sending them, and an auth failure
-// drops the failed item and rethrows so the caller signs out. All
+// drops the failed item and rethrows so the caller signs out. A send
+// whose outcome is unknown holds instead of retrying blindly, which is
+// what would send twice; only the person's own retry releases it. All
 // mutations run through one lock, so a flush can neither overwrite an
 // item enqueued meanwhile nor send one twice.
 
-import { AuthError, type NewAttachment, type Session } from "./api/types";
+import { AuthError, UnreconciledSendError, type NewAttachment, type Session } from "./api/types";
 import type { KeyValue } from "./kv";
 
 export interface QueuedMessage {
@@ -19,12 +21,16 @@ export interface QueuedMessage {
   attachments: NewAttachment[];
   createdAt: string;
   attempts: number;
+  // Set when a send may already have landed. Automatic flushes stop at
+  // a held item; only release() after the person's own retry clears it.
+  held?: boolean;
 }
 
 export interface FlushReport {
   sent: string[];
   kept: string[];
   droppedForeign: string[];
+  held: string[];
 }
 
 const OUTBOX_KEY = "outbox.v2";
@@ -100,9 +106,19 @@ export class Outbox {
     });
   }
 
+  // Releases a held item after the person's own retry. Unknown IDs
+  // are a no-op.
+  async release(id: string): Promise<void> {
+    return this.locked(async () => {
+      const items = await this.read();
+      await this.store.set(OUTBOX_KEY, JSON.stringify(items.map((i) => (i.id === id ? { ...i, held: false } : i))));
+    });
+  }
+
   // Sends owned items in order. The first failure stops the flush and
   // keeps the rest; foreign items are dropped without sending; an auth
-  // failure drops the failed item and rethrows.
+  // failure drops the failed item and rethrows. An unreconciled send
+  // holds its item so later flushes stop at it instead of resending.
   async flush(session: Session, send: (item: QueuedMessage) => Promise<unknown>): Promise<FlushReport> {
     return this.locked(async () => {
       const items = await this.read();
@@ -112,7 +128,12 @@ export class Outbox {
         await this.store.set(OUTBOX_KEY, JSON.stringify(own));
       }
       const sent: string[] = [];
+      const held: string[] = [];
       for (const item of own) {
+        if (item.held === true) {
+          const kept = own.filter((i) => !sent.includes(i.id));
+          return { sent, kept: kept.map((i) => i.id), droppedForeign, held };
+        }
         try {
           await send(item);
         } catch (err) {
@@ -121,17 +142,26 @@ export class Outbox {
             await this.store.set(OUTBOX_KEY, JSON.stringify(rest));
             throw err;
           }
+          if (err instanceof UnreconciledSendError) {
+            const kept = own.filter((i) => !sent.includes(i.id));
+            await this.store.set(
+              OUTBOX_KEY,
+              JSON.stringify(kept.map((i) => (i.id === item.id ? { ...i, attempts: i.attempts + 1, held: true } : i))),
+            );
+            held.push(item.id);
+            return { sent, kept: kept.map((i) => i.id), droppedForeign, held };
+          }
           const kept = own.filter((i) => !sent.includes(i.id));
           await this.store.set(
             OUTBOX_KEY,
             JSON.stringify(kept.map((i) => (i.id === item.id ? { ...i, attempts: i.attempts + 1 } : i))),
           );
-          return { sent, kept: kept.map((i) => i.id), droppedForeign };
+          return { sent, kept: kept.map((i) => i.id), droppedForeign, held };
         }
         sent.push(item.id);
         await this.store.set(OUTBOX_KEY, JSON.stringify(own.filter((i) => !sent.includes(i.id))));
       }
-      return { sent, kept: [], droppedForeign };
+      return { sent, kept: [], droppedForeign, held };
     });
   }
 }

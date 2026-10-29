@@ -148,6 +148,9 @@ export interface ManoClient {
   downloadDocument(session: Session, id: string): Promise<ApprovalDocument>;
   listGrants(session: Session): Promise<Grant[]>;
   revokeGrant(session: Session, recipient: string, caseId: string): Promise<RevokeResult>;
+  // The engine's own link-safety verdict, called from the viewer
+  // before any document link opens anywhere.
+  checkLink(session: Session, url: string): Promise<{ allowed: boolean; reason: string | null }>;
 }
 
 // Thrown when a call needs an engine route that does not exist yet. The
@@ -176,6 +179,20 @@ export class StaleApprovalError extends Error {
     super(`This approval is ${status}; nothing was sent.`);
     this.name = "StaleApprovalError";
     this.status = status;
+  }
+}
+
+// A send whose outcome is unknown: the request may have landed. The
+// outbox holds it for the person's own retry instead of resending it
+// blindly, which is what would send twice. The engine cannot confirm
+// the op yet (coordinated on Engine PR 2); until it can, the op ID
+// travels with every attempt so a repeat is deduped once supported.
+export class UnreconciledSendError extends Error {
+  readonly opId: string | null;
+  constructor(opId: string | null) {
+    super("This send may already have gone through; it is waiting for your retry.");
+    this.name = "UnreconciledSendError";
+    this.opId = opId;
   }
 }
 

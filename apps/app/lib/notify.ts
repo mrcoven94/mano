@@ -64,11 +64,19 @@ export async function refreshReminders(
 }
 
 // Fetches current data and rebuilds reminders. Gaps and failures mean
-// no reminders rather than wrong ones.
-export async function syncReminders(language: Language, client: ManoClient, session: Session): Promise<number> {
+// no reminders rather than wrong ones. The guard runs after the fetch:
+// a fetch that outlived its session schedules nothing, so a sign-out
+// in between cannot resurrect the previous resident's reminders.
+export async function syncReminders(
+  language: Language,
+  client: ManoClient,
+  session: Session,
+  isCurrent?: () => boolean,
+): Promise<number> {
   const [approvals, deadlines] = await Promise.all([
     client.listApprovals(session).catch(() => [] as Approval[]),
     client.listDeadlines(session).catch(() => [] as Deadline[]),
   ]);
+  if (isCurrent && !isCurrent()) return 0;
   return refreshReminders(language, approvals, deadlines);
 }

@@ -11,6 +11,7 @@ export interface SubmitReport {
   opId: string;
   sent: string[];
   kept: string[];
+  held: string[];
 }
 
 export function sessionUsable(session: Session, nowMs = Date.now()): boolean {
@@ -29,5 +30,5 @@ export async function submitMessage(
   const report = await outbox.flush(session, (queued) =>
     client.sendMessage(session, queued.text, queued.attachments, queued.id),
   );
-  return { opId: item.id, sent: report.sent, kept: report.kept };
+  return { opId: item.id, sent: report.sent, kept: report.kept, held: report.held };
 }

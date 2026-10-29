@@ -53,6 +53,13 @@ describe("parseActionView", () => {
     expect(revoke.rows.find((r) => r.label === "Consent")?.value).toBe("revoke");
   });
 
+  it("shows long values in full instead of truncating", async () => {
+    const long = "x".repeat(5000);
+    const parsed = parseActionView(request({ type: "send", payload: { text: long } }));
+    if (parsed.kind === "unknown") throw new Error(`unexpected unknown: ${parsed.reason}`);
+    expect(parsed.rows.find((r) => r.label === "Message")?.value).toBe(long);
+  });
+
   it("renders objects and arrays without losing entries", async () => {
     const parsed = parseActionView(request({ payload: { nested: { a: 1 }, list: [1, 2] } }));
     if (parsed.kind === "unknown") throw new Error(`unexpected unknown: ${parsed.reason}`);

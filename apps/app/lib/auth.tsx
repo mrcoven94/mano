@@ -13,12 +13,14 @@ import type { ResolvedClient } from "./client";
 import { EncryptedStore } from "./cipher";
 import { ExpoCipherFactory } from "./cipher-expo";
 import type { EngineMode, ManoClient, Session } from "./api/types";
+import { msUntilExpiry } from "./dates";
 import { MemoryStore, type KeyValue } from "./kv";
 import { Outbox } from "./queue";
 import { appStore, expoSecureBackend, scrubLegacyKeys, tokenStore } from "./storage";
-import { wipeResidentData } from "./wipe";
+import { signOutStored } from "./signout";
 
 const SESSION_KEY = "session";
+const PERSON_KEY = "person";
 const cipherFactory = new ExpoCipherFactory(expoSecureBackend);
 
 type AuthStatus = "loading" | "signed-out" | "signed-in";
@@ -30,6 +32,10 @@ interface AuthState {
   mode: EngineMode;
   outbox: Outbox | null;
   personStore: KeyValue | null;
+  // Bumps on every sign-in and sign-out. Slow work captures it and
+  // checks isCurrentGeneration before applying results.
+  generation: number;
+  isCurrentGeneration: (generation: number) => boolean;
   signIn: (session: Session) => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -40,12 +46,12 @@ export function sessionExpired(session: Session, nowMs = Date.now()): boolean {
   return new Date(session.expiresAt).getTime() <= nowMs;
 }
 
-function buildPersonStore(session: Session): KeyValue {
+function buildPersonStore(personId: string): KeyValue {
   // The web has no secure storage for the data key, so queued mail lives
   // in memory there and never touches the disk. Native persists it
   // encrypted under the resident's key.
   if (Platform.OS === "web") return new MemoryStore();
-  return new EncryptedStore(appStore, cipherFactory, session.personId);
+  return new EncryptedStore(appStore, cipherFactory, personId);
 }
 
 async function cancelReminders(): Promise<void> {
@@ -59,10 +65,16 @@ export function AuthProvider({ children, initial }: { children: ReactNode; initi
   const [session, setSession] = useState<Session | null>(null);
   const [outbox, setOutbox] = useState<Outbox | null>(null);
   const [personStore, setPersonStore] = useState<KeyValue | null>(null);
+  const [generation, setGeneration] = useState(0);
   const stateRef = useRef({ session, outbox, personStore });
   stateRef.current = { session, outbox, personStore };
+  const generationRef = useRef(0);
+
+  const isCurrentGeneration = useCallback((value: number): boolean => generationRef.current === value, []);
 
   const clearToSignedOut = useCallback(() => {
+    generationRef.current += 1;
+    setGeneration(generationRef.current);
     setSession(null);
     setOutbox(null);
     setPersonStore(null);
@@ -70,33 +82,37 @@ export function AuthProvider({ children, initial }: { children: ReactNode; initi
   }, []);
 
   const signOut = useCallback(async (): Promise<void> => {
-    const current = stateRef.current;
-    if (current.session && current.outbox && current.personStore) {
-      const errors = await wipeResidentData(current.session.personId, {
-        outbox: current.outbox,
-        personStore: current.personStore,
-        tokenStore,
-        forgetPerson: (id) => cipherFactory.forgetPerson(id),
-        deleteFile: (uri) => deleteAsync(uri, { idempotent: true }),
-        cancelReminders,
-      });
-      if (errors.length > 0) console.warn(`[mano] sign-out wipe: ${errors.join("; ")}`);
-    } else {
-      await tokenStore.remove(SESSION_KEY).catch(() => {});
-      await cancelReminders().catch(() => {});
-    }
+    // The wipe target comes from storage, not from this component's
+    // state, so expired and unrestored sessions still wipe clean.
+    const errors = await signOutStored({
+      tokenStore,
+      buildOutbox: (personId: string) => {
+        // Native rebuilds the resident's encrypted store from disk. The
+        // web keeps queued mail in memory, so it wipes the live store.
+        const store =
+          Platform.OS === "web" ? (stateRef.current.personStore ?? new MemoryStore()) : buildPersonStore(personId);
+        return { outbox: new Outbox(store), personStore: store };
+      },
+      forgetPerson: (id) => cipherFactory.forgetPerson(id),
+      deleteFile: (uri) => deleteAsync(uri, { idempotent: true }),
+      cancelReminders,
+    });
+    if (errors.length > 0) console.warn(`[mano] sign-out wipe: ${errors.join("; ")}`);
     clearToSignedOut();
   }, [clearToSignedOut]);
 
   const signIn = useCallback(
     async (next: Session): Promise<void> => {
-      const current = stateRef.current.session;
-      if (current && current.personId !== next.personId) {
+      const storedPerson = await tokenStore.get(PERSON_KEY).catch(() => null);
+      if (storedPerson && storedPerson !== next.personId) {
         // Never let a new resident inherit the previous one's stores.
         await signOut();
       }
       await tokenStore.set(SESSION_KEY, JSON.stringify(next));
-      const store = buildPersonStore(next);
+      await tokenStore.set(PERSON_KEY, next.personId);
+      generationRef.current += 1;
+      setGeneration(generationRef.current);
+      const store = buildPersonStore(next.personId);
       setPersonStore(store);
       setOutbox(new Outbox(store));
       setSession(next);
@@ -119,7 +135,7 @@ export function AuthProvider({ children, initial }: { children: ReactNode; initi
         try {
           const saved = JSON.parse(raw) as Session;
           if (saved.token && saved.personId && !sessionExpired(saved)) {
-            const store = buildPersonStore(saved);
+            const store = buildPersonStore(saved.personId);
             setPersonStore(store);
             setOutbox(new Outbox(store));
             setSession(saved);
@@ -148,8 +164,23 @@ export function AuthProvider({ children, initial }: { children: ReactNode; initi
     return () => sub.remove();
   }, [signOut]);
 
+  // Active expiry: the session signs out the moment it lapses, even
+  // with the app open and untouched.
+  useEffect(() => {
+    if (!session) return;
+    const left = msUntilExpiry(session.expiresAt);
+    if (left <= 0) {
+      void signOut();
+      return;
+    }
+    const timer = setTimeout(() => void signOut(), left);
+    return () => clearTimeout(timer);
+  }, [session, signOut]);
+
   return (
-    <AuthContext.Provider value={{ status, session, client, mode, outbox, personStore, signIn, signOut }}>
+    <AuthContext.Provider
+      value={{ status, session, client, mode, outbox, personStore, generation, isCurrentGeneration, signIn, signOut }}
+    >
       {children}
     </AuthContext.Provider>
   );
@@ -159,4 +190,15 @@ export function useAuth(): AuthState {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth needs an AuthProvider.");
   return ctx;
+}
+
+// Runs clear the moment the session ends, so loaded resident data
+// leaves the screen at once, even before the route gate moves away.
+export function useClearOnSignOut(clear: () => void): void {
+  const { session } = useAuth();
+  const clearRef = useRef(clear);
+  clearRef.current = clear;
+  useEffect(() => {
+    if (!session) clearRef.current();
+  }, [session]);
 }

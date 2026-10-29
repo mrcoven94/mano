@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { EngineClient } from "../lib/api/engine";
-import { AuthError, EngineGapError, StaleApprovalError, type Session } from "../lib/api/types";
+import { AuthError, EngineGapError, StaleApprovalError, UnreconciledSendError, type Session } from "../lib/api/types";
 
 async function sha256B64(bytesB64: string): Promise<string> {
   return createHash("sha256").update(Buffer.from(bytesB64, "base64")).digest("hex");
@@ -48,6 +48,19 @@ describe("EngineClient", () => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://engine.test/api/persons/maria-001/chat");
     expect((init.headers as Headers).get("authorization")).toBe("Bearer live-token");
+  });
+
+  it("holds an uncertain send for the person instead of failing it", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("socket hangup");
+    });
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    const failure = await client.sendMessage(session, "Hi", [], "op-9").then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(failure).toBeInstanceOf(UnreconciledSendError);
+    expect((failure as UnreconciledSendError).opId).toBe("op-9");
   });
 
   it("sends the operation ID with chat messages", async () => {
@@ -147,6 +160,17 @@ describe("EngineClient", () => {
     const result = await client.revokeGrant(session, "org:county", "R-1");
     expect(result.status).toBe("completed");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks the engine whether a link may open", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ allowed: false, reason: "Blocked." }));
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    const verdict = await client.checkLink(session, "https://evil.test/");
+    expect(verdict).toEqual({ allowed: false, reason: "Blocked." });
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://engine.test/api/check-link");
+    const body = JSON.parse(init.body as string) as { url: string };
+    expect(body.url).toBe("https://evil.test/");
   });
 
   it("turns 403 into AuthError", async () => {

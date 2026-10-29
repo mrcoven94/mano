@@ -8,7 +8,7 @@ import { Body, Btn, Card, DemoBanner, EmptyView, ErrorView, GhostBtn, LoadingVie
 import { formatDate } from "../lib/dates";
 import type { Grant, RevokeResult } from "../lib/api/types";
 import { AuthError, EngineGapError } from "../lib/api/types";
-import { useAuth } from "../lib/auth";
+import { useAuth, useClearOnSignOut } from "../lib/auth";
 import { useLanguage, useStrings } from "../lib/i18n";
 import { colors, radius, type } from "../lib/theme";
 
@@ -40,6 +40,15 @@ export default function Access() {
     }
   }, [client, session, signOut]);
 
+  useClearOnSignOut(() => {
+    setGrants(null);
+    setGap(false);
+    setFailed(false);
+    setConfirming(null);
+    setRevokeResult(null);
+    setNotice(false);
+  });
+
   useFocusEffect(
     useCallback(() => {
       void load();
@@ -58,7 +67,11 @@ export default function Access() {
       } else {
         setRevokeResult(result);
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof AuthError) {
+        await signOut();
+        return;
+      }
       setFailed(true);
       setConfirming(null);
     } finally {

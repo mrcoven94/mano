@@ -123,7 +123,9 @@ describe("Maria spine run", () => {
       texts.findIndex((t) => t.includes("I sent your pay stub")),
     );
     const docs = await client.listDocuments(session);
-    expect(docs.some((d) => d.name === "County approval notice.txt")).toBe(true);
+    const notice = docs.find((d) => d.id === "doc-approval-notice");
+    expect(notice?.name).toBe("County approval notice.pdf");
+    expect(notice?.mimeType).toBe("application/pdf");
   });
 
   it("answers deadline and approval questions from current state", async () => {
@@ -137,6 +139,14 @@ describe("Maria spine run", () => {
     expect(after.text).toContain("2 upcoming");
     const approvals = await client.sendMessage(session, "any approvals?", []);
     expect(approvals.text).toContain("1 thing");
+  });
+
+  it("checks links against the recorded verdicts", async () => {
+    const client = makeClient();
+    const session = await signIn(client);
+    expect(await client.checkLink(session, "https://example.com/renew")).toEqual({ allowed: true, reason: null });
+    const blocked = await client.checkLink(session, "http://example.com/renew");
+    expect(blocked.allowed).toBe(false);
   });
 
   it("returns the recorded reply when an operation ID repeats", async () => {

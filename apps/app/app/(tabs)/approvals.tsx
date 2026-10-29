@@ -8,7 +8,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Badge, Body, Card, DemoBanner, EmptyView, ErrorView, LoadingView, Muted, Screen, SectionTitle, Title } from "../../components/ui";
 import type { Approval } from "../../lib/api/types";
 import { AuthError, EngineGapError } from "../../lib/api/types";
-import { useAuth } from "../../lib/auth";
+import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { formatDate } from "../../lib/dates";
 import { useLanguage, useStrings } from "../../lib/i18n";
 import { syncReminders } from "../../lib/notify";
@@ -32,7 +32,7 @@ export default function Approvals() {
   const s = useStrings();
   const { language } = useLanguage();
   const router = useRouter();
-  const { client, session, mode, signOut } = useAuth();
+  const { client, session, mode, generation, isCurrentGeneration, signOut } = useAuth();
   const [approvals, setApprovals] = useState<Approval[] | null>(null);
   const [gap, setGap] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -43,7 +43,8 @@ export default function Approvals() {
     setGap(false);
     try {
       setApprovals(await client.listApprovals(session));
-      await syncReminders(language, client, session).catch(() => {});
+      const gen = generation;
+      await syncReminders(language, client, session, () => isCurrentGeneration(gen)).catch(() => {});
     } catch (err) {
       if (err instanceof AuthError) {
         await signOut();
@@ -52,7 +53,13 @@ export default function Approvals() {
       if (err instanceof EngineGapError) setGap(true);
       else setFailed(true);
     }
-  }, [client, session, signOut, language]);
+  }, [client, session, signOut, language, generation, isCurrentGeneration]);
+
+  useClearOnSignOut(() => {
+    setApprovals(null);
+    setGap(false);
+    setFailed(false);
+  });
 
   useFocusEffect(
     useCallback(() => {

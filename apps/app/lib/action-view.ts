@@ -28,26 +28,21 @@ const LABELS: Record<string, string> = {
   scope: "Scope",
 };
 
-const MAX_VALUE = 500;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Full values, never truncated: the approval covers the whole request
+// hash, so the screen shows the whole value and scrolls to fit it.
 function formatValue(value: unknown): string {
-  if (typeof value === "string") return value.length > MAX_VALUE ? `${value.slice(0, MAX_VALUE)}…` : value;
+  if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean" || value == null) return String(value);
-  if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
-    const joined = value.join(", ");
-    return joined.length > MAX_VALUE ? `${joined.slice(0, MAX_VALUE)}…` : joined;
-  }
-  let json: string;
+  if (Array.isArray(value) && value.every((v) => typeof v === "string")) return value.join(", ");
   try {
-    json = JSON.stringify(value) ?? "[unreadable]";
+    return JSON.stringify(value) ?? "[unreadable]";
   } catch {
-    json = "[unreadable]";
+    return "[unreadable]";
   }
-  return json.length > MAX_VALUE ? `${json.slice(0, MAX_VALUE)}…` : json;
 }
 
 function labelFor(key: string): string {

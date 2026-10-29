@@ -77,6 +77,11 @@ function cookieSecure(): boolean {
 
 // Web session jar. One cookie per key, Secure (except localhost) and
 // SameSite=Lax. Only the session uses this store.
+//
+// Known limit: this cookie is readable by JavaScript. The session must
+// move to an httpOnly cookie set by the site on sign-in.
+// TODO(Accounts): issue the web session as an httpOnly cookie and drop
+// CookieStore once the site serves sign-in.
 export class CookieStore implements KeyValue {
   private jar: CookieJar;
   constructor(jar: CookieJar = defaultJar()) {

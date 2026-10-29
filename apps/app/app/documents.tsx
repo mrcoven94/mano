@@ -8,7 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Body, Card, DemoBanner, EmptyView, ErrorView, LoadingView, Muted, Screen, Title } from "../components/ui";
 import type { DocMeta } from "../lib/api/types";
 import { AuthError, EngineGapError } from "../lib/api/types";
-import { useAuth } from "../lib/auth";
+import { useAuth, useClearOnSignOut } from "../lib/auth";
 import { useStrings } from "../lib/i18n";
 import { colors, tapTarget, type } from "../lib/theme";
 
@@ -35,6 +35,12 @@ export default function Documents() {
       else setFailed(true);
     }
   }, [client, session, signOut]);
+
+  useClearOnSignOut(() => {
+    setDocs(null);
+    setGap(false);
+    setFailed(false);
+  });
 
   useFocusEffect(
     useCallback(() => {

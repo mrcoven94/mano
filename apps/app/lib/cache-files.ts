@@ -1,6 +1,6 @@
 // Manifest of cache files the app wrote for the current resident
-// (share copies, voice previews). The manifest lives in the person's
-// own store, so sign-out deletes every file it names.
+// (PDF temp files, share copies, voice previews). The manifest lives
+// in the person's own store, so sign-out deletes every file it names.
 
 import type { KeyValue } from "./kv";
 
@@ -21,6 +21,11 @@ export async function listCacheFiles(store: KeyValue): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+export async function untrackCacheFile(store: KeyValue, uri: string): Promise<void> {
+  const rest = (await listCacheFiles(store)).filter((u) => u !== uri);
+  await store.set(CACHE_KEY, JSON.stringify(rest));
 }
 
 export async function clearCacheFiles(store: KeyValue): Promise<void> {

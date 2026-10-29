@@ -20,7 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { RecordingPresets, createAudioPlayer, requestRecordingPermissionsAsync, useAudioRecorder, type AudioPlayer } from "expo-audio";
 import { deleteAsync } from "expo-file-system/legacy";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { DemoBanner, EmptyView, LoadingView, Title } from "../../components/ui";
+import { Btn, DemoBanner, EmptyView, LoadingView, Title } from "../../components/ui";
 import type { Attachment, ChatMessage, NewAttachment } from "../../lib/api/types";
 import { AuthError } from "../../lib/api/types";
 import { useAuth } from "../../lib/auth";
@@ -139,6 +139,26 @@ export default function Chat() {
       // Nothing was queued (a full outbox): keep the text so no mail is lost.
       setOfflineNote(true);
       return false;
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const retryHeld = async (): Promise<void> => {
+    if (!session || !outbox) return;
+    setSending(true);
+    try {
+      const pending = await outbox.list();
+      for (const q of pending.filter((q) => q.held === true)) {
+        await outbox.release(q.id);
+      }
+      await refresh();
+    } catch (err) {
+      if (err instanceof AuthError) {
+        await signOut();
+        return;
+      }
+      setOfflineNote(true);
     } finally {
       setSending(false);
     }
@@ -290,6 +310,7 @@ export default function Chat() {
 
   const all = [...messages, ...queuedAsMessages];
   const shown = [...all].reverse();
+  const heldCount = queued.filter((q) => q.held === true).length;
 
   if (!session || !outbox) {
     return (
@@ -308,6 +329,14 @@ export default function Chat() {
           {offlineNote ? (
             <View style={styles.offline}>
               <Text style={styles.offlineText}>{s.offline}</Text>
+            </View>
+          ) : null}
+          {heldCount > 0 ? (
+            <View style={styles.offline}>
+              <Text style={styles.offlineText}>{s.heldNote}</Text>
+              <View style={styles.retry}>
+                <Btn title={s.retry} onPress={() => void retryHeld()} busy={sending} />
+              </View>
             </View>
           ) : null}
         </View>
@@ -451,6 +480,7 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   header: { paddingHorizontal: 20, paddingTop: 16, maxWidth: 640, width: "100%", alignSelf: "center" },
   offline: { backgroundColor: colors.envelope, borderRadius: radius.sm, padding: 10, marginBottom: 8 },
+  retry: { marginTop: 8 },
   offlineText: { fontSize: 13, color: colors.text },
   list: { paddingHorizontal: 20, paddingBottom: 12, maxWidth: 640, width: "100%", alignSelf: "center" },
   empty: { flex: 1, paddingHorizontal: 20, paddingTop: 8 },
