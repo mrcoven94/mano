@@ -4,20 +4,21 @@ import { engineFromEnv, personIdFor } from "../agent/lib/engine.js";
 import { recallFacts, renderMemory } from "../agent/lib/memory.js";
 import forget from "../agent/tools/forget.js";
 import remember from "../agent/tools/remember.js";
-import { ENGINE_SECRET, ENGINE_URL, EngineDouble } from "./engine-double.js";
+import { toolCtx } from "./ctx.js";
+import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 import { detectCrisis } from "../agent/lib/crisis.js";
 import { parseDecision } from "../agent/lib/decision.js";
 
 const HANDLE = "c".repeat(64);
-const ctx = { session: { auth: { current: { principalId: HANDLE, attributes: { turnId: "turn_memory0001" } } } } } as never;
-
+let ctx: never;
 let engine: EngineDouble;
 
-beforeEach(() => {
+beforeEach(async () => {
   engine = new EngineDouble();
   vi.stubEnv("ENGINE_URL", ENGINE_URL);
-  vi.stubEnv("ENGINE_SESSION_SECRET", ENGINE_SECRET);
+  vi.stubEnv("MANO_ENGINE_AGENT_TOKEN", ENGINE_AGENT_TOKEN);
   vi.stubGlobal("fetch", engine.fetch);
+  ctx = toolCtx({ handleHash: HANDLE, turnId: "turn_memory0001", grant: await grantFor(HANDLE) });
 });
 
 afterEach(() => {
@@ -26,7 +27,7 @@ afterEach(() => {
 });
 
 async function recalled(): Promise<string[]> {
-  return recallFacts(engineFromEnv()!, personIdFor(HANDLE));
+  return recallFacts(engineFromEnv()!.forHandle(HANDLE, await grantFor(HANDLE)));
 }
 
 describe("person memory in Engine", () => {
@@ -38,21 +39,24 @@ describe("person memory in Engine", () => {
     expect(renderMemory([])).toBeNull();
   });
 
-  it("forget says plainly that deletion is unavailable while Engine has no delete route", async () => {
-    await remember.execute({ fact: "Has two kids" }, ctx);
-    expect(await forget.execute({ fact: "has two kids" }, ctx)).toEqual({ removed: false, reason: "deletion_unavailable" });
-    expect(await recalled()).toEqual(["Has two kids"]);
-  });
-
-  it("forget deletes the fact once Engine supports deletion", async () => {
-    engine.supportsMemoryDelete = true;
+  it("forget deletes the fact from Engine", async () => {
     await remember.execute({ fact: "Has two kids" }, ctx);
     expect(await forget.execute({ fact: "has two kids" }, ctx)).toEqual({ removed: true });
     expect(await recalled()).toEqual([]);
     expect(await forget.execute({ fact: "has two kids" }, ctx)).toEqual({ removed: false, reason: "not_found" });
   });
 
-  it("memory tools refuse when Engine is not configured", async () => {
+  it("a grant for one handle never reaches another person's memory", async () => {
+    const other = "9".repeat(64);
+    const borrowed = toolCtx({ handleHash: other, turnId: "turn_memory0002", grant: await grantFor(HANDLE) });
+    await expect(remember.execute({ fact: "x" }, borrowed)).rejects.toThrow(/403/);
+    expect(engine.memory.get(personIdFor(other))).toBeUndefined();
+  });
+
+  it("memory tools refuse when Engine is not configured or the turn has no grant", async () => {
+    await expect(remember.execute({ fact: "x" }, toolCtx({ handleHash: HANDLE, turnId: "turn_memory0003" }))).rejects.toThrow(
+      /not available/,
+    );
     vi.stubEnv("ENGINE_URL", "");
     await expect(remember.execute({ fact: "x" }, ctx)).rejects.toThrow(/not available/);
   });

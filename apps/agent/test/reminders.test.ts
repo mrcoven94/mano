@@ -7,6 +7,7 @@ function row(overrides: Partial<Reminder> = {}): Reminder {
   return {
     id: "rem_1",
     handleHash: "a".repeat(64),
+    generation: 0,
     text: "call the office",
     dueAtMs: 1000,
     createdAtMs: 500,

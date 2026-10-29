@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getReminderStore, resetReminderStores } from "../agent/lib/reminder-store.js";
 import remind from "../agent/tools/remind.js";
+import { toolCtx } from "./ctx.js";
 
 const HANDLE = "b".repeat(64);
 
 function ctx(turnId: string) {
-  return { session: { auth: { current: { principalId: HANDLE, attributes: { turnId } } } } } as never;
+  return toolCtx({ handleHash: HANDLE, turnId, generation: 4 });
 }
 
 beforeEach(() => {
@@ -42,7 +43,8 @@ describe("reminder storage", () => {
     const out = await remind.execute({ text: "call the county", when: "tomorrow at 9" }, ctx("turn_aaaaaaaa3"));
     expect(out).toMatchObject({ text: "call the county" });
     const store = await getReminderStore();
-    expect(await store!.listForHandle(HANDLE)).toHaveLength(1);
+    const [saved] = await store!.listForHandle(HANDLE);
+    expect(saved.generation).toBe(4);
   });
 });
 

@@ -3,18 +3,18 @@
 // pinned in history. Empty or unreachable memory contributes nothing.
 import { defineDynamic, defineInstructions } from "eve/instructions";
 
-import { engineFromEnv, personIdFor } from "../lib/engine.js";
 import { recallFacts, renderMemory } from "../lib/memory.js";
+import { personEngine } from "../lib/person.js";
 
 export default defineDynamic({
   events: {
     "turn.started": async (_event, ctx) => {
-      const engine = engineFromEnv();
-      const handleHash = ctx.session.auth.current?.principalId;
-      if (!engine || !handleHash) return null;
+      if (!ctx.session.auth.current?.principalId) return null;
+      const engine = personEngine(ctx);
+      if (!engine) return null;
       let facts: string[];
       try {
-        facts = await recallFacts(engine, personIdFor(handleHash));
+        facts = await recallFacts(engine);
       } catch (err) {
         console.warn(JSON.stringify({ type: "mano_memory_recall_failed", err: err instanceof Error ? err.name : "unknown" }));
         return null;

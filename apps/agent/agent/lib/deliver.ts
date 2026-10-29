@@ -10,6 +10,7 @@ export interface DeliverOptions {
   channelsUrl: string;
   secret: string;
   handleHash: string;
+  generation: number;
   text: string;
   key: string;
   timeoutMs?: number;
@@ -27,7 +28,7 @@ export class DeliverFailed extends Error {
 
 export async function deliverToChannels(opts: DeliverOptions): Promise<void> {
   const timestamp = Math.floor(Date.now() / 1000);
-  const raw = JSON.stringify({ handleHash: opts.handleHash, text: opts.text, key: opts.key });
+  const raw = JSON.stringify({ handleHash: opts.handleHash, text: opts.text, key: opts.key, generation: opts.generation });
   const res = await (opts.fetchFn ?? fetch)(`${opts.channelsUrl.replace(/\/$/, "")}${AGENT_SEND_PATH}`, {
     method: "POST",
     headers: {

@@ -30,6 +30,7 @@ export default defineSchedule({
           channelsUrl,
           secret,
           handleHash: reminder.handleHash,
+          generation: reminder.generation,
           text: `Reminder: ${reminder.text}`,
           key: reminder.id,
         });

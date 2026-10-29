@@ -14,6 +14,7 @@ describe("channels delivery", () => {
       channelsUrl: "https://channels.example/",
       secret: "s",
       handleHash: "h",
+      generation: 2,
       text: "Reminder: call",
       key: "rem_1",
       fetchFn,
@@ -22,7 +23,7 @@ describe("channels delivery", () => {
     expect(seen[0].url).toBe("https://channels.example/internal/agent-send");
     expect(seen[0].headers[TIMESTAMP_HEADER]).toMatch(/^\d+$/);
     expect(seen[0].headers[SIGNATURE_HEADER]).toMatch(/^[0-9a-f]{64}$/);
-    expect(JSON.parse(seen[0].body)).toEqual({ handleHash: "h", text: "Reminder: call", key: "rem_1" });
+    expect(JSON.parse(seen[0].body)).toEqual({ handleHash: "h", text: "Reminder: call", key: "rem_1", generation: 2 });
   });
 
   it("throws a status-only error on failure", async () => {
@@ -31,6 +32,7 @@ describe("channels delivery", () => {
       channelsUrl: "https://x",
       secret: "s",
       handleHash: "h",
+      generation: 2,
       text: "t",
       key: "k",
       fetchFn,

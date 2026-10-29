@@ -15,7 +15,7 @@ export default defineTool({
     when: z.string().min(1).max(200).describe("When, in the person's own words."),
   }),
   async execute({ text, when }, ctx) {
-    const { handleHash, turnId, turnAtMs } = requireTurn(ctx);
+    const { handleHash, turnId, turnAtMs, generation } = requireTurn(ctx);
     const store = await getReminderStore();
     if (!store) throw new StorageUnavailable("Setting reminders");
     const parsed = parseWhen(when, turnAtMs);
@@ -27,6 +27,7 @@ export default defineTool({
     const saved = await store.create({
       id: reminderIdFor(turnId, parsed.dueAtMs),
       handleHash,
+      generation,
       text: text.trim(),
       dueAtMs: parsed.dueAtMs,
       createdAtMs: turnAtMs,

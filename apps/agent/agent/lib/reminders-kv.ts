@@ -16,6 +16,7 @@ function toRow(value: Record<string, unknown>): Reminder | null {
     typeof value.id !== "string" ||
     typeof value.handleHash !== "string" ||
     typeof value.text !== "string" ||
+    typeof value.generation !== "number" ||
     typeof value.dueAtMs !== "number" ||
     typeof value.createdAtMs !== "number"
   ) {
@@ -24,6 +25,7 @@ function toRow(value: Record<string, unknown>): Reminder | null {
   return {
     id: value.id,
     handleHash: value.handleHash,
+    generation: value.generation,
     text: value.text,
     dueAtMs: value.dueAtMs,
     createdAtMs: value.createdAtMs,

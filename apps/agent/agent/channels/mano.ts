@@ -7,6 +7,8 @@
 // message into the person's session and read back its events.
 import { defineChannel, POST } from "eve/channels";
 
+import { glimmerCheckerFromEnv } from "@mano/guardian";
+
 import { engineFromEnv } from "../lib/engine.js";
 import { settleStream, startIndexFor, type StreamEventLike } from "../lib/settle.js";
 import { getKeyValue } from "../lib/storage.js";
@@ -17,19 +19,33 @@ export const TURN_PATH = "/channels/mano/turn";
 // over to the fallback answer instead of hanging the conversation.
 export const SETTLE_TIMEOUT_MS = 90_000;
 
+// Guardian scales to zero and a cold start takes minutes, so a starting
+// conversation wakes it before Engine's first check needs it. Without a
+// Guardian endpoint configured there is nothing to warm.
+async function warmGuardian(): Promise<void> {
+  const checker = glimmerCheckerFromEnv(process.env);
+  if (!checker.warm || !process.env.MANO_GUARDIAN_URL) return;
+  const state = await checker.warm();
+  console.log(JSON.stringify({ type: "mano_guardian_warm", state }));
+}
+
 export default defineChannel({
   routes: [
-    POST(TURN_PATH, async (request, { from, resolveSession }) =>
+    POST(TURN_PATH, async (request, { from, resolveSession, waitUntil }) =>
       handleTurn(request, {
         secret: process.env.MANO_AGENT_SECRET,
         kv: await getKeyValue(),
         engine: engineFromEnv(),
-        async runAgent({ handleHash, turnId, turnAtMs, message, context }) {
+        warmGuardian: () => warmGuardian(),
+        background: (work) => waitUntil(work),
+        async runAgent({ handleHash, turnId, turnAtMs, generation, grant, message, context }) {
+          // The grant reaches tools as an attribute. It is only good with
+          // the agent's own Engine token, for this one handle, for minutes.
           const auth = {
             authenticator: "mano-channels",
             principalType: "user",
             principalId: handleHash,
-            attributes: { turnId, turnAtMs: String(turnAtMs) },
+            attributes: { turnId, turnAtMs: String(turnAtMs), generation: String(generation), grant },
           };
           // The tail index bounds the stream read to this turn's events. A
           // send that replaces a stranded session owns a fresh stream, so

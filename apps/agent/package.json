@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.70",
+    "@mano/guardian": "workspace:*",
+    "@mano/protocol": "workspace:*",
     "@vercel/kv": "^1.0.1",
     "ai": "7.0.137",
     "eve": "0.79.1",

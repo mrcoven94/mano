@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import startFormDraft from "../agent/tools/start_form_draft.js";
 import { resetKeyValue } from "../agent/lib/storage.js";
-import { ENGINE_SECRET, ENGINE_URL, EngineDouble } from "./engine-double.js";
+import { toolCtx } from "./ctx.js";
+import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
 const HANDLE = "d".repeat(64);
 const fields = {
@@ -14,20 +15,22 @@ const fields = {
   monthlyIncome: 1800,
 };
 
+let grant: string;
 function ctx(turnId: string) {
-  return { session: { auth: { current: { principalId: HANDLE, attributes: { turnId } } } } } as never;
+  return toolCtx({ handleHash: HANDLE, turnId, grant });
 }
 
 let engine: EngineDouble;
 let outside: string[];
 
-beforeEach(() => {
+beforeEach(async () => {
+  grant = await grantFor(HANDLE);
   resetKeyValue();
   engine = new EngineDouble();
   outside = [];
   vi.stubEnv("MANO_ENV", "development");
   vi.stubEnv("ENGINE_URL", ENGINE_URL);
-  vi.stubEnv("ENGINE_SESSION_SECRET", ENGINE_SECRET);
+  vi.stubEnv("MANO_ENGINE_AGENT_TOKEN", ENGINE_AGENT_TOKEN);
   vi.stubEnv("MANO_PORTAL_URL", "http://portal.test");
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);

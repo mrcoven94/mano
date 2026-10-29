@@ -7,6 +7,9 @@ import { createHash } from "node:crypto";
 export interface Reminder {
   id: string;
   handleHash: string;
+  // Channels' deletion generation when the reminder was set; Channels
+  // refuses delivery once the conversation has been deleted since.
+  generation: number;
   text: string;
   dueAtMs: number;
   createdAtMs: number;

@@ -1,51 +1,30 @@
 // Engine is the system of record: person memory, proposed actions and
-// their hash-bound approvals all live there. The agent reaches it over
-// Engine's person routes with a short-lived person session token it
-// mints with Engine's SESSION_SECRET (ENGINE_SESSION_SECRET here), for
-// the person behind the Channels handle. That handle reached the agent
-// inside a turn Channels signed, so the mapping is only ever made from
-// an authenticated handle.
-const TOKEN_TTL_SECONDS = 300;
+// their hash-bound approvals all live there. The agent calls Engine's
+// person routes with its own service token (MANO_ENGINE_AGENT_TOKEN) plus
+// the handle grant Channels signed for the turn. The grant names one
+// handle and expires within minutes, so the agent can act only for the
+// person who just texted; it never holds the secret that signs grants.
+import { personIdForHandle } from "@mano/protocol";
+
 const REQUEST_TIMEOUT_MS = 15_000;
+export const HANDLE_GRANT_HEADER = "x-mano-handle-grant";
 
 const boundFetch: typeof fetch = (...args) => globalThis.fetch(...args);
 
 export interface EngineConfig {
   baseUrl: string;
-  sessionSecret: string;
+  agentToken: string;
   fetchFn?: typeof fetch;
 }
 
 export function engineConfigFromEnv(env: NodeJS.ProcessEnv = process.env): EngineConfig | null {
-  if (!env.ENGINE_URL || !env.ENGINE_SESSION_SECRET) return null;
-  return { baseUrl: env.ENGINE_URL.replace(/\/$/, ""), sessionSecret: env.ENGINE_SESSION_SECRET };
+  if (!env.ENGINE_URL || !env.MANO_ENGINE_AGENT_TOKEN) return null;
+  return { baseUrl: env.ENGINE_URL.replace(/\/$/, ""), agentToken: env.MANO_ENGINE_AGENT_TOKEN };
 }
 
-// One Engine person per Channels handle. Accounts (LAP-583) will link
-// several handles to one person; until then the handle is the person.
-export function personIdFor(handleHash: string): string {
-  return `txt_${handleHash}`;
-}
-
-function b64url(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64url");
-}
-
-// Engine's session token format: v1.<base64url claims>.<base64url HMAC>.
-export async function mintPersonToken(personId: string, secret: string, nowMs = Date.now()): Promise<string> {
-  const iat = Math.floor(nowMs / 1000);
-  const claims = { kind: "person", sub: personId, org: null, iat, exp: iat + TOKEN_TTL_SECONDS };
-  const payload = b64url(new TextEncoder().encode(JSON.stringify(claims)));
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`v1.${payload}`));
-  return `v1.${payload}.${b64url(new Uint8Array(sig))}`;
-}
+// The Engine person a Channels handle maps to (Engine accepts a grant
+// only on this person's routes).
+export const personIdFor = personIdForHandle;
 
 export class EngineError extends Error {
   constructor(readonly status: number) {
@@ -70,14 +49,14 @@ export interface EngineApproval {
 }
 
 export interface EngineResult {
-  status: "completed" | "needs_approval" | "blocked" | "stale" | "reconciled" | "in_progress";
+  status: "completed" | "needs_approval" | "blocked" | "stale" | "reconciled" | "in_progress" | "rejected";
   approval?: EngineApproval;
   receipt?: { externalId: string; simulated: boolean };
   reason?: string;
 }
 
 // What the agent asks Engine to freeze for approval. Engine stamps the
-// person from the token and owns hashing, policy and execution.
+// person from the grant and owns hashing, policy and execution.
 export interface ActionProposal {
   type: "submit" | "send" | "share";
   recipient: string;
@@ -86,7 +65,7 @@ export interface ActionProposal {
   idempotencyKey: string;
 }
 
-const RESULT_STATUSES = new Set(["completed", "needs_approval", "blocked", "stale", "reconciled", "in_progress"]);
+const RESULT_STATUSES = new Set(["completed", "needs_approval", "blocked", "stale", "reconciled", "in_progress", "rejected"]);
 
 function parseResult(value: unknown): EngineResult {
   const v = (value ?? {}) as Record<string, unknown>;
@@ -94,25 +73,35 @@ function parseResult(value: unknown): EngineResult {
   return v as unknown as EngineResult;
 }
 
-export class EngineClient {
+// Engine's routes for one person, reached with the turn's handle grant.
+export class PersonEngine {
+  readonly personId: string;
   private fetchFn: typeof fetch;
-  constructor(private cfg: EngineConfig) {
+
+  constructor(
+    private cfg: EngineConfig,
+    handleHash: string,
+    private grant: string,
+  ) {
+    this.personId = personIdFor(handleHash);
     this.fetchFn = cfg.fetchFn ?? boundFetch;
   }
 
-  private async call(personId: string, method: string, path: string, body?: unknown): Promise<Response> {
-    const token = await mintPersonToken(personId, this.cfg.sessionSecret);
-    const res = await this.fetchFn(`${this.cfg.baseUrl}/api/persons/${encodeURIComponent(personId)}${path}`, {
+  private async call(method: string, path: string, body?: unknown): Promise<Response> {
+    return this.fetchFn(`${this.cfg.baseUrl}/api/persons/${encodeURIComponent(this.personId)}${path}`, {
       method,
-      headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      headers: {
+        authorization: `Bearer ${this.cfg.agentToken}`,
+        [HANDLE_GRANT_HEADER]: this.grant,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    return res;
   }
 
-  private async json(personId: string, method: string, path: string, body?: unknown): Promise<unknown> {
-    const res = await this.call(personId, method, path, body);
+  private async json(method: string, path: string, body?: unknown): Promise<unknown> {
+    const res = await this.call(method, path, body);
     if (!res.ok) {
       await res.body?.cancel().catch(() => undefined);
       throw new EngineError(res.status);
@@ -120,8 +109,8 @@ export class EngineClient {
     return res.json();
   }
 
-  async listMemory(personId: string): Promise<MemoryRow[]> {
-    const out = (await this.json(personId, "GET", "/memory")) as { memories?: unknown };
+  async listMemory(): Promise<MemoryRow[]> {
+    const out = (await this.json("GET", "/memory")) as { memories?: unknown };
     const rows = Array.isArray(out.memories) ? out.memories : [];
     return rows
       .map((r) => r as Record<string, unknown>)
@@ -129,33 +118,37 @@ export class EngineClient {
       .map((r) => ({ id: r.id as string, content: r.content as string }));
   }
 
-  async addMemory(personId: string, content: string): Promise<string> {
-    const out = (await this.json(personId, "POST", "/memory", { content, source: "agent" })) as { id?: unknown };
+  async addMemory(content: string): Promise<string> {
+    const out = (await this.json("POST", "/memory", { content, source: "agent" })) as { id?: unknown };
     if (typeof out.id !== "string") throw new EngineError(502);
     return out.id;
   }
 
-  // Engine has no memory deletion route yet. The contract the agent
-  // expects is DELETE /api/persons/:id/memory/:memoryId answering 2xx;
-  // until Engine ships it, this reports "unsupported" and deletes nothing.
-  async deleteMemory(personId: string, memoryId: string): Promise<"deleted" | "unsupported"> {
-    const res = await this.call(personId, "DELETE", `/memory/${encodeURIComponent(memoryId)}`);
-    await res.body?.cancel().catch(() => undefined);
-    if (res.ok) return "deleted";
-    if (res.status === 404 || res.status === 405) return "unsupported";
-    throw new EngineError(res.status);
+  async deleteMemory(memoryId: string): Promise<void> {
+    await this.json("DELETE", `/memory/${encodeURIComponent(memoryId)}`);
   }
 
-  async proposeAction(personId: string, proposal: ActionProposal): Promise<EngineResult> {
-    return parseResult(await this.json(personId, "POST", "/action", { ...proposal, actor: "foreground", origin: "person" }));
+  async proposeAction(proposal: ActionProposal): Promise<EngineResult> {
+    return parseResult(await this.json("POST", "/action", { ...proposal, actor: "foreground", origin: "person" }));
   }
 
-  async approve(personId: string, approvalId: string): Promise<EngineResult> {
-    return parseResult(await this.json(personId, "POST", `/approvals/${encodeURIComponent(approvalId)}/approve`));
+  async approve(approvalId: string): Promise<EngineResult> {
+    return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/approve`));
+  }
+
+  async reject(approvalId: string): Promise<EngineResult> {
+    return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/reject`));
   }
 }
 
-export function engineFromEnv(): EngineClient | null {
-  const cfg = engineConfigFromEnv();
-  return cfg ? new EngineClient(cfg) : null;
+export interface Engine {
+  forHandle(handleHash: string, grant: string): PersonEngine;
+}
+
+export function engineFrom(cfg: EngineConfig | null): Engine | null {
+  return cfg ? { forHandle: (handleHash, grant) => new PersonEngine(cfg, handleHash, grant) } : null;
+}
+
+export function engineFromEnv(): Engine | null {
+  return engineFrom(engineConfigFromEnv());
 }

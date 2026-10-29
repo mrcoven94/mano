@@ -7,9 +7,8 @@ import { createHash } from "node:crypto";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { engineFromEnv, personIdFor } from "../lib/engine.js";
 import { renderQuestion, savePending } from "../lib/pending.js";
-import { requireTurn } from "../lib/person.js";
+import { personEngine, requireTurn } from "../lib/person.js";
 import { StorageUnavailable, getKeyValue } from "../lib/storage.js";
 
 const inputSchema = z.object({
@@ -32,15 +31,15 @@ export default defineTool({
     start: () => "Prepare the renewal",
   },
   async execute(input, ctx) {
-    const { handleHash, turnId } = requireTurn(ctx);
-    const engine = engineFromEnv();
+    const { turnId } = requireTurn(ctx);
+    const engine = personEngine(ctx);
     if (!engine) throw new Error("Preparing forms is not available right now. Say so and offer to collect the answers.");
     const kv = await getKeyValue();
     if (!kv) throw new StorageUnavailable("Preparing forms");
-    const personId = personIdFor(handleHash);
+    const personId = engine.personId;
     const payload = { ...input };
     const contentKey = createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
-    const result = await engine.proposeAction(personId, {
+    const result = await engine.proposeAction({
       type: "submit",
       recipient: RENEWAL_RECIPIENT,
       purpose: RENEWAL_PURPOSE,

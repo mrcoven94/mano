@@ -40,7 +40,7 @@ export interface KeyValue {
 
 export class MemoryKeyValue implements KeyValue {
   private rows = new Map<string, { value: string; expiresAtMs: number }>();
-  constructor(private now: () => number = Date.now) {}
+  constructor(private now: () => number = () => Date.now()) {}
 
   private live(key: string) {
     const row = this.rows.get(key);

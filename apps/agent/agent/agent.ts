@@ -31,8 +31,8 @@ const model = process.env.META_MODEL_API_KEY
 if (!process.env.META_MODEL_API_KEY) {
   console.warn("mano: META_MODEL_API_KEY is not set; the agent answers with a stand-in.");
 }
-if (!process.env.ENGINE_URL || !process.env.ENGINE_SESSION_SECRET) {
-  console.warn("mano: ENGINE_URL or ENGINE_SESSION_SECRET is not set; memory and forms are unavailable.");
+if (!process.env.ENGINE_URL || !process.env.MANO_ENGINE_AGENT_TOKEN) {
+  console.warn("mano: ENGINE_URL or MANO_ENGINE_AGENT_TOKEN is not set; memory and forms are unavailable.");
 }
 
 export default defineAgent({

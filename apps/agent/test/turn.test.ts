@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signBody } from "../agent/lib/auth.js";
-import { EngineClient } from "../agent/lib/engine.js";
+import { engineFrom } from "../agent/lib/engine.js";
 import { getKeyValue, resetKeyValue, type KeyValue } from "../agent/lib/storage.js";
 import { handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/turn.js";
 import startFormDraft from "../agent/tools/start_form_draft.js";
-import { ENGINE_SECRET, ENGINE_URL, EngineDouble } from "./engine-double.js";
+import { toolCtx } from "./ctx.js";
+import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
 const SECRET = "turn-test-secret";
 const HANDLE = "e".repeat(64);
@@ -32,8 +33,10 @@ function signed(body: Record<string, unknown>): Request {
   });
 }
 
+const grants = new Map<string, string>();
+
 function turn(turnId: string, text: string, handleHash = HANDLE): Request {
-  return signed({ turnId, handleHash, texts: [text], attachmentCount: 0 });
+  return signed({ turnId, generation: 0, handleHash, grant: grants.get(handleHash), texts: [text], attachmentCount: 0 });
 }
 
 // Stands in for Eve: the model either answers plainly or, asked to file,
@@ -41,13 +44,13 @@ function turn(turnId: string, text: string, handleHash = HANDLE): Request {
 async function fakeAgent(input: AgentTurnInput) {
   agentCalls.push(input);
   if (/renewal/i.test(input.message)) {
-    const ctx = {
-      session: {
-        auth: {
-          current: { principalId: input.handleHash, attributes: { turnId: input.turnId, turnAtMs: String(input.turnAtMs) } },
-        },
-      },
-    } as never;
+    const ctx = toolCtx({
+      handleHash: input.handleHash,
+      turnId: input.turnId,
+      grant: input.grant,
+      generation: input.generation,
+      turnAtMs: input.turnAtMs,
+    });
     await startFormDraft.execute(fields, ctx);
     return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop" };
   }
@@ -58,7 +61,7 @@ function deps(overrides: Partial<TurnDeps> = {}): TurnDeps {
   return {
     secret: SECRET,
     kv,
-    engine: new EngineClient({ baseUrl: ENGINE_URL, sessionSecret: ENGINE_SECRET, fetchFn: engine.fetch }),
+    engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch }),
     runAgent: fakeAgent,
     ...overrides,
   };
@@ -74,7 +77,9 @@ beforeEach(async () => {
   agentCalls = [];
   vi.stubEnv("MANO_ENV", "development");
   vi.stubEnv("ENGINE_URL", ENGINE_URL);
-  vi.stubEnv("ENGINE_SESSION_SECRET", ENGINE_SECRET);
+  vi.stubEnv("MANO_ENGINE_AGENT_TOKEN", ENGINE_AGENT_TOKEN);
+  grants.set(HANDLE, await grantFor(HANDLE));
+  grants.set("f".repeat(64), await grantFor("f".repeat(64)));
   vi.stubGlobal("fetch", engine.fetch);
   resetKeyValue();
   kv = (await getKeyValue())!;
@@ -111,10 +116,11 @@ describe("approval by text", () => {
     expect(no.body.text).toMatch(/not send|nothing/i);
     expect(agentCalls).toHaveLength(1);
     expect(engine.executor.calls).toHaveLength(0);
+    expect(engine.approvals()[0].status).toBe("rejected");
 
     await send(turn("turn_late_000002", "yes"));
     expect(engine.executor.calls).toHaveLength(0);
-    expect(engine.approvals()[0].status).toBe("pending");
+    expect(engine.approvals()[0].status).toBe("rejected");
     expect(agentCalls).toHaveLength(2);
   });
 
@@ -181,8 +187,10 @@ describe("turn replay and recovery", () => {
   });
 
   it("a turn without a signed turn ID is rejected", async () => {
-    const res = await send(signed({ handleHash: HANDLE, texts: ["hello"], attachmentCount: 0 }));
+    const res = await send(signed({ handleHash: HANDLE, generation: 0, grant: grants.get(HANDLE), texts: ["hello"], attachmentCount: 0 }));
     expect(res.status).toBe(400);
+    const noGrant = await send(signed({ turnId: "turn_nogrant0001", generation: 0, handleHash: HANDLE, texts: ["hello"], attachmentCount: 0 }));
+    expect(noGrant.status).toBe(400);
     expect(agentCalls).toHaveLength(0);
   });
 
@@ -190,5 +198,30 @@ describe("turn replay and recovery", () => {
     const res = await send(turn("turn_nokv000001", "hello"), deps({ kv: null }));
     expect(res.status).toBe(503);
     expect(agentCalls).toHaveLength(0);
+  });
+});
+
+describe("Guardian warm-up", () => {
+  it("warms Guardian when a conversation starts, not on every turn", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
+    try {
+      const warms: number[] = [];
+      const d = deps({ warmGuardian: async () => warms.push(Date.now()) });
+      await send(turn("turn_warm000001", "hello"), d);
+      vi.setSystemTime(Date.now() + 60_000);
+      await send(turn("turn_warm000002", "and another thing"), d);
+      expect(warms).toHaveLength(1);
+      vi.setSystemTime(Date.now() + 20 * 60_000);
+      await send(turn("turn_warm000003", "back again"), d);
+      expect(warms).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a failed warm-up never affects the turn", async () => {
+    const d = deps({ warmGuardian: async () => Promise.reject(new Error("down")) });
+    const res = await send(turn("turn_warm000004", "hello"), d);
+    expect(res.status).toBe(200);
   });
 });
