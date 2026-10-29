@@ -136,7 +136,9 @@ export interface DeadlineCandidate {
   sentence: string;
   // Every full date the sentence names, in reading order (YYYY-MM-DD).
   dates: string[];
-  citation: Citation;
+  // Null for a deadline-like sentence the reader did not mark on the
+  // photo: no box means no citation.
+  citation: Citation | null;
 }
 
 export interface ModelCallStat {

@@ -31,17 +31,20 @@
 // the transcription, else it becomes a question; unreadable pages
 // contribute nothing, though their contacts still warn; pages merge
 // only on continuation evidence with no contradictions; a deadline
-// publishes only when its whole sentence is one of the closed forms
-// in src/gate.ts with exactly one date and nothing left over, and
-// every other deadline sentence asks; any open deadline question,
-// failed verification, failed chronology check, or missing page
-// withholds every date on the letter, and every withheld sentence,
-// cited, joins each deadline and missing-page question;
+// publishes only from a sentence recovered verbatim from the original
+// transcription that parses whole under the grammar in src/gate.ts,
+// and every other sentence with deadline-like wording asks, whether
+// the reader returned it or not; any open deadline question, failed
+// verification, failed chronology check, or missing page withholds
+// every date on the letter, and every withheld sentence joins each
+// deadline and missing-page question; a letter flagged as a scam gets
+// the scam warning and no deadline, date to know or deadline question;
 // links, phones and addresses are never acted on here and come back
 // as warnings for the gateway.
 // Content failures never throw; only invalid arguments do. Each file
-// has a time and token budget; past it the file stops early with a
-// question.
+// has a time and token budget, checked before every model call and
+// shared by its retries as one deadline; past it the file stops early
+// with a question.
 //
 // Run and test (no key needed): pnpm check. Regenerate fixtures:
 // pnpm make-fixtures. Live dev-set grade: ws keys run -- pnpm eval-dev.
@@ -68,8 +71,8 @@ import {
   type GroupablePage,
   type PageExtraction,
 } from "./read.js";
-import { parseAllDates, parseWrittenDate, sentenceContaining } from "./dates.js";
-import { gateSentence, trimSentence, type AskReason } from "./gate.js";
+import { parseAllDates, parseWrittenDate, recoverSentence, splitSentences } from "./dates.js";
+import { gateSentence, isDeadlineLike, type AskReason } from "./gate.js";
 import { scanContent, type ContentFlag } from "./safety.js";
 import { verifyExtraction, type DroppedField } from "./citations.js";
 import { readingModelFor } from "./model.js";
@@ -480,14 +483,16 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     // contradict the dates on the pages in hand.
     if (checkMissingPages(members, letterId, cite, ask)) letterBlocked = true;
 
-    // Every sentence the reader returned as a deadline goes through
-    // the publish gate (src/gate.ts): it publishes only as one of the
-    // closed whole-sentence forms, becomes a date to know when it
-    // names no duty and states one plain date, or asks. Dates of one
-    // duty that differ conflict. Any question, failed verification or
-    // missing page withholds every date on the letter, and every
-    // withheld sentence, cited, joins each of the letter's deadline
-    // and missing-page questions.
+    // Deadlines come from the original transcription, never from the
+    // reader's extracted text. Each extraction must be found verbatim
+    // in exactly one sentence of its page, or the letter asks. Then
+    // every sentence the reader returned, and every other sentence with
+    // deadline-like wording, goes through the publish gate
+    // (src/gate.ts). Only a cited sentence in a closed form publishes;
+    // an uncited one, or any that asks, withholds every date on the
+    // letter. Dates of one duty that differ conflict. Every withheld
+    // sentence joins each of the letter's deadline and missing-page
+    // questions.
     interface GatedEntry {
       iso: string;
       text: string;
@@ -500,37 +505,52 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     const resolvedDeadlines: GatedEntry[] = [];
     const resolvedToKnow: GatedEntry[] = [];
     const withheld: DeadlineCandidate[] = [];
-    const candidateOf = (sentence: string, citation: Citation): DeadlineCandidate => ({
+    const candidateOf = (sentence: string, citation: Citation | null): DeadlineCandidate => ({
       sentence,
       dates: parseAllDates(sentence),
       citation,
     });
+    const withhold = (sentence: string, citation: Citation | null, prompt: string): void => {
+      letterBlocked = true;
+      withheld.push(candidateOf(sentence, citation));
+      ask({ kind: "confirm_deadline", letterId, prompt, citation });
+    };
     const noticeIso = fields.noticeDate ? parseWrittenDate(fields.noticeDate.value) : null;
-    const gated = new Set<string>();
     members.forEach((m, i) => {
-      if (!m.extraction?.readable) return;
-      for (const d of m.extraction.deadlines) {
+      const ex = m.extraction;
+      if (!ex?.readable) return;
+      const returned = new Map<string, { text: string; citation: Citation }>();
+      for (const d of ex.deadlines) {
         if (!d.text) continue;
         const citation = cite(i, d.box);
         if (!citation) continue;
-        const sentence = trimSentence(sentenceContaining(d.text, m.extraction.fullText) ?? d.text);
-        if (gated.has(`${i}:${sentence}`)) continue;
-        gated.add(`${i}:${sentence}`);
+        const sentence = recoverSentence(d.text, ex.fullText);
+        if (sentence === null) {
+          withhold(d.text, citation, askPrompt(letterId, d.text, "unrecovered"));
+          continue;
+        }
+        if (!returned.has(sentence)) returned.set(sentence, { text: d.text, citation });
+      }
+      for (const sentence of new Set(splitSentences(ex.fullText))) {
+        const cited = returned.get(sentence) ?? null;
+        if (!cited && !isDeadlineLike(sentence)) continue;
         const verdict = gateSentence(sentence, noticeIso);
         if (verdict.kind === "no-date") continue;
         if (verdict.kind === "ask") {
-          letterBlocked = true;
-          withheld.push(candidateOf(sentence, citation));
-          ask({ kind: "confirm_deadline", letterId, prompt: askPrompt(letterId, sentence, verdict.reason), citation });
+          withhold(sentence, cited?.citation ?? null, askPrompt(letterId, sentence, verdict.reason));
+          continue;
+        }
+        if (!cited) {
+          if (verdict.kind === "deadline") withhold(sentence, null, askPrompt(letterId, sentence, "uncited"));
           continue;
         }
         if (verdict.kind === "date-to-know") {
           resolvedToKnow.push({
             iso: verdict.iso,
-            text: d.text,
+            text: cited.text,
             sentence,
             obligation: "other",
-            citation,
+            citation: cited.citation,
             anchor: null,
             countRule: null,
           });
@@ -543,14 +563,14 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
               ? fields.noticeDate
                 ? { value: fields.noticeDate.value, citation: fields.noticeDate.citation }
                 : null
-              : { value: verdict.count.anchorText, citation };
+              : { value: verdict.count.anchorText, citation: cited.citation };
         }
         resolvedDeadlines.push({
           iso: verdict.iso,
-          text: d.text,
+          text: cited.text,
           sentence,
           obligation: verdict.obligation,
-          citation,
+          citation: cited.citation,
           anchor,
           countRule: verdict.count ? "calendar days" : null,
         });
@@ -605,7 +625,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       for (const entry of resolvedToKnow) publish(entry, datesToKnow);
     } else {
       for (const entry of [...resolvedDeadlines, ...resolvedToKnow]) withheld.push(candidateOf(entry.sentence, entry.citation));
-      const key = (c: DeadlineCandidate): string => `${c.citation.file}:${c.citation.page}:${c.sentence}`;
+      const key = (c: DeadlineCandidate): string => `${c.citation?.file}:${c.citation?.page}:${c.sentence}`;
       for (const q of questions) {
         if (q.letterId !== letterId) continue;
         if (q.kind !== "confirm_deadline" && q.kind !== "missing_page") continue;
@@ -683,6 +703,21 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         warned.add(key);
         warnings.push(flagToWarning(flag, letterId, members, cite, source.citation));
       }
+    }
+
+    // A letter flagged as a scam gets the scam warning and nothing that
+    // treats its dates as real: no deadline, date to know or deadline
+    // question.
+    if (warnings.some((w) => w.letterId === letterId && w.kind === "scam_suspect")) {
+      const drop = <T extends { letterId: string | null }>(list: T[], gone: (item: T) => boolean): void => {
+        for (let k = list.length - 1; k >= 0; k--) if (list[k]!.letterId === letterId && gone(list[k]!)) list.splice(k, 1);
+      };
+      drop(deadlines, () => true);
+      drop(datesToKnow, () => true);
+      drop(questions, (q) => q.kind === "confirm_deadline");
+      drop(warnings, (w) => w.kind === "conflicting_dates");
+      for (const q of questions) if (q.letterId === letterId) delete q.candidates;
+      fields.deadlineIso = null;
     }
   });
 
@@ -962,7 +997,7 @@ function flagToWarning(
   }
 }
 
-function askPrompt(letterId: string, sentence: string, reason: AskReason): string {
+function askPrompt(letterId: string, sentence: string, reason: AskReason | "unrecovered" | "uncited"): string {
   const said = `Letter ${letterId} says "${sentence}".`;
   switch (reason) {
     case "ambiguous-date":
@@ -977,6 +1012,10 @@ function askPrompt(letterId: string, sentence: string, reason: AskReason): strin
       return `${said} The count starts from the notice date, which could not be read. What is the notice date?`;
     case "unrecognized":
       return `${said} It does not state one clear deadline, so none was set. Which date, if any, is the deadline?`;
+    case "uncited":
+      return `${said} It reads like a deadline but could not be pointed to on the photo, so no deadline was set. Which date, if any, is the deadline?`;
+    case "unrecovered":
+      return `Letter ${letterId} shows a deadline ("${sentence}") that could not be matched word for word to the letter, so none was set. Which date, if any, is the deadline?`;
   }
 }
 

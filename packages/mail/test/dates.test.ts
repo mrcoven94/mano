@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findAmbiguousDate, parseAllDates, parseWrittenDate, sentenceContaining } from "../src/dates.js";
+import { findAmbiguousDate, parseAllDates, parseWrittenDate, recoverSentence, splitSentences } from "../src/dates.js";
 
 describe("parseWrittenDate", () => {
   it("parses full written dates", () => {
@@ -30,16 +30,30 @@ describe("parseWrittenDate", () => {
   });
 });
 
-describe("sentenceContaining", () => {
-  it("finds the sentence stating the text", () => {
-    expect(sentenceContaining("November 20, 2026", "Hello. Respond by November 20, 2026. Bye.")).toBe(
-      "Respond by November 20, 2026.",
-    );
-    expect(sentenceContaining("November 20, 2026", "Nothing here.")).toBeNull();
+describe("splitSentences", () => {
+  it("removes only a salutation line and keeps the letterhead out of the body", () => {
+    const text = "Notice Date: November 2, 2026\n\nDear Maria Santos,\nReturn the form by November 20, 2026. Thank you.";
+    expect(splitSentences(text)).toEqual(["Notice Date: November 2, 2026", "Return the form by November 20, 2026", "Thank you"]);
   });
-  it("keeps the letterhead out of the first body sentence", () => {
-    const text = "Notice Date: November 2, 2026\n\nDear Maria,\n\nReturn the form by November 20, 2026.";
-    expect(sentenceContaining("November 20, 2026", text)).toBe("Return the form by November 20, 2026.");
+  it("never lets a salutation swallow a condition", () => {
+    expect(splitSentences("Dear Maria\nIf you moved, submit proof by November 20, 2026.")).toEqual([
+      "If you moved, submit proof by November 20, 2026",
+    ]);
+    expect(splitSentences("Dear Maria, if you moved, submit proof by November 20, 2026.")).toEqual([
+      "Dear Maria, if you moved, submit proof by November 20, 2026",
+    ]);
+  });
+});
+
+describe("recoverSentence", () => {
+  const text = "Hello. Do not submit proof by November 20, 2026. Respond by December 1, 2026.";
+  it("returns the one sentence that contains the text", () => {
+    expect(recoverSentence("submit proof by November 20, 2026", text)).toBe("Do not submit proof by November 20, 2026");
+    expect(recoverSentence("December 1, 2026.", text)).toBe("Respond by December 1, 2026");
+  });
+  it("returns null when the text is not verbatim or sits in more than one sentence", () => {
+    expect(recoverSentence("Submit proof by November 20 2026", text)).toBeNull();
+    expect(recoverSentence("2026", text)).toBeNull();
   });
 });
 

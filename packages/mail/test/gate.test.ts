@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chronologyOf, gateSentence, hasDutyWord, isHistoryWithAmount, obligationOf } from "../src/gate.js";
+import { chronologyOf, gateSentence, isDeadlineLike, obligationOf } from "../src/gate.js";
 
 const NOTICE = "2026-11-02";
 
@@ -10,14 +10,17 @@ describe("gateSentence publishes only the closed forms", () => {
     ["by", "Your paperwork must arrive by December 12, 2026.", "2026-12-12"],
     ["by", "Please send them so they arrive by November 15, 2026.", "2026-11-15"],
     ["by", "Your renewal is due by December 14, 2026.", "2026-12-14"],
-    ["by", "Dear Maria Santos, Return the form by 11/20/2026.", "2026-11-20"],
+    ["by", "Return the form by 11/20/2026.", "2026-11-20"],
+    ["by", "Pay $50.00 by December 1, 2026.", "2026-12-01"],
+    ["by", "Your hearing request must arrive by November 30, 2026.", "2026-11-30"],
+    ["by", "Send it so it arrives by November 22, 2026.", "2026-11-22"],
     ["on-or-before", "You must respond on or before December 12, 2026.", "2026-12-12"],
     ["no-later-than", "You must renew your case no later than December 15, 2026.", "2026-12-15"],
     ["within-days-of-date", "You must respond within 10 days of November 25, 2026.", "2026-12-05"],
     ["within-days-of-date", "Send the form within 10 calendar days after November 25, 2026.", "2026-12-05"],
     ["within-days-of-notice", "Request a hearing within 30 days of the date of this notice.", "2026-12-02"],
-    ["due", "Renewal due November 20, 2026.", "2026-11-20"],
-    ["due", "Your payment is due on December 1, 2026.", "2026-12-01"],
+    ["due", "Your renewal is due November 20, 2026.", "2026-11-20"],
+    ["due", "Your premium is due on December 1, 2026.", "2026-12-01"],
   ])("%s: %s", (form, sentence, iso) => {
     expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "deadline", form, iso });
   });
@@ -55,6 +58,19 @@ describe("gateSentence asks on everything else", () => {
     "Nothing is due November 20, 2026.",
     "Send pay stubs for the last 30 days by November 20, 2026.",
     "Respond by 03/04/2027.",
+    "Submit the form by 11/15/26; we finish processing by November 20, 2026.",
+    "Submit the form by tomorrow; we finish processing by November 20, 2026.",
+    "Return the form at your discretion by November 20, 2026.",
+    "Neither payment is due November 20, 2026.",
+    "Your refund is due on November 20, 2026.",
+    "Your refund must be paid by November 20, 2026.",
+    "Renewal due November 20, 2026.",
+    "It must arrive by November 25, 2026.",
+    "Dear Maria Santos, Return the form by November 20, 2026.",
+    "Your renewal is due tomorrow.",
+    "Your renewal is due 11/15/26.",
+    "Respond within ten days of receipt.",
+    "Your payment of $45.00 for November 2026 was due on November 15, 2026.",
   ])("%s", (sentence) => {
     expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "ask" });
   });
@@ -78,7 +94,6 @@ describe("gateSentence dates to know", () => {
     ["Your interview is on December 1, 2026.", "2026-12-01"],
     ["You will receive your new card on November 20, 2026.", "2026-11-20"],
     ["Coverage ends December 20, 2026.", "2026-12-20"],
-    ["Your payment of $45.00 for November 2026 was due on November 15, 2026.", "2026-11-15"],
   ])("%s", (sentence, iso) => {
     expect(gateSentence(sentence, NOTICE)).toEqual({ kind: "date-to-know", iso });
   });
@@ -116,20 +131,27 @@ describe("chronologyOf", () => {
   });
 });
 
-describe("hasDutyWord", () => {
-  it("finds duties but not nouns or arrivals", () => {
-    expect(hasDutyWord("You must respond by December 12, 2026")).toBe(true);
-    expect(hasDutyWord("Pay $50 by December 12, 2026")).toBe(true);
-    expect(hasDutyWord("You will receive your new card on November 20, 2026")).toBe(false);
-    expect(hasDutyWord("We received your response on November 2, 2026")).toBe(false);
-    expect(hasDutyWord("Send pay stubs by")).toBe(true);
-    expect(hasDutyWord("Your pay stubs from November 2, 2026")).toBe(false);
+describe("isDeadlineLike", () => {
+  it.each([
+    "Your renewal is due tomorrow",
+    "Respond within ten days of receipt",
+    "You have 60 days from the date of this notice to appeal",
+    "Send it by next week",
+    "Reply by 11/15/26",
+    "Reply by 11/15",
+    "Call us immediately",
+    "Return it by December 5",
+  ])("flags %s", (sentence) => {
+    expect(isDeadlineLike(sentence)).toBe(true);
   });
-});
 
-describe("isHistoryWithAmount", () => {
-  it("spots stated amounts already due or paid", () => {
-    expect(isHistoryWithAmount("Your payment of $45.00 for November 2026 was due on November 15, 2026")).toBe(true);
-    expect(isHistoryWithAmount("Pay $50 by December 12, 2026")).toBe(false);
+  it.each([
+    "Notice Date: November 2, 2026",
+    "Coverage ends December 20, 2026",
+    "Pay stubs for the last 30 days for every working household member",
+    "Call (555) 214-8800, Monday through Friday, 8:00 AM to 5:00 PM",
+    "Send it by mail",
+  ])("leaves %s alone", (sentence) => {
+    expect(isDeadlineLike(sentence)).toBe(false);
   });
 });

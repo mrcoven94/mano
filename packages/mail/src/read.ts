@@ -206,22 +206,14 @@ function toExtraLetter(v: unknown): ExtraLetter | null {
 export function extraLetterExtraction(page: PageExtraction): PageExtraction | null {
   const extra = page.extraLetter;
   if (!extra || !page.readable) return null;
-  const bits = [
-    extra.sender.text,
-    extra.program.text,
-    extra.subject.text,
-    ...extra.deadlines.map((d) => d.text),
-    extra.referenceNo.text,
-    extra.noticeDate.text,
-    ...extra.asked.map((a) => a.text),
-    ...extra.phones.map((p) => p.text),
-    ...extra.links.map((l) => l.text),
-  ].filter((t): t is string => !!t && t.trim().length > 0);
   return {
     ...emptyExtraction(),
     readable: true,
     readabilityNote: null,
-    fullText: bits.join("\n"),
+    // The shared transcription, never text composed from extracted
+    // fields: deadline sentences are recovered from what the page says,
+    // conditions included.
+    fullText: page.fullText,
     sender: extra.sender,
     program: extra.program,
     subject: extra.subject,

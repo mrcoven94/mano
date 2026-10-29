@@ -21,6 +21,9 @@ const BASE_TEXT =
   "Your renewal is due November 20, 2026. Send the signed renewal form. Coverage ends December 20, 2026. " +
   "Call (555) 100-2000.";
 
+// BASE_TEXT without its deadline sentence, for tests that state their own.
+const INFO_TEXT = BASE_TEXT.replace("Your renewal is due November 20, 2026. ", "");
+
 function pageJson(over: Record<string, unknown> = {}): string {
   return JSON.stringify({
     readable: true,
@@ -108,7 +111,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: "Sacramento County Medi-Cal Office. Your renewal is due November 20, 2026.",
+        full_text: "Sacramento County Medi-Cal Office. Coverage ends November 20, 2026.",
         sender: { text: "Sacramento County Medi-Cal Office", box_2d: null },
         program: NIL,
         subject: NIL,
@@ -139,7 +142,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} Respond within 10 days of November 25, 2026.`,
+        full_text: `${INFO_TEXT} Respond within 10 days of November 25, 2026.`,
         deadlines: [{ text: "within 10 days of November 25, 2026", box_2d: [200, 60, 220, 300] }],
       }),
     ]);
@@ -162,7 +165,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} Ask for reconsideration within 60 days of the date of this notice.`,
+        full_text: `${INFO_TEXT} Ask for reconsideration within 60 days of the date of this notice.`,
         deadlines: [{ text: "within 60 days of the date of this notice", box_2d: [200, 60, 220, 300] }],
       }),
     ]);
@@ -183,7 +186,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} Respond by 03/04/2027.`,
+        full_text: `${INFO_TEXT} Respond by 03/04/2027.`,
         deadlines: [{ text: "03/04/2027", box_2d: [200, 60, 220, 300] }],
       }),
     ]);
@@ -200,7 +203,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} Respond within 10 days of receipt.`,
+        full_text: `${INFO_TEXT} Respond within 10 days of receipt.`,
         deadlines: [{ text: "within 10 days of receipt", box_2d: [200, 60, 220, 300] }],
       }),
     ]);
@@ -248,7 +251,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} Benefits stop January 31, 2027.`,
+        full_text: `${INFO_TEXT} Benefits stop January 31, 2027.`,
         deadlines: [
           { text: "December 20, 2026", box_2d: [200, 60, 220, 300] },
           { text: "January 31, 2027", box_2d: [230, 60, 250, 300] },
@@ -396,7 +399,7 @@ describe("readMail", () => {
   it("still asks when two photos show the same page marker", async () => {
     const bytes = await photo();
     const dup = pageJson({
-      full_text: `${BASE_TEXT} page 1 of 2.`,
+      full_text: `${INFO_TEXT} page 1 of 2.`,
       page_marker: { text: "page 1 of 2", box_2d: [300, 60, 320, 250] },
     });
     const model = clientFor([dup, dup]);
@@ -416,7 +419,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} page 1 of 999999999.`,
+        full_text: `${INFO_TEXT} page 1 of 999999999.`,
         page_marker: { text: "page 1 of 999999999", box_2d: [300, 60, 320, 250] },
       }),
     ]);
@@ -434,7 +437,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} page 1 of 2.`,
+        full_text: `${INFO_TEXT} page 1 of 2.`,
         page_marker: { text: "page 1 of 2", box_2d: [300, 60, 320, 250] },
       }),
     ]);
@@ -450,7 +453,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} Respond by November 20, 2026. page 1 of 2.`,
+        full_text: `${INFO_TEXT} Respond by November 20, 2026. page 1 of 2.`,
         deadlines: [{ text: "Respond by November 20, 2026", box_2d: [200, 60, 220, 300] }],
         page_marker: { text: "page 1 of 2", box_2d: [300, 60, 320, 250] },
       }),
@@ -484,7 +487,7 @@ describe("readMail", () => {
     expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
     expect(question.candidates?.flatMap((c) => c.dates).sort()).toEqual(["2026-11-20", "2026-12-01"]);
-    expect(question.candidates?.every((c) => c.citation.file === "p1.jpg" || c.citation.file === "p2.jpg")).toBe(true);
+    expect(question.candidates?.every((c) => c.citation?.file === "p1.jpg" || c.citation?.file === "p2.jpg")).toBe(true);
   });
 
   it("splits stacked letters that share one crop", async () => {
@@ -512,10 +515,17 @@ describe("readMail", () => {
       model,
     });
     expect(reading.letters).toHaveLength(2);
-    expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
-    // The stacked letter's bare date keeps no sentence, so it lands in
-    // dates to know: cited, but never an action date.
-    expect(reading.datesToKnow.map((d) => d.dueDate)).toEqual(["2026-11-24"]);
+    // Both letters share one transcription, so each sees the other's
+    // deadline sentence without a box of its own and withholds.
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.datesToKnow).toEqual([]);
+    for (const letterId of ["L1", "L2"]) {
+      const q = reading.questions.find((x) => x.letterId === letterId && x.kind === "confirm_deadline")!;
+      expect(q.candidates?.map((c) => c.sentence).sort()).toEqual([
+        "Pay by November 24, 2026",
+        "Your renewal is due November 20, 2026",
+      ]);
+    }
   });
 
   it("uses on-device detection when SAM fails", async () => {
@@ -617,7 +627,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} Respond by November 20, 2026. Respond by 03/04/2027. Appeal by December 1, 2026.`,
+        full_text: `${INFO_TEXT} Respond by November 20, 2026. Respond by 03/04/2027. Appeal by December 1, 2026.`,
         deadlines: [
           { text: "Respond by November 20, 2026", box_2d: [200, 60, 220, 300] },
           { text: "Respond by 03/04/2027", box_2d: [230, 60, 250, 300] },
@@ -642,7 +652,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} Respond by October 24, 2026.`,
+        full_text: `${INFO_TEXT} Respond by October 24, 2026.`,
         deadlines: [{ text: "Respond by October 24, 2026", box_2d: [200, 60, 220, 300] }],
       }),
     ]);
@@ -662,7 +672,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} Respond by November 20, 2026. Respond by November 25, 2026.`,
+        full_text: `${INFO_TEXT} Respond by November 20, 2026. Respond by November 25, 2026.`,
         deadlines: [
           { text: "Respond by November 20, 2026", box_2d: [200, 60, 220, 300] },
           { text: "Respond by November 25, 2026", box_2d: [230, 60, 250, 300] },
@@ -685,7 +695,7 @@ describe("readMail", () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
-        full_text: `${BASE_TEXT} Respond by November 20, 2026.`,
+        full_text: `${INFO_TEXT} Respond by November 20, 2026.`,
         deadlines: [{ text: "Respond by November 20, 2026", box_2d: [200, 60, 220, 300] }],
       }),
       pageJson({
@@ -997,7 +1007,7 @@ describe("readMail", () => {
     expect(reading.deadlines).toEqual([]);
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
     expect(question.candidates?.flatMap((c) => c.dates).sort()).toEqual(["2026-10-23", "2026-11-24"]);
-    expect(question.candidates?.every((c) => c.citation.file === "mail.jpg")).toBe(true);
+    expect(question.candidates?.every((c) => c.citation?.file === "mail.jpg")).toBe(true);
   });
 
   it("asks when a clean clause sits in a two-expression sentence", async () => {
@@ -1133,7 +1143,7 @@ describe("readMail publish gate", () => {
       "2026-12-02",
       "November 2, 2026",
     ],
-    ["due", "Payment due December 13, 2026.", "Payment due December 13, 2026.", "2026-12-13", null],
+    ["due", "Your premium is due December 13, 2026.", "Your premium is due December 13, 2026.", "2026-12-13", null],
   ])("publishes the %s form", async (_label, sentence, extracted, iso, anchor) => {
     const reading = await readSentence(sentence, [dl(extracted)]);
     expect(reading.questions).toEqual([]);
@@ -1160,16 +1170,16 @@ describe("readMail publish gate", () => {
     expect(reading.datesToKnow.map((d) => d.dueDate)).toEqual(["2026-11-20", "2026-12-01"]);
   });
 
-  it("files a stated amount already due as a date to know", async () => {
+  it("asks on a stated amount already due, since due always reads like a deadline", async () => {
     const sentence = "Your payment of $45.00 for November 2026 was due on November 15, 2026.";
     const reading = await readSentence(sentence, [dl("November 15, 2026")]);
     expect(reading.deadlines).toEqual([]);
-    expect(reading.questions).toEqual([]);
-    expect(reading.datesToKnow.map((d) => d.dueDate)).toEqual(["2026-11-15"]);
+    expect(reading.datesToKnow).toEqual([]);
+    expect(reading.questions.map((q) => q.kind)).toEqual(["confirm_deadline"]);
   });
 
   it("asks when the deadline is the notice date itself", async () => {
-    const reading = await readSentence("Respond by November 2, 2026.", [dl("November 2, 2026")]);
+    const reading = await readSentence("Respond by November 2, 2026.", [dl("Respond by November 2, 2026.")]);
     expect(reading.deadlines).toEqual([]);
     expect(reading.questions.map((q) => q.kind)).toEqual(["confirm_deadline"]);
   });
@@ -1191,7 +1201,7 @@ describe("readMail publish gate", () => {
         ]),
       );
       expect(q.candidates).toHaveLength(2);
-      expect(q.candidates?.every((c) => c.citation.file === "mail.jpg")).toBe(true);
+      expect(q.candidates?.every((c) => c.citation?.file === "mail.jpg")).toBe(true);
     }
   });
 });

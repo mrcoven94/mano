@@ -111,17 +111,32 @@ export const DATE_PATTERN =
   `|\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${MONTH_NAMES})\\.?\\s*,?\\s*\\d{4}` +
   `|\\d{1,2}[/-]\\d{1,2}[/-]\\d{4}|20\\d{2}-\\d{2}-\\d{2})`;
 
-// First sentence of the transcription stating the extracted text,
-// or null. Sentences end at end punctuation or a blank line, so a
-// letterhead never runs into the first sentence of the body.
-// Matching ignores case and whitespace.
-export function sentenceContaining(text: string, fullText: string): string | null {
-  const want = text.toLowerCase().replace(/\s+/g, " ").trim();
+// A salutation is a whole line: "Dear" plus a short name, ending in an
+// optional comma or colon. Only that line is removed. A "Dear" line
+// with anything else on it stays, so its sentence fails the gate and
+// asks instead of losing a condition.
+const SALUTATION_LINE = /^[ \t]*dear(?:[ \t]+[A-Za-z][A-Za-z.'-]*){1,5}[ \t]*[,:]?[ \t]*$/gim;
+
+// The transcription's sentences, whitespace collapsed and trailing
+// punctuation removed. Sentences end at end punctuation, a blank line
+// or a salutation line, so a letterhead never runs into the body.
+export function splitSentences(fullText: string): string[] {
+  return fullText
+    .replace(SALUTATION_LINE, "\n\n")
+    .split(/(?<=[.!?])\s+|\n\s*\n/)
+    .map((s) => s.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, ""))
+    .filter((s) => s.length > 0);
+}
+
+// The one sentence of the original transcription that contains the
+// extracted text, ignoring case and whitespace. Null when no sentence
+// or more than one contains it: the extraction is never gated in its
+// place.
+export function recoverSentence(text: string, fullText: string): string | null {
+  const want = text.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "").toLowerCase();
   if (want.length < 2) return null;
-  for (const sentence of fullText.split(/(?<=[.!?])\s+|\n\s*\n/)) {
-    if (sentence.toLowerCase().replace(/\s+/g, " ").includes(want)) return sentence;
-  }
-  return null;
+  const found = [...new Set(splitSentences(fullText).filter((s) => s.toLowerCase().includes(want)))];
+  return found.length === 1 ? found[0]! : null;
 }
 
 // Every date found in reading order.
