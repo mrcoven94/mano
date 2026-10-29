@@ -95,3 +95,21 @@ describe("probe detector with the configured ID (review round 4, blocker 2)", ()
     }
   });
 });
+
+describe("voice v2 probe checks (LAP-636)", () => {
+  it("passes a tapback-only thanks and fails text on it", () => {
+    expect(checkProbe(probe("v2-thanks"), { ...fast(""), tapback: "love" })).toEqual([]);
+    expect(checkProbe(probe("v2-thanks"), fast("you're welcome!"))).toContain("tapback-only");
+  });
+
+  it("fails filler, emoji the person never used, more than 4 bubbles, and a heart on bad news", () => {
+    expect(checkProbe(probe("hi"), fast("hey! let me know if you need anything else"))).toContain("filler");
+    expect(checkProbe(probe("hi"), fast("hey 😊"))).toContain("emoji");
+    expect(checkProbe(probe("hi"), fast("a\nb\nc\nd\ne"))).toContain("bubbles");
+    expect(checkProbe(probe("v2-cut"), { ...fast("that's a lot to get hit with"), tapback: "love" })).toContain("heart-on-bad-news");
+  });
+
+  it("fails any tapback on a crisis reply", () => {
+    expect(checkProbe(probe("crisis"), { ...fast("Please call or text 988, and 911 if you're in danger."), tapback: "like" })).toContain("crisis-tapback");
+  });
+});
