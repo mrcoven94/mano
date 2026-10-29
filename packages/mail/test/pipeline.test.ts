@@ -1487,3 +1487,90 @@ describe("readMail review 7", () => {
     expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-12-05"]);
   });
 });
+
+describe("readMail review 8", () => {
+  const HEAD = "County Office\nNotice date November 2, 2026\n\n";
+  const NOTICE = { text: "November 2, 2026", box_2d: [135, 60, 150, 300] };
+  const page = (fullText: string, deadlines: { text: string; box_2d: number[] }[], over: Record<string, unknown> = {}) =>
+    pageJson({
+      full_text: fullText,
+      sender: { text: "County Office", box_2d: [40, 60, 70, 400] },
+      program: NIL,
+      subject: NIL,
+      asked: [],
+      deadlines,
+      consequence: NIL,
+      reference_no: NIL,
+      notice_date: NOTICE,
+      phones: [],
+      ...over,
+    });
+  async function read(pages: string[]) {
+    const bytes = await photo();
+    const model = clientFor(pages);
+    return readMail(
+      pages.map((_, i) => ({ bytes, mimeType: "image/jpeg", name: `p${i + 1}.jpg` })),
+      { personId: "p1", synthetic: true, model },
+    );
+  }
+  const dl = (text: string, ymin = 200): { text: string; box_2d: number[] } => ({
+    text,
+    box_2d: [ymin, 60, ymin + 20, 300],
+  });
+  const expectWithheld = (reading: Awaited<ReturnType<typeof read>>): void => {
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.letters.every((l) => l.fields.deadlineIso === null)).toBe(true);
+    expect(reading.questions.some((q) => q.kind === "confirm_deadline")).toBe(true);
+  };
+  const SUBMIT = "Submit proof by November 20, 2026.";
+
+  it("finding 1: an audience in the salutation withholds the deadline", async () => {
+    expectWithheld(await read([page(`${HEAD}Dear County Staff:\n\n${SUBMIT}`, [dl(SUBMIT)])]));
+  });
+
+  it.each([["If you moved:"], ["For county staff only:"]])(
+    "finding 2: %s on page 1 withholds the deadline on page 2",
+    async (heading) => {
+      const ref = { text: "CA-7", box_2d: [110, 220, 130, 350] };
+      const reading = await read([
+        page(`${HEAD}Case CA-7\n\n${heading}\n\npage 1 of 2`, [], {
+          reference_no: ref,
+          page_marker: { text: "page 1 of 2", box_2d: [300, 60, 320, 250] },
+        }),
+        page(`County Office\nCase CA-7\n\n${SUBMIT}\n\npage 2 of 2`, [dl(SUBMIT)], {
+          reference_no: ref,
+          notice_date: NIL,
+          page_marker: { text: "page 2 of 2", box_2d: [300, 60, 320, 250] },
+        }),
+      ]);
+      expect(reading.letters).toHaveLength(1);
+      expectWithheld(reading);
+    },
+  );
+
+  it.each([["The following instruction is not required."], ["The following instruction has been cancelled."]])(
+    "finding 3: %s withholds the deadline",
+    async (lead) => {
+      expectWithheld(await read([page(`${HEAD}${lead} ${SUBMIT}`, [dl(SUBMIT)])]));
+    },
+  );
+
+  it("finding 4: an abbreviated earlier date still counts", async () => {
+    const reading = await read([page(`${HEAD}Submit proof before 15 Nov. 2026. ${SUBMIT}`, [dl(SUBMIT)])]);
+    expectWithheld(reading);
+    const listed = reading.questions.flatMap((q) => q.candidates ?? []).flatMap((c) => c.dates);
+    expect(listed).toContain("2026-11-15");
+  });
+
+  it("finding 5: an earlier cutoff in other words still counts", async () => {
+    const reading = await read([page(`${HEAD}The last day to provide proof is November 15, 2026. ${SUBMIT}`, [dl(SUBMIT)])]);
+    expectWithheld(reading);
+    expect(reading.questions.flatMap((q) => q.candidates ?? []).flatMap((c) => c.dates)).toContain("2026-11-15");
+  });
+
+  it("still publishes when the only other date is the notice date alone on a header line", async () => {
+    const reading = await read([page(`${HEAD}Dear Maria Santos,\n\n${SUBMIT}`, [dl(SUBMIT)])]);
+    expect(reading.questions.filter((q) => q.kind === "confirm_deadline")).toEqual([]);
+    expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
+  });
+});
