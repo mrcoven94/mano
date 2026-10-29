@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ChannelUncertain, RecordingChannel, idempotencyKeyFor } from "@mano/channels";
+import { ChannelUncertain, RecordingChannel, ResponderFailed, idempotencyKeyFor } from "@mano/channels";
 import { ConversationRunner, DEFAULT_RUNNER_CONFIG } from "../src/runner.js";
 import { INTRO_BUBBLE } from "../src/text.js";
 import {
@@ -529,7 +529,9 @@ describe("infrastructure retries", () => {
   });
 
   it("keeps the spend hold until a failed settlement succeeds", async () => {
+    // Budget 10 fits the $9.20 worst-case hold but not hold plus probe.
     const h = makeHarness({
+      budgetUsd: 10,
       config: { usdPer1kChars: 1 },
       responder: {
         name: "metered",
@@ -756,6 +758,19 @@ describe("log safety", () => {
     expect(logs).toContain("responder_failed");
     expect(logs).not.toContain("+15550009999");
     expect(logs).toContain('"err":"Error"');
+    expect(logs).toContain('"reason":null');
+    const starved = makeHarness({
+      responder: {
+        name: "starved",
+        maxAttempts: 1,
+        respond: async () => {
+          throw new ResponderFailed("Model run incomplete.", 1, 500, "run_incomplete");
+        },
+      },
+    });
+    await starved.runner.handleEvent(inboundEvent({ id: "evt_3", text: "Hi.", occurredAtMs: starved.now }), "webhook");
+    await runTurnAfterBatch(starved);
+    expect(starved.lines.join("\n")).toContain('"reason":"run_incomplete"');
     const h2 = makeHarness({ replies: ["Answer."] });
     await h2.runner.handleEvent(inboundEvent({ id: "evt_2", text: "Hi.", occurredAtMs: h2.now }), "webhook");
     h2.advance(h2.batchMs + 100);

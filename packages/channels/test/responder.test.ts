@@ -23,7 +23,7 @@ describe("SparkResponder", () => {
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body.model).toBe("muse-spark-1.3");
     expect(body.store).toBe(false);
-    expect(body.max_output_tokens).toBe(600);
+    expect(body.max_output_tokens).toBe(2048);
     expect(body).not.toHaveProperty("tools");
     expect(result.bubbles.join(" ")).toBe("First. Second.");
     expect(result.attempts).toBe(1);
@@ -69,6 +69,18 @@ describe("SparkResponder", () => {
     expect(err).toBeInstanceOf(ResponderFailed);
     expect((err as ResponderFailed).attempts).toBe(1);
     expect((err as ResponderFailed).inputChars).toBeGreaterThan(0);
+  });
+
+  it("carries a safe machine reason on failures", async () => {
+    const incomplete = vi.fn(async () => new Response(JSON.stringify({ status: "incomplete" }), { status: 200 }));
+    const starved = new SparkResponder({ apiKey: "test-key-not-real", fetchFn: incomplete as typeof fetch, maxRetries: 0 });
+    const err = await starved.respond({ texts: ["Hi"], attachmentCount: 0 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ResponderFailed);
+    expect((err as ResponderFailed).reason).toBe("run_incomplete");
+    const denied = vi.fn(async () => new Response("{}", { status: 401 }));
+    const badKey = new SparkResponder({ apiKey: "test-key-not-real", fetchFn: denied as typeof fetch, maxRetries: 0 });
+    const deniedErr = await badKey.respond({ texts: ["Hi"], attachmentCount: 0 }).catch((e: unknown) => e);
+    expect((deniedErr as ResponderFailed).reason).toBe("http_401");
   });
 });
 
