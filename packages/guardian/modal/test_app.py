@@ -82,18 +82,54 @@ class OverlappingChecks(unittest.TestCase):
         self.assertEqual(results, {"safe": "pass", "unsafe": "block"})
 
 
+class FakeTime:
+    """A clock that moves only when the hold sleeps, firing scheduled
+    warm-ups as it passes them."""
+
+    def __init__(self, hold_ref, warm_ups):
+        self.now = 0.0
+        self.hold_ref = hold_ref
+        self.warm_ups = sorted(warm_ups)
+        self.extra_holders = []
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+        while self.warm_ups and self.warm_ups[0] <= self.now:
+            self.warm_ups.pop(0)
+            owed = self.hold_ref[0].hold(app.WARM_HOLD_SECONDS, app.WARM_ROTATE_SECONDS)
+            self.extra_holders.append(owed)
+
+
+def minutes(value):
+    return value * 60.0
+
+
 class WarmUps(unittest.TestCase):
-    def test_a_second_warm_up_extends_the_first_hold(self):
-        hold = app.WarmHold()
-        start = time.monotonic()
-        first = {}
-        thread = threading.Thread(target=lambda: first.update(held=hold.hold(0.2)))
-        thread.start()
-        time.sleep(0.1)
-        self.assertFalse(hold.hold(0.2))
-        thread.join()
-        self.assertTrue(first["held"])
-        self.assertGreaterEqual(time.monotonic() - start, 0.29)
+    def make(self, warm_ups):
+        ref = []
+        fake = FakeTime(ref, warm_ups)
+        ref.append(app.WarmHold(clock=fake.clock, sleep=fake.sleep))
+        return ref[0], fake
+
+    def test_a_warm_up_during_a_hold_only_moves_the_deadline(self):
+        hold, fake = self.make([minutes(4)])
+        self.assertEqual(hold.hold(app.WARM_HOLD_SECONDS, app.WARM_ROTATE_SECONDS), 0)
+        self.assertEqual(fake.extra_holders, [0])
+        self.assertEqual(fake.now, minutes(14))
+
+    def test_a_hold_past_the_execution_limit_rotates_and_keeps_its_promise(self):
+        hold, fake = self.make([minutes(9), minutes(18), minutes(27)])
+        owed = hold.hold(app.WARM_HOLD_SECONDS, app.WARM_ROTATE_SECONDS)
+        first_call_ended = fake.now
+        self.assertLess(first_call_ended, app.GPU_TIMEOUT_SECONDS)
+        self.assertGreater(owed, 0)
+        # Guardian.warm hands the rest to a fresh call: warm(0).
+        self.assertEqual(hold.hold(0, app.WARM_ROTATE_SECONDS), 0)
+        self.assertLess(fake.now - first_call_ended, app.GPU_TIMEOUT_SECONDS)
+        self.assertEqual(fake.now, minutes(37))
 
 
 class MinContainers(unittest.TestCase):

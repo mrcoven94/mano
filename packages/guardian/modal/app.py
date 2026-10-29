@@ -32,6 +32,10 @@ IMAGE_DIGEST = (
 
 VERDICTS = ("pass", "fix", "block")
 WARM_HOLD_SECONDS = 600
+GPU_TIMEOUT_SECONDS = 1800
+# A warm-up call hands the rest of its hold to a fresh call well before
+# Modal stops it at GPU_TIMEOUT_SECONDS.
+WARM_ROTATE_SECONDS = GPU_TIMEOUT_SECONDS - 300
 
 GUARDIAN_SCHEMA = {
     "type": "object",
@@ -112,25 +116,32 @@ class WarmHold:
     keeps the container up. A warm-up while one is held only moves the
     deadline, so warm-ups never take more than one input slot."""
 
-    def __init__(self) -> None:
+    def __init__(self, clock=time.monotonic, sleep=time.sleep) -> None:
         self._lock = threading.Lock()
+        self._clock = clock
+        self._sleep = sleep
         self._until = 0.0
         self._holding = False
 
-    def hold(self, seconds: float) -> bool:
-        """Return True after holding, or False at once when already held."""
+    def hold(self, seconds: float, limit: float) -> float:
+        """Hold for at most `limit` seconds. Return how much of the hold is
+        still owed when the limit ends this call, else 0. A call made while
+        another holds returns 0 at once."""
         with self._lock:
-            self._until = max(self._until, time.monotonic() + seconds)
+            started = self._clock()
+            self._until = max(self._until, started + seconds)
             if self._holding:
-                return False
+                return 0.0
             self._holding = True
         while True:
             with self._lock:
-                left = self._until - time.monotonic()
-                if left <= 0:
+                now = self._clock()
+                left = self._until - now
+                life = started + limit - now
+                if left <= 0 or life <= 0:
                     self._holding = False
-                    return True
-            time.sleep(min(left, 5.0))
+                    return max(left, 0.0)
+            self._sleep(min(left, life, 5.0))
 
 
 def server_info() -> dict[str, dict[str, str]]:
@@ -213,7 +224,7 @@ def download():
     cpu=4.0,
     memory=32768,
     volumes={"/root/.cache/huggingface": cache},
-    timeout=1800,
+    timeout=GPU_TIMEOUT_SECONDS,
     startup_timeout=1800,
     min_containers=min_containers_from_env(
         os.environ.get("MANO_GUARDIAN_MIN_CONTAINERS")
@@ -238,8 +249,9 @@ class Guardian:
         self.warm_hold = WarmHold()
 
     @modal.method()
-    def warm(self) -> None:
-        self.warm_hold.hold(WARM_HOLD_SECONDS)
+    def warm(self, seconds: float = WARM_HOLD_SECONDS) -> None:
+        if self.warm_hold.hold(seconds, WARM_ROTATE_SECONDS) > 0:
+            Guardian().warm.spawn(0)
 
     @modal.method()
     def complete(self, body: dict[str, Any]) -> dict[str, Any]:
