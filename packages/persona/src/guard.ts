@@ -27,11 +27,14 @@ const ALWAYS_NAMES = ["muse spark", "meta ai", "openai", "chatgpt", "gpt", "anth
 const ALWAYS_PATTERN = new RegExp(`\\b(?:${ALWAYS_NAMES.join("|")})\\b`, "i");
 const MODEL_ID_PATTERN = /\b(?:muse|spark|glimmer|llama|gpt|claude|gemini|mistral|grok)[-_. ]?(?:[a-z]+[-_. ]?)?\d[\w.-]*/i;
 
-// Every other model or provider name is a leak in any case, anywhere:
-// Mano never needs to say them. A sentence that also makes an identity
+// Words that only name a model or product are a leak in any case,
+// anywhere: a benefits reply never needs them. Words that are also
+// people's names or ordinary words (claude, gemini, nova, spark, meta,
+// bard) are in AI_NAMES below and count only inside identity
+// constructions, so "your caseworker Claude" and "I'm a Gemini" pass. A sentence that also makes an identity
 // statement always leaks. Otherwise only these exact idioms are exempt,
 // each covered by a test.
-const WORD_NAMES = ["muse", "spark", "glimmer", "meta", "llama", "claude", "gemini", "bard", "mistral", "grok", "copilot"];
+const WORD_NAMES = ["muse", "glimmer", "llama", "mistral", "grok", "copilot"];
 const WORD_PATTERN = new RegExp(`\\b(?:${WORD_NAMES.join("|")})\\b`, "i");
 const IDENTITY_STATEMENT =
   /\b(?:i am|i'm|i’m|im|my name is|this is|powered by|built (?:on|by)|made by|trained by|runs? on|running on|based on|models?|assistant from)\b/i;
@@ -67,12 +70,18 @@ const NAME = `(?:${AI_NAMES.join("|")})`;
 const FILLER = "(?:(?:a|an|the|your|just|actually) )?(?:(?:ai|virtual|voice|digital|assistant|model|bot|chatbot|version|helper) )*";
 const SELF = "(?:i|i was|i am|i'm|i’m|im|mano|mano is|mano was)";
 const MAKER = "(?:made|built|created|developed|trained|powered|designed|programmed|engineered)";
+const ASSISTANT_WORD = "(?:ai|virtual|voice|digital|assistant|model|bot|chatbot|version|helper)";
 const IDENTITY_WITH_NAME = [
-  `\\b(?:i am|i'm|i’m|im|my name is|you(?:'re|’re| are) (?:talking|chatting|texting) (?:to|with)) ${FILLER}${NAME}\\b`,
+  // "I'm Claude", "my name is the Spark", but not "I'm a Gemini": a bare
+  // "a" or "an" counts only with an assistant word ("I'm a Gemini model").
+  `\\b(?:i am|i'm|i’m|im|my name is|you(?:'re|’re| are) (?:talking|chatting|texting) (?:to|with)) (?:(?:the|your|just|actually) )?(?:${ASSISTANT_WORD} )*${NAME}\\b`,
+  `\\b(?:i am|i'm|i’m|im) (?:a|an) (?:${ASSISTANT_WORD} )*${NAME}(?:['’]s)? (?:ai |virtual )?(?:assistant|model|bot|chatbot|helper)\\b`,
+  `^\\s*(?:powered|built|made|created|developed|trained) (?:by|on) ${FILLER}${NAME}\\b`,
+  `\\b(?:i am|i'm|i’m|im|this is) (?:a|an|the|your) (?:[\\w-]+ )?(?:assistant|model|bot|chatbot|helper) (?:from|by|made by|built by|of) ${FILLER}${NAME}\\b`,
   `\\bthis is ${FILLER}${NAME}\\b(?!['’]s (?!(?:ai |virtual )?(?:assistant|model|bot|chatbot)\\b))`,
   `\\b${SELF}(?: (?:an?|the) (?:[\\w-]+ )?(?:assistant|ai|model|bot|chatbot))? ${MAKER} (?:by|on|at) ${FILLER}${NAME}\\b`,
   `\\b(?:i run|i am based|i'm based|i’m based|im based|mano runs|mano is based|mano was built) on ${FILLER}${NAME}\\b`,
-  `\\b(?:i|mano) (?:use|uses) ${NAME} to (?:answer|reply|respond|think|talk|write)\\b`,
+  `\\b(?:i|mano) (?:use|uses) ${NAME} (?:to|for) (?:answer|answers|reply|replies|respond|think|talk|write)\\b`,
   `\\b${NAME} (?:made|built|created|developed|trained|powers|runs|designed) (?:me|mano)\\b`,
   `\\bmy (?:maker|creator|developer|provider|company|model) is ${FILLER}${NAME}\\b`,
   `\\b(?:i am|i'm|i’m|im|this is|my name is)(?: (?:a|an|the|your))? ${NAME}['’]s (?:ai |virtual )?(?:assistant|model|bot|chatbot)\\b`,
@@ -83,7 +92,9 @@ const OTHER_SELF = [
   /\bi(?: was| am|'m|’m)(?: (?:an?|the) (?:[\w-]+ )?(?:assistant|ai|model|bot|chatbot))? (?:developed|built|made|created|trained|designed|programmed|powered|engineered) (?:by|at|on)\s+(?!mano\b)\S/i,
   /\bmy name is\s+(?!mano\b)\S/i,
   // Case-sensitive on purpose: the name after it is capitalized.
-  /\b[Ii](?:'m|’m| am) (?:an? |the )?(?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version) )*(?:called |named )?(?!Mano\b)[A-Z]/,
+  // An article counts only before an assistant word, so "I'm a
+  // Medicaid expert" and "I'm a Gemini" pass.
+  /\b[Ii](?:'m|’m| am) (?:(?:an?|the) (?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version|virtual) )+|(?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version) )*)(?:called |named )?(?!Mano\b)[A-Z]/,
 ];
 
 function selfIdentifiesAsOther(sentence: string): boolean {
@@ -166,7 +177,7 @@ function removeProviderNames(text: string, ids: RegExp | null): { text: string; 
     gap += i > 0 ? parts[i - 1] : "";
     let sentence: string | null = parts[i];
     if (sentenceNamesProvider(sentence, ids)) {
-      sentence = SELF_REFERENCE.test(sentence) && !selfDescribed ? SELF_DESCRIPTION : null;
+      sentence = (SELF_REFERENCE.test(sentence) || selfIdentifiesAsOther(sentence)) && !selfDescribed ? SELF_DESCRIPTION : null;
       if (sentence) selfDescribed = true;
     }
     if (sentence === null) continue;

@@ -79,7 +79,7 @@ describe("the voice guard on every send path", () => {
   });
 
   it("never sends an empty text: an unsendable answer becomes the safe line", async () => {
-    for (const reply of ["", "**", "Gemini."]) {
+    for (const reply of ["", "**", "ChatGPT."]) {
       const h = makeHarness({ replies: [reply] });
       await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "hi", occurredAtMs: h.now }), "webhook");
       await runTurnAfterBatch(h);

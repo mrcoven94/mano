@@ -154,3 +154,23 @@ describe("listed names count only inside an identity construction (lead decision
     }
   });
 });
+
+describe("model words split in two (lead decision)", () => {
+  it("passes people's names and ordinary words outside identity constructions", () => {
+    for (const text of ["Your caseworker Claude will call Friday.", "I'm a Gemini.", "That's a meta question.", "There's a nova of options.", "I'm a Medicaid expert, more or less."]) {
+      expect(guardReply(text), text).toEqual({ text, changes: [] });
+    }
+  });
+
+  it("still replaces those words inside identity constructions", () => {
+    for (const text of ["I'm Claude.", "I'm powered by Meta.", "Powered by Meta.", "This is Gemini.", "I'm a Gemini model."]) {
+      expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
+    }
+  });
+
+  it("keeps product-only words counting anywhere", () => {
+    for (const text of ["Ask ChatGPT about it.", "Llama is fine.", "Use Copilot for that.", "Grok can tell you."]) {
+      expect(containsProviderName(text), text).toBe(true);
+    }
+  });
+});

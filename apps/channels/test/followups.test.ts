@@ -149,3 +149,11 @@ describe("listed names in benefits help, through the send path (lead decision)",
     expect((await say(h, "evt_1", "can i use snap online")).slice(1)).toEqual([reply]);
   });
 });
+
+describe("a caseworker named Claude, through the send path (lead decision)", () => {
+  it("sends the reply unchanged", async () => {
+    const reply = "Your caseworker Claude will call Friday.";
+    const h = makeHarness({ replies: [reply] });
+    expect((await say(h, "evt_1", "when will they call")).slice(1)).toEqual([reply]);
+  });
+});

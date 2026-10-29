@@ -65,7 +65,7 @@ describe("guardReply model and provider names", () => {
 
   it("replaces the self-description once and drops other sentences that name a provider", () => {
     expect(guardReply("I'm Muse. I run on Llama. Meta trained me. What's up?").text).toBe(`${SELF_DESCRIPTION} What's up?`);
-    expect(guardReply("Unlike Gemini, this one is free. Bring the letter.")).toEqual({
+    expect(guardReply("Unlike ChatGPT, this one is free. Bring the letter.")).toEqual({
       text: "Bring the letter.",
       changes: ["provider-name"],
     });
@@ -87,7 +87,7 @@ describe("guardReply empty and unsendable replies", () => {
     }
     expect(guardReply("")).toEqual({ text: SAFE_REPLY, changes: ["empty"] });
     expect(guardReply("**")).toEqual({ text: SAFE_REPLY, changes: ["markdown", "empty"] });
-    expect(guardReply("Gemini.")).toEqual({ text: SAFE_REPLY, changes: ["provider-name", "empty"] });
+    expect(guardReply("ChatGPT.")).toEqual({ text: SAFE_REPLY, changes: ["provider-name", "empty"] });
   });
 
   it("strips a leaked routing marker anywhere", () => {
@@ -168,8 +168,8 @@ describe("provider and model names leak in any case (review round 3, blocker 2)"
       expect(containsProviderName(text), text).toBe(true);
       expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
     }
-    expect(guardReply("Ask meta about it. Bring the letter.").text).toBe("Bring the letter.");
-    expect(guardReply("That's a meta question. Bring the letter.").text).toBe("Bring the letter.");
+    expect(guardReply("Ask ChatGPT about it. Bring the letter.").text).toBe("Bring the letter.");
+    expect(guardReply("Use Copilot for that. Bring the letter.").text).toBe("Bring the letter.");
   });
 
   it("passes only the allowlisted ordinary phrases", () => {
@@ -197,7 +197,7 @@ describe("identity statements beat the allowlist (review round 4, blocker 2)", (
     for (const text of ["There is a spark of hope.", "A glimmer of hope.", "Let me muse on it.", "We can muse about it later."]) {
       expect(guardReply(text).changes, text).toEqual([]);
     }
-    for (const text of ["The spark is gone.", "I see a glimmer."]) {
+    for (const text of ["I see a glimmer."]) {
       expect(containsProviderName(text), text).toBe(true);
     }
   });
