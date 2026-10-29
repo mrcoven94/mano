@@ -13,6 +13,9 @@ importers:
       '@mano/channels':
         specifier: workspace:*
         version: link:../../packages/channels
+      '@mano/persona':
+        specifier: workspace:*
+        version: link:../../packages/persona
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: ^1.4.8
@@ -102,6 +105,10 @@ importers:
         version: 5.9.3
 
   packages/channels:
+    dependencies:
+      '@mano/persona':
+        specifier: workspace:*
+        version: link:../persona
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -114,6 +121,18 @@ importers:
         version: 5.0.5(@types/node@22.20.5)(vite@7.3.7(@types/node@22.20.5)(yaml@2.9.1))
 
   packages/guardian:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^5.0.5
+        version: 5.0.5(@types/node@22.20.5)(vite@7.3.7(@types/node@22.20.5)(yaml@2.9.1))
+
+  packages/persona:
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

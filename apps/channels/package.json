@@ -13,7 +13,8 @@
     "webhook:create": "node scripts/create-webhook.mjs"
   },
   "dependencies": {
-    "@mano/channels": "workspace:*"
+    "@mano/channels": "workspace:*",
+    "@mano/persona": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.8",

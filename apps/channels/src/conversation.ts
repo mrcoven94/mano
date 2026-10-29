@@ -90,14 +90,18 @@ export function buildChannel(env: Env): Channel {
   return new RecordingChannel();
 }
 
+// Real texts go only to a Standard model ID (AGENTS.md rule 7). A
+// missing or -contributor ID fails closed to the stand-in, which calls
+// no model.
 export function buildResponder(env: Env): Responder {
-  if (env.META_MODEL_API_KEY) {
+  const model = env.MANO_REPLY_MODEL ?? "";
+  if (env.META_MODEL_API_KEY && model && !model.endsWith("-contributor")) {
     const endpoint = buildModelBaseUrl({
       accountId: env.CF_ACCOUNT_ID,
       gatewayId: env.AI_GATEWAY_ID,
       provider: env.AI_GATEWAY_PROVIDER,
     });
-    return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
+    return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, model, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
   }
   return new StandInResponder();
 }

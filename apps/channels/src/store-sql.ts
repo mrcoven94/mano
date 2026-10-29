@@ -123,6 +123,36 @@ function firstRow<T>(cursor: SqlStorageCursor<Record<string, SqlStorageValue>>):
   return rows.length > 0 ? rows[0] : null;
 }
 
+type TurnRow = {
+  turn: number;
+  items_json: string;
+  chat_id: string | null;
+  handle_to: string | null;
+  answer_json: string | null;
+  cost_usd: number | null;
+  cost_settled: number;
+  attempts: number;
+  state: PersistedTurn["state"];
+  created_at_ms: number;
+  updated_at_ms: number;
+};
+
+function turnFromRow(row: TurnRow): PersistedTurn {
+  return {
+    turn: row.turn,
+    itemsJson: row.items_json,
+    chatId: row.chat_id,
+    to: row.handle_to,
+    answerJson: row.answer_json,
+    costUsd: row.cost_usd,
+    costSettled: row.cost_settled === 1,
+    attempts: row.attempts,
+    state: row.state,
+    createdAtMs: row.created_at_ms,
+    updatedAtMs: row.updated_at_ms,
+  };
+}
+
 export class SqlConversationStore implements ConversationStore {
   private sql: SqlStorage;
 
@@ -459,33 +489,13 @@ export class SqlConversationStore implements ConversationStore {
   }
 
   unfinishedTurn(): PersistedTurn | null {
-    const row = firstRow<{
-      turn: number;
-      items_json: string;
-      chat_id: string | null;
-      handle_to: string | null;
-      answer_json: string | null;
-      cost_usd: number | null;
-      cost_settled: number;
-      attempts: number;
-      state: PersistedTurn["state"];
-      created_at_ms: number;
-      updated_at_ms: number;
-    }>(this.sql.exec("SELECT * FROM turns WHERE state = 'started' ORDER BY turn ASC LIMIT 1"));
-    if (!row) return null;
-    return {
-      turn: row.turn,
-      itemsJson: row.items_json,
-      chatId: row.chat_id,
-      to: row.handle_to,
-      answerJson: row.answer_json,
-      costUsd: row.cost_usd,
-      costSettled: row.cost_settled === 1,
-      attempts: row.attempts,
-      state: row.state,
-      createdAtMs: row.created_at_ms,
-      updatedAtMs: row.updated_at_ms,
-    };
+    const row = firstRow<TurnRow>(this.sql.exec("SELECT * FROM turns WHERE state = 'started' ORDER BY turn ASC LIMIT 1"));
+    return row ? turnFromRow(row) : null;
+  }
+
+  recentTurns(limit: number): PersistedTurn[] {
+    const rows = this.sql.exec("SELECT * FROM turns WHERE state = 'finished' ORDER BY turn DESC LIMIT ?", limit).toArray() as unknown as TurnRow[];
+    return rows.map(turnFromRow);
   }
 
   updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number): void {

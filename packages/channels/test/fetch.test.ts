@@ -39,7 +39,7 @@ describe("bound fetch defaults", () => {
     installStrictFetch(() =>
       Response.json({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "Bound." }] }] }),
     );
-    const responder = new SparkResponder({ apiKey: "k" });
+    const responder = new SparkResponder({ apiKey: "k", model: "test-model-standard" });
     const result = await responder.respond({ texts: ["Hi"], attachmentCount: 0 });
     expect(result.text).toBe("Bound.");
   });

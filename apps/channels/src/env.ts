@@ -11,6 +11,8 @@ export interface Env {
   MANO_HANDLE_PEPPER: string;
   ENCRYPTION_KEK_B64: string;
   META_MODEL_API_KEY?: string;
+  // The Standard model ID that answers real texts, set in wrangler.toml.
+  MANO_REPLY_MODEL?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;

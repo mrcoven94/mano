@@ -5,6 +5,7 @@ on:
     paths:
       - "apps/channels/**"
       - "packages/channels/**"
+      - "packages/persona/**"
       - ".github/workflows/deploy-channels.yml"
   workflow_dispatch:
 permissions:

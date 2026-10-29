@@ -8,11 +8,15 @@
   },
   "scripts": {
     "check": "tsc --noEmit && vitest run",
-    "test": "vitest run"
+    "test": "vitest run",
+    "probe:live": "vitest run --config vitest.live.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "@mano/persona": "workspace:*"
   }
 }

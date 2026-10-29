@@ -155,6 +155,8 @@ export interface ConversationStore {
   updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number): void;
   markTurnSettled(turn: number, atMs: number): void;
   finishTurn(turn: number, atMs: number): void;
+  // Finished turns, newest first.
+  recentTurns(limit: number): PersistedTurn[];
   wipe(deletedAtMs: number): void;
 }
 
@@ -289,6 +291,14 @@ export class MemoryStore implements ConversationStore {
   finishTurn(turn: number, atMs: number): void {
     const row = this.turnRows.get(turn);
     if (row) this.turnRows.set(turn, { ...row, state: "finished", updatedAtMs: atMs });
+  }
+
+  recentTurns(limit: number): PersistedTurn[] {
+    return [...this.turnRows.values()]
+      .filter((r) => r.state === "finished")
+      .sort((a, b) => b.turn - a.turn)
+      .slice(0, limit)
+      .map((r) => ({ ...r }));
   }
 
   wipe(deletedAtMs: number): void {
