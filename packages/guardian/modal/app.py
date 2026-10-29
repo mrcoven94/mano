@@ -282,4 +282,4 @@ async def check(request: Request) -> JSONResponse:
         return JSONResponse(status_code=202, content={"warming": True})
     if not isinstance(body, dict):
         return JSONResponse(status_code=400, content={"error": "bad check input"})
-    return Guardian().complete.remote(body)
+    return await Guardian().complete.remote.aio(body)
