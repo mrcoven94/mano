@@ -14,19 +14,21 @@ Every workstream serves one story, and it must run end to end every day until th
 
 Maria (synthetic) texts Mano that her food benefits are ending. Mano answers within seconds. She sends a photo of the letter; Mano reads it, tells her the one deadline that matters and estimates what she qualifies for on a private page. Mano fills her renewal in the sandbox agency portal with its own computer. Guardian (Muse Glimmer) checks the action, Mano asks her a plain yes or no question, she says yes, and Mano submits it. A reminder arrives the day before her interview. Every step is logged, no data is real, and each step is labeled as real or simulated.
 
+The spine also proves three safety cases on camera: a document that changes after approval makes the approval stale and blocks the action; a submission that times out is reconciled without a duplicate; a planted scam link is caught.
+
 ## How Mano is built
 
 One lead runs the program and subagents build it. The lead is a Claude Code session running pstack's poteto mode with its Orchestrate playbook (`/pstack:poteto-mode`); builders use the Feature and Bug fix playbooks. Where pstack and this file disagree, this file wins.
 
-- **The lead runs the program, not the code.** It plans, writes each kickoff, reads every diff, decides when a pull request is ready and merges it. It does not write feature code.
+- **The lead runs the program, not the code.** It plans, writes each kickoff, reads every diff (except held-out eval content, below), decides when a pull request is ready and merges it. It does not write feature code.
 - **One owner per pull request.** Each workstream gets one builder subagent at a time, named after the workstream. The owner is the only writer of its branch, works in its own git worktree, and carries the pull request from first commit to merge-ready. Two builders never edit the same package at once.
 - **Each kickoff names the evidence that proves the work is done** (a command and its expected output, a production URL and status code, a real text to the maintainer's phone), plus the goal, the bar, the paths the builder may and may not write, and the actions it must not take. If the evidence cannot be named, the unit is not scoped yet.
 - **Check the brief before building.** Before a builder starts, a fresh agent with no other context reads the kickoff and says back what it will build and how it will prove it. If it cannot, the kickoff depends on context that will be lost; fix the kickoff.
 - **Start with one unit.** Take the first unit of a new kind of work through kickoff, build, review and merge before fanning out.
 - **A reviewer from another model family checks every pull request** at its current head. Here that is GPT Sol 6.1 through the Codex CLI (`sol-loop`): three rounds by default, five for anything touching auth, money, personal data, or anything that sends or deletes, and those also get a multi-model panel (`council`). Findings are labeled blocker, should or nit. A new push needs a new review. Contributors without Codex ask any reviewer from a different model family, or a person.
-- **The merge gate.** The lead merges only when all of these hold at the same head SHA: the proof covers the whole diff, required checks pass, every blocker is fixed, every should is fixed or answered on the pull request with a reason, and the branch is current with `main`. Merge with a merge commit, never squash, so the incremental history stays visible.
+- **The merge gate.** The lead merges only when all of these hold at the same head SHA: the proof covers the whole diff, required checks pass, every blocker is fixed, every should is fixed or answered on the pull request with a reason, and the branch is current with `main`. Merge with a merge commit, never squash, so the incremental history stays visible, and pin the merge to the reviewed head: `gh pr merge <n> --merge --match-head-commit <reviewed-sha>`. If it rejects, the head moved; review again.
 - **Read the artifact, not the summary.** Green CI is an input, not a verdict. Before reporting on a pull request, check its live state with `gh pr view` and `gh pr checks`.
-- **Eval stays apart.** Work on the held-out test never shares an agent with anything that builds Mano, and no builder reads the held-out template pack or seed.
+- **Eval stays apart.** Work on the held-out test never shares an agent with anything that builds Mano. Neither the lead nor any builder reads held-out templates, the template pack or the seed; Eval pull requests that touch them are reviewed by Sol and a maintainer only, and nothing but aggregate results enters a build context before the results are published.
 - **Ask David only for a real decision or a blocker:** an irreversible action, a product call, an account only he can create. Rebases, retries, CI flakes and review triage never reach him.
 
 ## Workstreams
@@ -66,7 +68,7 @@ Backlog, started only while the spine is solid: Orgs (LAP-505), Spine (LAP-506),
 10. **One brand.** Everything is Mano. No sub-brands or feature names: say "Mano fills out any form", not a named feature.
 11. **Writing.** Plain, specific language in code comments, commits, pull requests, copy and messages. No em dashes, no italics, no slogan pairs, no filler.
 12. **No new Markdown files.** The only Markdown files allowed are `README.md`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `docs/decisions.md`, `docs/protocol.md` and `docs/third-party.md`. No package READMEs, notes, plans, designs, reports or handoffs in the repo: reports and handoffs go in the pull request, plans in Linear. `pnpm check` fails on any other `.md` or `.mdx` file. Adding to the list is David's decision.
-13. **Only Meta models run.** Every model Mano calls at runtime is a Meta model, including small or on-device ones: hosted Muse models and Meta's open weights (Muse Glimmer, Muse Spark Open, Llama, SAM). No other speech, vision, embedding or language model, anywhere in the running product. Plain code and non-model services (DNS, messaging, storage, the browser's built-in speech) are fine; say in the README which parts are Meta model calls and which are not. Any tool may write the code.
+13. **Only Meta models run.** Every model Mano calls at runtime is a Meta model, including small or on-device ones: hosted Muse models and Meta's open weights (Muse Glimmer, Muse Spark Open, Llama, SAM). No other speech, vision, embedding or language model, anywhere in the running product. Plain code and non-model services (DNS, messaging, storage) are fine, and so is the browser's built-in `speechSynthesis`, which the organizers ruled allowed on October 28, 2026; say in the README which parts are Meta model calls and which are not. Any tool may write the code.
 
 ## Architecture (see docs/decisions.md)
 
@@ -80,7 +82,7 @@ Backlog, started only while the spine is solid: Orgs (LAP-505), Spine (LAP-506),
 
 ## The judge path
 
-A judge clones the repo, adds only their own Meta key, and within ten minutes watches the spine run on synthetic data with no login and no account of ours. Every step is labeled real or simulated. A hosted version is optional and never required. Keep this path working with every change; if a change breaks it, the change is not done.
+The target, owned by Ship: a judge clones the repo, adds only their own Meta key, and within ten minutes watches the spine run on synthetic data with no login and no account of ours. Every step is labeled real or simulated. A hosted version is optional and never required. Until Ship lands the single smoke command that runs this path (named here and in the README), each workstream keeps its own package runnable locally with stand-ins; once the command exists, a change that breaks it is not done.
 
 ## Open source, from the first commit
 
