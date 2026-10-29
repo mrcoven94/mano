@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { idempotencyKeyFor } from "@mano/channels";
-import { CRISIS_LINE } from "@mano/persona";
+import { CRISIS_LINE, SELF_DESCRIPTION } from "@mano/persona";
 import { BUSY_BUBBLE } from "../src/text.js";
 import { BUSY_DAILY_CAP } from "../src/runner.js";
-import { TEST_CHAT, TEST_HANDLE_HASH, inboundEvent, makeHarness, runTurnAfterBatch, type Harness } from "./helpers.js";
+import { TEST_CHAT, TEST_HANDLE_HASH, inboundEvent, lifecycleEvent, makeHarness, runTurnAfterBatch, type Harness } from "./helpers.js";
 
 async function say(h: Harness, id: string, text: string): Promise<string[]> {
   const before = h.channel.sends.length;
@@ -76,5 +76,42 @@ describe("legacy sends from before the guard (should 6)", () => {
     const key = seedUncertain(h, "Bring the letter to the office.", null);
     await h.runner.resolveUncertain();
     expect(h.channel.sends.map((s) => [s.text, s.idempotencyKey])).toEqual([["Bring the letter to the office.", key]]);
+  });
+});
+
+describe("PR 67 review, through the send path", () => {
+  it("replaces contracted self-identities (blocker 1)", async () => {
+    for (const reply of ["I'm an assistant powered by Microsoft.", "I’m built by Google."]) {
+      const h = makeHarness({ replies: [reply] });
+      const sent = await say(h, "evt_1", "who made you");
+      expect(sent.slice(1), reply).toEqual([SELF_DESCRIPTION]);
+    }
+  });
+
+  it("sends document explanations unchanged (should 3)", async () => {
+    const reply = "This is Ohio's food assistance renewal form. Sign page 2.";
+    const h = makeHarness({ replies: [reply] });
+    expect((await say(h, "evt_1", "what is this form")).slice(1)).toEqual([reply]);
+  });
+
+  it("keeps a legacy send uncertain through a lookup outage, then lets a receipt settle it (should 2)", async () => {
+    const h = makeHarness();
+    const key = idempotencyKeyFor(TEST_HANDLE_HASH, 0, 1, 1, "");
+    h.store.addOutbound({
+      key, turn: 1, part: 1, tag: "", text: "I'm Muse Spark! — here to help", attempts: 0, state: "uncertain", code: null,
+      chatId: TEST_CHAT, messageId: "msg_legacy_1", createdAtMs: h.now, updatedAtMs: h.now,
+    });
+    const realLookup = h.channel.lookupMessage.bind(h.channel);
+    h.channel.lookupMessage = async () => {
+      throw new Error("lookup down");
+    };
+    await h.runner.resolveUncertain();
+    expect(h.store.outboundByKey(key)).toMatchObject({ state: "uncertain", attempts: 1 });
+    expect(h.channel.sends).toEqual([]);
+    expect(h.runner.needsRetry()).toBe(true);
+    h.channel.lookupMessage = realLookup;
+    await h.runner.handleEvent(lifecycleEvent("message.delivered", "evt_receipt", "msg_legacy_1"), "webhook");
+    expect(h.store.outboundByKey(key)?.state).toBe("delivered");
+    expect(h.channel.sends).toEqual([]);
   });
 });

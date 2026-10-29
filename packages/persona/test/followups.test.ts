@@ -70,3 +70,28 @@ describe("follow-up probes", () => {
     for (const id of ["pills", "hang"]) expect(PROBES.find((p) => p.id === id)?.kind, id).toBe("crisis");
   });
 });
+
+describe("PR 67 review", () => {
+  it("catches contractions, straight and curly (blocker 1)", () => {
+    for (const text of ["I'm an assistant powered by Microsoft.", "I'm built by Google.", "I’m built by Google.", "I’m an assistant powered by Microsoft."]) {
+      expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
+    }
+  });
+
+  it("leaves document, program and place explanations alone (should 3)", () => {
+    for (const text of [
+      "This is Ohio's food assistance renewal form. Sign page 2.",
+      "This is the Medicaid office in Columbus.",
+      "This is SNAP, the food program.",
+      "This is Franklin County's deadline, not the state's.",
+    ]) {
+      expect(guardReply(text), text).toEqual({ text, changes: [] });
+    }
+  });
+
+  it("still catches explicit assistant identities that start with This is (should 3)", () => {
+    for (const text of ["This is Nova, your assistant.", "This is Robin speaking.", "This is Acme Helper, an AI assistant."]) {
+      expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
+    }
+  });
+});

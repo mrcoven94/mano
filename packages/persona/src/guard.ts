@@ -54,12 +54,15 @@ function idPattern(modelIds: readonly string[]): RegExp | null {
 // names itself or its maker as anything but Mano is a self-description
 // to replace, whatever the name: no provider list needed.
 const OTHER_SELF = [
-  /\bi (?:was|am|'m|’m)\b[^.!?\n]*?\b(?:developed|built|made|created|trained|designed|programmed|powered|engineered|owned) (?:by|at|on)\s+(?!mano\b)\S/i,
+  /\bi(?: was| am|'m|’m)\b[^.!?\n]*?\b(?:developed|built|made|created|trained|designed|programmed|powered|engineered|owned) (?:by|at|on)\s+(?!mano\b)\S/i,
   /\bi (?:run|operate|live) on\s+(?!mano\b)\S/i,
   /\bmy name is\s+(?!mano\b)\S/i,
   /\bassistant (?:from|by|made by|built by|of)\s+(?!mano\b)\S/i,
   // Case-sensitive on purpose: the name after it is capitalized.
-  /\b(?:[Ii](?:'m|’m| am)|[Tt]his is|[Yy]ou(?:'re|’re| are) (?:talking|chatting|texting) (?:to|with)) (?:an? |the )?(?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version) )*(?:called |named )?(?!Mano\b)[A-Z]/,
+  /\b(?:[Ii](?:'m|’m| am)|[Yy]ou(?:'re|’re| are) (?:talking|chatting|texting) (?:to|with)) (?:an? |the )?(?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version) )*(?:called |named )?(?!Mano\b)[A-Z]/,
+  // "This is" only as an assistant introducing itself, so "This is
+  // Ohio's renewal form" stays an explanation.
+  /\b[Tt]his is (?!Mano\b)[A-Z][\w'’-]*(?: [A-Z][\w'’-]*)*(?:,? (?:your|an?|the) (?:[\w-]+ )?assistant\b| speaking\b| here to help\b)/,
 ];
 
 function selfIdentifiesAsOther(sentence: string): boolean {

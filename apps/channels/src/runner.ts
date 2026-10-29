@@ -1131,6 +1131,7 @@ export class ConversationRunner {
       return result;
     };
     const row = store.outboundByKey(key);
+    let lookupFailed = false;
     if (row?.messageId && row.chatId) {
       try {
         const status = await channel.lookupMessage(row.chatId, row.messageId);
@@ -1143,13 +1144,23 @@ export class ConversationRunner {
         }
       } catch (err) {
         if (err instanceof GenerationStopped) throw err;
+        lookupFailed = true;
         logger.warn("lookup_failed", { handle: this.logHandle(), key, err: errName(err) });
       }
     }
     // A row stored before the voice guard shipped may hold text the guard
     // would change. Its key is bound to that exact payload, so it is
-    // never rewritten, and it is never replayed: it ends failed.
+    // never rewritten and never replayed. Never replaying is not the same
+    // as giving up: while the lookup is down the row stays uncertain, so
+    // the lookup retries with backoff and a delivery receipt can still
+    // settle it. It ends failed only once nothing can find it.
     if (!this.isVoiced(opts.text)) {
+      if (lookupFailed) {
+        const attempts = (store.outboundByKey(key)?.attempts ?? 0) + 1;
+        store.updateOutbound(key, { state: "uncertain", attempts, updatedAtMs: nowMs() });
+        logger.warn("send_still_uncertain", { handle: this.logHandle(), key, attempts });
+        return finish({ key, state: "uncertain", code: null, fresh: false, counted: false });
+      }
       store.updateOutbound(key, { state: "failed", code: "unguarded_legacy", updatedAtMs: nowMs() });
       logger.warn("send_failed", { handle: this.logHandle(), key, code: "unguarded_legacy", status: null });
       return finish({ key, state: "failed", code: "unguarded_legacy", fresh: false, counted: false });
