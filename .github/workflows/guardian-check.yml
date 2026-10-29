@@ -26,6 +26,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install "modal==1.6.2"
+      - name: Test the app
+        run: python -m unittest discover -s packages/guardian/modal -v
       - name: Import the app and check its shape
         run: |
           python - <<'EOF'
