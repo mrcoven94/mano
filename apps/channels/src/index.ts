@@ -11,6 +11,7 @@ import {
   hashChatId,
   hashHandle,
   lifecycleStateFor,
+  normalizeHandle,
   parseBlooioEvent,
   verifySignature,
   type Channel,
@@ -33,6 +34,16 @@ function workerChannel(env: Env): Channel {
     return new BlooioChannel({ apiKey: env.BLOOIO_API_KEY, channelId: env.BLOOIO_CHANNEL_ID });
   }
   return new RecordingChannel();
+}
+
+// True only when both sides name a line and they differ. Anything
+// unverifiable is accepted: the signature is the real proof, this is
+// defense in depth.
+function wrongLine(address: string | null, lineNumber: string | undefined): boolean {
+  if (!address || !lineNumber) return false;
+  const want = normalizeHandle(lineNumber);
+  const got = normalizeHandle(address);
+  return !!want && !!got && want !== got;
 }
 
 // Ingress: read the raw body once, verify over the raw bytes, decode,
@@ -66,9 +77,21 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
     logger.info("webhook_ignored", { reason: "not_an_event", durationMs: Date.now() - started });
     return new Response("Ignored.", { status: 202 });
   }
-  if (event.channelId !== env.BLOOIO_CHANNEL_ID) {
+  // Our webhook is scoped to our line and the signature proves the event
+  // came through it, so a missing channel_id is accepted. A present but
+  // different id, or an address naming another line, is ignored.
+  if (event.channelId && event.channelId !== env.BLOOIO_CHANNEL_ID) {
     logger.info("webhook_ignored", {
       reason: "wrong_channel",
+      eventId: event.id,
+      type: event.rawType,
+      durationMs: Date.now() - started,
+    });
+    return new Response("Ignored.", { status: 202 });
+  }
+  if (wrongLine(event.channelAddress, env.MANO_TEXT_NUMBER)) {
+    logger.info("webhook_ignored", {
+      reason: "wrong_address",
       eventId: event.id,
       type: event.rawType,
       durationMs: Date.now() - started,

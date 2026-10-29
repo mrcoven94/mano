@@ -12,6 +12,7 @@ export default defineConfig({
           BLOOIO_WEBHOOK_SECRET: "test-webhook-secret-not-real",
           MANO_HANDLE_PEPPER: "test-pepper-not-real",
           ENCRYPTION_KEK_B64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          MANO_TEXT_NUMBER: "+18005550000",
         },
       },
     }),

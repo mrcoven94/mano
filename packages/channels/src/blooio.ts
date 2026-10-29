@@ -83,17 +83,29 @@ function parseAttachments(v: unknown): EventAttachment[] {
 // ({id, type, occurred_at, message_id?, chat_id?, data: {...}}).
 export function parseBlooioEvent(raw: unknown): NormalizedEvent | null {
   if (!isRecord(raw)) return null;
-  const id = asString(raw.id);
   const type = asString(raw.type);
-  if (!id || !type) return null;
+  if (!type) return null;
   const data = isRecord(raw.data) ? raw.data : {};
+  const messageId = asString(data.message_id) ?? asString(raw.message_id) ?? asString(data.id);
+  // The 2026-10-01 webhook envelope carries no top-level id. The type
+  // plus message id is stable across redelivery, so it dedupes the same.
+  const id = asString(raw.id) ?? (messageId ? `${type}:${messageId}` : null);
+  if (!id) return null;
 
   const chatId = asString(data.chat_id) ?? asString(raw.chat_id);
-  const messageId = asString(data.message_id) ?? asString(raw.message_id) ?? asString(data.id);
   const channelId = asString(data.channel_id) ?? asString(raw.channel_id);
   const channelType = asString(data.channel_type) ?? asString(raw.channel_type);
+  const channelAddress = asString(data.channel_address);
   const directionRaw = asString(data.direction);
-  const direction = directionRaw === "inbound" || directionRaw === "outbound" ? directionRaw : null;
+  // message.received is inbound by definition; the 2026-10-01 envelope
+  // omits direction, and without this the handle would resolve to our
+  // own line instead of the sender.
+  const direction =
+    directionRaw === "inbound" || directionRaw === "outbound"
+      ? directionRaw
+      : type === "message.received"
+        ? "inbound"
+        : null;
   const kind = kindFor(type);
 
   const contact = isRecord(data.contact) ? data.contact : null;
@@ -116,6 +128,7 @@ export function parseBlooioEvent(raw: unknown): NormalizedEvent | null {
     rawType: type,
     channelId,
     channelType,
+    channelAddress,
     chatId,
     messageId,
     group,
