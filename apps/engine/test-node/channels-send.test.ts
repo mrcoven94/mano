@@ -1,22 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { sendToChannels, signAgentSend } from "../src/channels-send.js";
+import { ENGINE_SEND_SIGNATURE_HEADER, ENGINE_SEND_TIMESTAMP_HEADER, verifyEngineSend } from "@mano/protocol";
+import { sendToChannels } from "../src/channels-send.js";
 
-// The engine signs agent sends exactly as Channels verifies them, pinned
-// by the interop vector the Channels and agent suites share, and maps
-// Channels' answers to sent, dropped, failed or retry.
+// The engine signs sends to Channels with MANO_ENGINE_SEND_SECRET over
+// method, path, timestamp and body, as the protocol's verifier checks,
+// and maps Channels' answers to sent, dropped, failed or retry.
 
 const SEND = { handleHash: "ab".repeat(32), key: "reminder:t-1:0", text: "Hi.", generation: 1 };
-const ENV = { MANO_CHANNELS_URL: "https://channels.test", MANO_AGENT_SECRET: "s" };
+const ENV = { MANO_CHANNELS_URL: "https://channels.test", MANO_ENGINE_SEND_SECRET: "engine-send-secret" };
 
 function answering(res: () => Response): typeof fetch {
   return (async () => res()) as unknown as typeof fetch;
 }
 
 describe("Channels agent-send client", () => {
-  it("matches the shared interop vector", async () => {
-    expect(await signAgentSend("interop-secret", "1761777000", '{"handleHash":"ab"}')).toBe(
-      "042f17f9f8d6de11a23f0ca0c1ae55daba175a48af001583e909d62407e37096",
-    );
+  it("signs what the receiver verifies, and nothing the agent's secret could forge", async () => {
+    let seen: { url: string; headers: Headers; body: string } | null = null;
+    const capture = (async (url: string, init: RequestInit) => {
+      seen = { url, headers: new Headers(init.headers), body: String(init.body) };
+      return Response.json({ sent: true });
+    }) as unknown as typeof fetch;
+    const now = Date.now();
+    expect(await sendToChannels(ENV, SEND, capture, now)).toBe("sent");
+    const s = seen!;
+    expect(s.url).toBe("https://channels.test/internal/agent-send");
+    const request = {
+      method: "POST",
+      path: new URL(s.url).pathname,
+      timestamp: s.headers.get(ENGINE_SEND_TIMESTAMP_HEADER),
+      signature: s.headers.get(ENGINE_SEND_SIGNATURE_HEADER),
+      body: s.body,
+    };
+    expect(await verifyEngineSend("engine-send-secret", request, Math.floor(now / 1000))).toEqual({ ok: true });
+    expect((await verifyEngineSend("the-agents-secret", request, Math.floor(now / 1000))).ok).toBe(false);
+    expect(s.headers.get("x-mano-signature")).toBeNull();
   });
 
   it("maps Channels' answers", async () => {

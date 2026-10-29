@@ -16,7 +16,7 @@ export default defineConfig({
           MANO_HANDLE_GRANT_SECRET: "test-handle-grant-secret-not-real",
           MANO_ENGINE_CHANNELS_TOKEN: "test-channels-token-not-real",
           MANO_CHANNELS_URL: "https://channels.test",
-          MANO_AGENT_SECRET: "test-agent-secret-not-real",
+          MANO_ENGINE_SEND_SECRET: "test-engine-send-secret-not-real",
         },
       },
     }),

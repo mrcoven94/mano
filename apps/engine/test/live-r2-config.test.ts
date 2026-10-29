@@ -32,7 +32,7 @@ describe("production config gate", () => {
       "MANO_HANDLE_GRANT_SECRET",
       "MANO_ENGINE_CHANNELS_TOKEN",
       "MANO_CHANNELS_URL",
-      "MANO_AGENT_SECRET",
+      "MANO_ENGINE_SEND_SECRET",
       "META_MODEL_API_KEY",
       "EXECUTOR_MODE",
     ] as const) {

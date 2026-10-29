@@ -1,8 +1,7 @@
 import { SELF, env as testEnv, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
+import { mintHandleGrant, personIdForHandle, verifyEngineSend } from "@mano/protocol";
 import { mintSessionToken } from "../src/auth.js";
-import { signAgentSend } from "../src/channels-send.js";
 import type { PersonAgent } from "../src/agents/person-agent.js";
 
 // The agent's per-person state through the real worker and PersonAgent:
@@ -14,7 +13,7 @@ import type { PersonAgent } from "../src/agents/person-agent.js";
 const AGENT_TOKEN = "test-agent-token-not-real";
 const CHANNELS_TOKEN = "test-channels-token-not-real";
 const GRANT_SECRET = "test-handle-grant-secret-not-real";
-const AGENT_SECRET = "test-agent-secret-not-real";
+const ENGINE_SEND_SECRET = "test-engine-send-secret-not-real";
 const SESSION_SECRET = "test-session-secret-not-real";
 
 function handle(tag: string): string {
@@ -79,7 +78,7 @@ async function until(check: () => boolean, ms = 5000) {
 describe("reminders", () => {
   it("one ID is one reminder, two IDs at one time stay two, and a changed one conflicts", async () => {
     const h = handle("rem-identity");
-    const r = { id: "turn-1:0", text: "Call the county about the renewal.", dueAt: "2026-12-01T15:00:00.000Z", generation: 2 };
+    const r = { id: "turn-1:0", text: "Call the county about the renewal.", dueAt: "2026-12-01T15:00:00.000Z", generation: 0 };
     expect((await call(h, "POST", "/reminders", r)).status).toBe(201);
     const again = await call(h, "POST", "/reminders", r);
     expect(again.status).toBe(200);
@@ -94,6 +93,8 @@ describe("reminders", () => {
   it("the alarm delivers a due reminder by itself, once, signed, under its key and generation", async () => {
     const h = handle("rem-deliver");
     const sent = recordChannels();
+    // Channels' conversation is at generation 5: it moved Engine there.
+    await call(h, "DELETE", "/conversation", { generation: 5 }, { token: CHANNELS_TOKEN });
     await call(h, "POST", "/reminders", { id: "turn-2:0", text: "Your renewal is due Friday.", dueAt: past(), generation: 5 });
     await until(() => sent.length > 0);
     expect(sent.length).toBe(1);
@@ -104,8 +105,18 @@ describe("reminders", () => {
       text: "Your renewal is due Friday.",
       generation: 5,
     });
-    const ts = sent[0].headers["x-mano-timestamp"];
-    expect(sent[0].headers["x-mano-signature"]).toBe(await signAgentSend(AGENT_SECRET, ts, sent[0].body));
+    const verified = await verifyEngineSend(
+      ENGINE_SEND_SECRET,
+      {
+        method: "POST",
+        path: new URL(sent[0].url).pathname,
+        timestamp: sent[0].headers["x-mano-engine-timestamp"],
+        signature: sent[0].headers["x-mano-engine-signature"],
+        body: sent[0].body,
+      },
+      Math.floor(Date.now() / 1000),
+    );
+    expect(verified).toEqual({ ok: true });
 
     await (stubFor(h) as unknown as PersonAgent).deliverDueReminders();
     expect(sent.length).toBe(1);
@@ -116,8 +127,8 @@ describe("reminders", () => {
   it("a cancelled reminder never sends", async () => {
     const h = handle("rem-cancel");
     const sent = recordChannels();
-    await call(h, "POST", "/reminders", { id: "turn-3:0", text: "Keep me.", dueAt: later, generation: 1 });
-    await call(h, "POST", "/reminders", { id: "turn-3:1", text: "Cancel me.", dueAt: later, generation: 1 });
+    await call(h, "POST", "/reminders", { id: "turn-3:0", text: "Keep me.", dueAt: later, generation: 0 });
+    await call(h, "POST", "/reminders", { id: "turn-3:1", text: "Cancel me.", dueAt: later, generation: 0 });
     const cancelled = (await (await call(h, "POST", "/reminders/turn-3:1/cancel")).json()) as { cancelled: boolean };
     expect(cancelled.cancelled).toBe(true);
     await makeDue(h);
@@ -128,7 +139,7 @@ describe("reminders", () => {
   it("a Channels outage retries later under the same key", async () => {
     const h = handle("rem-retry");
     const sent = recordChannels(() => new Response("down", { status: 500 }));
-    await call(h, "POST", "/reminders", { id: "turn-4:0", text: "Retry me.", dueAt: later, generation: 1 });
+    await call(h, "POST", "/reminders", { id: "turn-4:0", text: "Retry me.", dueAt: later, generation: 0 });
     await makeDue(h);
     await (stubFor(h) as unknown as PersonAgent).deliverDueReminders();
     const waiting = (await (await call(h, "GET", "/reminders")).json()) as { reminders: { status: string; attempts: number }[] };
@@ -140,12 +151,12 @@ describe("reminders", () => {
 describe("turn ledger", () => {
   it("keeps the first receive time for a retried turn", async () => {
     const h = handle("turns");
-    const first = await call(h, "POST", "/turns", { turnId: "t-100", receivedAt: "2026-11-01T15:00:00.000Z" });
+    const first = await call(h, "POST", "/turns", { turnId: "t-100", receivedAt: "2026-11-01T15:00:00.000Z", generation: 0 });
     expect(first.status).toBe(201);
-    const retry = await call(h, "POST", "/turns", { turnId: "t-100", receivedAt: "2026-11-01T15:05:00.000Z" });
+    const retry = await call(h, "POST", "/turns", { turnId: "t-100", receivedAt: "2026-11-01T15:05:00.000Z", generation: 0 });
     expect(retry.status).toBe(200);
     expect(((await retry.json()) as { turn: { firstReceivedAt: string } }).turn.firstReceivedAt).toBe("2026-11-01T15:00:00.000Z");
-    const done = (await (await call(h, "POST", "/turns/t-100/complete")).json()) as { turn: { status: string } };
+    const done = (await (await call(h, "POST", "/turns/t-100/complete", { generation: 0 })).json()) as { turn: { status: string } };
     expect(done.turn.status).toBe("complete");
     expect((await call(h, "GET", "/turns/t-404")).status).toBe(404);
   });
@@ -161,6 +172,7 @@ async function pendingApproval(h: string): Promise<string> {
     actor: "foreground",
     sources: [],
     origin: "person",
+    generation: 0,
   });
   return ((await res.json()) as { approval: { id: string } }).approval.id;
 }
@@ -169,14 +181,14 @@ describe("pending approval pointer", () => {
   it("reads as nothing under a different generation", async () => {
     const h = handle("pointer");
     const approvalId = await pendingApproval(h);
-    expect((await call(h, "PUT", "/pending-approval", { approvalId, generation: 2 })).status).toBe(200);
-    const same = (await (await call(h, "GET", "/pending-approval?generation=2")).json()) as { pointer: { approvalId: string } | null };
+    expect((await call(h, "PUT", "/pending-approval", { approvalId, generation: 0 })).status).toBe(200);
+    const same = (await (await call(h, "GET", "/pending-approval?generation=0")).json()) as { pointer: { approvalId: string } | null };
     expect(same.pointer?.approvalId).toBe(approvalId);
-    const other = (await (await call(h, "GET", "/pending-approval?generation=3")).json()) as { pointer: unknown };
+    const other = (await (await call(h, "GET", "/pending-approval?generation=1")).json()) as { pointer: unknown };
     expect(other.pointer).toBeNull();
-    expect((await call(h, "PUT", "/pending-approval", { approvalId: crypto.randomUUID(), generation: 2 })).status).toBe(404);
+    expect((await call(h, "PUT", "/pending-approval", { approvalId: crypto.randomUUID(), generation: 0 })).status).toBe(404);
     expect(await (await call(h, "DELETE", "/pending-approval")).json()).toEqual({ cleared: true });
-    expect((await (await call(h, "GET", "/pending-approval?generation=2")).json()) as unknown).toEqual({ pointer: null });
+    expect((await (await call(h, "GET", "/pending-approval?generation=0")).json()) as unknown).toEqual({ pointer: null });
   });
 });
 
@@ -184,19 +196,28 @@ describe("conversation delete", () => {
   it("Channels removes everything and the answer says exactly what", async () => {
     const h = handle("delete-all");
     recordChannels();
-    await call(h, "POST", "/reminders", { id: "d:0", text: "One.", dueAt: "2026-12-01T15:00:00.000Z", generation: 1 });
-    await call(h, "POST", "/reminders", { id: "d:1", text: "Two.", dueAt: "2026-12-01T15:00:00.000Z", generation: 1 });
-    await call(h, "POST", "/turns", { turnId: "t-1", receivedAt: "2026-11-01T15:00:00.000Z" });
+    await call(h, "POST", "/reminders", { id: "d:0", text: "One.", dueAt: "2026-12-01T15:00:00.000Z", generation: 0 });
+    await call(h, "POST", "/reminders", { id: "d:1", text: "Two.", dueAt: "2026-12-01T15:00:00.000Z", generation: 0 });
+    await call(h, "POST", "/turns", { turnId: "t-1", receivedAt: "2026-11-01T15:00:00.000Z", generation: 0 });
     const approvalId = await pendingApproval(h);
-    await call(h, "PUT", "/pending-approval", { approvalId, generation: 1 });
-    await call(h, "POST", "/memory", { content: "Has two kids.", source: "text" });
-    await call(h, "POST", "/memory", { content: "Prefers texts.", source: "text" });
+    await call(h, "PUT", "/pending-approval", { approvalId, generation: 0 });
+    await call(h, "POST", "/memory", { content: "Has two kids.", source: "text", generation: 0 });
+    await call(h, "POST", "/memory", { content: "Prefers texts.", source: "text", generation: 0 });
 
     expect((await call(h, "GET", "/reminders", undefined, { token: CHANNELS_TOKEN })).status).toBe(403);
     const res = await call(h, "DELETE", "/conversation", undefined, { token: CHANNELS_TOKEN });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      removed: { remindersCancelled: 2, turnsDeleted: 1, pendingPointerCleared: true, approvalsRejected: 1, memoriesDeleted: 2 },
+      removed: {
+        generation: 1,
+        remindersCancelled: 2,
+        remindersInFlight: 0,
+        turnsDeleted: 1,
+        pendingPointerCleared: true,
+        approvalsRejected: 1,
+        approvalsRevoked: 0,
+        memoriesDeleted: 2,
+      },
     });
 
     const reminders = (await (await call(h, "GET", "/reminders")).json()) as { reminders: { status: string }[] };
@@ -207,10 +228,13 @@ describe("conversation delete", () => {
     expect(((await (await call(h, "GET", "/memory")).json()) as { memories: unknown[] }).memories).toEqual([]);
     const again = (await (await call(h, "DELETE", "/conversation")).json()) as { removed: Record<string, unknown> };
     expect(again.removed).toEqual({
+      generation: 2,
       remindersCancelled: 0,
+      remindersInFlight: 0,
       turnsDeleted: 0,
       pendingPointerCleared: false,
       approvalsRejected: 0,
+      approvalsRevoked: 0,
       memoriesDeleted: 0,
     });
   });
@@ -241,5 +265,115 @@ describe("scope", () => {
       headers: { authorization: `Bearer ${session}` },
     });
     expect(viaSession.status).toBe(404);
+  });
+});
+
+async function schedulesFor(handleHash: string): Promise<{ callback: string; time: number }[]> {
+  return runInDurableObject(stubFor(handleHash), async (instance) =>
+    (await (instance as PersonAgent).listSchedules()).map((x) => ({ callback: x.callback, time: (x as { time: number }).time })),
+  );
+}
+
+async function deliverySchedules(handleHash: string) {
+  return (await schedulesFor(handleHash)).filter((x) => x.callback === "deliverDueReminders");
+}
+
+describe("delete during delivery", () => {
+  it("a delete landing between two sends stops the second at its handoff", async () => {
+    const h = handle("race-delete");
+    const sent: string[] = [];
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)).key);
+      // While the first send is with Channels, Channels deletes the
+      // conversation: a real request into the same agent, interleaved.
+      if (sent.length === 1) {
+        const del = await call(h, "DELETE", "/conversation", { generation: 1 }, { token: CHANNELS_TOKEN });
+        expect(((await del.json()) as { removed: { remindersCancelled: number } }).removed.remindersCancelled).toBe(1);
+      }
+      return Response.json({ sent: true });
+    });
+    await call(h, "POST", "/reminders", { id: "race:0", text: "First.", dueAt: later, generation: 0 });
+    await call(h, "POST", "/reminders", { id: "race:1", text: "Second.", dueAt: later, generation: 0 });
+    await makeDue(h);
+    await (stubFor(h) as unknown as PersonAgent).deliverDueReminders();
+    expect(sent).toEqual(["reminder:race:0"]);
+    const list = (await (await call(h, "GET", "/reminders")).json()) as { reminders: { id: string; status: string }[] };
+    expect(Object.fromEntries(list.reminders.map((r) => [r.id, r.status]))).toEqual({ "race:0": "sent", "race:1": "cancelled" });
+  });
+});
+
+describe("old turn after a delete", () => {
+  it("cannot insert an approval, memory, reminder, turn or pointer under the old generation", async () => {
+    const h = handle("old-turn");
+    const approvalId = await pendingApproval(h);
+    await call(h, "DELETE", "/conversation", { generation: 1 }, { token: CHANNELS_TOKEN });
+    expect(((await (await call(h, "GET", "/conversation")).json()) as { generation: number }).generation).toBe(1);
+
+    const action = await call(h, "POST", "/action", {
+      type: "submit",
+      recipient: "sandbox-agency",
+      purpose: "renewal",
+      payload: {},
+      idempotencyKey: `old-${crypto.randomUUID()}`,
+      actor: "foreground",
+      sources: [],
+      origin: "person",
+      generation: 0,
+    });
+    expect(((await action.json()) as { reason: string }).reason).toMatch(/conversation was deleted/i);
+    expect((await call(h, "POST", "/memory", { content: "Late.", source: "text", generation: 0 })).status).toBe(409);
+    expect((await call(h, "POST", "/reminders", { id: "old:0", text: "Late.", dueAt: later, generation: 0 })).status).toBe(409);
+    expect((await call(h, "POST", "/turns", { turnId: "t-old", receivedAt: later, generation: 0 })).status).toBe(409);
+    expect((await call(h, "PUT", "/pending-approval", { approvalId, generation: 0 })).status).toBe(409);
+    expect((await call(h, "POST", "/memory", { content: "No generation.", source: "text" })).status).toBe(400);
+
+    const approvals = (await (await call(h, "GET", "/approvals")).json()) as { approvals: unknown[] };
+    expect(approvals.approvals.length).toBe(1);
+    expect(((await (await call(h, "GET", "/memory")).json()) as { memories: unknown[] }).memories).toEqual([]);
+    expect(((await (await call(h, "GET", "/reminders")).json()) as { reminders: unknown[] }).reminders).toEqual([]);
+    expect((await call(h, "POST", "/memory", { content: "Current.", source: "text", generation: 1 })).status).toBe(200);
+  });
+});
+
+describe("the delivery wake-up", () => {
+  it("is one schedule per person, moved to the earliest deadline", async () => {
+    const h = handle("one-wakeup");
+    recordChannels();
+    await call(h, "POST", "/reminders", { id: "w:0", text: "Later.", dueAt: "2026-12-03T15:00:00.000Z", generation: 0 });
+    await call(h, "POST", "/reminders", { id: "w:1", text: "Latest.", dueAt: "2026-12-05T15:00:00.000Z", generation: 0 });
+    await call(h, "POST", "/reminders", { id: "w:2", text: "Earliest.", dueAt: "2026-12-01T15:00:00.000Z", generation: 0 });
+    let wakeups = await deliverySchedules(h);
+    expect(wakeups.length).toBe(1);
+    expect(wakeups[0].time).toBe(Date.parse("2026-12-01T15:00:00.000Z") / 1000);
+    await call(h, "POST", "/reminders/w:2/cancel");
+    wakeups = await deliverySchedules(h);
+    expect(wakeups.length).toBe(1);
+    expect(wakeups[0].time).toBe(Date.parse("2026-12-03T15:00:00.000Z") / 1000);
+    await call(h, "DELETE", "/conversation", { generation: 1 }, { token: CHANNELS_TOKEN });
+    expect(await deliverySchedules(h)).toEqual([]);
+  });
+
+  it("a retry that finds the reminder repairs a lost wake-up, and a restart recovers it", async () => {
+    const h = handle("repair-wakeup");
+    recordChannels();
+    const r = { id: "rep:0", text: "Repair me.", dueAt: "2026-12-01T15:00:00.000Z", generation: 0 };
+    await call(h, "POST", "/reminders", r);
+    const lose = () =>
+      runInDurableObject(stubFor(h), async (instance) => {
+        const agent = instance as PersonAgent;
+        for (const x of await agent.listSchedules()) {
+          if (x.callback === "deliverDueReminders") await agent.cancelSchedule(x.id);
+        }
+      });
+    await lose();
+    expect(await deliverySchedules(h)).toEqual([]);
+    expect((await call(h, "POST", "/reminders", r)).status).toBe(200);
+    expect((await deliverySchedules(h)).length).toBe(1);
+
+    await lose();
+    await runInDurableObject(stubFor(h), async (instance) => {
+      await (instance as PersonAgent).onStart();
+    });
+    expect((await deliverySchedules(h)).length).toBe(1);
   });
 });
