@@ -92,8 +92,6 @@ describe("readMail", () => {
         dateText: "Your renewal is due November 20, 2026.",
         obligation: "renew",
         citation: { file: "mail.jpg", page: 1, box: { ymin: 200, xmin: 60, ymax: 220, xmax: 300 } },
-        anchor: null,
-        countRule: null,
       },
     ]);
     // The phone number is reported, never acted on.
@@ -138,7 +136,7 @@ describe("readMail", () => {
     expect(reading.questions.every((q) => q.citation === null)).toBe(true);
   });
 
-  it("counts relative deadlines from their anchor, never the anchor date", async () => {
+  it("asks on a counted deadline, showing the count from the date in the sentence", async () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
@@ -152,16 +150,13 @@ describe("readMail", () => {
       model,
     });
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.deadlines).toHaveLength(1);
-    const deadline = reading.deadlines[0]!;
-    expect(deadline.dueDate).toBe("2026-12-05");
-    expect(deadline.obligation).toBe("respond");
-    expect(deadline.countRule).toBe("calendar days");
-    expect(deadline.anchor?.value).toBe("November 25, 2026");
-    expect(deadline.anchor?.citation).toEqual(deadline.citation);
+    expect(reading.deadlines).toEqual([]);
+    const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
+    expect(question.candidates?.[0]?.count).toEqual({ days: 10, fromIso: "2026-11-25", resultIso: "2026-12-05" });
+    expect(question.prompt).toContain("December 5, 2026");
   });
 
-  it("anchors relative deadlines to the notice date", async () => {
+  it("asks on a count from the notice date, showing the notice date it assumed", async () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
@@ -175,11 +170,10 @@ describe("readMail", () => {
       model,
     });
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.deadlines).toHaveLength(1);
-    const deadline = reading.deadlines[0]!;
-    expect(deadline.dueDate).toBe("2027-01-01");
-    expect(deadline.obligation).toBe("appeal");
-    expect(deadline.anchor?.value).toBe("November 2, 2026");
+    expect(reading.deadlines).toEqual([]);
+    const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
+    expect(question.candidates?.[0]?.count).toEqual({ days: 60, fromIso: "2026-11-02", resultIso: "2027-01-01" });
+    expect(question.prompt).toContain("November 2, 2026");
   });
 
   it("asks instead of guessing at ambiguous dates", async () => {
@@ -691,7 +685,7 @@ describe("readMail", () => {
     expect(question.candidates?.flatMap((c) => c.dates).sort()).toEqual(["2026-11-20", "2026-11-25"]);
   });
 
-  it("publishes a repeated response date next to an appeal date on page 2", async () => {
+  it("asks when the pages of one letter hold more than one deadline sentence", async () => {
     const bytes = await photo();
     const model = clientFor([
       pageJson({
@@ -720,9 +714,13 @@ describe("readMail", () => {
       { personId: "p1", synthetic: true, model },
     );
     expect(reading.letters).toHaveLength(1);
-    expect(reading.warnings.map((w) => w.kind)).not.toContain("conflicting_dates");
-    expect(reading.deadlines.map((d) => d.dueDate).sort()).toEqual(["2026-11-20", "2026-12-01"]);
-    expect(reading.deadlines.map((d) => d.obligation).sort()).toEqual(["appeal", "respond"]);
+    expect(reading.warnings.map((w) => w.kind)).toContain("conflicting_dates");
+    expect(reading.deadlines).toEqual([]);
+    const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
+    expect(question.candidates?.map((c) => c.sentence).sort()).toEqual([
+      "Appeal by December 1, 2026",
+      "Respond by November 20, 2026",
+    ]);
   });
 
   it("warns for contacts returned on an unreadable page", async () => {
@@ -1126,38 +1124,23 @@ describe("readMail publish gate", () => {
 
   // Each allowed form publishes exactly one correct date.
   it.each([
-    ["by", "Return your signed form and pay stubs by December 5, 2026.", "December 5, 2026", "2026-12-05", null],
-    ["on or before", "You must respond on or before December 12, 2026.", "December 12, 2026", "2026-12-12", null],
-    ["no later than", "You must renew your case no later than December 15, 2026.", "December 15, 2026", "2026-12-15", null],
-    [
-      "within days of a date",
-      "You must respond within 10 days of November 25, 2026.",
-      "within 10 days of November 25, 2026",
-      "2026-12-05",
-      "November 25, 2026",
-    ],
-    [
-      "within days of the notice",
-      "Request a hearing within 30 days of the date of this notice.",
-      "within 30 days of the date of this notice",
-      "2026-12-02",
-      "November 2, 2026",
-    ],
-    ["due", "Your premium is due December 13, 2026.", "Your premium is due December 13, 2026.", "2026-12-13", null],
-  ])("publishes the %s form", async (_label, sentence, extracted, iso, anchor) => {
+    ["by", "Return your signed form and pay stubs by December 5, 2026.", "December 5, 2026", "2026-12-05"],
+    ["on or before", "You must respond on or before December 12, 2026.", "December 12, 2026", "2026-12-12"],
+    ["no later than", "You must renew your case no later than December 15, 2026.", "December 15, 2026", "2026-12-15"],
+    ["due", "Your premium is due December 13, 2026.", "Your premium is due December 13, 2026.", "2026-12-13"],
+  ])("publishes the %s form", async (_label, sentence, extracted, iso) => {
     const reading = await readSentence(sentence, [dl(extracted)]);
     expect(reading.questions).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
     expect(reading.deadlines).toHaveLength(1);
     expect(reading.deadlines[0]).toMatchObject({ dueDate: iso, citation: { file: "mail.jpg", page: 1, box: BOX } });
-    expect(reading.deadlines[0]!.anchor?.value ?? null).toBe(anchor);
     expect(reading.letters[0]!.fields.deadlineIso?.value).toBe(iso);
   });
 
-  it("computes a counted date from the sentence when the reader returned only the anchor", async () => {
+  it("asks with the count from the sentence when the reader returned only the anchor", async () => {
     const reading = await readSentence("You must respond within 10 days after November 25, 2026.", [dl("November 25")]);
-    expect(reading.questions).toEqual([]);
-    expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-12-05"]);
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.questions[0]?.candidates?.[0]?.count).toEqual({ days: 10, fromIso: "2026-11-25", resultIso: "2026-12-05" });
   });
 
   it("files a will-receive arrival and an interview as dates to know", async () => {

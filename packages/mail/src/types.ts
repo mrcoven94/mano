@@ -86,10 +86,6 @@ export interface Deadline {
   dateText: string;
   obligation: Obligation;
   citation: Citation;
-  // Relative deadlines ("60 days from the date of this notice") cite
-  // the rule above and the anchor here, plus the count rule used.
-  anchor: Cited<string> | null;
-  countRule: string | null;
 }
 
 export type WarningKind =
@@ -139,6 +135,9 @@ export interface DeadlineCandidate {
   // Null for a deadline-like sentence the reader did not mark on the
   // photo: no box means no citation.
   citation: Citation | null;
+  // A counted deadline: the count, the date it was counted from (the
+  // reader's notice date or a date in the sentence), and the result.
+  count?: { days: number; fromIso: string; resultIso: string };
 }
 
 export interface ModelCallStat {

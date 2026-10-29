@@ -191,11 +191,9 @@ export function scorePhoto(truth: GradeTruth, reading: MailReading, elapsedMs: n
 
   reading.deadlines.forEach((d, i) => {
     cited(`deadline[${i}]`, d.citation.box);
-    if (d.anchor) cited(`deadline[${i}] anchor`, d.anchor.citation.box);
   });
   reading.datesToKnow.forEach((d, i) => {
     cited(`date-to-know[${i}]`, d.citation.box);
-    if (d.anchor) cited(`date-to-know[${i}] anchor`, d.anchor.citation.box);
   });
 
   // Full deadline sets: a missing deadline and an extra invented one

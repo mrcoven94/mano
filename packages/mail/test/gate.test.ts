@@ -16,21 +16,26 @@ describe("gateSentence publishes only the closed forms", () => {
     ["by", "Send it so it arrives by November 22, 2026.", "2026-11-22"],
     ["on-or-before", "You must respond on or before December 12, 2026.", "2026-12-12"],
     ["no-later-than", "You must renew your case no later than December 15, 2026.", "2026-12-15"],
-    ["within-days-of-date", "You must respond within 10 days of November 25, 2026.", "2026-12-05"],
-    ["within-days-of-date", "Send the form within 10 calendar days after November 25, 2026.", "2026-12-05"],
-    ["within-days-of-notice", "Request a hearing within 30 days of the date of this notice.", "2026-12-02"],
     ["due", "Your renewal is due November 20, 2026.", "2026-11-20"],
     ["due", "Your premium is due on December 1, 2026.", "2026-12-01"],
   ])("%s: %s", (form, sentence, iso) => {
     expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "deadline", form, iso });
   });
 
-  it("cites the anchor and count of a counted deadline", () => {
-    expect(gateSentence("You must respond within 10 days of November 25, 2026.", NOTICE)).toMatchObject({
-      count: { days: 10, anchorIso: "2026-11-25", anchorText: "November 25, 2026" },
+  it("never publishes a counted deadline; it asks with the count", () => {
+    expect(gateSentence("You must respond within 10 days of November 25, 2026.", NOTICE)).toEqual({
+      kind: "ask",
+      reason: "counted",
+      count: { days: 10, fromIso: "2026-11-25", resultIso: "2026-12-05" },
     });
-    expect(gateSentence("Appeal within 30 days of the date of this notice.", NOTICE)).toMatchObject({
-      count: { days: 30, anchorIso: NOTICE, anchorText: null },
+    expect(gateSentence("Send the form within 10 calendar days after November 25, 2026.", NOTICE)).toMatchObject({
+      kind: "ask",
+      count: { resultIso: "2026-12-05" },
+    });
+    expect(gateSentence("Request a hearing within 30 days of the date of this notice.", NOTICE)).toEqual({
+      kind: "ask",
+      reason: "counted",
+      count: { days: 30, fromIso: NOTICE, resultIso: "2026-12-02" },
     });
   });
 });

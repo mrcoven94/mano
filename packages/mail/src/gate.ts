@@ -18,12 +18,12 @@ export type DeadlineForm =
   | "within-days-of-notice"
   | "due";
 
+// A counted deadline never publishes. The question shows the count,
+// the date it was counted from, and the result.
 export interface DayCount {
   days: number;
-  anchorIso: string;
-  // The anchor as the letter writes it, or null when it is the
-  // letter's own notice date.
-  anchorText: string | null;
+  fromIso: string;
+  resultIso: string;
 }
 
 export type AskReason =
@@ -32,12 +32,13 @@ export type AskReason =
   | "notice-date"
   | "before-notice"
   | "too-far"
-  | "no-notice-date";
+  | "no-notice-date"
+  | "counted";
 
 export type GateVerdict =
-  | { kind: "deadline"; iso: string; form: DeadlineForm; obligation: Obligation; count: DayCount | null }
+  | { kind: "deadline"; iso: string; form: DeadlineForm; obligation: Obligation }
   | { kind: "date-to-know"; iso: string }
-  | { kind: "ask"; reason: AskReason }
+  | { kind: "ask"; reason: AskReason; count?: DayCount }
   | { kind: "no-date" };
 
 const any = (words: string[]): string => `(?:${words.map((w) => w.replace(/ /g, String.raw`\s+`)).join("|")})`;
@@ -124,6 +125,30 @@ export function isDeadlineLike(sentence: string): boolean {
   return DEADLINE_LIKE.some((re) => re.test(sentence)) || findAmbiguousDate(sentence) !== null;
 }
 
+// A deadline sentence: deadline wording near a date or a count, or any
+// of the wording above. A letter publishes only when its whole
+// transcription holds exactly one.
+const DEADLINE_WORD =
+  /\b(?:by|before|no\s+later\s+than|due|within|deadline|expires?|expired|expiration|must|return(?:s|ed)?|submit(?:s|ted)?|respond(?:s|ed)?|renew(?:s|ed)?|recertify|upload(?:s|ed)?|sends?|sent|mail(?:s|ed)?)\b/i;
+const DATE_OR_COUNT = new RegExp(
+  String.raw`\b(?:${ANY_COUNT}|today|tonight|tomorrow|next\s+(?:week|month))\b|\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b|\b${MONTH_WORD}\s+\d{1,2}\b`,
+  "i",
+);
+
+export function isDeadlineSentence(sentence: string): boolean {
+  if (isDeadlineLike(sentence)) return true;
+  return DEADLINE_WORD.test(sentence) && (DATE_OR_COUNT.test(sentence) || parseAllDates(sentence).length > 0);
+}
+
+// Conditions and audiences that make a deadline someone else's or
+// not yet owed, looked for in the sentence's paragraph, the line before
+// it and the headings above it.
+const QUALIFIER = /\b(?:if|only|unless|except|when|staff|office\s+use|for\s+county|applies\s+to|does\s+not\s+apply)\b/i;
+
+export function hasQualifyingContext(context: string): boolean {
+  return QUALIFIER.test(context);
+}
+
 // A date to know states one plain date and names no duty: no
 // negation, condition or alternative.
 const TO_KNOW_LEFTOVER =
@@ -184,23 +209,19 @@ export function gateSentence(sentence: string, noticeIso: string | null): GateVe
   const match = matchForm(s);
   if (match) {
     const { form, groups } = match;
-    let iso: string;
-    let count: DayCount | null = null;
     if (form === "within-days-of-date" || form === "within-days-of-notice") {
-      const anchorIso = form === "within-days-of-notice" ? noticeIso : parseWrittenDate(groups.date ?? "");
-      if (!anchorIso) return { kind: "ask", reason: "no-notice-date" };
+      // The notice date is only as good as the reader's label for it.
+      const fromIso = form === "within-days-of-notice" ? noticeIso : parseWrittenDate(groups.date ?? "");
+      if (!fromIso) return { kind: "ask", reason: "no-notice-date" };
       const days = Number(groups.days);
-      iso = addDays(anchorIso, days);
-      count = { days, anchorIso, anchorText: form === "within-days-of-date" ? (groups.date ?? null) : null };
-    } else {
-      const parsed = parseWrittenDate(groups.date ?? "");
-      if (!parsed) return { kind: "ask", reason: "unrecognized" };
-      iso = parsed;
-      if (noticeIso && iso === noticeIso) return { kind: "ask", reason: "notice-date" };
+      return { kind: "ask", reason: "counted", count: { days, fromIso, resultIso: addDays(fromIso, days) } };
     }
+    const iso = parseWrittenDate(groups.date ?? "");
+    if (!iso) return { kind: "ask", reason: "unrecognized" };
+    if (noticeIso && iso === noticeIso) return { kind: "ask", reason: "notice-date" };
     const chrono = chronologyOf(iso, noticeIso);
     if (chrono !== "ok") return { kind: "ask", reason: chrono };
-    return { kind: "deadline", iso, form, obligation: obligationOf(groups.duty ?? s), count };
+    return { kind: "deadline", iso, form, obligation: obligationOf(groups.duty ?? s) };
   }
   if (isDeadlineLike(s)) return { kind: "ask", reason: "unrecognized" };
   const dates = parseAllDates(s);

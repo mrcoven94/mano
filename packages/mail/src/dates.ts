@@ -117,15 +117,46 @@ export const DATE_PATTERN =
 // asks instead of losing a condition.
 const SALUTATION_LINE = /^[ \t]*dear(?:[ \t]+[A-Za-z][A-Za-z.'-]*){1,5}[ \t]*[,:]?[ \t]*$/gim;
 
-// The transcription's sentences, whitespace collapsed and trailing
-// punctuation removed. Sentences end at end punctuation, a blank line
-// or a salutation line, so a letterhead never runs into the body.
-export function splitSentences(fullText: string): string[] {
-  return fullText
+export interface SentenceInContext {
+  sentence: string;
+  // The sentence's paragraph, the last line before that paragraph, and
+  // every heading line above it: where a condition or an audience
+  // ("If you moved:", "For county staff only.") qualifies it.
+  context: string;
+}
+
+const tidy = (s: string): string => s.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "");
+// A heading is a short line that does not end a sentence.
+const isHeading = (line: string): boolean => !/[.!?]\s*$/.test(line) && line.trim().split(/\s+/).length <= 12;
+
+// The transcription's sentences with their context. Sentences end at
+// end punctuation, a blank line or a salutation line, so a letterhead
+// never runs into the body. Whitespace is collapsed and trailing
+// punctuation removed.
+export function sentencesInContext(fullText: string): SentenceInContext[] {
+  const paragraphs = fullText
     .replace(SALUTATION_LINE, "\n\n")
-    .split(/(?<=[.!?])\s+|\n\s*\n/)
-    .map((s) => s.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, ""))
-    .filter((s) => s.length > 0);
+    .split(/\n\s*\n/)
+    .map((p) => p.split("\n").filter((l) => l.trim().length > 0))
+    .filter((lines) => lines.length > 0);
+  const out: SentenceInContext[] = [];
+  const headingsAbove: string[] = [];
+  let lineBefore = "";
+  for (const lines of paragraphs) {
+    const paragraph = lines.join(" ");
+    const context = [paragraph, lineBefore, ...headingsAbove].join("\n");
+    for (const raw of paragraph.split(/(?<=[.!?])\s+/)) {
+      const sentence = tidy(raw);
+      if (sentence) out.push({ sentence, context });
+    }
+    headingsAbove.push(...lines.filter(isHeading));
+    lineBefore = lines[lines.length - 1]!;
+  }
+  return out;
+}
+
+export function splitSentences(fullText: string): string[] {
+  return sentencesInContext(fullText).map((s) => s.sentence);
 }
 
 // The one sentence of the original transcription that contains the

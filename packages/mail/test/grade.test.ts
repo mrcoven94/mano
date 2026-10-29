@@ -61,8 +61,6 @@ function deadline(file: string, dueDate: string): Deadline {
     dateText: dueDate,
     obligation: "other",
     citation: cite(file),
-    anchor: null,
-    countRule: null,
   };
 }
 
