@@ -16,6 +16,7 @@ export const CODE_FILES = [
   "eval/src/inputs.mjs",
   "eval/src/render.mjs",
   "eval/src/tools.mjs",
+  "eval/src/ipc.mjs",
   "eval/src/baselines.mjs",
   "eval/src/harness.mjs",
   "eval/src/grader.mjs",
@@ -24,6 +25,7 @@ export const CODE_FILES = [
   "eval/src/cli-baselines.mjs",
   "eval/src/cli-freeze.mjs",
   "eval/src/cli-verify.mjs",
+  "eval/src/pack-public.json",
   "eval/src/systems/reminder.mjs",
   "eval/src/systems/parser.mjs",
   "eval/src/systems/general-agent.mjs",
@@ -106,6 +108,20 @@ export async function verifyHeldout(record, seed) {
   const manifest = sha256(lines.join("\n"));
   const mismatches = [];
   if (manifest !== record.manifest) mismatches.push("manifest");
+  // The private pack is committed by hash only; a swapped pack fails even
+  // when the seed is right.
+  const packPath = process.env.MANO_EVAL_TEMPLATE_PACK;
+  if (!packPath) {
+    mismatches.push("private pack path not set");
+  } else {
+    let packHash = null;
+    try {
+      packHash = sha256(await readFile(packPath, "utf8"));
+    } catch {
+      packHash = null;
+    }
+    if (packHash !== record.privatePack) mismatches.push("private pack hash");
+  }
   const frozen = new Map(record.heldout.map((h) => [h.householdId, h.sha256]));
   if (frozen.size !== heldout.length) mismatches.push(`count ${heldout.length} vs frozen ${frozen.size}`);
   for (const h of heldout) {

