@@ -87,7 +87,8 @@ export function ensureAgentStateTables(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS reminders(
     id TEXT PRIMARY KEY, text TEXT NOT NULL, due_at_ms INTEGER NOT NULL, generation INTEGER NOT NULL,
     status TEXT NOT NULL, next_at_ms INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-    claim_token TEXT, claimed_at_ms INTEGER, created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER)`);
+    claim_token TEXT, claimed_at_ms INTEGER, created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER,
+    handoffs INTEGER NOT NULL DEFAULT 0)`);
   // The due lookup: waiting reminders by their next time.
   sql.exec("CREATE INDEX IF NOT EXISTS reminders_due ON reminders(status, next_at_ms)");
   sql.exec(`CREATE TABLE IF NOT EXISTS turns(
@@ -110,10 +111,13 @@ export function currentGeneration(sql: SqlExec): number {
 }
 
 // scheduled: waiting for its time. claimed: taken by one delivery run,
-// not yet handed to Channels, so it can still be cancelled. sending:
-// handed to Channels, no longer cancellable. sent, dropped (Channels
-// refused it for good, or its conversation was deleted), failed (retries
-// ran out) and cancelled are final.
+// never yet handed to Channels, so it can still be cancelled. sending:
+// handed to Channels at least once. Channels may have accepted it, so it
+// never returns to a cancellable state: an uncertain answer or a crashed
+// run leaves it sending, and the next run re-sends it under the same key
+// for Channels to dedupe. sent, dropped (Channels refused it for good, or
+// its conversation was deleted), failed (retries ran out) and cancelled
+// are final.
 export type ReminderStatus = "scheduled" | "claimed" | "sending" | "sent" | "dropped" | "failed" | "cancelled";
 
 export interface Reminder {
@@ -171,46 +175,63 @@ export function createReminder(
   return same ? { reminder, created: false } : { conflict: reminder };
 }
 
-// Cancels a reminder still waiting or claimed but not yet handed off.
-// One handed to Channels reports "sending": its delivery is committed.
-export function cancelReminder(sql: SqlExec, id: string, nowMs: number): { reminder: Reminder | null; cancelled: boolean } {
+// Cancels a reminder that was never handed to Channels. One that ever
+// reached sending answers "already on its way": its delivery may already
+// be accepted, so it is never called back.
+export function cancelReminder(
+  sql: SqlExec,
+  id: string,
+  nowMs: number,
+): { reminder: Reminder | null; cancelled: boolean; reason?: "already on its way" } {
   const updated = sql.exec(
-    "UPDATE reminders SET status = 'cancelled', finished_at_ms = ? WHERE id = ? AND status IN ('scheduled', 'claimed')",
+    "UPDATE reminders SET status = 'cancelled', finished_at_ms = ? WHERE id = ? AND status IN ('scheduled', 'claimed') AND handoffs = 0",
     nowMs, id,
   ).rowsWritten;
   const reminder = getReminder(sql, id);
-  return { reminder, cancelled: updated > 0 || reminder?.status === "cancelled" };
+  if (updated > 0 || reminder?.status === "cancelled") return { reminder, cancelled: true };
+  if (reminder && (reminder.status === "sending" || reminder.status === "sent")) {
+    return { reminder, cancelled: false, reason: "already on its way" };
+  }
+  return { reminder, cancelled: false };
 }
 
 // Claims up to `limit` due reminders for one delivery run, marked with its
-// token. A claim whose lease ran out (the run crashed) can be claimed
-// again; Channels dedupes on the reminder's delivery key, so a resend of
-// one already handed off is safe.
+// token: waiting ones become claimed, and sending ones due for a re-send
+// (an uncertain answer) or whose run died (lease out) stay sending. A
+// claimed one whose run died is claimed again. Never moves a reminder
+// back from sending.
 export function claimDueReminders(sql: SqlExec, nowMs: number, leaseMs: number, token: string, limit: number): Reminder[] {
   sql.exec(
-    "UPDATE reminders SET status = 'claimed', claim_token = ?, claimed_at_ms = ?, attempts = attempts + 1" +
+    "UPDATE reminders SET status = CASE status WHEN 'sending' THEN 'sending' ELSE 'claimed' END," +
+      " claim_token = ?, claimed_at_ms = ?, attempts = attempts + 1" +
       " WHERE id IN (SELECT id FROM reminders WHERE (status = 'scheduled' AND next_at_ms <= ?)" +
-      " OR (status IN ('claimed', 'sending') AND claimed_at_ms <= ?) ORDER BY next_at_ms, id LIMIT ?)",
-    token, nowMs, nowMs, nowMs - leaseMs, limit,
+      " OR (status = 'sending' AND claim_token IS NULL AND next_at_ms <= ?)" +
+      " OR (status IN ('claimed', 'sending') AND claim_token IS NOT NULL AND claimed_at_ms <= ?)" +
+      " ORDER BY next_at_ms, id LIMIT ?)",
+    token, nowMs, nowMs, nowMs, nowMs - leaseMs, limit,
   );
   return sql
-    .exec(`SELECT ${REMINDER_COLUMNS} FROM reminders WHERE claim_token = ? AND status = 'claimed' ORDER BY due_at_ms, id`, token)
+    .exec(
+      `SELECT ${REMINDER_COLUMNS} FROM reminders WHERE claim_token = ? AND status IN ('claimed', 'sending') ORDER BY due_at_ms, id`,
+      token,
+    )
     .toArray()
     .map(reminderFromRow);
 }
 
-// The commit point of a delivery, right before the handoff to Channels:
-// the run must still hold the claim, the reminder must not have been
-// cancelled, and its generation must be current, all in this statement.
-// A claimed reminder whose conversation was deleted is dropped instead.
+// The commit point of each send, first or re-send, right before the call
+// to Channels: the run must still hold the claim, the reminder must not
+// have been cancelled, and its generation must be current, all in this
+// statement. One whose conversation was deleted is dropped instead.
 export function handOffReminder(sql: SqlExec, id: string, token: string, nowMs: number): boolean {
   const handed = sql.exec(
-    `UPDATE reminders SET status = 'sending' WHERE id = ? AND claim_token = ? AND status = 'claimed' AND generation = ${CURRENT_GENERATION}`,
+    "UPDATE reminders SET status = 'sending', handoffs = handoffs + 1" +
+      ` WHERE id = ? AND claim_token = ? AND status IN ('claimed', 'sending') AND generation = ${CURRENT_GENERATION}`,
     id, token,
   ).rowsWritten;
   if (handed > 0) return true;
   sql.exec(
-    "UPDATE reminders SET status = 'dropped', finished_at_ms = ? WHERE id = ? AND claim_token = ? AND status = 'claimed'",
+    "UPDATE reminders SET status = 'dropped', finished_at_ms = ? WHERE id = ? AND claim_token = ? AND status IN ('claimed', 'sending')",
     nowMs, id, token,
   );
   return false;
@@ -219,12 +240,14 @@ export function handOffReminder(sql: SqlExec, id: string, token: string, nowMs: 
 export type DeliveryOutcome = { kind: "sent" } | { kind: "dropped" } | { kind: "failed" } | { kind: "retry"; atMs: number };
 
 // Only the run holding the claim may settle it, and only once it was
-// handed off: a reclaimed or cancelled reminder ignores a late result.
+// handed off: a reclaimed or cancelled reminder ignores a late result. A
+// retry stays sending: the claim is released and the re-send waits for
+// its time.
 export function finishReminder(sql: SqlExec, id: string, token: string, outcome: DeliveryOutcome, nowMs: number): boolean {
   if (outcome.kind === "retry") {
     return (
       sql.exec(
-        "UPDATE reminders SET status = 'scheduled', next_at_ms = ?, claim_token = NULL, claimed_at_ms = NULL" +
+        "UPDATE reminders SET next_at_ms = ?, claim_token = NULL, claimed_at_ms = NULL" +
           " WHERE id = ? AND claim_token = ? AND status = 'sending'",
         outcome.atMs, id, token,
       ).rowsWritten > 0
@@ -242,7 +265,7 @@ export function finishReminder(sql: SqlExec, id: string, token: string, outcome:
 // the moment an outstanding claim's lease runs out.
 export function nextReminderRunMs(sql: SqlExec, leaseMs: number): number | null {
   const row = sql.exec(
-    "SELECT MIN(CASE status WHEN 'scheduled' THEN next_at_ms ELSE claimed_at_ms + ? END) AS at" +
+    "SELECT MIN(CASE WHEN status = 'scheduled' OR claim_token IS NULL THEN next_at_ms ELSE claimed_at_ms + ? END) AS at" +
       " FROM reminders WHERE status IN ('scheduled', 'claimed', 'sending')",
     leaseMs,
   ).toArray()[0] as { at: number | null } | undefined;
