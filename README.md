@@ -68,6 +68,21 @@ pnpm --filter @mano/sandbox-portal dev
 
 Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. To deploy your own copy, see the deploy workflows in `.github/workflows/`.
 
+## The text line
+
+Texts to Mano land on `apps/channels`, a Cloudflare Worker. Each reply is a Meta model call to Muse Spark 1.3 (a Standard model ID with `store: false`, set as `MANO_REPLY_MODEL` in `apps/channels/wrangler.toml`). Mano's voice lives in `packages/persona` and goes to the model as its instructions, with the conversation as role messages.
+
+- Simple questions take the fast path: one call at minimal reasoning effort, sent a second time 300 ms later, and the first answer wins. Replies arrive in about 2 to 4 seconds.
+- Questions that need real digging take the deep path: the fast call returns a short heads-up, which is texted at once, then a second call at medium effort writes the full answer.
+- Every outgoing text passes a deterministic voice guard (plain code, not a model call). It rewrites dashes and markdown, replaces any model or provider name with "I'm Mano, an automated assistant", and sends a short safe line instead of an empty text.
+- A message about self-harm or danger never waits on a heads-up, and its reply always names 988 and 911.
+
+Check the voice against the real model with your own key (synthetic messages only, sent to a `-contributor` model ID). Without a key, the probes are skipped:
+
+```sh
+META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
+```
+
 ## Packages and apps
 
 | Path | What | Status |
@@ -77,6 +92,7 @@ Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. To
 | `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway | landing during the hackathon |
 | `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text | live |
 | `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits | live |
+| `packages/persona` | Mano's voice: the soul, the fast and deep paths, the voice guard, the crisis floor and the persona probes | live |
 | `packages/protocol` | The open message format agents use to work a case together | landing during the hackathon |
 | `packages/guardian` | The checker that reviews every outside action before a person approves it | live |
 | `packages/quality` | The nightly answer-quality bench | landing during the hackathon |
