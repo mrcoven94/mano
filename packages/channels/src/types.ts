@@ -28,6 +28,10 @@ export interface EventGroup {
   name: string | null;
 }
 
+// The tapbacks Mano may send. Dislike and question are left out on
+// purpose: they read as judgment from an assistant.
+export type Tapback = "love" | "like" | "laugh" | "emphasize";
+
 export interface NormalizedEvent {
   id: string;
   kind: NormalizedEventKind;
@@ -49,6 +53,9 @@ export interface NormalizedEvent {
   direction: EventDirection | null;
   text: string | null;
   attachments: EventAttachment[];
+  // On a reaction event: the tapback and whether it was added or removed.
+  // messageId is the message it sits on.
+  reaction?: { value: string; action: "add" | "remove" } | null;
   // Machine-readable provider code on failures and refusals.
   errorCode: string | null;
   errorMessage: string | null;
@@ -104,6 +111,8 @@ export interface ChannelSendInput {
   chatId: string | null;
   text: string;
   idempotencyKey: string;
+  // The inbound message this bubble answers, shown as an inline reply.
+  replyTo?: string | null;
 }
 
 export interface ChannelSendResult {

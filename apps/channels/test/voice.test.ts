@@ -48,7 +48,8 @@ describe("the voice guard on every send path", () => {
       "webhook",
     );
     await runTurnAfterBatch(h);
-    expect(sentTexts(h)).toEqual([INTRO_BUBBLE, "Let me check Ohio's rules, one sec.", "The short answer. You likely qualify."]);
+    // Voice v2: one thought per line, one line per bubble.
+    expect(sentTexts(h)).toEqual([INTRO_BUBBLE, "Let me check Ohio's rules, one sec.", "The short answer.", "You likely qualify."]);
     expectAllInVoice(h);
     expect(h.lines.join("\n")).toContain("heads_up_sent");
   });

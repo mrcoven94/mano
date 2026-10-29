@@ -333,3 +333,34 @@ describe("BlooioChannel reads", () => {
     await expect(channel.hydrateEvent(receipt)).resolves.toBeNull();
   });
 });
+
+describe("Blooio native iMessage calls (LAP-636)", () => {
+  it("adds a tapback on a message", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, { ok: true }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    await channel.react("chat_aaa", "msg_in_1", "love");
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.blooio.com/v4/chats/chat_aaa/messages/msg_in_1/reactions");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ reaction: "+love" });
+  });
+
+  it("sends reply_to when a reply answers an earlier message", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(201, { id: "msg_out_9", chat_id: "chat_aaa", status: "queued" }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    await channel.send({ to: "+15550000001", chatId: "chat_aaa", text: "Friday, Nov 14.", idempotencyKey: "k1", replyTo: "msg_in_1" });
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ text: "Friday, Nov 14.", reply_to: "msg_in_1" });
+  });
+
+  it("parses a message.reaction webhook into the reaction, its action and the reacted message", () => {
+    const event = parseBlooioEvent({
+      type: "message.reaction",
+      created_at: Date.now(),
+      data: { chat_id: "chat_aaa", message_id: "msg_out_3", reaction: "love", action: "add", original_text: "Synthetic text." },
+    });
+    expect(event?.kind).toBe("reaction");
+    expect(event?.messageId).toBe("msg_out_3");
+    expect(event?.reaction).toEqual({ value: "love", action: "add" });
+  });
+});
