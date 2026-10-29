@@ -102,3 +102,14 @@ describe("the runner guards with the configured model ID (review blocker 4)", ()
     expect(sent(h).join(" ")).not.toContain("acme-reply-7");
   });
 });
+
+describe("the crisis check is the last step before a crisis turn is sent (review round 2, blocker 1)", () => {
+  it("keeps 988 and 911 when the send-time guard rewrites a joined bubble", async () => {
+    const h = makeHarness({ replies: ["Call 988 or 911, there is a spark of hope\nI use this to help you."] });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: CRISIS_TEXT, occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h);
+    const answer = sent(h).slice(1).join(" ");
+    expect(answer).toContain("988");
+    expect(answer).toContain("911");
+  });
+});

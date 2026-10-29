@@ -35,7 +35,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { CRISIS_LINE, guardReply, holdCrisisLines, isCrisis } from "@mano/persona";
+import { guardReply, holdCrisisLines, isCrisis } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -684,7 +684,10 @@ export class ConversationRunner {
       });
       if (crisis) {
         // No model and no cost: the deterministic crisis reply, past any limit.
-        const bubbles = [...(meta.introduced ? [] : [{ part: 0, tag: "", text: INTRO_BUBBLE }]), { part: 1, tag: "", text: CRISIS_LINE }];
+        const bubbles = [
+          ...(meta.introduced ? [] : [{ part: 0, tag: "", text: INTRO_BUBBLE }]),
+          ...this.answerBubbles(turn, [], true),
+        ];
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
         await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
@@ -723,13 +726,12 @@ export class ConversationRunner {
           if (final.removed > 0) {
             logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
           }
-          const answerBubbles = crisis ? holdCrisisLines(final.bubbles).slice(0, MAX_BUBBLES) : final.bubbles;
-          answerBubbles.forEach((text, i) => bubbles.push({ part: i + 1, tag: "", text }));
+          bubbles.push(...this.answerBubbles(turn, final.bubbles, crisis));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
         } else {
-          bubbles.push({ part: 1, tag: "", text: crisis ? CRISIS_LINE : FAILURE_BUBBLE });
+          bubbles.push(...this.answerBubbles(turn, crisis ? [] : [FAILURE_BUBBLE], crisis));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
@@ -913,6 +915,17 @@ export class ConversationRunner {
     while (messages.length > 0 && chars > HISTORY_CHARS) chars -= messages.shift()!.text.length;
     if (!introduced) messages.push({ role: "mano", text: INTRO_BUBBLE });
     return messages;
+  }
+
+  // The answer bubbles exactly as sendBubble will send them: each one
+  // through the same send-time guard, then, for a crisis turn, the
+  // check that 988 and 911 are still there, then the bubble cap. The
+  // crisis check is the last change to the text: the guard is
+  // idempotent, so sendBubble's own pass leaves these bubbles as they are.
+  private answerBubbles(turn: number, texts: string[], crisis: boolean): import("./store.js").AnswerBubble[] {
+    const voiced = texts.map((text, i) => this.guard(text, { turn, part: i + 1, tag: "" }));
+    const final = crisis ? holdCrisisLines(voiced).slice(0, MAX_BUBBLES) : voiced;
+    return final.map((text, i) => ({ part: i + 1, tag: "", text }));
   }
 
   // The voice guard. Logs which rules fired, never the text.
