@@ -1,5 +1,6 @@
 // Links are checked before use. Every host resolves over DNS-over-HTTPS:
 // an answer of 0.0.0.0 means blocked, and a lookup error also blocks.
+import { boundFetch } from "./fetch.js";
 // Anything shown to a person checks against both the family and the
 // security filters.
 
@@ -45,7 +46,7 @@ export class LinkChecker {
   private timeoutMs: number;
 
   constructor(opts: LinkCheckerOptions = {}) {
-    this.fetchFn = opts.fetchFn ?? fetch;
+    this.fetchFn = opts.fetchFn ?? boundFetch;
     this.securityBase = (opts.securityBase ?? SECURITY_DOH_BASE).replace(/\/$/, "");
     this.familyBase = (opts.familyBase ?? FAMILY_DOH_BASE).replace(/\/$/, "");
     this.timeoutMs = opts.timeoutMs ?? 10000;

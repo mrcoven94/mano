@@ -122,6 +122,14 @@ describe("ConversationDO on SQLite", () => {
     expect(recorded.sends.every((s) => s.state === "sent" && !!s.message)).toBe(true);
   });
 
+  it("dedupes a webhook+reconcile double delivery by message id", async () => {
+    const stub = stubFor(`do-xpath-${Date.now()}`);
+    const first = inbound("evt_webhook_x", "Hello.");
+    const second = { ...inbound("evt_feed_y", "Hello."), messageId: first.messageId };
+    expect(await postEvent(stub, "hash-xpath", first)).toBe("queued");
+    expect(await postEvent(stub, "hash-xpath", second)).toBe("duplicate");
+  });
+
   it("keeps conversations isolated per handle", async () => {
     const a = stubFor(`do-iso-a-${Date.now()}`);
     const b = stubFor(`do-iso-b-${Date.now()}`);

@@ -158,9 +158,12 @@ async function saveCursor(env: Env, cursor: string | null): Promise<void> {
 }
 
 // Reconciliation: page the provider's event feed since the last cursor
-// and enqueue anything for our line. A page the provider serves again
-// (no next cursor) is filtered through the seen high-watermark, so only
-// new events requeue; the DO event log dedupes the rest.
+// and enqueue anything for our line. Feed rows are thin (no channel,
+// text or sender), so inbound receipts hydrate their message before
+// queueing; anything else for our line queues directly. Skipped rows
+// are still marked seen so the cursor keeps moving, and a page the
+// provider serves again is filtered through the seen high-watermark,
+// so only new events requeue; the DO event log dedupes the rest.
 export async function reconcile(env: Env, channel?: Channel): Promise<{ pages: number; enqueued: number }> {
   const logger = createLogger();
   const feed = channel ?? workerChannel(env);
@@ -170,18 +173,27 @@ export async function reconcile(env: Env, channel?: Channel): Promise<{ pages: n
   for (let page = 0; page < RECONCILE_MAX_PAGES; page++) {
     const batch = await feed.listEvents(cursor, RECONCILE_LIMIT);
     pages += 1;
-    const ours = batch.events.filter((event) => event.channelId === env.BLOOIO_CHANNEL_ID);
-    const unseen = new Set(await checkUnseen(env, ours.map((event) => event.id)));
-    const queued: string[] = [];
-    for (const event of ours) {
+    const unseen = new Set(await checkUnseen(env, batch.events.map((event) => event.id)));
+    const seen: string[] = [];
+    for (const event of batch.events) {
       if (!unseen.has(event.id)) continue;
-      await env.EVENTS.send(event);
-      queued.push(event.id);
-      enqueued += 1;
+      const full = await hydrateForReconcile(feed, event, env, logger);
+      if (full === "paused") {
+        // Transient fetch failure: keep the cursor here so the next
+        // run retries this page; rows already handled stay marked.
+        await noteSeenIds(env, seen);
+        logger.info("reconciled", { pages, enqueued });
+        return { pages, enqueued };
+      }
+      if (full) {
+        await env.EVENTS.send(full);
+        enqueued += 1;
+      }
+      seen.push(event.id);
     }
     // Noted only after the queue accepted them: a throw above leaves
     // the page unmarked, and the next run retries it.
-    await noteSeenIds(env, queued);
+    await noteSeenIds(env, seen);
     // No next cursor means the feed is drained; keep the last cursor so
     // the next run resumes instead of rereading from the start.
     if (!batch.nextCursor) break;
@@ -190,6 +202,28 @@ export async function reconcile(env: Env, channel?: Channel): Promise<{ pages: n
   }
   logger.info("reconciled", { pages, enqueued });
   return { pages, enqueued };
+}
+
+// One feed row to zero or one queueable event. Thin inbound rows fetch
+// their message; rows already naming our line queue as parsed. Null
+// means seen and skipped (gone, unreadable, or another line's);
+// "paused" means the fetch failed transiently and the run must stop.
+async function hydrateForReconcile(
+  feed: Channel,
+  event: NormalizedEvent,
+  env: Env,
+  logger: ReturnType<typeof createLogger>,
+): Promise<NormalizedEvent | null | "paused"> {
+  if (event.channelId === env.BLOOIO_CHANNEL_ID) return event;
+  if (event.kind !== "message.received" || !event.chatId || !event.messageId) return null;
+  try {
+    const full = await feed.hydrateEvent(event);
+    if (!full || full.channelId !== env.BLOOIO_CHANNEL_ID) return null;
+    return full;
+  } catch (err) {
+    logger.warn("reconcile_paused", { err: errName(err) });
+    return "paused";
+  }
 }
 
 async function checkUnseen(env: Env, ids: string[]): Promise<string[]> {
@@ -265,7 +299,18 @@ export default {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
-    await reconcile(env);
-    await sweepExpiredFiles(new R2FileStore(env.FILES), Date.now());
+    // A failing tick must log and end, never exception: an uncaught
+    // cron error is invisible except in tail, and it skips the sweep.
+    const logger = createLogger();
+    try {
+      await reconcile(env);
+    } catch (err) {
+      logger.warn("reconcile_failed", { err: errName(err) });
+    }
+    try {
+      await sweepExpiredFiles(new R2FileStore(env.FILES), Date.now());
+    } catch (err) {
+      logger.warn("sweep_failed", { err: errName(err) });
+    }
   },
 };

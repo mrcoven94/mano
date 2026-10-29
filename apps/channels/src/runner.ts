@@ -3,6 +3,7 @@
 // channel, the responder, files and the spend ledger. Nothing here names
 // a provider or a runtime.
 import {
+  ChannelFailed,
   ChannelRefused,
   HANDLE_BYTES_DAILY,
   INPUT_SLACK_CHARS,
@@ -238,6 +239,16 @@ export class ConversationRunner {
       return "recorded";
     }
     if (store.hasEvent(event.id)) return "duplicate";
+    // Webhook and reconcile deliver the same inbound message under two
+    // different event ids (evt_ webhook id vs evt_ feed id): dedupe by
+    // type plus message id so it is answered once.
+    if (event.kind === "message.received" && event.direction === "inbound" && event.messageId) {
+      if (store.hasInboundMessage(event.messageId)) {
+        store.recordEvent(event.id, event.kind, nowMs());
+        return "duplicate";
+      }
+      store.recordInboundMessage(event.messageId, nowMs());
+    }
     store.recordEvent(event.id, event.kind, nowMs());
 
     // Groups are recorded and never answered. A group reply could carry a
@@ -892,7 +903,8 @@ export class ConversationRunner {
   // deterministic key. A send whose outcome is unknown is marked
   // uncertain, never failed: the worker looks the message up (or replays
   // its key, which the provider answers from its stored original) before
-  // deciding, retrying on later alarms until it knows.
+  // deciding, retrying on later alarms until it knows. Only a send the
+  // provider definitively rejected (failed) ends there.
   async sendBubble(opts: {
     turn: number;
     part: number;
@@ -961,6 +973,11 @@ export class ConversationRunner {
         logger.warn("send_refused", { handle: this.logHandle(), key, code: err.code, status: err.status });
         return finish({ key, state: "refused", code: err.code, fresh: false, counted: true });
       }
+      if (err instanceof ChannelFailed) {
+        store.updateOutbound(key, { state: "failed", code: err.code, updatedAtMs: nowMs() });
+        logger.warn("send_failed", { handle: this.logHandle(), key, code: err.code, status: err.status });
+        return finish({ key, state: "failed", code: err.code, fresh: false, counted: true });
+      }
       // Any other send error (timeout, network, 5xx, unexpected) may
       // have landed: never terminal. Mark uncertain, look the message
       // up or replay its key, and let the turn retry on backoff.
@@ -1014,6 +1031,11 @@ export class ConversationRunner {
       if (err instanceof ChannelRefused) {
         store.updateOutbound(key, { state: "refused", code: err.code, updatedAtMs: nowMs() });
         return finish({ key, state: "refused", code: err.code, fresh: false, counted: true });
+      }
+      if (err instanceof ChannelFailed) {
+        store.updateOutbound(key, { state: "failed", code: err.code, updatedAtMs: nowMs() });
+        logger.warn("send_failed", { handle: this.logHandle(), key, code: err.code, status: err.status });
+        return finish({ key, state: "failed", code: err.code, fresh: false, counted: true });
       }
       const attempts = (store.outboundByKey(key)?.attempts ?? 0) + 1;
       store.updateOutbound(key, { state: "uncertain", attempts, updatedAtMs: nowMs() });
