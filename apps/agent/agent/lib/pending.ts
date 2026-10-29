@@ -5,11 +5,17 @@
 // question is rendered from the request Engine froze, so the person reads
 // the exact content their yes would send.
 //
-// "asked" waits for the person's YES or NO. "checking" means Engine took
+// "prepared" means the agent returned the question but Channels has not
+// confirmed it reached the person word for word; a YES then approves
+// nothing. "presented" waits for the person's YES or NO, and starts only
+// when Channels reports the approval ID and the hash of the exact text
+// it sent. "checking" means Engine took
 // the YES but the outcome is not known yet: the pointer then holds the
 // same approval until Engine reports a definite outcome, so a retry
 // reconciles it instead of filing again. The pointer also records the
 // Channels deletion generation; after a deletion it is never answered.
+import { createHash } from "node:crypto";
+
 import { guardReply } from "@mano/persona";
 
 import type { EngineApproval } from "./engine.js";
@@ -19,7 +25,7 @@ export interface PendingApproval {
   approvalId: string;
   personId: string;
   generation: number;
-  state: "asked" | "checking";
+  state: "prepared" | "presented" | "checking";
   // The turn that proposed it, so that turn's reply carries the question.
   turnId: string;
   purpose: string;
@@ -76,6 +82,14 @@ export function renderQuestion(approval: EngineApproval): string {
 // Channels runs the same check before sending (packages/channels).
 export function presentsExactly(question: string): boolean {
   return guardReply(question).text === question && !/https?:\/\/|www\./i.test(question);
+}
+
+// What Channels reports after it sent a question: SHA-256 (hex) of the
+// question with runs of whitespace collapsed to one space, since the
+// text line may split it into bubbles at spaces. Channels computes the
+// same hash over what it sent.
+export function presentationHash(text: string): string {
+  return createHash("sha256").update(text.replace(/\s+/g, " ").trim()).digest("hex");
 }
 
 export async function savePending(kv: KeyValue, pending: PendingApproval, expiresAt: string): Promise<void> {

@@ -7,7 +7,7 @@ import type { KeyValue } from "./storage.js";
 
 export interface TurnResponse {
   httpStatus: number;
-  body: { status: string; text: string; reason?: string; approval?: string };
+  body: { status: string; text: string; reason?: string; approval?: string; approvalId?: string };
 }
 
 type TurnRecord =

@@ -815,6 +815,7 @@ export class ConversationRunner {
     try {
       const saved = await this.saveAttachments(turn, attachments);
       const bubbles: import("./store.js").AnswerBubble[] = [];
+      let afterSent: ((sentTexts: string[]) => Promise<void>) | undefined;
       // A crisis turn opens with the crisis line, never the friendly intro.
       if (!meta.introduced && !crisis) bubbles.push({ part: 0, tag: "", text: INTRO_BUBBLE });
       if (saved > 0) bubbles.push({ part: 0, tag: "ack", text: attachmentAck(saved) });
@@ -845,6 +846,7 @@ export class ConversationRunner {
           if (routable && tapback && latest) {
             bubbles.push({ part: 0, tag: "react", text: tapback, messageId: latest, fallback: hasText ? null : tapbackText(tapback) });
           }
+          afterSent = answer.afterSent;
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
@@ -864,6 +866,14 @@ export class ConversationRunner {
       this.checkGeneration(generation);
       await this.sendBubbles(turn, bubbles, chatId, to, saved, generation);
       this.checkSendsResolved(turn, generation);
+      if (afterSent) {
+        const sent = store
+          .outbounds()
+          .filter((r) => r.turn === turn && (r.state === "sent" || r.state === "delivered" || r.state === "read"))
+          .sort((a, b) => a.part - b.part)
+          .map((r) => r.text);
+        await this.bestEffort("answer_report_failed", () => afterSent(sent));
+      }
     } finally {
       typingDone = true;
       clearInterval(typingTimer);
@@ -999,7 +1009,16 @@ export class ConversationRunner {
     to: string | null,
     generation: number,
     crisis: boolean,
-  ): Promise<{ ok: true; text: string; costUsd: number; tapback: import("@mano/channels").Tapback | null } | { ok: false; costUsd: number }> {
+  ): Promise<
+    | {
+        ok: true;
+        text: string;
+        costUsd: number;
+        tapback: import("@mano/channels").Tapback | null;
+        afterSent?: (sentTexts: string[]) => Promise<void>;
+      }
+    | { ok: false; costUsd: number }
+  > {
     const { responder, config, logger } = this.deps;
     let done = false;
     let interimSent = false;
@@ -1031,7 +1050,7 @@ export class ConversationRunner {
       const costUsd =
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
       logger.info("turn_answered", { handle: this.logHandle(), turn, model: result.model, attempts: result.attempts });
-      return { ok: true, text: result.text, costUsd, tapback: result.tapback ?? null };
+      return { ok: true, text: result.text, costUsd, tapback: result.tapback ?? null, afterSent: result.afterSent };
     } catch (err) {
       logger.warn("responder_failed", {
         handle: this.logHandle(),

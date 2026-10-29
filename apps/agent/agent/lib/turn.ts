@@ -12,10 +12,10 @@
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
-import { EngineError, type Engine, type PersonEngine } from "./engine.js";
+import { EngineError, personIdFor, type Engine, type PersonEngine } from "./engine.js";
 import { raiseGenerationFloor } from "./deletion.js";
 import { claimTurn, failTurn, finishTurn, type TurnResponse } from "./ledger.js";
-import { clearPending, loadPending, savePending, type PendingApproval } from "./pending.js";
+import { clearPending, loadPending, presentationHash, savePending, type PendingApproval } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 import type { KeyValue } from "./storage.js";
 
@@ -112,6 +112,9 @@ async function consumed(engine: PersonEngine, pending: PendingApproval): Promise
 }
 
 async function answerYes(kv: KeyValue, engine: PersonEngine, pending: PendingApproval): Promise<string> {
+  if (pending.state === "prepared") {
+    return "I haven't shown you that one yet, so nothing was approved and nothing was sent. Ask me to show it again.";
+  }
   const result = await engine.approve(pending.approvalId);
   switch (result.status) {
     case "completed":
@@ -168,7 +171,7 @@ async function decide(
     return reply(decision === "yes" ? await answerYes(kv, engine, pending) : await answerNo(kv, engine, pending));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_decision_failed", decision, status: err instanceof EngineError ? err.status : null }));
-    if (decision === "no" && pending.state === "asked") {
+    if (decision === "no" && pending.state !== "checking") {
       return reply("Nothing was sent. I could not close that request just now, so reply NO again to cancel it.");
     }
     return reply("I could not confirm that just now. Reply YES again to retry; it will not be sent twice.");
@@ -179,7 +182,7 @@ async function decide(
 // waiting for its answer is rejected in Engine; one already consumed is
 // left to Engine's own reconciliation.
 async function dropStalePending(kv: KeyValue, engine: PersonEngine | null, pending: PendingApproval): Promise<void> {
-  if (engine && pending.state === "asked") {
+  if (engine && pending.state !== "checking") {
     await engine.reject(pending.approvalId).catch((err) => {
       console.warn(JSON.stringify({ type: "mano_reject_failed", status: err instanceof EngineError ? err.status : null }));
     });
@@ -228,7 +231,7 @@ async function runTurn(deps: TurnDeps & { kv: KeyValue }, body: TurnBody, turnAt
   if (!question) return reply(text, settled.status);
   // The question also travels on its own, so Channels can check it goes
   // out word for word.
-  return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question } };
+  return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: proposed!.approvalId } };
 }
 
 // True for the first turn after a quiet stretch. Every turn pushes the
@@ -298,4 +301,45 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
     }),
   );
   return Response.json(response.body, { status: response.httpStatus });
+}
+
+// Channels' report that a reply carrying an approval question went out:
+// the approval ID and the hash of the question text it sent. Signed like
+// a turn. Only a matching report for the waiting, still unpresented
+// question moves it to "presented"; anything else is 409 and changes
+// nothing. Repeating a matching report is fine.
+export async function handlePresented(request: Request, deps: { secret: string | undefined; kv: KeyValue | null }): Promise<Response> {
+  const raw = new Uint8Array(await request.arrayBuffer());
+  const check = verifyRequest(deps.secret, request.headers.get(TIMESTAMP_HEADER), request.headers.get(SIGNATURE_HEADER), raw);
+  if (!check.ok) return new Response("Unauthorized.", { status: 401 });
+  let body: { handleHash?: unknown; approvalId?: unknown; textHash?: unknown };
+  try {
+    body = JSON.parse(new TextDecoder().decode(raw));
+  } catch {
+    return Response.json({ ok: false, reason: "bad_json" }, { status: 400 });
+  }
+  const { handleHash, approvalId, textHash } = body;
+  if (
+    typeof handleHash !== "string" ||
+    !/^[0-9a-f]{64}$/.test(handleHash) ||
+    typeof approvalId !== "string" ||
+    typeof textHash !== "string"
+  ) {
+    return Response.json({ ok: false, reason: "bad_report" }, { status: 400 });
+  }
+  if (!deps.kv) return Response.json({ ok: false, reason: "storage" }, { status: 503 });
+  const pending = await loadPending(deps.kv, personIdFor(handleHash));
+  const matches =
+    pending !== null &&
+    pending.approvalId === approvalId &&
+    pending.state !== "checking" &&
+    presentationHash(pending.question) === textHash;
+  if (!matches) {
+    console.warn(JSON.stringify({ type: "mano_presented_mismatch", handle: handleHash }));
+    return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
+  }
+  if (pending.state === "prepared") {
+    await savePending(deps.kv, { ...pending, state: "presented" }, new Date(Date.now() + 24 * 3600_000).toISOString());
+  }
+  return Response.json({ ok: true });
 }

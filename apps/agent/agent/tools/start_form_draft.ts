@@ -68,7 +68,7 @@ export default defineTool({
     }
     // One question waits at a time: the one it replaces can never be
     // answered, so Engine closes it.
-    if (previous?.state === "asked" && previous.approvalId !== result.approval.id) {
+    if (previous && previous.state !== "checking" && previous.approvalId !== result.approval.id) {
       await engine.reject(previous.approvalId).catch(() => undefined);
     }
     await savePending(
@@ -77,7 +77,7 @@ export default defineTool({
         approvalId: result.approval.id,
         personId,
         generation,
-        state: "asked",
+        state: "prepared",
         turnId,
         purpose: result.approval.purpose,
         question,

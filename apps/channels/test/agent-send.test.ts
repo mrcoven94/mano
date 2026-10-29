@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentResponder,
+  ChannelRefused,
   computeSignatureHex,
   idempotencyKeyFor,
   SparkResponder,
@@ -9,7 +10,7 @@ import {
 import { handleAgentSend } from "../src/index.js";
 import { buildResponder } from "../src/conversation.js";
 import type { Env } from "../src/env.js";
-import { makeHarness, TEST_HANDLE_HASH } from "./helpers.js";
+import { inboundEvent, makeHarness, TEST_HANDLE_HASH } from "./helpers.js";
 
 const SECRET = "test-agent-secret-not-real";
 
@@ -201,5 +202,58 @@ describe("runner.sendAgentText", () => {
     };
     await expect(h.runner.sendAgentText({ key: "rem_r", text: "Reminder: call", generation })).rejects.toThrow();
     expect(h.store.agentSend("rem_r")?.generation).toBe(generation);
+  });
+});
+
+describe("reporting what the person was shown", () => {
+  function reporting(seen: string[][], text: string) {
+    return makeHarness({
+      responder: {
+        name: "agent",
+        maxAttempts: 1,
+        respond: async () => ({
+          text,
+          bubbles: [text],
+          inputChars: 10,
+          outputChars: text.length,
+          model: "agent",
+          attempts: 1,
+          afterSent: async (sent: string[]) => {
+            seen.push(sent);
+          },
+        }),
+      },
+    });
+  }
+
+  it("hands the responder the texts that actually went out, after they went out", async () => {
+    const seen: string[][] = [];
+    const h = reporting(seen, "Ready to send: renewal. Reply YES to send exactly this, or NO to stop.");
+    const meta = h.store.meta();
+    meta.introduced = true;
+    h.store.saveMeta(meta);
+    await h.runner.handleEvent(inboundEvent({ id: "evt_shown", text: "file it", occurredAtMs: h.now }), "webhook");
+    h.advance(5000);
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    expect(seen).toHaveLength(1);
+    expect(seen[0].join(" ")).toContain("Reply YES to send exactly this");
+    expect(h.channel.sends.map((s) => s.text).join(" ")).toContain("Reply YES to send exactly this");
+  });
+
+  it("reports nothing for a send the provider refused", async () => {
+    const seen: string[][] = [];
+    const h = reporting(seen, "Ready to send: renewal. Reply YES to send exactly this, or NO to stop.");
+    const meta = h.store.meta();
+    meta.introduced = true;
+    h.store.saveMeta(meta);
+    const realSend = h.channel.send.bind(h.channel);
+    h.channel.send = async (input) => {
+      if (input.text.includes("Reply YES")) throw new ChannelRefused(403, "blocked", "refused");
+      return realSend(input);
+    };
+    await h.runner.handleEvent(inboundEvent({ id: "evt_refused", text: "file it", occurredAtMs: h.now }), "webhook");
+    h.advance(5000);
+    await h.runner.runDueTurn();
+    expect(seen.flat().join(" ")).not.toContain("Reply YES");
   });
 });

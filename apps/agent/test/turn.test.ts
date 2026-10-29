@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signBody } from "../agent/lib/auth.js";
 import { engineFrom } from "../agent/lib/engine.js";
 import { getKeyValue, resetKeyValue, type KeyValue } from "../agent/lib/storage.js";
-import { handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/turn.js";
+import { handlePresented, handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/turn.js";
+import { presentationHash } from "../agent/lib/pending.js";
+
+const PRESENTATION_VECTOR = "33f67fe9f135d7efc24d4fbe91c1ed3c8bc540adde738809768ff2c8cbdb1245";
 import startFormDraft from "../agent/tools/start_form_draft.js";
 import remind from "../agent/tools/remind.js";
 import { getReminderStore, resetReminderStores } from "../agent/lib/reminder-store.js";
@@ -72,9 +75,30 @@ function deps(overrides: Partial<TurnDeps> = {}): TurnDeps {
   };
 }
 
-async function send(request: Request, d = deps()) {
+function presentedRequest(body: Record<string, unknown>): Request {
+  const raw = JSON.stringify(body);
+  const ts = Math.floor(Date.now() / 1000);
+  return new Request("http://agent.test/channels/mano/presented", {
+    method: "POST",
+    headers: { [TIMESTAMP_HEADER]: String(ts), [SIGNATURE_HEADER]: signBody(SECRET, ts, raw) },
+    body: raw,
+  });
+}
+
+// Plays Channels: after a reply carrying an approval question goes out,
+// Channels reports the approval ID and the hash of the question it sent.
+async function send(request: Request, d = deps(), opts: { present?: boolean } = {}) {
+  const copy = request.clone();
   const res = await handleTurn(request, d);
-  return { status: res.status, body: (await res.json()) as { status: string; text: string } };
+  const body = (await res.json()) as { status: string; text: string; approval?: string; approvalId?: string };
+  if (body.status === "waiting_approval" && opts.present !== false) {
+    const handleHash = JSON.parse(await copy.text()).handleHash;
+    await handlePresented(
+      presentedRequest({ handleHash, approvalId: body.approvalId, textHash: presentationHash(body.approval!) }),
+      { secret: SECRET, kv },
+    );
+  }
+  return { status: res.status, body };
 }
 
 beforeEach(async () => {
@@ -145,6 +169,37 @@ describe("approval by text", () => {
     const yes = await send(turn("turn_yes_000004", "yes"));
     expect(yes.status).toBe(200);
     expect(engine.executor.calls).toHaveLength(1);
+  });
+});
+
+describe("a YES needs a question Channels confirmed it showed", () => {
+  it("a YES before Channels reports the question as shown approves nothing", async () => {
+    await send(turn("turn_unshown001", "Please file my renewal"), deps(), { present: false });
+    const yes = await send(turn("turn_unshown002", "YES"));
+    expect(yes.body.text).toMatch(/haven't shown you/i);
+    expect(engine.executor.calls).toHaveLength(0);
+    expect(engine.approvals()[0].status).toBe("pending");
+  });
+
+  it("a report with a different text hash, or for another approval, does not count", async () => {
+    const ask = await send(turn("turn_unshown003", "Please file my renewal"), deps(), { present: false });
+    const forged = await handlePresented(
+      presentedRequest({ handleHash: HANDLE, approvalId: ask.body.approvalId, textHash: presentationHash(`${ask.body.approval} changed`) }),
+      { secret: SECRET, kv },
+    );
+    expect(forged.status).toBe(409);
+    const other = await handlePresented(
+      presentedRequest({ handleHash: HANDLE, approvalId: "another-approval", textHash: presentationHash(ask.body.approval!) }),
+      { secret: SECRET, kv },
+    );
+    expect(other.status).toBe(409);
+    await send(turn("turn_unshown004", "YES"));
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  it("the hash both sides compute is pinned", () => {
+    // packages/channels/test/agent.test.ts pins the same vector.
+    expect(presentationHash("Reply YES  to send\nexactly this.")).toBe(PRESENTATION_VECTOR);
   });
 });
 

@@ -64,7 +64,7 @@ export async function handleDeleted(request: Request, deps: DeletionDeps): Promi
     await raiseGenerationFloor(kv, handleHash, generation);
     let approvalRejected = false;
     const pending = await loadPending(kv, engine.personId);
-    if (pending && pending.state === "asked") {
+    if (pending && pending.state !== "checking") {
       approvalRejected = (await engine.reject(pending.approvalId)).status === "rejected";
     }
     if (pending) await clearPending(kv, engine.personId);

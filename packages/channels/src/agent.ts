@@ -20,6 +20,7 @@ import { computeSignatureHex, SIGNATURE_WINDOW_SECONDS, timingSafeEqualHex } fro
 
 export const AGENT_TURN_PATH = "/channels/mano/turn";
 export const AGENT_DELETED_PATH = "/channels/mano/deleted";
+export const AGENT_PRESENTED_PATH = "/channels/mano/presented";
 export const AGENT_SIGNATURE_HEADER = "x-mano-signature";
 export const AGENT_TIMESTAMP_HEADER = "x-mano-timestamp";
 // Above the agent's own settle timeout, so a slow turn falls back
@@ -38,6 +39,16 @@ export const APPROVAL_REFUSED_TEXT =
 export function approvalSurvivesTextLine(text: string, approval: unknown): boolean {
   if (typeof approval !== "string" || !approval || !text.includes(approval)) return false;
   return guardReply(approval).text === approval && !/https?:\/\/|www\./i.test(approval);
+}
+
+const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
+
+// SHA-256 (hex) of the question with whitespace runs collapsed, since
+// bubble splitting breaks at spaces. The agent computes the same hash
+// (apps/agent lib/pending.ts presentationHash); both pin one vector.
+export async function presentationHash(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(collapse(text)));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export type AgentVerifyFailure = "missing" | "bad_timestamp" | "stale" | "bad_signature";
@@ -77,6 +88,7 @@ interface AgentTurnResponse {
   status?: unknown;
   text?: unknown;
   approval?: unknown;
+  approvalId?: unknown;
 }
 
 export class AgentResponder implements Responder {
@@ -146,7 +158,7 @@ export class AgentResponder implements Responder {
         };
       }
       if (res.ok && (data?.status === "replied" || data?.status === "waiting_approval") && text) {
-        return {
+        const result: ResponderResult = {
           text,
           bubbles: splitBubbles(text),
           inputChars,
@@ -154,11 +166,39 @@ export class AgentResponder implements Responder {
           model: "agent",
           attempts: 1,
         };
+        if (data.status === "waiting_approval" && typeof data.approvalId === "string" && typeof data.approval === "string") {
+          const approvalId = data.approvalId;
+          const approval = data.approval;
+          result.afterSent = (sent) => this.reportPresented(approvalId, approval, sent);
+        }
+        return result;
       }
     } catch {
       // Timeout, network, or malformed reply: fall through to the fallback.
     }
     return this.respondFallback(turn, inputChars);
+  }
+
+  // Tells the agent the question reached the person word for word, so a
+  // YES to it can count. Only bubbles the provider accepted count, and
+  // the question must appear in them whole (whitespace aside). Anything
+  // less reports nothing, and the agent will not accept a YES.
+  private async reportPresented(approvalId: string, approval: string, sentTexts: string[]): Promise<void> {
+    if (!collapse(sentTexts.join(" ")).includes(collapse(approval))) return;
+    const raw = JSON.stringify({ handleHash: this.handleHash, approvalId, textHash: await presentationHash(approval) });
+    const timestamp = this.nowSeconds();
+    const res = await this.fetchFn(`${this.agentUrl}${AGENT_PRESENTED_PATH}`, {
+      method: "POST",
+      signal: AbortSignal.timeout(this.timeoutMs),
+      headers: {
+        "content-type": "application/json",
+        [AGENT_TIMESTAMP_HEADER]: String(timestamp),
+        [AGENT_SIGNATURE_HEADER]: await signAgentRequest(this.secret, timestamp, new TextEncoder().encode(raw)),
+      },
+      body: raw,
+    });
+    await res.body?.cancel().catch(() => undefined);
+    if (!res.ok) throw new Error(`Agent refused the presented report: ${res.status}`);
   }
 
   private async respondFallback(turn: TurnInput, inputChars: number): Promise<ResponderResult> {

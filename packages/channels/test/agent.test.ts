@@ -5,6 +5,7 @@ import {
   AgentResponder,
   computeSignatureHex,
   notifyAgentDeleted,
+  presentationHash,
   ResponderFailed,
   signAgentRequest,
   StandInResponder,
@@ -231,5 +232,48 @@ describe("approval questions on the text line", () => {
       turnKey: KEY,
     });
     expect(result.text).not.toContain("Reply YES");
+  });
+});
+
+describe("reporting a shown approval question", () => {
+  const approval = "Ready to send: renewal. Name: Rosa Testcase. Reply YES to send exactly this, or NO to stop.";
+
+  function agentWith(seen: { url: string; body: Record<string, unknown> }[]): AgentResponder {
+    return new AgentResponder({
+      agentUrl: "https://agent.example",
+      secret: "secret",
+      grantSecret: "g",
+      handleHash: HANDLE,
+      fallback: new StandInResponder(["fallback reply"]),
+      fetchFn: (async (url: string, init: RequestInit) => {
+        if (url.endsWith("/channels/mano/presented")) {
+          seen.push({ url, body: JSON.parse(String(init.body)) });
+          return Response.json({ ok: true });
+        }
+        return Response.json({ status: "waiting_approval", text: `Ready.\n\n${approval}`, approval, approvalId: "appr_1" });
+      }) as typeof fetch,
+    });
+  }
+
+  it("reports the approval ID and the hash of the question once it went out whole", async () => {
+    const seen: { url: string; body: Record<string, unknown> }[] = [];
+    const result = await agentWith(seen).respond({ texts: ["file it"], attachmentCount: 0, turnKey: KEY });
+    await result.afterSent?.(["Ready.", "Ready to send: renewal. Name: Rosa Testcase.", "Reply YES to send exactly this, or NO to stop."]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].body).toEqual({ handleHash: HANDLE, approvalId: "appr_1", textHash: await presentationHash(approval) });
+  });
+
+  it("reports nothing when part of the question did not go out", async () => {
+    const seen: { url: string; body: Record<string, unknown> }[] = [];
+    const result = await agentWith(seen).respond({ texts: ["file it"], attachmentCount: 0, turnKey: KEY });
+    await result.afterSent?.(["Ready.", "Reply YES to send exactly this, or NO to stop."]);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("hashes the same way the agent does", async () => {
+    // apps/agent/test/turn.test.ts pins the same vector.
+    expect(await presentationHash("Reply YES  to send\nexactly this.")).toBe(
+      "33f67fe9f135d7efc24d4fbe91c1ed3c8bc540adde738809768ff2c8cbdb1245",
+    );
   });
 });

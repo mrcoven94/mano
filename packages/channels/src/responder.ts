@@ -54,6 +54,10 @@ export interface ResponderResult {
   // A tapback the model chose for the person's latest message, from a
   // leading "REACT: love" line. The text may then be empty.
   tapback?: Tapback | null;
+  // Called once the turn's bubbles went out, with the text of each one
+  // the provider accepted, in order. Not called for a turn resumed after
+  // a restart, so anything that depends on it fails closed.
+  afterSent?: (sentTexts: string[]) => Promise<void>;
 }
 
 export interface RespondHooks {
