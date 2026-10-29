@@ -71,6 +71,33 @@ describe("ConversationDO on SQLite", () => {
     expect(recorded.sends.every((s) => s.state === "sent" && !!s.message)).toBe(true);
   });
 
+  it("runs a second turn with the first turn read back from SQLite as history", async () => {
+    const stub = stubFor(`do-history-${Date.now()}`);
+    const runTurn = async (): Promise<string> => {
+      await new Promise((r) => setTimeout(r, 3000));
+      const res = await stub.fetch("https://conversation/internal/turn", {
+        method: "POST",
+        body: JSON.stringify({ handleHash: "hash-history" }),
+      });
+      expect(res.status).toBe(200);
+      return ((await res.json()) as { result: string }).result;
+    };
+    expect(await postEvent(stub, "hash-history", inbound("evt_hist_1", "my food stamps are ending"))).toBe("queued");
+    // The DO's own alarm may run the turn first; either way it ran.
+    expect(["ran", "idle"]).toContain(await runTurn());
+    expect(await postEvent(stub, "hash-history", inbound("evt_hist_2", "march 3"))).toBe("queued");
+    expect(["ran", "idle"]).toContain(await runTurn());
+    const recorded = (await (await stub.fetch("https://conversation/internal/standin")).json()) as {
+      sends: Array<{ key: string; state: string }>;
+      turn: number;
+      pending: number;
+    };
+    expect(recorded.turn).toBe(2);
+    expect(recorded.pending).toBe(0);
+    expect(recorded.sends.length).toBe(3);
+    expect(recorded.sends.every((s) => s.state === "sent")).toBe(true);
+  }, 15000);
+
   it("answers a 2026-10-01 event with no id or channel_id", async () => {
     // Exact docs payload shape, parsed by the real parser, then run on
     // the real DO: dedupe key, sender handle and reply all derive from

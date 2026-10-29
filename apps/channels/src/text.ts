@@ -1,11 +1,13 @@
-// Every word the worker sends on its own. Plain copy, no tagline. The
-// introduction identifies Mano as an automated assistant (AGENTS.md rule 3).
+// Every word the worker sends on its own, in Mano's voice. The
+// introduction says Mano is an automated assistant, not a person
+// (AGENTS.md rule 3). The failure reply is the voice guard's safe line.
+import { SAFE_REPLY } from "@mano/persona";
 
-export const INTRO_BUBBLE = "Hi, I'm Mano, an automated assistant. I can help with benefits, forms and letters.";
+export const INTRO_BUBBLE = "Hey, it's Mano. I'm an automated assistant, not a person. I help with benefits, letters and forms.";
 
 export const INTERIM_BUBBLE = "Working on it. I will reply shortly.";
 
-export const FAILURE_BUBBLE = "Sorry, that did not go through. Try again in a bit.";
+export const FAILURE_BUBBLE = SAFE_REPLY;
 
 export const BUSY_BUBBLE = "Mano is busy right now. Try again later.";
 

@@ -34,7 +34,8 @@ import {
   type NormalizedEvent,
   type OutboundState,
 } from "@mano/channels";
-import type { Responder } from "@mano/channels";
+import type { HistoryMessage, Responder } from "@mano/channels";
+import { guardReply } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -66,6 +67,11 @@ export interface RunnerConfig {
 }
 
 export const DEFAULT_MEDIA_HOSTS = ["bucket.blooio.com"];
+
+// How much of the conversation the model sees: the last few finished
+// turns, oldest dropped first past the character cap.
+export const HISTORY_TURNS = 6;
+export const HISTORY_CHARS = 4000;
 
 export const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "handleHash"> = {
   batchMs: 2500,
@@ -655,10 +661,13 @@ export class ConversationRunner {
     // plus chunkByTextCap), so the join is never cut: every input
     // reaches the responder exactly once, across as many turns as needed.
     const turnText = texts.join("\n");
+    const history = this.history(meta.introduced);
+    const historyChars = history.reduce((sum, h) => sum + h.text.length, 0);
+    const { responder } = this.deps;
     const reserveKey = `${config.handleHash}:${turn}`;
     const worstUsd = estimateCostUsd(
-      (turnText.length + INPUT_SLACK_CHARS) * this.deps.responder.maxAttempts,
-      MAX_OUTPUT_CHARS,
+      (turnText.length + historyChars + (responder.inputSlackChars ?? INPUT_SLACK_CHARS)) * responder.maxAttempts,
+      responder.maxOutputChars ?? MAX_OUTPUT_CHARS,
       config.usdPer1kChars,
     );
     const budgeted = over ? { allowed: false, spentUsd: 0 } : await this.deps.spend.reserve(reserveKey, worstUsd);
@@ -691,12 +700,12 @@ export class ConversationRunner {
       if (saved > 0) bubbles.push({ part: 0, tag: "ack", text: attachmentAck(saved) });
       if (turnText) {
         this.checkGeneration(generation);
-        const answer = await this.respondWithInterim(turn, turnText, saved, chatId, to, generation);
+        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation);
         if (answer.ok) {
           // Links come out before splitting, and each final bubble is
           // checked again: a split must never leave an unchecked link
           // behind. The persisted bubbles are final and capped.
-          const final = await this.finalizeBubbles(answer.text);
+          const final = await this.finalizeBubbles(turn, answer.text);
           if (final.removed > 0) {
             logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
           }
@@ -725,15 +734,18 @@ export class ConversationRunner {
     }
   }
 
-  // Sanitizes the raw answer, splits it into capped bubbles, and
-  // checks each final bubble again. The splitter never breaks a word,
-  // so the recheck normally finds nothing; it exists so a future
-  // extraction gap cannot ship an unchecked link. A bubble that grows
-  // past the cap under replacement splits again, stripped text having
-  // no links left to expose.
-  private async finalizeBubbles(text: string): Promise<{ bubbles: string[]; removed: number }> {
+  // Guards the raw answer's voice, sanitizes it, splits it into capped
+  // bubbles, and checks each final bubble again. The guard runs before
+  // splitting because bullets and headers are line-based and the
+  // splitter joins lines. The splitter never breaks a word, so the
+  // recheck normally finds nothing; it exists so a future extraction
+  // gap cannot ship an unchecked link. A bubble that grows past the cap
+  // under replacement splits again, stripped text having no links left
+  // to expose.
+  private async finalizeBubbles(turn: number, text: string): Promise<{ bubbles: string[]; removed: number }> {
+    const voiced = this.guard(text, { turn, part: 1, tag: "" });
     const checker = new LinkChecker({ fetchFn: this.deps.fetchFn });
-    const first = await stripBlockedLinks(text, checker);
+    const first = await stripBlockedLinks(voiced, checker);
     let removed = first.removed;
     const out: string[] = [];
     for (const bubble of splitBubbles(first.text)) {
@@ -790,9 +802,13 @@ export class ConversationRunner {
     logger.info("turn_ran", { handle: this.logHandle(), turn, bubbles: bubbles.length, sent: fresh, saved });
   }
 
+  // Runs the responder. A deep turn's heads-up goes out the moment the
+  // responder has it, after the intro on a first contact, and takes the
+  // place of the interim notice.
   private async respondWithInterim(
     turn: number,
     turnText: string,
+    history: HistoryMessage[],
     attachmentCount: number,
     chatId: string | null,
     to: string | null,
@@ -816,7 +832,16 @@ export class ConversationRunner {
     const attemptCost = (inputChars: number, attempts: number): number =>
       estimateCostUsd(inputChars * attempts, 0, config.usdPer1kChars);
     try {
-      const result = await responder.respond({ texts: [turnText], attachmentCount });
+      const onHeadsUp = async (text: string): Promise<void> => {
+        if (done || interimSent) return;
+        interimSent = true;
+        try {
+          await this.sendHeadsUp(turn, text, chatId, to, generation);
+        } catch (err) {
+          logger.warn("heads_up_failed", { handle: this.logHandle(), turn, err: errName(err) });
+        }
+      };
+      const result = await responder.respond({ texts: [turnText], attachmentCount, history }, { onHeadsUp });
       const costUsd =
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
       return { ok: true, text: result.text, costUsd };
@@ -833,6 +858,50 @@ export class ConversationRunner {
       done = true;
       clearTimeout(timer);
     }
+  }
+
+  private async sendHeadsUp(turn: number, text: string, chatId: string | null, to: string | null, generation: number): Promise<void> {
+    this.checkGeneration(generation);
+    if (!this.store.meta().introduced) {
+      const intro = await this.sendBubble({ turn, part: 0, tag: "", text: INTRO_BUBBLE, chatId, to, generation });
+      if (intro.state === "sent") {
+        const meta = this.store.meta();
+        meta.introduced = true;
+        this.store.saveMeta(meta);
+      }
+    }
+    await this.sendBubble({ turn, part: 0, tag: "headsup", text, chatId, to, generation });
+    this.deps.logger.info("heads_up_sent", { handle: this.logHandle(), turn });
+  }
+
+  // The conversation so far as role messages, oldest first: each
+  // finished turn's texts and the bubbles Mano planned for it. On a
+  // first contact the intro goes last, since it is sent with this turn's
+  // reply, so the model does not introduce Mano twice.
+  private history(introduced: boolean): HistoryMessage[] {
+    const messages: HistoryMessage[] = [];
+    for (const row of this.store.recentTurns(HISTORY_TURNS).reverse()) {
+      const items = JSON.parse(row.itemsJson) as import("./store.js").PendingInbound[];
+      const person = items.map((i) => i.text ?? "").filter((t) => t.length > 0).join("\n");
+      const bubbles = row.answerJson ? (JSON.parse(row.answerJson) as import("./store.js").AnswerBubble[]) : [];
+      const mano = bubbles.map((b) => b.text).join(" ");
+      if (person) messages.push({ role: "person", text: person });
+      if (mano) messages.push({ role: "mano", text: mano });
+    }
+    let chars = messages.reduce((sum, m) => sum + m.text.length, 0);
+    while (messages.length > 0 && chars > HISTORY_CHARS) chars -= messages.shift()!.text.length;
+    if (!introduced) messages.push({ role: "mano", text: INTRO_BUBBLE });
+    return messages;
+  }
+
+  // The voice guard. Logs which rules fired, never the text.
+  private guard(text: string, where: { turn: number; part: number; tag: string }): string {
+    const guarded = guardReply(text);
+    if (guarded.changes.length > 0) {
+      const { turn, part, tag } = where;
+      this.deps.logger.info("voice_guarded", { handle: this.logHandle(), turn, part, tag, changes: guarded.changes.join(",") });
+    }
+    return guarded.text;
   }
 
   private async sendBusyOnce(
@@ -905,10 +974,12 @@ export class ConversationRunner {
   }
 
   // The one send path. Every bubble goes through here with its
-  // deterministic key. A send whose outcome is unknown is marked
-  // uncertain, never failed: the worker looks the message up (or replays
-  // its key, which the provider answers from its stored original) before
-  // deciding, retrying on later alarms until it knows. Only a send the
+  // deterministic key, and every text passes the voice guard first; the
+  // guard is deterministic, so a resumed turn sends the same bytes. A
+  // send whose outcome is unknown is marked uncertain, never failed: the
+  // worker looks the message up (or replays its key, which the provider
+  // answers from its stored original) before deciding, retrying on later
+  // alarms until it knows. Only a send the
   // provider definitively rejected (failed) ends there.
   async sendBubble(opts: {
     turn: number;
@@ -921,6 +992,7 @@ export class ConversationRunner {
     generation?: number;
   }): Promise<SendBubbleResult> {
     const { store, channel, logger, nowMs, config } = this.deps;
+    opts = { ...opts, text: this.guard(opts.text, { turn: opts.turn, part: opts.part, tag: opts.tag }) };
     const generation = opts.generation ?? store.meta().generation;
     this.checkGeneration(generation);
     const key = idempotencyKeyFor(config.handleHash, generation, opts.turn, opts.part, opts.tag);
