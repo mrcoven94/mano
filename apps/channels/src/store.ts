@@ -71,6 +71,8 @@ export interface AnswerBubble {
   text: string;
   messageId?: string | null;
   replyTo?: string | null;
+  // For a tapback that is the whole reply: the text sent if it fails.
+  fallback?: string | null;
 }
 
 // A turn persisted before any external call. Pending input is cleared

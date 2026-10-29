@@ -114,12 +114,16 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
 // keep.
 export async function routeEvent(event: NormalizedEvent, env: Env): Promise<"routed" | "skipped"> {
   const logger = createLogger();
-  if (event.kind === "ignored" || event.kind === "typing.started" || event.kind === "typing.stopped") {
+  if (event.kind === "ignored") {
     logger.info("event_skipped", { eventId: event.id, type: event.rawType });
     return "skipped";
   }
   let handleHash = event.handle ? await hashHandle(event.handle, env.MANO_HANDLE_PEPPER) : null;
-  if (!handleHash && event.chatId && lifecycleStateFor(event.kind)) {
+  // Receipts, typing and reactions often name only the chat: they route
+  // through the chat table the conversations keep.
+  const routesByChat =
+    lifecycleStateFor(event.kind) !== null || event.kind === "typing.started" || event.kind === "typing.stopped" || event.kind === "reaction";
+  if (!handleHash && event.chatId && routesByChat) {
     handleHash = await routeForChat(env, event.chatId);
   }
   if (!handleHash) {

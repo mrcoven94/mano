@@ -25,3 +25,20 @@ export function allowedTapback(tapback: Tapback | null, personText: string, cris
   if ((tapback === "love" || tapback === "laugh") && BAD_NEWS.test(personText)) return null;
   return tapback;
 }
+
+// A tapback is decoration: when it cannot carry the reply (it fails, or
+// there is no message to put it on), this text goes instead.
+const TAPBACK_TEXT: Record<Tapback, string> = {
+  love: "anytime!",
+  like: "sounds good",
+  laugh: "ha, yeah",
+  emphasize: "noted",
+};
+
+export function tapbackText(tapback: Tapback): string {
+  return TAPBACK_TEXT[tapback];
+}
+
+// Sent when the model replied with only a tapback the rules refused
+// (a heart on bad news), so the person still gets an answer.
+export const REFUSED_TAPBACK_TEXT = "that's rough. tell me what happened?";

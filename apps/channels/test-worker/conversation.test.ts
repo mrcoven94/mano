@@ -248,3 +248,20 @@ describe("ChannelStateDO", () => {
     expect(await (await stub.fetch("https://state/internal/cursor")).json()).toEqual({ cursor: "c1" });
   });
 });
+
+describe("typing routed from the queue to the DO (PR 69 review, should 5)", () => {
+  it("holds a turn while the person types, through routeEvent and the DO", async () => {
+    const { routeEvent } = await import("../src/index.js");
+    const chatId = `chat_typing_${Date.now()}`;
+    const handle = "+15550001777";
+    const handleHash = await hashHandle(handle, workerEnv.MANO_HANDLE_PEPPER);
+    const message = { ...inbound(`evt_typing_msg_${Date.now()}`, "so the letter says"), chatId, handle };
+    expect(await routeEvent(message as never, workerEnv)).toBe("routed");
+    const typing = { ...message, id: `evt_typing_start_${Date.now()}`, kind: "typing.started", rawType: "typing.started", messageId: null, handle: null, text: null, direction: null };
+    expect(await routeEvent(typing as never, workerEnv)).toBe("routed");
+    await new Promise((r) => setTimeout(r, 3000));
+    const stub = workerEnv.CONVERSATION.get(workerEnv.CONVERSATION.idFromName(handleHash));
+    const res = await stub.fetch("https://conversation/internal/turn", { method: "POST", body: JSON.stringify({ handleHash }) });
+    expect(((await res.json()) as { result: string }).result).toBe("waiting");
+  }, 15000);
+});

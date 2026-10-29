@@ -107,20 +107,22 @@ function separated(text: string): string {
 // curly, even across sentences, is swapped for a token before the text
 // is split into sentences and restored afterwards. An apostrophe inside
 // a word ("I'm") is not a quote mark.
-const QUOTE_SPANS = [
-  /"[^"\n]*"/g,
-  /“[^”\n]*”/g,
-  /(?<![\w'’])'(?=\S)(?:[^'\n]|'(?=\w))*?(?<=\S)'(?!\w)/g,
-  /‘(?:[^’\n]|’(?=\w))*?’(?!\w)/g,
-];
+// One pass over all four quote styles, leftmost first: the outermost
+// quote becomes one token, so tokens never nest.
+const QUOTE_SPANS = new RegExp(
+  [
+    /"[^"\n]*"/.source,
+    /“[^”\n]*”/.source,
+    /(?<![\w'’])'(?=\S)(?:[^'\n]|'(?=\w))*?(?<=\S)'(?!\w)/.source,
+    /‘(?:[^’\n]|’(?=\w))*?’(?!\w)/.source,
+  ].join("|"),
+  "g",
+);
 const QUOTE_TOKEN = /⁣(\d+)⁣/g;
 
 function protectQuotes(text: string): { text: string; quotes: string[] } {
   const quotes: string[] = [];
-  let out = text;
-  for (const pattern of QUOTE_SPANS) {
-    out = out.replace(pattern, (span) => `⁣${quotes.push(span) - 1}⁣`);
-  }
+  const out = text.replace(QUOTE_SPANS, (span) => `\u2063${quotes.push(span) - 1}\u2063`);
   return { text: out, quotes };
 }
 

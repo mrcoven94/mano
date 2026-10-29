@@ -19,6 +19,9 @@ describe("PR 67 round 5, guard, through the runner", () => {
   });
   it("protects quoted text across sentences (4)", async () => {
     for (const reply of [
+      // Sol's two inputs, verbatim.
+      "On the renewal form, write 'My name is Maria Garcia' and sign page 2.",
+      'Tell the worker, "Hello. My name is Maria Garcia and I need help renewing SNAP."',
       "On line 3, write 'My name is Maria Garcia. I am the applicant.' and sign.",
       "Type “I'm Robin. I live at 12 Oak St.” in box 2.",
       'Write "My name is Maria. I\'m 34." on page 1.',

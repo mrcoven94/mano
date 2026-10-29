@@ -35,7 +35,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { CRISIS_LINE, SAFE_REPLY, allowedTapback, guardReply, holdCrisisLines, mightBeCrisis } from "@mano/persona";
+import { CRISIS_LINE, REFUSED_TAPBACK_TEXT, SAFE_REPLY, allowedTapback, guardReply, holdCrisisLines, mightBeCrisis, tapbackText } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -276,13 +276,21 @@ export class ConversationRunner {
   // "queued" when the caller must (re)schedule the batch alarm.
   async handleEvent(event: NormalizedEvent, source: "webhook" | "reconcile"): Promise<HandleResult> {
     const { store, logger, nowMs, config } = this.deps;
+    // The person's typing sets one fixed hold deadline for the pending
+    // turn: a duplicate, a stale start or a later refresh never moves it.
     if (event.kind === "typing.started" || event.kind === "typing.stopped") {
-      if (!store.hasEvent(event.id)) store.recordEvent(event.id, event.kind, nowMs());
-      if (event.direction !== "outbound") {
-        const meta = store.meta();
-        meta.typingSinceMs = event.kind === "typing.started" ? nowMs() : 0;
-        store.saveMeta(meta);
+      if (store.hasEvent(event.id)) return "duplicate";
+      store.recordEvent(event.id, event.kind, nowMs());
+      if (event.direction === "outbound") return "recorded";
+      const meta = store.meta();
+      if (event.kind === "typing.stopped") {
+        meta.typingSinceMs = 0;
+      } else {
+        const at = event.occurredAtMs ?? nowMs();
+        if (nowMs() - at >= TYPING_HOLD_CAP_MS || meta.typingSinceMs > 0) return "recorded";
+        meta.typingSinceMs = nowMs();
       }
+      store.saveMeta(meta);
       return "recorded";
     }
     if (event.kind === "ignored") {
@@ -551,6 +559,11 @@ export class ConversationRunner {
     if (pending.length === 0) return this.needsRetry() ? "retry" : "idle";
     if (nowMs() - meta.lastInboundMs < this.deps.config.batchMs) return "waiting";
     if (meta.typingSinceMs > 0 && nowMs() - meta.typingSinceMs < TYPING_HOLD_CAP_MS) return "waiting";
+    if (meta.typingSinceMs > 0) {
+      // The hold is over: the next burst gets its own deadline.
+      meta.typingSinceMs = 0;
+      store.saveMeta(meta);
+    }
     // A turn finishes only after a persisted final outcome. An
     // infrastructure error keeps the turn row and its input and returns
     // "retry": the alarm re-arms with backoff and the turn resumes.
@@ -777,12 +790,19 @@ export class ConversationRunner {
       return;
     }
 
+    // Keepalive refreshes run one at a time. Before the final stop, no
+    // new refresh starts and the one in flight finishes, so typing can
+    // never come back on after Mano is done.
     let typingTimer: ReturnType<typeof setInterval> | undefined;
+    let refreshing: Promise<void> = Promise.resolve();
+    let typingDone = false;
     if (chatId) {
       await this.bestEffort("mark_read", () => this.deps.channel.markRead(chatId));
       await this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started"));
       typingTimer = setInterval(() => {
-        void this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started"));
+        refreshing = refreshing.then(() =>
+          typingDone ? undefined : this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started")),
+        );
       }, config.typingRefreshMs);
     }
     try {
@@ -803,15 +823,25 @@ export class ConversationRunner {
           if (final.removed > 0) {
             logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
           }
+          // A tapback is decoration. It carries the reply alone only when
+          // the rules allow it and it has a message to go on; even then a
+          // fallback text is persisted with it, sent if the tapback fails.
           const tapback = allowedTapback(answer.tapback, turnText, crisis);
           const latest = [...items].reverse().find((i) => i.messageId)?.messageId ?? null;
-          if (tapback && latest) bubbles.push({ part: 0, tag: "react", text: tapback, messageId: latest });
-          // A tapback alone is a full reply: no text, so no safe line either.
-          const reactionOnly = answer.tapback != null && !crisis && answer.text.trim().length === 0;
-          const answered = reactionOnly ? [] : this.answerBubbles(turn, final.bubbles, crisis);
+          const routable = tapback !== null && latest !== null && chatId !== null;
+          const hasText = answer.text.trim().length > 0;
+          let texts = final.bubbles;
+          if (!hasText && crisis) texts = [];
+          else if (!hasText && routable) texts = [];
+          else if (!hasText && tapback) texts = [tapbackText(tapback)];
+          else if (!hasText && answer.tapback) texts = [REFUSED_TAPBACK_TEXT];
+          const answered = texts.length > 0 || crisis ? this.answerBubbles(turn, texts, crisis) : [];
           const replyTo = inlineReplyTarget(items);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
           bubbles.push(...answered);
+          if (routable && tapback && latest) {
+            bubbles.push({ part: 0, tag: "react", text: tapback, messageId: latest, fallback: hasText ? null : tapbackText(tapback) });
+          }
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
@@ -832,7 +862,9 @@ export class ConversationRunner {
       await this.sendBubbles(turn, bubbles, chatId, to, saved, generation);
       this.checkSendsResolved(turn, generation);
     } finally {
+      typingDone = true;
       clearInterval(typingTimer);
+      await refreshing;
       if (chatId) await this.bestEffort("typing_stopped", () => this.deps.channel.setTyping(chatId, "stopped"));
     }
   }
@@ -892,15 +924,10 @@ export class ConversationRunner {
     // (pinned by test). Nothing here mutates them, so a replayed turn
     // sends byte-identical bubbles under the same keys.
     let fresh = 0;
-    for (const bubble of bubbles) {
+    // Text goes first: a tapback never holds back a message.
+    for (const bubble of [...bubbles.filter((b) => b.tag !== "react"), ...bubbles.filter((b) => b.tag === "react")]) {
       if (bubble.tag === "react") {
-        // Not a message and not counted: adding the same tapback again on
-        // a resumed turn changes nothing, so it is sent best effort.
-        const target = bubble.messageId;
-        if (chatId && target) {
-          await this.bestEffort("tapback_failed", () => this.deps.channel.react(chatId, target, bubble.text as import("@mano/channels").Tapback));
-          logger.info("tapback_sent", { handle: this.logHandle(), turn, tapback: bubble.text });
-        }
+        await this.sendTapback(turn, bubble, chatId, to, generation);
         continue;
       }
       const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation, replyTo: bubble.replyTo ?? null });
@@ -918,6 +945,53 @@ export class ConversationRunner {
   // Runs the responder. A deep turn's heads-up goes out the moment the
   // responder has it, after the intro on a first contact, and takes the
   // place of the interim notice.
+  // A tapback has its own outbound row, so a resumed turn knows whether
+  // it landed. It is not a message and never counts toward limits. Right
+  // before every attempt, including a replay, it checks the generation,
+  // opt-out and closed state. When it fails, its persisted fallback text
+  // goes through the one send path under its own key.
+  private async sendTapback(
+    turn: number,
+    bubble: import("./store.js").AnswerBubble,
+    chatId: string | null,
+    to: string | null,
+    generation: number,
+  ): Promise<void> {
+    const { store, channel, logger, nowMs, config } = this.deps;
+    const key = idempotencyKeyFor(config.handleHash, generation, turn, bubble.part, "react");
+    const sendFallback = async (): Promise<void> => {
+      if (bubble.fallback) await this.sendBubble({ turn, part: bubble.part, tag: "react-fallback", text: bubble.fallback, chatId, to, generation });
+    };
+    const prior = store.outboundByKey(key);
+    if (prior?.state === "sent" || prior?.state === "refused") return;
+    if (prior?.state === "failed") return sendFallback();
+    this.checkGeneration(generation);
+    const meta = store.meta();
+    if (!prior) {
+      store.addOutbound({
+        key, turn, part: bubble.part, tag: "react", text: bubble.text, attempts: 0, state: "planned", code: null,
+        chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+      });
+    }
+    if (meta.optedOut || meta.closed || !chatId || !bubble.messageId) {
+      const code = meta.optedOut ? "opted_out" : meta.closed ? "conversation_closed" : "unroutable";
+      store.updateOutbound(key, { state: "refused", code, updatedAtMs: nowMs() });
+      logger.info("tapback_suppressed", { handle: this.logHandle(), turn, code });
+      return;
+    }
+    try {
+      await channel.react(chatId, bubble.messageId, bubble.text as import("@mano/channels").Tapback);
+      this.checkGeneration(generation);
+      store.updateOutbound(key, { state: "sent", updatedAtMs: nowMs() });
+      logger.info("tapback_sent", { handle: this.logHandle(), turn, tapback: bubble.text });
+    } catch (err) {
+      if (err instanceof GenerationStopped) throw err;
+      store.updateOutbound(key, { state: "failed", code: "tapback_failed", updatedAtMs: nowMs() });
+      logger.warn("tapback_failed", { handle: this.logHandle(), turn, err: errName(err) });
+      await sendFallback();
+    }
+  }
+
   private async respondWithInterim(
     turn: number,
     turnText: string,
