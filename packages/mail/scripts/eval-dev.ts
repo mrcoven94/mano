@@ -2,18 +2,33 @@
 //   ws keys run -- pnpm eval-dev
 // Without META_MODEL_API_KEY it stops after the keyless checks, because
 // grading a stand-in would prove nothing.
-// Usage: pnpm eval-dev [--photo <substring>] [--json]
+// Usage: pnpm eval-dev [--photo <substring>] [--json] [--show]
+// --show also prints each published deadline, date to know, question
+// with its cited candidate sentences, and every model call with its
+// model ID and latency.
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createModelClient, readMail } from "../src/index.js";
+import { createModelClient, readMail, type MailReading } from "../src/index.js";
 import { isPhotoOk, scorePhoto, type GradeTruth, type PhotoScore } from "../src/grade.js";
 import type { PhotoTruth } from "./make-fixtures.js";
 import { LETTERS } from "./letters.js";
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(dir, "..", "fixtures");
+
+function show(reading: MailReading): void {
+  for (const c of reading.stats.modelCalls) {
+    console.log(`      call ${c.purpose} ${c.model} ${c.elapsedMs} ms, ${c.inputTokens}+${c.outputTokens} tok`);
+  }
+  for (const d of reading.deadlines) console.log(`      deadline ${d.dueDate} (${d.obligation}) "${d.dateText}"`);
+  for (const d of reading.datesToKnow) console.log(`      date to know ${d.dueDate} "${d.dateText}"`);
+  for (const q of reading.questions) {
+    console.log(`      question ${q.kind}: ${q.prompt}`);
+    for (const c of q.candidates ?? []) console.log(`        candidate [${c.dates.join(", ")}] "${c.sentence}"`);
+  }
+}
 
 function mimeFor(file: string): string {
   if (file.endsWith(".mp4")) return "video/mp4";
@@ -25,6 +40,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const photoFilter = args.includes("--photo") ? args[args.indexOf("--photo") + 1] : null;
   const asJson = args.includes("--json");
+  const showAll = args.includes("--show");
 
   if (!process.env["META_MODEL_API_KEY"]) {
     console.log("No META_MODEL_API_KEY. Live eval skipped: grading a stand-in would prove nothing.");
@@ -58,6 +74,7 @@ async function main(): Promise<void> {
           `${(score.elapsedMs / 1000).toFixed(1)}s, ${score.inputTokens}+${score.outputTokens} tok`,
       );
       for (const n of score.notes) console.log(`      - ${n}`);
+      if (showAll) show(reading);
     }
   }
 
