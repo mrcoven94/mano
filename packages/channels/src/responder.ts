@@ -5,15 +5,18 @@ import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 
 export const STANDARD_MODEL_ID = "muse-spark-1.3";
-// Live finding: reasoning alone burns ~600-1100 tokens on a greeting,
-// so 600 starved every answer (status incomplete, reason
-// max_output_tokens). 2048 leaves room for reasoning plus a short
-// reply; usage will say if harder questions need more.
-export const MAX_OUTPUT_TOKENS = 2048;
-// Worst-case output for spend reservations: 2048 tokens at roughly 4
-// characters each. Replies stay short by instruction and the bubble
-// cap; this only bounds the reservation.
-export const MAX_OUTPUT_CHARS = 8200;
+// The API accepts minimal, low, medium, high, xhigh and max ("none" is
+// rejected). Minimal answers a greeting in ~2-4 s with good quality;
+// uncapped reasoning took 8-30 s for the same reply. Per-task callers
+// (the Eve agent) raise this through SparkResponderOptions.
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export const STANDARD_REASONING_EFFORT: ReasoningEffort = "minimal";
+// Worst-case output: 8192 tokens at roughly 4 characters each. Replies
+// stay short by instruction and the bubble cap, and reasoning on a
+// greeting fits in a few hundred tokens; the headroom is for harder
+// questions, and MAX_OUTPUT_CHARS bounds the spend reservation.
+export const MAX_OUTPUT_TOKENS = 8192;
+export const MAX_OUTPUT_CHARS = 32800;
 // Slack for the system prompt when reserving the worst-case turn cost.
 export const INPUT_SLACK_CHARS = 1000;
 
@@ -100,6 +103,7 @@ export interface SparkResponderOptions {
   baseUrl?: string;
   timeoutMs?: number;
   maxRetries?: number;
+  reasoningEffort?: ReasoningEffort;
   fetchFn?: typeof fetch;
   // False when calling through AI Gateway, which would otherwise log
   // prompts and replies. Direct calls have nowhere to opt out of.
@@ -124,6 +128,7 @@ export class SparkResponder implements Responder {
   private baseUrl: string;
   private timeoutMs: number;
   private maxRetries: number;
+  private reasoningEffort: ReasoningEffort;
   private fetchFn: typeof fetch;
   private collectLogs: boolean;
 
@@ -133,6 +138,7 @@ export class SparkResponder implements Responder {
     this.baseUrl = (opts.baseUrl ?? "https://api.meta.ai/v1").replace(/\/$/, "");
     this.timeoutMs = opts.timeoutMs ?? 90000;
     this.maxRetries = opts.maxRetries ?? 2;
+    this.reasoningEffort = opts.reasoningEffort ?? STANDARD_REASONING_EFFORT;
     this.maxAttempts = this.maxRetries + 1;
     this.fetchFn = opts.fetchFn ?? boundFetch;
     this.collectLogs = opts.collectLogs ?? true;
@@ -152,7 +158,13 @@ export class SparkResponder implements Responder {
           method: "POST",
           signal: AbortSignal.timeout(this.timeoutMs),
           headers,
-          body: JSON.stringify({ model: STANDARD_MODEL_ID, input, store: false, max_output_tokens: MAX_OUTPUT_TOKENS }),
+          body: JSON.stringify({
+            model: STANDARD_MODEL_ID,
+            input,
+            store: false,
+            max_output_tokens: MAX_OUTPUT_TOKENS,
+            reasoning: { effort: this.reasoningEffort },
+          }),
         });
         if (res.status !== 429 && res.status < 500 && !res.ok) {
           throw new ResponderFailed(`Model request failed: ${res.status}`, attempt, input.length, `http_${res.status}`);
