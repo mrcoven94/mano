@@ -1104,6 +1104,11 @@ export class ConversationRunner {
         logger.warn("send_refused", { handle: this.logHandle(), key: idempotencyKey, code: err.code, status: err.status });
         return finish({ key: idempotencyKey, state: "refused", code: err.code, fresh: false, counted: true });
       }
+      if (err instanceof ChannelFailed) {
+        store.updateOutbound(idempotencyKey, { state: "failed", code: err.code, updatedAtMs: nowMs() });
+        logger.warn("send_failed", { handle: this.logHandle(), key: idempotencyKey, code: err.code, status: err.status });
+        return finish({ key: idempotencyKey, state: "failed", code: err.code, fresh: false, counted: true });
+      }
       store.updateOutbound(idempotencyKey, { state: "uncertain", updatedAtMs: nowMs() });
       logger.warn("send_uncertain", { handle: this.logHandle(), key: idempotencyKey });
       return this.resolveUncertainKey(idempotencyKey, { text: message, chatId: null, to }, generation);

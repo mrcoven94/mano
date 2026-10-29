@@ -77,6 +77,20 @@ describe("sendCode", () => {
     expect(suppressed.state).toBe("refused");
     expect(suppressed.code).toBe("opted_out");
   });
+
+  it("records a definitive failure instead of retrying", async () => {
+    const h = makeHarness();
+    h.channel.scriptFailure("code-key-6", { kind: "fail", status: 404, code: "chat_not_found" });
+    const failed = await h.runner.sendCode(TEST_HANDLE, "code", "code-key-6");
+    expect(failed.state).toBe("failed");
+    expect(failed.code).toBe("chat_not_found");
+    expect(h.store.outboundByKey("code-key-6")?.state).toBe("failed");
+    expect(await h.runner.resolveUncertain()).toBe(0);
+    expect(h.channel.sends).toHaveLength(0);
+    const replayed = await h.runner.sendCode(TEST_HANDLE, "code", "code-key-6");
+    expect(replayed.state).toBe("failed");
+    expect(replayed.fresh).toBe(false);
+  });
 });
 
 describe("create-or-route", () => {
