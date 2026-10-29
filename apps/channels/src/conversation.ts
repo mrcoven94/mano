@@ -110,8 +110,14 @@ export function buildResponder(env: Env, handleHash?: string): Responder {
   const fallback = buildFallbackResponder(env);
   // The agent answers when configured; otherwise the plain model answer
   // stays the responder, and the agent falls back to it per turn.
-  if (env.AGENT_URL && env.MANO_AGENT_SECRET && handleHash) {
-    return new AgentResponder({ agentUrl: env.AGENT_URL, secret: env.MANO_AGENT_SECRET, handleHash, fallback });
+  if (env.AGENT_URL && env.MANO_AGENT_SECRET && env.MANO_HANDLE_GRANT_SECRET && handleHash) {
+    return new AgentResponder({
+      agentUrl: env.AGENT_URL,
+      secret: env.MANO_AGENT_SECRET,
+      grantSecret: env.MANO_HANDLE_GRANT_SECRET,
+      handleHash,
+      fallback,
+    });
   }
   return fallback;
 }
@@ -244,6 +250,7 @@ export class ConversationDO implements DurableObject {
         handleHash?: unknown;
         key?: unknown;
         text?: unknown;
+        generation?: unknown;
       } | null;
       if (
         !body ||
@@ -251,13 +258,16 @@ export class ConversationDO implements DurableObject {
         typeof body.key !== "string" ||
         !body.key ||
         typeof body.text !== "string" ||
-        !body.text
+        !body.text ||
+        typeof body.generation !== "number" ||
+        !Number.isInteger(body.generation) ||
+        body.generation < 0
       ) {
         return new Response("Bad agent send.", { status: 400 });
       }
       const { runner } = this.runner(body.handleHash);
       try {
-        const result = await runner.sendAgentText({ key: body.key, text: body.text });
+        const result = await runner.sendAgentText({ key: body.key, text: body.text, generation: body.generation });
         if (!result.sent && result.reason === "budget") {
           return Response.json({ sent: false, reason: "budget" }, { status: 429 });
         }

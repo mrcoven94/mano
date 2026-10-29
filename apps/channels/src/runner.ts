@@ -1027,7 +1027,7 @@ export class ConversationRunner {
           logger.warn("heads_up_failed", { handle: this.logHandle(), turn, err: errName(err) });
         }
       };
-      const result = await responder.respond({ texts: [turnText], attachmentCount, history }, { onHeadsUp });
+      const result = await responder.respond({ texts: [turnText], attachmentCount, history, turnKey: { generation, turn } }, { onHeadsUp });
       const costUsd =
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
       logger.info("turn_answered", { handle: this.logHandle(), turn, model: result.model, attempts: result.attempts });
@@ -1405,12 +1405,16 @@ export class ConversationRunner {
   // spend ledger apply, links are checked, and every bubble carries its
   // deterministic key. The agent's key dedupes redeliveries: a retry
   // resumes the same turn, so a crash between claim and send can neither
-  // lose nor double the text. Budget refusal returns instead of throwing
-  // so the caller answers 429 and the agent retries later; anything
-  // else terminal (unknown, closed, opted out) is a handled 200.
-  async sendAgentText(opts: { key: string; text: string }): Promise<{
+  // lose nor double the text. The delivery belongs to the deletion
+  // generation the agent saw when it made it; that generation is fixed
+  // before the first await and persisted with the row, and any change
+  // stops the send, so a deletion can never be followed by an old text.
+  // Budget refusal returns instead of throwing so the caller answers 429
+  // and the agent retries later; anything else terminal (unknown,
+  // closed, opted out, deleted) is a handled 200.
+  async sendAgentText(opts: { key: string; text: string; generation: number }): Promise<{
     sent: boolean;
-    reason?: "empty" | "unknown" | "closed" | "opted_out" | "budget";
+    reason?: "empty" | "unknown" | "closed" | "opted_out" | "budget" | "deleted";
     duplicate?: boolean;
   }> {
     const { store, logger, nowMs, config } = this.deps;
@@ -1418,7 +1422,9 @@ export class ConversationRunner {
     if (!text) return { sent: false, reason: "empty" };
     const prior = store.agentSend(opts.key);
     if (prior?.state === "sent") return { sent: true, duplicate: true };
+    const generation = prior ? prior.generation : opts.generation;
     const meta = store.meta();
+    if (meta.generation !== generation) return { sent: false, reason: "deleted" };
     if (meta.optedOut) return { sent: false, reason: "opted_out" };
     if (meta.closed) return { sent: false, reason: "closed" };
     const chatId = meta.chatId;
@@ -1432,7 +1438,7 @@ export class ConversationRunner {
       bumped.turn += 1;
       store.saveMeta(bumped);
       turn = bumped.turn;
-      store.startAgentSend({ key: opts.key, turn, state: "sending", createdAtMs: nowMs(), updatedAtMs: nowMs() });
+      store.startAgentSend({ key: opts.key, turn, generation, state: "sending", createdAtMs: nowMs(), updatedAtMs: nowMs() });
     }
     const over = handleOverLimit(
       { hourKey: meta.hourKey, hourCount: meta.hourCount, dayKey: meta.dayKey, dayCount: meta.dayCount },
@@ -1451,8 +1457,8 @@ export class ConversationRunner {
       return { sent: false, reason: "budget" };
     }
     try {
-      this.checkGeneration(store.meta().generation);
-      const final = await this.finalizeBubbles(text);
+      this.checkGeneration(generation);
+      const final = await this.finalizeBubbles(turn, text);
       if (final.removed > 0) {
         logger.warn("agent_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
       }
@@ -1461,7 +1467,7 @@ export class ConversationRunner {
         tag: "agent",
         text: bubble,
       }));
-      const generation = store.meta().generation;
+      this.checkGeneration(generation);
       await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
       this.checkSendsResolved(turn, generation);
       await this.deps.spend.settle(reserveKey, costUsd);
@@ -1469,12 +1475,12 @@ export class ConversationRunner {
       logger.info("agent_sent", { handle: this.logHandle(), turn, bubbles: bubbles.length });
       return { sent: true };
     } catch (err) {
-      if (err instanceof GenerationStopped) throw err;
       try {
         await this.deps.spend.release(reserveKey);
       } catch (releaseErr) {
         logger.warn("agent_release_failed", { handle: this.logHandle(), turn, err: errName(releaseErr) });
       }
+      if (err instanceof GenerationStopped) return { sent: false, reason: "deleted" };
       throw err;
     }
   }

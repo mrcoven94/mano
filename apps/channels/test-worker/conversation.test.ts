@@ -215,7 +215,7 @@ describe("ConversationDO on SQLite", () => {
   it("delivers an agent-started text and dedupes its key", async () => {
     const stub = stubFor(`do-agent-${Date.now()}`);
     await postEvent(stub, "hash-agent", inbound("evt_do_agent", "Hello."));
-    const send = { handleHash: "hash-agent", key: "rem_worker_1", text: "Reminder: call the office" };
+    const send = { handleHash: "hash-agent", key: "rem_worker_1", text: "Reminder: call the office", generation: 0 };
     const first = await stub.fetch("https://conversation/internal/agent-send", {
       method: "POST",
       body: JSON.stringify(send),

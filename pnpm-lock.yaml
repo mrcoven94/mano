@@ -109,6 +109,9 @@ importers:
       '@mano/persona':
         specifier: workspace:*
         version: link:../persona
+      '@mano/protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

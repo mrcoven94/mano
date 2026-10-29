@@ -28,6 +28,7 @@ function agentEnv(stub: (url: string, init: RequestInit) => Promise<Response>): 
     MANO_HANDLE_PEPPER: "",
     ENCRYPTION_KEK_B64: "",
     MANO_AGENT_SECRET: SECRET,
+    MANO_HANDLE_GRANT_SECRET: "test-grant-secret-not-real",
   };
 }
 
@@ -49,6 +50,8 @@ describe("agent-send ingress", () => {
     expect(badSig.status).toBe(401);
     const badBody = await handleAgentSend(await signedSend({ handleHash: "h" }), env);
     expect(badBody.status).toBe(400);
+    const noGeneration = await handleAgentSend(await signedSend({ handleHash: "h", key: "k", text: "t" }), env);
+    expect(noGeneration.status).toBe(400);
   });
 
   it("routes to the conversation and relays its answer", async () => {
@@ -57,15 +60,15 @@ describe("agent-send ingress", () => {
       seen.push(`${url} ${init.body}`);
       return Response.json({ sent: true }, { status: 200 });
     });
-    const res = await handleAgentSend(await signedSend({ handleHash: "hh", key: "rem_1", text: "Reminder: call" }), env);
+    const res = await handleAgentSend(await signedSend({ handleHash: "hh", key: "rem_1", text: "Reminder: call", generation: 3 }), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ sent: true, reason: null });
-    expect(seen).toEqual(['https://conversation/internal/agent-send {"handleHash":"hh","key":"rem_1","text":"Reminder: call"}']);
+    expect(seen).toEqual(['https://conversation/internal/agent-send {"handleHash":"hh","key":"rem_1","text":"Reminder: call","generation":3}']);
   });
 
   it("relays budget backpressure as 429", async () => {
     const env = agentEnv(async () => Response.json({ sent: false, reason: "budget" }, { status: 429 }));
-    const res = await handleAgentSend(await signedSend({ handleHash: "hh", key: "k", text: "t" }), env);
+    const res = await handleAgentSend(await signedSend({ handleHash: "hh", key: "k", text: "t", generation: 0 }), env);
     expect(res.status).toBe(429);
     expect(await res.json()).toEqual({ sent: false, reason: "budget" });
   });
@@ -74,10 +77,10 @@ describe("agent-send ingress", () => {
 describe("agent responder selection", () => {
   const base = agentEnv(async () => new Response("no"));
   it("uses the agent when configured, else the plain responder", () => {
-    const agent = buildResponder({ ...base, AGENT_URL: "https://agent.example", META_MODEL_API_KEY: "k" }, TEST_HANDLE_HASH);
+    const agent = buildResponder({ ...base, AGENT_URL: "https://agent.example", META_MODEL_API_KEY: "k", MANO_REPLY_MODEL: "muse-spark-1.3" }, TEST_HANDLE_HASH);
     expect(agent).toBeInstanceOf(AgentResponder);
     expect(agent.name).toBe("agent");
-    const spark = buildResponder({ ...base, META_MODEL_API_KEY: "k" }, TEST_HANDLE_HASH);
+    const spark = buildResponder({ ...base, META_MODEL_API_KEY: "k", MANO_REPLY_MODEL: "muse-spark-1.3" }, TEST_HANDLE_HASH);
     expect(spark).toBeInstanceOf(SparkResponder);
     const standin = buildResponder({ ...base }, TEST_HANDLE_HASH);
     expect(standin).toBeInstanceOf(StandInResponder);
@@ -98,7 +101,7 @@ describe("runner.sendAgentText", () => {
 
   it("sends through the normal outbound path", async () => {
     const h = chatting();
-    const result = await h.runner.sendAgentText({ key: "rem_1", text: "Reminder: call the office" });
+    const result = await h.runner.sendAgentText({ key: "rem_1", text: "Reminder: call the office", generation: 0 });
     expect(result).toEqual({ sent: true });
     expect(h.channel.sends.map((s) => s.text)).toEqual(["Reminder: call the office"]);
     expect(h.store.agentSend("rem_1")?.state).toBe("sent");
@@ -106,8 +109,8 @@ describe("runner.sendAgentText", () => {
 
   it("dedupes redeliveries under the same key", async () => {
     const h = chatting();
-    await h.runner.sendAgentText({ key: "rem_1", text: "Reminder: call" });
-    const retry = await h.runner.sendAgentText({ key: "rem_1", text: "Reminder: call" });
+    await h.runner.sendAgentText({ key: "rem_1", text: "Reminder: call", generation: 0 });
+    const retry = await h.runner.sendAgentText({ key: "rem_1", text: "Reminder: call", generation: 0 });
     expect(retry).toEqual({ sent: true, duplicate: true });
     expect(h.channel.sends).toHaveLength(1);
   });
@@ -117,13 +120,13 @@ describe("runner.sendAgentText", () => {
     const meta = h.store.meta();
     meta.optedOut = true;
     h.store.saveMeta(meta);
-    expect(await h.runner.sendAgentText({ key: "a", text: "hi" })).toEqual({ sent: false, reason: "opted_out" });
+    expect(await h.runner.sendAgentText({ key: "a", text: "hi", generation: 0 })).toEqual({ sent: false, reason: "opted_out" });
     meta.optedOut = false;
     meta.closed = true;
     h.store.saveMeta(meta);
-    expect(await h.runner.sendAgentText({ key: "b", text: "hi" })).toEqual({ sent: false, reason: "closed" });
+    expect(await h.runner.sendAgentText({ key: "b", text: "hi", generation: 0 })).toEqual({ sent: false, reason: "closed" });
     const fresh = makeHarness();
-    expect(await fresh.runner.sendAgentText({ key: "c", text: "hi" })).toEqual({ sent: false, reason: "unknown" });
+    expect(await fresh.runner.sendAgentText({ key: "c", text: "hi", generation: 0 })).toEqual({ sent: false, reason: "unknown" });
     expect(h.channel.sends).toHaveLength(0);
   });
 
@@ -133,7 +136,7 @@ describe("runner.sendAgentText", () => {
     meta.chatId = "chat_agent";
     meta.to = "+15550001001";
     poor.store.saveMeta(meta);
-    expect(await poor.runner.sendAgentText({ key: "a", text: "Reminder: call" })).toEqual({
+    expect(await poor.runner.sendAgentText({ key: "a", text: "Reminder: call", generation: 0 })).toEqual({
       sent: false,
       reason: "budget",
     });
@@ -146,16 +149,57 @@ describe("runner.sendAgentText", () => {
     h.channel.send = async () => {
       throw new Error("boom");
     };
-    await expect(h.runner.sendAgentText({ key: "rem_9", text: "Reminder: call" })).rejects.toThrow();
+    await expect(h.runner.sendAgentText({ key: "rem_9", text: "Reminder: call", generation: 0 })).rejects.toThrow();
     const firstTurn = h.store.agentSend("rem_9")?.turn;
     expect(firstTurn).toBeGreaterThan(0);
     h.channel.send = realSend;
-    const result = await h.runner.sendAgentText({ key: "rem_9", text: "Reminder: call" });
+    const result = await h.runner.sendAgentText({ key: "rem_9", text: "Reminder: call", generation: 0 });
     expect(result.sent).toBe(true);
     expect(h.store.agentSend("rem_9")?.turn).toBe(firstTurn);
     // One provider send under the deterministic key: the retry resumes
     // the same turn instead of doubling the text.
     expect(h.channel.sends).toHaveLength(1);
     expect(h.channel.sends[0].idempotencyKey).toBe(idempotencyKeyFor(TEST_HANDLE_HASH, 0, firstTurn!, 1, "agent"));
+  });
+
+  it("a deletion while the text is being prepared stops the send", async () => {
+    const dns = () => Response.json({ Status: 0, Answer: [{ type: 1, data: "93.184.216.34" }] });
+    let h!: ReturnType<typeof makeHarness>;
+    h = makeHarness({
+      fetchFn: (async () => {
+        h.store.wipe(h.now);
+        return dns();
+      }) as typeof fetch,
+    });
+    const meta = h.store.meta();
+    meta.chatId = "chat_agent";
+    meta.to = "+15550001001";
+    h.store.saveMeta(meta);
+    const generation = h.store.meta().generation;
+    await h.runner.sendAgentText({ key: "rem_w", text: "Reminder: your form is at https://example.org/form", generation }).catch(() => undefined);
+    expect(h.channel.sends).toHaveLength(0);
+  });
+
+  it("a delivery made before a deletion never sends after it, even once the person is back", async () => {
+    const h = chatting();
+    const before = h.store.meta().generation;
+    h.store.wipe(h.now);
+    const meta = h.store.meta();
+    meta.chatId = "chat_agent";
+    meta.to = "+15550001001";
+    h.store.saveMeta(meta);
+    const result = await h.runner.sendAgentText({ key: "rem_old", text: "Reminder: call", generation: before });
+    expect(result).toEqual({ sent: false, reason: "deleted" });
+    expect(h.channel.sends).toHaveLength(0);
+  });
+
+  it("a retry keeps the generation its first attempt recorded", async () => {
+    const h = chatting();
+    const generation = h.store.meta().generation;
+    h.channel.send = async () => {
+      throw new Error("boom");
+    };
+    await expect(h.runner.sendAgentText({ key: "rem_r", text: "Reminder: call", generation })).rejects.toThrow();
+    expect(h.store.agentSend("rem_r")?.generation).toBe(generation);
   });
 });

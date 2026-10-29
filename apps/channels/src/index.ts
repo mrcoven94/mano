@@ -299,14 +299,24 @@ export async function handleAgentSend(request: Request, env: Env): Promise<Respo
   } catch {
     return new Response("Bad JSON.", { status: 400 });
   }
-  const body = parsed as { handleHash?: unknown; key?: unknown; text?: unknown };
-  if (typeof body.handleHash !== "string" || !body.handleHash || typeof body.key !== "string" || !body.key || typeof body.text !== "string" || !body.text) {
+  const body = parsed as { handleHash?: unknown; key?: unknown; text?: unknown; generation?: unknown };
+  if (
+    typeof body.handleHash !== "string" ||
+    !body.handleHash ||
+    typeof body.key !== "string" ||
+    !body.key ||
+    typeof body.text !== "string" ||
+    !body.text ||
+    typeof body.generation !== "number" ||
+    !Number.isInteger(body.generation) ||
+    body.generation < 0
+  ) {
     return new Response("Bad agent send.", { status: 400 });
   }
   const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(body.handleHash));
   const res = await stub.fetch("https://conversation/internal/agent-send", {
     method: "POST",
-    body: JSON.stringify({ handleHash: body.handleHash, key: body.key, text: body.text }),
+    body: JSON.stringify({ handleHash: body.handleHash, key: body.key, text: body.text, generation: body.generation }),
   });
   const data = (await res.json().catch(() => ({}))) as { sent?: unknown; reason?: unknown };
   logger.info("agent_send_routed", {

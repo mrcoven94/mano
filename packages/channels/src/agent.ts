@@ -4,6 +4,14 @@
 // verifies agent-started deliveries on the internal route. Both
 // directions sign HMAC-SHA256 over "<timestamp>.<raw body>" with the
 // one shared secret, the same construction as the provider webhooks.
+//
+// Each turn body carries, inside the signed bytes, a turn ID that stays
+// the same across retries and recovery of that turn (handle, deletion
+// generation, turn number), the generation itself, and a handle grant
+// minted for this handle only. The agent forwards the grant to the
+// engine with its own token; it never holds the grant secret.
+import { mintHandleGrant } from "@mano/protocol";
+
 import { boundFetch } from "./fetch.js";
 import { ResponderFailed, type Responder, type ResponderResult, type TurnInput } from "./responder.js";
 import { splitBubbles } from "./bubbles.js";
@@ -41,6 +49,7 @@ export async function signAgentRequest(secret: string, timestampSeconds: number,
 export interface AgentResponderOptions {
   agentUrl: string;
   secret: string;
+  grantSecret: string;
   handleHash: string;
   fallback: Responder;
   timeoutMs?: number;
@@ -58,6 +67,7 @@ export class AgentResponder implements Responder {
   readonly maxAttempts: number;
   private agentUrl: string;
   private secret: string;
+  private grantSecret: string;
   private handleHash: string;
   private fallback: Responder;
   private timeoutMs: number;
@@ -67,9 +77,11 @@ export class AgentResponder implements Responder {
   constructor(opts: AgentResponderOptions) {
     if (!opts.agentUrl) throw new Error("An agent URL is required.");
     if (!opts.secret) throw new Error("An agent secret is required.");
+    if (!opts.grantSecret) throw new Error("A handle grant secret is required.");
     if (!opts.handleHash) throw new Error("A handle hash is required.");
     this.agentUrl = opts.agentUrl.replace(/\/$/, "");
     this.secret = opts.secret;
+    this.grantSecret = opts.grantSecret;
     this.handleHash = opts.handleHash;
     this.fallback = opts.fallback;
     this.timeoutMs = opts.timeoutMs ?? AGENT_RESPONDER_TIMEOUT_MS;
@@ -80,9 +92,16 @@ export class AgentResponder implements Responder {
 
   async respond(turn: TurnInput): Promise<ResponderResult> {
     const inputChars = turn.texts.join("\n").length;
+    // Without a stable key the agent could run the turn twice, so it is
+    // not called at all.
+    if (!turn.turnKey) return this.respondFallback(turn, inputChars);
     try {
+      const { generation, turn: number } = turn.turnKey;
       const raw = JSON.stringify({
+        turnId: `${this.handleHash}:${generation}:${number}`,
+        generation,
         handleHash: this.handleHash,
+        grant: await mintHandleGrant(this.handleHash, this.grantSecret),
         texts: turn.texts,
         attachmentCount: turn.attachmentCount,
       });
@@ -99,7 +118,7 @@ export class AgentResponder implements Responder {
       });
       const data = (await res.json().catch(() => null)) as AgentTurnResponse | null;
       const text = typeof data?.text === "string" ? data.text.trim() : "";
-      if (res.ok && (data?.status === "replied" || data?.status === "waiting_input") && text) {
+      if (res.ok && (data?.status === "replied" || data?.status === "waiting_approval") && text) {
         return {
           text,
           bubbles: splitBubbles(text),

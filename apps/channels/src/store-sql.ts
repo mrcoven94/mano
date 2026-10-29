@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS turns (
 CREATE TABLE IF NOT EXISTS agent_sends (
   agent_key TEXT PRIMARY KEY,
   turn INTEGER NOT NULL,
+  generation INTEGER NOT NULL,
   state TEXT NOT NULL,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
@@ -544,6 +545,7 @@ export class SqlConversationStore implements ConversationStore {
     const row = firstRow<{
       agent_key: string;
       turn: number;
+      generation: number;
       state: import("./store.js").AgentSendRow["state"];
       created_at_ms: number;
       updated_at_ms: number;
@@ -552,6 +554,7 @@ export class SqlConversationStore implements ConversationStore {
     return {
       key: row.agent_key,
       turn: row.turn,
+      generation: row.generation,
       state: row.state,
       createdAtMs: row.created_at_ms,
       updatedAtMs: row.updated_at_ms,
@@ -560,9 +563,10 @@ export class SqlConversationStore implements ConversationStore {
 
   startAgentSend(row: import("./store.js").AgentSendRow): void {
     this.sql.exec(
-      "INSERT OR IGNORE INTO agent_sends (agent_key, turn, state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO agent_sends (agent_key, turn, generation, state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
       row.key,
       row.turn,
+      row.generation,
       row.state,
       row.createdAtMs,
       row.updatedAtMs,

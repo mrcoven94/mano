@@ -101,6 +101,9 @@ export interface PersistedTurn {
 export interface AgentSendRow {
   key: string;
   turn: number;
+  // The deletion generation the delivery belongs to, fixed when it was
+  // first accepted. A retry never adopts a newer generation.
+  generation: number;
   state: "sending" | "sent";
   createdAtMs: number;
   updatedAtMs: number;

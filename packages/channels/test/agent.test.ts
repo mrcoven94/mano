@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { verifyHandleGrant } from "@mano/protocol";
 
 import {
   AgentResponder,
@@ -10,11 +11,13 @@ import {
 } from "../src/index.js";
 
 const HANDLE = "a".repeat(64);
+const KEY = { generation: 0, turn: 1 };
 
 function responder(fetchFn: typeof fetch, fallback = new StandInResponder(["fallback reply"])): AgentResponder {
   return new AgentResponder({
     agentUrl: "https://agent.example",
     secret: "secret",
+    grantSecret: "grant-secret",
     handleHash: HANDLE,
     fallback,
     timeoutMs: 1000,
@@ -56,7 +59,7 @@ describe("agent responder", () => {
       seen.push({ url, init });
       return Response.json({ status: "replied", text: "Agent says hi." });
     }) as typeof fetch;
-    const result = await responder(fetchFn).respond({ texts: ["hi"], attachmentCount: 0 });
+    const result = await responder(fetchFn).respond({ texts: ["hi"], attachmentCount: 0, turnKey: KEY });
     expect(result.model).toBe("agent");
     expect(result.text).toBe("Agent says hi.");
     expect(result.attempts).toBe(1);
@@ -65,14 +68,7 @@ describe("agent responder", () => {
     const headers = seen[0].init.headers as Record<string, string>;
     expect(headers["x-mano-timestamp"]).toBe("1761777000");
     expect(headers["x-mano-signature"]).toMatch(/^[0-9a-f]{64}$/);
-    expect(JSON.parse(seen[0].init.body as string)).toEqual({ handleHash: HANDLE, texts: ["hi"], attachmentCount: 0 });
-  });
-
-  it("accepts a parked approval question as the reply", async () => {
-    const fetchFn = (async () => Response.json({ status: "waiting_input", text: "Submit? Reply YES or NO." })) as typeof fetch;
-    const result = await responder(fetchFn).respond({ texts: ["submit it"], attachmentCount: 0 });
-    expect(result.model).toBe("agent");
-    expect(result.text).toBe("Submit? Reply YES or NO.");
+    expect(JSON.parse(seen[0].init.body as string)).toMatchObject({ handleHash: HANDLE, texts: ["hi"], attachmentCount: 0 });
   });
 
   it("falls back on agent timeout, failure, or empty reply", async () => {
@@ -84,7 +80,7 @@ describe("agent responder", () => {
       (async () => Response.json({ status: "replied", text: "  " })) as typeof fetch,
     ];
     for (const fetchFn of failing) {
-      const result = await responder(fetchFn).respond({ texts: ["hi"], attachmentCount: 0 });
+      const result = await responder(fetchFn).respond({ texts: ["hi"], attachmentCount: 0, turnKey: KEY });
       expect(result.model).toBe("stand-in");
       expect(result.attempts).toBe(2);
     }
@@ -98,14 +94,72 @@ describe("agent responder", () => {
     fallback.respond = async () => {
       throw new ResponderFailed("Fallback failed.", 3, 10, "http_500");
     };
-    const err = await responder(fetchFn, fallback).respond({ texts: ["hi"], attachmentCount: 0 }).catch((e: unknown) => e);
+    const err = await responder(fetchFn, fallback).respond({ texts: ["hi"], attachmentCount: 0, turnKey: KEY }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ResponderFailed);
     expect((err as ResponderFailed).attempts).toBe(4);
   });
 
   it("requires its config", () => {
     const fallback = new StandInResponder();
-    expect(() => new AgentResponder({ agentUrl: "", secret: "s", handleHash: HANDLE, fallback })).toThrow();
-    expect(() => new AgentResponder({ agentUrl: "https://x", secret: "", handleHash: HANDLE, fallback })).toThrow();
+    expect(() => new AgentResponder({ agentUrl: "", secret: "s", grantSecret: "g", handleHash: HANDLE, fallback })).toThrow();
+    expect(() => new AgentResponder({ agentUrl: "https://x", secret: "", grantSecret: "g", handleHash: HANDLE, fallback })).toThrow();
+    expect(() => new AgentResponder({ agentUrl: "https://x", secret: "s", grantSecret: "", handleHash: HANDLE, fallback })).toThrow();
+  });
+});
+
+describe("agent turn identity and grant", () => {
+  const GRANT_SECRET = "grant-secret-for-tests";
+
+  function capturing(seen: Record<string, unknown>[]) {
+    return (async (_url: string, init: RequestInit) => {
+      seen.push(JSON.parse(String(init.body)));
+      return Response.json({ status: "replied", text: "ok" });
+    }) as typeof fetch;
+  }
+
+  function withGrant(fetchFn: typeof fetch): AgentResponder {
+    return new AgentResponder({
+      agentUrl: "https://agent.example",
+      secret: "secret",
+      grantSecret: GRANT_SECRET,
+      handleHash: HANDLE,
+      fallback: new StandInResponder(["fallback reply"]),
+      timeoutMs: 1000,
+      fetchFn,
+    });
+  }
+
+  it("signs a stable turn ID and the deletion generation inside the body", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const agent = withGrant(capturing(seen));
+    await agent.respond({ texts: ["hi"], attachmentCount: 0, turnKey: { generation: 2, turn: 7 } });
+    await agent.respond({ texts: ["hi"], attachmentCount: 0, turnKey: { generation: 2, turn: 7 } });
+    await agent.respond({ texts: ["hi"], attachmentCount: 0, turnKey: { generation: 2, turn: 8 } });
+    expect(seen[0].turnId).toBe(`${HANDLE}:2:7`);
+    expect(seen[1].turnId).toBe(seen[0].turnId);
+    expect(seen[2].turnId).toBe(`${HANDLE}:2:8`);
+    expect(seen[0].generation).toBe(2);
+  });
+
+  it("passes a handle grant the engine verifies for exactly this handle", async () => {
+    const seen: Record<string, unknown>[] = [];
+    await withGrant(capturing(seen)).respond({ texts: ["hi"], attachmentCount: 0, turnKey: { generation: 0, turn: 1 } });
+    const claims = await verifyHandleGrant(String(seen[0].grant), GRANT_SECRET);
+    expect(claims?.handle).toBe(HANDLE);
+    expect(await verifyHandleGrant(String(seen[0].grant), "other-secret")).toBeNull();
+  });
+
+  it("answers from the fallback when the turn has no stable key", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const result = await withGrant(capturing(seen)).respond({ texts: ["hi"], attachmentCount: 0 });
+    expect(seen).toHaveLength(0);
+    expect(result.text).toBe("fallback reply");
+  });
+
+  it("accepts a reply that carries an approval question", async () => {
+    const fetchFn = (async () => Response.json({ status: "waiting_approval", text: "Reply YES to send exactly this." })) as typeof fetch;
+    const result = await withGrant(fetchFn).respond({ texts: ["file it"], attachmentCount: 0, turnKey: { generation: 0, turn: 1 } });
+    expect(result.model).toBe("agent");
+    expect(result.text).toContain("Reply YES");
   });
 });

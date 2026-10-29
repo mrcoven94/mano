@@ -34,6 +34,9 @@ export interface TurnInput {
   attachmentCount: number;
   // Earlier messages, oldest first.
   history?: HistoryMessage[];
+  // The conversation's deletion generation and turn number. Stable across
+  // retries and recovery of the same turn, so the agent runs it once.
+  turnKey?: { generation: number; turn: number };
 }
 
 export interface ResponderResult {

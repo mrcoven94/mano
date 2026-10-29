@@ -28,6 +28,10 @@ export interface Env {
   // fallback. The secret signs both directions of agent traffic.
   AGENT_URL?: string;
   MANO_AGENT_SECRET?: string;
+  // Signs the per-turn handle grant the agent forwards to the engine, so
+  // the agent can act for the handle that just texted and no one else.
+  // The engine holds the same secret; the agent never does.
+  MANO_HANDLE_GRANT_SECRET?: string;
 }
 
 export function numberEnv(value: string | undefined, fallback: number): number {
