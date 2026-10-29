@@ -1,8 +1,10 @@
 name: guardian-modal
 
 # The only way the guardian model reaches production. Merging to main with
-# changes under packages/guardian/modal/ redeploys it. Never run
-# `modal deploy` from a laptop for production.
+# changes under packages/guardian/modal/ redeploys it with the GPU scaled to
+# zero. Running it by hand from main can keep one GPU up instead
+# (min_containers 1, about $1.95 an hour); the next merge returns it to 0.
+# Never run `modal deploy` from a laptop for production.
 #
 # Needs two secrets in the guardian-production environment, set by a maintainer:
 #   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
@@ -15,12 +17,20 @@ on:
     paths:
       - "packages/guardian/modal/**"
       - ".github/workflows/guardian-modal.yml"
+  workflow_dispatch:
+    inputs:
+      min_containers:
+        description: "GPU containers kept up: 0 scales to zero, 1 keeps one warm"
+        type: choice
+        options: ["0", "1"]
+        default: "0"
 
 permissions:
   contents: read
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: guardian-production
     steps:
@@ -39,5 +49,6 @@ jobs:
       - name: Deploy the guardian endpoint
         run: modal deploy packages/guardian/modal/app.py
         env:
+          MANO_GUARDIAN_MIN_CONTAINERS: ${{ inputs.min_containers || '0' }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}

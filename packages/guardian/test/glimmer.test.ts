@@ -83,6 +83,40 @@ describe("GlimmerChecker", () => {
     expect(sent).toContain("[RECIPIENT]");
   });
 
+  it("sends a warm-up with the same auth headers", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ warming: true }, 202));
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      proxyAuth: { keyId: "key", secret: "secret" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(checker.warm()).resolves.toBe(true);
+    const [calledUrl, init] = fetchImpl.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(calledUrl).toBe("https://guardian.example.com");
+    expect(init.body).toBe('{"warm":true}');
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer token",
+      "Modal-Key": "key",
+      "Modal-Secret": "secret",
+    });
+  });
+
+  it("reports a failed warm-up without throwing", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("network down");
+    });
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(checker.warm()).resolves.toBe(false);
+  });
+
   it("sends no personal detail of any kind", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ verdict: "pass", problems: [], ...SERVER }),

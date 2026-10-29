@@ -99,11 +99,7 @@ export class GlimmerChecker implements Checker {
     return this.model;
   }
 
-  async check(input: CheckInput): Promise<CheckResult> {
-    const rules = await this.rules.check(input);
-    if (rules.verdict === "block") return rules;
-    this.lastServer = null;
-
+  private headers(): Record<string, string> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${this.token}`,
@@ -112,12 +108,37 @@ export class GlimmerChecker implements Checker {
       headers["Modal-Key"] = this.proxyAuth.keyId;
       headers["Modal-Secret"] = this.proxyAuth.secret;
     }
+    return headers;
+  }
+
+  // Asks the endpoint to start the model and keep it up for about ten
+  // minutes, so a check soon after finds it ready. Call it when a
+  // conversation starts. Returns whether the endpoint accepted; a failure
+  // changes nothing, since a cold check still blocks.
+  async warm(): Promise<boolean> {
+    try {
+      const response = await this.fetchImpl(this.url, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({ warm: true }),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async check(input: CheckInput): Promise<CheckResult> {
+    const rules = await this.rules.check(input);
+    if (rules.verdict === "block") return rules;
+    this.lastServer = null;
 
     let response: Response;
     try {
       response = await this.fetchImpl(this.url, {
         method: "POST",
-        headers,
+        headers: this.headers(),
         body: JSON.stringify(buildModelRequest(input, this.knownEntities)),
         signal: AbortSignal.timeout(this.timeoutMs),
       });

@@ -9,11 +9,16 @@
 # function checks the bearer token and forwards the redacted input to the
 # GPU class, which runs vLLM in-process (no vLLM HTTP server, so no
 # unprotected inference routes). The GPU sleeps at zero until an
-# authenticated check arrives. Both scale to zero when idle.
+# authenticated check or warm-up arrives. Both scale to zero when idle.
+#
+# A POST of {"warm": true} starts the model and keeps it up for
+# WARM_HOLD_SECONDS, so an approval minutes later finds it ready. The deploy
+# sets MANO_GUARDIAN_MIN_CONTAINERS=1 to keep one GPU up all the time.
 import hmac
 import json
 import os
 import threading
+import time
 from typing import Any
 
 import modal
@@ -26,6 +31,7 @@ IMAGE_DIGEST = (
 )
 
 VERDICTS = ("pass", "fix", "block")
+WARM_HOLD_SECONDS = 600
 
 GUARDIAN_SCHEMA = {
     "type": "object",
@@ -88,6 +94,43 @@ def require_token(value: str | None) -> str:
             "MANO_GUARDIAN_TOKEN is missing or blank; refusing to start."
         )
     return value
+
+
+def min_containers_from_env(value: str | None) -> int:
+    """Parse MANO_GUARDIAN_MIN_CONTAINERS: unset or blank is 0, else 0 or 1."""
+    if value is None or value.strip() == "":
+        return 0
+    if value.strip() not in ("0", "1"):
+        raise RuntimeError(
+            f"MANO_GUARDIAN_MIN_CONTAINERS must be 0 or 1, not {value!r}."
+        )
+    return int(value)
+
+
+class WarmHold:
+    """Holds one call open until `seconds` after the latest warm-up, which
+    keeps the container up. A warm-up while one is held only moves the
+    deadline, so warm-ups never take more than one input slot."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._until = 0.0
+        self._holding = False
+
+    def hold(self, seconds: float) -> bool:
+        """Return True after holding, or False at once when already held."""
+        with self._lock:
+            self._until = max(self._until, time.monotonic() + seconds)
+            if self._holding:
+                return False
+            self._holding = True
+        while True:
+            with self._lock:
+                left = self._until - time.monotonic()
+                if left <= 0:
+                    self._holding = False
+                    return True
+            time.sleep(min(left, 5.0))
 
 
 def server_info() -> dict[str, dict[str, str]]:
@@ -172,7 +215,9 @@ def download():
     volumes={"/root/.cache/huggingface": cache},
     timeout=1800,
     startup_timeout=1800,
-    min_containers=0,
+    min_containers=min_containers_from_env(
+        os.environ.get("MANO_GUARDIAN_MIN_CONTAINERS")
+    ),
     max_containers=1,
     scaledown_window=60,
 )
@@ -190,6 +235,11 @@ class Guardian:
             generation_config="auto",
         )
         self.engine_lock = threading.Lock()
+        self.warm_hold = WarmHold()
+
+    @modal.method()
+    def warm(self) -> None:
+        self.warm_hold.hold(WARM_HOLD_SECONDS)
 
     @modal.method()
     def complete(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -227,6 +277,9 @@ async def check(request: Request) -> JSONResponse:
     if scheme.lower() != "bearer" or not hmac.compare_digest(presented, expected):
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
     body = await request.json()
+    if body == {"warm": True}:
+        await Guardian().warm.spawn.aio()
+        return JSONResponse(status_code=202, content={"warming": True})
     if not isinstance(body, dict):
         return JSONResponse(status_code=400, content={"error": "bad check input"})
     return Guardian().complete.remote(body)

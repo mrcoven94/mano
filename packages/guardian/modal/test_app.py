@@ -82,6 +82,31 @@ class OverlappingChecks(unittest.TestCase):
         self.assertEqual(results, {"safe": "pass", "unsafe": "block"})
 
 
+class WarmUps(unittest.TestCase):
+    def test_a_second_warm_up_extends_the_first_hold(self):
+        hold = app.WarmHold()
+        start = time.monotonic()
+        first = {}
+        thread = threading.Thread(target=lambda: first.update(held=hold.hold(0.2)))
+        thread.start()
+        time.sleep(0.1)
+        self.assertFalse(hold.hold(0.2))
+        thread.join()
+        self.assertTrue(first["held"])
+        self.assertGreaterEqual(time.monotonic() - start, 0.29)
+
+
+class MinContainers(unittest.TestCase):
+    def test_defaults_to_scale_to_zero(self):
+        self.assertEqual(app.min_containers_from_env(None), 0)
+        self.assertEqual(app.min_containers_from_env(""), 0)
+        self.assertEqual(app.min_containers_from_env("1"), 1)
+
+    def test_refuses_other_values(self):
+        for bad in ("2", "-1", "yes"):
+            with self.assertRaises(RuntimeError):
+                app.min_containers_from_env(bad)
+
 
 if __name__ == "__main__":
     unittest.main()

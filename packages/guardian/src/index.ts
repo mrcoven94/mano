@@ -6,7 +6,9 @@
  * What it does: RulesChecker needs no keys and blocks content-originated
  * actions, missing consent, and claims with no cited source. GlimmerChecker
  * runs the rules first, then asks the guardian model for a strict-JSON
- * verdict with a 10 second timeout; any failure is a block. redact()
+ * verdict with a 10 second timeout; any failure is a block. Its warm()
+ * starts the model ahead of a check, for example when a conversation
+ * starts, since a cold start takes minutes. redact()
  * strips personal details from text going to logs or outside graders.
  *
  * Run it: set MANO_GUARDIAN_RULES_ONLY=1 for explicit local rules-only,
