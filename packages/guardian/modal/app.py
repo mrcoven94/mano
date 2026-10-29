@@ -123,6 +123,26 @@ def parse_verdict(text: str) -> dict[str, Any]:
     return {"verdict": verdict, "problems": problems}
 
 
+def ask_model(engine: Any, body: dict[str, Any], params: Any) -> dict[str, Any]:
+    """Ask the model about one action and return its parsed verdict."""
+    outputs = engine.chat(
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(body)},
+        ],
+        sampling_params=params,
+        use_tqdm=False,
+    )
+    if not outputs or not outputs[0].outputs:
+        raise RuntimeError("the model returned no output")
+    output = outputs[0].outputs[0]
+    if output.finish_reason != "stop":
+        raise RuntimeError(f"the model stopped early: {output.finish_reason}")
+    verdict = parse_verdict(output.text)
+    verdict.update(server_info())
+    return verdict
+
+
 @app.function(
     image=gpu_image,
     volumes={"/root/.cache/huggingface": cache},
@@ -172,22 +192,7 @@ class Guardian:
             max_tokens=256,
             structured_outputs=StructuredOutputsParams(json=GUARDIAN_SCHEMA),
         )
-        outputs = self.engine.chat(
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps(body)},
-            ],
-            sampling_params=params,
-            use_tqdm=False,
-        )
-        if not outputs or not outputs[0].outputs:
-            raise RuntimeError("the model returned no output")
-        output = outputs[0].outputs[0]
-        if output.finish_reason != "stop":
-            raise RuntimeError(f"the model stopped early: {output.finish_reason}")
-        verdict = parse_verdict(output.text)
-        verdict.update(server_info())
-        return verdict
+        return ask_model(self.engine, body, params)
 
 
 _CONTAINER_TOKEN: str | None = None
