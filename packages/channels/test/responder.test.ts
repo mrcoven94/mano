@@ -265,3 +265,15 @@ describe("RecordingChannel", () => {
     expect(channel.sends).toHaveLength(1);
   });
 });
+
+describe("SparkResponder crisis routing uses the broad check", () => {
+  it("never routes a message the broad check matches to the deep path", async () => {
+    const fetchFn = scripted(reply("DEEP: Let me look into that."), reply("unused"));
+    const onHeadsUp = vi.fn(async () => {});
+    const responder = new SparkResponder({ apiKey: "test-key-not-real", model: MODEL, fetchFn: fetchFn as typeof fetch, hedgeAfterMs: 60_000 });
+    await responder.respond({ texts: ["I am going to jump off a bridge"], attachmentCount: 0 }, { onHeadsUp });
+    expect(bodyOf(fetchFn, 0).instructions).toBe(MANO_SOUL);
+    expect(onHeadsUp).not.toHaveBeenCalled();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});

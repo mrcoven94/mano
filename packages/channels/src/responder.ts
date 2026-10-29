@@ -5,7 +5,7 @@
 // which the caller sends at once before the deep call at medium effort.
 // When the engine merges, its person agent becomes the Responder behind
 // this same interface.
-import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisFloor, isCrisis, routeReply } from "@mano/persona";
+import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisFloor, mightBeCrisis, routeReply } from "@mano/persona";
 import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 
@@ -216,7 +216,7 @@ export class SparkResponder implements Responder {
     const note = attachmentNote(turn.attachmentCount);
     // A crisis never waits on a heads-up: no router, and the reply must
     // name 988 and 911.
-    const crisis = isCrisis(turn.texts.join("\n"));
+    const crisis = mightBeCrisis(turn.texts.join("\n"));
     const fast = await this.call(`${MANO_SOUL}${note}${crisis ? "" : `\n\n${PACING}`}`, messages, this.fastEffort, 0, true);
     const route = crisis ? ({ path: "fast", text: fast.text } as const) : routeReply(fast.text);
     if (route.path === "fast") {
