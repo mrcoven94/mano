@@ -117,3 +117,48 @@ describe("RecordedModelClient", () => {
     await expect(client.responses({ model: "muse-spark-1.3", input: "hi" })).rejects.toThrow("No recorded response");
   });
 });
+
+describe("MetaModelClient review 6", () => {
+  const completed = (): Response =>
+    new Response(JSON.stringify({ status: "completed", output_text: "ok" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  const req = { model: "muse-spark-1.3", input: "hi" };
+
+  it("calls the global fetch with its own receiver by default", async () => {
+    const original = globalThis.fetch;
+    // workerd throws when fetch is called with any receiver but the global.
+    globalThis.fetch = function (this: unknown) {
+      if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+      return Promise.resolve(completed());
+    } as typeof fetch;
+    try {
+      const client = new MetaModelClient({ apiKey: "k", maxRetries: 0 });
+      await expect(client.responses(req)).resolves.toMatchObject({ text: "ok" });
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("stops at a shared deadline instead of waiting out each attempt and retry", async () => {
+    const fetchFn = vi.fn(
+      (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        }),
+    );
+    const client = new MetaModelClient({ apiKey: "k", timeoutMs: 60_000, maxRetries: 2, fetchFn });
+    const started = Date.now();
+    await expect(client.responses(req, { deadline: Date.now() + 50 })).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes no request once the deadline has passed", async () => {
+    const fetchFn = vi.fn(async () => completed());
+    const client = new MetaModelClient({ apiKey: "k", fetchFn });
+    await expect(client.responses(req, { deadline: Date.now() - 1 })).rejects.toThrow(/budget/i);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
