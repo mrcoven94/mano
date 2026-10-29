@@ -69,7 +69,13 @@ except ImportError:  # pragma: no cover
 app = modal.App("mano-guardian")
 
 cache = modal.Volume.from_name("mano-guardian-cache", create_if_missing=True)
-gpu_image = modal.Image.from_registry(f"vllm/vllm-openai@{IMAGE_DIGEST}")
+# Modal finds the image's Python as `python`; this image ships vLLM under
+# /usr/bin/python3 only, and add_python would install a second Python without
+# vLLM. Its `vllm serve` entrypoint would wrap Modal's own runner, so clear it.
+gpu_image = modal.Image.from_registry(
+    f"vllm/vllm-openai@{IMAGE_DIGEST}",
+    setup_dockerfile_commands=["RUN ln -s /usr/bin/python3 /usr/bin/python"],
+).entrypoint([])
 web_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi")
 
 
