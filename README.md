@@ -84,6 +84,10 @@ Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. To
 | `eval` | The held-out test: scenarios, baselines and results | landing during the hackathon |
 | `docs` | Decisions and design notes | live |
 
+### Guardian
+
+Guardian runs on one GPU on Modal and scales to zero when idle. A cold start takes about three minutes, and a check fails closed after 10 seconds, so Mano calls `warm()` when a conversation starts. To keep one GPU warm (about $1.95 an hour), run the `guardian-modal` workflow from `main` under Actions with `min_containers` set to 1. To turn it off, run it again with 0. Any merge that touches the guardian also deploys 0.
+
 ## Held-out test
 
 Not run yet. The Results session will publish the headline here after the final run: correct packets, missed deadlines, blocked unsafe actions, failures, cost and time.

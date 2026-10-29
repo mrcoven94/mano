@@ -64,6 +64,12 @@ describe("GlimmerChecker against the local stand-in", () => {
     expect(fixResult.problems.length).toBeGreaterThan(0);
   });
 
+  it("accepts a warm-up only with the right token", async () => {
+    const url = await startStandin("pass");
+    await expect(new GlimmerChecker({ url, token: TOKEN }).warm()).resolves.toBe(true);
+    await expect(new GlimmerChecker({ url, token: "wrong" }).warm()).resolves.toBe(false);
+  });
+
   it("blocks a contradictory answer", async () => {
     const url = await startStandin("contradictory");
     const checker = new GlimmerChecker({ url, token: TOKEN });

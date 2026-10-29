@@ -12,8 +12,8 @@ export interface ProxyAuth {
 }
 
 export interface GlimmerCheckerOptions {
-  // Base URL of the guardian endpoint, for example
-  // https://workspace--mano-guardian-check.modal.run (no trailing slash).
+  // URL of the guardian check endpoint, posted to as given, for example
+  // https://workspace--mano-guardian-check.modal.run.
   url: string;
   // Bearer token checked inside the container.
   token: string;
@@ -33,6 +33,10 @@ export interface ServerInfo {
   model: { id: string; revision: string };
   image: { tag: string; digest: string };
 }
+
+// workerd throws "Illegal invocation" when fetch is called with any
+// receiver but the global object, as a stored method call would.
+const boundFetch: typeof fetch = (...args) => globalThis.fetch(...args);
 
 function isVerdict(value: unknown): value is Verdict {
   return value === "pass" || value === "fix" || value === "block";
@@ -64,7 +68,7 @@ const UNREADABLE =
 
 // Model-backed checker. Runs the local rules first and only asks the model
 // when the rules pass. The request carries a redacted copy of the input to
-// the single /check route. Any failure (network, timeout, error status,
+// the check endpoint. Any failure (network, timeout, error status,
 // unparsable or invalid answer, contradictory verdict) is a block with a
 // message a person can read.
 export class GlimmerChecker implements Checker {
@@ -85,7 +89,7 @@ export class GlimmerChecker implements Checker {
     this.model = options.model ?? DEFAULT_GUARDIAN_MODEL;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
     this.knownEntities = options.knownEntities;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? boundFetch;
   }
 
   // Model and image the server reported for its last successful answer, or
@@ -99,11 +103,7 @@ export class GlimmerChecker implements Checker {
     return this.model;
   }
 
-  async check(input: CheckInput): Promise<CheckResult> {
-    const rules = await this.rules.check(input);
-    if (rules.verdict === "block") return rules;
-    this.lastServer = null;
-
+  private headers(): Record<string, string> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${this.token}`,
@@ -112,12 +112,37 @@ export class GlimmerChecker implements Checker {
       headers["Modal-Key"] = this.proxyAuth.keyId;
       headers["Modal-Secret"] = this.proxyAuth.secret;
     }
+    return headers;
+  }
+
+  // Asks the endpoint to start the model and keep it up for about ten
+  // minutes, so a check soon after finds it ready. Call it when a
+  // conversation starts. Returns whether the endpoint accepted; a failure
+  // changes nothing, since a cold check still blocks.
+  async warm(): Promise<boolean> {
+    try {
+      const response = await this.fetchImpl(this.url, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({ warm: true }),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async check(input: CheckInput): Promise<CheckResult> {
+    const rules = await this.rules.check(input);
+    if (rules.verdict === "block") return rules;
+    this.lastServer = null;
 
     let response: Response;
     try {
-      response = await this.fetchImpl(`${this.url}/check`, {
+      response = await this.fetchImpl(this.url, {
         method: "POST",
-        headers,
+        headers: this.headers(),
         body: JSON.stringify(buildModelRequest(input, this.knownEntities)),
         signal: AbortSignal.timeout(this.timeoutMs),
       });

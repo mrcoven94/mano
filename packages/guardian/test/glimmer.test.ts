@@ -68,7 +68,7 @@ describe("GlimmerChecker", () => {
       string,
       RequestInit,
     ];
-    expect(calledUrl).toBe("https://guardian.example.com/check");
+    expect(calledUrl).toBe("https://guardian.example.com");
     expect(init.method).toBe("POST");
     expect(init.headers).toMatchObject({
       Authorization: "Bearer token",
@@ -81,6 +81,40 @@ describe("GlimmerChecker", () => {
     expect(sent).not.toContain("Sunset Clinic");
     expect(sent).toContain("[EMAIL-1]");
     expect(sent).toContain("[RECIPIENT]");
+  });
+
+  it("sends a warm-up with the same auth headers", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ warming: true }, 202));
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      proxyAuth: { keyId: "key", secret: "secret" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(checker.warm()).resolves.toBe(true);
+    const [calledUrl, init] = fetchImpl.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(calledUrl).toBe("https://guardian.example.com");
+    expect(init.body).toBe('{"warm":true}');
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer token",
+      "Modal-Key": "key",
+      "Modal-Secret": "secret",
+    });
+  });
+
+  it("reports a failed warm-up without throwing", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("network down");
+    });
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(checker.warm()).resolves.toBe(false);
   });
 
   it("sends no personal detail of any kind", async () => {
@@ -448,6 +482,36 @@ describe("GlimmerChecker", () => {
       for (const problem of result.problems) {
         expect(problem).not.toMatch(/glimmer|modal|vllm|meta|llama/i);
       }
+    }
+  });
+});
+
+describe("the default fetch", () => {
+  // workerd throws "Illegal invocation" when fetch runs with any receiver
+  // other than the global object.
+  function strictFetch(this: unknown, ..._args: Parameters<typeof fetch>) {
+    if (this !== undefined && this !== globalThis) {
+      return Promise.reject(new TypeError("Illegal invocation"));
+    }
+    return Promise.resolve(
+      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
+    );
+  }
+
+  it("runs with the global receiver, as workerd requires", async () => {
+    vi.stubGlobal("fetch", strictFetch);
+    try {
+      const checker = new GlimmerChecker({
+        url: "https://guardian.example.com",
+        token: "token",
+      });
+      await expect(checker.warm()).resolves.toBe(true);
+      await expect(checker.check(passInput())).resolves.toEqual({
+        verdict: "pass",
+        problems: [],
+      });
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });

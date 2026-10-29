@@ -1,13 +1,14 @@
 // Stand-in for the guardian model endpoint. Serves the single POST /check
 // route with scripted verdicts so GlimmerChecker runs end to end locally
-// with no GPU and no keys. Request bodies are never logged.
+// with no GPU and no keys. A body of {"warm":true} gets 202. Request bodies
+// are never logged.
 //
 // Usage:
 //   node standin/server.mjs [--port N]
 //     [--mode pass|fix|block|bad-json|error|slow|contradictory|dup-keys]
 //     [--require-token TOKEN] [--delay-ms N]
 //
-// Prints "STANDIN_READY <url>" on stdout once listening.
+// Prints "STANDIN_READY <url>" on stdout once listening, with the /check path.
 import http from "node:http";
 
 const args = process.argv.slice(2);
@@ -34,9 +35,11 @@ const VERDICTS = {
 };
 
 const server = http.createServer((req, res) => {
-  // Drain the body without logging it; it may hold resident content.
-  req.resume();
+  // Read the body without logging it; it may hold resident content.
+  const chunks = [];
+  req.on("data", (chunk) => chunks.push(chunk));
   req.on("end", () => {
+    const body = Buffer.concat(chunks).toString("utf8");
     if (req.method !== "POST" || req.url !== "/check") {
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "not found" }));
@@ -48,6 +51,11 @@ const server = http.createServer((req, res) => {
     ) {
       res.writeHead(401, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (body === '{"warm":true}') {
+      res.writeHead(202, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ warming: true }));
       return;
     }
     if (mode === "error") {
@@ -82,5 +90,5 @@ const server = http.createServer((req, res) => {
 server.listen(port, "127.0.0.1", () => {
   const address = server.address();
   const actual = typeof address === "object" && address ? address.port : port;
-  console.log(`STANDIN_READY http://127.0.0.1:${actual}`);
+  console.log(`STANDIN_READY http://127.0.0.1:${actual}/check`);
 });
