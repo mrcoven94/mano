@@ -4,6 +4,7 @@ import { verifyHandleGrant } from "@mano/protocol";
 import {
   AgentResponder,
   computeSignatureHex,
+  notifyAgentDeleted,
   ResponderFailed,
   signAgentRequest,
   StandInResponder,
@@ -161,5 +162,39 @@ describe("agent turn identity and grant", () => {
     const result = await withGrant(fetchFn).respond({ texts: ["file it"], attachmentCount: 0, turnKey: { generation: 0, turn: 1 } });
     expect(result.model).toBe("agent");
     expect(result.text).toContain("Reply YES");
+  });
+});
+
+describe("agent deletion notice", () => {
+  it("signs the handle, the new generation and a grant for the agent", async () => {
+    const seen: { url: string; init: RequestInit }[] = [];
+    const fetchFn = (async (url: string, init: RequestInit) => {
+      seen.push({ url, init });
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    const ok = await notifyAgentDeleted({
+      agentUrl: "https://agent.example/",
+      secret: "secret",
+      grantSecret: "grant-secret-for-tests",
+      handleHash: HANDLE,
+      generation: 3,
+      fetchFn,
+      nowSeconds: 1000,
+    });
+    expect(ok).toBe(true);
+    expect(seen[0].url).toBe("https://agent.example/channels/mano/deleted");
+    const raw = new TextEncoder().encode(String(seen[0].init.body));
+    const headers = seen[0].init.headers as Record<string, string>;
+    expect((await verifyAgentRequest("secret", headers["x-mano-timestamp"], headers["x-mano-signature"], raw, 1000)).ok).toBe(true);
+    const body = JSON.parse(String(seen[0].init.body));
+    expect(body).toMatchObject({ handleHash: HANDLE, generation: 3 });
+    expect((await verifyHandleGrant(body.grant, "grant-secret-for-tests"))?.handle).toBe(HANDLE);
+  });
+
+  it("reports a refused notice", async () => {
+    const fetchFn = (async () => new Response("no", { status: 503 })) as typeof fetch;
+    expect(
+      await notifyAgentDeleted({ agentUrl: "https://a", secret: "s", grantSecret: "g", handleHash: HANDLE, generation: 1, fetchFn }),
+    ).toBe(false);
   });
 });

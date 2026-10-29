@@ -13,6 +13,7 @@ import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type PersonEngine } from "./engine.js";
+import { raiseGenerationFloor } from "./deletion.js";
 import { claimTurn, failTurn, finishTurn, type TurnResponse } from "./ledger.js";
 import { clearPending, loadPending, savePending, type PendingApproval } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
@@ -257,6 +258,11 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
   if (!kv) {
     console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "storage" }));
     return Response.json({ status: "error", text: "", reason: "storage" }, { status: 503 });
+  }
+
+  // A turn from before the conversation's latest deletion is refused.
+  if ((await raiseGenerationFloor(kv, body.handleHash, body.generation)) > body.generation) {
+    return Response.json({ status: "stale", text: "" }, { status: 409 });
   }
 
   const claim = await claimTurn(kv, body.turnId, body.handleHash, receivedMs);

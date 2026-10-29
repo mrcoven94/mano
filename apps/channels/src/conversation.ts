@@ -4,6 +4,7 @@
 // reaches them from the queue consumer, never from the public internet.
 import {
   AgentResponder,
+  notifyAgentDeleted,
   BlooioChannel,
   RecordingChannel,
   boundFetch,
@@ -280,14 +281,28 @@ export class ConversationDO implements DurableObject {
     if (request.method === "POST" && url.pathname === "/internal/delete") {
       const body = (await request.json().catch(() => null)) as { handleHash?: unknown } | null;
       if (!body || typeof body.handleHash !== "string") return new Response("Bad delete.", { status: 400 });
-      new SqlConversationStore(this.ctx.storage.sql).wipe(Date.now());
+      const store = new SqlConversationStore(this.ctx.storage.sql);
+      store.wipe(Date.now());
       let filesDeleted = 0;
       if (this.env.FILES) {
         filesDeleted = await new R2FileStore(this.env.FILES).deletePrefix(conversationFilePrefix(body.handleHash));
       }
       await this.ctx.storage.deleteAlarm();
-      this.logger.info("conversation_deleted", { handle: body.handleHash, filesDeleted });
-      return Response.json({ ok: true, filesDeleted });
+      // The agent holds the rest of this person's state (waiting approval,
+      // reminders, Engine memory, session history) and clears it too.
+      let agentCleared: boolean | null = null;
+      if (this.env.AGENT_URL && this.env.MANO_AGENT_SECRET && this.env.MANO_HANDLE_GRANT_SECRET) {
+        agentCleared = await notifyAgentDeleted({
+          agentUrl: this.env.AGENT_URL,
+          secret: this.env.MANO_AGENT_SECRET,
+          grantSecret: this.env.MANO_HANDLE_GRANT_SECRET,
+          handleHash: body.handleHash,
+          generation: store.meta().generation,
+        }).catch(() => false);
+        if (!agentCleared) this.logger.warn("agent_delete_failed", { handle: body.handleHash });
+      }
+      this.logger.info("conversation_deleted", { handle: body.handleHash, filesDeleted, agentCleared });
+      return Response.json({ ok: true, filesDeleted, agentCleared });
     }
     if (request.method === "GET" && url.pathname === "/internal/standin") {
       // Only reachable when no provider key is configured, in which case

@@ -18,6 +18,7 @@ import { splitBubbles } from "./bubbles.js";
 import { computeSignatureHex, SIGNATURE_WINDOW_SECONDS, timingSafeEqualHex } from "./verify.js";
 
 export const AGENT_TURN_PATH = "/channels/mano/turn";
+export const AGENT_DELETED_PATH = "/channels/mano/deleted";
 export const AGENT_SIGNATURE_HEADER = "x-mano-signature";
 export const AGENT_TIMESTAMP_HEADER = "x-mano-timestamp";
 // Above the agent's own settle timeout, so a slow turn falls back
@@ -146,4 +147,42 @@ export class AgentResponder implements Responder {
       throw new ResponderFailed("Agent and fallback failed.", this.maxAttempts, inputChars);
     }
   }
+}
+
+export interface AgentDeletedNotice {
+  agentUrl: string;
+  secret: string;
+  grantSecret: string;
+  handleHash: string;
+  // The generation after the wipe.
+  generation: number;
+  fetchFn?: typeof fetch;
+  nowSeconds?: number;
+}
+
+// Tells the agent a conversation was deleted, so it closes the waiting
+// approval in Engine, cancels the handle's reminders, deletes its Engine
+// memory and retires its session. Signed like a turn, with a grant for
+// the handle. Returns whether the agent confirmed; the caller logs a
+// failure, and the generation checks on both sides still stop anything
+// from before the deletion.
+export async function notifyAgentDeleted(notice: AgentDeletedNotice): Promise<boolean> {
+  const raw = JSON.stringify({
+    handleHash: notice.handleHash,
+    generation: notice.generation,
+    grant: await mintHandleGrant(notice.handleHash, notice.grantSecret),
+  });
+  const timestamp = notice.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const res = await (notice.fetchFn ?? boundFetch)(`${notice.agentUrl.replace(/\/$/, "")}${AGENT_DELETED_PATH}`, {
+    method: "POST",
+    signal: AbortSignal.timeout(30_000),
+    headers: {
+      "content-type": "application/json",
+      [AGENT_TIMESTAMP_HEADER]: String(timestamp),
+      [AGENT_SIGNATURE_HEADER]: await signAgentRequest(notice.secret, timestamp, new TextEncoder().encode(raw)),
+    },
+    body: raw,
+  });
+  await res.body?.cancel().catch(() => undefined);
+  return res.ok;
 }
