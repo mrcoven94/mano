@@ -35,7 +35,7 @@ export interface Approval {
   documentHash: string | null;
   documentId: string | null;
   idempotencyKey: string;
-  status: "pending" | "approved" | "expired" | "stale" | "blocked";
+  status: "pending" | "approved" | "rejected" | "expired" | "stale" | "blocked";
   approvedByHumanId: string | null;
   // The person this approval belongs to, the frozen request it authorizes
   // (canonical JSON, executed verbatim), and the hash binding type,
@@ -85,7 +85,7 @@ export interface Attempt {
 }
 
 export interface GatewayResult {
-  status: "completed" | "needs_approval" | "blocked" | "stale" | "reconciled" | "in_progress";
+  status: "completed" | "needs_approval" | "rejected" | "blocked" | "stale" | "reconciled" | "in_progress";
   approval?: Approval;
   receipt?: Receipt;
   reason?: string;

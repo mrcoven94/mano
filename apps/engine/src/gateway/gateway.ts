@@ -42,6 +42,8 @@ export interface ApprovalStore {
   // only when the row is still pending, so a stale snapshot can never
   // revive an expired, consumed or blocked approval.
   expireApproval(id: string): boolean;
+  // pending to rejected only, so a NO can never undo a consumed approval.
+  rejectApproval(id: string): boolean;
   setApprovalBlocked(id: string): boolean;
   markApprovalStale(id: string): boolean;
   setApprovalProblems(id: string, problems: string[]): void;
@@ -122,6 +124,9 @@ export class MemoryApprovalStore implements ApprovalStore {
   }
   expireApproval(id: string) {
     return transition(this.approvals, id, "expired");
+  }
+  rejectApproval(id: string) {
+    return transition(this.approvals, id, "rejected");
   }
   setApprovalBlocked(id: string) {
     return transition(this.approvals, id, "blocked");
@@ -309,6 +314,7 @@ function approvalGoneReason(status: Approval["status"]): string {
   const reasons: Record<Approval["status"], string> = {
     pending: "This approval is still pending.",
     approved: "This approval was already used.",
+    rejected: "This approval was declined.",
     stale: "This approval is stale: the request changed after it was created.",
     blocked: "This approval is blocked.",
     expired: "Approval expired.",
@@ -497,6 +503,23 @@ export class ActionGateway {
       return { status: "blocked", reason: `Blocked by review: ${check.problems.join("; ")}` };
     }
     return this.execute(this.enrichWithDocument(req, docRead.bytes, frozen.documentHash), now);
+  }
+
+  // A person's NO. Ends a pending approval at once, guarded so it races
+  // safely with an approve: whichever reaches the pending row first wins.
+  // A second NO on a declined approval answers the same.
+  async rejectApproval(approvalId: string, humanId: string): Promise<GatewayResult> {
+    const approval = this.store.getApproval(approvalId);
+    if (!approval) return { status: "blocked", reason: "Approval not found." };
+    if (!humanId || humanId !== approval.personId) {
+      return { status: "blocked", reason: "This approval belongs to a different person." };
+    }
+    const approvalHash = await auditDigest(approval.id);
+    if (approval.status === "pending") this.store.rejectApproval(approval.id);
+    const fresh = this.store.getApproval(approval.id) ?? approval;
+    if (fresh.status !== "rejected") return { status: "blocked", reason: approvalGoneReason(fresh.status) };
+    this.store.audit({ event: "gateway.reject", approvalHash });
+    return { status: "rejected", approval: fresh };
   }
 
   async approveAndExecute(

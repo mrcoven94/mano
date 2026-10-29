@@ -174,6 +174,10 @@ export class SqlApprovalStore implements ApprovalStore {
     return this.transition(id, "expired");
   }
 
+  rejectApproval(id: string): boolean {
+    return this.transition(id, "rejected");
+  }
+
   setApprovalBlocked(id: string): boolean {
     return this.transition(id, "blocked");
   }

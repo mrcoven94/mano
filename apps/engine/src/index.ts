@@ -19,6 +19,12 @@
 // 503. Marking a person synthetic needs the operator secret on the admin
 // route below.
 //
+// The agent (apps/agent) never holds SESSION_SECRET. It calls person
+// routes with Bearer MANO_ENGINE_AGENT_TOKEN plus x-mano-handle-grant, a
+// grant Channels signs with MANO_HANDLE_GRANT_SECRET for the handle that
+// just texted (see packages/protocol handle-grant.ts). The grant names one
+// person, handle-<hash>, and opens only memory, action and approvals.
+//
 // HTTP surface:
 //
 //   GET  /health
@@ -27,6 +33,10 @@
 //   POST /api/persons/:id/action               action request (worker stamps personId from the token)
 //   GET  /api/persons/:id/approvals
 //   POST /api/persons/:id/approvals/:aid/approve
+//   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
+//   GET  /api/persons/:id/memory
+//   POST /api/persons/:id/memory              { content, source }
+//   DELETE /api/persons/:id/memory/:memoryId  forget: deletes the row
 //   POST /api/persons/:id/documents            { name, contentB64 }
 //   GET  /api/persons/:id/documents/:docId     decrypted bytes, owner only
 //   POST /api/persons/:id/ws-ticket            one 60-second single-use ticket for /ws
@@ -65,7 +75,15 @@
 import type { Env } from "./env.js";
 import { PersonAgent } from "./agents/person-agent.js";
 import { OrgAgent } from "./agents/org-agent.js";
-import { authenticate, getSessionSecret, mintWsTicket, sessionConfigured } from "./auth.js";
+import {
+  HANDLE_GRANT_HEADER,
+  agentMayUse,
+  authenticate,
+  authenticateAgent,
+  getSessionSecret,
+  mintWsTicket,
+  sessionConfigured,
+} from "./auth.js";
 import { createExecutor } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
@@ -295,23 +313,36 @@ export default {
           "x-mano-session-exp": String(redeemed.sessionExp),
         });
       }
-      const claims = await authenticate(request, env);
-      if (!claims || claims.kind !== "person" || claims.sub !== personId) return FORBIDDEN();
+      // Two callers: the person's own session, or the agent with a handle
+      // grant for exactly this person, on the agent's routes only. A grant
+      // header always means the agent path, never a session.
+      let subject: string;
+      let sessionExp: number | null = null;
+      if (request.headers.has(HANDLE_GRANT_HEADER)) {
+        const agentCaller = await authenticateAgent(request, env);
+        if (!agentCaller || agentCaller.personId !== personId || !agentMayUse(request.method, rest)) return FORBIDDEN();
+        subject = agentCaller.personId;
+      } else {
+        const claims = await authenticate(request, env);
+        if (!claims || claims.kind !== "person" || claims.sub !== personId) return FORBIDDEN();
+        subject = claims.sub;
+        sessionExp = claims.exp;
+      }
       if (rest === "/ws-ticket" && request.method === "POST") {
         const configured = getSessionSecret(env);
-        if (!configured) return Response.json({ error: "Sessions are not configured." }, { status: 503 });
-        const ticket = await mintWsTicket(claims.sub, claims.exp, configured.secret);
+        if (!configured || sessionExp === null) return Response.json({ error: "Sessions are not configured." }, { status: 503 });
+        const ticket = await mintWsTicket(subject, sessionExp, configured.secret);
         return Response.json(ticket);
       }
       if (rest === "/chat" && request.method === "POST") {
         const read = await readCappedJson(request, MAX_ACTION_BODY);
         if (!read.ok) return read.response;
         const message = (read.value as { message?: unknown })?.message;
-        const out = await agent.chat(typeof message === "string" ? message : "", claims.sub);
+        const out = await agent.chat(typeof message === "string" ? message : "", subject);
         return Response.json(out);
       }
       if (rest === "/approvals" && request.method === "GET") {
-        return Response.json({ approvals: await agent.listApprovals(claims.sub) });
+        return Response.json({ approvals: await agent.listApprovals(subject) });
       }
       if (rest === "/action" && request.method === "POST") {
         // The gateway binds the approval to the request's person ID, so the
@@ -322,7 +353,7 @@ export default {
         if (typeof body !== "object" || body === null || Array.isArray(body)) {
           return Response.json({ error: "Invalid action request." }, { status: 400 });
         }
-        const result = await agent.requestAction({ ...body, personId: claims.sub }, claims.sub);
+        const result = await agent.requestAction({ ...body, personId: subject }, subject);
         return Response.json(result);
       }
       if (rest === "/documents" && request.method === "POST") {
@@ -333,7 +364,7 @@ export default {
           return Response.json({ error: "Body needs a name and contentB64." }, { status: 400 });
         }
         try {
-          const doc = await agent.registerDocument(claims.sub, { name, contentB64 });
+          const doc = await agent.registerDocument(subject, { name, contentB64 });
           return Response.json(doc);
         } catch (err) {
           const message = (err as Error).message;
@@ -345,7 +376,7 @@ export default {
       if (documentMatch && request.method === "GET") {
         const docId = decodeURIComponent(documentMatch[1]);
         try {
-          const doc = await agent.getDocument(claims.sub, docId);
+          const doc = await agent.getDocument(subject, docId);
           const bytes = base64ToBytes(doc.contentB64);
           const filename = doc.name.replace(/["\r\n]/g, "_");
           return new Response(bytes as BodyInit, {
@@ -361,7 +392,7 @@ export default {
         }
       }
       if (rest === "/memory" && request.method === "GET") {
-        return Response.json({ memories: await agent.listMemory(claims.sub) });
+        return Response.json({ memories: await agent.listMemory(subject) });
       }
       if (rest === "/memory" && request.method === "POST") {
         const read = await readCappedJson(request, MAX_ACTION_BODY);
@@ -370,13 +401,18 @@ export default {
         if (typeof content !== "string" || typeof source !== "string" || !content) {
           return Response.json({ error: "Body needs content and source strings." }, { status: 400 });
         }
-        const id = await agent.addMemory(claims.sub, content, source);
+        const id = await agent.addMemory(subject, content, source);
         return Response.json({ id });
       }
-      const approveMatch = rest.match(/^\/approvals\/([^/]+)\/approve$/);
-      if (approveMatch && request.method === "POST") {
-        const approvalId = decodeURIComponent(approveMatch[1]);
-        const result = await agent.approve(approvalId, claims.sub);
+      const memoryMatch = rest.match(/^\/memory\/([^/]+)$/);
+      if (memoryMatch && request.method === "DELETE") {
+        return Response.json(await agent.forgetMemory(subject, decodeURIComponent(memoryMatch[1])));
+      }
+      const decisionMatch = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
+      if (decisionMatch && request.method === "POST") {
+        const approvalId = decodeURIComponent(decisionMatch[1]);
+        const result =
+          decisionMatch[2] === "approve" ? await agent.approve(approvalId, subject) : await agent.reject(approvalId, subject);
         return Response.json(result);
       }
       // No model route: the agent calls the model client itself with the
