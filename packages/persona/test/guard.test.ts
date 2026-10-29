@@ -136,7 +136,7 @@ describe("guardReply real model identifiers (review blocker 4)", () => {
   });
 
   it("still passes ordinary words used as words", () => {
-    for (const text of ["A spark of hope.", "Let me muse on it.", "That's a meta question.", "Llamas are calm."]) {
+    for (const text of ["A spark of hope.", "Let me muse on it.", "Check your metadata.", "Llamas are calm."]) {
       expect(guardReply(text).changes, text).toEqual([]);
     }
   });
@@ -154,7 +154,7 @@ describe("guardReply lowercase identity statements (review round 2, blocker 2)",
   });
 
   it("keeps passing ordinary words next to ordinary verbs", () => {
-    for (const text of ["I'm feeling a spark of hope.", "I am going to muse on it.", "That's a meta question."]) {
+    for (const text of ["I'm feeling a spark of hope.", "I am going to muse on it."]) {
       expect(guardReply(text).changes, text).toEqual([]);
     }
   });
@@ -164,5 +164,23 @@ describe("guardReply keeps sentence boundaries (review round 2, blocker 1)", () 
   it("is idempotent when it drops a sentence between lines", () => {
     const once = guardReply("There is a spark of hope\nUnlike Gemini, it costs nothing.\nI use this to help you.").text;
     expect(guardReply(once)).toEqual({ text: once, changes: [] });
+  });
+});
+
+describe("provider and model names leak in any case (review round 3, blocker 2)", () => {
+  it("replaces or drops every sentence that names one, however it is introduced", () => {
+    for (const text of ["My name is meta.", "You're chatting with muse glimmer.", "I'm an assistant from meta."]) {
+      expect(containsProviderName(text), text).toBe(true);
+      expect(guardReply(text).text, text).toBe(SELF_DESCRIPTION);
+    }
+    expect(guardReply("Ask meta about it. Bring the letter.").text).toBe("Bring the letter.");
+    expect(guardReply("That's a meta question. Bring the letter.").text).toBe("Bring the letter.");
+  });
+
+  it("passes only the allowlisted ordinary phrases", () => {
+    for (const text of ["There is a spark of hope.", "I see a spark here.", "Let me muse on it.", "I'll muse about it.", "A glimmer of hope."]) {
+      expect(containsProviderName(text), text).toBe(false);
+      expect(guardReply(text).changes, text).toEqual([]);
+    }
   });
 });

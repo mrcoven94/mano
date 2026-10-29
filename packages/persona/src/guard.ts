@@ -6,10 +6,13 @@
 // Callers log the change names, never the text. guardReply is
 // idempotent, so a replayed send carries the same bytes.
 
+import { SAFETY_LINE } from "./crisis.js";
+
 export const SELF_DESCRIPTION = "I'm Mano, an automated assistant.";
 
 // Sent when a reply has nothing sendable left, and when the model fails.
-export const SAFE_REPLY = "Sorry, I hit a snag on my end and lost that one. Can you send it again in a minute?";
+// Like every reply sent without the model, it carries SAFETY_LINE.
+export const SAFE_REPLY = `Sorry, I hit a snag on my end and lost that one. Can you send it again in a minute? ${SAFETY_LINE}`;
 
 export type GuardChange = "route-marker" | "markdown" | "dash" | "self-description" | "provider-name" | "empty";
 
@@ -24,19 +27,12 @@ const ALWAYS_NAMES = ["muse spark", "meta ai", "openai", "chatgpt", "gpt", "anth
 const ALWAYS_PATTERN = new RegExp(`\\b(?:${ALWAYS_NAMES.join("|")})\\b`, "i");
 const MODEL_ID_PATTERN = /\b(?:muse|spark|llama|gpt|claude|gemini|mistral|grok)[-_.]?(?:[a-z]+[-_.]?)?\d[\w.-]*/i;
 
-// Names that are also English words. Any capital letters make them a
-// name ("Muse", "META"); all lowercase, they count only next to words
-// about how an assistant is built or run, so "a spark of hope", "let
-// me muse on it" and "a meta question" pass.
-const WORD_NAMES = ["muse", "spark", "meta", "llama", "claude", "gemini", "bard", "mistral", "grok", "copilot"];
-const WORD_PATTERN = new RegExp(`\\b(?:${WORD_NAMES.join("|")})\\b`, "gi");
-const AI_CONTEXT = /\b(?:ai|model|bot|chatbot|built|made|trained|powered|run|runs|running|use|uses|using|developed|created|company|behind|based|provider)\b/i;
-// A direct identity statement right before the name: "I am meta", "my
-// provider is meta", "i run on llama", "built by meta".
-const IDENTITY_PATTERN = new RegExp(
-  `\\b(?:i am|i'm|i’m|im|this is|my (?:provider|model|maker|creator|company) is|(?:i )?runs? on|(?:built|made|powered|created|developed|trained) (?:by|on)|based on)\\s+(?:(?:a|an|the|just|actually)\\s+)?(?:${WORD_NAMES.join("|")})\\b`,
-  "i",
-);
+// Every other model or provider name is a leak in any case, anywhere:
+// Mano never needs to say them. The only exceptions are these ordinary
+// phrases, each covered by a test.
+const WORD_NAMES = ["muse", "spark", "glimmer", "meta", "llama", "claude", "gemini", "bard", "mistral", "grok", "copilot"];
+const WORD_PATTERN = new RegExp(`\\b(?:${WORD_NAMES.join("|")})\\b`, "i");
+const ORDINARY_PHRASES = /\b(?:(?:a|the) spark|spark of (?:hope|joy|life)|(?:a|the) glimmer|glimmer of hope|muse (?:on|about|over))\b/gi;
 
 function escapePattern(word: string): string {
   return word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -49,11 +45,8 @@ function idPattern(modelIds: readonly string[]): RegExp | null {
 }
 
 function sentenceNamesProvider(sentence: string, ids: RegExp | null): boolean {
-  if (ALWAYS_PATTERN.test(sentence) || MODEL_ID_PATTERN.test(sentence) || IDENTITY_PATTERN.test(sentence) || ids?.test(sentence)) return true;
-  for (const match of sentence.matchAll(WORD_PATTERN)) {
-    if (match[0] !== match[0].toLowerCase() || AI_CONTEXT.test(sentence)) return true;
-  }
-  return false;
+  if (ALWAYS_PATTERN.test(sentence) || MODEL_ID_PATTERN.test(sentence) || ids?.test(sentence)) return true;
+  return WORD_PATTERN.test(sentence.replace(ORDINARY_PHRASES, " "));
 }
 
 const SENTENCE_BREAK = /((?<=[.!?…])\s+|\n+)/;

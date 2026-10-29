@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CRISIS_LINE, crisisFloor, holdCrisisLines, isCrisis } from "../src/crisis.js";
-import { guardReply } from "../src/guard.js";
+import { CRISIS_LINE, SAFETY_LINE, crisisFloor, holdCrisisLines, isCrisis, namesCrisisLines } from "../src/crisis.js";
+import { SAFE_REPLY, guardReply } from "../src/guard.js";
 
 describe("isCrisis", () => {
   it("matches self-harm and danger phrasings", () => {
@@ -61,5 +61,41 @@ describe("holdCrisisLines (review blocker 2)", () => {
     const guarded = guardReply(crisisFloor("Call 988 or 911 through Meta.")).text;
     expect(holdCrisisLines([guarded]).join(" ")).toContain("988");
     expect(holdCrisisLines([guarded]).join(" ")).toContain("911");
+  });
+});
+
+describe("isCrisis, direct disclosures (review round 3, blocker 1)", () => {
+  it("matches violence and immediate danger", () => {
+    for (const text of [
+      "I am in immediate danger",
+      "My husband hit me",
+      "He is hitting me",
+      "he hurt me again",
+      "my boyfriend is abusive",
+      "I feel unsafe at home",
+      "he said he is going to kill me",
+      "I've been thinking about suicide",
+    ]) {
+      expect(isCrisis(text), text).toBe(true);
+    }
+  });
+
+  it("keeps benefits and money worries out", () => {
+    for (const text of [
+      "I am in danger of losing my benefits.",
+      "my apartment is unsafe and the landlord won't fix it, can I get help with rent",
+      "this deadline is killing me",
+      "losing SNAP would kill my budget",
+    ]) {
+      expect(isCrisis(text), text).toBe(false);
+    }
+  });
+});
+
+describe("SAFETY_LINE", () => {
+  it("names 988 and 911 in one sentence, in the voice the guard enforces", () => {
+    expect(namesCrisisLines(SAFETY_LINE)).toBe(true);
+    expect(guardReply(SAFETY_LINE)).toEqual({ text: SAFETY_LINE, changes: [] });
+    expect(namesCrisisLines(SAFE_REPLY)).toBe(true);
   });
 });
