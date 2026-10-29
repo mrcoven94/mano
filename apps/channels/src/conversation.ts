@@ -5,6 +5,7 @@
 import {
   BlooioChannel,
   RecordingChannel,
+  boundFetch,
   SparkResponder,
   StandInResponder,
   buildModelBaseUrl,
@@ -140,7 +141,7 @@ export class ConversationDO implements DurableObject {
       spend: new StateSpendLedger(globalStateStub(this.env)),
       logger: this.logger,
       nowMs: () => Date.now(),
-      fetchFn: fetch,
+      fetchFn: boundFetch,
       config: {
         handleHash,
         batchMs: numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs),

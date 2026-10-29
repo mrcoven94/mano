@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS events (
   kind TEXT NOT NULL,
   recorded_at_ms INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS inbound_messages (
+  message_id TEXT PRIMARY KEY,
+  recorded_at_ms INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   turn INTEGER NOT NULL,
@@ -154,6 +158,14 @@ export class SqlConversationStore implements ConversationStore {
 
   recordEvent(eventId: string, kind: string, atMs: number): void {
     this.sql.exec("INSERT OR IGNORE INTO events (event_id, kind, recorded_at_ms) VALUES (?, ?, ?)", eventId, kind, atMs);
+  }
+
+  hasInboundMessage(messageId: string): boolean {
+    return firstRow(this.sql.exec("SELECT message_id FROM inbound_messages WHERE message_id = ?", messageId)) !== null;
+  }
+
+  recordInboundMessage(messageId: string, atMs: number): void {
+    this.sql.exec("INSERT OR IGNORE INTO inbound_messages (message_id, recorded_at_ms) VALUES (?, ?)", messageId, atMs);
   }
 
   meta(): ConversationMeta {
@@ -495,7 +507,7 @@ export class SqlConversationStore implements ConversationStore {
   wipe(deletedAtMs: number): void {
     const meta = this.meta();
     this.sql.exec(
-      "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns;",
+      "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns; DELETE FROM inbound_messages;",
     );
     this.saveMeta({ ...defaultMeta(), generation: meta.generation + 1, turn: meta.turn, deletedAtMs });
   }

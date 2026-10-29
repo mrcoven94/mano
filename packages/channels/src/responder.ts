@@ -1,6 +1,7 @@
 // Responder: turns one batch of incoming texts into reply bubbles. Today
 // it is a plain Muse Spark answer with no tools; when the engine merges,
 // its person agent becomes the Responder behind this same interface.
+import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 
 export const STANDARD_MODEL_ID = "muse-spark-1.3";
@@ -124,7 +125,7 @@ export class SparkResponder implements Responder {
     this.timeoutMs = opts.timeoutMs ?? 90000;
     this.maxRetries = opts.maxRetries ?? 2;
     this.maxAttempts = this.maxRetries + 1;
-    this.fetchFn = opts.fetchFn ?? fetch;
+    this.fetchFn = opts.fetchFn ?? boundFetch;
     this.collectLogs = opts.collectLogs ?? true;
   }
 

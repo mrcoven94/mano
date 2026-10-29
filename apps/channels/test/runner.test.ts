@@ -607,6 +607,20 @@ describe("refusals", () => {
     expect(h.store.meta().introduced).toBe(true);
   });
 
+  it("records a definitive failure once and finishes the turn", async () => {
+    const h = makeHarness({ replies: ["Answer."] });
+    const introKey = idempotencyKeyFor(TEST_HANDLE_HASH, 0, 1, 0);
+    const answerKey = idempotencyKeyFor(TEST_HANDLE_HASH, 0, 1, 1);
+    h.channel.scriptFailure(introKey, { kind: "fail", status: 404, code: "chat_not_found" });
+    h.channel.scriptFailure(answerKey, { kind: "fail", status: 404, code: "chat_not_found" });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hi.", occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h);
+    expect(h.store.outboundByKey(introKey)).toMatchObject({ state: "failed", code: "chat_not_found" });
+    expect(h.store.outboundByKey(answerKey)).toMatchObject({ state: "failed", code: "chat_not_found" });
+    expect(h.runner.needsRetry()).toBe(false);
+    expect(await h.runner.runDueTurn()).toBe("idle");
+  });
+
   it("counts refused sends toward the per-handle limits, once", async () => {
     const h = makeHarness();
     const key = idempotencyKeyFor(TEST_HANDLE_HASH, 0, 1, 1);

@@ -2,6 +2,7 @@
 // provider key is configured. It records every send, answers scripted
 // events, and replays failures (refusals, timeouts, duplicates) on cue.
 import {
+  ChannelFailed,
   ChannelRefused,
   ChannelUncertain,
   type Channel,
@@ -20,6 +21,7 @@ export interface RecordedSend extends ChannelSendInput {
 
 export type ScriptedFailure =
   | { kind: "refuse"; status: number; code: string }
+  | { kind: "fail"; status: number; code: string }
   | { kind: "timeout-then-absent" }
   | { kind: "timeout-then-present"; messageId: string }
   | { kind: "uncertain"; attempts: number };
@@ -32,6 +34,11 @@ export class RecordingChannel implements Channel {
   lookupCalls: Array<{ chatId: string; messageId: string }> = [];
   // Feed pages served to listEvents, in order.
   feedPages: NormalizedEvent[][] = [];
+  // Full events served to hydrateEvent, keyed by message id. A keyed
+  // error throws instead, like a transient fetch failure.
+  hydrated = new Map<string, NormalizedEvent>();
+  hydrateErrors = new Map<string, Error>();
+  hydrateCalls: string[] = [];
   // Keyed by idempotency key: the failure the next send with that key gets.
   failures = new Map<string, ScriptedFailure>();
   private seq = 0;
@@ -50,6 +57,10 @@ export class RecordingChannel implements Channel {
     if (failure?.kind === "refuse") {
       this.failures.delete(input.idempotencyKey);
       throw new ChannelRefused(failure.status, failure.code, `Refused in test: ${failure.code}`);
+    }
+    if (failure?.kind === "fail") {
+      this.failures.delete(input.idempotencyKey);
+      throw new ChannelFailed(failure.status, failure.code, `Failed in test: ${failure.code}`);
     }
     if (failure?.kind === "timeout-then-absent") {
       this.failures.delete(input.idempotencyKey);
@@ -105,5 +116,12 @@ export class RecordingChannel implements Channel {
     const events = this.feedPages[index] ?? [];
     const nextCursor = index + 1 < this.feedPages.length ? String(index + 1) : null;
     return { events, nextCursor };
+  }
+
+  async hydrateEvent(event: NormalizedEvent): Promise<NormalizedEvent | null> {
+    if (!event.messageId) return null;
+    this.hydrateCalls.push(event.messageId);
+    if (this.hydrateErrors.has(event.messageId)) throw this.hydrateErrors.get(event.messageId);
+    return this.hydrated.get(event.messageId) ?? null;
   }
 }

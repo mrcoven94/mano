@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { computeSignatureHex, type NormalizedEvent } from "@mano/channels";
-import { handleWebhook, reconcile, routeEvent } from "../src/index.js";
+import worker, { handleWebhook, reconcile, routeEvent } from "../src/index.js";
 import type { Env } from "../src/env.js";
 
 const SECRET = "test-webhook-secret-not-real";
@@ -349,5 +349,89 @@ describe("reconcile", () => {
     const event = inboundEvent({ id: "evt_replay", text: "Hello.", occurredAtMs: h.now });
     expect(await h.runner.handleEvent(event, "reconcile")).toBe("queued");
     expect(await h.runner.handleEvent(event, "reconcile")).toBe("duplicate");
+  });
+
+  it("hydrates thin feed rows and queues only our line", async () => {
+    const { parseBlooioEvent, RecordingChannel } = await import("@mano/channels");
+    const { inboundEvent } = await import("./helpers.js");
+    const sent: unknown[] = [];
+    const stub = stateStub();
+    // The live GET /events row: ids and timestamp only, empty data.
+    const thin = (id: string, messageId: string) =>
+      parseBlooioEvent({
+        id,
+        type: "message.received",
+        message_id: messageId,
+        chat_id: "chat_feed_aaa",
+        channel_type: "blooio",
+        occurred_at: 1793243237808,
+        data: {},
+      })!;
+    const feed = new RecordingChannel();
+    feed.feedPages = [[thin("evt_feed_a", "msg_a"), thin("evt_feed_b", "msg_b"), thin("evt_feed_gone", "msg_gone")]];
+    feed.hydrated.set(
+      "msg_a",
+      inboundEvent({ id: "evt_feed_a", chatId: "chat_feed_aaa", messageId: "msg_a", channelId: "ch_test_line", text: "Hydrated." }),
+    );
+    feed.hydrated.set(
+      "msg_b",
+      inboundEvent({ id: "evt_feed_b", chatId: "chat_feed_aaa", messageId: "msg_b", channelId: "ch_someone_else", text: "Theirs." }),
+    );
+    const env = {
+      ...hookEnv(sent),
+      CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
+    } as unknown as Env;
+    expect(await reconcile(env, feed)).toEqual({ pages: 1, enqueued: 1 });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ id: "evt_feed_a", text: "Hydrated.", handle: "+15550001001" });
+    expect(feed.hydrateCalls).toEqual(["msg_a", "msg_b", "msg_gone"]);
+    // Gone and other-line rows are marked seen: the next run skips them.
+    expect(await reconcile(env, feed)).toEqual({ pages: 1, enqueued: 0 });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("answers a webhook+reconcile double delivery once", async () => {
+    const { makeHarness, inboundEvent } = await import("./helpers.js");
+    const h = makeHarness();
+    const sameMessage = { messageId: "msg_both_paths", text: "Hello.", occurredAtMs: h.now };
+    expect(await h.runner.handleEvent(inboundEvent({ id: "evt_webhook_x", ...sameMessage }), "webhook")).toBe("queued");
+    expect(await h.runner.handleEvent(inboundEvent({ id: "evt_feed_y", ...sameMessage }), "reconcile")).toBe("duplicate");
+  });
+
+  it("pauses a page on transient hydrate failure and resumes next run", async () => {
+    const { parseBlooioEvent, RecordingChannel } = await import("@mano/channels");
+    const { inboundEvent } = await import("./helpers.js");
+    const sent: unknown[] = [];
+    const stub = stateStub();
+    const thin = (id: string, messageId: string) =>
+      parseBlooioEvent({
+        id,
+        type: "message.received",
+        message_id: messageId,
+        chat_id: "chat_feed_aaa",
+        channel_type: "blooio",
+        occurred_at: 1793243237808,
+        data: {},
+      })!;
+    const feed = new RecordingChannel();
+    feed.feedPages = [[thin("evt_p_a", "msg_p_a"), thin("evt_p_b", "msg_p_b")], [thin("evt_p_c", "msg_p_c")]];
+    feed.hydrated.set("msg_p_a", inboundEvent({ id: "evt_p_a", messageId: "msg_p_a", channelId: "ch_test_line", text: "First." }));
+    feed.hydrated.set("msg_p_b", inboundEvent({ id: "evt_p_b", messageId: "msg_p_b", channelId: "ch_test_line", text: "Second." }));
+    feed.hydrated.set("msg_p_c", inboundEvent({ id: "evt_p_c", messageId: "msg_p_c", channelId: "ch_test_line", text: "Third." }));
+    feed.hydrateErrors.set("msg_p_b", new Error("fetch failed"));
+    const env = {
+      ...hookEnv(sent),
+      CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stub },
+    } as unknown as Env;
+    expect(await reconcile(env, feed)).toEqual({ pages: 1, enqueued: 1 });
+    expect(stub.cursor).toBeNull();
+    feed.hydrateErrors.delete("msg_p_b");
+    expect(await reconcile(env, feed)).toEqual({ pages: 2, enqueued: 2 });
+    expect(stub.cursor).toBe("1");
+    expect(sent).toHaveLength(3);
+  });
+
+  it("logs a failing cron tick instead of throwing", async () => {
+    await expect(worker.scheduled({} as never, hookEnv([]))).resolves.toBeUndefined();
   });
 });

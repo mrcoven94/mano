@@ -2,6 +2,7 @@
 // event shape here was checked against https://docs.blooio.com/llms-full.txt
 // and a live call. Base URL https://api.blooio.com/v4, Bearer auth.
 import {
+  ChannelFailed,
   ChannelRefused,
   ChannelUncertain,
   type Channel,
@@ -11,6 +12,7 @@ import {
   type ChannelSendResult,
 } from "./channel.js";
 import { normalizeHandle } from "./handles.js";
+import { boundFetch } from "./fetch.js";
 import type { EventAttachment, NormalizedEvent, NormalizedEventKind } from "./types.js";
 
 export const BLOOIO_BASE_URL = "https://api.blooio.com/v4";
@@ -142,6 +144,22 @@ export function parseBlooioEvent(raw: unknown): NormalizedEvent | null {
   };
 }
 
+// Shapes one v4 message object as a webhook-style envelope so the one
+// parser handles both paths. The feed row keeps its evt_ id; the
+// message supplies the ids, addresses, text and sender the row lacks.
+function messageToEvent(thin: NormalizedEvent, message: Record<string, unknown>): NormalizedEvent | null {
+  return parseBlooioEvent({
+    id: thin.id,
+    type: thin.rawType,
+    occurred_at: thin.occurredAtMs,
+    data: {
+      ...message,
+      message_id: message.id,
+      occurred_at: message.created_at,
+    },
+  });
+}
+
 function errorCodeOf(status: number, body: unknown): string {
   if (isRecord(body)) {
     const code = asString(body.code) ?? asString(body.error);
@@ -171,7 +189,7 @@ export class BlooioChannel implements Channel {
     this.apiKey = opts.apiKey;
     this.channelId = opts.channelId;
     this.baseUrl = (opts.baseUrl ?? BLOOIO_BASE_URL).replace(/\/$/, "");
-    this.fetchFn = opts.fetchFn ?? fetch;
+    this.fetchFn = opts.fetchFn ?? boundFetch;
     this.sleepFn = opts.sleepFn ?? sleepDefault;
   }
 
@@ -216,12 +234,18 @@ export class BlooioChannel implements Channel {
         if (res.status === 403 || res.status === 409 || res.status === 429) {
           throw new ChannelRefused(res.status, errorCodeOf(res.status, data), errorTextOf(data, `Blooio refused the send: ${res.status}`));
         }
+        // A definitive client error did not land: terminal, no retry.
+        // 408 is the exception: a timeout may have landed, so it stays
+        // uncertain and replays its key.
+        if (res.status !== 408 && res.status < 500) {
+          throw new ChannelFailed(res.status, errorCodeOf(res.status, data), errorTextOf(data, `Blooio send failed: ${res.status}`));
+        }
         if (res.status < 500) {
           throw new Error(`Blooio send failed: ${res.status} ${errorCodeOf(res.status, data)}`);
         }
         lastErr = new Error(`Blooio send failed: ${res.status}`);
       } catch (err) {
-        if (err instanceof ChannelRefused) throw err;
+        if (err instanceof ChannelRefused || err instanceof ChannelFailed) throw err;
         lastErr = err;
       }
       if (attempt < SEND_MAX_ATTEMPTS) await this.sleepFn(Math.min(1000 * 2 ** attempt, 8000));
@@ -272,6 +296,26 @@ export class BlooioChannel implements Channel {
       protocol: asString(data.protocol),
       errorCode: asString(error?.code),
     };
+  }
+
+  // The GET /events row names the message but carries no text or
+  // sender, so reconcile fetches the full v4 message object (docs:
+  // getChatMessage, verified live) and re-parses it as an event. The
+  // feed's own evt_ id stays the event id; the DO dedupes the
+  // cross-path double delivery by type plus message id.
+  async hydrateEvent(event: NormalizedEvent): Promise<NormalizedEvent | null> {
+    if (event.kind !== "message.received" || !event.chatId || !event.messageId) return null;
+    const res = await this.fetchFn(
+      `${this.baseUrl}/chats/${encodeURIComponent(event.chatId)}/messages/${encodeURIComponent(event.messageId)}`,
+      { signal: AbortSignal.timeout(SEND_TIMEOUT_MS), headers: this.headers() },
+    );
+    // Gone or unreadable under this key: retrying cannot help.
+    if (res.status === 404 || res.status === 403) return null;
+    if (!res.ok) throw new Error(`Blooio message fetch failed: ${res.status}`);
+    const data: unknown = await this.readJson(res);
+    const message = isRecord(data) && isRecord(data.data) ? data.data : isRecord(data) ? data : null;
+    if (!message) return null;
+    return messageToEvent(event, message);
   }
 
   async listEvents(cursor: string | null, limit: number): Promise<ChannelEventPage> {

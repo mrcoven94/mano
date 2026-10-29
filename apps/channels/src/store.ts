@@ -129,6 +129,11 @@ export function defaultMeta(): ConversationMeta {
 export interface ConversationStore {
   hasEvent(eventId: string): boolean;
   recordEvent(eventId: string, kind: string, atMs: number): void;
+  // Inbound message ids, keyed separately from event ids: the same
+  // message arrives once by webhook and once by reconcile under two
+  // different event ids, and the DO answers it once.
+  hasInboundMessage(messageId: string): boolean;
+  recordInboundMessage(messageId: string, atMs: number): void;
   meta(): ConversationMeta;
   saveMeta(meta: ConversationMeta): void;
   addPending(item: PendingInbound): void;
@@ -155,6 +160,7 @@ export interface ConversationStore {
 
 export class MemoryStore implements ConversationStore {
   private events = new Map<string, { kind: string; atMs: number }>();
+  private inboundMessages = new Map<string, number>();
   private metaRow: ConversationMeta = defaultMeta();
   private pendingRows: PendingInbound[] = [];
   private outboundRows = new Map<string, OutboundRow>();
@@ -166,6 +172,14 @@ export class MemoryStore implements ConversationStore {
 
   recordEvent(eventId: string, kind: string, atMs: number): void {
     this.events.set(eventId, { kind, atMs });
+  }
+
+  hasInboundMessage(messageId: string): boolean {
+    return this.inboundMessages.has(messageId);
+  }
+
+  recordInboundMessage(messageId: string, atMs: number): void {
+    this.inboundMessages.set(messageId, atMs);
   }
 
   meta(): ConversationMeta {
@@ -281,6 +295,7 @@ export class MemoryStore implements ConversationStore {
     const generation = this.metaRow.generation + 1;
     const turn = this.metaRow.turn;
     this.events.clear();
+    this.inboundMessages.clear();
     this.metaRow = { ...defaultMeta(), generation, turn, deletedAtMs };
     this.pendingRows = [];
     this.outboundRows.clear();
