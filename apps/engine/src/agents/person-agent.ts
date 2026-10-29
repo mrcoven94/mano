@@ -530,17 +530,28 @@ export class PersonAgent extends Agent<Env, PersonState> {
   }
 
   private async moveReminderWakeup(): Promise<void> {
+    // Reconcile first: a crash between creating a schedule and recording
+    // it can leave delivery schedules nobody tracks. Keep only the
+    // recorded one, if it still exists; cancel every other.
+    let current = getWakeup(this.db());
+    let recordedExists = false;
+    for (const schedule of await this.listSchedules()) {
+      if (schedule.callback !== "deliverDueReminders") continue;
+      if (current && schedule.id === current.scheduleId) recordedExists = true;
+      else await this.cancelSchedule(schedule.id);
+    }
+    if (current && !recordedExists) {
+      clearWakeup(this.db());
+      current = null;
+    }
     const next = nextReminderRunMs(this.db(), REMINDER_LEASE_MS);
-    const current = getWakeup(this.db());
     if (next === null) {
       if (current) await this.cancelSchedule(current.scheduleId);
       clearWakeup(this.db());
       return;
     }
     const atMs = Math.max(next, Date.now());
-    if (current && (current.atMs === next || (next <= Date.now() && current.atMs <= Date.now()))) {
-      if (await this.getScheduleById(current.scheduleId)) return;
-    }
+    if (current && (current.atMs === next || (next <= Date.now() && current.atMs <= Date.now()))) return;
     if (current) await this.cancelSchedule(current.scheduleId);
     const schedule = await this.schedule(new Date(atMs), "deliverDueReminders", {});
     setWakeup(this.db(), schedule.id, atMs);
@@ -622,9 +633,12 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return getPendingPointer(this.db(), requireGeneration(generation));
   }
 
-  async clearPendingApproval(verified: string) {
+  // Compare-and-delete: the caller names the approval and the generation
+  // it prepared the clear under.
+  async clearPendingApproval(verified: string, input: unknown) {
     await this.assertSubject(verified);
-    return { cleared: clearPendingPointer(this.db()) };
+    const { approvalId, generation } = parsePointerInput(input);
+    return { cleared: clearPendingPointer(this.db(), approvalId, generation) };
   }
 
   async getConversation(verified: string) {
@@ -632,15 +646,14 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { generation: currentGeneration(this.db()) };
   }
 
-  // Channels deleted this person's conversation: in one transaction,
-  // advance the generation (to Channels' new one when it says), cancel
-  // reminders, clear the ledger and the pointer, reject pending approvals,
-  // revoke approved ones that have not finished, and delete memory. The
-  // answer counts what was removed.
-  async deleteConversation(verified: string, input: unknown = {}) {
+  // Channels deleted this person's conversation, moving it to generation
+  // N: in one transaction, move to N, cancel reminders, clear the ledger
+  // and the pointer, reject pending approvals, revoke approved ones that
+  // have not finished, and delete memory. Already at N or past it, it is
+  // a no-op that answers with the recorded counts of that delete.
+  async deleteConversation(verified: string, input: unknown) {
     await this.assertSubject(verified);
-    const raw = (typeof input === "object" && input !== null ? input : {}) as { generation?: unknown };
-    const toGeneration = raw.generation === undefined ? undefined : requireGeneration(raw.generation);
+    const toGeneration = parseGenerationInput(input).generation;
     const removed = this.ctx.storage.transactionSync(() => removeConversationState(this.db(), Date.now(), toGeneration));
     this.store.audit({ event: "conversation.deleted", ...removed });
     await this.armReminderWakeup();

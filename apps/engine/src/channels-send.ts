@@ -27,6 +27,24 @@ export interface AgentSend {
 // timeout or config not yet set; try again later under the same key.
 export type SendOutcome = "sent" | "dropped" | "failed" | "retry";
 
+// Only an explicit, well-formed answer is final: {sent:true}, or
+// {sent:false} with a reason. A body that cannot be read or parsed, or any
+// other shape, says nothing about what Channels did, so it retries under
+// the same key, which Channels dedupes.
+async function answerOf(res: Response): Promise<SendOutcome> {
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return "retry";
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return "retry";
+  const { sent, reason } = body as { sent?: unknown; reason?: unknown };
+  if (sent === true) return "sent";
+  if (sent === false && typeof reason === "string" && reason.length > 0) return "dropped";
+  return "retry";
+}
+
 export async function sendToChannels(
   env: ChannelsSendEnv,
   send: AgentSend,
@@ -51,10 +69,7 @@ export async function sendToChannels(
   } catch {
     return "retry";
   }
-  if (res.status === 200) {
-    const body = (await res.json().catch(() => null)) as { sent?: unknown } | null;
-    return body?.sent === true ? "sent" : "dropped";
-  }
+  if (res.status === 200) return answerOf(res);
   if (res.status === 400) return "failed";
   return "retry";
 }

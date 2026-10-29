@@ -44,7 +44,7 @@
 //   when a delete has moved past it; services must send it on
 //   POST /memory and POST /action too.
 //   GET  /api/persons/:id/conversation         { generation } (agent)
-//   DELETE /api/persons/:id/conversation       { generation? } everything the agent kept (agent, Channels)
+//   DELETE /api/persons/:id/conversation       { generation } move to it, removing what the agent kept (agent, Channels)
 //   POST /api/persons/:id/reminders            { id, text, dueAt, generation } (agent)
 //   GET  /api/persons/:id/reminders            (agent)
 //   POST /api/persons/:id/reminders/:rid/cancel  (agent)
@@ -53,7 +53,7 @@
 //   POST /api/persons/:id/turns/:turnId/complete  { generation } (agent)
 //   PUT  /api/persons/:id/pending-approval     { approvalId, generation } (agent)
 //   GET  /api/persons/:id/pending-approval?generation=N  (agent)
-//   DELETE /api/persons/:id/pending-approval   (agent)
+//   DELETE /api/persons/:id/pending-approval   { approvalId, generation } compare-and-delete (agent)
 //
 // Due reminders go out from the person's one delivery wake-up through
 // Channels' agent-send route at MANO_CHANNELS_URL, signed with
@@ -358,16 +358,20 @@ async function handleAgentState(
       return Response.json({ pointer: await agent.getPendingApproval(subject, requireGeneration(generation)) });
     }
     if (rest === "/pending-approval" && method === "DELETE") {
-      return Response.json(await agent.clearPendingApproval(subject));
+      const input = await body();
+      parsePointerInput(input);
+      return Response.json(await agent.clearPendingApproval(subject, input));
     }
     if (rest === "/conversation" && method === "GET") {
       return Response.json(await agent.getConversation(subject));
     }
     if (rest === "/conversation" && method === "DELETE") {
-      // Channels sends its new generation; the body is optional.
-      const hasBody = (request.headers.get("content-length") ?? "") !== "0" && request.body !== null;
-      const input = hasBody ? await body().catch(() => ({})) : {};
-      if ("generation" in input) requireGeneration(input.generation);
+      // The generation the delete moves to: Channels' new one. A retry
+      // with the same generation answers the same and changes nothing.
+      const input = await body().catch(() => {
+        throw new AgentStateInputError("Body needs the generation the delete moves to.");
+      });
+      parseGenerationInput(input);
       return Response.json({ removed: await agent.deleteConversation(subject, input) });
     }
     return null;

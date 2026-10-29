@@ -95,6 +95,10 @@ export function ensureAgentStateTables(sql: SqlExec): void {
     generation INTEGER NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS pending_pointer(
     slot INTEGER PRIMARY KEY CHECK (slot = 1), approval_id TEXT NOT NULL, generation INTEGER NOT NULL, set_at TEXT NOT NULL)`);
+  // Each conversation delete, by the generation it moved to, with its
+  // answer: a retried delete gets the same answer and changes nothing.
+  sql.exec(`CREATE TABLE IF NOT EXISTS conversation_deletes(
+    generation INTEGER PRIMARY KEY, result_json TEXT NOT NULL, at_ms INTEGER NOT NULL)`);
   // The one delivery wake-up a person has: the schedule's ID and time.
   sql.exec(`CREATE TABLE IF NOT EXISTS reminder_wakeup(
     slot INTEGER PRIMARY KEY CHECK (slot = 1), schedule_id TEXT NOT NULL, at_ms INTEGER NOT NULL)`);
@@ -335,8 +339,16 @@ export function getPendingPointer(sql: SqlExec, generation: number): PendingPoin
   return { approvalId: row.approval_id, generation: Number(row.generation), setAt: row.set_at };
 }
 
-export function clearPendingPointer(sql: SqlExec): boolean {
-  return sql.exec("DELETE FROM pending_pointer WHERE slot = 1").rowsWritten > 0;
+// Compare-and-delete: clears the pointer only when it still names this
+// approval under this generation, and that generation is current, so a
+// stale turn can never clear the pointer of the conversation after it.
+export function clearPendingPointer(sql: SqlExec, approvalId: string, generation: number): boolean {
+  return (
+    sql.exec(
+      `DELETE FROM pending_pointer WHERE slot = 1 AND approval_id = ? AND generation = ? AND generation = ${CURRENT_GENERATION}`,
+      approvalId, generation,
+    ).rowsWritten > 0
+  );
 }
 
 export interface ConversationRemoval {
@@ -350,19 +362,41 @@ export interface ConversationRemoval {
   memoriesDeleted: number;
 }
 
-// Everything a deleted conversation leaves behind for this person. The
-// caller runs it inside one transaction. The generation moves first, so
-// any write still in preparation from the old conversation is stale.
+// Everything a deleted conversation leaves behind for this person, as a
+// transition to toGeneration. The caller runs it inside one transaction.
+// When the person is already at toGeneration or past it, nothing changes:
+// the answer is the recorded one of the delete that got there, so a
+// retried delete can never wipe the conversation that came after it.
+// Otherwise the generation moves first, so any write still in
+// preparation from the old conversation is stale.
 // Reminders not yet handed to Channels are cancelled; those already
 // handed off are counted in flight and settle as Channels answers (it
 // refuses a send under the old generation). Approved actions that have
 // not finished lose their authority to execute: their rows stay, revoked,
 // for reconciliation only.
-export function removeConversationState(sql: SqlExec, nowMs: number, toGeneration?: number): ConversationRemoval {
+export function removeConversationState(sql: SqlExec, nowMs: number, toGeneration: number): ConversationRemoval {
+  const current = currentGeneration(sql);
+  if (toGeneration <= current) {
+    const recorded = sql.exec(
+      "SELECT result_json FROM conversation_deletes WHERE generation >= ? ORDER BY generation LIMIT 1",
+      toGeneration,
+    ).toArray()[0] as { result_json: string } | undefined;
+    if (recorded) return JSON.parse(recorded.result_json) as ConversationRemoval;
+    return {
+      generation: current,
+      remindersCancelled: 0,
+      remindersInFlight: 0,
+      turnsDeleted: 0,
+      pendingPointerCleared: false,
+      approvalsRejected: 0,
+      approvalsRevoked: 0,
+      memoriesDeleted: 0,
+    };
+  }
   // Counted with SELECT, not rowsWritten: Durable Object SQLite counts
   // index writes there, and this answer must be exact.
   const count = (query: string) => Number((sql.exec(query).toArray()[0] as { n: number }).n);
-  const generation = Math.max(currentGeneration(sql) + 1, toGeneration ?? 0);
+  const generation = toGeneration;
   sql.exec("UPDATE conversation_state SET generation = ? WHERE slot = 1", generation);
   const remindersCancelled = count("SELECT COUNT(*) AS n FROM reminders WHERE status IN ('scheduled', 'claimed')");
   sql.exec("UPDATE reminders SET status = 'cancelled', finished_at_ms = ? WHERE status IN ('scheduled', 'claimed')", nowMs);
@@ -370,7 +404,7 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
   const turnsDeleted = count("SELECT COUNT(*) AS n FROM turns");
   sql.exec("DELETE FROM turns");
   const pendingPointerCleared = count("SELECT COUNT(*) AS n FROM pending_pointer") > 0;
-  clearPendingPointer(sql);
+  sql.exec("DELETE FROM pending_pointer");
   const approvalsRejected = count("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'");
   sql.exec("UPDATE approvals SET status = 'rejected' WHERE status = 'pending'");
   const unresolved =
@@ -379,7 +413,7 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
   sql.exec(`UPDATE approvals SET status = 'revoked' WHERE ${unresolved}`);
   const memoriesDeleted = count("SELECT COUNT(*) AS n FROM memory");
   sql.exec("DELETE FROM memory");
-  return {
+  const result: ConversationRemoval = {
     generation,
     remindersCancelled,
     remindersInFlight,
@@ -389,4 +423,9 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
     approvalsRevoked,
     memoriesDeleted,
   };
+  sql.exec(
+    "INSERT INTO conversation_deletes(generation, result_json, at_ms) VALUES (?, ?, ?)",
+    generation, JSON.stringify(result), nowMs,
+  );
+  return result;
 }
