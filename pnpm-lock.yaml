@@ -16,6 +16,9 @@ importers:
       '@mano/persona':
         specifier: workspace:*
         version: link:../../packages/persona
+      '@mano/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: ^1.4.8

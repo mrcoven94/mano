@@ -7,12 +7,14 @@ import {
   SparkResponder,
   StandInResponder,
 } from "@mano/channels";
+import { signEngineSend } from "@mano/protocol";
 import { handleAgentSend } from "../src/index.js";
 import { buildResponder } from "../src/conversation.js";
 import type { Env } from "../src/env.js";
 import { inboundEvent, makeHarness, TEST_HANDLE_HASH } from "./helpers.js";
 
 const SECRET = "test-agent-secret-not-real";
+const ENGINE_SEND_SECRET = "test-engine-send-secret-not-real";
 
 function agentEnv(stub: (url: string, init: RequestInit) => Promise<Response>): Env {
   return {
@@ -29,20 +31,66 @@ function agentEnv(stub: (url: string, init: RequestInit) => Promise<Response>): 
     MANO_HANDLE_PEPPER: "",
     ENCRYPTION_KEK_B64: "",
     MANO_AGENT_SECRET: SECRET,
+    MANO_ENGINE_SEND_SECRET: ENGINE_SEND_SECRET,
     MANO_HANDLE_GRANT_SECRET: "test-grant-secret-not-real",
   };
 }
 
-async function signedSend(body: unknown, secret = SECRET): Promise<Request> {
+// Signs like Engine does (packages/protocol engine-send.ts): the method,
+// path and timestamp are part of the signed bytes.
+async function signedSend(body: unknown, secret = ENGINE_SEND_SECRET, opts: { path?: string; method?: string } = {}): Promise<Request> {
+  const raw = JSON.stringify(body);
+  const t = String(Math.floor(Date.now() / 1000));
+  const sig = await signEngineSend(secret, opts.method ?? "POST", opts.path ?? "/internal/agent-send", t, raw);
+  return new Request("https://channels.example.test/internal/agent-send", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-mano-engine-timestamp": t, "x-mano-engine-signature": sig },
+    body: raw,
+  });
+}
+
+async function agentSigned(body: unknown): Promise<Request> {
   const raw = JSON.stringify(body);
   const t = Math.floor(Date.now() / 1000);
-  const v1 = await computeSignatureHex(secret, String(t), raw);
+  const v1 = await computeSignatureHex(SECRET, String(t), raw);
   return new Request("https://channels.example.test/internal/agent-send", {
     method: "POST",
     headers: { "x-mano-timestamp": String(t), "x-mano-signature": v1 },
     body: raw,
   });
 }
+
+describe("Engine send verification", () => {
+  const send = { handleHash: "hh", key: "reminder:rem-1", text: "Reminder: call", generation: 0 };
+
+  it("accepts a send Engine signed with its send secret", async () => {
+    const env = agentEnv(async () => Response.json({ sent: true }));
+    expect((await handleAgentSend(await signedSend(send), env)).status).toBe(200);
+  });
+
+  it("refuses the agent's secret, a signature over another path or method, and a wrong secret", async () => {
+    const env = agentEnv(async () => Response.json({ sent: true }));
+    expect((await handleAgentSend(await agentSigned(send), env)).status).toBe(401);
+    expect((await handleAgentSend(await signedSend(send, ENGINE_SEND_SECRET, { path: "/internal/other" }), env)).status).toBe(401);
+    expect((await handleAgentSend(await signedSend(send, ENGINE_SEND_SECRET, { method: "PUT" }), env)).status).toBe(401);
+    expect((await handleAgentSend(await signedSend(send, "wrong"), env)).status).toBe(401);
+  });
+
+  it("matches the contract's interop vector", async () => {
+    expect(await signEngineSend("interop-secret", "POST", "/internal/agent-send", "1761777000", '{"handleHash":"ab"}')).toBe(
+      "82cbcf6537db403e7a8b12a4b12dad407291deb044039a06e308d716b23e5bd9",
+    );
+  });
+
+  it("answers a terminal refusal with a non-empty reason, so Engine drops it instead of retrying", async () => {
+    const env = agentEnv(async () => Response.json({ sent: false, reason: "deleted" }));
+    const res = await handleAgentSend(await signedSend(send), env);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sent: false, reason: "deleted" });
+    const blank = agentEnv(async () => Response.json({ sent: false }));
+    expect((await handleAgentSend(await signedSend(send), blank)).status).toBe(502);
+  });
+});
 
 describe("agent-send ingress", () => {
   it("rejects bad signatures and bad bodies", async () => {
@@ -255,5 +303,14 @@ describe("reporting what the person was shown", () => {
     h.advance(5000);
     await h.runner.runDueTurn();
     expect(seen.flat().join(" ")).not.toContain("Reply YES");
+  });
+});
+
+describe("dev routes", () => {
+  it("the local delete route does not exist unless MANO_DEV_ROUTES is set", async () => {
+    const worker = (await import("../src/index.js")).default;
+    const env = agentEnv(async () => Response.json({ ok: true }));
+    const res = await worker.fetch(new Request("https://c.test/dev/delete", { method: "POST", body: '{"handle":"+18015550100"}' }), env);
+    expect(res.status).toBe(404);
   });
 });

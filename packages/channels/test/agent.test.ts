@@ -215,7 +215,7 @@ describe("approval questions on the text line", () => {
   }
 
   it("refuses a question the voice guard would change, rather than send an altered one", async () => {
-    const approval = "Ready to send: renewal. Name: Claude Testcase; Phone: 555-0100. Reply YES to send exactly this, or NO to stop.";
+    const approval = "Ready to send: renewal. Address: 12 Sample Street \u2014 Unit 4; Phone: 555-0100. Reply YES to send exactly this, or NO to stop.";
     const result = await answering({ status: "waiting_approval", text: `Ready.\n\n${approval}`, approval }).respond({
       texts: ["file it"],
       attachmentCount: 0,

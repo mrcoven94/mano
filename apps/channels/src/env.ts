@@ -38,6 +38,11 @@ export interface Env {
   // Engine, for removing a deleted conversation's agent state. Channels'
   // own Engine token opens only that route.
   MANO_ENGINE_URL?: string;
+  // "1" opens POST /dev/delete for local end-to-end runs. Never set in a
+  // deployment.
+  MANO_DEV_ROUTES?: string;
+  // Verifies Engine's reminder deliveries on /internal/agent-send only.
+  MANO_ENGINE_SEND_SECRET?: string;
   MANO_ENGINE_CHANNELS_TOKEN?: string;
 }
 

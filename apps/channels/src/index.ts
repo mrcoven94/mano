@@ -2,9 +2,8 @@
 // provider. Webhook ingress verifies and enqueues; the queue consumer
 // routes events to one ConversationDO per handle; a cron reconciles
 // anything the webhook missed through the same queue.
+import { ENGINE_SEND_SIGNATURE_HEADER, ENGINE_SEND_TIMESTAMP_HEADER, verifyEngineSend } from "@mano/protocol";
 import {
-  AGENT_SIGNATURE_HEADER,
-  AGENT_TIMESTAMP_HEADER,
   ATTACHMENT_RETENTION_MS,
   BlooioChannel,
   RecordingChannel,
@@ -15,7 +14,6 @@ import {
   lifecycleStateFor,
   normalizeHandle,
   parseBlooioEvent,
-  verifyAgentRequest,
   verifySignature,
   type Channel,
   type NormalizedEvent,
@@ -273,24 +271,31 @@ export async function sweepExpiredFiles(files: FileStore, nowMs: number): Promis
   return { deleted };
 }
 
-// Agent-started deliveries (reminders, nudges). Authenticated by HMAC
-// over the raw body with the shared agent secret, then routed to the
-// conversation, which sends through the normal outbound path. Terminal
-// outcomes (unknown, closed, opted out) are handled 200s; only budget
-// (429) and infra (500) ask the agent to retry.
+// Engine-started deliveries (due reminders). Engine signs each with
+// MANO_ENGINE_SEND_SECRET over the method, this route's path, the
+// timestamp and the raw body (packages/protocol engine-send.ts); that
+// secret is accepted on this route only, and the agent's secret is not.
+// Then routed to the conversation, which sends through the normal
+// outbound path under the generation the reminder was set in. Terminal
+// outcomes answer 200 {sent:false, reason} with a non-empty reason, so
+// Engine drops them; budget (429) and anything uncertain ask it to retry.
 export async function handleAgentSend(request: Request, env: Env): Promise<Response> {
   const started = Date.now();
   const logger = createLogger();
   const rawBytes = new Uint8Array(await request.arrayBuffer());
-  const check = await verifyAgentRequest(
-    env.MANO_AGENT_SECRET,
-    request.headers.get(AGENT_TIMESTAMP_HEADER),
-    request.headers.get(AGENT_SIGNATURE_HEADER),
-    rawBytes,
+  const check = await verifyEngineSend(
+    env.MANO_ENGINE_SEND_SECRET,
+    {
+      method: request.method.toUpperCase(),
+      path: new URL(request.url).pathname,
+      timestamp: request.headers.get(ENGINE_SEND_TIMESTAMP_HEADER),
+      signature: request.headers.get(ENGINE_SEND_SIGNATURE_HEADER),
+      body: rawBytes,
+    },
     Math.floor(started / 1000),
   );
   if (!check.ok) {
-    logger.warn("agent_send_rejected", { reason: check.reason ?? "unknown" });
+    logger.warn("agent_send_rejected", { reason: check.reason });
     return new Response("Bad signature.", { status: 401 });
   }
   let parsed: unknown;
@@ -319,6 +324,12 @@ export async function handleAgentSend(request: Request, env: Env): Promise<Respo
     body: JSON.stringify({ handleHash: body.handleHash, key: body.key, text: body.text, generation: body.generation }),
   });
   const data = (await res.json().catch(() => ({}))) as { sent?: unknown; reason?: unknown };
+  // A refusal must name its reason, or Engine could not tell it from an
+  // unreadable answer; anything else is reported as uncertain.
+  if (res.ok && data.sent !== true && (typeof data.reason !== "string" || !data.reason)) {
+    logger.warn("agent_send_unclear", { handle: body.handleHash, status: res.status });
+    return Response.json({ sent: false, reason: null }, { status: 502 });
+  }
   logger.info("agent_send_routed", {
     handle: body.handleHash,
     sent: data.sent === true,
@@ -337,6 +348,16 @@ export default {
     }
     if (request.method === "POST" && url.pathname === AGENT_SEND_PATH) {
       return handleAgentSend(request, env);
+    }
+    // Local end-to-end runs only: deletes one conversation by its handle.
+    // Exists only when MANO_DEV_ROUTES is "1", which no deployment sets.
+    if (env.MANO_DEV_ROUTES === "1" && request.method === "POST" && url.pathname === "/dev/delete") {
+      const body = (await request.json().catch(() => null)) as { handle?: unknown } | null;
+      const handle = typeof body?.handle === "string" ? normalizeHandle(body.handle) : null;
+      if (!handle) return new Response("Bad delete.", { status: 400 });
+      const handleHash = await hashHandle(handle, env.MANO_HANDLE_PEPPER);
+      const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));
+      return stub.fetch("https://conversation/internal/delete", { method: "POST", body: JSON.stringify({ handleHash }) });
     }
     // Ok and nothing else: strangers must not learn which keys are set.
     if (request.method === "GET" && url.pathname === "/health") {
