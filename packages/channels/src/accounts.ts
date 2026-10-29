@@ -31,3 +31,14 @@ export function buildAccountsDirectory(env: { MANO_HANDLE_PEPPER: string }): Acc
   // until then every handle maps deterministically, same input same person.
   return new StandInAccountsDirectory(env.MANO_HANDLE_PEPPER);
 }
+
+// A sign-in code is exactly six digits. Callers pass digits only; the
+// text below is the one copy Channels ever sends, so no caller can put
+// other words on the line through this seam.
+export function isSignInCode(value: string): boolean {
+  return /^\d{6}$/.test(value);
+}
+
+export function signInCodeMessage(code: string): string {
+  return `Your Mano code is ${code}. It expires in 10 minutes.`;
+}

@@ -19,8 +19,18 @@ class SqlGlobalStore implements GlobalStore {
   constructor(sql: SqlStorage) {
     this.sql = sql;
     this.sql.exec(
-      "CREATE TABLE IF NOT EXISTS global_state (id INTEGER PRIMARY KEY CHECK (id = 1), cursor TEXT, spend_day TEXT NOT NULL, spent_usd REAL NOT NULL, byte_day TEXT NOT NULL DEFAULT '', bytes_used INTEGER NOT NULL DEFAULT 0)",
+      "CREATE TABLE IF NOT EXISTS global_state (id INTEGER PRIMARY KEY CHECK (id = 1), cursor TEXT, spend_day TEXT NOT NULL, spent_usd REAL NOT NULL, byte_day TEXT NOT NULL DEFAULT '', bytes_used INTEGER NOT NULL DEFAULT 0, code_hour TEXT NOT NULL DEFAULT '', code_count INTEGER NOT NULL DEFAULT 0)",
     );
+    for (const ddl of [
+      "ALTER TABLE global_state ADD COLUMN code_hour TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE global_state ADD COLUMN code_count INTEGER NOT NULL DEFAULT 0",
+    ]) {
+      try {
+        this.sql.exec(ddl);
+      } catch {
+        // The column already exists.
+      }
+    }
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS spend_reservations (res_key TEXT PRIMARY KEY, worst_usd REAL NOT NULL, day TEXT NOT NULL)",
     );
@@ -44,6 +54,8 @@ class SqlGlobalStore implements GlobalStore {
       spent_usd: number;
       byte_day: string | null;
       bytes_used: number | null;
+      code_hour: string | null;
+      code_count: number | null;
     }>;
     const row = rows.length > 0 ? rows[0] : null;
     if (!row) return defaultGlobalState();
@@ -53,17 +65,21 @@ class SqlGlobalStore implements GlobalStore {
       spentUsd: row.spent_usd,
       byteDay: row.byte_day ?? "",
       bytesUsed: row.bytes_used ?? 0,
+      codeHour: row.code_hour ?? "",
+      codeCount: row.code_count ?? 0,
     };
   }
 
   save(state: GlobalStateRow): void {
     this.sql.exec(
-      "UPDATE global_state SET cursor = ?, spend_day = ?, spent_usd = ?, byte_day = ?, bytes_used = ? WHERE id = 1",
+      "UPDATE global_state SET cursor = ?, spend_day = ?, spent_usd = ?, byte_day = ?, bytes_used = ?, code_hour = ?, code_count = ? WHERE id = 1",
       state.cursor,
       state.spendDay,
       state.spentUsd,
       state.byteDay,
       state.bytesUsed,
+      state.codeHour,
+      state.codeCount,
     );
   }
 
@@ -167,6 +183,12 @@ class SqlGlobalStore implements GlobalStore {
 
   clearPerson(personId: string): void {
     this.sql.exec("DELETE FROM person_binds WHERE person_id = ?", personId);
+  }
+
+  clearPersonHandles(personId: string, handleHashes: string[]): void {
+    if (handleHashes.length === 0) return;
+    const marks = handleHashes.map(() => "?").join(",");
+    this.sql.exec(`DELETE FROM person_binds WHERE person_id = ? AND handle_hash IN (${marks})`, personId, ...handleHashes);
   }
 
   filterUnseen(ids: string[]): string[] {
@@ -285,12 +307,21 @@ export class ChannelStateDO implements DurableObject {
       const person = url.searchParams.get("person") ?? "";
       return Response.json({ handleHashes: person ? this.ledger().handlesForPerson(person) : [] });
     }
+    if (request.method === "POST" && url.pathname === "/internal/code-reserve") {
+      return Response.json(this.ledger().codeReserve());
+    }
     if (request.method === "POST" && url.pathname === "/internal/person-unbind") {
-      const body = (await request.json().catch(() => ({}))) as { personId?: unknown };
+      const body = (await request.json().catch(() => ({}))) as { personId?: unknown; handleHashes?: unknown };
       if (typeof body.personId !== "string") {
         return new Response("Bad unbind.", { status: 400 });
       }
-      this.ledger().clearPerson(body.personId);
+      if (body.handleHashes === undefined) {
+        this.ledger().clearPerson(body.personId);
+      } else if (Array.isArray(body.handleHashes) && body.handleHashes.every((h): h is string => typeof h === "string")) {
+        this.ledger().clearPersonHandles(body.personId, body.handleHashes);
+      } else {
+        return new Response("Bad unbind.", { status: 400 });
+      }
       return Response.json({ ok: true });
     }
     if (request.method === "POST" && url.pathname === "/internal/seen-check") {

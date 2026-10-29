@@ -3,6 +3,10 @@
 
 export const HANDLE_HOURLY_LIMIT = 20;
 export const HANDLE_DAILY_LIMIT = 100;
+// Sign-in codes carry their own hourly limits, tracked apart from reply
+// budget so codes can neither starve live answers nor ride on them.
+export const CODE_HANDLE_HOURLY_LIMIT = 3;
+export const CODE_GLOBAL_HOURLY_LIMIT = 200;
 export const TURN_TEXT_CAP = 4000;
 // Buffered inbound per conversation. A handle texting nonstop keeps
 // postponing the batch alarm; the cap bounds what waits for it.
@@ -34,6 +38,15 @@ export function handleOverLimit(windows: HandleWindows, nowMs: number): "hour" |
   if (windows.hourKey === hourKeyFor(nowMs) && windows.hourCount >= HANDLE_HOURLY_LIMIT) return "hour";
   if (windows.dayKey === dayKeyFor(nowMs) && windows.dayCount >= HANDLE_DAILY_LIMIT) return "day";
   return null;
+}
+
+export interface CodeWindows {
+  codeHourKey: string;
+  codeHourCount: number;
+}
+
+export function codeOverLimit(windows: CodeWindows, nowMs: number): boolean {
+  return windows.codeHourKey === hourKeyFor(nowMs) && windows.codeHourCount >= CODE_HANDLE_HOURLY_LIMIT;
 }
 
 export function estimateCostUsd(inputChars: number, outputChars: number, usdPer1kChars: number): number {

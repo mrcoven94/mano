@@ -11,6 +11,7 @@ import {
   buildModelBaseUrl,
   createLogger,
   hashChatId,
+  isSignInCode,
   type Channel,
   type Logger,
   type NormalizedEvent,
@@ -76,6 +77,11 @@ class StateSpendLedger implements SpendLedger {
       method: "POST",
       body: JSON.stringify({ key }),
     });
+  }
+
+  async codeReserve(): Promise<{ allowed: boolean; count: number }> {
+    const res = await this.stub.fetch("https://state/internal/code-reserve", { method: "POST" });
+    return (await res.json()) as { allowed: boolean; count: number };
   }
 }
 
@@ -201,19 +207,36 @@ export class ConversationDO implements DurableObject {
       const body = (await request.json().catch(() => null)) as {
         handleHash?: unknown;
         to?: unknown;
-        message?: unknown;
+        code?: unknown;
         idempotencyKey?: unknown;
+        personId?: unknown;
       } | null;
       if (
         !body || typeof body.handleHash !== "string" || typeof body.to !== "string" ||
-        typeof body.message !== "string" || typeof body.idempotencyKey !== "string" ||
-        !body.to || !body.message || !body.idempotencyKey
+        typeof body.code !== "string" || typeof body.idempotencyKey !== "string" ||
+        !body.to || !isSignInCode(body.code) || !body.idempotencyKey
       ) {
         return new Response("Bad code send.", { status: 400 });
       }
       const { runner } = this.runner(body.handleHash);
-      const sent = await runner.sendCode(body.to, body.message, body.idempotencyKey);
-      return Response.json({ key: sent.key, state: sent.state, code: sent.code });
+      const sent = await runner.sendCode(body.to, body.code, body.idempotencyKey);
+      // A code-only conversation never saw an inbound event, so this is
+      // its first bind to its person. Without it account deletion could
+      // never find this conversation.
+      let personCreated: boolean | null = null;
+      if (typeof body.personId === "string" && body.personId) {
+        const bind = await globalStateStub(this.env).fetch("https://state/internal/person-bind", {
+          method: "POST",
+          body: JSON.stringify({ handleHash: body.handleHash, personId: body.personId }),
+        });
+        if (bind.ok) personCreated = ((await bind.json()) as { created?: unknown }).created === true;
+      }
+      // An uncertain code recovers on the alarm like any uncertain send,
+      // so a send that left work behind arms it.
+      if (runner.needsRetry()) {
+        await this.ctx.storage.setAlarm(Date.now() + runner.retryAfterMs());
+      }
+      return Response.json({ key: sent.key, state: sent.state, code: sent.code, personCreated });
     }
     if (request.method === "POST" && url.pathname === "/internal/turn") {
       const body = (await request.json().catch(() => null)) as { handleHash?: unknown } | null;

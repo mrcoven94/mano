@@ -2,15 +2,18 @@ import { describe, expect, it } from "vitest";
 import { splitBubbles } from "../src/bubbles.js";
 import { isOptOut, parseApprovalReply } from "../src/approvals.js";
 import {
+  CODE_HANDLE_HOURLY_LIMIT,
   DEFAULT_DAILY_BUDGET_USD,
   HANDLE_DAILY_LIMIT,
   HANDLE_HOURLY_LIMIT,
   budgetAllows,
+  codeOverLimit,
   dayKeyFor,
   estimateCostUsd,
   handleOverLimit,
   hourKeyFor,
 } from "../src/limits.js";
+import { logKeyHash } from "../src/log.js";
 
 describe("splitBubbles", () => {
   it("keeps short replies whole", () => {
@@ -107,6 +110,30 @@ describe("handleOverLimit", () => {
   it("resets when the window rolls", () => {
     const windows = { hourKey: hourKeyFor(now - 3600_000), hourCount: HANDLE_HOURLY_LIMIT, dayKey: dayKeyFor(now - 86400_000), dayCount: HANDLE_DAILY_LIMIT };
     expect(handleOverLimit(windows, now)).toBeNull();
+  });
+});
+
+describe("codeOverLimit", () => {
+  const now = Date.parse("2026-10-28T12:00:00Z");
+
+  it("allows three codes per phone per hour, then refuses", () => {
+    expect(CODE_HANDLE_HOURLY_LIMIT).toBe(3);
+    expect(codeOverLimit({ codeHourKey: hourKeyFor(now), codeHourCount: 2 }, now)).toBe(false);
+    expect(codeOverLimit({ codeHourKey: hourKeyFor(now), codeHourCount: 3 }, now)).toBe(true);
+  });
+
+  it("resets when the hour rolls", () => {
+    expect(codeOverLimit({ codeHourKey: hourKeyFor(now - 3600_000), codeHourCount: 3 }, now)).toBe(false);
+  });
+});
+
+describe("logKeyHash", () => {
+  it("is stable, distinct, and leaks no part of the key", () => {
+    const key = "code-key-SENTINEL-9f8e";
+    expect(logKeyHash(key)).toBe(logKeyHash(key));
+    expect(logKeyHash(key)).not.toBe(logKeyHash(`${key}-other`));
+    expect(logKeyHash(key)).not.toContain("SENTINEL");
+    expect(logKeyHash(key)).toMatch(/^[0-9a-f]+$/);
   });
 });
 

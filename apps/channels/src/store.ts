@@ -21,6 +21,10 @@ export interface OutboundRow {
   // The bubble text, so an uncertain send can replay the exact same body
   // under its key later. Stored, never logged.
   text: string;
+  // The recipient at send time, so recovery replays to the same handle
+  // even when the conversation meta never learned one (a code-only
+  // conversation has no inbound to learn from). Stored, never logged.
+  to: string | null;
   // Failed attempts to resolve this send. Drives retry backoff.
   attempts: number;
   state: OutboundState;
@@ -95,6 +99,10 @@ export interface ConversationMeta {
   lastInboundMs: number;
   byteDayKey: string;
   byteDayCount: number;
+  // Sign-in codes sent this hour. Counted apart from hour/day reply
+  // counts so codes never consume reply budget.
+  codeHourKey: string;
+  codeHourCount: number;
   // Bumped on every delete. Idempotency keys carry the generation, and
   // work started under an older one stops instead of writing.
   generation: number;
@@ -121,6 +129,8 @@ export function defaultMeta(): ConversationMeta {
     lastInboundMs: 0,
     byteDayKey: "",
     byteDayCount: 0,
+    codeHourKey: "",
+    codeHourCount: 0,
     generation: 0,
     deletedAtMs: 0,
   };

@@ -13,10 +13,12 @@ import {
   OUTBOUND_RANK,
   ResponderFailed,
   TURN_TEXT_CAP,
+  codeOverLimit,
   dayKeyFor,
   errName,
   estimateCostUsd,
   LinkChecker,
+  logKeyHash,
   MAX_BUBBLES,
   MAX_BUBBLE_CHARS,
   MAX_PENDING_CHARS,
@@ -24,9 +26,11 @@ import {
   hourKeyFor,
   idempotencyKeyFor,
   isOptOut,
+  isSignInCode,
   lifecycleStateFor,
   parseApprovalReply,
   sha256Hex,
+  signInCodeMessage,
   splitBubbles,
   stripBlockedLinks,
   type Channel,
@@ -53,6 +57,9 @@ export interface SpendLedger {
   byteReserve(key: string, bytes: number): Promise<{ allowed: boolean; bytesUsed: number }>;
   byteSettle(key: string, actualBytes: number): Promise<void>;
   byteRelease(key: string): Promise<void>;
+  // One sign-in code against the global hourly cap. Codes never touch
+  // spend or bytes; this is their only global admission.
+  codeReserve(): Promise<{ allowed: boolean; count: number }>;
 }
 
 export interface RunnerConfig {
@@ -381,7 +388,7 @@ export class ConversationRunner {
     this.deps.logger.info("outbound_lifecycle", {
       handle: this.logHandle(),
       eventId,
-      key,
+      key: logKeyHash(key),
       state: advanced,
       code: errorCode ?? null,
     });
@@ -944,18 +951,18 @@ export class ConversationRunner {
       const code = meta.closed ? "conversation_closed" : "opted_out";
       if (!prior) {
         store.addOutbound({
-          key, turn: opts.turn, part: opts.part, tag: opts.tag, text: opts.text, attempts: 0, state: "refused", code,
+          key, turn: opts.turn, part: opts.part, tag: opts.tag, text: opts.text, to: opts.to, attempts: 0, state: "refused", code,
           chatId: opts.chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
         });
       } else {
         store.updateOutbound(key, { state: "refused", code, updatedAtMs: nowMs() });
       }
-      logger.info("send_suppressed", { handle: this.logHandle(), key, code });
+      logger.info("send_suppressed", { handle: this.logHandle(), key: logKeyHash(key), code });
       return finish({ key, state: "refused", code, fresh: false, counted: false });
     }
     if (!prior) {
       store.addOutbound({
-        key, turn: opts.turn, part: opts.part, tag: opts.tag, text: opts.text, attempts: 0, state: "planned", code: null,
+        key, turn: opts.turn, part: opts.part, tag: opts.tag, text: opts.text, to: opts.to, attempts: 0, state: "planned", code: null,
         chatId: opts.chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
       });
     }
@@ -969,25 +976,25 @@ export class ConversationRunner {
         state: "sent", messageId: result.messageId, chatId: result.chatId, updatedAtMs: nowMs(),
       });
       this.applyHeldReceipts(result.messageId, result.chatId);
-      logger.info("send_sent", { handle: this.logHandle(), key, message: result.messageId, duplicate: result.duplicate });
+      logger.info("send_sent", { handle: this.logHandle(), key: logKeyHash(key), message: result.messageId, duplicate: result.duplicate });
       return finish({ key, state: "sent", code: null, fresh: true, counted: true });
     } catch (err) {
       if (err instanceof GenerationStopped) throw err;
       if (err instanceof ChannelRefused) {
         store.updateOutbound(key, { state: "refused", code: err.code, updatedAtMs: nowMs() });
-        logger.warn("send_refused", { handle: this.logHandle(), key, code: err.code, status: err.status });
+        logger.warn("send_refused", { handle: this.logHandle(), key: logKeyHash(key), code: err.code, status: err.status });
         return finish({ key, state: "refused", code: err.code, fresh: false, counted: true });
       }
       if (err instanceof ChannelFailed) {
         store.updateOutbound(key, { state: "failed", code: err.code, updatedAtMs: nowMs() });
-        logger.warn("send_failed", { handle: this.logHandle(), key, code: err.code, status: err.status });
+        logger.warn("send_failed", { handle: this.logHandle(), key: logKeyHash(key), code: err.code, status: err.status });
         return finish({ key, state: "failed", code: err.code, fresh: false, counted: true });
       }
       // Any other send error (timeout, network, 5xx, unexpected) may
       // have landed: never terminal. Mark uncertain, look the message
       // up or replay its key, and let the turn retry on backoff.
       store.updateOutbound(key, { state: "uncertain", updatedAtMs: nowMs() });
-      logger.warn("send_uncertain", { handle: this.logHandle(), key });
+      logger.warn("send_uncertain", { handle: this.logHandle(), key: logKeyHash(key) });
       return this.resolveUncertainKey(key, opts, generation);
     }
   }
@@ -995,18 +1002,30 @@ export class ConversationRunner {
   // Resolves one uncertain send: a message the provider already named
   // gets looked up first, and only a send with no record replays the
   // same key and body. Anything still unknown stays uncertain for the
-  // next alarm.
+  // next alarm. Sign-in codes refuse here when the conversation opted
+  // out or closed, and never count toward reply limits.
   private async resolveUncertainKey(
     key: string,
     opts: { text: string; chatId: string | null; to: string | null },
     generation: number,
   ): Promise<SendBubbleResult> {
     const { store, channel, logger, nowMs } = this.deps;
+    const isCode = store.outboundByKey(key)?.tag === "code";
     const finish = (result: SendBubbleResult): SendBubbleResult => {
-      if (result.counted) this.countSent(1, nowMs());
-      return result;
+      const counted = isCode ? { ...result, counted: false } : result;
+      if (counted.counted) this.countSent(1, nowMs());
+      return counted;
     };
     const row = store.outboundByKey(key);
+    if (isCode) {
+      const meta = store.meta();
+      if (meta.closed || meta.optedOut) {
+        const code = meta.closed ? "conversation_closed" : "opted_out";
+        store.updateOutbound(key, { state: "refused", code, updatedAtMs: nowMs() });
+        logger.info("send_suppressed", { handle: this.logHandle(), key: logKeyHash(key), code });
+        return finish({ key, state: "refused", code, fresh: false, counted: false });
+      }
+    }
     if (row?.messageId && row.chatId) {
       try {
         const status = await channel.lookupMessage(row.chatId, row.messageId);
@@ -1014,12 +1033,12 @@ export class ConversationRunner {
           this.checkGeneration(generation);
           store.updateOutbound(key, { state: "sent", updatedAtMs: nowMs() });
           this.applyHeldReceipts(status.messageId, status.chatId);
-          logger.info("send_reconciled", { handle: this.logHandle(), key, message: status.messageId, via: "lookup" });
+          logger.info("send_reconciled", { handle: this.logHandle(), key: logKeyHash(key), message: status.messageId, via: "lookup" });
           return finish({ key, state: "sent", code: null, fresh: true, counted: true });
         }
       } catch (err) {
         if (err instanceof GenerationStopped) throw err;
-        logger.warn("lookup_failed", { handle: this.logHandle(), key, err: errName(err) });
+        logger.warn("lookup_failed", { handle: this.logHandle(), key: logKeyHash(key), err: errName(err) });
       }
     }
     try {
@@ -1029,7 +1048,7 @@ export class ConversationRunner {
         state: "sent", messageId: result.messageId, chatId: result.chatId, updatedAtMs: nowMs(),
       });
       this.applyHeldReceipts(result.messageId, result.chatId);
-      logger.info("send_reconciled", { handle: this.logHandle(), key, message: result.messageId, duplicate: result.duplicate, via: "replay" });
+      logger.info("send_reconciled", { handle: this.logHandle(), key: logKeyHash(key), message: result.messageId, duplicate: result.duplicate, via: "replay" });
       return finish({ key, state: "sent", code: null, fresh: true, counted: true });
     } catch (err) {
       if (err instanceof GenerationStopped) throw err;
@@ -1039,51 +1058,69 @@ export class ConversationRunner {
       }
       if (err instanceof ChannelFailed) {
         store.updateOutbound(key, { state: "failed", code: err.code, updatedAtMs: nowMs() });
-        logger.warn("send_failed", { handle: this.logHandle(), key, code: err.code, status: err.status });
+        logger.warn("send_failed", { handle: this.logHandle(), key: logKeyHash(key), code: err.code, status: err.status });
         return finish({ key, state: "failed", code: err.code, fresh: false, counted: true });
       }
       const attempts = (store.outboundByKey(key)?.attempts ?? 0) + 1;
       store.updateOutbound(key, { state: "uncertain", attempts, updatedAtMs: nowMs() });
-      logger.warn("send_still_uncertain", { handle: this.logHandle(), key, attempts });
+      logger.warn("send_still_uncertain", { handle: this.logHandle(), key: logKeyHash(key), attempts });
       return finish({ key, state: "uncertain", code: null, fresh: false, counted: false });
     }
   }
 
   // One-off send for sign-in codes, outside any turn. The caller
   // supplies the idempotency key, so a retry after a timeout replays
-  // instead of duplicating. Same lifecycle as bubbles: uncertain is
-  // never terminal, and closed or opted-out conversations still refuse.
-  async sendCode(to: string, message: string, idempotencyKey: string): Promise<SendBubbleResult> {
+  // instead of duplicating, and six digits, rendered into the one code
+  // text Channels ever sends. Same lifecycle as bubbles: uncertain is
+  // never terminal. Closed or opted-out conversations refuse before
+  // anything else can send, codes admit against their own per-phone and
+  // global hourly limits, and nothing here touches reply budget.
+  async sendCode(to: string, code: string, idempotencyKey: string): Promise<SendBubbleResult> {
     const { store, channel, logger, nowMs } = this.deps;
     const generation = store.meta().generation;
-    const finish = (result: SendBubbleResult): SendBubbleResult => {
-      if (result.counted) this.countSent(1, nowMs());
-      return result;
-    };
-    const prior = store.outboundByKey(idempotencyKey);
-    if (prior && TERMINAL_SEND.has(prior.state)) {
-      return finish({ key: idempotencyKey, state: prior.state, code: prior.code, fresh: false, counted: false });
-    }
-    if (prior && (prior.state === "sending" || prior.state === "uncertain")) {
-      return this.resolveUncertainKey(idempotencyKey, { text: prior.text, chatId: prior.chatId, to }, generation);
-    }
-    const meta = store.meta();
-    if (meta.closed || meta.optedOut) {
-      const code = meta.closed ? "conversation_closed" : "opted_out";
+    const keyHash = logKeyHash(idempotencyKey);
+    const refuse = (refusal: string, event: "send_suppressed" | "send_limited"): SendBubbleResult => {
+      const prior = store.outboundByKey(idempotencyKey);
       if (!prior) {
+        // No body was ever composed, so none is stored. The row records
+        // the refusal so the key replays it instead of sending.
         store.addOutbound({
-          key: idempotencyKey, turn: 0, part: 0, tag: "code", text: message, attempts: 0, state: "refused", code,
+          key: idempotencyKey, turn: 0, part: 0, tag: "code", text: "", to,
+          attempts: 0, state: "refused", code: refusal,
           chatId: null, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
         });
       } else {
-        store.updateOutbound(idempotencyKey, { state: "refused", code, updatedAtMs: nowMs() });
+        store.updateOutbound(idempotencyKey, { state: "refused", code: refusal, updatedAtMs: nowMs() });
       }
-      logger.info("send_suppressed", { handle: this.logHandle(), key: idempotencyKey, code });
-      return finish({ key: idempotencyKey, state: "refused", code, fresh: false, counted: false });
+      logger.info(event, { handle: this.logHandle(), key: keyHash, code: refusal });
+      return { key: idempotencyKey, state: "refused", code: refusal, fresh: false, counted: false };
+    };
+    const prior = store.outboundByKey(idempotencyKey);
+    // A decided key replays its outcome without sending, even after opt-out.
+    if (prior && TERMINAL_SEND.has(prior.state)) {
+      return { key: idempotencyKey, state: prior.state, code: prior.code, fresh: false, counted: false };
     }
+    const meta = store.meta();
+    if (meta.closed || meta.optedOut) {
+      return refuse(meta.closed ? "conversation_closed" : "opted_out", "send_suppressed");
+    }
+    if (prior && (prior.state === "sending" || prior.state === "uncertain")) {
+      return this.resolveUncertainKey(idempotencyKey, { text: prior.text, chatId: prior.chatId, to: prior.to ?? to }, generation);
+    }
+    if (!isSignInCode(code)) {
+      return refuse("bad_code", "send_suppressed");
+    }
+    if (codeOverLimit({ codeHourKey: meta.codeHourKey, codeHourCount: meta.codeHourCount }, nowMs())) {
+      return refuse("code_limit_phone", "send_limited");
+    }
+    if (!(await this.deps.spend.codeReserve()).allowed) {
+      return refuse("code_limit_global", "send_limited");
+    }
+    this.countCode(1, nowMs());
+    const message = signInCodeMessage(code);
     if (!prior) {
       store.addOutbound({
-        key: idempotencyKey, turn: 0, part: 0, tag: "code", text: message, attempts: 0, state: "planned", code: null,
+        key: idempotencyKey, turn: 0, part: 0, tag: "code", text: message, to, attempts: 0, state: "planned", code: null,
         chatId: null, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
       });
     }
@@ -1095,39 +1132,49 @@ export class ConversationRunner {
         state: "sent", messageId: result.messageId, chatId: result.chatId, updatedAtMs: nowMs(),
       });
       this.applyHeldReceipts(result.messageId, result.chatId);
-      logger.info("send_sent", { handle: this.logHandle(), key: idempotencyKey, message: result.messageId, duplicate: result.duplicate });
-      return finish({ key: idempotencyKey, state: "sent", code: null, fresh: true, counted: true });
+      logger.info("send_sent", { handle: this.logHandle(), key: keyHash, message: result.messageId, duplicate: result.duplicate });
+      return { key: idempotencyKey, state: "sent", code: null, fresh: true, counted: false };
     } catch (err) {
       if (err instanceof GenerationStopped) throw err;
       if (err instanceof ChannelRefused) {
         store.updateOutbound(idempotencyKey, { state: "refused", code: err.code, updatedAtMs: nowMs() });
-        logger.warn("send_refused", { handle: this.logHandle(), key: idempotencyKey, code: err.code, status: err.status });
-        return finish({ key: idempotencyKey, state: "refused", code: err.code, fresh: false, counted: true });
+        logger.warn("send_refused", { handle: this.logHandle(), key: keyHash, code: err.code, status: err.status });
+        return { key: idempotencyKey, state: "refused", code: err.code, fresh: false, counted: false };
       }
       if (err instanceof ChannelFailed) {
         store.updateOutbound(idempotencyKey, { state: "failed", code: err.code, updatedAtMs: nowMs() });
-        logger.warn("send_failed", { handle: this.logHandle(), key: idempotencyKey, code: err.code, status: err.status });
-        return finish({ key: idempotencyKey, state: "failed", code: err.code, fresh: false, counted: true });
+        logger.warn("send_failed", { handle: this.logHandle(), key: keyHash, code: err.code, status: err.status });
+        return { key: idempotencyKey, state: "failed", code: err.code, fresh: false, counted: false };
       }
       store.updateOutbound(idempotencyKey, { state: "uncertain", updatedAtMs: nowMs() });
-      logger.warn("send_uncertain", { handle: this.logHandle(), key: idempotencyKey });
+      logger.warn("send_uncertain", { handle: this.logHandle(), key: keyHash });
       return this.resolveUncertainKey(idempotencyKey, { text: message, chatId: null, to }, generation);
     }
   }
 
   // Retries every uncertain or stuck sending row with its stored
-  // text. Runs on each alarm tick before turns, so an uncertain send
-  // resolves as soon as the provider answers again. Sending rows are
-  // safe to take: turns never overlap, so a sending row seen here is a
-  // crash remnant, not a live send.
+  // text and recipient. Runs on each alarm tick before turns, so an
+  // uncertain send resolves as soon as the provider answers again.
+  // Sending rows are safe to take: turns never overlap, so a sending row
+  // seen here is a crash remnant, not a live send. Codes refuse instead
+  // of replaying once the conversation opted out or closed.
   async resolveUncertain(): Promise<number> {
     const generation = this.store.meta().generation;
+    const meta = this.store.meta();
+    const suppressed = meta.closed || meta.optedOut;
     let resolved = 0;
     for (const row of this.store.outbounds()) {
       if (row.state !== "uncertain" && row.state !== "sending") continue;
+      if (row.tag === "code" && suppressed) {
+        const code = meta.closed ? "conversation_closed" : "opted_out";
+        this.store.updateOutbound(row.key, { state: "refused", code, updatedAtMs: this.deps.nowMs() });
+        this.deps.logger.info("send_suppressed", { handle: this.logHandle(), key: logKeyHash(row.key), code });
+        resolved += 1;
+        continue;
+      }
       const result = await this.resolveUncertainKey(
         row.key,
-        { text: row.text, chatId: row.chatId, to: this.store.meta().to },
+        { text: row.text, chatId: row.chatId, to: row.to ?? this.store.meta().to },
         generation,
       );
       if (result.state === "sent" || result.state === "refused") resolved += 1;
@@ -1144,6 +1191,15 @@ export class ConversationRunner {
     meta.dayCount = meta.dayKey === dayKey ? meta.dayCount + sent : sent;
     meta.hourKey = hourKey;
     meta.dayKey = dayKey;
+    this.store.saveMeta(meta);
+  }
+
+  private countCode(sent: number, nowMs: number): void {
+    if (sent === 0) return;
+    const meta = this.store.meta();
+    const codeHourKey = hourKeyFor(nowMs);
+    meta.codeHourCount = meta.codeHourKey === codeHourKey ? meta.codeHourCount + sent : sent;
+    meta.codeHourKey = codeHourKey;
     this.store.saveMeta(meta);
   }
 

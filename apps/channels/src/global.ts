@@ -2,7 +2,7 @@
 // One singleton row, in its own Durable Object in the worker and in
 // memory in tests. Spend is reserved before the model call and settled
 // after, so concurrent conversations cannot overshoot the budget.
-import { DEFAULT_DAILY_BUDGET_USD, GLOBAL_BYTES_DAILY, dayKeyFor } from "@mano/channels";
+import { CODE_GLOBAL_HOURLY_LIMIT, DEFAULT_DAILY_BUDGET_USD, GLOBAL_BYTES_DAILY, dayKeyFor, hourKeyFor } from "@mano/channels";
 
 export interface GlobalStateRow {
   cursor: string | null;
@@ -10,6 +10,8 @@ export interface GlobalStateRow {
   spentUsd: number;
   byteDay: string;
   bytesUsed: number;
+  codeHour: string;
+  codeCount: number;
 }
 
 export interface SpendReservation {
@@ -25,7 +27,7 @@ export interface ByteReservation {
 }
 
 export function defaultGlobalState(): GlobalStateRow {
-  return { cursor: null, spendDay: "", spentUsd: 0, byteDay: "", bytesUsed: 0 };
+  return { cursor: null, spendDay: "", spentUsd: 0, byteDay: "", bytesUsed: 0, codeHour: "", codeCount: 0 };
 }
 
 // Feed event IDs remembered as already enqueued. Bounded: older pages
@@ -59,6 +61,10 @@ export interface GlobalStore {
   notePersonBind(handleHash: string, personId: string): boolean;
   handlesForPerson(personId: string): string[];
   clearPerson(personId: string): void;
+  // Drops only the given handles for a person. A delete that wiped some
+  // conversations and failed others keeps the failed binds, so a retry
+  // still finds those conversations.
+  clearPersonHandles(personId: string, handleHashes: string[]): void;
   // High-watermark of feed event IDs already enqueued, so a page the
   // provider serves again (no next cursor) is not requeued.
   filterUnseen(ids: string[]): string[];
@@ -184,6 +190,13 @@ export class MemoryGlobalStore implements GlobalStore {
     }
   }
 
+  clearPersonHandles(personId: string, handleHashes: string[]): void {
+    const drop = new Set(handleHashes);
+    for (const [handleHash, bound] of this.personBinds) {
+      if (bound === personId && drop.has(handleHash)) this.personBinds.delete(handleHash);
+    }
+  }
+
   private seen: Set<string> = new Set();
 
   filterUnseen(ids: string[]): string[] {
@@ -205,17 +218,20 @@ export class GlobalLedger {
   private nowMs: () => number;
   private budgetUsd: number;
   private byteBudget: number;
+  private codeBudget: number;
 
   constructor(
     store: GlobalStore,
     nowMs: () => number,
     budgetUsd: number = DEFAULT_DAILY_BUDGET_USD,
     byteBudget: number = GLOBAL_BYTES_DAILY,
+    codeBudget: number = CODE_GLOBAL_HOURLY_LIMIT,
   ) {
     this.store = store;
     this.nowMs = nowMs;
     this.budgetUsd = budgetUsd;
     this.byteBudget = byteBudget;
+    this.codeBudget = codeBudget;
   }
 
   // Reserves the worst-case cost under a turn key. Idempotent: reusing a
@@ -289,6 +305,25 @@ export class GlobalLedger {
     this.store.releaseBytes(key);
   }
 
+  // One sign-in code against the global hourly cap. Counted, never held:
+  // a code is one send, so admission increments and nothing settles or
+  // releases. Tracked apart from model spend and bytes.
+  codeReserve(): { allowed: boolean; count: number } {
+    const hour = hourKeyFor(this.nowMs());
+    const state = this.store.state();
+    if (state.codeHour !== hour) {
+      state.codeHour = hour;
+      state.codeCount = 0;
+    }
+    if (state.codeCount >= this.codeBudget) {
+      this.store.save(state);
+      return { allowed: false, count: state.codeCount };
+    }
+    state.codeCount += 1;
+    this.store.save(state);
+    return { allowed: true, count: state.codeCount };
+  }
+
   noteRoute(chatHash: string, handleHash: string): void {
     this.store.noteRoute(chatHash, handleHash);
   }
@@ -307,6 +342,10 @@ export class GlobalLedger {
 
   clearPerson(personId: string): void {
     this.store.clearPerson(personId);
+  }
+
+  clearPersonHandles(personId: string, handleHashes: string[]): void {
+    this.store.clearPersonHandles(personId, handleHashes);
   }
 
   filterUnseen(ids: string[]): string[] {

@@ -11,6 +11,7 @@ import {
   errName,
   hashChatId,
   hashHandle,
+  isSignInCode,
   lifecycleStateFor,
   normalizeHandle,
   parseBlooioEvent,
@@ -149,9 +150,14 @@ export async function routeEvent(event: NormalizedEvent, env: Env): Promise<"rou
   return "routed";
 }
 
+// Binding callers reach the service routes through service-binding
+// fetch, which never carries the public hostname (same convention as the
+// conversation and state binding URLs below). Anything arriving on the
+// public route is refused before the secret is even checked.
+const INTERNAL_HOST = "channels";
+
 function internalAllowed(request: Request, env: Env): boolean {
-  // Service-binding routes share the public fetch surface, so they need
-  // their own secret. Unset or mismatched fails closed.
+  if (new URL(request.url).hostname !== INTERNAL_HOST) return false;
   const secret = env.INTERNAL_SECRET;
   if (!secret) return false;
   const given = request.headers.get("x-mano-internal") ?? "";
@@ -162,31 +168,34 @@ function internalAllowed(request: Request, env: Env): boolean {
 }
 
 // Sends a sign-in code over Mano's own line. Called by accounts through
-// the service binding, never by the public internet.
+// the service binding, never by the public internet. Takes six digits;
+// Channels renders the one code text itself.
 export async function handleSendCode(request: Request, env: Env): Promise<Response> {
   if (!internalAllowed(request, env)) return new Response("Forbidden.", { status: 403 });
   const body = (await request.json().catch(() => null)) as {
     to?: unknown;
-    message?: unknown;
+    code?: unknown;
     idempotencyKey?: unknown;
   } | null;
   const to = typeof body?.to === "string" ? normalizeHandle(body.to) : null;
-  if (!to || typeof body?.message !== "string" || !body.message || typeof body?.idempotencyKey !== "string" || !body.idempotencyKey) {
+  if (!to || typeof body?.code !== "string" || !isSignInCode(body.code) || typeof body?.idempotencyKey !== "string" || !body.idempotencyKey) {
     return new Response("Bad code send.", { status: 400 });
   }
   const handleHash = await hashHandle(to, env.MANO_HANDLE_PEPPER);
+  const { personId } = await buildAccountsDirectory(env).resolvePerson(to);
   const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));
   const res = await stub.fetch("https://conversation/internal/send-code", {
     method: "POST",
-    body: JSON.stringify({ handleHash, to, message: body.message, idempotencyKey: body.idempotencyKey }),
+    body: JSON.stringify({ handleHash, to, code: body.code, idempotencyKey: body.idempotencyKey, personId }),
   });
   if (!res.ok) return new Response("Code send failed.", { status: 502 });
   return Response.json(await res.json());
 }
 
 // Deletes every conversation a person owns. Accounts calls this when an
-// account is deleted; the person binds recorded at create-or-route say
-// which conversations those are.
+// account is deleted; the person binds recorded at create-or-route and on
+// code sends say which conversations those are. Only wiped conversations
+// unbind, so a retry still finds the rest; any failed wipe fails the call.
 export async function handleDeletePerson(request: Request, env: Env): Promise<Response> {
   if (!internalAllowed(request, env)) return new Response("Forbidden.", { status: 403 });
   const body = (await request.json().catch(() => null)) as { personId?: unknown } | null;
@@ -199,20 +208,34 @@ export async function handleDeletePerson(request: Request, env: Env): Promise<Re
   if (!lookup.ok) throw new Error(`Person lookup failed: ${lookup.status}`);
   const { handleHashes } = (await lookup.json()) as { handleHashes: string[] };
   let deleted = 0;
+  let failed = 0;
+  const wiped: string[] = [];
   for (const handleHash of handleHashes) {
     const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));
-    const res = await stub.fetch("https://conversation/internal/delete", {
-      method: "POST",
-      body: JSON.stringify({ handleHash }),
-    });
-    if (res.ok) deleted += 1;
+    try {
+      const res = await stub.fetch("https://conversation/internal/delete", {
+        method: "POST",
+        body: JSON.stringify({ handleHash }),
+      });
+      if (res.ok) {
+        deleted += 1;
+        wiped.push(handleHash);
+      } else {
+        failed += 1;
+      }
+    } catch {
+      failed += 1;
+    }
   }
-  await globalStateStub(env).fetch("https://state/internal/person-unbind", {
-    method: "POST",
-    body: JSON.stringify({ personId: body.personId }),
-  });
-  createLogger().info("person_deleted", { deleted });
-  return Response.json({ deleted });
+  if (wiped.length > 0) {
+    await globalStateStub(env).fetch("https://state/internal/person-unbind", {
+      method: "POST",
+      body: JSON.stringify({ personId: body.personId, handleHashes: wiped }),
+    });
+  }
+  createLogger().info("person_deleted", { deleted, failed });
+  if (failed > 0) return Response.json({ deleted, failed }, { status: 502 });
+  return Response.json({ deleted, failed });
 }
 
 async function routeForChat(env: Env, chatId: string): Promise<string | null> {
