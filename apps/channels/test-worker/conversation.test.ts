@@ -208,7 +208,7 @@ describe("ConversationDO on SQLite", () => {
       body: JSON.stringify({ handleHash: "hash-del" }),
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, filesDeleted: 0, agentCleared: null });
+    expect(await res.json()).toEqual({ ok: true, filesDeleted: 0, engineRemoved: null, agentCleared: null });
     expect(await postEvent(stub, "hash-del", inbound("evt_do_del", "Hello."))).toBe("queued");
   });
 

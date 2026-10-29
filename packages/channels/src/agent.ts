@@ -11,7 +11,7 @@
 // minted for this handle only. The agent forwards the grant to the
 // engine with its own token; it never holds the grant secret.
 import { guardReply } from "@mano/persona";
-import { mintHandleGrant } from "@mano/protocol";
+import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
 
 import { boundFetch } from "./fetch.js";
 import { ResponderFailed, type Responder, type ResponderResult, type TurnInput } from "./responder.js";
@@ -169,7 +169,7 @@ export class AgentResponder implements Responder {
         if (data.status === "waiting_approval" && typeof data.approvalId === "string" && typeof data.approval === "string") {
           const approvalId = data.approvalId;
           const approval = data.approval;
-          result.afterSent = (sent) => this.reportPresented(approvalId, approval, sent);
+          result.afterSent = (sent) => this.reportPresented(approvalId, approval, generation, sent);
         }
         return result;
       }
@@ -183,9 +183,15 @@ export class AgentResponder implements Responder {
   // YES to it can count. Only bubbles the provider accepted count, and
   // the question must appear in them whole (whitespace aside). Anything
   // less reports nothing, and the agent will not accept a YES.
-  private async reportPresented(approvalId: string, approval: string, sentTexts: string[]): Promise<void> {
+  private async reportPresented(approvalId: string, approval: string, generation: number, sentTexts: string[]): Promise<void> {
     if (!collapse(sentTexts.join(" ")).includes(collapse(approval))) return;
-    const raw = JSON.stringify({ handleHash: this.handleHash, approvalId, textHash: await presentationHash(approval) });
+    const raw = JSON.stringify({
+      handleHash: this.handleHash,
+      approvalId,
+      textHash: await presentationHash(approval),
+      generation,
+      grant: await mintHandleGrant(this.handleHash, this.grantSecret),
+    });
     const timestamp = this.nowSeconds();
     const res = await this.fetchFn(`${this.agentUrl}${AGENT_PRESENTED_PATH}`, {
       method: "POST",
@@ -251,4 +257,40 @@ export async function notifyAgentDeleted(notice: AgentDeletedNotice): Promise<bo
   });
   await res.body?.cancel().catch(() => undefined);
   return res.ok;
+}
+
+export interface EngineConversationDelete {
+  engineUrl: string;
+  channelsToken: string;
+  grantSecret: string;
+  handleHash: string;
+  fetchFn?: typeof fetch;
+}
+
+// Asks Engine to remove everything this person's agent kept for the
+// conversation (reminders, turn ledger, approval pointer, pending
+// approvals, memory) in one transaction. Channels' own token opens only
+// this route, and only with a grant for this handle. Returns Engine's
+// counts, or null when Engine did not confirm.
+export async function deleteConversationInEngine(
+  req: EngineConversationDelete,
+): Promise<Record<string, number | boolean> | null> {
+  const personId = personIdForHandle(req.handleHash);
+  const res = await (req.fetchFn ?? boundFetch)(
+    `${req.engineUrl.replace(/\/$/, "")}/api/persons/${encodeURIComponent(personId)}/conversation`,
+    {
+      method: "DELETE",
+      signal: AbortSignal.timeout(30_000),
+      headers: {
+        authorization: `Bearer ${req.channelsToken}`,
+        "x-mano-handle-grant": await mintHandleGrant(req.handleHash, req.grantSecret),
+      },
+    },
+  );
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  const body = (await res.json().catch(() => null)) as { removed?: Record<string, number | boolean> } | null;
+  return body?.removed ?? null;
 }

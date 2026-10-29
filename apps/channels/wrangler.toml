@@ -57,3 +57,5 @@ MANO_REPLY_MODEL = "muse-spark-1.3"
 #   MANO_AGENT_SECRET (signs agent traffic both ways, shared with the
 #   agent) and MANO_HANDLE_GRANT_SECRET (signs per-turn handle grants,
 #   shared with the engine, never the agent)
+# Engine, for removing a deleted conversation's agent state:
+#   MANO_ENGINE_URL (plain var) and the secret MANO_ENGINE_CHANNELS_TOKEN

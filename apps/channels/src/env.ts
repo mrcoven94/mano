@@ -35,6 +35,10 @@ export interface Env {
   // the agent can act for the handle that just texted and no one else.
   // The engine holds the same secret; the agent never does.
   MANO_HANDLE_GRANT_SECRET?: string;
+  // Engine, for removing a deleted conversation's agent state. Channels'
+  // own Engine token opens only that route.
+  MANO_ENGINE_URL?: string;
+  MANO_ENGINE_CHANNELS_TOKEN?: string;
 }
 
 export function numberEnv(value: string | undefined, fallback: number): number {

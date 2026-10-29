@@ -4,6 +4,7 @@
 // reaches them from the queue consumer, never from the public internet.
 import {
   AgentResponder,
+  deleteConversationInEngine,
   notifyAgentDeleted,
   BlooioChannel,
   RecordingChannel,
@@ -288,8 +289,19 @@ export class ConversationDO implements DurableObject {
         filesDeleted = await new R2FileStore(this.env.FILES).deletePrefix(conversationFilePrefix(body.handleHash));
       }
       await this.ctx.storage.deleteAlarm();
-      // The agent holds the rest of this person's state (waiting approval,
-      // reminders, Engine memory, session history) and clears it too.
+      // Engine holds the rest of this person's state (reminders, turn
+      // ledger, approval pointer, pending approvals, memory) and removes it
+      // in one transaction; the agent then retires its session history.
+      let engineRemoved: Record<string, number | boolean> | null = null;
+      if (this.env.MANO_ENGINE_URL && this.env.MANO_ENGINE_CHANNELS_TOKEN && this.env.MANO_HANDLE_GRANT_SECRET) {
+        engineRemoved = await deleteConversationInEngine({
+          engineUrl: this.env.MANO_ENGINE_URL,
+          channelsToken: this.env.MANO_ENGINE_CHANNELS_TOKEN,
+          grantSecret: this.env.MANO_HANDLE_GRANT_SECRET,
+          handleHash: body.handleHash,
+        }).catch(() => null);
+        if (!engineRemoved) this.logger.warn("engine_delete_failed", { handle: body.handleHash });
+      }
       let agentCleared: boolean | null = null;
       if (this.env.AGENT_URL && this.env.MANO_AGENT_SECRET && this.env.MANO_HANDLE_GRANT_SECRET) {
         agentCleared = await notifyAgentDeleted({
@@ -301,8 +313,8 @@ export class ConversationDO implements DurableObject {
         }).catch(() => false);
         if (!agentCleared) this.logger.warn("agent_delete_failed", { handle: body.handleHash });
       }
-      this.logger.info("conversation_deleted", { handle: body.handleHash, filesDeleted, agentCleared });
-      return Response.json({ ok: true, filesDeleted, agentCleared });
+      this.logger.info("conversation_deleted", { handle: body.handleHash, filesDeleted, engineCleared: engineRemoved !== null, agentCleared });
+      return Response.json({ ok: true, filesDeleted, engineRemoved, agentCleared });
     }
     if (request.method === "GET" && url.pathname === "/internal/standin") {
       // Only reachable when no provider key is configured, in which case

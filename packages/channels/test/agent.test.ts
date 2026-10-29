@@ -4,6 +4,7 @@ import { verifyHandleGrant } from "@mano/protocol";
 import {
   AgentResponder,
   computeSignatureHex,
+  deleteConversationInEngine,
   notifyAgentDeleted,
   presentationHash,
   ResponderFailed,
@@ -260,7 +261,8 @@ describe("reporting a shown approval question", () => {
     const result = await agentWith(seen).respond({ texts: ["file it"], attachmentCount: 0, turnKey: KEY });
     await result.afterSent?.(["Ready.", "Ready to send: renewal. Name: Rosa Testcase.", "Reply YES to send exactly this, or NO to stop."]);
     expect(seen).toHaveLength(1);
-    expect(seen[0].body).toEqual({ handleHash: HANDLE, approvalId: "appr_1", textHash: await presentationHash(approval) });
+    expect(seen[0].body).toMatchObject({ handleHash: HANDLE, approvalId: "appr_1", textHash: await presentationHash(approval), generation: 0 });
+    expect((await verifyHandleGrant(String(seen[0].body.grant), "g"))?.handle).toBe(HANDLE);
   });
 
   it("reports nothing when part of the question did not go out", async () => {
@@ -275,5 +277,35 @@ describe("reporting a shown approval question", () => {
     expect(await presentationHash("Reply YES  to send\nexactly this.")).toBe(
       "33f67fe9f135d7efc24d4fbe91c1ed3c8bc540adde738809768ff2c8cbdb1245",
     );
+  });
+});
+
+describe("deleting a conversation in Engine", () => {
+  it("calls Engine's conversation delete for this handle's person with Channels' token and a grant", async () => {
+    const seen: { url: string; init: RequestInit }[] = [];
+    const fetchFn = (async (url: string, init: RequestInit) => {
+      seen.push({ url, init });
+      return Response.json({ removed: { remindersCancelled: 2, turnsDeleted: 1, pendingPointerCleared: true, approvalsRejected: 1, memoriesDeleted: 2 } });
+    }) as typeof fetch;
+    const removed = await deleteConversationInEngine({
+      engineUrl: "https://engine.example/",
+      channelsToken: "channels-token",
+      grantSecret: "grant-secret-for-tests",
+      handleHash: HANDLE,
+      fetchFn,
+    });
+    expect(removed).toMatchObject({ remindersCancelled: 2, pendingPointerCleared: true });
+    expect(seen[0].url).toBe(`https://engine.example/api/persons/handle-${HANDLE}/conversation`);
+    expect(seen[0].init.method).toBe("DELETE");
+    const headers = seen[0].init.headers as Record<string, string>;
+    expect(headers.authorization).toBe("Bearer channels-token");
+    expect((await verifyHandleGrant(headers["x-mano-handle-grant"], "grant-secret-for-tests"))?.handle).toBe(HANDLE);
+  });
+
+  it("reports an unconfirmed delete as null", async () => {
+    const fetchFn = (async () => new Response("no", { status: 403 })) as typeof fetch;
+    expect(
+      await deleteConversationInEngine({ engineUrl: "https://e", channelsToken: "t", grantSecret: "g", handleHash: HANDLE, fetchFn }),
+    ).toBeNull();
   });
 });
