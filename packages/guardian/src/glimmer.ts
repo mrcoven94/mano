@@ -34,6 +34,10 @@ export interface ServerInfo {
   image: { tag: string; digest: string };
 }
 
+// workerd throws "Illegal invocation" when fetch is called with any
+// receiver but the global object, as a stored method call would.
+const boundFetch: typeof fetch = (...args) => globalThis.fetch(...args);
+
 function isVerdict(value: unknown): value is Verdict {
   return value === "pass" || value === "fix" || value === "block";
 }
@@ -85,7 +89,7 @@ export class GlimmerChecker implements Checker {
     this.model = options.model ?? DEFAULT_GUARDIAN_MODEL;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
     this.knownEntities = options.knownEntities;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? boundFetch;
   }
 
   // Model and image the server reported for its last successful answer, or
