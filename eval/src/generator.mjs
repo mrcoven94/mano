@@ -70,16 +70,22 @@ export function loadPrivatePack() {
   } catch {
     throw new Error(`cannot read private pack at ${p}`);
   }
-  // A JSON parse error echoes pack text, so it is replaced with a fixed
-  // message carrying only the file's SHA-256. Pack wording must never
-  // reach an error, a log, or a report.
+  // Every failure below carries only a fixed message and the file's
+  // SHA-256. Parse errors echo pack text and validation errors name
+  // family keys, so neither may escape: pack wording must never reach
+  // an error, a log, or a report.
+  const tag = `(sha256: ${createHash("sha256").update(raw).digest("hex")})`;
   let pack;
   try {
     pack = JSON.parse(raw);
   } catch {
-    throw new Error(`private pack at ${p} is not valid JSON (sha256: ${createHash("sha256").update(raw).digest("hex")})`);
+    throw new Error(`private pack is not valid JSON ${tag}`);
   }
-  return validatePack(pack);
+  try {
+    return validatePack(pack);
+  } catch {
+    throw new Error(`private pack failed validation ${tag}`);
+  }
 }
 
 function fill(template, map) {

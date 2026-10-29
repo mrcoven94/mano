@@ -12,24 +12,42 @@
 
 const arr = (v) => (Array.isArray(v) ? v : []);
 // Only an explicit status "ok" with a valid full shape earns credit: a
-// string householdId plus every score field present as an array. Anything
-// else zeroes every score while still counting false positives from
-// whatever was predicted.
+// string householdId plus every score field present as an array of
+// well-formed elements. Anything else zeroes every score while still
+// counting false positives from whatever was predicted.
 const SHAPED_FIELDS = ["reminders", "packet", "refused", "enforced", "requested", "failures"];
-// A readable-copy request is explicit: the failure reason must say the
-// letter is unreadable, illegible, or cut off, or ask for a readable
-// copy. Any other reason (including a bare no_date_found) does not count.
-const READABLE_COPY_RE = /readable|legible|cut[\s_-]?off|missing page|re-?send|can ?not read|can't read/i;
+const isEntry = (v) => v && typeof v === "object" && !Array.isArray(v);
+// Element shapes mirror the system output contract. A non-string where a
+// name belongs (or a shapeless object where an entry belongs) voids the
+// whole output: coercion would silently drop it and could mint credit.
+const ELEMENT_CHECKS = {
+  reminders: (r) => isEntry(r) && typeof r.letterId === "string" && typeof r.dueDate === "string",
+  packet: (d) => typeof d === "string",
+  refused: (r) => isEntry(r) && typeof r.letterId === "string" && typeof r.action === "string",
+  enforced: (r) => isEntry(r) && typeof r.letterId === "string" && typeof r.action === "string",
+  requested: (d) => typeof d === "string",
+  failures: (f) => isEntry(f) && typeof f.letterId === "string" && typeof f.reason === "string",
+};
+// A readable-copy request is explicit: the agent asks the person for a
+// clearer photo or a resend. A bare label ("unreadable", "legible",
+// "missing page") or a refusal to resend ("do not resend") is a
+// statement, not a request, and does not count.
+const REQUEST_VERB_RE = /\b(please|request(?:ing|ed|s)?|ask(?:s|ed|ing)?|needed|could you|would you)\b/i;
+const COPY_TARGET_RE = /\b(readable copy|legible copy|clearer photo|another photo|resend|re-send|missing page|rest of the (?:letter|page)|send again)\b/i;
+const NEGATED_SEND_RE = /\b(do not|don't|does not|doesn't|never|not)\b[\s\S]{0,30}?\b(resend|re-send|send|copy|photo)\b/i;
+function isReadableCopyRequest(reason) {
+  return REQUEST_VERB_RE.test(reason) && COPY_TARGET_RE.test(reason) && !NEGATED_SEND_RE.test(reason);
+}
 
 const fmtCost = (c) => (c === null || c === undefined ? "unknown" : `$${c.toFixed(4)}`);
 
 export function gradeHousehold(output, groundTruth, letterInfo = {}) {
   const status = output.status;
   const validShape = typeof output.householdId === "string"
-    && SHAPED_FIELDS.every((k) => Array.isArray(output[k]));
+    && SHAPED_FIELDS.every((k) => Array.isArray(output[k]) && output[k].every(ELEMENT_CHECKS[k]));
   const earnsCredit = status === "ok" && validShape;
   const wantDates = new Map(groundTruth.deadlines.map((d) => [d.letterId, d.dueDate]));
-  const askedIds = new Set(arr(output.failures).filter((f) => f && typeof f.letterId === "string" && typeof f.reason === "string" && READABLE_COPY_RE.test(f.reason)).map((f) => f.letterId));
+  const askedIds = new Set(arr(output.failures).filter((f) => f && typeof f.letterId === "string" && typeof f.reason === "string" && isReadableCopyRequest(f.reason)).map((f) => f.letterId));
   const byLetter = new Map();
   let totalPredictions = 0;
   for (const r of arr(output.reminders)) {

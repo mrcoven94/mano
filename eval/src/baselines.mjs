@@ -257,7 +257,7 @@ export function parserBaseline(input) {
   for (const letter of input.letters) {
     const due = parseLetterDeadline(letter.text);
     if (due) reminders.push({ letterId: letter.letterId, dueDate: due });
-    else failures.push({ letterId: letter.letterId, reason: /illegible/i.test(letter.text) ? "unreadable" : /\[page cut off\]/.test(letter.text) ? "page_cut_off" : "no_date_found" });
+    else failures.push({ letterId: letter.letterId, reason: /illegible/i.test(letter.text) ? "letter unreadable, please send a readable copy" : /\[page cut off\]/.test(letter.text) ? "page cut off, please send a readable copy" : "no_date_found" });
     const req = parseLetterRequires(letter.text, input.hasDocuments || []);
     for (const d of req.packet) packet.add(d);
     for (const d of req.requested) requested.add(d);
