@@ -529,9 +529,9 @@ describe("infrastructure retries", () => {
   });
 
   it("keeps the spend hold until a failed settlement succeeds", async () => {
-    // Budget 10 fits the $9.20 worst-case hold but not hold plus probe.
+    // Budget 35 fits the $33.80 worst-case hold but not hold plus probe.
     const h = makeHarness({
-      budgetUsd: 10,
+      budgetUsd: 35,
       config: { usdPer1kChars: 1 },
       responder: {
         name: "metered",

@@ -23,10 +23,23 @@ describe("SparkResponder", () => {
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body.model).toBe("muse-spark-1.3");
     expect(body.store).toBe(false);
-    expect(body.max_output_tokens).toBe(2048);
+    expect(body.max_output_tokens).toBe(8192);
+    expect(body.reasoning).toEqual({ effort: "minimal" });
     expect(body).not.toHaveProperty("tools");
     expect(result.bubbles.join(" ")).toBe("First. Second.");
     expect(result.attempts).toBe(1);
+  });
+
+  it("lets per-task callers raise the reasoning effort", async () => {
+    const fetchFn = vi.fn(async () =>
+      new Response(JSON.stringify({ status: "completed", output: [{ content: [{ type: "output_text", text: "Deep." }] }] }), {
+        status: 200,
+      }),
+    );
+    const responder = new SparkResponder({ apiKey: "test-key-not-real", fetchFn: fetchFn as typeof fetch, reasoningEffort: "high" });
+    await responder.respond({ texts: ["Hi"], attachmentCount: 0 });
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect((JSON.parse(init.body as string) as Record<string, unknown>).reasoning).toEqual({ effort: "high" });
   });
 
   it("counts every attempt, including retries", async () => {
