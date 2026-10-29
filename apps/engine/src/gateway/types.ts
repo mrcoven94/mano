@@ -110,11 +110,6 @@ export interface Executor {
 // means the executor confirms it never ran this key.
 export type CheckOutcome = { found: true; externalId: string } | { found: false };
 
-// One audit_log entry. Idempotency keys are caller-supplied and can carry
-// a URL or personal details, so an entry holds a key only as its SHA-256
-// (keyHash); a raw key field does not type-check.
-export type AuditEntry = { event: string; key?: never; [field: string]: unknown };
-
 export class TimeoutError extends Error {
   constructor(msg = "executor timed out") {
     super(msg);

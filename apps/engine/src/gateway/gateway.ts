@@ -1,18 +1,18 @@
 import { canonicalJson } from "@mano/protocol";
 import { sha256Hex, bytesToBase64 } from "../hash.js";
-import { checkLinkSafety, extractHttpUrls } from "../link-safety.js";
+import { checkLinkSafety, extractHttpUrls, type LinkBlockReason } from "../link-safety.js";
 import { approvalWindow, evaluatePolicy } from "./policy.js";
 import type {
   ActionRequest,
   Approval,
   Attempt,
-  AuditEntry,
   Executor,
   GatewayResult,
   PolicyDecision,
   Receipt,
 } from "./types.js";
 import { DefiniteFailureError, TimeoutError } from "./types.js";
+import { auditDigest, type AuditDigest, type AuditEntry } from "./audit.js";
 import { ValidationError, parseActionRequest } from "./validate.js";
 import { LocalRulesChecker, checkerWithTimeout, type Checker, type CheckResult } from "./checker.js";
 
@@ -71,7 +71,7 @@ export interface ApprovalStore {
   // a durable recovery run while this holds.
   hasUnresolvedAttempts(): boolean;
   updateAttempt(key: string, status: Attempt["status"]): void;
-  audit(entry: AuditEntry): void;
+  audit<const T extends { event: string }>(entry: T & AuditEntry<T>): void;
 }
 
 function transition(store: Map<string, Approval>, id: string, to: Approval["status"]): boolean {
@@ -85,7 +85,7 @@ export class MemoryApprovalStore implements ApprovalStore {
   approvals = new Map<string, Approval>();
   receipts = new Map<string, Receipt>();
   attempts = new Map<string, Attempt>();
-  auditLog: AuditEntry[] = [];
+  auditLog: Record<string, unknown>[] = [];
   getApproval(id: string) {
     return this.approvals.get(id) ?? null;
   }
@@ -198,7 +198,7 @@ export class MemoryApprovalStore implements ApprovalStore {
     const current = this.attempts.get(key);
     if (current) this.attempts.set(key, { ...current, status, updatedAt: new Date().toISOString() });
   }
-  audit(entry: AuditEntry) {
+  audit<const T extends { event: string }>(entry: T & AuditEntry<T>) {
     this.auditLog.push(entry);
   }
 }
@@ -222,24 +222,10 @@ export class MapDocumentStore implements DocumentStore {
 export type LinkCheckFn = (
   url: string,
   opts: { forDisplay: boolean },
-) => Promise<{ allowed: boolean; reason?: string }>;
+) => Promise<{ allowed: boolean; reason?: LinkBlockReason }>;
 
 const defaultLinkCheck: LinkCheckFn = (url, opts) =>
   checkLinkSafety(url, { forDisplay: opts.forDisplay });
-
-// Audit-safe form of a URL: scheme and host in clear, path, query and
-// fragment replaced by the SHA-256 of the rest. Query strings carry
-// personal details, which must never land in the audit log.
-export async function redactUrlForAudit(url: string): Promise<string> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return `unparseable-url#${await sha256Hex(url)}`;
-  }
-  const rest = `${parsed.pathname}${parsed.search}${parsed.hash}`;
-  return `${parsed.protocol}//${parsed.host}#${await sha256Hex(rest)}`;
-}
 
 export interface GatewayOptions {
   policyOverrides?: Partial<Record<string, PolicyDecision>>;
@@ -333,6 +319,9 @@ function approvalGoneReason(status: Approval["status"]): string {
 // The outcome of one reconcile lookup. Settled carries a receipt-backed
 // result; absent means the caller may adopt the key and execute; a throw
 // inside check becomes unavailable, which keeps the attempt unknown.
+// Audit digests for one approval, computed before any check or claim.
+type AuditHashes = { key: AuditDigest; approval: AuditDigest };
+
 type ReconcileOutcome =
   | { kind: "settled"; result: GatewayResult }
   | { kind: "absent" }
@@ -376,7 +365,7 @@ export class ActionGateway {
         origin: req.origin ?? "person",
       });
     } catch (err) {
-      this.store.audit({ event: "gateway.checker_error", detail: String(err) });
+      this.store.audit({ event: "gateway.checker_error", detailHash: await auditDigest(String(err)) });
       return { ok: false, reason: "Blocked by review: the checker failed and the gateway fails closed." };
     }
     if (result.verdict === "pass") return { ok: true, problems: [] };
@@ -389,7 +378,7 @@ export class ActionGateway {
     for (const url of collectActionUrls(req)) {
       const verdict = await this.linkCheck(url, { forDisplay: false });
       if (!verdict.allowed) {
-        this.store.audit({ event: "gateway.link_block", url: await redactUrlForAudit(url), reason: verdict.reason });
+        this.store.audit({ event: "gateway.link_block", urlHash: await auditDigest(url), reason: verdict.reason });
         return { status: "blocked", reason: `Blocked before acting: link check failed for ${url}: ${verdict.reason ?? "blocked"}` };
       }
     }
@@ -432,11 +421,11 @@ export class ActionGateway {
     return { ...req, document: { bytesB64: bytesToBase64(raw), hash: documentHash } };
   }
 
-  private async receiptReuse(req: ActionRequest, contentHash: string): Promise<GatewayResult | null> {
+  private receiptReuse(req: ActionRequest, contentHash: string, keyHash: AuditDigest): GatewayResult | null {
     const existing = this.store.getReceiptByKey(req.idempotencyKey);
     if (!existing) return null;
     if (existing.requestHash && existing.requestHash !== contentHash) {
-      this.store.audit({ event: "gateway.key_reuse", keyHash: await sha256Hex(req.idempotencyKey) });
+      this.store.audit({ event: "gateway.key_reuse", keyHash });
       return { status: "blocked", reason: "This idempotency key was already used with different content." };
     }
     return { status: "completed", receipt: existing };
@@ -448,12 +437,13 @@ export class ActionGateway {
       req = parseActionRequest(raw);
     } catch (err) {
       const detail = err instanceof ValidationError ? err.message : "unreadable request";
-      this.store.audit({ event: "gateway.invalid", detail, at: now.toISOString() });
+      this.store.audit({ event: "gateway.invalid", detailHash: await auditDigest(detail) });
       return { status: "blocked", reason: `Invalid action request: ${detail}` };
     }
-    this.store.audit({ event: "gateway.decide", type: req.type, keyHash: await sha256Hex(req.idempotencyKey), at: now.toISOString() });
+    const keyHash = await auditDigest(req.idempotencyKey);
+    this.store.audit({ event: "gateway.decide", type: req.type, keyHash });
     const contentHash = await contentHashOf(req);
-    const replay = await this.receiptReuse(req, contentHash);
+    const replay = this.receiptReuse(req, contentHash, keyHash);
     if (replay) return replay;
 
     const decision = evaluatePolicy(req, this.opts.policyOverrides as never);
@@ -516,12 +506,18 @@ export class ActionGateway {
   ): Promise<GatewayResult> {
     const approval = this.store.getApproval(approvalId);
     if (!approval) return { status: "blocked", reason: "Approval not found." };
+    // Every audit digest is computed here, before any expiry check or
+    // claim, so nothing awaits between the final claim and execute.
+    const hashes: AuditHashes = {
+      key: await auditDigest(approval.idempotencyKey),
+      approval: await auditDigest(approval.id),
+    };
     // Consumed approvals retry first, whatever the expiry: their attempt
     // always reconciles, and expiry only stops new execution (see
     // retryConsumedApproval, which reconciles before any expiry decision).
     if (approval.status !== "pending") {
       if (approval.status === "approved" && approval.approvedByHumanId === humanId) {
-        return this.retryConsumedApproval(approval, humanId, now);
+        return this.retryConsumedApproval(approval, humanId, now, hashes);
       }
       return { status: "blocked", reason: approvalGoneReason(approval.status) };
     }
@@ -555,7 +551,7 @@ export class ActionGateway {
     if (!check.ok) return { status: "blocked", reason: check.reason };
     if (frozen.requestHash !== approval.requestHash) {
       this.store.markApprovalStale(approvalId);
-      this.store.audit({ event: "gateway.stale_block", approvalId });
+      this.store.audit({ event: "gateway.stale_block", approvalHash: hashes.approval });
       const fresh = this.store.getApproval(approvalId);
       return { status: "stale", approval: fresh ?? approval, reason: "Document changed after approval." };
     }
@@ -572,10 +568,10 @@ export class ActionGateway {
     const prior = this.store.getAttempt(stored.idempotencyKey);
     if (prior?.status === "unknown") {
       if (prior.requestHash && prior.requestHash !== (await contentHashOf(stored))) {
-        this.store.audit({ event: "gateway.key_reuse", keyHash: await sha256Hex(stored.idempotencyKey) });
+        this.store.audit({ event: "gateway.key_reuse", keyHash: hashes.key });
         return { status: "blocked", reason: "This idempotency key was already used with different content." };
       }
-      const settled = await this.reconcileUnknown(stored, now);
+      const settled = await this.reconcileUnknown(stored, now, hashes.key);
       if (settled.kind !== "absent") return settled.result;
     }
     const attempt: Attempt = {
@@ -604,13 +600,18 @@ export class ActionGateway {
       }
       return { status: "blocked", reason: approvalGoneReason(fresh?.status ?? approval.status) };
     }
-    return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now);
+    return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now, hashes.key);
   }
 
   // Retries a consumed approval without asking the person again. Failed
   // attempts rerun cleanly; unknown attempts reconcile first, and only an
   // absent outcome re-executes. Every check runs again either way.
-  private async retryConsumedApproval(approval: Approval, humanId: string, now: Date): Promise<GatewayResult> {
+  private async retryConsumedApproval(
+    approval: Approval,
+    humanId: string,
+    now: Date,
+    hashes: AuditHashes,
+  ): Promise<GatewayResult> {
     let stored: ActionRequest;
     try {
       stored = parseActionRequest(JSON.parse(approval.requestJson));
@@ -628,7 +629,7 @@ export class ActionGateway {
     const check = await this.runChecker(stored, frozen.documentHash);
     if (!check.ok) return { status: "blocked", reason: check.reason };
     if (frozen.requestHash !== approval.requestHash) {
-      this.store.audit({ event: "gateway.stale_block", approvalId: approval.id });
+      this.store.audit({ event: "gateway.stale_block", approvalHash: hashes.approval });
       return { status: "stale", approval, reason: "Document changed after approval." };
     }
     const attempt = this.store.getAttempt(approval.idempotencyKey);
@@ -638,9 +639,11 @@ export class ActionGateway {
     // Reconcile before any expiry decision: if the action happened, the
     // person gets the receipt even after the window passed.
     if (attempt.status === "unknown") {
-      const settled = await this.reconcileUnknown(stored, now);
+      const settled = await this.reconcileUnknown(stored, now, hashes.key);
       if (settled.kind !== "absent") return settled.result;
     }
+    // From here to execute nothing awaits: a window that is open at this
+    // check is still open when the executor starts.
     if (new Date(approval.expiresAt).getTime() < Date.now()) {
       return { status: "blocked", reason: "Approval expired." };
     }
@@ -655,8 +658,8 @@ export class ActionGateway {
         if (receipt) return { status: "completed", receipt };
         return { status: "in_progress", reason: "Another request with this idempotency key is running." };
       }
-      this.store.audit({ event: "gateway.retry_consumed", keyHash: await sha256Hex(approval.idempotencyKey), from: attempt.status });
-      return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now);
+      this.store.audit({ event: "gateway.retry_consumed", keyHash: hashes.key, from: attempt.status });
+      return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now, hashes.key);
     }
     if (attempt.status === "in_flight") {
       return { status: "in_progress", reason: "Another request with this idempotency key is running." };
@@ -694,12 +697,12 @@ export class ActionGateway {
   // adopt the key and execute; an unreachable executor keeps the attempt
   // unknown and blocks. A failed lookup is never treated as "did not
   // happen".
-  private async reconcileUnknown(req: ActionRequest, now: Date): Promise<ReconcileOutcome> {
+  private async reconcileUnknown(req: ActionRequest, now: Date, keyHash: AuditDigest): Promise<ReconcileOutcome> {
     let outcome: { found: true; externalId: string } | { found: false };
     try {
       outcome = await this.executor.check(req.idempotencyKey, req.personId);
     } catch (err) {
-      this.store.audit({ event: "gateway.check_error", keyHash: await sha256Hex(req.idempotencyKey), detail: String(err) });
+      this.store.audit({ event: "gateway.check_error", keyHash, detailHash: await auditDigest(String(err)) });
       return {
         kind: "unavailable",
         result: {
@@ -715,33 +718,34 @@ export class ActionGateway {
       const receipt = await this.makeReceipt(req, "reconciled", outcome.externalId, undefined, now, attempt);
       this.store.putReceipt(receipt);
       this.store.updateAttempt(req.idempotencyKey, "done");
-      this.store.audit({ event: "gateway.reconciled", keyHash: await sha256Hex(req.idempotencyKey) });
+      this.store.audit({ event: "gateway.reconciled", keyHash });
       return { kind: "settled", result: { status: "reconciled", receipt } };
     }
     return { kind: "absent" };
   }
 
   async execute(req: ActionRequest, now = new Date()): Promise<GatewayResult> {
+    const keyHash = await auditDigest(req.idempotencyKey);
     const contentHash = await contentHashOf(req);
-    const replay = await this.receiptReuse(req, contentHash);
+    const replay = this.receiptReuse(req, contentHash, keyHash);
     if (replay) return replay;
     const attempt = this.store.getAttempt(req.idempotencyKey);
     if (attempt?.requestHash && attempt.requestHash !== contentHash) {
-      this.store.audit({ event: "gateway.key_reuse", keyHash: await sha256Hex(req.idempotencyKey) });
+      this.store.audit({ event: "gateway.key_reuse", keyHash });
       return { status: "blocked", reason: "This idempotency key was already used with different content." };
     }
     if (attempt?.status === "in_flight") {
       return { status: "in_progress", reason: "Another request with this idempotency key is running." };
     }
     if (attempt?.status === "unknown") {
-      const settled = await this.reconcileUnknown(req, now);
+      const settled = await this.reconcileUnknown(req, now, keyHash);
       if (settled.kind !== "absent") return settled.result;
       if (!this.store.adoptUnknownAttempt(req.idempotencyKey, now)) {
         const receipt = this.store.getReceiptByKey(req.idempotencyKey);
         if (receipt) return { status: "completed", receipt };
         return { status: "in_progress", reason: "Another request with this idempotency key is running." };
       }
-      return this.runExecution(req, now);
+      return this.runExecution(req, now, keyHash);
     }
     if (attempt?.status === "failed") {
       // Definite failure: nothing happened, so no reconcile is needed
@@ -751,15 +755,15 @@ export class ActionGateway {
         if (receipt) return { status: "completed", receipt };
         return { status: "in_progress", reason: "Another request with this idempotency key is running." };
       }
-      return this.runExecution(req, now);
+      return this.runExecution(req, now, keyHash);
     }
     if (attempt?.status === "done") {
       // Invariant: done always ships with a receipt, which the check above
       // would have returned. If it is missing anyway, reconcile once and
       // otherwise fail closed rather than executing blindly.
-      const settled = await this.reconcileUnknown(req, now);
+      const settled = await this.reconcileUnknown(req, now, keyHash);
       if (settled.kind !== "absent") return settled.result;
-      this.store.audit({ event: "gateway.corrupt_attempt", keyHash: await sha256Hex(req.idempotencyKey) });
+      this.store.audit({ event: "gateway.corrupt_attempt", keyHash });
       return { status: "blocked", reason: "This key has a recorded attempt but no receipt. Refusing to execute." };
     }
     const fresh: Attempt = {
@@ -776,7 +780,7 @@ export class ActionGateway {
       if (receipt) return { status: "completed", receipt };
       return { status: "in_progress", reason: "Another request with this idempotency key is running." };
     }
-    return this.runExecution(req, now);
+    return this.runExecution(req, now, keyHash);
   }
 
   // Recovers one unresolved attempt (in_flight or unknown): older than
@@ -789,21 +793,23 @@ export class ActionGateway {
     const attempt = this.store.getAttempt(key);
     if (!attempt || (attempt.status !== "in_flight" && attempt.status !== "unknown")) return null;
     if (attempt.updatedAt >= olderThanIso) return null;
+    const keyHash = await auditDigest(key);
     if (!this.store.claimRecoverableAttempt(key, olderThanIso, now)) return null;
-    this.store.audit({ event: "gateway.recover_claimed", keyHash: await sha256Hex(key) });
+    this.store.audit({ event: "gateway.recover_claimed", keyHash });
     const approval = this.store.getApprovalByKey(key);
-    if (!approval) return this.recoverAllowAttempt(key, attempt, now);
+    if (!approval) return this.recoverAllowAttempt(key, attempt, now, keyHash);
+    const approvalHash = await auditDigest(approval.id);
     let stored: ActionRequest;
     try {
       stored = parseActionRequest(JSON.parse(approval.requestJson));
     } catch {
       this.store.updateAttempt(key, "failed");
-      this.store.audit({ event: "gateway.recover_corrupt", keyHash: await sha256Hex(key) });
+      this.store.audit({ event: "gateway.recover_corrupt", keyHash });
       return { status: "blocked", reason: "The stored request for this key is unreadable." };
     }
     // Reconcile before any expiry decision: if the action happened, the
     // person gets the receipt even after the window passed.
-    const settled = await this.reconcileUnknown(stored, now);
+    const settled = await this.reconcileUnknown(stored, now, keyHash);
     if (settled.kind !== "absent") return settled.result;
     if (new Date(approval.expiresAt).getTime() < Date.now()) {
       this.store.updateAttempt(key, "failed");
@@ -827,7 +833,7 @@ export class ActionGateway {
     const frozen = await freezeActionRequest(stored, docRead.bytes);
     if (frozen.requestHash !== approval.requestHash) {
       this.store.updateAttempt(key, "failed");
-      this.store.audit({ event: "gateway.stale_block", approvalId: approval.id });
+      this.store.audit({ event: "gateway.stale_block", approvalHash });
       return { status: "stale", approval, reason: "Document changed after approval." };
     }
     const check = await this.runChecker(stored, frozen.documentHash);
@@ -843,13 +849,13 @@ export class ActionGateway {
       const receipt = this.store.getReceiptByKey(key);
       if (receipt) return { status: "completed", receipt };
       this.store.updateAttempt(key, "failed");
-      this.store.audit({ event: "gateway.recover_expired", keyHash: await sha256Hex(key) });
+      this.store.audit({ event: "gateway.recover_expired", keyHash });
       return { status: "blocked", reason: "Approval expired before the stranded attempt could be recovered." };
     }
-    return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now);
+    return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now, keyHash);
   }
 
-  private async recoverAllowAttempt(key: string, attempt: Attempt, now: Date): Promise<GatewayResult> {
+  private async recoverAllowAttempt(key: string, attempt: Attempt, now: Date, keyHash: AuditDigest): Promise<GatewayResult> {
     // No stored request exists on the allow path, so recovery reconciles
     // only: found settles with a receipt built from the attempt row,
     // absent marks the key failed so a fresh request retries cleanly.
@@ -857,7 +863,7 @@ export class ActionGateway {
     try {
       outcome = await this.executor.check(key, attempt.personId);
     } catch (err) {
-      this.store.audit({ event: "gateway.check_error", keyHash: await sha256Hex(key), detail: String(err) });
+      this.store.audit({ event: "gateway.check_error", keyHash, detailHash: await auditDigest(String(err)) });
       return {
         status: "blocked",
         reason: "The gateway cannot reach the outside system to reconcile this action. Recovery will retry.",
@@ -877,30 +883,30 @@ export class ActionGateway {
       };
       this.store.putReceipt(receipt);
       this.store.updateAttempt(key, "done");
-      this.store.audit({ event: "gateway.reconciled", keyHash: await sha256Hex(key) });
+      this.store.audit({ event: "gateway.reconciled", keyHash });
       return { status: "reconciled", receipt };
     }
     this.store.updateAttempt(key, "failed");
-    this.store.audit({ event: "gateway.recover_absent", keyHash: await sha256Hex(key) });
+    this.store.audit({ event: "gateway.recover_absent", keyHash });
     return { status: "blocked", reason: "The outside system has no record of this key. Send the action again." };
   }
 
   // Runs the executor for an already-claimed (in_flight) attempt.
-  private async runExecution(req: ActionRequest, now: Date): Promise<GatewayResult> {
+  private async runExecution(req: ActionRequest, now: Date, keyHash: AuditDigest): Promise<GatewayResult> {
     try {
       const out = await this.executor.execute(req);
       const receipt = await this.makeReceipt(req, "completed", out.externalId, out.simulated, now);
       this.store.putReceipt(receipt);
       this.store.updateAttempt(req.idempotencyKey, "done");
-      this.store.audit({ event: "gateway.executed", keyHash: await sha256Hex(req.idempotencyKey) });
+      this.store.audit({ event: "gateway.executed", keyHash });
       return { status: "completed", receipt };
     } catch (err) {
       if (err instanceof TimeoutError || (err as Error)?.name === "TimeoutError") {
-        const settled = await this.reconcileUnknown(req, now);
+        const settled = await this.reconcileUnknown(req, now, keyHash);
         if (settled.kind === "settled") return settled.result;
         this.store.updateAttempt(req.idempotencyKey, "unknown");
         if (settled.kind === "unavailable") return settled.result;
-        this.store.audit({ event: "gateway.unknown", keyHash: await sha256Hex(req.idempotencyKey) });
+        this.store.audit({ event: "gateway.unknown", keyHash });
         return {
           status: "blocked",
           reason: "The action timed out and its outcome is unknown. Retry with the same idempotency key; the gateway reconciles before executing again.",
@@ -909,12 +915,12 @@ export class ActionGateway {
       if (err instanceof DefiniteFailureError || (err as Error)?.name === "DefiniteFailureError") {
         const message = err instanceof Error ? err.message : String(err);
         this.store.updateAttempt(req.idempotencyKey, "failed");
-        this.store.audit({ event: "gateway.executor_failed", keyHash: await sha256Hex(req.idempotencyKey), detail: message });
+        this.store.audit({ event: "gateway.executor_failed", keyHash, detailHash: await auditDigest(message) });
         return { status: "blocked", reason: `The action failed before anything happened: ${message} Retry with the same idempotency key.` };
       }
       const message = err instanceof Error ? err.message : String(err);
       this.store.updateAttempt(req.idempotencyKey, "unknown");
-      this.store.audit({ event: "gateway.executor_error", keyHash: await sha256Hex(req.idempotencyKey), detail: message });
+      this.store.audit({ event: "gateway.executor_error", keyHash, detailHash: await auditDigest(message) });
       return { status: "blocked", reason: `The action failed before a receipt was recorded: ${message}` };
     }
   }

@@ -35,10 +35,13 @@ export async function redactBlockedLinks(
   return { text: out, blocked };
 }
 
+// Why a link was blocked. A closed set, so the reason is safe to audit.
+export type LinkBlockReason = "Invalid URL." | "DNS check failed." | "No DNS answer." | "Blocked domain." | "DNS check error.";
+
 export async function checkLinkSafety(
   url: string,
   opts: { forDisplay?: boolean; fetchFn?: FetchFn } = {},
-): Promise<{ allowed: boolean; reason?: string }> {
+): Promise<{ allowed: boolean; reason?: LinkBlockReason }> {
   const fetchFn = opts.fetchFn ?? boundFetch;
   let host: string;
   try {

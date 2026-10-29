@@ -11,6 +11,8 @@ import type { ActionRequest, Approval, CheckOutcome } from "../gateway/index.js"
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
 import { getDocumentBytes, putDocument } from "../files.js";
+import { CASE_ID_RULE, isCaseId } from "../case-id.js";
+import { auditDigest } from "../gateway/audit.js";
 import { checkLinkSafety, redactBlockedLinks } from "../link-safety.js";
 import { base64ToBytes, bytesToBase64 } from "../hash.js";
 import { createModelClient, defaultModelFor } from "../model-client.js";
@@ -180,7 +182,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       await this.schedule(new Date(sessionExp * 1000), callback, {});
       return true;
     } catch (err) {
-      this.store.audit({ event: "ws.schedule_failed", detail: String(err) });
+      this.store.audit({ event: "ws.schedule_failed", detailHash: await auditDigest(String(err)) });
       return false;
     }
   }
@@ -376,7 +378,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       const out = await createModelClient(this.env).complete({ input, synthetic });
       text = out.text;
     } catch (err) {
-      this.store.audit({ event: "chat.model_error", detail: String(err) });
+      this.store.audit({ event: "chat.model_error", detailHash: await auditDigest(String(err)) });
       text = "I can't reach my model right now. Try again in a bit; your message is saved.";
     }
     // Anything shown to the person passes the family filter, decided
@@ -496,7 +498,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       if (approval.status !== "pending") continue;
       if (new Date(approval.expiresAt).getTime() <= nowMs) {
         if (this.store.expireApproval(approval.id)) {
-          this.store.audit({ event: "approval.expired", approvalId: approval.id });
+          this.store.audit({ event: "approval.expired", approvalHash: await auditDigest(approval.id) });
           out.expired.push(approval.id);
         }
         continue;
@@ -505,7 +507,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         const seen = this.db().exec("SELECT approval_id FROM approval_reminders WHERE approval_id = ?", approval.id).toArray();
         if (seen.length === 0) {
           this.db().exec("INSERT INTO approval_reminders VALUES (?, ?)", approval.id, new Date(nowMs).toISOString());
-          this.store.audit({ event: "approval.reminded", approvalId: approval.id });
+          this.store.audit({ event: "approval.reminded", approvalHash: await auditDigest(approval.id) });
           out.reminded.push(approval.id);
         }
       }
@@ -513,7 +515,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         const hoursLeft = hoursToDeadline(approval.requestJson, nowMs);
         if (hoursLeft !== null && hoursLeft < 24) {
           if (this.store.escalateApproval(approval.id)) {
-            this.store.audit({ event: "approval.escalated", approvalId: approval.id });
+            this.store.audit({ event: "approval.escalated", approvalHash: await auditDigest(approval.id) });
             out.escalated.push(approval.id);
           }
         }
@@ -542,7 +544,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       const row = key ? this.store.getApprovalByKey(key) : null;
       if (row?.actionType === "share") this.recordConsentOutcome(row);
     }
-    this.store.audit({ event: "gateway.approve", approvalId, status: result.status });
+    this.store.audit({ event: "gateway.approve", approvalHash: await auditDigest(approvalId), status: result.status });
     await this.scheduleRecoveryIfUnresolved();
     this.syncState();
     return result;
@@ -588,7 +590,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async grantConsent(verified: string, input: GrantConsentInput) {
     await this.assertSubject(verified);
     const orgAgentId = requireOrgAgentId(input.orgAgentId);
-    if (!input.purpose || !input.caseId) throw new Error("Consent needs a purpose and a case ID.");
+    if (!input.purpose) throw new Error("Consent needs a purpose.");
+    if (!isCaseId(input.caseId)) throw new Error(CASE_ID_RULE);
     if (!Array.isArray(input.scope)) throw new Error("Consent needs a scope list.");
     if (input.expiresAt !== undefined) {
       const at = new Date(input.expiresAt).getTime();
@@ -601,7 +604,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     }
     if (this.revokedLocally(input.caseId)) {
       const reason = `Case ${input.caseId} was revoked and cannot be shared again.`;
-      this.store.audit({ event: "consent.regrant_refused", caseId: input.caseId });
+      this.store.audit({ event: "consent.regrant_refused", caseHash: await auditDigest(input.caseId) });
       return { status: "blocked" as const, reason };
     }
     // The key identifies the grant: person, organization, case and
@@ -631,7 +634,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async revokeConsent(verified: string, input: RevokeConsentInput) {
     await this.assertSubject(verified);
     const orgAgentId = requireOrgAgentId(input.orgAgentId);
-    if (!input.caseId) throw new Error("Revocation needs a case ID.");
+    if (!isCaseId(input.caseId)) throw new Error(CASE_ID_RULE);
     const req: ActionRequest = {
       type: "share",
       recipient: orgAgentId,
@@ -659,9 +662,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       throw new DefiniteFailureError("Share payload must declare a grant or revoke.");
     }
     const caseId = req.payload.caseId;
-    if (typeof caseId !== "string" || !caseId) {
-      throw new DefiniteFailureError("Share payload must carry a case ID.");
-    }
+    if (!isCaseId(caseId)) throw new DefiniteFailureError(CASE_ID_RULE);
     const stored = this.storedOutboundMessage(req.idempotencyKey);
     const message = stored ?? (await this.buildAndStoreOutboundMessage(req, match[0], consent, caseId));
     const stub = this.env.ORG_AGENT.get(this.env.ORG_AGENT.idFromName(match[1]));
@@ -787,7 +788,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const id = crypto.randomUUID();
     const { hash, r2Key } = await putDocument(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, id, bytes);
     this.db().exec("INSERT INTO documents VALUES (?,?,?,?)", id, input.name, hash, r2Key);
-    this.store.audit({ event: "document.registered", id, hash });
+    this.store.audit({ event: "document.registered", documentHash: await auditDigest(id) });
     return { id, hash };
   }
 

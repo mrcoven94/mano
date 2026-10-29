@@ -5,6 +5,8 @@ import {
   type ProtocolMessage,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
+import { CASE_ID_RULE, isCaseId } from "../case-id.js";
+import { auditDigest, type AuditEntry } from "../gateway/audit.js";
 import { generateAgentKeypair, resolveAgentKey } from "./agent-keys.js";
 import {
   applyConsentDelivery,
@@ -107,11 +109,11 @@ export class OrgAgent extends Agent<Env, OrgState> {
     return this.ctx.storage.sql;
   }
 
-  private audit(event: string, detail: unknown) {
+  private audit<const T extends { event: string }>(entry: T & AuditEntry<T>) {
     this.db().exec(
       "INSERT INTO audit_log(event, detail, created_at) VALUES (?, ?, ?)",
-      event,
-      JSON.stringify(detail),
+      entry.event,
+      JSON.stringify(entry),
       new Date().toISOString(),
     );
   }
@@ -162,6 +164,9 @@ export class OrgAgent extends Agent<Env, OrgState> {
     if (!msg.approvedByHumanId) {
       return { accepted: false, reason: "Consent needs a person's approval." };
     }
+    if (!isCaseId(msg.caseId)) {
+      return { accepted: false, reason: CASE_ID_RULE };
+    }
     const expected = await this.keyForSender(msg.fromAgentId);
     if (!expected) {
       return { accepted: false, reason: `Unknown sender: ${msg.fromAgentId}.` };
@@ -191,7 +196,11 @@ export class OrgAgent extends Agent<Env, OrgState> {
       });
       if (delivery === "duplicate") return { accepted: true, duplicate: true };
       if (delivery === "unavailable") return { accepted: false, reason: "The org cannot record this delivery right now. Retry.", retryable: true };
-      this.audit("consent.revoke", { caseId: msg.caseId, from: msg.fromAgentId });
+      this.audit({
+        event: "consent.revoke",
+        caseHash: await auditDigest(msg.caseId),
+        fromHash: await auditDigest(msg.fromAgentId),
+      });
       this.syncState();
       return { accepted: true };
     }
@@ -223,7 +232,11 @@ export class OrgAgent extends Agent<Env, OrgState> {
     });
     if (delivery === "duplicate") return { accepted: true, duplicate: true };
     if (delivery === "unavailable") return { accepted: false, reason: "The org cannot record this delivery right now. Retry.", retryable: true };
-    this.audit("consent.grant", { caseId: msg.caseId, from: msg.fromAgentId });
+    this.audit({
+      event: "consent.grant",
+      caseHash: await auditDigest(msg.caseId),
+      fromHash: await auditDigest(msg.fromAgentId),
+    });
     this.syncState();
     return { accepted: true };
   }

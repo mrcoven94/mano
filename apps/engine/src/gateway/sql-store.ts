@@ -1,4 +1,5 @@
-import type { ActionType, Approval, Attempt, AuditEntry, Receipt } from "./types.js";
+import type { ActionType, Approval, Attempt, Receipt } from "./types.js";
+import type { AuditEntry } from "./audit.js";
 import type { ApprovalStore, ConsumeGuard } from "./gateway.js";
 
 // The gateway store on the agent's own SQLite. Approvals, attempts,
@@ -295,7 +296,7 @@ export class SqlApprovalStore implements ApprovalStore {
     this.sql.exec("UPDATE attempts SET status = ?, updated_at = ? WHERE idempotency_key = ?", status, new Date().toISOString(), key);
   }
 
-  audit(entry: AuditEntry): void {
+  audit<const T extends { event: string }>(entry: T & AuditEntry<T>): void {
     this.sql.exec(
       "INSERT INTO audit_log(event, detail, created_at) VALUES (?, ?, ?)",
       String(entry.event ?? "event"),
