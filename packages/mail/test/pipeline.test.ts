@@ -1373,3 +1373,134 @@ describe("readMail review 6", () => {
     }
   });
 });
+
+describe("readMail review 7", () => {
+  async function readText(
+    fullText: string,
+    deadlines: { text: string; box_2d: number[] }[],
+    over: Record<string, unknown> = {},
+  ) {
+    const bytes = await photo();
+    const model = clientFor([
+      pageJson({
+        full_text: fullText,
+        sender: { text: "County Office", box_2d: [40, 60, 70, 400] },
+        program: NIL,
+        subject: NIL,
+        asked: [],
+        deadlines,
+        consequence: NIL,
+        reference_no: NIL,
+        notice_date: { text: "November 2, 2026", box_2d: [135, 60, 150, 300] },
+        phones: [],
+        ...over,
+      }),
+    ]);
+    return readMail([{ bytes, mimeType: "image/jpeg", name: "mail.jpg" }], { personId: "p1", synthetic: true, model });
+  }
+  const dl = (text: string, ymin = 200): { text: string; box_2d: number[] } => ({
+    text,
+    box_2d: [ymin, 60, ymin + 20, 300],
+  });
+  const HEAD = "County Office\n\nNotice date November 2, 2026\n\n";
+  const asked = (reading: Awaited<ReturnType<typeof readText>>) =>
+    reading.questions.filter((q) => q.kind === "confirm_deadline");
+  const expectWithheld = (reading: Awaited<ReturnType<typeof readText>>): void => {
+    expect(reading.deadlines).toEqual([]);
+    expect(reading.datesToKnow).toEqual([]);
+    expect(reading.letters.every((l) => l.fields.deadlineIso === null)).toBe(true);
+    expect(asked(reading).length).toBeGreaterThan(0);
+  };
+
+  it("finding 1: a condition heading above the sentence withholds it", async () => {
+    const reading = await readText(`${HEAD}If you moved:\n\nSubmit proof by November 20, 2026.`, [
+      dl("Submit proof by November 20, 2026."),
+    ]);
+    expectWithheld(reading);
+  });
+
+  it("finding 1: an audience line before the sentence withholds it", async () => {
+    const reading = await readText(`${HEAD}For county staff only.\n\nSubmit proof by November 20, 2026.`, [
+      dl("Submit proof by November 20, 2026."),
+    ]);
+    expectWithheld(reading);
+  });
+
+  it("finding 2: an earlier deadline the reader skipped withholds the later one", async () => {
+    const reading = await readText(`${HEAD}Return the form before November 15, 2026. Return the form by November 20, 2026.`, [
+      dl("Return the form by November 20, 2026."),
+    ]);
+    expectWithheld(reading);
+    expect(asked(reading)[0]!.candidates?.map((c) => c.sentence).sort()).toEqual([
+      "Return the form before November 15, 2026",
+      "Return the form by November 20, 2026",
+    ]);
+  });
+
+  it("finding 2: an earlier deadline the reader returned withholds the later one", async () => {
+    const reading = await readText(`${HEAD}Return the form before November 15, 2026. Return the form by November 20, 2026.`, [
+      dl("Return the form before November 15, 2026."),
+      dl("Return the form by November 20, 2026.", 230),
+    ]);
+    expectWithheld(reading);
+  });
+
+  it.each([
+    ["renewal and recertification", "Your renewal is due November 20, 2026. Your recertification is due November 15, 2026."],
+    ["submit and upload", "Submit proof by November 20, 2026. Upload proof by November 18, 2026."],
+  ])("finding 3: two deadline sentences for %s ask, listing both", async (_label, text) => {
+    const sentences = text.split(/(?<=\.) /);
+    const reading = await readText(`${HEAD}${text}`, [dl(sentences[0]!), dl(sentences[1]!, 230)]);
+    expectWithheld(reading);
+    for (const s of sentences) {
+      expect(asked(reading).some((q) => q.candidates?.some((c) => c.sentence === s.replace(/\.$/, "")))).toBe(true);
+    }
+  });
+
+  it("finding 4: a count from a mislabeled notice date asks, showing the date it assumed", async () => {
+    const reading = await readText(
+      "County Office. Notice date November 2, 2026. Coverage starts November 10, 2026. Respond within 10 days of the date of this notice.",
+      [dl("Respond within 10 days of the date of this notice.")],
+      { notice_date: { text: "November 10, 2026", box_2d: [135, 60, 150, 300] } },
+    );
+    expectWithheld(reading);
+    const candidate = asked(reading)
+      .flatMap((q) => q.candidates ?? [])
+      .find((c) => c.sentence === "Respond within 10 days of the date of this notice")!;
+    expect(candidate.count).toEqual({ days: 10, fromIso: "2026-11-10", resultIso: "2026-11-20" });
+  });
+
+  it("finding 4: a count from a correct notice date still asks instead of publishing", async () => {
+    const reading = await readText(`${HEAD}Respond within 10 days of the date of this notice.`, [
+      dl("Respond within 10 days of the date of this notice."),
+    ]);
+    expectWithheld(reading);
+    expect(asked(reading)[0]!.candidates?.[0]?.count).toEqual({ days: 10, fromIso: "2026-11-02", resultIso: "2026-11-12" });
+  });
+
+  it("finding 5: a budget spent before segmentation returns the budget question instead of throwing", async () => {
+    const bytes = await photo();
+    const model = clientFor([pageJson()]);
+    let calls = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => (++calls <= 2 ? 1_000_000 : 1_000_000 + 400_000));
+    try {
+      const reading = await readMail([{ bytes, mimeType: "image/jpeg", name: "late.jpg" }], {
+        personId: "p1",
+        synthetic: true,
+        model,
+      });
+      expect(reading.questions.map((q) => q.kind)).toContain("budget_exceeded");
+      expect(model.calls).toEqual([]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("still publishes one plain deadline sentence with no qualifying context", async () => {
+    const reading = await readText(`${HEAD}Dear Maria Santos,\n\nReturn your signed form by December 5, 2026.`, [
+      dl("Return your signed form by December 5, 2026."),
+    ]);
+    expect(asked(reading)).toEqual([]);
+    expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-12-05"]);
+  });
+});
