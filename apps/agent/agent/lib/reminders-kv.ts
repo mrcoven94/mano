@@ -1,19 +1,11 @@
 // KV-backed reminder store for production. One hash per reminder plus
 // a sorted set of unsent IDs scored by due time, so the dispatcher
-// claims due rows without scanning. Local import of @vercel/kv keeps
-// tests dependency-free.
-import type { Reminder, ReminderStore } from "./reminders.js";
+// claims due rows without scanning.
+import { CLAIM_TTL_MS, type Reminder, type ReminderStore } from "./reminders.js";
+import type { RedisLike } from "./storage.js";
+
 const KEY_PREFIX = "mano:reminder:";
 const DUE_KEY = "mano:reminders:due";
-
-interface KvLike {
-  hset(key: string, value: Record<string, unknown>): Promise<unknown>;
-  hgetall(key: string): Promise<Record<string, unknown> | null>;
-  zadd(key: string, ...args: Array<{ score: number; member: string }>): Promise<unknown>;
-  zrange(key: string, start: number, stop: number): Promise<string[]>;
-  zrem(key: string, ...members: string[]): Promise<unknown>;
-  del(...keys: string[]): Promise<unknown>;
-}
 
 function rowKey(id: string): string {
   return `${KEY_PREFIX}${id}`;
@@ -41,27 +33,20 @@ function toRow(value: Record<string, unknown>): Reminder | null {
 }
 
 export class KvReminderStore implements ReminderStore {
-  private kv: KvLike;
-  constructor(kv: KvLike) {
-    this.kv = kv;
-  }
+  constructor(private kv: RedisLike) {}
 
-  static async fromEnv(): Promise<KvReminderStore | null> {
-    if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) return null;
-    // Imported lazily so local runs without KV configured never load it.
-    const { kv } = (await import("@vercel/kv")) as unknown as { kv: KvLike };
-    return new KvReminderStore(kv);
-  }
-
-  async save(reminder: Reminder): Promise<void> {
+  async create(reminder: Reminder): Promise<Reminder> {
+    const raw = await this.kv.hgetall(rowKey(reminder.id));
+    const existing = raw ? toRow(raw) : null;
+    if (existing) return existing;
     await this.kv.hset(rowKey(reminder.id), { ...reminder });
     if (reminder.sentAtMs === null) {
       await this.kv.zadd(DUE_KEY, { score: reminder.dueAtMs, member: reminder.id });
     }
+    return reminder;
   }
 
   async claimDue(nowMs: number, limit: number): Promise<Reminder[]> {
-    const { CLAIM_TTL_MS } = await import("./reminders.js");
     const claimed: Reminder[] = [];
     // Over-read: some candidates may be claimed, sent, or gone.
     const candidates = await this.kv.zrange(DUE_KEY, 0, limit * 4 - 1);

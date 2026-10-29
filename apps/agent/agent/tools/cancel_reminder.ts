@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { requireHandleHash } from "../lib/person.js";
 import { getReminderStore } from "../lib/reminder-store.js";
+import { StorageUnavailable } from "../lib/storage.js";
 
 export default defineTool({
   description: "Cancel one pending reminder by its ID. List reminders first when the person names one by words instead.",
@@ -10,6 +11,7 @@ export default defineTool({
   async execute({ reminderId }, ctx) {
     const handleHash = requireHandleHash(ctx);
     const store = await getReminderStore();
+    if (!store) throw new StorageUnavailable("Cancelling reminders");
     const cancelled = await store.cancel(reminderId, handleHash);
     return { cancelled };
   },

@@ -2,6 +2,8 @@
 // writes a row; the dispatcher schedule fires every minute, claims due
 // rows, and delivers each as a text through Channels' internal route.
 // Rows carry the hashed handle only, never a phone number.
+import { createHash } from "node:crypto";
+
 export interface Reminder {
   id: string;
   handleHash: string;
@@ -18,7 +20,9 @@ export const CLAIM_TTL_MS = 10 * 60 * 1000;
 export const MAX_REMINDER_TEXT_CHARS = 500;
 
 export interface ReminderStore {
-  save(reminder: Reminder): Promise<void>;
+  // Saves the row unless one with the same ID exists, and returns the
+  // stored row either way, so a repeated save converges on one reminder.
+  create(reminder: Reminder): Promise<Reminder>;
   // Atomically claims up to limit rows due at or before nowMs whose
   // claim is missing or expired and that were never sent.
   claimDue(nowMs: number, limit: number): Promise<Reminder[]>;
@@ -28,8 +32,10 @@ export interface ReminderStore {
   cancel(id: string, handleHash: string): Promise<boolean>;
 }
 
-export function newReminderId(nowMs: number, randomHex: string): string {
-  return `rem_${nowMs.toString(36)}_${randomHex}`;
+// One reminder per turn and due time: a replayed or recovered turn
+// derives the same ID, so it finds the row it already made.
+export function reminderIdFor(turnId: string, dueAtMs: number): string {
+  return `rem_${createHash("sha256").update(`${turnId}\n${dueAtMs}`).digest("hex").slice(0, 24)}`;
 }
 
 // In-memory store for local dev and tests. Production uses KV: Vercel
@@ -37,8 +43,11 @@ export function newReminderId(nowMs: number, randomHex: string): string {
 export class MemoryReminderStore implements ReminderStore {
   private rows = new Map<string, Reminder>();
 
-  async save(reminder: Reminder): Promise<void> {
+  async create(reminder: Reminder): Promise<Reminder> {
+    const existing = this.rows.get(reminder.id);
+    if (existing) return { ...existing };
     this.rows.set(reminder.id, { ...reminder });
+    return { ...reminder };
   }
 
   async claimDue(nowMs: number, limit: number): Promise<Reminder[]> {

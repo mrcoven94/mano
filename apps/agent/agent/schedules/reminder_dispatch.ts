@@ -19,6 +19,10 @@ export default defineSchedule({
       return;
     }
     const store = await getReminderStore();
+    if (!store) {
+      console.warn("mano: durable storage is not configured; the reminder dispatcher has nothing to read.");
+      return;
+    }
     const due = await store.claimDue(Date.now(), CLAIM_LIMIT);
     for (const reminder of due) {
       try {
