@@ -15,9 +15,9 @@ export interface Env {
   // person's conversation state. It needs a handle grant too.
   MANO_ENGINE_CHANNELS_TOKEN?: string;
   // Due reminders go out through Channels' agent-send route at this base
-  // URL, signed with the secret Channels verifies agent requests with.
+  // URL, signed with the Engine-to-Channels secret (never the agent's).
   MANO_CHANNELS_URL?: string;
-  MANO_AGENT_SECRET?: string;
+  MANO_ENGINE_SEND_SECRET?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;

@@ -35,7 +35,7 @@ export interface Approval {
   documentHash: string | null;
   documentId: string | null;
   idempotencyKey: string;
-  status: "pending" | "approved" | "rejected" | "expired" | "stale" | "blocked";
+  status: "pending" | "approved" | "rejected" | "revoked" | "expired" | "stale" | "blocked";
   approvedByHumanId: string | null;
   // The person this approval belongs to, the frozen request it authorizes
   // (canonical JSON, executed verbatim), and the hash binding type,

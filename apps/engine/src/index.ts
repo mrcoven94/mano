@@ -39,20 +39,25 @@
 //   DELETE /api/persons/:id/memory/:memoryId  forget: deletes the row
 //
 //   Service routes (agent token or Channels token, plus a handle grant;
-//   the person must be handle-<hash> from the grant):
+//   the person must be handle-<hash> from the grant). Every write carries
+//   the conversation generation it was prepared under and answers 409
+//   when a delete has moved past it; services must send it on
+//   POST /memory and POST /action too.
+//   GET  /api/persons/:id/conversation         { generation } (agent)
+//   DELETE /api/persons/:id/conversation       { generation? } everything the agent kept (agent, Channels)
 //   POST /api/persons/:id/reminders            { id, text, dueAt, generation } (agent)
 //   GET  /api/persons/:id/reminders            (agent)
 //   POST /api/persons/:id/reminders/:rid/cancel  (agent)
-//   POST /api/persons/:id/turns                { turnId, receivedAt } (agent)
+//   POST /api/persons/:id/turns                { turnId, receivedAt, generation } (agent)
 //   GET  /api/persons/:id/turns/:turnId        (agent)
-//   POST /api/persons/:id/turns/:turnId/complete  (agent)
+//   POST /api/persons/:id/turns/:turnId/complete  { generation } (agent)
 //   PUT  /api/persons/:id/pending-approval     { approvalId, generation } (agent)
 //   GET  /api/persons/:id/pending-approval?generation=N  (agent)
 //   DELETE /api/persons/:id/pending-approval   (agent)
-//   DELETE /api/persons/:id/conversation       everything the agent kept (agent, Channels)
 //
-// Due reminders go out from the person's alarm through Channels'
-// agent-send route at MANO_CHANNELS_URL, signed with MANO_AGENT_SECRET.
+// Due reminders go out from the person's one delivery wake-up through
+// Channels' agent-send route at MANO_CHANNELS_URL, signed with
+// MANO_ENGINE_SEND_SECRET (packages/protocol engine-send.ts).
 //   POST /api/persons/:id/documents            { name, contentB64 }
 //   GET  /api/persons/:id/documents/:docId     decrypted bytes, owner only
 //   POST /api/persons/:id/ws-ticket            one 60-second single-use ticket for /ws
@@ -92,6 +97,7 @@ import type { Env } from "./env.js";
 import { PersonAgent } from "./agents/person-agent.js";
 import {
   AgentStateInputError,
+  parseGenerationInput,
   parsePointerInput,
   parseReminderInput,
   parseTurnInput,
@@ -132,6 +138,22 @@ function orgStub(env: Env, orgId: string) {
 }
 
 const FORBIDDEN = () => Response.json({ error: "Forbidden." }, { status: 403 });
+
+// A write prepared under a conversation generation a delete has moved
+// past: nothing was written. The answer carries no state of the new one.
+const STALE = () =>
+  Response.json({ error: "This conversation was deleted after the request was prepared. Nothing was written." }, { status: 409 });
+
+function isStale<T>(value: T): value is Extract<T, { readonly stale: true }> {
+  return typeof value === "object" && value !== null && (value as { stale?: unknown }).stale === true;
+}
+
+// A service must say which conversation generation it prepared a write
+// under; a person's own session may omit it (the current one is used).
+function writeGeneration(service: string | null, value: unknown): number | undefined | "invalid" {
+  if (value === undefined) return service ? "invalid" : undefined;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : "invalid";
+}
 
 // Forward to an agent stub with caller identity headers stripped. Agents
 // trust x-mano-subject and x-mano-ticket only because the worker is their
@@ -252,7 +274,7 @@ export function healthOk(env: Env): boolean {
     !env.MANO_HANDLE_GRANT_SECRET ||
     !env.MANO_ENGINE_CHANNELS_TOKEN ||
     !env.MANO_CHANNELS_URL ||
-    !env.MANO_AGENT_SECRET
+    !env.MANO_ENGINE_SEND_SECRET
   ) {
     return false;
   }
@@ -288,6 +310,7 @@ async function handleAgentState(
       const input = await body();
       parseReminderInput(input);
       const out = await agent.createReminder(subject, input);
+      if (isStale(out)) return STALE();
       return Response.json(out, { status: out.status === "conflict" ? 409 : out.status === "created" ? 201 : 200 });
     }
     if (rest === "/reminders" && method === "GET") {
@@ -303,12 +326,21 @@ async function handleAgentState(
       const input = await body();
       parseTurnInput(input);
       const out = await agent.putTurn(subject, input);
+      if (isStale(out)) return STALE();
       return Response.json(out, { status: out.created ? 201 : 200 });
     }
     const turnMatch = rest.match(/^\/turns\/([^/]+)(\/complete)?$/);
     if (turnMatch && ((method === "GET" && !turnMatch[2]) || (method === "POST" && turnMatch[2]))) {
       const turnId = requireIdentity(decodeURIComponent(turnMatch[1]));
-      const turn = turnMatch[2] ? await agent.completeTurn(subject, turnId) : await agent.getTurn(subject, turnId);
+      let turn;
+      if (turnMatch[2]) {
+        const input = await body();
+        parseGenerationInput(input);
+        turn = await agent.completeTurn(subject, turnId, input);
+        if (isStale(turn)) return STALE();
+      } else {
+        turn = await agent.getTurn(subject, turnId);
+      }
       if (!turn) return Response.json({ error: "Turn not found." }, { status: 404 });
       return Response.json({ turn });
     }
@@ -316,6 +348,7 @@ async function handleAgentState(
       const input = await body();
       parsePointerInput(input);
       const pointer = await agent.setPendingApproval(subject, input);
+      if (isStale(pointer)) return STALE();
       if (!pointer) return Response.json({ error: "Approval not found." }, { status: 404 });
       return Response.json({ pointer });
     }
@@ -327,8 +360,15 @@ async function handleAgentState(
     if (rest === "/pending-approval" && method === "DELETE") {
       return Response.json(await agent.clearPendingApproval(subject));
     }
+    if (rest === "/conversation" && method === "GET") {
+      return Response.json(await agent.getConversation(subject));
+    }
     if (rest === "/conversation" && method === "DELETE") {
-      return Response.json({ removed: await agent.deleteConversation(subject) });
+      // Channels sends its new generation; the body is optional.
+      const hasBody = (request.headers.get("content-length") ?? "") !== "0" && request.body !== null;
+      const input = hasBody ? await body().catch(() => ({})) : {};
+      if ("generation" in input) requireGeneration(input.generation);
+      return Response.json({ removed: await agent.deleteConversation(subject, input) });
     }
     return null;
   } catch (err) {
@@ -472,7 +512,9 @@ export default {
         if (typeof body !== "object" || body === null || Array.isArray(body)) {
           return Response.json({ error: "Invalid action request." }, { status: 400 });
         }
-        const result = await agent.requestAction({ ...body, personId: subject }, subject);
+        const generation = writeGeneration(service, (body as { generation?: unknown }).generation);
+        if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
+        const result = await agent.requestAction({ ...body, personId: subject }, subject, generation);
         return Response.json(result);
       }
       if (rest === "/documents" && request.method === "POST") {
@@ -516,11 +558,18 @@ export default {
       if (rest === "/memory" && request.method === "POST") {
         const read = await readCappedJson(request, MAX_ACTION_BODY);
         if (!read.ok) return read.response;
-        const { content, source } = (read.value ?? {}) as { content?: unknown; source?: unknown };
+        const { content, source, generation: rawGeneration } = (read.value ?? {}) as {
+          content?: unknown;
+          source?: unknown;
+          generation?: unknown;
+        };
         if (typeof content !== "string" || typeof source !== "string" || !content) {
           return Response.json({ error: "Body needs content and source strings." }, { status: 400 });
         }
-        const id = await agent.addMemory(subject, content, source);
+        const generation = writeGeneration(service, rawGeneration);
+        if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
+        const id = await agent.addMemory(subject, content, source, generation);
+        if (isStale(id)) return STALE();
         return Response.json({ id });
       }
       const memoryMatch = rest.match(/^\/memory\/([^/]+)$/);
