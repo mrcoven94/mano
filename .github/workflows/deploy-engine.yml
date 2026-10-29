@@ -1,0 +1,157 @@
+name: deploy-engine
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/engine/**"
+      - "packages/protocol/**"
+      - ".github/workflows/deploy-engine.yml"
+  # Pull requests run only the validate job: lint this workflow and bundle
+  # the worker with a dry run. No secrets, no deploy.
+  pull_request:
+    paths:
+      - "apps/engine/**"
+      - "packages/protocol/**"
+      - ".github/workflows/deploy-engine.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+# Serialize deploys so two pushes cannot deploy over each other. Never cancel: a started deploy runs to the end.
+concurrency:
+  group: deploy-engine-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint this workflow
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/repo" --workdir /repo rhysd/actionlint:1.7.7 -color .github/workflows/deploy-engine.yml
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile
+      - name: Bundle the worker without deploying
+        run: pnpm exec wrangler deploy --dry-run --outdir "$RUNNER_TEMP/engine-dry-run"
+        working-directory: apps/engine
+
+  deploy:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: engine-production
+      url: https://engine.withmano.com/health
+    defaults:
+      run:
+        working-directory: apps/engine
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify required secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          check() {
+            if [ -z "$1" ]; then echo "::error::missing required secret $2"; missing=1; fi
+          }
+          check "$CLOUDFLARE_API_TOKEN" CLOUDFLARE_API_TOKEN
+          check "$CLOUDFLARE_ACCOUNT_ID" CLOUDFLARE_ACCOUNT_ID
+          check "$META_MODEL_API_KEY" META_MODEL_API_KEY
+          check "$ENCRYPTION_KEK_B64" ENCRYPTION_KEK_B64
+          check "$SESSION_SECRET" SESSION_SECRET
+          check "$OPERATOR_SECRET" OPERATOR_SECRET
+          check "$MANO_ENGINE_AGENT_TOKEN" MANO_ENGINE_AGENT_TOKEN
+          check "$MANO_HANDLE_GRANT_SECRET" MANO_HANDLE_GRANT_SECRET
+          check "$EXECUTOR_MODE" EXECUTOR_MODE
+          if [ "$EXECUTOR_MODE" = "sandbox" ]; then check "$SANDBOX_BASE_URL" SANDBOX_BASE_URL; fi
+          exit $missing
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
+          ENCRYPTION_KEK_B64: ${{ secrets.ENCRYPTION_KEK_B64 }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          OPERATOR_SECRET: ${{ secrets.OPERATOR_SECRET }}
+          MANO_ENGINE_AGENT_TOKEN: ${{ secrets.MANO_ENGINE_AGENT_TOKEN }}
+          MANO_HANDLE_GRANT_SECRET: ${{ secrets.MANO_HANDLE_GRANT_SECRET }}
+          EXECUTOR_MODE: ${{ secrets.EXECUTOR_MODE }}
+          SANDBOX_BASE_URL: ${{ secrets.SANDBOX_BASE_URL }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile
+        working-directory: .
+      - run: pnpm --filter @mano/engine --filter @mano/protocol run check
+        working-directory: .
+      - name: Create bucket
+        run: pnpm exec wrangler r2 bucket create mano-files || true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # Values go in on stdin, never on a command line.
+      - name: Set required secrets
+        run: |
+          set -euo pipefail
+          printf '%s' "$META_MODEL_API_KEY" | pnpm exec wrangler secret put META_MODEL_API_KEY
+          printf '%s' "$ENCRYPTION_KEK_B64" | pnpm exec wrangler secret put ENCRYPTION_KEK_B64
+          printf '%s' "$SESSION_SECRET" | pnpm exec wrangler secret put SESSION_SECRET
+          printf '%s' "$OPERATOR_SECRET" | pnpm exec wrangler secret put OPERATOR_SECRET
+          printf '%s' "$MANO_ENGINE_AGENT_TOKEN" | pnpm exec wrangler secret put MANO_ENGINE_AGENT_TOKEN
+          printf '%s' "$MANO_HANDLE_GRANT_SECRET" | pnpm exec wrangler secret put MANO_HANDLE_GRANT_SECRET
+          printf '%s' "$EXECUTOR_MODE" | pnpm exec wrangler secret put EXECUTOR_MODE
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
+          ENCRYPTION_KEK_B64: ${{ secrets.ENCRYPTION_KEK_B64 }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          OPERATOR_SECRET: ${{ secrets.OPERATOR_SECRET }}
+          MANO_ENGINE_AGENT_TOKEN: ${{ secrets.MANO_ENGINE_AGENT_TOKEN }}
+          MANO_HANDLE_GRANT_SECRET: ${{ secrets.MANO_HANDLE_GRANT_SECRET }}
+          EXECUTOR_MODE: ${{ secrets.EXECUTOR_MODE }}
+      - name: Set optional secrets
+        run: |
+          set -euo pipefail
+          maybe() {
+            if [ -n "$1" ]; then printf '%s' "$1" | pnpm exec wrangler secret put "$2"; fi
+          }
+          maybe "$SANDBOX_BASE_URL" SANDBOX_BASE_URL
+          maybe "$CF_ACCOUNT_ID" CF_ACCOUNT_ID
+          maybe "$AI_GATEWAY_ID" AI_GATEWAY_ID
+          maybe "$AI_GATEWAY_PROVIDER" AI_GATEWAY_PROVIDER
+          maybe "$MODEL_ALLOWLIST_EXTRA" MODEL_ALLOWLIST_EXTRA
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SANDBOX_BASE_URL: ${{ secrets.SANDBOX_BASE_URL }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          AI_GATEWAY_ID: ${{ secrets.AI_GATEWAY_ID }}
+          AI_GATEWAY_PROVIDER: ${{ secrets.AI_GATEWAY_PROVIDER }}
+          MODEL_ALLOWLIST_EXTRA: ${{ secrets.MODEL_ALLOWLIST_EXTRA }}
+      # The custom domain's certificate can take a few minutes on the first
+      # deploy, so the check retries before it fails the run.
+      - name: Check production health
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            status=$(curl -s -o "$RUNNER_TEMP/health.json" -w '%{http_code}' https://engine.withmano.com/health || true)
+            if [ "$status" = "200" ]; then
+              cat "$RUNNER_TEMP/health.json"
+              if ! grep -q '"ok":true' "$RUNNER_TEMP/health.json"; then
+                echo "::warning::engine is up but reports ok:false; a required part is missing"
+              fi
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $status"
+            sleep 15
+          done
+          echo "::error::https://engine.withmano.com/health did not return 200"
+          exit 1
