@@ -143,7 +143,8 @@ describe("reminders", () => {
     await makeDue(h);
     await (stubFor(h) as unknown as PersonAgent).deliverDueReminders();
     const waiting = (await (await call(h, "GET", "/reminders")).json()) as { reminders: { status: string; attempts: number }[] };
-    expect(waiting.reminders[0]).toMatchObject({ status: "scheduled", attempts: 1 });
+    // Handed off once, so it waits to re-send as sending, never cancellable.
+    expect(waiting.reminders[0]).toMatchObject({ status: "sending", attempts: 1 });
     expect(sent.length).toBe(1);
   });
 });
@@ -413,5 +414,83 @@ describe("the delivery wake-up", () => {
       await (instance as PersonAgent).onStart();
     });
     expect((await deliverySchedules(h)).length).toBe(1);
+  });
+});
+
+describe("a cancel after an uncertain handoff", () => {
+  // Sol's reproduction: (1) a reminder is due; (2) a delivery run hands it
+  // to Channels and the answer is uncertain (an outage, or the run dies
+  // after the handoff); (3) the person cancels; (4) the next run. Channels
+  // may already have accepted the send in step 2, so the cancel in step 3
+  // must answer "already on its way", and step 4 re-sends under the same
+  // key for Channels to dedupe, never reporting the reminder cancelled.
+  async function dueEverything(h: string) {
+    await runInDurableObject(stubFor(h), (_i, state) => {
+      state.storage.sql.exec("UPDATE reminders SET next_at_ms = ?, claimed_at_ms = ? WHERE status NOT IN ('sent', 'dropped', 'failed', 'cancelled')", Date.now() - 1, 0);
+    });
+  }
+
+  it("after an uncertain answer from Channels", async () => {
+    const h = handle("uncertain-500");
+    let up = false;
+    const keys: string[] = [];
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      keys.push(JSON.parse(String(init?.body)).key);
+      return up ? Response.json({ sent: true }) : new Response("upstream timeout", { status: 504 });
+    });
+    await call(h, "POST", "/reminders", { id: "unc:0", text: "Pick up the forms.", dueAt: later, generation: 0 });
+    await makeDue(h);
+    await (stubFor(h) as unknown as PersonAgent).deliverDueReminders();
+    expect(keys).toEqual(["reminder:unc:0"]);
+
+    const cancel = (await (await call(h, "POST", "/reminders/unc:0/cancel")).json()) as {
+      cancelled: boolean;
+      reason?: string;
+      reminder: { status: string };
+    };
+    expect(cancel.cancelled).toBe(false);
+    expect(cancel.reason).toBe("already on its way");
+    expect(cancel.reminder.status).toBe("sending");
+
+    up = true;
+    await dueEverything(h);
+    await (stubFor(h) as unknown as PersonAgent).deliverDueReminders();
+    expect(keys).toEqual(["reminder:unc:0", "reminder:unc:0"]);
+    const list = (await (await call(h, "GET", "/reminders")).json()) as { reminders: { status: string }[] };
+    expect(list.reminders[0].status).toBe("sent");
+  });
+
+  it("after a delivery run dies between the handoff and the answer", async () => {
+    const h = handle("uncertain-crash");
+    const keys: string[] = [];
+    const lateCancels: unknown[] = [];
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      keys.push(JSON.parse(String(init?.body)).key);
+      // While recovery re-sends the first, the person cancels the second:
+      // a real request interleaved into the same agent mid-run.
+      if (keys.length === 1) lateCancels.push(await (await call(h, "POST", "/reminders/crash:1/cancel")).json());
+      return Response.json({ sent: true });
+    });
+    await call(h, "POST", "/reminders", { id: "crash:0", text: "Bring the pay stub.", dueAt: later, generation: 0 });
+    await call(h, "POST", "/reminders", { id: "crash:1", text: "Bring the ID.", dueAt: later, generation: 0 });
+    await makeDue(h);
+    // The run claims and hands off both, then dies before Channels answers.
+    await runInDurableObject(stubFor(h), async (_i, state) => {
+      const { claimDueReminders, handOffReminder } = await import("../src/agents/agent-state.js");
+      claimDueReminders(state.storage.sql, Date.now(), 120_000, "dead-run", 25);
+      expect(handOffReminder(state.storage.sql, "crash:0", "dead-run", Date.now())).toBe(true);
+      expect(handOffReminder(state.storage.sql, "crash:1", "dead-run", Date.now())).toBe(true);
+    });
+
+    const cancel = (await (await call(h, "POST", "/reminders/crash:0/cancel")).json()) as { cancelled: boolean; reason?: string };
+    expect(cancel).toMatchObject({ cancelled: false, reason: "already on its way" });
+
+    // The lease runs out; recovery re-sends both under their keys.
+    await dueEverything(h);
+    await (stubFor(h) as unknown as PersonAgent).deliverDueReminders();
+    expect(lateCancels).toEqual([expect.objectContaining({ cancelled: false, reason: "already on its way" })]);
+    expect(keys).toEqual(["reminder:crash:0", "reminder:crash:1"]);
+    const list = (await (await call(h, "GET", "/reminders")).json()) as { reminders: { id: string; status: string }[] };
+    expect(Object.fromEntries(list.reminders.map((r) => [r.id, r.status]))).toEqual({ "crash:0": "sent", "crash:1": "sent" });
   });
 });
