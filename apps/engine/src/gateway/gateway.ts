@@ -6,6 +6,7 @@ import type {
   ActionRequest,
   Approval,
   Attempt,
+  AuditEntry,
   Executor,
   GatewayResult,
   PolicyDecision,
@@ -70,7 +71,7 @@ export interface ApprovalStore {
   // a durable recovery run while this holds.
   hasUnresolvedAttempts(): boolean;
   updateAttempt(key: string, status: Attempt["status"]): void;
-  audit(entry: Record<string, unknown>): void;
+  audit(entry: AuditEntry): void;
 }
 
 function transition(store: Map<string, Approval>, id: string, to: Approval["status"]): boolean {
@@ -84,7 +85,7 @@ export class MemoryApprovalStore implements ApprovalStore {
   approvals = new Map<string, Approval>();
   receipts = new Map<string, Receipt>();
   attempts = new Map<string, Attempt>();
-  auditLog: Record<string, unknown>[] = [];
+  auditLog: AuditEntry[] = [];
   getApproval(id: string) {
     return this.approvals.get(id) ?? null;
   }
@@ -197,7 +198,7 @@ export class MemoryApprovalStore implements ApprovalStore {
     const current = this.attempts.get(key);
     if (current) this.attempts.set(key, { ...current, status, updatedAt: new Date().toISOString() });
   }
-  audit(entry: Record<string, unknown>) {
+  audit(entry: AuditEntry) {
     this.auditLog.push(entry);
   }
 }
@@ -431,11 +432,11 @@ export class ActionGateway {
     return { ...req, document: { bytesB64: bytesToBase64(raw), hash: documentHash } };
   }
 
-  private receiptReuse(req: ActionRequest, contentHash: string): GatewayResult | null {
+  private async receiptReuse(req: ActionRequest, contentHash: string): Promise<GatewayResult | null> {
     const existing = this.store.getReceiptByKey(req.idempotencyKey);
     if (!existing) return null;
     if (existing.requestHash && existing.requestHash !== contentHash) {
-      this.store.audit({ event: "gateway.key_reuse", key: req.idempotencyKey });
+      this.store.audit({ event: "gateway.key_reuse", keyHash: await sha256Hex(req.idempotencyKey) });
       return { status: "blocked", reason: "This idempotency key was already used with different content." };
     }
     return { status: "completed", receipt: existing };
@@ -450,9 +451,9 @@ export class ActionGateway {
       this.store.audit({ event: "gateway.invalid", detail, at: now.toISOString() });
       return { status: "blocked", reason: `Invalid action request: ${detail}` };
     }
-    this.store.audit({ event: "gateway.decide", type: req.type, key: req.idempotencyKey, at: now.toISOString() });
+    this.store.audit({ event: "gateway.decide", type: req.type, keyHash: await sha256Hex(req.idempotencyKey), at: now.toISOString() });
     const contentHash = await contentHashOf(req);
-    const replay = this.receiptReuse(req, contentHash);
+    const replay = await this.receiptReuse(req, contentHash);
     if (replay) return replay;
 
     const decision = evaluatePolicy(req, this.opts.policyOverrides as never);
@@ -571,7 +572,7 @@ export class ActionGateway {
     const prior = this.store.getAttempt(stored.idempotencyKey);
     if (prior?.status === "unknown") {
       if (prior.requestHash && prior.requestHash !== (await contentHashOf(stored))) {
-        this.store.audit({ event: "gateway.key_reuse", key: stored.idempotencyKey });
+        this.store.audit({ event: "gateway.key_reuse", keyHash: await sha256Hex(stored.idempotencyKey) });
         return { status: "blocked", reason: "This idempotency key was already used with different content." };
       }
       const settled = await this.reconcileUnknown(stored, now);
@@ -654,7 +655,7 @@ export class ActionGateway {
         if (receipt) return { status: "completed", receipt };
         return { status: "in_progress", reason: "Another request with this idempotency key is running." };
       }
-      this.store.audit({ event: "gateway.retry_consumed", key: approval.idempotencyKey, from: attempt.status });
+      this.store.audit({ event: "gateway.retry_consumed", keyHash: await sha256Hex(approval.idempotencyKey), from: attempt.status });
       return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now);
     }
     if (attempt.status === "in_flight") {
@@ -698,7 +699,7 @@ export class ActionGateway {
     try {
       outcome = await this.executor.check(req.idempotencyKey, req.personId);
     } catch (err) {
-      this.store.audit({ event: "gateway.check_error", key: req.idempotencyKey, detail: String(err) });
+      this.store.audit({ event: "gateway.check_error", keyHash: await sha256Hex(req.idempotencyKey), detail: String(err) });
       return {
         kind: "unavailable",
         result: {
@@ -714,7 +715,7 @@ export class ActionGateway {
       const receipt = await this.makeReceipt(req, "reconciled", outcome.externalId, undefined, now, attempt);
       this.store.putReceipt(receipt);
       this.store.updateAttempt(req.idempotencyKey, "done");
-      this.store.audit({ event: "gateway.reconciled", key: req.idempotencyKey });
+      this.store.audit({ event: "gateway.reconciled", keyHash: await sha256Hex(req.idempotencyKey) });
       return { kind: "settled", result: { status: "reconciled", receipt } };
     }
     return { kind: "absent" };
@@ -722,11 +723,11 @@ export class ActionGateway {
 
   async execute(req: ActionRequest, now = new Date()): Promise<GatewayResult> {
     const contentHash = await contentHashOf(req);
-    const replay = this.receiptReuse(req, contentHash);
+    const replay = await this.receiptReuse(req, contentHash);
     if (replay) return replay;
     const attempt = this.store.getAttempt(req.idempotencyKey);
     if (attempt?.requestHash && attempt.requestHash !== contentHash) {
-      this.store.audit({ event: "gateway.key_reuse", key: req.idempotencyKey });
+      this.store.audit({ event: "gateway.key_reuse", keyHash: await sha256Hex(req.idempotencyKey) });
       return { status: "blocked", reason: "This idempotency key was already used with different content." };
     }
     if (attempt?.status === "in_flight") {
@@ -758,7 +759,7 @@ export class ActionGateway {
       // otherwise fail closed rather than executing blindly.
       const settled = await this.reconcileUnknown(req, now);
       if (settled.kind !== "absent") return settled.result;
-      this.store.audit({ event: "gateway.corrupt_attempt", key: req.idempotencyKey });
+      this.store.audit({ event: "gateway.corrupt_attempt", keyHash: await sha256Hex(req.idempotencyKey) });
       return { status: "blocked", reason: "This key has a recorded attempt but no receipt. Refusing to execute." };
     }
     const fresh: Attempt = {
@@ -789,7 +790,7 @@ export class ActionGateway {
     if (!attempt || (attempt.status !== "in_flight" && attempt.status !== "unknown")) return null;
     if (attempt.updatedAt >= olderThanIso) return null;
     if (!this.store.claimRecoverableAttempt(key, olderThanIso, now)) return null;
-    this.store.audit({ event: "gateway.recover_claimed", key });
+    this.store.audit({ event: "gateway.recover_claimed", keyHash: await sha256Hex(key) });
     const approval = this.store.getApprovalByKey(key);
     if (!approval) return this.recoverAllowAttempt(key, attempt, now);
     let stored: ActionRequest;
@@ -797,7 +798,7 @@ export class ActionGateway {
       stored = parseActionRequest(JSON.parse(approval.requestJson));
     } catch {
       this.store.updateAttempt(key, "failed");
-      this.store.audit({ event: "gateway.recover_corrupt", key });
+      this.store.audit({ event: "gateway.recover_corrupt", keyHash: await sha256Hex(key) });
       return { status: "blocked", reason: "The stored request for this key is unreadable." };
     }
     // Reconcile before any expiry decision: if the action happened, the
@@ -842,7 +843,7 @@ export class ActionGateway {
       const receipt = this.store.getReceiptByKey(key);
       if (receipt) return { status: "completed", receipt };
       this.store.updateAttempt(key, "failed");
-      this.store.audit({ event: "gateway.recover_expired", key });
+      this.store.audit({ event: "gateway.recover_expired", keyHash: await sha256Hex(key) });
       return { status: "blocked", reason: "Approval expired before the stranded attempt could be recovered." };
     }
     return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now);
@@ -856,7 +857,7 @@ export class ActionGateway {
     try {
       outcome = await this.executor.check(key, attempt.personId);
     } catch (err) {
-      this.store.audit({ event: "gateway.check_error", key, detail: String(err) });
+      this.store.audit({ event: "gateway.check_error", keyHash: await sha256Hex(key), detail: String(err) });
       return {
         status: "blocked",
         reason: "The gateway cannot reach the outside system to reconcile this action. Recovery will retry.",
@@ -876,11 +877,11 @@ export class ActionGateway {
       };
       this.store.putReceipt(receipt);
       this.store.updateAttempt(key, "done");
-      this.store.audit({ event: "gateway.reconciled", key });
+      this.store.audit({ event: "gateway.reconciled", keyHash: await sha256Hex(key) });
       return { status: "reconciled", receipt };
     }
     this.store.updateAttempt(key, "failed");
-    this.store.audit({ event: "gateway.recover_absent", key });
+    this.store.audit({ event: "gateway.recover_absent", keyHash: await sha256Hex(key) });
     return { status: "blocked", reason: "The outside system has no record of this key. Send the action again." };
   }
 
@@ -891,7 +892,7 @@ export class ActionGateway {
       const receipt = await this.makeReceipt(req, "completed", out.externalId, out.simulated, now);
       this.store.putReceipt(receipt);
       this.store.updateAttempt(req.idempotencyKey, "done");
-      this.store.audit({ event: "gateway.executed", key: req.idempotencyKey });
+      this.store.audit({ event: "gateway.executed", keyHash: await sha256Hex(req.idempotencyKey) });
       return { status: "completed", receipt };
     } catch (err) {
       if (err instanceof TimeoutError || (err as Error)?.name === "TimeoutError") {
@@ -899,7 +900,7 @@ export class ActionGateway {
         if (settled.kind === "settled") return settled.result;
         this.store.updateAttempt(req.idempotencyKey, "unknown");
         if (settled.kind === "unavailable") return settled.result;
-        this.store.audit({ event: "gateway.unknown", key: req.idempotencyKey });
+        this.store.audit({ event: "gateway.unknown", keyHash: await sha256Hex(req.idempotencyKey) });
         return {
           status: "blocked",
           reason: "The action timed out and its outcome is unknown. Retry with the same idempotency key; the gateway reconciles before executing again.",
@@ -908,12 +909,12 @@ export class ActionGateway {
       if (err instanceof DefiniteFailureError || (err as Error)?.name === "DefiniteFailureError") {
         const message = err instanceof Error ? err.message : String(err);
         this.store.updateAttempt(req.idempotencyKey, "failed");
-        this.store.audit({ event: "gateway.executor_failed", key: req.idempotencyKey, detail: message });
+        this.store.audit({ event: "gateway.executor_failed", keyHash: await sha256Hex(req.idempotencyKey), detail: message });
         return { status: "blocked", reason: `The action failed before anything happened: ${message} Retry with the same idempotency key.` };
       }
       const message = err instanceof Error ? err.message : String(err);
       this.store.updateAttempt(req.idempotencyKey, "unknown");
-      this.store.audit({ event: "gateway.executor_error", key: req.idempotencyKey, detail: message });
+      this.store.audit({ event: "gateway.executor_error", keyHash: await sha256Hex(req.idempotencyKey), detail: message });
       return { status: "blocked", reason: `The action failed before a receipt was recorded: ${message}` };
     }
   }

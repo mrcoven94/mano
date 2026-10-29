@@ -653,7 +653,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // delivery however often the gateway retries.
   private async deliverShare(req: ActionRequest): Promise<{ externalId: string }> {
     const match = ORG_AGENT_ID.exec(req.recipient);
-    if (!match) throw new DefiniteFailureError(`Share recipient must be an org agent ID, got ${req.recipient}.`);
+    if (!match) throw new DefiniteFailureError("Share recipient must be an org agent ID.");
     const consent = req.payload.consent;
     if (consent !== "grant" && consent !== "revoke") {
       throw new DefiniteFailureError("Share payload must declare a grant or revoke.");
