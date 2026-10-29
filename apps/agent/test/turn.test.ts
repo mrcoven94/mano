@@ -37,8 +37,8 @@ function signed(body: Record<string, unknown>): Request {
 
 const grants = new Map<string, string>();
 
-function turn(turnId: string, text: string, handleHash = HANDLE): Request {
-  return signed({ turnId, generation: 0, handleHash, grant: grants.get(handleHash), texts: [text], attachmentCount: 0 });
+function turn(turnId: string, text: string, handleHash = HANDLE, generation = 0): Request {
+  return signed({ turnId, generation, handleHash, grant: grants.get(handleHash), texts: [text], attachmentCount: 0 });
 }
 
 // Stands in for Eve: the model either answers plainly or, asked to file,
@@ -142,6 +142,47 @@ describe("approval by text", () => {
     const yes = await send(turn("turn_yes_000004", "yes"));
     expect(yes.status).toBe(200);
     expect(engine.executor.calls).toHaveLength(1);
+  });
+});
+
+describe("uncertain and refused outcomes", () => {
+  it("an unknown filing outcome is never reported as nothing sent, and the same approval is reconciled", async () => {
+    await send(turn("turn_ask_000010", "Please file my renewal"));
+    engine.executor.failNextWithTimeout = true;
+    const realCheck = engine.executor.check.bind(engine.executor);
+    let checkDown = true;
+    engine.executor.check = async (key, personId) => {
+      if (checkDown) throw new Error("portal unreachable");
+      return realCheck(key, personId);
+    };
+    const yes = await send(turn("turn_yes_000010", "YES"));
+    expect(yes.body.text).toMatch(/checking/i);
+    expect(yes.body.text).not.toMatch(/nothing was sent/i);
+    await send(turn("turn_ask_000011", "Please file my renewal"));
+    expect(engine.approvals()).toHaveLength(1);
+    checkDown = false;
+    const again = await send(turn("turn_yes_000011", "YES"));
+    expect(again.body.text).toMatch(/^Done/);
+    expect(engine.executor.calls).toHaveLength(1);
+  });
+
+  it("a NO is confirmed only when Engine rejects the approval", async () => {
+    await send(turn("turn_ask_000012", "Please file my renewal"));
+    const [approval] = engine.approvals();
+    // The YES went through in Engine but its answer never reached Mano.
+    await engine.gateway.approveAndExecute(approval.id, approval.personId);
+    const no = await send(turn("turn_no_0000012", "no"));
+    expect(no.body.text).not.toMatch(/did not send|nothing left/i);
+    expect(no.body.text).toMatch(/already/i);
+  });
+});
+
+describe("after a deletion", () => {
+  it("a YES in the new conversation never approves a draft from before the deletion", async () => {
+    await send(turn("turn_ask_000013", "Please file my renewal"));
+    await send(turn("turn_yes_000013", "YES", HANDLE, 1));
+    expect(engine.executor.calls).toHaveLength(0);
+    expect(engine.approvals()[0].status).toBe("rejected");
   });
 });
 

@@ -52,6 +52,9 @@ export class EngineDouble {
       this.memory.set(personId, rows.filter((r) => r.id !== id));
       return Response.json({ id, forgotten: true });
     }
+    if (rest === "/approvals" && method === "GET") {
+      return Response.json({ approvals: this.approvals().filter((a) => a.personId === personId) });
+    }
     if (rest === "/action" && method === "POST") {
       return Response.json(await this.gateway.requestAction({ ...body, personId }));
     }

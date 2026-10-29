@@ -12,9 +12,9 @@
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
-import { EngineError, type Engine, type EngineResult, type PersonEngine } from "./engine.js";
+import { EngineError, type Engine, type PersonEngine } from "./engine.js";
 import { claimTurn, failTurn, finishTurn, type TurnResponse } from "./ledger.js";
-import { clearPending, loadPending, type PendingApproval } from "./pending.js";
+import { clearPending, loadPending, savePending, type PendingApproval } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 import type { KeyValue } from "./storage.js";
 
@@ -96,22 +96,62 @@ const failure = (httpStatus: number, status: string, reason?: string): TurnRespo
   body: { status, text: "", ...(reason ? { reason } : {}) },
 });
 
-function outcomeText(pending: PendingApproval, result: EngineResult): { text: string; settled: boolean } {
+const CHECKING =
+  "I'm checking whether it went through. It will not be sent twice. Reply YES in a few minutes and I will check again.";
+
+async function setChecking(kv: KeyValue, pending: PendingApproval): Promise<void> {
+  await savePending(kv, { ...pending, state: "checking" }, new Date(Date.now() + 24 * 3600_000).toISOString());
+}
+
+// After an answer that is not a definite outcome, Engine's own record of
+// the approval decides: consumed means execution started, so the
+// outcome is unknown until Engine reconciles it.
+async function consumed(engine: PersonEngine, pending: PendingApproval): Promise<boolean> {
+  return (await engine.approvalStatus(pending.approvalId)) === "approved";
+}
+
+async function answerYes(kv: KeyValue, engine: PersonEngine, pending: PendingApproval): Promise<string> {
+  const result = await engine.approve(pending.approvalId);
   switch (result.status) {
     case "completed":
     case "reconciled": {
+      await clearPending(kv, pending.personId);
       const receipt = result.receipt;
       const label = receipt?.simulated ? " This was a simulated filing." : "";
       const confirmation = receipt ? ` Confirmation ${receipt.externalId}.` : "";
-      return { text: `Done. Sent: ${pending.purpose}.${confirmation}${label}`, settled: true };
+      return `Done. Sent: ${pending.purpose}.${confirmation}${label}`;
     }
-    case "in_progress":
-      return { text: "It is being sent now. Reply YES again in a few minutes and I will check on it.", settled: false };
     case "stale":
-      return { text: "That changed after you saw it, so nothing was sent. Want me to prepare it again?", settled: true };
+      await clearPending(kv, pending.personId);
+      return "That changed after you saw it, so nothing was sent. Want me to prepare it again?";
+    case "in_progress":
+      await setChecking(kv, pending);
+      return CHECKING;
     default:
-      return { text: "That approval can no longer be used, so nothing was sent. Want me to prepare it again?", settled: true };
+      if (await consumed(engine, pending)) {
+        await setChecking(kv, pending);
+        return CHECKING;
+      }
+      await clearPending(kv, pending.personId);
+      return "That approval can no longer be used, so nothing was sent. Want me to prepare it again?";
   }
+}
+
+async function answerNo(kv: KeyValue, engine: PersonEngine, pending: PendingApproval): Promise<string> {
+  if (pending.state === "checking") {
+    return "It may already have gone through, so I cannot cancel it. I'm checking. Reply YES and I will check again.";
+  }
+  const result = await engine.reject(pending.approvalId);
+  if (result.status === "rejected") {
+    await clearPending(kv, pending.personId);
+    return "Okay, I did not send it. Nothing left Mano.";
+  }
+  if (await consumed(engine, pending)) {
+    await setChecking(kv, pending);
+    return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
+  }
+  await clearPending(kv, pending.personId);
+  return "That request had already expired or changed, so nothing was sent.";
 }
 
 async function decide(
@@ -121,41 +161,40 @@ async function decide(
   decision: "yes" | "no",
 ): Promise<TurnResponse> {
   if (!engine) {
-    return reply(
-      decision === "no"
-        ? "Okay, I will not send it. Nothing left Mano."
-        : "I cannot send that right now, and nothing was sent. Please try again later.",
-    );
-  }
-  if (decision === "no") {
-    // Engine closes the approval, so it can never be approved later. If
-    // Engine is unreachable the pointer stays and NO can be sent again;
-    // nothing is sent either way.
-    try {
-      await engine.reject(pending.approvalId);
-      await clearPending(kv, pending.personId);
-      return reply("Okay, I did not send it. Nothing left Mano.");
-    } catch (err) {
-      console.warn(JSON.stringify({ type: "mano_reject_failed", status: err instanceof EngineError ? err.status : null }));
-      return reply("Nothing was sent. I could not close that request just now, so reply NO again to cancel it.");
-    }
+    return reply("I cannot reach the system that holds that request right now. Please try again in a few minutes.");
   }
   try {
-    const result = await engine.approve(pending.approvalId);
-    const { text, settled } = outcomeText(pending, result);
-    if (settled) await clearPending(kv, pending.personId);
-    return reply(text);
+    return reply(decision === "yes" ? await answerYes(kv, engine, pending) : await answerNo(kv, engine, pending));
   } catch (err) {
-    console.warn(JSON.stringify({ type: "mano_approve_failed", status: err instanceof EngineError ? err.status : null }));
-    return reply("I could not confirm that went through. Reply YES again to retry; it will not be sent twice.");
+    console.warn(JSON.stringify({ type: "mano_decision_failed", decision, status: err instanceof EngineError ? err.status : null }));
+    if (decision === "no" && pending.state === "asked") {
+      return reply("Nothing was sent. I could not close that request just now, so reply NO again to cancel it.");
+    }
+    return reply("I could not confirm that just now. Reply YES again to retry; it will not be sent twice.");
   }
+}
+
+// A pointer from before a deletion is never answered. An approval still
+// waiting for its answer is rejected in Engine; one already consumed is
+// left to Engine's own reconciliation.
+async function dropStalePending(kv: KeyValue, engine: PersonEngine | null, pending: PendingApproval): Promise<void> {
+  if (engine && pending.state === "asked") {
+    await engine.reject(pending.approvalId).catch((err) => {
+      console.warn(JSON.stringify({ type: "mano_reject_failed", status: err instanceof EngineError ? err.status : null }));
+    });
+  }
+  await clearPending(kv, pending.personId);
 }
 
 async function runTurn(deps: TurnDeps & { kv: KeyValue }, body: TurnBody, turnAtMs: number): Promise<TurnResponse> {
   const engine = deps.engine?.forHandle(body.handleHash, body.grant) ?? null;
   const personId = engine?.personId ?? null;
   const message = turnText(body);
-  const waiting = personId ? await loadPending(deps.kv, personId) : null;
+  let waiting = personId ? await loadPending(deps.kv, personId) : null;
+  if (waiting && waiting.generation !== body.generation) {
+    await dropStalePending(deps.kv, engine, waiting);
+    waiting = null;
+  }
   const decision = waiting && body.attachmentCount === 0 ? parseDecision(body.texts.join(" ")) : null;
   if (waiting && decision) return decide(deps.kv, engine, waiting, decision);
 

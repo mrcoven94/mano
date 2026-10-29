@@ -4,12 +4,20 @@
 // about, so a texted YES or NO reaches exactly that approval. The
 // question is rendered from the request Engine froze, so the person reads
 // the exact content their yes would send.
+//
+// "asked" waits for the person's YES or NO. "checking" means Engine took
+// the YES but the outcome is not known yet: the pointer then holds the
+// same approval until Engine reports a definite outcome, so a retry
+// reconciles it instead of filing again. The pointer also records the
+// Channels deletion generation; after a deletion it is never answered.
 import type { EngineApproval } from "./engine.js";
 import type { KeyValue } from "./storage.js";
 
 export interface PendingApproval {
   approvalId: string;
   personId: string;
+  generation: number;
+  state: "asked" | "checking";
   // The turn that proposed it, so that turn's reply carries the question.
   turnId: string;
   purpose: string;

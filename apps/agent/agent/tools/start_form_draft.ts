@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { renderQuestion, savePending } from "../lib/pending.js";
+import { loadPending, renderQuestion, savePending } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { StorageUnavailable, getKeyValue } from "../lib/storage.js";
 
@@ -31,12 +31,20 @@ export default defineTool({
     start: () => "Prepare the renewal",
   },
   async execute(input, ctx) {
-    const { turnId } = requireTurn(ctx);
+    const { turnId, generation } = requireTurn(ctx);
     const engine = personEngine(ctx);
     if (!engine) throw new Error("Preparing forms is not available right now. Say so and offer to collect the answers.");
     const kv = await getKeyValue();
     if (!kv) throw new StorageUnavailable("Preparing forms");
     const personId = engine.personId;
+    const previous = await loadPending(kv, personId);
+    if (previous?.state === "checking" && previous.generation === generation) {
+      return {
+        status: "waiting_on_previous",
+        sent: false,
+        note: "An earlier submission is still being confirmed. Do not prepare another; tell the person you are checking on the first one and they can reply YES to check.",
+      };
+    }
     const payload = { ...input };
     const contentKey = createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
     const result = await engine.proposeAction({
@@ -49,11 +57,18 @@ export default defineTool({
     if (result.status !== "needs_approval" || !result.approval) {
       return { status: result.status, reason: result.reason ?? "Engine did not hold it for approval.", sent: false };
     }
+    // One question waits at a time: the one it replaces can never be
+    // answered, so Engine closes it.
+    if (previous?.state === "asked" && previous.approvalId !== result.approval.id) {
+      await engine.reject(previous.approvalId).catch(() => undefined);
+    }
     await savePending(
       kv,
       {
         approvalId: result.approval.id,
         personId,
+        generation,
+        state: "asked",
         turnId,
         purpose: result.approval.purpose,
         question: renderQuestion(result.approval),

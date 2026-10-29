@@ -136,6 +136,16 @@ export class PersonEngine {
     return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/approve`));
   }
 
+  // The approval's own status, or null when Engine has no such approval.
+  // "approved" means it was consumed: execution started, whatever the
+  // last answer said.
+  async approvalStatus(approvalId: string): Promise<string | null> {
+    const out = (await this.json("GET", "/approvals")) as { approvals?: unknown };
+    const rows = Array.isArray(out.approvals) ? (out.approvals as Record<string, unknown>[]) : [];
+    const row = rows.find((r) => r.id === approvalId);
+    return typeof row?.status === "string" ? row.status : null;
+  }
+
   async reject(approvalId: string): Promise<EngineResult> {
     return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/reject`));
   }
