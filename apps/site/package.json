@@ -9,6 +9,7 @@
     "check": "next build"
   },
   "dependencies": {
+    "@mano/quality": "workspace:*",
     "next": "15.5.28",
     "react": "19.1.1",
     "react-dom": "19.1.1",

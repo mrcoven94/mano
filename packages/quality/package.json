@@ -1,0 +1,30 @@
+{
+  "name": "@mano/quality",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./site": "./src/site.ts",
+    "./package.json": "./package.json"
+  },
+  "description": "Mano quality: the offline bench over synthetic cases and the live hooks that keep scores and counts only, never text.",
+  "scripts": {
+    "check": "tsc --noEmit && node --import ./src/register.ts --test test/*.test.ts",
+    "bench": "node --import ./src/register.ts src/bin/bench.ts",
+    "smoke": "node --import ./src/register.ts src/bin/smoke.ts",
+    "nightly": "node --import ./src/register.ts src/bin/nightly.ts",
+    "rescore": "node --import ./src/register.ts src/bin/rescore.ts",
+    "calibrate": "node --import ./src/register.ts src/bin/calibrate.ts",
+    "compare": "node --import ./src/register.ts src/bin/compare.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@mano/channels": "workspace:*",
+    "@mano/guardian": "workspace:*",
+    "@mano/persona": "workspace:*"
+  }
+}

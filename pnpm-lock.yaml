@@ -115,6 +115,9 @@ importers:
 
   apps/site:
     dependencies:
+      '@mano/quality':
+        specifier: workspace:*
+        version: link:../../packages/quality
       next:
         specifier: 15.5.28
         version: 15.5.28(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
@@ -214,6 +217,25 @@ importers:
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(vite@7.3.7(@types/node@22.20.5)(tsx@4.23.15)(yaml@2.9.1))
+
+  packages/quality:
+    dependencies:
+      '@mano/channels':
+        specifier: workspace:*
+        version: link:../channels
+      '@mano/guardian':
+        specifier: workspace:*
+        version: link:../guardian
+      '@mano/persona':
+        specifier: workspace:*
+        version: link:../persona
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
 
 packages:
 

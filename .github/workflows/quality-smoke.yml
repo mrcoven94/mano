@@ -1,0 +1,78 @@
+# Quality gate for pull requests that can change what Mano says: the 28-case
+# smoke subset and the persona probes through the real text line, gated
+# against main's last eligible nightly run. smoke.ts writes the gate's
+# outcome to runs/smoke/gate.json and exits 0 whatever it says;
+# smoke-publish.ts posts the one PR comment and the "quality gate" check, and
+# exits 1 only for a failing gate or a run that wrote no result. In CI the
+# gate is strict: a missing key, no baseline or an ineligible run fails;
+# neutral exists only for offline runs.
+name: quality-smoke
+on:
+  pull_request:
+    paths:
+      - "packages/quality/**"
+      - "packages/persona/**"
+      - "packages/channels/**"
+      - "apps/channels/**"
+      - "packages/mail/**"
+      - "packages/guardian/**"
+      - "apps/engine/**"
+      - "apps/agent/**"
+      - ".github/workflows/quality-*.yml"
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+concurrency:
+  group: quality-smoke-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  smoke:
+    # Pull requests from forks get no secrets, so there is nothing to run.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Require the model key
+        env:
+          META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
+        run: |
+          [ -n "$META_MODEL_API_KEY" ] || { echo "META_MODEL_API_KEY is not set"; exit 1; }
+      - name: Judge and serving IDs must differ
+        env:
+          MANO_MODEL_JUDGE_ID: ${{ vars.MANO_MODEL_JUDGE_ID }}
+          MANO_MODEL_BENCH_ID: ${{ vars.MANO_MODEL_BENCH_ID }}
+        run: |
+          [ -n "$MANO_MODEL_JUDGE_ID" ] || { echo "MANO_MODEL_JUDGE_ID variable is not set"; exit 1; }
+          [ -n "$MANO_MODEL_BENCH_ID" ] || { echo "MANO_MODEL_BENCH_ID variable is not set"; exit 1; }
+          [ "$MANO_MODEL_JUDGE_ID" != "$MANO_MODEL_BENCH_ID" ] || { echo "judge and serving model IDs must differ"; exit 1; }
+      - run: pnpm install --frozen-lockfile
+      - name: Run smoke subset
+        working-directory: packages/quality
+        env:
+          QUALITY_GATE_STRICT: "1"
+          META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
+          MANO_MODEL_BASE_URL: ${{ secrets.MANO_MODEL_BASE_URL }}
+          MANO_MODEL_JUDGE_ID: ${{ vars.MANO_MODEL_JUDGE_ID }}
+          MANO_MODEL_BENCH_ID: ${{ vars.MANO_MODEL_BENCH_ID }}
+          QUALITY_PRICE_INPUT_PER_1K: ${{ vars.QUALITY_PRICE_INPUT_PER_1K }}
+          QUALITY_PRICE_OUTPUT_PER_1K: ${{ vars.QUALITY_PRICE_OUTPUT_PER_1K }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          node --import ./src/register.ts src/bin/smoke.ts --out ../../runs/smoke
+      - name: Post the result
+        if: always()
+        working-directory: packages/quality
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node --import ./src/register.ts src/bin/smoke-publish.ts ../../runs/smoke
