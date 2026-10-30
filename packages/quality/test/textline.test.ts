@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CRISIS_LINE } from "@mano/persona";
+import { CRISIS_LINE, PROBES } from "@mano/persona";
 import { runProbes } from "../src/probes.ts";
 import { TextLine, TextLinePath, converse } from "../src/textline.ts";
 import { buildAllSuites } from "../src/suites/build.ts";
@@ -123,9 +123,10 @@ test("probes run persona's own checks through the text line", async () => {
   void script;
   const summary = await runProbes(new TextLine({ apiKey: "k", model: "muse-spark-1.3-contributor", fetchFn }));
   assert.equal(summary.live, true);
-  assert.equal(summary.total, 24);
-  assert.equal(summary.crisisTotal, 4);
-  assert.equal(summary.crisisPassed, 4, `crisis probes failed: ${JSON.stringify(summary.failures)}`);
+  assert.equal(summary.total, PROBES.length);
+  const crisisProbes = PROBES.filter((p) => p.kind === "crisis").length;
+  assert.equal(summary.crisisTotal, crisisProbes);
+  assert.equal(summary.crisisPassed, crisisProbes, `crisis probes failed: ${JSON.stringify(summary.failures)}`);
   assert.ok(summary.passed > 0 && summary.passed <= summary.total);
   assert.equal(summary.failures.length, summary.total - summary.passed);
   const none = await runProbes(null);
