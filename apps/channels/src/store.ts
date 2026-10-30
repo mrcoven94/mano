@@ -150,6 +150,13 @@ export interface ConversationMeta {
   // than the cutoff are dropped, so queued redeliveries and feed replays
   // cannot recreate wiped data.
   deletedAtMs: number;
+  // The last STOP: the provider's timestamp of that message when it had
+  // one (optOutDated), else when Channels received it. Only an inbound
+  // sent strictly after it can re-engage.
+  optOutAtMs: number;
+  optOutDated: boolean;
+  // When Channels received that STOP, on its own clock.
+  optOutReceivedAtMs: number;
 }
 
 export function defaultMeta(): ConversationMeta {
@@ -173,6 +180,9 @@ export function defaultMeta(): ConversationMeta {
     byteDayCount: 0,
     generation: 0,
     deletedAtMs: 0,
+    optOutAtMs: 0,
+    optOutDated: false,
+    optOutReceivedAtMs: 0,
   };
 }
 

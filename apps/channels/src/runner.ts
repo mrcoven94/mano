@@ -22,6 +22,7 @@ import {
   handleOverLimit,
   hourKeyFor,
   idempotencyKeyFor,
+  isOptIn,
   isOptOut,
   lifecycleStateFor,
   parseApprovalReply,
@@ -266,6 +267,17 @@ export function advanceLifecycle(current: OutboundState, next: OutboundState): O
   return OUTBOUND_RANK[next] > OUTBOUND_RANK[current] ? next : null;
 }
 
+// After a STOP whose timestamp the provider gave, any inbound sent
+// strictly after it re-engages (the product rule: any new message). After
+// an undated STOP, only START or a message Channels received at least
+// REENGAGE_AFTER_UNDATED_MS later can.
+const REENGAGE_AFTER_UNDATED_MS = 60_000;
+
+function reengages(meta: import("./store.js").ConversationMeta, sentAtMs: number | null, text: string, nowMs: number): boolean {
+  if (meta.optOutDated) return sentAtMs !== null && sentAtMs > meta.optOutAtMs;
+  return isOptIn(text) || nowMs >= meta.optOutReceivedAtMs + REENGAGE_AFTER_UNDATED_MS;
+}
+
 export class ConversationRunner {
   private deps: RunnerDeps;
 
@@ -327,6 +339,14 @@ export class ConversationRunner {
       logger.info("group_skipped", { handle: this.logHandle(), eventId: event.id });
       return "recorded";
     }
+    // STOP is honored before every check below, dated or not, fresh or
+    // stale, even from before a delete: it only ever makes Mano quieter.
+    if (event.kind === "message.received" && event.direction === "inbound") {
+      const optOutText = event.text ?? "";
+      if (optOutText && isOptOut(optOutText) && event.attachments.length === 0 && (event.chatId || event.handle)) {
+        return this.applyOptOut(event);
+      }
+    }
     // Events older than the deletion cutoff are recorded and dropped:
     // queued redeliveries and feed replays from before a delete cannot
     // recreate wiped data, and redeliveries dedupe on the recorded ID.
@@ -353,8 +373,13 @@ export class ConversationRunner {
         return "recorded";
       }
       const text = event.text ?? "";
-      if (text && isOptOut(text) && event.attachments.length === 0) {
-        return this.applyOptOut(event);
+      // After STOP, only an inbound the person sent after it re-engages.
+      // One sent before it (or at the same instant) and delivered late, by
+      // webhook or by the reconcile feed, is recorded and nothing more.
+      const optedOut = store.meta();
+      if (optedOut.optedOut && !reengages(optedOut, when, text, nowMs())) {
+        logger.info("inbound_before_optout", { handle: this.logHandle(), eventId: event.id });
+        return "recorded";
       }
       // Bound what waits for the batch alarm before buffering it. Past
       // the cap the new input is recorded and dropped; the turn answers
@@ -488,8 +513,14 @@ export class ConversationRunner {
     const { store, logger, nowMs } = this.deps;
     const before = store.meta();
     if (before.optedOut) return "opted-out";
+    // The cutoff: the provider's timestamp of the STOP, else Channels'
+    // receive time.
+    const dated = event.occurredAtMs !== null && event.occurredAtMs > 0;
     const meta = {
       optedOut: true,
+      optOutAtMs: dated ? event.occurredAtMs! : nowMs(),
+      optOutDated: dated,
+      optOutReceivedAtMs: nowMs(),
       chatId: event.chatId ?? before.chatId,
       to: event.handle ?? before.to,
       turn: before.turn + 1,

@@ -645,6 +645,8 @@ describe("opt-out and close", () => {
     expect(h.channel.sends).toHaveLength(1);
     expect(await h.runner.handleEvent(inboundEvent({ id: "evt_stop2", text: "STOP", occurredAtMs: h.now }), "webhook")).toBe("opted-out");
     expect(h.channel.sends).toHaveLength(1);
+    // Re-engaging takes a message sent after the STOP.
+    h.advance(1000);
     expect(await h.runner.handleEvent(inboundEvent({ id: "evt_back", text: "Hello again.", occurredAtMs: h.now }), "webhook")).toBe("queued");
     await runTurnAfterBatch(h);
     expect(h.channel.sends.length).toBeGreaterThan(1);

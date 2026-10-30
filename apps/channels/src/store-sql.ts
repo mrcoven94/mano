@@ -133,6 +133,9 @@ interface MetaRow {
   deleted_at_ms: number;
   typing_since_ms?: number;
   typing_active?: number;
+  opt_out_at_ms?: number;
+  opt_out_dated?: number;
+  opt_out_received_at_ms?: number;
 }
 
 function firstRow<T>(cursor: SqlStorageCursor<Record<string, SqlStorageValue>>): T | null {
@@ -191,6 +194,9 @@ const META_COLUMNS: Record<keyof ConversationMeta, string> = {
   byteDayCount: "byte_day_count",
   generation: "generation",
   deletedAtMs: "deleted_at_ms",
+  optOutAtMs: "opt_out_at_ms",
+  optOutDated: "opt_out_dated",
+  optOutReceivedAtMs: "opt_out_received_at_ms",
 };
 
 export class SqlConversationStore implements ConversationStore {
@@ -212,6 +218,10 @@ export class SqlConversationStore implements ConversationStore {
       "ALTER TABLE outbounds ADD COLUMN reply_to TEXT",
       "ALTER TABLE meta ADD COLUMN typing_since_ms INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE meta ADD COLUMN typing_active INTEGER NOT NULL DEFAULT 0",
+      // The opt-out cutoff (LAP-613, review 9).
+      "ALTER TABLE meta ADD COLUMN opt_out_at_ms INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE meta ADD COLUMN opt_out_dated INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE meta ADD COLUMN opt_out_received_at_ms INTEGER NOT NULL DEFAULT 0",
     ]) {
       try {
         this.sql.exec(ddl);
@@ -266,12 +276,15 @@ export class SqlConversationStore implements ConversationStore {
       byteDayCount: row.byte_day_count ?? 0,
       generation: row.generation ?? 0,
       deletedAtMs: row.deleted_at_ms ?? 0,
+      optOutAtMs: row.opt_out_at_ms ?? 0,
+      optOutDated: row.opt_out_dated === 1,
+      optOutReceivedAtMs: row.opt_out_received_at_ms ?? 0,
     };
   }
 
   saveMeta(meta: ConversationMeta): void {
     this.sql.exec(
-      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ?, typing_since_ms = ?, typing_active = ? WHERE id = 1",
+      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ?, typing_since_ms = ?, typing_active = ?, opt_out_at_ms = ?, opt_out_dated = ?, opt_out_received_at_ms = ? WHERE id = 1",
       meta.turn,
       meta.introduced ? 1 : 0,
       meta.closed ? 1 : 0,
@@ -291,6 +304,9 @@ export class SqlConversationStore implements ConversationStore {
       meta.deletedAtMs,
       meta.typingSinceMs,
       meta.typingActive ? 1 : 0,
+      meta.optOutAtMs,
+      meta.optOutDated ? 1 : 0,
+      meta.optOutReceivedAtMs,
     );
   }
 
