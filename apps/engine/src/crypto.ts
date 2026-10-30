@@ -1,3 +1,5 @@
+import type { FieldCipher } from "./profile.js";
+
 function b64ToBytes(s: string): Uint8Array {
   const bin = atob(s);
   const out = new Uint8Array(bin.length);
@@ -85,7 +87,7 @@ export async function decryptForPerson(
 // The profile's field cipher (src/profile.ts): each value sealed with the
 // person's key and bound to the person and the field path, so a sealed
 // value cannot be read under another person or moved to another field.
-export function profileCipher(kekB64: string, personId: string): { seal(path: string, plaintext: string): Promise<string>; open(path: string, sealed: string): Promise<string> } {
+export function profileCipher(kekB64: string, personId: string): FieldCipher {
   const aad = (path: string) => new TextEncoder().encode(`mano-profile:v1:${personId}:${path}`);
   return {
     seal: async (path, plaintext) => JSON.stringify(await encryptForPerson(new TextEncoder().encode(plaintext), kekB64, aad(path))),
