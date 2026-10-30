@@ -588,8 +588,9 @@ export function writeNightlyStaging(root: string, report: RunReport, results: Ca
 // Puts back, on purpose, the baseline a past main run produced, read from
 // what that run saved: its report with its persisted decision, and the
 // exact baseline it wrote (runs/<id>/baseline.json). A run with no saved
-// decision is refused. A run whose decision kept the baseline (blocked) is
-// refused unless accept is set; then its plain results are installed and
+// decision, or that was not gate-eligible, is refused, accept or not. An
+// eligible run whose decision kept the baseline (blocked by a regression)
+// is refused unless accept is set; then its plain results are installed and
 // the current agent record kept. latest.json and the history say the
 // baseline was restored. Main only.
 export function restoreBaseline(
@@ -601,6 +602,9 @@ export function restoreBaseline(
   const { report } = source;
   const decision = report.promotion;
   if (!decision) throw new Error(`run ${report.runId} saved no promotion decision; it cannot be restored`);
+  // accept_baseline overrides a regression, never ineligibility: a run whose
+  // results were incomplete (for example its judge failed) is never a baseline.
+  if (!report.eligibility.eligible) throw new Error(`run ${report.runId} was not gate-eligible (${report.eligibility.reasons.join("; ")}); it can never be restored`);
   let doc: RunReport;
   let agent: "write" | "keep" | "clear";
   const reasons: string[] = [];

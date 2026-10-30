@@ -163,3 +163,18 @@ test("every run gets its own id, so a second run the same day never overwrites t
   assert.equal(runIdFor("2026-10-30", { GITHUB_RUN_ID: "41007734259" }), "2026-10-30-41007734259");
   assert.equal(runIdFor("2026-10-30", {}), "2026-10-30");
 });
+
+// Sol's third review at 779aec1: accept_baseline overrides a regression,
+// never ineligibility, on a nightly or a restore.
+test("an ineligible run is never restorable, even with accept_baseline", () => {
+  const root = mkdtempSync(join(tmpdir(), "inel-"));
+  const ineligible = report("2026-10-31-8", { eligibility: { eligible: false, reasons: ["the judge could not score 8 answer(s)"] } });
+  const out = nightly(root, ineligible, report("prior"), true);
+  assert.equal(out.baseline, null, "accept_baseline promoted an ineligible run");
+  assert.equal(out.saved.promotion!.plain, "keep");
+  assert.equal(out.saved.eligibility.eligible, false);
+  const later = mkdtempSync(join(tmpdir(), "restore-"));
+  const opts = { ref: MAIN, actor: "lead", priorLog: [], current: report("now", { agent: agent("current") }), latest: null, history: [], accept: true };
+  assert.throws(() => restoreBaseline(later, { report: out.saved, effective: out.effective }, opts), /not gate-eligible/);
+  assert.equal(existsSync(join(later, "public", "baseline.json")), false);
+});
