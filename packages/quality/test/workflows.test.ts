@@ -38,7 +38,8 @@ test("the gate outcome is data, never a shell exit code", () => {
 });
 
 test("nightly runs on main with every live part and records to both buckets", () => {
-  assert.ok(nightly.includes("ref: main"));
+  assert.match(nightly, /schedule:\n\s+- cron:/, "the nightly runs on a schedule, which GitHub runs on main");
+  assert.ok(nightly.includes("workflow_dispatch"), "a branch can run it by hand");
   assert.ok(!/^ *if:.*secrets\./m.test(nightly), "nightly gates a step on a secret");
   assert.ok(nightly.includes("HOLDOUT: ${{ secrets.MANO_QUALITY_HOLDOUT }}"), "holdout must ride env");
   assert.ok(!nightly.includes("printf '%s' '${{"), "holdout is pasted into shell source");

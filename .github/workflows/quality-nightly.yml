@@ -18,9 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
+      # The schedule runs on main. A manual run uses the ref it was started
+      # on, so a branch can be checked before it merges.
       - uses: actions/checkout@v7
-        with:
-          ref: main
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
