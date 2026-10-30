@@ -2,12 +2,12 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 
 import { personEngine, requireTurn } from "../lib/person.js";
-import { REMINDER_PREFIX, reminderIdFor } from "../lib/reminders.js";
+import { REMINDER_PREFIX, ordinalInTurn, reminderIdFor } from "../lib/reminders.js";
 import { parseWhen, validateDue } from "../lib/when.js";
 
 export default defineTool({
   description:
-    "Set a reminder the person asked for. Pass their words for when (\"tomorrow at 9\") untouched plus the short reminder text. Times resolve in the person's timezone. Confirm the result in one short sentence afterward.",
+    "Set one reminder the person asked for. Pass their words for when (\"tomorrow at 9\") untouched plus the short reminder text. Times resolve in the person's timezone. For several reminders, call it once per reminder and wait for each result before the next. Confirm the result in one short sentence afterward.",
   inputSchema: z.object({
     text: z.string().min(1).max(500).describe("What to remind them of, in a few words."),
     when: z.string().min(1).max(200).describe("When, in the person's own words."),
@@ -23,7 +23,7 @@ export default defineTool({
     const invalid = validateDue(parsed.dueAtMs, turnAtMs);
     if (invalid) throw new Error(invalid);
     const saved = await engine.createReminder({
-      id: reminderIdFor(turnId, parsed.dueAtMs, text),
+      id: reminderIdFor(turnId, ordinalInTurn(ctx.messages ?? [], ctx.toolName ?? "remind")),
       // Engine delivers this text as is, so it says what it is.
       text: `${REMINDER_PREFIX}${text.trim()}`,
       dueAt: new Date(parsed.dueAtMs).toISOString(),

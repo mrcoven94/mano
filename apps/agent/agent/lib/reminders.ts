@@ -8,11 +8,39 @@ import { createHash } from "node:crypto";
 
 export const REMINDER_PREFIX = "Reminder: ";
 
-// One reminder per turn, due time and wording: a replayed or recovered
-// turn derives the same ID, so it finds the reminder it already made,
-// while two different reminders set for the same time stay two. Case,
-// spacing and punctuation do not change the identity.
-export function reminderIdFor(turnId: string, dueAtMs: number, text: string): string {
-  const words = text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-  return `rem-${createHash("sha256").update(`${turnId}\n${dueAtMs}\n${words}`).digest("hex").slice(0, 32)}`;
+// A reminder's identity is the turn plus its ordinal among this turn's
+// remind calls, never its wording. A retried turn (Channels sends the same
+// signed turn again) starts counting from zero again, so its first
+// reminder is the first attempt's first reminder whatever the model says
+// this time; Engine then returns the reminder it already holds.
+export function reminderIdFor(turnId: string, ordinal: number): string {
+  return `rem-${createHash("sha256").update(`${turnId}\n${ordinal}`).digest("hex").slice(0, 32)}`;
+}
+
+interface MessageLike {
+  role?: unknown;
+  content?: unknown;
+}
+
+// How many calls to this tool the current attempt made before this one:
+// tool calls in the model input after the attempt's own message (the last
+// person message). The input excludes the step that requested this call,
+// so the tool asks the model to set reminders one call at a time.
+export function ordinalInTurn(messages: readonly unknown[], toolName: string): number {
+  const list = messages as readonly MessageLike[];
+  let start = 0;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i]?.role === "user") {
+      start = i + 1;
+      break;
+    }
+  }
+  let count = 0;
+  for (const message of list.slice(start)) {
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const part of message.content as { type?: unknown; toolName?: unknown }[]) {
+      if (part?.type === "tool-call" && part.toolName === toolName) count += 1;
+    }
+  }
+  return count;
 }
