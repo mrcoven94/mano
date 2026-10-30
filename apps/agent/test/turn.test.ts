@@ -348,6 +348,33 @@ describe("a decision turn is bound to the question it answered", () => {
   });
 });
 
+describe("a decision that decided nothing, and a NO Engine refused", () => {
+  it("a replayed NO that decided nothing never touches a draft created after it", async () => {
+    const no = turn("turn_none000001", "NO");
+    await send(no.clone());
+    await send(turn("turn_noneB00001", "Please file my renewal"));
+    await send(no);
+    expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
+  });
+
+  it("a replayed NO that Engine still refuses says it is unsure and keeps the approval tracked", async () => {
+    await send(turn("turn_refA000001", "Please file my renewal"));
+    const realFetch = engine.fetch;
+    const refusing: typeof fetch = async (input, init) =>
+      /\/reject$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : realFetch(input, init);
+    engine.fetch = refusing;
+    vi.stubGlobal("fetch", refusing);
+    const d = deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: refusing }) });
+    const no = turn("turn_refN000001", "NO");
+    const first = await send(no.clone(), d);
+    expect(first.body.text).not.toMatch(/nothing left mano|did not send it/i);
+    const replay = await send(no, d);
+    expect(replay.body.text).not.toMatch(/nothing left mano|did not send it/i);
+    expect(replay.body.text).toMatch(/could not confirm/i);
+    expect(engine.approvals()[0].status).toBe("pending");
+  });
+});
+
 describe("turn replay and recovery", () => {
   it("a replayed turn converges: one reminder, and a replayed YES files once", async () => {
     const remindTurn = turn("turn_rem_000001", "remind me");

@@ -177,15 +177,9 @@ async function decide(engine: PersonEngine, approvalId: string, decision: "yes" 
   }
 }
 
-// A YES or NO with no answerable question. Proposals not yet shown are
-// never approved; a NO closes them.
-async function answerUnshown(engine: PersonEngine, waiting: EngineApproval[], decision: "yes" | "no"): Promise<TurnResponse> {
-  if (decision === "yes") {
-    return reply("I haven't shown you that one yet, so nothing was approved and nothing was sent. Ask me to show it again.");
-  }
-  for (const approval of waiting) await engine.reject(approval.id).catch(() => undefined);
-  return reply("Okay, nothing was sent.");
-}
+// A YES with no answerable question: proposals not yet shown are never
+// approved.
+const UNSHOWN = reply("I haven't shown you that one yet, so nothing was approved and nothing was sent. Ask me to show it again.");
 
 // A YES or NO turn is bound, in Engine's turn ledger, to what its first
 // attempt decided: one ledger row per approval it acted on, or one row
@@ -197,10 +191,14 @@ function bindingId(turnId: string, target: string): string {
   return `d-${createHash("sha256").update(turnId).digest("hex").slice(0, 40)}-${target}`;
 }
 
-type Binding = { kind: "none" } | { kind: "approvals"; ids: string[] };
+// What a decision turn's first attempt decided: the approvals it acted
+// on, that nothing waiting had been shown ("unshown"), or that there was
+// nothing to decide and the model answered ("model").
+type Binding = { kind: "unshown" } | { kind: "model" } | { kind: "approvals"; ids: string[] };
 
 async function boundDecision(engine: PersonEngine, turnId: string, approvals: EngineApproval[]): Promise<Binding | null> {
-  if (await engine.getTurn(bindingId(turnId, "none"))) return { kind: "none" };
+  if (await engine.getTurn(bindingId(turnId, "unshown"))) return { kind: "unshown" };
+  if (await engine.getTurn(bindingId(turnId, "model"))) return { kind: "model" };
   const candidates = proposalsOf(approvals, engine.generation);
   const found = await Promise.all(candidates.map(async (a) => ((await engine.getTurn(bindingId(turnId, a.id))) ? a.id : null)));
   const ids = found.filter((id): id is string => id !== null);
@@ -208,9 +206,19 @@ async function boundDecision(engine: PersonEngine, turnId: string, approvals: En
 }
 
 async function bind(engine: PersonEngine, turnId: string, receivedAt: string, targets: string[]): Promise<void> {
-  for (const target of targets.length > 0 ? targets : ["none"]) {
-    await engine.putTurn(bindingId(turnId, target), receivedAt);
+  for (const target of targets) await engine.putTurn(bindingId(turnId, target), receivedAt);
+}
+
+// A NO to several approvals at once (the ones a turn bound) answers with
+// the first outcome that is not a confirmed cancellation, so the person
+// never hears "nothing left Mano" unless Engine rejected every one.
+async function declineAll(engine: PersonEngine, ids: string[]): Promise<TurnResponse> {
+  let answer: TurnResponse | null = null;
+  for (const id of ids) {
+    const one = await decide(engine, id, "no");
+    if (!answer || !/^Okay, I did not send it/.test(one.body.text)) answer = one;
   }
+  return answer ?? reply("Okay, I did not send it. Nothing left Mano.");
 }
 
 async function decideTurn(
@@ -221,25 +229,32 @@ async function decideTurn(
 ): Promise<TurnResponse | null> {
   const approvals = await engine.listApprovals();
   const bound = turn.created ? null : await boundDecision(engine, body.turnId, approvals);
-  if (bound?.kind === "none") return answerUnshown(engine, [], decision);
+  if (bound?.kind === "model") return null;
+  if (bound?.kind === "unshown") return UNSHOWN;
   if (bound?.kind === "approvals") {
     if (decision === "yes") return decide(engine, bound.ids[0], "yes");
-    for (const id of bound.ids) await engine.reject(id).catch(() => undefined);
-    return reply("Okay, I did not send it. Nothing left Mano.");
+    return declineAll(engine, bound.ids);
   }
-  // First attempt (or a retry whose first attempt bound nothing): the
-  // question answerable when the person texted, never one presented
-  // after that.
+  // First attempt (or a retry whose first attempt bound nothing): only
+  // what existed when the person texted, never anything made after.
+  const arrived = Date.parse(turn.firstReceivedAt);
   const pointer = await engine.getPointer();
-  const answerable = pointer && Date.parse(pointer.setAt) <= Date.parse(turn.firstReceivedAt) ? pointer : null;
+  const answerable = pointer && Date.parse(pointer.setAt) <= arrived ? pointer : null;
   if (answerable) {
     await bind(engine, body.turnId, turn.firstReceivedAt, [answerable.approvalId]);
     return decide(engine, answerable.approvalId, decision);
   }
-  const waiting = waitingProposals(approvals, engine.generation);
-  if (waiting.length === 0) return null;
-  await bind(engine, body.turnId, turn.firstReceivedAt, decision === "no" ? waiting.map((a) => a.id) : []);
-  return answerUnshown(engine, waiting, decision);
+  const waiting = waitingProposals(approvals, engine.generation).filter((a) => Date.parse(a.createdAt) <= arrived);
+  if (waiting.length === 0) {
+    await bind(engine, body.turnId, turn.firstReceivedAt, ["model"]);
+    return null;
+  }
+  if (decision === "no") {
+    await bind(engine, body.turnId, turn.firstReceivedAt, waiting.map((a) => a.id));
+    return declineAll(engine, waiting.map((a) => a.id));
+  }
+  await bind(engine, body.turnId, turn.firstReceivedAt, ["unshown"]);
+  return UNSHOWN;
 }
 
 async function runTurn(
