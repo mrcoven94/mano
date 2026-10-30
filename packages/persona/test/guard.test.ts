@@ -202,3 +202,14 @@ describe("identity statements beat the allowlist (review round 4, blocker 2)", (
     }
   });
 });
+
+describe("a leaked speaker label (Quality chat-oh-03, chat-wa-03)", () => {
+  it("strips Mano: at the start of a line and keeps the name elsewhere", () => {
+    expect(guardReply("usually proof of income and rent\nMano: which state is your SNAP in?")).toEqual({
+      text: "usually proof of income and rent\nwhich state is your SNAP in?",
+      changes: ["speaker-label"],
+    });
+    expect(guardReply("Mano: hey!").text).toBe("hey!");
+    expect(guardReply("I'm Mano: I help with benefits")).toEqual({ text: "I'm Mano: I help with benefits", changes: [] });
+  });
+});

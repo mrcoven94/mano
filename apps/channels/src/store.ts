@@ -71,8 +71,10 @@ export interface AnswerBubble {
   text: string;
   messageId?: string | null;
   replyTo?: string | null;
-  // For a tapback that is the whole reply: the text sent if it fails.
+  // From replies before every reply had words; never set now.
   fallback?: string | null;
+  // For a reaction: the decoration epoch it was planned under.
+  epoch?: number;
 }
 
 // A turn persisted before any external call. Pending input is cleared
@@ -157,6 +159,28 @@ export interface ConversationMeta {
   optOutDated: boolean;
   // When Channels received that STOP, on its own clock.
   optOutReceivedAtMs: number;
+  // Moves forward on every STOP, close and delete, and never back, not
+  // even when the person re-engages. Decorations (the eyes, a reply's
+  // reaction) carry the epoch they were scheduled under and send only
+  // while it still holds.
+  decorationEpoch: number;
+}
+
+// Mano's chat background on one chat, keyed by a hash of the chat ID (so
+// no raw chat ID outlives a delete). "uncertain" means an upload may have
+// landed and is read back before any retry. Kept across a delete, so the
+// background is never sent twice.
+export type ChatBackgroundState = "uncertain" | "set" | "failed";
+export interface ChatBackground {
+  chatKey: string;
+  state: ChatBackgroundState;
+  // Uploads tried.
+  attempts: number;
+  // A single-flight lock, written before an upload starts: while it holds,
+  // no other upload starts for this chat. Past it, an "uncertain" record
+  // is read back before anything else.
+  lockedUntilMs: number;
+  updatedAtMs: number;
 }
 
 export function defaultMeta(): ConversationMeta {
@@ -183,6 +207,7 @@ export function defaultMeta(): ConversationMeta {
     optOutAtMs: 0,
     optOutDated: false,
     optOutReceivedAtMs: 0,
+    decorationEpoch: 0,
   };
 }
 
@@ -228,6 +253,8 @@ export interface ConversationStore {
   startAgentSend(row: AgentSendRow): void;
   finishAgentSend(key: string, atMs: number, state?: "sent" | "refused" | "failed"): void;
   wipe(deletedAtMs: number): void;
+  chatBackground(chatKey: string): ChatBackground | null;
+  saveChatBackground(row: ChatBackground): void;
 }
 
 export class MemoryStore implements ConversationStore {
@@ -404,12 +431,24 @@ export class MemoryStore implements ConversationStore {
     if (row) this.agentSendRows.set(key, { ...row, state, updatedAtMs: atMs });
   }
 
+  // Not cleared by wipe: see ChatBackground.
+  private chatBackgrounds = new Map<string, ChatBackground>();
+
+  chatBackground(chatKey: string): ChatBackground | null {
+    return this.chatBackgrounds.get(chatKey) ?? null;
+  }
+
+  saveChatBackground(row: ChatBackground): void {
+    this.chatBackgrounds.set(row.chatKey, { ...row });
+  }
+
   wipe(deletedAtMs: number): void {
     const generation = this.metaRow.generation + 1;
     const turn = this.metaRow.turn;
     this.events.clear();
     this.inboundMessages.clear();
-    this.metaRow = { ...defaultMeta(), generation, turn, deletedAtMs };
+    const decorationEpoch = this.metaRow.decorationEpoch + 1;
+    this.metaRow = { ...defaultMeta(), generation, turn, deletedAtMs, decorationEpoch };
     this.pendingRows = [];
     this.outboundRows.clear();
     this.heldReceipts = [];

@@ -2,6 +2,7 @@
 // handle. It owns the event log, the outbound state machine and the turn
 // runner for exactly one conversation. Internal routes only; the worker
 // reaches them from the queue consumer, never from the public internet.
+import { Decorations } from "./decorations.js";
 import {
   AgentResponder,
   reportPresentation,
@@ -97,6 +98,18 @@ export function globalStateStub(env: Env): DurableObjectStub {
   return env.CHANNEL_STATE.get(env.CHANNEL_STATE.idFromName(GLOBAL_STATE_ID));
 }
 
+// Mano's chat background is off unless turned on: the first version did
+// not fill the screen on an iPhone and dimmed badly in dark mode (PR 74).
+export function chatBackgroundUrl(env: Env): string | null {
+  if (env.MANO_CHAT_BACKGROUND_ENABLED !== "true") return null;
+  return env.MANO_CHAT_BACKGROUND_URL?.trim() || null;
+}
+
+// One switch for every reaction and the eyes: on unless set to "false".
+export function reactionsEnabled(env: Env): boolean {
+  return env.MANO_REACTIONS_ENABLED?.trim().toLowerCase() !== "false";
+}
+
 export function buildChannel(env: Env): Channel {
   if (env.BLOOIO_API_KEY && env.BLOOIO_CHANNEL_ID) {
     return new BlooioChannel({ apiKey: env.BLOOIO_API_KEY, channelId: env.BLOOIO_CHANNEL_ID, baseUrl: env.BLOOIO_BASE_URL || undefined });
@@ -142,11 +155,18 @@ export class ConversationDO implements DurableObject {
   // Serializes turns across requests in one isolate, so an unfinished
   // row always means the last attempt died rather than a concurrent run.
   private turnChain: Promise<unknown> = Promise.resolve();
+  // Eyes and background work, outside the turn chain, kept across
+  // requests so STOP and a delete can cancel what an earlier one started.
+  private decorations: Decorations;
 
   constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx;
     this.env = env;
     this.logger = createLogger();
+    this.decorations = new Decorations({
+      hold: (work) => ctx.waitUntil(work),
+      onError: (name, err) => this.logger.warn("decoration_failed", { name, err: err instanceof Error ? err.name : "unknown" }),
+    });
   }
 
   private runTurnSerialized(handleHash: string): Promise<{ result: import("./runner.js").TurnResult; retryAfterMs: number }> {
@@ -177,6 +197,7 @@ export class ConversationDO implements DurableObject {
       logger: this.logger,
       nowMs: () => Date.now(),
       fetchFn: boundFetch,
+      decorations: this.decorations,
       reportPresentation: agentConfigured(this.env)
         ? (p, sentTexts) =>
             reportPresentation({
@@ -197,6 +218,9 @@ export class ConversationDO implements DurableObject {
         usdPer1kChars: numberEnv(this.env.MANO_TEXT_USD_PER_1K_CHARS, DEFAULT_RUNNER_CONFIG.usdPer1kChars),
         maxInboundAgeMs: DEFAULT_RUNNER_CONFIG.maxInboundAgeMs,
         mediaHosts: parseMediaHosts(this.env.BLOOIO_MEDIA_HOSTS),
+        eyesAfterMs: numberEnv(this.env.TURN_EYES_AFTER_MS, DEFAULT_RUNNER_CONFIG.eyesAfterMs),
+        backgroundUrl: chatBackgroundUrl(this.env),
+        reactionsEnabled: reactionsEnabled(this.env),
       },
     });
     return { runner, channel, responder };
@@ -312,6 +336,7 @@ export class ConversationDO implements DurableObject {
       const sql = this.ctx.storage.sql;
       const store = new SqlConversationStore(sql);
       store.wipe(Date.now());
+      this.decorations.cancelAll("deleted");
       const intent = { ...newPendingDelete(this.env, body.handleHash, store.meta().generation), nextAtMs: Date.now() };
       savePendingDelete(sql, intent);
       await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(1));

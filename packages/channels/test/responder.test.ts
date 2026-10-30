@@ -277,3 +277,13 @@ describe("SparkResponder crisis routing uses the broad check", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("no corrective call (PR 74 review 3: every reply has words)", () => {
+  it("returns a reaction-only answer as it came, with one call; the runner gives it words", async () => {
+    const fetchFn = scripted(reply("REACT: like"));
+    const responder = new SparkResponder({ apiKey: "test-key-not-real", model: MODEL, fetchFn: fetchFn as typeof fetch, hedgeAfterMs: 60_000 });
+    const result = await responder.respond({ texts: ["When is my SNAP renewal due?"], attachmentCount: 0, history: [] });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ text: "", tapback: "like", attempts: 1 });
+  });
+});

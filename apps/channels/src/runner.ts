@@ -2,6 +2,8 @@
 // dependencies: the store (SQLite in the DO, memory in tests), the
 // channel, the responder, files and the spend ledger. Nothing here names
 // a provider or a runtime.
+import { Decorations } from "./decorations.js";
+import type { ChatBackground } from "./store.js";
 import {
   ChannelFailed,
   ChannelRefused,
@@ -34,7 +36,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, crisisTurn, guardReply, tapbackText } from "@mano/persona";
+import { EYES, allowedTapback, crisisLineFor, crisisTurn, eyesAllowed, guardReply } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -66,6 +68,14 @@ export interface RunnerConfig {
   usdPer1kChars: number;
   maxInboundAgeMs: number;
   mediaHosts: string[];
+  // A turn still working after this long gets the eyes on the person's
+  // message ("Mano is on it"). A photo or a deep turn gets them at once.
+  eyesAfterMs: number;
+  // One switch for every reaction Mano adds, the eyes included.
+  reactionsEnabled: boolean;
+  // Mano's chat background image, set once per chat after the first
+  // reply. Null leaves chats as they are.
+  backgroundUrl: string | null;
 }
 
 export const DEFAULT_MEDIA_HOSTS = ["bucket.blooio.com"];
@@ -93,7 +103,24 @@ export const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "handleHash"> = {
   usdPer1kChars: 0.001,
   maxInboundAgeMs: 5 * 60 * 1000,
   mediaHosts: DEFAULT_MEDIA_HOSTS,
+  eyesAfterMs: 5000,
+  reactionsEnabled: true,
+  backgroundUrl: null,
 };
+
+// Tries at setting the chat background before Channels gives up on it.
+export const BACKGROUND_MAX_ATTEMPTS = 3;
+// Blooio takes a background image of at most 10 MB.
+export const BACKGROUND_MAX_BYTES = 10 * 1024 * 1024;
+// How long one upload holds the per-chat lock: longer than any
+// decoration may run, so a live upload always finishes first.
+export const BACKGROUND_LOCK_MS = 2 * 60 * 1000;
+// The background record's key: a hash of the chat ID, so no raw chat ID
+// outlives a delete.
+export async function backgroundKey(chatId: string): Promise<string> {
+  return sha256Hex(new TextEncoder().encode(`chat-background:${chatId}`));
+}
+const BACKGROUND_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/heic", "image/heif"]);
 
 export interface RunnerDeps {
   store: import("./store.js").ConversationStore;
@@ -106,6 +133,10 @@ export interface RunnerDeps {
   nowMs: () => number;
   fetchFn: typeof fetch;
   config: RunnerConfig;
+  // Eyes and background work, run outside the turn. The Durable Object
+  // passes one that lives across requests, so STOP and a delete can
+  // cancel work a previous request started.
+  decorations?: Decorations;
   // Tells the agent an approval question reached the person, given the
   // texts the provider accepted for its turn. True when reported, false
   // when the question was not shown whole; throws to retry later.
@@ -462,7 +493,8 @@ export class ConversationRunner {
     }
 
     if (event.kind === "chat.closed") {
-      store.patchMeta({ closed: true });
+      store.patchMeta({ closed: true, decorationEpoch: store.meta().decorationEpoch + 1 });
+      this.decorations.cancelAll("closed");
       logger.info("conversation_closed", { handle: this.logHandle(), eventId: event.id });
       return "recorded";
     }
@@ -523,7 +555,9 @@ export class ConversationRunner {
         optOutAtMs: Math.max(before.optOutAtMs, dated ? event.occurredAtMs! : nowMs()),
         optOutDated: before.optOutDated && dated,
         optOutReceivedAtMs: nowMs(),
+        decorationEpoch: before.decorationEpoch + 1,
       });
+      this.decorations.cancelAll("opted_out");
       return "opted-out";
     }
     const meta = {
@@ -535,7 +569,9 @@ export class ConversationRunner {
       to: event.handle ?? before.to,
       turn: before.turn + 1,
     };
-    store.patchMeta(meta);
+    store.patchMeta({ ...meta, decorationEpoch: before.decorationEpoch + 1 });
+    // Nothing decorative goes out after STOP, not even work already started.
+    this.decorations.cancelAll("opted_out");
     logger.info("opted_out", { handle: this.logHandle(), eventId: event.id, turn: meta.turn });
     await this.sendBubble({
       turn: meta.turn,
@@ -574,7 +610,7 @@ export class ConversationRunner {
     const { store, nowMs, logger } = this.deps;
     // Fast path stays synchronous when nothing needs resolving, so the
     // batch decision below sees the same state as the caller.
-    if (store.outbounds().some((r) => r.state === "uncertain" || r.state === "sending")) {
+    if (store.outbounds().some((r) => openSend(r))) {
       try {
         await this.resolveUncertain();
       } catch (err) {
@@ -702,7 +738,7 @@ export class ConversationRunner {
   needsRetry(): boolean {
     if (this.store.unfinishedTurn()) return true;
     if (this.deps.reportPresentation && this.store.pendingPresentations().length > 0) return true;
-    return this.store.outbounds().some((r) => r.state === "uncertain" || r.state === "sending");
+    return this.store.outbounds().some((r) => openSend(r));
   }
 
   // Backoff for the next attempt: the unfinished turn's count, else the
@@ -710,7 +746,7 @@ export class ConversationRunner {
   retryAfterMs(): number {
     const unfinished = this.store.unfinishedTurn();
     if (unfinished) return retryDelayMs(Math.max(1, unfinished.attempts));
-    const stuck = this.store.outbounds().filter((r) => r.state === "uncertain" || r.state === "sending");
+    const stuck = this.store.outbounds().filter((r) => openSend(r));
     const attempts = stuck.reduce((max, r) => Math.max(max, r.attempts), 0);
     return retryDelayMs(Math.max(1, attempts));
   }
@@ -725,8 +761,8 @@ export class ConversationRunner {
     if (!report) return;
     const outbounds = store.outbounds();
     for (const p of store.pendingPresentations()) {
-      const rows = outbounds.filter((r) => r.turn === p.turn);
-      if (rows.length === 0 || rows.some((r) => r.state === "uncertain" || r.state === "sending")) continue;
+      const rows = outbounds.filter((r) => r.turn === p.turn && !DECORATION_TAGS.has(r.tag));
+      if (rows.length === 0 || rows.some((r) => openSend(r))) continue;
       const sent = rows
         .filter((r) => r.state === "sent" || r.state === "delivered" || r.state === "read")
         .sort((a, b) => a.part - b.part)
@@ -749,6 +785,139 @@ export class ConversationRunner {
   }
 
   private active = false;
+
+  private ownDecorations: Decorations | null = null;
+
+  private get decorations(): Decorations {
+    if (this.deps.decorations) return this.deps.decorations;
+    this.ownDecorations ??= new Decorations({ onError: (name, err) => this.deps.logger.warn("decoration_failed", { name, err: errName(err) }) });
+    return this.ownDecorations;
+  }
+
+  // Why a decoration must not go out right now, read fresh from the store
+  // immediately before the call: the conversation was deleted, STOP or a
+  // close came after it was scheduled (the decoration epoch moved), the
+  // person opted out, or the chat closed.
+  private decorationBlock(generation: number, epoch: number): "generation" | "epoch" | "opted_out" | "conversation_closed" | null {
+    const meta = this.store.meta();
+    if (meta.generation !== generation) return "generation";
+    // STOP, a close or a delete since the work was scheduled: dropped,
+    // even when the person has re-engaged since.
+    if (meta.decorationEpoch !== epoch) return "epoch";
+    if (meta.optedOut) return "opted_out";
+    if (meta.closed) return "conversation_closed";
+    return null;
+  }
+
+  // The eyes are a status signal ("on it"), not a sentiment: they go on
+  // once, on a slow turn's target message, unless it is a crisis, a
+  // reaction text, or STOP or a close came since the turn started. Bad
+  // news does not stop them. They are fire-and-forget work outside the
+  // turn, sent at most once (their row is written as "sending" before
+  // the call, so a retried or resumed turn never sends them again), and
+  // never taken off. Once they are placed, no other reaction goes on that
+  // message.
+  private eyesFor(turn: number, chatId: string | null, target: Target | null, crisis: boolean, generation: number, epoch: number): Eyes {
+    const { channel, logger, store, config, nowMs } = this.deps;
+    const eyes: Eyes = {
+      placed: false,
+      put: (why: string): void => {
+        if (eyes.placed || !config.reactionsEnabled || !chatId || !target || !eyesAllowed(target.text, crisis)) return;
+        if (this.decorationBlock(generation, epoch)) return;
+        eyes.placed = true;
+        const key = idempotencyKeyFor(config.handleHash, generation, turn, 0, "eyes");
+        this.decorations.run("eyes", async () => {
+          // Read fresh right before the call.
+          if (!config.reactionsEnabled || this.decorationBlock(generation, epoch) || store.outboundByKey(key)) return;
+          store.addOutbound({
+            key, turn, part: 0, tag: "eyes", text: EYES, attempts: 0, state: "sending", code: null,
+            chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+          });
+          try {
+            await channel.react(chatId, target.messageId, EYES);
+            if (store.meta().generation === generation) store.updateOutbound(key, { state: "sent", updatedAtMs: nowMs() });
+            logger.info("eyes_sent", { handle: this.logHandle(), turn, why });
+          } catch (err) {
+            if (store.meta().generation === generation) store.updateOutbound(key, { state: "failed", code: "eyes_dropped", updatedAtMs: nowMs() });
+            logger.warn("eyes_dropped", { handle: this.logHandle(), turn, err: errName(err) });
+          }
+        });
+      },
+    };
+    // A run of this turn that crashed may already have put them on.
+    if (store.outboundByKey(idempotencyKeyFor(config.handleHash, generation, turn, 0, "eyes"))) eyes.placed = true;
+    return eyes;
+  }
+
+  // Mano's chat background goes on once per chat, after a reply reached
+  // the person, never on a crisis turn, after STOP or on a closed chat.
+  // It runs outside the turn. An upload that may have landed is read back
+  // before any retry; only a known failure is retried, at most
+  // BACKGROUND_MAX_ATTEMPTS uploads per chat.
+  private async setBackgroundOnce(chatId: string, generation: number, epoch: number, signal: AbortSignal): Promise<void> {
+    const { store, channel, config, logger, nowMs } = this.deps;
+    const url = config.backgroundUrl;
+    if (!url || !channel.setBackground || this.decorationBlock(generation, epoch)) return;
+    const chatKey = await backgroundKey(chatId);
+    const busy = (row: ChatBackground | null): boolean => row?.state === "set" || (row !== null && row.lockedUntilMs > nowMs());
+    let row = store.chatBackground(chatKey);
+    if (busy(row)) return;
+    if (row?.state === "uncertain") {
+      // A lock that ran out with no outcome: read the chat back first.
+      if (!channel.hasBackground) return;
+      const landed = await channel.hasBackground(chatId, signal);
+      row = store.chatBackground(chatKey);
+      if (busy(row) || row?.state !== "uncertain") return;
+      row = { ...row, state: landed ? "set" : "failed", updatedAtMs: nowMs() };
+      store.saveChatBackground(row);
+      logger.info("background_reconciled", { handle: this.logHandle(), landed });
+      if (landed) return;
+    }
+    const attempts = row?.attempts ?? 0;
+    if (attempts >= BACKGROUND_MAX_ATTEMPTS || this.decorationBlock(generation, epoch)) return;
+    // Check and lock with no await between them: the single-flight lock is
+    // persisted before anything is fetched or uploaded.
+    store.saveChatBackground({ chatKey, state: "uncertain", attempts: attempts + 1, lockedUntilMs: nowMs() + BACKGROUND_LOCK_MS, updatedAtMs: nowMs() });
+    const finish = (state: ChatBackground["state"], counted: boolean): void =>
+      store.saveChatBackground({ chatKey, state, attempts: counted ? attempts + 1 : attempts, lockedUntilMs: 0, updatedAtMs: nowMs() });
+    let image: Blob;
+    try {
+      image = await this.fetchBackground(url, signal);
+    } catch (err) {
+      // Nothing was uploaded: a known failure that does not count.
+      finish("failed", false);
+      logger.warn("background_failed", { handle: this.logHandle(), err: errName(err), stage: "fetch" });
+      return;
+    }
+    if (signal.aborted || this.decorationBlock(generation, epoch)) {
+      finish("failed", false);
+      return;
+    }
+    try {
+      await channel.setBackground(chatId, image, signal);
+      finish("set", true);
+      logger.info("background_set", { handle: this.logHandle() });
+    } catch (err) {
+      // A known failure is retried later; an uncertain one is read back.
+      finish(err instanceof ChannelFailed ? "failed" : "uncertain", true);
+      logger.warn("background_failed", { handle: this.logHandle(), err: errName(err), known: err instanceof ChannelFailed });
+    }
+  }
+
+  // Our own image, from config, through the same capped, streamed and
+  // host-checked download as an attachment, cancelled past 10 MB.
+  private async fetchBackground(url: string, signal: AbortSignal): Promise<Blob> {
+    const host = new URL(url).hostname;
+    const fetched = await fetchAttachment(
+      { url },
+      { fetchFn: this.deps.fetchFn, checker: new LinkChecker({ fetchFn: this.deps.fetchFn }), mediaHosts: [host], maxBytes: BACKGROUND_MAX_BYTES, signal },
+    );
+    if (fetched.bytes === null) throw new Error(`background fetch failed: ${fetched.reason}`);
+    if (!BACKGROUND_TYPES.has(fetched.contentType)) throw new Error("background is not an image");
+    if (fetched.bytes.byteLength === 0) throw new Error("background is empty");
+    return new Blob([fetched.bytes], { type: fetched.contentType });
+  }
+
 
   private async runGuarded(fn: () => Promise<void>): Promise<void> {
     const { store } = this.deps;
@@ -774,6 +943,9 @@ export class ConversationRunner {
     const { store, logger, nowMs, config } = this.deps;
     this.checkGeneration(generation);
     const meta = store.meta();
+    // Captured before the turn's first await and carried everywhere: a
+    // decoration this turn schedules sends only while it still holds.
+    const epoch = meta.decorationEpoch;
     const chatId = resumed?.chatId ?? [...items].reverse().find((i) => i.chatId)?.chatId ?? meta.chatId;
     const to = resumed?.to ?? [...items].reverse().find((i) => i.to)?.to ?? meta.to;
     if (!chatId && !to) {
@@ -784,7 +956,7 @@ export class ConversationRunner {
     // it: same keys, same text, no second model call.
     if (resumed?.answerJson) {
       await this.settleResumedCost(turn, resumed);
-      await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation);
+      await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation, epoch);
       this.checkSendsResolved(turn, generation);
       await this.reportPresentations();
       return;
@@ -805,7 +977,7 @@ export class ConversationRunner {
     if (approval && store.pendingApprovals(nowMs()).length > 0) {
       // A crisis reply goes first; the decision is still recorded.
       const crisisBubbles = crisis ? await this.finalize(turn, "", true, turnTextOf(texts)) : [];
-      if (crisisBubbles.length > 0) await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation);
+      if (crisisBubbles.length > 0) await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation, epoch);
       const recordedPart = crisisBubbles.length + 1;
       const answered = await this.answerApproval(approval.code, approval.decision, turn, chatId, to, recordedPart);
       if (answered) {
@@ -846,7 +1018,7 @@ export class ConversationRunner {
         const bubbles = await this.finalize(turn, "", true, turnText);
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
-        await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
+        await this.sendBubbles(turn, bubbles, chatId, to, 0, generation, epoch);
         this.checkSendsResolved(turn, generation);
       } else {
         const noticed = await this.sendBusy(turn, chatId, to, nowMs());
@@ -861,12 +1033,24 @@ export class ConversationRunner {
       return;
     }
 
+    // Only the batch's last message can carry a reaction, judged on its
+    // own text alone.
+    const last = items[items.length - 1];
+    const target: Target | null = last?.messageId ? { messageId: last.messageId, text: last.text ?? "" } : null;
+    // The eyes say Mano is on it: at once for a photo, and otherwise when
+    // the turn routes deep or runs past eyesAfterMs.
+    const eyes = this.eyesFor(turn, chatId, target, crisis, generation, epoch);
+    if (attachments.length > 0) eyes.put("attachment");
+    // Tracked by the decoration queue, so STOP, a close or a delete cancels it.
+    const stopEyesTimer = this.decorations.schedule("eyes_timer", config.eyesAfterMs, () => eyes.put("slow"));
+
     // Keepalive refreshes run one at a time. Before the final stop, no
     // new refresh starts and the one in flight finishes, so typing can
     // never come back on after Mano is done.
     let typingTimer: ReturnType<typeof setInterval> | undefined;
     let refreshing: Promise<void> = Promise.resolve();
     let typingDone = false;
+    let replied = false;
     if (chatId) {
       await this.bestEffort("mark_read", () => this.deps.channel.markRead(chatId));
       await this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started"));
@@ -886,30 +1070,24 @@ export class ConversationRunner {
         this.checkGeneration(generation);
         // The turn's latest message: what the agent orders a YES by.
         const receivedAtMs = Math.max(...items.map((i) => i.receivedAtMs));
-        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation, crisis, receivedAtMs);
+        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation, crisis, receivedAtMs, () => eyes.put("deep"));
+        stopEyesTimer();
         if (answer.ok) {
           // Links come out before splitting, and each final bubble is
           // checked again: a split must never leave an unchecked link
           // behind. The persisted bubbles are final and capped. A crisis
           // turn's final bubbles must still name 988 and 911.
-          // A tapback is decoration. It carries the reply alone only when
-          // the rules allow it and it has a message to go on; even then a
-          // fallback text is persisted with it, sent if the tapback fails.
-          const tapback = allowedTapback(answer.tapback, turnText, crisis);
-          const latest = [...items].reverse().find((i) => i.messageId)?.messageId ?? null;
-          const routable = tapback !== null && latest !== null && chatId !== null;
-          const hasText = answer.text.trim().length > 0;
-          let reply: string | null = answer.text;
-          if (!hasText && crisis) reply = "";
-          else if (!hasText && routable) reply = null;
-          else if (!hasText && tapback) reply = tapbackText(tapback);
-          else if (!hasText && answer.tapback) reply = REFUSED_TAPBACK_TEXT;
-          const answered = reply === null ? [] : await this.finalize(turn, reply, crisis, turnText);
+          // Every reply has words; an empty one becomes the guard's safe
+          // line in finalize. A reaction is only ever added on top: picked
+          // by the model from what the target message allows, never on a
+          // message that has the eyes, and sent outside the turn.
+          const tapback = config.reactionsEnabled && target && !eyes.placed ? allowedTapback(answer.tapback, target.text, crisis) : null;
+          const answered = await this.finalize(turn, answer.text, crisis, turnText);
           const replyTo = inlineReplyTarget(items);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
           bubbles.push(...answered);
-          if (routable && tapback && latest) {
-            bubbles.push({ part: 0, tag: "react", text: tapback, messageId: latest, fallback: hasText ? null : tapbackText(tapback) });
+          if (tapback && target && chatId && answered.length > 0) {
+            bubbles.push({ part: 0, tag: "react", text: tapback, messageId: target.messageId, epoch });
           }
           // Persisted with the answer, so a resumed send reports it too.
           if (answer.presentation) store.savePresentation({ turn, generation, state: "pending", ...answer.presentation });
@@ -929,15 +1107,24 @@ export class ConversationRunner {
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
       }
+      stopEyesTimer();
       this.checkGeneration(generation);
-      await this.sendBubbles(turn, bubbles, chatId, to, saved, generation);
+      await this.sendBubbles(turn, bubbles, chatId, to, saved, generation, epoch);
       this.checkSendsResolved(turn, generation);
       await this.reportPresentations();
+      replied = true;
     } finally {
+      stopEyesTimer();
       typingDone = true;
       clearInterval(typingTimer);
       await refreshing;
       if (chatId) await this.bestEffort("typing_stopped", () => this.deps.channel.setTyping(chatId, "stopped"));
+    }
+    // The background is decoration too: started outside the turn once a
+    // reply reached the person, so it can never hold the next message.
+    if (replied && chatId && !crisis && this.deps.config.backgroundUrl) {
+      const sent = this.store.outbounds().some((r) => r.turn === turn && r.state === "sent" && r.tag !== "react");
+      if (sent) this.decorations.run("background", (signal) => this.setBackgroundOnce(chatId, generation, epoch, signal));
     }
   }
 
@@ -967,7 +1154,7 @@ export class ConversationRunner {
   // and the retry looks each send up again.
   private checkSendsResolved(turn: number, generation: number): void {
     this.checkGeneration(generation);
-    const stuck = this.store.outbounds().some((r) => r.turn === turn && (r.state === "uncertain" || r.state === "sending"));
+    const stuck = this.store.outbounds().some((r) => r.turn === turn && openSend(r));
     if (stuck) throw new TurnIncomplete();
   }
 
@@ -984,6 +1171,7 @@ export class ConversationRunner {
     to: string | null,
     saved: number,
     generation: number,
+    epoch: number,
   ): Promise<void> {
     const { store, logger } = this.deps;
     // Bubbles arrive final: model text was sanitized before splitting
@@ -991,14 +1179,25 @@ export class ConversationRunner {
     // (pinned by test). Nothing here mutates them, so a replayed turn
     // sends byte-identical bubbles under the same keys.
     let fresh = 0;
-    // Text goes first: a tapback never holds back a message.
+    // Whether the provider accepted at least one of the reply's own texts.
+    let accepted = false;
+    // Words go first; a reaction is only ever added on top.
     for (const bubble of [...bubbles.filter((b) => b.tag !== "react"), ...bubbles.filter((b) => b.tag === "react")]) {
       if (bubble.tag === "react") {
-        await this.sendTapback(turn, bubble, chatId, to, generation);
+        // Only on top of words the provider accepted, and only while
+        // reactions are on (a replayed answer included); otherwise dropped.
+        // After the words, and outside the turn: never awaited.
+        if (!this.deps.config.reactionsEnabled || !accepted) {
+          this.dropTapback(turn, bubble, chatId, generation, this.deps.config.reactionsEnabled ? "no_text_accepted" : "reactions_off");
+          continue;
+        }
+        const planned = bubble.epoch ?? epoch;
+        this.decorations.run("reaction", () => this.sendTapback(turn, bubble, chatId, generation, planned));
         continue;
       }
       const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation, replyTo: bubble.replyTo ?? null });
       if (row.fresh) fresh += 1;
+      if (bubble.tag === "" && bubble.part >= 1 && (row.state === "sent" || row.state === "delivered" || row.state === "read")) accepted = true;
       if (bubble.tag === "" && bubble.part === 0 && row.state === "sent") {
         store.patchMeta({ introduced: true });
       }
@@ -1010,50 +1209,50 @@ export class ConversationRunner {
   // Runs the responder. A deep turn's heads-up goes out the moment the
   // responder has it, after the intro on a first contact, and takes the
   // place of the interim notice.
-  // A tapback has its own outbound row, so a resumed turn knows whether
-  // it landed. It is not a message and never counts toward limits. Right
-  // before every attempt, including a replay, it checks the generation,
-  // opt-out and closed state. When it fails, its persisted fallback text
-  // goes through the one send path under its own key.
-  private async sendTapback(
-    turn: number,
-    bubble: import("./store.js").AnswerBubble,
-    chatId: string | null,
-    to: string | null,
-    generation: number,
-  ): Promise<void> {
-    const { store, channel, logger, nowMs, config } = this.deps;
+  // A reaction is decoration on top of words: it runs outside the turn,
+  // never awaited by it, and goes out at most once. Its row is written as
+  // "sending" before the call, so a resumed or retried turn never issues
+  // it again; an outcome that never comes back leaves it there, dropped.
+  // It sends only while the generation and decoration epoch it was
+  // scheduled under still hold, read fresh right before the call.
+  // Records a reaction as dropped, so no later run sends it.
+  private dropTapback(turn: number, bubble: import("./store.js").AnswerBubble, chatId: string | null, generation: number, code: string): void {
+    const { store, logger, nowMs, config } = this.deps;
+    if (store.meta().generation !== generation) return;
     const key = idempotencyKeyFor(config.handleHash, generation, turn, bubble.part, "react");
-    const sendFallback = async (): Promise<void> => {
-      if (bubble.fallback) await this.sendBubble({ turn, part: bubble.part, tag: "react-fallback", text: bubble.fallback, chatId, to, generation });
-    };
-    const prior = store.outboundByKey(key);
-    if (prior?.state === "sent" || prior?.state === "refused") return;
-    if (prior?.state === "failed") return sendFallback();
-    this.checkGeneration(generation);
-    const meta = store.meta();
-    if (!prior) {
-      store.addOutbound({
-        key, turn, part: bubble.part, tag: "react", text: bubble.text, attempts: 0, state: "planned", code: null,
-        chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
-      });
-    }
-    if (meta.optedOut || meta.closed || !chatId || !bubble.messageId) {
-      const code = meta.optedOut ? "opted_out" : meta.closed ? "conversation_closed" : "unroutable";
-      store.updateOutbound(key, { state: "refused", code, updatedAtMs: nowMs() });
-      logger.info("tapback_suppressed", { handle: this.logHandle(), turn, code });
+    if (store.outboundByKey(key)) return;
+    store.addOutbound({
+      key, turn, part: bubble.part, tag: "react", text: bubble.text, attempts: 0, state: "refused", code,
+      chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+    });
+    logger.info("tapback_dropped", { handle: this.logHandle(), turn, code });
+  }
+
+  private async sendTapback(turn: number, bubble: import("./store.js").AnswerBubble, chatId: string | null, generation: number, epoch: number): Promise<void> {
+    const { store, channel, logger, nowMs, config } = this.deps;
+    if (!config.reactionsEnabled) return;
+    const block = !chatId || !bubble.messageId ? "unroutable" : this.decorationBlock(generation, epoch);
+    if (block === "generation") return;
+    const key = idempotencyKeyFor(config.handleHash, generation, turn, bubble.part, "react");
+    if (store.outboundByKey(key)) return;
+    const row = (state: "sending" | "refused", code: string | null) => ({
+      key, turn, part: bubble.part, tag: "react", text: bubble.text, attempts: 0, state, code,
+      chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+    });
+    if (block) {
+      store.addOutbound(row("refused", block));
+      logger.info("tapback_suppressed", { handle: this.logHandle(), turn, code: block });
       return;
     }
+    store.addOutbound(row("sending", null));
     try {
-      await channel.react(chatId, bubble.messageId, bubble.text as import("@mano/channels").Tapback);
-      this.checkGeneration(generation);
-      store.updateOutbound(key, { state: "sent", updatedAtMs: nowMs() });
+      await channel.react(chatId!, bubble.messageId!, bubble.text as import("@mano/channels").Tapback);
+      if (this.store.meta().generation === generation) store.updateOutbound(key, { state: "sent", updatedAtMs: nowMs() });
       logger.info("tapback_sent", { handle: this.logHandle(), turn, tapback: bubble.text });
     } catch (err) {
-      if (err instanceof GenerationStopped) throw err;
-      store.updateOutbound(key, { state: "failed", code: "tapback_failed", updatedAtMs: nowMs() });
-      logger.warn("tapback_failed", { handle: this.logHandle(), turn, err: errName(err) });
-      await sendFallback();
+      // Never retried: a failed or unknown reaction is dropped.
+      if (this.store.meta().generation === generation) store.updateOutbound(key, { state: "failed", code: "tapback_dropped", updatedAtMs: nowMs() });
+      logger.warn("tapback_dropped", { handle: this.logHandle(), turn, err: errName(err) });
     }
   }
 
@@ -1067,6 +1266,7 @@ export class ConversationRunner {
     generation: number,
     crisis: boolean,
     receivedAtMs: number,
+    onDeep: () => void = () => {},
   ): Promise<
     | {
         ok: true;
@@ -1096,6 +1296,7 @@ export class ConversationRunner {
       estimateCostUsd(inputChars * attempts, 0, config.usdPer1kChars);
     try {
       const onHeadsUp = async (text: string): Promise<void> => {
+        if (!crisis) onDeep();
         if (done || interimSent || crisis) return;
         interimSent = true;
         try {
@@ -1449,7 +1650,7 @@ export class ConversationRunner {
     const generation = this.store.meta().generation;
     let resolved = 0;
     for (const row of this.store.outbounds()) {
-      if (row.state !== "uncertain" && row.state !== "sending") continue;
+      if (!openSend(row)) continue;
       const result = await this.resolveUncertainKey(
         row.key,
         { text: row.text, chatId: row.chatId, to: this.store.meta().to },
@@ -1555,7 +1756,8 @@ export class ConversationRunner {
       // The same finalizeReply pass as every reply (it logs removed links).
       const bubbles: import("./store.js").AnswerBubble[] = (await this.finalize(turn, text, false, "")).map((b) => ({ ...b, tag: "agent" }));
       this.checkGeneration(generation);
-      await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
+      // Agent texts carry no reactions, so the epoch is only passed along.
+      await this.sendBubbles(turn, bubbles, chatId, to, 0, generation, this.store.meta().decorationEpoch);
       this.checkSendsResolved(turn, generation);
       // Sent only when the provider accepted every bubble; a refusal or a
       // definite failure is final and reported as not sent.
@@ -1598,3 +1800,26 @@ export class ConversationRunner {
     return true;
   }
 }
+
+// The message a turn may react to: the batch's last one.
+interface Target {
+  messageId: string;
+  text: string;
+}
+
+// The eyes on one turn's target message.
+interface Eyes {
+  // Set when the eyes are put on; then no other reaction goes there.
+  placed: boolean;
+  // Puts them on once, outside the turn, when the message allows them.
+  put(why: string): void;
+}
+
+// A message send whose outcome is still open. A reaction or the eyes are
+// never one: sent at most once, an unknown outcome dropped, not retried.
+function openSend(r: import("./store.js").OutboundRow): boolean {
+  return !DECORATION_TAGS.has(r.tag) && (r.state === "uncertain" || r.state === "sending");
+}
+
+// Rows for reactions and the eyes, never for words.
+const DECORATION_TAGS: ReadonlySet<string> = new Set(["react", "eyes"]);

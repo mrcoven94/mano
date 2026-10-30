@@ -15,6 +15,8 @@ async function say(h: Harness, id: string, text: string): Promise<string[]> {
   const before = h.channel.sends.length;
   await h.runner.handleEvent(inboundEvent({ id, text, occurredAtMs: h.now }), "webhook");
   await runTurnAfterBatch(h);
+  // Reactions run outside the turn; wait for them.
+  await h.decorations.idle();
   return h.channel.sends.slice(before).map((s) => s.text);
 }
 
@@ -23,15 +25,15 @@ function typingEvent(kind: "typing.started" | "typing.stopped", id: string, at: 
 }
 
 describe("tapbacks (LAP-636)", () => {
-  it("answers thanks with a heart on the person's message and no text", async () => {
-    const h = introduced(makeHarness({ replies: ["REACT: love"] }));
-    expect(await say(h, "evt_thx", "thank you!!")).toEqual([]);
+  it("answers thanks with words and a heart on top (every reply has words, PR 74 review 3)", async () => {
+    const h = introduced(makeHarness({ replies: ["REACT: love\nanytime!"] }));
+    expect(await say(h, "evt_thx", "thank you!!")).toEqual(["anytime!"]);
     expect(h.channel.reactions).toEqual([{ chatId: TEST_CHAT, messageId: "msg_evt_thx", reaction: "love" }]);
   });
 
   it("sends a tapback plus text when the model writes both", async () => {
     const h = introduced(makeHarness({ replies: ["REACT: like\nI'll check in at 7"] }));
-    expect(await say(h, "evt_ok", "ugh ok tonight")).toEqual(["I'll check in at 7"]);
+    expect(await say(h, "evt_ok", "ok sounds good")).toEqual(["I'll check in at 7"]);
     expect(h.channel.reactions.map((r) => r.reaction)).toEqual(["like"]);
   });
 

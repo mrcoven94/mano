@@ -43,6 +43,12 @@ crons = ["* * * * *"]
 # Real texts go only to a Standard model ID, with store: false.
 [vars]
 MANO_REPLY_MODEL = "muse-spark-1.3"
+# Mano's chat background, set once per chat, is off until a version is
+# checked on a real iPhone in light and dark mode. Turning it on also needs
+# MANO_CHAT_BACKGROUND_URL, an https image we host.
+MANO_CHAT_BACKGROUND_ENABLED = "false"
+# One switch for every reaction and the eyes; "false" turns them all off.
+MANO_REACTIONS_ENABLED = "true"
 
 # Secrets (never commit values; set with wrangler secret put):
 #   BLOOIO_API_KEY, BLOOIO_CHANNEL_ID, BLOOIO_WEBHOOK_SECRET,
@@ -50,7 +56,7 @@ MANO_REPLY_MODEL = "muse-spark-1.3"
 # Optional tuning (plain vars or secrets):
 #   CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER,
 #   MANO_TEXT_DAILY_BUDGET_USD, MANO_TEXT_USD_PER_1K_CHARS,
-#   TURN_BATCH_MS, TURN_INTERIM_MS, BLOOIO_MEDIA_HOSTS,
+#   TURN_BATCH_MS, TURN_INTERIM_MS, TURN_EYES_AFTER_MS, BLOOIO_MEDIA_HOSTS,
 #   MANO_TEXT_NUMBER (our line's number, checked against channel_address)
 # Mano's agent (all three set, or turns use the plain model answer):
 #   AGENT_URL (plain var, the agent's base URL), and the secrets

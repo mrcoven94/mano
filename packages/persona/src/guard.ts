@@ -25,7 +25,7 @@ export const SELF_DESCRIPTION = "I'm Mano, an automated assistant.";
 // Like every reply sent without the model, it carries SAFETY_LINE.
 export const SAFE_REPLY = `Sorry, I hit a snag on my end and lost that one. Can you send it again in a minute? ${SAFETY_LINE}`;
 
-export type GuardChange = "route-marker" | "markdown" | "dash" | "self-description" | "provider-name" | "empty";
+export type GuardChange = "route-marker" | "speaker-label" | "markdown" | "dash" | "self-description" | "provider-name" | "empty";
 
 export interface GuardResult {
   text: string;
@@ -283,9 +283,14 @@ export function guardReply(raw: string, opts: GuardOptions = {}): GuardResult {
   const ids = idPattern(opts.modelIds ?? []);
   const changes: GuardChange[] = [];
   let text = raw;
-  const unrouted = text.replace(/(^|[^A-Za-z])REACT:[ \t]*[a-z]*/gi, "$1 ").replace(/(^|[^A-Za-z])DEEP:[ \t]*/g, "$1 ");
+  const unrouted = text.replace(/(^|[^A-Za-z])REACT:[ \t]*(?:[a-z]+|[\p{Extended_Pictographic}\u{FE0F}\u{1F3FB}-\u{1F3FF}\u{200D}]+)?/giu, "$1 ").replace(/(^|[^A-Za-z])DEEP:[ \t]*/g, "$1 ");
   if (unrouted !== text) changes.push("route-marker");
   text = unrouted;
+  // The soul's examples are written as "Mano: ..." lines, and a reply
+  // sometimes copies the label onto a bubble.
+  const unlabeled = text.replace(/^[ \t]*Mano:[ \t]*/gm, "");
+  if (unlabeled !== text) changes.push("speaker-label");
+  text = unlabeled;
   const unmarked = stripMarkdown(text);
   if (unmarked !== text) changes.push("markdown");
   text = unmarked;

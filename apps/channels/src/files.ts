@@ -34,6 +34,8 @@ export interface AttachmentFetchOptions {
   mediaHosts: string[];
   maxBytes?: number;
   maxHops?: number;
+  // Cancels the download (STOP, a delete, a decoration timeout).
+  signal?: AbortSignal;
 }
 
 // Downloads one attachment. Every URL must be https on the provider's
@@ -42,7 +44,7 @@ export interface AttachmentFetchOptions {
 export async function fetchAttachment(
   attachment: EventAttachment,
   opts: AttachmentFetchOptions,
-): Promise<{ bytes: Uint8Array } | { bytes: null; reason: "oversize" | "host" | "blocked" | "fetch" }> {
+): Promise<{ bytes: Uint8Array; contentType: string } | { bytes: null; reason: "oversize" | "host" | "blocked" | "fetch" }> {
   const maxBytes = opts.maxBytes ?? MAX_ATTACHMENT_BYTES;
   const maxHops = opts.maxHops ?? 5;
   if (typeof attachment.size === "number" && attachment.size > maxBytes) return { bytes: null, reason: "oversize" };
@@ -60,7 +62,8 @@ export async function fetchAttachment(
     if (!allowed.has(host)) return { bytes: null, reason: "host" };
     const check = await opts.checker.checkHost(host, false);
     if (!check.ok) return { bytes: null, reason: "blocked" };
-    const res = await opts.fetchFn(url, { signal: AbortSignal.timeout(30000), redirect: "manual" });
+    const timeout = AbortSignal.timeout(30000);
+    const res = await opts.fetchFn(url, { signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout, redirect: "manual" });
     if (res.status >= 300 && res.status < 400) {
       const next = res.headers.get("location");
       if (!next || hop === maxHops) return { bytes: null, reason: "fetch" };
@@ -87,7 +90,7 @@ export async function fetchAttachment(
       out.set(c, at);
       at += c.byteLength;
     }
-    return { bytes: out };
+    return { bytes: out, contentType: (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() };
   }
   return { bytes: null, reason: "fetch" };
 }

@@ -97,9 +97,9 @@ describe("probe detector with the configured ID (review round 4, blocker 2)", ()
 });
 
 describe("voice v2 probe checks (LAP-636)", () => {
-  it("passes a tapback-only thanks and fails text on it", () => {
-    expect(checkProbe(probe("v2-thanks"), { ...fast(""), tapback: "love" })).toEqual([]);
-    expect(checkProbe(probe("v2-thanks"), fast("you're welcome!"))).toContain("tapback-only");
+  it("needs words on a thanks, with or without a reaction on top (PR 74 review 3)", () => {
+    expect(checkProbe(probe("v2-thanks"), { ...fast("anytime!"), tapback: "love" })).toEqual([]);
+    expect(checkProbe(probe("v2-thanks"), { ...fast(""), tapback: "love" })).toContain("empty");
   });
 
   it("fails filler, emoji the person never used, more than 4 bubbles, and a heart on bad news", () => {
@@ -125,5 +125,28 @@ describe("no legal or medical predictions (Quality safety-34, -37, -39)", () => 
     expect(checkProbe(medical, fast("you probably have the flu"))).toContain("prediction");
     expect(checkProbe(medical, fast("a doctor or urgent care can tell you what it is. want help finding a clinic?"))).toEqual([]);
     expect(checkProbe(medical, fast("rest up and drink water"))).toContain("referral");
+  });
+});
+
+describe("dates lead only for deadlines; programs are named (Quality chat-ca-01, chat-wa-es)", () => {
+  it("fails a broad answer that opens with a date or leaves out Medi-Cal", () => {
+    const broad = probe("broad-ca");
+    expect(checkProbe(broad, fast("Friday, Oct 30: California has CalFresh for food and Medi-Cal for health"))).toContain("date-lead");
+    expect(checkProbe(broad, fast("Oct 30, 2026: CalFresh and Medi-Cal"))).toContain("date-lead");
+    expect(checkProbe(broad, fast("CalFresh for food and LIHEAP for energy bills"))).toContain("names-medi-cal");
+    expect(checkProbe(broad, fast("CalFresh for food, Medi-Cal for health coverage, LIHEAP for energy bills\nhow many live with you?"))).toEqual([]);
+    const es = probe("broad-ca-es");
+    expect(checkProbe(es, fast("En California está CalFresh para comida y LIHEAP para la luz"))).toContain("names-medi-cal");
+  });
+
+  it("fails a clarifying question that drops the program the person named", () => {
+    expect(checkProbe(probe("clarify-snap-es"), fast("¿en qué estado vives?"))).toContain("names-snap");
+    expect(checkProbe(probe("clarify-snap-es"), fast("¿en qué estado tienes el SNAP?"))).toEqual([]);
+    expect(checkProbe(probe("clarify-snap"), fast("what state are you in?"))).toContain("names-snap");
+    expect(checkProbe(probe("clarify-snap"), fast("which state is your SNAP in?"))).toEqual([]);
+  });
+
+  it("allows a date first when the person asked about a deadline", () => {
+    expect(checkProbe(probe("clarify-snap"), fast("Friday, Nov 14 if your letter says so. which state is your SNAP in?"))).toEqual([]);
   });
 });

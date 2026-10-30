@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PROBES, allowedTapback, checkProbe, guardReply, mightBeCrisis, type GuardChange, type ProbeRun } from "@mano/persona";
+import { PROBES, REACTION_PROBES, allowedTapback, checkProbe, checkReactionSet, guardReply, mightBeCrisis, type GuardChange, type ProbeRun, type ReactionRun } from "@mano/persona";
 import { SparkResponder } from "../src/responder.js";
 
 const apiKey = process.env.META_MODEL_API_KEY ?? "";
@@ -64,5 +64,35 @@ describe.skipIf(!apiKey)("persona probes, live", () => {
     }
     console.log(`model ${model}, ${PROBES.length} probes, ${PROBES.length - failures} passed\n\n${rows.join("\n\n")}`);
     expect(failures).toBe(0);
+  });
+
+  it("reacts sparingly, with variety, and only where it fits, across 20 messages", async () => {
+    expect(model.endsWith("-contributor"), "probes send synthetic text to a -contributor model ID only").toBe(true);
+    const responder = new SparkResponder({ apiKey, model, baseUrl: process.env.MANO_MODEL_BASE_URL || undefined });
+    const runs: ReactionRun[] = [];
+    const rows: string[] = [];
+    let overruled = 0;
+    for (const probe of REACTION_PROBES) {
+      try {
+        const result = await responder.respond({ texts: [probe.text], attachmentCount: 0 });
+        // Code decides which reactions a message allows (PR 74 review 4),
+        // so the check grades what would be sent. Where the model picked
+        // outside the set, the row shows it and the run counts it.
+        const sent = allowedTapback(result.tapback ?? null, probe.text, mightBeCrisis(probe.text));
+        if (sent !== (result.tapback ?? null)) overruled += 1;
+        runs.push({ id: probe.id, tapback: sent, reply: result.text });
+        rows.push(`${probe.id} (${probe.kind}): ${result.tapback ?? "none"}${sent !== (result.tapback ?? null) ? ` (rules: ${sent ?? "none"})` : ""} / ${result.text.replace(/\n/g, " / ").slice(0, 90)}`);
+      } catch (err) {
+        runs.push({ id: probe.id, tapback: null, reply: "" });
+        rows.push(`${probe.id}: responder error ${(err as Error).name}`);
+      }
+    }
+    const failed = checkReactionSet(runs);
+    const reacted = runs.filter((r) => r.tapback);
+    console.log(
+      `reactions sent: ${reacted.length}/${runs.length} messages, distinct ${new Set(reacted.map((r) => r.tapback)).size}, model picks overruled by code: ${overruled}` +
+        `${failed.length ? `, failed: ${failed.join(", ")}` : ", all checks pass"}\n${rows.join("\n")}`,
+    );
+    expect(failed).toEqual([]);
   });
 });

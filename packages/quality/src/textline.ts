@@ -17,7 +17,7 @@ import {
   stripBlockedLinks,
   type HistoryMessage,
 } from "@mano/channels";
-import { REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, crisisTurn, guardReply, tapbackText, type GuardChange } from "@mano/persona";
+import { crisisLineFor, crisisTurn, guardReply, type GuardChange } from "@mano/persona";
 import { viaAiGateway } from "./models.ts";
 import type { AnswerPath, BenchAnswer } from "./paths.ts";
 import type { BenchCase } from "./suites/types.ts";
@@ -134,11 +134,10 @@ export class TextLine {
     }
     const totalMs = performance.now() - started;
 
-    // The bench has no message to react to, so a tapback-only reply takes
-    // the worker's text fallback, as it does when a tapback cannot be sent.
-    const tapback = allowedTapback(result.tapback ?? null, turnText, crisis);
-    let reply = result.text;
-    if (!reply.trim()) reply = crisis ? "" : tapback ? tapbackText(tapback) : result.tapback ? REFUSED_TAPBACK_TEXT : reply;
+    // Every reply has words; a reaction only ever goes on top, and the
+    // bench has no message to put one on. An empty reply becomes the
+    // guard's safe line in finalizeReply, as in the worker.
+    const reply = result.text;
     const final = await finalizeReply(reply, { modelIds, crisis, checker, crisisLine: crisisLineFor(turnText) });
     removed += final.removed;
     changes.push(...final.changes);

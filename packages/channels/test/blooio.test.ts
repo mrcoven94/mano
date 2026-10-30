@@ -345,6 +345,54 @@ describe("Blooio native iMessage calls (LAP-636)", () => {
     expect(JSON.parse(init.body as string)).toEqual({ reaction: "+love" });
   });
 
+  it("adds an emoji reaction and sets the chat background as a multipart upload (LAP-508)", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, { data: { chat_id: "chat_aaa", background_id: "bg_1" } }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    await channel.react("chat_aaa", "msg_in_1", "🙏");
+    await channel.react("chat_aaa", "msg_in_1", "👀");
+    const image = new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" });
+    await channel.setBackground("chat_aaa", image);
+    const calls = fetchFn.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(JSON.parse(calls[0]![1].body as string)).toEqual({ reaction: "+🙏" });
+    expect(calls[1]![0]).toBe("https://api.blooio.com/v4/chats/chat_aaa/messages/msg_in_1/reactions");
+    expect(JSON.parse(calls[1]![1].body as string)).toEqual({ reaction: "+👀" });
+    expect(calls[2]![0]).toBe("https://api.blooio.com/v4/chats/chat_aaa/background");
+    expect(calls[2]![1].method).toBe("PUT");
+    const form = calls[2]![1].body as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    const file = form.get("background") as File;
+    expect(file.type).toBe("image/png");
+    expect(file.size).toBe(4);
+    expect(new Headers(calls[2]![1].headers).has("content-type")).toBe(false);
+  });
+
+  it("tells a known background failure from an uncertain one (PR 74 review, should 5)", async () => {
+    const image = new Blob(["x"], { type: "image/png" });
+    const refused = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: (async () => jsonResponse(400, { error: { code: "bad_image" } })) as typeof fetch });
+    await expect(refused.setBackground("chat_aaa", image)).rejects.toBeInstanceOf(ChannelFailed);
+    const limited = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: (async () => jsonResponse(429, {})) as typeof fetch });
+    await expect(limited.setBackground("chat_aaa", image)).rejects.toBeInstanceOf(ChannelFailed);
+    for (const status of [500, 502, 408]) {
+      const unsure = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: (async () => jsonResponse(status, {})) as typeof fetch });
+      await expect(unsure.setBackground("chat_aaa", image), String(status)).rejects.toBeInstanceOf(ChannelUncertain);
+    }
+    const dropped = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: (async () => { throw new TypeError("network"); }) as typeof fetch });
+    await expect(dropped.setBackground("chat_aaa", image)).rejects.toBeInstanceOf(ChannelUncertain);
+  });
+
+  it("reads whether a chat has a background, to reconcile an uncertain upload", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, { data: { chat_id: "chat_aaa", has_background: true, background_id: "bg_1" } }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    await expect(channel.hasBackground("chat_aaa")).resolves.toBe(true);
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.blooio.com/v4/chats/chat_aaa/background");
+    expect(init.method ?? "GET").toBe("GET");
+    const none = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: (async () => jsonResponse(200, { data: { has_background: false } })) as typeof fetch });
+    await expect(none.hasBackground("chat_aaa")).resolves.toBe(false);
+    const broken = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: (async () => jsonResponse(503, {})) as typeof fetch });
+    await expect(broken.hasBackground("chat_aaa")).rejects.toThrow();
+  });
+
   it("sends reply_to when a reply answers an earlier message", async () => {
     const fetchFn = vi.fn(async () => jsonResponse(201, { id: "msg_out_9", chat_id: "chat_aaa", status: "queued" }));
     const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
