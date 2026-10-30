@@ -1,14 +1,12 @@
 // Guardian against production: the 44 synthetic actions from Guardian's own
-// eval (packages/guardian/eval/cases.ts) sent to the deployed checker, scored
+// eval (@mano/guardian/eval/cases) sent to the deployed checker, scored
 // for precision, recall and latency the same way Guardian's eval scores them.
 // Needs MANO_GUARDIAN_URL, MANO_GUARDIAN_TOKEN and the proxy key pair; without
 // them the stage says it did not run. Guardian scales to zero, so the stage
 // warms it first and waits, the way Mano does when a conversation starts.
 
 import { GlimmerChecker, type Checker } from "@mano/guardian";
-// The cases are Guardian's; quality reads them in place. Once @mano/guardian
-// exports "./eval/cases" this becomes a package import.
-import { EVAL_CASES } from "../../guardian/eval/cases.ts";
+import { EVAL_CASES } from "@mano/guardian/eval/cases";
 import { percentile } from "./run.ts";
 
 export interface GuardianSummary {

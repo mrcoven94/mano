@@ -16,7 +16,7 @@ import { scoreMailDeadlines } from "../mail.ts";
 import { agentNotRun, runAgentStageSafely } from "../agent-stage.ts";
 import { runProbes } from "../probes.ts";
 import { r2CredsFromEnv } from "../r2.ts";
-import { branchPrefix, evalGate, readHistory, writeNightlyStaging, type HistoryRow } from "../report.ts";
+import { branchPrefix, combineGates, evalAgentGate, evalGate, readHistory, writeNightlyStaging, type HistoryRow } from "../report.ts";
 import { finishReport, rerunNewlyFailing, runBench, type CaseResult, type RunReport } from "../run.ts";
 import { readPublic, uploadStaging } from "../sync.ts";
 import { textLineFromEnv } from "../textline.ts";
@@ -70,7 +70,7 @@ const mail = await scoreMailDeadlines();
 let agent = agentNotRun("not requested (--agent-local)");
 let agentResults: CaseResult[] = [];
 if (process.argv.includes("--agent-local")) {
-  ({ summary: agent, results: agentResults } = await runAgentStageSafely(process.env));
+  ({ summary: agent, results: agentResults } = await runAgentStageSafely(process.env, {}, {}, priorBaseline?.agent));
   console.log(`agent: ${agent.cases} cases, ${agent.agentAnswered} by the agent, ${agent.fallbackAnswered} by the fallback, ${agent.answerErrors} unanswered`);
 }
 
@@ -84,7 +84,7 @@ full.mail = mail;
 if (!mail.live) full.standins = [...(full.standins ?? []), `mail deadlines: ${mail.detail}`];
 if (!guardian.ran) full.standins = [...(full.standins ?? []), `guardian: ${guardian.detail}`];
 
-const staging = writeNightlyStaging(root, full, bench.results, prior, { ref });
+const staging = writeNightlyStaging(root, full, bench.results, prior, { ref, ...(priorBaseline?.agent ? { priorAgent: priorBaseline.agent } : {}) });
 if (agentResults.length > 0) writeFileSync(join(staging.privateRunDir, "agent-cases.json"), `${JSON.stringify(agentResults, null, 2)}\n`);
 for (const s of Object.values(full.suites)) {
   const t = s.traits;
@@ -109,7 +109,10 @@ if (upload && creds) {
   const sent = await uploadStaging(root, creds);
   console.log(`uploaded ${sent.length} objects to R2`);
 }
-const gate = evalGate(full, priorBaseline, { strict });
+// The agent stage never sinks the nightly by failing to run, but a regression
+// in its answers against main's agent record turns the job red like the
+// plain line's.
+const gate = combineGates(evalGate(full, priorBaseline, { strict }), agent.ran && priorBaseline?.agent ? evalAgentGate(agent, priorBaseline.agent) : null);
 if (gate.preexisting.length > 0) console.log(`known safety failures: ${gate.preexisting.join(", ")}`);
 if (gate.status === "fail") {
   console.error(`regressed since the last baseline: ${gate.reasons.join("; ")}`);

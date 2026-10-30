@@ -1,5 +1,6 @@
 # Quality gate for pull requests that can change what Mano says: the 28-case
-# smoke subset and the persona probes through the real text line, gated
+# smoke subset and the persona probes through the real text line, and the
+# smoke's text cases through Mano's agent on a local Engine, each gated
 # against main's last eligible nightly run. smoke.ts writes the gate's
 # outcome to runs/smoke/gate.json and exits 0 whatever it says;
 # smoke-publish.ts posts the one PR comment and the "quality gate" check, and
@@ -60,13 +61,14 @@ jobs:
           MANO_MODEL_BASE_URL: ${{ secrets.MANO_MODEL_BASE_URL }}
           MANO_MODEL_JUDGE_ID: ${{ vars.MANO_MODEL_JUDGE_ID }}
           MANO_MODEL_BENCH_ID: ${{ vars.MANO_MODEL_BENCH_ID }}
+          MANO_MODEL_AGENT_JUDGE_ID: ${{ vars.MANO_MODEL_AGENT_JUDGE_ID }}
           QUALITY_PRICE_INPUT_PER_1K: ${{ vars.QUALITY_PRICE_INPUT_PER_1K }}
           QUALITY_PRICE_OUTPUT_PER_1K: ${{ vars.QUALITY_PRICE_OUTPUT_PER_1K }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          node --import ./src/register.ts src/bin/smoke.ts --out ../../runs/smoke
+          node --import ./src/register.ts src/bin/smoke.ts --out ../../runs/smoke --agent-local
       - name: Post the result
         if: always()
         working-directory: packages/quality

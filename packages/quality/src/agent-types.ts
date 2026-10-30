@@ -33,7 +33,14 @@ export interface AgentSummary {
   // Answered by the worker itself, with no responder (STOP).
   workerAnswered: number;
   answerErrors: number;
+  // Answers the agent's judge could not score. Any of these, or a failed
+  // calibration, keeps the record out of the gate and the baseline.
+  judgeErrors?: number;
   suites: Record<string, AgentSuite>;
+  // Per case: identifiers and numbers only, for matched comparisons. Only
+  // cases the agent answered in both runs are compared.
+  fingerprints?: Record<string, { suite: string; version: number; live: boolean; hardPass: boolean; judgeMean: number | null; servedBy: string }>;
+  rerun?: { rerun: string[]; held: string[]; cleared: string[] };
   p50Ms: number;
   p95Ms: number;
 }

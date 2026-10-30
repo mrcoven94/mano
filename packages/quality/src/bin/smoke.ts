@@ -1,7 +1,7 @@
 // smoke: the pull request gate. Runs the 28-case smoke subset and the persona
 // probes through the real text line, then gates against main's baseline
 // (the last gate-eligible nightly run, from R2 or --baseline).
-// Usage: node --import ./src/register.ts src/bin/smoke.ts [--baseline file] [--out runs/smoke]
+// Usage: node --import ./src/register.ts src/bin/smoke.ts [--baseline file] [--out runs/smoke] [--agent-local]
 // Writes report.json, cases.json, gate.json and comment.md to --out and
 // exits 0 whatever the gate says; src/bin/smoke-publish.ts posts the result
 // and sets the job's outcome. Any other exit means the run itself broke.
@@ -12,7 +12,8 @@ import { join } from "node:path";
 import { dnsFromEnv } from "../links.ts";
 import { runProbes } from "../probes.ts";
 import { r2CredsFromEnv } from "../r2.ts";
-import { evalGate, prComment, writeRun } from "../report.ts";
+import { combineGates, evalAgentGate, evalGate, prComment, writeRun } from "../report.ts";
+import { runAgentStageSafely } from "../agent-stage.ts";
 import { finishReport, rerunNewlyFailing, runBench, type RunReport } from "../run.ts";
 import { SMOKE_CASE_IDS } from "../smoke.ts";
 import { readPublic } from "../sync.ts";
@@ -75,7 +76,15 @@ writeRun(out, full, bench.results);
 for (const r of bench.results) {
   for (const c of r.checks.filter((x) => x.id === "answer-error")) console.error(`answer error on ${r.caseId}: ${c.detail}`);
 }
-const gate = evalGate(full, baseline, { strict, missing });
+// --agent-local: the smoke's text cases through Mano's agent too, gated
+// against main's agent record. Live texts go through the agent.
+if (process.argv.includes("--agent-local")) {
+  ({ summary: full.agent } = await runAgentStageSafely(process.env, {}, { onlyCaseIds: new Set(SMOKE_CASE_IDS) }, baseline?.agent));
+}
+const gate = combineGates(
+  evalGate(full, baseline, { strict, missing }),
+  process.argv.includes("--agent-local") ? evalAgentGate(full.agent, baseline?.agent, { strict }) : null,
+);
 const comment = prComment(full, baseline, gate, baselineFrom);
 writeFileSync(join(out, "gate.json"), `${JSON.stringify({ status: gate.status, reasons: gate.reasons, matchedCases: gate.matchedCases }, null, 2)}\n`);
 writeFileSync(join(out, "comment.md"), `${comment}\n`);

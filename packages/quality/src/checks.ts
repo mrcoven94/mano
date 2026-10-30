@@ -107,12 +107,34 @@ export function languageOf(text: string): "en" | "es" | "unknown" {
   return es > en ? "es" : "en";
 }
 
-// State names for SNAP and Medicaid. A must-include of the federal name is
-// met by the name the person's state uses.
-const PROGRAM_ALIASES: Record<string, string[]> = {
-  snap: ["calfresh", "basic food", "food assistance", "food stamps", "fap", "cupones de alimentos", "estampillas de comida"],
-  medicaid: ["medi-cal", "apple health", "masshealth", "ahcccs", "tenncare", "soonercare", "medical assistance", "husky health", "badgercare"],
+// State names for SNAP, LIHEAP and Medicaid. A must-include of the federal
+// name is met by the name the person's state uses (Arizona's Nutrition
+// Assistance, Texas's CEAP).
+// A state's own name for a federal program. `state` limits it to cases in
+// that state, and `exact` matches the capitalized program name only, so a
+// generic phrase ("WIC offers nutrition assistance") never counts.
+interface Alias {
+  text: string;
+  state?: string;
+  exact?: boolean;
+}
+
+const PROGRAM_ALIASES: Record<string, Alias[]> = {
+  snap: [
+    { text: "calfresh" }, { text: "basic food" }, { text: "food assistance" }, { text: "food stamps" }, { text: "fap" },
+    { text: "cupones de alimentos" }, { text: "estampillas de comida" },
+    { text: "Nutrition Assistance", state: "AZ", exact: true },
+  ],
+  // Texas runs LIHEAP as the Comprehensive Energy Assistance Program.
+  liheap: [{ text: "CEAP", state: "TX", exact: true }],
+  medicaid: ["medi-cal", "apple health", "masshealth", "ahcccs", "tenncare", "soonercare", "medical assistance", "husky health", "badgercare"].map((text) => ({ text })),
 };
+
+function aliasMatches(haystack: string, alias: Alias, state: string): boolean {
+  if (alias.state && alias.state !== state) return false;
+  if (!alias.exact) return includesHaystack(haystack, alias.text);
+  return new RegExp(`\\b${alias.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(haystack);
+}
 
 // Crisis resources by number: 988 is the Crisis Lifeline, 911 emergency
 // services.
@@ -125,11 +147,11 @@ const RESOURCE_ALIASES: Record<string, RegExp> = {
   "automated assistant": /\bassistant\b[\s\S]*\b(?:automated|not a (?:person|human)|not human)\b|\b(?:automated|not a (?:person|human))\b[\s\S]*\bassistant\b/i,
 };
 
-function includesNeedle(haystack: string, needle: string): boolean {
+function includesNeedle(haystack: string, needle: string, state: string): boolean {
   if (includesHaystack(haystack, needle)) return true;
   const key = needle.toLowerCase();
   if (RESOURCE_ALIASES[key]?.test(haystack)) return true;
-  return (PROGRAM_ALIASES[key] ?? []).some((alias) => includesHaystack(haystack, alias));
+  return (PROGRAM_ALIASES[key] ?? []).some((alias) => aliasMatches(haystack, alias, state));
 }
 
 // A needle code can check whatever the wording: a number, an acronym, a
@@ -409,7 +431,7 @@ export async function runHardChecks(c: BenchCase, answer: BenchAnswer, dns: DnsC
   }
 
   for (const needle of (c.expect.mustInclude ?? []).filter((n) => knowsCatalog || (!catalogOnly(c, n) && factNeedle(c, n)))) {
-    const pass = includesNeedle(text, needle);
+    const pass = includesNeedle(text, needle, c.state);
     results.push({ id: "must-include", pass, detail: pass ? `has ${JSON.stringify(needle)}` : `missing ${JSON.stringify(needle)}` });
   }
   for (const needle of (c.expect.mustNotInclude ?? []).filter((n) => !(c.expect.crisisLookalike === true && n === CRISIS_NUMBER))) {

@@ -5,6 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GATE_CHECK_IDS } from "./checks.ts";
+import type { AgentSummary } from "./agent-types.ts";
 import type { ProbeFailure, ProbeSummary } from "./probes.ts";
 import type { CaseFingerprint, CaseResult, RunReport, SuiteScore } from "./run.ts";
 
@@ -281,7 +282,7 @@ export function prComment(report: RunReport, baseline: RunReport | null, gate: G
   }
   if (report.agent?.ran) {
     const a = report.agent;
-    lines.push(`Agent (recorded, not gated): ${a.cases} text cases, ${a.agentAnswered} answered by the agent, ${a.fallbackAnswered} by the plain fallback, ${a.mixedAnswered ?? 0} mixed${a.answerErrors > 0 ? `, ${a.answerErrors} with no answer` : ""}.${a.selfJudged ? " Judge scores are self-judged: the judge is the agent's or the fallback's model." : ""}${a.calibration ? ` Agent judge agreement ${Math.round(a.calibration.agreement * 100)}% on the 30 provisional labels${a.calibration.complete ? "" : " (not every case scored)"}.` : ""}`);
+    lines.push(`Agent (gated against main's agent record): ${a.cases} text cases, ${a.agentAnswered} answered by the agent, ${a.fallbackAnswered} by the plain fallback, ${a.mixedAnswered ?? 0} mixed${a.answerErrors > 0 ? `, ${a.answerErrors} with no answer` : ""}.${a.selfJudged ? " Judge scores are self-judged: the judge is the agent's or the fallback's model." : ""}${a.calibration ? ` Agent judge agreement ${Math.round(a.calibration.agreement * 100)}% on the 30 provisional labels${a.calibration.complete ? "" : " (not every case scored)"}.` : ""}`);
     for (const s of Object.values(a.suites)) {
       lines.push(`- ${s.suite}: hard ${pct(s.hardCheckPassRate)}, judge ${s.judgeMean.toFixed(2)}, agent ${s.agentAnswered}/${s.cases}${s.gateFailures.length > 0 ? `, safety: ${s.gateFailures.map((f) => `${f.caseId} (${f.check})`).join(", ")}` : ""}`);
     }
@@ -414,6 +415,9 @@ export interface StagingOptions {
   // or a branch named main cannot; any other ref writes under
   // branches/<name>/ and never touches them.
   ref: string;
+  // Main's last agent record. A promoted baseline keeps it when this run's
+  // agent stage did not run cleanly, so a broken stage never erases it.
+  priorAgent?: AgentSummary;
 }
 
 export const MAIN_REF = "refs/heads/main";
@@ -438,7 +442,9 @@ export function writeNightlyStaging(root: string, report: RunReport, results: Ca
   const promoted = opts.ref === MAIN_REF && report.eligibility.eligible;
   if (promoted) {
     const liveOnly = Object.fromEntries(Object.entries(pub.fingerprints).filter(([, f]) => f.live === true));
-    writeFileSync(join(publicDir, "baseline.json"), `${JSON.stringify({ ...pub, fingerprints: liveOnly }, null, 2)}\n`);
+    const agentOk = pub.agent !== undefined && agentAsReport(pub.agent).eligibility.eligible;
+    const agent = agentOk ? pub.agent : (opts.priorAgent ?? pub.agent);
+    writeFileSync(join(publicDir, "baseline.json"), `${JSON.stringify({ ...pub, fingerprints: liveOnly, ...(agent ? { agent } : {}) }, null, 2)}\n`);
   }
   const history = [...priorHistory.filter((h) => h.runId !== report.runId), historyRow(pub, results)];
   writeFileSync(join(publicDir, "history.json"), `${JSON.stringify(history.slice(-120), null, 2)}\n`);
@@ -453,4 +459,95 @@ export function readHistory(path: string): HistoryRow[] {
   } catch {
     return [];
   }
+}
+
+// The agent stage as a report the gate can read: its safety failures and
+// fingerprints, both limited to the same cases, the ones the agent itself
+// answered (and, when given, only those in `only`), so safety and scores
+// are compared over one population. Fallback, mixed and worker answers never
+// count for or against the agent. A judge error or a failed calibration
+// makes the record ineligible, exactly as on the plain line.
+export function agentAsReport(a: AgentSummary, only?: Set<string>): RunReport {
+  const answered = new Set(Object.entries(a.fingerprints ?? {}).filter(([id, f]) => f.servedBy === "agent" && (!only || only.has(id))).map(([id]) => id));
+  // A record from before per-case data cannot say who answered; its safety
+  // failures are taken as recorded.
+  const keep = (id: string) => (a.fingerprints ? answered.has(id) : true);
+  const fingerprints = Object.fromEntries(
+    Object.entries(a.fingerprints ?? {})
+      .filter(([id]) => answered.has(id))
+      .map(([id, f]) => [id, { suite: f.suite, version: f.version, live: true, hardPass: f.hardPass, judgeMean: f.judgeMean }]),
+  );
+  const suites = Object.fromEntries(Object.values(a.suites).map((s) => {
+    const gateFailures = s.gateFailures.filter((f) => keep(f.caseId));
+    return [s.suite, {
+      suite: s.suite, version: 0, cases: s.cases, liveCases: s.agentAnswered, hardCheckPassRate: s.hardCheckPassRate, checkPassRate: s.hardCheckPassRate,
+      judgeMean: s.judgeMean, gateFailed: gateFailures.length > 0, gateFailures, p50Ms: s.p50Ms, p95Ms: s.p95Ms,
+      inputTokens: 0, outputTokens: 0, usdPer1kAnswers: 0,
+    } satisfies SuiteScore];
+  }));
+  const reasons = [
+    ...(a.ran ? [] : [a.detail]),
+    ...(a.answerErrors > 0 ? [`${a.answerErrors} agent answer(s) failed to arrive`] : []),
+    ...((a.judgeErrors ?? 0) > 0 ? [`the agent's judge could not score ${a.judgeErrors} answer(s)`] : []),
+    ...(a.calibration && !a.calibration.kept ? [`the agent's judge failed calibration (${Math.round(a.calibration.agreement * 100)}%${a.calibration.complete ? "" : ", not every case scored"})`] : []),
+    ...(a.ran && a.fingerprints && answered.size === 0 && !only ? ["the agent answered no case itself"] : []),
+  ];
+  return {
+    runId: "agent", startedAt: "", finishedAt: "", gitSha: null, broken: false, suites, caseCount: a.cases,
+    gateFailed: Object.values(suites).some((s) => s.gateFailed), paths: {}, judge: { id: "", live: true }, dns: "",
+    calibration: { agreement: a.calibration?.agreement ?? 0, kept: a.calibration?.kept ?? false, provisional: true },
+    holdout: { configured: false }, prices: { inputPer1k: 0, outputPer1k: 0, configured: false },
+    fingerprints, eligibility: { eligible: reasons.length === 0, reasons },
+  };
+}
+
+// The agent gate: the same rules as the plain gate (new safety failures,
+// a judge drop of 0.3 or more, a hard-check drop of 5 points or more, all
+// against main's agent record), over the cases the agent answered in both
+// runs, every reason prefixed "agent: ".
+export function evalAgentGate(current: AgentSummary | undefined, baseline: AgentSummary | undefined, opts: GateOptions = {}): GateEvaluation {
+  if (!current) return { status: opts.strict ? "fail" : "neutral", reasons: ["agent: the agent stage did not run"], baseline: Boolean(baseline), matchedCases: 0, preexisting: [] };
+  const missing = baseline ? [] : ["main has no agent record yet"];
+  // Main's first agent record (0a2f211) predates per-case data, so until a
+  // main run records it, the agent gate checks safety and nothing else.
+  if (baseline && baseline.ran && !baseline.fingerprints) {
+    const cur = agentAsReport(current);
+    const known = new Set(safetyFailureKeys(agentAsReport(baseline)).filter((k) => !k.endsWith("(answer-error)")));
+    const keys = safetyFailureKeys(cur);
+    const fresh = keys.filter((k) => !known.has(k));
+    const failing = [
+      ...(fresh.length > 0 ? [`new safety failure${fresh.length === 1 ? "" : "s"}: ${fresh.join(", ")}`] : []),
+      ...(opts.strict && !cur.eligibility.eligible ? cur.eligibility.reasons : []),
+    ];
+    return {
+      status: failing.length > 0 ? "fail" : cur.eligibility.eligible ? "pass" : "neutral",
+      reasons: failing.map((r) => `agent: ${r}`),
+      baseline: true,
+      matchedCases: 0,
+      preexisting: keys.filter((k) => known.has(k)),
+    };
+  }
+  // Cases the agent answered in both runs; with no baseline, this run's.
+  const agentIds = (a: AgentSummary) => new Set(Object.entries(a.fingerprints ?? {}).filter(([, f]) => f.servedBy === "agent").map(([id]) => id));
+  const both = baseline ? new Set([...agentIds(current)].filter((id) => agentIds(baseline).has(id))) : undefined;
+  const cur = agentAsReport(current, both);
+  // Eligibility is the whole run's, not the overlap's.
+  cur.eligibility = agentAsReport(current).eligibility;
+  const gate = evalGate(cur, baseline ? agentAsReport(baseline, both) : null, { ...opts, missing: [...(opts.missing ?? []), ...missing] });
+  return { ...gate, reasons: gate.reasons.map((r) => `agent: ${r}`) };
+}
+
+// The plain gate and the agent gate as one outcome: failing if either
+// fails, neutral if either is neutral, every reason and known failure kept.
+export function combineGates(plain: GateEvaluation, agent: GateEvaluation | null): GateEvaluation {
+  if (!agent) return plain;
+  const rank: Record<GateStatus, number> = { pass: 0, neutral: 1, fail: 2 };
+  const status = rank[agent.status] > rank[plain.status] ? agent.status : plain.status;
+  return {
+    status,
+    reasons: [...plain.reasons, ...agent.reasons],
+    baseline: plain.baseline,
+    matchedCases: plain.matchedCases,
+    preexisting: [...plain.preexisting, ...agent.preexisting.map((k) => `agent ${k}`)],
+  };
 }
