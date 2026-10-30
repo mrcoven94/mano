@@ -461,6 +461,74 @@ describe("a slow draft against a newer one", () => {
     expect(sizes()).toEqual(["3:rejected", "4:approved"]);
   });
 
+  // Sol's review 7: A's report fails, closing A fails (Engine 503), B's
+  // report fails, then A's report is retried, then YES.
+  it("an older draft that could not be closed never becomes answerable, and the YES approves nothing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await send(turn("turn_r7A0000001", "Please file my renewal"), deps(), { present: false });
+    const refusing: typeof fetch = async (input, init) =>
+      /\/reject$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init);
+    vi.stubGlobal("fetch", refusing);
+    const closing = deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: refusing }) });
+    const b = await send(turn("turn_r7B0000001", "Please file my renewal, household of 4"), closing, { present: false });
+    expect(b.body.status).toBe("waiting_approval");
+    vi.stubGlobal("fetch", engine.fetch);
+    const bySize = (n: number) => engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === n)!;
+    expect(bySize(3).status).toBe("pending");
+    expect(warn.mock.calls.some(([line]) => String(line).includes("mano_close_failed"))).toBe(true);
+
+    const retried = await present(bySize(3));
+    expect(retried.body).toEqual({ ok: true, superseded: true });
+    const yes = await send(turn("turn_r7Y0000001", "YES"));
+    expect(yes.body.text).toMatch(/haven't shown you/i);
+    expect(engine.executor.calls).toHaveLength(0);
+
+    // B's report lands on its retry: now the YES files B, and only B.
+    expect((await present(bySize(4))).body).toEqual({ ok: true });
+    await new Promise((r) => setTimeout(r, 3));
+    const yes2 = await send(turn("turn_r7Y0000002", "YES"));
+    expect(yes2.body.text).toMatch(/^Done/);
+    expect(engine.executor.calls).toHaveLength(1);
+    expect(sizes()).toEqual(["3:rejected", "4:approved"]);
+    warn.mockRestore();
+  });
+
+  it("an older draft is never approved once a newer one exists, even left unclosed", async () => {
+    await send(turn("turn_r7C0000001", "Please file my renewal"), deps(), { present: false });
+    const refusing: typeof fetch = async (input, init) =>
+      /\/reject$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init);
+    vi.stubGlobal("fetch", refusing);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await send(turn("turn_r7D0000001", "Please file my renewal, household of 4"), deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: refusing }) }), { present: false });
+    vi.stubGlobal("fetch", engine.fetch);
+    const older = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === 3)!;
+    expect(older.status).toBe("pending");
+    const person = engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0);
+    expect(await person.approve(older.id)).toMatchObject({ status: "blocked", superseded: true });
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  it("a YES aimed at a replaced question approves nothing and shows the latest one", async () => {
+    await send(turn("turn_r7E0000001", "Please file my renewal"));
+    // A newer draft lands, but its question has not reached the person.
+    const ctx = toolCtx({ handleHash: HANDLE, turnId: "turn_r7F0000001", grant: grants.get(HANDLE), turnAtMs: Date.now() });
+    await engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).putTurn("turn_r7F0000001", new Date().toISOString());
+    // Clearing the old pointer fails, so it still names the first question.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      /\/pending-approval$/.test(new URL(String(input)).pathname) && init?.method === "DELETE"
+        ? new Response("unavailable", { status: 503 })
+        : engine.fetch(input, init),
+    );
+    await Promise.resolve(startFormDraft.execute({ ...fields, householdSize: 4 }, ctx)).catch(() => undefined);
+    vi.stubGlobal("fetch", engine.fetch);
+    await new Promise((r) => setTimeout(r, 3));
+    const yes = await send(turn("turn_r7G0000001", "YES"), deps(), { present: false });
+    expect(yes.body.text).toMatch(/^I just updated that/);
+    expect(yes.body.text).toContain("Household size: 4");
+    expect(yes.body.status).toBe("waiting_approval");
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
   it("a repeated report of the question keeps when it was first shown", async () => {
     await send(turn("turn_rep_A00001", "Please file my renewal"));
     const yesAt = Date.now();

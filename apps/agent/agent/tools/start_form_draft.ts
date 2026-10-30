@@ -8,7 +8,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 
 import type { EngineApproval } from "../lib/engine.js";
-import { draftOrders, olderTurn, presentsExactly, proposalKey, renderQuestion, waitingProposals, type TurnOrder } from "../lib/pending.js";
+import { closeSuperseded, presentsExactly, proposalKey, renderQuestion } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { placeClaimId } from "../lib/reminders.js";
 
@@ -81,44 +81,41 @@ export default defineTool({
         else outcome = { status: holder.status, reason: "This draft was already answered or closed." };
         break;
       }
-      const result = await engine.proposeAction({ type: "submit", recipient: RENEWAL_RECIPIENT, purpose: RENEWAL_PURPOSE, payload, idempotencyKey: key });
+      const result = await engine.proposeAction(
+        { type: "submit", recipient: RENEWAL_RECIPIENT, purpose: RENEWAL_PURPOSE, payload, idempotencyKey: key },
+        turnId,
+      );
       if (result.status === "needs_approval" && result.approval) approval = result.approval;
       else outcome = { status: result.status, reason: result.reason ?? "Engine did not hold it for approval." };
     }
     if (!approval) return { status: outcome?.status ?? "blocked", reason: outcome?.reason ?? "Too many drafts in one message.", sent: false };
-    if (!presentsExactly(renderQuestion(approval))) {
-      await engine.reject(approval.id).catch(() => undefined);
-      return {
-        status: "cannot_show_exactly",
-        sent: false,
-        note: "This draft cannot be shown word for word over text, so it was not put to a yes and nothing was sent. Tell the person plainly, without repeating the details, and offer to help another way.",
-      };
-    }
-    // One question waits at a time, and the newest turn's draft is the
-    // one. Drafts are ordered by the turn that proposed them, never by
-    // when they were made: a slow turn can finish after a newer one.
-    // Drafts of older turns can no longer be answered, so Engine closes
-    // them; if a newer turn's draft already waits, this one is closed
-    // instead and never shown.
-    const mine: TurnOrder = { receivedAt: new Date(turnAtMs).toISOString(), turnId };
-    const others = waitingProposals(await engine.listApprovals(), engine.generation, approval.id);
-    const orders = await draftOrders(engine, others, engine.generation);
-    if (others.some((a) => orders.has(a.id) && olderTurn(mine, orders.get(a.id)!))) {
-      await engine.reject(approval.id).catch(() => undefined);
+    // One question waits at a time: Engine's latest proposal, the draft of
+    // the newest turn. A slow turn whose draft lands after a newer turn's
+    // is not the latest; Engine never approves it, and it is closed here.
+    const { pointer: shown, latest } = await engine.getPending();
+    const approvals = await engine.listApprovals();
+    await closeSuperseded(engine, approvals, engine.generation, latest?.approvalId ?? null);
+    if (latest?.approvalId !== approval.id) {
       return {
         status: "superseded",
         sent: false,
         note: "A newer request from the person is already waiting for their yes, so this draft was closed and nothing was sent. Say so in one short sentence.",
       };
     }
-    const older = (order: TurnOrder | undefined) => !order || olderTurn(order, mine);
-    if (pointer && pointer.approvalId !== approval.id) {
-      const shown = pointer.turnId && pointer.turnReceivedAt ? { receivedAt: pointer.turnReceivedAt, turnId: pointer.turnId } : undefined;
-      if (older(shown)) await engine.clearPointer(pointer.approvalId);
+    if (!presentsExactly(renderQuestion(approval))) {
+      try {
+        await engine.reject(approval.id);
+      } catch {
+        console.warn(JSON.stringify({ type: "mano_close_failed", count: 1 }));
+      }
+      return {
+        status: "cannot_show_exactly",
+        sent: false,
+        note: "This draft cannot be shown word for word over text, so it was not put to a yes and nothing was sent. Tell the person plainly, without repeating the details, and offer to help another way.",
+      };
     }
-    for (const earlier of others.filter((a) => older(orders.get(a.id)))) {
-      await engine.reject(earlier.id).catch(() => undefined);
-    }
+    // An earlier question still pointed at can no longer be answered.
+    if (shown && shown.approvalId !== approval.id) await engine.clearPointer(shown.approvalId);
     return {
       approvalId: approval.id,
       status: "waiting_for_yes",

@@ -81,8 +81,6 @@ export interface EnginePointer {
   approvalId: string;
   generation: number;
   setAt: string;
-  turnId: string | null;
-  turnReceivedAt: string | null;
 }
 
 export interface EngineResult {
@@ -90,6 +88,16 @@ export interface EngineResult {
   approval?: EngineApproval;
   receipt?: { externalId: string; simulated: boolean };
   reason?: string;
+  // A refused approve: a newer proposal replaced this one.
+  superseded?: true;
+}
+
+// The person's newest drafted approval. Engine moves it only forward, in
+// the step that creates the approval, and approves no older draft.
+export interface EngineLatest {
+  approvalId: string;
+  receivedAt: string;
+  turnId: string;
 }
 
 // What the agent asks Engine to freeze for approval. Engine stamps the
@@ -214,17 +222,24 @@ export class PersonEngine {
   }
 
   async getPointer(): Promise<EnginePointer | null> {
-    const out = (await this.json("GET", `/pending-approval?generation=${this.generation}`)) as { pointer?: EnginePointer | null };
-    return out.pointer ?? null;
+    return (await this.getPending()).pointer;
   }
 
-  // Compare-and-set by turn order: Engine moves the pointer only to a
-  // draft of the same or a newer turn than the one it shows; an older
-  // turn's draft answers superseded and changes nothing. null when Engine
-  // refused: the approval or turn is not this person's, or not of the
+  // The pointer and the latest proposal, read together.
+  async getPending(): Promise<{ pointer: EnginePointer | null; latest: EngineLatest | null }> {
+    const out = (await this.json("GET", `/pending-approval?generation=${this.generation}`)) as {
+      pointer?: EnginePointer | null;
+      latest?: EngineLatest | null;
+    };
+    return { pointer: out.pointer ?? null, latest: out.latest ?? null };
+  }
+
+  // Compare-and-set: Engine moves the pointer only to the latest proposal;
+  // any other approval answers superseded and changes nothing. null when
+  // Engine refused: the approval is not this person's, or not of the
   // current generation.
-  async setPointer(approvalId: string, turnId: string): Promise<{ pointer: EnginePointer | null; superseded: boolean } | null> {
-    const res = await this.call("PUT", "/pending-approval", { approvalId, generation: this.generation, turnId });
+  async setPointer(approvalId: string): Promise<{ pointer: EnginePointer | null; superseded: boolean } | null> {
+    const res = await this.call("PUT", "/pending-approval", { approvalId, generation: this.generation });
     if (res.status === 404) {
       await res.body?.cancel().catch(() => undefined);
       return null;
@@ -274,11 +289,19 @@ export class PersonEngine {
     await this.json("DELETE", `/memory/${encodeURIComponent(memoryId)}`);
   }
 
-  async proposeAction(proposal: ActionProposal): Promise<EngineResult> {
+  // turnId: the turn this draft belongs to. Engine orders proposals by it.
+  async proposeAction(proposal: ActionProposal, turnId: string): Promise<EngineResult> {
     return parseResult(
-      await this.json("POST", "/action", { ...proposal, actor: "foreground", origin: "person", generation: this.generation }),
+      await this.json("POST", "/action", {
+        ...proposal,
+        actor: "foreground",
+        origin: "person",
+        generation: this.generation,
+        proposalTurn: turnId,
+      }),
     );
   }
+
 
   async approve(approvalId: string): Promise<EngineResult> {
     return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/approve`));

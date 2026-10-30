@@ -26,7 +26,8 @@ import {
   listReminders,
   parseGenerationInput,
   parsePointerInput,
-  parsePointerSetInput,
+  proposalOrderFor,
+  splitProposalTurn,
   parseReminderInput,
   parseTurnInput,
   putTurnIfAbsent,
@@ -186,7 +187,14 @@ export class EngineDouble {
       if (rest === "/action" && method === "POST") {
         if (!isGeneration(body.generation)) return Response.json({ error: "generation is required." }, { status: 400 });
         const { generation, ...action } = body;
-        return Response.json(await gateway.requestAction({ ...action, personId }, new Date(this.now()), { generation }));
+        // As Engine: a draft names its turn, ordered from the turn ledger.
+        const split = splitProposalTurn(action);
+        if (!split) return Response.json({ status: "blocked", reason: "proposalTurn must name a turn." });
+        const proposal = split.turnId === null ? undefined : (proposalOrderFor(sql, split.turnId) ?? undefined);
+        if (split.turnId !== null && !proposal) return Response.json({ status: "blocked", reason: "Unknown turn." });
+        return Response.json(
+          await gateway.requestAction({ ...(split.request as object), personId }, new Date(this.now()), { generation, proposal }),
+        );
       }
       const decision = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
       if (decision && method === "POST") {
@@ -225,12 +233,16 @@ export class EngineDouble {
         return Response.json({ turn });
       }
       if (rest === "/pending-approval" && method === "PUT") {
-        const input = parsePointerSetInput(body);
-        const set = setPendingPointer(sql, input.approvalId, input.generation, input.turnId, nowIso());
-        return set ? Response.json(set) : Response.json({ error: "Approval or turn not found." }, { status: 404 });
+        const input = parsePointerInput(body);
+        const set = setPendingPointer(sql, input.approvalId, input.generation, nowIso());
+        return set ? Response.json(set) : Response.json({ error: "Approval not found." }, { status: 404 });
       }
       if (rest === "/pending-approval" && method === "GET") {
-        return Response.json({ pointer: getPendingPointer(sql, Number(url.searchParams.get("generation"))) });
+        const generation = Number(url.searchParams.get("generation"));
+        return Response.json({
+          pointer: getPendingPointer(sql, generation),
+          latest: generation === currentGeneration(sql) ? store.latestProposal() : null,
+        });
       }
       if (rest === "/pending-approval" && method === "DELETE") {
         const input = parsePointerInput(body);
