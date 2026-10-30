@@ -6,8 +6,8 @@
 // else from it. Text a letter aims at the reader is never repeated or
 // followed, only mentioned. Links and phone numbers from the letter are
 // never repeated: they are unchecked evidence.
-import { findInstructions } from "./safety.js";
-import type { Letter, MailReading, Question } from "./types.js";
+import { scanContent } from "./safety.js";
+import type { Letter, MailReading, Question, Warning } from "./types.js";
 
 // What a held deadline is for, when the sentence says.
 export type DeadlineKind = "renewal" | "recertification" | "interview" | "hearing" | "appeal" | "payment" | "documents";
@@ -53,8 +53,24 @@ const bare = (value: string): string =>
     .trim()
     .replace(/^(?:\(?\d{1,2}[.)]|[-*\u2022]|re:)\s*/i, "")
     .replace(/[\s.;:,]+$/, "");
-const PHONE_OR_LINK = /\d{3}[-.\s)]+\d{3,4}|https?:\/\/|www\.|\b[a-z0-9-]+\.[a-z]{2,24}\//i;
-const safe = (value: string): boolean => findInstructions(value).length === 0 && !PHONE_OR_LINK.test(value);
+
+// Whether Mano may repeat a piece of this letter. Nothing the reader's own
+// scan flags (an instruction, a link, a phone number) and no contact the
+// letter carries, however it is written: Mano recommends no phone number,
+// link or address from a letter.
+type Speakable = (value: string) => boolean;
+const CONTACT_WARNINGS = new Set(["phone_unchecked", "link_unchecked", "address_unchecked", "instruction_in_content"]);
+const digits = (value: string): string => value.replace(/\D/g, "");
+
+function speakableFor(warnings: Warning[]): Speakable {
+  const contacts = warnings.filter((w) => CONTACT_WARNINGS.has(w.kind) && w.detail).map((w) => w.detail!.toLowerCase());
+  return (value) => {
+    if (scanContent(value).length > 0) return false;
+    const lower = value.toLowerCase();
+    const valueDigits = digits(value);
+    return !contacts.some((c) => lower.includes(c) || (digits(c).length >= 7 && valueDigits.includes(digits(c))));
+  };
+}
 
 function listOf(items: string[]): string {
   if (items.length <= 1) return items.join("");
@@ -66,6 +82,7 @@ const SCAM =
 const PLANTED = "Part of this letter tries to give me instructions. I did not follow them.";
 const UNREAD = "I could not read the letter in your photo. Send it again with the whole page flat, in good light, and I will try once more.";
 const FAILED = "I could not finish reading your photo just now. Send it again and I will try once more.";
+const OFFICIAL = "If you need to call the office, use the number on your state's official site, not one from a letter.";
 
 const IMPERATIVE = /^(send|bring|return|sign|submit|provide|mail|complete|fill|call|upload|attach|include|keep|make|pay|renew|report|apply|reply|respond)\b/i;
 const lowerFirst = (item: string): string => (/^[A-Z][a-z]/.test(item) ? item[0]!.toLowerCase() + item.slice(1) : item);
@@ -77,7 +94,7 @@ function askedLine(asked: string[]): string {
   return asked.every((a) => IMPERATIVE.test(a)) ? `It asks you to: ${listOf(items)}.` : `It asks for: ${listOf(items)}.`;
 }
 
-function whatItIs(letter: Letter): string {
+function whatItIs(letter: Letter, safe: Speakable): string {
   const f = letter.fields;
   const sender = f.sender && safe(f.sender.value) ? bare(f.sender.value) : null;
   const subject = [f.subject, f.program].find((c) => c && safe(c.value));
@@ -92,9 +109,14 @@ function whatItIs(letter: Letter): string {
 // when the sentence has none of its own.
 const quoted = (quote: string): string => (/[.!?]$/.test(quote.trim()) ? `"${quote.trim()}"` : `"${quote.trim()}".`);
 
-function deadlineLine(question: Question | undefined): { text: string; held: boolean } | null {
+// A sentence Mano may not repeat is never quoted and never held: the
+// date goes in Mano's own words, as a question.
+const unquoted = (iso: string): string => `It looks like the letter gives a deadline of ${spoken(iso)}. Is that the date you need to meet?`;
+
+function deadlineLine(question: Question | undefined, safe: Speakable): { text: string; held: boolean } | null {
   if (!question) return null;
   const proposal = question.proposal;
+  if (proposal && !safe(proposal.quote)) return { text: unquoted(proposal.dueDate), held: false };
   if (proposal?.confidence === "high") {
     return { text: `It is due ${spoken(proposal.dueDate)}. The letter says: ${quoted(proposal.quote)}`, held: true };
   }
@@ -103,8 +125,9 @@ function deadlineLine(question: Question | undefined): { text: string; held: boo
   }
   // Only a sentence that names a date is worth asking about.
   const candidate = question.candidates?.find((c) => c.dates.length > 0);
-  if (candidate) return { text: `The letter says: ${quoted(candidate.sentence)} Which date is your deadline?`, held: false };
-  return null;
+  if (!candidate) return null;
+  if (!safe(candidate.sentence)) return { text: unquoted(candidate.dates[0]!), held: false };
+  return { text: `The letter says: ${quoted(candidate.sentence)} Which date is your deadline?`, held: false };
 }
 
 // Only what the published sentence says; no kind when it says none.
@@ -145,9 +168,10 @@ function titleOf(letter: Letter, kind: DeadlineKind | null): string {
 function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; held: HeldDeadline | null } {
   const warnings = reading.warnings.filter((w) => w.letterId === letter.id);
   if (warnings.some((w) => w.kind === "scam_suspect")) return { lines: [SCAM], held: null };
-  const lines = [whatItIs(letter)];
+  const safe = speakableFor(warnings);
+  const lines = [whatItIs(letter, safe)];
   const question = reading.questions.find((q) => q.letterId === letter.id && q.kind === "confirm_deadline");
-  const deadline = deadlineLine(question);
+  const deadline = deadlineLine(question, safe);
   const proposal = question?.proposal;
   const held =
     deadline?.held && proposal
@@ -165,6 +189,7 @@ function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; 
   const asked = letter.fields.asked.map((a) => a.value).filter(safe).map(bare);
   if (asked.length > 0) lines.push(askedLine(asked));
   if (warnings.some((w) => w.kind === "instruction_in_content")) lines.push(PLANTED);
+  if (warnings.some((w) => w.kind === "phone_unchecked" || w.kind === "link_unchecked")) lines.push(OFFICIAL);
   // The question goes last, so the reply ends on the one thing to answer.
   if (deadline) {
     if (held) lines.splice(1, 0, deadline.text);
