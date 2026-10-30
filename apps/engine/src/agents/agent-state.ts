@@ -134,9 +134,10 @@ export function currentGeneration(sql: SqlExec): number {
 // never returns to a cancellable state: an uncertain answer or a crashed
 // run leaves it sending, and the next run re-sends it under the same key
 // for Channels to dedupe. sent, dropped (Channels refused it for good, or
-// its conversation was deleted), failed (retries ran out) and cancelled
-// are final.
-export type ReminderStatus = "scheduled" | "claimed" | "sending" | "sent" | "dropped" | "failed" | "cancelled";
+// its conversation was deleted), failed (retries ran out), cancelled and
+// withdrawn (a deadline's nudge stopped after it was handed off, because
+// the deadline closed or moved: never handed off again) are final.
+export type ReminderStatus = "scheduled" | "claimed" | "sending" | "sent" | "dropped" | "failed" | "cancelled" | "withdrawn";
 
 export interface Reminder {
   id: string;

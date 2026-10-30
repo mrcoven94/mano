@@ -56,7 +56,7 @@ import {
   cancelDeadline,
   deadlineIdFor,
   ensureDeadlineTables,
-  holdNudgeOutsideWindow,
+  gateNudge,
   isNudge,
   listDeadlines,
   nudgeTimeOf,
@@ -646,12 +646,17 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const claimed = claimDueReminders(this.db(), Date.now(), REMINDER_LEASE_MS, token, REMINDER_BATCH);
     let sent = 0;
     for (const reminder of claimed) {
-      const held = holdNudgeOutsideWindow(this.db(), reminder.id, token, Date.now());
-      if (held) {
-        this.store.audit({ event: `deadline.nudge_${held}`, reminderHash: await auditDigest(reminder.id) });
+      // A deadline's nudge is checked against its deadline and its quiet
+      // hours in the same step as the handoff, so nothing lands between.
+      const step = this.ctx.storage.transactionSync(() => {
+        const held = gateNudge(this.db(), reminder.id, token, Date.now());
+        return held ?? (handOffReminder(this.db(), reminder.id, token, Date.now()) ? "handed" : "lost");
+      });
+      if (step === "withdrawn" || step === "deferred" || step === "missed") {
+        this.store.audit({ event: `deadline.nudge_${step}`, reminderHash: await auditDigest(reminder.id) });
         continue;
       }
-      if (!handOffReminder(this.db(), reminder.id, token, Date.now())) continue;
+      if (step === "lost") continue;
       let outcome: DeliveryOutcome;
       if (!handleHash) {
         outcome = { kind: "failed" };
@@ -744,7 +749,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       const out = removeConversationState(this.db(), Date.now(), toGeneration);
       // Only a delete that moved the generation removes deadlines: a
       // retried old one never touches the conversation after it.
-      if (out.generation > before) removeDeadlines(this.db());
+      if (out.generation > before) removeDeadlines(this.db(), Date.now());
       return out;
     });
     this.store.audit({ event: "conversation.deleted", ...removed });

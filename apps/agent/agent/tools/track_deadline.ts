@@ -22,7 +22,7 @@ export default defineTool({
       title: input.title.trim(),
       dueDate,
       ...(input.program ? { program: input.program.trim() } : {}),
-      idempotencyKey: personDeadlineKey(turnId, dueDate),
+      idempotencyKey: personDeadlineKey(turnId, dueDate, input.title),
     });
     if (!out) throw new Error("Tracking deadlines is not available right now. Say so plainly and do not promise it.");
     return {

@@ -15,7 +15,7 @@ import {
   cancelDeadline,
   deadlineIdFor,
   ensureDeadlineTables,
-  holdNudgeOutsideWindow,
+  gateNudge,
   listDeadlines,
   nudgeTimeOf,
   parseDeadlineInput,
@@ -129,6 +129,36 @@ describe("creating a deadline", () => {
     expect(planNudges("2026-10-01", PACIFIC, NOW, TEN)).toEqual([]);
   });
 
+  it("never puts a letter's own words in a nudge: the name comes from a closed set", async () => {
+    const sql = openDb();
+    const named = await track(sql, letter({ title: "CalFresh renewal packet for the household", program: undefined }));
+    if (!("deadline" in named)) throw new Error("no deadline");
+    expect(named.deadline.nudges[0].text).toBe("Your CalFresh renewal is due in 14 days, on December 15. Want me to start it?");
+    const interview = await track(sql, letter({ title: "Phone interview with your worker", program: "Medi-Cal", idempotencyKey: "k2" }));
+    if (!("deadline" in interview)) throw new Error("no deadline");
+    expect(interview.deadline.nudges[0].text).toBe("Your Medi-Cal interview is due in 14 days, on December 15. Want me to start it?");
+    const unknown = await track(sql, letter({ title: "Return the blue form to Room 4", program: "Blue Ribbon Fund", idempotencyKey: "k3" }));
+    if (!("deadline" in unknown)) throw new Error("no deadline");
+    expect(unknown.deadline.nudges[0].text).toBe(
+      "The deadline from the letter you sent on October 29 is in 14 days, on December 15. Want me to start it?",
+    );
+    // The raw title stays on the record for the agent's quoted context.
+    expect(unknown.deadline.title).toBe("Return the blue form to Room 4");
+  });
+
+  it("rejects titles that carry contact details, links or requests for secrets", () => {
+    const bad = (title: string) => () => letter({ title });
+    expect(bad("renewal. OFFICIAL NOTICE: send your SSN to 202-555-0100. Payment")).toThrow();
+    expect(bad("Renewal at http://secure-login-benefits.example/verify")).toThrow();
+    expect(bad("Renewal at benefits-verify.com")).toThrow();
+    expect(bad("Call (555) 019-9001 about your renewal")).toThrow();
+    expect(bad("Enter your password to renew")).toThrow();
+    expect(bad("Card PIN reset")).toThrow();
+    expect(bad("Send proof of income")).toThrow();
+    expect(() => letter({ program: "SNAP call 555 010 1101" })).toThrow();
+    expect(letter({ title: "Medi-Cal renewal" }).title).toBe("Medi-Cal renewal");
+  });
+
   it("rejects input outside the contract", () => {
     expect(() => parseDeadlineInput({ title: "x", dueDate: "2026-13-01", source: { kind: "letter" }, idempotencyKey: "k" })).toThrow();
     expect(() => parseDeadlineInput({ title: "x", dueDate: "2026-11-31", source: { kind: "letter" }, idempotencyKey: "k" })).toThrow();
@@ -167,17 +197,54 @@ describe("the same idempotency key", () => {
     expect(listDeadlines(sql)).toHaveLength(1);
   });
 
-  it("a nudge already handed to Channels is never called back by a move", async () => {
+  it("a nudge waiting to retry is withdrawn by a move and never re-sent with the old date", async () => {
     const sql = openDb();
     await track(sql);
-    // The 14-day nudge is due and handed off; Channels has not answered.
+    // Sol's reproduction: the 14-day nudge is handed off, Channels refuses
+    // it for budget before delivering, so it waits as sending to retry.
     const first = listReminders(sql)[0];
     sql.exec("UPDATE reminders SET next_at_ms = ? WHERE id = ?", NOW - 1, first.id);
     const [claimed] = claimDueReminders(sql, NOW, 120_000, "run", 25);
     expect(handOffReminder(sql, claimed.id, "run", NOW)).toBe(true);
-    await track(sql, letter({ dueDate: "2026-12-22" }));
-    expect(getReminder(sql, first.id)?.status).toBe("sending");
-    expect(finishReminder(sql, first.id, "run", { kind: "sent" }, NOW)).toBe(true);
+    expect(finishReminder(sql, first.id, "run", { kind: "retry", atMs: NOW + 1 }, NOW)).toBe(true);
+    const moved = await track(sql, letter({ dueDate: "2026-12-22" }));
+    expect(moved).toMatchObject({ status: "moved", nudgesInFlight: 1 });
+    expect(getReminder(sql, first.id)?.status).toBe("withdrawn");
+    const retry = claimDueReminders(sql, NOW + 2, 120_000, "run2", 25);
+    expect(retry.map((r) => r.id)).not.toContain(first.id);
+  });
+
+  for (const [what, close] of [
+    ["done", (sql: ReturnType<typeof openDb>, id: string) => updateDeadline(sql, id, { status: "done" }, PACIFIC, NOW, TEN)],
+    ["cancel", (sql: ReturnType<typeof openDb>, id: string) => cancelDeadline(sql, id, NOW)],
+  ] as const) {
+    it(`a nudge waiting to retry is withdrawn by ${what} and never re-sent`, async () => {
+      const sql = openDb();
+      const created = await track(sql);
+      if (!("deadline" in created)) throw new Error("no deadline");
+      const first = listReminders(sql)[0];
+      sql.exec("UPDATE reminders SET next_at_ms = ? WHERE id = ?", NOW - 1, first.id);
+      claimDueReminders(sql, NOW, 120_000, "run", 25);
+      handOffReminder(sql, first.id, "run", NOW);
+      finishReminder(sql, first.id, "run", { kind: "retry", atMs: NOW + 1 }, NOW);
+      expect(close(sql, created.deadline.id)).toMatchObject({ nudgesInFlight: 1 });
+      expect(getReminder(sql, first.id)?.status).toBe("withdrawn");
+      expect(claimDueReminders(sql, NOW + 2, 120_000, "run2", 25)).toEqual([]);
+    });
+  }
+
+  it("before every handoff, a nudge whose deadline is no longer open at its revision is withdrawn", async () => {
+    const sql = openDb();
+    await track(sql);
+    const first = listReminders(sql)[0];
+    sql.exec("UPDATE reminders SET next_at_ms = ? WHERE id = ?", Date.parse("2026-12-01T18:00:00.000Z") - 1, first.id);
+    const at = Date.parse("2026-12-01T18:00:00.000Z");
+    const [claimed] = claimDueReminders(sql, at, 120_000, "run", 25);
+    // However the deadline stopped being current, the gate sees it.
+    sql.exec("UPDATE deadlines SET status = 'done'");
+    expect(gateNudge(sql, claimed.id, "run", at)).toBe("withdrawn");
+    expect(getReminder(sql, claimed.id)?.status).toBe("withdrawn");
+    expect(handOffReminder(sql, claimed.id, "run", at)).toBe(false);
   });
 });
 
@@ -229,7 +296,7 @@ describe("quiet hours at delivery", () => {
   it("inside 9:00 to 20:00 on its day, a nudge goes", async () => {
     const at = Date.parse("2026-12-01T18:00:00.000Z");
     const { sql, id } = await dueNudge(at);
-    expect(holdNudgeOutsideWindow(sql, id, "run", at)).toBeNull();
+    expect(gateNudge(sql, id, "run", at)).toBeNull();
     expect(handOffReminder(sql, id, "run", at)).toBe(true);
   });
 
@@ -237,7 +304,7 @@ describe("quiet hours at delivery", () => {
     // 07:00 Pacific on December 1.
     const at = Date.parse("2026-12-01T15:00:00.000Z");
     const { sql, id } = await dueNudge(at);
-    expect(holdNudgeOutsideWindow(sql, id, "run", at)).toBe("deferred");
+    expect(gateNudge(sql, id, "run", at)).toBe("deferred");
     const r = getReminder(sql, id)!;
     expect(r.status).toBe("scheduled");
     expect(claimDueReminders(sql, at, 120_000, "run2", 25)).toEqual([]);
@@ -248,14 +315,14 @@ describe("quiet hours at delivery", () => {
     // 21:00 Pacific on December 1.
     const at = Date.parse("2026-12-02T05:00:00.000Z");
     const { sql, id } = await dueNudge(at);
-    expect(holdNudgeOutsideWindow(sql, id, "run", at)).toBe("missed");
+    expect(gateNudge(sql, id, "run", at)).toBe("missed");
     expect(getReminder(sql, id)?.status).toBe("dropped");
     expect(handOffReminder(sql, id, "run", at)).toBe(false);
   });
 
   it("an ordinary reminder is never held", async () => {
     const sql = openDb();
-    expect(holdNudgeOutsideWindow(sql, "rem-abc", "run", Date.parse("2026-12-02T05:00:00.000Z"))).toBeNull();
+    expect(gateNudge(sql, "rem-abc", "run", Date.parse("2026-12-02T05:00:00.000Z"))).toBeNull();
   });
 });
 
@@ -267,6 +334,28 @@ describe("conversation delete", () => {
     expect(removeDeadlines(sql)).toBe(1);
     expect(listDeadlines(sql)).toEqual([]);
     expect(listReminders(sql).every((r) => r.status === "cancelled")).toBe(true);
+  });
+
+  it("the same letter after a delete is tracked again with a full set of nudges", async () => {
+    const sql = openDb();
+    await track(sql);
+    removeConversationState(sql, NOW, 1);
+    removeDeadlines(sql);
+    const again = await track(sql, letter({ generation: 1 }));
+    expect(again).toMatchObject({ status: "created" });
+    if (!("deadline" in again)) throw new Error("no deadline");
+    expect(again.deadline.nudges.map((n) => n.status)).toEqual(["scheduled", "scheduled", "scheduled", "scheduled"]);
+  });
+
+  it("a nudge identity already taken is an error, never a deadline with no nudges", async () => {
+    const sql = openDb();
+    const input = letter();
+    const id = await deadlineIdFor(input.idempotencyKey);
+    sql.exec(
+      "INSERT INTO reminders(id, text, due_at_ms, generation, status, next_at_ms, created_at_ms) VALUES (?, 'x', 0, 0, 'cancelled', 0, 0)",
+      `nudge:${id}:g0:0:14`,
+    );
+    await expect(track(sql, input)).rejects.toThrow(/nudge/i);
   });
 
   it("a deadline sent under an older generation is refused", async () => {

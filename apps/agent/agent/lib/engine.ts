@@ -59,7 +59,7 @@ export interface EngineApproval {
 
 // Engine's per-person agent state (reminders, turn ledger, approval
 // pointer), shapes as Engine's agent-state routes return them.
-export type ReminderStatus = "scheduled" | "sending" | "sent" | "dropped" | "failed" | "cancelled";
+export type ReminderStatus = "scheduled" | "sending" | "sent" | "dropped" | "failed" | "cancelled" | "withdrawn";
 
 export interface EngineReminder {
   id: string;
@@ -248,6 +248,12 @@ export class PersonEngine {
     if (res.status === 404) {
       await res.body?.cancel().catch(() => undefined);
       return null;
+    }
+    // Engine says what it refused (a date, or a title that does more than
+    // name the task) in words the model can act on.
+    if (res.status === 400) {
+      const out = (await res.json().catch(() => null)) as { error?: unknown } | null;
+      throw new Error(typeof out?.error === "string" ? out.error : "Engine refused that deadline.");
     }
     if (!res.ok) {
       await res.body?.cancel().catch(() => undefined);

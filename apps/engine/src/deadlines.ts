@@ -10,24 +10,34 @@
 // from the person's one delivery wake-up through Channels' agent-send
 // route like every reminder: STOP and closed conversations refuse there,
 // the conversation generation fences it, and its key dedupes a re-send
-// after a crash. On top of that a nudge only goes inside 9:00 to 20:00
-// local on its own day; earlier it waits, later it is dropped, so a count
-// like "in 7 days" is never sent on the wrong day. A nudge only asks
-// ("Want me to start it?"); acting still needs the person's yes on an
-// approval.
+// after a crash. Before every handoff, retries included, a nudge is
+// checked against its deadline: one whose deadline closed, moved or was
+// deleted is withdrawn, never sent. It also only goes inside 9:00 to
+// 20:00 local on its own day; earlier it waits, later it is dropped, so a
+// count like "in 7 days" is never sent on the wrong day.
+//
+// A nudge never carries a letter's own words. Its name comes from a
+// closed set (a known program plus the kind of deadline, "Your CalFresh
+// renewal"), or it says "The deadline from the letter you sent on
+// October 30". The title is kept for the agent, quoted as data, and is
+// refused when it carries a phone number, a link or a request for a
+// secret. A nudge only asks ("Want me to start it?"); acting still needs
+// the person's yes on an approval.
 //
 // Routes, for the person's session or the agent service (contract shared
 // with Mail):
 //   POST   /deadlines       { title, dueDate: "YYYY-MM-DD", program?, source: { kind, documentId?, sentence? },
-//                            idempotencyKey, generation? }. The same key is the same deadline; a new date
+//                            idempotencyKey, generation }. The same key is the same deadline; a new date
 //                            for it answers moved with both dates and replaces the nudges not yet sent.
+//                            generation is the conversation generation the request was prepared under:
+//                            required from a service, 409 when a delete has moved past it. The person's
+//                            own session may leave it out.
 //   GET    /deadlines       open ones first, each with its nudges
 //   PATCH  /deadlines/:id   { dueDate?, title?, status?: "done" } change it, or mark it done
 //   DELETE /deadlines/:id   stop tracking it
 // Tests: test-node/deadlines.test.ts (SQLite) and test/deadlines-routes.test.ts (worker, alarm).
 import {
   AgentStateInputError,
-  cancelReminder,
   createReminder,
   currentGeneration,
   isGeneration,
@@ -52,6 +62,29 @@ const MAX_KEY = 256;
 const MAX_DOCUMENT_ID = 128;
 const MAX_AHEAD_DAYS = 731;
 const DEADLINE_ID = /^dl-[0-9a-f]{32}$/;
+
+// The names a nudge may use. Replaced by the Programs catalog once it lands.
+const KNOWN_PROGRAMS = [
+  "CalFresh", "SNAP", "Medi-Cal", "Medicaid", "Medicare", "WIC", "TANF", "CalWORKs", "SSI", "SSDI", "LIHEAP",
+  "Section 8", "CHIP", "Covered California", "General Assistance",
+];
+const DEADLINE_KINDS: readonly (readonly [RegExp, string])[] = [
+  [/\brecertif/i, "recertification"],
+  [/\brenew/i, "renewal"],
+  [/\binterview/i, "interview"],
+  [/\b(hearing|appeal)/i, "hearing"],
+  [/\b(payment|pay|premium)\b/i, "payment"],
+  [/\b(documents?|verification|proof|paperwork)\b/i, "documents"],
+];
+
+// What a title or program may not carry: contact details, links, and
+// requests for secrets or for the person to act.
+const UNSAFE = [
+  /(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/,
+  /\b\d{3}-?\d{2}-?\d{4}\b/,
+  /https?:|www\.|\b[a-z0-9-]+\.(?:com|org|net|gov|us|info|io|co|biz|me|app|site|online|xyz|link)\b/i,
+  /\b(?:ssn|social security|password|passwords|passcode|card|cards|pin|pins|send|call|wire|gift)\b/i,
+];
 
 export type DeadlineStatus = "open" | "done" | "cancelled";
 export type SourceKind = "letter" | "case" | "person";
@@ -97,8 +130,8 @@ export interface Deadline {
   previousDueDate: string | null;
   createdAt: string;
   updatedAt: string;
-  // Every nudge but the ones withdrawn before they went: what was sent,
-  // dropped or is still to come.
+  // Every nudge but the ones withdrawn: what was sent, dropped or is
+  // still to come.
   nudges: NudgeView[];
 }
 
@@ -236,11 +269,37 @@ export function planNudges(dueDate: string, timeZone: string, nowMs: number, tim
   return ahead;
 }
 
-export function nudgeText(title: string, daysBefore: number, dueDate: string): string {
-  const name = title.replace(/^your\s+/i, "");
-  const [, m, d] = dueDate.split("-").map(Number);
-  const when = daysBefore === 0 ? "today" : daysBefore === 1 ? "tomorrow" : `in ${daysBefore} days, on ${MONTHS[m - 1]} ${d}`;
-  return `Your ${name} is due ${when}. Want me to start it?`;
+function monthDay(date: string): string {
+  const [, m, d] = date.split("-").map(Number);
+  return `${MONTHS[m - 1]} ${d}`;
+}
+
+function knownProgram(...texts: (string | null | undefined)[]): string | null {
+  for (const text of texts) {
+    if (!text) continue;
+    const found = KNOWN_PROGRAMS.find((p) => new RegExp(`(^|[^A-Za-z-])${p.replace(/[-\s]/g, "[-\\s]?")}($|[^A-Za-z-])`, "i").test(text));
+    if (found) return found;
+  }
+  return null;
+}
+
+// Only closed-set words and dates: never the letter's own text.
+export function nudgeText(
+  d: { title: string; program: string | null; sourceKind: SourceKind; learnedOn: string },
+  daysBefore: number,
+  dueDate: string,
+): string {
+  const kind = DEADLINE_KINDS.find(([pattern]) => pattern.test(d.title))?.[1] ?? null;
+  const program = knownProgram(d.program, d.title);
+  const when = daysBefore === 0 ? "today" : daysBefore === 1 ? "tomorrow" : `in ${daysBefore} days, on ${monthDay(dueDate)}`;
+  if (kind) return `Your ${program ? `${program} ` : ""}${kind} is due ${when}. Want me to start it?`;
+  const name =
+    d.sourceKind === "letter"
+      ? `The deadline from the letter you sent on ${monthDay(d.learnedOn)}`
+      : d.sourceKind === "person"
+        ? `The deadline you told me about on ${monthDay(d.learnedOn)}`
+        : "The deadline on your case";
+  return `${name} is ${when}. Want me to start it?`;
 }
 
 // Input. Throws AgentStateInputError, which the routes answer with 400.
@@ -253,6 +312,14 @@ function object(raw: unknown): Record<string, unknown> {
 function text(value: unknown, field: string, max: number): string {
   const cleaned = typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim() : "";
   if (!cleaned || cleaned.length > max) throw new AgentStateInputError(`${field} must be 1 to ${max} characters.`);
+  return cleaned;
+}
+
+function name(value: unknown, field: string, max: number): string {
+  const cleaned = text(value, field, max);
+  if (UNSAFE.some((pattern) => pattern.test(cleaned))) {
+    throw new AgentStateInputError(`${field} must only name the task: no phone numbers, links, or requests to send, call or give details.`);
+  }
   return cleaned;
 }
 
@@ -275,12 +342,12 @@ export function parseDeadlineInput(raw: unknown): DeadlineInput {
     throw new AgentStateInputError(`idempotencyKey must be 1 to ${MAX_KEY} characters.`);
   }
   const input: DeadlineInput = {
-    title: text(f.title, "title", MAX_TITLE),
+    title: name(f.title, "title", MAX_TITLE),
     dueDate: dueDateOf(f.dueDate),
     source,
     idempotencyKey: f.idempotencyKey,
   };
-  if (f.program !== undefined && f.program !== null) input.program = text(f.program, "program", MAX_PROGRAM);
+  if (f.program !== undefined && f.program !== null) input.program = name(f.program, "program", MAX_PROGRAM);
   if (f.generation !== undefined) {
     if (!isGeneration(f.generation)) throw new AgentStateInputError("generation must be a whole number, 0 or more.");
     input.generation = f.generation;
@@ -291,7 +358,7 @@ export function parseDeadlineInput(raw: unknown): DeadlineInput {
 export function parseDeadlinePatch(raw: unknown): DeadlinePatch {
   const f = object(raw);
   const patch: DeadlinePatch = {};
-  if (f.title !== undefined) patch.title = text(f.title, "title", MAX_TITLE);
+  if (f.title !== undefined) patch.title = name(f.title, "title", MAX_TITLE);
   if (f.dueDate !== undefined) patch.dueDate = dueDateOf(f.dueDate);
   if (f.status !== undefined) {
     if (f.status !== "done") throw new AgentStateInputError('status can only be "done".');
@@ -349,7 +416,7 @@ function view(sql: SqlExec, r: Row): Deadline {
   const nudges = sql
     .exec(
       "SELECT n.reminder_id, n.days_before, r.due_at_ms, r.status, r.text FROM deadline_nudges n JOIN reminders r ON r.id = n.reminder_id" +
-        " WHERE n.deadline_id = ? AND r.status != 'cancelled' ORDER BY r.due_at_ms, n.reminder_id",
+        " WHERE n.deadline_id = ? AND r.status NOT IN ('cancelled', 'withdrawn') ORDER BY r.due_at_ms, n.reminder_id",
       r.id,
     )
     .toArray() as { reminder_id: string; days_before: number; due_at_ms: number; status: ReminderStatus; text: string }[];
@@ -379,35 +446,54 @@ export function listDeadlines(sql: SqlExec): Deadline[] {
   return rows.map((r) => view(sql, r));
 }
 
+export class NudgeConflictError extends Error {
+  override name = "NudgeConflictError";
+}
+
 // Nudges for the deadline's current revision, under the conversation
-// generation current now. IDs carry the revision, so a moved date never
-// collides with the nudges it replaced.
+// generation current now. IDs carry both, so neither a moved date nor the
+// same letter tracked again after a delete can land on an old nudge. A
+// nudge that cannot be created new is an error that rolls the change back.
 function scheduleNudges(sql: SqlExec, r: Row, nowMs: number, time: NudgeTime): void {
   const generation = currentGeneration(sql);
+  const naming = {
+    title: r.title,
+    program: r.program,
+    sourceKind: (JSON.parse(r.source_json) as DeadlineSource).kind,
+    learnedOn: wall(Number(r.created_at_ms), r.time_zone).date,
+  };
   for (const n of planNudges(r.due_date, r.time_zone, nowMs, time)) {
-    const reminderId = `${NUDGE_PREFIX}${r.id}:${r.revision}:${n.daysBefore}`;
-    createReminder(sql, { id: reminderId, text: nudgeText(r.title, n.daysBefore, r.due_date), dueAtMs: n.atMs, generation }, nowMs);
+    const reminderId = `${NUDGE_PREFIX}${r.id}:g${generation}:${r.revision}:${n.daysBefore}`;
+    const made = createReminder(sql, { id: reminderId, text: nudgeText(naming, n.daysBefore, r.due_date), dueAtMs: n.atMs, generation }, nowMs);
+    if (!("created" in made) || !made.created) throw new NudgeConflictError(`Nudge ${reminderId} could not be created.`);
     sql.exec(
-      "INSERT OR IGNORE INTO deadline_nudges(reminder_id, deadline_id, revision, days_before, window_start_ms, window_end_ms) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO deadline_nudges(reminder_id, deadline_id, revision, days_before, window_start_ms, window_end_ms) VALUES (?, ?, ?, ?, ?, ?)",
       reminderId, r.id, r.revision, n.daysBefore, n.windowStartMs, n.windowEndMs,
     );
   }
 }
 
-// Withdraws every nudge not yet handed to Channels. Returns how many
-// were already handed off: those may still land and are never called back.
-function stopNudges(sql: SqlExec, deadlineId: string, nowMs: number): number {
-  const ids = sql.exec("SELECT reminder_id FROM deadline_nudges WHERE deadline_id = ?", deadlineId).toArray() as { reminder_id: string }[];
-  let inFlight = 0;
-  for (const { reminder_id } of ids) {
-    const out = cancelReminder(sql, reminder_id, nowMs);
-    if (out.reason === "already on its way" && out.reminder?.status === "sending") inFlight += 1;
-  }
+// Stops every nudge that has not settled: one never handed off is
+// cancelled, one handed off and waiting on Channels or a retry is
+// withdrawn, so no later run hands it off again. Returns how many were
+// withdrawn: Channels may already have delivered those.
+function stopNudges(sql: SqlExec, deadlineId: string | null, nowMs: number): number {
+  const scope = deadlineId === null ? "" : " WHERE deadline_id = ?";
+  const args = deadlineId === null ? [] : [deadlineId];
+  const ours = `id IN (SELECT reminder_id FROM deadline_nudges${scope})`;
+  const inFlight = Number(
+    (sql.exec(`SELECT COUNT(*) AS n FROM reminders WHERE ${ours} AND status = 'sending'`, ...args).toArray()[0] as { n: number }).n,
+  );
+  sql.exec(
+    "UPDATE reminders SET status = CASE WHEN status = 'sending' THEN 'withdrawn' ELSE 'cancelled' END, finished_at_ms = ?" +
+      ` WHERE ${ours} AND status IN ('scheduled', 'claimed', 'sending')`,
+    nowMs, ...args,
+  );
   return inFlight;
 }
 
 function revise(sql: SqlExec, r: Row, next: { title: string; dueDate: string; timeZone: string }, nowMs: number, time: NudgeTime): DeadlineResult {
-  stopNudges(sql, r.id, nowMs);
+  const nudgesInFlight = stopNudges(sql, r.id, nowMs);
   const moved = next.dueDate !== r.due_date;
   sql.exec(
     "UPDATE deadlines SET title = ?, due_date = ?, previous_due_date = ?, time_zone = ?, revision = revision + 1, updated_at_ms = ? WHERE id = ?",
@@ -416,8 +502,8 @@ function revise(sql: SqlExec, r: Row, next: { title: string; dueDate: string; ti
   const updated = row(sql, r.id)!;
   scheduleNudges(sql, updated, nowMs, time);
   return moved
-    ? { status: "moved", deadline: view(sql, updated), moved: { from: r.due_date, to: next.dueDate } }
-    : { status: "updated", deadline: view(sql, updated) };
+    ? { status: "moved", deadline: view(sql, updated), moved: { from: r.due_date, to: next.dueDate }, nudgesInFlight }
+    : { status: "updated", deadline: view(sql, updated), nudgesInFlight };
 }
 
 export function trackDeadline(
@@ -480,25 +566,43 @@ function close(sql: SqlExec, r: Row, status: "done" | "cancelled", nowMs: number
 }
 
 // A conversation delete removes the deadlines with everything else Mano
-// kept; removeConversationState has already withdrawn their nudges.
-export function removeDeadlines(sql: SqlExec): number {
+// kept, after stopping every nudge removeConversationState left in flight.
+export function removeDeadlines(sql: SqlExec, nowMs = Date.now()): number {
   const n = Number((sql.exec("SELECT COUNT(*) AS n FROM deadlines").toArray()[0] as { n: number }).n);
+  stopNudges(sql, null, nowMs);
   sql.exec("DELETE FROM deadline_nudges");
   sql.exec("DELETE FROM deadlines");
   return n;
 }
 
-// Quiet hours, checked by the delivery run on each claimed reminder
-// before its handoff. null: not a nudge, or inside its window, so it
-// goes. deferred: too early, it waits for 9:00 (a nudge already handed
-// off stays sending). missed: its day's window closed, so it is dropped.
-// Either way the run does not send it.
-export function holdNudgeOutsideWindow(sql: SqlExec, reminderId: string, token: string, nowMs: number): "deferred" | "missed" | null {
+// The check a delivery run makes on each claimed reminder right before
+// its handoff, first sends and retries alike, in the same synchronous
+// step as the handoff. null: not a nudge, or a current one inside its
+// window, so it goes. withdrawn: its deadline is gone, closed, or at a
+// newer revision. deferred: too early, it waits for 9:00 (one already
+// handed off stays sending). missed: its day's window closed, so it is
+// dropped. The run sends none of these.
+export function gateNudge(sql: SqlExec, reminderId: string, token: string, nowMs: number): "withdrawn" | "deferred" | "missed" | null {
   if (!isNudge(reminderId)) return null;
-  const w = sql.exec("SELECT window_start_ms, window_end_ms FROM deadline_nudges WHERE reminder_id = ?", reminderId).toArray()[0] as
-    | { window_start_ms: number; window_end_ms: number }
+  const w = sql
+    .exec(
+      "SELECT n.window_start_ms, n.window_end_ms, n.revision, d.status, d.revision AS current_revision" +
+        " FROM deadline_nudges n LEFT JOIN deadlines d ON d.id = n.deadline_id WHERE n.reminder_id = ?",
+      reminderId,
+    )
+    .toArray()[0] as
+    | { window_start_ms: number; window_end_ms: number; revision: number; status: DeadlineStatus | null; current_revision: number | null }
     | undefined;
-  if (!w || (nowMs >= Number(w.window_start_ms) && nowMs < Number(w.window_end_ms))) return null;
+  const settle = (status: "withdrawn" | "dropped") =>
+    sql.exec(
+      "UPDATE reminders SET status = ?, finished_at_ms = ? WHERE id = ? AND claim_token = ? AND status IN ('claimed', 'sending')",
+      status, nowMs, reminderId, token,
+    );
+  if (!w || w.status !== "open" || Number(w.current_revision) !== Number(w.revision)) {
+    settle("withdrawn");
+    return "withdrawn";
+  }
+  if (nowMs >= Number(w.window_start_ms) && nowMs < Number(w.window_end_ms)) return null;
   if (nowMs < Number(w.window_start_ms)) {
     sql.exec(
       "UPDATE reminders SET status = CASE WHEN handoffs = 0 THEN 'scheduled' ELSE status END, next_at_ms = ?," +
@@ -508,10 +612,7 @@ export function holdNudgeOutsideWindow(sql: SqlExec, reminderId: string, token: 
     );
     return "deferred";
   }
-  sql.exec(
-    "UPDATE reminders SET status = 'dropped', finished_at_ms = ? WHERE id = ? AND claim_token = ? AND status IN ('claimed', 'sending')",
-    nowMs, reminderId, token,
-  );
+  settle("dropped");
   return "missed";
 }
 
@@ -528,11 +629,14 @@ const NOT_FOUND = () => Response.json({ error: "Deadline not found." }, { status
 const STALE = () =>
   Response.json({ error: "This conversation was deleted after the request was prepared. Nothing was written." }, { status: 409 });
 
+// generationRequired: the caller is a service, which must name the
+// conversation generation it prepared a new deadline under.
 export async function routeDeadlines(
   calls: DeadlineCalls,
   method: string,
   rest: string,
   readBody: () => Promise<unknown>,
+  opts: { generationRequired: boolean },
 ): Promise<Response | null> {
   const one = rest.match(/^\/deadlines\/([^/]+)$/);
   if (rest !== "/deadlines" && !one) return null;
@@ -540,7 +644,11 @@ export async function routeDeadlines(
     if (rest === "/deadlines") {
       if (method === "GET") return Response.json({ deadlines: await calls.list() });
       if (method !== "POST") return null;
-      const out = await calls.track(parseDeadlineInput(await readBody()));
+      const input = parseDeadlineInput(await readBody());
+      if (opts.generationRequired && input.generation === undefined) {
+        throw new AgentStateInputError("Body needs the conversation generation it was prepared under.");
+      }
+      const out = await calls.track(input);
       if ("stale" in out) return STALE();
       return Response.json(out, { status: out.status === "created" ? 201 : 200 });
     }

@@ -51,10 +51,23 @@ export function parseDueDate(words: string, nowMs: number): string | null {
   return null;
 }
 
-// One deadline per turn and date: a retried turn lands on the one it
-// made, whatever words the retry used for its title.
-export function personDeadlineKey(turnId: string, dueDate: string): string {
-  return `person:${createHash("sha256").update(`${turnId}\n${dueDate}`).digest("hex").slice(0, 40)}`;
+// The words that name a task, without filler, so "the CalFresh renewal"
+// and "CalFresh renewal" are one task.
+const FILLER = new Set(["a", "an", "the", "my", "your", "our", "their", "his", "her", "for", "of", "to"]);
+
+export function taskWords(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .split(" ")
+    .filter((w) => w && !FILLER.has(w))
+    .join(" ");
+}
+
+// One deadline per turn, date and task: a retried turn lands on the one
+// it made, and two tasks due the same day stay two.
+export function personDeadlineKey(turnId: string, dueDate: string, title: string): string {
+  return `person:${createHash("sha256").update(`${turnId}\n${dueDate}\n${taskWords(title)}`).digest("hex").slice(0, 40)}`;
 }
 
 export function daysLeft(deadline: EngineDeadline, nowMs: number): number {

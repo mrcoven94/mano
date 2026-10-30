@@ -82,6 +82,7 @@ const renewal = (over: Record<string, unknown> = {}) => ({
   program: "CalFresh",
   source: { kind: "letter", documentId: "doc-1", sentence: "Return your renewal form by the date above." },
   idempotencyKey: "letter:doc-1:renewal",
+  generation: 0,
   ...over,
 });
 
@@ -127,6 +128,20 @@ describe("the deadlines contract", () => {
     expect((await call(h, "POST", "/deadlines", { ...renewal(), dueDate: "next week" })).status).toBe(400);
   });
 
+  it("a service must say which conversation generation it prepared the deadline under", async () => {
+    const h = handle("dl-generation");
+    recordChannels();
+    const { generation: _omitted, ...withoutGeneration } = renewal();
+    const missing = await call(h, "POST", "/deadlines", withoutGeneration);
+    expect(missing.status).toBe(400);
+    expect(((await missing.json()) as { error: string }).error).toMatch(/generation/);
+    // Sol's reproduction: a letter read before a delete arrives after it.
+    await call(h, "DELETE", "/conversation", { generation: 1 }, { token: CHANNELS_TOKEN });
+    expect((await call(h, "POST", "/deadlines", renewal({ generation: 0 }))).status).toBe(409);
+    expect(((await (await call(h, "GET", "/deadlines")).json()) as Listed).deadlines).toEqual([]);
+    expect((await call(h, "POST", "/deadlines", renewal({ generation: 1 }))).status).toBe(201);
+  });
+
   it("a moved date answers moved with both dates", async () => {
     const h = handle("dl-moved");
     recordChannels();
@@ -145,6 +160,14 @@ describe("the deadlines contract", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(own.status).toBe(200);
+    // The person's own session writes under the current generation.
+    const { generation: _g, ...noGeneration } = renewal({ idempotencyKey: "person:own" });
+    const ownPost = await SELF.fetch(`https://engine.test/api/persons/${personIdForHandle(h)}/deadlines`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(noGeneration),
+    });
+    expect(ownPost.status).toBe(201);
     const done = await SELF.fetch(`https://engine.test/api/persons/${personIdForHandle(h)}/deadlines/${created.deadline.id}`, {
       method: "PATCH",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -167,12 +190,12 @@ describe("nudges go out by themselves", () => {
     const h = handle("dl-alarm");
     const channels = recordChannels();
     await call(h, "DELETE", "/conversation", { generation: 3 }, { token: CHANNELS_TOKEN });
-    await call(h, "POST", "/deadlines", renewal({ dueDate: inDays(14) }));
+    await call(h, "POST", "/deadlines", renewal({ dueDate: inDays(14), generation: 3 }));
     await makeFirstNudgeDue(h);
     await until(() => channels.delivered.length > 0);
     expect(channels.delivered).toHaveLength(1);
     expect(channels.delivered[0]).toMatchObject({ generation: 3 });
-    expect(channels.delivered[0].key).toMatch(/^reminder:nudge:dl-[0-9a-f]{32}:0:1[34]$/);
+    expect(channels.delivered[0].key).toMatch(/^reminder:nudge:dl-[0-9a-f]{32}:g3:0:1[34]$/);
     expect(channels.delivered[0].text).toMatch(/^Your CalFresh renewal is due in 1[34] days, on [A-Z][a-z]+ \d{1,2}\. Want me to start it\?$/);
     await settled(h);
     expect(await firstNudgeStatus(h)).toBe("sent");
@@ -209,6 +232,27 @@ describe("nudges go out by themselves", () => {
     expect(channels.posts).toEqual([]);
     const list = (await (await call(h, "GET", "/deadlines")).json()) as Listed;
     expect(list.deadlines[0].nudges.map((n) => n.status)).toEqual(["dropped", "scheduled", "scheduled", "scheduled"]);
+  });
+
+  it("a nudge Channels refused for budget is never re-sent after the deadline is done", async () => {
+    const h = handle("dl-budget");
+    const channels = recordChannels(() => Response.json({ sent: false, reason: "budget" }, { status: 429 }));
+    const created = (await (await call(h, "POST", "/deadlines", renewal({ dueDate: inDays(20) }))).json()) as { deadline: { id: string } };
+    await makeFirstNudgeDue(h);
+    await until(() => channels.posts.length > 0);
+    await until(async () => {
+      const row = await runInDurableObject(stubFor(h), (_i, state) =>
+        state.storage.sql.exec("SELECT claim_token FROM reminders WHERE status = 'sending'").toArray(),
+      );
+      return row.length === 1 && (row[0] as { claim_token: unknown }).claim_token === null;
+    });
+    const done = await call(h, "PATCH", `/deadlines/${created.deadline.id}`, { status: "done" });
+    expect(await done.json()).toMatchObject({ status: "done", nudgesInFlight: 1 });
+    await runInDurableObject(stubFor(h), async (instance, state) => {
+      state.storage.sql.exec("UPDATE reminders SET next_at_ms = ?, claimed_at_ms = 0", Date.now() - 1);
+      await (instance as PersonAgent).deliverDueReminders();
+    });
+    expect(channels.posts).toHaveLength(1);
   });
 
   it("done after the letter stops every nudge before it goes", async () => {
@@ -269,7 +313,7 @@ describe("conversation delete", () => {
     await call(h, "POST", "/deadlines", renewal());
     await call(h, "DELETE", "/conversation", { generation: 1 }, { token: CHANNELS_TOKEN });
     expect(((await (await call(h, "GET", "/deadlines")).json()) as Listed).deadlines).toEqual([]);
-    await call(h, "POST", "/deadlines", renewal({ idempotencyKey: "letter:doc-2:renewal" }));
+    await call(h, "POST", "/deadlines", renewal({ idempotencyKey: "letter:doc-2:renewal", generation: 1 }));
     await call(h, "DELETE", "/conversation", { generation: 1 }, { token: CHANNELS_TOKEN });
     expect(((await (await call(h, "GET", "/deadlines")).json()) as Listed).deadlines).toHaveLength(1);
   });

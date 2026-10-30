@@ -57,7 +57,14 @@ describe("deadline tools", () => {
     expect(first).toMatchObject({ title: "CalFresh renewal", dueDate: "2026-11-12", status: "created" });
     const again = await trackDeadline.execute({ ...input, title: "the CalFresh renewal" }, ctx("turn_dl_0001"));
     expect(again).toMatchObject({ deadlineId: first.deadlineId, status: "updated" });
+    // Engine keeps the newest wording; the nudge name comes from its closed set either way.
     expect(engine.deadlinesOf(PERSON)).toHaveLength(1);
+  });
+
+  it("two tasks due the same day in one turn stay two deadlines", async () => {
+    await trackDeadline.execute({ title: "CalFresh renewal", due: "November 12" }, ctx("turn_dl_0020"));
+    await trackDeadline.execute({ title: "Medi-Cal interview", due: "November 12" }, ctx("turn_dl_0020"));
+    expect(engine.deadlinesOf(PERSON).map((d) => d.title).sort()).toEqual(["CalFresh renewal", "Medi-Cal interview"]);
   });
 
   it("lists what is coming up, moves a date, marks one done and cancels another", async () => {

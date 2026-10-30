@@ -156,6 +156,7 @@ try {
     program: "CalFresh",
     source: { kind: "letter", documentId: "synthetic-letter-1", sentence: "Return your renewal by the date above." },
     idempotencyKey: "letter:synthetic-letter-1:renewal",
+    generation: 0,
   });
   console.log(`tracked: ${created.status} ${created.body.status}, nudges ${JSON.stringify(created.body.deadline.nudges.map((n) => [n.daysBefore, n.at]))}`);
   expect(created.status === 201, "POST /deadlines created the deadline");
@@ -179,6 +180,7 @@ try {
     dueDate: addDays(two.today, 12),
     source: { kind: "letter", documentId: "synthetic-letter-2" },
     idempotencyKey: "letter:synthetic-letter-2:renewal",
+    generation: 0,
   });
   const nudge = tracked.body.deadline.nudges[0];
   const key = `reminder:${nudge.reminderId}`;
