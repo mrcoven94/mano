@@ -36,7 +36,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { EYES, allowedTapback, crisisLineFor, crisisTurn, decideCrisis, eyesAllowed, guardReply, isOneHealthQuestion, type CrisisCheck } from "@mano/persona";
+import { EYES, allowedTapback, crisisLineFor, crisisTurn, decideCrisis, eyesAllowed, guardReply, type CrisisCheck } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -662,13 +662,19 @@ export class ConversationRunner {
     try {
       await this.runGuarded(async () => {
         for (const group of partitionByChat(pending, store.meta().chatId)) {
-          // A message the keyword floor calls a crisis is one on every
-          // chunk. Only one short health question is left for the turn to
-          // decide with the model check; it is never split.
+          // One crisis decision on the whole message, before any split, and
+          // the same decision on every chunk (Sol's fourth review): a split
+          // can never cut a crisis word into pieces nobody checks.
           const groupText = rejoinPieces(group);
-          const groupCrisis = crisisTurn(groupText) && !isOneHealthQuestion(groupText);
+          // The decoration epoch is read before this first await, so a STOP
+          // or close during the check is never missed by the turn.
+          const epoch = store.meta().decorationEpoch;
+          const decision = await decideCrisis(groupText, this.deps.crisisCheck ?? null);
+          if (decision.reason !== "floor") {
+            logger.info("crisis_check", { handle: this.logHandle(), crisis: decision.crisis, reason: decision.reason, ms: decision.ms });
+          }
           for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP)) {
-            const items = groupCrisis ? chunk.map((item) => ({ ...item, crisis: true })) : chunk;
+            const items = chunk.map((item) => ({ ...item, crisis: decision.crisis }));
             const turnMeta = store.meta();
             const turn = turnMeta.turn + 1;
             store.patchMeta({ turn });
@@ -688,7 +694,7 @@ export class ConversationRunner {
                 createdAtMs: nowMs(),
                 updatedAtMs: nowMs(),
               });
-              await this.runTurnBody(turn, items, null, generation);
+              await this.runTurnBody(turn, items, null, generation, epoch);
               this.finishTurnRow(turn, items);
             } catch (err) {
               if (err instanceof GenerationStopped) throw err;
@@ -946,13 +952,16 @@ export class ConversationRunner {
     items: import("./store.js").PendingInbound[],
     resumed: import("./store.js").PersistedTurn | null,
     generation: number,
+    // The decoration epoch read before the turn's first await; a resumed
+    // turn reads it now.
+    startEpoch?: number,
   ): Promise<void> {
     const { store, logger, nowMs, config } = this.deps;
     this.checkGeneration(generation);
     const meta = store.meta();
     // Captured before the turn's first await and carried everywhere: a
     // decoration this turn schedules sends only while it still holds.
-    const epoch = meta.decorationEpoch;
+    const epoch = startEpoch ?? meta.decorationEpoch;
     const chatId = resumed?.chatId ?? [...items].reverse().find((i) => i.chatId)?.chatId ?? meta.chatId;
     const to = resumed?.to ?? [...items].reverse().find((i) => i.to)?.to ?? meta.to;
     if (!chatId && !to) {
@@ -975,17 +984,13 @@ export class ConversationRunner {
     // admission and any model work, on the whole message even when the
     // buffer split it. It is broad on purpose: a match makes the reply
     // name 988 and 911, and over-triggering is accepted.
-    // The keyword floor decides, except that one short health question
-    // goes to the model check, where only an exact "no" exempts it. The
-    // epoch was captured above, before this first await.
-    const decision = items.some((i) => i.crisis === true)
-      ? { crisis: true, reason: "floor" as const, ms: 0 }
-      : await decideCrisis(texts.join("\n"), this.deps.crisisCheck ?? null);
-    if (decision.reason !== "floor") {
-      logger.info("crisis_check", { handle: this.logHandle(), turn, crisis: decision.crisis, reason: decision.reason, ms: decision.ms });
-    }
-    this.checkGeneration(generation);
-    const crisis = decision.crisis;
+    // The decision was made once on the whole message before it was
+    // split, and every chunk carries it. A turn persisted before that
+    // (no decision on its items) takes the keyword floor, which errs
+    // toward crisis.
+    const crisis = items.every((i) => typeof i.crisis === "boolean")
+      ? items.some((i) => i.crisis === true)
+      : crisisTurn(texts.join("\n"));
     // A crisis turn never sends the friendly intro, and later turns do not
     // send it either.
     if (crisis && !meta.introduced) store.patchMeta({ introduced: true });

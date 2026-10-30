@@ -10,7 +10,7 @@
 //   exempt, which must be exactly the one-short-health-question set.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { crisisTurn, decideCrisis, isOneHealthQuestion, type CrisisCheck } from "../src/crisis.js";
+import { crisisTurn, decideCrisis, isOneHealthQuestion, mentionsInstructions, type CrisisCheck } from "../src/crisis.js";
 
 interface Row {
   text: string;
@@ -24,12 +24,12 @@ const always = (answer: string): CrisisCheck => ({ live: true, ask: async () => 
 
 describe("the crisis decision on a fixed list of strings", () => {
   it("covers the whole comparison", () => {
-    expect(rows.length).toBeGreaterThanOrEqual(2090);
+    expect(rows.length).toBeGreaterThanOrEqual(2110);
   });
 
   it("gives every string its recorded floor and gate", () => {
     expect(rows.filter((r) => crisisTurn(r.text) !== r.crisis).map((r) => r.text)).toEqual([]);
-    expect(rows.filter((r) => (r.crisis && isOneHealthQuestion(r.text)) !== r.oneQuestion).map((r) => r.text)).toEqual([]);
+    expect(rows.filter((r) => (r.crisis && isOneHealthQuestion(r.text) && !mentionsInstructions(r.text)) !== r.oneQuestion).map((r) => r.text)).toEqual([]);
   });
 
   it("with a check that always says yes, equals the floor and drops no crisis main catches", async () => {

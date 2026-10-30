@@ -4,9 +4,8 @@
 // model ID only, with store: false, through the same Responses API and AI
 // Gateway as the replies (AGENTS.md rule 7). A -contributor ID is refused.
 // It never logs the message.
-import { CRISIS_CHECK_INSTRUCTIONS, type CrisisCheck } from "@mano/persona";
+import { CRISIS_CHECK_INSTRUCTIONS, crisisCheckInput, type CrisisCheck } from "@mano/persona";
 import { boundFetch } from "./fetch.js";
-import { extractOutputText } from "./responder.js";
 
 export interface ModelCrisisCheckOptions {
   apiKey: string;
@@ -42,7 +41,8 @@ export class ModelCrisisCheck implements CrisisCheck {
   // The answer has 2 seconds (decideCrisis). The model sometimes takes
   // longer or returns nothing, so a second identical request goes out
   // after hedgeAfterMs; the first non-empty answer wins and the other is
-  // cancelled. An empty answer is not an answer.
+  // cancelled. An empty answer is not an answer. Anything but a clean
+  // "no" comes back as "yes", so it decides at once, as a crisis.
   async ask(text: string, signal: AbortSignal): Promise<string> {
     const controllers = [new AbortController(), new AbortController()];
     const cancelAll = () => controllers.forEach((c) => c.abort());
@@ -77,7 +77,7 @@ export class ModelCrisisCheck implements CrisisCheck {
       body: JSON.stringify({
         model: this.model,
         instructions: CRISIS_CHECK_INSTRUCTIONS,
-        input: [{ role: "user", content: text }],
+        input: [{ role: "user", content: crisisCheckInput(text) }],
         store: false,
         // Room for the model's reasoning tokens; a small cap returns no text.
         max_output_tokens: 512,
@@ -85,6 +85,29 @@ export class ModelCrisisCheck implements CrisisCheck {
       }),
     });
     if (!res.ok) throw new Error(`crisis check failed: ${res.status}`);
-    return extractOutputText(await res.json());
+    return classifierAnswer(await res.json().catch(() => null));
   }
+}
+
+// Written for this check alone, not the general extractor (Sol's fourth
+// review): "no" only for a completed response with exactly one assistant
+// message item holding exactly one output_text part that says "no".
+// Reasoning items may sit beside it; text anywhere else never counts. An
+// empty message is no answer (the hedge may still bring one); every other
+// shape is "yes".
+export function classifierAnswer(data: unknown): string {
+  if (!isRecord(data) || data.status !== "completed" || !Array.isArray(data.output)) return "yes";
+  const messages = data.output.filter((item) => isRecord(item) && item.type === "message");
+  if (messages.length !== 1) return "yes";
+  const message = messages[0] as Record<string, unknown>;
+  if (message.role !== "assistant" || !Array.isArray(message.content) || message.content.length !== 1) return "yes";
+  const part = message.content[0];
+  if (!isRecord(part) || part.type !== "output_text" || typeof part.text !== "string") return "yes";
+  const text = part.text.trim();
+  if (text === "") return "";
+  return text === "no" ? "no" : "yes";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

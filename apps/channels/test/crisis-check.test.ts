@@ -59,3 +59,27 @@ describe("the worker builds the check only on a Standard model with a key", () =
     expect(buildCrisisCheck({ META_MODEL_API_KEY: "test-key-not-real", MANO_REPLY_MODEL: "muse-spark-1.3" } as never)?.live).toBe(true);
   });
 });
+
+describe("one decision on the whole message, before any split (Sol's fourth review, 1)", () => {
+  it("keeps every chunk of a long crisis message a crisis, and never asks the model", async () => {
+    const c = check("no");
+    const h = makeHarness({ replies: ["part one", "part two"], crisisCheck: c });
+    h.store.patchMeta({ introduced: true });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_long", text: "Can " + "a".repeat(3993) + " suicide?", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    await h.runner.runDueTurn();
+    for (let i = 0; i < 3 && h.store.pending().length > 0; i++) await h.runner.runDueTurn();
+    const lines = h.channel.sends.filter((s) => s.text === CRISIS_LINE);
+    expect(h.store.recentTurns(5).length).toBeGreaterThanOrEqual(2);
+    expect(lines.length).toBe(h.store.recentTurns(5).length);
+    expect(c.asked).toEqual([]);
+  });
+
+  it("asks once for a short question, before the turn, and carries the answer", async () => {
+    const c = check("no");
+    const h = makeHarness({ replies: ["a doctor can tell you"], crisisCheck: c });
+    h.store.patchMeta({ introduced: true });
+    expect(await say(h, "evt_1", QUESTION)).toEqual(["a doctor can tell you"]);
+    expect(c.asked).toHaveLength(1);
+  });
+});
