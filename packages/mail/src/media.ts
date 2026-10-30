@@ -1,3 +1,4 @@
+/// <reference path="./heic-decode.d.ts" />
 // Media handling: photo decode (JPEG, PNG, WebP, HEIC), video frame
 // extraction (ffmpeg), sharpness scoring, page crop and straightening,
 // and box geometry for tracking detections across frames.

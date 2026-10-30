@@ -323,6 +323,39 @@ export class PersonEngine {
   async reject(approvalId: string): Promise<EngineResult> {
     return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/reject`));
   }
+
+  // A photo Channels stored for this person, or null when Engine has none.
+  async getDocument(documentId: string): Promise<Uint8Array | null> {
+    const res = await this.call("GET", `/documents/${encodeURIComponent(documentId)}`);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  // Holds a deadline. "unavailable" when Engine has no deadlines route
+  // yet (404); the same idempotency key is the same deadline.
+  async saveDeadline(input: DeadlineInput): Promise<"saved" | "unavailable"> {
+    const res = await this.call("POST", "/deadlines", { ...input, generation: this.generation });
+    await res.body?.cancel().catch(() => undefined);
+    if (res.status === 404) return "unavailable";
+    if (!res.ok) throw new EngineError(res.status);
+    return "saved";
+  }
+}
+
+// A deadline held from a letter, as the Deadlines contract names it.
+export interface DeadlineInput {
+  title: string;
+  dueDate: string;
+  program?: string;
+  source: { kind: "letter"; documentId: string; sentence: string };
+  idempotencyKey: string;
 }
 
 export interface Engine {

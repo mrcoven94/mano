@@ -19,12 +19,17 @@ import { createHash } from "node:crypto";
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
+import { createModelClient, type ModelClient } from "@mano/mail";
+
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
+import { readTextedPhotos, type TextedPhoto } from "./letters.js";
 import { closeReplaced, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 
 const MAX_TEXTS = 10;
 const MAX_TEXT_CHARS = 4000;
+const MAX_PHOTOS = 10;
+const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,200}$/;
 // Engine's identity rule for turn IDs.
 const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9:_-]{7,127}$/;
 // A person quiet this long is starting a new conversation.
@@ -52,6 +57,10 @@ export interface TurnDeps {
   // effort: another instance may warm again, which costs one request.
   lastTurnAt?: Map<string, number>;
   now?: () => number;
+  // Reads texted photos (SAM 3.1 and Muse Spark through @mano/mail), and
+  // how long a reading may take before the turn says it could not finish.
+  mailModel?: ModelClient;
+  readTimeoutMs?: number;
 }
 
 export interface TurnResponse {
@@ -68,7 +77,23 @@ interface TurnBody {
   grant: string;
   handleHash: string;
   texts: string[];
+  // Photos the person sent; documents are the ones Channels stored in
+  // Engine, by ID.
   attachmentCount: number;
+  documents: TextedPhoto[];
+}
+
+function parseDocuments(value: unknown): TextedPhoto[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_PHOTOS) return null;
+  const out: TextedPhoto[] = [];
+  for (const d of value) {
+    const doc = d as { id?: unknown; mimeType?: unknown } | null;
+    if (typeof doc?.id !== "string" || !DOCUMENT_ID.test(doc.id)) return null;
+    if (typeof doc.mimeType !== "string" || doc.mimeType.length > 100) return null;
+    out.push({ id: doc.id, mimeType: doc.mimeType });
+  }
+  return out;
 }
 
 function parseBody(value: unknown): TurnBody | null {
@@ -86,6 +111,8 @@ function parseBody(value: unknown): TurnBody | null {
     typeof body.attachmentCount === "number" && Number.isInteger(body.attachmentCount) && body.attachmentCount >= 0
       ? Math.min(body.attachmentCount, 10)
       : 0;
+  const documents = parseDocuments(body.documents);
+  if (!documents) return null;
   if (texts.length === 0 && attachmentCount === 0) return null;
   return {
     turnId: body.turnId,
@@ -94,21 +121,28 @@ function parseBody(value: unknown): TurnBody | null {
     grant: body.grant,
     handleHash: body.handleHash,
     texts,
-    attachmentCount,
+    attachmentCount: Math.max(attachmentCount, documents.length),
+    documents,
   };
 }
 
 function turnText(body: TurnBody): string {
   const parts = [...body.texts];
   if (body.attachmentCount > 0) {
-    parts.push(
-      `(The person also sent ${body.attachmentCount} photo${body.attachmentCount === 1 ? "" : "s"}; they are saved and will be read separately. Acknowledge briefly if you mention them.)`,
-    );
+    parts.push(`(The person also sent ${body.attachmentCount === 1 ? "a photo" : `${body.attachmentCount} photos`}. What Mano read from it is in your instructions.)`);
   }
   return parts.join("\n");
 }
 
 const reply = (text: string, status = "replied"): TurnResponse => ({ httpStatus: 200, body: { status, text } });
+
+// Live readings use the Standard model ID with store: false. Without a
+// key the stand-in answers nothing, so the reply says it could not read.
+let mailModel: ModelClient | null = null;
+function defaultMailModel(): ModelClient {
+  mailModel ??= createModelClient(process.env, { synthetic: false });
+  return mailModel;
+}
 const failure = (httpStatus: number, status: string, reason?: string): TurnResponse => ({
   httpStatus,
   body: { status, text: "", ...(reason ? { reason } : {}) },
@@ -309,6 +343,15 @@ async function runTurn(
 
   const context: string[] = [];
   if (body.texts.some(detectCrisis)) context.push(CRISIS_LINE);
+  // A texted photo is read first and answered in this same reply. With no
+  // words that answer is the whole reply; the crisis line still leads
+  // through Channels' finalize when the turn is a crisis.
+  let letter: { text: string; context: string } | null = null;
+  if (body.attachmentCount > 0) {
+    letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), deps.readTimeoutMs);
+    if (body.texts.length === 0) return reply(letter.text);
+    context.push(letter.context);
+  }
   // Where earlier requests stand (instructions/requests.ts) reaches the
   // model as a system instruction, never as part of the person's message.
   let settled: SettleResult;
@@ -333,7 +376,7 @@ async function runTurn(
   const latest = own ? (await engine.getPending()).latest : null;
   const proposed = own && latest?.approvalId === own.id && presentsExactly(renderQuestion(own)) ? own : null;
   const question = proposed ? renderQuestion(proposed) : null;
-  const text = [settled.status === "failed" ? "" : settled.text, question ?? ""].filter(Boolean).join("\n\n");
+  const text = [letter?.text ?? "", settled.status === "failed" ? "" : settled.text, question ?? ""].filter(Boolean).join("\n\n");
   if (!text) return failure(502, "failed", settled.reason);
   if (!proposed || !question) return reply(text, settled.status);
   return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: proposed.id } };
