@@ -52,7 +52,8 @@ import {
   type DeliveryOutcome,
 } from "./agent-state.js";
 import { CURRENT_GENERATION } from "../gateway/sql-store.js";
-import { ProfileStore, profileCipher, type PatchAnswer, type Profile } from "../profile.js";
+import { ProfileStore, type PatchAnswer, type Profile } from "../profile.js";
+import { profileCipher } from "../crypto.js";
 
 // A delivery run holds its claim this long; a run that crashed is
 // reclaimed after it. Retries back off from 30 seconds to an hour and

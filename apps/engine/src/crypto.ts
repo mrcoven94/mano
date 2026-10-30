@@ -81,3 +81,15 @@ export async function decryptForPerson(
   );
   return new Uint8Array(pt);
 }
+
+// The profile's field cipher (src/profile.ts): each value sealed with the
+// person's key and bound to the person and the field path, so a sealed
+// value cannot be read under another person or moved to another field.
+export function profileCipher(kekB64: string, personId: string): { seal(path: string, plaintext: string): Promise<string>; open(path: string, sealed: string): Promise<string> } {
+  const aad = (path: string) => new TextEncoder().encode(`mano-profile:v1:${personId}:${path}`);
+  return {
+    seal: async (path, plaintext) => JSON.stringify(await encryptForPerson(new TextEncoder().encode(plaintext), kekB64, aad(path))),
+    open: async (path, sealed) =>
+      new TextDecoder().decode(await decryptForPerson(JSON.parse(sealed) as EncryptedBlob, kekB64, aad(path))),
+  };
+}

@@ -25,7 +25,6 @@
 // nothing; with other fields it is refused. Deleting the person's
 // conversation deletes the profile in the same transaction.
 import { canonicalJson } from "@mano/protocol";
-import { decryptForPerson, encryptForPerson, type EncryptedBlob } from "./crypto.js";
 import { CURRENT_GENERATION } from "./gateway/sql-store.js";
 import { sha256Hex } from "./hash.js";
 
@@ -183,16 +182,6 @@ export function parseProfilePatch(raw: unknown): ParsedPatch {
 export interface FieldCipher {
   seal(path: string, plaintext: string): Promise<string>;
   open(path: string, sealed: string): Promise<string>;
-}
-
-// Each value sealed with the person's key, bound to the person and path.
-export function profileCipher(kekB64: string, personId: string): FieldCipher {
-  const aad = (path: string) => new TextEncoder().encode(`mano-profile:v1:${personId}:${path}`);
-  return {
-    seal: async (path, plaintext) => JSON.stringify(await encryptForPerson(new TextEncoder().encode(plaintext), kekB64, aad(path))),
-    open: async (path, sealed) =>
-      new TextDecoder().decode(await decryptForPerson(JSON.parse(sealed) as EncryptedBlob, kekB64, aad(path))),
-  };
 }
 
 export function ensureProfileTables(sql: SqlExec): void {
