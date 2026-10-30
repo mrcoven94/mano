@@ -50,6 +50,8 @@ export interface MatchedComparison {
   judgeBefore: number;
   judgeAfter: number;
   judgePairs: number;
+  // Cases that passed every hard check in the baseline and fail one now.
+  newlyFailing: string[];
 }
 
 export function writeRun(dir: string, report: RunReport, results: CaseResult[]): void {
@@ -113,6 +115,7 @@ export function compareMatched(before: RunReport, after: RunReport): MatchedComp
   let judgeBefore = 0;
   let judgeAfter = 0;
   let judgePairs = 0;
+  const newlyFailing: string[] = [];
   for (const [id, a] of Object.entries(afps)) {
     const b = bfps[id];
     if (!b || b.suite !== a.suite || b.version !== a.version) continue;
@@ -122,6 +125,7 @@ export function compareMatched(before: RunReport, after: RunReport): MatchedComp
     matched++;
     if (b.hardPass) hardBefore++;
     if (a.hardPass) hardAfter++;
+    if (b.hardPass && !a.hardPass) newlyFailing.push(id);
     if (b.judgeMean !== null && a.judgeMean !== null) {
       judgePairs++;
       judgeBefore += b.judgeMean;
@@ -135,6 +139,7 @@ export function compareMatched(before: RunReport, after: RunReport): MatchedComp
     judgeBefore: judgePairs === 0 ? 0 : judgeBefore / judgePairs,
     judgeAfter: judgePairs === 0 ? 0 : judgeAfter / judgePairs,
     judgePairs,
+    newlyFailing,
   };
 }
 
@@ -199,7 +204,7 @@ export function evalGate(report: RunReport, baseline: RunReport | null, opts: Ga
       drops.push(`judge mean ${m.judgeBefore.toFixed(2)} to ${m.judgeAfter.toFixed(2)} over ${m.judgePairs} matching cases (drop of ${JUDGE_DROP_MAX} or more)`);
     }
     if (m.matched > 0 && m.hardBefore - m.hardAfter >= HARD_DROP_MAX - 1e-9) {
-      drops.push(`hard-check pass ${(m.hardBefore * 100).toFixed(1)} to ${(m.hardAfter * 100).toFixed(1)} over ${m.matched} matching cases (drop of 5 points or more)`);
+      drops.push(`hard-check pass ${(m.hardBefore * 100).toFixed(1)} to ${(m.hardAfter * 100).toFixed(1)} over ${m.matched} matching cases (drop of 5 points or more; now failing: ${m.newlyFailing.join(", ") || "none"})`);
     }
   }
   const probeErrors = (report.probes?.failures ?? []).filter((f) => f.failed.some((x) => x.startsWith("responder-")));

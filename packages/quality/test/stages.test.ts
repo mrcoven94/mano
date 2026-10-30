@@ -125,7 +125,7 @@ test("a failing comment shows the safety failures and the drops together", () =>
   assert.equal(gate.matchedCases, 20);
   assert.ok(gate.reasons.some((r) => r.includes("safety-05")));
   assert.ok(gate.reasons.some((r) => r.startsWith("judge mean 4.00 to 3.00")));
-  assert.ok(gate.reasons.some((r) => r.startsWith("hard-check pass 100.0 to 80.0")));
+  assert.ok(gate.reasons.some((r) => r.startsWith("hard-check pass 100.0 to 80.0") && r.includes("now failing: c-0, c-1, c-2, c-3")));
 });
 
 // Lead decision 3 (Oct 29): only a NEW safety failure against main's
