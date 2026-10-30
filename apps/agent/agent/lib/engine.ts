@@ -59,7 +59,7 @@ export interface EngineApproval {
 
 // Engine's per-person agent state (reminders, turn ledger, approval
 // pointer), shapes as Engine's agent-state routes return them.
-export type ReminderStatus = "scheduled" | "sending" | "sent" | "dropped" | "failed" | "cancelled";
+export type ReminderStatus = "scheduled" | "sending" | "sent" | "dropped" | "failed" | "cancelled" | "withdrawn";
 
 export interface EngineReminder {
   id: string;
@@ -68,6 +68,31 @@ export interface EngineReminder {
   generation: number;
   status: ReminderStatus;
   attempts: number;
+}
+
+// The kinds of deadline Engine names in a nudge. With no kind, a nudge
+// names no action.
+export const DEADLINE_KINDS = ["renewal", "recertification", "interview", "hearing", "appeal", "payment", "documents"] as const;
+export type DeadlineKind = (typeof DEADLINE_KINDS)[number];
+
+// A deadline Engine tracks, as its /deadlines routes return it.
+export interface EngineDeadline {
+  id: string;
+  title: string;
+  dueDate: string;
+  program: string | null;
+  kind: DeadlineKind | null;
+  status: "open" | "done" | "cancelled";
+  timeZone: string;
+  previousDueDate: string | null;
+  nudges: { reminderId: string; at: string; daysBefore: number; status: ReminderStatus | "claimed"; text: string }[];
+}
+
+export interface EngineDeadlineResult {
+  status: "created" | "existing" | "moved" | "updated" | "closed" | "done" | "cancelled";
+  deadline: EngineDeadline;
+  moved?: { from: string; to: string };
+  nudgesInFlight?: number;
 }
 
 export interface EngineTurn {
@@ -193,6 +218,60 @@ export class PersonEngine {
       throw new EngineError(res.status);
     }
     return (await res.json()) as { reminder: EngineReminder; cancelled: boolean };
+  }
+
+  // Deadlines. null from list and track: this Engine has no deadline
+  // routes yet (404), so the agent says so and never invents one. null
+  // from update and cancel: no such deadline for this person.
+  async listDeadlines(): Promise<EngineDeadline[] | null> {
+    const res = await this.call("GET", "/deadlines");
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    const out = (await res.json()) as { deadlines?: unknown };
+    return Array.isArray(out.deadlines) ? (out.deadlines as EngineDeadline[]) : [];
+  }
+
+  async trackDeadline(input: {
+    title: string;
+    dueDate: string;
+    program?: string;
+    kind?: DeadlineKind;
+    idempotencyKey: string;
+  }): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("POST", "/deadlines", { ...input, source: { kind: "person" }, generation: this.generation });
+  }
+
+  async updateDeadline(id: string, patch: { dueDate?: string; title?: string; status?: "done" }): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("PATCH", `/deadlines/${encodeURIComponent(id)}`, patch);
+  }
+
+  async cancelDeadline(id: string): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("DELETE", `/deadlines/${encodeURIComponent(id)}`);
+  }
+
+  private async deadlineCall(method: string, path: string, body?: unknown): Promise<EngineDeadlineResult | null> {
+    const res = await this.call(method, path, body);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    // Engine says what it refused (a date, or a title that does more than
+    // name the task) in words the model can act on.
+    if (res.status === 400) {
+      const out = (await res.json().catch(() => null)) as { error?: unknown } | null;
+      throw new Error(typeof out?.error === "string" ? out.error : "Engine refused that deadline.");
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return (await res.json()) as EngineDeadlineResult;
   }
 
   // The turn as Engine first recorded it: firstReceivedAt never changes.

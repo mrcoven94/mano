@@ -39,6 +39,11 @@
 //   GET  /api/persons/:id/memory
 //   POST /api/persons/:id/memory              { content, source }
 //   DELETE /api/persons/:id/memory/:memoryId  forget: deletes the row
+//   POST /api/persons/:id/deadlines           { title, dueDate, program?, source, idempotencyKey, generation }
+//                                              (generation required, 409 when stale)
+//   GET  /api/persons/:id/deadlines           (session or agent; nudges per deadline, see src/deadlines.ts)
+//   PATCH /api/persons/:id/deadlines/:did     { dueDate?, title?, status?: "done" }
+//   DELETE /api/persons/:id/deadlines/:did    stop tracking it
 //
 //   Service routes (agent token or Channels token, plus a handle grant;
 //   the person must be handle-<hash> from the grant). Every write carries
@@ -119,6 +124,7 @@ import {
 import { createExecutor } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
+import { routeDeadlines } from "./deadlines.js";
 
 export { PersonAgent, OrgAgent };
 export { ActionGateway, MemoryApprovalStore, InMemoryExecutor } from "./gateway/index.js";
@@ -493,6 +499,22 @@ export default {
         const stateResponse = await handleAgentState(agent, subject, request, rest, url);
         if (stateResponse) return stateResponse;
       }
+      const deadlines = await routeDeadlines(
+        {
+          track: (input) => agent.trackDeadline(subject, input),
+          list: () => agent.listDeadlines(subject),
+          update: (id, patch) => agent.updateDeadline(subject, id, patch),
+          cancel: (id) => agent.cancelDeadline(subject, id),
+        },
+        request.method,
+        rest,
+        async () => {
+          const read = await readCappedJson(request, MAX_ACTION_BODY);
+          if (!read.ok) throw read.response;
+          return read.value;
+        },
+      );
+      if (deadlines) return deadlines;
       if (rest === "/ws-ticket" && request.method === "POST") {
         const configured = getSessionSecret(env);
         if (!configured || sessionExp === null) return Response.json({ error: "Sessions are not configured." }, { status: 503 });

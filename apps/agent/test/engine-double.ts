@@ -2,7 +2,8 @@
 // its service authentication (agent token plus handle grant), its action
 // gateway over its SQL approval store, and its agent-state SQL
 // (generation fence, reminders, turn ledger, approval pointer,
-// conversation delete), all on one node:sqlite database per person, the
+// conversation delete) and its deadlines with their nudges, all on one
+// node:sqlite database per person, the
 // way each PersonAgent keeps them in its own SQLite. Only the Durable
 // Object shell and its alarm are replaced: deliverDue() claims and hands
 // off due reminders the way the alarm does.
@@ -35,6 +36,19 @@ import {
   setPendingPointer,
 } from "../../engine/src/agents/agent-state.js";
 import { authenticateService, serviceMayUse } from "../../engine/src/auth.js";
+import {
+  DEFAULT_TIME_ZONE,
+  cancelDeadline,
+  deadlineIdFor,
+  ensureDeadlineTables,
+  listDeadlines,
+  nudgeTimeOf,
+  removeDeadlines,
+  routeDeadlines,
+  trackDeadline,
+  updateDeadline,
+  type DeadlineCalls,
+} from "../../engine/src/deadlines.js";
 import { ActionGateway } from "../../engine/src/gateway/gateway.js";
 import { InMemoryExecutor } from "../../engine/src/gateway/executors.js";
 import { CURRENT_GENERATION, SqlApprovalStore, ensureGatewayTables } from "../../engine/src/gateway/sql-store.js";
@@ -65,6 +79,7 @@ function sqlite() {
   };
   ensureGatewayTables(sql as never);
   ensureAgentStateTables(sql);
+  ensureDeadlineTables(sql);
   sql.exec(
     "CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 0)",
   );
@@ -75,6 +90,7 @@ interface Person {
   sql: ReturnType<typeof sqlite>;
   store: SqlApprovalStore;
   gateway: ActionGateway;
+  deadlines: DeadlineCalls;
 }
 
 function isGeneration(value: unknown): value is number {
@@ -91,7 +107,15 @@ export class EngineDouble {
     if (!p) {
       const sql = sqlite();
       const store = new SqlApprovalStore(sql as never);
-      p = { sql, store, gateway: new ActionGateway(store, this.executor, { linkCheck: async () => ({ allowed: true }) }) };
+      const time = nudgeTimeOf({});
+      const deadlines: DeadlineCalls = {
+        track: async (input) =>
+          trackDeadline(sql, { ...input, id: await deadlineIdFor(input.idempotencyKey), timeZone: DEFAULT_TIME_ZONE }, this.now(), time),
+        list: async () => listDeadlines(sql),
+        update: async (id, patch) => updateDeadline(sql, id, patch, DEFAULT_TIME_ZONE, this.now(), time),
+        cancel: async (id) => cancelDeadline(sql, id, this.now()),
+      };
+      p = { sql, store, gateway: new ActionGateway(store, this.executor, { linkCheck: async () => ({ allowed: true }) }), deadlines };
       this.persons.set(personId, p);
     }
     return p;
@@ -105,6 +129,10 @@ export class EngineDouble {
     return (this.person(personId).sql.exec("SELECT content FROM memory ORDER BY created_at").toArray() as { content: string }[]).map(
       (r) => r.content,
     );
+  }
+
+  deadlinesOf(personId: string) {
+    return listDeadlines(this.person(personId).sql);
   }
 
   remindersOf(personId: string) {
@@ -148,8 +176,10 @@ export class EngineDouble {
       return Response.json({ error: "Forbidden." }, { status: 403 });
     }
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    const { sql, store, gateway } = this.person(personId);
+    const { sql, store, gateway, deadlines } = this.person(personId);
     const nowIso = () => new Date(this.now()).toISOString();
+    const deadlineResponse = await routeDeadlines(deadlines, method, rest, async () => body);
+    if (deadlineResponse) return deadlineResponse;
     try {
       if (rest === "/memory" && method === "GET") {
         return Response.json({ memories: sql.exec("SELECT * FROM memory ORDER BY created_at").toArray() });
@@ -255,7 +285,10 @@ export class EngineDouble {
       }
       if (rest === "/conversation" && method === "GET") return Response.json({ generation: currentGeneration(sql) });
       if (rest === "/conversation" && method === "DELETE") {
-        return Response.json({ removed: removeConversationState(sql, this.now(), parseGenerationInput(body).generation) });
+        const before = currentGeneration(sql);
+        const removed = removeConversationState(sql, this.now(), parseGenerationInput(body).generation);
+        if (removed.generation > before) removeDeadlines(sql, this.now());
+        return Response.json({ removed });
       }
     } catch (err) {
       if (err instanceof AgentStateInputError) return Response.json({ error: err.message }, { status: 400 });
