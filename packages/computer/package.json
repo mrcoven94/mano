@@ -1,0 +1,21 @@
+{
+  "name": "@mano/computer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The computer Mano drives: a desktop with a browser, worked through screenshots, mouse and keyboard.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit && vitest run",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "playwright": "^1.55.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^5.0.5"
+  }
+}
