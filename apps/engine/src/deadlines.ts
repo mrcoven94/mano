@@ -4,7 +4,10 @@
 // nudge time (MANO_NUDGE_TIME, default 10:00) in the zone of the
 // person's state, Pacific when it is unknown. A deadline learned after its
 // first nudge day gets one nudge at the next nudge time instead, unless a
-// planned one is less than 3 days away.
+// planned one is less than 3 days away. A correction rebuilds only the
+// nudges not yet sent, and a moved date plans the new days; either way a
+// slot whose day is still open (until 20:00) goes at the earliest allowed
+// time from now, and no catch-up is added.
 //
 // Each nudge is a reminder row (agents/agent-state.ts), so it goes out
 // from the person's one delivery wake-up through Channels' agent-send
@@ -240,7 +243,11 @@ export interface PlannedNudge {
   windowEndMs: number;
 }
 
-export function planNudges(dueDate: string, timeZone: string, nowMs: number, time: NudgeTime): PlannedNudge[] {
+// first: a deadline Mano just learned, with one catch-up when it came in
+// after its first nudge day. rebuild: a deadline whose date moved; every
+// slot whose day's window is still open, at the earliest allowed time
+// from now, and no catch-up.
+export function planNudges(dueDate: string, timeZone: string, nowMs: number, time: NudgeTime, mode: "first" | "rebuild" = "first"): PlannedNudge[] {
   const plan = (localDate: string): PlannedNudge => ({
     daysBefore: daysBetween(localDate, dueDate),
     localDate,
@@ -249,6 +256,7 @@ export function planNudges(dueDate: string, timeZone: string, nowMs: number, tim
     windowEndMs: zonedInstant(localDate, WINDOW_CLOSES_HOUR, 0, timeZone),
   });
   const planned = NUDGE_DAYS.map((days) => plan(addDays(dueDate, -days)));
+  if (mode === "rebuild") return planned.filter((n) => n.windowEndMs > nowMs).map((n) => ({ ...n, atMs: Math.max(n.atMs, nowMs) }));
   const ahead = planned.filter((n) => n.atMs > nowMs);
   if (ahead.length < planned.length) {
     const today = wall(nowMs, timeZone).date;
@@ -311,6 +319,16 @@ function text(value: unknown, field: string, max: number): string {
   return cleaned;
 }
 
+const TIMESTAMP = /^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.\d{1,3})?)?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+
+function isReceivedAt(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const date = isIsoDate(value) ? value : TIMESTAMP.exec(value)?.[1];
+  if (!date || !isIsoDate(date)) return false;
+  const ms = Date.parse(isIsoDate(value) ? `${value}T00:00:00Z` : value);
+  return Number.isFinite(ms) && ms <= Date.now();
+}
+
 function dueDateOf(value: unknown): string {
   if (!isIsoDate(value)) throw new AgentStateInputError("dueDate must be a real date written YYYY-MM-DD.");
   if (daysBetween(new Date().toISOString().slice(0, 10), value) > MAX_AHEAD_DAYS) {
@@ -326,12 +344,9 @@ export function parseDeadlineInput(raw: unknown): DeadlineInput {
   const source: DeadlineSource = { kind: s.kind as SourceKind };
   if (s.documentId !== undefined) source.documentId = text(s.documentId, "source.documentId", MAX_DOCUMENT_ID);
   if (s.sentence !== undefined) source.sentence = text(s.sentence, "source.sentence", MAX_SENTENCE);
-  if (s.receivedAt !== undefined) {
-    if (typeof s.receivedAt !== "string" || !(isIsoDate(s.receivedAt) || /^\d{4}-\d{2}-\d{2}T/.test(s.receivedAt)) || !Number.isFinite(Date.parse(s.receivedAt))) {
-      throw new AgentStateInputError("source.receivedAt must be YYYY-MM-DD or an ISO timestamp.");
-    }
-    source.receivedAt = s.receivedAt;
-  }
+  // A received date that is not a real calendar moment, or is in the
+  // future, is no date: the nudge then says "the letter you sent me".
+  if (isReceivedAt(s.receivedAt)) source.receivedAt = s.receivedAt;
   if (typeof f.idempotencyKey !== "string" || !f.idempotencyKey || f.idempotencyKey.length > MAX_KEY) {
     throw new AgentStateInputError(`idempotencyKey must be 1 to ${MAX_KEY} characters.`);
   }
@@ -468,10 +483,10 @@ export class NudgeConflictError extends Error {
 // generation current now. IDs carry both, so neither a moved date nor the
 // same letter tracked again after a delete can land on an old nudge. A
 // nudge that cannot be created new is an error that rolls the change back.
-function scheduleNudges(sql: SqlExec, r: Row, nowMs: number, time: NudgeTime): void {
+function scheduleNudges(sql: SqlExec, r: Row, plan: PlannedNudge[], nowMs: number): void {
   const generation = currentGeneration(sql);
   const naming = namingOf(r);
-  for (const n of planNudges(r.due_date, r.time_zone, nowMs, time)) {
+  for (const n of plan) {
     const reminderId = `${NUDGE_PREFIX}${r.id}:g${generation}:${r.revision}:${n.daysBefore}`;
     const made = createReminder(sql, { id: reminderId, text: nudgeText(naming, n.daysBefore, r.due_date), dueAtMs: n.atMs, generation }, nowMs);
     if (!("created" in made) || !made.created) throw new NudgeConflictError(`Nudge ${reminderId} could not be created.`);
@@ -527,15 +542,36 @@ function apply(sql: SqlExec, r: Row, next: Next, nowMs: number, time: NudgeTime)
     );
     return { status: "updated", deadline: view(sql, row(sql, r.id)!) };
   }
-  const nudgesInFlight = stopNudges(sql, r.id, nowMs);
   const moved = next.dueDate !== r.due_date;
+  // The same date: the slots not yet sent, kept while their day's window
+  // is open, at the earliest allowed time from now. Nothing is added.
+  const unsent = moved
+    ? []
+    : (sql
+        .exec(
+          "SELECT n.days_before, n.window_start_ms, n.window_end_ms, r.due_at_ms FROM deadline_nudges n JOIN reminders r ON r.id = n.reminder_id" +
+            " JOIN deadlines d ON d.id = n.deadline_id WHERE n.deadline_id = ? AND n.revision = d.revision AND r.status IN ('scheduled', 'claimed')" +
+            " AND n.window_end_ms > ?",
+          r.id, nowMs,
+        )
+        .toArray() as { days_before: number; window_start_ms: number; window_end_ms: number; due_at_ms: number }[]);
+  const nudgesInFlight = stopNudges(sql, r.id, nowMs);
   sql.exec(
     "UPDATE deadlines SET title = ?, due_date = ?, program = ?, kind = ?, source_json = ?, previous_due_date = ?, time_zone = ?," +
       " revision = revision + 1, updated_at_ms = ? WHERE id = ?",
     next.title, next.dueDate, next.program, next.kind, next.sourceJson, moved ? r.due_date : r.previous_due_date, next.timeZone, nowMs, r.id,
   );
   const updated = row(sql, r.id)!;
-  scheduleNudges(sql, updated, nowMs, time);
+  const plan: PlannedNudge[] = moved
+    ? planNudges(updated.due_date, updated.time_zone, nowMs, time, "rebuild")
+    : unsent.map((n) => ({
+        daysBefore: Number(n.days_before),
+        localDate: addDays(updated.due_date, -Number(n.days_before)),
+        atMs: Math.max(Number(n.due_at_ms), nowMs),
+        windowStartMs: Number(n.window_start_ms),
+        windowEndMs: Number(n.window_end_ms),
+      }));
+  scheduleNudges(sql, updated, plan, nowMs);
   return moved
     ? { status: "moved", deadline: view(sql, updated), moved: { from: r.due_date, to: next.dueDate }, nudgesInFlight }
     : { status: "updated", deadline: view(sql, updated), nudgesInFlight };
@@ -557,7 +593,7 @@ export function trackDeadline(
       JSON.stringify(input.source), input.timeZone, nowMs, nowMs,
     );
     const created = row(sql, input.id)!;
-    scheduleNudges(sql, created, nowMs, time);
+    scheduleNudges(sql, created, planNudges(created.due_date, created.time_zone, nowMs, time), nowMs);
     return { status: "created", deadline: view(sql, created) };
   }
   if (existing.status !== "open") return { status: "closed", deadline: view(sql, existing) };

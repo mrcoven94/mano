@@ -72,6 +72,13 @@ async function track(sql: ReturnType<typeof openDb>, input = letter(), nowMs = N
   return trackDeadline(sql, { ...input, id: await deadlineIdFor(input.idempotencyKey), timeZone }, nowMs, TEN);
 }
 
+async function firstText(over: Record<string, unknown>) {
+  const sql = openDb();
+  const out = await track(sql, letter(over));
+  if (!("deadline" in out)) throw new Error("no deadline");
+  return out.deadline.nudges[0].text;
+}
+
 describe("creating a deadline", () => {
   it("schedules nudges 14, 7 and 2 days out and the day of, at 10:00 Pacific, with the exact text", async () => {
     const sql = openDb();
@@ -130,12 +137,6 @@ describe("creating a deadline", () => {
     expect(planNudges("2026-10-01", PACIFIC, NOW, TEN)).toEqual([]);
   });
 
-  async function firstText(over: Record<string, unknown>) {
-    const sql = openDb();
-    const out = await track(sql, letter(over));
-    if (!("deadline" in out)) throw new Error("no deadline");
-    return out.deadline.nudges[0].text;
-  }
 
   it("names the action only from the explicit kind and the program only when it is a known one", async () => {
     expect(await firstText({})).toBe("Your CalFresh renewal is due in 14 days, on December 15. Want me to start it?");
@@ -281,6 +282,45 @@ describe("what a nudge says changes", () => {
     if (!("deadline" in changed)) throw new Error("no deadline");
     expect(changed.deadline.nudges.map((n) => n.text)[0]).toBe("Your Medi-Cal recertification is due in 14 days, on December 15. Want me to start it?");
     expect(listReminders(sql).filter((r) => r.status === "scheduled").every((r) => r.text.includes("Medi-Cal recertification"))).toBe(true);
+  });
+
+  it("a correction at 10:01 on the due date still sends today's nudge, now, not never", async () => {
+    const sql = openDb();
+    await track(sql);
+    // Sol's reproduction: 10:01 Pacific on December 15, the due date.
+    const at = Date.parse("2026-12-15T18:01:00.000Z");
+    const fixed = trackDeadline(sql, { ...letter({ program: "Medi-Cal" }), id: await deadlineIdFor(letter().idempotencyKey), timeZone: PACIFIC }, at, TEN);
+    if (!("deadline" in fixed)) throw new Error("no deadline");
+    const today = fixed.deadline.nudges.filter((n) => n.status === "scheduled");
+    expect(today.map((n) => [n.daysBefore, n.at, n.text])).toEqual([
+      [0, "2026-12-15T18:01:00.000Z", "Your Medi-Cal renewal is due today. Want me to start it?"],
+    ]);
+  });
+
+  it("a correction after the first nudge went out replaces only the unsent ones and adds no catch-up", async () => {
+    const sql = openDb();
+    await track(sql);
+    // The 14-day nudge went out on December 1.
+    const first = listReminders(sql)[0];
+    sql.exec("UPDATE reminders SET status = 'sent' WHERE id = ?", first.id);
+    // Noon on December 2, the program is corrected.
+    const at = Date.parse("2026-12-02T20:00:00.000Z");
+    const fixed = trackDeadline(sql, { ...letter({ program: "Medi-Cal" }), id: await deadlineIdFor(letter().idempotencyKey), timeZone: PACIFIC }, at, TEN);
+    if (!("deadline" in fixed)) throw new Error("no deadline");
+    expect(fixed.deadline.nudges.filter((n) => n.status === "scheduled").map((n) => [n.daysBefore, n.at])).toEqual([
+      [7, "2026-12-08T18:00:00.000Z"],
+      [2, "2026-12-13T18:00:00.000Z"],
+      [0, "2026-12-15T18:00:00.000Z"],
+    ]);
+  });
+
+  it("a received date in the future or not on the calendar is treated as absent", async () => {
+    const noKind = { kind: undefined, program: undefined };
+    const sent = (receivedAt: string) => ({ ...noKind, source: { kind: "letter", documentId: "doc-1", receivedAt } });
+    expect(await firstText(sent("2099-01-01"))).toBe("The deadline from the letter you sent me is in 14 days, on December 15.");
+    expect(await firstText(sent("2026-02-30T12:00:00Z"))).toBe("The deadline from the letter you sent me is in 14 days, on December 15.");
+    expect(await firstText(sent("2026-10-27T25:00:00Z"))).toBe("The deadline from the letter you sent me is in 14 days, on December 15.");
+    expect(await firstText(sent("2026-10-27T15:00:00Z"))).toBe("The deadline from the letter you sent on October 27 is in 14 days, on December 15.");
   });
 
   it("a new title alone changes no nudge", async () => {
