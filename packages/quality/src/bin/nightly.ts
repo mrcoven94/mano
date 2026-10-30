@@ -3,7 +3,7 @@
 // record the run with its history. With --upload and R2 credentials the run
 // lands in R2 (mano-quality for aggregates, mano-quality-private for per-case
 // results); otherwise it stays in --out.
-// Usage: node --import ./src/register.ts src/bin/nightly.ts [--out runs-staging] [--date 2026-10-29] [--ref refs/heads/main] [--agent-local] [--upload]
+// Usage: node --import ./src/register.ts src/bin/nightly.ts [--out runs-staging] [--date 2026-10-29] [--ref refs/heads/main] [--agent-local] [--accept-baseline] [--upload]
 // Exits 1, after the run is recorded, when something regressed against the
 // previous baseline: a new safety failure or a judge or hard-check drop.
 
@@ -16,7 +16,7 @@ import { scoreMailDeadlines } from "../mail.ts";
 import { agentNotRun, runAgentStageSafely } from "../agent-stage.ts";
 import { runProbes } from "../probes.ts";
 import { r2CredsFromEnv } from "../r2.ts";
-import { branchPrefix, combineGates, evalAgentGate, evalGate, readHistory, writeNightlyStaging, type HistoryRow } from "../report.ts";
+import { MAIN_REF, branchPrefix, combineGates, decidePromotion, evalAgentGate, evalGate, readHistory, runIdFor, writeNightlyStaging, type BaselineLogEntry, type HistoryRow } from "../report.ts";
 import { finishReport, rerunNewlyFailing, runBench, type CaseResult, type RunReport } from "../run.ts";
 import { readPublic, uploadStaging } from "../sync.ts";
 import { textLineFromEnv } from "../textline.ts";
@@ -75,7 +75,7 @@ if (process.argv.includes("--agent-local")) {
 }
 
 const full = finishReport(bench.report, {
-  runId: day, startedAt, finishedAt: new Date().toISOString(), gitSha: gitSha(), broken: false,
+  runId: runIdFor(day, process.env), startedAt, finishedAt: new Date().toISOString(), gitSha: gitSha(), broken: false,
   paths: bench.paths, judge: bench.judge, dns: dnsFromEnv(process.env).mode, env: process.env,
 }, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: bench.answeringModel, probes, rerun });
 full.guardian = guardian;
@@ -84,7 +84,19 @@ full.mail = mail;
 if (!mail.live) full.standins = [...(full.standins ?? []), `mail deadlines: ${mail.detail}`];
 if (!guardian.ran) full.standins = [...(full.standins ?? []), `guardian: ${guardian.detail}`];
 
-const staging = writeNightlyStaging(root, full, bench.results, prior, { ref, ...(priorBaseline?.agent ? { priorAgent: priorBaseline.agent } : {}) });
+// Decided before anything is written: a run that regressed against the
+// prior baseline is recorded but does not replace it, unless the lead
+// accepted it on purpose (workflow input accept_baseline, main only).
+const accept = ref === MAIN_REF && process.argv.includes("--accept-baseline");
+const plainGate = evalGate(full, priorBaseline);
+const agentGate = agent.ran && priorBaseline?.agent ? evalAgentGate(agent, priorBaseline.agent) : null;
+const promotion = decidePromotion({ plain: plainGate, agent: agentGate, accept });
+const priorLog: BaselineLogEntry[] = ref === MAIN_REF && upload && creds ? ((await readPublic<BaselineLogEntry[]>(creds, "baseline-log.json")) ?? []) : [];
+const staging = writeNightlyStaging(root, full, bench.results, prior, {
+  ref, promotion, priorLog,
+  ...(priorBaseline?.agent ? { priorAgent: priorBaseline.agent } : {}),
+  ...(process.env.GITHUB_ACTOR ? { actor: process.env.GITHUB_ACTOR } : {}),
+});
 if (agentResults.length > 0) writeFileSync(join(staging.privateRunDir, "agent-cases.json"), `${JSON.stringify(agentResults, null, 2)}\n`);
 for (const s of Object.values(full.suites)) {
   const t = s.traits;
@@ -102,7 +114,9 @@ if (guardian.ran) console.log(`guardian: ${guardian.cases} cases, precision ${gu
 console.log(`mail deadlines: ${mail.correct}/${mail.letters} (${mail.live ? "live" : mail.detail})`);
 console.log(`judge ${full.judge.live ? "live" : "stand-in"}, calibration ${Math.round(full.calibration.agreement * 100)}% on ${full.calibration.provisional ? "provisional" : "hand"} labels, ${full.judge.errors ?? 0} unscored`);
 for (const s of full.standins ?? []) console.log(`stand-in: ${s}`);
-console.log(staging.promoted ? "gate-eligible on main: this run becomes the baseline" : full.eligibility.eligible ? `gate-eligible, recorded under ${prefix || "main"} without promotion` : `not gate-eligible: ${full.eligibility.reasons.join("; ")}`);
+if (ref !== MAIN_REF) console.log(`recorded under ${prefix || "main"} without promotion`);
+else if (staging.promoted) console.log(promotion.accepted ? `accepted as the baseline on purpose despite: ${promotion.reasons.join("; ")}` : `this run becomes the baseline${promotion.agentPromoted ? "" : " (the prior agent record is kept)"}`);
+else console.log(`not promoted; the prior baseline stays: ${[...(full.eligibility.eligible ? [] : full.eligibility.reasons), ...promotion.reasons].join("; ")}`);
 console.log(`staged ${staging.publicDir} and ${staging.privateRunDir}`);
 
 if (upload && creds) {

@@ -197,8 +197,23 @@ export default async function QualityPage() {
       <p className={styles.runline}>
         Nightly run of {day(latest.startedAt)}, {latest.caseCount} synthetic cases
         {latest.gitSha ? `, commit ${latest.gitSha.slice(0, 7)}` : ""}.{" "}
-        {latest.eligibility.eligible ? "Pull requests are gated against this run." : `Not used as a gate baseline: ${latest.eligibility.reasons.join("; ")}.`}
+        {latest.promotion
+          ? latest.promotion.promoted
+            ? latest.promotion.accepted
+              ? "Accepted as the baseline on purpose, despite a regression."
+              : `Pull requests are gated against this run${latest.promotion.agentPromoted ? "" : "; the previous agent record is kept"}.`
+            : "This run did not become the baseline; pull requests are still gated against the previous one."
+          : latest.eligibility.eligible ? "Pull requests are gated against this run." : `Not used as a gate baseline: ${latest.eligibility.reasons.join("; ")}.`}
       </p>
+
+      {latest.promotion && !latest.promotion.promoted && latest.promotion.reasons.length > 0 ? (
+        <div className={styles.alert} role="alert">
+          <b>Not promoted.</b> This run regressed against the baseline, so it was recorded but did not replace it:
+          <ul>
+            {latest.promotion.reasons.map((r) => <li key={r}>{stripModelNames(r)}</li>)}
+          </ul>
+        </div>
+      ) : null}
 
       {knownFailures.length > 0 ? (
         <div className={styles.alert} role="alert">

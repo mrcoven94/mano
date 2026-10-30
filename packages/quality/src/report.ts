@@ -331,6 +331,7 @@ export interface HistoryRow {
   probes: { live: boolean; passRate: number; passed: number; total: number; guardChangeRate: number } | null;
   guardian: { ran: boolean; precision: number; recall: number; p50Ms: number; p95Ms: number } | null;
   mail: { live: boolean; accuracy: number; letters: number } | null;
+  promotion?: Promotion;
   agent?: { ran: boolean; cases: number; agentAnswered: number; fallbackAnswered: number; mixedAnswered: number; selfJudged: boolean; hardCheckPassRate: number; judgeMean: number; p50Ms: number; p95Ms: number } | null;
   standins: string[];
 }
@@ -409,6 +410,41 @@ export interface NightlyStaging {
   privateRunDir: string;
 }
 
+export interface Promotion {
+  // The plain baseline and the agent record move to this run only when their
+  // gates against the prior baseline did not fail, or the lead accepted the
+  // run on purpose.
+  promoted: boolean;
+  agentPromoted: boolean;
+  accepted: boolean;
+  reasons: string[];
+}
+
+// A regression must never be absorbed after one red night: a failing plain
+// gate (new safety failures, a judge drop of 0.3 or more, a hard-check drop
+// of 5 points or more) keeps the prior baseline, and a failing agent gate
+// keeps the prior agent record. `accept` overrides both, and is logged.
+export function decidePromotion(input: { plain: GateEvaluation; agent: GateEvaluation | null; accept: boolean }): Promotion {
+  const plainFailed = input.plain.status === "fail";
+  const agentFailed = input.agent?.status === "fail";
+  return {
+    promoted: input.accept || !plainFailed,
+    agentPromoted: input.accept || !agentFailed,
+    accepted: input.accept && (plainFailed || agentFailed),
+    reasons: [...(plainFailed ? input.plain.reasons : []), ...(agentFailed ? input.agent!.reasons : [])],
+  };
+}
+
+export interface BaselineLogEntry {
+  at: string;
+  action: "promoted" | "blocked" | "accepted" | "restored";
+  runId: string;
+  gitSha: string | null;
+  by: string | null;
+  agentPromoted: boolean;
+  reasons: string[];
+}
+
 export interface StagingOptions {
   // The full git ref the run checked out (GITHUB_REF). Only exactly
   // refs/heads/main writes the shared latest, history and baseline, so a tag
@@ -416,8 +452,15 @@ export interface StagingOptions {
   // branches/<name>/ and never touches them.
   ref: string;
   // Main's last agent record. A promoted baseline keeps it when this run's
-  // agent stage did not run cleanly, so a broken stage never erases it.
+  // agent stage did not run cleanly or regressed, so neither erases it.
   priorAgent?: AgentSummary;
+  // What the gates against the prior baseline decided. Without it a clean
+  // run promotes, as before any gate existed (local and test runs).
+  promotion?: Promotion;
+  // Who started the run (GITHUB_ACTOR), for the baseline log.
+  actor?: string;
+  // The baseline log so far, from R2.
+  priorLog?: BaselineLogEntry[];
 }
 
 export const MAIN_REF = "refs/heads/main";
@@ -426,10 +469,26 @@ export function branchPrefix(ref: string): string {
   return ref === MAIN_REF ? "" : `branches/${ref.replace(/^refs\/heads\//, "").replace(/[^A-Za-z0-9._-]/g, "-")}/`;
 }
 
+// One id per run. The date alone let a second main run on the same day
+// overwrite the first run's private results and its baseline.
+export function runIdFor(day: string, env: NodeJS.ProcessEnv): string {
+  return env.GITHUB_RUN_ID ? `${day}-${env.GITHUB_RUN_ID}` : day;
+}
+
+function baselineDoc(pub: RunReport, agent: AgentSummary | undefined): RunReport {
+  const liveOnly = Object.fromEntries(Object.entries(pub.fingerprints).filter(([, f]) => f.live === true));
+  return { ...pub, fingerprints: liveOnly, ...(agent ? { agent } : {}) };
+}
+
+function writeLog(publicDir: string, prior: BaselineLogEntry[], entry: BaselineLogEntry): void {
+  writeFileSync(join(publicDir, "baseline-log.json"), `${JSON.stringify([...prior, entry].slice(-500), null, 2)}\n`);
+}
+
 // Stages a nightly run for upload. public/ (bucket mano-quality) gets
-// aggregates only: latest.json, history.json (one row per night, the last
-// 120) and, for an eligible run on main, baseline.json, which pull requests
-// are gated against and which holds live cases only. private/ (bucket
+// aggregates only: latest.json, history.json (one row per run, the last
+// 120), baseline-log.json and, for an eligible run on main that did not
+// regress (or was accepted), baseline.json, which pull requests are gated
+// against and which holds live cases only. private/ (bucket
 // mano-quality-private) gets the per-case results.
 export function writeNightlyStaging(root: string, report: RunReport, results: CaseResult[], priorHistory: HistoryRow[] = [], opts: StagingOptions = { ref: "local" }): NightlyStaging {
   const prefix = branchPrefix(opts.ref);
@@ -437,18 +496,53 @@ export function writeNightlyStaging(root: string, report: RunReport, results: Ca
   const privateRunDir = join(root, "private", prefix, "runs", report.runId);
   mkdirSync(publicDir, { recursive: true });
   writeRun(privateRunDir, report, results);
-  const pub = publicReport(report);
+  const onMain = opts.ref === MAIN_REF;
+  const decided = opts.promotion ?? { promoted: true, agentPromoted: true, accepted: false, reasons: [] };
+  const eligible = report.eligibility.eligible;
+  const promoted = onMain && eligible && decided.promoted;
+  const pubBase = publicReport(report);
+  const agentOk = pubBase.agent !== undefined && agentAsReport(pubBase.agent).eligibility.eligible;
+  const agentPromoted = promoted && agentOk && decided.agentPromoted;
+  const promotion: Promotion = {
+    promoted,
+    agentPromoted,
+    accepted: promoted && decided.accepted,
+    reasons: [
+      ...(eligible ? [] : report.eligibility.reasons.map((r) => `not gate-eligible: ${r}`)),
+      ...decided.reasons,
+      ...(pubBase.agent && !agentOk ? ["the agent stage did not run cleanly"] : []),
+    ],
+  };
+  const pub = onMain ? { ...pubBase, promotion } : pubBase;
   writeFileSync(join(publicDir, "latest.json"), `${JSON.stringify(pub, null, 2)}\n`);
-  const promoted = opts.ref === MAIN_REF && report.eligibility.eligible;
   if (promoted) {
-    const liveOnly = Object.fromEntries(Object.entries(pub.fingerprints).filter(([, f]) => f.live === true));
-    const agentOk = pub.agent !== undefined && agentAsReport(pub.agent).eligibility.eligible;
-    const agent = agentOk ? pub.agent : (opts.priorAgent ?? pub.agent);
-    writeFileSync(join(publicDir, "baseline.json"), `${JSON.stringify({ ...pub, fingerprints: liveOnly, ...(agent ? { agent } : {}) }, null, 2)}\n`);
+    const agent = agentPromoted ? pub.agent : (opts.priorAgent ?? pub.agent);
+    writeFileSync(join(publicDir, "baseline.json"), `${JSON.stringify(baselineDoc(pub, agent), null, 2)}\n`);
   }
-  const history = [...priorHistory.filter((h) => h.runId !== report.runId), historyRow(pub, results)];
+  if (onMain) {
+    writeLog(publicDir, opts.priorLog ?? [], {
+      at: new Date().toISOString(),
+      action: promotion.accepted ? "accepted" : promoted ? "promoted" : "blocked",
+      runId: report.runId, gitSha: report.gitSha, by: opts.actor ?? null, agentPromoted, reasons: promotion.reasons,
+    });
+  }
+  const row = { ...historyRow(pub, results), ...(onMain ? { promotion } : {}) };
+  const history = [...priorHistory.filter((h) => h.runId !== report.runId), row];
   writeFileSync(join(publicDir, "history.json"), `${JSON.stringify(history.slice(-120), null, 2)}\n`);
   return { promoted, publicDir, privateRunDir };
+}
+
+// Puts a past main run's report back as the baseline, on purpose, through
+// the same baseline shape and log as a promotion. Main only.
+export function restoreBaseline(root: string, report: RunReport, opts: { ref: string; actor: string | null; priorLog: BaselineLogEntry[] }): string {
+  if (opts.ref !== MAIN_REF) throw new Error("a baseline can only be restored from a run on main (refs/heads/main)");
+  const publicDir = join(root, "public");
+  mkdirSync(publicDir, { recursive: true });
+  const pub = publicReport(report);
+  const path = join(publicDir, "baseline.json");
+  writeFileSync(path, `${JSON.stringify(baselineDoc(pub, pub.agent), null, 2)}\n`);
+  writeLog(publicDir, opts.priorLog, { at: new Date().toISOString(), action: "restored", runId: report.runId, gitSha: report.gitSha, by: opts.actor, agentPromoted: Boolean(pub.agent), reasons: [] });
+  return path;
 }
 
 export function readHistory(path: string): HistoryRow[] {
