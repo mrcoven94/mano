@@ -13,11 +13,11 @@ const HOUSEHOLD: Household = {
 };
 
 const FILES: FileMeta[] = [
-  { name: "paystub.pdf", type: "application/pdf", size: 14, sha256: "abc", r2key: "submissions/web/k/1-abc" },
+  { name: "paystub.pdf", type: "application/pdf", size: 14, sha256: "abc", r2key: "submissions/api-test/k/1-abc" },
 ];
 
-function input(key: string, digest = "digest-a", household: Household = HOUSEHOLD, scope = "web"): SubmitInput {
-  return { key, scope, household, files: FILES, digest, source: "api", slowMs: 0, receivedAt: Date.now() };
+function input(key: string, digest = "digest-a", household: Household = HOUSEHOLD, scope = "api-test"): SubmitInput {
+  return { key, scope, household, files: FILES, digest, slowMs: 0, receivedAt: Date.now() };
 }
 
 function filed(result: SubmitResult): Submission {
@@ -64,7 +64,7 @@ describe("blocker 1: atomic submit", () => {
     const second = await store.submit(input("race-key", "digest-a", { ...HOUSEHOLD, fullName: "Somebody Else" }));
     expect(second.outcome).toBe("duplicate");
     expect(filed(second).confirmationNumber).toBe(filed(first).confirmationNumber);
-    const peeked = await store.getSubmission("web", "race-key");
+    const peeked = await store.getSubmission("api-test", "race-key");
     expect(peeked?.household.fullName).toBe("Maria Santos");
     expect(peeked?.confirmationNumber).toBe(filed(first).confirmationNumber);
     expect((await store.countSubmissions())).toBe(1);
@@ -135,7 +135,7 @@ describe("blocker 3: scopes", () => {
     expect(b.outcome).toBe("stored");
     expect(filed(a).confirmationNumber).not.toBe(filed(b).confirmationNumber);
     expect((await store.getSubmission("api-1", "k"))?.digest).toBe("digest-a");
-    expect(await store.getSubmission("web", "k")).toBeNull();
+    expect(await store.getSubmission("api-test", "k")).toBeNull();
   });
 
   test("SQLite store: the same key files independently in each scope", async () => {
@@ -144,7 +144,7 @@ describe("blocker 3: scopes", () => {
     const b = await store.submit(input("k", "digest-b", HOUSEHOLD, "api-2"));
     expect(a.outcome).toBe("stored");
     expect(b.outcome).toBe("stored");
-    expect(await store.getSubmission("web", "k")).toBeNull();
+    expect(await store.getSubmission("api-test", "k")).toBeNull();
     expect((await store.getSubmission("api-2", "k"))?.digest).toBe("digest-b");
   });
 });
@@ -192,13 +192,13 @@ describe("blocker 6: rate limits and slow leases", () => {
 describe("blocker 8: retention", () => {
   test("expired sessions list without deleting, then delete only if still expired", async () => {
     for (const store of [new MemoryStore(), makeSqlStore()]) {
-      await store.putSession({ id: "old", files: [], key: "k", createdAt: 0, expiresAt: 1000 });
-      await store.putSession({ id: "fresh", files: [], key: "k", createdAt: 0, expiresAt: 9999 });
+      await store.putSession({ id: "old", draftId: "d", files: [], createdAt: 0, expiresAt: 1000 });
+      await store.putSession({ id: "fresh", draftId: "d", files: [], createdAt: 0, expiresAt: 9999 });
       const expired = await store.listExpiredSessions(2000);
       expect(expired.map((s) => s.id)).toEqual(["old"]);
       expect(await store.getSession("old")).not.toBeNull();
       // A renewal that lands after the listing wins: the re-checked delete spares it.
-      expect(await store.renewSession({ id: "fresh", files: [], key: "k", createdAt: 0, expiresAt: 99999 }, 2000)).toBe(true);
+      expect(await store.renewSession({ id: "fresh", draftId: "d", files: [], createdAt: 0, expiresAt: 99999 }, 2000)).toBe(true);
       expect(await store.deleteSessionIfExpired("fresh", 2000)).toBeNull();
       const reaped = await store.deleteSessionIfExpired("old", 2000);
       expect(reaped?.id).toBe("old");
@@ -229,17 +229,17 @@ describe("blocker 8: retention", () => {
       if (stored.outcome !== "stored") throw new Error("expected stored");
       const old = await store.listOldSubmissions(2000, 500);
       expect(old.map((s) => s.key)).toEqual(["k"]);
-      expect(await store.getSubmission("web", "k")).not.toBeNull();
+      expect(await store.getSubmission("api-test", "k")).not.toBeNull();
       await store.writeReceipts(
         old.map((sub) => ({ key: sub.key, scope: sub.scope, confirmationNumber: sub.confirmationNumber, digest: sub.digest, receivedAt: sub.receivedAt })),
       );
-      await store.deleteSubmissions([{ scope: "web", key: "k" }]);
-      expect(await store.getSubmission("web", "k")).toBeNull();
-      const receipt = await store.getReceipt("web", "k");
+      await store.deleteSubmissions([{ scope: "api-test", key: "k" }]);
+      expect(await store.getSubmission("api-test", "k")).toBeNull();
+      const receipt = await store.getReceipt("api-test", "k");
       expect(receipt?.confirmationNumber).toBe(stored.submission.confirmationNumber);
       expect(receipt?.digest).toBe("digest-a");
       expect(await store.purgeOldReceipts(2000)).toBe(1);
-      expect(await store.getReceipt("web", "k")).toBeNull();
+      expect(await store.getReceipt("api-test", "k")).toBeNull();
     });
 
     test(`${name}: staged objects track, list, claim by guard, and untrack`, async () => {
@@ -260,18 +260,18 @@ describe("blocker 8: retention", () => {
 
     test(`${name}: renew refuses an expired or missing session and leaves the row alone`, async () => {
       const store = make();
-      await store.putSession({ id: "s", files: [], key: "k", createdAt: 0, expiresAt: 1000 });
-      expect(await store.renewSession({ id: "s", files: [], key: "k", createdAt: 0, expiresAt: 99999 }, 2000)).toBe(false);
+      await store.putSession({ id: "s", draftId: "d", files: [], createdAt: 0, expiresAt: 1000 });
+      expect(await store.renewSession({ id: "s", draftId: "d", files: [], createdAt: 0, expiresAt: 99999 }, 2000)).toBe(false);
       expect((await store.getSession("s"))?.expiresAt).toBe(1000);
-      expect(await store.renewSession({ id: "missing", files: [], key: "k", createdAt: 0, expiresAt: 99999 }, 2000)).toBe(false);
-      expect(await store.renewSession({ id: "s", files: [], key: "k", createdAt: 0, expiresAt: 99999 }, 500)).toBe(true);
+      expect(await store.renewSession({ id: "missing", draftId: "d", files: [], createdAt: 0, expiresAt: 99999 }, 2000)).toBe(false);
+      expect(await store.renewSession({ id: "s", draftId: "d", files: [], createdAt: 0, expiresAt: 99999 }, 500)).toBe(true);
       expect((await store.getSession("s"))?.expiresAt).toBe(99999);
     });
 
     test(`${name}: a draft claim fails while its owner session is alive, whatever its age`, async () => {
       const store = make();
-      await store.putSession({ id: "live", files: [], key: "k", createdAt: 0, expiresAt: 99999 });
-      await store.putSession({ id: "dead", files: [], key: "k", createdAt: 0, expiresAt: 1000 });
+      await store.putSession({ id: "live", draftId: "d", files: [], createdAt: 0, expiresAt: 99999 });
+      await store.putSession({ id: "dead", draftId: "d", files: [], createdAt: 0, expiresAt: 1000 });
       await store.trackStaged([
         { key: "drafts/live/1-x", createdAt: 1000 },
         { key: "drafts/dead/1-y", createdAt: 1000 },
@@ -292,18 +292,18 @@ describe("blocker 8: retention", () => {
       const filed = await store.submit({ ...input("k", "digest-a"), receivedAt: 1000 });
       if (filed.outcome !== "stored") throw new Error("expected stored");
       await store.trackStaged([
-        { key: "submissions/web/k/1-x", createdAt: 1000 },
-        { key: "submissions/web/gone/1-y", createdAt: 1000 },
+        { key: "submissions/api-test/k/1-x", createdAt: 1000 },
+        { key: "submissions/api-test/gone/1-y", createdAt: 1000 },
       ]);
       expect(
         await store.claimUnreferencedStaged([
-          { key: "submissions/web/k/1-x", guard: { kind: "submission", scope: "web", key: "k" } },
-          { key: "submissions/web/gone/1-y", guard: { kind: "submission", scope: "web", key: "gone" } },
+          { key: "submissions/api-test/k/1-x", guard: { kind: "submission", scope: "api-test", key: "k", now: 2000 } },
+          { key: "submissions/api-test/gone/1-y", guard: { kind: "submission", scope: "api-test", key: "gone", now: 2000 } },
         ]),
-      ).toEqual(["submissions/web/gone/1-y"]);
-      await store.deleteSubmissions([{ scope: "web", key: "k" }]);
-      expect(await store.claimUnreferencedStaged([{ key: "submissions/web/k/1-x", guard: { kind: "submission", scope: "web", key: "k" } }])).toEqual([
-        "submissions/web/k/1-x",
+      ).toEqual(["submissions/api-test/gone/1-y"]);
+      await store.deleteSubmissions([{ scope: "api-test", key: "k" }]);
+      expect(await store.claimUnreferencedStaged([{ key: "submissions/api-test/k/1-x", guard: { kind: "submission", scope: "api-test", key: "k", now: 2000 } }])).toEqual([
+        "submissions/api-test/k/1-x",
       ]);
     });
 
@@ -312,8 +312,8 @@ describe("blocker 8: retention", () => {
       const first = await store.submit(input("retired-key", "digest-a"));
       if (first.outcome !== "stored") throw new Error("expected stored");
       const original = first.submission.confirmationNumber;
-      await store.writeReceipts([{ key: "retired-key", scope: "web", confirmationNumber: original, digest: "digest-a", receivedAt: 1000 }]);
-      await store.deleteSubmissions([{ scope: "web", key: "retired-key" }]);
+      await store.writeReceipts([{ key: "retired-key", scope: "api-test", confirmationNumber: original, digest: "digest-a", receivedAt: 1000 }]);
+      await store.deleteSubmissions([{ scope: "api-test", key: "retired-key" }]);
       const same = await store.submit(input("retired-key", "digest-a"));
       expect(same.outcome).toBe("duplicate-retired");
       if (same.outcome !== "duplicate-retired") throw new Error("expected duplicate-retired");
@@ -323,6 +323,20 @@ describe("blocker 8: retention", () => {
       if (changed.outcome !== "conflict-retired") throw new Error("expected conflict-retired");
       expect(changed.receipt.confirmationNumber).toBe(original);
       expect(await store.countSubmissions()).toBe(0);
+    });
+  }
+});
+
+describe("review round 5 item 3: only API filings are submissions", () => {
+  for (const [name, make] of [["MemoryStore", () => new MemoryStore()], ["SQLite store", () => makeSqlStore()]] as const) {
+    test(`${name}: a legacy browser row is invisible to the caseworker reads`, async () => {
+      const store = make();
+      const legacy = filed(await store.submit({ ...input("legacy", "digest-web", { ...HOUSEHOLD, fullName: "Browser Row" }, "web"), receivedAt: 2000 }));
+      const real = filed(await store.submit({ ...input("real", "digest-api"), receivedAt: 1000 }));
+      expect(await store.countSubmissions()).toBe(1);
+      expect((await store.listSubmissionSummaries(25, 0)).map((s) => s.confirmationNumber)).toEqual([real.confirmationNumber]);
+      expect(await store.getSubmissionByConfirmation(legacy.confirmationNumber)).toBeNull();
+      expect((await store.getSubmissionByConfirmation(real.confirmationNumber))?.key).toBe("real");
     });
   }
 });

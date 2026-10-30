@@ -1,5 +1,6 @@
 import { draftFileKey, stagingAttemptKey, submissionFileKey, trackedOwner, type FileStore } from "./files";
 import {
+  API_SCOPE_PREFIX,
   fromBase64,
   metasToDigests,
   newId,
@@ -16,13 +17,12 @@ import {
   TEST_BANNER,
   caseworkerDetailPage,
   caseworkerListPage,
-  confirmationPage,
   documentsPage,
   errorPage,
   homePage,
   householdPage,
   reviewPage,
-  submittedPage,
+  savedPage,
   timeoutPage,
 } from "./pages";
 
@@ -35,8 +35,10 @@ export interface PortalConfig {
   maxFieldLength: number;
   rateLimitPerMinute: number;
   slowMaxConcurrent: number;
-  /** Expected bearer token for the caseworker view and the JSON API. Unset means unconfigured. */
+  /** Filing token: the caseworker view and the JSON API. Unset means unconfigured. */
   portalToken?: string;
+  /** Read-only token for GET /drafts/:id. Unset turns that route off; the filing token also reads drafts. */
+  draftToken?: string;
   now?: () => number;
 }
 
@@ -52,7 +54,9 @@ export const DEFAULT_CONFIG: PortalConfig = {
 };
 
 const SESSION_COOKIE = "portal_session";
-export const WEB_SCOPE = "web";
+/** Caller-generated draft ids are at least 128 bits of lowercase hex. */
+const DRAFT_ID = /^[0-9a-f]{32,128}$/;
+const DRAFT_ID_RULE = "A draft number is 32 to 128 lowercase hexadecimal characters.";
 const ALLOWED_UPLOAD_TYPES = new Set(["application/pdf", "image/png", "image/jpeg"]);
 const MAX_SLOW_MS = 60000;
 const MAX_KEY_LENGTH = 128;
@@ -227,12 +231,6 @@ function readSessionId(request: Request): string | null {
   return null;
 }
 
-function wantsJson(request: Request): boolean {
-  const contentType = request.headers.get("content-type") ?? "";
-  const accept = request.headers.get("accept") ?? "";
-  return contentType.includes("application/json") || accept.includes("application/json");
-}
-
 function bearerToken(request: Request): string | null {
   const header = request.headers.get("authorization") ?? "";
   const match = /^Bearer (.+)$/.exec(header.trim());
@@ -241,7 +239,7 @@ function bearerToken(request: Request): string | null {
 
 /** JSON callers file in a namespace scoped to their token, so callers never share keys. */
 async function callerScope(request: Request): Promise<string> {
-  return `api-${await sha256Hex(bearerToken(request) ?? "")}`;
+  return `${API_SCOPE_PREFIX}${await sha256Hex(bearerToken(request) ?? "")}`;
 }
 
 type AuthState = "ok" | "denied" | "unconfigured";
@@ -254,16 +252,20 @@ function equalHex(a: string, b: string): boolean {
   return diff === 0;
 }
 
-async function authState(request: Request, config: PortalConfig): Promise<AuthState> {
-  if (!config.portalToken) return "unconfigured";
+/** A route is on only when its own token is configured; any accepted token then opens it. */
+async function authState(request: Request, configured: string | undefined, accepted: Array<string | undefined>): Promise<AuthState> {
+  if (!configured) return "unconfigured";
   const presented = bearerToken(request);
   if (!presented) return "denied";
-  const [a, b] = await Promise.all([sha256Hex(presented), sha256Hex(config.portalToken)]);
-  return equalHex(a, b) ? "ok" : "denied";
+  const hash = await sha256Hex(presented);
+  for (const token of accepted) {
+    if (token && equalHex(hash, await sha256Hex(token))) return "ok";
+  }
+  return "denied";
 }
 
 function authFailedResponse(path: string, state: AuthState): Response {
-  const wantsHtml = !path.startsWith("/submissions");
+  const wantsHtml = !path.startsWith("/submissions") && !path.startsWith("/drafts");
   if (state === "unconfigured") {
     const message = "This portal's access token is not configured, so staff and API access is off.";
     return wantsHtml ? html(errorPage("Not configured", message, "/", "Back to the home page"), 503) : json({ error: message }, 503);
@@ -281,12 +283,6 @@ function rateLimitedResponse(path: string): Response {
     : html(errorPage("Too many requests", message, "/", "Back to the home page"), 429);
 }
 
-function slowBusyResponse(wantsHtml: boolean): Response {
-  const message = "The office is holding too many slow responses. Try again in a moment.";
-  return wantsHtml
-    ? html(errorPage("Office busy", message, "/apply/review", "Back to review"), 503)
-    : json({ error: message }, 503);
-}
 
 async function loadLiveSession(
   request: Request,
@@ -327,15 +323,17 @@ async function touchSession(store: Store, session: SessionData, config: PortalCo
   return renewed ? fresh : null;
 }
 
-/**
- * Save the cleared post-submit session. The submit already succeeded, so a
- * session that lapsed mid-request still gets its confirmation marker, saved
- * with the old expiry: the row dies on schedule and the sweep takes it. The
- * cleared session holds no files, so this cannot point at deleted bytes.
- */
-async function saveSubmittedSession(store: Store, cleared: SessionData, config: PortalConfig): Promise<void> {
-  const fresh = await touchSession(store, cleared, config);
-  if (!fresh) await store.putSession(cleared);
+function draftInUse(): Response {
+  return html(
+    errorPage("Draft in use", "This draft number belongs to another application in progress. Start a new application.", "/apply", "Start a new application"),
+    409,
+  );
+}
+
+/** Save the session's household as its draft, expiring on the session timeout. False means another session owns it. */
+function saveDraft(store: Store, session: SessionData, household: Household, config: PortalConfig): Promise<boolean> {
+  const now = nowMs(config);
+  return store.saveDraft({ id: session.draftId, sessionId: session.id, household, savedAt: now, expiresAt: now + config.sessionTimeoutMinutes * 60 * 1000 });
 }
 
 function timedOut(): Response {
@@ -491,6 +489,10 @@ interface JsonUpload {
   bytes: Uint8Array;
 }
 
+/**
+ * File one application. Only the JSON API with the filing token reaches
+ * here; the browser saves drafts and never files.
+ */
 async function handleSubmit(
   request: Request,
   url: URL,
@@ -498,260 +500,171 @@ async function handleSubmit(
   fileStore: FileStore,
   config: PortalConfig,
 ): Promise<Response> {
-  const isJson = (request.headers.get("content-type") ?? "").includes("application/json");
-  let fields: Record<string, string> = {};
-  let jsonHousehold: Household | null = null;
-  let jsonUploads: JsonUpload[] | null = null;
+  if (!(request.headers.get("content-type") ?? "").includes("application/json")) {
+    return json({ error: "Submissions are JSON from the office's filing service. The browser saves drafts only." }, 415);
+  }
+  const fields: Record<string, string> = {};
+  let household: Household | null = null;
+  const uploads: JsonUpload[] = [];
 
-  if (isJson) {
-    const capped = await readCappedBody(request, config.maxBodyBytes);
-    if (!capped.ok) return tooLargeResponse(true);
-    let body: unknown;
-    try {
-      body = JSON.parse(new TextDecoder().decode(capped.bytes));
-    } catch {
-      return json({ error: "Request body must be valid JSON." }, 400);
+  const capped = await readCappedBody(request, config.maxBodyBytes);
+  if (!capped.ok) return tooLargeResponse(true);
+  let body: unknown;
+  try {
+    body = JSON.parse(new TextDecoder().decode(capped.bytes));
+  } catch {
+    return json({ error: "Request body must be valid JSON." }, 400);
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return json({ error: "Request body must be an object." }, 400);
+  }
+  const record = body as Record<string, unknown>;
+  for (const [k, v] of Object.entries(record)) {
+    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") fields[k] = String(v);
+  }
+  if (record["household"] !== undefined) {
+    const raw = record["household"];
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return json({ error: "household must be an object." }, 400);
     }
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
-      return json({ error: "Request body must be an object." }, 400);
+    const strings: Record<string, string> = {};
+    for (const [field, label] of Object.entries(HOUSEHOLD_LABELS)) {
+      const value = (raw as Record<string, unknown>)[field];
+      if (value === undefined) continue;
+      if (typeof value !== "string") return json({ error: `${label} must be a string.` }, 400);
+      strings[field] = value;
     }
-    const record = body as Record<string, unknown>;
-    for (const [k, v] of Object.entries(record)) {
-      if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") fields[k] = String(v);
+    const parsed = validateHousehold(strings, config.maxFieldLength);
+    if (!parsed.household) return json({ error: parsed.error }, 400);
+    household = parsed.household;
+  }
+  if (record["files"] !== undefined) {
+    if (!Array.isArray(record["files"])) return json({ error: "files must be an array." }, 400);
+    if (record["files"].length > config.maxUploadFiles) {
+      return json({ error: `Attach at most ${config.maxUploadFiles} files.` }, 400);
     }
-    if (record["household"] !== undefined) {
-      const raw = record["household"];
-      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-        return json({ error: "household must be an object." }, 400);
+    for (const entry of record["files"] as Array<Record<string, unknown>>) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        return json({ error: "Each file needs a name, type and base64 data." }, 400);
       }
-      const strings: Record<string, string> = {};
-      for (const [field, label] of Object.entries(HOUSEHOLD_LABELS)) {
-        const value = (raw as Record<string, unknown>)[field];
-        if (value === undefined) continue;
-        if (typeof value !== "string") return json({ error: `${label} must be a string.` }, 400);
-        strings[field] = value;
+      if (typeof entry["name"] !== "string" || typeof entry["type"] !== "string" || typeof entry["data"] !== "string") {
+        return json({ error: "Each file needs a name, type and base64 data." }, 400);
       }
-      const parsed = validateHousehold(strings, config.maxFieldLength);
-      if (!parsed.household) return json({ error: parsed.error }, 400);
-      jsonHousehold = parsed.household;
-    }
-    if (record["files"] !== undefined) {
-      if (!Array.isArray(record["files"])) return json({ error: "files must be an array." }, 400);
-      if (record["files"].length > config.maxUploadFiles) {
-        return json({ error: `Attach at most ${config.maxUploadFiles} files.` }, 400);
+      if (entry["name"].length > MAX_FILE_NAME_LENGTH) {
+        return json({ error: "A file name is too long." }, 400);
       }
-      jsonUploads = [];
-      for (const entry of record["files"] as Array<Record<string, unknown>>) {
-        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-          return json({ error: "Each file needs a name, type and base64 data." }, 400);
-        }
-        if (typeof entry["name"] !== "string" || typeof entry["type"] !== "string" || typeof entry["data"] !== "string") {
-          return json({ error: "Each file needs a name, type and base64 data." }, 400);
-        }
-        if (entry["name"].length > MAX_FILE_NAME_LENGTH) {
-          return json({ error: "A file name is too long." }, 400);
-        }
-        if (entry["data"].length > maxEncodedLength(config.maxUploadBytes)) {
-          return json({ error: `${entry["name"]} is larger than the ${config.maxUploadBytes} byte limit.` }, 400);
-        }
-        if (!ALLOWED_UPLOAD_TYPES.has(entry["type"])) {
-          return json({ error: `${entry["name"]} must be a PDF, PNG or JPG file.` }, 400);
-        }
-        let bytes: Uint8Array;
-        try {
-          bytes = fromBase64(entry["data"]);
-        } catch {
-          return json({ error: `${entry["name"]} is not valid base64.` }, 400);
-        }
-        if (bytes.length === 0) {
-          return json({ error: `${entry["name"]} is empty.` }, 400);
-        }
-        if (bytes.length > config.maxUploadBytes) {
-          return json({ error: `${entry["name"]} is larger than the ${config.maxUploadBytes} byte limit.` }, 400);
-        }
-        if (sniffType(bytes) !== entry["type"]) {
-          return json({ error: `${entry["name"]} does not look like its declared file type.` }, 400);
-        }
-        jsonUploads.push({ name: entry["name"], type: entry["type"], bytes });
+      if (entry["data"].length > maxEncodedLength(config.maxUploadBytes)) {
+        return json({ error: `${entry["name"]} is larger than the ${config.maxUploadBytes} byte limit.` }, 400);
       }
-    }
-  } else {
-    const capped = await readCappedBody(request, config.maxBodyBytes);
-    if (!capped.ok) return tooLargeResponse(wantsJson(request));
-    const form = await formRequestFromBytes(request, capped.bytes).formData();
-    for (const [k, v] of form.entries()) {
-      if (typeof v === "string") fields[k] = v;
+      if (!ALLOWED_UPLOAD_TYPES.has(entry["type"])) {
+        return json({ error: `${entry["name"]} must be a PDF, PNG or JPG file.` }, 400);
+      }
+      let bytes: Uint8Array;
+      try {
+        bytes = fromBase64(entry["data"]);
+      } catch {
+        return json({ error: `${entry["name"]} is not valid base64.` }, 400);
+      }
+      if (bytes.length === 0) {
+        return json({ error: `${entry["name"]} is empty.` }, 400);
+      }
+      if (bytes.length > config.maxUploadBytes) {
+        return json({ error: `${entry["name"]} is larger than the ${config.maxUploadBytes} byte limit.` }, 400);
+      }
+      if (sniffType(bytes) !== entry["type"]) {
+        return json({ error: `${entry["name"]} does not look like its declared file type.` }, 400);
+      }
+      uploads.push({ name: entry["name"], type: entry["type"], bytes });
     }
   }
 
   const key = (fields["key"] ?? "").trim();
-  if (!key) {
-    const message = "A submission key is required.";
-    return isJson || wantsJson(request) ? json({ error: message }, 400) : html(errorPage("Missing key", message, "/apply/review", "Back to review"), 400);
-  }
-  if (key.length > MAX_KEY_LENGTH) {
-    const message = "The submission key is too long.";
-    return isJson || wantsJson(request) ? json({ error: message }, 400) : html(errorPage("Bad key", message, "/apply/review", "Back to review"), 400);
-  }
+  if (!key) return json({ error: "A submission key is required." }, 400);
+  if (key.length > MAX_KEY_LENGTH) return json({ error: "The submission key is too long." }, 400);
+  if (!household) return json({ error: "A JSON submission needs a household object." }, 400);
+  if (uploads.length === 0) return json({ error: "Attach at least one document." }, 400);
 
-  let household: Household | undefined;
-  let files: FileMeta[] = [];
-  let source: Submission["source"] = "web";
-  let session: SessionData | null = null;
-  let scope = WEB_SCOPE;
-  let reviewedDigest = "";
-  // Sources this attempt reads bytes from, paired with the filed keys they fill on success.
-  let copies: Array<{ from: string; to: string }> = [];
+  // A key belongs to the scope that created it: callers see only their token's scope.
+  const scope = await callerScope(request);
+  const attemptId = newId();
+  const files: FileMeta[] = [];
+  // Staged sources paired with the filed keys they fill on success.
+  const copies: Array<{ from: string; to: string }> = [];
   // Objects this attempt created and may delete. Filed keys are never deleted here.
-  let stagedKeys: string[] = [];
-
-  if (isJson) {
-    source = "api";
-    if (!jsonHousehold) return json({ error: "A JSON submission needs a household object." }, 400);
-    const uploads = jsonUploads ?? [];
-    if (uploads.length === 0) return json({ error: "Attach at least one document." }, 400);
-    scope = await callerScope(request);
-    household = jsonHousehold;
-    const attemptId = newId();
-    try {
-      for (let i = 0; i < uploads.length; i++) {
-        const upload = uploads[i]!;
-        const sha256 = await sha256Hex(upload.bytes);
-        const staged = stagingAttemptKey(attemptId, i + 1, sha256);
-        await stageFile(fileStore, store, staged, upload.bytes, upload.type, nowMs(config));
-        stagedKeys.push(staged);
-        const r2key = submissionFileKey(scope, key, i + 1, sha256);
-        copies.push({ from: staged, to: r2key });
-        files.push({ name: upload.name, type: upload.type, size: upload.bytes.length, sha256, r2key });
-      }
-    } catch {
-      await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-      return json({ error: "The office could not store the attachments. Try again." }, 500);
+  const stagedKeys: string[] = [];
+  try {
+    for (let i = 0; i < uploads.length; i++) {
+      const upload = uploads[i]!;
+      const sha256 = await sha256Hex(upload.bytes);
+      const staged = stagingAttemptKey(attemptId, i + 1, sha256);
+      await stageFile(fileStore, store, staged, upload.bytes, upload.type, nowMs(config));
+      stagedKeys.push(staged);
+      const r2key = submissionFileKey(scope, key, i + 1, sha256);
+      copies.push({ from: staged, to: r2key });
+      files.push({ name: upload.name, type: upload.type, size: upload.bytes.length, sha256, r2key });
     }
-  } else {
-    session = await loadLiveSession(request, store, fileStore, config);
-    if (!session) return timedOut();
-    if (key !== session.key) {
-      return html(
-        errorPage(
-          "Wrong key",
-          "This form's key belongs to a different session. Go back to your review page and submit from there.",
-          "/apply/review",
-          "Back to review",
-        ),
-        400,
-      );
-    }
-    if (session.submitted) {
-      const filed = await store.getSubmission(WEB_SCOPE, session.submitted.key);
-      if (filed) return html(confirmationPage(filed, true));
-      return html(submittedPage(session.submitted));
-    }
-    if (!session.household) {
-      return html(errorPage("Incomplete application", "Household information is missing. Start again.", "/apply", "Start over"), 400);
-    }
-    if (session.files.length === 0) {
-      return redirect("/apply/documents");
-    }
-    household = session.household;
-    reviewedDigest = fields["digest"] ?? "";
-    files = session.files.map((draft, i) => ({ ...draft, r2key: submissionFileKey(scope, key, i + 1, draft.sha256) }));
-    copies = session.files.map((draft, i) => ({ from: draft.r2key, to: submissionFileKey(scope, key, i + 1, draft.sha256) }));
+  } catch {
+    await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
+    return json({ error: "The office could not store the attachments. Try again." }, 500);
   }
 
   const slowMs = resolveSlowMs(url, fields, config);
   const digest = await packetDigest(household, metasToDigests(files));
-  if (!isJson && reviewedDigest !== digest) {
-    return html(
-      errorPage(
-        "Changed since review",
-        "This application changed after the review page was shown. Review the current details and submit again.",
-        "/apply/review",
-        "Back to review",
-      ),
-      400,
-    );
-  }
-  // A key belongs to the scope that created it. There is no cross-scope
-  // fallback: API requests see only their token's scope, web only theirs.
   let lease: string | null = null;
+  const fail = async (status: number, message: string): Promise<Response> => {
+    await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
+    if (lease) await store.endSlow(lease);
+    return json({ error: message }, status);
+  };
   if (slowMs > 0) {
     lease = await store.tryBeginSlow(nowMs(config), SLOW_LEASE_TTL_MS, config.slowMaxConcurrent);
-    if (!lease) {
-      await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-      return slowBusyResponse(!isJson && !wantsJson(request));
-    }
+    if (!lease) return fail(503, "The office is holding too many slow responses. Try again in a moment.");
   }
-  // Attachments land on their final keys before the receipt exists, so a copy
-  // failure leaves not_found instead of a received row with missing bytes.
-  // Copies are idempotent: twins write identical bytes to identical keys.
-  // A missing source with a present target means a twin attempt already copied.
-  // The destination keys are tracked first, so a failed copy still leaves a
-  // record the sweep can delete; the winner untracks them once its row owns them.
+  // The destination keys are tracked and held before any byte lands on them,
+  // so the sweep cannot take a copy before its row exists. Attachments land
+  // on their final keys before the receipt exists, so a copy failure leaves
+  // not_found instead of a received row with missing bytes. Copies are
+  // idempotent: twins write identical bytes to identical keys, and a missing
+  // source with a present target means a twin attempt already copied.
+  let held = false;
   try {
-    await store.trackStaged(copies.map((c) => ({ key: c.to, createdAt: nowMs(config) })));
-    for (const pair of copies) {
-      const bytes = await fileStore.get(pair.from);
-      if (!bytes) {
-        const twin = await fileStore.get(pair.to);
-        if (!twin) throw new Error(`staged object missing: ${pair.from}`);
-        continue;
+    held = await store.holdForFiling(attemptId, copies.map((c) => ({ key: c.to, createdAt: nowMs(config) })), nowMs(config) + STAGED_RETENTION_MS);
+    if (held) {
+      for (const pair of copies) {
+        const bytes = await fileStore.get(pair.from);
+        if (!bytes) {
+          const twin = await fileStore.get(pair.to);
+          if (!twin) throw new Error(`staged object missing: ${pair.from}`);
+          continue;
+        }
+        await fileStore.put(pair.to, bytes.data, bytes.type);
       }
-      await fileStore.put(pair.to, bytes.data, bytes.type);
     }
   } catch {
-    await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-    // The destination keys stay tracked: no row references them, so the sweep
-    // deletes whatever the failed copy left behind.
-    if (lease) await store.endSlow(lease);
-    const message = "The office could not store the attachments. Try again.";
-    return isJson || wantsJson(request)
-      ? json({ error: message }, 500)
-      : html(errorPage("Filing failed", message, "/apply/review", "Back to review"), 500);
+    // The destination keys stay tracked: once the hold is gone and no row
+    // references them, the sweep deletes whatever the failed copy left behind.
+    await store.releaseHolds(attemptId).catch(() => undefined);
+    return fail(500, "The office could not store the attachments. Try again.");
   }
-  const result = await store.submit({
-    key,
-    scope,
-    household,
-    files,
-    digest,
-    source,
-    slowMs,
-    receivedAt: nowMs(config),
-  });
-  if (result.outcome === "conflict" || result.outcome === "conflict-retired") {
-    await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-    // A losing attempt never deletes its filed copies itself: a re-read then
-    // delete still races a new winner filing under this key. The copies stay
-    // tracked, and the sweep deletes them only while no submission row
-    // references them, which is the same guard that decided this attempt lost.
-    if (lease) await store.endSlow(lease);
-    const stored = result.outcome === "conflict" ? result.stored : result.receipt;
-    if (isJson || wantsJson(request)) return conflictJson(stored);
-    return html(
-      errorPage(
-        "Key already used",
-        `This key already filed a different application (confirmation ${stored.confirmationNumber}). Start a new application for new details.`,
-        "/apply",
-        "Start a new application",
-      ),
-      409,
-    );
-  }
-  if (result.outcome === "duplicate-retired") {
-    await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-    // Same as a losing attempt: the copies stay tracked for the sweep, which
-    // deletes them only while no submission row references them.
-    if (lease) await store.endSlow(lease);
-    const kept = result.receipt;
-    if (session) {
-      await releaseStaged(fileStore, store, session.files.map((f) => f.r2key)).catch(() => undefined);
-      const cleared: SessionData = { ...session, files: [] };
-      delete cleared.household;
-      cleared.submitted = { key: kept.key, confirmationNumber: kept.confirmationNumber, digest: kept.digest, receivedAt: kept.receivedAt };
-      await saveSubmittedSession(store, cleared, config);
+  // A key still waiting on its R2 delete could lose bytes written now to that delete.
+  if (!held) return fail(503, "The office is still clearing an earlier copy of these attachments. Try again in a minute.");
+
+  try {
+    const result = await store.submit({ key, scope, household, files, digest, slowMs, receivedAt: nowMs(config) });
+    if (result.outcome === "conflict" || result.outcome === "conflict-retired") {
+      // A losing attempt never deletes its filed copies itself: a re-read then
+      // delete still races a new winner filing under this key. The copies stay
+      // tracked, and the sweep deletes them only while no submission row
+      // references them, which is the same guard that decided this attempt lost.
+      await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
+      if (lease) await store.endSlow(lease);
+      return conflictJson(result.outcome === "conflict" ? result.stored : result.receipt);
     }
-    if (isJson || wantsJson(request)) {
+    if (result.outcome === "duplicate-retired") {
+      // Same as a losing attempt: the copies stay tracked for the guarded sweep.
+      await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
+      if (lease) await store.endSlow(lease);
+      const kept = result.receipt;
       return json(
         {
           key: kept.key,
@@ -767,40 +680,23 @@ async function handleSubmit(
         200,
       );
     }
-    return html(submittedPage({ key: kept.key, confirmationNumber: kept.confirmationNumber, digest: kept.digest, receivedAt: kept.receivedAt }));
+    const duplicate = result.outcome === "duplicate";
+    // The winner's row owns the filed copies now, so they leave tracking; a
+    // duplicate's copies are identical bytes on the same keys. If the untrack
+    // fails the sweep still spares them while the row references them.
+    await store.untrackStaged(copies.map((c) => c.to)).catch(() => undefined);
+    await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
+    if (slowMs > 0 && !duplicate) await sleep(slowMs);
+    if (lease) await store.endSlow(lease);
+    return submissionJson(result.submission, duplicate);
+  } finally {
+    await store.releaseHolds(attemptId).catch(() => undefined);
   }
-  const duplicate = result.outcome === "duplicate";
-  const receipt = result.submission;
-  // The winner's row owns the filed copies now, so they leave tracking; a
-  // duplicate's copies are identical bytes on the same keys. If the untrack
-  // fails the sweep still spares them while the row references them.
-  await store.untrackStaged(copies.map((c) => c.to)).catch(() => undefined);
-  await releaseStaged(fileStore, store, stagedKeys).catch(() => undefined);
-  // Drafts belong to this session and no receipt references them; dropping them is safe.
-  if (session) await releaseStaged(fileStore, store, session.files.map((f) => f.r2key)).catch(() => undefined);
-
-  if (session) {
-    // Touch the cleared session so the released drafts are not re-tracked.
-    const cleared: SessionData = { ...session, files: [] };
-    delete cleared.household;
-    cleared.submitted = {
-      key: receipt.key,
-      confirmationNumber: receipt.confirmationNumber,
-      digest: receipt.digest,
-      receivedAt: receipt.receivedAt,
-    };
-    await saveSubmittedSession(store, cleared, config);
-  }
-
-  if (slowMs > 0 && !duplicate) await sleep(slowMs);
-  if (lease) await store.endSlow(lease);
-
-  if (isJson || wantsJson(request)) return submissionJson(receipt, duplicate);
-  return html(confirmationPage(receipt, duplicate));
 }
 
 export interface CleanupReport {
   expiredSessions: number;
+  expiredDrafts: number;
   retiredFiles: number;
   purgedReceipts: number;
   sweptStaged: number;
@@ -811,8 +707,10 @@ export interface CleanupReport {
  * their files go after 7 days, leaving a small receipt for 30 days so a late
  * reconcile never sees not_found for something that was filed. A tracked
  * object goes only when nothing references it: the session and submission
- * guards decide by live reference, not age. Every claim checks its guard in
- * the same statement as the untrack, so a renewal that lands first always wins.
+ * guards decide by live reference or filing hold, not age. Every claim checks
+ * its guard in the same statement as the untrack, so a renewal or hold that
+ * lands first always wins. A claimed object stays recorded as a pending delete
+ * until R2 confirms, so a failed or interrupted delete is retried next run.
  */
 export async function runCleanup(store: Store, fileStore: FileStore, now: number): Promise<CleanupReport> {
   const expired = await store.listExpiredSessions(now);
@@ -841,21 +739,18 @@ export async function runCleanup(store: Store, fileStore: FileStore, now: number
   const claims: StagedClaim[] = tracked.map((entry) => {
     const owner = trackedOwner(entry.key);
     if (owner.kind === "session") return { key: entry.key, guard: { kind: "session", sessionId: owner.sessionId, now } };
-    if (owner.kind === "submission") return { key: entry.key, guard: { kind: "submission", scope: owner.scope, key: owner.key } };
+    if (owner.kind === "submission") return { key: entry.key, guard: { kind: "submission", scope: owner.scope, key: owner.key, now } };
     return { key: entry.key, guard: { kind: "attempt", olderThan: now - STAGED_RETENTION_MS } };
   });
-  const claimed = await store.claimUnreferencedStaged(claims);
-  // The claim already untracked these rows; if the R2 delete fails they are
-  // re-tracked, so the next run retries instead of leaking untracked objects.
-  try {
-    await fileStore.del(claimed);
-  } catch {
-    await store.trackStaged(claimed.map((key) => ({ key, createdAt: now }))).catch(() => undefined);
-    throw new Error("cleanup could not delete swept objects");
-  }
+  await store.claimUnreferencedStaged(claims);
+  await store.purgeExpiredHolds(now);
   await store.purgeExpiredSlowLeases(now);
   const purgedReceipts = await store.purgeOldReceipts(now - RECEIPT_RETENTION_MS);
-  return { expiredSessions: reaped.length, retiredFiles: retiredKeys.length, purgedReceipts, sweptStaged: claimed.length };
+  const expiredDrafts = await store.purgeExpiredDrafts(now);
+  const doomed = await store.listPendingDeletes();
+  await fileStore.del(doomed);
+  await store.clearPendingDeletes(doomed);
+  return { expiredSessions: reaped.length, expiredDrafts, retiredFiles: retiredKeys.length, purgedReceipts, sweptStaged: doomed.length };
 }
 
 export async function handleRequest(request: Request, store: Store, fileStore: FileStore, config: PortalConfig): Promise<Response> {
@@ -870,18 +765,27 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   const path = url.pathname;
   const method = request.method.toUpperCase();
 
-  const auth = await authState(request, config);
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
   const allowed = await store.checkRateLimit(ip, nowMs(config), RATE_WINDOW_MS, config.rateLimitPerMinute);
   if (!allowed) return rateLimitedResponse(path);
-  const jsonPost = method === "POST" && path === "/submissions" && (request.headers.get("content-type") ?? "").includes("application/json");
-  const isProtected =
-    path === "/caseworker" || path.startsWith("/caseworker/") || (path.startsWith("/submissions") && (method === "GET" || jsonPost));
-  if (isProtected && auth !== "ok") return authFailedResponse(path, auth);
+  // Filing, reconciling and the caseworker view take the filing token only.
+  if (path === "/caseworker" || path.startsWith("/caseworker/") || path.startsWith("/submissions")) {
+    const auth = await authState(request, config.portalToken, [config.portalToken]);
+    if (auth !== "ok") return authFailedResponse(path, auth);
+  }
+  // Draft reads take the read-only draft token, or the filing token, and are off without the draft token.
+  if (path.startsWith("/drafts")) {
+    const auth = await authState(request, config.draftToken, [config.draftToken, config.portalToken]);
+    if (auth !== "ok") return authFailedResponse(path, auth);
+  }
 
   if (method === "GET" && path === "/") return html(homePage());
 
-  if (method === "GET" && path === "/apply") return html(householdPage());
+  if (method === "GET" && path === "/apply") {
+    const draftId = url.searchParams.get("draft");
+    if (draftId !== null && !DRAFT_ID.test(draftId)) return html(errorPage("Bad draft number", DRAFT_ID_RULE, "/apply", "Start over"), 400);
+    return html(householdPage(draftId));
+  }
 
   if (method === "POST" && path === "/apply/household") {
     const capped = await readCappedBody(request, config.maxBodyBytes);
@@ -891,23 +795,20 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     for (const [k, v] of form.entries()) {
       if (typeof v === "string") fields[k] = v;
     }
+    const requested = fields["draft"] || null;
+    if (requested !== null && !DRAFT_ID.test(requested)) return html(householdPage(null, DRAFT_ID_RULE, fields), 400);
     const parsed = validateHousehold(fields, config.maxFieldLength);
-    if (!parsed.household) return html(householdPage(parsed.error, fields), 400);
+    if (!parsed.household) return html(householdPage(requested, parsed.error, fields), 400);
     let session = await loadLiveSession(request, store, fileStore, config);
+    const draftId = requested ?? session?.draftId ?? newId();
     let isNew = false;
-    if (!session || session.submitted) {
-      // A submitted session starts over with a fresh session and key; the old
-      // row keeps its receipt reference until it expires.
-      session = {
-        id: newId(),
-        files: [],
-        key: newId(16),
-        createdAt: nowMs(config),
-        expiresAt: 0,
-      };
+    if (!session || session.draftId !== draftId) {
+      // A different draft starts a fresh session; the old row expires on its own.
+      session = { id: newId(), draftId, files: [], createdAt: nowMs(config), expiresAt: 0 };
       isNew = true;
     }
     session.household = parsed.household;
+    if (!(await saveDraft(store, session, parsed.household, config))) return draftInUse();
     if (isNew) {
       // A new session has no row to renew; it is created, never renewed.
       session.expiresAt = nowMs(config) + config.sessionTimeoutMinutes * 60 * 1000;
@@ -922,7 +823,6 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "GET" && path === "/apply/documents") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (session.submitted) return html(submittedPage(session.submitted));
     if (!session.household) return redirect("/apply");
     if (!(await touchSession(store, session, config))) return timedOut();
     return html(documentsPage());
@@ -962,12 +862,42 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "GET" && path === "/apply/review") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (session.submitted) return html(submittedPage(session.submitted));
     if (!session.household) return redirect("/apply");
     if (session.files.length === 0) return redirect("/apply/documents");
     if (!(await touchSession(store, session, config))) return timedOut();
-    const digest = await packetDigest(session.household, metasToDigests(session.files));
-    return html(reviewPage(session.household, session.files, session.key, digest));
+    return html(reviewPage(session.household, session.files));
+  }
+
+  // The browser's Submit saves the draft and files nothing.
+  if (method === "POST" && path === "/apply/submit") {
+    const session = await loadLiveSession(request, store, fileStore, config);
+    if (!session) return timedOut();
+    if (!session.household) return redirect("/apply");
+    if (session.files.length === 0) return redirect("/apply/documents");
+    if (!(await saveDraft(store, session, session.household, config))) return draftInUse();
+    if (!(await touchSession(store, session, config))) return timedOut();
+    return html(savedPage(session.draftId));
+  }
+
+  const draftMatch = /^\/drafts\/([^/]+)$/.exec(path);
+  if (method === "GET" && draftMatch?.[1]) {
+    const id = draftMatch[1];
+    if (!DRAFT_ID.test(id)) return json({ error: DRAFT_ID_RULE }, 400);
+    const draft = await store.getDraft(id, nowMs(config));
+    if (!draft) return json({ id, status: "not_found" }, 404);
+    const h = draft.household;
+    return json({
+      id: draft.id,
+      household: {
+        fullName: h.fullName,
+        dateOfBirth: h.dateOfBirth,
+        address: h.address,
+        phone: h.phone,
+        householdSize: h.householdSize,
+        monthlyIncome: h.monthlyIncome,
+      },
+      savedAt: draft.savedAt,
+    });
   }
 
   if (method === "POST" && path === "/submissions") {

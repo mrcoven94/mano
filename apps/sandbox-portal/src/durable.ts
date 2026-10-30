@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   PortalStoreSql,
+  type Draft,
   type SessionData,
   type StagedClaim,
   type StagedEntry,
@@ -53,8 +54,40 @@ export class PortalStore extends DurableObject {
     return this.inner().listTrackedStaged();
   }
 
+  holdForFiling(attemptId: string, entries: StagedEntry[], until: number): Promise<boolean> {
+    return this.inner().holdForFiling(attemptId, entries, until);
+  }
+
+  releaseHolds(attemptId: string): Promise<void> {
+    return this.inner().releaseHolds(attemptId);
+  }
+
+  purgeExpiredHolds(now: number): Promise<void> {
+    return this.inner().purgeExpiredHolds(now);
+  }
+
   claimUnreferencedStaged(claims: StagedClaim[]): Promise<string[]> {
     return this.inner().claimUnreferencedStaged(claims);
+  }
+
+  listPendingDeletes(): Promise<string[]> {
+    return this.inner().listPendingDeletes();
+  }
+
+  clearPendingDeletes(keys: string[]): Promise<void> {
+    return this.inner().clearPendingDeletes(keys);
+  }
+
+  saveDraft(draft: Draft): Promise<boolean> {
+    return this.inner().saveDraft(draft);
+  }
+
+  getDraft(id: string, now: number): Promise<Draft | null> {
+    return this.inner().getDraft(id, now);
+  }
+
+  purgeExpiredDrafts(now: number): Promise<number> {
+    return this.inner().purgeExpiredDrafts(now);
   }
 
   getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null> {
