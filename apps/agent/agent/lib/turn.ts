@@ -61,6 +61,9 @@ export interface TurnResponse {
 
 interface TurnBody {
   turnId: string;
+  // When Channels received the person's message, from its own clock and
+  // signed in the turn: what "before" and "after" mean for this turn.
+  receivedAtMs: number;
   generation: number;
   grant: string;
   handleHash: string;
@@ -72,6 +75,7 @@ function parseBody(value: unknown): TurnBody | null {
   if (typeof value !== "object" || value === null) return null;
   const body = value as Record<string, unknown>;
   if (typeof body.turnId !== "string" || !TURN_ID.test(body.turnId)) return null;
+  if (typeof body.receivedAt !== "number" || !Number.isFinite(body.receivedAt) || body.receivedAt <= 0) return null;
   if (typeof body.handleHash !== "string" || !/^[0-9a-f]{64}$/.test(body.handleHash)) return null;
   if (typeof body.generation !== "number" || !Number.isInteger(body.generation) || body.generation < 0) return null;
   if (typeof body.grant !== "string" || !body.grant || body.grant.length > 2000) return null;
@@ -85,6 +89,7 @@ function parseBody(value: unknown): TurnBody | null {
   if (texts.length === 0 && attachmentCount === 0) return null;
   return {
     turnId: body.turnId,
+    receivedAtMs: body.receivedAt,
     generation: body.generation,
     grant: body.grant,
     handleHash: body.handleHash,
@@ -235,16 +240,21 @@ async function decideTurn(
     if (decision === "yes") return decide(engine, bound.ids[0], "yes");
     return declineAll(engine, bound.ids);
   }
-  // First attempt (or a retry whose first attempt bound nothing): only
-  // what existed when the person texted, never anything made after.
+  // First attempt (or a retry whose first attempt bound nothing): only a
+  // question shown strictly before Channels received the message, never
+  // one shown after it, and only drafts made before it.
   const arrived = Date.parse(turn.firstReceivedAt);
   const pointer = await engine.getPointer();
-  const answerable = pointer && Date.parse(pointer.setAt) <= arrived ? pointer : null;
+  const answerable = pointer && Date.parse(pointer.setAt) < arrived ? pointer : null;
+  if (pointer && !answerable) {
+    await bind(engine, body.turnId, turn.firstReceivedAt, ["unshown"]);
+    return UNSHOWN;
+  }
   if (answerable) {
     await bind(engine, body.turnId, turn.firstReceivedAt, [answerable.approvalId]);
     return decide(engine, answerable.approvalId, decision);
   }
-  const waiting = waitingProposals(approvals, engine.generation).filter((a) => Date.parse(a.createdAt) <= arrived);
+  const waiting = waitingProposals(approvals, engine.generation).filter((a) => Date.parse(a.createdAt) < arrived);
   if (waiting.length === 0) {
     await bind(engine, body.turnId, turn.firstReceivedAt, ["model"]);
     return null;
@@ -290,7 +300,11 @@ async function runTurn(
     if (err instanceof SettleTimeout) return failure(504, "timeout");
     throw err;
   }
-  const proposed = proposedIn(await engine.listApprovals(), body.generation, body.turnId);
+  const after = await engine.listApprovals();
+  const own = proposedIn(after, body.generation, body.turnId);
+  // A replayed draft turn never brings back a question superseded by a
+  // later draft.
+  const proposed = own && !proposalsOf(after, body.generation).some((a) => a.createdAt > own.createdAt) ? own : null;
   const question = proposed ? renderQuestion(proposed) : null;
   const text = [settled.status === "failed" ? "" : settled.text, question ?? ""].filter(Boolean).join("\n\n");
   if (!text) return failure(502, "failed", settled.reason);
@@ -354,7 +368,7 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
 
   let turn: { firstReceivedAt: string; created: boolean };
   try {
-    const recorded = await recordTurn(engine, body.turnId, new Date(receivedMs).toISOString());
+    const recorded = await recordTurn(engine, body.turnId, new Date(body.receivedAtMs).toISOString());
     if (!recorded) return Response.json({ status: "stale", text: "" }, { status: 409 });
     turn = { firstReceivedAt: recorded.turn.firstReceivedAt, created: recorded.created };
   } catch (err) {

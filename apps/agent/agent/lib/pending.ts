@@ -9,7 +9,7 @@
 //
 // The question is rendered from the request Engine froze, never from the
 // model's words, so the person reads the exact content their yes sends.
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import { guardReply } from "@mano/persona";
 
@@ -24,16 +24,17 @@ const LABELS: Record<string, string> = {
   monthlyIncome: "Monthly income",
 };
 
-// Every proposal gets its own key. Engine closes an approval by closing
-// every approval under its key, so two proposals never share one. The
-// key names the conversation generation and the turn that proposed it,
-// so the agent only ever reads proposals of the current conversation.
+// The key names the conversation generation and the turn that proposed
+// it, so the agent only ever reads proposals of the current conversation.
 function prefix(generation: number): string {
   return `agent:g${generation}:`;
 }
 
-export function proposalKey(generation: number, turnId: string): string {
-  return `${prefix(generation)}${turnId}:${randomUUID().slice(0, 8)}`;
+// A draft's key is its turn plus its place among that turn's drafts, so a
+// replay of the turn proposes under the same key and Engine hands back the
+// approval it already holds instead of a new one.
+export function proposalKey(generation: number, turnId: string, place: number): string {
+  return `${prefix(generation)}${turnId}:d${place}`;
 }
 
 // The agent's proposals in this conversation, newest first.

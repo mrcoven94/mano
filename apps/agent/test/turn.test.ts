@@ -38,8 +38,17 @@ function signedAt(path: string, body: Record<string, unknown>): Request {
   });
 }
 
-function turn(turnId: string, text: string, handleHash = HANDLE, generation = 0): Request {
-  return signedAt("/channels/mano/turn", { turnId, generation, handleHash, grant: grants.get(handleHash), texts: [text], attachmentCount: 0 });
+// receivedAt: when Channels received the message, signed in the turn.
+function turn(turnId: string, text: string, handleHash = HANDLE, generation = 0, receivedAt = Date.now()): Request {
+  return signedAt("/channels/mano/turn", {
+    turnId,
+    generation,
+    handleHash,
+    grant: grants.get(handleHash),
+    receivedAt,
+    texts: [text],
+    attachmentCount: 0,
+  });
 }
 
 // Stands in for Eve: the model either answers plainly or, asked to file,
@@ -94,6 +103,9 @@ async function send(request: Request, d = deps(), opts: { present?: boolean } = 
       { secret: SECRET, engine: engineClient() },
     );
   }
+  // The person reads a reply before answering: their next message reaches
+  // Channels strictly after it.
+  await new Promise((r) => setTimeout(r, 3));
   return { status: res.status, body };
 }
 
@@ -345,6 +357,30 @@ describe("a decision turn is bound to the question it answered", () => {
     expect(engine.approvals().map((a) => a.status).sort()).toEqual(["pending", "rejected"]);
     await send(turn("turn_bindY00002", "YES"));
     expect(engine.executor.calls).toHaveLength(1);
+  });
+});
+
+describe("ordering against Channels' receive time", () => {
+  it("a YES received before the question was shown never approves it", async () => {
+    const yesReceivedAt = Date.now() - 60_000;
+    await send(turn("turn_early00001", "Please file my renewal"));
+    const yes = await send(turn("turn_earlyY0001", "YES", HANDLE, 0, yesReceivedAt));
+    expect(yes.body.text).toMatch(/haven't shown you/i);
+    expect(engine.executor.calls).toHaveLength(0);
+    expect(engine.approvals()[0].status).toBe("pending");
+  });
+
+  it("replaying a draft turn finds its own approval and never closes a later one", async () => {
+    const aAt = Date.now() - 60_000;
+    const a = turn("turn_draftA0001", "Please file my renewal", HANDLE, 0, aAt);
+    await send(a.clone());
+    await send(turn("turn_draftB0001", "Please file my renewal, household of 4"));
+    await send(a);
+    const sizes = engine
+      .approvals()
+      .map((x) => `${JSON.parse(x.requestJson).payload.householdSize}:${x.status}`)
+      .sort();
+    expect(sizes).toEqual(["3:rejected", "4:pending"]);
   });
 });
 

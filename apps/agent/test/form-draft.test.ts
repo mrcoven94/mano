@@ -18,8 +18,8 @@ let engine: EngineDouble;
 let outside: string[];
 let grant: string;
 
-function ctx(turnId: string) {
-  return toolCtx({ handleHash: HANDLE, turnId, grant });
+function ctx(turnId: string, turnAtMs = Date.now()) {
+  return toolCtx({ handleHash: HANDLE, turnId, grant, turnAtMs });
 }
 
 beforeEach(async () => {
@@ -57,7 +57,7 @@ describe("starting a form draft", () => {
 
   it("a newer draft closes the one before it", async () => {
     await startFormDraft.execute(fields, ctx("turn_form000003"));
-    await startFormDraft.execute({ ...fields, householdSize: 4 }, ctx("turn_form000004"));
+    await startFormDraft.execute({ ...fields, householdSize: 4 }, ctx("turn_form000004", Date.now() + 10));
     expect(engine.approvals().map((a) => a.status).sort()).toEqual(["pending", "rejected"]);
   });
 

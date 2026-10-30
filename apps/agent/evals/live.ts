@@ -46,6 +46,7 @@ export function syntheticPerson(t: EvalLike): Person {
       const raw = JSON.stringify({
         turnId: `eval-${randomUUID()}`,
         generation: 0,
+        receivedAt: Date.now(),
         handleHash,
         grant: await grant(),
         texts: [message],
