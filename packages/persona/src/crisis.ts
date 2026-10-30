@@ -64,3 +64,49 @@ export function crisisFloor(reply: string): string {
 export function holdCrisisLines(bubbles: readonly string[]): string[] {
   return [CRISIS_LINE, ...bubbles.filter((b) => b !== CRISIS_LINE)];
 }
+
+// Suppression, the only exception to the detectors above, and used only
+// after one fired. A sentence that is exactly someone else cutting a
+// benefit ("they cut my food stamps", "my boss is cutting my shifts") is
+// a benefits question. The crisis line is suppressed only when every
+// sentence that triggers is exactly that: no other sentence triggers on
+// its own, and the other sentences rejoined trigger nothing either. The detectors stay
+// exactly as they are; nothing here can make them miss a crisis word.
+const BENEFITS_CUT_SENTENCE = new RegExp(
+  "^(?:they|he|she|my boss|my job|work|the county|the state|the office|snap|medicaid|the landlord|the company|my employer)" +
+    "(?: is| are|'s|'re)? (?:cut|cuts|cutting|cut back|cutting back)(?: back| off)? (?:my|our|the) " +
+    "(?:food stamps|snap|ebt|benefits|hours|shifts|pay|paycheck|wages|medicaid|coverage|insurance|power|lights|water|gas|phone)" +
+    "(?: off)?[\\s.!?,;:]*$",
+  "i",
+);
+
+// Newlines are spaces here, so a line break never makes a template
+// sentence out of part of a longer one ("they cut my benefits\nand my
+// throat"). Sentences end only at . ! or ? before whitespace or the end.
+function sentencesOf(text: string): string[] {
+  return text
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])(?:\s+|$)/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+export function suppressedBenefitsCut(text: string): boolean {
+  const sentences = sentencesOf(text);
+  const template = sentences.filter((s) => BENEFITS_CUT_SENTENCE.test(s));
+  if (template.length === 0) return false;
+  if (!template.some((s) => mightBeCrisis(s))) return false;
+  // Rejoined with ". " so phrases on either side of a removed sentence
+  // can never fuse into a new one.
+  const others = sentences.filter((s) => !BENEFITS_CUT_SENTENCE.test(s));
+  // Both must hold: no other sentence triggers on its own, and the other
+  // sentences rejoined trigger nothing either.
+  if (others.some((s) => mightBeCrisis(s))) return false;
+  return !mightBeCrisis(others.join(". "));
+}
+
+// The decision a turn uses: a detector fired, and suppression does not apply.
+export function crisisTurn(text: string): boolean {
+  return mightBeCrisis(text) && !suppressedBenefitsCut(text);
+}

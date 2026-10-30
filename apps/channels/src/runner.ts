@@ -35,7 +35,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { CRISIS_LINE, SAFE_REPLY, guardReply, holdCrisisLines, mightBeCrisis } from "@mano/persona";
+import { CRISIS_LINE, SAFE_REPLY, crisisTurn, guardReply, holdCrisisLines } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -669,7 +669,7 @@ export class ConversationRunner {
     // One crisis detector for every path, classified before admission
     // and before any model work. It is broad on purpose: a match makes
     // the reply name 988 and 911, and over-triggering is accepted.
-    const crisis = mightBeCrisis(turnText);
+    const crisis = crisisTurn(turnText);
     const history = this.history(meta.introduced);
     const historyChars = history.reduce((sum, h) => sum + h.text.length, 0);
     const { responder } = this.deps;
