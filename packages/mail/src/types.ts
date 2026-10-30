@@ -83,6 +83,9 @@ export interface DateToKnow {
   program: string | null;
   date: string;
   dateText: string;
+  // The letter's sentence, verbatim. Mano presents a date to know only
+  // as this quote ("the letter mentions: ..."), never as a restated fact.
+  quote: string;
   citation: Citation;
 }
 
@@ -134,8 +137,11 @@ export interface Question {
 
 export interface DeadlineProposal {
   letterId: string;
-  // The reader's pick, verbatim from the letter's transcription.
+  // The reader's pick from the letter's transcription, normalized for
+  // matching (whitespace, trailing punctuation, month abbreviations).
   sentence: string;
+  // The same sentence verbatim, as the person sees it on the letter.
+  quote: string;
   citation: Citation;
   // The date the sentence parsed to, or the counted result.
   dueDate: string;

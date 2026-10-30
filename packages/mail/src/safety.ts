@@ -34,6 +34,11 @@ const INSTRUCTION_PATTERNS: { re: RegExp; label: string }[] = [
 
 const LINK_RE = /https?:\/\/[^\s<>"')\]]+/gi;
 const WWW_RE = /\bwww\.[a-z0-9-]+(\.[a-z0-9-]+)+[^\s<>"')\]]*/gi;
+// A bare domain with no scheme or www ("benefits-unlock.example/login"),
+// on a known top-level domain so "Case No." or "Inc." never match, and
+// never the domain of an email address.
+const BARE_DOMAIN_RE =
+  /(?<![@\w.-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|gov|edu|us|info|biz|io|co|me|app|online|site|xyz|example)\b(?:\/[^\s<>"')\]]*)?/gi;
 // NANP-ish numbers: (555) 123-4567, 555-123-4567, 555.123.4567,
 // 5551234567 with separators, optional leading 1.
 const PHONE_RE = /(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}\b/g;
@@ -62,8 +67,8 @@ export function findInstructions(text: string): ContentFlag[] {
 export function findLinks(text: string): ContentFlag[] {
   const flags: ContentFlag[] = [];
   const seen = new Set<string>();
-  const collect = (re: RegExp) => {
-    for (const m of text.matchAll(re)) {
+  const collect = (re: RegExp, source = text) => {
+    for (const m of source.matchAll(re)) {
       const url = m[0].replace(/[.,;:!?]+$/, "");
       if (!seen.has(url)) {
         seen.add(url);
@@ -73,6 +78,8 @@ export function findLinks(text: string): ContentFlag[] {
   };
   collect(LINK_RE);
   collect(WWW_RE);
+  // Bare domains outside the links already found.
+  collect(BARE_DOMAIN_RE, text.replace(LINK_RE, (m) => " ".repeat(m.length)).replace(WWW_RE, (m) => " ".repeat(m.length)));
   return flags;
 }
 
@@ -100,23 +107,26 @@ function hostOf(url: string): string | null {
   }
 }
 
-// Payment by gift card, prepaid card, wire, crypto or a payment app,
-// or reading card codes to someone, is a scam signal with or without a
-// link. A sentence that warns against it ("we will never ask you to pay
-// with gift cards") is not.
+// Payment by gift card, prepaid card, crypto, wire transfer or a
+// payment app is a scam signal whenever the letter also mentions paying,
+// in any sentence: passive demands and demands split across sentences
+// count. So does texting or calling with card codes. The only sentence
+// set aside is one where the sender says it never asks for, requires or
+// accepts such payment ("we will never ask you to pay with gift cards").
 const PAYMENT_METHOD =
-  /\b(?:gift\s*cards?|prepaid\s+(?:debit\s+)?cards?|wire\s+transfers?|bitcoin|crypto(?:currency)?|zelle|cash\s*app|venmo|western\s+union|moneygram)\b/i;
-const PAYMENT_DEMAND = /\b(?:pay|buy|purchase|send|load|wire|transfer|deposit)\b/i;
+  /\b(?:gift\s*cards?|prepaid\s+(?:debit\s+)?cards?|bitcoin|crypto(?:currency)?|wire\s+transfers?|zelle|cash\s*app|venmo)\b/i;
+const PAYING = /\b(?:pay|pays|paid|paying|payment|payments|fee|fees|purchase|buy|send\s+them)\b|\$\s*\d/i;
 const CODES_DEMAND = /\b(?:text|call|send|read|give|email)\b[^.!?]{0,60}\b(?:codes|card\s+numbers)\b/i;
-const NEGATION = /\b(?:never|not|no|don't|do\s+not|will\s+not|won't)\b/i;
+const NEVER_ASKS =
+  /\b(?:never|not|won't|don't|doesn't)\s+(?:ever\s+)?(?:ask|request|require|accept|take)\b/i;
 
 function paymentDemand(text: string): string | null {
-  for (const sentence of text.split(/(?<=[.!?])\s+/)) {
-    if (NEGATION.test(sentence)) continue;
-    if ((PAYMENT_METHOD.test(sentence) && PAYMENT_DEMAND.test(sentence)) || CODES_DEMAND.test(sentence)) {
-      return sentence.trim();
-    }
-  }
+  const sentences = text.split(/(?<=[.!?])\s+|\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  const counted = sentences.filter((s) => !(NEVER_ASKS.test(s) && PAYMENT_METHOD.test(s)));
+  const codes = counted.find((s) => CODES_DEMAND.test(s));
+  if (codes) return codes;
+  const method = counted.find((s) => PAYMENT_METHOD.test(s));
+  if (method && PAYING.test(text)) return method;
   return null;
 }
 

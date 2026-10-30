@@ -94,6 +94,7 @@ describe("readMail", () => {
       {
         letterId: "L1",
         sentence: "Your renewal is due November 20, 2026",
+        quote: "Your renewal is due November 20, 2026.",
         citation: { file: "mail.jpg", page: 1, box: { ymin: 200, xmin: 60, ymax: 220, xmax: 300 } },
         dueDate: "2026-11-20",
         obligation: "renew",

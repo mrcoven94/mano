@@ -39,8 +39,11 @@
 // verbatim, that parses whole into an absolute form under src/gate.ts,
 // with no condition, audience or cancellation word anywhere and no
 // other date apart from a single notice date alone on a header line;
-// counted deadlines propose the computed date with the count; dates to
-// know publish only when nothing on the letter is in doubt; scams are
+// counted deadlines propose the computed date with the count; every
+// surfaced date carries its verbatim sentence as a quote; dates to know
+// publish only when nothing on the letter is in doubt, and a sentence
+// with deadline wording is a deadline candidate, never a date to know;
+// a date with a year the parser cannot read in full asks; scams are
 // screened on the whole letter, and a letter flagged as a scam gets
 // the scam warning and no proposal, date to know or deadline question;
 // links, phones and addresses are never acted on here and come back
@@ -80,6 +83,7 @@ import {
   headerDates,
   parseAllDates,
   parseWrittenDate,
+  quoteOf,
   recoverSentence,
   splitSentences,
   verbatimSentences,
@@ -527,6 +531,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       iso: string;
       text: string;
       sentence: string;
+      quote?: string;
       obligation: Obligation;
       citation: Citation;
     }
@@ -537,7 +542,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     const toKnow: GatedEntry[] = [];
     const found: LetterSentence[] = [];
     const sentences: LetterSentence[] = [];
-    const picks: { sentence: string; citation: Citation }[] = [];
+    const picks: { sentence: string; quote: string; citation: Citation }[] = [];
     const letterTexts: string[] = [];
     const withheld: DeadlineCandidate[] = [];
     const hold = (sentence: string, citation: Citation | null): void => {
@@ -561,7 +566,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
           continue;
         }
         if (!returned.has(sentence)) returned.set(sentence, { text: d.text, citation });
-        if (!picks.some((p) => p.sentence === sentence)) picks.push({ sentence, citation });
+        if (!picks.some((p) => p.sentence === sentence)) picks.push({ sentence, quote: quoteOf(sentence, ex.fullText), citation });
       }
       for (const sentence of splitSentences(ex.fullText)) {
         const cited = returned.get(sentence) ?? null;
@@ -573,7 +578,14 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         if (!cited) continue;
         const verdict = gateSentence(sentence, noticeIso);
         if (verdict.kind === "date-to-know") {
-          toKnow.push({ iso: verdict.iso, text: cited.text, sentence, obligation: "other", citation: cited.citation });
+          toKnow.push({
+            iso: verdict.iso,
+            text: cited.text,
+            sentence,
+            quote: quoteOf(sentence, ex.fullText),
+            obligation: "other",
+            citation: cited.citation,
+          });
         } else if (verdict.kind !== "no-date") {
           reasons.push(`the letter also says "${sentence}"`);
           hold(sentence, cited.citation);
@@ -648,6 +660,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
           program: fields.program?.value ?? null,
           date: entry.iso,
           dateText: entry.text,
+          quote: entry.quote ?? entry.sentence,
           citation: entry.citation,
         });
       }
@@ -664,6 +677,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       ? {
           letterId,
           sentence: best.pick.sentence,
+          quote: best.pick.quote,
           citation: best.pick.citation,
           dueDate: best.dueDate,
           obligation: obligationOf(best.pick.sentence),
@@ -1096,10 +1110,12 @@ function gateReason(reason: AskReason, count: DayCount | undefined, sentence: st
 // then one naming exactly one date. Only deadline sentences are
 // proposed, and never a date before the notice date or more than a
 // year after it. Null when the reader picked none.
+type Pick = { sentence: string; quote: string; citation: Citation };
+
 function pickProposal(
-  picks: { sentence: string; citation: Citation }[],
+  picks: Pick[],
   noticeIso: string | null,
-): { pick: { sentence: string; citation: Citation }; dueDate: string; count: DayCount | null } | null {
+): { pick: Pick; dueDate: string; count: DayCount | null } | null {
   const scored = picks
     .filter((p) => isDeadlineSentence(p.sentence))
     .map((pick) => {

@@ -129,7 +129,7 @@ export function isDeadlineLike(sentence: string): boolean {
 // of the wording above. A letter publishes only when its whole
 // transcription holds exactly one.
 const DEADLINE_WORD =
-  /\b(?:by|before|no\s+later\s+than|due|within|deadline|expires?|expired|expiration|must|return(?:s|ed)?|submit(?:s|ted)?|respond(?:s|ed)?|renew(?:s|ed)?|recertify|upload(?:s|ed)?|sends?|sent|mail(?:s|ed)?)\b/i;
+  /\b(?:by|before|until|no\s+later\s+than|due|within|deadline|last\s+day|close[sd]?|closing|expires?|expired|expiration|must|return(?:s|ed)?|submit(?:s|ted)?|respond(?:s|ed)?|renew(?:s|ed)?|recertify|upload(?:s|ed)?|sends?|sent|mail(?:s|ed)?)\b/i;
 const DATE_OR_COUNT = new RegExp(
   String.raw`\b(?:${ANY_COUNT}|today|tonight|tomorrow|next\s+(?:week|month))\b|\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b|\b${MONTH_WORD}\s+\d{1,2}\b`,
   "i",
@@ -164,7 +164,10 @@ export function hasQualifier(sentence: string): boolean {
 // negation, condition or alternative.
 const TO_KNOW_LEFTOVER =
   /\b(?:not|no|never|cannot|nor|none|without|if|unless|when|whenever|whether|provided|otherwise|or|either|instead|alternatively)\b|n['’]t\b/i;
-const DUTY_WORDS = /\b(?:must|respond|send|submit|provide|complete|deliver|mail|bring|renew|appeal|pay)\b/i;
+// Duty or deadline wording keeps a sentence out of dates to know; it
+// becomes a deadline candidate instead.
+const DUTY_WORDS =
+  /\b(?:must|respond|send|submit|provide|complete|deliver|mail|bring|renew|appeal|pay|last\s+day|close[sd]?|closing|expire[sd]?|expiration|due|deadline|by|before|until|no\s+later\s+than)\b/i;
 
 // The duty a deadline states, read from its own words. Dates within
 // one duty are compared with each other.

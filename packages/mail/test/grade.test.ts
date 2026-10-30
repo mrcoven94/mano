@@ -64,6 +64,7 @@ function proposal(file: string, dueDate: string, confidence: "high" | "low" = "h
     proposal: {
       letterId,
       sentence: `Respond by ${dueDate}`,
+      quote: `Respond by ${dueDate}.`,
       citation: cite(file),
       dueDate,
       obligation: "respond",
@@ -76,7 +77,7 @@ function proposal(file: string, dueDate: string, confidence: "high" | "low" = "h
 }
 
 function dateToKnow(file: string, date: string): DateToKnow {
-  return { letterId: "L1", program: "Medi-Cal", date, dateText: date, citation: cite(file) };
+  return { letterId: "L1", program: "Medi-Cal", date, dateText: date, quote: `Coverage ends ${date}.`, citation: cite(file) };
 }
 
 function phoneWarning(file: string, phone: string): Warning {

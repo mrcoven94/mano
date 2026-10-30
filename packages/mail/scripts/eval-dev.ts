@@ -22,13 +22,13 @@ function show(reading: MailReading): void {
   for (const c of reading.stats.modelCalls) {
     console.log(`      call ${c.purpose} ${c.model} ${c.elapsedMs} ms, ${c.inputTokens}+${c.outputTokens} tok`);
   }
-  for (const d of reading.datesToKnow) console.log(`      date to know ${d.date} "${d.dateText}"`);
+  for (const d of reading.datesToKnow) console.log(`      date to know ${d.date} "${d.quote}"`);
   for (const q of reading.questions) {
     console.log(`      question ${q.kind}: ${q.prompt}`);
     const p = q.proposal;
     if (p) {
       const counted = p.count ? `, counted ${p.count.days} days from ${p.count.fromIso}` : "";
-      console.log(`        proposal ${p.dueDate} (${p.confidence})${counted} p${p.citation.page} "${p.sentence}"`);
+      console.log(`        proposal ${p.dueDate} (${p.confidence})${counted} p${p.citation.page} "${p.quote}"`);
       for (const r of p.reasons) console.log(`          because ${r}`);
     }
     for (const c of q.candidates ?? []) console.log(`        candidate [${c.dates.join(", ")}] "${c.sentence}"`);
