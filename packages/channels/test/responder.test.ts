@@ -117,8 +117,7 @@ describe("SparkResponder", () => {
     const responder = new SparkResponder({ apiKey: "test-key-not-real", model: MODEL, fetchFn: fetchFn as typeof fetch });
     const result = await responder.respond({ texts: ["Hi"], attachmentCount: 0 });
     expect(result.attempts).toBe(5);
-    // Two hedged fast calls (a question answered with a reaction alone) bound it.
-    expect(responder.maxAttempts).toBe(12);
+    expect(responder.maxAttempts).toBe(9);
   });
 
   it("hedges a slow fast call with a second request, takes the first answer and aborts the other", async () => {
@@ -279,32 +278,12 @@ describe("SparkResponder crisis routing uses the broad check", () => {
   });
 });
 
-describe("a reaction never replaces an answer (LAP-508)", () => {
-  it("asks again for text when the person asked something and the reply is a reaction alone", async () => {
-    const fetchFn = scripted(reply("REACT: like"), reply("it's on your renewal letter. send a photo and i'll read it"));
+describe("no corrective call (PR 74 review 3: every reply has words)", () => {
+  it("returns a reaction-only answer as it came, with one call; the runner gives it words", async () => {
+    const fetchFn = scripted(reply("REACT: like"));
     const responder = new SparkResponder({ apiKey: "test-key-not-real", model: MODEL, fetchFn: fetchFn as typeof fetch, hedgeAfterMs: 60_000 });
     const result = await responder.respond({ texts: ["When is my SNAP renewal due?"], attachmentCount: 0, history: [] });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    expect(String(bodyOf(fetchFn, 1).instructions)).toContain("answer it in text");
-    expect(result).toMatchObject({ text: "it's on your renewal letter. send a photo and i'll read it", tapback: "like", attempts: 2 });
-  });
-
-  it("keeps a reaction alone when nothing was asked", async () => {
-    const fetchFn = scripted(reply("REACT: love"));
-    const responder = new SparkResponder({ apiKey: "test-key-not-real", model: MODEL, fetchFn: fetchFn as typeof fetch, hedgeAfterMs: 60_000 });
-    const result = await responder.respond({ texts: ["thank you!!"], attachmentCount: 0, history: [] });
     expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ text: "", tapback: "love", attempts: 1 });
-  });
-});
-
-describe("the deep path answers in text too (PR 74 review, blocker 3)", () => {
-  it("asks again for text when a deep answer to a question is a reaction alone", async () => {
-    const fetchFn = scripted(reply("DEEP: Let me check how that works."), reply("REACT: like"), reply("the date is on your renewal letter"));
-    const responder = new SparkResponder({ apiKey: "test-key-not-real", model: MODEL, fetchFn: fetchFn as typeof fetch, hedgeAfterMs: 60_000 });
-    const result = await responder.respond({ texts: ["When is my SNAP renewal due?"], attachmentCount: 0, history: [] }, { onHeadsUp: async () => {} });
-    expect(fetchFn).toHaveBeenCalledTimes(3);
-    expect(String(bodyOf(fetchFn, 2).instructions)).toContain("answer it in text");
-    expect(result).toMatchObject({ text: "the date is on your renewal letter", tapback: "like", attempts: 3 });
+    expect(result).toMatchObject({ text: "", tapback: "like", attempts: 1 });
   });
 });

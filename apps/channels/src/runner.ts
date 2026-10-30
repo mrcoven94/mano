@@ -36,14 +36,13 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { EYES, allowedReactions, allowedTapback, crisisLineFor, crisisTurn, eyesAllowed, guardReply, needsAnswer, reactionOnlyAllowed, refusedReactionText, tapbackText } from "@mano/persona";
+import { EYES, allowedTapback, crisisLineFor, crisisTurn, eyesAllowed, guardReply } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
   FAILURE_BUBBLE,
   INTERIM_BUBBLE,
   INTRO_BUBBLE,
-  NEEDS_ANSWER_BUBBLE,
   OPT_OUT_BUBBLE,
   attachmentAck,
 } from "./text.js";
@@ -492,6 +491,7 @@ export class ConversationRunner {
 
     if (event.kind === "chat.closed") {
       store.patchMeta({ closed: true });
+      this.decorations.cancelAll("closed");
       logger.info("conversation_closed", { handle: this.logHandle(), eventId: event.id });
       return "recorded";
     }
@@ -1010,11 +1010,8 @@ export class ConversationRunner {
     // the turn routes deep or runs past eyesAfterMs.
     const eyes = this.eyesFor(turn, chatId, target, crisis, generation);
     if (attachments.length > 0) eyes.put("attachment");
-    let eyesTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => eyes.put("slow"), config.eyesAfterMs);
-    const stopEyesTimer = (): void => {
-      clearTimeout(eyesTimer);
-      eyesTimer = undefined;
-    };
+    // Tracked by the decoration queue, so STOP, a close or a delete cancels it.
+    const stopEyesTimer = this.decorations.schedule("eyes_timer", config.eyesAfterMs, () => eyes.put("slow"));
 
     // Keepalive refreshes run one at a time. Before the final stop, no
     // new refresh starts and the one in flight finishes, so typing can
@@ -1049,28 +1046,17 @@ export class ConversationRunner {
           // checked again: a split must never leave an unchecked link
           // behind. The persisted bubbles are final and capped. A crisis
           // turn's final bubbles must still name 988 and 911.
-          // A tapback is decoration, picked by the model only from what the
-          // target message allows, and never on a message that has the
-          // eyes. It carries the reply alone only for a plain thanks or ok
-          // in a batch that asks nothing; everything else gets words.
-          const targetText = target?.text ?? "";
-          const tapback = target && !eyes.placed ? allowedTapback(answer.tapback, targetText, crisis) : null;
-          const routable = tapback !== null && target !== null && chatId !== null;
-          const hasText = answer.text.trim().length > 0;
-          const asked = needsAnswer(turnText) || needsAnswer(targetText);
-          const allowed = target ? allowedReactions(targetText, crisis) : [];
-          let reply: string | null = answer.text;
-          if (!hasText && crisis) reply = "";
-          else if (!hasText && asked) reply = NEEDS_ANSWER_BUBBLE;
-          else if (!hasText && routable && reactionOnlyAllowed(targetText)) reply = null;
-          else if (!hasText && tapback) reply = tapbackText(tapback);
-          else if (!hasText && answer.tapback) reply = allowed[0] ? tapbackText(allowed[0]) : refusedReactionText(targetText);
-          const answered = reply === null ? [] : await this.finalize(turn, reply, crisis, turnText);
+          // Every reply has words; an empty one becomes the guard's safe
+          // line in finalize. A reaction is only ever added on top: picked
+          // by the model from what the target message allows, never on a
+          // message that has the eyes, and sent outside the turn.
+          const tapback = target && !eyes.placed ? allowedTapback(answer.tapback, target.text, crisis) : null;
+          const answered = await this.finalize(turn, answer.text, crisis, turnText);
           const replyTo = inlineReplyTarget(items);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
           bubbles.push(...answered);
-          if (routable && tapback && target) {
-            bubbles.push({ part: 0, tag: "react", text: tapback, messageId: target.messageId, fallback: reply === null ? tapbackText(tapback) : null });
+          if (tapback && target && chatId && answered.length > 0) {
+            bubbles.push({ part: 0, tag: "react", text: tapback, messageId: target.messageId, fallback: null });
           }
           // Persisted with the answer, so a resumed send reports it too.
           if (answer.presentation) store.savePresentation({ turn, generation, state: "pending", ...answer.presentation });
@@ -1161,10 +1147,11 @@ export class ConversationRunner {
     // (pinned by test). Nothing here mutates them, so a replayed turn
     // sends byte-identical bubbles under the same keys.
     let fresh = 0;
-    // Text goes first: a tapback never holds back a message.
+    // Words go first; a reaction is only ever added on top.
     for (const bubble of [...bubbles.filter((b) => b.tag !== "react"), ...bubbles.filter((b) => b.tag === "react")]) {
       if (bubble.tag === "react") {
-        await this.sendTapback(turn, bubble, chatId, to, generation);
+        // After the words, and outside the turn: never awaited.
+        this.decorations.run("reaction", () => this.sendTapback(turn, bubble, chatId, generation));
         continue;
       }
       const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation, replyTo: bubble.replyTo ?? null });
@@ -1180,59 +1167,40 @@ export class ConversationRunner {
   // Runs the responder. A deep turn's heads-up goes out the moment the
   // responder has it, after the intro on a first contact, and takes the
   // place of the interim notice.
-  // A tapback has its own outbound row, so a resumed turn knows whether
-  // it landed. It is not a message and never counts toward limits. Right
-  // before every attempt, including a replay, it checks the generation,
-  // opt-out and closed state. When it fails, its persisted fallback text
-  // goes through the one send path under its own key.
-  private async sendTapback(
-    turn: number,
-    bubble: import("./store.js").AnswerBubble,
-    chatId: string | null,
-    to: string | null,
-    generation: number,
-  ): Promise<void> {
+  // A reaction is decoration on top of words: it runs outside the turn,
+  // never awaited by it. It keeps its own outbound row, so a resumed turn
+  // does not send it twice, and it reads STOP, closed and the generation
+  // fresh right before the call. It never writes after a delete.
+  private async sendTapback(turn: number, bubble: import("./store.js").AnswerBubble, chatId: string | null, generation: number): Promise<void> {
     const { store, channel, logger, nowMs, config } = this.deps;
+    if (this.decorationBlock(generation) === "generation") return;
     const key = idempotencyKeyFor(config.handleHash, generation, turn, bubble.part, "react");
-    const sendFallback = async (): Promise<void> => {
-      if (bubble.fallback) await this.sendBubble({ turn, part: bubble.part, tag: "react-fallback", text: bubble.fallback, chatId, to, generation });
-    };
     const prior = store.outboundByKey(key);
-    if (prior?.state === "sent" || prior?.state === "refused") return;
-    if (prior?.state === "failed") return sendFallback();
-    this.checkGeneration(generation);
-    const meta = store.meta();
+    if (prior && prior.state !== "planned") return;
     if (!prior) {
       store.addOutbound({
         key, turn, part: bubble.part, tag: "react", text: bubble.text, attempts: 0, state: "planned", code: null,
         chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
       });
     }
-    if (meta.optedOut || meta.closed || !chatId || !bubble.messageId) {
-      const code = meta.optedOut ? "opted_out" : meta.closed ? "conversation_closed" : "unroutable";
-      store.updateOutbound(key, { state: "refused", code, updatedAtMs: nowMs() });
-      logger.info("tapback_suppressed", { handle: this.logHandle(), turn, code });
+    const settle = (state: "sent" | "refused" | "failed", code: string | null): void => {
+      if (this.decorationBlock(generation) === "generation") return;
+      store.updateOutbound(key, { state, code, updatedAtMs: nowMs() });
+    };
+    const block = !chatId || !bubble.messageId ? "unroutable" : this.decorationBlock(generation);
+    if (block === "generation") return;
+    if (block) {
+      settle("refused", block);
+      logger.info("tapback_suppressed", { handle: this.logHandle(), turn, code: block });
       return;
     }
     try {
-      // Read fresh right before the call: STOP, a close or a delete may
-      // have landed since the turn started.
-      const block = this.decorationBlock(generation);
-      if (block === "generation") throw new GenerationStopped();
-      if (block) {
-        store.updateOutbound(key, { state: "refused", code: block, updatedAtMs: nowMs() });
-        logger.info("tapback_suppressed", { handle: this.logHandle(), turn, code: block });
-        return;
-      }
-      await channel.react(chatId, bubble.messageId, bubble.text as import("@mano/channels").Tapback);
-      this.checkGeneration(generation);
-      store.updateOutbound(key, { state: "sent", updatedAtMs: nowMs() });
+      await channel.react(chatId!, bubble.messageId!, bubble.text as import("@mano/channels").Tapback);
+      settle("sent", null);
       logger.info("tapback_sent", { handle: this.logHandle(), turn, tapback: bubble.text });
     } catch (err) {
-      if (err instanceof GenerationStopped) throw err;
-      store.updateOutbound(key, { state: "failed", code: "tapback_failed", updatedAtMs: nowMs() });
+      settle("failed", "tapback_failed");
       logger.warn("tapback_failed", { handle: this.logHandle(), turn, err: errName(err) });
-      await sendFallback();
     }
   }
 

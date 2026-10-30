@@ -2,8 +2,7 @@
 // runner test that failed before the simplification.
 import { describe, expect, it } from "vitest";
 import type { Responder, RespondHooks, TurnInput } from "@mano/channels";
-import { EYES, NEUTRAL_REACTION_TEXT as PRAISE_FALLBACK, REFUSED_TAPBACK_TEXT } from "@mano/persona";
-import { NEEDS_ANSWER_BUBBLE } from "../src/text.js";
+import { EYES } from "@mano/persona";
 import { inboundEvent, makeHarness, runTurnAfterBatch, TEST_CHAT, type Harness } from "./helpers.js";
 
 const BACKGROUND_URL = "https://withmano.example/chat-background.png";
@@ -100,14 +99,16 @@ describe("Sol round 2, repro 4: only the last message of a batch is a target, on
     await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "thank you!", occurredAtMs: h.now }), "webhook");
     await h.runner.handleEvent(inboundEvent({ id: "evt_2", text: "my renewal letter came today", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
+    await h.decorations.idle();
     expect(h.channel.reactions).toEqual([]);
   });
 
   it("reacts to the last message when it is the thanks", async () => {
-    const h = introduced(makeHarness({ responder: reply("", "love") }));
+    const h = introduced(makeHarness({ responder: reply("anytime!", "love") }));
     await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Loved “your renewal is due Friday”", occurredAtMs: h.now }), "webhook");
     await h.runner.handleEvent(inboundEvent({ id: "evt_2", text: "thanks!", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
+    await h.decorations.idle();
     expect(h.channel.reactions).toEqual([{ chatId: TEST_CHAT, messageId: "msg_evt_2", reaction: "love" }]);
   });
 });
@@ -127,41 +128,37 @@ describe("Sol round 2, repro 6: a question without a question mark always gets w
     it(`answers "${text}" in words`, async () => {
       const h = introduced(makeHarness({ responder: reply("", "like") }));
       const sent = await say(h, "evt_1", text);
-      expect(sent).toEqual([NEEDS_ANSWER_BUBBLE]);
+      expect(sent.join(" ").trim().length).toBeGreaterThan(0);
     });
   }
 
-  it("still lets a plain thanks or ok be answered with a reaction alone", async () => {
-    const h = introduced(makeHarness({ responder: reply("", "like") }));
-    expect(await say(h, "evt_1", "ok sounds good")).toEqual([]);
+  it("answers a plain ok in words too, with the reaction on top (review 3)", async () => {
+    const h = introduced(makeHarness({ responder: reply("talk soon", "like") }));
+    expect(await say(h, "evt_1", "ok sounds good")).toEqual(["talk soon"]);
+    await h.decorations.idle();
     expect(h.channel.reactions.map((r) => r.reaction)).toEqual(["like"]);
   });
 
-  it("gives words to a done message the model answered with a reaction alone", async () => {
-    const h = introduced(makeHarness({ responder: reply("", "💪") }));
-    const sent = await say(h, "evt_1", "just mailed the renewal packet");
-    expect(sent.length).toBeGreaterThan(0);
+  it("adds a done message's reaction on top of its words", async () => {
+    const h = introduced(makeHarness({ responder: reply("nice, that's the hard part", "💪") }));
+    expect(await say(h, "evt_1", "just mailed the renewal packet")).toEqual(["nice, that's the hard part"]);
+    await h.decorations.idle();
     expect(h.channel.reactions.map((r) => r.reaction)).toEqual(["💪"]);
   });
 
   it("drops a reaction outside the message's allowed set", async () => {
     const h = introduced(makeHarness({ responder: reply("glad it helped", "🎉") }));
     await say(h, "evt_1", "thank you");
+    await h.decorations.idle();
     expect(h.channel.reactions).toEqual([]);
   });
 });
 
-describe("live probe r-best: a refused reaction alone gets fitting words", () => {
-  it("answers praise the model met with a heart alone in neutral words, not the bad-news line", async () => {
-    const h = introduced(makeHarness({ responder: reply("", "love") }));
-    const sent = await say(h, "evt_1", "you're the best, seriously");
+describe("live probe r-best: praise gets words and no reaction", () => {
+  it("puts no heart on praise, and still sends the words", async () => {
+    const h = introduced(makeHarness({ responder: reply("that means a lot", "love") }));
+    expect(await say(h, "evt_1", "you're the best, seriously")).toEqual(["that means a lot"]);
+    await h.decorations.idle();
     expect(h.channel.reactions).toEqual([]);
-    expect(sent).toEqual([PRAISE_FALLBACK]);
-  });
-
-  it("still answers bad news met with a heart alone with the bad-news line", async () => {
-    const h = introduced(makeHarness({ responder: reply("", "love") }));
-    const sent = await say(h, "evt_1", "they denied my medicaid");
-    expect(sent).toEqual([REFUSED_TAPBACK_TEXT]);
   });
 });

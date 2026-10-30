@@ -2,7 +2,7 @@
 // here, outside the turn: a turn finishes and settles first, so a slow or
 // hanging provider call can never hold the next message, a crisis
 // included. Every piece is tracked, bounded by a timeout and cancellable;
-// STOP and a delete cancel all of it. The work does its own STOP, closed
+// STOP, a close and a delete cancel all of it, pending timers included. The work does its own STOP, closed
 // and generation checks right before each provider call.
 
 export interface DecorationsOptions {
@@ -25,6 +25,7 @@ interface Running {
 
 export class Decorations {
   private running = new Map<number, Running>();
+  private timers = new Set<ReturnType<typeof setTimeout>>();
   private next = 0;
   private timeoutMs: number;
   private hold: (work: Promise<unknown>) => void;
@@ -56,9 +57,30 @@ export class Decorations {
     this.hold(done);
   }
 
-  // Cancels everything still running (STOP, a delete).
+  // Runs work after a delay, unless cancelled first (the eyes timer).
+  // Returns the cancel function.
+  schedule(name: string, ms: number, work: () => void): () => void {
+    const timer = setTimeout(() => {
+      this.timers.delete(timer);
+      work();
+    }, ms);
+    this.timers.add(timer);
+    return () => {
+      clearTimeout(timer);
+      this.timers.delete(timer);
+    };
+  }
+
+  // Cancels every pending timer and everything still running (STOP, a
+  // close, a delete).
   cancelAll(reason = "cancelled"): void {
+    for (const t of this.timers) clearTimeout(t);
+    this.timers.clear();
     for (const r of this.running.values()) r.controller.abort(new Error(reason));
+  }
+
+  get pendingTimers(): number {
+    return this.timers.size;
   }
 
   get size(): number {

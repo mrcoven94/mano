@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { guardReply } from "../src/guard.js";
 import { MANO_SOUL } from "../src/soul.js";
-import { EYES, allowedReactions, allowedTapback, eyesAllowed, isReactionText, needsAnswer, reactionOnlyAllowed, splitTapback, tapbackText } from "../src/tapbacks.js";
+import { EYES, allowedReactions, allowedTapback, eyesAllowed, isReactionText, normalizeQuotes, splitTapback } from "../src/tapbacks.js";
 import { REACTION_PROBES, checkReactionSet, type ReactionRun } from "../src/probes.js";
 
 describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
@@ -49,10 +49,10 @@ describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
     expect(eyesAllowed("Loved \u201cok\u201d", false)).toBe(false);
   });
 
-  it("allows a reaction alone only for a plain thanks or ok that asks nothing", () => {
-    for (const text of ["thank you!!", "ok", "sounds good", "gracias", "perfect thanks"]) expect(reactionOnlyAllowed(text), text).toBe(true);
-    for (const text of ["submitted it!", "lol who has a fax", "ok will do", "thanks, any update", "ok what now", "gracias, cuándo llega"]) {
-      expect(reactionOnlyAllowed(text), text).toBe(false);
+  it("reads curly apostrophes as straight ones, and vetoes the wider bad-news list (PR 74 review 3)", () => {
+    expect(normalizeQuotes("can\u2019t \u201cok\u201d")).toBe(`can't "ok"`);
+    for (const text of ["thanks, my benefits were reduced", "thanks, I can\u2019t pay rent", "thank you, I don\u2019t have food", "ok, it's overdue", "thanks, no money left", "gracias, me redujeron los beneficios", "gracias, no tengo comida", "ok, estoy atrasado"]) {
+      expect(allowedReactions(text, false), text).toEqual([]);
     }
   });
 
@@ -63,19 +63,6 @@ describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
       expect(allowedTapback("love", text, false), text).toBeNull();
     }
     expect(isReactionText("loved it, thanks")).toBe(false);
-  });
-
-  it("knows when the person asked something a reaction cannot answer", () => {
-    for (const text of ["When is my SNAP renewal due?", "can you help me with the form", "¿Cuándo vence mi renovación?", "what do i need for WIC"]) {
-      expect(needsAnswer(text), text).toBe(true);
-    }
-    for (const text of ["thank you!!", "submitted it!", "lol the hold music"]) {
-      expect(needsAnswer(text), text).toBe(false);
-    }
-  });
-
-  it("has a short text fallback for every emoji", () => {
-    for (const t of ["🙏", "💪", "🎉"] as const) expect(tapbackText(t).length).toBeGreaterThan(0);
   });
 
   it("tells the model to vary reactions and never react instead of answering", () => {
@@ -111,18 +98,18 @@ describe("the 20-message reaction set", () => {
     const bad = set("bad-news", "🙏");
     const crisis = set("crisis", "🙏", "please call or text 988");
     const reaction = set("reaction", "like");
-    const question = set("question", "like", "");
+    const question = set("question", null, "");
     const failed = checkReactionSet(runs);
     expect(failed).toContain(`${bad}:bad-news-reaction`);
     expect(failed).toContain(`${crisis}:crisis-reaction`);
     expect(failed).toContain(`${reaction}:reaction-on-reaction`);
-    expect(failed).toContain(`${question}:reaction-instead-of-answer`);
+    expect(failed).toContain(`${question}:no-words`);
   });
 
   it("passes a varied, sparing set", () => {
     const runs = calm();
     const pick: Record<string, [ReactionRun["tapback"], string]> = {
-      thanks: ["love", ""],
+      thanks: ["love", "anytime!"],
       joke: ["laugh", "ha, right?"],
       done: ["💪", "nice, that's off your plate"],
       "good-news": ["🎉", "that's huge"],

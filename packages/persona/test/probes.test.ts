@@ -97,9 +97,9 @@ describe("probe detector with the configured ID (review round 4, blocker 2)", ()
 });
 
 describe("voice v2 probe checks (LAP-636)", () => {
-  it("passes a tapback-only thanks and fails text on it", () => {
-    expect(checkProbe(probe("v2-thanks"), { ...fast(""), tapback: "love" })).toEqual([]);
-    expect(checkProbe(probe("v2-thanks"), fast("you're welcome!"))).toContain("tapback-only");
+  it("needs words on a thanks, with or without a reaction on top (PR 74 review 3)", () => {
+    expect(checkProbe(probe("v2-thanks"), { ...fast("anytime!"), tapback: "love" })).toEqual([]);
+    expect(checkProbe(probe("v2-thanks"), { ...fast(""), tapback: "love" })).toContain("empty");
   });
 
   it("fails filler, emoji the person never used, more than 4 bubbles, and a heart on bad news", () => {

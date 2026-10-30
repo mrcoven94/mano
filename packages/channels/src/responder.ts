@@ -5,7 +5,7 @@
 // which the caller sends at once before the deep call at medium effort.
 // When the engine merges, its person agent becomes the Responder behind
 // this same interface.
-import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisFloor, crisisTurn, reactionOnlyAllowed, routeReply, splitTapback, type Tapback } from "@mano/persona";
+import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisFloor, crisisTurn, routeReply, splitTapback, type Tapback } from "@mano/persona";
 import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 
@@ -191,13 +191,9 @@ class FatalCall extends Error {
   }
 }
 
-// Sent when a reply was a reaction alone but the person asked something.
-const ANSWER_IN_TEXT = "They asked something, so answer it in text now. A reaction alone is not an answer. Do not start with REACT: or DEEP:.";
-
 export class SparkResponder implements Responder {
   readonly name = "spark";
-  // Worst case: the fast call's tries, each hedged, then the deep call's,
-  // then one more unhedged call when a question got a reaction alone.
+  // Worst case: the fast call's tries, each hedged, then the deep call's.
   readonly maxAttempts: number;
   readonly inputSlackChars = MANO_SOUL.length + PACING.length + DEEP_INSTRUCTIONS.length + 1000;
   readonly maxOutputChars = 2 * MAX_OUTPUT_CHARS;
@@ -223,7 +219,7 @@ export class SparkResponder implements Responder {
     this.hedgeAfterMs = opts.hedgeAfterMs ?? HEDGE_AFTER_MS;
     this.fastEffort = opts.reasoningEffort ?? FAST_REASONING_EFFORT;
     this.deepEffort = opts.deepReasoningEffort ?? DEEP_REASONING_EFFORT;
-    this.maxAttempts = 4 * (this.maxRetries + 1);
+    this.maxAttempts = 3 * (this.maxRetries + 1);
     this.fetchFn = opts.fetchFn ?? boundFetch;
     this.collectLogs = opts.collectLogs ?? true;
   }
@@ -236,44 +232,19 @@ export class SparkResponder implements Responder {
     const crisis = crisisTurn(turn.texts.join("\n"));
     const fast = await this.call(`${MANO_SOUL}${note}${crisis ? "" : `\n\n${PACING}`}`, messages, this.fastEffort, 0, true);
     const route = crisis ? ({ path: "fast", text: fast.text } as const) : routeReply(fast.text);
-    // Words are owed unless the last message is a plain thanks or ok.
-    const asked = !crisis && !reactionOnlyAllowed(turn.texts[turn.texts.length - 1] ?? "");
     if (route.path === "fast") {
       const text = crisis ? crisisFloor(route.text) : route.text;
-      return this.answered(text, asked, `${MANO_SOUL}${note}`, messages, fast.attempts, fast.inputChars);
+      return this.result(text, fast.attempts, fast.inputChars);
     }
     await hooks.onHeadsUp?.(route.headsUp);
-    const deepInput = [...messages, { role: "assistant" as const, content: route.headsUp }];
-    const deep = await this.call(`${MANO_SOUL}${note}\n\n${DEEP_INSTRUCTIONS}`, deepInput, this.deepEffort, fast.attempts, false);
-    return this.answered(
-      deep.text,
-      asked,
+    const deep = await this.call(
       `${MANO_SOUL}${note}\n\n${DEEP_INSTRUCTIONS}`,
-      deepInput,
-      fast.attempts + deep.attempts,
-      Math.max(fast.inputChars, deep.inputChars),
+      [...messages, { role: "assistant", content: route.headsUp }],
+      this.deepEffort,
+      fast.attempts,
+      false,
     );
-  }
-
-  // A reaction never replaces an answer, on either path: unless the last
-  // message is a plain thanks or ok, a reply that is a reaction alone gets
-  // one more call (not hedged) for the text, and the reaction stays with
-  // it. When that still has no text, the runner sends its own words.
-  private async answered(
-    raw: string,
-    asked: boolean,
-    instructions: string,
-    input: ModelMessage[],
-    attempts: number,
-    inputChars: number,
-  ): Promise<ResponderResult> {
-    const split = splitTapback(raw);
-    if (!asked || !split.tapback || split.text.trim()) return this.result(raw, attempts, inputChars);
-    const again = await this.call(`${instructions}\n\n${ANSWER_IN_TEXT}`, input, this.fastEffort, attempts, false);
-    const retried = splitTapback(again.text).text;
-    const total = attempts + again.attempts;
-    const chars = Math.max(inputChars, again.inputChars);
-    return this.result(retried.trim() ? `REACT: ${split.tapback}\n${retried}` : raw, total, chars);
+    return this.result(deep.text, fast.attempts + deep.attempts, Math.max(fast.inputChars, deep.inputChars));
   }
 
   private result(raw: string, attempts: number, inputChars: number): ResponderResult {

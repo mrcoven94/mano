@@ -45,18 +45,25 @@ function words(list: readonly string[]): RegExp {
   return new RegExp(`(?<![\\p{L}\\p{N}])(?:${list.join("|")})(?![\\p{L}\\p{N}])`, "iu");
 }
 
+// Curly quotes and apostrophes become straight ones before any check, so
+// "can’t" and "can't" read the same.
+export function normalizeQuotes(text: string): string {
+  return text.replace(/[‘’‚‛′]/g, "'").replace(/[“”„‟″«»]/g, '"');
+}
+
 // A reaction that reached Mano as text (SMS shows a tapback as
 // 'Loved "..."'). Mano never reacts to a reaction.
 const REACTION_TEXT =
-  /^\s*(?:loved|liked|disliked|laughed at|emphasi[sz]ed|questioned|reacted \S{1,12} to|removed an? \S+ from|le (?:encantó|gustó|hizo gracia|dio risa|dio énfasis a)|no le gustó|enfatizó|cuestionó|se rió de)\s+["“«]/iu;
+  /^\s*(?:loved|liked|disliked|laughed at|emphasi[sz]ed|questioned|reacted \S{1,12} to|removed an? \S+ from|le (?:encantó|gustó|hizo gracia|dio risa|dio énfasis a)|no le gustó|enfatizó|cuestionó|se rió de)\s+"/iu;
 
 export function isReactionText(personText: string): boolean {
-  return REACTION_TEXT.test(personText);
+  return REACTION_TEXT.test(normalizeQuotes(personText));
 }
 
 // Reactions are decided by code from the target message's own text: a
 // positive allowlist. A message that is none of these gets no reaction,
 // so bad news never qualifies. The model may pick within the set, or none.
+// A reaction only ever goes on top of words.
 export type MessageKind = "thanks" | "done" | "joke" | "ack";
 
 const KINDS: ReadonlyArray<{ kind: MessageKind; pattern: RegExp; allows: readonly Tapback[] }> = [
@@ -67,18 +74,28 @@ const KINDS: ReadonlyArray<{ kind: MessageKind; pattern: RegExp; allows: readonl
 ];
 
 // A veto on top of the allowlist: a thanks or a "got it" that also
-// carries bad news or a negation ("thanks, they denied it", "I haven't
-// mailed it", "no lo hice") gets no reaction.
+// carries bad news, a hardship or a negation gets no reaction.
 const VETO = words([
-  "cut", "cuts", "denied", "deny", "denial", "lost", "losing", "lose", "evict\\w*", "terminat\\w*", "fired", "laid off",
-  "stopped", "cancel\\w*", "overpay\\w*", "owe", "behind", "late", "reject\\w*", "closed", "shut ?off", "disconnect\\w*",
-  "died", "passed away", "sick", "hospital", "not", "never", "\\w+n't", "negaron", "neg[oó]", "cortaron", "despidieron",
-  "perd[ií]\\w*", "desalojo", "nunca", "todav[ií]a no", "no (?:lo|la|me|se|he|ha|han)",
+  // Losing or not getting help, in English.
+  "reduc\\w*", "cut", "cuts", "cutting", "lost", "losing", "lose", "denied", "deny", "denial", "reject\\w*", "terminat\\w*",
+  "ended", "ending", "stopped", "stopping", "overdue", "behind", "late", "owe", "overpay\\w*", "evict\\w*", "fired", "laid off",
+  "cancel\\w*", "closed", "shut ?off", "disconnect\\w*", "died", "passed away", "sick", "hospital",
+  // Hardship and negation.
+  "can't", "cannot", "can not", "don't have", "haven't", "no food", "no money", "not", "never", "\\w+n't",
+  // The same in Spanish.
+  "reduj\\w*", "reduc\\w*", "recort\\w*", "cort\\w*", "perd[ií]\\w*", "neg\\w*", "rechaz\\w*", "termin\\w*", "venci\\w*",
+  "atrasad\\w*", "debo", "desalojo", "desalojar\\w*", "despid\\w*", "no puedo", "no tengo", "sin comida", "sin dinero",
+  "nunca", "todav[ií]a no", "no (?:lo|la|me|se|he|ha|han)",
 ]);
 
+function vetoed(text: string): boolean {
+  return VETO.test(text);
+}
+
 export function reactionKinds(targetText: string): MessageKind[] {
-  if (isReactionText(targetText) || VETO.test(targetText)) return [];
-  return KINDS.filter((k) => k.pattern.test(targetText)).map((k) => k.kind);
+  const text = normalizeQuotes(targetText);
+  if (isReactionText(text) || vetoed(text)) return [];
+  return KINDS.filter((k) => k.pattern.test(text)).map((k) => k.kind);
 }
 
 // The reactions the target message allows, empty for most messages.
@@ -96,53 +113,6 @@ export function allowedTapback(tapback: Tapback | null, targetText: string, cris
 // Whether the eyes may go on a slow turn's message: never in a crisis, on
 // a reaction or on bad news.
 export function eyesAllowed(targetText: string, crisis: boolean): boolean {
-  return !crisis && !isReactionText(targetText) && !VETO.test(targetText);
+  const text = normalizeQuotes(targetText);
+  return !crisis && !isReactionText(text) && !vetoed(text);
 }
-
-// The person asked something, so a reaction alone is not an answer: a
-// question mark, or a question word anywhere in the message.
-const QUESTION_MARK = /[?¿]/;
-const QUESTION_WORD = words([
-  "when", "what", "where", "how", "why", "who", "which", "can", "could", "do", "does", "did", "is", "are", "will", "would",
-  "any update", "cu[áa]ndo", "qu[ée]", "c[óo]mo", "d[óo]nde", "puedes",
-]);
-
-export function needsAnswer(targetText: string): boolean {
-  return !isReactionText(targetText) && (QUESTION_MARK.test(targetText) || QUESTION_WORD.test(targetText));
-}
-
-// A reaction alone, with no words, only answers a plain thanks or an
-// acknowledgement that asks nothing. Everything else always gets words.
-export function reactionOnlyAllowed(targetText: string): boolean {
-  const kinds = reactionKinds(targetText);
-  return (kinds.includes("thanks") || kinds.includes("ack")) && !needsAnswer(targetText);
-}
-
-// A tapback is decoration: when it cannot carry the reply (it fails, or
-// there is no message to put it on), this text goes instead.
-const TAPBACK_TEXT: Record<Tapback, string> = {
-  love: "anytime!",
-  like: "sounds good",
-  laugh: "ha, yeah",
-  emphasize: "noted",
-  "🙏": "anytime!",
-  "💪": "nice work!",
-  "🎉": "that's great news!",
-};
-
-export function tapbackText(tapback: Tapback): string {
-  return TAPBACK_TEXT[tapback];
-}
-
-// Sent when the model replied with only a reaction the rules refused, so
-// the person still gets words: one line for bad news, one for anything else.
-export const REFUSED_TAPBACK_TEXT = "that's rough. tell me what happened?";
-export const NEUTRAL_REACTION_TEXT = "ha, glad I could help. what's next?";
-
-export function refusedReactionText(targetText: string): string {
-  return VETO.test(targetText) ? REFUSED_TAPBACK_TEXT : NEUTRAL_REACTION_TEXT;
-}
-
-// Sent when the person asked something and the reply came back as a
-// reaction alone, even after the responder asked again for words.
-export const NEEDS_ANSWER_TEXT = "I don't have a good answer to that yet. Can you tell me a little more about what you need?";

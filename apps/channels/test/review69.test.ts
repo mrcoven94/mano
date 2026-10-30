@@ -55,14 +55,15 @@ describe("PR 69 review, blocker 1: a tapback never erases the reply", () => {
 });
 
 describe("PR 69 review, blocker 2: a failed tapback falls back to text, and text never waits on a tapback", () => {
-  it("sends a guarded text when the tapback call fails", async () => {
-    const h = introduced(makeHarness({ replies: ["REACT: love"] }));
+  it("still sends the words when the reaction call fails (PR 74 review 3: no reaction-only replies)", async () => {
+    const h = introduced(makeHarness({ replies: ["REACT: love\nanytime!"] }));
     h.channel.react = async () => {
       throw new Error("reaction rejected");
     };
     const sent = await say(h, "evt_1", "thank you!!");
-    expect(sent.length).toBe(1);
-    expect(h.store.outbounds().some((r) => r.tag === "react-fallback" && r.state === "sent")).toBe(true);
+    await h.decorations.idle();
+    expect(sent).toEqual(["anytime!"]);
+    expect(h.store.outbounds().some((r) => r.tag === "react" && r.state === "failed")).toBe(true);
   });
 
   it("sends the text before the tapback is even attempted", async () => {
