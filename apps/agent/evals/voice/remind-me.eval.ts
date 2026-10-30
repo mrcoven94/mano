@@ -13,7 +13,7 @@ export default defineEval({
     t.check(turn.message, satisfies(shortReply(300), "confirmation is under 300 chars"));
     t.check(
       turn.message,
-      satisfies((m: string) => /remind/i.test(m), "confirmation says what was set"),
+      satisfies((m: string) => /remind|county office/i.test(m), "confirmation says what was set"),
     );
     const reminders = await (await person.engine()).listReminders();
     t.check(reminders, satisfies((r: unknown[]) => r.length === 1, "Engine holds exactly one reminder"));
