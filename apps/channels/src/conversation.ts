@@ -105,6 +105,11 @@ export function chatBackgroundUrl(env: Env): string | null {
   return env.MANO_CHAT_BACKGROUND_URL?.trim() || null;
 }
 
+// One switch for every reaction and the eyes: on unless set to "false".
+export function reactionsEnabled(env: Env): boolean {
+  return env.MANO_REACTIONS_ENABLED?.trim().toLowerCase() !== "false";
+}
+
 export function buildChannel(env: Env): Channel {
   if (env.BLOOIO_API_KEY && env.BLOOIO_CHANNEL_ID) {
     return new BlooioChannel({ apiKey: env.BLOOIO_API_KEY, channelId: env.BLOOIO_CHANNEL_ID, baseUrl: env.BLOOIO_BASE_URL || undefined });
@@ -215,6 +220,7 @@ export class ConversationDO implements DurableObject {
         mediaHosts: parseMediaHosts(this.env.BLOOIO_MEDIA_HOSTS),
         eyesAfterMs: numberEnv(this.env.TURN_EYES_AFTER_MS, DEFAULT_RUNNER_CONFIG.eyesAfterMs),
         backgroundUrl: chatBackgroundUrl(this.env),
+        reactionsEnabled: reactionsEnabled(this.env),
       },
     });
     return { runner, channel, responder };

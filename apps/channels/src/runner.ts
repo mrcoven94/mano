@@ -71,6 +71,8 @@ export interface RunnerConfig {
   // A turn still working after this long gets the eyes on the person's
   // message ("Mano is on it"). A photo or a deep turn gets them at once.
   eyesAfterMs: number;
+  // One switch for every reaction Mano adds, the eyes included.
+  reactionsEnabled: boolean;
   // Mano's chat background image, set once per chat after the first
   // reply. Null leaves chats as they are.
   backgroundUrl: string | null;
@@ -102,6 +104,7 @@ export const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "handleHash"> = {
   maxInboundAgeMs: 5 * 60 * 1000,
   mediaHosts: DEFAULT_MEDIA_HOSTS,
   eyesAfterMs: 5000,
+  reactionsEnabled: true,
   backgroundUrl: null,
 };
 
@@ -758,7 +761,7 @@ export class ConversationRunner {
     if (!report) return;
     const outbounds = store.outbounds();
     for (const p of store.pendingPresentations()) {
-      const rows = outbounds.filter((r) => r.turn === p.turn);
+      const rows = outbounds.filter((r) => r.turn === p.turn && !DECORATION_TAGS.has(r.tag));
       if (rows.length === 0 || rows.some((r) => openSend(r))) continue;
       const sent = rows
         .filter((r) => r.state === "sent" || r.state === "delivered" || r.state === "read")
@@ -806,24 +809,43 @@ export class ConversationRunner {
     return null;
   }
 
-  // The eyes go on once, on a slow turn's target message, as
-  // fire-and-forget work outside the turn, and are never taken off. Once
-  // they are placed, no other reaction goes on that message.
+  // The eyes are a status signal ("on it"), not a sentiment: they go on
+  // once, on a slow turn's target message, unless it is a crisis, a
+  // reaction text, or STOP or a close came since the turn started. Bad
+  // news does not stop them. They are fire-and-forget work outside the
+  // turn, sent at most once (their row is written as "sending" before
+  // the call, so a retried or resumed turn never sends them again), and
+  // never taken off. Once they are placed, no other reaction goes on that
+  // message.
   private eyesFor(turn: number, chatId: string | null, target: Target | null, crisis: boolean, generation: number, epoch: number): Eyes {
-    const { channel, logger } = this.deps;
+    const { channel, logger, store, config, nowMs } = this.deps;
     const eyes: Eyes = {
       placed: false,
       put: (why: string): void => {
-        if (eyes.placed || !chatId || !target || !eyesAllowed(target.text, crisis) || this.decorationBlock(generation, epoch)) return;
+        if (eyes.placed || !config.reactionsEnabled || !chatId || !target || !eyesAllowed(target.text, crisis)) return;
+        if (this.decorationBlock(generation, epoch)) return;
         eyes.placed = true;
+        const key = idempotencyKeyFor(config.handleHash, generation, turn, 0, "eyes");
         this.decorations.run("eyes", async () => {
           // Read fresh right before the call.
-          if (this.decorationBlock(generation, epoch)) return;
-          await channel.react(chatId, target.messageId, EYES);
-          logger.info("eyes_sent", { handle: this.logHandle(), turn, why });
+          if (this.decorationBlock(generation, epoch) || store.outboundByKey(key)) return;
+          store.addOutbound({
+            key, turn, part: 0, tag: "eyes", text: EYES, attempts: 0, state: "sending", code: null,
+            chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+          });
+          try {
+            await channel.react(chatId, target.messageId, EYES);
+            if (store.meta().generation === generation) store.updateOutbound(key, { state: "sent", updatedAtMs: nowMs() });
+            logger.info("eyes_sent", { handle: this.logHandle(), turn, why });
+          } catch (err) {
+            if (store.meta().generation === generation) store.updateOutbound(key, { state: "failed", code: "eyes_dropped", updatedAtMs: nowMs() });
+            logger.warn("eyes_dropped", { handle: this.logHandle(), turn, err: errName(err) });
+          }
         });
       },
     };
+    // A run of this turn that crashed may already have put them on.
+    if (store.outboundByKey(idempotencyKeyFor(config.handleHash, generation, turn, 0, "eyes"))) eyes.placed = true;
     return eyes;
   }
 
@@ -921,6 +943,9 @@ export class ConversationRunner {
     const { store, logger, nowMs, config } = this.deps;
     this.checkGeneration(generation);
     const meta = store.meta();
+    // Captured before the turn's first await and carried everywhere: a
+    // decoration this turn schedules sends only while it still holds.
+    const epoch = meta.decorationEpoch;
     const chatId = resumed?.chatId ?? [...items].reverse().find((i) => i.chatId)?.chatId ?? meta.chatId;
     const to = resumed?.to ?? [...items].reverse().find((i) => i.to)?.to ?? meta.to;
     if (!chatId && !to) {
@@ -931,7 +956,7 @@ export class ConversationRunner {
     // it: same keys, same text, no second model call.
     if (resumed?.answerJson) {
       await this.settleResumedCost(turn, resumed);
-      await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation);
+      await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation, epoch);
       this.checkSendsResolved(turn, generation);
       await this.reportPresentations();
       return;
@@ -952,7 +977,7 @@ export class ConversationRunner {
     if (approval && store.pendingApprovals(nowMs()).length > 0) {
       // A crisis reply goes first; the decision is still recorded.
       const crisisBubbles = crisis ? await this.finalize(turn, "", true, turnTextOf(texts)) : [];
-      if (crisisBubbles.length > 0) await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation);
+      if (crisisBubbles.length > 0) await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation, epoch);
       const recordedPart = crisisBubbles.length + 1;
       const answered = await this.answerApproval(approval.code, approval.decision, turn, chatId, to, recordedPart);
       if (answered) {
@@ -993,7 +1018,7 @@ export class ConversationRunner {
         const bubbles = await this.finalize(turn, "", true, turnText);
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
-        await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
+        await this.sendBubbles(turn, bubbles, chatId, to, 0, generation, epoch);
         this.checkSendsResolved(turn, generation);
       } else {
         const noticed = await this.sendBusy(turn, chatId, to, nowMs());
@@ -1014,8 +1039,6 @@ export class ConversationRunner {
     const target: Target | null = last?.messageId ? { messageId: last.messageId, text: last.text ?? "" } : null;
     // The eyes say Mano is on it: at once for a photo, and otherwise when
     // the turn routes deep or runs past eyesAfterMs.
-    // Every decoration this turn schedules carries the epoch it ran under.
-    const epoch = store.meta().decorationEpoch;
     const eyes = this.eyesFor(turn, chatId, target, crisis, generation, epoch);
     if (attachments.length > 0) eyes.put("attachment");
     // Tracked by the decoration queue, so STOP, a close or a delete cancels it.
@@ -1058,7 +1081,7 @@ export class ConversationRunner {
           // line in finalize. A reaction is only ever added on top: picked
           // by the model from what the target message allows, never on a
           // message that has the eyes, and sent outside the turn.
-          const tapback = target && !eyes.placed ? allowedTapback(answer.tapback, target.text, crisis) : null;
+          const tapback = config.reactionsEnabled && target && !eyes.placed ? allowedTapback(answer.tapback, target.text, crisis) : null;
           const answered = await this.finalize(turn, answer.text, crisis, turnText);
           const replyTo = inlineReplyTarget(items);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
@@ -1086,7 +1109,7 @@ export class ConversationRunner {
       }
       stopEyesTimer();
       this.checkGeneration(generation);
-      await this.sendBubbles(turn, bubbles, chatId, to, saved, generation);
+      await this.sendBubbles(turn, bubbles, chatId, to, saved, generation, epoch);
       this.checkSendsResolved(turn, generation);
       await this.reportPresentations();
       replied = true;
@@ -1148,6 +1171,7 @@ export class ConversationRunner {
     to: string | null,
     saved: number,
     generation: number,
+    epoch: number,
   ): Promise<void> {
     const { store, logger } = this.deps;
     // Bubbles arrive final: model text was sanitized before splitting
@@ -1155,18 +1179,24 @@ export class ConversationRunner {
     // (pinned by test). Nothing here mutates them, so a replayed turn
     // sends byte-identical bubbles under the same keys.
     let fresh = 0;
+    // Whether the provider accepted at least one of the reply's own texts.
+    let accepted = false;
     // Words go first; a reaction is only ever added on top.
     for (const bubble of [...bubbles.filter((b) => b.tag !== "react"), ...bubbles.filter((b) => b.tag === "react")]) {
       if (bubble.tag === "react") {
+        // Only on top of words the provider accepted; otherwise dropped.
         // After the words, and outside the turn: never awaited.
-        // A replayed answer from before epochs were stored uses the
-        // current one.
-        const epoch = bubble.epoch ?? this.store.meta().decorationEpoch;
-        this.decorations.run("reaction", () => this.sendTapback(turn, bubble, chatId, generation, epoch));
+        if (!accepted) {
+          this.dropTapback(turn, bubble, chatId, generation, "no_text_accepted");
+          continue;
+        }
+        const planned = bubble.epoch ?? epoch;
+        this.decorations.run("reaction", () => this.sendTapback(turn, bubble, chatId, generation, planned));
         continue;
       }
       const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation, replyTo: bubble.replyTo ?? null });
       if (row.fresh) fresh += 1;
+      if (bubble.tag === "" && bubble.part >= 1 && (row.state === "sent" || row.state === "delivered" || row.state === "read")) accepted = true;
       if (bubble.tag === "" && bubble.part === 0 && row.state === "sent") {
         store.patchMeta({ introduced: true });
       }
@@ -1184,6 +1214,19 @@ export class ConversationRunner {
   // it again; an outcome that never comes back leaves it there, dropped.
   // It sends only while the generation and decoration epoch it was
   // scheduled under still hold, read fresh right before the call.
+  // Records a reaction as dropped, so no later run sends it.
+  private dropTapback(turn: number, bubble: import("./store.js").AnswerBubble, chatId: string | null, generation: number, code: string): void {
+    const { store, logger, nowMs, config } = this.deps;
+    if (store.meta().generation !== generation) return;
+    const key = idempotencyKeyFor(config.handleHash, generation, turn, bubble.part, "react");
+    if (store.outboundByKey(key)) return;
+    store.addOutbound({
+      key, turn, part: bubble.part, tag: "react", text: bubble.text, attempts: 0, state: "refused", code,
+      chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+    });
+    logger.info("tapback_dropped", { handle: this.logHandle(), turn, code });
+  }
+
   private async sendTapback(turn: number, bubble: import("./store.js").AnswerBubble, chatId: string | null, generation: number, epoch: number): Promise<void> {
     const { store, channel, logger, nowMs, config } = this.deps;
     const block = !chatId || !bubble.messageId ? "unroutable" : this.decorationBlock(generation, epoch);
@@ -1711,7 +1754,8 @@ export class ConversationRunner {
       // The same finalizeReply pass as every reply (it logs removed links).
       const bubbles: import("./store.js").AnswerBubble[] = (await this.finalize(turn, text, false, "")).map((b) => ({ ...b, tag: "agent" }));
       this.checkGeneration(generation);
-      await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
+      // Agent texts carry no reactions, so the epoch is only passed along.
+      await this.sendBubbles(turn, bubbles, chatId, to, 0, generation, this.store.meta().decorationEpoch);
       this.checkSendsResolved(turn, generation);
       // Sent only when the provider accepted every bubble; a refusal or a
       // definite failure is final and reported as not sent.
@@ -1769,8 +1813,11 @@ interface Eyes {
   put(why: string): void;
 }
 
-// A message send whose outcome is still open. A reaction is never one:
-// it is sent at most once, and an unknown outcome is dropped, not retried.
+// A message send whose outcome is still open. A reaction or the eyes are
+// never one: sent at most once, an unknown outcome dropped, not retried.
 function openSend(r: import("./store.js").OutboundRow): boolean {
-  return r.tag !== "react" && (r.state === "uncertain" || r.state === "sending");
+  return !DECORATION_TAGS.has(r.tag) && (r.state === "uncertain" || r.state === "sending");
 }
+
+// Rows for reactions and the eyes, never for words.
+const DECORATION_TAGS: ReadonlySet<string> = new Set(["react", "eyes"]);

@@ -45,7 +45,9 @@ describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
     }
     expect(allowedReactions("thank you", true)).toEqual([]);
     expect(eyesAllowed("can you look at my case", false)).toBe(true);
-    expect(eyesAllowed("I got fired", false)).toBe(false);
+    // The eyes are a status signal, not a sentiment (final review, 3).
+    expect(eyesAllowed("I got fired", false)).toBe(true);
+    expect(eyesAllowed("I got fired", true)).toBe(false);
     expect(eyesAllowed("Loved \u201cok\u201d", false)).toBe(false);
   });
 

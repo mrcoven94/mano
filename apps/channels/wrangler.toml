@@ -47,6 +47,8 @@ MANO_REPLY_MODEL = "muse-spark-1.3"
 # checked on a real iPhone in light and dark mode. Turning it on also needs
 # MANO_CHAT_BACKGROUND_URL, an https image we host.
 MANO_CHAT_BACKGROUND_ENABLED = "false"
+# One switch for every reaction and the eyes; "false" turns them all off.
+MANO_REACTIONS_ENABLED = "true"
 
 # Secrets (never commit values; set with wrangler secret put):
 #   BLOOIO_API_KEY, BLOOIO_CHANNEL_ID, BLOOIO_WEBHOOK_SECRET,

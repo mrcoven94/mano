@@ -27,6 +27,8 @@ export interface Env {
   // chat, only when MANO_CHAT_BACKGROUND_ENABLED is "true".
   MANO_CHAT_BACKGROUND_URL?: string;
   MANO_CHAT_BACKGROUND_ENABLED?: string;
+  // "false" turns off every reaction and the eyes.
+  MANO_REACTIONS_ENABLED?: string;
   // Our line's own number or alias, checked against the channel_address
   // on inbound webhooks when both are present. Public value; optional.
   MANO_TEXT_NUMBER?: string;

@@ -107,7 +107,9 @@ describe("Sol round 4, repro 2: bad news riding along with thanks", () => {
 
 describe("Sol round 4, repro 3: a reaction is sent at most once", () => {
   it("never issues a reaction again on a resumed turn when the first call's outcome was unknown", async () => {
-    const h = introduced(makeHarness({ responder: reply("anytime!", "love"), decorationTimeoutMs: 40 }));
+    // Two texts: the first is accepted, so the reaction goes; the second
+    // stays uncertain, so the turn is retried and resumes.
+    const h = introduced(makeHarness({ responder: reply("anytime!\nsee you friday", "love"), decorationTimeoutMs: 40 }));
     let calls = 0;
     let hang = true;
     h.channel.react = async () => {
@@ -117,7 +119,7 @@ describe("Sol round 4, repro 3: a reaction is sent at most once", () => {
     let down = true;
     const send = h.channel.send.bind(h.channel);
     h.channel.send = async (input) => {
-      if (down) throw new ChannelUncertain("Provider down in test.", 1);
+      if (down && input.text === "see you friday") throw new ChannelUncertain("Provider down in test.", 1);
       return send(input);
     };
     await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "thank you", occurredAtMs: h.now }), "webhook");

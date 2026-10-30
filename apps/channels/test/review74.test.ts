@@ -139,24 +139,24 @@ describe("blocker 3: a question always gets words, deep path included", () => {
   });
 });
 
-describe("should 4: one eligibility gate for every reaction, the eyes included", () => {
-  it("puts no eyes on a slow turn about a reaction text or bad news", async () => {
-    for (const text of ["Loved “your renewal is due Friday”", "they denied my medicaid"]) {
-      const h = introduced(makeHarness({ responder: slow("ok", 60), config: { eyesAfterMs: 10 } }));
-      await say(h, "evt_1", text);
-      expect(h.channel.reactions, text).toEqual([]);
-    }
+describe("should 4: one gate for sentiment reactions; the eyes are a status signal (final review, 3)", () => {
+  it("puts no eyes on a slow turn about a reaction text", async () => {
+    const h = introduced(makeHarness({ responder: slow("ok", 60), config: { eyesAfterMs: 10 } }));
+    await say(h, "evt_1", "Loved \u201cyour renewal is due Friday\u201d");
+    expect(h.channel.reactions).toEqual([]);
   });
 
-  it("puts no eyes on a photo sent with bad news", async () => {
-    const h = introduced(makeHarness({ replies: ["got it"] }));
+  it("puts the eyes on a photo sent with bad news, and nothing else", async () => {
+    const h = introduced(makeHarness({ replies: ["REACT: love\ngot it, reading it now"] }));
     await say(h, "evt_1", "they denied my medicaid, here's the letter", { attachments: [{ url: "https://bucket.blooio.com/a.jpg", mediaType: "image/jpeg" }] });
-    expect(h.channel.reactions).toEqual([]);
+    await h.decorations.idle();
+    expect(h.channel.reactions.map((r) => r.reaction)).toEqual([EYES]);
   });
 
   it("sends no like on bad news", async () => {
     const h = introduced(makeHarness({ replies: ["REACT: like\nthat's a hard letter. send me a photo of it"] }));
     await say(h, "evt_1", "they denied my medicaid");
+    await h.decorations.idle();
     expect(h.channel.reactions).toEqual([]);
   });
 });

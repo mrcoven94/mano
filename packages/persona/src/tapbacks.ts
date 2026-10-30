@@ -186,9 +186,10 @@ export function allowedTapback(tapback: Tapback | null, targetText: string, cris
   return tapback && allowedReactions(targetText, crisis).includes(tapback) ? tapback : null;
 }
 
-// Whether the eyes may go on a slow turn's message: never in a crisis, on
-// a reaction or on bad news.
+// Whether the eyes may go on a slow turn's message. They are a status
+// signal ("on it"), not a sentiment, so bad news does not stop them; a
+// crisis and a reaction text do. The bad-news veto is for sentiment
+// reactions only.
 export function eyesAllowed(targetText: string, crisis: boolean): boolean {
-  const text = normalizeQuotes(targetText);
-  return !crisis && !isReactionText(text) && !vetoed(text);
+  return !crisis && !isReactionText(normalizeQuotes(targetText));
 }
