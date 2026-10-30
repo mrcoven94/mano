@@ -144,6 +144,7 @@ interface MetaRow {
   opt_out_at_ms?: number;
   opt_out_dated?: number;
   opt_out_received_at_ms?: number;
+  decoration_epoch?: number;
 }
 
 function firstRow<T>(cursor: SqlStorageCursor<Record<string, SqlStorageValue>>): T | null {
@@ -205,6 +206,7 @@ const META_COLUMNS: Record<keyof ConversationMeta, string> = {
   optOutAtMs: "opt_out_at_ms",
   optOutDated: "opt_out_dated",
   optOutReceivedAtMs: "opt_out_received_at_ms",
+  decorationEpoch: "decoration_epoch",
 };
 
 export class SqlConversationStore implements ConversationStore {
@@ -230,6 +232,8 @@ export class SqlConversationStore implements ConversationStore {
       "ALTER TABLE meta ADD COLUMN opt_out_at_ms INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE meta ADD COLUMN opt_out_dated INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE meta ADD COLUMN opt_out_received_at_ms INTEGER NOT NULL DEFAULT 0",
+      // The decoration epoch (PR 74 review 4).
+      "ALTER TABLE meta ADD COLUMN decoration_epoch INTEGER NOT NULL DEFAULT 0",
     ]) {
       try {
         this.sql.exec(ddl);
@@ -287,12 +291,13 @@ export class SqlConversationStore implements ConversationStore {
       optOutAtMs: row.opt_out_at_ms ?? 0,
       optOutDated: row.opt_out_dated === 1,
       optOutReceivedAtMs: row.opt_out_received_at_ms ?? 0,
+      decorationEpoch: row.decoration_epoch ?? 0,
     };
   }
 
   saveMeta(meta: ConversationMeta): void {
     this.sql.exec(
-      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ?, typing_since_ms = ?, typing_active = ?, opt_out_at_ms = ?, opt_out_dated = ?, opt_out_received_at_ms = ? WHERE id = 1",
+      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ?, typing_since_ms = ?, typing_active = ?, opt_out_at_ms = ?, opt_out_dated = ?, opt_out_received_at_ms = ?, decoration_epoch = ? WHERE id = 1",
       meta.turn,
       meta.introduced ? 1 : 0,
       meta.closed ? 1 : 0,
@@ -315,6 +320,7 @@ export class SqlConversationStore implements ConversationStore {
       meta.optOutAtMs,
       meta.optOutDated ? 1 : 0,
       meta.optOutReceivedAtMs,
+      meta.decorationEpoch,
     );
   }
 
@@ -699,6 +705,6 @@ export class SqlConversationStore implements ConversationStore {
     this.sql.exec(
       "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns; DELETE FROM inbound_messages; DELETE FROM agent_sends; DELETE FROM presentations;",
     );
-    this.saveMeta({ ...defaultMeta(), generation: meta.generation + 1, turn: meta.turn, deletedAtMs });
+    this.saveMeta({ ...defaultMeta(), generation: meta.generation + 1, turn: meta.turn, deletedAtMs, decorationEpoch: meta.decorationEpoch + 1 });
   }
 }

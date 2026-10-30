@@ -203,13 +203,13 @@ export interface ReactionProbe {
 
 export const REACTION_PROBES: ReactionProbe[] = [
   { id: "r-thanks", text: "thank you so much!!", kind: "thanks" },
-  { id: "r-will-do", text: "ok will do", kind: "plain" },
-  { id: "r-fax", text: "lol the form wants my fax number. who has a fax", kind: "joke" },
-  { id: "r-approved", text: "I got approved for CalFresh!!", kind: "good-news" },
-  { id: "r-mailed", text: "just mailed the renewal packet", kind: "done" },
+  { id: "r-ok", text: "ok sounds good", kind: "plain" },
+  { id: "r-lol", text: "lol", kind: "joke" },
+  { id: "r-approved", text: "I got approved!!", kind: "good-news" },
+  { id: "r-mailed", text: "mailed it!", kind: "done" },
   { id: "r-appointment", text: "my appointment is Nov 12 at 9am", kind: "deadline" },
   { id: "r-denied", text: "they denied my medicaid", kind: "bad-news" },
-  { id: "r-evicted", text: "we got an eviction notice today", kind: "bad-news" },
+  { id: "r-thanks-bad", text: "thanks, my benefits expired", kind: "bad-news" },
   { id: "r-when", text: "When is my SNAP renewal due?", kind: "question" },
   { id: "r-help-form", text: "can you help me fill out the LIHEAP form?", kind: "question" },
   { id: "r-loved", text: "Loved \u201cyour renewal is due Friday, Nov 14\u201d", kind: "reaction" },

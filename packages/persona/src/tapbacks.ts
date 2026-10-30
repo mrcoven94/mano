@@ -61,20 +61,87 @@ export function isReactionText(personText: string): boolean {
 }
 
 // Reactions are decided by code from the target message's own text: a
-// positive allowlist. A message that is none of these gets no reaction,
-// so bad news never qualifies. The model may pick within the set, or none.
-// A reaction only ever goes on top of words.
+// whole-message allowlist. A message qualifies only as a short pure form:
+// at most MAX_PURE_WORDS words, made only of allowlisted phrases plus
+// filler ("thanks!!", "thank you so much", "ok sounds good", "done,
+// mailed it", "lol"). Anything with other content gets no reaction, so
+// bad news riding along with a thanks never qualifies. The model may pick
+// within the allowed set, or none. A reaction only ever goes on top of words.
 export type MessageKind = "thanks" | "done" | "joke" | "ack";
 
-const KINDS: ReadonlyArray<{ kind: MessageKind; pattern: RegExp; allows: readonly Tapback[] }> = [
-  { kind: "thanks", pattern: words(["thank\\w*", "ty", "appreciate\\w*", "gracias"]), allows: ["love", "🙏"] },
-  { kind: "done", pattern: words(["done", "did it", "mailed", "sent it", "submitted", "approved", "got it", "lo hice"]), allows: ["💪", "🎉"] },
-  { kind: "joke", pattern: /(?<![\p{L}\p{N}])(?:ha(?:ha)+|lol|lmao|ja(?:ja)+)(?![\p{L}\p{N}])|😂/iu, allows: ["laugh"] },
-  { kind: "ack", pattern: words(["ok", "okay", "k", "cool", "sounds good", "got it", "perfect", "vale"]), allows: ["like"] },
-];
+export const MAX_PURE_WORDS = 6;
 
-// A veto on top of the allowlist: a thanks or a "got it" that also
-// carries bad news, a hardship or a negation gets no reaction.
+const PHRASES: ReadonlyArray<{ kind: MessageKind; phrases: readonly string[] }> = [
+  { kind: "thanks", phrases: ["thank you", "thank u", "thanks", "thx", "ty", "tysm", "i appreciate it", "appreciate it", "appreciate you", "muchas gracias", "mil gracias", "gracias"] },
+  { kind: "done", phrases: ["all done", "done", "i did it", "did it", "mailed it", "mailed", "sent it", "submitted it", "submitted", "i got approved", "got approved", "approved", "got it", "ya lo hice", "lo hice"] },
+  { kind: "joke", phrases: ["lol", "lmao", "😂"] },
+  { kind: "ack", phrases: ["sounds good", "got it", "okay", "ok", "kk", "k", "cool", "perfect", "vale"] },
+];
+// Words that may sit around a pure form without changing it.
+const FILLER = new Set(["so", "much", "a", "lot", "guys", "mano", "you", "again"]);
+const LAUGH = /^(?:(?:ha){2,}h?|(?:ja){2,}j?)$/;
+
+const ALLOWS: Record<MessageKind, readonly Tapback[]> = {
+  thanks: ["love", "🙏"],
+  done: ["💪", "🎉"],
+  joke: ["laugh"],
+  ack: ["like"],
+};
+
+// The message as words: lowercased, 😂 kept as a word, other emoji and
+// punctuation dropped.
+function wordsOf(text: string): string[] {
+  return normalizeQuotes(text)
+    .toLowerCase()
+    .replace(/😂/gu, " 😂 ")
+    .replace(/[^\p{L}\p{N}'😂\s]/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+// The kinds a short pure form is made of, or none when anything else is
+// in the message.
+function pureKinds(text: string): MessageKind[] {
+  const words = wordsOf(text);
+  if (words.length === 0 || words.length > MAX_PURE_WORDS) return [];
+  const kinds = new Set<MessageKind>();
+  let i = 0;
+  outer: while (i < words.length) {
+    const w = words[i]!;
+    if (LAUGH.test(w)) {
+      kinds.add("joke");
+      i += 1;
+      continue;
+    }
+    // Longest phrase first; a phrase in two lists ("got it") counts for both.
+    let matched = 0;
+    for (const { kind, phrases } of PHRASES) {
+      for (const phrase of phrases) {
+        const parts = phrase.split(" ");
+        if (parts.length >= matched && parts.every((p, k) => words[i + k] === p)) {
+          if (parts.length > matched) {
+            matched = parts.length;
+          }
+          kinds.add(kind);
+          break;
+        }
+      }
+    }
+    if (matched > 0) {
+      i += matched;
+      continue outer;
+    }
+    if (FILLER.has(w)) {
+      i += 1;
+      continue;
+    }
+    return [];
+  }
+  return [...kinds];
+}
+
+// A second layer under the allowlist: bad news, a hardship or a negation
+// anywhere in the message means no reaction.
 const VETO = words([
   // Losing or not getting help, in English.
   "reduc\\w*", "cut", "cuts", "cutting", "lost", "losing", "lose", "denied", "deny", "denial", "reject\\w*", "terminat\\w*",
@@ -94,15 +161,16 @@ function vetoed(text: string): boolean {
 
 export function reactionKinds(targetText: string): MessageKind[] {
   const text = normalizeQuotes(targetText);
+  // The bad-news veto stays as a second layer.
   if (isReactionText(text) || vetoed(text)) return [];
-  return KINDS.filter((k) => k.pattern.test(text)).map((k) => k.kind);
+  return pureKinds(text);
 }
 
 // The reactions the target message allows, empty for most messages.
 export function allowedReactions(targetText: string, crisis: boolean): Tapback[] {
   if (crisis) return [];
-  const kinds = new Set(reactionKinds(targetText));
-  return [...new Set(KINDS.filter((k) => kinds.has(k.kind)).flatMap((k) => k.allows))];
+  const kinds = reactionKinds(targetText);
+  return [...new Set((["thanks", "done", "joke", "ack"] as const).filter((k) => kinds.includes(k)).flatMap((k) => ALLOWS[k]))];
 }
 
 // The model's pick, kept only when the target message allows it.

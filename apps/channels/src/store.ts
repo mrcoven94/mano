@@ -71,8 +71,10 @@ export interface AnswerBubble {
   text: string;
   messageId?: string | null;
   replyTo?: string | null;
-  // For a tapback that is the whole reply: the text sent if it fails.
+  // From replies before every reply had words; never set now.
   fallback?: string | null;
+  // For a reaction: the decoration epoch it was planned under.
+  epoch?: number;
 }
 
 // A turn persisted before any external call. Pending input is cleared
@@ -157,6 +159,11 @@ export interface ConversationMeta {
   optOutDated: boolean;
   // When Channels received that STOP, on its own clock.
   optOutReceivedAtMs: number;
+  // Moves forward on every STOP, close and delete, and never back, not
+  // even when the person re-engages. Decorations (the eyes, a reply's
+  // reaction) carry the epoch they were scheduled under and send only
+  // while it still holds.
+  decorationEpoch: number;
 }
 
 // Mano's chat background on one chat, keyed by a hash of the chat ID (so
@@ -200,6 +207,7 @@ export function defaultMeta(): ConversationMeta {
     optOutAtMs: 0,
     optOutDated: false,
     optOutReceivedAtMs: 0,
+    decorationEpoch: 0,
   };
 }
 
@@ -439,7 +447,8 @@ export class MemoryStore implements ConversationStore {
     const turn = this.metaRow.turn;
     this.events.clear();
     this.inboundMessages.clear();
-    this.metaRow = { ...defaultMeta(), generation, turn, deletedAtMs };
+    const decorationEpoch = this.metaRow.decorationEpoch + 1;
+    this.metaRow = { ...defaultMeta(), generation, turn, deletedAtMs, decorationEpoch };
     this.pendingRows = [];
     this.outboundRows.clear();
     this.heldReceipts = [];

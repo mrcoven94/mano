@@ -33,7 +33,7 @@ describe("tapbacks (LAP-636)", () => {
 
   it("sends a tapback plus text when the model writes both", async () => {
     const h = introduced(makeHarness({ replies: ["REACT: like\nI'll check in at 7"] }));
-    expect(await say(h, "evt_ok", "ugh ok tonight")).toEqual(["I'll check in at 7"]);
+    expect(await say(h, "evt_ok", "ok sounds good")).toEqual(["I'll check in at 7"]);
     expect(h.channel.reactions.map((r) => r.reaction)).toEqual(["like"]);
   });
 

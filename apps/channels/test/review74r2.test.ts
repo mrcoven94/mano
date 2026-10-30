@@ -141,7 +141,7 @@ describe("Sol round 2, repro 6: a question without a question mark always gets w
 
   it("adds a done message's reaction on top of its words", async () => {
     const h = introduced(makeHarness({ responder: reply("nice, that's the hard part", "💪") }));
-    expect(await say(h, "evt_1", "just mailed the renewal packet")).toEqual(["nice, that's the hard part"]);
+    expect(await say(h, "evt_1", "done, mailed it")).toEqual(["nice, that's the hard part"]);
     await h.decorations.idle();
     expect(h.channel.reactions.map((r) => r.reaction)).toEqual(["💪"]);
   });

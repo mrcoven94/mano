@@ -91,7 +91,7 @@ function slow(text: string, ms: number): Responder {
 describe("dynamic reactions", () => {
   it("sends an emoji reaction the model chose", async () => {
     const h = introduced(makeHarness({ replies: ["REACT: 💪\nnice, that's the hard part done"] }));
-    expect(await say(h, "evt_done", "just mailed the renewal packet")).toEqual(["nice, that's the hard part done"]);
+    expect(await say(h, "evt_done", "mailed it!")).toEqual(["nice, that's the hard part done"]);
     expect(h.channel.reactions).toEqual([{ chatId: TEST_CHAT, messageId: "msg_evt_done", reaction: "💪" }]);
   });
 

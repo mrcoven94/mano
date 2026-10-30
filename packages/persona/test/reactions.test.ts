@@ -29,13 +29,13 @@ describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
     for (const t of ["love", "laugh", "💪", "🎉", "like", "emphasize", "🙏"] as const) {
       expect(allowedTapback(t, "they denied my medicaid", false), t).toBeNull();
     }
-    expect(allowedTapback("💪", "just mailed the renewal packet", false)).toBe("💪");
+    expect(allowedTapback("💪", "mailed it", false)).toBe("💪");
   });
 
   it("decides the allowed reactions from the message's own text (PR 74 review 2)", () => {
     expect(allowedReactions("thank you so much", false)).toEqual(["love", "🙏"]);
     expect(allowedReactions("gracias", false)).toEqual(["love", "🙏"]);
-    expect(allowedReactions("just mailed it", false)).toEqual(["💪", "🎉"]);
+    expect(allowedReactions("mailed it", false)).toEqual(["💪", "🎉"]);
     expect(allowedReactions("lo hice!", false)).toEqual(["💪", "🎉"]);
     expect(allowedReactions("jajaja", false)).toEqual(["laugh"]);
     expect(allowedReactions("ok", false)).toEqual(["like"]);
@@ -47,6 +47,25 @@ describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
     expect(eyesAllowed("can you look at my case", false)).toBe(true);
     expect(eyesAllowed("I got fired", false)).toBe(false);
     expect(eyesAllowed("Loved \u201cok\u201d", false)).toBe(false);
+  });
+
+  it("allows a reaction only on a short pure form (PR 74 review 4)", () => {
+    for (const [text, allowed] of [
+      ["thanks!!", ["love", "🙏"]],
+      ["thank you so much", ["love", "🙏"]],
+      ["Thanks Mano 🙏", ["love", "🙏"]],
+      ["ok sounds good", ["like"]],
+      ["done, mailed it", ["💪", "🎉"]],
+      ["lol", ["laugh"]],
+      ["jajaja", ["laugh"]],
+      ["😂😂", ["laugh"]],
+      ["gracias!", ["love", "🙏"]],
+    ] as const) {
+      expect(allowedReactions(text, false), text).toEqual(allowed);
+    }
+    for (const text of ["thanks, my benefits expired", "thanks, I'm homeless", "thank you, the shelter is full tonight", "ok, my car got towed", "thanks for the help with the form yesterday", "lol my landlord", "thank you thank you thank you so much guys"]) {
+      expect(allowedReactions(text, false), text).toEqual([]);
+    }
   });
 
   it("reads curly apostrophes as straight ones, and vetoes the wider bad-news list (PR 74 review 3)", () => {

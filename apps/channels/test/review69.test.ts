@@ -79,7 +79,7 @@ describe("PR 69 review, blocker 2: a failed tapback falls back to text, and text
       order.push("tapback");
       await new Promise<void>((resolve) => (release = resolve));
     };
-    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "ugh ok tonight", occurredAtMs: h.now }), "webhook");
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "ok sounds good", occurredAtMs: h.now }), "webhook");
     h.advance(h.batchMs + 100);
     const turn = h.runner.runDueTurn();
     await new Promise((r) => setTimeout(r, 30));
