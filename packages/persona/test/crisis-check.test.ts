@@ -110,3 +110,10 @@ describe("question marks only where there is no closing punctuation (Sol's third
     expect(holdCrisisLines(["I'm here. are you safe right now"])[1]).toBe("I'm here. are you safe right now?");
   });
 });
+
+describe("the model check's time limit", () => {
+  it("is 3 seconds", async () => {
+    const { CRISIS_CHECK_TIMEOUT_MS } = await import("../src/crisis.js");
+    expect(CRISIS_CHECK_TIMEOUT_MS).toBe(3000);
+  });
+});

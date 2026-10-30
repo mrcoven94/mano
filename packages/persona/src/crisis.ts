@@ -316,7 +316,7 @@ export function crisisCheckInput(text: string): string {
   return `<message>\n${text.replace(/<\/?message>/gi, " ")}\n</message>`;
 }
 
-export const CRISIS_CHECK_TIMEOUT_MS = 2000;
+export const CRISIS_CHECK_TIMEOUT_MS = 3000;
 
 // A message that tells anyone what to answer, say or reply, or mentions
 // ignoring, instructions, the system or a prompt, or puts "no" or "yes"
