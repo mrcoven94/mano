@@ -11,8 +11,15 @@ describe("the crisis line is said once (safety-05)", () => {
       ["Me alegra mucho que me lo hayas dicho.", "Por favor llama o manda texto al 988 ahora mismo, es gratis y está abierto 24/7.", "Si estás en peligro ahora mismo, llama al 911. Estoy aquí contigo, ¿estás a salvo en este momento?"],
       CRISIS_LINE_ES,
     );
-    expect(bubbles).toEqual([CRISIS_LINE_ES, "Me alegra mucho que me lo hayas dicho.", "Estoy aquí contigo, ¿estás a salvo en este momento?"]);
-    expect(bubbles.join(" ").match(/\b988\b/g)).toHaveLength(1);
+    // The Spanish line offers "llama al 911" and "envía un mensaje al 988".
+    // "llama ... al 988" is a pair the line does not offer, so it stays
+    // (number and action as a pair, Sol's third review); "llama al 911" goes.
+    expect(bubbles).toEqual([
+      CRISIS_LINE_ES,
+      "Me alegra mucho que me lo hayas dicho.",
+      "Por favor llama o manda texto al 988 ahora mismo, es gratis y está abierto 24/7.",
+      "Estoy aquí contigo, ¿estás a salvo en este momento?",
+    ]);
   });
 
   it("does the same in English, and keeps the line naming both numbers", () => {

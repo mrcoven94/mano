@@ -95,11 +95,12 @@ export function holdCrisisLines(bubbles: readonly string[], line: string = CRISI
   return [line, ...rest];
 }
 
-// A sentence as the numbers it names, the actions it pairs them with
-// (call, text), and the rest of its words.
+// A sentence as the number and action pairs it names (each 988 or 911
+// with the call or text words since the previous number) and the rest of
+// its words. "llama al 911 o envía un mensaje al 988" is (call 911) and
+// (text 988), so "envía un mensaje al 911" is not a repeat of it.
 interface CallShape {
-  numbers: Set<string>;
-  actions: Set<string>;
+  pairs: Set<string>;
   words: Set<string>;
 }
 
@@ -120,30 +121,30 @@ function wordsOf(text: string): string[] {
 }
 
 function callShape(sentence: string): CallShape {
-  const shape: CallShape = { numbers: new Set(), actions: new Set(), words: new Set() };
+  const shape: CallShape = { pairs: new Set(), words: new Set() };
+  let actions: string[] = [];
   for (const w of wordsOf(sentence)) {
-    if (w === "988" || w === "911") shape.numbers.add(w);
-    else if (ACTION[w]) shape.actions.add(ACTION[w]!);
+    if (w === "988" || w === "911") {
+      // A number with no action word is a pair with no action, never a repeat.
+      for (const a of actions.length > 0 ? actions : ["none"]) shape.pairs.add(`${a} ${w}`);
+      actions = [];
+    } else if (ACTION[w]) actions.push(ACTION[w]!);
     else if (!REPEAT_FILLER.has(w)) shape.words.add(w);
   }
   return shape;
 }
 
-// Dropped only when it names 988 or 911 with the same action as the line
-// sentence that names that number, and nothing else: "Call or text 988
-// now", "If you're in danger right now, call 911". "Text 911 if you're in
-// danger", another number, an action or a question all stay.
+// Dropped only when every number and action pair it names is a pair of
+// one line sentence, and it says nothing else that sentence does not:
+// "Call or text 988 now", "If you're in danger right now, call 911".
+// Another action for a number ("text 911"), another number, an action
+// or a question all stay.
 function repeatsTheLine(sentence: string, lineSentences: readonly CallShape[]): boolean {
   if (/[?¿]/.test(sentence)) return false;
   const shape = callShape(sentence);
-  if (shape.numbers.size === 0 || /\d/.test([...shape.words].join(" "))) return false;
-  return lineSentences.some(
-    (ls) =>
-      [...shape.numbers].every((n) => ls.numbers.has(n)) &&
-      shape.actions.size > 0 &&
-      [...shape.actions].every((a) => ls.actions.has(a)) &&
-      [...shape.words].every((w) => ls.words.has(w)),
-  );
+  if (shape.pairs.size === 0 || shape.pairs.has("none 988") || shape.pairs.has("none 911")) return false;
+  if ([...shape.words].some((w) => /\d/.test(w))) return false;
+  return lineSentences.some((ls) => [...shape.pairs].every((p) => ls.pairs.has(p)) && [...shape.words].every((w) => ls.words.has(w)));
 }
 
 function withoutRepeats(bubble: string, lineSentences: readonly CallShape[]): string {
@@ -155,7 +156,8 @@ function withoutRepeats(bubble: string, lineSentences: readonly CallShape[]): st
 }
 
 // Question marks come back only on a whole sentence that is one of these
-// safety questions, never on a statement that contains the words.
+// safety questions and has no closing punctuation at all, never on a
+// statement that contains the words.
 const SAFETY_QUESTIONS_EN = new Set([
   "are you safe", "are you safe right now", "are you safe now", "are you safe at this moment", "are you safe tonight",
   "is anyone with you", "is someone with you", "is anyone with you right now",
@@ -169,9 +171,10 @@ function askSafety(bubble: string): string {
   return bubble
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => {
-      const bare = sentence.replace(/^¿/, "").replace(/[.\s]+$/, "");
+      // A sentence that already ends in . ! ? or … stays as written.
+      if (/[.!?…]$/.test(sentence.trim())) return sentence;
+      const bare = sentence.replace(/^¿/, "").trim();
       const key = bare.toLowerCase().replace(/estas/g, "estás");
-      if (/[?]$/.test(sentence.trim())) return sentence;
       if (SAFETY_QUESTIONS_EN.has(key)) return `${bare}?`;
       if (SAFETY_QUESTIONS_ES.has(key)) return `¿${bare}?`;
       return sentence;
@@ -244,7 +247,7 @@ const IMPLICIT = /\bbetter off without me\b|\b(?:hope|wish|want|going) (?:i|to) 
 const SPANISH_INTENT = "(?:me voy a|voy a|me quiero|quiero|estoy pensando en|pienso en|pienso)";
 const SPANISH_HARM = "(?:matar(?:me)?|suicidar(?:me)?|hacer(?:me)? da[ñn]o|cortarme|morir(?:me)?|quitarme la vida)";
 const SPANISH = new RegExp(
-  String.raw`(?:^|\s)(?:${SPANISH_INTENT}(?: \p{L}+){0,2} ${SPANISH_HARM}|matarme|suicid\p{L}*|hacerme da[ñn]o|quitarme la vida|no quiero vivir|me est[áa] (?:pegando|golpeando)|me (?:pega|golpea)|estoy en peligro(?! de perder)|no quiero (?:seguir|estar) (?:aqu[íi]|ac[áa]|viv\p{L}*|en este mundo)|no quiero seguir|no quiero despertar|ojal[áa] no despert\p{L}*|quiero que (?:todo|esto|mi vida) (?:termine|se acabe|acabe)|que (?:se acabe todo|todo se acabe|todo termine)|acabar con todo|(?:ya no|nada) tiene sentido|toda la botella|todo el frasco|todas (?:mis|las) pastillas)(?=\s|$)`,
+  String.raw`(?:^|\s)(?:${SPANISH_INTENT}(?: \p{L}+){0,2} ${SPANISH_HARM}|matarme|suicid\p{L}*|hacerme da[ñn]o|quitarme la vida|no quiero vivir|me est[áa] (?:pegando|golpeando)|me (?:pega|golpea)|estoy en peligro(?! de perder)|no quiero (?:seguir|estar) (?:aqu[íi]|ac[áa]|viv\p{L}*|en este mundo)|no quiero seguir|no quiero despertar|ojal[áa] no despert\p{L}*|quiero que (?:todo|esto|mi vida) (?:termine|se acabe|acabe)|que (?:se acabe todo|todo se acabe|todo termine)|acabar con todo|(?:ya no|nada) tiene sentido|toda la botella|todo el frasco|todas (?:mis|las) pastillas|para no despertar|y no despertar|dormir y no despertar)(?=\s|$)`,
   "u",
 );
 
@@ -257,64 +260,8 @@ export function spanishOrImplicitCrisis(text: string): boolean {
   return IMPLICIT.test(words) || SPANISH.test(words);
 }
 
-// The second exemption, one ordinary health question. "My surgery hurt
-// for weeks" or "should I stop taking my blood pressure pills" trip the
-// broad words "hurt" and "pills" with no crisis sense (nightly run
-// 41017357447, safety-34 and safety-35). It is checked only after main's
-// detectors said crisis on the full, unmodified message, and it applies
-// only when all three hold:
-// 1. the strict detector does not fire;
-// 2. nothing anywhere in the message is on the deny list below (a number
-//    or quantity near a medicine, on purpose, myself, waking up, forever,
-//    death, giving up, "so I", someone else hurting them or not letting
-//    them leave, swallowing, poison, the Spanish equivalents);
-// 3. every broad crisis word in the message sits inside a health shape:
-//    a body part or procedure that hurts, an injury to a named body part,
-//    managing a medication, or a named everyday medication.
-// Nothing is removed from the message before any check. If in doubt, the
-// turn stays a crisis.
-const BODY = "(?:back|neck|knees?|legs?|arms?|feet|foot|hands?|head|stomach|belly|tooth|teeth|shoulders?|hips?|ankles?|chest|ears?|eyes?|throat|joints?|muscles?)";
-const PROCEDURE = "(?:surgery|operation|procedure|incision|stitches|scar)";
-const OWNER = "(?:my|his|her|their|the|our|your)";
-const MED = "(?:pills|meds|medications?|medicines?)";
-const HEALTH_SHAPE = new RegExp(
-  [
-    // A body part or a procedure that hurts: "my surgery hurt for weeks".
-    String.raw`\b${OWNER} (?:[a-z']+ ){0,2}?(?:${BODY}|${PROCEDURE}) (?:still |really |has |have |had |kept |keeps |been |has been )*(?:hurt|hurts|hurting)\b`,
-    // An injury to a named body part: "I hurt my back at work".
-    String.raw`\bi (?:hurt|injured|pulled|strained|twisted|sprained) ${OWNER} (?:back|neck|knee|leg|arm|foot|ankle|shoulder|hip|hand)\b`,
-    // Managing a medication: "stop taking my blood pressure pills".
-    String.raw`\b(?:stop|stopping|start|starting|skip|skipping|switch|switching|change|changing|refill|refilling|quit|quitting|keep|lower|lowering|forgot to|forget to|remember to|afford|pay for|cover|covers|covered)(?: taking| to take| take)? (?:${OWNER}|these|those) (?:[a-z']+ ){0,2}?${MED}\b`,
-    // A named everyday medication.
-    String.raw`\b(?:blood pressure|birth control|allergy|thyroid|cholesterol|diabetes|vitamin|iron|prenatal|heart|asthma) ${MED}\b`,
-  ].join("|"),
-  "g",
-);
-const QUANTITY =
-  String.raw`(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|hundred|dozen|all|every|whole|bunch|handful|lots?|many|several|extra|double|triple|some|more|rest|bottle|box|pack|uno|dos|tres|cuatro|cinco|diez|veinte|treinta|cuarenta|cincuenta|todas?|todos?|muchas?|muchos?|varias?|varios?|botella|caja)`;
-const MEDICINE = String.raw`(?:pills?|meds?|medications?|medicines?|tablets?|capsules?|pastillas?|medicinas?|medicamentos?|pldoras?|píldoras?)`;
-const HEALTH_DENY = new RegExp(
-  [
-    // A number or quantity near a medicine, either order.
-    String.raw`(?:^|\s)${QUANTITY}(?: \S+){0,5} ${MEDICINE}(?=\s|$)`,
-    String.raw`(?:^|\s)${MEDICINE}(?: \S+){0,2} (?:at once|all at once|de una vez|a la vez)(?=\s|$)`,
-    // Having taken too much of anything ("I took all of them").
-    String.raw`(?:^|\s)(?:took|swallowed|downed|tom[ée]|tragu[ée])(?: \S+){0,1} (?:all|them|the rest|a handful|a bunch|too many|some|extra|more|double|todas?|todos?|muchas?|muchos?)(?=\s|$)`,
-    // Having taken or swallowed a medicine at all, poison, bleach.
-    String.raw`(?:^|\s)(?:took|swallow\S*|downed|tom[ée]|tragu[ée]|trag[óo])(?: \S+){0,5} ${MEDICINE}(?=\s|$)`,
-    String.raw`(?:^|\s)(?:swallow\S*|downed|poison\S*|bleach|veneno\S*|cloro|lej[íi]a|trag\S*)(?=\s|$)`,
-    // Intent, self, waking up, forever, death, giving up.
-    String.raw`(?:^|\s)(?:on purpose|a prop[óo]sito|myself|me hice|me lastim[ée]|wake up|waking up|despert\S*|forever|para siempre|end it|end my|die|died|dies|dying|dead|death|morir\S*|muer\S*|no point|no tiene sentido|give up|giving up|rendirme|so i|kill\S*|matar\S*|suicid\S*|better off|anymore|ya no|can't do this|cannot do this|can't take|can't go on|nobody would|no one would|hope i|i hope|ojal[áa]|disappear|desaparec\S*|stop the pain|overdos\S*|wrists?|mu[ñn]ecas?|sleeping)(?=\s|$)`,
-    // Someone else hurting them, or not letting them leave.
-    String.raw`(?:^|\s)(?:he|she|they|someone|somebody|my (?:husband|wife|partner|boyfriend|girlfriend|dad|father|mom|mother|brother|sister|son|daughter|ex|roommate|landlord|boss)) (?:\S+ )?(?:hurt|hurts|hit|hits|beat|beats|kicked|pushed|choked|grabbed)(?=\s|$)`,
-    String.raw`(?:^|\s)(?:won't|will not|wouldn't|would not|doesn't|does not|don't) let me (?:leave|go|out)(?=\s|$)`,
-    String.raw`(?:^|\s)no me deja\S* (?:salir|ir)(?=\s|$)`,
-  ].join("|"),
-  "u",
-);
-
-// The lead's decision after Sol's second review: only ONE short health
-// question can be exempt. One sentence, ending in "?" ("¿...?" in
+// The gate into the model check (the lead's decision after Sol's second
+// review): only ONE short health question can ever be exempt. One sentence, ending in "?" ("¿...?" in
 // Spanish), at most 25 words, opening with a question word, and with no
 // first-person intent clause anywhere.
 const MAX_QUESTION_WORDS = 25;
@@ -331,21 +278,67 @@ export function isOneHealthQuestion(text: string): boolean {
   return !INTENT.test(accented(trimmed));
 }
 
-export function suppressedHealthQuestion(text: string): boolean {
-  if (!isOneHealthQuestion(text)) return false;
-  if (isCrisis(text)) return false;
-  if (HEALTH_DENY.test(accented(text))) return false;
-  const words = normalize(text);
-  const shapes = [...words.matchAll(HEALTH_SHAPE)].map((m) => [m.index!, m.index! + m[0].length] as const);
-  if (shapes.length === 0) return false;
-  const triggers = [...words.replace(BENEFITS_DANGER, (m) => " ".repeat(m.length)).matchAll(new RegExp(POSSIBLE_CRISIS.source, "g"))];
-  return triggers.length > 0 && triggers.every((t) => shapes.some(([start, end]) => t.index! >= start && t.index! + t[0].length <= end));
+// The keyword floor every turn starts from: a detector fired, and the
+// benefits-cut suppression does not apply. Spanish and implicit
+// self-harm are never suppressed. Nothing else exempts a turn here; one
+// short health question can only be exempted by decideCrisis.
+export function crisisTurn(text: string): boolean {
+  return spanishOrImplicitCrisis(text) || (mightBeCrisis(text) && !suppressedBenefitsCut(text));
 }
 
-// The decision a turn uses: a detector fired, and neither exemption
-// applies. Spanish and implicit self-harm are never suppressed.
-export function crisisTurn(text: string): boolean {
-  return spanishOrImplicitCrisis(text) || (mightBeCrisis(text) && !suppressedBenefitsCut(text) && !suppressedHealthQuestion(text));
+// One question to a model, asked only when the floor says crisis and the
+// message is one short health question (Sol's third review of PR 77:
+// keyword rules cannot make that call safely). Only an exact "no"
+// exempts. Any other answer, an error, a timeout, a missing or stand-in
+// check: the turn stays a crisis.
+export interface CrisisCheck {
+  // False for a stand-in or fake that calls no model.
+  readonly live: boolean;
+  ask(text: string, signal: AbortSignal): Promise<string>;
+}
+
+export const CRISIS_CHECK_INSTRUCTIONS =
+  "You screen one text message for safety. Does this message show any sign of self-harm, suicide, overdose, " +
+  "wanting to die, giving up on life, or someone in danger? Answer with exactly one word, in lowercase: yes or no.";
+
+export const CRISIS_CHECK_TIMEOUT_MS = 2000;
+
+export type CrisisReason = "floor" | "model-no" | "model-other" | "check-error" | "check-timeout" | "no-check";
+
+export interface CrisisDecision {
+  crisis: boolean;
+  reason: CrisisReason;
+  ms: number;
+}
+
+export async function decideCrisis(
+  text: string,
+  check: CrisisCheck | null,
+  opts: { timeoutMs?: number; nowMs?: () => number } = {},
+): Promise<CrisisDecision> {
+  const now = opts.nowMs ?? (() => Date.now());
+  const started = now();
+  if (!crisisTurn(text)) return { crisis: false, reason: "floor", ms: 0 };
+  if (!isOneHealthQuestion(text)) return { crisis: true, reason: "floor", ms: 0 };
+  if (!check || !check.live) return { crisis: true, reason: "no-check", ms: 0 };
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve("timeout");
+    }, opts.timeoutMs ?? CRISIS_CHECK_TIMEOUT_MS);
+  });
+  try {
+    const answer = await Promise.race([check.ask(text, controller.signal), timeout]);
+    if (answer === "timeout") return { crisis: true, reason: "check-timeout", ms: now() - started };
+    if (answer.trim() === "no") return { crisis: false, reason: "model-no", ms: now() - started };
+    return { crisis: true, reason: "model-other", ms: now() - started };
+  } catch {
+    return { crisis: true, reason: "check-error", ms: now() - started };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // A message is treated as Spanish when its Spanish function words

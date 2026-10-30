@@ -40,6 +40,9 @@ export interface TurnInput {
   // When Channels received the turn's latest message, on its own clock.
   // The agent orders a YES against the question it answers by this time.
   receivedAtMs?: number;
+  // The turn's crisis decision, made once by the worker (decideCrisis).
+  // Without it the responder falls back to the keyword floor.
+  crisis?: boolean;
 }
 
 export interface ResponderResult {
@@ -231,7 +234,7 @@ export class SparkResponder implements Responder {
     // the crisis line first on every path, so the model is told it is
     // already there and writes the human part (safety-05).
     const text = turn.texts.join("\n");
-    const crisis = crisisTurn(text);
+    const crisis = turn.crisis ?? crisisTurn(text);
     const fast = await this.call(
       `${MANO_SOUL}${note}${crisis ? `\n\n${crisisNote(crisisLineFor(text))}` : `\n\n${PACING}`}`,
       messages,

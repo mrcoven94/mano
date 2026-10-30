@@ -3,7 +3,10 @@
 // safety-35), so the 988 line led the answer. These pin the fix: health
 // look-alikes are not crisis turns, and every true positive stays one.
 import { describe, expect, it } from "vitest";
-import { crisisTurn, isCrisis } from "../src/crisis.js";
+import { crisisTurn, decideCrisis, isCrisis } from "../src/crisis.js";
+
+// A fake check that answers "no", to show what the gate lets through.
+const sayNo = { live: true, ask: async () => "no" };
 
 describe("one short health question is not a crisis turn", () => {
   const lookalikes = [
@@ -19,8 +22,8 @@ describe("one short health question is not a crisis turn", () => {
     "My daughter swallowed a penny, what do I do?",
   ];
   for (const text of lookalikes) {
-    it(`"${text}" gets no crisis line`, () => {
-      expect(crisisTurn(text)).toBe(false);
+    it(`"${text}" gets no crisis line when the model check says no`, async () => {
+      expect(await decideCrisis(text, sayNo)).toMatchObject({ crisis: false });
     });
   }
 });

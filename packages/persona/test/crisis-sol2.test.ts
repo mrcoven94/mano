@@ -2,7 +2,10 @@
 // only ONE short health question is exempt. Everything else that main's
 // detector calls a crisis stays one.
 import { describe, expect, it } from "vitest";
-import { CRISIS_LINE, CRISIS_LINE_ES, crisisTurn, holdCrisisLines, isCrisis } from "../src/crisis.js";
+import { CRISIS_LINE, CRISIS_LINE_ES, crisisTurn, decideCrisis, holdCrisisLines, isCrisis } from "../src/crisis.js";
+
+// A fake check that answers "no", to show what the gate lets through.
+const sayNo = { live: true, ask: async () => "no" };
 import { MANO_SOUL } from "../src/soul.js";
 
 describe("only one short health question is exempt", () => {
@@ -12,8 +15,10 @@ describe("only one short health question is exempt", () => {
     "Can I switch my birth control pills to a cheaper brand?",
     "Does medicaid cover my allergy pills?",
   ]) {
-    it(`"${text}" is exempt`, () => {
-      expect(crisisTurn(text)).toBe(false);
+    it(`"${text}" reaches the model check, and only its "no" exempts it`, async () => {
+      expect(crisisTurn(text)).toBe(true);
+      expect(await decideCrisis(text, sayNo)).toMatchObject({ crisis: false, reason: "model-no" });
+      expect(await decideCrisis(text, null)).toMatchObject({ crisis: true });
     });
   }
 
@@ -37,8 +42,9 @@ describe("only one short health question is exempt", () => {
     "Can I skip my blood pressure pills, I hope it ends?",
     "¿Debo dejar mis pastillas para el corazón porque quiero morir?",
   ]) {
-    it(`"${text}" stays a crisis`, () => {
+    it(`"${text}" stays a crisis, even if a model would say no`, async () => {
       expect(crisisTurn(text)).toBe(true);
+      expect(await decideCrisis(text, sayNo)).toMatchObject({ crisis: true, reason: "floor" });
     });
   }
 
@@ -62,7 +68,7 @@ describe("the dedupe drops only the same number with the same action (Sol, 5)", 
 
   it("still drops the same number with the same action and nothing else", () => {
     expect(holdCrisisLines(["Call or text 988 now.", "If you're in danger right now, call 911."])).toEqual([CRISIS_LINE]);
-    expect(holdCrisisLines(["Por favor llama o manda texto al 988 ahora mismo."], CRISIS_LINE_ES)).toEqual([CRISIS_LINE_ES]);
+    expect(holdCrisisLines(["Por favor manda un mensaje al 988 ahora mismo."], CRISIS_LINE_ES)).toEqual([CRISIS_LINE_ES]);
   });
 });
 

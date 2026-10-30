@@ -26,7 +26,9 @@ describe("safety-05: the crisis line once, and the safety question still a quest
   it("sends the Spanish line once, drops the model's repeat, and keeps ¿...?", async () => {
     const model = "Me alegra mucho que me lo hayas dicho.\nPor favor llama o manda texto al 988 ahora mismo.\nSi estás en peligro ahora mismo, llama al 911. estoy aquí contigo. estás a salvo en este momento";
     const out = await finalizeReply(model, { crisis: true, checker: noLinks, crisisLine: CRISIS_LINE_ES });
-    expect(out.bubbles).toEqual([CRISIS_LINE_ES, "Me alegra mucho que me lo hayas dicho.", "estoy aquí contigo. ¿estás a salvo en este momento?"]);
+    // "llama ... al 988" is a pair the Spanish line does not offer, so it
+    // stays; "llama al 911" is the line's own pair, so it goes.
+    expect(out.bubbles).toEqual([CRISIS_LINE_ES, "Me alegra mucho que me lo hayas dicho.", "Por favor llama o manda texto al 988 ahora mismo.", "estoy aquí contigo. ¿estás a salvo en este momento?"]);
   });
 
   it("does the same in English", async () => {

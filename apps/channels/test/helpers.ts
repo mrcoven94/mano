@@ -96,6 +96,8 @@ export function makeHarness(
     store?: ConversationStore;
     // How long decoration work may run before it is cancelled.
     decorationTimeoutMs?: number;
+    // The model check for one short health question; none fails closed.
+    crisisCheck?: import("@mano/persona").CrisisCheck | null;
   } = {},
 ): Harness {
   const lines: string[] = [];
@@ -151,6 +153,7 @@ export function makeHarness(
     config: { handleHash: TEST_HANDLE_HASH, ...DEFAULT_RUNNER_CONFIG, ...opts.config },
     reportPresentation: opts.reportPresentation,
     decorations: h.decorations,
+    crisisCheck: opts.crisisCheck ?? null,
   });
   return h;
 }

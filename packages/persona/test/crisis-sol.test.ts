@@ -69,6 +69,6 @@ describe("the dedupe never deletes help or a question (Sol, blocker 4)", () => {
 
   it("still deletes a bare call to 988 or 911, and a near-exact repeat of the line", () => {
     expect(holdCrisisLines(["Call or text 988 now.", "Please call or text 988 right now, it's free and open 24/7", "if you're in danger right now, call 911."])).toEqual([CRISIS_LINE]);
-    expect(holdCrisisLines(["Por favor llama o manda texto al 988 ahora mismo.", "Si estás en peligro ahora mismo, llama al 911."], CRISIS_LINE_ES)).toEqual([CRISIS_LINE_ES]);
+    expect(holdCrisisLines(["Envía un mensaje al 988 ahora mismo.", "Si estás en peligro ahora mismo, llama al 911."], CRISIS_LINE_ES)).toEqual([CRISIS_LINE_ES]);
   });
 });
