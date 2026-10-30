@@ -14,7 +14,7 @@ import { getDocumentBytes, putDocument } from "../files.js";
 import { CASE_ID_RULE, isCaseId } from "../case-id.js";
 import { auditDigest } from "../gateway/audit.js";
 import { checkLinkSafety, redactBlockedLinks } from "../link-safety.js";
-import { base64ToBytes, bytesToBase64 } from "../hash.js";
+import { base64ToBytes, bytesToBase64, sha256Hex } from "../hash.js";
 import { createModelClient, defaultModelFor } from "../model-client.js";
 import { getSessionSecret, verifyWsTicket } from "../auth.js";
 import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
@@ -45,6 +45,7 @@ import {
   parseTurnInput,
   putTurnIfAbsent,
   removeConversationState,
+  conversationDocumentKeys,
   requireGeneration,
   requireIdentity,
   setPendingPointer,
@@ -61,6 +62,8 @@ const MAX_REMINDER_ATTEMPTS = 8;
 // The answer when a write was prepared under a conversation generation
 // that a delete has since moved past: nothing was written.
 export const STALE_STATE = { stale: true } as const;
+export const DOCUMENT_CONFLICT = { conflict: true } as const;
+const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,200}$/;
 
 // One delivery run claims at most this many; a run that leaves more due
 // re-arms the wake-up for now.
@@ -658,6 +661,10 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async deleteConversation(verified: string, input: unknown) {
     await this.assertSubject(verified);
     const toGeneration = parseGenerationInput(input).generation;
+    // Files first, outside the transaction: a failed R2 delete throws
+    // before any row goes, so Channels' retry deletes them again.
+    const keys = conversationDocumentKeys(this.db(), toGeneration);
+    if (keys.length > 0) await this.env.FILES.delete(keys);
     const removed = this.ctx.storage.transactionSync(() => removeConversationState(this.db(), Date.now(), toGeneration));
     this.store.audit({ event: "conversation.deleted", ...removed });
     await this.armReminderWakeup();
@@ -1063,10 +1070,17 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return recorded ? { found: true, externalId: stored.id } : { found: false };
   }
 
-  async registerDocument(verified: string, input: { name: string; contentB64: string }) {
+  // id: a caller-chosen, slug-safe ID (Channels derives one per texted
+  // photo), so a retried upload is the same document; the same ID with
+  // other bytes is a conflict. generation: the conversation the upload
+  // was prepared under, checked again at the insert.
+  async registerDocument(verified: string, input: { name: string; contentB64: string; id?: string }, generation?: number) {
     await this.assertSubject(verified);
     if (!input.name || typeof input.name !== "string" || input.name.length > 300) {
       throw new Error("Document needs a name.");
+    }
+    if (input.id !== undefined && (typeof input.id !== "string" || !DOCUMENT_ID.test(input.id))) {
+      throw new Error("Document id must be slug-safe.");
     }
     let bytes: Uint8Array;
     try {
@@ -1077,9 +1091,23 @@ export class PersonAgent extends Agent<Env, PersonState> {
     if (bytes.length === 0 || bytes.length > 10_000_000) {
       throw new Error("Document is empty or larger than 10 MB.");
     }
-    const id = crypto.randomUUID();
+    const id = input.id ?? crypto.randomUUID();
+    const prepared = generation ?? currentGeneration(this.db());
+    const existing = this.db().exec("SELECT hash FROM documents WHERE id = ?", id).toArray()[0] as { hash: string } | undefined;
+    if (existing) return existing.hash === (await sha256Hex(bytes)) ? { id, hash: existing.hash } : DOCUMENT_CONFLICT;
+    if (prepared !== currentGeneration(this.db())) return STALE_STATE;
     const { hash, r2Key } = await putDocument(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, id, bytes);
-    this.db().exec("INSERT INTO documents VALUES (?,?,?,?)", id, input.name, hash, r2Key);
+    const written = this.db().exec(
+      `INSERT OR IGNORE INTO documents(id, name, hash, r2_key) SELECT ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?`,
+      id, input.name, hash, r2Key, prepared,
+    ).rowsWritten;
+    if (written === 0) {
+      const raced = this.db().exec("SELECT hash FROM documents WHERE id = ?", id).toArray()[0] as { hash: string } | undefined;
+      if (raced) return raced.hash === hash ? { id, hash } : DOCUMENT_CONFLICT;
+      // The conversation was deleted during the upload.
+      await this.env.FILES.delete(r2Key);
+      return STALE_STATE;
+    }
     this.store.audit({ event: "document.registered", documentHash: await auditDigest(id) });
     return { id, hash };
   }

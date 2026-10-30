@@ -23,7 +23,9 @@
 // routes with Bearer MANO_ENGINE_AGENT_TOKEN plus x-mano-handle-grant, a
 // grant Channels signs with MANO_HANDLE_GRANT_SECRET for the handle that
 // just texted (see packages/protocol handle-grant.ts). The grant names one
-// person, handle-<hash>, and opens only memory, action and approvals.
+// person, handle-<hash>, and opens only the routes in auth.ts
+// SERVICE_ROUTES: for the agent, memory, action, approvals, its own state,
+// reading a texted photo (GET /documents/:docId) and POST /deadlines.
 //
 // HTTP surface:
 //
@@ -60,7 +62,8 @@
 // Due reminders go out from the person's one delivery wake-up through
 // Channels' agent-send route at MANO_CHANNELS_URL, signed with
 // MANO_ENGINE_SEND_SECRET (packages/protocol engine-send.ts).
-//   POST /api/persons/:id/documents            { name, contentB64 }
+//   POST /api/persons/:id/documents            { name, contentB64, id?, generation? } (Channels with a grant:
+//                                              a texted photo under its own ID, generation required)
 //   GET  /api/persons/:id/documents/:docId     decrypted bytes, owner only
 //   POST /api/persons/:id/ws-ticket            one 60-second single-use ticket for /ws
 //   GET  /api/persons/:id/ws?ticket=           chat socket (closes when the session expires)
@@ -526,12 +529,21 @@ export default {
       if (rest === "/documents" && request.method === "POST") {
         const read = await readCappedJson(request, MAX_UPLOAD_BODY);
         if (!read.ok) return read.response;
-        const { name, contentB64 } = (read.value ?? {}) as { name?: unknown; contentB64?: unknown };
-        if (typeof name !== "string" || typeof contentB64 !== "string") {
+        const { name, contentB64, id, generation: rawGeneration } = (read.value ?? {}) as {
+          name?: unknown;
+          contentB64?: unknown;
+          id?: unknown;
+          generation?: unknown;
+        };
+        if (typeof name !== "string" || typeof contentB64 !== "string" || (id !== undefined && typeof id !== "string")) {
           return Response.json({ error: "Body needs a name and contentB64." }, { status: 400 });
         }
+        const generation = writeGeneration(service, rawGeneration);
+        if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
         try {
-          const doc = await agent.registerDocument(subject, { name, contentB64 });
+          const doc = await agent.registerDocument(subject, { name, contentB64, id }, generation);
+          if (isStale(doc)) return STALE();
+          if ("conflict" in doc) return Response.json({ error: "That document ID holds other content." }, { status: 409 });
           return Response.json(doc);
         } catch (err) {
           const message = (err as Error).message;

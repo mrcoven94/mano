@@ -102,6 +102,9 @@ export function proposalOrderFor(sql: SqlExec, turnId: string): { receivedAt: st
 }
 
 export function ensureAgentStateTables(sql: SqlExec): void {
+  // The person's files (texted photos among them), also created by
+  // PersonAgent; here so a conversation delete can remove their rows.
+  sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS reminders(
     id TEXT PRIMARY KEY, text TEXT NOT NULL, due_at_ms INTEGER NOT NULL, generation INTEGER NOT NULL,
     status TEXT NOT NULL, next_at_ms INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
@@ -414,6 +417,7 @@ export interface ConversationRemoval {
   approvalsRejected: number;
   approvalsRevoked: number;
   memoriesDeleted: number;
+  documentsDeleted: number;
 }
 
 // Everything a deleted conversation leaves behind for this person, as a
@@ -428,6 +432,13 @@ export interface ConversationRemoval {
 // refuses a send under the old generation). Approved actions that have
 // not finished lose their authority to execute: their rows stay, revoked,
 // for reconciliation only.
+// The R2 keys of the files a delete to toGeneration would remove: none
+// when the conversation is already there.
+export function conversationDocumentKeys(sql: SqlExec, toGeneration: number): string[] {
+  if (toGeneration <= currentGeneration(sql)) return [];
+  return (sql.exec("SELECT r2_key FROM documents").toArray() as unknown as { r2_key: string }[]).map((r) => r.r2_key);
+}
+
 export function removeConversationState(sql: SqlExec, nowMs: number, toGeneration: number): ConversationRemoval {
   const current = currentGeneration(sql);
   if (toGeneration <= current) {
@@ -445,6 +456,7 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
       approvalsRejected: 0,
       approvalsRevoked: 0,
       memoriesDeleted: 0,
+      documentsDeleted: 0,
     };
   }
   // Counted with SELECT, not rowsWritten: Durable Object SQLite counts
@@ -467,6 +479,11 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
   sql.exec(`UPDATE approvals SET status = 'revoked' WHERE ${unresolved}`);
   const memoriesDeleted = count("SELECT COUNT(*) AS n FROM memory");
   sql.exec("DELETE FROM memory");
+  // Their R2 objects are deleted first, outside the transaction
+  // (conversationDocumentKeys), so a failed delete leaves these rows for
+  // the retry.
+  const documentsDeleted = count("SELECT COUNT(*) AS n FROM documents");
+  sql.exec("DELETE FROM documents");
   const result: ConversationRemoval = {
     generation,
     remindersCancelled,
@@ -476,6 +493,7 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
     approvalsRejected,
     approvalsRevoked,
     memoriesDeleted,
+    documentsDeleted,
   };
   sql.exec(
     "INSERT INTO conversation_deletes(generation, result_json, at_ms) VALUES (?, ?, ?)",
