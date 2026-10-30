@@ -70,6 +70,7 @@ export async function runAgentStage(pathSet: PathSet | null, opts: RunOptions = 
   const fps = fingerprintsOf(bench.results, bench.report.suites);
   summary.fingerprints = Object.fromEntries(bench.results.filter((r) => fps[r.caseId]).map((r) => [r.caseId, { ...fps[r.caseId]!, live: fps[r.caseId]!.live === true, servedBy: r.answer.servedBy ?? "plain" }]));
   summary.rerun = rerun;
+  summary.judgeErrors = bench.judgeErrors;
   return { summary, results: bench.results };
 }
 

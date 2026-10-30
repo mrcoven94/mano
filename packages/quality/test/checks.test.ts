@@ -281,3 +281,11 @@ test("Texas CEAP counts as LIHEAP and Arizona Nutrition Assistance as SNAP", asy
   const az = await lineCheck(byId("chat-az-02"), ["Arizona's Nutrition Assistance renewal is due November 25, 2026."]);
   assert.ok(az.filter((r) => r.id === "must-include").every((r) => r.pass), JSON.stringify(az.filter((r) => !r.pass)));
 });
+
+// Sol on #75: the alias matched generic text in a Texas case.
+test("generic 'nutrition assistance' is not Arizona's program name", async () => {
+  const tx = await lineCheck(byId("chat-tx-01"), ["WIC offers nutrition assistance for pregnant people and young children. LIHEAP can help with utility bills."]);
+  assert.ok(tx.some((r) => r.id === "must-include" && !r.pass && r.detail!.includes("SNAP")), "a generic phrase counted as SNAP");
+  const azGeneric = await lineCheck(byId("chat-az-02"), ["WIC offers nutrition assistance. Your renewal is due November 25, 2026."]);
+  assert.ok(azGeneric.some((r) => r.id === "must-include" && !r.pass && r.detail!.includes("SNAP")), "lowercase generic text counted in Arizona");
+});
