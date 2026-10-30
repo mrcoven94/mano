@@ -10,6 +10,8 @@ const instructions = readFileSync(new URL("../agent/instructions.md", import.met
 type Out = Awaited<ReturnType<typeof lookUpProgram.execute>>;
 const run = (input: Parameters<typeof lookUpProgram.execute>[0]) => lookUpProgram.execute(input, ctx) as Promise<Out>;
 
+const OVER = /\bover\b|above|exceed|too (much|high)|ineligible|not eligible|(don't|do not|does not|doesn't|won't|will not) qualify|not qualify/i;
+
 // The bench's promise patterns (packages/quality checks.ts PROMISE_RES).
 const PROMISE = [
   /(?<!\b(?:what|whether|if|si)\s+)you\s+(qualify|are eligible|will be approved|are approved|are guaranteed)/i,
@@ -61,9 +63,28 @@ describe("look_up_program", () => {
     expect(out.found).toBe(true);
     if (!out.found) return;
     const screen = out.programs[0]!.screen!;
-    expect(screen.result).toBe("under_limit");
+    expect(screen.result).toBe("may_qualify");
     expect(screen.note).toMatch(/may qualify/);
     for (const re of PROMISE) expect(JSON.stringify(out)).not.toMatch(re);
+  });
+
+  it("can't tell for $300 a month, size 3, Texas Medicaid, and never says over a limit (Sol)", async () => {
+    const out = await run({ state: "TX", program: "medicaid", householdSize: 3, monthlyIncome: 300 });
+    const screen = out.found ? out.programs[0]!.screen! : null;
+    expect(screen?.result).toBe("cant_tell");
+    expect(screen?.note).toMatch(/offer to help them apply/);
+    expect(JSON.stringify(out.found && out.programs[0]!.screen)).not.toMatch(OVER);
+  });
+
+  it("uses what the person said about work to pick New York's SNAP table (Sol)", async () => {
+    const out = await run({ state: "NY", program: "snap", householdSize: 1, monthlyIncome: 1900, earnedIncome: true, elderlyOrDisabled: false });
+    expect(out.found && out.programs[0]!.screen!.result).toBe("may_qualify");
+  });
+
+  it("gives a Brooklyn applicant New York City's route (Sol)", async () => {
+    const out = await run({ state: "NY", program: "SNAP", place: "Brooklyn" });
+    expect(out.found && out.programs[0]!.area).toBe("New York City");
+    expect(out.found && out.programs[0]!.facts.website!.value).toMatch(/a069-access\.nyc\.gov/);
   });
 
   it("gives no screen without both numbers", async () => {
@@ -83,6 +104,7 @@ describe("the program instruction", () => {
   it("gives a rough screen that never promises eligibility", () => {
     expect(rule).toMatch(/may qualify/);
     expect(rule).toMatch(/Never say they qualify/);
+    expect(rule).toMatch(/never that they are over a limit or do not qualify/);
   });
 
   it("says it does not know when the tool has nothing, and offers to check", () => {
