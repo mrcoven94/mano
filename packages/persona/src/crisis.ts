@@ -83,11 +83,15 @@ const BENEFITS_CUT_SENTENCE = new RegExp(
   "i",
 );
 
+// Newlines are spaces here, so a line break never makes a template
+// sentence out of part of a longer one ("they cut my benefits\nand my
+// throat"). Sentences end only at . ! or ? before whitespace or the end.
 function sentencesOf(text: string): string[] {
   return text
     .replace(/[’]/g, "'")
-    .split(/(?<=[.!?…;])\s+|\n+/)
-    .map((s) => s.trim().replace(/\s+/g, " "))
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])(?:\s+|$)/)
+    .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
 
@@ -96,7 +100,9 @@ export function suppressedBenefitsCut(text: string): boolean {
   const template = sentences.filter((s) => BENEFITS_CUT_SENTENCE.test(s));
   if (template.length === 0) return false;
   if (!template.some((s) => mightBeCrisis(s))) return false;
-  const rest = sentences.filter((s) => !BENEFITS_CUT_SENTENCE.test(s)).join(" ");
+  // Rejoined with ". " so phrases on either side of a removed sentence
+  // can never fuse into a new one.
+  const rest = sentences.filter((s) => !BENEFITS_CUT_SENTENCE.test(s)).join(". ");
   return !mightBeCrisis(rest);
 }
 
@@ -117,8 +123,9 @@ export function spanishOrImplicitCrisis(text: string): boolean {
 }
 
 // The decision a turn uses: a detector fired, and suppression does not apply.
+// Spanish and implicit self-harm are never suppressed.
 export function crisisTurn(text: string): boolean {
-  return (mightBeCrisis(text) || spanishOrImplicitCrisis(text)) && !suppressedBenefitsCut(text);
+  return spanishOrImplicitCrisis(text) || (mightBeCrisis(text) && !suppressedBenefitsCut(text));
 }
 
 // A message is treated as Spanish when its Spanish function words
