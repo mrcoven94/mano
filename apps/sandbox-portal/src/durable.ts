@@ -1,7 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   PortalStoreSql,
+  type Draft,
   type SessionData,
+  type StagedClaim,
   type StagedEntry,
   type Submission,
   type SubmissionReceipt,
@@ -24,6 +26,10 @@ export class PortalStore extends DurableObject {
     return this.inner().putSession(session);
   }
 
+  renewSession(session: SessionData, now: number): Promise<boolean> {
+    return this.inner().renewSession(session, now);
+  }
+
   deleteSession(id: string): Promise<void> {
     return this.inner().deleteSession(id);
   }
@@ -32,8 +38,8 @@ export class PortalStore extends DurableObject {
     return this.inner().listExpiredSessions(now);
   }
 
-  deleteSessions(ids: string[]): Promise<void> {
-    return this.inner().deleteSessions(ids);
+  deleteSessionIfExpired(id: string, now: number): Promise<SessionData | null> {
+    return this.inner().deleteSessionIfExpired(id, now);
   }
 
   trackStaged(entries: StagedEntry[]): Promise<void> {
@@ -44,8 +50,44 @@ export class PortalStore extends DurableObject {
     return this.inner().untrackStaged(keys);
   }
 
-  listStaleStaged(olderThan: number): Promise<string[]> {
-    return this.inner().listStaleStaged(olderThan);
+  listTrackedStaged(): Promise<StagedEntry[]> {
+    return this.inner().listTrackedStaged();
+  }
+
+  holdForFiling(attemptId: string, entries: StagedEntry[], until: number): Promise<boolean> {
+    return this.inner().holdForFiling(attemptId, entries, until);
+  }
+
+  releaseHolds(attemptId: string): Promise<void> {
+    return this.inner().releaseHolds(attemptId);
+  }
+
+  purgeExpiredHolds(now: number): Promise<void> {
+    return this.inner().purgeExpiredHolds(now);
+  }
+
+  claimUnreferencedStaged(claims: StagedClaim[]): Promise<string[]> {
+    return this.inner().claimUnreferencedStaged(claims);
+  }
+
+  listPendingDeletes(): Promise<string[]> {
+    return this.inner().listPendingDeletes();
+  }
+
+  clearPendingDeletes(keys: string[]): Promise<void> {
+    return this.inner().clearPendingDeletes(keys);
+  }
+
+  saveDraft(draft: Draft): Promise<boolean> {
+    return this.inner().saveDraft(draft);
+  }
+
+  getDraft(id: string, now: number): Promise<Draft | null> {
+    return this.inner().getDraft(id, now);
+  }
+
+  purgeExpiredDrafts(now: number): Promise<number> {
+    return this.inner().purgeExpiredDrafts(now);
   }
 
   getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null> {

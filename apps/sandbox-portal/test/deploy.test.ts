@@ -41,3 +41,32 @@ describe("review round 2 item 7: deploy refuses empty secrets", () => {
     expect(yaml).toContain("shell: bash");
   });
 });
+
+describe("follow-up: the portal serves only its custom domain", () => {
+  test("workers.dev is off and the custom domain route is set", async () => {
+    const toml = readFileSync(join(here, "..", "wrangler.toml"), "utf8");
+    expect(toml).toContain("workers_dev = false");
+    expect(toml).toContain('pattern = "sandbox.withmano.com"');
+    expect(toml).toContain("custom_domain = true");
+  });
+});
+
+describe("review round 5 item 4: the draft token is optional at deploy and never the filing token", () => {
+  const full: Record<string, string> = { CLOUDFLARE_API_TOKEN: "dummy", CLOUDFLARE_ACCOUNT_ID: "dummy", SANDBOX_PORTAL_TOKEN: "filing" };
+
+  test("the guard passes with no draft token or a distinct one, and refuses one equal to the filing token", async () => {
+    expect((await runGuard({ ...full, SANDBOX_PORTAL_DRAFT_TOKEN: "" })).code).toBe(0);
+    expect((await runGuard({ ...full, SANDBOX_PORTAL_DRAFT_TOKEN: "draft" })).code).toBe(0);
+    const same = await runGuard({ ...full, SANDBOX_PORTAL_DRAFT_TOKEN: "filing" });
+    expect(same.code).not.toBe(0);
+    expect(same.stderr).toContain("SANDBOX_PORTAL_DRAFT_TOKEN");
+  });
+
+  test("the workflow passes the draft token to the guard and sets it only when present", async () => {
+    const yaml = readFileSync(workflow, "utf8");
+    const guardStep = yaml.slice(yaml.indexOf("require-deploy-secrets.sh"), yaml.indexOf("wrangler r2 bucket create"));
+    expect(guardStep).toContain("SANDBOX_PORTAL_DRAFT_TOKEN: ${{ secrets.SANDBOX_PORTAL_DRAFT_TOKEN }}");
+    expect(yaml).toContain('if [ -n "$SANDBOX_PORTAL_DRAFT_TOKEN" ]');
+    expect(yaml).toContain("wrangler secret put SANDBOX_PORTAL_DRAFT_TOKEN");
+  });
+});

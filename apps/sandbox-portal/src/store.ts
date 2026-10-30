@@ -16,30 +16,38 @@ export interface FileMeta {
   r2key: string;
 }
 
-/** What this session already filed, so the review page can say so. */
-export interface SubmittedRef {
-  key: string;
-  confirmationNumber: string;
-  digest: string;
-  receivedAt: number;
-}
-
 export interface SessionData {
   id: string;
+  /** The draft this session saves to: caller generated, or minted when the caller gave none. */
+  draftId: string;
   household?: Household;
   files: FileMeta[];
-  /** idempotency key minted for this session's submission */
-  key: string;
   createdAt: number;
   expiresAt: number;
-  submitted?: SubmittedRef;
 }
+
+/**
+ * What the browser saved. A draft is never a filing: only the JSON API with
+ * the filing token creates a submission. The agent reads a draft back to
+ * compare it with what the person will approve.
+ */
+export interface Draft {
+  id: string;
+  /** The session that saved it; another session cannot overwrite it while it lives. */
+  sessionId: string;
+  household: Household;
+  savedAt: number;
+  expiresAt: number;
+}
+
+/** Every submission scope starts with this; only token holders file. */
+export const API_SCOPE_PREFIX = "api-";
 
 export type SubmissionStatus = "received";
 
 export interface Submission {
   key: string;
-  /** "web", or "api-<sha256 of the caller's token>" for JSON callers */
+  /** "api-<sha256 of the caller's token>" */
   scope: string;
   confirmationNumber: string;
   household: Household;
@@ -50,7 +58,6 @@ export interface Submission {
   receivedAt: number;
   /** response was deliberately held this long (slow mode demo) */
   slowMs: number;
-  source: "web" | "api";
 }
 
 /** File identity inside a packet digest. Bytes are hashed, never embedded. */
@@ -67,7 +74,6 @@ export interface SubmitInput {
   household: Household;
   files: FileMeta[];
   digest: string;
-  source: Submission["source"];
   slowMs: number;
   receivedAt: number;
 }
@@ -101,14 +107,42 @@ export interface StagedEntry {
   createdAt: number;
 }
 
+/**
+ * Why a tracked object may be deleted. Attempt staging belongs to no
+ * session, so age alone guards it; drafts live while their session does;
+ * filed copies live while a submission row or an in-flight filing hold
+ * references them, whatever their age.
+ */
+export type StagedGuard =
+  | { kind: "attempt"; olderThan: number }
+  | { kind: "session"; sessionId: string; now: number }
+  | { kind: "submission"; scope: string; key: string; now: number };
+
+export interface StagedClaim {
+  key: string;
+  guard: StagedGuard;
+}
+
 export interface Store {
   getSession(id: string): Promise<SessionData | null>;
   putSession(session: SessionData): Promise<void>;
+  /**
+   * Renew a session only if it is still unexpired, checked in the same
+   * statement as the write. False means the session lapsed mid-request
+   * (or the sweep reaped it) and the caller must treat it as expired.
+   */
+  renewSession(session: SessionData, now: number): Promise<boolean>;
   deleteSession(id: string): Promise<void>;
   /** Timed-out drafts, listed without deleting so R2 goes first and rows after. */
   listExpiredSessions(now: number): Promise<SessionData[]>;
-  deleteSessions(ids: string[]): Promise<void>;
+  /**
+   * Delete one session only if it is still expired, checked in the same
+   * statement as the delete. A renewal that lands after the listing wins,
+   * and the sweep leaves that session alone.
+   */
+  deleteSessionIfExpired(id: string, now: number): Promise<SessionData | null>;
   getSubmission(scope: string, key: string): Promise<Submission | null>;
+  /** Caseworker reads see API-scope rows only; nothing else is a filing. */
   listSubmissionSummaries(limit: number, offset: number): Promise<SubmissionSummary[]>;
   countSubmissions(): Promise<number>;
   getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null>;
@@ -117,10 +151,38 @@ export interface Store {
   writeReceipts(receipts: SubmissionReceipt[]): Promise<void>;
   deleteSubmissions(keys: Array<{ scope: string; key: string }>): Promise<void>;
   purgeOldReceipts(olderThan: number): Promise<number>;
-  /** Record attempt-staging objects; the record clears only after the R2 delete succeeds. */
+  /** Record staged objects; the record clears only after the R2 delete succeeds. */
   trackStaged(entries: StagedEntry[]): Promise<void>;
   untrackStaged(keys: string[]): Promise<void>;
-  listStaleStaged(olderThan: number): Promise<string[]>;
+  listTrackedStaged(): Promise<StagedEntry[]>;
+  /**
+   * Track one filing attempt's destination keys and hold them until the
+   * attempt releases them or the hold expires, so the sweep cannot take a
+   * copy before its submission row exists. False, with nothing written, when
+   * any key still waits on an R2 delete: writing it now could lose to that delete.
+   */
+  holdForFiling(attemptId: string, entries: StagedEntry[], until: number): Promise<boolean>;
+  releaseHolds(attemptId: string): Promise<void>;
+  purgeExpiredHolds(now: number): Promise<void>;
+  /**
+   * Untrack each claimed key only if its guard holds, checked in the same
+   * statement as the delete, and record it as a pending delete in the same
+   * turn. Returns the newly claimed keys. A renewal or hold that lands first
+   * keeps the object referenced, so the claim fails and the bytes stay.
+   */
+  claimUnreferencedStaged(claims: StagedClaim[]): Promise<string[]>;
+  /** Claimed keys whose R2 delete has not been confirmed yet. */
+  listPendingDeletes(): Promise<string[]>;
+  /** Call only after R2 confirmed the delete. */
+  clearPendingDeletes(keys: string[]): Promise<void>;
+  /**
+   * Save a draft unless another session owns a live draft under the same id,
+   * checked in the same statement as the write. False means refused.
+   */
+  saveDraft(draft: Draft): Promise<boolean>;
+  /** A draft that has not expired, or null. */
+  getDraft(id: string, now: number): Promise<Draft | null>;
+  purgeExpiredDrafts(now: number): Promise<number>;
   checkRateLimit(ip: string, now: number, windowMs: number, max: number): Promise<boolean>;
   tryBeginSlow(now: number, ttlMs: number, max: number): Promise<string | null>;
   endSlow(leaseId: string): Promise<void>;
@@ -245,6 +307,22 @@ export class PortalStoreSql implements Store {
         r2key TEXT PRIMARY KEY,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS filing_holds (
+        r2key TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (r2key, attempt_id)
+      );
+      CREATE TABLE IF NOT EXISTS pending_deletes (
+        r2key TEXT PRIMARY KEY
+      );
+      CREATE TABLE IF NOT EXISTS drafts (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        saved_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
     `);
     this.ready = true;
   }
@@ -272,6 +350,14 @@ export class PortalStoreSql implements Store {
     this.sql.exec("DELETE FROM sessions WHERE id = ?", id);
   }
 
+  async renewSession(session: SessionData, now: number): Promise<boolean> {
+    this.ensureTables();
+    return (
+      this.sql.exec("UPDATE sessions SET data = ?, expires_at = ? WHERE id = ? AND expires_at > ? RETURNING id", JSON.stringify(session), session.expiresAt, session.id, now).toArray()
+        .length === 1
+    );
+  }
+
   async listExpiredSessions(now: number): Promise<SessionData[]> {
     this.ensureTables();
     return this.sql
@@ -280,9 +366,12 @@ export class PortalStoreSql implements Store {
       .map((row) => JSON.parse((row as { data: string }).data) as SessionData);
   }
 
-  async deleteSessions(ids: string[]): Promise<void> {
+  async deleteSessionIfExpired(id: string, now: number): Promise<SessionData | null> {
     this.ensureTables();
-    for (const id of ids) this.sql.exec("DELETE FROM sessions WHERE id = ?", id);
+    const row = this.sql.exec("DELETE FROM sessions WHERE id = ? AND expires_at <= ? RETURNING data", id, now).toArray()[0] as
+      | { data: string }
+      | undefined;
+    return row ? (JSON.parse(row.data) as SessionData) : null;
   }
 
   async trackStaged(entries: StagedEntry[]): Promise<void> {
@@ -297,12 +386,118 @@ export class PortalStoreSql implements Store {
     for (const key of keys) this.sql.exec("DELETE FROM staged_objects WHERE r2key = ?", key);
   }
 
-  async listStaleStaged(olderThan: number): Promise<string[]> {
+  async listTrackedStaged(): Promise<StagedEntry[]> {
     this.ensureTables();
     return this.sql
-      .exec("SELECT r2key FROM staged_objects WHERE created_at < ?", olderThan)
+      .exec("SELECT r2key, created_at FROM staged_objects ORDER BY r2key")
+      .toArray()
+      .map((row) => {
+        const r = row as { r2key: string; created_at: number };
+        return { key: r.r2key, createdAt: r.created_at };
+      });
+  }
+
+  async holdForFiling(attemptId: string, entries: StagedEntry[], until: number): Promise<boolean> {
+    this.ensureTables();
+    // No await between these statements: the Durable Object commits them as one turn.
+    for (const entry of entries) {
+      if (this.sql.exec("SELECT 1 FROM pending_deletes WHERE r2key = ?", entry.key).toArray().length > 0) return false;
+    }
+    for (const entry of entries) {
+      this.sql.exec("INSERT OR REPLACE INTO staged_objects (r2key, created_at) VALUES (?, ?)", entry.key, entry.createdAt);
+      this.sql.exec("INSERT OR REPLACE INTO filing_holds (r2key, attempt_id, expires_at) VALUES (?, ?, ?)", entry.key, attemptId, until);
+    }
+    return true;
+  }
+
+  async releaseHolds(attemptId: string): Promise<void> {
+    this.ensureTables();
+    this.sql.exec("DELETE FROM filing_holds WHERE attempt_id = ?", attemptId);
+  }
+
+  async purgeExpiredHolds(now: number): Promise<void> {
+    this.ensureTables();
+    this.sql.exec("DELETE FROM filing_holds WHERE expires_at <= ?", now);
+  }
+
+  async claimUnreferencedStaged(claims: StagedClaim[]): Promise<string[]> {
+    this.ensureTables();
+    const claimed: string[] = [];
+    for (const claim of claims) {
+      let rows: unknown[];
+      if (claim.guard.kind === "attempt") {
+        rows = this.sql.exec("DELETE FROM staged_objects WHERE r2key = ? AND created_at < ? RETURNING r2key", claim.key, claim.guard.olderThan).toArray();
+      } else if (claim.guard.kind === "session") {
+        rows = this.sql.exec(
+          "DELETE FROM staged_objects WHERE r2key = ? AND NOT EXISTS (SELECT 1 FROM sessions WHERE id = ? AND expires_at > ?) RETURNING r2key",
+          claim.key,
+          claim.guard.sessionId,
+          claim.guard.now,
+        ).toArray();
+      } else {
+        rows = this.sql.exec(
+          "DELETE FROM staged_objects WHERE r2key = ? AND NOT EXISTS (SELECT 1 FROM submissions WHERE scope = ? AND key = ?) AND NOT EXISTS (SELECT 1 FROM filing_holds WHERE r2key = ? AND expires_at > ?) RETURNING r2key",
+          claim.key,
+          claim.guard.scope,
+          claim.guard.key,
+          claim.key,
+          claim.guard.now,
+        ).toArray();
+      }
+      if (rows.length === 1) {
+        // Same turn as the untrack, so the object is never unrecorded before R2 confirms its delete.
+        this.sql.exec("INSERT OR IGNORE INTO pending_deletes (r2key) VALUES (?)", claim.key);
+        claimed.push(claim.key);
+      }
+    }
+    return claimed;
+  }
+
+  async listPendingDeletes(): Promise<string[]> {
+    this.ensureTables();
+    return this.sql
+      .exec("SELECT r2key FROM pending_deletes ORDER BY r2key")
       .toArray()
       .map((row) => (row as { r2key: string }).r2key);
+  }
+
+  async clearPendingDeletes(keys: string[]): Promise<void> {
+    this.ensureTables();
+    for (const key of keys) this.sql.exec("DELETE FROM pending_deletes WHERE r2key = ?", key);
+  }
+
+  async saveDraft(draft: Draft): Promise<boolean> {
+    this.ensureTables();
+    return (
+      this.sql
+        .exec(
+          `INSERT INTO drafts (id, session_id, data, saved_at, expires_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (id) DO UPDATE SET session_id = excluded.session_id, data = excluded.data, saved_at = excluded.saved_at, expires_at = excluded.expires_at
+           WHERE drafts.session_id = excluded.session_id OR drafts.expires_at <= excluded.saved_at
+           RETURNING id`,
+          draft.id,
+          draft.sessionId,
+          JSON.stringify(draft.household),
+          draft.savedAt,
+          draft.expiresAt,
+        )
+        .toArray().length === 1
+    );
+  }
+
+  async getDraft(id: string, now: number): Promise<Draft | null> {
+    this.ensureTables();
+    const row = this.sql
+      .exec("SELECT id, session_id, data, saved_at, expires_at FROM drafts WHERE id = ? AND expires_at > ?", id, now)
+      .toArray()[0] as { id: string; session_id: string; data: string; saved_at: number; expires_at: number } | undefined;
+    return row
+      ? { id: row.id, sessionId: row.session_id, household: JSON.parse(row.data) as Household, savedAt: row.saved_at, expiresAt: row.expires_at }
+      : null;
+  }
+
+  async purgeExpiredDrafts(now: number): Promise<number> {
+    this.ensureTables();
+    return this.sql.exec("DELETE FROM drafts WHERE expires_at <= ? RETURNING id", now).toArray().length;
   }
 
   async getReceipt(scope: string, key: string): Promise<SubmissionReceipt | null> {
@@ -360,7 +555,7 @@ export class PortalStoreSql implements Store {
   async getSubmissionByConfirmation(confirmation: string): Promise<Submission | null> {
     this.ensureTables();
     const row = this.sql
-      .exec("SELECT data FROM submissions WHERE confirmation = ?", confirmation)
+      .exec("SELECT data FROM submissions WHERE confirmation = ? AND scope LIKE ?", confirmation, `${API_SCOPE_PREFIX}%`)
       .toArray()[0] as { data: string } | undefined;
     return row ? (JSON.parse(row.data) as Submission) : null;
   }
@@ -423,7 +618,6 @@ export class PortalStoreSql implements Store {
         status: "received",
         receivedAt: input.receivedAt,
         slowMs: input.slowMs,
-        source: input.source,
       };
       let inserted: unknown[];
       try {
@@ -467,7 +661,8 @@ export class PortalStoreSql implements Store {
     this.ensureTables();
     return this.sql
       .exec(
-        "SELECT confirmation, applicant, received_at, file_count FROM submissions ORDER BY received_at DESC, scope ASC, key ASC LIMIT ? OFFSET ?",
+        "SELECT confirmation, applicant, received_at, file_count FROM submissions WHERE scope LIKE ? ORDER BY received_at DESC, scope ASC, key ASC LIMIT ? OFFSET ?",
+        `${API_SCOPE_PREFIX}%`,
         limit,
         offset,
       )
@@ -480,7 +675,7 @@ export class PortalStoreSql implements Store {
 
   async countSubmissions(): Promise<number> {
     this.ensureTables();
-    const row = this.sql.exec("SELECT COUNT(*) AS n FROM submissions").toArray()[0] as { n: number } | undefined;
+    const row = this.sql.exec("SELECT COUNT(*) AS n FROM submissions WHERE scope LIKE ?", `${API_SCOPE_PREFIX}%`).toArray()[0] as { n: number } | undefined;
     return row?.n ?? 0;
   }
 }
