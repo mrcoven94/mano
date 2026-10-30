@@ -16,11 +16,11 @@
 // instead of doing anything twice.
 import { createHash } from "node:crypto";
 
+import { createModelClient, type ModelClient } from "@mano/mail";
+
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
-import { createModelClient, type ModelClient } from "@mano/mail";
-
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
 import { readTextedPhotos, type TextedPhoto } from "./letters.js";
 import { closeReplaced, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
@@ -136,6 +136,11 @@ function turnText(body: TurnBody): string {
 
 const reply = (text: string, status = "replied"): TurnResponse => ({ httpStatus: 200, body: { status, text } });
 
+const failure = (httpStatus: number, status: string, reason?: string): TurnResponse => ({
+  httpStatus,
+  body: { status, text: "", ...(reason ? { reason } : {}) },
+});
+
 // Live readings use the Standard model ID with store: false. Without a
 // key the stand-in answers nothing, so the reply says it could not read.
 let mailModel: ModelClient | null = null;
@@ -143,10 +148,6 @@ function defaultMailModel(): ModelClient {
   mailModel ??= createModelClient(process.env, { synthetic: false });
   return mailModel;
 }
-const failure = (httpStatus: number, status: string, reason?: string): TurnResponse => ({
-  httpStatus,
-  body: { status, text: "", ...(reason ? { reason } : {}) },
-});
 
 const CHECKING =
   "I'm checking whether it went through. It will not be sent twice. Reply YES in a few minutes and I will check again.";
