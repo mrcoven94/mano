@@ -1,14 +1,34 @@
 """Mano computer service: hosted desktops on Modal Sandboxes.
 
-Deploy once with `modal deploy app.py` from this directory, after creating
-the mano-computer secret holding MANO_COMPUTER_TOKEN in the Modal dashboard
-(never on a command line); the printed web URL is MODAL_COMPUTER_URL and the
-token is MODAL_COMPUTER_TOKEN for the TypeScript client. Each session is one
-Sandbox running an Xvfb desktop with Chromium, a VNC live view, and the
-control server answering the REST contract. Browser profiles persist per
-person in the mano-profiles volume. Sandboxes stop when the session is
-deleted, or after one hour; there is no idle timeout because tunnel
-traffic may not count as activity, and a desktop must never die mid-filing.
+Each session is one Sandbox running an Xvfb desktop with Chromium and the
+control server that answers the REST contract. There is no live view.
+
+Access. POST and DELETE /sessions need MANO_COMPUTER_TOKEN as a bearer
+token. POST /sessions answers with a per-session secret, made for that
+session and returned only to that caller; every control route needs it as
+a bearer token. The service keeps only the sandbox id, and the sandbox
+holds only the secret's SHA-256, so neither can hand the secret out.
+
+Storage. Each person's browser profile is its own Modal volume, mounted at
+/profile and nothing else. The volume name is an HMAC-SHA256 of the Engine
+person id under MANO_PROFILE_KEY, so ids never collapse into one profile
+and a name does not reveal the id. A request without a person id is refused.
+
+Network. The sandbox may reach only the host of MANO_PORTAL_ORIGIN (Modal's
+outbound domain allowlist), and a Chromium managed policy blocks every
+other origin, so a redirect, popup or form post elsewhere is refused before
+a request leaves. The origin is service configuration, never request data.
+
+Configure. The mano-computer Modal secret holds MANO_COMPUTER_TOKEN,
+MANO_PROFILE_KEY and MANO_PORTAL_ORIGIN (set in the Modal dashboard, never
+on a command line). Deploy with `modal deploy app.py` from this directory;
+the printed web URL is MODAL_COMPUTER_URL and the token is
+MODAL_COMPUTER_TOKEN for the TypeScript client. Sandboxes stop when the
+session is deleted, or after one hour; there is no idle timeout because
+tunnel traffic may not count as activity.
+
+Test. python -m unittest discover -s packages/computer/modal (needs the
+modal client and fastapi; no Modal account).
 
 The desktop scripts live in this file as literals: sandbox images build
 lazily inside whatever container first requests them, where sibling files
@@ -17,10 +37,15 @@ START_SH here.
 """
 
 import asyncio
+import hashlib
+import hmac
+import json
 import os
 import secrets
 import time
+import urllib.parse
 import urllib.request
+from typing import NamedTuple
 
 import modal
 from fastapi import FastAPI, Request
@@ -30,13 +55,17 @@ CONTROL_PY = '''#!/usr/bin/env python3
 """Control server inside a Mano desktop sandbox.
 
 Speaks the session REST contract over plain HTTP on port 8001: screenshots
-out, mouse and keyboard in, files staged for pickers. Standard library only.
-Every action runs through xdotool against the Xvfb screen Chromium fills.
+out, mouse and keyboard in, files staged for pickers. Every route needs the
+session secret as a bearer token; this sandbox knows only its SHA-256.
+Standard library only. Every action runs through xdotool against the Xvfb
+screen Chromium fills.
 """
 
 import base64
+import hashlib
 import json
 import os
+import secrets
 import subprocess
 import time
 import urllib.parse
@@ -45,6 +74,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 DISPLAY = os.environ.get("DISPLAY", ":99")
 UPLOADS = "/uploads"
 SCREENSHOT_PATH = "/tmp/shot.png"
+SECRET_SHA256 = os.environ.get("MANO_SESSION_SECRET_SHA256", "")
+PORTAL_ORIGIN = os.environ.get("MANO_PORTAL_ORIGIN", "")
 
 KEY_NAMES = {
     "Enter": "Return",
@@ -56,6 +87,28 @@ KEY_NAMES = {
 }
 
 MODIFIERS = {"ctrl": "ctrl", "control": "ctrl", "meta": "Super", "super": "Super", "shift": "shift", "alt": "alt"}
+
+
+def authorized_header(presented, expected_sha256):
+    if not expected_sha256 or not presented.startswith("Bearer "):
+        return False
+    token = presented[len("Bearer "):]
+    if not token:
+        return False
+    return secrets.compare_digest(hashlib.sha256(token.encode()).hexdigest(), expected_sha256)
+
+
+def origin_of(url):
+    if any(c <= " " for c in url):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme != "https" or not parts.hostname:
+        return None
+    return "https://" + parts.hostname + ("" if port in (None, 443) else ":%d" % port)
 
 
 def key_name(key):
@@ -145,7 +198,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def authorized(self):
+        if authorized_header(self.headers.get("Authorization", ""), SECRET_SHA256):
+            return True
+        self.send_json(401, {"error": "unauthorized"})
+        return False
+
     def do_GET(self):
+        if not self.authorized():
+            return
         path = urllib.parse.urlparse(self.path).path
         if path == "/health":
             self.send_json(200, {"ok": True})
@@ -164,6 +225,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "no route"})
 
     def do_POST(self):
+        if not self.authorized():
+            return
         path = urllib.parse.urlparse(self.path).path
         try:
             if path == "/act":
@@ -178,7 +241,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self.send_json(200, {"applied": applied})
             elif path == "/goto":
-                url = self.read_json().get("url", "")
+                url = str(self.read_json().get("url", ""))
+                if not PORTAL_ORIGIN or origin_of(url) != PORTAL_ORIGIN:
+                    self.send_json(403, {"error": "only the portal may be opened"})
+                    return
                 run("xdotool", "key", "ctrl+l")
                 time.sleep(0.3)
                 run("xdotool", "type", "--delay", "5", "--", url)
@@ -201,56 +267,95 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     # All interfaces: the tunnel proxy reaches the sandbox from outside, so
-    # localhost would refuse it. The port leaves the sandbox only through the
-    # session's own unguessable tunnel URL.
+    # localhost would refuse it.
     ThreadingHTTPServer(("0.0.0.0", 8001), Handler).serve_forever()
 '''
 
 START_SH = '''#!/bin/sh
-# Boot one Mano desktop: Xvfb screen, window manager, Chromium, live view, control server.
+# Boot one Mano desktop: Xvfb screen, window manager, Chromium, control server.
 set -eu
 WIDTH=${WIDTH:-1280}
 HEIGHT=${HEIGHT:-800}
-PROFILE=${PROFILE:-default}
 export DISPLAY=:99
+mkdir -p /etc/chromium/policies/managed
+printf '%s' "$MANO_CHROMIUM_POLICY" > /etc/chromium/policies/managed/mano.json
 Xvfb :99 -screen 0 "${WIDTH}x${HEIGHT}x24" >/tmp/xvfb.log 2>&1 &
 sleep 1
 fluxbox >/tmp/fluxbox.log 2>&1 &
-x11vnc -display :99 -forever -shared -rfbport 5900 -nopw -quiet >/tmp/x11vnc.log 2>&1 &
-websockify --web /usr/share/novnc 6080 localhost:5900 >/tmp/novnc.log 2>&1 &
 mkdir -p /uploads
 python3 /root/control.py &
-mkdir -p "/profiles/${PROFILE}"
+unset MANO_SESSION_SECRET_SHA256 MANO_CHROMIUM_POLICY
 # A desktop that died mid-filing leaves a crashed profile behind; scrub the
 # crash markers so Chromium never opens a restore bubble over the page. (The
 # --disable-session-crashed-bubble flag no longer suppresses it.) Stale
 # singleton locks are safe to drop: this sandbox is always a fresh machine.
-PREF="/profiles/${PROFILE}/Default/Preferences"
+PREF="/profile/Default/Preferences"
 if [ -f "$PREF" ]; then
   sed -i 's/"exited_cleanly":false/"exited_cleanly":true/;s/"exit_type":"Crashed"/"exit_type":"Normal"/' "$PREF"
 fi
-rm -f "/profiles/${PROFILE}/Default/SingletonLock" "/profiles/${PROFILE}/Default/SingletonSocket" "/profiles/${PROFILE}/Default/SingletonCookie"
+rm -f /profile/Default/SingletonLock /profile/Default/SingletonSocket /profile/Default/SingletonCookie
 chromium --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --no-default-browser-check \\
-  --user-data-dir="/profiles/${PROFILE}" \\
+  --user-data-dir=/profile \\
   --window-size="${WIDTH},${HEIGHT}" --window-position=0,0 --start-maximized \\
   about:blank >/tmp/chromium.log 2>&1 &
 wait
 '''
 
-desktop = modal.Image.debian_slim(python_version="3.12").apt_install(
-    "xvfb", "fluxbox", "chromium", "xdotool", "scrot", "x11vnc", "novnc", "websockify"
-)
+desktop = modal.Image.debian_slim(python_version="3.12").apt_install("xvfb", "fluxbox", "chromium", "xdotool", "scrot")
 
 service = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi")
 
 app = modal.App("mano-computer")
-profiles = modal.Volume.from_name("mano-profiles", create_if_missing=True)
 sessions = modal.Dict.from_name("mano-computer-sessions", create_if_missing=True)
-# MANO_COMPUTER_TOKEN: the bearer token every session call must carry. A
-# session opens a person's browser profile, so the service never runs open.
-api_secret = modal.Secret.from_name("mano-computer", required_keys=["MANO_COMPUTER_TOKEN"])
+api_secret = modal.Secret.from_name(
+    "mano-computer", required_keys=["MANO_COMPUTER_TOKEN", "MANO_PROFILE_KEY", "MANO_PORTAL_ORIGIN"]
+)
 
 SANDBOX_TIMEOUT = 60 * 60
+CONTROL_PORT = 8001
+PROFILE_PATH = "/profile"
+MAX_PERSON_ID = 256
+
+
+class Portal(NamedTuple):
+    origin: str
+    host: str
+    port: int | None
+
+
+def parse_portal_origin(value: str) -> Portal:
+    try:
+        parts = urllib.parse.urlsplit(value)
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError("MANO_PORTAL_ORIGIN is not a URL") from exc
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.username is not None
+        or parts.query
+        or parts.fragment
+        or parts.path not in ("", "/")
+    ):
+        raise ValueError("MANO_PORTAL_ORIGIN must be an https origin such as https://portal.example.org")
+    port = None if port in (None, 443) else port
+    host = parts.hostname
+    return Portal("https://" + host + (":%d" % port if port else ""), host, port)
+
+
+def chromium_policy(portal: Portal) -> dict:
+    """URLBlocklist covers navigations of every kind (typed, redirected,
+    popups, form posts, file://). The leading dot keeps subdomains out."""
+    exact = "https://." + portal.host + (":%d" % portal.port if portal.port else "")
+    return {"URLBlocklist": ["*"], "URLAllowlist": [exact], "DeveloperToolsAvailability": 2}
+
+
+def profile_volume_name(person_id: str, key: str) -> str:
+    if not person_id or not key:
+        raise ValueError("a profile needs a person id and MANO_PROFILE_KEY")
+    digest = hmac.new(key.encode(), person_id.encode(), hashlib.sha256).hexdigest()
+    # 192 bits keeps the name inside Modal's 64-character limit.
+    return "mano-profile-" + digest[:48]
 
 
 def sandbox_bootstrap():
@@ -267,23 +372,22 @@ def sandbox_bootstrap():
     )
 
 
-def wait_for_control(tunnels, timeout=90):
-    control = tunnels[8001].url
+def wait_for_control(control_url: str, secret: str, timeout: float = 90) -> None:
+    request = urllib.request.Request(control_url + "/health", headers={"Authorization": "Bearer " + secret})
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(control + "/health", timeout=5) as res:
+            with urllib.request.urlopen(request, timeout=5) as res:
                 if res.status == 200:
-                    return control
+                    return
         except Exception:
             time.sleep(2)
     raise TimeoutError("desktop control server never came up")
 
 
-async def wait_for_chromium(sb, timeout=60):
-    """Chromium starts after the control server answers; a session is not
-    ready until its window is visible, or the first screenshot is an empty
-    desktop and the model's first clicks miss."""
+async def wait_for_chromium(sb, timeout: float = 60) -> None:
+    """A session is not ready until Chromium's window is visible, or the
+    first screenshot is an empty desktop and the model's first clicks miss."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         proc = await sb.exec.aio("xdotool", "search", "--onlyvisible", "--class", "Chromium", env={"DISPLAY": ":99"})
@@ -293,33 +397,23 @@ async def wait_for_chromium(sb, timeout=60):
     raise TimeoutError("chromium window never appeared")
 
 
-@app.function(image=service, timeout=180)
-async def spawn_desktop(width: int, height: int, profile: str):
-    sb = await modal.Sandbox.create.aio(
-        "bash",
-        "-c",
-        sandbox_bootstrap(),
-        image=desktop,
-        volumes={"/profiles": profiles},
-        env={"WIDTH": str(width), "HEIGHT": str(height), "PROFILE": profile},
-        timeout=SANDBOX_TIMEOUT,
-        cpu=2.0,
-        memory=4096,
-        encrypted_ports=[8001, 6080],
-    )
-    tunnels = await sb.tunnels.aio()
-    control = wait_for_control(tunnels)
+async def wait_until_ready(sb, control_url: str, secret: str) -> None:
+    await asyncio.to_thread(wait_for_control, control_url, secret)
     await wait_for_chromium(sb)
-    return {"sandbox_id": sb.object_id, "control_url": control, "live_view_url": tunnels[6080].url + "/vnc.html"}
 
 
-@app.function(image=service, timeout=120)
-async def kill_desktop(sandbox_id: str):
-    sb = await modal.Sandbox.from_id.aio(sandbox_id)
-    await sb.terminate.aio()
+async def terminate_quietly(sb) -> None:
+    try:
+        await sb.terminate.aio()
+    except Exception:
+        pass
 
 
 web = FastAPI()
+
+
+def refuse(status: int, message: str) -> JSONResponse:
+    return JSONResponse({"error": message}, status_code=status)
 
 
 def authorized(request: Request) -> bool:
@@ -328,29 +422,99 @@ def authorized(request: Request) -> bool:
     return bool(token) and secrets.compare_digest(presented.encode(), f"Bearer {token}".encode())
 
 
+def person_from(body) -> str | None:
+    person = body.get("person_id") if isinstance(body, dict) else None
+    if not isinstance(person, str) or not person.strip() or len(person) > MAX_PERSON_ID:
+        return None
+    return person
+
+
+def dimension(body: dict, name: str, default: int) -> int:
+    value = body.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, int) or not 320 <= value <= 3840:
+        raise ValueError(name)
+    return value
+
+
 @web.post("/sessions")
 async def create_session(request: Request):
     if not authorized(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    body = await request.json()
-    width = int(body.get("width", 1280))
-    height = int(body.get("height", 800))
-    profile = "".join(c for c in str(body.get("profile", "default")) if c.isalnum() or c in "-_") or "default"
-    info = await spawn_desktop.remote.aio(width=width, height=height, profile=profile)
-    sid = secrets.token_hex(8)
-    sessions[sid] = info["sandbox_id"]
-    return JSONResponse({"id": sid, "control_url": info["control_url"], "live_view_url": info["live_view_url"]})
+        return refuse(401, "unauthorized")
+    profile_key = os.environ.get("MANO_PROFILE_KEY", "")
+    try:
+        portal = parse_portal_origin(os.environ.get("MANO_PORTAL_ORIGIN", ""))
+    except ValueError:
+        portal = None
+    if portal is None or not profile_key:
+        return refuse(503, "the computer service is not configured")
+    try:
+        body = await request.json()
+    except Exception:
+        return refuse(400, "the body must be JSON")
+    person = person_from(body)
+    if person is None:
+        return refuse(400, "person_id is required")
+    try:
+        width = dimension(body, "width", 1280)
+        height = dimension(body, "height", 800)
+    except ValueError as exc:
+        return refuse(400, "%s is out of range" % exc)
+
+    secret = secrets.token_urlsafe(32)
+    sid = secrets.token_hex(16)
+    try:
+        sb = await modal.Sandbox.create.aio(
+            "bash",
+            "-c",
+            sandbox_bootstrap(),
+            image=desktop,
+            volumes={PROFILE_PATH: modal.Volume.from_name(profile_volume_name(person, profile_key), create_if_missing=True)},
+            env={
+                "WIDTH": str(width),
+                "HEIGHT": str(height),
+                "MANO_SESSION_SECRET_SHA256": hashlib.sha256(secret.encode()).hexdigest(),
+                "MANO_PORTAL_ORIGIN": portal.origin,
+                "MANO_CHROMIUM_POLICY": json.dumps(chromium_policy(portal)),
+            },
+            outbound_domain_allowlist=[portal.host],
+            timeout=SANDBOX_TIMEOUT,
+            cpu=2.0,
+            memory=4096,
+            encrypted_ports=[CONTROL_PORT],
+        )
+    except Exception:
+        return refuse(503, "the desktop did not start")
+    try:
+        control_url = (await sb.tunnels.aio())[CONTROL_PORT].url
+        await wait_until_ready(sb, control_url, secret)
+        await sessions.put.aio(sid, sb.object_id)
+    except BaseException as exc:
+        await terminate_quietly(sb)
+        if isinstance(exc, Exception):
+            return refuse(503, "the desktop did not start")
+        raise
+    return JSONResponse({"id": sid, "control_url": control_url, "session_secret": secret})
 
 
 @web.delete("/sessions/{sid}")
 async def delete_session(sid: str, request: Request):
     if not authorized(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    sandbox_id = sessions.get(sid)
+        return refuse(401, "unauthorized")
+    sandbox_id = await sessions.get.aio(sid)
     if sandbox_id is None:
-        return JSONResponse({"error": "unknown session"}, status_code=404)
-    del sessions[sid]
-    await kill_desktop.remote.aio(sandbox_id=sandbox_id)
+        return refuse(404, "unknown session")
+    try:
+        sb = await modal.Sandbox.from_id.aio(sandbox_id)
+        await sb.terminate.aio(wait=True)
+    except (modal.exception.NotFoundError, modal.exception.SandboxTerminatedError, modal.exception.SandboxTimeoutError):
+        pass
+    except Exception:
+        # The record stays so a retry can still find and stop the desktop.
+        return refuse(502, "termination not confirmed")
+    try:
+        await sessions.pop.aio(sid)
+    except KeyError:
+        pass
     return JSONResponse({})
 
 
