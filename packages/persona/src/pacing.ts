@@ -13,7 +13,7 @@ export const PACING: string =
 
 export const DEEP_INSTRUCTIONS: string =
   "Your last message was a short heads-up that you were looking into this. Now send the full answer. " +
-  "Do not repeat the heads-up and do not start with DEEP:. Lead with the answer, show the key numbers plainly, " +
+  "Do not repeat the heads-up and do not start with DEEP:. Lead with the answer, show plainly the numbers they or their letter gave you, " +
   "and say what you would need to know to be sure. Keep it to a few short texts.";
 
 // Sent when the model routes deep but writes no usable heads-up.
