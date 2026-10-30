@@ -78,24 +78,39 @@ describe("reminder identity across attempts", () => {
   const ask = user("Remind me in 2 minutes to call the county office.");
 
   it("a retry that words the reminder differently still finds the one it made", async () => {
-    const first = toolCtx({ handleHash: HANDLE, turnId: "turn_word00001", grant, messages: [ask] });
+    const turnAtMs = Date.now();
+    const first = toolCtx({ handleHash: HANDLE, turnId: "turn_word00001", grant, messages: [ask], turnAtMs });
     await remind.execute({ text: "call the county office", when: "in 2 minutes" }, first);
     // The retry runs as a new attempt: the same message arrives again.
-    const retry = toolCtx({ handleHash: HANDLE, turnId: "turn_word00001", grant, messages: [ask, user("Set."), ask] });
+    const retry = toolCtx({ handleHash: HANDLE, turnId: "turn_word00001", grant, messages: [ask, user("Set."), ask], eveTurn: "eve-turn-2", turnAtMs });
     await remind.execute({ text: "phone the county office", when: "in 2 minutes" }, retry);
     expect(engine.remindersOf(PERSON)).toHaveLength(1);
   });
 
-  it("a second reminder later in the same turn is its own reminder", async () => {
-    const step1 = toolCtx({ handleHash: HANDLE, turnId: "turn_word00002", grant, messages: [ask] });
+  it("a different reminder for the same time later in the same turn is its own reminder", async () => {
+    const turnAtMs = Date.now();
+    const step1 = toolCtx({ handleHash: HANDLE, turnId: "turn_word00002", grant, messages: [ask], turnAtMs });
     await remind.execute({ text: "call the county office", when: "in 2 minutes" }, step1);
-    const step2 = toolCtx({
-      handleHash: HANDLE,
-      turnId: "turn_word00002",
-      grant,
-      messages: [ask, call({ text: "call the county office", when: "in 2 minutes" }), result],
-    });
-    await remind.execute({ text: "call the county office", when: "in 2 minutes" }, step2);
+    const step2 = toolCtx({ handleHash: HANDLE, turnId: "turn_word00002", grant, messages: [ask, call({}), result], turnAtMs });
+    await remind.execute({ text: "bring the pay stub", when: "in 2 minutes" }, step2);
+    expect(engine.remindersOf(PERSON)).toHaveLength(2);
+  });
+});
+
+describe("parallel reminder calls in one model step", () => {
+  const ask = { role: "user", content: "Remind me tomorrow at 9 to call the office and to bring the pay stub." };
+  const stepCtx = (eveTurn: string) => toolCtx({ handleHash: HANDLE, turnId: "turn_para00001", grant, messages: [ask], eveTurn });
+
+  it("two different reminders in one step stay two, and a retry of that turn makes no third", async () => {
+    await Promise.all([
+      remind.execute({ text: "call the office", when: "tomorrow at 9" }, stepCtx("attempt-1")),
+      remind.execute({ text: "bring the pay stub", when: "tomorrow at 9" }, stepCtx("attempt-1")),
+    ]);
+    expect(engine.remindersOf(PERSON)).toHaveLength(2);
+    await Promise.all([
+      remind.execute({ text: "phone the office", when: "tomorrow at 9" }, stepCtx("attempt-2")),
+      remind.execute({ text: "bring your pay stub", when: "tomorrow at 9" }, stepCtx("attempt-2")),
+    ]);
     expect(engine.remindersOf(PERSON)).toHaveLength(2);
   });
 });

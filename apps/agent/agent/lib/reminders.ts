@@ -8,39 +8,27 @@ import { createHash } from "node:crypto";
 
 export const REMINDER_PREFIX = "Reminder: ";
 
-// A reminder's identity is the turn plus its ordinal among this turn's
-// remind calls, never its wording. A retried turn (Channels sends the same
-// signed turn again) starts counting from zero again, so its first
-// reminder is the first attempt's first reminder whatever the model says
-// this time; Engine then returns the reminder it already holds.
-export function reminderIdFor(turnId: string, ordinal: number): string {
-  return `rem-${createHash("sha256").update(`${turnId}\n${ordinal}`).digest("hex").slice(0, 32)}`;
+// A reminder's identity comes from the signed turn, its due time (which
+// a retry derives the same way, from the turn's first receive time) and
+// its place among this attempt's reminders due at that same time. The
+// wording never counts, so a retry that rewords a reminder lands on the
+// one it already made. The place is claimed in Engine's turn ledger per
+// attempt (Eve turn), atomically, so two different reminders for the
+// same time in one model step get places 0 and 1 even when their calls
+// run in parallel, and a retry claims them again from 0.
+export function reminderBase(turnId: string, dueAtMs: number): string {
+  return `rem-${createHash("sha256").update(`${turnId}\n${dueAtMs}`).digest("hex").slice(0, 32)}`;
 }
 
-interface MessageLike {
-  role?: unknown;
-  content?: unknown;
+export function reminderIdAt(base: string, place: number): string {
+  return place === 0 ? base : `${base}-${place}`;
 }
 
-// How many calls to this tool the current attempt made before this one:
-// tool calls in the model input after the attempt's own message (the last
-// person message). The input excludes the step that requested this call,
-// so the tool asks the model to set reminders one call at a time.
-export function ordinalInTurn(messages: readonly unknown[], toolName: string): number {
-  const list = messages as readonly MessageLike[];
-  let start = 0;
-  for (let i = list.length - 1; i >= 0; i--) {
-    if (list[i]?.role === "user") {
-      start = i + 1;
-      break;
-    }
-  }
-  let count = 0;
-  for (const message of list.slice(start)) {
-    if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
-    for (const part of message.content as { type?: unknown; toolName?: unknown }[]) {
-      if (part?.type === "tool-call" && part.toolName === toolName) count += 1;
-    }
-  }
-  return count;
+export function placeClaimId(base: string, attempt: string, place: number): string {
+  return `p-${createHash("sha256").update(`${base}\n${attempt}`).digest("hex").slice(0, 40)}-${place}`;
+}
+
+export function sameWords(a: string, b: string): boolean {
+  const words = (t: string) => t.replace(REMINDER_PREFIX, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return words(a) === words(b);
 }
