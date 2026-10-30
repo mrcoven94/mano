@@ -733,8 +733,9 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // Channels deleted this person's conversation, moving it to generation
   // N: in one transaction, move to N, cancel reminders, clear the ledger
   // and the pointer, reject pending approvals, revoke approved ones that
-  // have not finished, and delete memory and deadlines. Already at N or past it, it is
-  // a no-op that answers with the recorded counts of that delete.
+  // have not finished, and delete memory and deadlines. Already at N or
+  // past it, it is a no-op that answers with the recorded counts of that
+  // delete.
   async deleteConversation(verified: string, input: unknown) {
     await this.assertSubject(verified);
     const toGeneration = parseGenerationInput(input).generation;
