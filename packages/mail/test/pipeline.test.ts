@@ -1844,6 +1844,26 @@ describe("readMail review 10", () => {
     expect(reading.warnings.some((w) => w.kind === "link_unchecked" && w.detail?.includes("benefits-unlock.example"))).toBe(true);
   });
 
+  it.each([
+    ["Your benefits are loaded on your EBT card on the 3rd of each month."],
+    ["Your Electronic Benefits Transfer card is your benefit card. Pay nothing to use it at stores."],
+    ["You may choose a prepaid card for your payments. A $2 fee applies to each ATM withdrawal."],
+  ])("never flags a real benefit card in %s", async (text) => {
+    const reading = await read(`${HEAD}${SUBMIT} ${text}`, [dl(SUBMIT)]);
+    expect(kinds(reading)).not.toContain("scam_suspect");
+    expect(proposed(reading)).toHaveLength(1);
+  });
+
+  it.each([
+    ["Buy a prepaid card and text us the number."],
+    ["Load $200 onto a gift card and read us the codes by phone."],
+    ["Pay the $50 fee with a prepaid card."],
+  ])("flags a card demand in %s", async (text) => {
+    const reading = await read(`${HEAD}${SUBMIT} ${text}`, [dl(SUBMIT)]);
+    expect(kinds(reading)).toContain("scam_suspect");
+    expect(proposed(reading)).toEqual([]);
+  });
+
   it("never flags a letter that says it will never ask for gift cards", async () => {
     const reading = await read(`${HEAD}${SUBMIT} You can pay your $10 fee by check. We will never ask you to pay with gift cards.`, [dl(SUBMIT)]);
     expect(kinds(reading)).not.toContain("scam_suspect");
