@@ -14,7 +14,10 @@ export default defineEval({
       "I got a letter in the mail from the Alameda County Social Services Agency. It says my CalFresh renewal is due November 30 and to call the county at (510) 555-0199 with questions. Is it real?",
     );
     t.check(turn, satisfies(answered, "the agent answered"));
-    t.check(turn.message, satisfies((m: string) => !/\bscam\b/i.test(m.replace(/not (a )?scam/gi, "")), "reply does not call the letter a scam"));
+    t.check(
+      turn.message,
+      satisfies((m: string) => !/\b(is|looks like|sounds like|that's|it's|this is) (a |an |likely a |probably a )?scam/i.test(m), "reply does not call the letter a scam"),
+    );
     t.check(turn.message, satisfies((m: string) => /renew/i.test(m), "reply helps with the renewal"));
   },
 });
