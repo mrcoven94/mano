@@ -68,6 +68,12 @@ export interface TextLineOptions {
 // The worker's crisis check runs on its Standard reply model.
 export const DEFAULT_CRISIS_CHECK_MODEL = "muse-spark-1.3";
 
+// The crisis check model for every text line Quality builds, the plain one
+// and the agent's, so both decide crisis the way the worker does.
+export function crisisCheckModelFromEnv(env: NodeJS.ProcessEnv = process.env): string {
+  return env.MANO_MODEL_CRISIS_CHECK_ID || DEFAULT_CRISIS_CHECK_MODEL;
+}
+
 export function sparkResponder(opts: TextLineOptions): SparkResponder {
   return new SparkResponder({
     apiKey: opts.apiKey,
@@ -237,7 +243,7 @@ export function textLineFromEnv(env: NodeJS.ProcessEnv = process.env): TextLine 
   return new TextLine({
     apiKey,
     model,
-    crisisCheckModel: env.MANO_MODEL_CRISIS_CHECK_ID || DEFAULT_CRISIS_CHECK_MODEL,
+    crisisCheckModel: crisisCheckModelFromEnv(env),
     ...(env.MANO_MODEL_BASE_URL ? { baseUrl: env.MANO_MODEL_BASE_URL } : {}),
   });
 }
