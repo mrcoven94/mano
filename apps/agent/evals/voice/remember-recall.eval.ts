@@ -10,8 +10,8 @@ export default defineEval({
     const person = syntheticPerson(t);
     const first = await person.text("Just so you know, I live in Salt Lake County.");
     t.check(first, satisfies(answered, "the agent answered"));
-    const memory = await (await person.engine()).listMemory();
-    t.check(memory, satisfies((rows: { content: string }[]) => rows.some((r) => /salt lake/i.test(r.content)), "Engine remembers the county"));
+    const profile = await (await person.engine()).getProfile();
+    t.check(profile.person.county?.value ?? "", satisfies((county: string) => /salt lake/i.test(county), "Engine has the county on the profile"));
     const second = await person.text("What county do I live in?");
     t.check(second, satisfies(answered, "the agent answered"));
     t.check(second.message, includes(/salt lake/i));

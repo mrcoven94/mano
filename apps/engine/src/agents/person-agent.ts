@@ -52,6 +52,8 @@ import {
   type DeliveryOutcome,
 } from "./agent-state.js";
 import { CURRENT_GENERATION } from "../gateway/sql-store.js";
+import { ProfileStore, forgetMemoryNote, type PatchAnswer, type Profile, type Suggestion } from "../profile.js";
+import { profileCipher } from "../crypto.js";
 
 // A delivery run holds its claim this long; a run that crashed is
 // reclaimed after it. Retries back off from 30 seconds to an hour and
@@ -479,7 +481,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // answers the same, so a retried forget is safe.
   async forgetMemory(verified: string, memoryId: string) {
     await this.assertSubject(verified);
-    this.db().exec("DELETE FROM memory WHERE id = ?", memoryId);
+    this.ctx.storage.transactionSync(() => forgetMemoryNote(this.db(), memoryId));
     this.store.audit({ event: "memory.forgotten", memoryHash: await auditDigest(memoryId) });
     return { id: memoryId, forgotten: true as const };
   }
@@ -487,6 +489,53 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async listMemory(verified: string) {
     await this.assertSubject(verified);
     return [...this.db().exec("SELECT * FROM memory ORDER BY created_at").toArray()];
+  }
+
+  // The person's profile (src/profile.ts). Null without the key that
+  // seals it: the profile is never stored in the clear.
+  private profileStore(): ProfileStore | null {
+    if (!this.env.ENCRYPTION_KEK_B64) return null;
+    return new ProfileStore({
+      sql: this.db(),
+      transaction: (fn) => this.ctx.storage.transactionSync(fn),
+      cipher: profileCipher(this.env.ENCRYPTION_KEK_B64, this.personId),
+      now: () => new Date(),
+      documentExists: (id) => this.db().exec("SELECT 1 FROM documents WHERE id = ?", id).toArray().length > 0,
+    });
+  }
+
+  // Code inside Engine reads the profile with this, as the person:
+  // getProfile(this.personId). Null when the profile key is not set.
+  async getProfile(verified: string): Promise<Profile | null> {
+    await this.assertSubject(verified);
+    return (await this.profileStore()?.read()) ?? null;
+  }
+
+  // Values from a lower-trust source that differ from what is on file,
+  // waiting for the person to confirm.
+  async getProfileSuggestions(verified: string): Promise<Suggestion[]> {
+    await this.assertSubject(verified);
+    return (await this.profileStore()?.suggestions()) ?? [];
+  }
+
+  // generation: as for memory, the conversation generation the caller
+  // prepared this under, or the current one.
+  async patchProfile(verified: string, raw: unknown, generation?: number): Promise<PatchAnswer> {
+    await this.assertSubject(verified);
+    const store = this.profileStore();
+    if (!store) return { status: "unavailable" };
+    const out = await store.patch(raw, generation ?? currentGeneration(this.db()));
+    return out.status === "ok" ? { ...out, profile: await store.read(), suggestions: await store.suggestions() } : out;
+  }
+
+  // For code inside Engine that reads a document (Mail, Forms): facts it
+  // read from one of this person's documents, recorded with source
+  // document and that documentId.
+  async recordDocumentFacts(
+    verified: string,
+    input: { documentId: string; idempotencyKey: string; fields: Record<string, unknown> },
+  ): Promise<PatchAnswer> {
+    return this.patchProfile(verified, { ...input, source: "document" });
   }
 
   // Reminders. The caller names each one: the same ID returns the

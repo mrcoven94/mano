@@ -38,6 +38,69 @@ export interface MemoryRow {
   content: string;
 }
 
+// The person's profile, as Engine's GET /profile returns it. Every leaf
+// says where it came from and when it changed.
+export type ProfileSource = "person" | "document" | "agent";
+export type Frequency = "weekly" | "biweekly" | "monthly" | "yearly";
+
+export interface Leaf<T = string> {
+  value: T;
+  source: ProfileSource;
+  documentId?: string;
+  updatedAt: string;
+}
+
+export interface Profile {
+  person: {
+    fullName?: Leaf;
+    dateOfBirth?: Leaf;
+    phone?: Leaf;
+    email?: Leaf;
+    address: { line1?: Leaf; line2?: Leaf; city?: Leaf; state?: Leaf; zip?: Leaf };
+    county?: Leaf;
+    language?: Leaf;
+    householdConfirmed?: Leaf<boolean>;
+  };
+  household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];
+  income: { id: string; memberId?: Leaf; source?: Leaf; amount?: Leaf<number>; frequency?: Leaf<Frequency> }[];
+  programs: { id: string; program?: Leaf; state?: Leaf; caseNumber?: Leaf; status?: Leaf }[];
+}
+
+// A value from a lower-trust source that differs from what is on file,
+// held until the person confirms it.
+export interface Suggestion {
+  path: string;
+  value: string | number | boolean;
+  source: ProfileSource;
+  documentId?: string;
+  suggestedAt: string;
+}
+
+export interface ProfileView {
+  profile: Profile;
+  suggestions: Suggestion[];
+}
+
+export interface ProfilePatchResult extends ProfileView {
+  changed: string[];
+  unchanged: string[];
+  cleared: string[];
+  suggested: string[];
+  replayed: boolean;
+}
+
+// A refused profile write: the fields did not fit (400), or the key was
+// used for other fields or the conversation was deleted (409).
+export class ProfileRefused extends Error {
+  constructor(
+    readonly status: number,
+    readonly reason: string,
+  ) {
+    super(reason);
+    this.name = "ProfileRefused";
+  }
+}
+
 export interface EngineApproval {
   id: string;
   status: string;
@@ -287,6 +350,31 @@ export class PersonEngine {
 
   async deleteMemory(memoryId: string): Promise<void> {
     await this.json("DELETE", `/memory/${encodeURIComponent(memoryId)}`);
+  }
+
+  async getProfileView(): Promise<ProfileView> {
+    const out = (await this.json("GET", "/profile")) as { profile?: Profile; suggestions?: Suggestion[] };
+    if (!out.profile || typeof out.profile !== "object") throw new EngineError(502);
+    return { profile: out.profile, suggestions: Array.isArray(out.suggestions) ? out.suggestions : [] };
+  }
+
+  async getProfile(): Promise<Profile> {
+    return (await this.getProfileView()).profile;
+  }
+
+  // fields: path to value, or null to clear. Engine answers a retried key
+  // with the first answer and writes nothing.
+  async patchProfile(input: {
+    idempotencyKey: string;
+    source: ProfileSource;
+    documentId?: string;
+    fields: Record<string, string | number | boolean | null>;
+  }): Promise<ProfilePatchResult> {
+    const res = await this.call("PATCH", "/profile", { ...input, generation: this.generation });
+    const body = (await res.json().catch(() => null)) as (ProfilePatchResult & { error?: string }) | null;
+    if (res.ok && body?.profile) return body;
+    if ((res.status === 400 || res.status === 409) && typeof body?.error === "string") throw new ProfileRefused(res.status, body.error);
+    throw new EngineError(res.status);
   }
 
   // turnId: the turn this draft belongs to. Engine orders proposals by it.

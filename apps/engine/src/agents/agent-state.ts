@@ -6,6 +6,7 @@
 // commits only while that generation is current (CURRENT_GENERATION, in
 // the same statement), so work from a deleted conversation never lands.
 import { CURRENT_GENERATION } from "../gateway/sql-store.js";
+import { clearProfile, ensureProfileTables } from "../profile.js";
 
 interface SqlExec {
   exec(query: string, ...bindings: unknown[]): { toArray(): unknown[]; rowsWritten: number };
@@ -121,6 +122,7 @@ export function ensureAgentStateTables(sql: SqlExec): void {
   // The one delivery wake-up a person has: the schedule's ID and time.
   sql.exec(`CREATE TABLE IF NOT EXISTS reminder_wakeup(
     slot INTEGER PRIMARY KEY CHECK (slot = 1), schedule_id TEXT NOT NULL, at_ms INTEGER NOT NULL)`);
+  ensureProfileTables(sql);
 }
 
 export function currentGeneration(sql: SqlExec): number {
@@ -414,6 +416,7 @@ export interface ConversationRemoval {
   approvalsRejected: number;
   approvalsRevoked: number;
   memoriesDeleted: number;
+  profileFieldsDeleted: number;
 }
 
 // Everything a deleted conversation leaves behind for this person, as a
@@ -445,6 +448,7 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
       approvalsRejected: 0,
       approvalsRevoked: 0,
       memoriesDeleted: 0,
+      profileFieldsDeleted: 0,
     };
   }
   // Counted with SELECT, not rowsWritten: Durable Object SQLite counts
@@ -467,6 +471,7 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
   sql.exec(`UPDATE approvals SET status = 'revoked' WHERE ${unresolved}`);
   const memoriesDeleted = count("SELECT COUNT(*) AS n FROM memory");
   sql.exec("DELETE FROM memory");
+  const profileFieldsDeleted = clearProfile(sql);
   const result: ConversationRemoval = {
     generation,
     remindersCancelled,
@@ -476,6 +481,7 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
     approvalsRejected,
     approvalsRevoked,
     memoriesDeleted,
+    profileFieldsDeleted,
   };
   sql.exec(
     "INSERT INTO conversation_deletes(generation, result_json, at_ms) VALUES (?, ?, ?)",
