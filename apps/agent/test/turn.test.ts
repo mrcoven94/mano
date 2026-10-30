@@ -7,6 +7,7 @@ import { presentationHash } from "../agent/lib/pending.js";
 import { handlePresented, handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/turn.js";
 import remind from "../agent/tools/remind.js";
 import startFormDraft from "../agent/tools/start_form_draft.js";
+import requestsInstruction from "../agent/instructions/requests.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_CHANNELS_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
@@ -62,6 +63,13 @@ function engineClient() {
 
 function deps(overrides: Partial<TurnDeps> = {}): TurnDeps {
   return { secret: SECRET, engine: engineClient(), runAgent: fakeAgent, lastTurnAt: new Map(), ...overrides };
+}
+
+// What the request-status instruction tells the model at the next turn.
+async function told(generation = 0): Promise<string> {
+  const resolve = (requestsInstruction as unknown as { events: Record<string, (e: unknown, c: unknown) => Promise<unknown>> }).events["turn.started"];
+  const out = (await resolve({}, toolCtx({ handleHash: HANDLE, turnId: "turn_told000001", grant: grants.get(HANDLE), generation }))) as { content?: string } | null;
+  return out?.content ?? "";
 }
 
 type Body = { status: string; text: string; approval?: string; approvalId?: string };
@@ -202,17 +210,19 @@ describe("what the model is told about earlier requests", () => {
   it("after a YES is filed, the next turn knows it was filed, not still waiting", async () => {
     await send(turn("turn_ask_000017", "Please file my renewal"));
     await send(turn("turn_yes_000017", "YES"));
-    await send(turn("turn_next000017", "and a second copy please"));
-    const last = agentCalls.at(-1)!;
-    expect(last.context.join("\n")).toMatch(/approved it and it was filed/i);
-    expect(last.context.join("\n")).not.toMatch(/waiting for this person/i);
+    expect(await told()).toMatch(/approved it and it was filed/i);
+    expect(await told()).not.toMatch(/waiting for this person/i);
+  });
+
+  it("while a question waits, the model is told the exact question", async () => {
+    const ask = await send(turn("turn_ask_000020", "Please file my renewal"));
+    expect(await told()).toContain(ask.body.approval);
   });
 
   it("after a NO, the next turn knows nothing was sent", async () => {
     await send(turn("turn_ask_000018", "Please file my renewal"));
     await send(turn("turn_no_0000018", "NO"));
-    await send(turn("turn_next000018", "what happened with my renewal?"));
-    expect(agentCalls.at(-1)!.context.join("\n")).toMatch(/declined/i);
+    expect(await told()).toMatch(/declined/i);
   });
 });
 
@@ -300,8 +310,7 @@ describe("after a deletion", () => {
     await send(turn("turn_ask_000019", "Please file my renewal"));
     await send(turn("turn_yes_000019", "YES"));
     await deleteConversation(1);
-    await send(turn("turn_new_000019", "what do you know about me?", HANDLE, 1));
-    expect(agentCalls.at(-1)!.context.join("\n")).not.toMatch(/latest request/i);
+    expect(await told(1)).toBe("");
   });
 
   it("a turn from before the deletion is refused and writes nothing", async () => {

@@ -219,18 +219,8 @@ async function runTurn(
 
   const context: string[] = [];
   if (body.texts.some(detectCrisis)) context.push(CRISIS_LINE);
-  if (!pointer) {
-    const line = latestRequestLine(approvals, body.generation);
-    if (line) context.push(line);
-  }
-  if (pointer) {
-    const answerable = approvals.find((a) => a.id === pointer.approvalId);
-    if (answerable) {
-      context.push(
-        `A yes-or-no approval question is waiting for this person:\n${renderQuestion(answerable)}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`,
-      );
-    }
-  }
+  // Where earlier requests stand (instructions/requests.ts) reaches the
+  // model as a system instruction, never as part of the person's message.
   let settled: SettleResult;
   try {
     settled = await deps.runAgent({
@@ -269,25 +259,6 @@ async function recordTurn(engine: PersonEngine, turnId: string, receivedAt: stri
     console.log(JSON.stringify({ type: "mano_conversation_advanced", generation: engine.generation }));
     return engine.putTurn(turnId, receivedAt);
   }
-}
-
-// One line about the latest request the agent proposed, so the model,
-// which never sees the deterministic YES and NO exchanges, knows where it
-// stands.
-function latestRequestLine(approvals: EngineApproval[], generation: number): string | null {
-  const latest = proposalsOf(approvals, generation)[0];
-  if (!latest) return null;
-  const state =
-    latest.status === "approved"
-      ? latest.outcome?.attempt === "done"
-        ? "the person approved it and it was filed"
-        : "the person approved it and Mano is checking whether it went through"
-      : latest.status === "rejected"
-        ? "the person declined it, or it was closed; nothing was sent"
-        : latest.status === "pending"
-          ? "it was prepared but has not been shown to the person yet"
-          : `it can no longer be used (${latest.status}); nothing was sent`;
-  return `Latest request Mano prepared: ${latest.purpose}. Status: ${state}. Do not say it is still waiting unless this says so.`;
 }
 
 // True for the first turn after a quiet stretch, as far as this process

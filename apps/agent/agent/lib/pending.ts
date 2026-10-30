@@ -100,3 +100,26 @@ export function presentsExactly(question: string): boolean {
 export function presentationHash(text: string): string {
   return createHash("sha256").update(text.replace(/\s+/g, " ").trim()).digest("hex");
 }
+
+// What the model is told, as a system instruction, about where requests
+// stand. It never sees the deterministic YES and NO exchanges, so without
+// this it would say a filed draft is still waiting.
+export function requestStatus(approvals: EngineApproval[], generation: number, answerableId: string | null): string | null {
+  const answerable = answerableId ? approvals.find((a) => a.id === answerableId) : undefined;
+  if (answerable && answerable.status === "pending") {
+    return `A yes-or-no approval question is waiting for this person:\n${renderQuestion(answerable)}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`;
+  }
+  const latest = proposalsOf(approvals, generation)[0];
+  if (!latest) return null;
+  const state =
+    latest.status === "approved"
+      ? latest.outcome?.attempt === "done"
+        ? "the person approved it and it was filed"
+        : "the person approved it and Mano is checking whether it went through"
+      : latest.status === "rejected"
+        ? "the person declined it, or it was closed; nothing was sent"
+        : latest.status === "pending"
+          ? "it was prepared but has not been shown to the person yet"
+          : `it can no longer be used (${latest.status}); nothing was sent`;
+  return `Latest request Mano prepared: ${latest.purpose}. Status: ${state}. This comes from Mano's own records and is accurate.`;
+}
