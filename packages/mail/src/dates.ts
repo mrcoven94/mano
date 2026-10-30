@@ -96,9 +96,9 @@ export function findAmbiguousDate(text: string): string | null {
     if ((first <= 12 && second <= 12) || first > 12) return numeric[0];
   }
   const monthNames = Object.keys(MONTHS).join("|");
-  const yearless = cleaned.match(
-    new RegExp(`\\b(${monthNames})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?\\b(?!\\s*,?\\s*\\d{4})`, "i"),
-  );
+  const yearless =
+    cleaned.match(new RegExp(`\\b(${monthNames})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?\\b(?!\\s*,?\\s*\\d{4})`, "i")) ??
+    cleaned.match(new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(${monthNames})\\b(?!\\.?\\s*,?\\s*\\d{4})`, "i"));
   if (yearless) return yearless[0];
   return null;
 }
@@ -182,8 +182,10 @@ export function recoverSentence(text: string, fullText: string): string | null {
 }
 
 // Every date the parser accepts, in reading order, once per
-// occurrence.
-export function dateOccurrences(text: string): string[] {
+// occurrence. With a reference date (the notice date), dates written
+// without a year ("15 November", "November 15") count too, resolved to
+// their first occurrence on or after the reference.
+export function dateOccurrences(text: string, refIso: string | null = null): string[] {
   const cleaned = normalizeMonthAbbreviations(text).replace(/\s+/g, " ");
   const monthNames = Object.keys(MONTHS).join("|");
   const patterns: RegExp[] = [
@@ -199,11 +201,32 @@ export function dateOccurrences(text: string): string[] {
       if (m.index !== undefined) hits.push({ index: m.index, text: m[0] });
     }
   }
+  if (refIso) {
+    const yearless: RegExp[] = [
+      new RegExp(`\\b(${monthNames})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?!\\s*,?\\s*\\d{4})`, "gi"),
+      new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthNames})\\b(?!\\.?\\s*,?\\s*\\d{4})`, "gi"),
+    ];
+    yearless.forEach((re, k) => {
+      for (const m of cleaned.matchAll(re)) {
+        const month = k === 0 ? m[1]! : m[2]!;
+        const day = k === 0 ? m[2]! : m[1]!;
+        const iso = resolveYear(MONTHS[month.toLowerCase()]!, Number(day), refIso);
+        if (iso && m.index !== undefined) hits.push({ index: m.index, text: iso });
+      }
+    });
+  }
   hits.sort((a, b) => a.index - b.index);
   return hits.map((h) => parseWrittenDate(h.text)).filter((iso): iso is string => iso !== null);
 }
 
+function resolveYear(month: number, day: number, refIso: string): string | null {
+  const refYear = Number(refIso.slice(0, 4));
+  const sameYear = toIso(refYear, month, day);
+  if (sameYear && sameYear >= refIso) return sameYear;
+  return toIso(refYear + 1, month, day);
+}
+
 // Every distinct date in reading order.
-export function parseAllDates(text: string): string[] {
-  return [...new Set(dateOccurrences(text))];
+export function parseAllDates(text: string, refIso: string | null = null): string[] {
+  return [...new Set(dateOccurrences(text, refIso))];
 }

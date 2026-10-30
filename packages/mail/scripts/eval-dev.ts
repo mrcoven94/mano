@@ -3,7 +3,7 @@
 // Without META_MODEL_API_KEY it stops after the keyless checks, because
 // grading a stand-in would prove nothing.
 // Usage: pnpm eval-dev [--photo <substring>] [--json] [--show]
-// --show also prints each published deadline, date to know, question
+// --show also prints each date to know, question
 // with its proposal, reasons and cited candidate sentences, and every
 // model call with its model ID and latency.
 
@@ -22,14 +22,13 @@ function show(reading: MailReading): void {
   for (const c of reading.stats.modelCalls) {
     console.log(`      call ${c.purpose} ${c.model} ${c.elapsedMs} ms, ${c.inputTokens}+${c.outputTokens} tok`);
   }
-  for (const d of reading.deadlines) console.log(`      deadline ${d.dueDate} (${d.obligation}) "${d.dateText}"`);
-  for (const d of reading.datesToKnow) console.log(`      date to know ${d.dueDate} "${d.dateText}"`);
+  for (const d of reading.datesToKnow) console.log(`      date to know ${d.date} "${d.dateText}"`);
   for (const q of reading.questions) {
     console.log(`      question ${q.kind}: ${q.prompt}`);
     const p = q.proposal;
     if (p) {
       const counted = p.count ? `, counted ${p.count.days} days from ${p.count.fromIso}` : "";
-      console.log(`        proposal ${p.dueDate}${counted} p${p.citation.page} "${p.sentence}"`);
+      console.log(`        proposal ${p.dueDate} (${p.confidence})${counted} p${p.citation.page} "${p.sentence}"`);
       for (const r of p.reasons) console.log(`          because ${r}`);
     }
     for (const c of q.candidates ?? []) console.log(`        candidate [${c.dates.join(", ")}] "${c.sentence}"`);
@@ -143,8 +142,8 @@ async function main(): Promise<void> {
     fieldsCorrect: sum((s) => s.fieldsCorrect),
     fieldsExpected: sum((s) => s.fieldsExpected),
     deadlinesCorrect: scores.filter((s) => s.deadlinesCorrect).length,
-    deadlinesPublished: sum((s) => s.deadlinesPublished),
-    deadlinesWithheldAsked: sum((s) => s.deadlinesWithheldAsked),
+    proposals: sum((s) => s.proposals),
+    proposalsHigh: sum((s) => s.proposalsHigh),
     datesToKnow: sum((s) => s.datesToKnow),
     scamsCaught: scores.filter((s) => s.scamExpected && s.scamCaught).length,
     scamsExpected: scores.filter((s) => s.scamExpected).length,
@@ -171,7 +170,7 @@ async function main(): Promise<void> {
       `\nDev set: letters ${summary.lettersCorrect}/${summary.photos} photos fully correct, ` +
         `fields ${summary.fieldsCorrect}/${summary.fieldsExpected}, ` +
         `deadlines ${summary.deadlinesCorrect}/${summary.photos} photos correct ` +
-        `(published ${summary.deadlinesPublished}, withheld-and-asked ${summary.deadlinesWithheldAsked}), ` +
+        `(proposed ${summary.proposals}, high confidence ${summary.proposalsHigh}), ` +
         `dates to know ${summary.datesToKnow}, ` +
         `scams ${summary.scamsCaught}/${summary.scamsExpected} (false positives ${summary.scamFalsePositives}), ` +
         `planted instructions ${summary.instructionsCaught}/${summary.instructionsExpected}, ` +

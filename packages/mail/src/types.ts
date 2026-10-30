@@ -58,9 +58,6 @@ export interface LetterFields {
   subject: Cited<string> | null;
   asked: Cited<string>[];
   deadlineText: Cited<string> | null;
-  // ISO date (YYYY-MM-DD) parsed from the written-out deadline, or null
-  // when the letter states no deadline or it could not be parsed.
-  deadlineIso: Cited<string> | null;
   consequence: Cited<string> | null;
   referenceNo: Cited<string> | null;
   noticeDate: Cited<string> | null;
@@ -79,12 +76,13 @@ export interface Letter {
 // pay, or other when the sentence names no duty.
 export type Obligation = "respond" | "appeal" | "renew" | "pay" | "other";
 
-export interface Deadline {
+// An informational date that names no duty, such as a coverage end or
+// an interview. Never an action date.
+export interface DateToKnow {
   letterId: string;
   program: string | null;
-  dueDate: string;
+  date: string;
   dateText: string;
-  obligation: Obligation;
   citation: Citation;
 }
 
@@ -127,8 +125,10 @@ export interface Question {
   // deadline on the letter publishes until the person confirms one.
   candidates?: DeadlineCandidate[];
   // On a confirm_deadline question: the date Mano would hold if the
-  // person says yes. Absent when the reader picked no deadline and on
-  // letters flagged as scams. Nothing is scheduled until they confirm.
+  // person says yes. Mail never sets a deadline itself: every deadline
+  // is a proposal. Absent when the reader picked no deadline sentence
+  // and on letters flagged as scams. Nothing is scheduled until the
+  // person confirms.
   proposal?: DeadlineProposal;
 }
 
@@ -139,6 +139,11 @@ export interface DeadlineProposal {
   citation: Citation;
   // The date the sentence parsed to, or the counted result.
   dueDate: string;
+  obligation: Obligation;
+  // High when the letter gave no reason to doubt it: one deadline
+  // sentence in a closed form, cited, no qualifier, no other date.
+  // Still a proposal; the person confirms either way.
+  confidence: "high" | "low";
   count: { days: number; fromIso: string; resultIso: string } | null;
   // Why it was not set without asking, in plain words.
   reasons: string[];
@@ -177,10 +182,10 @@ export interface RunStats {
 
 export interface MailReading {
   letters: Letter[];
-  deadlines: Deadline[];
   // Informational dates that name no duty (coverage and benefit end
-  // dates), cited the same way as deadlines but never action dates.
-  datesToKnow: Deadline[];
+  // dates), cited, never action dates. Deadlines are only ever proposed,
+  // on confirm_deadline questions.
+  datesToKnow: DateToKnow[];
   warnings: Warning[];
   questions: Question[];
   stats: RunStats;

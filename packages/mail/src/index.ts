@@ -30,18 +30,19 @@
 // Guarantees: a field publishes only with a real box and text found in
 // the transcription, else it becomes a question; unreadable pages
 // contribute nothing, though their contacts still warn; pages merge
-// only on continuation evidence with no contradictions; a letter
-// publishes at most one deadline, and only when, across all its pages,
-// it has exactly one deadline sentence, returned by the reader and
-// recovered verbatim, that parses whole into an absolute form under
-// src/gate.ts, with no condition, audience or cancellation word
-// anywhere in the letter and no other date apart from a single notice
-// date alone on a header line; counted deadlines ask, showing the
-// count and the date counted from; any open deadline question, failed
-// verification, failed chronology check, or missing page withholds
-// every date on the letter, and every withheld sentence joins each
-// deadline and missing-page question; a letter flagged as a scam gets
-// the scam warning and no deadline, date to know or deadline question;
+// only on continuation evidence with no contradictions; Mail never
+// sets a deadline: each letter with a deadline sentence the reader
+// picked asks once, with a proposal the person confirms, carrying the
+// verbatim sentence, citation, date, plain reasons and every other
+// candidate; the proposal is high confidence only when, across all its
+// pages, the letter has exactly one deadline sentence, recovered
+// verbatim, that parses whole into an absolute form under src/gate.ts,
+// with no condition, audience or cancellation word anywhere and no
+// other date apart from a single notice date alone on a header line;
+// counted deadlines propose the computed date with the count; dates to
+// know publish only when nothing on the letter is in doubt; scams are
+// screened on the whole letter, and a letter flagged as a scam gets
+// the scam warning and no proposal, date to know or deadline question;
 // links, phones and addresses are never acted on here and come back
 // as warnings for the gateway.
 // Content failures never throw; only invalid arguments do. Each file
@@ -86,12 +87,13 @@ import {
 import {
   chronologyOf,
   gateSentence,
+  obligationOf,
   hasQualifier,
   isDeadlineSentence,
   type AskReason,
   type DayCount,
 } from "./gate.js";
-import { scanContent, type ContentFlag } from "./safety.js";
+import { scanContent, screenScam, type ContentFlag } from "./safety.js";
 import { verifyExtraction, type DroppedField } from "./citations.js";
 import { readingModelFor } from "./model.js";
 import type {
@@ -99,7 +101,7 @@ import type {
   Cited,
   Citation,
   Contact,
-  Deadline,
+  DateToKnow,
   DeadlineCandidate,
   DeadlineProposal,
   InputFile,
@@ -445,8 +447,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
 
   // Build letters.
   const letters: Letter[] = [];
-  const deadlines: Deadline[] = [];
-  const datesToKnow: Deadline[] = [];
+  const datesToKnow: DateToKnow[] = [];
   groups.forEach((memberOrders, li) => {
     const letterId = `L${li + 1}`;
     const members = memberOrders
@@ -514,14 +515,14 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       ownQuestion.add(pageReason);
     }
 
-    // A letter publishes at most one deadline, and only when all of
-    // these hold across all its pages: the transcription has exactly
-    // one deadline sentence (src/gate.ts isDeadlineSentence), whether
-    // or not the reader returned it; that sentence was returned and
-    // recovered verbatim; no condition, audience or cancellation word
-    // appears anywhere in the letter; it parses whole into an absolute
-    // form under the gate's grammar; and the letter names no date but
-    // that one, apart from a single notice date alone on a header line.
+    // A proposal is high confidence only when all of these hold across
+    // all the letter's pages: the transcription has exactly one deadline
+    // sentence (src/gate.ts isDeadlineSentence), whether or not the
+    // reader returned it; that sentence was returned and recovered
+    // verbatim; no condition, audience or cancellation word appears
+    // anywhere in the letter; it parses whole into an absolute form
+    // under the gate's grammar; and the letter names no date but that
+    // one, apart from a single notice date alone on a header line.
     interface GatedEntry {
       iso: string;
       text: string;
@@ -541,7 +542,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     const withheld: DeadlineCandidate[] = [];
     const hold = (sentence: string, citation: Citation | null): void => {
       if (!withheld.some((c) => c.sentence === sentence)) {
-        withheld.push({ sentence, dates: parseAllDates(sentence), citation });
+        withheld.push({ sentence, dates: parseAllDates(sentence, noticeIso), citation });
       }
     };
     const noticeIso = fields.noticeDate ? parseWrittenDate(fields.noticeDate.value) : null;
@@ -600,30 +601,33 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       if (verdict.kind === "ask") reasons.push(gateReason(verdict.reason, verdict.count, sentence));
       else if (verdict.kind !== "deadline") reasons.push(gateReason("unrecognized", undefined, sentence));
       if (!cited) reasons.push("the deadline sentence was not marked on the photo");
-      const dates = letterTexts.flatMap(dateOccurrences);
-      const header = letterTexts.flatMap(headerDates);
-      if (header.length === 1) dates.splice(dates.indexOf(header[0]!), 1);
-      // Dates the deadline sentence itself names, and its counted result,
-      // are its own; every other date in the letter asks.
-      const own = new Set(parseAllDates(sentence));
-      if (verdict.kind === "ask" && verdict.count) own.add(verdict.count.resultIso);
-      const others = [...new Set(dates)].filter((iso) => !own.has(iso));
-      if (others.length > 0) {
-        for (const iso of others) {
-          const quoted = verbatimSentences(letterText).filter((q) => dateOccurrences(q).includes(iso));
-          if (quoted.length === 0) reasons.push(`the letter also mentions ${spoken(iso)}`);
-          for (const q of quoted) reasons.push(`the letter also mentions ${spoken(iso)}, in "${q}"`);
-        }
-        for (const s of sentences) {
-          if (s.sentence !== sentence && parseAllDates(s.sentence).some((iso) => others.includes(iso))) {
-            hold(s.sentence, s.cited?.citation ?? null);
-          }
-        }
-      }
       if (verdict.kind === "deadline" && cited) {
         deadline = { iso: verdict.iso, text: cited.text, sentence, obligation: verdict.obligation, citation: cited.citation };
       } else {
         hold(sentence, cited?.citation ?? null);
+      }
+    }
+    // Every date in the letter other than the proposed sentence's own,
+    // and its counted result, is quoted with the sentence it sits in.
+    // A single notice date alone on a header line is set aside.
+    const best = pickProposal(picks, noticeIso);
+    const focus = best?.pick.sentence ?? (found.length === 1 ? found[0]!.sentence : null);
+    if (focus) {
+      const dates = letterTexts.flatMap((t) => dateOccurrences(t, noticeIso));
+      const header = letterTexts.flatMap(headerDates);
+      if (header.length === 1) dates.splice(dates.indexOf(header[0]!), 1);
+      const own = new Set(parseAllDates(focus, noticeIso));
+      if (best?.count) own.add(best.count.resultIso);
+      const others = [...new Set(dates)].filter((iso) => !own.has(iso));
+      for (const iso of others) {
+        const quoted = verbatimSentences(letterText).filter((q) => dateOccurrences(q, noticeIso).includes(iso));
+        if (quoted.length === 0) reasons.push(`the letter also mentions ${spoken(iso)}`);
+        for (const q of quoted) reasons.push(`the letter also mentions ${spoken(iso)}, in "${q}"`);
+      }
+      for (const s of sentences) {
+        if (s.sentence !== focus && parseAllDates(s.sentence, noticeIso).some((iso) => others.includes(iso))) {
+          hold(s.sentence, s.cited?.citation ?? null);
+        }
       }
     }
     for (const quoted of verbatimSentences(letterText)) {
@@ -631,49 +635,67 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     }
     if (reasons.length > 0) letterBlocked = true;
 
-    const asDeadline = (entry: GatedEntry): Deadline => ({
-      letterId,
-      program: fields.program?.value ?? null,
-      dueDate: entry.iso,
-      dateText: entry.text,
-      obligation: entry.obligation,
-      citation: entry.citation,
-    });
+    // Mail never sets a deadline: every deadline is a proposal the
+    // person confirms. Dates to know publish only when nothing on the
+    // letter is in doubt.
     if (!letterBlocked) {
-      if (deadline) {
-        fields.deadlineIso = { value: deadline.iso, citation: deadline.citation };
-        deadlines.push(asDeadline(deadline));
-      }
       const known = new Set<string>();
       for (const entry of toKnow) {
         if (known.has(entry.iso)) continue;
         known.add(entry.iso);
-        datesToKnow.push(asDeadline(entry));
+        datesToKnow.push({
+          letterId,
+          program: fields.program?.value ?? null,
+          date: entry.iso,
+          dateText: entry.text,
+          citation: entry.citation,
+        });
       }
     } else {
       for (const entry of toKnow) hold(entry.sentence, entry.citation);
-      const proposal = proposeDeadline(letterId, picks, noticeIso, reasons, withheld);
-      const deadlineAsk = proposal !== null || withheld.length > 0 || reasons.some((r) => !ownQuestion.has(r));
-      if (deadlineAsk) {
-        const why = [...new Set(reasons)].join("; ");
-        ask({
-          kind: "confirm_deadline",
-          letterId,
-          prompt: proposal
-            ? `Letter ${letterId} says "${proposal.sentence}". That looks like ${spoken(proposal.dueDate)}, but no date ` +
-              `was set because ${why}. Should Mano hold ${spoken(proposal.dueDate)} as the deadline?`
-            : `Letter ${letterId} has a deadline that was not set because ${why}. Which date, if any, is the deadline?`,
-          citation: proposal?.citation ?? withheld.find((c) => c.citation)?.citation ?? null,
-          candidates: withheld,
-          ...(proposal ? { proposal } : {}),
-        });
-      }
       const key = (c: DeadlineCandidate): string => `${c.citation?.file}:${c.citation?.page}:${c.sentence}`;
       for (const q of questions) {
         if (q.letterId !== letterId || q.kind !== "missing_page") continue;
         const have = new Set((q.candidates ?? []).map(key));
         q.candidates = [...(q.candidates ?? []), ...withheld.filter((c) => !have.has(key(c)))];
       }
+    }
+    const proposal: DeadlineProposal | null = best
+      ? {
+          letterId,
+          sentence: best.pick.sentence,
+          citation: best.pick.citation,
+          dueDate: best.dueDate,
+          obligation: obligationOf(best.pick.sentence),
+          confidence: !letterBlocked && deadline?.sentence === best.pick.sentence ? "high" : "low",
+          count: best.count,
+          reasons: [
+            ...new Set([
+              ...reasons,
+              ...(best.count && !reasons.some((r) => r.startsWith("it is counted"))
+                ? [gateReason("counted", best.count, best.pick.sentence)]
+                : []),
+            ]),
+          ],
+          others: withheld.filter((c) => c.sentence !== best.pick.sentence),
+        }
+      : null;
+    if (proposal !== null || withheld.length > 0 || reasons.some((r) => !ownQuestion.has(r))) {
+      const why = [...new Set(reasons)].join("; ");
+      ask({
+        kind: "confirm_deadline",
+        letterId,
+        prompt: !proposal
+          ? `Letter ${letterId} has a deadline that could not be read clearly because ${why}. Which date, if any, is the deadline?`
+          : proposal.confidence === "high"
+            ? `Letter ${letterId} says "${proposal.sentence}". That looks like ${spoken(proposal.dueDate)}. ` +
+              `Should Mano hold ${spoken(proposal.dueDate)} as the deadline?`
+            : `Letter ${letterId} says "${proposal.sentence}". That looks like ${spoken(proposal.dueDate)}, but ${why}. ` +
+              `Should Mano hold ${spoken(proposal.dueDate)} as the deadline?`,
+        citation: proposal?.citation ?? withheld.find((c) => c.citation)?.citation ?? null,
+        candidates: withheld,
+        ...(proposal ? { proposal } : {}),
+      });
     }
 
     // Safety: every returned contact becomes a warning on its own,
@@ -734,12 +756,16 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       }
     });
     for (const source of scanSources) {
-      for (const flag of scanContent(source.text, fields.sender?.value ?? null)) {
+      for (const flag of scanContent(source.text)) {
         const key = `${flag.kind}:${flag.match.toLowerCase()}`;
         if (warned.has(key)) continue;
         warned.add(key);
         warnings.push(flagToWarning(flag, letterId, members, cite, source.citation));
       }
+    }
+
+    for (const flag of screenScam(scanSources.map((x) => x.text).join("\n\n"))) {
+      warnings.push(flagToWarning(flag, letterId, members, cite));
     }
 
     // A letter flagged as a scam gets the scam warning and nothing that
@@ -749,12 +775,10 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       const drop = <T extends { letterId: string | null }>(list: T[], gone: (item: T) => boolean): void => {
         for (let k = list.length - 1; k >= 0; k--) if (list[k]!.letterId === letterId && gone(list[k]!)) list.splice(k, 1);
       };
-      drop(deadlines, () => true);
       drop(datesToKnow, () => true);
       drop(questions, (q) => q.kind === "confirm_deadline");
       drop(warnings, (w) => w.kind === "conflicting_dates");
       for (const q of questions) if (q.letterId === letterId) delete q.candidates;
-      fields.deadlineIso = null;
     }
   });
 
@@ -762,7 +786,6 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
   const outputTokens = modelCalls.reduce((s, c) => s + c.outputTokens, 0);
   return {
     letters,
-    deadlines,
     datesToKnow,
     warnings,
     questions,
@@ -875,7 +898,6 @@ function mergeFields(
   const deadlineText = firstDeadline();
   // Resolved per letter in the pipeline, where a missing anchor and
   // conflicting dates can become questions.
-  const deadlineIso: Cited<string> | null = null;
   const excerpt = (members.find((m) => m.extraction?.readable)?.extraction?.fullText ?? "").slice(0, 280);
   return {
     sender: firstText((ex) => ex.sender),
@@ -886,7 +908,6 @@ function mergeFields(
       null,
     ) as Cited<string>[],
     deadlineText,
-    deadlineIso,
     consequence: firstText((ex) => ex.consequence),
     referenceNo: firstText((ex) => ex.referenceNo),
     noticeDate: firstText((ex) => ex.noticeDate),
@@ -1072,40 +1093,25 @@ function gateReason(reason: AskReason, count: DayCount | undefined, sentence: st
 
 // The most likely deadline among the sentences the reader picked, in
 // the reader's order: first one in a closed form, then a counted one,
-// then one naming exactly one date. Null when the reader picked none.
-function proposeDeadline(
-  letterId: string,
+// then one naming exactly one date. Only deadline sentences are
+// proposed, and never a date before the notice date or more than a
+// year after it. Null when the reader picked none.
+function pickProposal(
   picks: { sentence: string; citation: Citation }[],
   noticeIso: string | null,
-  reasons: string[],
-  withheld: DeadlineCandidate[],
-): DeadlineProposal | null {
-  const scored = picks.map((p) => {
-    const v = gateSentence(p.sentence, noticeIso);
-    if (v.kind === "deadline") return { p, tier: 0, dueDate: v.iso, count: null };
-    if (v.kind === "ask" && v.count) return { p, tier: 1, dueDate: v.count.resultIso, count: v.count };
-    const dates = parseAllDates(p.sentence);
-    return dates.length === 1 ? { p, tier: 2, dueDate: dates[0]!, count: null } : null;
-  });
-  // A date before the notice date, or more than a year after it, is
-  // never the proposal.
-  const best = scored
+): { pick: { sentence: string; citation: Citation }; dueDate: string; count: DayCount | null } | null {
+  const scored = picks
+    .filter((p) => isDeadlineSentence(p.sentence))
+    .map((pick) => {
+      const v = gateSentence(pick.sentence, noticeIso);
+      if (v.kind === "deadline") return { pick, tier: 0, dueDate: v.iso, count: null };
+      if (v.kind === "ask" && v.count) return { pick, tier: 1, dueDate: v.count.resultIso, count: v.count };
+      const dates = parseAllDates(pick.sentence, noticeIso);
+      return dates.length === 1 ? { pick, tier: 2, dueDate: dates[0]!, count: null } : null;
+    })
     .filter((x): x is NonNullable<typeof x> => x !== null && chronologyOf(x.dueDate, noticeIso) === "ok")
-    .sort((a, b) => a.tier - b.tier)[0];
-  if (!best) return null;
-  const why = [...new Set(reasons)];
-  if (best.count && !why.some((r) => r.startsWith("it is counted"))) {
-    why.push(gateReason("counted", best.count, best.p.sentence));
-  }
-  return {
-    letterId,
-    sentence: best.p.sentence,
-    citation: best.p.citation,
-    dueDate: best.dueDate,
-    count: best.count,
-    reasons: why,
-    others: withheld.filter((c) => c.sentence !== best.p.sentence),
-  };
+    .sort((a, b) => a.tier - b.tier);
+  return scored[0] ?? null;
 }
 
 function shortMessage(err: unknown): string {

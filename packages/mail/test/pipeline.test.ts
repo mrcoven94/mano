@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { readMail } from "../src/index.js";
+import { readMail, type MailReading } from "../src/index.js";
 import { ffmpegAvailable } from "../src/media.js";
 import { RecordedModelClient, recordedText } from "../src/model.js";
 import { LETTERS } from "../scripts/letters.js";
@@ -23,6 +23,10 @@ const BASE_TEXT =
   "Sacramento County Medi-Cal Office\nRe: Renewal\nCase CA-2026-1\nNotice date November 2, 2026\n\n" +
   "Your renewal is due November 20, 2026. Send the signed renewal form. Late forms stop coverage. " +
   "Call (555) 100-2000.";
+
+// Every deadline Mail proposes. Mail never publishes one itself.
+const proposed = (reading: MailReading) =>
+  reading.questions.flatMap((q) => (q.kind === "confirm_deadline" && q.proposal ? [q.proposal] : []));
 
 // BASE_TEXT without its deadline sentence, for tests that state their own.
 const INFO_TEXT = BASE_TEXT.replace("Your renewal is due November 20, 2026. ", "");
@@ -83,23 +87,25 @@ describe("readMail", () => {
       page: 1,
       box: { ymin: 40, xmin: 60, ymax: 70, xmax: 400 },
     });
-    // The full sentence states the deadline under the strict rule,
-    // so it publishes.
-    expect(letter.fields.deadlineIso?.value).toBe("2026-11-20");
+    // The full sentence states the deadline in a closed form, so it is
+    // proposed with high confidence, never set.
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.deadlines).toEqual([
+    expect(proposed(reading)).toEqual([
       {
         letterId: "L1",
-        program: "Medi-Cal",
-        dueDate: "2026-11-20",
-        dateText: "Your renewal is due November 20, 2026.",
-        obligation: "renew",
+        sentence: "Your renewal is due November 20, 2026",
         citation: { file: "mail.jpg", page: 1, box: { ymin: 200, xmin: 60, ymax: 220, xmax: 300 } },
+        dueDate: "2026-11-20",
+        obligation: "renew",
+        confidence: "high",
+        count: null,
+        reasons: [],
+        others: [],
       },
     ]);
     // The phone number is reported, never acted on.
     expect(reading.warnings.map((w) => w.kind)).toContain("phone_unchecked");
-    expect(reading.questions).toEqual([]);
+    expect(reading.questions.map((q) => q.kind)).toEqual(["confirm_deadline"]);
     // Synthetic runs use the contributor reading model.
     const readCalls = model.calls.filter((c) => c.model !== "sam-3.1");
     expect(readCalls.length).toBeGreaterThan(0);
@@ -131,8 +137,6 @@ describe("readMail", () => {
     });
     const letter = reading.letters[0]!;
     expect(letter.fields.sender).toBeNull();
-    expect(letter.fields.deadlineIso).toBeNull();
-    expect(reading.deadlines).toEqual([]);
     const kinds = reading.questions.map((q) => q.kind);
     expect(kinds).toContain("unverified_field");
     expect(reading.questions).toHaveLength(2);
@@ -153,7 +157,6 @@ describe("readMail", () => {
       model,
     });
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.deadlines).toEqual([]);
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
     expect(question.proposal?.count).toEqual({ days: 10, fromIso: "2026-11-25", resultIso: "2026-12-05" });
     expect(question.prompt).toContain("December 5, 2026");
@@ -173,7 +176,6 @@ describe("readMail", () => {
       model,
     });
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.deadlines).toEqual([]);
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
     expect(question.proposal?.count).toEqual({ days: 60, fromIso: "2026-11-02", resultIso: "2027-01-01" });
     expect(question.prompt).toContain("November 2, 2026");
@@ -192,7 +194,6 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.deadlines).toEqual([]);
     expect(reading.questions.map((q) => q.kind)).toContain("confirm_deadline");
   });
 
@@ -209,7 +210,6 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.deadlines).toEqual([]);
     expect(reading.questions.map((q) => q.kind)).toContain("confirm_deadline");
   });
 
@@ -260,9 +260,7 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.deadlines).toEqual([]);
-    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
-    expect(reading.datesToKnow.map((d) => d.dueDate).sort()).toEqual(["2026-12-20", "2027-01-31"]);
+    expect(reading.datesToKnow.map((d) => d.date).sort()).toEqual(["2026-12-20", "2027-01-31"]);
     expect(reading.datesToKnow.every((d) => d.citation)).toBe(true);
     expect(reading.warnings.map((w) => w.kind)).not.toContain("conflicting_dates");
   });
@@ -335,7 +333,7 @@ describe("readMail", () => {
       model,
     });
     expect(reading.letters).toHaveLength(2);
-    expect(reading.deadlines.map((d) => d.dueDate).sort()).toEqual(["2026-11-20", "2026-11-24"]);
+    expect(proposed(reading).map((p) => p.dueDate).sort()).toEqual(["2026-11-20", "2026-11-24"]);
   });
 
   it("turns planted instructions into warnings and withholds the letter's deadline", async () => {
@@ -353,7 +351,6 @@ describe("readMail", () => {
     });
     expect(reading.warnings.map((w) => w.kind)).toContain("instruction_in_content");
     // "Ignore" is a cancellation word, so the letter asks.
-    expect(reading.deadlines).toEqual([]);
     expect(reading.questions.map((q) => q.kind)).toContain("confirm_deadline");
   });
 
@@ -367,7 +364,6 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.deadlines).toEqual([]);
     expect(reading.questions.map((q) => q.kind)).toContain("unreadable_page");
   });
 
@@ -389,9 +385,7 @@ describe("readMail", () => {
     });
     const letter = reading.letters[0]!;
     expect(letter.fields.sender).toBeNull();
-    expect(letter.fields.deadlineIso).toBeNull();
     expect(letter.fields.excerpt).toBe("");
-    expect(reading.deadlines).toEqual([]);
     expect(reading.questions.map((q) => q.kind)).toEqual(["unreadable_page"]);
   });
 
@@ -481,9 +475,7 @@ describe("readMail", () => {
     );
     expect(reading.letters).toHaveLength(1);
     expect(reading.warnings.map((w) => w.kind)).toContain("conflicting_dates");
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
     expect(question.candidates?.flatMap((c) => c.dates).sort()).toEqual(["2026-11-20", "2026-12-01"]);
     expect(question.candidates?.every((c) => c.citation?.file === "p1.jpg" || c.citation?.file === "p2.jpg")).toBe(true);
@@ -516,7 +508,6 @@ describe("readMail", () => {
     expect(reading.letters).toHaveLength(2);
     // Both letters share one transcription, so each sees the other's
     // deadline sentence without a box of its own and withholds.
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
     for (const letterId of ["L1", "L2"]) {
       const q = reading.questions.find((x) => x.letterId === letterId && x.kind === "confirm_deadline")!;
@@ -642,9 +633,7 @@ describe("readMail", () => {
     // One ambiguous date blocks every date on the letter, including
     // the clean appeal date: withholding is letter-wide.
     expect(reading.questions.map((q) => q.kind)).toContain("confirm_deadline");
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
   });
 
   it("withholds a deadline before the notice date and asks", async () => {
@@ -660,8 +649,6 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.deadlines).toEqual([]);
-    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
     expect(question.candidates?.map((c) => c.sentence)).toEqual(["Respond by October 24, 2026"]);
     expect(question.citation).not.toBeNull();
@@ -684,8 +671,6 @@ describe("readMail", () => {
       model,
     });
     expect(reading.warnings.map((w) => w.kind)).toContain("conflicting_dates");
-    expect(reading.deadlines).toEqual([]);
-    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
     expect(question.candidates?.flatMap((c) => c.dates).sort()).toEqual(["2026-11-20", "2026-11-25"]);
   });
@@ -720,12 +705,10 @@ describe("readMail", () => {
     );
     expect(reading.letters).toHaveLength(1);
     expect(reading.warnings.map((w) => w.kind)).toContain("conflicting_dates");
-    expect(reading.deadlines).toEqual([]);
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
-    expect(question.candidates?.map((c) => c.sentence).sort()).toEqual([
-      "Appeal by December 1, 2026",
-      "Respond by November 20, 2026",
-    ]);
+    expect(question.candidates?.map((c) => c.sentence)).toEqual(
+      expect.arrayContaining(["Appeal by December 1, 2026", "Respond by November 20, 2026"]),
+    );
   });
 
   it("warns for contacts returned on an unreadable page", async () => {
@@ -753,7 +736,6 @@ describe("readMail", () => {
       model,
     });
     expect(reading.questions.map((q) => q.kind)).toContain("unreadable_page");
-    expect(reading.deadlines).toEqual([]);
     const kinds = reading.warnings.map((w) => w.kind);
     expect(kinds).toContain("phone_unchecked");
     expect(kinds).toContain("link_unchecked");
@@ -785,7 +767,6 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
     expect(reading.questions[0]?.candidates?.map((c) => c.sentence)).toEqual([sentence.replace(/\.$/, "")]);
   });
@@ -812,9 +793,8 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.deadlines).toEqual([]);
     expect(reading.questions).toEqual([]);
-    expect(reading.datesToKnow.map((d) => d.dueDate)).toEqual(["2026-12-01"]);
+    expect(reading.datesToKnow.map((d) => d.date)).toEqual(["2026-12-01"]);
   });
 
   it("asks on a hedged two-date sentence instead of picking one", async () => {
@@ -840,7 +820,6 @@ describe("readMail", () => {
       model,
     });
     expect(reading.questions.map((q) => q.kind)).toEqual(["confirm_deadline"]);
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
   });
 
@@ -868,7 +847,6 @@ describe("readMail", () => {
     });
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
     expect(question.candidates?.map((c) => c.sentence)).toEqual([sentence.replace(/\.$/, "")]);
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
   });
 
@@ -895,7 +873,6 @@ describe("readMail", () => {
       model,
     });
     expect(reading.questions.map((q) => q.kind)).toEqual(["confirm_deadline"]);
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
   });
 
@@ -922,7 +899,6 @@ describe("readMail", () => {
       model,
     });
     expect(reading.questions.map((q) => q.kind)).toEqual(["confirm_deadline"]);
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
   });
 
@@ -949,7 +925,6 @@ describe("readMail", () => {
     });
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
     expect(question.candidates?.map((c) => c.sentence)).toEqual(["We must receive your packet by November 20, 2026"]);
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
   });
 
@@ -977,9 +952,7 @@ describe("readMail", () => {
     });
     expect(reading.questions.map((q) => q.kind)).toEqual(["missing_page", "confirm_deadline"]);
     expect(reading.questions[1]!.proposal).toMatchObject({ dueDate: "2026-11-20", sentence: "Respond by November 20, 2026" });
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
   });
 
   it("joins every withheld cited date to the question", async () => {
@@ -1008,10 +981,9 @@ describe("readMail", () => {
       synthetic: true,
       model,
     });
-    expect(reading.deadlines).toEqual([]);
     const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
-    expect(question.candidates?.flatMap((c) => c.dates).sort()).toEqual(["2026-10-23", "2026-11-24"]);
-    expect(question.candidates?.every((c) => c.citation?.file === "mail.jpg")).toBe(true);
+    expect(question.candidates?.flatMap((c) => c.dates)).toEqual(expect.arrayContaining(["2026-10-23", "2026-11-24"]));
+    expect(question.candidates?.filter((c) => c.citation).every((c) => c.citation!.file === "mail.jpg")).toBe(true);
   });
 
   it("asks when a clean clause sits in a two-expression sentence", async () => {
@@ -1039,7 +1011,6 @@ describe("readMail", () => {
     expect(question.candidates?.map((c) => c.sentence)).toEqual([
       "Respond by November 20, 2026 or within 10 days of receipt",
     ]);
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
   });
 });
@@ -1089,7 +1060,8 @@ describe("readMail publish gate", () => {
       ["2026-11-25"],
     ],
     ["permission after a date (review 5)", "You may respond after November 20, 2026.", "November 20, 2026", ["2026-11-20"]],
-    ["alternative dates (review 5)", "Respond by November 20 or December 1, 2026.", "December 1, 2026", ["2026-12-01"]],
+    // A yearless date resolves against the notice date and counts.
+    ["alternative dates (review 5)", "Respond by November 20 or December 1, 2026.", "December 1, 2026", ["2026-11-20", "2026-12-01"]],
     ["negated payment (review 5)", "Do not pay before November 20, 2026.", "November 20, 2026", ["2026-11-20"]],
     ["negated duty", "You do not need to respond by November 20, 2026.", "November 20, 2026", ["2026-11-20"]],
     ["alternative duty", "Send the form or call our office by November 20, 2026.", "November 20, 2026", ["2026-11-20"]],
@@ -1117,9 +1089,7 @@ describe("readMail publish gate", () => {
     ["business days", "Submit the form within 10 business days after November 25, 2026.", "November 25, 2026", ["2026-11-25"]],
   ])("asks on %s", async (_label, sentence, extracted, dates) => {
     const reading = await readSentence(sentence, [dl(extracted)]);
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.letters[0]!.fields.deadlineIso).toBeNull();
     expect(reading.questions).toHaveLength(1);
     expect(reading.questions[0]).toMatchObject({
       kind: "confirm_deadline",
@@ -1134,18 +1104,21 @@ describe("readMail publish gate", () => {
     ["on or before", "You must respond on or before December 12, 2026.", "December 12, 2026", "2026-12-12"],
     ["no later than", "You must renew your case no later than December 15, 2026.", "December 15, 2026", "2026-12-15"],
     ["due", "Your premium is due December 13, 2026.", "Your premium is due December 13, 2026.", "2026-12-13"],
-  ])("publishes the %s form", async (_label, sentence, extracted, iso) => {
+  ])("proposes the %s form with high confidence", async (_label, sentence, extracted, iso) => {
     const reading = await readSentence(sentence, [dl(extracted)]);
-    expect(reading.questions).toEqual([]);
+    expect(reading.questions.map((q) => q.kind)).toEqual(["confirm_deadline"]);
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.deadlines).toHaveLength(1);
-    expect(reading.deadlines[0]).toMatchObject({ dueDate: iso, citation: { file: "mail.jpg", page: 1, box: BOX } });
-    expect(reading.letters[0]!.fields.deadlineIso?.value).toBe(iso);
+    expect(proposed(reading)).toHaveLength(1);
+    expect(proposed(reading)[0]).toMatchObject({
+      dueDate: iso,
+      confidence: "high",
+      reasons: [],
+      citation: { file: "mail.jpg", page: 1, box: BOX },
+    });
   });
 
   it("asks with the count from the sentence when the reader returned only the anchor", async () => {
     const reading = await readSentence("You must respond within 10 days after November 25, 2026.", [dl("November 25")]);
-    expect(reading.deadlines).toEqual([]);
     expect(reading.questions[0]?.proposal?.count).toEqual({ days: 10, fromIso: "2026-11-25", resultIso: "2026-12-05" });
   });
 
@@ -1154,22 +1127,19 @@ describe("readMail publish gate", () => {
       "You will receive your new card on November 20, 2026. Your interview is on December 1, 2026.",
       [dl("November 20, 2026"), dl("December 1, 2026", 230)],
     );
-    expect(reading.deadlines).toEqual([]);
     expect(reading.questions).toEqual([]);
-    expect(reading.datesToKnow.map((d) => d.dueDate)).toEqual(["2026-11-20", "2026-12-01"]);
+    expect(reading.datesToKnow.map((d) => d.date)).toEqual(["2026-11-20", "2026-12-01"]);
   });
 
   it("asks on a stated amount already due, since due always reads like a deadline", async () => {
     const sentence = "Your payment of $45.00 for November 2026 was due on November 15, 2026.";
     const reading = await readSentence(sentence, [dl("November 15, 2026")]);
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
     expect(reading.questions.map((q) => q.kind)).toEqual(["confirm_deadline"]);
   });
 
   it("asks when the deadline is the notice date itself", async () => {
     const reading = await readSentence("Respond by November 2, 2026.", [dl("Respond by November 2, 2026.")]);
-    expect(reading.deadlines).toEqual([]);
     expect(reading.questions.map((q) => q.kind)).toEqual(["confirm_deadline"]);
   });
 
@@ -1179,7 +1149,6 @@ describe("readMail publish gate", () => {
       [dl("Return the form by November 20, 2026."), dl("November 18, 2026", 230)],
       { page_marker: { text: "page 1 of 2", box_2d: [300, 60, 320, 250] } },
     );
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
     expect(reading.questions.map((q) => q.kind).sort()).toEqual(["confirm_deadline", "missing_page"]);
     for (const q of reading.questions) {
@@ -1225,9 +1194,7 @@ describe("readMail review 6", () => {
   });
   const HEAD = "County Office\nNotice date November 2, 2026\n\n";
   const expectNothingPublished = (reading: Awaited<ReturnType<typeof readText>>): void => {
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.letters.every((l) => l.fields.deadlineIso === null)).toBe(true);
     expect(reading.questions.some((q) => q.kind === "confirm_deadline")).toBe(true);
   };
 
@@ -1274,8 +1241,8 @@ describe("readMail review 6", () => {
         },
       },
     );
-    expect(reading.deadlines.map((d) => d.dueDate)).not.toContain("2026-11-21");
-    expect(reading.datesToKnow.map((d) => d.dueDate)).not.toContain("2026-11-21");
+    expect(proposed(reading).filter((p) => p.confidence === "high").map((p) => p.dueDate)).not.toContain("2026-11-21");
+    expect(reading.datesToKnow.map((d) => d.date)).not.toContain("2026-11-21");
   });
 
   it("finding 5: removes only the salutation line, never a condition after it", async () => {
@@ -1285,12 +1252,12 @@ describe("readMail review 6", () => {
     expectNothingPublished(reading);
   });
 
-  it("finding 5: still publishes after a salutation on its own line", async () => {
+  it("finding 5: still proposes with high confidence after a salutation on its own line", async () => {
     const reading = await readText(`${HEAD}\n\nDear Maria Santos,\nReturn the form by November 20, 2026.`, [
       dl("Return the form by November 20, 2026."),
     ]);
-    expect(reading.questions).toEqual([]);
-    expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
+    expect(proposed(reading)).toEqual([expect.objectContaining({ confidence: "high", reasons: [] })]);
+    expect(proposed(reading).filter((p) => p.confidence === "high").map((p) => p.dueDate)).toEqual(["2026-11-20"]);
   });
 
   it.each([
@@ -1321,7 +1288,6 @@ describe("readMail review 6", () => {
     );
     expect(reading.warnings.map((w) => w.kind)).toContain("scam_suspect");
     expect(reading.questions.filter((q) => q.kind === "confirm_deadline")).toEqual([]);
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
   });
 
@@ -1395,9 +1361,7 @@ describe("readMail review 7", () => {
   const asked = (reading: Awaited<ReturnType<typeof readText>>) =>
     reading.questions.filter((q) => q.kind === "confirm_deadline");
   const expectWithheld = (reading: Awaited<ReturnType<typeof readText>>): void => {
-    expect(reading.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
-    expect(reading.letters.every((l) => l.fields.deadlineIso === null)).toBe(true);
     expect(asked(reading).length).toBeGreaterThan(0);
   };
 
@@ -1485,12 +1449,12 @@ describe("readMail review 7", () => {
     }
   });
 
-  it("still publishes one plain deadline sentence with no qualifying context", async () => {
+  it("proposes one plain deadline sentence with no qualifying context with high confidence", async () => {
     const reading = await readText(`${HEAD}Dear Maria Santos,\n\nReturn your signed form by December 5, 2026.`, [
       dl("Return your signed form by December 5, 2026."),
     ]);
-    expect(asked(reading)).toEqual([]);
-    expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-12-05"]);
+    expect(proposed(reading)).toEqual([expect.objectContaining({ confidence: "high", reasons: [] })]);
+    expect(proposed(reading).filter((p) => p.confidence === "high").map((p) => p.dueDate)).toEqual(["2026-12-05"]);
   });
 });
 
@@ -1524,8 +1488,6 @@ describe("readMail review 8", () => {
     box_2d: [ymin, 60, ymin + 20, 300],
   });
   const expectWithheld = (reading: Awaited<ReturnType<typeof read>>): void => {
-    expect(reading.deadlines).toEqual([]);
-    expect(reading.letters.every((l) => l.fields.deadlineIso === null)).toBe(true);
     expect(reading.questions.some((q) => q.kind === "confirm_deadline")).toBe(true);
   };
   const SUBMIT = "Submit proof by November 20, 2026.";
@@ -1574,10 +1536,10 @@ describe("readMail review 8", () => {
     expect(reading.questions.flatMap((q) => q.candidates ?? []).flatMap((c) => c.dates)).toContain("2026-11-15");
   });
 
-  it("still publishes when the only other date is the notice date alone on a header line", async () => {
+  it("proposes with high confidence when the only other date is the notice date on a header line", async () => {
     const reading = await read([page(`${HEAD}Dear Maria Santos,\n\n${SUBMIT}`, [dl(SUBMIT)])]);
-    expect(reading.questions.filter((q) => q.kind === "confirm_deadline")).toEqual([]);
-    expect(reading.deadlines.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
+    expect(proposed(reading)).toEqual([expect.objectContaining({ confidence: "high", reasons: [] })]);
+    expect(proposed(reading).filter((p) => p.confidence === "high").map((p) => p.dueDate)).toEqual(["2026-11-20"]);
   });
 });
 
@@ -1611,7 +1573,6 @@ describe("readMail deadline proposals", () => {
 
   it("proposes the reader's sentence and date with plain reasons and the other dates quoted", async () => {
     const reading = await read(`${HEAD}${RETURN}\n\n${LATE}`, [dl(RETURN)]);
-    expect(reading.deadlines).toEqual([]);
     expect(confirms(reading)).toHaveLength(1);
     const proposal = confirms(reading)[0]!.proposal!;
     expect(proposal).toMatchObject({

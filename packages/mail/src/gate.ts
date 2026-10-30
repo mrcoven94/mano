@@ -149,6 +149,7 @@ const QUALIFIER = new RegExp(
     "if applicable", "if", "only", "unless", "except", "when", "dear county staff", "staff",
     "office use", "caseworker use", "for county", "applies to", "does not apply", "not required",
     "cancelled", "canceled", "disregard", "void", "no longer", "ignore", "optional",
+    "withdrawn", "rescinded", "no action", "not needed", "provided that", "providers",
   ]
     .map((w) => w.replace(/ /g, String.raw`\s+`))
     .join("|")})\b`,

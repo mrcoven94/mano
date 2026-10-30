@@ -1,8 +1,9 @@
 // Dev-set grading: scorePhoto grades one readMail result against one
 // manifest entry. Expected items always come from the key, never from
 // what the pipeline found: dropping a letter must not shrink the
-// denominator. Deadlines compare as full sets, so a missing deadline
-// and an extra invented one both fail. scripts/eval-dev.ts runs this
+// denominator. Mail never sets a deadline, so deadlines are graded on
+// the proposals it asks the person to confirm. They compare as full
+// sets, so a missing proposal and an extra invented one both fail. scripts/eval-dev.ts runs this
 // live; test/grade.test.ts pins the gaming cases.
 
 import { isRealBox } from "./citations.js";
@@ -35,8 +36,8 @@ export interface PhotoScore {
   fieldsExpected: number;
   fieldsCorrect: number;
   deadlinesCorrect: boolean;
-  deadlinesPublished: number;
-  deadlinesWithheldAsked: number;
+  proposals: number;
+  proposalsHigh: number;
   datesToKnow: number;
   scamExpected: boolean;
   scamCaught: boolean;
@@ -85,6 +86,8 @@ function matchLetters(truth: GradeLetterTruth[], found: Letter[]): Map<number, L
 }
 
 export function scorePhoto(truth: GradeTruth, reading: MailReading, elapsedMs: number): PhotoScore {
+  const proposalList = reading.questions.flatMap((q) => (q.kind === "confirm_deadline" && q.proposal ? [q.proposal] : []));
+  const proposalOf = (letterId: string) => proposalList.find((p) => p.letterId === letterId);
   const notes: string[] = [];
   const matches = matchLetters(truth.letters, reading.letters);
   let fieldsExpected = 0;
@@ -110,7 +113,7 @@ export function scorePhoto(truth: GradeTruth, reading: MailReading, elapsedMs: n
       ["sender", t.sender, letter?.fields.sender?.value ?? null],
       ["program", t.program, letter?.fields.program?.value ?? null],
       ["reference", t.referenceNo, letter?.fields.referenceNo?.value ?? null],
-      ["deadline", t.deadlineIso, letter?.fields.deadlineIso?.value ?? null],
+      ["deadline", t.deadlineIso, (letter && proposalOf(letter.id)?.dueDate) ?? null],
     ];
     for (const [name, want, got] of checks) {
       // Null program on both sides still counts: the model must not invent one.
@@ -128,7 +131,6 @@ export function scorePhoto(truth: GradeTruth, reading: MailReading, elapsedMs: n
         ["program", f.program],
         ["subject", f.subject],
         ["deadline text", f.deadlineText],
-        ["deadline", f.deadlineIso],
         ["consequence", f.consequence],
         ["reference", f.referenceNo],
         ["notice date", f.noticeDate],
@@ -189,30 +191,30 @@ export function scorePhoto(truth: GradeTruth, reading: MailReading, elapsedMs: n
     truth.letters.every((t) => !t.scam) && reading.warnings.some((w) => w.kind === "scam_suspect");
   if (scamFalsePositive) notes.push("scam warning on a non-scam photo");
 
-  reading.deadlines.forEach((d, i) => {
-    cited(`deadline[${i}]`, d.citation.box);
+  proposalList.forEach((p, i) => {
+    cited(`proposal[${i}]`, p.citation.box);
   });
   reading.datesToKnow.forEach((d, i) => {
     cited(`date-to-know[${i}]`, d.citation.box);
   });
 
-  // Full deadline sets: a missing deadline and an extra invented one
-  // both fail. Checking deadlineIso alone let extras through.
+  // Full deadline sets: a missing proposal and an extra invented one
+  // both fail.
   const expectedDeadlines = new Set(
     truth.letters.map((t) => t.deadlineIso).filter((d): d is string => d !== null),
   );
-  const publishedDeadlines = new Set(reading.deadlines.map((d) => d.dueDate));
+  const publishedDeadlines = new Set(proposalList.map((p) => p.dueDate));
   let deadlinesCorrect = true;
   for (const want of expectedDeadlines) {
     if (!publishedDeadlines.has(want)) {
       deadlinesCorrect = false;
-      notes.push(`deadline missing: ${want}`);
+      notes.push(`proposal missing: ${want}`);
     }
   }
   for (const got of publishedDeadlines) {
     if (!expectedDeadlines.has(got)) {
       deadlinesCorrect = false;
-      notes.push(`extra deadline published: ${got}`);
+      notes.push(`extra proposal: ${got}`);
     }
   }
 
@@ -242,8 +244,8 @@ export function scorePhoto(truth: GradeTruth, reading: MailReading, elapsedMs: n
     fieldsExpected,
     fieldsCorrect,
     deadlinesCorrect,
-    deadlinesPublished: reading.deadlines.length,
-    deadlinesWithheldAsked: reading.questions.filter((q) => q.kind === "confirm_deadline").length,
+    proposals: proposalList.length,
+    proposalsHigh: proposalList.filter((p) => p.confidence === "high").length,
     datesToKnow: reading.datesToKnow.length,
     scamExpected: truth.letters.some((t) => t.scam),
     scamCaught,

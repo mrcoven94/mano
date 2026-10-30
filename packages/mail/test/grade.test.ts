@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isPhotoOk, scorePhoto, type GradeTruth } from "../src/grade.js";
-import type { Deadline, Letter, MailReading, Question, Warning } from "../src/types.js";
+import type { DateToKnow, Letter, MailReading, Question, Warning } from "../src/types.js";
 
 const box = { ymin: 10, xmin: 10, ymax: 30, xmax: 200 };
 const cite = (file: string) => ({ file, page: 1, box });
@@ -41,7 +41,6 @@ function foundLetter(
       subject: null,
       asked: [{ value: "signed renewal form", citation: cite(file) }],
       deadlineText: { value: "November 20, 2026", citation: cite(file) },
-      deadlineIso: { value: "2026-11-20", citation: cite(file) },
       consequence: null,
       referenceNo: { value: "CA-1", citation: cite(file) },
       noticeDate: null,
@@ -53,15 +52,31 @@ function foundLetter(
   };
 }
 
-function deadline(file: string, dueDate: string): Deadline {
+// A confirm_deadline question carrying a proposal: Mail never publishes
+// a deadline, so deadlines are graded on proposals.
+function proposal(file: string, dueDate: string, confidence: "high" | "low" = "high", letterId = "L1"): Question {
   return {
-    letterId: "L1",
-    program: "Medi-Cal",
-    dueDate,
-    dateText: dueDate,
-    obligation: "other",
+    id: `Q-${dueDate}`,
+    kind: "confirm_deadline",
+    letterId,
+    prompt: "hold this date?",
     citation: cite(file),
+    proposal: {
+      letterId,
+      sentence: `Respond by ${dueDate}`,
+      citation: cite(file),
+      dueDate,
+      obligation: "respond",
+      confidence,
+      count: null,
+      reasons: [],
+      others: [],
+    },
   };
+}
+
+function dateToKnow(file: string, date: string): DateToKnow {
+  return { letterId: "L1", program: "Medi-Cal", date, dateText: date, citation: cite(file) };
 }
 
 function phoneWarning(file: string, phone: string): Warning {
@@ -70,17 +85,16 @@ function phoneWarning(file: string, phone: string): Warning {
 
 function reading(over: {
   letters?: Letter[];
-  deadlines?: Deadline[];
-  datesToKnow?: Deadline[];
+  proposals?: Question[];
+  datesToKnow?: DateToKnow[];
   warnings?: Warning[];
   questions?: Question[];
 }): MailReading {
   return {
     letters: over.letters ?? [],
-    deadlines: over.deadlines ?? [],
     datesToKnow: over.datesToKnow ?? [],
     warnings: over.warnings ?? [],
-    questions: over.questions ?? [],
+    questions: [...(over.proposals ?? []), ...(over.questions ?? [])],
     stats: { files: 1, frames: 1, pages: 1, modelCalls: [], inputTokens: 10, outputTokens: 5, elapsedMs: 100, live: false },
   };
 }
@@ -93,7 +107,7 @@ describe("scorePhoto", () => {
     ]);
     const r = reading({
       letters: [foundLetter("photo.jpg", { sender: { value: "Office A", citation: cite("photo.jpg") } })],
-      deadlines: [deadline("photo.jpg", "2026-11-20")],
+      proposals: [proposal("photo.jpg", "2026-11-20")],
       warnings: [phoneWarning("photo.jpg", "(555) 100-2000")],
     });
     const score = scorePhoto(t, r, 100);
@@ -104,44 +118,40 @@ describe("scorePhoto", () => {
     expect(score.contactsWarned).toBe(1);
   });
 
-  it("fails an extra invented deadline", () => {
+  it("fails an extra invented proposal", () => {
     const t = truth([truthLetter()]);
     const r = reading({
       letters: [foundLetter("photo.jpg")],
-      deadlines: [deadline("photo.jpg", "2026-11-20"), deadline("photo.jpg", "2099-01-01")],
+      proposals: [proposal("photo.jpg", "2026-11-20"), proposal("photo.jpg", "2099-01-01", "low", "L2")],
       warnings: [phoneWarning("photo.jpg", "(555) 100-2000")],
     });
     const score = scorePhoto(t, r, 100);
     expect(score.deadlinesCorrect).toBe(false);
-    expect(score.notes).toContain("extra deadline published: 2099-01-01");
+    expect(score.notes).toContain("extra proposal: 2099-01-01");
   });
 
   it("fails a missing deadline", () => {
     const t = truth([truthLetter()]);
     const r = reading({
-      letters: [foundLetter("photo.jpg", { deadlineIso: null })],
-      deadlines: [],
+      letters: [foundLetter("photo.jpg")],
       warnings: [phoneWarning("photo.jpg", "(555) 100-2000")],
     });
     const score = scorePhoto(t, r, 100);
     expect(score.deadlinesCorrect).toBe(false);
-    expect(score.notes).toContain("deadline missing: 2026-11-20");
+    expect(score.notes).toContain("proposal missing: 2026-11-20");
   });
 
-  it("counts published versus withheld-and-asked deadlines", () => {
-    const t = truth([truthLetter({ deadlineIso: null })], ["confirm_deadline"]);
+  it("counts proposals and the high-confidence ones", () => {
+    const t = truth([truthLetter()], ["confirm_deadline"]);
     const r = reading({
-      letters: [foundLetter("photo.jpg", { deadlineIso: null, deadlineText: null })],
-      deadlines: [],
+      letters: [foundLetter("photo.jpg")],
+      proposals: [proposal("photo.jpg", "2026-11-20", "high"), proposal("photo.jpg", "2026-11-20", "low", "L2")],
       warnings: [phoneWarning("photo.jpg", "(555) 100-2000")],
-      questions: [
-        { id: "Q1", kind: "confirm_deadline", letterId: "L1", prompt: "which date?", citation: null },
-        { id: "Q2", kind: "confirm_deadline", letterId: "L1", prompt: "which other date?", citation: null },
-      ],
+      questions: [{ id: "Q9", kind: "confirm_deadline", letterId: "L3", prompt: "which date?", citation: null }],
     });
     const score = scorePhoto(t, r, 100);
-    expect(score.deadlinesPublished).toBe(0);
-    expect(score.deadlinesWithheldAsked).toBe(2);
+    expect(score.proposals).toBe(2);
+    expect(score.proposalsHigh).toBe(1);
   });
 });
 
@@ -151,7 +161,7 @@ describe("isPhotoOk", () => {
       t: truth([truthLetter()]),
       r: reading({
         letters: [foundLetter("photo.jpg")],
-        deadlines: [deadline("photo.jpg", "2026-11-20")],
+        proposals: [proposal("photo.jpg", "2026-11-20")],
         warnings: [phoneWarning("photo.jpg", "(555) 100-2000")],
       }),
     };
@@ -174,11 +184,11 @@ describe("isPhotoOk", () => {
     expect(isPhotoOk(scorePhoto(t, r, 100))).toBe(false);
   });
 
-  it("fails on a wrong deadlineIso even when deadlines[] is right", () => {
+  it("fails a proposal with the wrong date", () => {
     const { t, r } = clean();
-    r.letters[0]!.fields.deadlineIso = { value: "2026-11-21", citation: cite("photo.jpg") };
+    r.questions = [proposal("photo.jpg", "2026-11-21")];
     const score = scorePhoto(t, r, 100);
-    expect(score.deadlinesCorrect).toBe(true);
+    expect(score.deadlinesCorrect).toBe(false);
     expect(score.fieldsCorrect).toBe(score.fieldsExpected - 1);
     expect(isPhotoOk(score)).toBe(false);
   });
@@ -186,7 +196,7 @@ describe("isPhotoOk", () => {
   it("counts and citation-checks dates to know", () => {
     const { t, r } = clean();
     r.datesToKnow = [
-      { ...deadline("photo.jpg", "2026-12-20"), citation: { file: "photo.jpg", page: 1, box: { ymin: 0, xmin: 0, ymax: 1, xmax: 1 } } },
+      { ...dateToKnow("photo.jpg", "2026-12-20"), citation: { file: "photo.jpg", page: 1, box: { ymin: 0, xmin: 0, ymax: 1, xmax: 1 } } },
     ];
     const score = scorePhoto(t, r, 100);
     expect(score.datesToKnow).toBe(1);

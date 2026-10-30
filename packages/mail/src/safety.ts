@@ -100,31 +100,46 @@ function hostOf(url: string): string | null {
   }
 }
 
-// Heuristic scam screen. Returns flags; the pipeline turns them into
-// scam_suspect warnings. Deterministic and narrow: urgency language
-// plus a payment or verification ask plus a link whose host does not
-// look official. A real agency letter with a plain phone number never
-// matches.
-export function screenScam(args: { text: string; sender: string | null }): ContentFlag[] {
-  const { text, sender } = args;
+// Payment by gift card, prepaid card, wire, crypto or a payment app,
+// or reading card codes to someone, is a scam signal with or without a
+// link. A sentence that warns against it ("we will never ask you to pay
+// with gift cards") is not.
+const PAYMENT_METHOD =
+  /\b(?:gift\s*cards?|prepaid\s+(?:debit\s+)?cards?|wire\s+transfers?|bitcoin|crypto(?:currency)?|zelle|cash\s*app|venmo|western\s+union|moneygram)\b/i;
+const PAYMENT_DEMAND = /\b(?:pay|buy|purchase|send|load|wire|transfer|deposit)\b/i;
+const CODES_DEMAND = /\b(?:text|call|send|read|give|email)\b[^.!?]{0,60}\b(?:codes|card\s+numbers)\b/i;
+const NEGATION = /\b(?:never|not|no|don't|do\s+not|will\s+not|won't)\b/i;
+
+function paymentDemand(text: string): string | null {
+  for (const sentence of text.split(/(?<=[.!?])\s+/)) {
+    if (NEGATION.test(sentence)) continue;
+    if ((PAYMENT_METHOD.test(sentence) && PAYMENT_DEMAND.test(sentence)) || CODES_DEMAND.test(sentence)) {
+      return sentence.trim();
+    }
+  }
+  return null;
+}
+
+// Heuristic scam screen over a whole letter, every page together.
+// Returns flags; the pipeline turns them into scam_suspect warnings.
+// Two signals: a payment demand by an untraceable method (above), or
+// urgency language plus a payment or verification ask plus a link
+// whose host is not a .gov host. A printed sender name never exempts a
+// link: it is unverified evidence. A real agency letter with a plain
+// phone number never matches.
+export function screenScam(text: string): ContentFlag[] {
+  const demand = paymentDemand(text);
+  if (demand) {
+    return [{ kind: "scam", label: "asks for payment by gift card, prepaid card, wire, crypto or a payment app", match: demand }];
+  }
   const lower = text.toLowerCase();
   const urgency = URGENCY_WORDS.filter((w) => lower.includes(w));
   if (urgency.length === 0) return [];
   const asksPayment = /pay\b|payment|verify|confirm\s+your|update\s+your\s+(account|information|benefits)/i.test(text);
   if (!asksPayment) return [];
-  const links = findLinks(text);
-  if (links.length === 0) return [];
-  const officialHosts = ["ssa.gov", "medicare.gov", "healthcare.gov", "irs.gov", "usa.gov", "benefits.gov"];
-  const senderLower = (sender ?? "").toLowerCase();
-  const suspicious = links.filter((l) => {
+  const suspicious = findLinks(text).filter((l) => {
     const host = hostOf(l.match);
-    if (!host) return true;
-    if (officialHosts.some((h) => host === h || host.endsWith(`.${h}`))) return false;
-    if (host.endsWith(".gov")) return false;
-    // A sender-named host (county or program site) is not suspicious.
-    const hostBits = host.replace(/^www\./, "").split(".")[0] ?? "";
-    if (hostBits.length > 4 && senderLower.includes(hostBits)) return false;
-    return true;
+    return !host || !host.endsWith(".gov");
   });
   if (suspicious.length === 0) return [];
   return [
@@ -137,8 +152,10 @@ export function screenScam(args: { text: string; sender: string | null }): Conte
   ];
 }
 
-export function scanContent(text: string, sender: string | null): ContentFlag[] {
-  return [...findInstructions(text), ...findLinks(text), ...findPhones(text), ...screenScam({ text, sender })];
+// Instructions, links and phones in one piece of text. Scams are
+// screened on the whole letter instead (screenScam).
+export function scanContent(text: string): ContentFlag[] {
+  return [...findInstructions(text), ...findLinks(text), ...findPhones(text)];
 }
 
 // Attach a page-level citation when the flag has no field-level box.
