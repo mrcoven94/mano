@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { env, runDurableObjectAlarm } from "cloudflare:test";
+import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { hashHandle, parseBlooioEvent } from "@mano/channels";
 import type { Env } from "../src/env.js";
 
@@ -221,6 +221,40 @@ describe("ConversationDO on SQLite", () => {
     const later = (await (await stub.fetch("https://conversation/internal/standin")).json()) as { engineDeletePending: unknown };
     expect(later.engineDeletePending).toMatchObject({ generation: 1, engineDone: false, attempts: 1 });
     expect(await postEvent(stub, handleHash, inbound("evt_do_del", "Hello."))).toBe("queued");
+  });
+
+  it("a delete that throws midway keeps its intent: the agent stays off and the alarm retries", async () => {
+    const handleHash = "b".repeat(64);
+    const stub = stubFor(`do-del-throw-${Date.now()}`);
+    await postEvent(stub, handleHash, inbound("evt_do_del_throw", "Hello."));
+    const outcome = await runInDurableObject<{ env: Env; fetch: (r: Request) => Promise<Response> }, { status: number | "threw"; alarm: number | null }>(
+      stub,
+      async (instance, state) => {
+        // Files storage fails while the delete runs.
+        instance.env = {
+          ...instance.env,
+          FILES: {
+            list: async () => {
+              throw new Error("R2 unavailable");
+            },
+            delete: async () => {
+              throw new Error("R2 unavailable");
+            },
+          } as unknown as Env["FILES"],
+        };
+        let status: number | "threw";
+        try {
+          status = (await instance.fetch(new Request("https://conversation/internal/delete", { method: "POST", body: JSON.stringify({ handleHash }) }))).status;
+        } catch {
+          status = "threw";
+        }
+        return { status, alarm: await state.storage.getAlarm() };
+      },
+    );
+    expect(outcome.status).not.toBe(200);
+    expect(outcome.alarm).not.toBeNull();
+    const state = (await (await stub.fetch("https://conversation/internal/standin")).json()) as { engineDeletePending: unknown };
+    expect(state.engineDeletePending).toMatchObject({ handleHash, generation: 1, engineDone: false });
   });
 
   it("delivers an agent-started text and dedupes its key", async () => {

@@ -1,7 +1,10 @@
 // Deleting a conversation reaches past Channels: Engine holds the agent's
 // state for the person (reminders, turn ledger, approval pointer, pending
 // approvals, memory) and the agent holds its session history. Channels
-// wipes its own store first, then asks both to follow. Until Engine
+// records the whole intent (new generation, files, Engine, agent) in the
+// same synchronous step that wipes its own store, before anything is
+// awaited, then works through it; anything that fails or throws is
+// picked up from the record. Until Engine
 // confirms it moved to the new generation, old approvals could still be
 // answered, so the delete stays pending in the conversation's own SQLite:
 // the alarm retries it with backoff, and the conversation answers only
@@ -19,6 +22,7 @@ export interface PendingDelete {
   handleHash: string;
   // The generation Channels moved to.
   generation: number;
+  filesDone: boolean;
   engineDone: boolean;
   agentDone: boolean;
   attempts: number;
@@ -30,6 +34,7 @@ export function ensureDeleteTable(sql: Sql): void {
     slot INTEGER PRIMARY KEY CHECK (slot = 1),
     handle_hash TEXT NOT NULL,
     generation INTEGER NOT NULL,
+    files_done INTEGER NOT NULL,
     engine_done INTEGER NOT NULL,
     agent_done INTEGER NOT NULL,
     attempts INTEGER NOT NULL,
@@ -40,12 +45,21 @@ export function ensureDeleteTable(sql: Sql): void {
 export function loadPendingDelete(sql: Sql): PendingDelete | null {
   ensureDeleteTable(sql);
   const row = sql.exec("SELECT * FROM engine_delete WHERE slot = 1").toArray()[0] as
-    | { handle_hash: string; generation: number; engine_done: number; agent_done: number; attempts: number; next_at_ms: number }
+    | {
+        handle_hash: string;
+        generation: number;
+        files_done: number;
+        engine_done: number;
+        agent_done: number;
+        attempts: number;
+        next_at_ms: number;
+      }
     | undefined;
   if (!row) return null;
   return {
     handleHash: row.handle_hash,
     generation: Number(row.generation),
+    filesDone: Number(row.files_done) === 1,
     engineDone: Number(row.engine_done) === 1,
     agentDone: Number(row.agent_done) === 1,
     attempts: Number(row.attempts),
@@ -56,9 +70,10 @@ export function loadPendingDelete(sql: Sql): PendingDelete | null {
 export function savePendingDelete(sql: Sql, p: PendingDelete): void {
   ensureDeleteTable(sql);
   sql.exec(
-    "INSERT OR REPLACE INTO engine_delete (slot, handle_hash, generation, engine_done, agent_done, attempts, next_at_ms) VALUES (1, ?, ?, ?, ?, ?, ?)",
+    "INSERT OR REPLACE INTO engine_delete (slot, handle_hash, generation, files_done, engine_done, agent_done, attempts, next_at_ms) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
     p.handleHash,
     p.generation,
+    p.filesDone ? 1 : 0,
     p.engineDone ? 1 : 0,
     p.agentDone ? 1 : 0,
     p.attempts,
@@ -90,6 +105,7 @@ export function newPendingDelete(env: Env, handleHash: string, generation: numbe
   return {
     handleHash,
     generation,
+    filesDone: !env.FILES,
     engineDone: !(engineConfigured(env) || agentConfigured(env)),
     agentDone: !agentConfigured(env),
     attempts: 0,
@@ -103,7 +119,15 @@ export async function advanceDelete(
   env: Env,
   p: PendingDelete,
   fetchFn?: typeof fetch,
+  deleteFiles?: () => Promise<unknown>,
 ): Promise<{ pending: PendingDelete; engineRemoved: Record<string, number | boolean> | null }> {
+  let filesDone = p.filesDone;
+  if (!filesDone && deleteFiles) {
+    filesDone = await deleteFiles().then(
+      () => true,
+      () => false,
+    );
+  }
   let engineRemoved: Record<string, number | boolean> | null = null;
   let engineDone = p.engineDone;
   if (!engineDone && engineConfigured(env)) {
@@ -128,9 +152,9 @@ export async function advanceDelete(
       fetchFn,
     }).catch(() => false);
   }
-  return { pending: { ...p, engineDone, agentDone }, engineRemoved };
+  return { pending: { ...p, filesDone, engineDone, agentDone }, engineRemoved };
 }
 
 export function isDone(p: PendingDelete): boolean {
-  return p.engineDone && p.agentDone;
+  return p.filesDone && p.engineDone && p.agentDone;
 }

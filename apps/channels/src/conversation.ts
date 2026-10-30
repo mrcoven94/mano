@@ -30,6 +30,7 @@ import { SqlConversationStore } from "./store-sql.js";
 import {
   advanceDelete,
   agentConfigured,
+  type PendingDelete,
   clearPendingDelete,
   isDone,
   loadPendingDelete,
@@ -305,32 +306,28 @@ export class ConversationDO implements DurableObject {
     if (request.method === "POST" && url.pathname === "/internal/delete") {
       const body = (await request.json().catch(() => null)) as { handleHash?: unknown } | null;
       if (!body || typeof body.handleHash !== "string") return new Response("Bad delete.", { status: 400 });
-      const store = new SqlConversationStore(this.ctx.storage.sql);
+      // One synchronous step, before any await: wipe Channels' store and
+      // record everything still owed. Until the record is cleared the
+      // agent stays off for this handle and the alarm keeps retrying.
+      const sql = this.ctx.storage.sql;
+      const store = new SqlConversationStore(sql);
       store.wipe(Date.now());
-      let filesDeleted = 0;
-      if (this.env.FILES) {
-        filesDeleted = await new R2FileStore(this.env.FILES).deletePrefix(conversationFilePrefix(body.handleHash));
+      const intent = { ...newPendingDelete(this.env, body.handleHash, store.meta().generation), nextAtMs: Date.now() };
+      savePendingDelete(sql, intent);
+      await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(1));
+      const { pending, engineRemoved } = await this.advancePendingDelete(intent);
+      if (!pending) {
+        this.logger.info("conversation_deleted", { handle: body.handleHash, engineCleared: true, agentCleared: true });
+        return Response.json({ ok: true, engineRemoved, agentCleared: agentConfigured(this.env) ? true : null });
       }
-      await this.ctx.storage.deleteAlarm();
-      // Engine and the agent hold the rest of this person's state. Until
-      // both confirm, the delete stays pending (see conversation-delete.ts).
-      const fresh = newPendingDelete(this.env, body.handleHash, store.meta().generation);
-      const { pending, engineRemoved } = await advanceDelete(this.env, fresh);
-      if (isDone(pending)) {
-        clearPendingDelete(this.ctx.storage.sql);
-        this.logger.info("conversation_deleted", { handle: body.handleHash, filesDeleted, engineCleared: true, agentCleared: true });
-        return Response.json({ ok: true, filesDeleted, engineRemoved, agentCleared: agentConfigured(this.env) ? true : null });
-      }
-      const attempts = 1;
-      savePendingDelete(this.ctx.storage.sql, { ...pending, attempts, nextAtMs: Date.now() + retryDelayMs(attempts) });
-      await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(attempts));
-      this.logger.warn("conversation_delete_pending", {
-        handle: body.handleHash,
-        engineConfirmed: pending.engineDone,
-        agentCleared: pending.agentDone,
-      });
       return Response.json(
-        { ok: false, pending: true, filesDeleted, engineConfirmed: pending.engineDone, agentCleared: pending.agentDone },
+        {
+          ok: false,
+          pending: true,
+          filesDeleted: pending.filesDone,
+          engineConfirmed: pending.engineDone,
+          agentCleared: pending.agentDone,
+        },
         { status: 202 },
       );
     }
@@ -354,21 +351,45 @@ export class ConversationDO implements DurableObject {
     return new Response("Not found.", { status: 404 });
   }
 
-  // Retries a delete that Engine or the agent has not confirmed yet.
-  private async retryPendingDelete(): Promise<void> {
+  // Works through a recorded delete once. Clears the record when every
+  // part is done; otherwise counts the attempt and schedules the next.
+  // Never throws: whatever fails stays in the record for the alarm.
+  private async advancePendingDelete(
+    before: PendingDelete,
+  ): Promise<{ pending: PendingDelete | null; engineRemoved: Record<string, number | boolean> | null }> {
     const sql = this.ctx.storage.sql;
-    const before = loadPendingDelete(sql);
-    if (!before || before.nextAtMs > Date.now()) return;
-    const { pending } = await advanceDelete(this.env, before);
-    if (isDone(pending)) {
+    let result: { pending: PendingDelete; engineRemoved: Record<string, number | boolean> | null };
+    try {
+      result = await advanceDelete(this.env, before, undefined, async () => {
+        if (this.env.FILES) await new R2FileStore(this.env.FILES).deletePrefix(conversationFilePrefix(before.handleHash));
+      });
+    } catch (err) {
+      this.logger.warn("conversation_delete_failed", { handle: before.handleHash, err: errName(err) });
+      result = { pending: before, engineRemoved: null };
+    }
+    if (isDone(result.pending)) {
       clearPendingDelete(sql);
-      this.logger.info("conversation_delete_confirmed", { handle: pending.handleHash, attempts: before.attempts + 1 });
-      return;
+      return { pending: null, engineRemoved: result.engineRemoved };
     }
     const attempts = before.attempts + 1;
-    const nextAtMs = Date.now() + retryDelayMs(attempts);
-    savePendingDelete(sql, { ...pending, attempts, nextAtMs });
-    this.logger.warn("conversation_delete_pending", { handle: pending.handleHash, attempts });
+    const next = { ...result.pending, attempts, nextAtMs: Date.now() + retryDelayMs(attempts) };
+    savePendingDelete(sql, next);
+    this.logger.warn("conversation_delete_pending", {
+      handle: before.handleHash,
+      attempts,
+      filesDeleted: next.filesDone,
+      engineConfirmed: next.engineDone,
+      agentCleared: next.agentDone,
+    });
+    return { pending: next, engineRemoved: result.engineRemoved };
+  }
+
+  // Retries a recorded delete once its next attempt is due.
+  private async retryPendingDelete(): Promise<void> {
+    const before = loadPendingDelete(this.ctx.storage.sql);
+    if (!before || before.nextAtMs > Date.now()) return;
+    const { pending } = await this.advancePendingDelete(before);
+    if (!pending) this.logger.info("conversation_delete_confirmed", { handle: before.handleHash, attempts: before.attempts + 1 });
   }
 
   async alarm(): Promise<void> {

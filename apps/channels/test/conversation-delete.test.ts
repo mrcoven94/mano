@@ -59,10 +59,22 @@ describe("a conversation delete that reaches Engine and the agent", () => {
     expect(isDone(ok.pending)).toBe(true);
   });
 
+  it("keeps the file deletion owed until it succeeds", async () => {
+    const withFiles = { ...env, FILES: {} } as unknown as Env;
+    const fresh = newPendingDelete(withFiles, HANDLE, 1);
+    const failed = await advanceDelete(withFiles, fresh, fakes({ engine: "ok", agent: true }), async () => {
+      throw new Error("R2 unavailable");
+    });
+    expect(failed.pending).toMatchObject({ filesDone: false, engineDone: true, agentDone: true });
+    expect(isDone(failed.pending)).toBe(false);
+    const ok = await advanceDelete(withFiles, failed.pending, fakes({ engine: "ok", agent: true }), async () => undefined);
+    expect(isDone(ok.pending)).toBe(true);
+  });
+
   it("is persisted across restarts and backs off", () => {
     const db = sql();
     savePendingDelete(db, { ...newPendingDelete(env, HANDLE, 1), attempts: 2, nextAtMs: 5 });
-    expect(loadPendingDelete(db)).toMatchObject({ handleHash: HANDLE, generation: 1, engineDone: false, attempts: 2, nextAtMs: 5 });
+    expect(loadPendingDelete(db)).toMatchObject({ handleHash: HANDLE, generation: 1, filesDone: true, engineDone: false, attempts: 2, nextAtMs: 5 });
     clearPendingDelete(db);
     expect(loadPendingDelete(db)).toBeNull();
     expect(retryDelayMs(1)).toBe(30_000);
