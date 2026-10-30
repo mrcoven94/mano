@@ -186,9 +186,25 @@ export class PersonEngine {
   }
 
   // The turn as Engine first recorded it: firstReceivedAt never changes.
-  async putTurn(turnId: string, receivedAt: string): Promise<EngineTurn> {
-    const out = (await this.json("POST", "/turns", { turnId, receivedAt, generation: this.generation })) as { turn: EngineTurn };
-    return out.turn;
+  // created is false when Engine already knew the turn (a retry or replay).
+  async putTurn(turnId: string, receivedAt: string): Promise<{ turn: EngineTurn; created: boolean }> {
+    return (await this.json("POST", "/turns", { turnId, receivedAt, generation: this.generation })) as {
+      turn: EngineTurn;
+      created: boolean;
+    };
+  }
+
+  async getTurn(turnId: string): Promise<EngineTurn | null> {
+    const res = await this.call("GET", `/turns/${encodeURIComponent(turnId)}`);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return ((await res.json()) as { turn: EngineTurn }).turn;
   }
 
   async completeTurn(turnId: string): Promise<void> {

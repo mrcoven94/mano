@@ -14,6 +14,8 @@
 // A retried turn runs again: every mutation it makes is keyed by the turn
 // (reminders, memory) or held by Engine (approvals), so a rerun converges
 // instead of doing anything twice.
+import { createHash } from "node:crypto";
+
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
@@ -185,36 +187,73 @@ async function answerUnshown(engine: PersonEngine, waiting: EngineApproval[], de
   return reply("Okay, nothing was sent.");
 }
 
-// A retried YES or NO whose first run already settled the question (so
-// the pointer is gone) gets the same answer again: the newest agent
-// proposal this decision could have settled is asked again, and Engine's
-// approve and reject are idempotent for the same person.
-async function answerAgain(engine: PersonEngine, approvals: EngineApproval[], decision: "yes" | "no"): Promise<TurnResponse | null> {
-  const settled = proposalsOf(approvals, engine.generation).find((a) => a.status === (decision === "yes" ? "approved" : "rejected"));
-  if (!settled) return null;
-  if (decision === "no") return reply("Okay, I did not send it. Nothing left Mano.");
-  return decide(engine, settled.id, "yes");
+// A YES or NO turn is bound, in Engine's turn ledger, to what its first
+// attempt decided: one ledger row per approval it acted on, or one row
+// saying it acted on none, written before it acts. Every later attempt of
+// the same turn re-applies exactly that decision (Engine's approve and
+// reject are idempotent for the same person) and never reads the current
+// pointer, so a replayed YES can never approve a draft presented after it.
+function bindingId(turnId: string, target: string): string {
+  return `d-${createHash("sha256").update(turnId).digest("hex").slice(0, 40)}-${target}`;
+}
+
+type Binding = { kind: "none" } | { kind: "approvals"; ids: string[] };
+
+async function boundDecision(engine: PersonEngine, turnId: string, approvals: EngineApproval[]): Promise<Binding | null> {
+  if (await engine.getTurn(bindingId(turnId, "none"))) return { kind: "none" };
+  const candidates = proposalsOf(approvals, engine.generation);
+  const found = await Promise.all(candidates.map(async (a) => ((await engine.getTurn(bindingId(turnId, a.id))) ? a.id : null)));
+  const ids = found.filter((id): id is string => id !== null);
+  return ids.length > 0 ? { kind: "approvals", ids } : null;
+}
+
+async function bind(engine: PersonEngine, turnId: string, receivedAt: string, targets: string[]): Promise<void> {
+  for (const target of targets.length > 0 ? targets : ["none"]) {
+    await engine.putTurn(bindingId(turnId, target), receivedAt);
+  }
+}
+
+async function decideTurn(
+  engine: PersonEngine,
+  body: TurnBody,
+  turn: { firstReceivedAt: string; created: boolean },
+  decision: "yes" | "no",
+): Promise<TurnResponse | null> {
+  const approvals = await engine.listApprovals();
+  const bound = turn.created ? null : await boundDecision(engine, body.turnId, approvals);
+  if (bound?.kind === "none") return answerUnshown(engine, [], decision);
+  if (bound?.kind === "approvals") {
+    if (decision === "yes") return decide(engine, bound.ids[0], "yes");
+    for (const id of bound.ids) await engine.reject(id).catch(() => undefined);
+    return reply("Okay, I did not send it. Nothing left Mano.");
+  }
+  // First attempt (or a retry whose first attempt bound nothing): the
+  // question answerable when the person texted, never one presented
+  // after that.
+  const pointer = await engine.getPointer();
+  const answerable = pointer && Date.parse(pointer.setAt) <= Date.parse(turn.firstReceivedAt) ? pointer : null;
+  if (answerable) {
+    await bind(engine, body.turnId, turn.firstReceivedAt, [answerable.approvalId]);
+    return decide(engine, answerable.approvalId, decision);
+  }
+  const waiting = waitingProposals(approvals, engine.generation);
+  if (waiting.length === 0) return null;
+  await bind(engine, body.turnId, turn.firstReceivedAt, decision === "no" ? waiting.map((a) => a.id) : []);
+  return answerUnshown(engine, waiting, decision);
 }
 
 async function runTurn(
   deps: TurnDeps,
   engine: PersonEngine,
   body: TurnBody,
-  turnAtMs: number,
-  replay: boolean,
+  turn: { firstReceivedAt: string; created: boolean },
 ): Promise<TurnResponse> {
   const message = turnText(body);
-  const pointer = await engine.getPointer();
+  const turnAtMs = Date.parse(turn.firstReceivedAt);
   const decision = body.attachmentCount === 0 ? parseDecision(body.texts.join(" ")) : null;
-  if (decision && pointer) return decide(engine, pointer.approvalId, decision);
-  const approvals = await engine.listApprovals();
   if (decision) {
-    const waiting = waitingProposals(approvals, body.generation);
-    if (waiting.length > 0) return answerUnshown(engine, waiting, decision);
-    if (replay) {
-      const again = await answerAgain(engine, approvals, decision);
-      if (again) return again;
-    }
+    const decided = await decideTurn(engine, body, turn, decision);
+    if (decided) return decided;
   }
 
   const context: string[] = [];
@@ -249,7 +288,11 @@ async function runTurn(
 // before a deletion is stale (null); a turn from after one that Engine
 // never heard of (Channels' own call failed) brings Engine forward, which
 // removes the old conversation's state, and is recorded then.
-async function recordTurn(engine: PersonEngine, turnId: string, receivedAt: string): Promise<EngineTurn | null> {
+async function recordTurn(
+  engine: PersonEngine,
+  turnId: string,
+  receivedAt: string,
+): Promise<{ turn: EngineTurn; created: boolean } | null> {
   try {
     return await engine.putTurn(turnId, receivedAt);
   } catch (err) {
@@ -294,13 +337,11 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
     return Response.json({ status: "error", text: "", reason: "engine" }, { status: 503 });
   }
 
-  let turnAtMs: number;
-  let replay: boolean;
+  let turn: { firstReceivedAt: string; created: boolean };
   try {
-    const turn = await recordTurn(engine, body.turnId, new Date(receivedMs).toISOString());
-    if (!turn) return Response.json({ status: "stale", text: "" }, { status: 409 });
-    turnAtMs = Date.parse(turn.firstReceivedAt);
-    replay = turn.status === "complete";
+    const recorded = await recordTurn(engine, body.turnId, new Date(receivedMs).toISOString());
+    if (!recorded) return Response.json({ status: "stale", text: "" }, { status: 409 });
+    turn = { firstReceivedAt: recorded.turn.firstReceivedAt, created: recorded.created };
   } catch (err) {
     const status = err instanceof EngineError ? err.status : null;
     console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "ledger", status }));
@@ -314,7 +355,7 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
 
   let response: TurnResponse;
   try {
-    response = await runTurn(deps, engine, body, turnAtMs, replay);
+    response = await runTurn(deps, engine, body, turn);
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_turn_error", handle: body.handleHash, err: err instanceof Error ? err.name : "unknown" }));
     response = failure(502, "error");

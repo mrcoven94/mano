@@ -21,6 +21,7 @@ import {
   ensureAgentStateTables,
   finishReminder,
   getPendingPointer,
+  getTurn,
   handOffReminder,
   listReminders,
   parseGenerationInput,
@@ -209,6 +210,11 @@ export class EngineDouble {
         const out = putTurnIfAbsent(sql, input.turnId, input.receivedAt, input.generation);
         if ("stale" in out) return Response.json(STALE, { status: 409 });
         return Response.json(out, { status: out.created ? 201 : 200 });
+      }
+      const turnGet = rest.match(/^\/turns\/([^/]+)$/);
+      if (turnGet && method === "GET") {
+        const turn = getTurn(sql, decodeURIComponent(turnGet[1]));
+        return turn ? Response.json({ turn }) : Response.json({ error: "Turn not found." }, { status: 404 });
       }
       const complete = rest.match(/^\/turns\/([^/]+)\/complete$/);
       if (complete && method === "POST") {

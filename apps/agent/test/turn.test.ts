@@ -49,9 +49,10 @@ async function fakeAgent(input: AgentTurnInput) {
   if (/renewal/i.test(input.message)) {
     const ctx = toolCtx({ handleHash: input.handleHash, turnId: input.turnId, grant: input.grant, generation: input.generation, turnAtMs: input.turnAtMs });
     const name = /Claude Testcase/.test(input.message) ? "Claude Testcase" : fields.fullName;
+    const householdSize = /household of 4/.test(input.message) ? 4 : fields.householdSize;
     // The voice guard rewrites dashes, so this address cannot be shown word for word.
     const address = /with a dash/.test(input.message) ? "12 Sample Street \u2014 Unit 4, Testville" : fields.address;
-    await startFormDraft.execute({ ...fields, fullName: name, address }, ctx);
+    await startFormDraft.execute({ ...fields, fullName: name, address, householdSize }, ctx);
     return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop" };
   }
   return { status: "replied" as const, text: `Answer ${agentCalls.length}`, reason: "stop" };
@@ -318,6 +319,32 @@ describe("after a deletion", () => {
     const stale = await send(turn("turn_old_000013", "remind me of something", HANDLE, 0));
     expect(stale.status).toBe(409);
     expect(agentCalls).toHaveLength(0);
+  });
+});
+
+describe("a decision turn is bound to the question it answered", () => {
+  it("a replayed YES never approves a draft presented after it", async () => {
+    await send(turn("turn_bindA00001", "Please file my renewal"));
+    const yes = turn("turn_bindY00001", "YES");
+    const first = await send(yes.clone());
+    expect(first.body.text).toMatch(/^Done/);
+    await send(turn("turn_bindB00001", "Please file my renewal, household of 4"));
+    const replay = await send(yes);
+    expect(engine.executor.calls).toHaveLength(1);
+    expect(replay.body.text).toMatch(/^Done/);
+    const pending = engine.approvals().filter((a) => a.status === "pending");
+    expect(pending).toHaveLength(1);
+  });
+
+  it("a replayed NO never declines a draft presented after it", async () => {
+    await send(turn("turn_bindA00002", "Please file my renewal"));
+    const no = turn("turn_bindN00002", "NO");
+    await send(no.clone());
+    await send(turn("turn_bindB00002", "Please file my renewal, household of 4"));
+    await send(no);
+    expect(engine.approvals().map((a) => a.status).sort()).toEqual(["pending", "rejected"]);
+    await send(turn("turn_bindY00002", "YES"));
+    expect(engine.executor.calls).toHaveLength(1);
   });
 });
 
