@@ -13,12 +13,11 @@ import {
   OUTBOUND_RANK,
   ResponderFailed,
   TURN_TEXT_CAP,
+  finalizeReply,
   dayKeyFor,
   errName,
   estimateCostUsd,
   LinkChecker,
-  MAX_BUBBLES,
-  MAX_BUBBLE_CHARS,
   MAX_PENDING_CHARS,
   handleOverLimit,
   hourKeyFor,
@@ -27,7 +26,6 @@ import {
   lifecycleStateFor,
   parseApprovalReply,
   sha256Hex,
-  splitBubbles,
   stripBlockedLinks,
   type Channel,
   type Logger,
@@ -35,7 +33,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { CRISIS_LINE, REFUSED_TAPBACK_TEXT, SAFE_REPLY, allowedTapback, guardReply, holdCrisisLines, mightBeCrisis, tapbackText } from "@mano/persona";
+import { REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, guardReply, mightBeCrisis, tapbackText } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -189,6 +187,10 @@ export function inlineReplyTarget(items: import("./store.js").PendingInbound[]):
   if (texts.length < 2) return null;
   const earlier = texts.slice(0, -1).filter((i) => /\?\s*$/.test(i.text ?? ""));
   return earlier.length === 1 && !/\?\s*$/.test(texts[texts.length - 1].text ?? "") ? (earlier[0].messageId ?? null) : null;
+}
+
+function turnTextOf(texts: string[]): string {
+  return texts.join("\n");
 }
 
 // The full text of each message in a group: pieces split from one long
@@ -738,7 +740,7 @@ export class ConversationRunner {
     const approval = texts.length === 1 && attachments.length === 0 ? parseApprovalReply(texts[0]) : null;
     if (approval && store.pendingApprovals(nowMs()).length > 0) {
       // A crisis reply goes first; the decision is still recorded.
-      const crisisBubbles = crisis ? this.answerBubbles(turn, [], true) : [];
+      const crisisBubbles = crisis ? await this.finalize(turn, "", true, turnTextOf(texts)) : [];
       if (crisisBubbles.length > 0) await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation);
       const recordedPart = crisisBubbles.length + 1;
       const answered = await this.answerApproval(approval.code, approval.decision, turn, chatId, to, recordedPart);
@@ -777,7 +779,7 @@ export class ConversationRunner {
       });
       if (crisis) {
         // No model and no cost: the deterministic crisis reply, past any limit.
-        const bubbles = this.answerBubbles(turn, [], true);
+        const bubbles = await this.finalize(turn, "", true, turnText);
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
         await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
@@ -824,10 +826,6 @@ export class ConversationRunner {
           // checked again: a split must never leave an unchecked link
           // behind. The persisted bubbles are final and capped. A crisis
           // turn's final bubbles must still name 988 and 911.
-          const final = await this.finalizeBubbles(turn, answer.text);
-          if (final.removed > 0) {
-            logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
-          }
           // A tapback is decoration. It carries the reply alone only when
           // the rules allow it and it has a message to go on; even then a
           // fallback text is persisted with it, sent if the tapback fails.
@@ -835,12 +833,12 @@ export class ConversationRunner {
           const latest = [...items].reverse().find((i) => i.messageId)?.messageId ?? null;
           const routable = tapback !== null && latest !== null && chatId !== null;
           const hasText = answer.text.trim().length > 0;
-          let texts = final.bubbles;
-          if (!hasText && crisis) texts = [];
-          else if (!hasText && routable) texts = [];
-          else if (!hasText && tapback) texts = [tapbackText(tapback)];
-          else if (!hasText && answer.tapback) texts = [REFUSED_TAPBACK_TEXT];
-          const answered = texts.length > 0 || crisis ? this.answerBubbles(turn, texts, crisis) : [];
+          let reply: string | null = answer.text;
+          if (!hasText && crisis) reply = "";
+          else if (!hasText && routable) reply = null;
+          else if (!hasText && tapback) reply = tapbackText(tapback);
+          else if (!hasText && answer.tapback) reply = REFUSED_TAPBACK_TEXT;
+          const answered = reply === null ? [] : await this.finalize(turn, reply, crisis, turnText);
           const replyTo = inlineReplyTarget(items);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
           bubbles.push(...answered);
@@ -851,7 +849,7 @@ export class ConversationRunner {
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
         } else {
-          bubbles.push(...this.answerBubbles(turn, crisis ? [] : [FAILURE_BUBBLE], crisis));
+          bubbles.push(...(await this.finalize(turn, crisis ? "" : FAILURE_BUBBLE, crisis, turnText)));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
@@ -874,31 +872,26 @@ export class ConversationRunner {
     }
   }
 
-  // Guards the raw answer's voice, sanitizes it, splits it into capped
-  // bubbles, and checks each final bubble again. The guard runs before
-  // splitting because bullets and headers are line-based and the
-  // splitter joins lines. The splitter never breaks a word, so the
-  // recheck normally finds nothing; it exists so a future extraction
-  // gap cannot ship an unchecked link. A bubble that grows past the cap
-  // under replacement splits again, stripped text having no links left
-  // to expose.
-  private async finalizeBubbles(turn: number, text: string): Promise<{ bubbles: string[]; removed: number }> {
-    const voiced = this.guard(text, { turn, part: 1, tag: "" });
-    const checker = new LinkChecker({ fetchFn: this.deps.fetchFn });
-    const first = await stripBlockedLinks(voiced, checker);
-    let removed = first.removed;
-    const out: string[] = [];
-    for (const bubble of splitBubbles(first.text)) {
-      const rechecked = await stripBlockedLinks(bubble, checker);
-      removed += rechecked.removed;
-      if (rechecked.text.length <= MAX_BUBBLE_CHARS) {
-        out.push(rechecked.text);
-      } else {
-        out.push(...splitBubbles(rechecked.text));
-      }
+  // Every reply, model or fixed, becomes its bubbles through
+  // finalizeReply (@mano/channels), the same function Quality runs. It
+  // logs which guard rules fired and how many links it removed, never
+  // the text. sendBubble's own guard pass then changes nothing, since
+  // the guard is idempotent.
+  private async finalize(turn: number, text: string, crisis: boolean, personText: string): Promise<import("./store.js").AnswerBubble[]> {
+    const model = this.deps.responder.model;
+    const final = await finalizeReply(text, {
+      modelIds: model ? [model] : [],
+      crisis,
+      checker: new LinkChecker({ fetchFn: this.deps.fetchFn }),
+      crisisLine: crisisLineFor(personText),
+    });
+    if (final.changes.length > 0) {
+      this.deps.logger.info("voice_guarded", { handle: this.logHandle(), turn, part: 1, tag: "", changes: final.changes.join(",") });
     }
-    return { bubbles: out.length <= MAX_BUBBLES ? out : splitBubbles(out.join(" ")), removed };
+    if (final.removed > 0) this.deps.logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
+    return final.bubbles.map((t, i) => ({ part: i + 1, tag: "", text: t }));
   }
+
 
   // A turn is finished only when every send resolved. Anything still
   // uncertain or sending aborts the turn: the row and its input stay,
@@ -1092,22 +1085,7 @@ export class ConversationRunner {
     return messages;
   }
 
-  // The answer bubbles exactly as sendBubble will send them: each one
-  // through the same send-time guard. On a crisis turn the fixed crisis
-  // line is the first bubble, once, and only the bubbles after it are
-  // capped, so neither the guard nor the cap can remove 988 and 911.
-  // The guard is idempotent, so sendBubble's own pass changes nothing.
-  private answerBubbles(turn: number, texts: string[], crisis: boolean): import("./store.js").AnswerBubble[] {
-    const voiced = texts.map((text, i) => this.guard(text, { turn, part: i + 1, tag: "" }));
-    if (!crisis) return voiced.map((text, i) => ({ part: i + 1, tag: "", text }));
-    // The model may have written the crisis line into its own text.
-    const rest = splitBubbles(voiced.join(" ").split(CRISIS_LINE).join(" "))
-      .map((text, i) => this.guard(text, { turn, part: i + 2, tag: "" }))
-      .filter((text) => text !== SAFE_REPLY);
-    return holdCrisisLines(rest)
-      .slice(0, MAX_BUBBLES)
-      .map((text, i) => ({ part: i + 1, tag: "", text }));
-  }
+
 
   private guardOptions(): { modelIds: string[] } {
     const model = this.deps.responder.model;

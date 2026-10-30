@@ -159,3 +159,11 @@ describe("crisis first contact (LAP-636)", () => {
     expect(sent[0]).toBe(CRISIS_LINE);
   });
 });
+
+describe("Spanish crisis (PR 69)", () => {
+  it("opens a Spanish crisis turn with the Spanish crisis line", async () => {
+    const { CRISIS_LINE_ES } = await import("@mano/persona");
+    const h = makeHarness({ replies: ["Estoy aquí contigo."] });
+    expect((await say(h, "evt_1", "quiero morir, ya no puedo más"))[0]).toBe(CRISIS_LINE_ES);
+  });
+});
