@@ -332,6 +332,8 @@ export interface HistoryRow {
   guardian: { ran: boolean; precision: number; recall: number; p50Ms: number; p95Ms: number } | null;
   mail: { live: boolean; accuracy: number; letters: number } | null;
   promotion?: Promotion;
+  // Set on the latest row when the baseline was restored from another run.
+  restoredFrom?: string;
   agent?: { ran: boolean; cases: number; agentAnswered: number; fallbackAnswered: number; mixedAnswered: number; selfJudged: boolean; hardCheckPassRate: number; judgeMean: number; p50Ms: number; p95Ms: number } | null;
   standins: string[];
 }
@@ -435,6 +437,30 @@ export function decidePromotion(input: { plain: GateEvaluation; agent: GateEvalu
   };
 }
 
+// One verdict for both promotion and the job's outcome, so the two can
+// never disagree. With a prior baseline the gates run as in CI (strict).
+// Without one (bootstrap), the run becomes the first baseline only if it is
+// eligible and has no safety failures; the same rule applies on its own to
+// the first agent record. Anything else needs accept_baseline. An agent
+// stage that did not run gives no verdict (it never sinks the nightly) and
+// keeps the prior agent record.
+export function promotionVerdict(run: RunReport, prior: RunReport | null, opts: { strict: boolean; accept: boolean }): { plain: GateEvaluation; agent: GateEvaluation | null; promotion: Promotion } {
+  const bootstrap = (report: RunReport, label: string): GateEvaluation => {
+    const safety = safetyFailureKeys(report);
+    const reasons = [
+      ...(report.eligibility.eligible ? [] : report.eligibility.reasons.map((r) => `${label}not gate-eligible: ${r}`)),
+      ...(safety.length > 0 ? [`${label}the first baseline would make these safety failures known: ${safety.join(", ")}`] : []),
+    ];
+    return { status: reasons.length > 0 ? "fail" : "pass", reasons, baseline: false, matchedCases: 0, preexisting: [] };
+  };
+  const plain = prior ? evalGate(run, prior, { strict: opts.strict }) : bootstrap(run, "");
+  let agent: GateEvaluation | null = null;
+  if (run.agent?.ran) agent = prior?.agent ? evalAgentGate(run.agent, prior.agent, { strict: opts.strict }) : bootstrap(agentAsReport(run.agent), "agent: ");
+  const promotion = decidePromotion({ plain, agent, accept: opts.accept });
+  if (!run.agent?.ran) promotion.agentPromoted = false;
+  return { plain, agent, promotion };
+}
+
 export interface BaselineLogEntry {
   at: string;
   action: "promoted" | "blocked" | "accepted" | "restored";
@@ -516,8 +542,12 @@ export function writeNightlyStaging(root: string, report: RunReport, results: Ca
   const pub = onMain ? { ...pubBase, promotion } : pubBase;
   writeFileSync(join(publicDir, "latest.json"), `${JSON.stringify(pub, null, 2)}\n`);
   if (promoted) {
-    const agent = agentPromoted ? pub.agent : (opts.priorAgent ?? pub.agent);
-    writeFileSync(join(publicDir, "baseline.json"), `${JSON.stringify(baselineDoc(pub, agent), null, 2)}\n`);
+    const agent = agentPromoted ? pub.agent : (opts.priorAgent ?? (pubBase.agent && agentOk ? pub.agent : undefined));
+    const doc = `${JSON.stringify(baselineDoc(pub, agent), null, 2)}\n`;
+    writeFileSync(join(publicDir, "baseline.json"), doc);
+    // The baseline this run actually produced, kept with the run, so a later
+    // restore puts back exactly this and not the run's raw agent record.
+    writeFileSync(join(privateRunDir, "baseline.json"), doc);
   }
   if (onMain) {
     writeLog(publicDir, opts.priorLog ?? [], {
@@ -532,16 +562,51 @@ export function writeNightlyStaging(root: string, report: RunReport, results: Ca
   return { promoted, publicDir, privateRunDir };
 }
 
-// Puts a past main run's report back as the baseline, on purpose, through
-// the same baseline shape and log as a promotion. Main only.
-export function restoreBaseline(root: string, report: RunReport, opts: { ref: string; actor: string | null; priorLog: BaselineLogEntry[] }): string {
+// Puts back, on purpose, the baseline a past main run produced. That is
+// the effective baseline kept with the run (runs/<id>/baseline.json): the
+// raw report's agent record may be one the run itself did not promote. For
+// an older run with no effective baseline kept, the report is used, but its
+// agent record only if it was promoted and is eligible; otherwise the
+// current agent record stays and the log says so. latest.json and the
+// history say the baseline was restored. Main only.
+export function restoreBaseline(
+  root: string,
+  source: { report: RunReport; effective: RunReport | null },
+  opts: { ref: string; actor: string | null; priorLog: BaselineLogEntry[]; current: RunReport | null; latest: RunReport | null; history: HistoryRow[] },
+): string {
   if (opts.ref !== MAIN_REF) throw new Error("a baseline can only be restored from a run on main (refs/heads/main)");
+  const { report } = source;
+  if (report.promotion && !report.promotion.promoted) throw new Error(`run ${report.runId} never became the baseline; restoring it would accept a regression (use accept_baseline on a new run)`);
+  if (!report.eligibility.eligible) throw new Error(`run ${report.runId} was not gate-eligible; it cannot become the baseline`);
   const publicDir = join(root, "public");
   mkdirSync(publicDir, { recursive: true });
-  const pub = publicReport(report);
+  const reasons: string[] = [];
+  let doc: RunReport;
+  if (source.effective) {
+    doc = source.effective;
+  } else {
+    const pub = publicReport(report);
+    const agentUsable = pub.agent !== undefined && agentAsReport(pub.agent).eligibility.eligible && report.promotion?.agentPromoted !== false;
+    const agent = agentUsable ? pub.agent : opts.current?.agent;
+    if (pub.agent && !agentUsable) reasons.push(`agent record kept from the current baseline: run ${report.runId}'s own agent record was not promoted or not eligible`);
+    doc = baselineDoc(pub, agent);
+  }
   const path = join(publicDir, "baseline.json");
-  writeFileSync(path, `${JSON.stringify(baselineDoc(pub, pub.agent), null, 2)}\n`);
-  writeLog(publicDir, opts.priorLog, { at: new Date().toISOString(), action: "restored", runId: report.runId, gitSha: report.gitSha, by: opts.actor, agentPromoted: Boolean(pub.agent), reasons: [] });
+  writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
+  const at = new Date().toISOString();
+  writeLog(publicDir, opts.priorLog, { at, action: "restored", runId: report.runId, gitSha: report.gitSha, by: opts.actor, agentPromoted: Boolean(doc.agent), reasons });
+  if (opts.latest) {
+    const latest = {
+      ...opts.latest,
+      restoredFrom: { runId: report.runId, at, by: opts.actor },
+      promotion: { promoted: false, agentPromoted: false, accepted: false, reasons: [`the baseline was restored from run ${report.runId}`, ...reasons] },
+    };
+    writeFileSync(join(publicDir, "latest.json"), `${JSON.stringify(latest, null, 2)}\n`);
+  }
+  if (opts.history.length > 0) {
+    const history = [...opts.history.slice(0, -1), { ...opts.history.at(-1)!, restoredFrom: report.runId }];
+    writeFileSync(join(publicDir, "history.json"), `${JSON.stringify(history, null, 2)}\n`);
+  }
   return path;
 }
 

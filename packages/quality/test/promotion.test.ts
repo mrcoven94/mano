@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { AgentSummary } from "../src/agent-types.ts";
-import { decidePromotion, restoreBaseline, runIdFor, writeNightlyStaging, type BaselineLogEntry, type GateEvaluation } from "../src/report.ts";
+import { decidePromotion, promotionVerdict, restoreBaseline, runIdFor, writeNightlyStaging, type BaselineLogEntry, type GateEvaluation, type HistoryRow } from "../src/report.ts";
 import type { RunReport } from "../src/run.ts";
 
 const pass: GateEvaluation = { status: "pass", reasons: [], baseline: true, matchedCases: 20, preexisting: [] };
@@ -80,16 +80,78 @@ test("accept_baseline does nothing off main", () => {
   assert.equal(staged.promoted, false);
 });
 
-test("a restore puts a past main run back as the baseline, keeping its agent record, and logs it", () => {
+test("a restore puts a past main run's effective baseline back, updates latest and history, and logs it", () => {
   const root = mkdtempSync(join(tmpdir(), "restore-"));
-  const past = report("2026-10-30-41007734259", { agent: agent("past"), fingerprints: { "chat-ca-01": { suite: "chat", version: 1, live: true, hardPass: true, judgeMean: 4 } } });
-  restoreBaseline(root, past, { ref: "refs/heads/main", actor: "mrcoven94", priorLog: [] });
+  const past = report("2026-10-30-41007734259", { agent: agent("raw-past"), fingerprints: { "chat-ca-01": { suite: "chat", version: 1, live: true, hardPass: true, judgeMean: 4 } } });
+  const effective = { ...past, agent: agent("effective-past") };
+  const latest = report("2026-10-31-9", { promotion: { promoted: true, agentPromoted: true, accepted: false, reasons: [] } });
+  const history = [{ runId: "2026-10-31-9" }] as unknown as HistoryRow[];
+  restoreBaseline(root, { report: past, effective }, { ref: "refs/heads/main", actor: "mrcoven94", priorLog: [], current: report("now", { agent: agent("current") }), latest, history });
   const baseline = read(join(root, "public", "baseline.json")) as { runId: string; agent: AgentSummary };
   assert.equal(baseline.runId, "2026-10-30-41007734259");
-  assert.equal(baseline.agent.detail, "past");
+  assert.equal(baseline.agent.detail, "effective-past", "the raw agent record was installed instead of the effective one");
   const log = read(join(root, "public", "baseline-log.json")) as unknown as BaselineLogEntry[];
   assert.deepEqual([log.at(-1)!.action, log.at(-1)!.runId, log.at(-1)!.by], ["restored", "2026-10-30-41007734259", "mrcoven94"]);
-  assert.throws(() => restoreBaseline(root, past, { ref: "refs/heads/other", actor: "x", priorLog: [] }), /main/);
+  const newLatest = read(join(root, "public", "latest.json")) as { restoredFrom: { runId: string }; promotion: { promoted: boolean; reasons: string[] } };
+  assert.equal(newLatest.restoredFrom.runId, "2026-10-30-41007734259");
+  assert.equal(newLatest.promotion.promoted, false, "latest still claims to be the baseline");
+  const newHistory = read(join(root, "public", "history.json")) as unknown as { runId: string; restoredFrom?: string }[];
+  assert.equal(newHistory.at(-1)!.restoredFrom, "2026-10-30-41007734259");
+  assert.throws(() => restoreBaseline(root, { report: past, effective }, { ref: "refs/heads/other", actor: "x", priorLog: [], current: null, latest: null, history: [] }), /main/);
+});
+
+test("without the effective baseline, a restore never installs an ineligible agent record", () => {
+  const root = mkdtempSync(join(tmpdir(), "restore-"));
+  const broken = { ...agent("raw-past"), ran: false, detail: "the agent stage could not start Engine and the agent" };
+  const past = report("2026-10-30-1", { agent: broken });
+  restoreBaseline(root, { report: past, effective: null }, { ref: "refs/heads/main", actor: "x", priorLog: [], current: report("now", { agent: agent("current") }), latest: null, history: [] });
+  const baseline = read(join(root, "public", "baseline.json")) as { agent: AgentSummary };
+  assert.equal(baseline.agent.detail, "current");
+  const log = read(join(root, "public", "baseline-log.json")) as unknown as BaselineLogEntry[];
+  assert.ok(log.at(-1)!.reasons.some((r) => r.includes("agent record kept")), JSON.stringify(log.at(-1)));
+});
+
+test("a run that was blocked from promotion cannot be restored", () => {
+  const root = mkdtempSync(join(tmpdir(), "restore-"));
+  const blocked = report("2026-10-30-2", { promotion: { promoted: false, agentPromoted: false, accepted: false, reasons: ["x"] } });
+  assert.throws(() => restoreBaseline(root, { report: blocked, effective: null }, { ref: "refs/heads/main", actor: "x", priorLog: [], current: null, latest: null, history: [] }), /never became the baseline/);
+});
+
+// Sol on #76: one verdict for promotion and CI, and an explicit bootstrap.
+test("an ineligible prior baseline does not let a run promote itself in strict mode", () => {
+  const prior = report("prior", { eligibility: { eligible: false, reasons: ["the judge could not score 3 answer(s)"] } });
+  const v = promotionVerdict(report("tonight"), prior, { strict: true, accept: false });
+  assert.equal(v.promotion.promoted, false);
+  assert.equal(v.plain.status, "fail", "CI and promotion must agree");
+});
+
+test("bootstrap: the first baseline promotes only if eligible and free of safety failures", () => {
+  const clean = promotionVerdict(report("first"), null, { strict: true, accept: false });
+  assert.equal(clean.promotion.promoted, true);
+  assert.equal(clean.plain.status, "pass");
+  const unsafe = report("first", { gateFailed: true, suites: { safety: { suite: "safety", version: 1, cases: 1, liveCases: 1, hardCheckPassRate: 0, checkPassRate: 0, judgeMean: 1, gateFailed: true, gateFailures: [{ caseId: "safety-05", check: "crisis-ok" }], p50Ms: 1, p95Ms: 1, inputTokens: 0, outputTokens: 0, usdPer1kAnswers: 0 } } });
+  const blocked = promotionVerdict(unsafe, null, { strict: true, accept: false });
+  assert.equal(blocked.promotion.promoted, false);
+  assert.equal(blocked.plain.status, "fail");
+  assert.ok(blocked.promotion.reasons.some((r) => r.includes("safety-05")));
+  assert.equal(promotionVerdict(unsafe, null, { strict: true, accept: true }).promotion.promoted, true);
+});
+
+test("bootstrap: a first agent record with safety failures is not promoted", () => {
+  const unsafeAgent = { ...agent("first"), suites: { safety: { suite: "safety", cases: 1, agentAnswered: 1, fallbackAnswered: 0, mixedAnswered: 0, hardCheckPassRate: 0, judgeMean: 1, traits: null, gateFailures: [{ caseId: "chat-ca-01", check: "no-promise" }], p50Ms: 1, p95Ms: 1 } } };
+  // The plain line matches its baseline; only the agent record is new.
+  const fingerprints = { "chat-ca-01": { suite: "chat", version: 1, live: true, hardPass: true, judgeMean: 4 } };
+  const prior = report("prior", { fingerprints });
+  const tonight = (extra: Partial<RunReport>) => report("tonight", { fingerprints, ...extra });
+  const blocked = promotionVerdict(tonight({ agent: unsafeAgent }), prior, { strict: true, accept: false });
+  assert.equal(blocked.promotion.promoted, true);
+  assert.equal(blocked.promotion.agentPromoted, false);
+  assert.equal(blocked.agent!.status, "fail");
+  const clean = promotionVerdict(tonight({ agent: agent("first") }), prior, { strict: true, accept: false });
+  assert.equal(clean.promotion.agentPromoted, true);
+  const none = promotionVerdict(tonight({ agent: { ...agent("x"), ran: false } }), prior, { strict: true, accept: false });
+  assert.equal(none.promotion.agentPromoted, false);
+  assert.equal(none.agent, null, "an agent stage that did not run gives no verdict and never sinks the nightly");
 });
 
 test("every run gets its own id, so a second run the same day never overwrites the first", () => {

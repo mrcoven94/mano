@@ -16,7 +16,7 @@ import { scoreMailDeadlines } from "../mail.ts";
 import { agentNotRun, runAgentStageSafely } from "../agent-stage.ts";
 import { runProbes } from "../probes.ts";
 import { r2CredsFromEnv } from "../r2.ts";
-import { MAIN_REF, branchPrefix, combineGates, decidePromotion, evalAgentGate, evalGate, readHistory, runIdFor, writeNightlyStaging, type BaselineLogEntry, type HistoryRow } from "../report.ts";
+import { MAIN_REF, branchPrefix, combineGates, promotionVerdict, readHistory, runIdFor, writeNightlyStaging, type BaselineLogEntry, type HistoryRow } from "../report.ts";
 import { finishReport, rerunNewlyFailing, runBench, type CaseResult, type RunReport } from "../run.ts";
 import { readPublic, uploadStaging } from "../sync.ts";
 import { textLineFromEnv } from "../textline.ts";
@@ -88,9 +88,9 @@ if (!guardian.ran) full.standins = [...(full.standins ?? []), `guardian: ${guard
 // prior baseline is recorded but does not replace it, unless the lead
 // accepted it on purpose (workflow input accept_baseline, main only).
 const accept = ref === MAIN_REF && process.argv.includes("--accept-baseline");
-const plainGate = evalGate(full, priorBaseline);
-const agentGate = agent.ran && priorBaseline?.agent ? evalAgentGate(agent, priorBaseline.agent) : null;
-const promotion = decidePromotion({ plain: plainGate, agent: agentGate, accept });
+// One verdict decides both what is promoted and how the job ends.
+const verdict = promotionVerdict(full, priorBaseline, { strict, accept });
+const promotion = verdict.promotion;
 const priorLog: BaselineLogEntry[] = ref === MAIN_REF && upload && creds ? ((await readPublic<BaselineLogEntry[]>(creds, "baseline-log.json")) ?? []) : [];
 const staging = writeNightlyStaging(root, full, bench.results, prior, {
   ref, promotion, priorLog,
@@ -126,7 +126,7 @@ if (upload && creds) {
 // The agent stage never sinks the nightly by failing to run, but a regression
 // in its answers against main's agent record turns the job red like the
 // plain line's.
-const gate = combineGates(evalGate(full, priorBaseline, { strict }), agent.ran && priorBaseline?.agent ? evalAgentGate(agent, priorBaseline.agent) : null);
+const gate = combineGates(verdict.plain, verdict.agent);
 if (gate.preexisting.length > 0) console.log(`known safety failures: ${gate.preexisting.join(", ")}`);
 if (gate.status === "fail") {
   console.error(`regressed since the last baseline: ${gate.reasons.join("; ")}`);

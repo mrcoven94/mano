@@ -7,7 +7,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { r2CredsFromEnv, r2GetJson, PRIVATE_BUCKET } from "../r2.ts";
-import { restoreBaseline, type BaselineLogEntry } from "../report.ts";
+import { restoreBaseline, type BaselineLogEntry, type HistoryRow } from "../report.ts";
 import type { RunReport } from "../run.ts";
 import { readPublic, uploadStaging } from "../sync.ts";
 
@@ -23,9 +23,14 @@ const creds = r2CredsFromEnv(process.env);
 if (!creds) throw new Error("R2 credentials are required");
 const report = await r2GetJson<RunReport>(creds, PRIVATE_BUCKET, `runs/${runId}/report.json`);
 if (!report) throw new Error(`no main run ${runId} in mano-quality-private; it cannot be restored`);
-if (!report.eligibility.eligible) throw new Error(`run ${runId} was not gate-eligible; it cannot become the baseline`);
+// The baseline the run actually produced, when it was kept with the run.
+const effective = await r2GetJson<RunReport>(creds, PRIVATE_BUCKET, `runs/${runId}/baseline.json`);
 const priorLog = (await readPublic<BaselineLogEntry[]>(creds, "baseline-log.json")) ?? [];
+const current = await readPublic<RunReport>(creds, "baseline.json");
+const latest = await readPublic<RunReport>(creds, "latest.json");
+const history = (await readPublic<HistoryRow[]>(creds, "history.json")) ?? [];
 const root = arg("--out") ?? mkdtempSync(`${tmpdir()}/restore-`);
-restoreBaseline(root, report, { ref, actor: process.env.GITHUB_ACTOR ?? null, priorLog });
+restoreBaseline(root, { report, effective }, { ref, actor: process.env.GITHUB_ACTOR ?? null, priorLog, current, latest, history });
+if (!effective) console.log(`run ${runId} kept no effective baseline; rebuilt from its report`);
 const sent = await uploadStaging(root, creds);
 console.log(`restored run ${runId} (${report.gitSha?.slice(0, 7) ?? "no sha"}) as the baseline; wrote ${sent.map((s) => s.key).join(", ")}`);

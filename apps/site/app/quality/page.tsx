@@ -202,11 +202,17 @@ export default async function QualityPage() {
             ? latest.promotion.accepted
               ? "Accepted as the baseline on purpose, despite a regression."
               : `Pull requests are gated against this run${latest.promotion.agentPromoted ? "" : "; the previous agent record is kept"}.`
-            : "This run did not become the baseline; pull requests are still gated against the previous one."
+            : latest.restoredFrom
+              ? `Pull requests are gated against the restored run ${latest.restoredFrom.runId}.`
+              : "This run did not become the baseline; pull requests are still gated against the previous one."
           : latest.eligibility.eligible ? "Pull requests are gated against this run." : `Not used as a gate baseline: ${latest.eligibility.reasons.join("; ")}.`}
       </p>
 
-      {latest.promotion && !latest.promotion.promoted && latest.promotion.reasons.length > 0 ? (
+      {latest.restoredFrom ? (
+        <div className={styles.alert} role="status">
+          <b>Baseline restored.</b> Pull requests are gated against run {latest.restoredFrom.runId}, restored on {day(latest.restoredFrom.at)}, not against this run.
+        </div>
+      ) : latest.promotion && !latest.promotion.promoted && latest.promotion.reasons.length > 0 ? (
         <div className={styles.alert} role="alert">
           <b>Not promoted.</b> This run regressed against the baseline, so it was recorded but did not replace it:
           <ul>
