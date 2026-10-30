@@ -16,22 +16,23 @@
 // 20:00 local on its own day; earlier it waits, later it is dropped, so a
 // count like "in 7 days" is never sent on the wrong day.
 //
-// A nudge never carries a letter's own words. Its name comes from a
-// closed set (a known program plus the kind of deadline, "Your CalFresh
-// renewal"), or it says "The deadline from the letter you sent on
-// October 30". The title is kept for the agent, quoted as data, and is
-// refused when it carries a phone number, a link or a request for a
-// secret. A nudge only asks ("Want me to start it?"); acting still needs
-// the person's yes on an approval.
+// A nudge never carries a letter's own words. It names the action only
+// from the explicit kind (renewal, recertification, interview, hearing,
+// appeal, payment, documents) and the program only when it is a known
+// one: "Your CalFresh renewal is due in 12 days". With no kind it names
+// no action: "Your CalFresh deadline is in 12 days", or "The deadline
+// from the letter you sent on October 27" by the day the letter arrived.
+// The title is kept only for the agent, quoted as data. A nudge with a
+// kind asks ("Want me to start it?"); acting still needs the person's
+// yes on an approval.
 //
 // Routes, for the person's session or the agent service (contract shared
 // with Mail):
-//   POST   /deadlines       { title, dueDate: "YYYY-MM-DD", program?, source: { kind, documentId?, sentence? },
-//                            idempotencyKey, generation }. The same key is the same deadline; a new date
+//   POST   /deadlines       { title, dueDate: "YYYY-MM-DD", program?, kind?, source: { kind, documentId?,
+//                            sentence?, receivedAt? }, idempotencyKey, generation }. The same key is the same deadline; a new date
 //                            for it answers moved with both dates and replaces the nudges not yet sent.
 //                            generation is the conversation generation the request was prepared under:
-//                            required from a service, 409 when a delete has moved past it. The person's
-//                            own session may leave it out.
+//                            required from every caller, 409 when a delete has moved past it.
 //   GET    /deadlines       open ones first, each with its nudges
 //   PATCH  /deadlines/:id   { dueDate?, title?, status?: "done" } change it, or mark it done
 //   DELETE /deadlines/:id   stop tracking it
@@ -63,28 +64,14 @@ const MAX_DOCUMENT_ID = 128;
 const MAX_AHEAD_DAYS = 731;
 const DEADLINE_ID = /^dl-[0-9a-f]{32}$/;
 
-// The names a nudge may use. Replaced by the Programs catalog once it lands.
+// The program names a nudge may use. Replaced by the Programs catalog
+// once it lands.
 const KNOWN_PROGRAMS = [
   "CalFresh", "SNAP", "Medi-Cal", "Medicaid", "Medicare", "WIC", "TANF", "CalWORKs", "SSI", "SSDI", "LIHEAP",
   "Section 8", "CHIP", "Covered California", "General Assistance",
 ];
-const DEADLINE_KINDS: readonly (readonly [RegExp, string])[] = [
-  [/\brecertif/i, "recertification"],
-  [/\brenew/i, "renewal"],
-  [/\binterview/i, "interview"],
-  [/\b(hearing|appeal)/i, "hearing"],
-  [/\b(payment|pay|premium)\b/i, "payment"],
-  [/\b(documents?|verification|proof|paperwork)\b/i, "documents"],
-];
-
-// What a title or program may not carry: contact details, links, and
-// requests for secrets or for the person to act.
-const UNSAFE = [
-  /(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/,
-  /\b\d{3}-?\d{2}-?\d{4}\b/,
-  /https?:|www\.|\b[a-z0-9-]+\.(?:com|org|net|gov|us|info|io|co|biz|me|app|site|online|xyz|link)\b/i,
-  /\b(?:ssn|social security|password|passwords|passcode|card|cards|pin|pins|send|call|wire|gift)\b/i,
-];
+export const DEADLINE_KINDS = ["renewal", "recertification", "interview", "hearing", "appeal", "payment", "documents"] as const;
+export type DeadlineKind = (typeof DEADLINE_KINDS)[number];
 
 export type DeadlineStatus = "open" | "done" | "cancelled";
 export type SourceKind = "letter" | "case" | "person";
@@ -94,12 +81,15 @@ export interface DeadlineSource {
   kind: SourceKind;
   documentId?: string;
   sentence?: string;
+  // When the letter reached Mano: YYYY-MM-DD or an ISO timestamp.
+  receivedAt?: string;
 }
 
 export interface DeadlineInput {
   title: string;
   dueDate: string;
   program?: string;
+  kind?: DeadlineKind;
   source: DeadlineSource;
   idempotencyKey: string;
   generation?: number;
@@ -124,6 +114,7 @@ export interface Deadline {
   title: string;
   dueDate: string;
   program: string | null;
+  kind: DeadlineKind | null;
   source: DeadlineSource;
   status: DeadlineStatus;
   timeZone: string;
@@ -274,32 +265,37 @@ function monthDay(date: string): string {
   return `${MONTHS[m - 1]} ${d}`;
 }
 
-function knownProgram(...texts: (string | null | undefined)[]): string | null {
-  for (const text of texts) {
-    if (!text) continue;
-    const found = KNOWN_PROGRAMS.find((p) => new RegExp(`(^|[^A-Za-z-])${p.replace(/[-\s]/g, "[-\\s]?")}($|[^A-Za-z-])`, "i").test(text));
-    if (found) return found;
-  }
-  return null;
+function knownProgram(program: string | null): string | null {
+  const key = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return program ? (KNOWN_PROGRAMS.find((p) => key(p) === key(program)) ?? null) : null;
+}
+
+export interface NudgeNaming {
+  program: string | null;
+  kind: DeadlineKind | null;
+  sourceKind: SourceKind;
+  // The local day the letter arrived, when the source says; the day the
+  // person told Mano, for their own.
+  receivedOn: string | null;
+  learnedOn: string;
 }
 
 // Only closed-set words and dates: never the letter's own text.
-export function nudgeText(
-  d: { title: string; program: string | null; sourceKind: SourceKind; learnedOn: string },
-  daysBefore: number,
-  dueDate: string,
-): string {
-  const kind = DEADLINE_KINDS.find(([pattern]) => pattern.test(d.title))?.[1] ?? null;
-  const program = knownProgram(d.program, d.title);
+export function nudgeText(d: NudgeNaming, daysBefore: number, dueDate: string): string {
+  const program = knownProgram(d.program);
   const when = daysBefore === 0 ? "today" : daysBefore === 1 ? "tomorrow" : `in ${daysBefore} days, on ${monthDay(dueDate)}`;
-  if (kind) return `Your ${program ? `${program} ` : ""}${kind} is due ${when}. Want me to start it?`;
-  const name =
-    d.sourceKind === "letter"
-      ? `The deadline from the letter you sent on ${monthDay(d.learnedOn)}`
+  if (d.kind) {
+    const verb = d.kind === "documents" ? "are" : "is";
+    return `Your ${program ? `${program} ` : ""}${d.kind} ${verb} due ${when}. Want me to start it?`;
+  }
+  const name = program
+    ? `Your ${program} deadline`
+    : d.sourceKind === "letter"
+      ? `The deadline from the letter you sent ${d.receivedOn ? `on ${monthDay(d.receivedOn)}` : "me"}`
       : d.sourceKind === "person"
         ? `The deadline you told me about on ${monthDay(d.learnedOn)}`
         : "The deadline on your case";
-  return `${name} is ${when}. Want me to start it?`;
+  return `${name} is ${when}.`;
 }
 
 // Input. Throws AgentStateInputError, which the routes answer with 400.
@@ -310,16 +306,8 @@ function object(raw: unknown): Record<string, unknown> {
 }
 
 function text(value: unknown, field: string, max: number): string {
-  const cleaned = typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim() : "";
+  const cleaned = typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim() : "";
   if (!cleaned || cleaned.length > max) throw new AgentStateInputError(`${field} must be 1 to ${max} characters.`);
-  return cleaned;
-}
-
-function name(value: unknown, field: string, max: number): string {
-  const cleaned = text(value, field, max);
-  if (UNSAFE.some((pattern) => pattern.test(cleaned))) {
-    throw new AgentStateInputError(`${field} must only name the task: no phone numbers, links, or requests to send, call or give details.`);
-  }
   return cleaned;
 }
 
@@ -338,16 +326,24 @@ export function parseDeadlineInput(raw: unknown): DeadlineInput {
   const source: DeadlineSource = { kind: s.kind as SourceKind };
   if (s.documentId !== undefined) source.documentId = text(s.documentId, "source.documentId", MAX_DOCUMENT_ID);
   if (s.sentence !== undefined) source.sentence = text(s.sentence, "source.sentence", MAX_SENTENCE);
+  if (s.receivedAt !== undefined) {
+    if (typeof s.receivedAt !== "string" || !(isIsoDate(s.receivedAt) || /^\d{4}-\d{2}-\d{2}T/.test(s.receivedAt)) || !Number.isFinite(Date.parse(s.receivedAt))) {
+      throw new AgentStateInputError("source.receivedAt must be YYYY-MM-DD or an ISO timestamp.");
+    }
+    source.receivedAt = s.receivedAt;
+  }
   if (typeof f.idempotencyKey !== "string" || !f.idempotencyKey || f.idempotencyKey.length > MAX_KEY) {
     throw new AgentStateInputError(`idempotencyKey must be 1 to ${MAX_KEY} characters.`);
   }
   const input: DeadlineInput = {
-    title: name(f.title, "title", MAX_TITLE),
+    title: text(f.title, "title", MAX_TITLE),
     dueDate: dueDateOf(f.dueDate),
     source,
     idempotencyKey: f.idempotencyKey,
   };
-  if (f.program !== undefined && f.program !== null) input.program = name(f.program, "program", MAX_PROGRAM);
+  if (f.program !== undefined && f.program !== null) input.program = text(f.program, "program", MAX_PROGRAM);
+  // An unknown kind is no kind: the nudge then names no action.
+  if (DEADLINE_KINDS.includes(f.kind as DeadlineKind)) input.kind = f.kind as DeadlineKind;
   if (f.generation !== undefined) {
     if (!isGeneration(f.generation)) throw new AgentStateInputError("generation must be a whole number, 0 or more.");
     input.generation = f.generation;
@@ -358,7 +354,7 @@ export function parseDeadlineInput(raw: unknown): DeadlineInput {
 export function parseDeadlinePatch(raw: unknown): DeadlinePatch {
   const f = object(raw);
   const patch: DeadlinePatch = {};
-  if (f.title !== undefined) patch.title = name(f.title, "title", MAX_TITLE);
+  if (f.title !== undefined) patch.title = text(f.title, "title", MAX_TITLE);
   if (f.dueDate !== undefined) patch.dueDate = dueDateOf(f.dueDate);
   if (f.status !== undefined) {
     if (f.status !== "done") throw new AgentStateInputError('status can only be "done".');
@@ -384,7 +380,7 @@ export function ensureDeadlineTables(sql: SqlExec): void {
   if (cols.length > 0 && !cols.some((c) => c.name === "idempotency_key")) sql.exec("DROP TABLE deadlines");
   sql.exec(`CREATE TABLE IF NOT EXISTS deadlines(
     id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, title TEXT NOT NULL, due_date TEXT NOT NULL,
-    program TEXT, source_json TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL,
+    program TEXT, kind TEXT, source_json TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL,
     previous_due_date TEXT, time_zone TEXT NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL,
     closed_at_ms INTEGER)`);
   // Each nudge's reminder row, and the 9:00 to 20:00 window of its day.
@@ -399,6 +395,7 @@ interface Row {
   title: string;
   due_date: string;
   program: string | null;
+  kind: DeadlineKind | null;
   source_json: string;
   status: DeadlineStatus;
   revision: number;
@@ -425,6 +422,7 @@ function view(sql: SqlExec, r: Row): Deadline {
     title: r.title,
     dueDate: r.due_date,
     program: r.program,
+    kind: r.kind,
     source: JSON.parse(r.source_json) as DeadlineSource,
     status: r.status,
     timeZone: r.time_zone,
@@ -446,6 +444,22 @@ export function listDeadlines(sql: SqlExec): Deadline[] {
   return rows.map((r) => view(sql, r));
 }
 
+function namingOf(r: { program: string | null; kind: DeadlineKind | null; source_json: string; created_at_ms: number; time_zone: string }): NudgeNaming {
+  const source = JSON.parse(r.source_json) as DeadlineSource;
+  const received = source.receivedAt
+    ? isIsoDate(source.receivedAt)
+      ? source.receivedAt
+      : wall(Date.parse(source.receivedAt), r.time_zone).date
+    : null;
+  return {
+    program: r.program,
+    kind: r.kind,
+    sourceKind: source.kind,
+    receivedOn: received,
+    learnedOn: wall(Number(r.created_at_ms), r.time_zone).date,
+  };
+}
+
 export class NudgeConflictError extends Error {
   override name = "NudgeConflictError";
 }
@@ -456,12 +470,7 @@ export class NudgeConflictError extends Error {
 // nudge that cannot be created new is an error that rolls the change back.
 function scheduleNudges(sql: SqlExec, r: Row, nowMs: number, time: NudgeTime): void {
   const generation = currentGeneration(sql);
-  const naming = {
-    title: r.title,
-    program: r.program,
-    sourceKind: (JSON.parse(r.source_json) as DeadlineSource).kind,
-    learnedOn: wall(Number(r.created_at_ms), r.time_zone).date,
-  };
+  const naming = namingOf(r);
   for (const n of planNudges(r.due_date, r.time_zone, nowMs, time)) {
     const reminderId = `${NUDGE_PREFIX}${r.id}:g${generation}:${r.revision}:${n.daysBefore}`;
     const made = createReminder(sql, { id: reminderId, text: nudgeText(naming, n.daysBefore, r.due_date), dueAtMs: n.atMs, generation }, nowMs);
@@ -492,12 +501,38 @@ function stopNudges(sql: SqlExec, deadlineId: string | null, nowMs: number): num
   return inFlight;
 }
 
-function revise(sql: SqlExec, r: Row, next: { title: string; dueDate: string; timeZone: string }, nowMs: number, time: NudgeTime): DeadlineResult {
+// What a deadline may become. Anything that changes what a nudge says
+// (the date, the program, the kind, the source) bumps the revision and
+// replaces the nudges still to come; a new title alone changes no nudge.
+interface Next {
+  title: string;
+  dueDate: string;
+  program: string | null;
+  kind: DeadlineKind | null;
+  sourceJson: string;
+  timeZone: string;
+}
+
+function apply(sql: SqlExec, r: Row, next: Next, nowMs: number, time: NudgeTime): DeadlineResult {
+  const sameNudges =
+    next.dueDate === r.due_date &&
+    JSON.stringify(namingOf({ ...r, program: next.program, kind: next.kind, source_json: next.sourceJson })) === JSON.stringify(namingOf(r));
+  if (sameNudges) {
+    if (next.title === r.title && next.program === r.program && next.sourceJson === r.source_json) {
+      return { status: "existing", deadline: view(sql, r) };
+    }
+    sql.exec(
+      "UPDATE deadlines SET title = ?, program = ?, source_json = ?, updated_at_ms = ? WHERE id = ?",
+      next.title, next.program, next.sourceJson, nowMs, r.id,
+    );
+    return { status: "updated", deadline: view(sql, row(sql, r.id)!) };
+  }
   const nudgesInFlight = stopNudges(sql, r.id, nowMs);
   const moved = next.dueDate !== r.due_date;
   sql.exec(
-    "UPDATE deadlines SET title = ?, due_date = ?, previous_due_date = ?, time_zone = ?, revision = revision + 1, updated_at_ms = ? WHERE id = ?",
-    next.title, next.dueDate, moved ? r.due_date : r.previous_due_date, next.timeZone, nowMs, r.id,
+    "UPDATE deadlines SET title = ?, due_date = ?, program = ?, kind = ?, source_json = ?, previous_due_date = ?, time_zone = ?," +
+      " revision = revision + 1, updated_at_ms = ? WHERE id = ?",
+    next.title, next.dueDate, next.program, next.kind, next.sourceJson, moved ? r.due_date : r.previous_due_date, next.timeZone, nowMs, r.id,
   );
   const updated = row(sql, r.id)!;
   scheduleNudges(sql, updated, nowMs, time);
@@ -516,22 +551,30 @@ export function trackDeadline(
   const existing = row(sql, input.id);
   if (!existing) {
     sql.exec(
-      "INSERT INTO deadlines(id, idempotency_key, title, due_date, program, source_json, status, revision, time_zone, created_at_ms, updated_at_ms)" +
-        " VALUES (?, ?, ?, ?, ?, ?, 'open', 0, ?, ?, ?)",
-      input.id, input.idempotencyKey, input.title, input.dueDate, input.program ?? null, JSON.stringify(input.source), input.timeZone, nowMs, nowMs,
+      "INSERT INTO deadlines(id, idempotency_key, title, due_date, program, kind, source_json, status, revision, time_zone, created_at_ms, updated_at_ms)" +
+        " VALUES (?, ?, ?, ?, ?, ?, ?, 'open', 0, ?, ?, ?)",
+      input.id, input.idempotencyKey, input.title, input.dueDate, input.program ?? null, input.kind ?? null,
+      JSON.stringify(input.source), input.timeZone, nowMs, nowMs,
     );
     const created = row(sql, input.id)!;
     scheduleNudges(sql, created, nowMs, time);
     return { status: "created", deadline: view(sql, created) };
   }
   if (existing.status !== "open") return { status: "closed", deadline: view(sql, existing) };
-  if (input.program !== undefined && input.program !== existing.program) {
-    sql.exec("UPDATE deadlines SET program = ?, updated_at_ms = ? WHERE id = ?", input.program, nowMs, existing.id);
-  }
-  if (input.title === existing.title && input.dueDate === existing.due_date) {
-    return { status: "existing", deadline: view(sql, row(sql, existing.id)!) };
-  }
-  return revise(sql, existing, { title: input.title, dueDate: input.dueDate, timeZone: input.timeZone }, nowMs, time);
+  return apply(
+    sql,
+    existing,
+    {
+      title: input.title,
+      dueDate: input.dueDate,
+      program: input.program ?? null,
+      kind: input.kind ?? null,
+      sourceJson: JSON.stringify(input.source),
+      timeZone: input.timeZone,
+    },
+    nowMs,
+    time,
+  );
 }
 
 export function updateDeadline(
@@ -546,9 +589,13 @@ export function updateDeadline(
   if (!r) return null;
   if (r.status !== "open") return { status: "closed", deadline: view(sql, r) };
   if (patch.status === "done") return close(sql, r, "done", nowMs);
-  const next = { title: patch.title ?? r.title, dueDate: patch.dueDate ?? r.due_date, timeZone };
-  if (next.title === r.title && next.dueDate === r.due_date) return { status: "existing", deadline: view(sql, r) };
-  return revise(sql, r, next, nowMs, time);
+  return apply(
+    sql,
+    r,
+    { title: patch.title ?? r.title, dueDate: patch.dueDate ?? r.due_date, program: r.program, kind: r.kind, sourceJson: r.source_json, timeZone },
+    nowMs,
+    time,
+  );
 }
 
 export function cancelDeadline(sql: SqlExec, id: string, nowMs: number): DeadlineResult | null {
@@ -629,14 +676,11 @@ const NOT_FOUND = () => Response.json({ error: "Deadline not found." }, { status
 const STALE = () =>
   Response.json({ error: "This conversation was deleted after the request was prepared. Nothing was written." }, { status: 409 });
 
-// generationRequired: the caller is a service, which must name the
-// conversation generation it prepared a new deadline under.
 export async function routeDeadlines(
   calls: DeadlineCalls,
   method: string,
   rest: string,
   readBody: () => Promise<unknown>,
-  opts: { generationRequired: boolean },
 ): Promise<Response | null> {
   const one = rest.match(/^\/deadlines\/([^/]+)$/);
   if (rest !== "/deadlines" && !one) return null;
@@ -645,7 +689,9 @@ export async function routeDeadlines(
       if (method === "GET") return Response.json({ deadlines: await calls.list() });
       if (method !== "POST") return null;
       const input = parseDeadlineInput(await readBody());
-      if (opts.generationRequired && input.generation === undefined) {
+      // Every caller names the generation it prepared the deadline under,
+      // so a request from before a delete never lands after it.
+      if (input.generation === undefined) {
         throw new AgentStateInputError("Body needs the conversation generation it was prepared under.");
       }
       const out = await calls.track(input);

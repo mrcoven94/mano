@@ -51,9 +51,10 @@ export function parseDueDate(words: string, nowMs: number): string | null {
   return null;
 }
 
-// The words that name a task, without filler, so "the CalFresh renewal"
-// and "CalFresh renewal" are one task.
-const FILLER = new Set(["a", "an", "the", "my", "your", "our", "their", "his", "her", "for", "of", "to"]);
+// The words that name a task, without articles and filler, so "the
+// CalFresh renewal" and "CalFresh renewal" are one task. Pronouns and
+// names stay: "my renewal" and "her renewal" are two.
+const FILLER = new Set(["a", "an", "the", "upcoming", "next"]);
 
 export function taskWords(title: string): string {
   return title

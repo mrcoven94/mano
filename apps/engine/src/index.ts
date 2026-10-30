@@ -40,7 +40,7 @@
 //   POST /api/persons/:id/memory              { content, source }
 //   DELETE /api/persons/:id/memory/:memoryId  forget: deletes the row
 //   POST /api/persons/:id/deadlines           { title, dueDate, program?, source, idempotencyKey, generation }
-//                                              (generation required from a service, 409 when stale)
+//                                              (generation required, 409 when stale)
 //   GET  /api/persons/:id/deadlines           (session or agent; nudges per deadline, see src/deadlines.ts)
 //   PATCH /api/persons/:id/deadlines/:did     { dueDate?, title?, status?: "done" }
 //   DELETE /api/persons/:id/deadlines/:did    stop tracking it
@@ -513,7 +513,6 @@ export default {
           if (!read.ok) throw read.response;
           return read.value;
         },
-        { generationRequired: service !== null },
       );
       if (deadlines) return deadlines;
       if (rest === "/ws-ticket" && request.method === "POST") {

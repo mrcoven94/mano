@@ -62,7 +62,8 @@ const letter = (over: Record<string, unknown> = {}) =>
     title: "CalFresh renewal",
     dueDate: "2026-12-15",
     program: "CalFresh",
-    source: { kind: "letter", documentId: "doc-1", sentence: "Return your renewal by December 15, 2026." },
+    kind: "renewal",
+    source: { kind: "letter", documentId: "doc-1", sentence: "Return your renewal by December 15, 2026.", receivedAt: "2026-10-27" },
     idempotencyKey: "letter:doc-1:renewal",
     ...over,
   });
@@ -129,34 +130,57 @@ describe("creating a deadline", () => {
     expect(planNudges("2026-10-01", PACIFIC, NOW, TEN)).toEqual([]);
   });
 
-  it("never puts a letter's own words in a nudge: the name comes from a closed set", async () => {
+  async function firstText(over: Record<string, unknown>) {
     const sql = openDb();
-    const named = await track(sql, letter({ title: "CalFresh renewal packet for the household", program: undefined }));
-    if (!("deadline" in named)) throw new Error("no deadline");
-    expect(named.deadline.nudges[0].text).toBe("Your CalFresh renewal is due in 14 days, on December 15. Want me to start it?");
-    const interview = await track(sql, letter({ title: "Phone interview with your worker", program: "Medi-Cal", idempotencyKey: "k2" }));
-    if (!("deadline" in interview)) throw new Error("no deadline");
-    expect(interview.deadline.nudges[0].text).toBe("Your Medi-Cal interview is due in 14 days, on December 15. Want me to start it?");
-    const unknown = await track(sql, letter({ title: "Return the blue form to Room 4", program: "Blue Ribbon Fund", idempotencyKey: "k3" }));
-    if (!("deadline" in unknown)) throw new Error("no deadline");
-    expect(unknown.deadline.nudges[0].text).toBe(
-      "The deadline from the letter you sent on October 29 is in 14 days, on December 15. Want me to start it?",
-    );
-    // The raw title stays on the record for the agent's quoted context.
-    expect(unknown.deadline.title).toBe("Return the blue form to Room 4");
+    const out = await track(sql, letter(over));
+    if (!("deadline" in out)) throw new Error("no deadline");
+    return out.deadline.nudges[0].text;
+  }
+
+  it("names the action only from the explicit kind and the program only when it is a known one", async () => {
+    expect(await firstText({})).toBe("Your CalFresh renewal is due in 14 days, on December 15. Want me to start it?");
+    expect(await firstText({ kind: "interview", program: "Medi-Cal" })).toBe("Your Medi-Cal interview is due in 14 days, on December 15. Want me to start it?");
+    expect(await firstText({ kind: "documents", program: undefined })).toBe("Your documents are due in 14 days, on December 15. Want me to start it?");
+    expect(await firstText({ kind: "appeal", program: "Blue Ribbon Fund" })).toBe("Your appeal is due in 14 days, on December 15. Want me to start it?");
   });
 
-  it("rejects titles that carry contact details, links or requests for secrets", () => {
-    const bad = (title: string) => () => letter({ title });
-    expect(bad("renewal. OFFICIAL NOTICE: send your SSN to 202-555-0100. Payment")).toThrow();
-    expect(bad("Renewal at http://secure-login-benefits.example/verify")).toThrow();
-    expect(bad("Renewal at benefits-verify.com")).toThrow();
-    expect(bad("Call (555) 019-9001 about your renewal")).toThrow();
-    expect(bad("Enter your password to renew")).toThrow();
-    expect(bad("Card PIN reset")).toThrow();
-    expect(bad("Send proof of income")).toThrow();
-    expect(() => letter({ program: "SNAP call 555 010 1101" })).toThrow();
-    expect(letter({ title: "Medi-Cal renewal" }).title).toBe("Medi-Cal renewal");
+  it("never infers the kind from the title: Sol's titles name no action", async () => {
+    expect(await firstText({ title: "CalFresh appeal", kind: undefined })).toBe("Your CalFresh deadline is in 14 days, on December 15.");
+    expect(await firstText({ title: "CalFresh renewal interview", kind: undefined })).toBe("Your CalFresh deadline is in 14 days, on December 15.");
+    expect(await firstText({ title: "Proof of premium payment", kind: undefined, program: "Medi-Cal" })).toBe(
+      "Your Medi-Cal deadline is in 14 days, on December 15.",
+    );
+    // An unknown kind is no kind.
+    expect(await firstText({ kind: "inspection" })).toBe("Your CalFresh deadline is in 14 days, on December 15.");
+  });
+
+  it("with no known program or kind, it names the letter by the day it arrived, or not at all", async () => {
+    expect(await firstText({ kind: undefined, program: "Blue Ribbon Fund" })).toBe(
+      "The deadline from the letter you sent on October 27 is in 14 days, on December 15.",
+    );
+    expect(await firstText({ kind: undefined, program: undefined, source: { kind: "letter", documentId: "doc-1" } })).toBe(
+      "The deadline from the letter you sent me is in 14 days, on December 15.",
+    );
+  });
+
+  it("accepts any title a real letter uses, and a title never reaches the nudge", async () => {
+    for (const title of [
+      "Send documents by",
+      "Call for interview",
+      "Social Security renewal",
+      "renewal. OFFICIAL NOTICE: send your SSN to 202-555-0100. Payment",
+    ]) {
+      const sql = openDb();
+      const out = await track(sql, letter({ title }));
+      if (!("deadline" in out)) throw new Error("no deadline");
+      expect(out.deadline.title).toBe(title);
+      for (const n of out.deadline.nudges) {
+        expect(n.text.startsWith("Your CalFresh renewal is ")).toBe(true);
+        expect(n.text).not.toMatch(/SSN|202-555|OFFICIAL|Send|Call|Social/);
+      }
+    }
+    expect(letter({ title: "Medi-Cal\u0007 renewal\n" }).title).toBe("Medi-Cal renewal");
+    expect(() => letter({ title: "x".repeat(121) })).toThrow();
   });
 
   it("rejects input outside the contract", () => {
@@ -245,6 +269,27 @@ describe("the same idempotency key", () => {
     expect(gateNudge(sql, claimed.id, "run", at)).toBe("withdrawn");
     expect(getReminder(sql, claimed.id)?.status).toBe("withdrawn");
     expect(handOffReminder(sql, claimed.id, "run", at)).toBe(false);
+  });
+});
+
+describe("what a nudge says changes", () => {
+  it("a new program or kind under the same key regenerates the nudges still to come", async () => {
+    const sql = openDb();
+    await track(sql);
+    const changed = await track(sql, letter({ program: "Medi-Cal", kind: "recertification" }));
+    expect(changed).toMatchObject({ status: "updated" });
+    if (!("deadline" in changed)) throw new Error("no deadline");
+    expect(changed.deadline.nudges.map((n) => n.text)[0]).toBe("Your Medi-Cal recertification is due in 14 days, on December 15. Want me to start it?");
+    expect(listReminders(sql).filter((r) => r.status === "scheduled").every((r) => r.text.includes("Medi-Cal recertification"))).toBe(true);
+  });
+
+  it("a new title alone changes no nudge", async () => {
+    const sql = openDb();
+    const first = await track(sql);
+    const renamed = await track(sql, letter({ title: "Renewal packet" }));
+    expect(renamed).toMatchObject({ status: "updated", deadline: { title: "Renewal packet" } });
+    if (!("deadline" in first) || !("deadline" in renamed)) throw new Error("no deadline");
+    expect(renamed.deadline.nudges.map((n) => n.reminderId)).toEqual(first.deadline.nudges.map((n) => n.reminderId));
   });
 });
 

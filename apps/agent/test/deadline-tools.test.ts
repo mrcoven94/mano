@@ -67,6 +67,12 @@ describe("deadline tools", () => {
     expect(engine.deadlinesOf(PERSON).map((d) => d.title).sort()).toEqual(["CalFresh renewal", "Medi-Cal interview"]);
   });
 
+  it("whose task it is counts: my renewal and her renewal stay two", async () => {
+    await trackDeadline.execute({ title: "My Medicaid renewal", due: "November 12", program: "Medicaid", kind: "renewal" }, ctx("turn_dl_0021"));
+    await trackDeadline.execute({ title: "Her Medicaid renewal", due: "November 12", program: "Medicaid", kind: "renewal" }, ctx("turn_dl_0021"));
+    expect(engine.deadlinesOf(PERSON)).toHaveLength(2);
+  });
+
   it("lists what is coming up, moves a date, marks one done and cancels another", async () => {
     const renewal = (await trackDeadline.execute({ title: "CalFresh renewal", due: "November 12" }, ctx("turn_dl_0002"))) as Tracked;
     const other = (await trackDeadline.execute({ title: "Medi-Cal packet", due: "12/01" }, ctx("turn_dl_0003"))) as Tracked;
@@ -101,7 +107,7 @@ describe("deadline tools", () => {
 
 describe("the turn's deadline context", () => {
   it("shows open deadlines with the last nudge Mano texted, titles quoted as data", async () => {
-    await trackDeadline.execute({ title: "CalFresh renewal", due: "November 12" }, ctx("turn_dl_0012"));
+    await trackDeadline.execute({ title: "CalFresh renewal", due: "November 12", program: "CalFresh", kind: "renewal" }, ctx("turn_dl_0012"));
     // The alarm sends the first nudge.
     engine.now = () => Date.parse("2026-10-31T17:00:00.000Z");
     expect(engine.deliverDue(PERSON).map((s) => s.text)).toEqual(["Your CalFresh renewal is due in 12 days, on November 12. Want me to start it?"]);

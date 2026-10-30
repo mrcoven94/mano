@@ -70,12 +70,18 @@ export interface EngineReminder {
   attempts: number;
 }
 
+// The kinds of deadline Engine names in a nudge. With no kind, a nudge
+// names no action.
+export const DEADLINE_KINDS = ["renewal", "recertification", "interview", "hearing", "appeal", "payment", "documents"] as const;
+export type DeadlineKind = (typeof DEADLINE_KINDS)[number];
+
 // A deadline Engine tracks, as its /deadlines routes return it.
 export interface EngineDeadline {
   id: string;
   title: string;
   dueDate: string;
   program: string | null;
+  kind: DeadlineKind | null;
   status: "open" | "done" | "cancelled";
   timeZone: string;
   previousDueDate: string | null;
@@ -231,7 +237,13 @@ export class PersonEngine {
     return Array.isArray(out.deadlines) ? (out.deadlines as EngineDeadline[]) : [];
   }
 
-  async trackDeadline(input: { title: string; dueDate: string; program?: string; idempotencyKey: string }): Promise<EngineDeadlineResult | null> {
+  async trackDeadline(input: {
+    title: string;
+    dueDate: string;
+    program?: string;
+    kind?: DeadlineKind;
+    idempotencyKey: string;
+  }): Promise<EngineDeadlineResult | null> {
     return this.deadlineCall("POST", "/deadlines", { ...input, source: { kind: "person" }, generation: this.generation });
   }
 

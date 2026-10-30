@@ -154,6 +154,7 @@ try {
     title: "CalFresh renewal",
     dueDate: due1,
     program: "CalFresh",
+    kind: "renewal",
     source: { kind: "letter", documentId: "synthetic-letter-1", sentence: "Return your renewal by the date above." },
     idempotencyKey: "letter:synthetic-letter-1:renewal",
     generation: 0,
@@ -178,6 +179,8 @@ try {
   const tracked = await api(h2, "POST", "/deadlines", {
     title: "Medi-Cal renewal",
     dueDate: addDays(two.today, 12),
+    program: "Medi-Cal",
+    kind: "renewal",
     source: { kind: "letter", documentId: "synthetic-letter-2" },
     idempotencyKey: "letter:synthetic-letter-2:renewal",
     generation: 0,

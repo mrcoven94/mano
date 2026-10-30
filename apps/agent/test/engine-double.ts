@@ -178,7 +178,7 @@ export class EngineDouble {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     const { sql, store, gateway, deadlines } = this.person(personId);
     const nowIso = () => new Date(this.now()).toISOString();
-    const deadlineResponse = await routeDeadlines(deadlines, method, rest, async () => body, { generationRequired: true });
+    const deadlineResponse = await routeDeadlines(deadlines, method, rest, async () => body);
     if (deadlineResponse) return deadlineResponse;
     try {
       if (rest === "/memory" && method === "GET") {

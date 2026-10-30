@@ -80,6 +80,7 @@ const renewal = (over: Record<string, unknown> = {}) => ({
   title: "CalFresh renewal",
   dueDate: inDays(30),
   program: "CalFresh",
+  kind: "renewal",
   source: { kind: "letter", documentId: "doc-1", sentence: "Return your renewal form by the date above." },
   idempotencyKey: "letter:doc-1:renewal",
   generation: 0,
@@ -160,14 +161,6 @@ describe("the deadlines contract", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(own.status).toBe(200);
-    // The person's own session writes under the current generation.
-    const { generation: _g, ...noGeneration } = renewal({ idempotencyKey: "person:own" });
-    const ownPost = await SELF.fetch(`https://engine.test/api/persons/${personIdForHandle(h)}/deadlines`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(noGeneration),
-    });
-    expect(ownPost.status).toBe(201);
     const done = await SELF.fetch(`https://engine.test/api/persons/${personIdForHandle(h)}/deadlines/${created.deadline.id}`, {
       method: "PATCH",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -182,6 +175,19 @@ describe("the deadlines contract", () => {
     expect(cross.status).toBe(403);
     // Channels' token opens only the conversation delete.
     expect((await call(h, "GET", "/deadlines", undefined, { token: CHANNELS_TOKEN })).status).toBe(403);
+    // The person's own session names its generation too: a request
+    // prepared before a delete never lands after it.
+    const ownPost = (body: unknown) =>
+      SELF.fetch(`https://engine.test/api/persons/${personIdForHandle(h)}/deadlines`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const { generation: _g, ...noGeneration } = renewal({ idempotencyKey: "person:own" });
+    expect((await ownPost(noGeneration)).status).toBe(400);
+    await call(h, "DELETE", "/conversation", { generation: 1 }, { token: CHANNELS_TOKEN });
+    expect((await ownPost(renewal({ idempotencyKey: "person:own", generation: 0 }))).status).toBe(409);
+    expect((await ownPost(renewal({ idempotencyKey: "person:own", generation: 1 }))).status).toBe(201);
   });
 });
 
