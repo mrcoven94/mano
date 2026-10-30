@@ -107,26 +107,37 @@ function hostOf(url: string): string | null {
   }
 }
 
-// Payment by gift card, prepaid card, crypto, wire transfer or a
-// payment app is a scam signal whenever the letter also mentions paying,
-// in any sentence: passive demands and demands split across sentences
-// count. So does texting or calling with card codes. The only sentence
-// set aside is one where the sender says it never asks for, requires or
-// accepts such payment ("we will never ask you to pay with gift cards").
-const PAYMENT_METHOD =
-  /\b(?:gift\s*cards?|prepaid\s+(?:debit\s+)?cards?|bitcoin|crypto(?:currency)?|wire\s+transfers?|zelle|cash\s*app|venmo)\b/i;
+// Payment by crypto, wire transfer or a payment app is a scam signal
+// whenever the letter also mentions paying, in any sentence, so passive
+// demands and demands split across sentences count. Gift and prepaid
+// cards are different: benefits are paid onto EBT and prepaid cards,
+// so a card counts only with a demand to buy, load or purchase one and
+// send, text, call or read out its numbers or codes, or to pay a fee or
+// amount with it. Texting or calling with card codes always counts. A
+// sentence where the sender says it never asks for, requires or accepts
+// such payment is set aside. EBT is never a signal.
+const APP_METHOD = /\b(?:bitcoin|crypto(?:currency)?|wire\s+transfers?|zelle|cash\s*app|venmo)\b/i;
 const PAYING = /\b(?:pay|pays|paid|paying|payment|payments|fee|fees|purchase|buy|send\s+them)\b|\$\s*\d/i;
+const CARD = /\b(?:gift|prepaid)\s+(?:debit\s+)?cards?\b/i;
+const BUY_CARD = /\b(?:buy|purchase|load)\b/i;
+const HAND_OVER = /\b(?:send|text|call|read|give|email)\b/i;
+const PAY_WITH_CARD =
+  /\b(?:pay|payment)\b[^.!?]{0,60}\b(?:with|in|using|by|on)\s+(?:a\s+|an\s+|the\s+)?(?:(?:gift|prepaid)\s+(?:debit\s+)?cards?|it|them)\b|\bpayment\s+must\s+be\s+in\s+(?:gift|prepaid)/i;
 const CODES_DEMAND = /\b(?:text|call|send|read|give|email)\b[^.!?]{0,60}\b(?:codes|card\s+numbers)\b/i;
 const NEVER_ASKS =
   /\b(?:never|not|won't|don't|doesn't)\s+(?:ever\s+)?(?:ask|request|require|accept|take)\b/i;
 
 function paymentDemand(text: string): string | null {
   const sentences = text.split(/(?<=[.!?])\s+|\n\s*\n/).map((s) => s.trim()).filter(Boolean);
-  const counted = sentences.filter((s) => !(NEVER_ASKS.test(s) && PAYMENT_METHOD.test(s)));
+  const counted = sentences.filter((s) => !(NEVER_ASKS.test(s) && (APP_METHOD.test(s) || CARD.test(s))));
   const codes = counted.find((s) => CODES_DEMAND.test(s));
   if (codes) return codes;
-  const method = counted.find((s) => PAYMENT_METHOD.test(s));
-  if (method && PAYING.test(text)) return method;
+  const app = counted.find((s) => APP_METHOD.test(s));
+  if (app && PAYING.test(text)) return app;
+  if (counted.some((s) => CARD.test(s))) {
+    const demand = counted.find((s) => (BUY_CARD.test(s) && HAND_OVER.test(s)) || PAY_WITH_CARD.test(s));
+    if (demand) return demand;
+  }
   return null;
 }
 
@@ -140,7 +151,7 @@ function paymentDemand(text: string): string | null {
 export function screenScam(text: string): ContentFlag[] {
   const demand = paymentDemand(text);
   if (demand) {
-    return [{ kind: "scam", label: "asks for payment by gift card, prepaid card, wire, crypto or a payment app", match: demand }];
+    return [{ kind: "scam", label: "demands payment by gift or prepaid card, wire, crypto or a payment app", match: demand }];
   }
   const lower = text.toLowerCase();
   const urgency = URGENCY_WORDS.filter((w) => lower.includes(w));
