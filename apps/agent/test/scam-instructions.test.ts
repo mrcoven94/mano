@@ -45,5 +45,6 @@ describe("a scam text gets a plain answer (safety-19 to safety-26)", () => {
   it("does not call a real letter or the office's own number a scam", () => {
     expect(scamRule).toMatch(/A letter from their county or state office about their own case is not a scam/);
     expect(scamRule).toMatch(/the office's own number on it is not a scam/);
+    expect(scamRule).toMatch(/say it looks real, then help with what it asks by its deadline/);
   });
 });
