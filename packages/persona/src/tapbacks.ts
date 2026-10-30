@@ -72,7 +72,15 @@ export type MessageKind = "thanks" | "done" | "joke" | "ack";
 export const MAX_PURE_WORDS = 6;
 
 const PHRASES: ReadonlyArray<{ kind: MessageKind; phrases: readonly string[] }> = [
-  { kind: "thanks", phrases: ["thank you", "thank u", "thanks", "thx", "ty", "tysm", "i appreciate it", "appreciate it", "appreciate you", "muchas gracias", "mil gracias", "gracias"] },
+  {
+    kind: "thanks",
+    phrases: [
+      "thank you", "thank u", "thanks", "thx", "ty", "tysm", "i appreciate it", "appreciate it", "appreciate you",
+      // Purely positive, counted as thanks.
+      "that helped", "helped a lot", "you're the best", "you rock", "life saver", "lifesaver", "amazing",
+      "gracias por todo", "eres lo máximo", "muchas gracias", "mil gracias", "gracias",
+    ],
+  },
   { kind: "done", phrases: ["all done", "done", "i did it", "did it", "mailed it", "mailed", "sent it", "submitted it", "submitted", "i got approved", "got approved", "approved", "got it", "ya lo hice", "lo hice"] },
   { kind: "joke", phrases: ["lol", "lmao", "😂"] },
   { kind: "ack", phrases: ["sounds good", "got it", "okay", "ok", "kk", "k", "cool", "perfect", "vale"] },

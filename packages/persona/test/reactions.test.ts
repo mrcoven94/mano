@@ -68,6 +68,15 @@ describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
     }
   });
 
+  it("counts purely positive thanks as thanks, still short and still vetoed (lead, after review 4)", () => {
+    for (const text of ["that helped", "thanks, that helped a lot", "helped a lot!", "you're the best", "you\u2019re the best!", "you rock", "appreciate it", "life saver", "lifesaver!!", "amazing", "perfect, thanks", "gracias por todo", "eres lo máximo"]) {
+      expect(allowedReactions(text, false), text).toContain("love");
+    }
+    for (const text of ["thanks, that helped but they still denied me", "you're the best but my benefits expired", "amazing, they cut my hours"]) {
+      expect(allowedReactions(text, false), text).toEqual([]);
+    }
+  });
+
   it("reads curly apostrophes as straight ones, and vetoes the wider bad-news list (PR 74 review 3)", () => {
     expect(normalizeQuotes("can\u2019t \u201cok\u201d")).toBe(`can't "ok"`);
     for (const text of ["thanks, my benefits were reduced", "thanks, I can\u2019t pay rent", "thank you, I don\u2019t have food", "ok, it's overdue", "thanks, no money left", "gracias, me redujeron los beneficios", "gracias, no tengo comida", "ok, estoy atrasado"]) {
