@@ -69,3 +69,13 @@ test("judge parse errors never echo the response text", async () => {
     assert.match(err.message, /^judge reply unusable \([a-z-]+\), sha256 [0-9a-f]{12}$/);
   }
 });
+
+test("the judge leaves room for reasoning in a full batch", async () => {
+  let asked = 0;
+  const model = { id: "m", live: true, complete: async (_m: unknown, opts?: { maxTokens?: number }) => {
+    asked = opts?.maxTokens ?? 0;
+    return { text: JSON.stringify(new Array(JUDGE_BATCH_SIZE).fill({ helpful: 4, accurate: 4, plain: 4, warm: 4, pass: true, reason: "ok" })), inputTokens: 1, outputTokens: 1 };
+  } };
+  await new MetaJudge(model).score(new Array(JUDGE_BATCH_SIZE).fill(item));
+  assert.ok(asked >= 8192, `judge capped at ${asked} tokens`);
+});

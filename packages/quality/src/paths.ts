@@ -1,12 +1,12 @@
-// Answer paths: the bench answers each case through the exact production
-// prompts, tools and model client when those packages are merged, and through
-// a stand-in otherwise. The report always says which path each suite used.
-//
-// Production contract (for Engine, Channels, Mail): export a `qualityAnswerPath`
-// object with { name, answer(case) } from the package root. The bench imports
-// it dynamically so quality/ never hard-depends on unmerged code.
+// Answer paths: which code answers each bench case. Text cases go through the
+// real text line (textline.ts: SparkResponder, Mano's persona and the send
+// pipeline) on a Meta model whenever META_MODEL_API_KEY and
+// MANO_MODEL_BENCH_ID are set. Letters and photos go through the mail reader,
+// a stand-in until packages/mail merges and exports qualityAnswerPath. Without
+// a key every case falls back to the reference stand-in. Every report names
+// the path of every case.
 
-import type { BenchCase, SuiteName } from "./suites/types.ts";
+import type { BenchCase } from "./suites/types.ts";
 
 export interface BenchAction {
   kind: string;
@@ -20,11 +20,19 @@ export interface BenchAnswer {
   latencyMs: number;
   inputTokens: number;
   outputTokens: number;
+  // Text line only: time to the first text the person sees, the route the
+  // turn took, and the voice-guard rules that had to change the reply.
+  firstTextMs?: number;
+  route?: "fast" | "deep";
+  guardChanges?: string[];
 }
 
 export interface AnswerPath {
   name: string;
   live: boolean;
+  // False when the path answers without the program catalog the case's facts
+  // come from (the text line today). Checks that need the catalog do not run.
+  knowsCatalog: boolean;
   answer(c: BenchCase): Promise<BenchAnswer>;
 }
 
@@ -33,53 +41,31 @@ export interface AnswerPath {
 export class ReferencePath implements AnswerPath {
   readonly name = "reference-standin";
   readonly live = false;
+  readonly knowsCatalog = true;
 
   async answer(c: BenchCase): Promise<BenchAnswer> {
-    const start = Date.now();
-    return {
-      text: c.reference,
-      bubbles: c.referenceBubbles,
-      actions: [],
-      latencyMs: Date.now() - start,
-      inputTokens: 10,
-      outputTokens: 10,
-    };
+    return { text: c.reference, bubbles: c.referenceBubbles, actions: [], latencyMs: 0, inputTokens: 10, outputTokens: 10 };
   }
 }
 
 // Stand-in that breaks every gate on purpose: an invented phone and link, a
-// promise of approval, and an outside action. The smoke gate must fail on it.
+// promise of approval, and an outside action. Used by the offline gate tests.
 export class BrokenPath implements AnswerPath {
   readonly name = "broken-standin";
   readonly live = false;
+  readonly knowsCatalog = true;
 
   async answer(c: BenchCase): Promise<BenchAnswer> {
-    const start = Date.now();
     const poison = " You are approved, guaranteed. Call (555) 999-0000 or visit http://secure-login-benefits.example/verify-now to finish.";
     return {
       text: `${c.reference}${poison}`,
       bubbles: c.referenceBubbles ? [...c.referenceBubbles, poison] : undefined,
       actions: [{ kind: "outside-action", detail: "broken stand-in acts" }],
-      latencyMs: Date.now() - start,
+      latencyMs: 0,
       inputTokens: 10,
       outputTokens: 10,
     };
   }
-}
-
-const PACKAGE_FOR_SUITE: Record<SuiteName, string> = {
-  chat: "@mano/engine",
-  text: "@mano/channels",
-  letters: "@mano/mail",
-  safety: "@mano/engine",
-  "safety-holdout": "@mano/engine",
-  personas: "@mano/channels",
-};
-
-export interface LoadedPath {
-  path: AnswerPath;
-  standin: boolean;
-  detail: string;
 }
 
 // The exact text that is sent: the bubbles joined, or the plain text when the
@@ -88,34 +74,45 @@ export function sentText(answer: Pick<BenchAnswer, "text" | "bubbles">): string 
   return (answer.bubbles ?? [answer.text]).join("\n");
 }
 
-async function tryImportQualityPath(packageName: string): Promise<{ path: AnswerPath } | { missing: true } | { noExport: true }> {
-  let mod: Record<string, unknown>;
+export interface LoadedPath {
+  path: AnswerPath;
+  standin: boolean;
+  detail: string;
+}
+
+export interface PathSet {
+  forCase(c: BenchCase): LoadedPath;
+  textLineModel: string | null;
+}
+
+// A case whose answer depends on reading a letter or photo. The text line
+// saves photos for the mail reader and only acknowledges them.
+export function needsMailReader(c: BenchCase): boolean {
+  return c.suite === "letters" || (c.input.images?.length ?? 0) > 0;
+}
+
+async function mailPath(): Promise<LoadedPath> {
   try {
-    mod = (await import(packageName)) as Record<string, unknown>;
+    const mod = (await import("@mano/mail" as string)) as { qualityAnswerPath?: AnswerPath };
+    if (mod.qualityAnswerPath && typeof mod.qualityAnswerPath.answer === "function") {
+      return { path: mod.qualityAnswerPath, standin: false, detail: "packages/mail qualityAnswerPath" };
+    }
+    return { path: new ReferencePath(), standin: true, detail: "packages/mail exports no qualityAnswerPath yet; reference stand-in" };
   } catch {
-    return { missing: true };
+    return { path: new ReferencePath(), standin: true, detail: "packages/mail is not merged yet; reference stand-in" };
   }
-  const candidate = mod.qualityAnswerPath as AnswerPath | undefined;
-  if (candidate && typeof candidate.answer === "function") return { path: candidate };
-  return { noExport: true };
 }
 
-export async function loadAnswerPath(suite: SuiteName, broken = false): Promise<LoadedPath> {
-  // MANO_QUALITY_BROKEN=1 forces the breaking path, for the gate-failure demo.
-  if (broken || process.env.MANO_QUALITY_BROKEN === "1") {
-    return { path: new BrokenPath(), standin: true, detail: "breaking stand-in forced for the gate demo" };
+export async function loadPaths(env: NodeJS.ProcessEnv = process.env, broken = false): Promise<PathSet> {
+  if (broken) {
+    const forced: LoadedPath = { path: new BrokenPath(), standin: true, detail: "breaking stand-in forced for the gate test" };
+    return { forCase: () => forced, textLineModel: null };
   }
-  const packageName = PACKAGE_FOR_SUITE[suite];
-  const live = await tryImportQualityPath(packageName);
-  if ("path" in live) return { path: live.path, standin: false, detail: `${packageName} qualityAnswerPath` };
-  if ("noExport" in live) {
-    return { path: new ReferencePath(), standin: true, detail: `${packageName} exports no qualityAnswerPath yet; reference stand-in` };
-  }
-  return { path: new ReferencePath(), standin: true, detail: `${packageName} has no loadable quality path yet; reference stand-in` };
-}
-
-export async function loadAllAnswerPaths(broken = false): Promise<Record<SuiteName, LoadedPath>> {
-  const suites: SuiteName[] = ["chat", "text", "letters", "safety", "personas"];
-  const entries = await Promise.all(suites.map(async (s) => [s, await loadAnswerPath(s, broken)] as const));
-  return Object.fromEntries(entries) as Record<SuiteName, LoadedPath>;
+  const mail = await mailPath();
+  const { TextLinePath, textLineFromEnv } = await import("./textline.ts");
+  const line = textLineFromEnv(env);
+  const text: LoadedPath = line
+    ? { path: new TextLinePath(line), standin: false, detail: "the text line: the production responder, persona voice and send pipeline" }
+    : { path: new ReferencePath(), standin: true, detail: "no META_MODEL_API_KEY or MANO_MODEL_BENCH_ID; reference stand-in" };
+  return { forCase: (c) => (needsMailReader(c) ? mail : text), textLineModel: line?.model ?? null };
 }

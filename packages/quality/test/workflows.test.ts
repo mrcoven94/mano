@@ -24,28 +24,26 @@ test("workflows use the repo Meta key and plain model ID variables", () => {
   }
 });
 
-test("smoke watches every path that can change answers", () => {
-  for (const path of ["apps/engine/**", "apps/channels/**", "packages/channels/**", "packages/mail/**", "packages/quality/**", ".github/workflows/quality-*.yml"]) {
-    assert.ok(smoke.includes(path), `smoke misses ${path}`);
+test("smoke watches every path that can change what Mano says", () => {
+  for (const path of ["packages/persona/**", "packages/channels/**", "apps/channels/**", "packages/mail/**", "packages/guardian/**", "apps/engine/**", "packages/quality/**", ".github/workflows/quality-*.yml"]) {
+    assert.ok(smoke.includes(`"${path}"`), `smoke misses ${path}`);
   }
 });
 
-test("smoke comment step tolerates a missing run log", () => {
-  assert.ok(smoke.includes("[ -f runs/smoke.log ]"), "unconditional sed fails the step under bash -e");
+test("the gate outcome is data, never a shell exit code", () => {
+  assert.ok(!smoke.includes("$?"), "a step reads an exit code");
+  assert.ok(!smoke.includes("GITHUB_ENV"), "the outcome rides the environment");
+  assert.ok(smoke.includes("checks: write"), "the check run needs checks permission");
+  assert.match(smoke, /- name: Post the result\n\s+if: always\(\)/, "publishing must run after a failed or neutral smoke step");
 });
 
-test("neutral smoke posts a neutral check and only failure fails", () => {
-  assert.ok(smoke.includes("checks: write"), "neutral check run needs checks permission");
-  assert.ok(smoke.includes("/check-runs"), "neutral result is not posted through the Checks API");
-  assert.ok(smoke.includes('conclusion="neutral"'), "neutral check run lacks a neutral conclusion");
-  assert.ok(smoke.includes("if: env.exit == '1'"), "neutral must not fail the job");
-});
-
-test("nightly handles secrets through env only", () => {
+test("nightly runs on main with every live part and records to both buckets", () => {
+  assert.ok(nightly.includes("ref: main"));
   assert.ok(!/^ *if:.*secrets\./m.test(nightly), "nightly gates a step on a secret");
   assert.ok(nightly.includes("HOLDOUT: ${{ secrets.MANO_QUALITY_HOLDOUT }}"), "holdout must ride env");
   assert.ok(!nightly.includes("printf '%s' '${{"), "holdout is pasted into shell source");
-  assert.ok(nightly.includes('printf \'%s\' "$HOLDOUT"'), "holdout is not written from env");
-  assert.ok(nightly.includes("s3://mano-quality-private"), "private runs lack a separate bucket");
-  assert.ok(!nightly.includes("s3://mano-quality/private"), "private data shares the public bucket");
+  for (const name of ["MANO_GUARDIAN_URL", "MANO_GUARDIAN_TOKEN", "MANO_GUARDIAN_KEY_ID", "MANO_GUARDIAN_KEY_SECRET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]) {
+    assert.ok(nightly.includes(`secrets.${name}`), `nightly misses ${name}`);
+  }
+  assert.ok(nightly.includes("--upload"), "nightly never records the run");
 });

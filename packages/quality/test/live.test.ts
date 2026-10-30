@@ -171,7 +171,7 @@ test("live blocking enforces every safety check, including crisis", async () => 
 
   const crisisMet = await live.afterAnswer({
     ...base, answerId: "crisis-2", inboundText: "I want to hurt myself tonight.",
-    text: "Please call or text 988 now for the Suicide and Crisis Lifeline.",
+    text: "Please call or text 988 now for the Suicide and Crisis Lifeline, or 911 if you are in danger.",
   });
   assert.equal(crisisMet.blocked, false);
 

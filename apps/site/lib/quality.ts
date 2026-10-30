@@ -1,157 +1,98 @@
-/* Staff quality page data. Reads nightly run aggregates from the public runs URL
-   and per-case detail from the private runs URL, server-side only. The holdout
-   never appears per-case. Anything that names a model or provider is stripped
-   before render; staff never see those names. */
+/* Staff quality page data, server-side only. The latest run and its history
+   come from the mano-quality bucket (aggregates only); per-case results come
+   from mano-quality-private. Both are read with signed requests, so neither
+   bucket needs a public URL. The holdout never appears per case. Every string
+   that reaches the page passes the model-name filter; the page never renders
+   model IDs at all. */
 
-import { displayTotal, r2CredsFromEnv, scrubStaffCase, signedPrivateGet } from "@mano/quality";
+import {
+  PRIVATE_BUCKET,
+  PUBLIC_BUCKET,
+  r2CredsFromEnv,
+  r2GetJson,
+  scrubStaffCase,
+  stripModelNames,
+  type CaseResult,
+  type HistoryRow,
+  type RunReport,
+} from "@mano/quality/site";
 
-export interface SuiteRow {
-  version: number;
-  cases: number;
-  hardCheckPassRate: number;
-  judgeMean: number;
-  gateFailed: boolean;
-  p50Ms: number;
-  p95Ms: number;
-  usdPer1kAnswers: number;
-}
+export type { HistoryRow, RunReport };
 
-export interface LatestRun {
-  runId: string;
-  startedAt: string;
-  caseCount: number;
-  gateFailed: boolean;
-  suites: Record<string, SuiteRow>;
-  paths: Record<string, { live: boolean; name: string; detail: string }>;
-  judge: { live: boolean };
-  dns: string;
-  calibration: { agreement: number; kept: boolean; provisional: boolean };
-  holdout: { configured: boolean; reason?: string };
-  prices: { configured: boolean };
-}
-
-export interface CaseRow {
+export interface StaffCaseRow {
   caseId: string;
   suite: string;
-  answer: { text: string };
-  checks: { id: string; pass: boolean; detail?: string }[];
-  judge: { helpful: number; accurate: number; plain: number; warm: number; pass: boolean; reason: string } | null;
+  live: boolean;
+  bubbles: string[];
+  failed: { id: string; detail: string }[];
+  judge: { mean: number; helpful: number; accurate: number; plain: number; warm: number; reason: string } | null;
 }
 
-export interface HistoryRow {
-  runId: string;
-  startedAt: string;
-  caseCount: number;
-  gateFailed: boolean;
-  suites: Record<string, SuiteRow>;
+export interface QualityData {
+  latest: RunReport;
+  history: HistoryRow[];
+  lowest: StaffCaseRow[];
+  failed: StaffCaseRow[];
+  casesConnected: boolean;
+  standins: string[];
 }
 
-export interface CountersDoc {
-  week: string;
-  counters: { label: string; n: number }[];
-  total: number | null;
-  hiddenCells: number;
-}
+export type LoadResult = { state: "unconfigured" } | { state: "empty" } | { state: "error" } | { state: "ok"; data: QualityData };
 
-async function fetchJson<T>(url: string): Promise<T | null> {
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
-// Per-case data lives in the private bucket and is fetched server-side with
-// R2 credentials. Without credentials there is no fallback: the page says the
-// detail is not connected rather than reaching anywhere public for it.
-async function fetchPrivateJson<T>(key: string): Promise<T | null> {
-  const creds = r2CredsFromEnv(process.env);
-  if (!creds) return null;
-  try {
-    const signed = signedPrivateGet(creds, key);
-    const res = await fetch(signed.url, { cache: "no-store", headers: signed.headers });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
-function stripRun(raw: Record<string, unknown>): LatestRun {
-  const suites: Record<string, SuiteRow> = {};
-  for (const [name, s] of Object.entries((raw.suites ?? {}) as Record<string, SuiteRow>)) {
-    suites[name] = {
-      version: s.version, cases: s.cases, hardCheckPassRate: s.hardCheckPassRate,
-      judgeMean: s.judgeMean, gateFailed: s.gateFailed, p50Ms: s.p50Ms, p95Ms: s.p95Ms,
-      usdPer1kAnswers: s.usdPer1kAnswers,
-    };
-  }
+function toRow(c: CaseResult): StaffCaseRow {
+  const clean = scrubStaffCase({ caseId: c.caseId, suite: c.suite, answer: { text: c.answer.text }, checks: c.checks, judge: c.judge });
+  const j = clean.judge;
   return {
-    runId: String(raw.runId ?? ""),
-    startedAt: String(raw.startedAt ?? ""),
-    caseCount: Number(raw.caseCount ?? 0),
-    gateFailed: raw.gateFailed === true,
-    suites,
-    paths: (raw.paths ?? {}) as LatestRun["paths"],
-    judge: { live: (raw.judge as { live?: unknown } | undefined)?.live === true },
-    dns: String(raw.dns ?? ""),
-    calibration: {
-      agreement: Number((raw.calibration as { agreement?: unknown } | undefined)?.agreement ?? 0),
-      kept: (raw.calibration as { kept?: unknown } | undefined)?.kept === true,
-      provisional: (raw.calibration as { provisional?: unknown } | undefined)?.provisional !== false,
-    },
-    holdout: {
-      configured: (raw.holdout as { configured?: unknown } | undefined)?.configured === true,
-      reason: (raw.holdout as { reason?: string } | undefined)?.reason,
-    },
-    prices: { configured: (raw.prices as { configured?: unknown } | undefined)?.configured === true },
+    caseId: clean.caseId,
+    suite: clean.suite,
+    live: c.path?.live === true,
+    bubbles: clean.answer.text.split("\n").filter((b) => b.trim().length > 0),
+    failed: clean.checks.filter((r) => !r.pass).map((r) => ({ id: r.id, detail: r.detail ?? "" })),
+    judge: j ? { mean: (j.helpful + j.accurate + j.plain + j.warm) / 4, helpful: j.helpful, accurate: j.accurate, plain: j.plain, warm: j.warm, reason: j.reason } : null,
   };
 }
 
-function cleanCase(c: CaseRow): CaseRow {
-  return scrubStaffCase(c);
-}
-
-export async function loadQuality(base: string): Promise<{
-  latest: LatestRun | null;
-  history: HistoryRow[];
-  lowest: CaseRow[];
-  failed: CaseRow[];
-  casesConnected: boolean;
-  counters: CountersDoc | null;
-}> {
-  const raw = await fetchJson<Record<string, unknown>>(`${base}/latest.json`);
-  const latest = raw ? stripRun(raw) : null;
-  const history = (await fetchJson<HistoryRow[]>(`${base}/history.json`)) ?? [];
-  let lowest: CaseRow[] = [];
-  let failed: CaseRow[] = [];
-  let casesConnected = false;
-  if (latest) {
-    const cases = (await fetchPrivateJson<CaseRow[]>(`runs/${latest.runId}/cases.json`)) ?? [];
-    casesConnected = cases.length > 0;
-    const visible = cases.filter((c) => c.suite !== "safety-holdout").map(cleanCase);
-    const judged = visible.filter((c) => c.judge !== null);
-    judged.sort((a, b) => mean(b.judge!) - mean(a.judge!));
-    lowest = judged.slice(-5).reverse();
-    failed = visible.filter((c) => c.checks.some((r) => !r.pass)).slice(0, 10);
+export async function loadQuality(): Promise<LoadResult> {
+  const creds = r2CredsFromEnv(process.env);
+  if (!creds) return { state: "unconfigured" };
+  let latest: RunReport | null;
+  let history: HistoryRow[];
+  try {
+    [latest, history] = await Promise.all([
+      r2GetJson<RunReport>(creds, PUBLIC_BUCKET, "latest.json"),
+      r2GetJson<HistoryRow[]>(creds, PUBLIC_BUCKET, "history.json").then((h) => h ?? []),
+    ]);
+  } catch {
+    return { state: "error" };
   }
-  const countersUrl = process.env.QUALITY_COUNTERS_URL ?? "";
-  const counters = countersUrl ? await fetchJson<CountersDoc>(countersUrl) : null;
-  return { latest, history: history.slice(-14), lowest, failed, casesConnected, counters };
-}
-
-function mean(j: NonNullable<CaseRow["judge"]>): number {
-  return (j.helpful + j.accurate + j.plain + j.warm) / 4;
-}
-
-export function judgeMeanOf(j: CaseRow["judge"]): number | null {
-  return j ? mean(j) : null;
-}
-
-// Totals are withheld whenever any cell is suppressed, so hidden counts
-// cannot be recovered by subtraction. Enforced here as well as at the source.
-export function countersTotal(doc: CountersDoc): number | null {
-  return displayTotal(doc.hiddenCells, doc.total);
+  if (!latest) return { state: "empty" };
+  let cases: CaseResult[] = [];
+  let casesConnected = false;
+  try {
+    cases = (await r2GetJson<CaseResult[]>(creds, PRIVATE_BUCKET, `runs/${latest.runId}/cases.json`)) ?? [];
+    casesConnected = cases.length > 0;
+  } catch {
+    casesConnected = false;
+  }
+  // Only live answers are worth reading here; a stand-in prints the
+  // reference answer, which says nothing about Mano.
+  const rows = cases.filter((c) => c.suite !== "safety-holdout" && c.path?.live === true).map(toRow);
+  const lowest = rows.filter((r) => r.judge !== null).sort((a, b) => a.judge!.mean - b.judge!.mean).slice(0, 6);
+  const failed = rows.filter((r) => r.failed.length > 0).sort((a, b) => b.failed.length - a.failed.length);
+  // Free-text fields the page shows, cleaned like everything else.
+  latest.eligibility = { ...latest.eligibility, reasons: latest.eligibility.reasons.map(stripModelNames) };
+  if (latest.probes) latest.probes = { ...latest.probes, detail: stripModelNames(latest.probes.detail) };
+  if (latest.guardian) latest.guardian = { ...latest.guardian, detail: stripModelNames(latest.guardian.detail) };
+  if (latest.mail) latest.mail = { ...latest.mail, detail: stripModelNames(latest.mail.detail) };
+  return {
+    state: "ok",
+    data: {
+      latest,
+      history: history.slice(-60),
+      lowest,
+      failed,
+      casesConnected,
+      standins: (latest.standins ?? []).map(stripModelNames),
+    },
+  };
 }

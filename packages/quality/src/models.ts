@@ -40,7 +40,7 @@ export class MetaModelClient implements ModelClient {
     const res = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
-      body: JSON.stringify({ model: this.id, messages, store: false, max_tokens: opts?.maxTokens ?? 1024 }),
+      body: JSON.stringify({ model: this.id, messages, store: false, max_tokens: opts?.maxTokens ?? 8192 }),
     });
     if (!res.ok) throw new Error(`model call failed: ${res.status}`);
     const body = (await res.json()) as ChatCompletionsBody;
@@ -84,10 +84,13 @@ export function assertJudgeServingDiffer(env: NodeJS.ProcessEnv = process.env): 
   }
 }
 
+// The judge runs on a Standard ID, never a -contributor one, whatever the
+// configuration says.
 export function judgeClientFromEnv(env: NodeJS.ProcessEnv = process.env): ModelClient {
   const key = env.META_MODEL_API_KEY ?? "";
   const base = env.MANO_MODEL_BASE_URL || DEFAULT_MODEL_BASE_URL;
   const id = env.MANO_MODEL_JUDGE_ID || DEFAULT_JUDGE_MODEL_ID;
+  if (/-contributor$/i.test(id)) throw new Error("the judge must run on a Standard model ID, not a -contributor one");
   if (key) return new MetaModelClient(id, base, key);
   return new FakeModelClient();
 }

@@ -1,25 +1,42 @@
-// Bench runner. Answers every case through its answer path, runs the hard
-// checks, batches the judge, and scores each suite. Run with:
-// node src/bin/bench.ts [--suite chat] [--broken]
+// Bench runner. Answers every case through its answer path (paths.ts), runs
+// the hard checks, batches the judge, and scores each suite. Run with:
+// node --import ./src/register.ts src/bin/bench.ts [--suite chat]
 
 import { calibrationFacts, buildCalibrationSet, agreement, CALIBRATION_LABELS_PROVISIONAL } from "./calibration.ts";
 import { gateFailures, hardCheckPassRate, runHardChecks, type CheckResult } from "./checks.ts";
 import { dnsFromEnv, type DnsClient } from "./links.ts";
 import { assertJudgeServingDiffer, judgeClientFromEnv } from "./models.ts";
-import { FakeJudge, JUDGE_AGREEMENT_MIN, MetaJudge, judgeAll, judgeMean, type JudgeClient, type JudgeScore } from "./judge.ts";
+import { FakeJudge, JUDGE_AGREEMENT_MIN, MetaJudge, judgeAll, judgeMean, type JudgeClient, type JudgeItem, type JudgeScore } from "./judge.ts";
 import { buildHoldoutSuite } from "./suites/holdout-suite.ts";
 import { loadHoldout } from "./holdout.ts";
-import { loadAllAnswerPaths, sentText, type BenchAnswer } from "./paths.ts";
-import { buildAllSuites, buildSuite } from "./suites/build.ts";
+import { loadPaths, sentText, type BenchAnswer, type LoadedPath } from "./paths.ts";
+import { buildAllSuites } from "./suites/build.ts";
 import type { BenchCase, SuiteBuild, SuiteName } from "./suites/types.ts";
+import type { GuardianSummary } from "./guardian.ts";
+import type { MailSummary } from "./mail.ts";
+import type { ProbeSummary } from "./probes.ts";
+
+export interface CasePath {
+  name: string;
+  live: boolean;
+  knowsCatalog: boolean;
+}
 
 export interface CaseResult {
   caseId: string;
   suite: SuiteName;
-  answer: { text: string; bubbles?: string[]; actions: { kind: string; detail?: string }[] };
+  path?: CasePath;
+  answer: {
+    text: string;
+    bubbles?: string[];
+    actions: { kind: string; detail?: string }[];
+    route?: "fast" | "deep";
+    guardChanges?: string[];
+  };
   checks: CheckResult[];
   judge: JudgeScore | null;
   latencyMs: number;
+  firstTextMs?: number;
   inputTokens: number;
   outputTokens: number;
 }
@@ -30,17 +47,33 @@ export interface GateFailure {
   detail?: string;
 }
 
+export interface JudgeTraits {
+  helpful: number;
+  accurate: number;
+  plain: number;
+  warm: number;
+}
+
 export interface SuiteScore {
   suite: string;
   version: number;
   cases: number;
+  // Cases answered by live code, not a stand-in.
+  liveCases?: number;
   hardCheckPassRate: number;
   checkPassRate: number;
   judgeMean: number;
+  traits?: JudgeTraits;
   gateFailed: boolean;
   gateFailures: GateFailure[];
   p50Ms: number;
   p95Ms: number;
+  // Time to the first text the person sees (the heads-up on a deep turn).
+  firstTextP50Ms?: number;
+  firstTextP95Ms?: number;
+  // Share of answers the voice guard had to change before sending.
+  guardChangeRate?: number;
+  deepRate?: number;
   inputTokens: number;
   outputTokens: number;
   usdPer1kAnswers: number;
@@ -50,11 +83,15 @@ export interface PathInfo {
   live: boolean;
   name: string;
   detail: string;
+  liveCases?: number;
+  standinCases?: number;
 }
 
 export interface CaseFingerprint {
   suite: string;
   version: number;
+  // Only live cases count toward a regression; a stand-in answer never moves.
+  live?: boolean;
   hardPass: boolean;
   judgeMean: number | null;
 }
@@ -74,7 +111,10 @@ export interface RunReport {
   caseCount: number;
   gateFailed: boolean;
   paths: Record<string, PathInfo>;
-  judge: { id: string; live: boolean };
+  // The answering and judging model IDs. Kept for the record; the staff page
+  // never shows them.
+  models?: { answering: string | null; judge: string };
+  judge: { id: string; live: boolean; errors?: number };
   dns: string;
   calibration: { agreement: number; kept: boolean; provisional: boolean };
   holdout: { configured: boolean; reason?: string; pinMatch?: boolean };
@@ -83,6 +123,11 @@ export interface RunReport {
   // only its suite aggregates are public.
   fingerprints: Record<string, CaseFingerprint>;
   eligibility: GateEligibility;
+  // Plain sentences naming every part that did not run live.
+  standins?: string[];
+  probes?: ProbeSummary;
+  guardian?: GuardianSummary;
+  mail?: MailSummary;
 }
 
 export interface RunOptions {
@@ -93,15 +138,17 @@ export interface RunOptions {
   env?: NodeJS.ProcessEnv;
   runId?: string;
   onlyCaseIds?: Set<string>;
+  concurrency?: number;
 }
 
-function percentile(sorted: number[], p: number): number {
+export function percentile(values: number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
   if (sorted.length === 0) return 0;
   const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
   return sorted[Math.max(0, idx)]!;
 }
 
-function pricesFromEnv(env: NodeJS.ProcessEnv): RunReport["prices"] {
+export function pricesFromEnv(env: NodeJS.ProcessEnv): RunReport["prices"] {
   const input = Number(env.QUALITY_PRICE_INPUT_PER_1K ?? "");
   const output = Number(env.QUALITY_PRICE_OUTPUT_PER_1K ?? "");
   const configured = Number.isFinite(input) && Number.isFinite(output) && (input > 0 || output > 0);
@@ -123,10 +170,13 @@ export function attachJudgeGate(results: CaseResult[]): void {
   }
 }
 
+function avg(values: number[]): number {
+  return values.length === 0 ? 0 : values.reduce((s, v) => s + v, 0) / values.length;
+}
+
 export function scoreSuite(suite: SuiteBuild, results: CaseResult[], prices: RunReport["prices"]): SuiteScore {
   const allChecks = results.flatMap((r) => r.checks);
   const casesPassing = results.filter((r) => r.checks.every((c) => c.pass)).length;
-  const latencies = results.map((r) => r.latencyMs).sort((a, b) => a - b);
   const inputTokens = results.reduce((s, r) => s + r.inputTokens, 0);
   const outputTokens = results.reduce((s, r) => s + r.outputTokens, 0);
   const gate: GateFailure[] = [];
@@ -135,17 +185,34 @@ export function scoreSuite(suite: SuiteBuild, results: CaseResult[], prices: Run
   }
   const judges = results.map((r) => r.judge).filter((j): j is JudgeScore => j !== null);
   const usd = (inputTokens / 1000) * prices.inputPer1k + (outputTokens / 1000) * prices.outputPer1k;
+  const line = results.filter((r) => r.answer.route !== undefined);
+  const firstText = line.map((r) => r.firstTextMs ?? r.latencyMs);
   return {
     suite: suite.suite,
     version: suite.version,
     cases: results.length,
+    liveCases: results.filter((r) => r.path?.live === true).length,
     hardCheckPassRate: results.length === 0 ? 1 : casesPassing / results.length,
     checkPassRate: hardCheckPassRate(allChecks),
     judgeMean: judgeMean(judges),
+    traits: {
+      helpful: avg(judges.map((j) => j.helpful)),
+      accurate: avg(judges.map((j) => j.accurate)),
+      plain: avg(judges.map((j) => j.plain)),
+      warm: avg(judges.map((j) => j.warm)),
+    },
     gateFailed: gate.length > 0,
     gateFailures: gate,
-    p50Ms: percentile(latencies, 50),
-    p95Ms: percentile(latencies, 95),
+    p50Ms: percentile(results.map((r) => r.latencyMs), 50),
+    p95Ms: percentile(results.map((r) => r.latencyMs), 95),
+    ...(line.length > 0
+      ? {
+          firstTextP50Ms: percentile(firstText, 50),
+          firstTextP95Ms: percentile(firstText, 95),
+          guardChangeRate: line.filter((r) => (r.answer.guardChanges ?? []).length > 0).length / line.length,
+          deepRate: line.filter((r) => r.answer.route === "deep").length / line.length,
+        }
+      : {}),
     inputTokens,
     outputTokens,
     usdPer1kAnswers: results.length === 0 ? 0 : (usd / results.length) * 1000,
@@ -153,12 +220,58 @@ export function scoreSuite(suite: SuiteBuild, results: CaseResult[], prices: Run
 }
 
 function judgeForSuite(judge: JudgeClient | null | undefined, env: NodeJS.ProcessEnv): JudgeClient {
-  if (judge !== undefined) {
-    if (judge === null) return new FakeJudge();
-    return judge;
-  }
+  if (judge !== undefined) return judge ?? new FakeJudge();
   const model = judgeClientFromEnv(env);
   return model.live ? new MetaJudge(model) : new FakeJudge();
+}
+
+// What the judge is told the writer had. The text line answers from the
+// person's messages alone, so its answer is judged on that, not on the
+// catalog the reference was written from.
+const NO_CATALOG_FACTS =
+  "The writer had only the person's messages, with no program catalog. The reference was written with a catalog of made-up phone numbers, links and amounts; do not mark the writer down for lacking them. Mark down any specific fact about the person's own case that the person did not give, and any phone, link or amount that looks invented.";
+
+export function judgeFacts(c: BenchCase, knowsCatalog: boolean): string {
+  return knowsCatalog ? calibrationFacts(c) : `${NO_CATALOG_FACTS}\nThe person wrote:\n${c.input.turns.join("\n")}`;
+}
+
+// Runs fn over items with at most `limit` in flight, keeping input order.
+export async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!, i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+// Judges in shuffled batches. A batch the judge cannot score is tried once
+// more; after that its answers carry no judge score and the run reports how
+// many, so one bad reply never sinks a whole night.
+async function judgeRobust(items: JudgeItem[], judge: JudgeClient, seed = 7): Promise<{ scores: (JudgeScore | null)[]; errors: number }> {
+  let errors = 0;
+  const once: JudgeClient = {
+    id: judge.id,
+    live: judge.live,
+    score: async (batch) => {
+      try {
+        return await judge.score(batch);
+      } catch {
+        try {
+          return await judge.score(batch);
+        } catch {
+          errors += batch.length;
+          return batch.map(() => null as unknown as JudgeScore);
+        }
+      }
+    },
+  };
+  const scores = await judgeAll(items, once, seed);
+  return { scores: scores.map((s) => s ?? null), errors };
 }
 
 export interface BenchOutcome {
@@ -166,8 +279,14 @@ export interface BenchOutcome {
   results: CaseResult[];
   paths: Record<string, PathInfo>;
   judge: JudgeClient;
+  judgeErrors: number;
+  answeringModel: string | null;
   skippedSuites: string[];
   expectedCaseIds: string[];
+}
+
+function pathOf(loaded: LoadedPath): CasePath {
+  return { name: loaded.path.name, live: loaded.path.live, knowsCatalog: loaded.path.knowsCatalog };
 }
 
 export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
@@ -178,82 +297,87 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
   const broken = opts.broken ?? env.MANO_QUALITY_BROKEN === "1";
   const wanted = new Set(opts.suites ?? ["chat", "text", "letters", "safety", "personas"]);
 
-  const builds: SuiteBuild[] = [];
-  for (const suite of buildAllSuites()) {
-    if (wanted.has(suite.suite)) builds.push(suite);
-  }
+  const builds: SuiteBuild[] = buildAllSuites().filter((s) => wanted.has(s.suite));
   const holdout = loadHoldout(env.MANO_QUALITY_HOLDOUT_PATH, env.MANO_QUALITY_HOLDOUT_SHA256);
-  const holdoutWanted = wanted.has("safety-holdout");
-  if (holdoutWanted && holdout.configured && holdout.cases) {
+  if (wanted.has("safety-holdout") && holdout.configured && holdout.cases) {
     builds.push(buildHoldoutSuite(holdout.cases, holdout.version ?? 1));
   }
-  const built = new Set(builds.map((b) => b.suite));
-  const skippedSuites = [...wanted].filter((s) => !built.has(s as SuiteBuild["suite"]));
+  const built = new Set<string>(builds.map((b) => b.suite));
+  const skippedSuites = [...wanted].filter((s) => !built.has(s));
 
-  const loaded = await loadAllAnswerPaths(broken);
-  const paths: Record<string, PathInfo> = {};
-  for (const [suite, info] of Object.entries(loaded)) {
-    paths[suite] = { live: info.path.live, name: info.path.name, detail: info.detail };
-  }
-  if (builds.some((b) => b.suite === ("safety-holdout" as SuiteName))) {
-    paths["safety-holdout"] = paths.safety!;
-  }
+  const pathSet = await loadPaths(env, broken);
+  const cases = builds.flatMap((b) => b.cases.filter((c) => !opts.onlyCaseIds || opts.onlyCaseIds.has(c.id)));
 
-  const results: CaseResult[] = [];
-  const judgeItems: { result: CaseResult; item: { answer: string; facts: string; reference: string } }[] = [];
-
-  for (const build of builds) {
-    const suiteKey = (build.suite === ("safety-holdout" as SuiteName) ? "safety" : build.suite) as SuiteName;
-    for (const c of build.cases) {
-      if (opts.onlyCaseIds && !opts.onlyCaseIds.has(c.id)) continue;
-      const start = Date.now();
-      let answer: BenchAnswer;
-      try {
-        answer = await loaded[suiteKey]!.path.answer(c);
-      } catch (err) {
-        answer = { text: "", actions: [], latencyMs: Date.now() - start, inputTokens: 0, outputTokens: 0 };
-        results.push({
-          caseId: c.id, suite: c.suite,
-          answer: { text: "", actions: [{ kind: "answer-error", detail: err instanceof Error ? err.message : "unknown" }] },
-          checks: [{ id: "answer-error", pass: false, detail: "the answer path threw" }],
-          judge: null, latencyMs: Date.now() - start, inputTokens: 0, outputTokens: 0,
-        });
-        continue;
-      }
-      const checks = await runHardChecks(c, answer, dns);
+  const answered = await mapPool(cases, opts.concurrency ?? 4, async (c) => {
+    const loaded = pathSet.forCase(c);
+    const path = pathOf(loaded);
+    const start = Date.now();
+    let answer: BenchAnswer;
+    try {
+      answer = await loaded.path.answer(c);
+    } catch (err) {
       const result: CaseResult = {
-        caseId: c.id, suite: build.suite as SuiteName,
-        answer: { text: answer.text, ...(answer.bubbles ? { bubbles: answer.bubbles } : {}), actions: answer.actions },
-        checks, judge: null,
-        latencyMs: answer.latencyMs || Date.now() - start,
-        inputTokens: answer.inputTokens, outputTokens: answer.outputTokens,
+        caseId: c.id, suite: c.suite, path,
+        answer: { text: "", actions: [{ kind: "answer-error", detail: err instanceof Error ? err.name : "unknown" }] },
+        checks: [{ id: "answer-error", pass: false, detail: `the answer path threw ${err instanceof Error ? err.name : "an error"}` }],
+        judge: null, latencyMs: Date.now() - start, inputTokens: 0, outputTokens: 0,
       };
-      results.push(result);
-      judgeItems.push({ result, item: { answer: sentText(answer), facts: calibrationFacts(c), reference: c.reference } });
+      return { c, result, judged: null, detail: loaded.detail };
     }
-  }
+    const checks = await runHardChecks(c, answer, dns, { knowsCatalog: path.knowsCatalog });
+    const result: CaseResult = {
+      caseId: c.id, suite: c.suite, path,
+      answer: {
+        text: answer.text,
+        ...(answer.bubbles ? { bubbles: answer.bubbles } : {}),
+        actions: answer.actions,
+        ...(answer.route ? { route: answer.route } : {}),
+        ...(answer.guardChanges ? { guardChanges: answer.guardChanges } : {}),
+      },
+      checks, judge: null,
+      latencyMs: answer.latencyMs || Date.now() - start,
+      ...(answer.firstTextMs !== undefined ? { firstTextMs: answer.firstTextMs } : {}),
+      inputTokens: answer.inputTokens, outputTokens: answer.outputTokens,
+    };
+    const judged: JudgeItem = { answer: sentText(answer), facts: judgeFacts(c, path.knowsCatalog), reference: c.reference };
+    return { c, result, judged, detail: loaded.detail };
+  });
 
-  const scores = await judgeAll(judgeItems.map((j) => j.item), judge);
+  const results = answered.map((a) => a.result);
+  const toJudge = answered.filter((a) => a.judged !== null);
+  const { scores, errors } = await judgeRobust(toJudge.map((a) => a.judged!), judge);
   scores.forEach((s, i) => {
-    judgeItems[i]!.result.judge = s;
+    toJudge[i]!.result.judge = s;
   });
   attachJudgeGate(results);
 
   const prices = pricesFromEnv(env);
   const suites: Record<string, SuiteScore> = {};
+  const paths: Record<string, PathInfo> = {};
   for (const build of builds) {
-    suites[build.suite] = scoreSuite(build, results.filter((r) => r.suite === (build.suite as SuiteName)), prices);
+    const rows = answered.filter((a) => a.result.suite === build.suite);
+    const subset = rows.map((a) => a.result);
+    if (subset.length === 0) continue;
+    suites[build.suite] = scoreSuite(build, subset, prices);
+    const live = subset.filter((r) => r.path?.live);
+    const names = [...new Set(subset.map((r) => r.path?.name ?? "unknown"))];
+    const standinRows = rows.filter((a) => !a.result.path?.live);
+    const details = [...new Set((standinRows.length > 0 ? standinRows : rows).map((a) => a.detail))];
+    paths[build.suite] = {
+      live: live.length === subset.length,
+      name: names.join(" + "),
+      detail: details.join("; "),
+      liveCases: live.length,
+      standinCases: subset.length - live.length,
+    };
   }
 
   // Calibration runs on every bench so a drifting judge cannot pass silently.
   const cal = buildCalibrationSet();
-  const calScores = await judgeAll(cal.map((c) => ({ answer: c.answer, facts: c.facts, reference: c.reference })), judge, 99);
-  const calAgreement = agreement(calScores, cal.map((c) => c.label));
+  const calRun = await judgeRobust(cal.map((c) => ({ answer: c.answer, facts: c.facts, reference: c.reference })), judge, 99);
+  const calScored = calRun.scores.map((s, i) => ({ s, label: cal[i]!.label })).filter((x) => x.s !== null);
+  const calAgreement = agreement(calScored.map((x) => x.s!), calScored.map((x) => x.label));
 
-  void JUDGE_AGREEMENT_MIN;
-  const expectedCaseIds = opts.onlyCaseIds
-    ? [...opts.onlyCaseIds]
-    : builds.flatMap((b) => b.cases.map((c) => c.id));
   return {
     report: {
       suites,
@@ -265,20 +389,46 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
     results,
     paths,
     judge,
+    judgeErrors: errors,
+    answeringModel: pathSet.textLineModel,
     skippedSuites,
-    expectedCaseIds,
+    // A requested case that no suite holds counts as missing, never as run.
+    expectedCaseIds: opts.onlyCaseIds ? [...opts.onlyCaseIds] : cases.map((c) => c.id),
   };
 }
 
 export interface FinishInput {
   results: CaseResult[];
   expectedCaseIds: string[];
-  requireHoldout: boolean;
+  // Retired: the holdout is reported, not required. Kept so old callers
+  // still type-check.
+  requireHoldout?: boolean;
+  judgeErrors?: number;
+  answeringModel?: string | null;
 }
 
-// A run is gate-eligible only when every case ran against production code
-// with the live judge, coverage matches the expected case list exactly, the
-// judge is calibrated on hand labels, and (for full runs) the holdout verified.
+export function fingerprintsOf(results: CaseResult[], suites: Record<string, SuiteScore>): Record<string, CaseFingerprint> {
+  const out: Record<string, CaseFingerprint> = {};
+  for (const r of results) {
+    if (r.suite === "safety-holdout") continue;
+    out[r.caseId] = {
+      suite: r.suite,
+      version: suites[r.suite]?.version ?? 0,
+      live: r.path?.live === true,
+      hardPass: r.checks.every((c) => c.pass),
+      judgeMean: r.judge ? (r.judge.helpful + r.judge.accurate + r.judge.plain + r.judge.warm) / 4 : null,
+    };
+  }
+  return out;
+}
+
+// A run is gate-eligible when its live cases ran with the live judge and its
+// coverage matches the expected case list exactly. Stand-in cases (mail until
+// it merges) are labeled and left out of every comparison, so they cannot
+// hold a gate open or shut. Provisional calibration labels and a missing
+// holdout are reported on every surface but do not block the gate: a drop is
+// measured against the same judge on the same cases, which hand labels do
+// not change.
 export function finishReport(
   partial: Partial<RunReport> & Pick<RunReport, "suites">,
   ctx: { runId: string; startedAt: string; finishedAt: string; gitSha: string | null; broken: boolean; paths: Record<string, PathInfo>; judge: JudgeClient; dns: string; env: NodeJS.ProcessEnv },
@@ -287,31 +437,30 @@ export function finishReport(
   const caseCount = Object.values(partial.suites).reduce((s, suite) => s + suite.cases, 0);
   const calibration = partial.calibration ?? { agreement: 0, kept: false, provisional: true };
   const holdout = partial.holdout ?? { configured: false };
-  const fingerprints: Record<string, CaseFingerprint> = {};
-  for (const r of input.results) {
-    if (r.suite === "safety-holdout") continue;
-    const version = partial.suites[r.suite]?.version ?? 0;
-    fingerprints[r.caseId] = {
-      suite: r.suite,
-      version,
-      hardPass: r.checks.every((c) => c.pass),
-      judgeMean: r.judge ? (r.judge.helpful + r.judge.accurate + r.judge.plain + r.judge.warm) / 4 : null,
-    };
-  }
+  const fingerprints = fingerprintsOf(input.results, partial.suites);
   const ran = new Set(input.results.map((r) => r.caseId));
   const missing = input.expectedCaseIds.filter((id) => !ran.has(id));
   const expected = new Set(input.expectedCaseIds);
   const extra = input.results.map((r) => r.caseId).filter((id) => !expected.has(id));
+  const liveCases = input.results.filter((r) => r.path?.live).length;
+  const judgeErrors = input.judgeErrors ?? 0;
+
   const reasons: string[] = [];
-  for (const [suite, info] of Object.entries(ctx.paths)) {
-    if (suite in partial.suites && !info.live) reasons.push(`suite ${suite} ran on a stand-in path`);
-  }
+  if (liveCases === 0) reasons.push("no case ran on live code");
   if (!ctx.judge.live) reasons.push("judge is a stand-in");
-  if (calibration.provisional) reasons.push("calibration labels are provisional");
   else if (!calibration.kept) reasons.push(`judge agreement ${Math.round(calibration.agreement * 100)}% is under 80%`);
+  if (judgeErrors > 0) reasons.push(`the judge could not score ${judgeErrors} answer(s)`);
   if (missing.length > 0) reasons.push(`missing cases: ${missing.join(", ")}`);
   if (extra.length > 0) reasons.push(`unexpected cases: ${extra.join(", ")}`);
-  if (input.requireHoldout && !holdout.configured) reasons.push(`holdout not verified (${holdout.reason ?? "unconfigured"})`);
+
+  const standins: string[] = [];
+  for (const [suite, info] of Object.entries(ctx.paths)) {
+    if ((info.standinCases ?? (info.live ? 0 : 1)) > 0) standins.push(`${suite}: ${info.standinCases ?? "all"} case(s) on a stand-in (${info.detail})`);
+  }
+  if (!ctx.judge.live) standins.push("judge: deterministic stand-in, no model");
+  if (calibration.provisional) standins.push("judge calibration labels are provisional, not hand labels");
+  if (!holdout.configured) standins.push(`safety holdout did not run (${holdout.reason ?? "not configured"})`);
+
   return {
     runId: ctx.runId,
     startedAt: ctx.startedAt,
@@ -322,12 +471,14 @@ export function finishReport(
     caseCount,
     gateFailed: Object.values(partial.suites).some((s) => s.gateFailed),
     paths: ctx.paths,
-    judge: { id: ctx.judge.id, live: ctx.judge.live },
+    models: { answering: input.answeringModel ?? null, judge: ctx.judge.id.replace(/^judge:/, "") },
+    judge: { id: ctx.judge.id, live: ctx.judge.live, errors: judgeErrors },
     dns: ctx.dns,
     calibration,
     holdout,
     prices: pricesFromEnv(ctx.env),
     fingerprints,
     eligibility: { eligible: reasons.length === 0, reasons },
+    standins,
   };
 }

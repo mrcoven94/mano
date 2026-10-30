@@ -10,7 +10,7 @@ import test from "node:test";
 import { LocalDns } from "../src/links.ts";
 import { FakeJudge } from "../src/judge.ts";
 import { rescoreRun } from "../src/rescore.ts";
-import { compareMatched, evalGate, prComment, publicReport, readRun, writeNightlyStaging, writeRun } from "../src/report.ts";
+import { compareMatched, evalGate, prComment, publicReport, readHistory, readRun, writeNightlyStaging, writeRun } from "../src/report.ts";
 import { attachJudgeGate, finishReport, runBench, scoreSuite, type CaseResult, type RunReport } from "../src/run.ts";
 import { buildSuite } from "../src/suites/build.ts";
 import { SMOKE_CASE_IDS } from "../src/smoke.ts";
@@ -32,8 +32,14 @@ async function smokeRun(broken: boolean, onlyCaseIds = SMOKE_CASE_IDS, requireHo
   return { full, results: out.results, skipped: out.skippedSuites };
 }
 
+// A reference run dressed up as a live, eligible one, for the comparison
+// logic. Real runs get live fingerprints only from the text line.
 function eligible(report: RunReport): RunReport {
-  return { ...report, eligibility: { eligible: true, reasons: [] } };
+  return {
+    ...report,
+    eligibility: { eligible: true, reasons: [] },
+    fingerprints: Object.fromEntries(Object.entries(report.fingerprints).map(([id, f]) => [id, { ...f, live: true }])),
+  };
 }
 
 test("reference-path smoke is neutral, never a pass", async () => {
@@ -61,10 +67,9 @@ test("coverage mismatch makes a run ineligible", async () => {
   assert.ok(full.eligibility.reasons.some((r) => r.includes("missing cases: chat-nope-99")));
 });
 
-test("full runs require a verified holdout", async () => {
+test("a missing holdout is labeled on the run, not hidden", async () => {
   const { full } = await smokeRun(false, SMOKE_CASE_IDS, true);
-  assert.equal(full.eligibility.eligible, false);
-  assert.ok(full.eligibility.reasons.some((r) => r.includes("holdout not verified")));
+  assert.ok(full.standins!.some((r) => r.includes("safety holdout did not run")));
 });
 
 test("a judge fail gates safety cases but not chat cases", () => {
@@ -148,22 +153,31 @@ test("baselines compare matching cases at the same suite version", async () => {
   assert.equal(noBaseline.status, "neutral");
 });
 
-test("only eligible runs become latest.json; the rest are diagnostics", async () => {
+test("every nightly run is recorded; only eligible runs become the baseline", async () => {
   const { full, results } = await smokeRun(false);
   const dir = mkdtempSync(join(tmpdir(), "quality-staging-"));
 
-  const diag = writeNightlyStaging(join(dir, "ineligible"), full, results);
-  assert.equal(diag.eligible, false);
-  assert.ok(diag.diagnosticPath && existsSync(diag.diagnosticPath));
-  assert.equal(existsSync(join(dir, "ineligible", "public", "latest.json")), false);
-  assert.ok(existsSync(join(diag.privateRunDir, "cases.json")), "per-case data stays private");
+  const first = writeNightlyStaging(join(dir, "n"), { ...full, runId: "2026-10-28" }, results);
+  assert.equal(first.eligible, false);
+  assert.ok(existsSync(join(dir, "n", "public", "latest.json")), "the page always sees the latest run");
+  assert.equal(existsSync(join(dir, "n", "public", "baseline.json")), false, "an ineligible run never gates anyone");
+  assert.ok(existsSync(join(first.privateRunDir, "cases.json")), "per-case data stays private");
+  assert.equal(existsSync(join(dir, "n", "public", "cases.json")), false);
 
-  const ok = writeNightlyStaging(join(dir, "eligible"), eligible(full), results);
-  assert.equal(ok.eligible, true);
-  const latest = JSON.parse(readFileSync(join(dir, "eligible", "public", "latest.json"), "utf8")) as RunReport;
-  assert.equal(Object.keys(latest.fingerprints).length, 28);
-  const history = JSON.parse(readFileSync(join(dir, "eligible", "public", "history.json"), "utf8")) as unknown[];
-  assert.equal(history.length, 1);
+  const prior = readHistory(join(dir, "n", "public", "history.json"));
+  const second = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, prior);
+  assert.equal(second.eligible, true);
+  const baseline = JSON.parse(readFileSync(join(dir, "n", "public", "baseline.json"), "utf8")) as RunReport;
+  assert.equal(baseline.runId, "2026-10-29");
+  assert.equal(Object.keys(baseline.fingerprints).length, 28);
+
+  const rerun = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, readHistory(join(dir, "n", "public", "history.json")));
+  assert.ok(rerun.eligible);
+  const history = readHistory(join(dir, "n", "public", "history.json"));
+  assert.deepEqual(history.map((h) => h.runId), ["2026-10-28", "2026-10-29"], "a rerun replaces its own row");
+  assert.deepEqual(history.map((h) => h.eligible), [false, true]);
+  const publicText = readFileSync(join(dir, "n", "public", "history.json"), "utf8") + readFileSync(join(dir, "n", "public", "latest.json"), "utf8");
+  assert.ok(!publicText.includes(results[0]!.answer.text.slice(0, 40)), "public files hold no answer text");
 });
 
 test("public reports keep holdout aggregates but drop per-case detail", async () => {

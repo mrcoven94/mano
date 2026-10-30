@@ -96,8 +96,12 @@ export class DohDns implements DnsClient {
   }
 }
 
+// Live runs (a model key is set) check links against the Cloudflare
+// resolvers by default; MANO_QUALITY_LIVE_DNS=0 forces the local table and
+// =1 forces DoH without a key.
 export function dnsFromEnv(env: NodeJS.ProcessEnv = process.env): DnsClient {
-  if (env.MANO_QUALITY_LIVE_DNS === "1") {
+  const forced = env.MANO_QUALITY_LIVE_DNS;
+  if (forced === "1" || (forced !== "0" && Boolean(env.META_MODEL_API_KEY))) {
     return new DohDns(env.MANO_QUALITY_DNS_URL || undefined, env.MANO_QUALITY_DNS_FAMILY_URL || undefined);
   }
   return new LocalDns();

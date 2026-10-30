@@ -4,7 +4,7 @@
 
 import { runHardChecks } from "./checks.ts";
 import { LocalDns } from "./links.ts";
-import { attachJudgeGate, scoreSuite, type CaseResult, type RunReport } from "./run.ts";
+import { attachJudgeGate, fingerprintsOf, scoreSuite, type CaseResult, type RunReport } from "./run.ts";
 import { buildAllSuites } from "./suites/build.ts";
 import type { BenchCase } from "./suites/types.ts";
 import { readRun, writeRun } from "./report.ts";
@@ -23,10 +23,19 @@ export async function rescoreRun(inDir: string, outDir: string): Promise<RunRepo
       rescored.push(r);
       continue;
     }
+    // A stored answer error has nothing to re-check.
+    if (r.checks.some((x) => x.id === "answer-error")) {
+      rescored.push(r);
+      continue;
+    }
     const checks = await runHardChecks(
       c,
-      { text: r.answer.text, bubbles: r.answer.bubbles, actions: r.answer.actions, latencyMs: r.latencyMs, inputTokens: r.inputTokens, outputTokens: r.outputTokens },
+      {
+        text: r.answer.text, bubbles: r.answer.bubbles, actions: r.answer.actions, latencyMs: r.latencyMs,
+        inputTokens: r.inputTokens, outputTokens: r.outputTokens, ...(r.answer.route ? { route: r.answer.route } : {}),
+      },
       dns,
+      { knowsCatalog: r.path?.knowsCatalog ?? true },
     );
     rescored.push({ ...r, checks });
   }
@@ -39,17 +48,7 @@ export async function rescoreRun(inDir: string, outDir: string): Promise<RunRepo
   for (const [name, score] of Object.entries(report.suites)) {
     if (!(name in suites)) suites[name] = score;
   }
-  const fingerprints: RunReport["fingerprints"] = {};
-  for (const r of rescored) {
-    if (r.suite === "safety-holdout") continue;
-    const version = suites[r.suite]?.version ?? 0;
-    fingerprints[r.caseId] = {
-      suite: r.suite,
-      version,
-      hardPass: r.checks.every((c) => c.pass),
-      judgeMean: r.judge ? (r.judge.helpful + r.judge.accurate + r.judge.plain + r.judge.warm) / 4 : null,
-    };
-  }
+  const fingerprints = fingerprintsOf(rescored, suites);
   const out: RunReport = {
     ...report,
     runId: `${report.runId}-rescored`,

@@ -9,6 +9,10 @@ import { containsPromise, extractAmounts, extractDates, extractPhones, extractUr
 import { mulberry32, shuffle } from "./prng.ts";
 
 export const JUDGE_BATCH_SIZE = 8;
+// Reasoning tokens count against the cap. A batch of 8 used about 3,400
+// tokens, 3,000 of them reasoning, so the old cap of 2,000 returned empty
+// replies that read as parse errors.
+export const JUDGE_MAX_TOKENS = 16000;
 export const JUDGE_AGREEMENT_MIN = 0.8;
 
 export interface JudgeItem {
@@ -100,7 +104,7 @@ export class MetaJudge implements JudgeClient {
     }
     const result = await this.model.complete(
       [{ role: "user", content: judgePrompt(batch) }],
-      { maxTokens: 2000 },
+      { maxTokens: JUDGE_MAX_TOKENS },
     );
     return parseJudgeScores(result.text, batch.length);
   }
