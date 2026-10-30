@@ -102,7 +102,7 @@ async function mailPath(): Promise<LoadedPath> {
     }
     return { path: new ReferencePath(), standin: true, detail: "packages/mail exports no qualityAnswerPath yet; reference stand-in" };
   } catch {
-    return { path: new ReferencePath(), standin: true, detail: "packages/mail is not merged yet; reference stand-in" };
+    return { path: new ReferencePath(), standin: true, detail: "packages/mail exports no qualityAnswerPath yet; reference stand-in" };
   }
 }
 

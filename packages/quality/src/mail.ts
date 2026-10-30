@@ -1,7 +1,7 @@
 // Mail's published-deadline accuracy: for each synthetic letter in the
 // letters suite, does the deadline the mail reader publishes match the one
 // the letter sets (none for a scam or a letter with two dates)? The real
-// reader is packages/mail, which is not merged yet; until it exports
+// reader is packages/mail, which has no quality adapter yet; until it exports
 // qualityDeadlineReader, a stand-in reads the letter's transcript and every
 // report says so.
 
@@ -54,7 +54,7 @@ export async function loadDeadlineReader(): Promise<{ reader: DeadlineReader; de
     }
     return { reader: new TranscriptDeadlineReader(), detail: "stand-in: packages/mail exports no qualityDeadlineReader yet" };
   } catch {
-    return { reader: new TranscriptDeadlineReader(), detail: "stand-in: packages/mail is not merged yet (PR 23)" };
+    return { reader: new TranscriptDeadlineReader(), detail: "stand-in: packages/mail exports no qualityDeadlineReader yet" };
   }
 }
 
