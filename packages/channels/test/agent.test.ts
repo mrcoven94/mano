@@ -292,8 +292,10 @@ describe("deleting a conversation in Engine", () => {
       channelsToken: "channels-token",
       grantSecret: "grant-secret-for-tests",
       handleHash: HANDLE,
+      generation: 2,
       fetchFn,
     });
+    expect(JSON.parse(String(seen[0].init.body))).toEqual({ generation: 2 });
     expect(removed).toMatchObject({ remindersCancelled: 2, pendingPointerCleared: true });
     expect(seen[0].url).toBe(`https://engine.example/api/persons/handle-${HANDLE}/conversation`);
     expect(seen[0].init.method).toBe("DELETE");
@@ -305,7 +307,7 @@ describe("deleting a conversation in Engine", () => {
   it("reports an unconfirmed delete as null", async () => {
     const fetchFn = (async () => new Response("no", { status: 403 })) as typeof fetch;
     expect(
-      await deleteConversationInEngine({ engineUrl: "https://e", channelsToken: "t", grantSecret: "g", handleHash: HANDLE, fetchFn }),
+      await deleteConversationInEngine({ engineUrl: "https://e", channelsToken: "t", grantSecret: "g", handleHash: HANDLE, generation: 1, fetchFn }),
     ).toBeNull();
   });
 });

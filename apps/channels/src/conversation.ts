@@ -299,6 +299,7 @@ export class ConversationDO implements DurableObject {
           channelsToken: this.env.MANO_ENGINE_CHANNELS_TOKEN,
           grantSecret: this.env.MANO_HANDLE_GRANT_SECRET,
           handleHash: body.handleHash,
+          generation: store.meta().generation,
         }).catch(() => null);
         if (!engineRemoved) this.logger.warn("engine_delete_failed", { handle: body.handleHash });
       }

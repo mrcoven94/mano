@@ -264,6 +264,9 @@ export interface EngineConversationDelete {
   channelsToken: string;
   grantSecret: string;
   handleHash: string;
+  // The generation the conversation moved to. Engine's delete is a
+  // transition to it, so a retry never wipes the conversation after it.
+  generation: number;
   fetchFn?: typeof fetch;
 }
 
@@ -283,8 +286,10 @@ export async function deleteConversationInEngine(
       signal: AbortSignal.timeout(30_000),
       headers: {
         authorization: `Bearer ${req.channelsToken}`,
+        "content-type": "application/json",
         "x-mano-handle-grant": await mintHandleGrant(req.handleHash, req.grantSecret),
       },
+      body: JSON.stringify({ generation: req.generation }),
     },
   );
   if (!res.ok) {
