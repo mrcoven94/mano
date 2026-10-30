@@ -8,7 +8,7 @@ import {
 } from "@mano/channels";
 import { ConversationRunner, DEFAULT_RUNNER_CONFIG, type RunnerConfig, type SpendLedger } from "../src/runner.js";
 import { GlobalLedger, MemoryGlobalStore } from "../src/global.js";
-import { MemoryStore } from "../src/store.js";
+import { MemoryStore, type ConversationStore } from "../src/store.js";
 import { MemoryFileStore } from "../src/files.js";
 
 export const TEST_PEPPER = "test-pepper-not-real";
@@ -88,11 +88,14 @@ export function makeHarness(
     byteBudget?: number;
     startMs?: number;
     fetchFn?: typeof fetch;
+    reportPresentation?: import("../src/runner.js").RunnerDeps["reportPresentation"];
+    // Another store behind the same interface, such as SqlConversationStore.
+    store?: ConversationStore;
   } = {},
 ): Harness {
   const lines: string[] = [];
   const logger = createLogger((line) => lines.push(line));
-  const store = new MemoryStore();
+  const store = (opts.store ?? new MemoryStore()) as MemoryStore;
   const channel = new RecordingChannel();
   const responder = opts.responder ?? new StandInResponder(opts.replies ?? ["Thanks for writing. Here is what I found."]);
   const files = new MemoryFileStore();
@@ -140,6 +143,7 @@ export function makeHarness(
     nowMs: () => h.now,
     fetchFn: opts.fetchFn ?? (async () => new Response("missing", { status: 404 })),
     config: { handleHash: TEST_HANDLE_HASH, ...DEFAULT_RUNNER_CONFIG, ...opts.config },
+    reportPresentation: opts.reportPresentation,
   });
   return h;
 }

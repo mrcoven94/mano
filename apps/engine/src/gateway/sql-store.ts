@@ -1,6 +1,7 @@
 import type { ActionType, Approval, Attempt, Receipt } from "./types.js";
 import type { AuditEntry } from "./audit.js";
 import type { ApprovalStore, ConsumeGuard } from "./gateway.js";
+import type { LatestProposal, ProposalOrder } from "./types.js";
 
 // The gateway store on the agent's own SQLite. Approvals, attempts,
 // receipts and audit rows live here, so eviction or redeploy never loses
@@ -32,6 +33,14 @@ export function ensureGatewayTables(sql: SqlStorage): void {
     escalated INTEGER NOT NULL, person_id TEXT NOT NULL, request_json TEXT NOT NULL,
     request_hash TEXT NOT NULL, problems_json TEXT NOT NULL)`);
   addColumn(sql, "approvals", "generation", "INTEGER NOT NULL DEFAULT 0");
+  // A drafted proposal's order (its turn's receive time, then turn ID),
+  // and the person's latest proposal: moved only forward, in the same
+  // synchronous step that creates the approval.
+  addColumn(sql, "approvals", "proposal_received_at", "TEXT");
+  addColumn(sql, "approvals", "proposal_turn_id", "TEXT");
+  sql.exec(`CREATE TABLE IF NOT EXISTS latest_proposal(
+    slot INTEGER PRIMARY KEY CHECK (slot = 1), generation INTEGER NOT NULL, approval_id TEXT NOT NULL,
+    received_at TEXT NOT NULL, turn_id TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS attempts(
     idempotency_key TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at TEXT NOT NULL)`);
   addColumn(sql, "attempts", "request_hash", "TEXT");
@@ -47,6 +56,12 @@ export function ensureGatewayTables(sql: SqlStorage): void {
     id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL, detail TEXT NOT NULL,
     created_at TEXT NOT NULL)`);
 }
+
+// True for a row of approvals that is not a drafted proposal, or is the
+// latest one of the current generation.
+const PROPOSAL_CURRENT_SQL =
+  "(approvals.proposal_turn_id IS NULL OR approvals.id = " +
+  `(SELECT approval_id FROM latest_proposal WHERE slot = 1 AND generation = ${CURRENT_GENERATION}))`;
 
 const APPROVAL_COLUMNS =
   "id, action_type, recipient, purpose, document_hash, document_id, idempotency_key," +
@@ -139,7 +154,7 @@ export class SqlApprovalStore implements ApprovalStore {
     return Number(row?.g ?? 0);
   }
 
-  createApprovalForKey(a: Approval, generation: number): Approval | null {
+  createApprovalForKey(a: Approval, generation: number, order?: ProposalOrder): Approval | null {
     const inserted = this.sql.exec(
       `INSERT INTO approvals(${APPROVAL_COLUMNS}, generation) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?` +
         " WHERE NOT EXISTS (SELECT 1 FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected', 'revoked'))" +
@@ -149,7 +164,21 @@ export class SqlApprovalStore implements ApprovalStore {
       a.escalated ? 1 : 0, a.personId, a.requestJson, a.requestHash, JSON.stringify(a.problems), generation,
       a.idempotencyKey, generation,
     ).rowsWritten;
-    if (inserted > 0) return a;
+    if (inserted > 0) {
+      // No await between the insert above and these writes.
+      if (order) {
+        this.sql.exec("UPDATE approvals SET proposal_received_at = ?, proposal_turn_id = ? WHERE id = ?", order.receivedAt, order.turnId, a.id);
+        this.sql.exec(
+          "INSERT INTO latest_proposal(slot, generation, approval_id, received_at, turn_id) VALUES (1, ?, ?, ?, ?)" +
+            " ON CONFLICT(slot) DO UPDATE SET generation = excluded.generation, approval_id = excluded.approval_id," +
+            " received_at = excluded.received_at, turn_id = excluded.turn_id" +
+            " WHERE latest_proposal.generation <> excluded.generation" +
+            " OR (excluded.received_at, excluded.turn_id) >= (latest_proposal.received_at, latest_proposal.turn_id)",
+          generation, a.id, order.receivedAt, order.turnId,
+        );
+      }
+      return a;
+    }
     if (this.generation() !== generation) return null;
     const rows = this.sql.exec(
       `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected', 'revoked')` +
@@ -157,6 +186,25 @@ export class SqlApprovalStore implements ApprovalStore {
       a.idempotencyKey,
     ).toArray();
     return rows.length > 0 ? approvalFromRow(rows[0] as Record<string, unknown>) : null;
+  }
+
+  latestProposal(): LatestProposal | null {
+    const row = this.sql
+      .exec(`SELECT approval_id, received_at, turn_id FROM latest_proposal WHERE slot = 1 AND generation = ${CURRENT_GENERATION}`)
+      .toArray()[0] as { approval_id: string; received_at: string; turn_id: string } | undefined;
+    return row ? { approvalId: row.approval_id, receivedAt: row.received_at, turnId: row.turn_id } : null;
+  }
+
+  rejectSupersededProposals(generation: number): number {
+    return this.sql.exec(
+      `UPDATE approvals SET status = 'rejected' WHERE status = 'pending' AND NOT (${PROPOSAL_CURRENT_SQL})` +
+        ` AND generation = ${CURRENT_GENERATION} AND ${CURRENT_GENERATION} = ?`,
+      generation,
+    ).rowsWritten;
+  }
+
+  proposalCurrent(id: string): boolean {
+    return this.sql.exec(`SELECT 1 FROM approvals WHERE id = ? AND NOT (${PROPOSAL_CURRENT_SQL})`, id).toArray().length === 0;
   }
 
   approvalCurrent(id: string): boolean {
@@ -221,7 +269,7 @@ export class SqlApprovalStore implements ApprovalStore {
       "UPDATE approvals SET status = 'approved', approved_by = ?" +
         " WHERE id = ? AND status = 'pending' AND person_id = ? AND request_hash = ? AND expires_at > ?" +
         " AND NOT EXISTS (SELECT 1 FROM approvals d WHERE d.idempotency_key = approvals.idempotency_key AND d.status = 'rejected')" +
-        ` AND generation = ${CURRENT_GENERATION}`,
+        ` AND generation = ${CURRENT_GENERATION} AND ${PROPOSAL_CURRENT_SQL}`,
       humanId, id, guard.personId, guard.requestHash, new Date().toISOString(),
     );
     if (updated.rowsWritten !== 1) {

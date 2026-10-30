@@ -34,6 +34,12 @@ export interface TurnInput {
   attachmentCount: number;
   // Earlier messages, oldest first.
   history?: HistoryMessage[];
+  // The conversation's deletion generation and turn number. Stable across
+  // retries and recovery of the same turn, so the agent runs it once.
+  turnKey?: { generation: number; turn: number };
+  // When Channels received the turn's latest message, on its own clock.
+  // The agent orders a YES against the question it answers by this time.
+  receivedAtMs?: number;
 }
 
 export interface ResponderResult {
@@ -51,6 +57,10 @@ export interface ResponderResult {
   // A tapback the model chose for the person's latest message, from a
   // leading "REACT: love" line. The text may then be empty.
   tapback?: Tapback | null;
+  // An approval question this answer carries. The runner persists it with
+  // the answer and reports it once the bubbles the provider accepted show
+  // it whole, retrying the report until it lands.
+  presentation?: { approvalId: string; approval: string };
 }
 
 export interface RespondHooks {

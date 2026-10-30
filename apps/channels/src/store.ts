@@ -95,6 +95,31 @@ export interface PersistedTurn {
   updatedAtMs: number;
 }
 
+// An agent-started delivery (reminder, nudge) keyed by the agent's own
+// idempotency key. Recorded before the first send, so a redelivery
+// resumes the same turn instead of doubling the text.
+export interface AgentSendRow {
+  key: string;
+  turn: number;
+  // The deletion generation the delivery belongs to, fixed when it was
+  // first accepted. A retry never adopts a newer generation.
+  generation: number;
+  // refused and failed are final: the provider declined a bubble for good.
+  state: "sending" | "sent" | "refused" | "failed";
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+// An approval question a turn's answer carried, kept until the agent has
+// been told it reached the person (or that it did not).
+export interface PresentationRow {
+  turn: number;
+  approvalId: string;
+  approval: string;
+  generation: number;
+  state: "pending" | "reported" | "not_shown";
+}
+
 export interface ConversationMeta {
   turn: number;
   introduced: boolean;
@@ -125,6 +150,13 @@ export interface ConversationMeta {
   // than the cutoff are dropped, so queued redeliveries and feed replays
   // cannot recreate wiped data.
   deletedAtMs: number;
+  // The last STOP: the provider's timestamp of that message when it had
+  // one (optOutDated), else when Channels received it. Only an inbound
+  // sent strictly after it can re-engage.
+  optOutAtMs: number;
+  optOutDated: boolean;
+  // When Channels received that STOP, on its own clock.
+  optOutReceivedAtMs: number;
 }
 
 export function defaultMeta(): ConversationMeta {
@@ -148,6 +180,9 @@ export function defaultMeta(): ConversationMeta {
     byteDayCount: 0,
     generation: 0,
     deletedAtMs: 0,
+    optOutAtMs: 0,
+    optOutDated: false,
+    optOutReceivedAtMs: 0,
   };
 }
 
@@ -160,7 +195,11 @@ export interface ConversationStore {
   hasInboundMessage(messageId: string): boolean;
   recordInboundMessage(messageId: string, atMs: number): void;
   meta(): ConversationMeta;
+  // Writes the whole row: only for a reset, never with a snapshot read
+  // before an await. Every other write is patchMeta.
   saveMeta(meta: ConversationMeta): void;
+  // Writes only the given fields, leaving every other field as it is now.
+  patchMeta(patch: Partial<ConversationMeta>): void;
   addPending(item: PendingInbound): void;
   pending(): PendingInbound[];
   clearPending(eventIds: string[]): void;
@@ -182,6 +221,12 @@ export interface ConversationStore {
   finishTurn(turn: number, atMs: number): void;
   // Finished turns, newest first.
   recentTurns(limit: number): PersistedTurn[];
+  savePresentation(row: PresentationRow): void;
+  pendingPresentations(): PresentationRow[];
+  finishPresentation(turn: number, state: "reported" | "not_shown"): void;
+  agentSend(key: string): AgentSendRow | null;
+  startAgentSend(row: AgentSendRow): void;
+  finishAgentSend(key: string, atMs: number, state?: "sent" | "refused" | "failed"): void;
   wipe(deletedAtMs: number): void;
 }
 
@@ -215,6 +260,10 @@ export class MemoryStore implements ConversationStore {
 
   saveMeta(meta: ConversationMeta): void {
     this.metaRow = { ...meta };
+  }
+
+  patchMeta(patch: Partial<ConversationMeta>): void {
+    this.metaRow = { ...this.metaRow, ...patch };
   }
 
   addPending(item: PendingInbound): void {
@@ -326,6 +375,35 @@ export class MemoryStore implements ConversationStore {
       .map((r) => ({ ...r }));
   }
 
+  private agentSendRows = new Map<string, AgentSendRow>();
+  private presentationRows = new Map<number, PresentationRow>();
+
+  savePresentation(row: PresentationRow): void {
+    if (!this.presentationRows.has(row.turn)) this.presentationRows.set(row.turn, { ...row });
+  }
+
+  pendingPresentations(): PresentationRow[] {
+    return [...this.presentationRows.values()].filter((r) => r.state === "pending").map((r) => ({ ...r }));
+  }
+
+  finishPresentation(turn: number, state: "reported" | "not_shown"): void {
+    const row = this.presentationRows.get(turn);
+    if (row) this.presentationRows.set(turn, { ...row, state });
+  }
+
+  agentSend(key: string): AgentSendRow | null {
+    return this.agentSendRows.get(key) ?? null;
+  }
+
+  startAgentSend(row: AgentSendRow): void {
+    if (!this.agentSendRows.has(row.key)) this.agentSendRows.set(row.key, { ...row });
+  }
+
+  finishAgentSend(key: string, atMs: number, state: "sent" | "refused" | "failed" = "sent"): void {
+    const row = this.agentSendRows.get(key);
+    if (row) this.agentSendRows.set(key, { ...row, state, updatedAtMs: atMs });
+  }
+
   wipe(deletedAtMs: number): void {
     const generation = this.metaRow.generation + 1;
     const turn = this.metaRow.turn;
@@ -337,6 +415,8 @@ export class MemoryStore implements ConversationStore {
     this.heldReceipts = [];
     this.approvalRows.clear();
     this.turnRows.clear();
+    this.agentSendRows.clear();
+    this.presentationRows.clear();
   }
 }
 

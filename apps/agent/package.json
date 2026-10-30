@@ -1,0 +1,27 @@
+{
+  "name": "@mano/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit && vitest run",
+    "test": "vitest run",
+    "dev": "eve dev",
+    "eval": "eve eval",
+    "build": "eve build"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "3.0.70",
+    "@mano/guardian": "workspace:*",
+    "@mano/persona": "workspace:*",
+    "@mano/protocol": "workspace:*",
+    "ai": "7.0.137",
+    "eve": "0.79.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^5.0.5"
+  }
+}

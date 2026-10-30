@@ -22,6 +22,7 @@ import {
   handleOverLimit,
   hourKeyFor,
   idempotencyKeyFor,
+  isOptIn,
   isOptOut,
   lifecycleStateFor,
   parseApprovalReply,
@@ -105,6 +106,13 @@ export interface RunnerDeps {
   nowMs: () => number;
   fetchFn: typeof fetch;
   config: RunnerConfig;
+  // Tells the agent an approval question reached the person, given the
+  // texts the provider accepted for its turn. True when reported, false
+  // when the question was not shown whole; throws to retry later.
+  reportPresentation?: (
+    p: { approvalId: string; approval: string; generation: number },
+    sentTexts: string[],
+  ) => Promise<boolean>;
 }
 
 export type HandleResult =
@@ -259,6 +267,17 @@ export function advanceLifecycle(current: OutboundState, next: OutboundState): O
   return OUTBOUND_RANK[next] > OUTBOUND_RANK[current] ? next : null;
 }
 
+// After a STOP whose timestamp the provider gave, any inbound sent
+// strictly after it re-engages (the product rule: any new message). After
+// an undated STOP, only START or a message Channels received at least
+// REENGAGE_AFTER_UNDATED_MS later can.
+const REENGAGE_AFTER_UNDATED_MS = 60_000;
+
+function reengages(meta: import("./store.js").ConversationMeta, sentAtMs: number | null, text: string, nowMs: number): boolean {
+  if (meta.optOutDated) return sentAtMs !== null && sentAtMs > meta.optOutAtMs;
+  return isOptIn(text) || nowMs >= meta.optOutReceivedAtMs + REENGAGE_AFTER_UNDATED_MS;
+}
+
 export class ConversationRunner {
   private deps: RunnerDeps;
 
@@ -286,17 +305,15 @@ export class ConversationRunner {
       if (store.hasEvent(event.id)) return "duplicate";
       store.recordEvent(event.id, event.kind, nowMs());
       if (event.direction === "outbound") return "recorded";
-      const meta = store.meta();
       if (event.kind === "typing.stopped") {
-        meta.typingActive = false;
+        store.patchMeta({ typingActive: false });
       } else {
         const at = event.occurredAtMs ?? nowMs();
         if (nowMs() - at >= TYPING_HOLD_CAP_MS) return "recorded";
         // With nothing pending there is no turn to hold yet: a new burst.
-        if (meta.typingSinceMs === 0 || store.pending().length === 0) meta.typingSinceMs = nowMs();
-        meta.typingActive = true;
+        const fresh = store.meta().typingSinceMs === 0 || store.pending().length === 0;
+        store.patchMeta(fresh ? { typingSinceMs: nowMs(), typingActive: true } : { typingActive: true });
       }
-      store.saveMeta(meta);
       return "recorded";
     }
     if (event.kind === "ignored") {
@@ -321,6 +338,14 @@ export class ConversationRunner {
     if (event.group) {
       logger.info("group_skipped", { handle: this.logHandle(), eventId: event.id });
       return "recorded";
+    }
+    // STOP is honored before every check below, dated or not, fresh or
+    // stale, even from before a delete: it only ever makes Mano quieter.
+    if (event.kind === "message.received" && event.direction === "inbound") {
+      const optOutText = event.text ?? "";
+      if (optOutText && isOptOut(optOutText) && event.attachments.length === 0 && (event.chatId || event.handle)) {
+        return this.applyOptOut(event);
+      }
     }
     // Events older than the deletion cutoff are recorded and dropped:
     // queued redeliveries and feed replays from before a delete cannot
@@ -348,8 +373,13 @@ export class ConversationRunner {
         return "recorded";
       }
       const text = event.text ?? "";
-      if (text && isOptOut(text) && event.attachments.length === 0) {
-        return this.applyOptOut(event);
+      // After STOP, only an inbound the person sent after it re-engages.
+      // One sent before it (or at the same instant) and delivered late, by
+      // webhook or by the reconcile feed, is recorded and nothing more.
+      const optedOut = store.meta();
+      if (optedOut.optedOut && !reengages(optedOut, when, text, nowMs())) {
+        logger.info("inbound_before_optout", { handle: this.logHandle(), eventId: event.id });
+        return "recorded";
       }
       // Bound what waits for the batch alarm before buffering it. Past
       // the cap the new input is recorded and dropped; the turn answers
@@ -360,12 +390,13 @@ export class ConversationRunner {
         return "recorded";
       }
       const meta = store.meta();
-      meta.chatId = event.chatId ?? meta.chatId;
-      meta.to = event.handle ?? meta.to;
-      meta.closed = false;
-      meta.optedOut = false;
-      meta.lastInboundMs = nowMs();
-      store.saveMeta(meta);
+      store.patchMeta({
+        chatId: event.chatId ?? meta.chatId,
+        to: event.handle ?? meta.to,
+        closed: false,
+        optedOut: false,
+        lastInboundMs: nowMs(),
+      });
       // Oversized texts split into cap-sized pieces now, so the turn
       // runner never has to cut. Continuation pieces take derived IDs;
       // the event still dedupes on its own ID.
@@ -431,9 +462,7 @@ export class ConversationRunner {
     }
 
     if (event.kind === "chat.closed") {
-      const meta = store.meta();
-      meta.closed = true;
-      store.saveMeta(meta);
+      store.patchMeta({ closed: true });
       logger.info("conversation_closed", { handle: this.logHandle(), eventId: event.id });
       return "recorded";
     }
@@ -482,13 +511,31 @@ export class ConversationRunner {
 
   private async applyOptOut(event: NormalizedEvent): Promise<HandleResult> {
     const { store, logger, nowMs } = this.deps;
-    const meta = store.meta();
-    if (meta.optedOut) return "opted-out";
-    meta.optedOut = true;
-    meta.chatId = event.chatId ?? meta.chatId;
-    meta.to = event.handle ?? meta.to;
-    meta.turn += 1;
-    store.saveMeta(meta);
+    const before = store.meta();
+    // The cutoff: the provider's timestamp of the STOP, else Channels'
+    // receive time.
+    const dated = event.occurredAtMs !== null && event.occurredAtMs > 0;
+    if (before.optedOut) {
+      // A repeat STOP sends nothing, but the cutoff only ever moves
+      // forward to it. Once any STOP was undated, the stricter undated
+      // rule holds, timed from the latest STOP.
+      store.patchMeta({
+        optOutAtMs: Math.max(before.optOutAtMs, dated ? event.occurredAtMs! : nowMs()),
+        optOutDated: before.optOutDated && dated,
+        optOutReceivedAtMs: nowMs(),
+      });
+      return "opted-out";
+    }
+    const meta = {
+      optedOut: true,
+      optOutAtMs: dated ? event.occurredAtMs! : nowMs(),
+      optOutDated: dated,
+      optOutReceivedAtMs: nowMs(),
+      chatId: event.chatId ?? before.chatId,
+      to: event.handle ?? before.to,
+      turn: before.turn + 1,
+    };
+    store.patchMeta(meta);
     logger.info("opted_out", { handle: this.logHandle(), eventId: event.id, turn: meta.turn });
     await this.sendBubble({
       turn: meta.turn,
@@ -554,22 +601,20 @@ export class ConversationRunner {
       }
       return this.afterTurns();
     }
+    // Stale flag with no turn row behind it: a crash before the first
+    // persist. Clear it and proceed; nothing was sent yet.
+    if (store.meta().running) store.patchMeta({ running: false });
+    // Only awaits when a report is owed. Everything after it reads the
+    // meta fresh: STOP, a close or a delete can land during the await.
+    if (this.deps.reportPresentation && store.pendingPresentations().length > 0) await this.reportPresentations();
     const meta = store.meta();
-    if (meta.running) {
-      // Stale flag with no turn row behind it: a crash before the first
-      // persist. Clear it and proceed; nothing was sent yet.
-      meta.running = false;
-      store.saveMeta(meta);
-    }
     const pending = store.pending();
     if (pending.length === 0) return this.needsRetry() ? "retry" : "idle";
     if (nowMs() - meta.lastInboundMs < this.deps.config.batchMs) return "waiting";
     if (meta.typingActive && meta.typingSinceMs > 0 && nowMs() - meta.typingSinceMs < TYPING_HOLD_CAP_MS) return "waiting";
     if (meta.typingSinceMs > 0 || meta.typingActive) {
       // This turn runs now: the next burst gets its own deadline.
-      meta.typingSinceMs = 0;
-      meta.typingActive = false;
-      store.saveMeta(meta);
+      store.patchMeta({ typingSinceMs: 0, typingActive: false });
     }
     // A turn finishes only after a persisted final outcome. An
     // infrastructure error keeps the turn row and its input and returns
@@ -582,9 +627,8 @@ export class ConversationRunner {
           for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP)) {
             const items = groupCrisis ? chunk.map((item) => ({ ...item, crisis: true })) : chunk;
             const turnMeta = store.meta();
-            turnMeta.turn += 1;
-            store.saveMeta(turnMeta);
-            const turn = turnMeta.turn;
+            const turn = turnMeta.turn + 1;
+            store.patchMeta({ turn });
             const chatId = [...items].reverse().find((i) => i.chatId)?.chatId ?? turnMeta.chatId;
             const to = [...items].reverse().find((i) => i.to)?.to ?? turnMeta.to;
             try {
@@ -657,6 +701,7 @@ export class ConversationRunner {
   // The alarm must re-arm until none remains, even with no new input.
   needsRetry(): boolean {
     if (this.store.unfinishedTurn()) return true;
+    if (this.deps.reportPresentation && this.store.pendingPresentations().length > 0) return true;
     return this.store.outbounds().some((r) => r.state === "uncertain" || r.state === "sending");
   }
 
@@ -668,6 +713,31 @@ export class ConversationRunner {
     const stuck = this.store.outbounds().filter((r) => r.state === "uncertain" || r.state === "sending");
     const attempts = stuck.reduce((max, r) => Math.max(max, r.attempts), 0);
     return retryDelayMs(Math.max(1, attempts));
+  }
+
+  // Reports each approval question whose turn's sends are all resolved.
+  // A report that fails stays pending; needsRetry re-arms the alarm, and
+  // the next run sends it again. The person's YES counts only once the
+  // agent has the report.
+  private async reportPresentations(): Promise<void> {
+    const { store, logger } = this.deps;
+    const report = this.deps.reportPresentation;
+    if (!report) return;
+    const outbounds = store.outbounds();
+    for (const p of store.pendingPresentations()) {
+      const rows = outbounds.filter((r) => r.turn === p.turn);
+      if (rows.length === 0 || rows.some((r) => r.state === "uncertain" || r.state === "sending")) continue;
+      const sent = rows
+        .filter((r) => r.state === "sent" || r.state === "delivered" || r.state === "read")
+        .sort((a, b) => a.part - b.part)
+        .map((r) => r.text);
+      try {
+        const shown = await report({ approvalId: p.approvalId, approval: p.approval, generation: p.generation }, sent);
+        store.finishPresentation(p.turn, shown ? "reported" : "not_shown");
+      } catch (err) {
+        logger.warn("presentation_report_failed", { handle: this.logHandle(), turn: p.turn, err: errName(err) });
+      }
+    }
   }
 
   private afterTurns(): TurnResult {
@@ -682,15 +752,11 @@ export class ConversationRunner {
 
   private async runGuarded(fn: () => Promise<void>): Promise<void> {
     const { store } = this.deps;
-    const meta = store.meta();
-    meta.running = true;
-    store.saveMeta(meta);
+    store.patchMeta({ running: true });
     try {
       await fn();
     } finally {
-      const done = store.meta();
-      done.running = false;
-      store.saveMeta(done);
+      store.patchMeta({ running: false });
     }
   }
 
@@ -720,6 +786,7 @@ export class ConversationRunner {
       await this.settleResumedCost(turn, resumed);
       await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation);
       this.checkSendsResolved(turn, generation);
+      await this.reportPresentations();
       return;
     }
     const texts = items.map((i) => i.text).filter((t): t is string => !!t && t.length > 0);
@@ -732,10 +799,7 @@ export class ConversationRunner {
     const crisis = crisisTurn(texts.join("\n")) || items.some((i) => i.crisis === true);
     // A crisis turn never sends the friendly intro, and later turns do not
     // send it either.
-    if (crisis && !meta.introduced) {
-      meta.introduced = true;
-      store.saveMeta(meta);
-    }
+    if (crisis && !meta.introduced) store.patchMeta({ introduced: true });
 
     const approval = texts.length === 1 && attachments.length === 0 ? parseApprovalReply(texts[0]) : null;
     if (approval && store.pendingApprovals(nowMs()).length > 0) {
@@ -820,7 +884,9 @@ export class ConversationRunner {
       if (saved > 0) bubbles.push({ part: 0, tag: "ack", text: attachmentAck(saved) });
       if (turnText) {
         this.checkGeneration(generation);
-        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation, crisis);
+        // The turn's latest message: what the agent orders a YES by.
+        const receivedAtMs = Math.max(...items.map((i) => i.receivedAtMs));
+        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation, crisis, receivedAtMs);
         if (answer.ok) {
           // Links come out before splitting, and each final bubble is
           // checked again: a split must never leave an unchecked link
@@ -845,6 +911,8 @@ export class ConversationRunner {
           if (routable && tapback && latest) {
             bubbles.push({ part: 0, tag: "react", text: tapback, messageId: latest, fallback: hasText ? null : tapbackText(tapback) });
           }
+          // Persisted with the answer, so a resumed send reports it too.
+          if (answer.presentation) store.savePresentation({ turn, generation, state: "pending", ...answer.presentation });
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
@@ -864,6 +932,7 @@ export class ConversationRunner {
       this.checkGeneration(generation);
       await this.sendBubbles(turn, bubbles, chatId, to, saved, generation);
       this.checkSendsResolved(turn, generation);
+      await this.reportPresentations();
     } finally {
       typingDone = true;
       clearInterval(typingTimer);
@@ -931,9 +1000,7 @@ export class ConversationRunner {
       const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation, replyTo: bubble.replyTo ?? null });
       if (row.fresh) fresh += 1;
       if (bubble.tag === "" && bubble.part === 0 && row.state === "sent") {
-        const introduced = store.meta();
-        introduced.introduced = true;
-        store.saveMeta(introduced);
+        store.patchMeta({ introduced: true });
       }
     }
     // Limits count inside the one send path; the turn only reports.
@@ -999,7 +1066,17 @@ export class ConversationRunner {
     to: string | null,
     generation: number,
     crisis: boolean,
-  ): Promise<{ ok: true; text: string; costUsd: number; tapback: import("@mano/channels").Tapback | null } | { ok: false; costUsd: number }> {
+    receivedAtMs: number,
+  ): Promise<
+    | {
+        ok: true;
+        text: string;
+        costUsd: number;
+        tapback: import("@mano/channels").Tapback | null;
+        presentation?: { approvalId: string; approval: string };
+      }
+    | { ok: false; costUsd: number }
+  > {
     const { responder, config, logger } = this.deps;
     let done = false;
     let interimSent = false;
@@ -1027,10 +1104,14 @@ export class ConversationRunner {
           logger.warn("heads_up_failed", { handle: this.logHandle(), turn, err: errName(err) });
         }
       };
-      const result = await responder.respond({ texts: [turnText], attachmentCount, history }, { onHeadsUp });
+      const result = await responder.respond(
+        { texts: [turnText], attachmentCount, history, turnKey: { generation, turn }, receivedAtMs },
+        { onHeadsUp },
+      );
       const costUsd =
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
-      return { ok: true, text: result.text, costUsd, tapback: result.tapback ?? null };
+      logger.info("turn_answered", { handle: this.logHandle(), turn, model: result.model, attempts: result.attempts });
+      return { ok: true, text: result.text, costUsd, tapback: result.tapback ?? null, presentation: result.presentation };
     } catch (err) {
       logger.warn("responder_failed", {
         handle: this.logHandle(),
@@ -1056,9 +1137,7 @@ export class ConversationRunner {
     if (!this.store.meta().introduced) {
       const intro = await this.sendBubble({ turn, part: 0, tag: "", text: INTRO_BUBBLE, chatId, to, generation });
       if (intro.state === "sent") {
-        const meta = this.store.meta();
-        meta.introduced = true;
-        this.store.saveMeta(meta);
+        this.store.patchMeta({ introduced: true });
       }
     }
     await this.sendBubble({ turn, part: 0, tag: "headsup", text, chatId, to, generation });
@@ -1115,8 +1194,7 @@ export class ConversationRunner {
     const match = /^busy:([^:]+):(\d+)$/.exec(meta.busyNoticeKey ?? "");
     const count = match && match[1] === day ? Number(match[2]) : 0;
     if (count >= BUSY_DAILY_CAP) return false;
-    meta.busyNoticeKey = `busy:${day}:${count + 1}`;
-    this.store.saveMeta(meta);
+    this.store.patchMeta({ busyNoticeKey: `busy:${day}:${count + 1}` });
     await this.sendBubble({ turn, part: 0, tag: "busy", text: BUSY_BUBBLE, chatId, to });
     return true;
   }
@@ -1163,9 +1241,10 @@ export class ConversationRunner {
         await saveAttachment(files, kekB64, config.handleHash, documentId, bytes);
         await spend.byteSettle(byteKey, bytes.byteLength);
         const counted = store.meta();
-        counted.byteDayCount = (counted.byteDayKey === byteDay ? counted.byteDayCount : 0) + bytes.byteLength;
-        counted.byteDayKey = byteDay;
-        store.saveMeta(counted);
+        store.patchMeta({
+          byteDayCount: (counted.byteDayKey === byteDay ? counted.byteDayCount : 0) + bytes.byteLength,
+          byteDayKey: byteDay,
+        });
         saved += 1;
       } catch (err) {
         await spend.byteRelease(byteKey);
@@ -1316,6 +1395,22 @@ export class ConversationRunner {
       logger.warn("send_failed", { handle: this.logHandle(), key, code: "unguarded_legacy", status: null });
       return finish({ key, state: "failed", code: "unguarded_legacy", fresh: false, counted: false });
     }
+    // Read fresh after the lookup's await: a STOP, a close or a delete
+    // that landed meanwhile stops the replay. The opt-out confirmation
+    // itself still goes out. While the lookup is down the row stays
+    // uncertain, since the first attempt may have landed.
+    this.checkGeneration(generation);
+    const now = store.meta();
+    if (row?.tag !== "optout" && (now.optedOut || now.closed)) {
+      const code = now.closed ? "conversation_closed" : "opted_out";
+      if (lookupFailed) {
+        store.updateOutbound(key, { state: "uncertain", attempts: (row?.attempts ?? 0) + 1, updatedAtMs: nowMs() });
+        return finish({ key, state: "uncertain", code: null, fresh: false, counted: false });
+      }
+      store.updateOutbound(key, { state: "refused", code, updatedAtMs: nowMs() });
+      logger.info("send_suppressed", { handle: this.logHandle(), key, code });
+      return finish({ key, state: "refused", code, fresh: false, counted: false });
+    }
     try {
       // The replay carries the stored reply target: the key is bound to
       // the exact body, so it must not change.
@@ -1370,11 +1465,12 @@ export class ConversationRunner {
     const meta = this.store.meta();
     const hourKey = hourKeyFor(nowMs);
     const dayKey = dayKeyFor(nowMs);
-    meta.hourCount = meta.hourKey === hourKey ? meta.hourCount + sent : sent;
-    meta.dayCount = meta.dayKey === dayKey ? meta.dayCount + sent : sent;
-    meta.hourKey = hourKey;
-    meta.dayKey = dayKey;
-    this.store.saveMeta(meta);
+    this.store.patchMeta({
+      hourCount: meta.hourKey === hourKey ? meta.hourCount + sent : sent,
+      dayCount: meta.dayKey === dayKey ? meta.dayCount + sent : sent,
+      hourKey,
+      dayKey,
+    });
   }
 
   private async bestEffort(name: string, fn: () => Promise<void>): Promise<void> {
@@ -1397,6 +1493,91 @@ export class ConversationRunner {
       expiresAtMs: now + opts.ttlMs,
     });
     this.deps.logger.info("approval_requested", { handle: this.logHandle(), approval: opts.id });
+  }
+
+  // Sends one agent-started text (reminder, nudge) through the normal
+  // outbound path: consent and STOP refuse, per-handle limits and the
+  // spend ledger apply, links are checked, and every bubble carries its
+  // deterministic key. The agent's key dedupes redeliveries: a retry
+  // resumes the same turn, so a crash between claim and send can neither
+  // lose nor double the text. The delivery belongs to the deletion
+  // generation the agent saw when it made it; that generation is fixed
+  // before the first await and persisted with the row, and any change
+  // stops the send, so a deletion can never be followed by an old text.
+  // Budget refusal returns instead of throwing so the caller answers 429
+  // and the agent retries later; anything else terminal (unknown,
+  // closed, opted out, deleted) is a handled 200.
+  async sendAgentText(opts: { key: string; text: string; generation: number }): Promise<{
+    sent: boolean;
+    reason?: "empty" | "unknown" | "closed" | "opted_out" | "budget" | "deleted" | "refused" | "failed";
+    duplicate?: boolean;
+  }> {
+    const { store, logger, nowMs, config } = this.deps;
+    const text = opts.text.trim().slice(0, TURN_TEXT_CAP);
+    if (!text) return { sent: false, reason: "empty" };
+    const prior = store.agentSend(opts.key);
+    if (prior?.state === "sent") return { sent: true, duplicate: true };
+    if (prior?.state === "refused" || prior?.state === "failed") return { sent: false, reason: prior.state };
+    const generation = prior ? prior.generation : opts.generation;
+    const meta = store.meta();
+    if (meta.generation !== generation) return { sent: false, reason: "deleted" };
+    if (meta.optedOut) return { sent: false, reason: "opted_out" };
+    if (meta.closed) return { sent: false, reason: "closed" };
+    const chatId = meta.chatId;
+    const to = meta.to;
+    if (!chatId && !to) return { sent: false, reason: "unknown" };
+    let turn: number;
+    if (prior) {
+      turn = prior.turn;
+    } else {
+      turn = store.meta().turn + 1;
+      store.patchMeta({ turn });
+      store.startAgentSend({ key: opts.key, turn, generation, state: "sending", createdAtMs: nowMs(), updatedAtMs: nowMs() });
+    }
+    const over = handleOverLimit(
+      { hourKey: meta.hourKey, hourCount: meta.hourCount, dayKey: meta.dayKey, dayCount: meta.dayCount },
+      nowMs(),
+    );
+    const reserveKey = `${config.handleHash}:agent:${opts.key}`;
+    const costUsd = estimateCostUsd(text.length, 0, config.usdPer1kChars);
+    const budgeted = over ? { allowed: false, spentUsd: 0 } : await this.deps.spend.reserve(reserveKey, costUsd);
+    if (over || !budgeted.allowed) {
+      logger.info("agent_send_limited", {
+        handle: this.logHandle(),
+        turn,
+        reason: over ?? "budget",
+        spentUsd: budgeted.spentUsd,
+      });
+      return { sent: false, reason: "budget" };
+    }
+    try {
+      this.checkGeneration(generation);
+      // The same finalizeReply pass as every reply (it logs removed links).
+      const bubbles: import("./store.js").AnswerBubble[] = (await this.finalize(turn, text, false, "")).map((b) => ({ ...b, tag: "agent" }));
+      this.checkGeneration(generation);
+      await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
+      this.checkSendsResolved(turn, generation);
+      // Sent only when the provider accepted every bubble; a refusal or a
+      // definite failure is final and reported as not sent.
+      const states = store.outbounds().filter((r) => r.turn === turn).map((r) => r.state);
+      const outcome: "sent" | "refused" | "failed" = states.includes("refused")
+        ? "refused"
+        : states.includes("failed")
+          ? "failed"
+          : "sent";
+      await this.deps.spend.settle(reserveKey, outcome === "sent" ? costUsd : 0);
+      store.finishAgentSend(opts.key, nowMs(), outcome);
+      logger.info("agent_sent", { handle: this.logHandle(), turn, bubbles: bubbles.length, outcome });
+      return outcome === "sent" ? { sent: true } : { sent: false, reason: outcome };
+    } catch (err) {
+      try {
+        await this.deps.spend.release(reserveKey);
+      } catch (releaseErr) {
+        logger.warn("agent_release_failed", { handle: this.logHandle(), turn, err: errName(releaseErr) });
+      }
+      if (err instanceof GenerationStopped) return { sent: false, reason: "deleted" };
+      throw err;
+    }
   }
 
   private async answerApproval(

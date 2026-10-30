@@ -24,6 +24,26 @@ export interface Env {
   // Our line's own number or alias, checked against the channel_address
   // on inbound webhooks when both are present. Public value; optional.
   MANO_TEXT_NUMBER?: string;
+  // Mano's agent: answers turns when set, with the plain responder as
+  // fallback. The secret signs both directions of agent traffic.
+  // Provider API base URL override, for a local stand-in of the provider
+  // in end-to-end runs. Unset in production.
+  BLOOIO_BASE_URL?: string;
+  AGENT_URL?: string;
+  MANO_AGENT_SECRET?: string;
+  // Signs the per-turn handle grant the agent forwards to the engine, so
+  // the agent can act for the handle that just texted and no one else.
+  // The engine holds the same secret; the agent never does.
+  MANO_HANDLE_GRANT_SECRET?: string;
+  // Engine, for removing a deleted conversation's agent state. Channels'
+  // own Engine token opens only that route.
+  MANO_ENGINE_URL?: string;
+  // "1" opens POST /dev/delete for local end-to-end runs. Never set in a
+  // deployment.
+  MANO_DEV_ROUTES?: string;
+  // Verifies Engine's reminder deliveries on /internal/agent-send only.
+  MANO_ENGINE_SEND_SECRET?: string;
+  MANO_ENGINE_CHANNELS_TOKEN?: string;
 }
 
 export function numberEnv(value: string | undefined, fallback: number): number {

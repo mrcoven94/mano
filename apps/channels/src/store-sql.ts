@@ -96,6 +96,21 @@ CREATE TABLE IF NOT EXISTS turns (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_sends (
+  agent_key TEXT PRIMARY KEY,
+  turn INTEGER NOT NULL,
+  generation INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS presentations (
+  turn INTEGER PRIMARY KEY,
+  approval_id TEXT NOT NULL,
+  approval TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  state TEXT NOT NULL
+);
 `;
 
 interface MetaRow {
@@ -118,6 +133,9 @@ interface MetaRow {
   deleted_at_ms: number;
   typing_since_ms?: number;
   typing_active?: number;
+  opt_out_at_ms?: number;
+  opt_out_dated?: number;
+  opt_out_received_at_ms?: number;
 }
 
 function firstRow<T>(cursor: SqlStorageCursor<Record<string, SqlStorageValue>>): T | null {
@@ -155,6 +173,32 @@ function turnFromRow(row: TurnRow): PersistedTurn {
   };
 }
 
+// Each meta field's column, for writes of only the fields a step owns.
+const META_COLUMNS: Record<keyof ConversationMeta, string> = {
+  turn: "turn",
+  introduced: "introduced",
+  closed: "closed",
+  optedOut: "opted_out",
+  running: "running",
+  chatId: "chat_id",
+  to: "handle_to",
+  hourKey: "hour_key",
+  hourCount: "hour_count",
+  dayKey: "day_key",
+  dayCount: "day_count",
+  busyNoticeKey: "busy_notice_key",
+  lastInboundMs: "last_inbound_ms",
+  typingSinceMs: "typing_since_ms",
+  typingActive: "typing_active",
+  byteDayKey: "byte_day_key",
+  byteDayCount: "byte_day_count",
+  generation: "generation",
+  deletedAtMs: "deleted_at_ms",
+  optOutAtMs: "opt_out_at_ms",
+  optOutDated: "opt_out_dated",
+  optOutReceivedAtMs: "opt_out_received_at_ms",
+};
+
 export class SqlConversationStore implements ConversationStore {
   private sql: SqlStorage;
 
@@ -174,6 +218,10 @@ export class SqlConversationStore implements ConversationStore {
       "ALTER TABLE outbounds ADD COLUMN reply_to TEXT",
       "ALTER TABLE meta ADD COLUMN typing_since_ms INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE meta ADD COLUMN typing_active INTEGER NOT NULL DEFAULT 0",
+      // The opt-out cutoff (LAP-613, review 9).
+      "ALTER TABLE meta ADD COLUMN opt_out_at_ms INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE meta ADD COLUMN opt_out_dated INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE meta ADD COLUMN opt_out_received_at_ms INTEGER NOT NULL DEFAULT 0",
     ]) {
       try {
         this.sql.exec(ddl);
@@ -228,12 +276,15 @@ export class SqlConversationStore implements ConversationStore {
       byteDayCount: row.byte_day_count ?? 0,
       generation: row.generation ?? 0,
       deletedAtMs: row.deleted_at_ms ?? 0,
+      optOutAtMs: row.opt_out_at_ms ?? 0,
+      optOutDated: row.opt_out_dated === 1,
+      optOutReceivedAtMs: row.opt_out_received_at_ms ?? 0,
     };
   }
 
   saveMeta(meta: ConversationMeta): void {
     this.sql.exec(
-      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ?, typing_since_ms = ?, typing_active = ? WHERE id = 1",
+      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ?, typing_since_ms = ?, typing_active = ?, opt_out_at_ms = ?, opt_out_dated = ?, opt_out_received_at_ms = ? WHERE id = 1",
       meta.turn,
       meta.introduced ? 1 : 0,
       meta.closed ? 1 : 0,
@@ -253,7 +304,21 @@ export class SqlConversationStore implements ConversationStore {
       meta.deletedAtMs,
       meta.typingSinceMs,
       meta.typingActive ? 1 : 0,
+      meta.optOutAtMs,
+      meta.optOutDated ? 1 : 0,
+      meta.optOutReceivedAtMs,
     );
+  }
+
+  patchMeta(patch: Partial<ConversationMeta>): void {
+    const sets: string[] = [];
+    const values: (string | number | null)[] = [];
+    for (const [field, value] of Object.entries(patch) as [keyof ConversationMeta, ConversationMeta[keyof ConversationMeta]][]) {
+      if (value === undefined) continue;
+      sets.push(`${META_COLUMNS[field]} = ?`);
+      values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
+    }
+    if (sets.length > 0) this.sql.exec(`UPDATE meta SET ${sets.join(", ")} WHERE id = 1`, ...values);
   }
 
   addPending(item: PendingInbound): void {
@@ -533,10 +598,77 @@ export class SqlConversationStore implements ConversationStore {
     this.sql.exec("UPDATE turns SET state = 'finished', updated_at_ms = ? WHERE turn = ?", atMs, turn);
   }
 
+  savePresentation(row: import("./store.js").PresentationRow): void {
+    this.sql.exec(
+      "INSERT OR IGNORE INTO presentations (turn, approval_id, approval, generation, state) VALUES (?, ?, ?, ?, ?)",
+      row.turn,
+      row.approvalId,
+      row.approval,
+      row.generation,
+      row.state,
+    );
+  }
+
+  pendingPresentations(): import("./store.js").PresentationRow[] {
+    return this.sql
+      .exec("SELECT * FROM presentations WHERE state = 'pending' ORDER BY turn")
+      .toArray()
+      .map((r) => {
+        const row = r as { turn: number; approval_id: string; approval: string; generation: number; state: string };
+        return {
+          turn: Number(row.turn),
+          approvalId: row.approval_id,
+          approval: row.approval,
+          generation: Number(row.generation),
+          state: "pending" as const,
+        };
+      });
+  }
+
+  finishPresentation(turn: number, state: "reported" | "not_shown"): void {
+    this.sql.exec("UPDATE presentations SET state = ? WHERE turn = ?", state, turn);
+  }
+
+  agentSend(key: string): import("./store.js").AgentSendRow | null {
+    const row = firstRow<{
+      agent_key: string;
+      turn: number;
+      generation: number;
+      state: import("./store.js").AgentSendRow["state"];
+      created_at_ms: number;
+      updated_at_ms: number;
+    }>(this.sql.exec("SELECT * FROM agent_sends WHERE agent_key = ?", key));
+    if (!row) return null;
+    return {
+      key: row.agent_key,
+      turn: row.turn,
+      generation: row.generation,
+      state: row.state,
+      createdAtMs: row.created_at_ms,
+      updatedAtMs: row.updated_at_ms,
+    };
+  }
+
+  startAgentSend(row: import("./store.js").AgentSendRow): void {
+    this.sql.exec(
+      "INSERT OR IGNORE INTO agent_sends (agent_key, turn, generation, state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
+      row.key,
+      row.turn,
+      row.generation,
+      row.state,
+      row.createdAtMs,
+      row.updatedAtMs,
+    );
+  }
+
+  finishAgentSend(key: string, atMs: number, state: "sent" | "refused" | "failed" = "sent"): void {
+    this.sql.exec("UPDATE agent_sends SET state = ?, updated_at_ms = ? WHERE agent_key = ?", state, atMs, key);
+  }
+
   wipe(deletedAtMs: number): void {
     const meta = this.meta();
     this.sql.exec(
-      "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns; DELETE FROM inbound_messages;",
+      "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns; DELETE FROM inbound_messages; DELETE FROM agent_sends; DELETE FROM presentations;",
     );
     this.saveMeta({ ...defaultMeta(), generation: meta.generation + 1, turn: meta.turn, deletedAtMs });
   }

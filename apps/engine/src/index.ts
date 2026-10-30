@@ -30,8 +30,10 @@
 //   GET  /health
 //   POST /api/check-link                       { url } (person token; 200 with allowed:false when blocked)
 //   POST /api/persons/:id/chat                 { message }
-//   POST /api/persons/:id/action               action request (worker stamps personId from the token)
+//   POST /api/persons/:id/action               action request (worker stamps personId from the token);
+//                                              proposalTurn names the turn an agent draft belongs to
 //   GET  /api/persons/:id/approvals
+//   POST /api/persons/:id/approvals/supersede     { generation } closes every waiting draft but the latest
 //   POST /api/persons/:id/approvals/:aid/approve
 //   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
 //   GET  /api/persons/:id/memory
@@ -51,8 +53,8 @@
 //   POST /api/persons/:id/turns                { turnId, receivedAt, generation } (agent)
 //   GET  /api/persons/:id/turns/:turnId        (agent)
 //   POST /api/persons/:id/turns/:turnId/complete  { generation } (agent)
-//   PUT  /api/persons/:id/pending-approval     { approvalId, generation } (agent)
-//   GET  /api/persons/:id/pending-approval?generation=N  (agent)
+//   PUT  /api/persons/:id/pending-approval     { approvalId, generation } compare-and-set: only the latest proposal (agent)
+//   GET  /api/persons/:id/pending-approval?generation=N  { pointer, latest } (agent)
 //   DELETE /api/persons/:id/pending-approval   { approvalId, generation } compare-and-delete (agent)
 //
 // Due reminders go out from the person's one delivery wake-up through
@@ -347,15 +349,15 @@ async function handleAgentState(
     if (rest === "/pending-approval" && method === "PUT") {
       const input = await body();
       parsePointerInput(input);
-      const pointer = await agent.setPendingApproval(subject, input);
-      if (isStale(pointer)) return STALE();
-      if (!pointer) return Response.json({ error: "Approval not found." }, { status: 404 });
-      return Response.json({ pointer });
+      const set = await agent.setPendingApproval(subject, input);
+      if (isStale(set)) return STALE();
+      if (!set) return Response.json({ error: "Approval not found." }, { status: 404 });
+      return Response.json(set);
     }
     if (rest === "/pending-approval" && method === "GET") {
       const raw = url.searchParams.get("generation");
       const generation = raw !== null && /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
-      return Response.json({ pointer: await agent.getPendingApproval(subject, requireGeneration(generation)) });
+      return Response.json(await agent.getPendingApproval(subject, requireGeneration(generation)));
     }
     if (rest === "/pending-approval" && method === "DELETE") {
       const input = await body();
@@ -579,6 +581,15 @@ export default {
       const memoryMatch = rest.match(/^\/memory\/([^/]+)$/);
       if (memoryMatch && request.method === "DELETE") {
         return Response.json(await agent.forgetMemory(subject, decodeURIComponent(memoryMatch[1])));
+      }
+      if (rest === "/approvals/supersede" && request.method === "POST") {
+        const read = await readCappedJson(request, MAX_ACTION_BODY);
+        if (!read.ok) return read.response;
+        const generation = writeGeneration(service, (read.value as { generation?: unknown } | null)?.generation);
+        if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
+        const out = await agent.supersedeProposals(subject, generation);
+        if (isStale(out)) return STALE();
+        return Response.json(out);
       }
       const decisionMatch = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
       if (decisionMatch && request.method === "POST") {

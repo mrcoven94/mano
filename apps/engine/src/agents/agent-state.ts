@@ -83,6 +83,24 @@ export function parsePointerInput(raw: unknown): { approvalId: string; generatio
   return { approvalId: f.approvalId, generation: requireGeneration(f.generation) };
 }
 
+// An action request the agent drafts for a turn names it as
+// proposalTurn, outside the request itself (never part of what is frozen
+// and hashed). null when it is present but not a turn ID.
+export function splitProposalTurn(raw: unknown): { request: unknown; turnId: string | null } | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw) || !("proposalTurn" in raw)) return { request: raw, turnId: null };
+  const { proposalTurn, ...request } = raw as Record<string, unknown>;
+  return isIdentity(proposalTurn) ? { request, turnId: proposalTurn } : null;
+}
+
+// A drafted proposal's order: its turn's first receive time, then the
+// turn ID. null when the turn is not in the current conversation's ledger.
+export function proposalOrderFor(sql: SqlExec, turnId: string): { receivedAt: string; turnId: string } | null {
+  const row = sql.exec(`SELECT first_received_at FROM turns WHERE turn_id = ? AND generation = ${CURRENT_GENERATION}`, turnId).toArray()[0] as
+    | { first_received_at: string }
+    | undefined;
+  return row ? { receivedAt: new Date(Date.parse(row.first_received_at)).toISOString(), turnId } : null;
+}
+
 export function ensureAgentStateTables(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS reminders(
     id TEXT PRIMARY KEY, text TEXT NOT NULL, due_at_ms INTEGER NOT NULL, generation INTEGER NOT NULL,
@@ -339,17 +357,30 @@ export interface PendingPointer {
   setAt: string;
 }
 
-// Sets the pointer only while the generation is current and the approval
-// was made under it.
-export function setPendingPointer(sql: SqlExec, approvalId: string, generation: number, setAt: string): PendingPointer | null {
+export type PointerSet = { pointer: PendingPointer; superseded: false } | { pointer: PendingPointer | null; superseded: true } | null;
+
+// Compare-and-set, in one statement: the pointer moves only while the
+// generation is current and the approval is the person's latest proposal
+// (ensureGatewayTables keeps it, moved only forward as approvals are
+// drafted). A report for any other approval of this generation answers
+// superseded and changes nothing. Repeating the report of the question
+// already pointed at keeps when it was first shown.
+export function setPendingPointer(sql: SqlExec, approvalId: string, generation: number, setAt: string): PointerSet {
   const written = sql.exec(
     "INSERT INTO pending_pointer(slot, approval_id, generation, set_at)" +
       ` SELECT 1, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?` +
-      ` AND EXISTS (SELECT 1 FROM approvals WHERE id = ? AND generation = ${CURRENT_GENERATION})` +
-      " ON CONFLICT(slot) DO UPDATE SET approval_id = excluded.approval_id, generation = excluded.generation, set_at = excluded.set_at",
+      ` AND EXISTS (SELECT 1 FROM latest_proposal WHERE slot = 1 AND approval_id = ? AND generation = ${CURRENT_GENERATION})` +
+      " ON CONFLICT(slot) DO UPDATE SET approval_id = excluded.approval_id, generation = excluded.generation," +
+      " set_at = CASE WHEN pending_pointer.approval_id = excluded.approval_id AND pending_pointer.generation = excluded.generation" +
+      " THEN pending_pointer.set_at ELSE excluded.set_at END",
     approvalId, generation, setAt, generation, approvalId,
   ).rowsWritten;
-  return written > 0 ? { approvalId, generation, setAt } : null;
+  const current = getPendingPointer(sql, generation);
+  if (written > 0 && current) return { pointer: current, superseded: false };
+  const known =
+    currentGeneration(sql) === generation &&
+    sql.exec(`SELECT 1 FROM approvals WHERE id = ? AND generation = ${CURRENT_GENERATION}`, approvalId).toArray().length > 0;
+  return known ? { pointer: current, superseded: true } : null;
 }
 
 // A pointer stored under another conversation generation belongs to a

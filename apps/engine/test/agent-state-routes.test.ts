@@ -163,7 +163,10 @@ describe("turn ledger", () => {
   });
 });
 
-async function pendingApproval(h: string): Promise<string> {
+// An agent draft for a turn (recorded first when it is new), or a plain
+// approval with turn null.
+async function pendingApproval(h: string, turnId: string | null = "t-draft", receivedAt = "2026-11-01T15:00:00.000Z"): Promise<string> {
+  if (turnId) await call(h, "POST", "/turns", { turnId, receivedAt, generation: 0 });
   const res = await call(h, "POST", "/action", {
     type: "submit",
     recipient: "sandbox-agency",
@@ -174,6 +177,7 @@ async function pendingApproval(h: string): Promise<string> {
     sources: [],
     origin: "person",
     generation: 0,
+    ...(turnId ? { proposalTurn: turnId } : {}),
   });
   return ((await res.json()) as { approval: { id: string } }).approval.id;
 }
@@ -192,7 +196,44 @@ describe("pending approval pointer", () => {
       cleared: false,
     });
     expect(await (await call(h, "DELETE", "/pending-approval", { approvalId, generation: 0 })).json()).toEqual({ cleared: true });
-    expect((await (await call(h, "GET", "/pending-approval?generation=0")).json()) as unknown).toEqual({ pointer: null });
+    expect(((await (await call(h, "GET", "/pending-approval?generation=0")).json()) as { pointer: unknown }).pointer).toBeNull();
+  });
+
+  // Sol's review 7: A's report fails, closing A fails, B's report fails,
+  // then A's report is retried.
+  it("names only the latest proposal, and an older draft can never be approved", async () => {
+    const h = handle("pointer-latest");
+    const b = await pendingApproval(h, "t-b", "2026-11-01T15:00:05.000Z");
+    const a = await pendingApproval(h, "t-a", "2026-11-01T15:00:00.000Z");
+    const plain = await pendingApproval(h, null);
+    const state = (await (await call(h, "GET", "/pending-approval?generation=0")).json()) as { latest: { approvalId: string; turnId: string } };
+    expect(state.latest).toMatchObject({ approvalId: b, turnId: "t-b" });
+    const retried = await call(h, "PUT", "/pending-approval", { approvalId: a, generation: 0 });
+    expect(await retried.json()).toEqual({ superseded: true, pointer: null });
+    expect(await (await call(h, "PUT", "/pending-approval", { approvalId: plain, generation: 0 })).json()).toEqual({ superseded: true, pointer: null });
+    const refused = (await (await call(h, "POST", `/approvals/${a}/approve`)).json()) as { status: string; superseded?: boolean };
+    expect(refused).toMatchObject({ status: "blocked", superseded: true });
+    // Closing names no approval: Engine closes what is not the latest when it runs.
+    expect((await call(h, "POST", "/approvals/supersede", {})).status).toBe(400);
+    expect(await (await call(h, "POST", "/approvals/supersede", { generation: 0 })).json()).toEqual({ closed: 1 });
+    const statuses = (await (await call(h, "GET", "/approvals")).json()) as { approvals: { id: string; status: string }[] };
+    const status = (id: string) => statuses.approvals.find((x) => x.id === id)?.status;
+    expect([status(a), status(b), status(plain)]).toEqual(["rejected", "pending", "pending"]);
+    expect(((await (await call(h, "POST", `/approvals/${b}/approve`)).json()) as { status: string }).status).toBe("completed");
+    // A draft must name a turn this conversation's ledger holds.
+    const unknown = await call(h, "POST", "/action", {
+      type: "submit",
+      recipient: "sandbox-agency",
+      purpose: "renewal",
+      payload: {},
+      idempotencyKey: "k-unknown",
+      actor: "foreground",
+      sources: [],
+      origin: "person",
+      generation: 0,
+      proposalTurn: "t-unknown",
+    });
+    expect(((await unknown.json()) as { status: string }).status).toBe("blocked");
   });
 });
 
@@ -203,7 +244,7 @@ describe("conversation delete", () => {
     await call(h, "POST", "/reminders", { id: "d:0", text: "One.", dueAt: "2026-12-01T15:00:00.000Z", generation: 0 });
     await call(h, "POST", "/reminders", { id: "d:1", text: "Two.", dueAt: "2026-12-01T15:00:00.000Z", generation: 0 });
     await call(h, "POST", "/turns", { turnId: "t-1", receivedAt: "2026-11-01T15:00:00.000Z", generation: 0 });
-    const approvalId = await pendingApproval(h);
+    const approvalId = await pendingApproval(h, "t-1");
     await call(h, "PUT", "/pending-approval", { approvalId, generation: 0 });
     await call(h, "POST", "/memory", { content: "Has two kids.", source: "text", generation: 0 });
     await call(h, "POST", "/memory", { content: "Prefers texts.", source: "text", generation: 0 });

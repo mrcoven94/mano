@@ -52,3 +52,11 @@ MANO_REPLY_MODEL = "muse-spark-1.3"
 #   MANO_TEXT_DAILY_BUDGET_USD, MANO_TEXT_USD_PER_1K_CHARS,
 #   TURN_BATCH_MS, TURN_INTERIM_MS, BLOOIO_MEDIA_HOSTS,
 #   MANO_TEXT_NUMBER (our line's number, checked against channel_address)
+# Mano's agent (all three set, or turns use the plain model answer):
+#   AGENT_URL (plain var, the agent's base URL), and the secrets
+#   MANO_AGENT_SECRET (signs agent traffic both ways, shared with the
+#   agent) and MANO_HANDLE_GRANT_SECRET (signs per-turn handle grants,
+#   shared with the engine, never the agent)
+# Engine: MANO_ENGINE_URL, MANO_ENGINE_CHANNELS_TOKEN (removes a deleted
+#   conversation's agent state) and MANO_ENGINE_SEND_SECRET (verifies
+#   Engine's reminder deliveries on /internal/agent-send only)
