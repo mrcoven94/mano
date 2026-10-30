@@ -106,3 +106,9 @@ describe("the 20-message reaction set", () => {
     expect(checkReactionSet(runs)).toEqual([]);
   });
 });
+
+describe("a reaction shown as text (live probe r-loved)", () => {
+  it("tells the model what a Loved \"...\" message is", () => {
+    expect(MANO_SOUL).toMatch(/Loved "\.\.\."[^\n]*reaction showing up as text\. Never react to it/);
+  });
+});
