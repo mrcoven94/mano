@@ -15,10 +15,13 @@ export interface PendingInbound {
   // replies. Null on continuation pieces and older rows.
   messageId?: string | null;
   // The crisis decision for the whole message this piece came from, made
-  // once on the rejoined message before any split or send and stored with
-  // the piece (Sol's fifth review). Every chunk, retry, restart and replay
-  // reads it; it is never recomputed per chunk. Undefined until decided.
-  crisis?: boolean;
+  // when the message arrives, before it is split, and stored with every
+  // piece: true, false, or "ask" (one short health question, decided once
+  // by the model check before its turn and then stored as true or false).
+  // Every chunk, retry, restart and replay reads it; nothing is ever
+  // recomputed per piece. Missing means crisis, always (Sol's sixth
+  // review: rows from before the decision was stored).
+  crisis?: boolean | "ask";
 }
 
 export interface OutboundRow {
@@ -297,7 +300,8 @@ export class MemoryStore implements ConversationStore {
   }
 
   addPending(item: PendingInbound): void {
-    this.pendingRows.push(item);
+    // Missing means crisis, as on the SQL store.
+    this.pendingRows.push({ ...item, crisis: item.crisis ?? true });
   }
 
   pending(): PendingInbound[] {

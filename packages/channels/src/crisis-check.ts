@@ -38,7 +38,7 @@ export class ModelCrisisCheck implements CrisisCheck {
     this.hedgeAfterMs = opts.hedgeAfterMs ?? 700;
   }
 
-  // The answer has 2 seconds (decideCrisis). The model sometimes takes
+  // The answer has 3 seconds (CRISIS_CHECK_TIMEOUT_MS). The model sometimes takes
   // longer or returns nothing, so a second identical request goes out
   // after hedgeAfterMs; the first non-empty answer wins and the other is
   // cancelled. An empty answer is not an answer. Anything but a clean

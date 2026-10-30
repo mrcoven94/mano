@@ -36,7 +36,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { EYES, allowedTapback, crisisLineFor, crisisTurn, decideCrisis, eyesAllowed, guardReply, type CrisisCheck } from "@mano/persona";
+import { EYES, allowedTapback, crisisGate, crisisLineFor, decideCrisis, eyesAllowed, guardReply, type CrisisCheck } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -435,8 +435,14 @@ export class ConversationRunner {
       // runner never has to cut. Continuation pieces take derived IDs;
       // the event still dedupes on its own ID.
       const pieces = text ? splitTextCap(text, TURN_TEXT_CAP) : [null];
+      // The crisis decision on the whole message, before it is split, and
+      // stored with every piece. Only one short health question is left
+      // as "ask", for the model check before its turn.
+      const gate = crisisGate(text);
+      const crisis = gate === "none" ? false : gate === "ask" ? ("ask" as const) : true;
       pieces.forEach((piece, i) => {
         store.addPending({
+          crisis,
           eventId: i === 0 ? event.id : `${event.id}#${i + 1}`,
           receivedAtMs: nowMs(),
           chatId: event.chatId ?? meta.chatId ?? "",
@@ -669,18 +675,21 @@ export class ConversationRunner {
           // The decoration epoch is read before this first await, so a STOP
           // or close during the check is never missed by the turn.
           const epoch = store.meta().decorationEpoch;
-          // The decision is stored with the inbound pieces before any turn
-          // starts, and read back on every retry and restart: a leftover
-          // piece of a long message keeps its message's decision.
-          const undecided = group.filter((p) => typeof p.crisis !== "boolean");
-          let crisis = group.some((p) => p.crisis === true);
-          if (undecided.length > 0) {
-            const decision = await decideCrisis(groupText, this.deps.crisisCheck ?? null);
-            if (decision.reason !== "floor") {
-              logger.info("crisis_check", { handle: this.logHandle(), crisis: decision.crisis, reason: decision.reason, ms: decision.ms });
+          // The decision was stored with every piece when the message
+          // arrived, and is read back on every retry and restart; a missing
+          // one is a crisis. Only pieces stored as "ask" (one short health
+          // question) go to the model check, once, and the answer is stored.
+          const asks = group.filter((p) => p.crisis === "ask");
+          let crisis = group.some((p) => p.crisis !== false && p.crisis !== "ask");
+          if (asks.length > 0) {
+            if (!crisis) {
+              const decision = await decideCrisis(groupText, this.deps.crisisCheck ?? null);
+              if (decision.reason !== "floor") {
+                logger.info("crisis_check", { handle: this.logHandle(), crisis: decision.crisis, reason: decision.reason, ms: decision.ms });
+              }
+              crisis = decision.crisis;
             }
-            crisis = crisis || decision.crisis;
-            store.setPendingCrisis(undecided.map((p) => p.eventId), crisis);
+            store.setPendingCrisis(asks.map((p) => p.eventId), crisis);
           }
           for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP)) {
             const items = chunk.map((item) => ({ ...item, crisis }));
@@ -994,12 +1003,9 @@ export class ConversationRunner {
     // buffer split it. It is broad on purpose: a match makes the reply
     // name 988 and 911, and over-triggering is accepted.
     // The decision was made once on the whole message before it was
-    // split, and every chunk carries it. A turn persisted before that
-    // (no decision on its items) takes the keyword floor, which errs
-    // toward crisis.
-    const crisis = items.every((i) => typeof i.crisis === "boolean")
-      ? items.some((i) => i.crisis === true)
-      : crisisTurn(texts.join("\n"));
+    // split, and every chunk carries it. An item with no decision (a turn
+    // persisted before decisions were stored) is a crisis, always.
+    const crisis = items.some((i) => i.crisis !== false);
     // A crisis turn never sends the friendly intro, and later turns do not
     // send it either.
     if (crisis && !meta.introduced) store.patchMeta({ introduced: true });

@@ -180,3 +180,64 @@ describe("the stored decision on the SQL store", () => {
     for (const turn of sentTurns) expect(h.store.outbounds().some((r) => r.turn === turn && r.text === CRISIS_LINE)).toBe(true);
   });
 });
+
+describe("a missing stored decision means crisis, always (Sol's sixth review)", () => {
+  function sqlite(db: DatabaseSync): SqlStorage {
+    return {
+      exec(sql: string, ...params: unknown[]) {
+        const select = /^\s*(SELECT|WITH)\b/i.test(sql);
+        if (!select && params.length === 0 && sql.includes(";")) {
+          db.exec(sql);
+          return { toArray: () => [] };
+        }
+        const stmt = db.prepare(sql);
+        const args = params as SQLInputValue[];
+        if (select) return { toArray: () => stmt.all(...args) };
+        stmt.run(...args);
+        return { toArray: () => [] };
+      },
+    } as unknown as SqlStorage;
+  }
+
+  it("upgrades pieces left pending by the previous release to crisis, and every piece gets the line", async () => {
+    // The previous release's database: no crisis column, a long message
+    // split into two pieces, the first one's turn started but never
+    // settled (markTurnSettled failed), the second still pending.
+    const db = new DatabaseSync(":memory:");
+    new SqlConversationStore(sqlite(db));
+    db.exec("ALTER TABLE pending DROP COLUMN crisis");
+    const LONG = "Can " + "a".repeat(3993) + " suicide?";
+    const first = LONG.slice(0, 4000);
+    const second = LONG.slice(4000);
+    const insert = db.prepare("INSERT INTO pending (event_id, received_at_ms, chat_id, handle_to, text, attachments_json, from_reconcile, message_id) VALUES (?, ?, ?, ?, ?, '[]', 0, ?)");
+    const now = Date.parse("2026-10-28T12:00:00Z");
+    insert.run("evt_long#2", now, "chat_test_aaa", "+15550001001", second, null);
+    db.prepare("UPDATE meta SET introduced = 1, turn = 1, chat_id = 'chat_test_aaa', handle_to = '+15550001001' WHERE id = 1").run();
+    db.prepare(
+      "INSERT INTO turns (turn, items_json, chat_id, handle_to, answer_json, cost_usd, cost_settled, attempts, state, created_at_ms, updated_at_ms) VALUES (1, ?, 'chat_test_aaa', '+15550001001', NULL, NULL, 0, 1, 'started', ?, ?)",
+    ).run(JSON.stringify([{ eventId: "evt_long", receivedAtMs: now, chatId: "chat_test_aaa", to: "+15550001001", text: first, attachments: [], fromReconcile: false, messageId: "msg_evt_long" }]), now, now);
+    insert.run("evt_long", now, "chat_test_aaa", "+15550001001", first, "msg_evt_long");
+
+    // Upgrade: the new store on the same database, then resume.
+    const c = check("no");
+    const h = makeHarness({ replies: ["part one", "part two"], crisisCheck: c, store: new SqlConversationStore(sqlite(db)), startMs: now });
+    expect(h.store.pending().every((p) => p.crisis === true)).toBe(true);
+    h.advance(h.batchMs + 100);
+    for (let i = 0; i < 12 && (h.store.pending().length > 0 || h.store.unfinishedTurn()); i++) {
+      h.advance(60_000);
+      await h.runner.runDueTurn().catch(() => "threw");
+    }
+    const sentTurns = new Set(h.store.outbounds().filter((r) => r.state === "sent" && r.tag === "").map((r) => r.turn));
+    expect(sentTurns.size).toBeGreaterThanOrEqual(2);
+    for (const turn of sentTurns) expect(h.store.outbounds().some((r) => r.turn === turn && r.text === CRISIS_LINE), `turn ${turn}`).toBe(true);
+    expect(c.asked).toEqual([]);
+  });
+
+  it("stores a decision on every piece when the message arrives", async () => {
+    const h = makeHarness({ replies: ["ok"], crisisCheck: check("no") });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_a", text: "What documents do I need for WIC?", occurredAtMs: h.now }), "webhook");
+    await h.runner.handleEvent(inboundEvent({ id: "evt_b", text: "I want to hurt myself tonight.", occurredAtMs: h.now }), "webhook");
+    await h.runner.handleEvent(inboundEvent({ id: "evt_c", text: QUESTION, occurredAtMs: h.now }), "webhook");
+    expect(h.store.pending().map((p) => p.crisis)).toEqual([false, true, "ask"]);
+  });
+});

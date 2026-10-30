@@ -243,6 +243,10 @@ export class SqlConversationStore implements ConversationStore {
         // The column already exists.
       }
     }
+    // Pieces stored before the decision was (no value) are crises: every
+    // piece written since carries a value, so only those rows change
+    // (Sol's sixth review).
+    this.sql.exec("UPDATE pending SET crisis = 1 WHERE crisis IS NULL");
     const existing = firstRow(this.sql.exec("SELECT id FROM meta WHERE id = 1"));
     if (!existing) {
       this.sql.exec(
@@ -339,7 +343,7 @@ export class SqlConversationStore implements ConversationStore {
 
   addPending(item: PendingInbound): void {
     this.sql.exec(
-      "INSERT OR IGNORE INTO pending (event_id, received_at_ms, chat_id, handle_to, text, attachments_json, from_reconcile, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO pending (event_id, received_at_ms, chat_id, handle_to, text, attachments_json, from_reconcile, message_id, crisis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       item.eventId,
       item.receivedAtMs,
       item.chatId,
@@ -348,6 +352,7 @@ export class SqlConversationStore implements ConversationStore {
       JSON.stringify(item.attachments),
       item.fromReconcile ? 1 : 0,
       item.messageId ?? null,
+      crisisColumn(item.crisis),
     );
   }
 
@@ -372,7 +377,8 @@ export class SqlConversationStore implements ConversationStore {
       attachments: JSON.parse(r.attachments_json) as EventAttachment[],
       fromReconcile: r.from_reconcile === 1,
       messageId: r.message_id ?? null,
-      ...(r.crisis === 0 || r.crisis === 1 ? { crisis: r.crisis === 1 } : {}),
+      // Anything but a stored "no" or "ask" is a crisis: missing means crisis.
+      crisis: r.crisis === 0 ? false : r.crisis === 2 ? ("ask" as const) : true,
     }));
   }
 
@@ -717,4 +723,9 @@ export class SqlConversationStore implements ConversationStore {
     );
     this.saveMeta({ ...defaultMeta(), generation: meta.generation + 1, turn: meta.turn, deletedAtMs, decorationEpoch: meta.decorationEpoch + 1 });
   }
+}
+
+// 0 not a crisis, 1 a crisis, 2 ask the model check; never null.
+function crisisColumn(crisis: boolean | "ask" | undefined): number {
+  return crisis === false ? 0 : crisis === "ask" ? 2 : 1;
 }

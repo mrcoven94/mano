@@ -358,6 +358,23 @@ export function mentionsInstructions(text: string): boolean {
 
 export type CrisisReason = "floor" | "instructions" | "model-no" | "model-other" | "check-error" | "check-timeout" | "no-check";
 
+// The decision that needs no model, made when a message arrives and
+// stored with it: not a crisis, a crisis, a crisis because it talks to
+// the check, or "ask" (one short health question for the model check).
+// The floor and the instruction rule read the NFKC form, so full-width
+// and other compatibility forms read as plain letters (Sol's fifth
+// review); the original is checked too, and a crisis in either counts.
+export type CrisisGate = "none" | "crisis" | "instructions" | "ask";
+
+export function crisisGate(text: string): CrisisGate {
+  const nfkc = text.normalize("NFKC");
+  if (!crisisTurn(nfkc) && !crisisTurn(text)) return "none";
+  if (!plainLatin(nfkc) || !isOneHealthQuestion(nfkc)) return "crisis";
+  // A message that talks to the check never reaches it.
+  if (mentionsInstructions(nfkc)) return "instructions";
+  return "ask";
+}
+
 export interface CrisisDecision {
   crisis: boolean;
   reason: CrisisReason;
@@ -371,14 +388,10 @@ export async function decideCrisis(
 ): Promise<CrisisDecision> {
   const now = opts.nowMs ?? (() => Date.now());
   const started = now();
-  // The floor and the instruction rule read the NFKC form, so full-width
-  // and other compatibility forms read as plain letters (Sol's fifth
-  // review). The original is checked too: a crisis in either is a crisis.
-  const nfkc = text.normalize("NFKC");
-  if (!crisisTurn(nfkc) && !crisisTurn(text)) return { crisis: false, reason: "floor", ms: 0 };
-  if (!plainLatin(nfkc) || !isOneHealthQuestion(nfkc)) return { crisis: true, reason: "floor", ms: 0 };
-  // A message that talks to the check never reaches it.
-  if (mentionsInstructions(nfkc)) return { crisis: true, reason: "instructions", ms: 0 };
+  const gate = crisisGate(text);
+  if (gate === "none") return { crisis: false, reason: "floor", ms: 0 };
+  if (gate === "crisis") return { crisis: true, reason: "floor", ms: 0 };
+  if (gate === "instructions") return { crisis: true, reason: "instructions", ms: 0 };
   if (!check || !check.live) return { crisis: true, reason: "no-check", ms: 0 };
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
