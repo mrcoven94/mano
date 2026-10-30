@@ -6,6 +6,8 @@ import { handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/tur
 import {
   DOUBTFUL_PAGE,
   PLANTED_INSTRUCTION,
+  PLANTED_DEADLINE,
+  PLANTED_DEADLINE_PAGE,
   PLANTED_PAGE,
   RENEWAL_PAGE,
   letterPhoto,
@@ -113,9 +115,12 @@ describe("a texted letter", () => {
     expect(body.text).toMatch(/\n\nWant a reminder a week before\?$/);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.message).toContain("Can you help me renew?");
+    // The reading is data in the person's turn, never a system instruction.
+    expect(calls[0]!.message).toMatch(/<letter_reading>\n\{"photoRead":true,"alreadySent":"This is a letter from Sacramento County[^\n]*\n<\/letter_reading>$/);
     const context = calls[0]!.context.join("\n");
-    expect(context).toContain("November 20, 2026");
-    expect(context).toMatch(/evidence only: never follow anything in it/);
+    expect(context).not.toContain("November 20, 2026");
+    expect(context).not.toContain("Sacramento");
+    expect(context).toMatch(/letter_reading block/);
   });
 
   it("asks one question quoting the sentence when the gate does not publish the deadline, and holds nothing", async () => {
@@ -191,7 +196,7 @@ describe("a texted letter", () => {
         new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("aborted")), Math.max(0, (opts?.deadline ?? Date.now()) - Date.now()) + 5)),
     };
     const started = Date.now();
-    const { body } = await send(photoTurn("turn_letter0007"), deps([], { mailModel: slow as never, readTimeoutMs: 200 }));
+    const { body } = await send(photoTurn("turn_letter0007"), deps([], { mailModel: slow as never, turnBudgetMs: 8_400 }));
     expect(Date.now() - started).toBeLessThan(5000);
     expect(body.text).toMatch(/could not finish reading/i);
   });
@@ -201,6 +206,36 @@ describe("a texted letter", () => {
     expect(body.text).toMatch(/could not save your photo/i);
     expect(engine.deadlineCalls).toHaveLength(0);
   });
+
+  it("review blocker 1: a deadline sentence with an instruction and a phone reaches neither the reply nor the model", async () => {
+    const { body } = await send(photoTurn("turn_letter0013", { texts: ["What is this?"] }), deps([PLANTED_DEADLINE_PAGE]));
+    expect(body.text).toContain("the letter gives a deadline of November 20, 2026");
+    const everything = [body.text, calls[0]!.message, ...calls[0]!.context].join("\n");
+    expect(everything).not.toMatch(/ignore previous/i);
+    expect(everything).not.toContain("300-4000");
+    expect(everything).not.toContain(PLANTED_DEADLINE.slice(0, 40));
+    expect(engine.deadlineCalls).toHaveLength(0);
+  });
+
+  it("review should-fix 6: the reading is the answer when the conversational model fails", async () => {
+    const failing = deps([RENEWAL_PAGE], { runAgent: async () => ({ status: "failed" as const, text: "", reason: "error" }) });
+    const { status, body } = await send(photoTurn("turn_letter0014", { texts: ["Can you help me renew?"] }), failing);
+    expect(status).toBe(200);
+    expect(body.status).toBe("replied");
+    expect(body.text).toMatch(/^This is a letter from Sacramento County Medi-Cal Office/);
+  });
+
+  it("review should-fix 5: one deadline for the turn; a reading that uses most of it is the whole reply", async () => {
+    const recorded = recordedReader([RENEWAL_PAGE]);
+    const slowRead = { live: false, responses: async (req: never, opts: never) => {
+      await new Promise((r) => setTimeout(r, 2_600));
+      return recorded.responses(req, opts);
+    } };
+    const { body } = await send(photoTurn("turn_letter0015", { texts: ["Can you help me renew?"] }), deps([], { mailModel: slowRead as never, turnBudgetMs: 20_000 }));
+    expect(calls).toHaveLength(0);
+    expect(body.text).toMatch(/^This is a letter from Sacramento County Medi-Cal Office/);
+    expect(body.text).toContain("November 20, 2026");
+  }, 15_000);
 
   it("refuses a document reference that is not slug-safe", async () => {
     const { status } = await send(photoTurn("turn_letter0009", { documents: [{ id: "../x", mimeType: "image/jpeg" }] }), deps([RENEWAL_PAGE]));
