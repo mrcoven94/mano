@@ -16,6 +16,9 @@ importers:
       '@mano/guardian':
         specifier: workspace:*
         version: link:../../packages/guardian
+      '@mano/mail':
+        specifier: workspace:*
+        version: link:../../packages/mail
       '@mano/persona':
         specifier: workspace:*
         version: link:../../packages/persona
@@ -226,6 +229,9 @@ importers:
       '@mano/guardian':
         specifier: workspace:*
         version: link:../guardian
+      '@mano/mail':
+        specifier: workspace:*
+        version: link:../mail
       '@mano/persona':
         specifier: workspace:*
         version: link:../persona
