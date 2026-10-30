@@ -52,7 +52,7 @@ import {
   type DeliveryOutcome,
 } from "./agent-state.js";
 import { CURRENT_GENERATION } from "../gateway/sql-store.js";
-import { ProfileStore, type PatchAnswer, type Profile } from "../profile.js";
+import { ProfileStore, forgetMemoryNote, type PatchAnswer, type Profile, type Suggestion } from "../profile.js";
 import { profileCipher } from "../crypto.js";
 
 // A delivery run holds its claim this long; a run that crashed is
@@ -481,7 +481,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // answers the same, so a retried forget is safe.
   async forgetMemory(verified: string, memoryId: string) {
     await this.assertSubject(verified);
-    this.db().exec("DELETE FROM memory WHERE id = ?", memoryId);
+    this.ctx.storage.transactionSync(() => forgetMemoryNote(this.db(), memoryId));
     this.store.audit({ event: "memory.forgotten", memoryHash: await auditDigest(memoryId) });
     return { id: memoryId, forgotten: true as const };
   }
@@ -504,9 +504,18 @@ export class PersonAgent extends Agent<Env, PersonState> {
     });
   }
 
+  // Code inside Engine reads the profile with this, as the person:
+  // getProfile(this.personId). Null when the profile key is not set.
   async getProfile(verified: string): Promise<Profile | null> {
     await this.assertSubject(verified);
     return (await this.profileStore()?.read()) ?? null;
+  }
+
+  // Values from a lower-trust source that differ from what is on file,
+  // waiting for the person to confirm.
+  async getProfileSuggestions(verified: string): Promise<Suggestion[]> {
+    await this.assertSubject(verified);
+    return (await this.profileStore()?.suggestions()) ?? [];
   }
 
   // generation: as for memory, the conversation generation the caller
@@ -516,7 +525,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const store = this.profileStore();
     if (!store) return { status: "unavailable" };
     const out = await store.patch(raw, generation ?? currentGeneration(this.db()));
-    return out.status === "ok" ? { ...out, profile: await store.read() } : out;
+    return out.status === "ok" ? { ...out, profile: await store.read(), suggestions: await store.suggestions() } : out;
   }
 
   // For code inside Engine that reads a document (Mail, Forms): facts it

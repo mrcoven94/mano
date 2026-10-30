@@ -9,6 +9,7 @@
 //
 //   person.fullName  person.dateOfBirth  person.phone  person.email
 //   person.address.line1|line2|city|state|zip  person.county  person.language
+//   person.householdConfirmed   (true once the person said who lives with them)
 //   household.<id>.name|relationship|dateOfBirth
 //   income.<id>.memberId|source|amount|frequency   (memberId: a household id, or "self")
 //   programs.<id>.program|state|caseNumber|status
@@ -18,6 +19,14 @@
 // (read from one of their documents, which documentId names) or "agent"
 // (Mano moved it from older memory). Every leaf in the answer is
 // { value, source, documentId?, updatedAt }.
+//
+// Trust runs person, then document, then agent. A value from a lower
+// source never replaces a different one from a higher source: it is kept
+// as a suggestion (GET answers { profile, suggestions }) for the person to
+// confirm. Saying it again, from the person, settles the suggestion.
+//
+// A field moved from a memory note stays linked to it: forgetting either
+// one forgets both, and changing the field retires the note.
 //
 // Each leaf is its own row, sealed with the person's key and bound to its
 // path, so a value cannot be read from SQLite or moved to another field.
@@ -53,14 +62,15 @@ export interface Profile {
     address: { line1?: Leaf; line2?: Leaf; city?: Leaf; state?: Leaf; zip?: Leaf };
     county?: Leaf;
     language?: Leaf;
+    householdConfirmed?: Leaf<boolean>;
   };
   household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];
   income: { id: string; memberId?: Leaf; source?: Leaf; amount?: Leaf<number>; frequency?: Leaf<Frequency> }[];
   programs: { id: string; program?: Leaf; state?: Leaf; caseNumber?: Leaf; status?: Leaf }[];
 }
 
-type Value = string | number;
-type Kind = "text" | "date" | "phone" | "email" | "state" | "zip" | "amount" | "frequency" | "member";
+type Value = string | number | boolean;
+type Kind = "text" | "date" | "phone" | "email" | "state" | "zip" | "amount" | "frequency" | "member" | "flag";
 
 const MAX_TEXT = 200;
 const ENTRY_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -91,6 +101,7 @@ const NORMALIZE: Record<Kind, (raw: unknown) => Value | null> = {
     typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 10_000_000 ? Math.round(raw * 100) / 100 : null,
   frequency: (raw) => (typeof raw === "string" && (FREQUENCIES as readonly string[]).includes(raw) ? raw : null),
   member: (raw) => (typeof raw === "string" && ENTRY_ID.test(raw) ? raw : null),
+  flag: (raw) => (typeof raw === "boolean" ? raw : null),
 };
 
 const PERSON_LEAVES: Record<string, Kind> = {
@@ -105,6 +116,7 @@ const PERSON_LEAVES: Record<string, Kind> = {
   "person.address.zip": "zip",
   "person.county": "text",
   "person.language": "text",
+  "person.householdConfirmed": "flag",
 };
 
 const ENTRY_LEAVES = {
@@ -184,21 +196,52 @@ export interface FieldCipher {
   open(path: string, sealed: string): Promise<string>;
 }
 
+const TRUST: Record<ProfileSource, number> = { person: 3, document: 2, agent: 1 };
+const TRUST_SQL = "(CASE source WHEN 'person' THEN 3 WHEN 'document' THEN 2 ELSE 1 END)";
+const UNDER = "(path = ? OR substr(path, 1, ?) = ?)";
+const under = (group: string) => [group, group.length + 1, `${group}.`];
+
 export function ensureProfileTables(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS profile_fields(
     path TEXT PRIMARY KEY, sealed TEXT NOT NULL, source TEXT NOT NULL, document_id TEXT, updated_at TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS profile_patches(
     idempotency_key TEXT PRIMARY KEY, request_hash TEXT NOT NULL, result_json TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS profile_migrations(name TEXT PRIMARY KEY, at TEXT NOT NULL)`);
+  // A lower-trust value that conflicts with a higher-trust one, waiting
+  // for the person: one per field and source.
+  sql.exec(`CREATE TABLE IF NOT EXISTS profile_suggestions(
+    path TEXT NOT NULL, source TEXT NOT NULL, sealed TEXT NOT NULL, document_id TEXT, suggested_at TEXT NOT NULL,
+    PRIMARY KEY (path, source))`);
+  // Which memory notes a migrated field came from.
+  sql.exec(`CREATE TABLE IF NOT EXISTS profile_memory_links(path TEXT NOT NULL, memory_id TEXT NOT NULL, PRIMARY KEY (path, memory_id))`);
 }
 
-// Part of the conversation delete: the profile and its patch keys go.
-// Returns how many fields were removed.
+function hasMemoryTable(sql: SqlExec): boolean {
+  return sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory'").toArray().length > 0;
+}
+
+// Part of the conversation delete: the profile, its suggestions, links
+// and patch keys go. Returns how many fields were removed.
 export function clearProfile(sql: SqlExec): number {
   const n = Number((sql.exec("SELECT COUNT(*) AS n FROM profile_fields").toArray()[0] as { n: number }).n);
-  sql.exec("DELETE FROM profile_fields");
-  sql.exec("DELETE FROM profile_patches");
+  for (const table of ["profile_fields", "profile_patches", "profile_suggestions", "profile_memory_links"]) sql.exec(`DELETE FROM ${table}`);
   return n;
+}
+
+// Forgetting a memory note also forgets the profile fields moved from it.
+export function forgetMemoryNote(sql: SqlExec, memoryId: string): void {
+  sql.exec(`DELETE FROM profile_fields WHERE path IN (SELECT path FROM profile_memory_links WHERE memory_id = ?)`, memoryId);
+  sql.exec("DELETE FROM profile_memory_links WHERE memory_id = ?", memoryId);
+  if (hasMemoryTable(sql)) sql.exec("DELETE FROM memory WHERE id = ?", memoryId);
+}
+
+// A field that changes or is cleared retires the notes it came from, so
+// the old note never reaches the model beside the new value.
+function retireLinkedNotes(sql: SqlExec, path: string, group: boolean): void {
+  const where = group ? UNDER : "path = ?";
+  const args = group ? under(path) : [path];
+  if (hasMemoryTable(sql)) sql.exec(`DELETE FROM memory WHERE id IN (SELECT memory_id FROM profile_memory_links WHERE ${where})`, ...args);
+  sql.exec(`DELETE FROM profile_memory_links WHERE ${where}`, ...args);
 }
 
 // Older memory notes that say exactly one profile fact. Anything that does
@@ -224,8 +267,14 @@ const MEMORY_RULES: { pattern: RegExp; fields: (m: RegExpMatchArray) => Record<s
   },
 ];
 
-export function profileFieldsFromMemory(notes: { content: string; createdAt: string }[]): Map<string, { value: Value; at: string }> {
-  const found = new Map<string, { value: Value; at: string }>();
+export interface MigratedField {
+  value: Value;
+  at: string;
+  noteIds: string[];
+}
+
+export function profileFieldsFromMemory(notes: { id?: string; content: string; createdAt: string }[]): Map<string, MigratedField> {
+  const found = new Map<string, MigratedField>();
   const disputed = new Set<string>();
   for (const note of notes) {
     const text = note.content.trim();
@@ -237,7 +286,8 @@ export function profileFieldsFromMemory(notes: { content: string; createdAt: str
       if (value === null) continue;
       const prior = found.get(path);
       if (prior && prior.value !== value) disputed.add(path);
-      else found.set(path, { value, at: note.createdAt });
+      else if (prior) prior.noteIds.push(...(note.id ? [note.id] : []));
+      else found.set(path, { value, at: note.createdAt, noteIds: note.id ? [note.id] : [] });
     }
   }
   for (const path of disputed) found.delete(path);
@@ -248,7 +298,17 @@ export interface PatchResult {
   changed: string[];
   unchanged: string[];
   cleared: string[];
+  // Not applied: a higher-trust value differs. Kept for the person.
+  suggested: string[];
   replayed: boolean;
+}
+
+export interface Suggestion {
+  path: string;
+  value: Value;
+  source: ProfileSource;
+  documentId?: string;
+  suggestedAt: string;
 }
 
 export type PatchOutcome =
@@ -277,6 +337,11 @@ const MEMORY_MIGRATION = "memory-to-profile-v1";
 
 class SnapshotMoved extends Error {}
 
+function generationOf(sql: SqlExec): number {
+  const row = sql.exec(`SELECT ${CURRENT_GENERATION} AS g`).toArray()[0] as { g: number | null } | undefined;
+  return Number(row?.g ?? 0);
+}
+
 export class ProfileStore {
   constructor(private deps: ProfileStoreDeps) {}
 
@@ -287,8 +352,8 @@ export class ProfileStore {
     return paths ? all.filter((r) => paths.includes(r.path)) : all;
   }
 
-  private async open(row: FieldRow): Promise<Value> {
-    return JSON.parse(await this.deps.cipher.open(row.path, row.sealed)) as Value;
+  private async open(path: string, sealed: string): Promise<Value> {
+    return JSON.parse(await this.deps.cipher.open(path, sealed)) as Value;
   }
 
   async read(): Promise<Profile> {
@@ -297,7 +362,7 @@ export class ProfileStore {
     const entries = new Map<string, Record<string, unknown>>();
     for (const row of this.rows()) {
       const leaf: Leaf<Value> = {
-        value: await this.open(row),
+        value: await this.open(row.path, row.sealed),
         source: row.source,
         ...(row.document_id ? { documentId: row.document_id } : {}),
         updatedAt: row.updated_at,
@@ -318,6 +383,23 @@ export class ProfileStore {
       entry[field] = leaf;
     }
     return profile;
+  }
+
+  async suggestions(): Promise<Suggestion[]> {
+    const rows = this.deps.sql
+      .exec("SELECT path, source, sealed, document_id, suggested_at FROM profile_suggestions ORDER BY suggested_at, path")
+      .toArray() as unknown as { path: string; source: ProfileSource; sealed: string; document_id: string | null; suggested_at: string }[];
+    const out: Suggestion[] = [];
+    for (const r of rows) {
+      out.push({
+        path: r.path,
+        value: await this.open(r.path, r.sealed),
+        source: r.source,
+        ...(r.document_id ? { documentId: r.document_id } : {}),
+        suggestedAt: r.suggested_at,
+      });
+    }
+    return out;
   }
 
   async patch(raw: unknown, generation: number): Promise<PatchOutcome> {
@@ -350,43 +432,57 @@ export class ProfileStore {
       | undefined;
     if (!row) return null;
     if (row.request_hash !== requestHash) return { status: "conflict" };
-    return { status: "ok", result: { ...(JSON.parse(row.result_json) as PatchResult), replayed: true } };
+    return { status: "ok", result: { ...(JSON.parse(row.result_json) as Omit<PatchResult, "replayed">), replayed: true } };
   }
 
-  // Reads what each set would replace, seals only real changes, then
-  // writes in one transaction that re-checks the key, the generation and
-  // that nothing it compared against moved in between.
+  // Decides each set against what it would replace (apply, leave as is, or
+  // keep as a suggestion), seals what will be written, then writes in one
+  // transaction that re-checks the key, the generation and that nothing it
+  // compared against moved in between.
   private async tryPatch(parsed: ParsedPatch, requestHash: string, generation: number): Promise<PatchOutcome> {
     const early = this.recorded(parsed.idempotencyKey, requestHash);
     if (early) return early;
+    const trust = TRUST[parsed.source];
     const setPaths = parsed.sets.map((s) => s.path);
     const before = new Map(this.rows(setPaths).map((r) => [r.path, r]));
     const changed: { path: string; sealed: string }[] = [];
+    const suggested: { path: string; sealed: string }[] = [];
     const unchanged: string[] = [];
     for (const set of parsed.sets) {
       const prior = before.get(set.path);
-      const same =
-        prior &&
-        !parsed.clears.some((c) => covers(c, set.path)) &&
-        prior.source === parsed.source &&
-        (prior.document_id ?? null) === parsed.documentId &&
-        (await this.open(prior)) === set.value;
-      if (same) unchanged.push(set.path);
-      else changed.push({ path: set.path, sealed: await this.deps.cipher.seal(set.path, JSON.stringify(set.value)) });
+      const cleared = parsed.clears.some((c) => covers(c, set.path)) && (!prior || TRUST[prior.source] <= trust);
+      const live = prior && !cleared ? prior : undefined;
+      const sameValue = live ? (await this.open(live.path, live.sealed)) === set.value : false;
+      if (live && TRUST[live.source] > trust) {
+        if (sameValue) unchanged.push(set.path);
+        else suggested.push({ path: set.path, sealed: await this.deps.cipher.seal(set.path, JSON.stringify(set.value)) });
+      } else if (live && sameValue && live.source === parsed.source && (live.document_id ?? null) === parsed.documentId) {
+        unchanged.push(set.path);
+      } else {
+        changed.push({ path: set.path, sealed: await this.deps.cipher.seal(set.path, JSON.stringify(set.value)) });
+      }
     }
-    const updatedAt = this.deps.now().toISOString();
+    const at = this.deps.now().toISOString();
+    const sql = this.deps.sql;
     return this.deps.transaction((): PatchOutcome => {
       const late = this.recorded(parsed.idempotencyKey, requestHash);
       if (late) return late;
-      const current = this.deps.sql.exec(`SELECT ${CURRENT_GENERATION} AS g`).toArray()[0] as { g: number | null } | undefined;
-      if (Number(current?.g ?? 0) !== generation) return { status: "stale" };
+      if (generationOf(sql) !== generation) return { status: "stale" };
       const now = new Map(this.rows(setPaths).map((r) => [r.path, r.updated_at]));
       for (const path of setPaths) if (now.get(path) !== before.get(path)?.updated_at) throw new SnapshotMoved();
       for (const path of parsed.clears) {
-        this.deps.sql.exec("DELETE FROM profile_fields WHERE path = ? OR substr(path, 1, ?) = ?", path, path.length + 1, `${path}.`);
+        // Only what this source may overrule: a document never clears what
+        // the person said.
+        const rows = sql.exec(`SELECT path FROM profile_fields WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust).toArray() as {
+          path: string;
+        }[];
+        for (const r of rows) retireLinkedNotes(sql, r.path, false);
+        sql.exec(`DELETE FROM profile_fields WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
+        sql.exec(`DELETE FROM profile_suggestions WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
       }
       for (const c of changed) {
-        this.deps.sql.exec(
+        retireLinkedNotes(sql, c.path, false);
+        sql.exec(
           `INSERT INTO profile_fields(path, sealed, source, document_id, updated_at) VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(path) DO UPDATE SET sealed = excluded.sealed, source = excluded.source,
              document_id = excluded.document_id, updated_at = excluded.updated_at`,
@@ -394,51 +490,94 @@ export class ProfileStore {
           c.sealed,
           parsed.source,
           parsed.documentId,
-          updatedAt,
+          at,
         );
       }
-      const result: PatchResult = { changed: changed.map((c) => c.path), unchanged, cleared: parsed.clears, replayed: false };
-      this.deps.sql.exec(
+      // Saying a field again, or changing it, settles suggestions for it
+      // from this source or a lower one.
+      for (const path of [...changed.map((c) => c.path), ...unchanged]) {
+        sql.exec(`DELETE FROM profile_suggestions WHERE path = ? AND ${TRUST_SQL} <= ?`, path, trust);
+      }
+      for (const s of suggested) {
+        sql.exec(
+          `INSERT INTO profile_suggestions(path, source, sealed, document_id, suggested_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(path, source) DO UPDATE SET sealed = excluded.sealed, document_id = excluded.document_id, suggested_at = excluded.suggested_at`,
+          s.path,
+          parsed.source,
+          s.sealed,
+          parsed.documentId,
+          at,
+        );
+      }
+      const result = {
+        changed: changed.map((c) => c.path),
+        unchanged,
+        cleared: parsed.clears,
+        suggested: suggested.map((s) => s.path),
+      };
+      sql.exec(
         "INSERT INTO profile_patches(idempotency_key, request_hash, result_json) VALUES (?, ?, ?)",
         parsed.idempotencyKey,
         requestHash,
-        JSON.stringify({ changed: result.changed, unchanged: result.unchanged, cleared: result.cleared }),
+        JSON.stringify(result),
       );
-      return { status: "ok", result };
+      return { status: "ok", result: { ...result, replayed: false } };
     });
   }
 
   // Runs once per person: memory notes that clearly name a profile fact
-  // become that field with source agent, the note itself kept. A field the
-  // profile already has is never overwritten.
+  // become that field with source agent, linked to the notes, which stay.
+  // A field the profile already has is never overwritten. The write lands
+  // only if the conversation generation and every source note are as they
+  // were read; otherwise nothing is written and the next call starts over,
+  // so a delete during sealing can never bring the data back.
   async migrateMemoryOnce(): Promise<number> {
-    const done = () => this.deps.sql.exec("SELECT 1 FROM profile_migrations WHERE name = ?", MEMORY_MIGRATION).toArray().length > 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const moved = await this.tryMigrate();
+      if (moved !== null) return moved;
+    }
+    return 0;
+  }
+
+  // null: memory or the generation moved while sealing; nothing written.
+  private async tryMigrate(): Promise<number | null> {
+    const sql = this.deps.sql;
+    const done = () => sql.exec("SELECT 1 FROM profile_migrations WHERE name = ?", MEMORY_MIGRATION).toArray().length > 0;
     if (done()) return 0;
-    const hasMemory = this.deps.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory'").toArray().length > 0;
-    const notes = hasMemory
-      ? (this.deps.sql.exec("SELECT content, created_at AS createdAt FROM memory ORDER BY created_at").toArray() as unknown as {
+    const generation = generationOf(sql);
+    const notes = hasMemoryTable(sql)
+      ? (sql.exec("SELECT id, content, created_at AS createdAt FROM memory ORDER BY created_at").toArray() as unknown as {
+          id: string;
           content: string;
           createdAt: string;
         }[])
       : [];
-    const sealed: { path: string; sealed: string; at: string }[] = [];
-    for (const [path, { value, at }] of profileFieldsFromMemory(notes)) {
-      sealed.push({ path, sealed: await this.deps.cipher.seal(path, JSON.stringify(value)), at });
+    const sealed: { path: string; sealed: string; at: string; noteIds: string[] }[] = [];
+    for (const [path, field] of profileFieldsFromMemory(notes)) {
+      sealed.push({ path, sealed: await this.deps.cipher.seal(path, JSON.stringify(field.value)), at: field.at, noteIds: field.noteIds });
     }
-    return this.deps.transaction(() => {
+    return this.deps.transaction((): number | null => {
       if (done()) return 0;
+      if (generationOf(sql) !== generation) return null;
+      const sourceIds = [...new Set(sealed.flatMap((s) => s.noteIds))];
+      const present = new Set(
+        hasMemoryTable(sql) ? (sql.exec("SELECT id FROM memory").toArray() as { id: string }[]).map((r) => r.id) : [],
+      );
+      if (sourceIds.some((id) => !present.has(id))) return null;
       let moved = 0;
       for (const s of sealed) {
-        moved += this.deps.sql.exec(
-          "INSERT INTO profile_fields(path, sealed, source, document_id, updated_at) VALUES (?, ?, 'agent', NULL, ?) ON CONFLICT(path) DO NOTHING",
-          s.path,
-          s.sealed,
-          s.at,
-        ).rowsWritten > 0
-          ? 1
-          : 0;
+        const wrote =
+          sql.exec(
+            "INSERT INTO profile_fields(path, sealed, source, document_id, updated_at) VALUES (?, ?, 'agent', NULL, ?) ON CONFLICT(path) DO NOTHING",
+            s.path,
+            s.sealed,
+            s.at,
+          ).rowsWritten > 0;
+        if (!wrote) continue;
+        moved += 1;
+        for (const id of s.noteIds) sql.exec("INSERT OR IGNORE INTO profile_memory_links(path, memory_id) VALUES (?, ?)", s.path, id);
       }
-      this.deps.sql.exec("INSERT INTO profile_migrations(name, at) VALUES (?, ?)", MEMORY_MIGRATION, this.deps.now().toISOString());
+      sql.exec("INSERT INTO profile_migrations(name, at) VALUES (?, ?)", MEMORY_MIGRATION, this.deps.now().toISOString());
       return moved;
     });
   }
@@ -450,14 +589,14 @@ function covers(group: string, path: string): boolean {
 
 // What a patch answers over RPC: on success, with the profile as it now is.
 export type PatchAnswer =
-  | { status: "ok"; result: PatchResult; profile: Profile }
+  | { status: "ok"; result: PatchResult; profile: Profile; suggestions: Suggestion[] }
   | Exclude<PatchOutcome, { status: "ok" }>
   | { status: "unavailable" };
 
 export function profilePatchResponse(out: PatchAnswer): Response {
   switch (out.status) {
     case "ok":
-      return Response.json({ ...out.result, profile: out.profile });
+      return Response.json({ ...out.result, profile: out.profile, suggestions: out.suggestions });
     case "invalid":
       return Response.json({ error: out.error }, { status: 400 });
     case "conflict":

@@ -587,7 +587,8 @@ export default {
       }
       if (rest === "/profile" && request.method === "GET") {
         const profile = await agent.getProfile(subject);
-        return profile ? Response.json({ profile }) : profilePatchResponse({ status: "unavailable" });
+        if (!profile) return profilePatchResponse({ status: "unavailable" });
+        return Response.json({ profile, suggestions: await agent.getProfileSuggestions(subject) });
       }
       if (rest === "/profile" && request.method === "PATCH") {
         const read = await readCappedJson(request, MAX_ACTION_BODY);

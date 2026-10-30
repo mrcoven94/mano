@@ -313,3 +313,116 @@ describe("profile: memory entries that clearly map become profile fields, once",
     expect((await profileOf(await asPerson(personId, "GET", "/profile"))).person.county).toMatchObject({ value: "Weber County", source: "person" });
   });
 });
+
+describe("profile: a migrated field and its memory note are one fact", () => {
+  it("forgetting the field forgets the note", async () => {
+    const personId = "profile-link-field";
+    await asPerson(personId, "POST", "/memory", { content: "Lives in Synthetic County", source: "agent" });
+    await asPerson(personId, "POST", "/memory", { content: "Has two kids", source: "agent" });
+    expect((await profileOf(await asPerson(personId, "GET", "/profile"))).person.county?.value).toBe("Synthetic County");
+    await asPerson(personId, "PATCH", "/profile", { idempotencyKey: "lf1", source: "person", fields: { "person.county": null } });
+    const memories = ((await (await asPerson(personId, "GET", "/memory")).json()) as { memories: { content: string }[] }).memories;
+    expect(memories.map((m) => m.content)).toEqual(["Has two kids"]);
+    expect((await profileOf(await asPerson(personId, "GET", "/profile"))).person.county).toBeUndefined();
+  });
+
+  it("forgetting the note forgets the field", async () => {
+    const personId = "profile-link-note";
+    const { id } = (await (await asPerson(personId, "POST", "/memory", { content: "Lives in Synthetic County", source: "agent" })).json()) as {
+      id: string;
+    };
+    expect((await profileOf(await asPerson(personId, "GET", "/profile"))).person.county?.value).toBe("Synthetic County");
+    expect((await asPerson(personId, "DELETE", `/memory/${id}`)).status).toBe(200);
+    expect((await profileOf(await asPerson(personId, "GET", "/profile"))).person.county).toBeUndefined();
+  });
+
+  it("the person changing a migrated field retires the old note", async () => {
+    const personId = "profile-link-change";
+    await asPerson(personId, "POST", "/memory", { content: "Lives in Davis County", source: "agent" });
+    await asPerson(personId, "GET", "/profile");
+    await asPerson(personId, "PATCH", "/profile", { idempotencyKey: "lc1", source: "person", fields: { "person.county": "Weber County" } });
+    const memories = ((await (await asPerson(personId, "GET", "/memory")).json()) as { memories: unknown[] }).memories;
+    expect(memories).toEqual([]);
+  });
+});
+
+describe("profile: person over document over agent", () => {
+  async function withDocument(personId: string): Promise<string> {
+    const doc = await asPerson(personId, "POST", "/documents", { name: "letter.txt", contentB64: btoa("Synthetic letter") });
+    return ((await doc.json()) as { id: string }).id;
+  }
+  const stubOf = (personId: string) => testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(personId)) as unknown as PersonAgent;
+
+  it("a letter's older address does not replace what the person said; it waits as a suggestion", async () => {
+    const personId = "profile-trust-letter";
+    const documentId = await withDocument(personId);
+    await asPerson(personId, "PATCH", "/profile", {
+      idempotencyKey: "t1",
+      source: "person",
+      fields: { "person.address.line1": "12 Sample Street", "person.address.city": "Testville" },
+    });
+    const out = await stubOf(personId).recordDocumentFacts(personId, {
+      documentId,
+      idempotencyKey: "t2",
+      fields: { "person.address.line1": "4 Oak St", "person.address.city": "Testville" },
+    });
+    expect(out).toMatchObject({ status: "ok", result: { changed: [], suggested: ["person.address.line1"], unchanged: ["person.address.city"] } });
+    const res = await asPerson(personId, "GET", "/profile");
+    const body = (await res.json()) as { profile: { person: { address: Record<string, Leaf> } }; suggestions: unknown[] };
+    expect(body.profile.person.address.line1).toMatchObject({ value: "12 Sample Street", source: "person" });
+    expect(body.profile.person.address.city).toMatchObject({ value: "Testville", source: "person" });
+    expect(body.suggestions).toEqual([
+      { path: "person.address.line1", value: "4 Oak St", source: "document", documentId, suggestedAt: expect.any(String) },
+    ]);
+
+    // The person confirms: their word replaces it and the suggestion is settled.
+    await asPerson(personId, "PATCH", "/profile", { idempotencyKey: "t3", source: "person", fields: { "person.address.line1": "4 Oak St" } });
+    const after = (await (await asPerson(personId, "GET", "/profile")).json()) as { profile: { person: { address: Record<string, Leaf> } }; suggestions: unknown[] };
+    expect(after.profile.person.address.line1).toMatchObject({ value: "4 Oak St", source: "person" });
+    expect(after.suggestions).toEqual([]);
+  });
+
+  it("saying the old value again settles the suggestion without applying it", async () => {
+    const personId = "profile-trust-decline";
+    const documentId = await withDocument(personId);
+    await asPerson(personId, "PATCH", "/profile", { idempotencyKey: "d1", source: "person", fields: { "person.address.zip": "84101" } });
+    await stubOf(personId).recordDocumentFacts(personId, { documentId, idempotencyKey: "d2", fields: { "person.address.zip": "84000" } });
+    await asPerson(personId, "PATCH", "/profile", { idempotencyKey: "d3", source: "person", fields: { "person.address.zip": "84101" } });
+    const body = (await (await asPerson(personId, "GET", "/profile")).json()) as { profile: { person: { address: Record<string, Leaf> } }; suggestions: unknown[] };
+    expect(body.profile.person.address.zip.value).toBe("84101");
+    expect(body.suggestions).toEqual([]);
+  });
+
+  it("an agent value never replaces a document's, a document replaces an agent's, and a lower source cannot clear a higher one", async () => {
+    const h = handle("profile-trust-agent");
+    const personId = personIdForHandle(h);
+    const documentId = await withDocument(personId);
+    await stubOf(personId).recordDocumentFacts(personId, { documentId, idempotencyKey: "a1", fields: { "income.job.amount": 412.5 } });
+    const agentWrite = await asAgent(h, "PATCH", "/profile", {
+      idempotencyKey: "a2",
+      source: "agent",
+      generation: 0,
+      fields: { "income.job.amount": 500, "person.county": "Guess County" },
+    });
+    expect(((await agentWrite.json()) as { suggested: string[] }).suggested).toEqual(["income.job.amount"]);
+    await stubOf(personId).recordDocumentFacts(personId, { documentId, idempotencyKey: "a3", fields: { "person.county": "Testcase County" } });
+    const cleared = await asAgent(h, "PATCH", "/profile", { idempotencyKey: "a4", source: "agent", generation: 0, fields: { income: null } });
+    expect(cleared.status).toBe(200);
+    const profile = await profileOf(await asAgent(h, "GET", "/profile"));
+    expect(profile.income[0].amount).toMatchObject({ value: 412.5, source: "document" });
+    expect(profile.person.county).toMatchObject({ value: "Testcase County", source: "document" });
+  });
+});
+
+describe("profile: read inside Engine", () => {
+  it("getProfile(this.personId) gives Deadlines the state for the nudge timezone", async () => {
+    const personId = "profile-deadlines";
+    await asPerson(personId, "PATCH", "/profile", { idempotencyKey: "z1", source: "person", fields: { "person.address.state": "ut" } });
+    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(personId));
+    const state = await runInDurableObject(stub, async (instance) => {
+      const agent = instance as PersonAgent;
+      return (await agent.getProfile(agent.personId))?.person.address.state?.value;
+    });
+    expect(state).toBe("UT");
+  });
+});
