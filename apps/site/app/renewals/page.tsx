@@ -7,6 +7,7 @@ import TextQr from "@/components/TextQr";
 import { NeedIcon } from "@/components/home/NeedIcons";
 import LetterDemo from "@/components/renewals/LetterDemo";
 import ApprovalCard from "@/components/renewals/ApprovalCard";
+import { LETTERS, askText } from "@/components/renewals/letters";
 import { PLACEHOLDER_NOTE, SMS_HREF, SMS_IS_PLACEHOLDER, SMS_NUMBER } from "@/lib/site";
 import "./renewals.css";
 
@@ -44,22 +45,37 @@ export default function Renewals() {
   return (
     <div className="home rw">
       <div className="h-hero rw-hero">
-        <div className="wrap h-hero-head">
-          <h1>Your renewal is due. <mark className="rw-hl">Keep your benefits coming.</mark></h1>
-          <p className="h-lede">Food benefits, health coverage, help with the power bill. Text Mano a photo of the letter.</p>
-          <div className="btn-row h-ctas">
-            <a className="btn btn-primary btn-lg" href={SMS_HREF}>Text Mano</a>
-            <a className="btn btn-ghost btn-lg" href="#letter">How it works</a>
+        <div className="wrap rw-hero-grid">
+          <div className="rw-hero-copy">
+            <h1>Your renewal is due. <mark className="rw-phrase">Keep your benefits coming.</mark></h1>
+            <p className="h-lede">Food benefits, health coverage, help with the power bill. Text Mano a photo of the letter.</p>
+            <div className="btn-row h-ctas">
+              <a className="btn btn-primary btn-lg" href={SMS_HREF}>Text Mano</a>
+              <a className="btn btn-ghost btn-lg" href="#letter">How it works</a>
+            </div>
+            <p className="h-note">Keeping your help is always free. No card, no sign up. Just text.</p>
           </div>
-          <p className="h-note">Keeping your help is always free. No card, no sign up. Just text.</p>
+          <div className="rw-hero-art">
+            <Mascot tile wave tone="orange" size={72} className="rw-hero-mascot" />
+            <div className="rw-envelope">
+              <div className="rw-paper rw-hero-paper">
+                <p className="rw-office">Sample County Human Services</p>
+                <p className="rw-letter-h">Notice of renewal</p>
+                <p className="rw-body">Dear Maria Lopez,</p>
+                <p className="rw-body">{LETTERS[0].dear}</p>
+                <p><mark className="rw-hl">{LETTERS[0].quote}</mark></p>
+                <p className="rw-example">Example letter. Sample County is made up.</p>
+              </div>
+            </div>
+            <div className="bub-row rw-hero-reply">
+              <Mascot tile tone="orange" size={30} className="bub-av" />
+              <p className="bub mano">{askText(LETTERS[0])}</p>
+            </div>
+          </div>
         </div>
 
         <section id="letter" className="rw-letter-sec" aria-labelledby="rw-letter-h">
-          <div className="wrap h-stage-wrap">
-            <div className="h-sticker rw-sticker" aria-hidden="true">
-              <span className="h-sticker-bubble">Send me the letter. I&rsquo;ll find the date.</span>
-              <Mascot tile wave tone="orange" size={64} />
-            </div>
+          <div className="wrap">
             <h2 id="rw-letter-h" className="rw-h3">Mano quotes your letter and asks before it holds a date.</h2>
             <LetterDemo />
           </div>
