@@ -284,10 +284,6 @@ export class BlooioChannel implements Channel {
     await this.reaction(chatId, messageId, `+${reaction}`);
   }
 
-  async unreact(chatId: string, messageId: string, reaction: Reaction): Promise<void> {
-    await this.reaction(chatId, messageId, `-${reaction}`);
-  }
-
   // A native tapback goes by name (+love); an emoji goes as itself (+🙏).
   private async reaction(chatId: string, messageId: string, value: string): Promise<void> {
     const res = await this.fetchFn(

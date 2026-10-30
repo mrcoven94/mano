@@ -1,8 +1,8 @@
 // Tapbacks: the model may start its reply with one line, "REACT: love"
 // or "REACT: 🙏", to react to the person's message, with or without text
-// after it. The rules around it are deterministic: no reaction in a
-// crisis, on a reaction or on bad news. The
-// worker alone sends EYES, while a slow turn is under way.
+// after it. Code decides which reactions the message allows (see
+// allowedReactions); the model only picks within that set. The worker
+// alone sends EYES, once, on a slow turn, and never takes it off.
 
 // The four tapbacks every iMessage client shows natively.
 export type NativeTapback = "love" | "like" | "laugh" | "emphasize";
@@ -40,37 +40,82 @@ export function splitTapback(text: string): { tapback: Tapback | null; text: str
   return { tapback, text: text.slice(match[0].length).trim() };
 }
 
-// Losing food, housing, coverage or income, or a denial.
-const BAD_NEWS =
-  /\b(?:cut|cuts|denied|deny|denial|lost|losing|lose|evict\w*|terminat\w*|ended|ending|stopped|cancel\w*|overpay\w*|owe|behind|late|reject\w*|closed|shut ?off|disconnect\w*|died|passed away|sick|hospital)\b/i;
+// Words as whole words, in any language: JavaScript's \b is ASCII only.
+function words(list: readonly string[]): RegExp {
+  return new RegExp(`(?<![\\p{L}\\p{N}])(?:${list.join("|")})(?![\\p{L}\\p{N}])`, "iu");
+}
 
 // A reaction that reached Mano as text (SMS shows a tapback as
 // 'Loved "..."'). Mano never reacts to a reaction.
 const REACTION_TEXT =
-  /^\s*(?:loved|liked|disliked|laughed at|emphasi[sz]ed|questioned|reacted \S{1,12} to|removed an? \S+ from|le (?:encantó|gustó|hizo gracia|dio risa|dio énfasis a)|no le gustó)\s+["“«]/iu;
+  /^\s*(?:loved|liked|disliked|laughed at|emphasi[sz]ed|questioned|reacted \S{1,12} to|removed an? \S+ from|le (?:encantó|gustó|hizo gracia|dio risa|dio énfasis a)|no le gustó|enfatizó|cuestionó|se rió de)\s+["“«]/iu;
 
 export function isReactionText(personText: string): boolean {
   return REACTION_TEXT.test(personText);
 }
 
-// The one gate for every reaction Mano puts on a message, the eyes
-// included: none in a crisis, none on a reaction, and none on bad news,
-// where the only fitting response is words.
-export function reactionEligible(personText: string, crisis: boolean): boolean {
-  return !crisis && !isReactionText(personText) && !BAD_NEWS.test(personText);
+// Reactions are decided by code from the target message's own text: a
+// positive allowlist. A message that is none of these gets no reaction,
+// so bad news never qualifies. The model may pick within the set, or none.
+export type MessageKind = "thanks" | "done" | "joke" | "ack";
+
+const KINDS: ReadonlyArray<{ kind: MessageKind; pattern: RegExp; allows: readonly Tapback[] }> = [
+  { kind: "thanks", pattern: words(["thank\\w*", "ty", "appreciate\\w*", "gracias"]), allows: ["love", "🙏"] },
+  { kind: "done", pattern: words(["done", "did it", "mailed", "sent it", "submitted", "approved", "got it", "lo hice"]), allows: ["💪", "🎉"] },
+  { kind: "joke", pattern: /(?<![\p{L}\p{N}])(?:ha(?:ha)+|lol|lmao|ja(?:ja)+)(?![\p{L}\p{N}])|😂/iu, allows: ["laugh"] },
+  { kind: "ack", pattern: words(["ok", "okay", "k", "cool", "sounds good", "got it", "perfect", "vale"]), allows: ["like"] },
+];
+
+// A veto on top of the allowlist: a thanks or a "got it" that also
+// carries bad news or a negation ("thanks, they denied it", "I haven't
+// mailed it", "no lo hice") gets no reaction.
+const VETO = words([
+  "cut", "cuts", "denied", "deny", "denial", "lost", "losing", "lose", "evict\\w*", "terminat\\w*", "fired", "laid off",
+  "stopped", "cancel\\w*", "overpay\\w*", "owe", "behind", "late", "reject\\w*", "closed", "shut ?off", "disconnect\\w*",
+  "died", "passed away", "sick", "hospital", "not", "never", "\\w+n't", "negaron", "neg[oó]", "cortaron", "despidieron",
+  "perd[ií]\\w*", "desalojo", "nunca", "todav[ií]a no", "no (?:lo|la|me|se|he|ha|han)",
+]);
+
+export function reactionKinds(targetText: string): MessageKind[] {
+  if (isReactionText(targetText) || VETO.test(targetText)) return [];
+  return KINDS.filter((k) => k.pattern.test(targetText)).map((k) => k.kind);
 }
 
-export function allowedTapback(tapback: Tapback | null, personText: string, crisis: boolean): Tapback | null {
-  if (!tapback || !reactionEligible(personText, crisis)) return null;
-  return tapback;
+// The reactions the target message allows, empty for most messages.
+export function allowedReactions(targetText: string, crisis: boolean): Tapback[] {
+  if (crisis) return [];
+  const kinds = new Set(reactionKinds(targetText));
+  return [...new Set(KINDS.filter((k) => kinds.has(k.kind)).flatMap((k) => k.allows))];
 }
 
-// The person asked something, so a reaction alone is not an answer.
-const QUESTION =
-  /[?¿]|^\s*(?:what|when|where|which|who|whom|whose|why|how|can|could|would|will|should|do|does|did|is|are|am|was|were|qu[ée]|cu[áa]ndo|c[óo]mo|d[óo]nde|cu[áa]l(?:es)?|qui[ée]n(?:es)?|por qu[ée]|puedo|puedes|necesito)\b/imu;
+// The model's pick, kept only when the target message allows it.
+export function allowedTapback(tapback: Tapback | null, targetText: string, crisis: boolean): Tapback | null {
+  return tapback && allowedReactions(targetText, crisis).includes(tapback) ? tapback : null;
+}
 
-export function needsAnswer(personText: string): boolean {
-  return !isReactionText(personText) && QUESTION.test(personText);
+// Whether the eyes may go on a slow turn's message: never in a crisis, on
+// a reaction or on bad news.
+export function eyesAllowed(targetText: string, crisis: boolean): boolean {
+  return !crisis && !isReactionText(targetText) && !VETO.test(targetText);
+}
+
+// The person asked something, so a reaction alone is not an answer: a
+// question mark, or a question word anywhere in the message.
+const QUESTION_MARK = /[?¿]/;
+const QUESTION_WORD = words([
+  "when", "what", "where", "how", "why", "who", "which", "can", "could", "do", "does", "did", "is", "are", "will", "would",
+  "any update", "cu[áa]ndo", "qu[ée]", "c[óo]mo", "d[óo]nde", "puedes",
+]);
+
+export function needsAnswer(targetText: string): boolean {
+  return !isReactionText(targetText) && (QUESTION_MARK.test(targetText) || QUESTION_WORD.test(targetText));
+}
+
+// A reaction alone, with no words, only answers a plain thanks or an
+// acknowledgement that asks nothing. Everything else always gets words.
+export function reactionOnlyAllowed(targetText: string): boolean {
+  const kinds = reactionKinds(targetText);
+  return (kinds.includes("thanks") || kinds.includes("ack")) && !needsAnswer(targetText);
 }
 
 // A tapback is decoration: when it cannot carry the reply (it fails, or

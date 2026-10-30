@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { guardReply } from "../src/guard.js";
 import { MANO_SOUL } from "../src/soul.js";
-import { EYES, allowedTapback, isReactionText, needsAnswer, reactionEligible, splitTapback, tapbackText } from "../src/tapbacks.js";
+import { EYES, allowedReactions, allowedTapback, eyesAllowed, isReactionText, needsAnswer, reactionOnlyAllowed, splitTapback, tapbackText } from "../src/tapbacks.js";
 import { REACTION_PROBES, checkReactionSet, type ReactionRun } from "../src/probes.js";
 
 describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
@@ -32,11 +32,28 @@ describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
     expect(allowedTapback("💪", "just mailed the renewal packet", false)).toBe("💪");
   });
 
-  it("has one eligibility gate for every reaction, the eyes included", () => {
-    expect(reactionEligible("they denied my medicaid", false)).toBe(false);
-    expect(reactionEligible("Loved \u201cok\u201d", false)).toBe(false);
-    expect(reactionEligible("thank you", true)).toBe(false);
-    expect(reactionEligible("can you look at my case", false)).toBe(true);
+  it("decides the allowed reactions from the message's own text (PR 74 review 2)", () => {
+    expect(allowedReactions("thank you so much", false)).toEqual(["love", "🙏"]);
+    expect(allowedReactions("gracias", false)).toEqual(["love", "🙏"]);
+    expect(allowedReactions("just mailed it", false)).toEqual(["💪", "🎉"]);
+    expect(allowedReactions("lo hice!", false)).toEqual(["💪", "🎉"]);
+    expect(allowedReactions("jajaja", false)).toEqual(["laugh"]);
+    expect(allowedReactions("ok", false)).toEqual(["like"]);
+    expect(allowedReactions("got it", false)).toEqual(["💪", "🎉", "like"]);
+    for (const text of ["I got fired", "me negaron Medicaid", "thanks, they denied it", "I haven't mailed it", "no lo hice", "my renewal letter came", "can you look at my case"]) {
+      expect(allowedReactions(text, false), text).toEqual([]);
+    }
+    expect(allowedReactions("thank you", true)).toEqual([]);
+    expect(eyesAllowed("can you look at my case", false)).toBe(true);
+    expect(eyesAllowed("I got fired", false)).toBe(false);
+    expect(eyesAllowed("Loved \u201cok\u201d", false)).toBe(false);
+  });
+
+  it("allows a reaction alone only for a plain thanks or ok that asks nothing", () => {
+    for (const text of ["thank you!!", "ok", "sounds good", "gracias", "perfect thanks"]) expect(reactionOnlyAllowed(text), text).toBe(true);
+    for (const text of ["submitted it!", "lol who has a fax", "ok will do", "thanks, any update", "ok what now", "gracias, cuándo llega"]) {
+      expect(reactionOnlyAllowed(text), text).toBe(false);
+    }
   });
 
   it("never reacts on a crisis turn or on a reaction sent as text", () => {
@@ -52,7 +69,7 @@ describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
     for (const text of ["When is my SNAP renewal due?", "can you help me with the form", "¿Cuándo vence mi renovación?", "what do i need for WIC"]) {
       expect(needsAnswer(text), text).toBe(true);
     }
-    for (const text of ["thank you!!", "ok will do", "submitted it!", "lol who has a fax"]) {
+    for (const text of ["thank you!!", "submitted it!", "lol the hold music"]) {
       expect(needsAnswer(text), text).toBe(false);
     }
   });
@@ -104,17 +121,23 @@ describe("the 20-message reaction set", () => {
 
   it("passes a varied, sparing set", () => {
     const runs = calm();
-    const pick: Record<string, ReactionRun["tapback"]> = { thanks: "love", joke: "laugh", done: "💪", deadline: "emphasize", "good-news": "🎉" };
-    for (const [kind, tapback] of Object.entries(pick)) {
+    const pick: Record<string, [ReactionRun["tapback"], string]> = {
+      thanks: ["love", ""],
+      joke: ["laugh", "ha, right?"],
+      done: ["💪", "nice, that's off your plate"],
+      "good-news": ["🎉", "that's huge"],
+    };
+    for (const [kind, [tapback, reply]] of Object.entries(pick)) {
       const i = REACTION_PROBES.findIndex((p) => p.kind === kind);
-      runs[i] = runOf(REACTION_PROBES[i]!.id, tapback, "");
+      runs[i] = runOf(REACTION_PROBES[i]!.id, tapback, reply);
     }
     expect(checkReactionSet(runs)).toEqual([]);
   });
-});
 
-describe("a reaction shown as text (live probe r-loved)", () => {
-  it("tells the model what a Loved \"...\" message is", () => {
-    expect(MANO_SOUL).toMatch(/Loved "\.\.\."[^\n]*reaction showing up as text\. Never react to it/);
+  it("fails a reaction outside the message's allowed set", () => {
+    const runs = calm();
+    const i = REACTION_PROBES.findIndex((p) => p.kind === "deadline");
+    runs[i] = runOf(REACTION_PROBES[i]!.id, "emphasize", "noted");
+    expect(checkReactionSet(runs)).toContain(`${REACTION_PROBES[i]!.id}:not-allowed`);
   });
 });

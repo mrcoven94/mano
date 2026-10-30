@@ -169,6 +169,10 @@ export interface ChatBackground {
   state: ChatBackgroundState;
   // Uploads tried.
   attempts: number;
+  // A single-flight lock, written before an upload starts: while it holds,
+  // no other upload starts for this chat. Past it, an "uncertain" record
+  // is read back before anything else.
+  lockedUntilMs: number;
   updatedAtMs: number;
 }
 

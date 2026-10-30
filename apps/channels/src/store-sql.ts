@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS chat_backgrounds (
   chat_key TEXT PRIMARY KEY,
   state TEXT NOT NULL,
   attempts INTEGER NOT NULL,
+  locked_until_ms INTEGER NOT NULL DEFAULT 0,
   updated_at_ms INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS presentations (
@@ -673,18 +674,21 @@ export class SqlConversationStore implements ConversationStore {
   }
 
   chatBackground(chatKey: string): ChatBackground | null {
-    const row = firstRow<{ chat_key: string; state: ChatBackground["state"]; attempts: number; updated_at_ms: number }>(
+    const row = firstRow<{ chat_key: string; state: ChatBackground["state"]; attempts: number; locked_until_ms: number; updated_at_ms: number }>(
       this.sql.exec("SELECT * FROM chat_backgrounds WHERE chat_key = ?", chatKey),
     );
-    return row ? { chatKey: row.chat_key, state: row.state, attempts: row.attempts, updatedAtMs: row.updated_at_ms } : null;
+    return row
+      ? { chatKey: row.chat_key, state: row.state, attempts: row.attempts, lockedUntilMs: row.locked_until_ms, updatedAtMs: row.updated_at_ms }
+      : null;
   }
 
   saveChatBackground(row: ChatBackground): void {
     this.sql.exec(
-      "INSERT OR REPLACE INTO chat_backgrounds (chat_key, state, attempts, updated_at_ms) VALUES (?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO chat_backgrounds (chat_key, state, attempts, locked_until_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?)",
       row.chatKey,
       row.state,
       row.attempts,
+      row.lockedUntilMs,
       row.updatedAtMs,
     );
   }

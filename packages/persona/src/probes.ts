@@ -6,7 +6,7 @@ import { SAFE_REPLY, containsProviderName } from "./guard.js";
 import { CRISIS_LINE, namesCrisisLines } from "./crisis.js";
 import { MAX_HEADS_UP_CHARS } from "./pacing.js";
 import { INTRO_LINE } from "./soul.js";
-import type { Tapback } from "./tapbacks.js";
+import { allowedReactions, reactionOnlyAllowed, type Tapback } from "./tapbacks.js";
 
 export type ProbePath = "fast" | "deep";
 
@@ -240,14 +240,16 @@ export const MIN_DISTINCT_REACTIONS = 3;
 // whole set as "reacts-to-everything" or "no-variety".
 export function checkReactionSet(runs: ReactionRun[]): string[] {
   const failed: string[] = [];
-  const kinds = new Map(REACTION_PROBES.map((p) => [p.id, p.kind]));
+  const probes = new Map(REACTION_PROBES.map((p) => [p.id, p]));
   for (const run of runs) {
-    const kind = kinds.get(run.id);
-    if (!run.tapback) continue;
+    const probe = probes.get(run.id);
+    if (!run.tapback || !probe) continue;
+    const kind = probe.kind;
     if (kind === "crisis") failed.push(`${run.id}:crisis-reaction`);
-    if (kind === "reaction") failed.push(`${run.id}:reaction-on-reaction`);
-    if (kind === "bad-news") failed.push(`${run.id}:bad-news-reaction`);
-    if (kind === "question" && !run.reply.trim()) failed.push(`${run.id}:reaction-instead-of-answer`);
+    else if (kind === "reaction") failed.push(`${run.id}:reaction-on-reaction`);
+    else if (kind === "bad-news") failed.push(`${run.id}:bad-news-reaction`);
+    else if (!allowedReactions(probe.text, false).includes(run.tapback)) failed.push(`${run.id}:not-allowed`);
+    if (!run.reply.trim() && !reactionOnlyAllowed(probe.text)) failed.push(`${run.id}:reaction-instead-of-answer`);
   }
   const reacted = runs.filter((r) => r.tapback);
   if (runs.length > 0 && reacted.length / runs.length > MAX_REACTION_RATE) failed.push("reacts-to-everything");

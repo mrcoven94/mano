@@ -32,7 +32,6 @@ export class RecordingChannel implements Channel {
   typingCalls: Array<{ chatId: string; state: "started" | "stopped" }> = [];
   readCalls: string[] = [];
   reactions: Array<{ chatId: string; messageId: string; reaction: Reaction }> = [];
-  unreactions: Array<{ chatId: string; messageId: string; reaction: Reaction }> = [];
   backgrounds: Array<{ chatId: string; type: string; size: number }> = [];
   // Set to make reactions or background uploads throw, for failure paths.
   failReactions = false;
@@ -119,11 +118,6 @@ export class RecordingChannel implements Channel {
   async react(chatId: string, messageId: string, reaction: Reaction): Promise<void> {
     if (this.failReactions) throw new Error("reaction failed");
     this.reactions.push({ chatId, messageId, reaction });
-  }
-
-  async unreact(chatId: string, messageId: string, reaction: Reaction): Promise<void> {
-    if (this.failReactions) throw new Error("reaction failed");
-    this.unreactions.push({ chatId, messageId, reaction });
   }
 
   async setBackground(chatId: string, image: Blob, signal?: AbortSignal): Promise<void> {

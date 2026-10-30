@@ -20,9 +20,6 @@ export interface Channel {
   // Adds a tapback to a message. Not a message: it spends none of the
   // provider's per-conversation send allowance.
   react(chatId: string, messageId: string, reaction: Reaction): Promise<void>;
-  // Takes Mano's reaction off a message (the eyes, when the reply brings
-  // its own reaction).
-  unreact(chatId: string, messageId: string, reaction: Reaction): Promise<void>;
   // Sets the chat's background image. Optional: providers without one
   // skip it. Throws ChannelFailed when it was not set and
   // ChannelUncertain when it may have been.

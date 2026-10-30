@@ -3,6 +3,7 @@
 // channel, the responder, files and the spend ledger. Nothing here names
 // a provider or a runtime.
 import { Decorations } from "./decorations.js";
+import type { ChatBackground } from "./store.js";
 import {
   ChannelFailed,
   ChannelRefused,
@@ -35,7 +36,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { EYES, REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, crisisTurn, guardReply, needsAnswer, reactionEligible, tapbackText, type Reaction } from "@mano/persona";
+import { EYES, REFUSED_TAPBACK_TEXT, allowedReactions, allowedTapback, crisisLineFor, crisisTurn, eyesAllowed, guardReply, needsAnswer, reactionOnlyAllowed, tapbackText } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -71,9 +72,6 @@ export interface RunnerConfig {
   // A turn still working after this long gets the eyes on the person's
   // message ("Mano is on it"). A photo or a deep turn gets them at once.
   eyesAfterMs: number;
-  // How long the reply's own reaction waits for the eyes call to land
-  // before going on anyway; a later landing is swapped outside the turn.
-  eyesSwapWaitMs: number;
   // Mano's chat background image, set once per chat after the first
   // reply. Null leaves chats as they are.
   backgroundUrl: string | null;
@@ -105,7 +103,6 @@ export const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "handleHash"> = {
   maxInboundAgeMs: 5 * 60 * 1000,
   mediaHosts: DEFAULT_MEDIA_HOSTS,
   eyesAfterMs: 5000,
-  eyesSwapWaitMs: 1500,
   backgroundUrl: null,
 };
 
@@ -113,6 +110,9 @@ export const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "handleHash"> = {
 export const BACKGROUND_MAX_ATTEMPTS = 3;
 // Blooio takes a background image of at most 10 MB.
 export const BACKGROUND_MAX_BYTES = 10 * 1024 * 1024;
+// How long one upload holds the per-chat lock: longer than any
+// decoration may run, so a live upload always finishes first.
+export const BACKGROUND_LOCK_MS = 2 * 60 * 1000;
 // The background record's key: a hash of the chat ID, so no raw chat ID
 // outlives a delete.
 export async function backgroundKey(chatId: string): Promise<string> {
@@ -781,8 +781,6 @@ export class ConversationRunner {
 
   private active = false;
 
-  // The running turn's eyes, so its tapback can swap them.
-  private eyes: Eyes | null = null;
   private ownDecorations: Decorations | null = null;
 
   private get decorations(): Decorations {
@@ -802,56 +800,25 @@ export class ConversationRunner {
     return null;
   }
 
-  private eyesFor(turn: number, chatId: string | null, messageId: string | null, eligible: boolean, generation: number): Eyes {
+  // The eyes go on once, on a slow turn's target message, as
+  // fire-and-forget work outside the turn, and are never taken off. Once
+  // they are placed, no other reaction goes on that message.
+  private eyesFor(turn: number, chatId: string | null, target: Target | null, crisis: boolean, generation: number): Eyes {
     const { channel, logger } = this.deps;
-    let landed: Promise<boolean> | null = null;
-    const blocked = (): boolean => this.decorationBlock(generation) !== null;
-    return {
-      turn,
-      messageId,
+    const eyes: Eyes = {
+      placed: false,
       put: (why: string): void => {
-        if (landed || !eligible || !chatId || !messageId || blocked()) return;
-        landed = channel.react(chatId, messageId, EYES).then(
-          () => {
-            logger.info("eyes_sent", { handle: this.logHandle(), turn, why });
-            return true;
-          },
-          (err: unknown) => {
-            logger.warn("eyes_failed", { handle: this.logHandle(), turn, err: errName(err) });
-            return false;
-          },
-        );
-      },
-      within: async (ms: number): Promise<"on" | "off" | "pending"> => {
-        if (!landed) return "off";
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const late = new Promise<"pending">((resolve) => (timer = setTimeout(() => resolve("pending"), ms)));
-        const state = await Promise.race([landed.then((ok) => (ok ? ("on" as const) : ("off" as const))), late]);
-        clearTimeout(timer);
-        return state;
-      },
-      takeOff: async (): Promise<void> => {
-        if (!chatId || !messageId || blocked()) return;
-        await this.bestEffort("eyes_remove_failed", () => channel.unreact(chatId, messageId, EYES));
-      },
-      // The eyes landed after the reply's reaction went on: outside the
-      // turn, take them off and put the reaction back, checking right
-      // before each call.
-      swapLater: (reaction: Reaction): void => {
-        const pending = landed;
-        if (!pending || !chatId || !messageId) return;
-        this.decorations.run("eyes_swap", async () => {
-          if (!(await pending) || blocked()) return;
-          await channel.unreact(chatId, messageId, EYES);
-          if (blocked()) return;
-          await channel.react(chatId, messageId, reaction);
+        if (eyes.placed || !chatId || !target || !eyesAllowed(target.text, crisis) || this.decorationBlock(generation)) return;
+        eyes.placed = true;
+        this.decorations.run("eyes", async () => {
+          // Read fresh right before the call.
+          if (this.decorationBlock(generation)) return;
+          await channel.react(chatId, target.messageId, EYES);
+          logger.info("eyes_sent", { handle: this.logHandle(), turn, why });
         });
       },
-      settleLater: (): void => {
-        const pending = landed;
-        if (pending) this.decorations.run("eyes_settle", async () => void (await pending));
-      },
     };
+    return eyes;
   }
 
   // Mano's chat background goes on once per chat, after a reply reached
@@ -864,31 +831,47 @@ export class ConversationRunner {
     const url = config.backgroundUrl;
     if (!url || !channel.setBackground || this.decorationBlock(generation)) return;
     const chatKey = await backgroundKey(chatId);
+    const busy = (row: ChatBackground | null): boolean => row?.state === "set" || (row !== null && row.lockedUntilMs > nowMs());
     let row = store.chatBackground(chatKey);
-    if (row?.state === "set") return;
+    if (busy(row)) return;
     if (row?.state === "uncertain") {
+      // A lock that ran out with no outcome: read the chat back first.
       if (!channel.hasBackground) return;
-      if (await channel.hasBackground(chatId, signal)) {
-        store.saveChatBackground({ ...row, state: "set", updatedAtMs: nowMs() });
-        logger.info("background_reconciled", { handle: this.logHandle(), landed: true });
-        return;
-      }
-      row = { ...row, state: "failed", updatedAtMs: nowMs() };
+      const landed = await channel.hasBackground(chatId, signal);
+      row = store.chatBackground(chatKey);
+      if (busy(row) || row?.state !== "uncertain") return;
+      row = { ...row, state: landed ? "set" : "failed", updatedAtMs: nowMs() };
       store.saveChatBackground(row);
-      logger.info("background_reconciled", { handle: this.logHandle(), landed: false });
+      logger.info("background_reconciled", { handle: this.logHandle(), landed });
+      if (landed) return;
     }
     const attempts = row?.attempts ?? 0;
-    if (attempts >= BACKGROUND_MAX_ATTEMPTS) return;
-    const image = await this.fetchBackground(url, signal);
-    if (signal.aborted || this.decorationBlock(generation)) return;
-    // Recorded before the upload: a crash or timeout leaves it uncertain.
-    store.saveChatBackground({ chatKey, state: "uncertain", attempts: attempts + 1, updatedAtMs: nowMs() });
+    if (attempts >= BACKGROUND_MAX_ATTEMPTS || this.decorationBlock(generation)) return;
+    // Check and lock with no await between them: the single-flight lock is
+    // persisted before anything is fetched or uploaded.
+    store.saveChatBackground({ chatKey, state: "uncertain", attempts: attempts + 1, lockedUntilMs: nowMs() + BACKGROUND_LOCK_MS, updatedAtMs: nowMs() });
+    const finish = (state: ChatBackground["state"], counted: boolean): void =>
+      store.saveChatBackground({ chatKey, state, attempts: counted ? attempts + 1 : attempts, lockedUntilMs: 0, updatedAtMs: nowMs() });
+    let image: Blob;
+    try {
+      image = await this.fetchBackground(url, signal);
+    } catch (err) {
+      // Nothing was uploaded: a known failure that does not count.
+      finish("failed", false);
+      logger.warn("background_failed", { handle: this.logHandle(), err: errName(err), stage: "fetch" });
+      return;
+    }
+    if (signal.aborted || this.decorationBlock(generation)) {
+      finish("failed", false);
+      return;
+    }
     try {
       await channel.setBackground(chatId, image, signal);
-      store.saveChatBackground({ chatKey, state: "set", attempts: attempts + 1, updatedAtMs: nowMs() });
+      finish("set", true);
       logger.info("background_set", { handle: this.logHandle() });
     } catch (err) {
-      if (err instanceof ChannelFailed) store.saveChatBackground({ chatKey, state: "failed", attempts: attempts + 1, updatedAtMs: nowMs() });
+      // A known failure is retried later; an uncertain one is read back.
+      finish(err instanceof ChannelFailed ? "failed" : "uncertain", true);
       logger.warn("background_failed", { handle: this.logHandle(), err: errName(err), known: err instanceof ChannelFailed });
     }
   }
@@ -1019,12 +1002,13 @@ export class ConversationRunner {
       return;
     }
 
-    // The eyes say Mano is on it: at once for a photo, before typing
-    // shows, and otherwise when the turn routes deep or runs past
-    // eyesAfterMs. They are decoration, never awaited before the reply.
-    const latest = [...items].reverse().find((i) => i.messageId)?.messageId ?? null;
-    const eyes = this.eyesFor(turn, chatId, latest, reactionEligible(texts.join("\n"), crisis), generation);
-    this.eyes = eyes;
+    // Only the batch's last message can carry a reaction, judged on its
+    // own text alone.
+    const last = items[items.length - 1];
+    const target: Target | null = last?.messageId ? { messageId: last.messageId, text: last.text ?? "" } : null;
+    // The eyes say Mano is on it: at once for a photo, and otherwise when
+    // the turn routes deep or runs past eyesAfterMs.
+    const eyes = this.eyesFor(turn, chatId, target, crisis, generation);
     if (attachments.length > 0) eyes.put("attachment");
     let eyesTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => eyes.put("slow"), config.eyesAfterMs);
     const stopEyesTimer = (): void => {
@@ -1065,26 +1049,28 @@ export class ConversationRunner {
           // checked again: a split must never leave an unchecked link
           // behind. The persisted bubbles are final and capped. A crisis
           // turn's final bubbles must still name 988 and 911.
-          // A tapback is decoration. It carries the reply alone only when
-          // the rules allow it and it has a message to go on; even then a
-          // fallback text is persisted with it, sent if the tapback fails.
-          const tapback = allowedTapback(answer.tapback, turnText, crisis);
-          const latest = [...items].reverse().find((i) => i.messageId)?.messageId ?? null;
-          const routable = tapback !== null && latest !== null && chatId !== null;
+          // A tapback is decoration, picked by the model only from what the
+          // target message allows, and never on a message that has the
+          // eyes. It carries the reply alone only for a plain thanks or ok
+          // in a batch that asks nothing; everything else gets words.
+          const targetText = target?.text ?? "";
+          const tapback = target && !eyes.placed ? allowedTapback(answer.tapback, targetText, crisis) : null;
+          const routable = tapback !== null && target !== null && chatId !== null;
           const hasText = answer.text.trim().length > 0;
+          const asked = needsAnswer(turnText) || needsAnswer(targetText);
+          const allowed = target ? allowedReactions(targetText, crisis) : [];
           let reply: string | null = answer.text;
           if (!hasText && crisis) reply = "";
-          // A question always gets words, whatever path answered it.
-          else if (!hasText && needsAnswer(turnText)) reply = NEEDS_ANSWER_BUBBLE;
-          else if (!hasText && routable) reply = null;
+          else if (!hasText && asked) reply = NEEDS_ANSWER_BUBBLE;
+          else if (!hasText && routable && reactionOnlyAllowed(targetText)) reply = null;
           else if (!hasText && tapback) reply = tapbackText(tapback);
-          else if (!hasText && answer.tapback) reply = REFUSED_TAPBACK_TEXT;
+          else if (!hasText && answer.tapback) reply = allowed[0] ? tapbackText(allowed[0]) : REFUSED_TAPBACK_TEXT;
           const answered = reply === null ? [] : await this.finalize(turn, reply, crisis, turnText);
           const replyTo = inlineReplyTarget(items);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
           bubbles.push(...answered);
-          if (routable && tapback && latest) {
-            bubbles.push({ part: 0, tag: "react", text: tapback, messageId: latest, fallback: hasText ? null : tapbackText(tapback) });
+          if (routable && tapback && target) {
+            bubbles.push({ part: 0, tag: "react", text: tapback, messageId: target.messageId, fallback: reply === null ? tapbackText(tapback) : null });
           }
           // Persisted with the answer, so a resumed send reports it too.
           if (answer.presentation) store.savePresentation({ turn, generation, state: "pending", ...answer.presentation });
@@ -1116,9 +1102,6 @@ export class ConversationRunner {
       clearInterval(typingTimer);
       await refreshing;
       if (chatId) await this.bestEffort("typing_stopped", () => this.deps.channel.setTyping(chatId, "stopped"));
-      // A reaction call still in flight settles outside the turn.
-      eyes.settleLater();
-      this.eyes = null;
     }
     // The background is decoration too: started outside the turn once a
     // reply reached the person, so it can never hold the next message.
@@ -1232,17 +1215,8 @@ export class ConversationRunner {
       return;
     }
     try {
-      // One reaction per message: the eyes come off before the reply's own.
-      // The wait for them is bounded; a later landing is swapped outside
-      // the turn.
-      const eyes = this.eyes?.turn === turn && this.eyes.messageId === bubble.messageId ? this.eyes : null;
-      if (eyes) {
-        const state = await eyes.within(config.eyesSwapWaitMs);
-        if (state === "on") await eyes.takeOff();
-        else if (state === "pending") eyes.swapLater(bubble.text as Reaction);
-      }
       // Read fresh right before the call: STOP, a close or a delete may
-      // have landed during any await above.
+      // have landed since the turn started.
       const block = this.decorationBlock(generation);
       if (block === "generation") throw new GenerationStopped();
       if (block) {
@@ -1806,20 +1780,16 @@ export class ConversationRunner {
   }
 }
 
-// The eyes on one turn's latest message.
+// The message a turn may react to: the batch's last one.
+interface Target {
+  messageId: string;
+  text: string;
+}
+
+// The eyes on one turn's target message.
 interface Eyes {
-  turn: number;
-  messageId: string | null;
-  // Puts them on, once, when the message may get a reaction at all and
-  // nothing blocks it. Never awaited by the turn.
+  // Set when the eyes are put on; then no other reaction goes there.
+  placed: boolean;
+  // Puts them on once, outside the turn, when the message allows them.
   put(why: string): void;
-  // Waits at most ms for the eyes call: on, off (never put or failed), or
-  // still pending.
-  within(ms: number): Promise<"on" | "off" | "pending">;
-  // Takes them off, unless STOP, a close or a delete landed.
-  takeOff(): Promise<void>;
-  // Outside the turn: once they land, swaps them for the reply's reaction.
-  swapLater(reaction: Reaction): void;
-  // Outside the turn: tracks a call still in flight until it settles.
-  settleLater(): void;
 }

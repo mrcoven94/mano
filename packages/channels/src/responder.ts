@@ -5,7 +5,7 @@
 // which the caller sends at once before the deep call at medium effort.
 // When the engine merges, its person agent becomes the Responder behind
 // this same interface.
-import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisFloor, crisisTurn, needsAnswer, routeReply, splitTapback, type Tapback } from "@mano/persona";
+import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisFloor, crisisTurn, reactionOnlyAllowed, routeReply, splitTapback, type Tapback } from "@mano/persona";
 import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 
@@ -236,7 +236,8 @@ export class SparkResponder implements Responder {
     const crisis = crisisTurn(turn.texts.join("\n"));
     const fast = await this.call(`${MANO_SOUL}${note}${crisis ? "" : `\n\n${PACING}`}`, messages, this.fastEffort, 0, true);
     const route = crisis ? ({ path: "fast", text: fast.text } as const) : routeReply(fast.text);
-    const asked = !crisis && needsAnswer(turn.texts.join("\n"));
+    // Words are owed unless the last message is a plain thanks or ok.
+    const asked = !crisis && !reactionOnlyAllowed(turn.texts[turn.texts.length - 1] ?? "");
     if (route.path === "fast") {
       const text = crisis ? crisisFloor(route.text) : route.text;
       return this.answered(text, asked, `${MANO_SOUL}${note}`, messages, fast.attempts, fast.inputChars);
@@ -254,10 +255,10 @@ export class SparkResponder implements Responder {
     );
   }
 
-  // A reaction never replaces an answer, on either path: when they asked
-  // something and the reply is a reaction alone, one more call (not
-  // hedged) asks for the text, and the reaction stays with it. When that
-  // still has no text, the runner sends its own short fallback.
+  // A reaction never replaces an answer, on either path: unless the last
+  // message is a plain thanks or ok, a reply that is a reaction alone gets
+  // one more call (not hedged) for the text, and the reaction stays with
+  // it. When that still has no text, the runner sends its own words.
   private async answered(
     raw: string,
     asked: boolean,

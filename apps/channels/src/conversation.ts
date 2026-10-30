@@ -215,7 +215,6 @@ export class ConversationDO implements DurableObject {
         mediaHosts: parseMediaHosts(this.env.BLOOIO_MEDIA_HOSTS),
         eyesAfterMs: numberEnv(this.env.TURN_EYES_AFTER_MS, DEFAULT_RUNNER_CONFIG.eyesAfterMs),
         backgroundUrl: chatBackgroundUrl(this.env),
-        eyesSwapWaitMs: DEFAULT_RUNNER_CONFIG.eyesSwapWaitMs,
       },
     });
     return { runner, channel, responder };

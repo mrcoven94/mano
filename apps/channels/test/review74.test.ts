@@ -43,6 +43,14 @@ function deep(text: string, tapback: string | null): Responder {
   };
 }
 
+function fixed(text: string, tapback: string | null): Responder {
+  return {
+    name: "fixed",
+    maxAttempts: 1,
+    respond: async () => ({ text, bubbles: text ? [text] : [], inputChars: 10, outputChars: text.length, model: "stand-in", attempts: 1, tapback: tapback as never }),
+  };
+}
+
 function slow(text: string, ms: number): Responder {
   return {
     name: "slow",
@@ -54,45 +62,44 @@ function slow(text: string, ms: number): Responder {
   };
 }
 
-// The eyes call lands only when the test says so; `onEyes` runs first.
-function gateEyes(h: Harness, onEyes: () => void, delayMs = 30): void {
-  const original = h.channel.react.bind(h.channel);
-  h.channel.react = async (chatId, messageId, reaction) => {
-    if (reaction === EYES) {
-      await new Promise((r) => setTimeout(r, delayMs));
-      onEyes();
-    }
-    return original(chatId, messageId, reaction);
-  };
-}
-
 describe("blocker 1: fresh STOP, closed and generation checks right before every reaction call", () => {
-  it("sends no like when STOP lands while the eyes are still in flight", async () => {
-    const h = introduced(makeHarness({ responder: deep("here's how that works", "like") }));
-    gateEyes(h, () => h.store.patchMeta({ optedOut: true }));
-    await say(h, "evt_1", "how does CalFresh count income");
-    expect(h.channel.reactions.map((r) => r.reaction)).not.toContain("like");
-    // The eyes call was already on its way; nothing goes after it.
-    expect(h.channel.unreactions).toEqual([]);
+  // The reply's text goes first; the change lands right after it.
+  function afterText(h: Harness, change: () => void): void {
+    const send = h.channel.send.bind(h.channel);
+    h.channel.send = async (input) => {
+      const out = await send(input);
+      change();
+      return out;
+    };
+  }
+
+  it("sends no like when STOP lands after the text went out", async () => {
+    const h = introduced(makeHarness({ responder: fixed("sounds good, talk soon", "like") }));
+    afterText(h, () => h.store.patchMeta({ optedOut: true }));
+    await say(h, "evt_1", "ok sounds good");
+    expect(h.channel.reactions).toEqual([]);
   });
 
-  it("removes no eyes and adds nothing once the chat closed", async () => {
-    const h = introduced(makeHarness({ responder: deep("ok", "like") }));
-    gateEyes(h, () => h.store.patchMeta({ closed: true }));
-    await say(h, "evt_1", "how does this work");
-    await h.decorations.idle();
-    expect(h.channel.reactions.map((r) => r.reaction)).not.toContain("like");
-    expect(h.channel.unreactions).toEqual([]);
+  it("sends no like once the chat closed", async () => {
+    const h = introduced(makeHarness({ responder: fixed("sounds good", "like") }));
+    afterText(h, () => h.store.patchMeta({ closed: true }));
+    await say(h, "evt_1", "ok sounds good");
+    expect(h.channel.reactions).toEqual([]);
   });
 
-  it("refuses a late swap after the conversation was deleted", async () => {
-    const h = introduced(makeHarness({ responder: deep("ok", "like"), config: { eyesSwapWaitMs: 5 } }));
-    gateEyes(h, () => h.store.wipe(h.now), 60);
-    await say(h, "evt_1", "how does this work").catch(() => []);
+  it("sends no eyes when STOP lands before the eyes go out", async () => {
+    const h = introduced(makeHarness({ responder: deep("here's how that works", null) }));
+    const respond = h.responder.respond.bind(h.responder);
+    h.responder.respond = async (turn, hooks) =>
+      respond(turn, {
+        onHeadsUp: async (text) => {
+          h.store.patchMeta({ optedOut: true });
+          await hooks?.onHeadsUp?.(text);
+        },
+      });
+    await say(h, "evt_1", "how does CalFresh count income").catch(() => []);
     await h.decorations.idle();
-    // The like went out before the delete; the late swap after it is refused.
-    expect(h.channel.unreactions).toEqual([]);
-    expect(h.channel.reactions.filter((r) => r.reaction === "like")).toHaveLength(1);
+    expect(h.channel.reactions).toEqual([]);
   });
 });
 

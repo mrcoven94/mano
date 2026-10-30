@@ -49,15 +49,14 @@ async function say(h: Harness, id: string, text: string, extra: Partial<Paramete
 function trace(h: Harness): string[] {
   const order: string[] = [];
   const c = h.channel;
-  const wrap = <K extends "react" | "unreact" | "setTyping" | "send" | "setBackground">(name: K, label: (...a: never[]) => string) => {
-    const original = (c[name] as (...a: unknown[]) => Promise<unknown>).bind(c);
+  const wrap = <K extends "react" | "setTyping" | "send" | "setBackground">(name: K, label: (...a: never[]) => string) => {
+    const original = (c[name] as unknown as (...a: unknown[]) => Promise<unknown>).bind(c);
     (c as unknown as Record<string, unknown>)[name] = async (...args: unknown[]) => {
       order.push((label as (...a: unknown[]) => string)(...args));
       return original(...args);
     };
   };
   wrap("react", (_c: string, _m: string, r: string) => `+${r}`);
-  wrap("unreact", (_c: string, _m: string, r: string) => `-${r}`);
   wrap("setTyping", (_c: string, s: string) => `typing:${s}`);
   wrap("send", (i: { text: string }) => `send:${i.text}`);
   wrap("setBackground", () => "background");
@@ -104,22 +103,16 @@ describe("dynamic reactions", () => {
 });
 
 describe("eyes while a slow turn runs", () => {
-  it("puts eyes on a photo before the typing indicator, and leaves them when the reply has no reaction", async () => {
+  it("puts eyes on a photo once, and never takes them off", async () => {
     const h = introduced(makeHarness({ replies: ["got it, reading it now"] }));
-    const order = trace(h);
     await say(h, "evt_photo", "what is this", { attachments: [{ url: "https://bucket.blooio.com/a.jpg", name: "a.jpg", mediaType: "image/jpeg" }] });
-    expect(order.indexOf(`+${EYES}`)).toBeGreaterThanOrEqual(0);
-    expect(order.indexOf(`+${EYES}`)).toBeLessThan(order.indexOf("typing:started"));
-    expect(h.channel.unreactions).toEqual([]);
+    expect(h.channel.reactions).toEqual([{ chatId: TEST_CHAT, messageId: "msg_evt_photo", reaction: EYES }]);
   });
 
-  it("puts eyes on the message when the turn routes deep, and swaps them for the reply's reaction", async () => {
-    const h = introduced(makeHarness({ responder: deep("REACT: emphasize\nCalFresh renewals are due by the date on your letter") }));
-    const order = trace(h);
-    await say(h, "evt_deep", "how does CalFresh count my roommate's income");
-    expect(h.channel.reactions.map((r) => r.reaction)).toEqual([EYES, "emphasize"]);
-    expect(h.channel.unreactions).toEqual([{ chatId: TEST_CHAT, messageId: "msg_evt_deep", reaction: EYES }]);
-    expect(order.indexOf(`-${EYES}`)).toBeLessThan(order.indexOf("+emphasize"));
+  it("puts eyes on the message when the turn routes deep, and then no other reaction on it", async () => {
+    const h = introduced(makeHarness({ responder: deep("REACT: like\nok, CalFresh counts what you share with your roommate") }));
+    await say(h, "evt_deep", "ok how does CalFresh count my roommate's income");
+    expect(h.channel.reactions.map((r) => r.reaction)).toEqual([EYES]);
   });
 
   it("puts eyes on a fast turn that runs past the threshold", async () => {
@@ -239,8 +232,8 @@ describe("the chat background, set once", () => {
 describe("the SQL store keeps the background record", () => {
   it("round-trips it per chat and keeps it across a wipe", () => {
     const store = new SqlConversationStore(sqliteStorage(new DatabaseSync(":memory:")));
-    store.saveChatBackground({ chatKey: "k1", state: "uncertain", attempts: 1, updatedAtMs: 1234 });
-    expect(store.chatBackground("k1")).toEqual({ chatKey: "k1", state: "uncertain", attempts: 1, updatedAtMs: 1234 });
+    store.saveChatBackground({ chatKey: "k1", state: "uncertain", attempts: 1, lockedUntilMs: 9999, updatedAtMs: 1234 });
+    expect(store.chatBackground("k1")).toEqual({ chatKey: "k1", state: "uncertain", attempts: 1, lockedUntilMs: 9999, updatedAtMs: 1234 });
     expect(store.chatBackground("k2")).toBeNull();
     store.wipe(5678);
     expect(store.chatBackground("k1")?.state).toBe("uncertain");
