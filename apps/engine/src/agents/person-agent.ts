@@ -807,6 +807,18 @@ export class PersonAgent extends Agent<Env, PersonState> {
     });
   }
 
+  // Closes every waiting draft that is not the latest proposal, decided
+  // in one statement when it runs. The agent never names which.
+  async supersedeProposals(verified: string, generation?: number) {
+    await this.assertSubject(verified);
+    const g = generation ?? currentGeneration(this.db());
+    if (g !== currentGeneration(this.db())) return STALE_STATE;
+    const closed = this.store.rejectSupersededProposals(g);
+    if (closed > 0) this.store.audit({ event: "gateway.supersede", count: closed });
+    this.syncState();
+    return { closed };
+  }
+
   async reject(approvalId: string, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.rejectApproval(approvalId, verified);

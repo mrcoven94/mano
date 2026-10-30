@@ -195,6 +195,14 @@ export class SqlApprovalStore implements ApprovalStore {
     return row ? { approvalId: row.approval_id, receivedAt: row.received_at, turnId: row.turn_id } : null;
   }
 
+  rejectSupersededProposals(generation: number): number {
+    return this.sql.exec(
+      `UPDATE approvals SET status = 'rejected' WHERE status = 'pending' AND NOT (${PROPOSAL_CURRENT_SQL})` +
+        ` AND generation = ${CURRENT_GENERATION} AND ${CURRENT_GENERATION} = ?`,
+      generation,
+    ).rowsWritten;
+  }
+
   proposalCurrent(id: string): boolean {
     return this.sql.exec(`SELECT 1 FROM approvals WHERE id = ? AND NOT (${PROPOSAL_CURRENT_SQL})`, id).toArray().length === 0;
   }

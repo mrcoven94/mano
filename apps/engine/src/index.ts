@@ -33,6 +33,7 @@
 //   POST /api/persons/:id/action               action request (worker stamps personId from the token);
 //                                              proposalTurn names the turn an agent draft belongs to
 //   GET  /api/persons/:id/approvals
+//   POST /api/persons/:id/approvals/supersede     { generation } closes every waiting draft but the latest
 //   POST /api/persons/:id/approvals/:aid/approve
 //   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
 //   GET  /api/persons/:id/memory
@@ -580,6 +581,15 @@ export default {
       const memoryMatch = rest.match(/^\/memory\/([^/]+)$/);
       if (memoryMatch && request.method === "DELETE") {
         return Response.json(await agent.forgetMemory(subject, decodeURIComponent(memoryMatch[1])));
+      }
+      if (rest === "/approvals/supersede" && request.method === "POST") {
+        const read = await readCappedJson(request, MAX_ACTION_BODY);
+        if (!read.ok) return read.response;
+        const generation = writeGeneration(service, (read.value as { generation?: unknown } | null)?.generation);
+        if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
+        const out = await agent.supersedeProposals(subject, generation);
+        if (isStale(out)) return STALE();
+        return Response.json(out);
       }
       const decisionMatch = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
       if (decisionMatch && request.method === "POST") {

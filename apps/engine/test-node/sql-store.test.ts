@@ -155,7 +155,13 @@ describe("the latest proposal", () => {
       expect(store.proposalCurrent(b.id)).toBe(true);
       expect(store.proposalCurrent(plain.id)).toBe(true);
       expect(store.consumeApprovalAndClaim(a.id, "maria", attemptFor(a), { personId: "maria", requestHash: "content-1" })).toBeNull();
-      expect(store.getApproval(a.id)?.status).toBe("pending");
+      // Closing is decided when it runs: only what is not the latest now.
+      expect(store.rejectSupersededProposals(1)).toBe(0);
+      expect(store.rejectSupersededProposals(0)).toBe(1);
+      expect(store.getApproval(a.id)?.status).toBe("rejected");
+      expect(store.getApproval(b.id)?.status).toBe("pending");
+      expect(store.getApproval(plain.id)?.status).toBe("pending");
+      expect(store.rejectSupersededProposals(0)).toBe(0);
       expect(store.consumeApprovalAndClaim(b.id, "maria", attemptFor(b), { personId: "maria", requestHash: "content-1" })?.status).toBe(
         "approved",
       );

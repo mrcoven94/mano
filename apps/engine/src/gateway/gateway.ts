@@ -49,6 +49,10 @@ export interface ApprovalStore {
   createApprovalForKey(a: Approval, generation: number, order?: ProposalOrder): Approval | null;
   // The newest drafted proposal of the current generation, or null.
   latestProposal(): LatestProposal | null;
+  // Rejects, in one step decided at execution time, every pending drafted
+  // proposal of this generation that is not the latest. Returns how many.
+  // Nothing when the generation is no longer current.
+  rejectSupersededProposals(generation: number): number;
   // False only for a drafted proposal that is no longer the latest one: it
   // can never be approved, whether or not closing it worked.
   proposalCurrent(id: string): boolean;
@@ -158,6 +162,16 @@ export class MemoryApprovalStore implements ApprovalStore {
   }
   proposalCurrent(id: string) {
     return !this.drafted.has(id) || this.latestProposal()?.approvalId === id;
+  }
+  rejectSupersededProposals(generation: number): number {
+    if (generation !== this.conversationGeneration) return 0;
+    let closed = 0;
+    for (const a of this.approvals.values()) {
+      if (a.status !== "pending" || this.proposalCurrent(a.id) || this.approvalGenerations.get(a.id) !== generation) continue;
+      this.approvals.set(a.id, { ...a, status: "rejected" });
+      closed += 1;
+    }
+    return closed;
   }
   createApprovalForKey(a: Approval, generation: number, order?: ProposalOrder): Approval | null {
     if (generation !== this.conversationGeneration) return null;

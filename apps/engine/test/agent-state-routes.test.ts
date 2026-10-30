@@ -213,6 +213,12 @@ describe("pending approval pointer", () => {
     expect(await (await call(h, "PUT", "/pending-approval", { approvalId: plain, generation: 0 })).json()).toEqual({ superseded: true, pointer: null });
     const refused = (await (await call(h, "POST", `/approvals/${a}/approve`)).json()) as { status: string; superseded?: boolean };
     expect(refused).toMatchObject({ status: "blocked", superseded: true });
+    // Closing names no approval: Engine closes what is not the latest when it runs.
+    expect((await call(h, "POST", "/approvals/supersede", {})).status).toBe(400);
+    expect(await (await call(h, "POST", "/approvals/supersede", { generation: 0 })).json()).toEqual({ closed: 1 });
+    const statuses = (await (await call(h, "GET", "/approvals")).json()) as { approvals: { id: string; status: string }[] };
+    const status = (id: string) => statuses.approvals.find((x) => x.id === id)?.status;
+    expect([status(a), status(b), status(plain)]).toEqual(["rejected", "pending", "pending"]);
     expect(((await (await call(h, "POST", `/approvals/${b}/approve`)).json()) as { status: string }).status).toBe("completed");
     // A draft must name a turn this conversation's ledger holds.
     const unknown = await call(h, "POST", "/action", {
