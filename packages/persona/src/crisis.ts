@@ -53,6 +53,8 @@ const ENDING = new RegExp(
     String.raw`\bno point (?:anymore|in (?:living|anything|going on|trying|being here)|to (?:living|anything|life))\b`,
     String.raw`\b(?:took|take|taking|swallowed|downed|drank|injected|used|ate) (?:my |the |a |an |all of my |all of the )?(?:whole|entire) (?:bottle|box|pack|vial|supply|prescription)\b`,
     String.raw`\b(?:whole|entire) bottle\b`,
+    String.raw`\btake my (?:own )?life\b`,
+    String.raw`\b(?:end|ending) my (?:own )?life\b`,
     String.raw`\ball (?:of )?my (?:pills|meds|medications?|medicines?|insulin|tablets|painkillers)\b`,
   ].join("|"),
 );
@@ -84,61 +86,97 @@ export function crisisFloor(reply: string): string {
 // says a sentence of the line again, is dropped (safety-05: the judge
 // marks the repeat down), and the safety question keeps its question marks.
 export function holdCrisisLines(bubbles: readonly string[], line: string = CRISIS_LINE): string[] {
-  const lineWords = new Set(wordsOf(line));
+  const lineSentences = sentencesOf(line).map(callShape);
   const rest = bubbles
     .filter((b) => b !== CRISIS_LINE && b !== CRISIS_LINE_ES)
     // Question marks come back first, so a question is never read as a repeat.
-    .map((b) => withoutRepeats(askSafety(b), lineWords))
+    .map((b) => withoutRepeats(askSafety(b), lineSentences))
     .filter((b) => b.length > 0);
   return [line, ...rest];
 }
 
-// A sentence carries nothing new only when, without the numbers 988 and
-// 911 and filler (call or text, please, now, free, 24/7), every word it
-// has left is a word of the line. So a bare "call or text 988" or a near
-// copy of a sentence of the line is dropped, and a sentence is kept when
-// it names another resource or number (Poison Control, 999, a hotline),
-// gives an action (move away, ask someone to stay) or asks anything.
+// A sentence as the numbers it names, the actions it pairs them with
+// (call, text), and the rest of its words.
+interface CallShape {
+  numbers: Set<string>;
+  actions: Set<string>;
+  words: Set<string>;
+}
+
+const ACTION: Record<string, "call" | "text"> = {
+  call: "call", calling: "call", phone: "call", dial: "call", llama: "call", llamar: "call", "llámale": "call", marca: "call",
+  text: "text", texting: "text", message: "text", mensaje: "text", texto: "text", "envía": "text", envia: "text", manda: "text",
+};
+// Words that never change what a sentence says.
 const REPEAT_FILLER = new Set(
   (
-    "please now right just again too also so it's its it is and or a an the to you can free open available 24 7 anytime any time day night " +
-    "call text dial or calling texting " +
-    "por favor ahora mismo ya también es y está esta gratis abierto disponible las horas día noche llama llamar llámale marca manda envía envia un mensaje texto al a el"
+    "please now right just so also too okay ok it's its is and or a an the to you can free open available 24 7 anytime any time " +
+    "por favor ahora mismo ya también es y está esta gratis abierto disponible las horas un una al a el o"
   ).split(" "),
 );
-const ASKS = /[?¿]|(?:^|[,;:]\s*)(?:are|is|do|does|did|can|could|will|would|what|where|when|how|who|why|have|has|est[áa]s|tienes|puedes|qu[ée]|d[óo]nde|c[óo]mo|cu[áa]ndo|qui[ée]n)\b/iu;
 
 function wordsOf(text: string): string[] {
   return text.toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, " ").split(/\s+/).filter(Boolean);
 }
 
-function carriesNothingNew(sentence: string, lineWords: ReadonlySet<string>): boolean {
-  if (ASKS.test(sentence)) return false;
-  const words = wordsOf(sentence).filter((w) => w !== "988" && w !== "911" && !REPEAT_FILLER.has(w));
-  // Any other number is new help (a hotline, 999).
-  if (words.some((w) => /\d/.test(w))) return false;
-  return words.every((w) => lineWords.has(w));
+function callShape(sentence: string): CallShape {
+  const shape: CallShape = { numbers: new Set(), actions: new Set(), words: new Set() };
+  for (const w of wordsOf(sentence)) {
+    if (w === "988" || w === "911") shape.numbers.add(w);
+    else if (ACTION[w]) shape.actions.add(ACTION[w]!);
+    else if (!REPEAT_FILLER.has(w)) shape.words.add(w);
+  }
+  return shape;
 }
 
-function withoutRepeats(bubble: string, lineWords: ReadonlySet<string>): string {
+// Dropped only when it names 988 or 911 with the same action as the line
+// sentence that names that number, and nothing else: "Call or text 988
+// now", "If you're in danger right now, call 911". "Text 911 if you're in
+// danger", another number, an action or a question all stay.
+function repeatsTheLine(sentence: string, lineSentences: readonly CallShape[]): boolean {
+  if (/[?¿]/.test(sentence)) return false;
+  const shape = callShape(sentence);
+  if (shape.numbers.size === 0 || /\d/.test([...shape.words].join(" "))) return false;
+  return lineSentences.some(
+    (ls) =>
+      [...shape.numbers].every((n) => ls.numbers.has(n)) &&
+      shape.actions.size > 0 &&
+      [...shape.actions].every((a) => ls.actions.has(a)) &&
+      [...shape.words].every((w) => ls.words.has(w)),
+  );
+}
+
+function withoutRepeats(bubble: string, lineSentences: readonly CallShape[]): string {
   return bubble
     .split(/(?<=[.!?])\s+/)
-    .filter((sentence) => !carriesNothingNew(sentence, lineWords))
+    .filter((sentence) => !repeatsTheLine(sentence, lineSentences))
     .join(" ")
     .trim();
 }
 
-// "are you safe right now" or "estás a salvo en este momento" at the end
-// of a bubble, with its question marks lost, gets them back: told to a
-// person in crisis, the statement "you are safe" is the wrong message.
-const SAFETY_EN = /(\bare you (?:safe|ok|okay)(?: right now| at this moment| now| tonight)?)\s*\.?$/i;
-const SAFETY_ES = /(^|[,;.]\s*)¿?((?:est[áa]s|te sientes) (?:a salvo|segur[oa]|bien)(?: (?:en este momento|ahora mismo|ahora|esta noche))?)\s*\.?$/iu;
+// Question marks come back only on a whole sentence that is one of these
+// safety questions, never on a statement that contains the words.
+const SAFETY_QUESTIONS_EN = new Set([
+  "are you safe", "are you safe right now", "are you safe now", "are you safe at this moment", "are you safe tonight",
+  "is anyone with you", "is someone with you", "is anyone with you right now",
+]);
+const SAFETY_QUESTIONS_ES = new Set([
+  "estás a salvo", "estás a salvo ahora", "estás a salvo ahora mismo", "estás a salvo en este momento", "estás a salvo esta noche",
+  "hay alguien contigo", "hay alguien contigo ahora",
+]);
 
 function askSafety(bubble: string): string {
-  if (/\?\s*$/.test(bubble)) return bubble;
-  if (SAFETY_ES.test(bubble)) return bubble.replace(SAFETY_ES, "$1¿$2?");
-  if (SAFETY_EN.test(bubble)) return bubble.replace(SAFETY_EN, "$1?");
-  return bubble;
+  return bubble
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => {
+      const bare = sentence.replace(/^¿/, "").replace(/[.\s]+$/, "");
+      const key = bare.toLowerCase().replace(/estas/g, "estás");
+      if (/[?]$/.test(sentence.trim())) return sentence;
+      if (SAFETY_QUESTIONS_EN.has(key)) return `${bare}?`;
+      if (SAFETY_QUESTIONS_ES.has(key)) return `¿${bare}?`;
+      return sentence;
+    })
+    .join(" ");
 }
 
 // Told to the model on a crisis turn, after the soul: the crisis line is
@@ -219,7 +257,7 @@ export function spanishOrImplicitCrisis(text: string): boolean {
   return IMPLICIT.test(words) || SPANISH.test(words);
 }
 
-// The second exemption, an ordinary health question. "My surgery hurt
+// The second exemption, one ordinary health question. "My surgery hurt
 // for weeks" or "should I stop taking my blood pressure pills" trip the
 // broad words "hurt" and "pills" with no crisis sense (nightly run
 // 41017357447, safety-34 and safety-35). It is checked only after main's
@@ -275,7 +313,26 @@ const HEALTH_DENY = new RegExp(
   "u",
 );
 
+// The lead's decision after Sol's second review: only ONE short health
+// question can be exempt. One sentence, ending in "?" ("¿...?" in
+// Spanish), at most 25 words, opening with a question word, and with no
+// first-person intent clause anywhere.
+const MAX_QUESTION_WORDS = 25;
+const OPENS_EN = /^(?:should|is|can|do|does|will|could|am|are|was|how|what|why|when)\b/i;
+const OPENS_ES = /^¿\s*(?:debo|deber[íi]a|es|puedo|puede|pueden|se puede|tengo que|c[óo]mo|qu[ée]|cu[áa]ndo|por qu[ée]|est[áa]|estoy|hay)\b/iu;
+const INTENT = /(?:^|\s)(?:i want|i'm going to|im going to|i am going to|i'll|i will|i wish|i hope|so i|because|cause|quiero|voy a|ojal[áa]|porque)(?=\s|$)/iu;
+
+export function isOneHealthQuestion(text: string): boolean {
+  const trimmed = text.trim().replace(/[’]/g, "'");
+  if (sentencesOf(trimmed).length !== 1 || !trimmed.endsWith("?")) return false;
+  if (trimmed.split(/\s+/).length > MAX_QUESTION_WORDS) return false;
+  const opens = trimmed.startsWith("¿") ? OPENS_ES.test(trimmed) : OPENS_EN.test(trimmed);
+  if (!opens) return false;
+  return !INTENT.test(accented(trimmed));
+}
+
 export function suppressedHealthQuestion(text: string): boolean {
+  if (!isOneHealthQuestion(text)) return false;
   if (isCrisis(text)) return false;
   if (HEALTH_DENY.test(accented(text))) return false;
   const words = normalize(text);

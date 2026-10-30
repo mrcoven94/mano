@@ -17,8 +17,8 @@ describe("the crisis line is said once (safety-05)", () => {
 
   it("does the same in English, and keeps the line naming both numbers", () => {
     const bubbles = holdCrisisLines(["I'm really glad you told me. Please call or text 988 right now, it's free and open 24/7", "if you're in danger right now, call 911. I'm here with you. are you safe at this moment?"]);
-    // "I'm really glad you told me" is in the line already, so it goes too.
-    expect(bubbles).toEqual([CRISIS_LINE, "I'm here with you. are you safe at this moment?"]);
+    // Only the number sentences go; the human words stay (Sol's second review, 5).
+    expect(bubbles).toEqual([CRISIS_LINE, "I'm really glad you told me.", "I'm here with you. are you safe at this moment?"]);
     expect(namesCrisisLines(bubbles.join(" "))).toBe(true);
   });
 
@@ -33,18 +33,22 @@ describe("the crisis line is said once (safety-05)", () => {
 });
 
 describe("the safety question keeps its question marks (safety-05)", () => {
-  it("restores ¿ and ? on a Spanish safety question that lost them", () => {
-    expect(holdCrisisLines(["estoy aquí contigo, estás a salvo en este momento"], CRISIS_LINE_ES)).toEqual([
+  it("restores ¿ and ? on a whole Spanish safety question that lost them", () => {
+    expect(holdCrisisLines(["estoy aquí contigo. estás a salvo en este momento"], CRISIS_LINE_ES)).toEqual([
       CRISIS_LINE_ES,
-      "estoy aquí contigo, ¿estás a salvo en este momento?",
+      "estoy aquí contigo. ¿estás a salvo en este momento?",
     ]);
     expect(holdCrisisLines(["¿Estás a salvo ahora mismo"], CRISIS_LINE_ES)[1]).toBe("¿Estás a salvo ahora mismo?");
   });
 
-  it("restores ? on an English safety question that lost it, and leaves a kept one alone", () => {
+  it("restores ? on a whole English safety question that lost it, and leaves a kept one alone", () => {
     expect(holdCrisisLines(["I'm here with you. are you safe right now"])[1]).toBe("I'm here with you. are you safe right now?");
     expect(holdCrisisLines(["are you safe at this moment?"])[1]).toBe("are you safe at this moment?");
     expect(holdCrisisLines(["¿estás a salvo?"], CRISIS_LINE_ES)[1]).toBe("¿estás a salvo?");
+  });
+
+  it("does not touch a safety clause inside a longer sentence (Sol's second review, 6)", () => {
+    expect(holdCrisisLines(["estoy aquí contigo, estás a salvo en este momento"], CRISIS_LINE_ES)[1]).toBe("estoy aquí contigo, estás a salvo en este momento");
   });
 });
 
@@ -57,17 +61,9 @@ describe("the model is told the line is already sent", () => {
   });
 });
 
-describe("the model's words never repeat what the line already says (live run, English)", () => {
-  it("drops a model sentence the line already says, and keeps the rest", () => {
-    expect(holdCrisisLines(["I'm really glad you told me", "I'm here with you", "are you safe right now?"])).toEqual([
-      CRISIS_LINE,
-      "I'm here with you",
-      "are you safe right now?",
-    ]);
-    expect(holdCrisisLines(["i'm really glad you told me.", "are you safe right now?"])).toEqual([CRISIS_LINE, "are you safe right now?"]);
-  });
-
-  it("tells the model not to repeat anything the line says, only to add what it leaves out", () => {
+describe("the model is told not to repeat what the line already says (live run, English)", () => {
+  it("keeps human words even when the line says something similar; the note asks the model not to", () => {
+    expect(holdCrisisLines(["I'm really glad you told me", "are you safe right now?"])).toEqual([CRISIS_LINE, "I'm really glad you told me", "are you safe right now?"]);
     expect(CRISIS_NOTE).toMatch(/Do not repeat anything that line says/);
   });
 });

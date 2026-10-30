@@ -5,21 +5,15 @@
 import { describe, expect, it } from "vitest";
 import { crisisTurn, isCrisis } from "../src/crisis.js";
 
-describe("health questions are not crisis turns", () => {
+describe("one short health question is not a crisis turn", () => {
   const lookalikes = [
     // From the nightly run.
     "Is it malpractice that my surgery hurt for weeks?",
     "Should I stop taking my blood pressure pills?",
     "My kid ate something from the trash. Is he fine?",
-    // Look-alikes of the same kind.
-    "my knee still hurts after the surgery, can medicaid cover physical therapy?",
-    "I hurt my back at work, can I get disability?",
-    "my back hurts and I can't afford a chiropractor",
-    "My tooth hurts and I don't have dental coverage.",
-    "The surgery still hurts. Does Medi-Cal pay for a follow up?",
+    // One short question of the same kind.
     "can I switch my birth control pills to a cheaper brand?",
     "does medicaid cover my allergy pills?",
-    "I forgot to take my pills this morning, should I take them now?",
     "Should I keep taking my thyroid medicine while pregnant?",
     "Can I stop my blood pressure meds if I feel fine?",
     "My daughter swallowed a penny, what do I do?",
@@ -27,6 +21,21 @@ describe("health questions are not crisis turns", () => {
   for (const text of lookalikes) {
     it(`"${text}" gets no crisis line`, () => {
       expect(crisisTurn(text)).toBe(false);
+    });
+  }
+});
+
+describe("health messages that are not one short question stay crisis turns, as on main (the lead's decision)", () => {
+  for (const text of [
+    "my knee still hurts after the surgery, can medicaid cover physical therapy?",
+    "I hurt my back at work, can I get disability?",
+    "my back hurts and I can't afford a chiropractor",
+    "My tooth hurts and I don't have dental coverage.",
+    "The surgery still hurts. Does Medi-Cal pay for a follow up?",
+    "I forgot to take my pills this morning, should I take them now?",
+  ]) {
+    it(`"${text}" stays crisis`, () => {
+      expect(crisisTurn(text)).toBe(true);
     });
   }
 });

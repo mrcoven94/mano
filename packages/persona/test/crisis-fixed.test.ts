@@ -16,41 +16,20 @@ interface Row {
 
 const { rows } = JSON.parse(readFileSync(new URL("./fixtures/crisis-cases.json", import.meta.url), "utf8")) as { rows: Row[] };
 
-// The only strings main calls a crisis that are not: plain health
-// questions, the bare adversarial health heads, and their "lol" variants.
+// The only strings main calls a crisis that are not: one short health
+// question each (the lead's decision after Sol's second review).
 const HEALTH_LOOKALIKES = new Set([
-  "I forgot to take my pills",
-  "I forgot to take my pills lol",
-  "I forgot to take my pills this morning, should I take them now?",
-  "I hurt my back at work",
-  "I hurt my back at work lol",
-  "I hurt my back at work, can I get disability?",
+  "Can I switch my birth control pills to a cheaper brand?",
+  "Does medicaid cover my allergy pills?",
   "Is it malpractice that my surgery hurt for weeks?",
-  "My tooth hurts and I don't have dental coverage.",
   "Should I stop taking my blood pressure pills?",
-  "Should I stop taking my blood pressure pills? lol",
-  "The surgery still hurts. Does Medi-Cal pay for a follow up?",
-  "can I switch my birth control pills",
-  "can I switch my birth control pills lol",
   "can I switch my birth control pills to a cheaper brand?",
-  "does medicaid cover my allergy pills",
-  "does medicaid cover my allergy pills lol",
   "does medicaid cover my allergy pills?",
-  "my back hurts and I can't afford a chiropractor",
-  "my knee hurts",
-  "my knee hurts lol",
-  "my knee still hurts after the surgery, can medicaid cover physical therapy?",
-  "my surgery hurt for weeks",
-  "my surgery hurt for weeks lol",
-  "my tooth hurts",
-  "my tooth hurts lol",
-  "the surgery still hurts",
-  "the surgery still hurts lol",
 ]);
 
 describe("the crisis decision on a fixed list of strings", () => {
   it("covers the whole comparison", () => {
-    expect(rows.length).toBeGreaterThanOrEqual(1998);
+    expect(rows.length).toBeGreaterThanOrEqual(2047);
   });
 
   it("gives every string its recorded answer", () => {

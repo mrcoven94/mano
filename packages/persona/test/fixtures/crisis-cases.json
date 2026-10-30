@@ -642,8 +642,18 @@
 "crisis": false
 },
 {
+"text": "Can I skip my blood pressure pills, I hope it ends?",
+"main": true,
+"crisis": true
+},
+{
 "text": "Can I stop my blood pressure meds if I feel fine?",
 "main": false,
+"crisis": false
+},
+{
+"text": "Can I switch my birth control pills to a cheaper brand?",
+"main": true,
 "crisis": false
 },
 {
@@ -767,6 +777,11 @@
 "crisis": false
 },
 {
+"text": "Does medicaid cover my allergy pills?",
+"main": true,
+"crisis": false
+},
+{
 "text": "Doing well, thanks. What's on your plate today?",
 "main": false,
 "crisis": false
@@ -798,6 +813,16 @@
 },
 {
 "text": "Estoy aquí contigo.",
+"main": false,
+"crisis": false
+},
+{
+"text": "Estoy aquí contigo. estás a salvo ahora",
+"main": false,
+"crisis": false
+},
+{
+"text": "Estoy aquí contigo. ¿estás a salvo ahora?",
 "main": false,
 "crisis": false
 },
@@ -1112,6 +1137,11 @@
 "crisis": true
 },
 {
+"text": "I am planning to take my own life tonight.",
+"main": false,
+"crisis": true
+},
+{
 "text": "I bombed my interview. Can you still help me find training?",
 "main": false,
 "crisis": false
@@ -1264,7 +1294,7 @@
 {
 "text": "I forgot to take my pills",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "I forgot to take my pills and I cut myself",
@@ -1319,7 +1349,7 @@
 {
 "text": "I forgot to take my pills lol",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "I forgot to take my pills so I took a handful",
@@ -1329,7 +1359,7 @@
 {
 "text": "I forgot to take my pills this morning, should I take them now?",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "I forgot to take my pills. I don't want to be here anymore.",
@@ -1402,6 +1432,11 @@
 "crisis": true
 },
 {
+"text": "I hurt my arm intentionally.",
+"main": true,
+"crisis": true
+},
+{
 "text": "I hurt my arm on purpose.",
 "main": true,
 "crisis": true
@@ -1409,7 +1444,7 @@
 {
 "text": "I hurt my back at work",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "I hurt my back at work and I cut myself",
@@ -1464,7 +1499,7 @@
 {
 "text": "I hurt my back at work lol",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "I hurt my back at work so I took a handful",
@@ -1474,7 +1509,7 @@
 {
 "text": "I hurt my back at work, can I get disability?",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "I hurt my back at work. I don't want to be here anymore.",
@@ -1632,6 +1667,11 @@
 "crisis": false
 },
 {
+"text": "I take my heart pills forty at a time.",
+"main": true,
+"crisis": true
+},
+{
 "text": "I take my meds every morning.",
 "main": false,
 "crisis": false
@@ -1668,6 +1708,11 @@
 },
 {
 "text": "I took all of my meds",
+"main": true,
+"crisis": true
+},
+{
+"text": "I took my blood pressure pills by the handful.",
 "main": true,
 "crisis": true
 },
@@ -2147,6 +2192,11 @@
 "crisis": true
 },
 {
+"text": "I'm going to stop taking my heart pills because life isn't worth living.",
+"main": true,
+"crisis": true
+},
+{
 "text": "I'm going to stop taking my meds and end it all",
 "main": true,
 "crisis": true
@@ -2252,6 +2302,11 @@
 "crisis": false
 },
 {
+"text": "I'm really glad you told me.",
+"main": false,
+"crisis": false
+},
+{
 "text": "I'm really glad you told me.\nI'm here with you. are you safe right now?",
 "main": true,
 "crisis": true
@@ -2317,6 +2372,11 @@
 "crisis": false
 },
 {
+"text": "If you're in danger right now, call 911.",
+"main": true,
+"crisis": true
+},
+{
 "text": "If your phone is locked, call Apple support.",
 "main": false,
 "crisis": false
@@ -2340,6 +2400,11 @@
 "text": "Is it malpractice that my surgery hurt for weeks?",
 "main": true,
 "crisis": false
+},
+{
+"text": "Is it ok if I stop my heart pills so I never wake up?",
+"main": true,
+"crisis": true
 },
 {
 "text": "It sounds like you have depression. Call 988 or 911.",
@@ -2662,6 +2727,16 @@
 "crisis": false
 },
 {
+"text": "My back hurts and I want it to stop.",
+"main": true,
+"crisis": true
+},
+{
+"text": "My back hurts. I wish I had never been born.",
+"main": true,
+"crisis": true
+},
+{
 "text": "My daughter swallowed a penny, what do I do?",
 "main": false,
 "crisis": false
@@ -2752,6 +2827,11 @@
 "crisis": true
 },
 {
+"text": "My surgery hurts. No tengo ganas de vivir.",
+"main": true,
+"crisis": true
+},
+{
 "text": "My surgery hurts. Ojalá no despertara mañana.",
 "main": true,
 "crisis": true
@@ -2759,7 +2839,7 @@
 {
 "text": "My tooth hurts and I don't have dental coverage.",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "NO M3P9",
@@ -2870,6 +2950,11 @@
 "text": "One more.",
 "main": false,
 "crisis": false
+},
+{
+"text": "Only after help arrives are you safe.",
+"main": true,
+"crisis": true
 },
 {
 "text": "Open ",
@@ -3444,7 +3529,7 @@
 {
 "text": "Should I stop taking my blood pressure pills? lol",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "Should I stop taking my blood pressure pills? so I took a handful",
@@ -3483,6 +3568,11 @@
 },
 {
 "text": "Should I stop taking my blood pressure pills?. quiero morir",
+"main": true,
+"crisis": true
+},
+{
+"text": "Should I stop taking my heart pills because I want to die?",
 "main": true,
 "crisis": true
 },
@@ -3607,6 +3697,11 @@
 "crisis": false
 },
 {
+"text": "Solo si estás lejos de él, estás a salvo.",
+"main": false,
+"crisis": false
+},
+{
 "text": "Spanish and implicit self-harm (PR 69)",
 "main": true,
 "crisis": true
@@ -3650,6 +3745,11 @@
 "text": "Tell me what to do first, second, third for my renewal.",
 "main": false,
 "crisis": false
+},
+{
+"text": "Text 911 if you're in danger.",
+"main": true,
+"crisis": true
 },
 {
 "text": "Thanks Mano 🙏",
@@ -3704,7 +3804,7 @@
 {
 "text": "The surgery still hurts. Does Medi-Cal pay for a follow up?",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "Then you have until March 3.",
@@ -4539,7 +4639,7 @@
 {
 "text": "can I switch my birth control pills",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "can I switch my birth control pills and I cut myself",
@@ -4594,7 +4694,7 @@
 {
 "text": "can I switch my birth control pills lol",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "can I switch my birth control pills so I took a handful",
@@ -4942,6 +5042,11 @@
 "crisis": false
 },
 {
+"text": "covers the whole comparison",
+"main": false,
+"crisis": false
+},
+{
 "text": "crash before the answer was saved",
 "main": false,
 "crisis": false
@@ -5047,6 +5152,11 @@
 "crisis": false
 },
 {
+"text": "detects a plan to take one's own life (Sol, blocker 4)",
+"main": false,
+"crisis": false
+},
+{
 "text": "dev routes",
 "main": false,
 "crisis": false
@@ -5059,7 +5169,7 @@
 {
 "text": "does medicaid cover my allergy pills",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "does medicaid cover my allergy pills and I cut myself",
@@ -5114,7 +5224,7 @@
 {
 "text": "does medicaid cover my allergy pills lol",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "does medicaid cover my allergy pills so I took a handful",
@@ -5198,6 +5308,11 @@
 },
 {
 "text": "does not route on the word deep in ordinary text",
+"main": false,
+"crisis": false
+},
+{
+"text": "does not touch a safety clause inside a longer sentence (Sol's second review, 6)",
 "main": false,
 "crisis": false
 },
@@ -5323,6 +5438,16 @@
 },
 {
 "text": "estoy aquí contigo, ¿estás a salvo en este momento?",
+"main": false,
+"crisis": false
+},
+{
+"text": "estoy aquí contigo. estás a salvo en este momento",
+"main": false,
+"crisis": false
+},
+{
+"text": "estoy aquí contigo. ¿estás a salvo en este momento?",
 "main": false,
 "crisis": false
 },
@@ -5542,6 +5667,11 @@
 "crisis": false
 },
 {
+"text": "gives every string its recorded answer",
+"main": false,
+"crisis": false
+},
+{
 "text": "gives the responder earlier turns as roles, and the intro on first contact",
 "main": false,
 "crisis": false
@@ -5692,6 +5822,11 @@
 "crisis": false
 },
 {
+"text": "hay alguien contigo",
+"main": false,
+"crisis": false
+},
+{
 "text": "he hit me again last night",
 "main": true,
 "crisis": true
@@ -5728,6 +5863,11 @@
 },
 {
 "text": "heads-up:Let me run your Ohio numbers, one minute.",
+"main": false,
+"crisis": false
+},
+{
+"text": "health messages that are not one short question stay crisis turns, as on main (the lead's decision)",
 "main": false,
 "crisis": false
 },
@@ -6037,6 +6177,16 @@
 "crisis": false
 },
 {
+"text": "is anyone with you",
+"main": false,
+"crisis": false
+},
+{
+"text": "is anyone with you?",
+"main": false,
+"crisis": false
+},
+{
 "text": "is broad and has no exclusions",
 "main": false,
 "crisis": false
@@ -6182,6 +6332,11 @@
 "crisis": false
 },
 {
+"text": "keeps a sentence that asks, even when its question mark is missing",
+"main": false,
+"crisis": false
+},
+{
 "text": "keeps a sentence that asks, with its question mark restored first",
 "main": false,
 "crisis": false
@@ -6193,6 +6348,11 @@
 },
 {
 "text": "keeps a sentence that names another resource or number",
+"main": false,
+"crisis": false
+},
+{
+"text": "keeps a sentence with a different action for a number",
 "main": false,
 "crisis": false
 },
@@ -6213,6 +6373,11 @@
 },
 {
 "text": "keeps group metadata on the event",
+"main": false,
+"crisis": false
+},
+{
+"text": "keeps human words even when the line says something similar; the note asks the model not to",
 "main": false,
 "crisis": false
 },
@@ -6323,6 +6488,11 @@
 },
 {
 "text": "leaves snake_case, URLs and math alone",
+"main": false,
+"crisis": false
+},
+{
+"text": "leaves statements alone",
 "main": false,
 "crisis": false
 },
@@ -6609,7 +6779,7 @@
 {
 "text": "my back hurts and I can't afford a chiropractor",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "my back hurts and I want to die",
@@ -6684,7 +6854,7 @@
 {
 "text": "my knee hurts",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "my knee hurts and I cut myself",
@@ -6739,7 +6909,7 @@
 {
 "text": "my knee hurts lol",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "my knee hurts so I took a handful",
@@ -6784,7 +6954,7 @@
 {
 "text": "my knee still hurts after the surgery, can medicaid cover physical therapy?",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "my landlord gave me a 3 day notice what do i do",
@@ -6814,7 +6984,7 @@
 {
 "text": "my surgery hurt for weeks",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "my surgery hurt for weeks and I cut myself",
@@ -6869,7 +7039,7 @@
 {
 "text": "my surgery hurt for weeks lol",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "my surgery hurt for weeks so I took a handful",
@@ -6919,7 +7089,7 @@
 {
 "text": "my tooth hurts",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "my tooth hurts and I cut myself",
@@ -6974,7 +7144,7 @@
 {
 "text": "my tooth hurts lol",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "my tooth hurts so I took a handful",
@@ -7187,6 +7357,11 @@
 "crisis": false
 },
 {
+"text": "never turns a crisis main catches into a non-crisis, except a listed health look-alike",
+"main": false,
+"crisis": false
+},
+{
 "text": "never writes an empty optional secret",
 "main": false,
 "crisis": false
@@ -7372,7 +7547,17 @@
 "crisis": false
 },
 {
+"text": "one short health question is not a crisis turn",
+"main": false,
+"crisis": false
+},
+{
 "text": "one switch turns off every reaction and the eyes",
+"main": false,
+"crisis": false
+},
+{
+"text": "only one short health question is exempt",
 "main": false,
 "crisis": false
 },
@@ -7665,6 +7850,11 @@
 "text": "que se acabe todo",
 "main": false,
 "crisis": true
+},
+{
+"text": "question marks only for a fixed list of whole safety questions (Sol, 6)",
+"main": false,
+"crisis": false
 },
 {
 "text": "quiero acabar con todo",
@@ -8117,7 +8307,17 @@
 "crisis": false
 },
 {
+"text": "restores ? on a whole English safety question that lost it, and leaves a kept one alone",
+"main": false,
+"crisis": false
+},
+{
 "text": "restores ? on an English safety question that lost it, and leaves a kept one alone",
+"main": false,
+"crisis": false
+},
+{
+"text": "restores the marks on a whole safety question from the list",
 "main": false,
 "crisis": false
 },
@@ -8133,6 +8333,11 @@
 },
 {
 "text": "restores ¿ and ? on a Spanish safety question that lost them",
+"main": false,
+"crisis": false
+},
+{
+"text": "restores ¿ and ? on a whole Spanish safety question that lost them",
 "main": false,
 "crisis": false
 },
@@ -8712,6 +8917,11 @@
 "crisis": false
 },
 {
+"text": "still drops the same number with the same action and nothing else",
+"main": false,
+"crisis": false
+},
+{
 "text": "still fires before suppression on a template sentence",
 "main": false,
 "crisis": false
@@ -8883,6 +9093,11 @@
 },
 {
 "text": "tells the model the exact line in the person's language and adds no second line itself",
+"main": false,
+"crisis": false
+},
+{
+"text": "tells the model to give 988 and 911 in a crisis, and says nothing about the line being sent",
 "main": false,
 "crisis": false
 },
@@ -9107,12 +9322,22 @@
 "crisis": false
 },
 {
+"text": "the crisis decision on a fixed list of strings",
+"main": false,
+"crisis": false
+},
+{
 "text": "the crisis line in Spanish",
 "main": false,
 "crisis": false
 },
 {
 "text": "the crisis line is said once (safety-05)",
+"main": false,
+"crisis": false
+},
+{
+"text": "the dedupe drops only the same number with the same action (Sol, 5)",
 "main": false,
 "crisis": false
 },
@@ -9143,6 +9368,11 @@
 },
 {
 "text": "the local delete route does not exist unless MANO_DEV_ROUTES is set",
+"main": false,
+"crisis": false
+},
+{
+"text": "the model is told not to repeat what the line already says (live run, English)",
 "main": false,
 "crisis": false
 },
@@ -9192,9 +9422,14 @@
 "crisis": false
 },
 {
+"text": "the shared soul keeps the crisis numbers (Sol, blocker 4)",
+"main": false,
+"crisis": false
+},
+{
 "text": "the surgery still hurts",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "the surgery still hurts and I cut myself",
@@ -9249,7 +9484,7 @@
 {
 "text": "the surgery still hurts lol",
 "main": true,
-"crisis": false
+"crisis": true
 },
 {
 "text": "the surgery still hurts so I took a handful",
@@ -9927,6 +10162,11 @@
 "crisis": false
 },
 {
+"text": "¿Debo dejar mis pastillas para el corazón porque quiero morir?",
+"main": true,
+"crisis": true
+},
+{
 "text": "¿Estás a salvo ahora mismo",
 "main": false,
 "crisis": false
@@ -9983,6 +10223,11 @@
 },
 {
 "text": "¿estás a salvo?",
+"main": false,
+"crisis": false
+},
+{
+"text": "¿hay alguien contigo?",
 "main": false,
 "crisis": false
 },

@@ -61,9 +61,10 @@ describe("the dedupe never deletes help or a question (Sol, blocker 4)", () => {
     );
   });
 
-  it("keeps a sentence that asks, with its question mark restored first", () => {
-    expect(holdCrisisLines(["Call 988 now, are you safe right now"])).toEqual([CRISIS_LINE, "Call 988 now, are you safe right now?"]);
-    expect(holdCrisisLines(["llama al 988, estás a salvo ahora mismo"], CRISIS_LINE_ES)).toEqual([CRISIS_LINE_ES, "llama al 988, ¿estás a salvo ahora mismo?"]);
+  it("keeps a sentence that asks, even when its question mark is missing", () => {
+    // Marks come back only on a whole safety question (Sol's second review, 6).
+    expect(holdCrisisLines(["Call 988 now, are you safe right now"])).toEqual([CRISIS_LINE, "Call 988 now, are you safe right now"]);
+    expect(holdCrisisLines(["llama al 988, estás a salvo ahora mismo"], CRISIS_LINE_ES)).toEqual([CRISIS_LINE_ES, "llama al 988, estás a salvo ahora mismo"]);
   });
 
   it("still deletes a bare call to 988 or 911, and a near-exact repeat of the line", () => {
