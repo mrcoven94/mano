@@ -10,7 +10,7 @@ import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow,
 import type { ActionRequest, Approval, CheckOutcome, ProposalOrder } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
-import { getDocumentBytes, putDocument } from "../files.js";
+import { getDocumentBytes, putDocument, sweepDocuments } from "../files.js";
 import { CASE_ID_RULE, isCaseId } from "../case-id.js";
 import { auditDigest } from "../gateway/audit.js";
 import { checkLinkSafety, redactBlockedLinks } from "../link-safety.js";
@@ -45,7 +45,6 @@ import {
   parseTurnInput,
   putTurnIfAbsent,
   removeConversationState,
-  conversationDocumentKeys,
   requireGeneration,
   requireIdentity,
   setPendingPointer,
@@ -120,8 +119,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       {
         listConsents: () => this.listStoredConsents(),
         documents: {
-          getBytes: (documentId) =>
-            getDocumentBytes(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, documentId),
+          getBytes: (documentId) => this.documentBytes(documentId),
         },
       },
     );
@@ -661,11 +659,12 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async deleteConversation(verified: string, input: unknown) {
     await this.assertSubject(verified);
     const toGeneration = parseGenerationInput(input).generation;
-    // Files first, outside the transaction: a failed R2 delete throws
-    // before any row goes, so Channels' retry deletes them again.
-    const keys = conversationDocumentKeys(this.db(), toGeneration);
-    if (keys.length > 0) await this.env.FILES.delete(keys);
+    // The generation moves and the rows go first, in one transaction, so
+    // no upload prepared before can commit after it. Then the files of
+    // older generations go by prefix, including one that landed during
+    // the delete. A failed sweep throws, and Channels' retry sweeps again.
     const removed = this.ctx.storage.transactionSync(() => removeConversationState(this.db(), Date.now(), toGeneration));
+    await sweepDocuments(this.env.FILES, this.personId, currentGeneration(this.db()));
     this.store.audit({ event: "conversation.deleted", ...removed });
     await this.armReminderWakeup();
     this.syncState();
@@ -1093,37 +1092,51 @@ export class PersonAgent extends Agent<Env, PersonState> {
     }
     const id = input.id ?? crypto.randomUUID();
     const prepared = generation ?? currentGeneration(this.db());
-    const existing = this.db().exec("SELECT hash FROM documents WHERE id = ?", id).toArray()[0] as { hash: string } | undefined;
-    if (existing) return existing.hash === (await sha256Hex(bytes)) ? { id, hash: existing.hash } : DOCUMENT_CONFLICT;
+    const hash = await sha256Hex(bytes);
+    const existing = this.documentRow(id);
+    if (existing) return existing.hash === hash ? { id, hash } : DOCUMENT_CONFLICT;
     if (prepared !== currentGeneration(this.db())) return STALE_STATE;
-    const { hash, r2Key } = await putDocument(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, id, bytes);
+    // The bytes go under their own generation and hash first; the row
+    // commits only while that generation is current. Whoever loses, a
+    // racing upload or a delete, removes its own object and nothing else.
+    const { r2Key } = await putDocument(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, id, bytes, prepared);
     const written = this.db().exec(
       `INSERT OR IGNORE INTO documents(id, name, hash, r2_key) SELECT ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?`,
       id, input.name, hash, r2Key, prepared,
     ).rowsWritten;
     if (written === 0) {
-      const raced = this.db().exec("SELECT hash FROM documents WHERE id = ?", id).toArray()[0] as { hash: string } | undefined;
-      if (raced) return raced.hash === hash ? { id, hash } : DOCUMENT_CONFLICT;
-      // The conversation was deleted during the upload.
-      await this.env.FILES.delete(r2Key);
-      return STALE_STATE;
+      const raced = this.documentRow(id);
+      if (raced?.r2_key !== r2Key) await this.env.FILES.delete(r2Key);
+      if (!raced) return STALE_STATE;
+      return raced.hash === hash ? { id, hash } : DOCUMENT_CONFLICT;
     }
     this.store.audit({ event: "document.registered", documentHash: await auditDigest(id) });
     return { id, hash };
+  }
+
+  private documentRow(id: string): { hash: string; r2_key: string; name: string } | undefined {
+    return this.db().exec("SELECT hash, r2_key, name FROM documents WHERE id = ?", id).toArray()[0] as
+      | { hash: string; r2_key: string; name: string }
+      | undefined;
+  }
+
+  // Bytes for the gateway, read from the key the row recorded.
+  private async documentBytes(documentId: string): Promise<Uint8Array | null> {
+    const row = this.documentRow(documentId);
+    if (!row) return null;
+    return getDocumentBytes(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, documentId, row.r2_key);
   }
 
   // Returns a document's decrypted bytes to its owner, so the person can
   // see exactly what they are approving.
   async getDocument(verified: string, docId: string): Promise<{ name: string; contentB64: string }> {
     await this.assertSubject(verified);
-    const rows = this.db().exec("SELECT name FROM documents WHERE id = ?", docId).toArray() as unknown as {
-      name: string;
-    }[];
-    if (!rows[0]?.name) throw new Error("Document not found.");
-    const bytes = await getDocumentBytes(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, docId);
+    const row = this.documentRow(docId);
+    if (!row?.name) throw new Error("Document not found.");
+    const bytes = await this.documentBytes(docId);
     if (bytes == null) throw new Error("Document not found.");
     const raw = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
-    return { name: rows[0].name, contentB64: bytesToBase64(raw) };
+    return { name: row.name, contentB64: bytesToBase64(raw) };
   }
 }
 

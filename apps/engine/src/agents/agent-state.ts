@@ -432,13 +432,6 @@ export interface ConversationRemoval {
 // refuses a send under the old generation). Approved actions that have
 // not finished lose their authority to execute: their rows stay, revoked,
 // for reconciliation only.
-// The R2 keys of the files a delete to toGeneration would remove: none
-// when the conversation is already there.
-export function conversationDocumentKeys(sql: SqlExec, toGeneration: number): string[] {
-  if (toGeneration <= currentGeneration(sql)) return [];
-  return (sql.exec("SELECT r2_key FROM documents").toArray() as unknown as { r2_key: string }[]).map((r) => r.r2_key);
-}
-
 export function removeConversationState(sql: SqlExec, nowMs: number, toGeneration: number): ConversationRemoval {
   const current = currentGeneration(sql);
   if (toGeneration <= current) {
@@ -479,9 +472,8 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
   sql.exec(`UPDATE approvals SET status = 'revoked' WHERE ${unresolved}`);
   const memoriesDeleted = count("SELECT COUNT(*) AS n FROM memory");
   sql.exec("DELETE FROM memory");
-  // Their R2 objects are deleted first, outside the transaction
-  // (conversationDocumentKeys), so a failed delete leaves these rows for
-  // the retry.
+  // Their R2 objects go by prefix right after this transaction
+  // (files.ts sweepDocuments).
   const documentsDeleted = count("SELECT COUNT(*) AS n FROM documents");
   sql.exec("DELETE FROM documents");
   const result: ConversationRemoval = {
