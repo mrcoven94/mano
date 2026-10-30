@@ -38,24 +38,16 @@ export function proposalKey(generation: number, turnId: string, place: number): 
 }
 
 // Closing drafts that are no longer the latest proposal is cleanup only:
-// Engine already refuses to approve them, closed or not. A close that
-// fails is logged (no content) and tried again at the next turn.
-export async function closeSuperseded(
-  engine: { reject(approvalId: string): Promise<unknown> },
-  approvals: EngineApproval[],
-  generation: number,
-  latestId: string | null,
-): Promise<void> {
-  if (!latestId) return;
-  let failed = 0;
-  for (const draft of waitingProposals(approvals, generation, latestId)) {
-    try {
-      await engine.reject(draft.id);
-    } catch {
-      failed += 1;
-    }
+// Engine already refuses to approve them, closed or not. Engine decides
+// which to close when the call runs; the agent never passes IDs from an
+// earlier read. A failure is logged (no content) and retried at the next
+// turn.
+export async function closeReplaced(engine: { supersede(): Promise<number> }): Promise<void> {
+  try {
+    await engine.supersede();
+  } catch {
+    console.warn(JSON.stringify({ type: "mano_close_failed" }));
   }
-  if (failed > 0) console.warn(JSON.stringify({ type: "mano_close_failed", count: failed }));
 }
 
 // The agent's proposals in this conversation, newest first.

@@ -313,6 +313,13 @@ export class PersonEngine {
     return (await this.listApprovals()).find((a) => a.id === approvalId) ?? null;
   }
 
+  // Engine closes every waiting draft that is not the latest proposal,
+  // decided in one statement when it runs. The agent never names which:
+  // anything it read earlier may be out of date by then.
+  async supersede(): Promise<number> {
+    return ((await this.json("POST", "/approvals/supersede", { generation: this.generation })) as { closed: number }).closed;
+  }
+
   async reject(approvalId: string): Promise<EngineResult> {
     return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/reject`));
   }

@@ -446,7 +446,7 @@ describe("a slow draft against a newer one", () => {
     // Engine refuses every close while A finishes, so both drafts still wait.
     const realFetch = engine.fetch;
     const refusing: typeof fetch = async (input, init) =>
-      /\/reject$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : realFetch(input, init);
+      /\/(reject|supersede)$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : realFetch(input, init);
     vi.stubGlobal("fetch", refusing);
     release();
     await preparingA;
@@ -467,7 +467,7 @@ describe("a slow draft against a newer one", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await send(turn("turn_r7A0000001", "Please file my renewal"), deps(), { present: false });
     const refusing: typeof fetch = async (input, init) =>
-      /\/reject$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init);
+      /\/(reject|supersede)$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init);
     vi.stubGlobal("fetch", refusing);
     const closing = deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: refusing }) });
     const b = await send(turn("turn_r7B0000001", "Please file my renewal, household of 4"), closing, { present: false });
@@ -496,7 +496,7 @@ describe("a slow draft against a newer one", () => {
   it("an older draft is never approved once a newer one exists, even left unclosed", async () => {
     await send(turn("turn_r7C0000001", "Please file my renewal"), deps(), { present: false });
     const refusing: typeof fetch = async (input, init) =>
-      /\/reject$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init);
+      /\/(reject|supersede)$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init);
     vi.stubGlobal("fetch", refusing);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await send(turn("turn_r7D0000001", "Please file my renewal, household of 4"), deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: refusing }) }), { present: false });
@@ -527,6 +527,39 @@ describe("a slow draft against a newer one", () => {
     expect(yes.body.text).toContain("Household size: 4");
     expect(yes.body.status).toBe("waiting_approval");
     expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  // Sol's review 8: a replay of A reads Engine's latest proposal, pauses,
+  // B becomes latest and is shown, then the replay closes drafts from what
+  // it read before the pause.
+  it("a paused replay of an older draft turn never closes the newer draft shown meanwhile", async () => {
+    const a = turn("turn_r8A0000001", "Please file my renewal");
+    await send(a.clone());
+    let release: () => void = () => undefined;
+    let paused: () => void = () => undefined;
+    const reached = new Promise<void>((r) => (paused = r));
+    let armed = true;
+    const gated: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (armed && (init?.method ?? "GET") === "GET" && /\/approvals$/.test(url.pathname)) {
+        armed = false;
+        paused();
+        await new Promise<void>((r) => (release = r));
+      }
+      return engine.fetch(input, init);
+    };
+    vi.stubGlobal("fetch", gated);
+    const replay = send(a, deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: gated }) }));
+    await reached;
+    const b = await send(turn("turn_r8B0000001", "Please file my renewal, household of 4"));
+    expect(b.body.status).toBe("waiting_approval");
+    release();
+    await replay;
+    vi.stubGlobal("fetch", engine.fetch);
+    expect(sizes()).toEqual(["3:rejected", "4:pending"]);
+    const yes = await send(turn("turn_r8Y0000001", "YES"));
+    expect(yes.body.text).toMatch(/^Done/);
+    expect(sizes()).toEqual(["3:rejected", "4:approved"]);
   });
 
   it("a repeated report of the question keeps when it was first shown", async () => {

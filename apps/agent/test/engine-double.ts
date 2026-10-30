@@ -196,6 +196,11 @@ export class EngineDouble {
           await gateway.requestAction({ ...(split.request as object), personId }, new Date(this.now()), { generation, proposal }),
         );
       }
+      if (rest === "/approvals/supersede" && method === "POST") {
+        if (!isGeneration(body.generation)) return Response.json({ error: "generation is required." }, { status: 400 });
+        if (body.generation !== currentGeneration(sql)) return Response.json(STALE, { status: 409 });
+        return Response.json({ closed: store.rejectSupersededProposals(body.generation) });
+      }
       const decision = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
       if (decision && method === "POST") {
         const id = decodeURIComponent(decision[1]);

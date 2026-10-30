@@ -8,7 +8,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 
 import type { EngineApproval } from "../lib/engine.js";
-import { closeSuperseded, presentsExactly, proposalKey, renderQuestion } from "../lib/pending.js";
+import { closeReplaced, presentsExactly, proposalKey, renderQuestion } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { placeClaimId } from "../lib/reminders.js";
 
@@ -92,9 +92,8 @@ export default defineTool({
     // One question waits at a time: Engine's latest proposal, the draft of
     // the newest turn. A slow turn whose draft lands after a newer turn's
     // is not the latest; Engine never approves it, and it is closed here.
+    await closeReplaced(engine);
     const { pointer: shown, latest } = await engine.getPending();
-    const approvals = await engine.listApprovals();
-    await closeSuperseded(engine, approvals, engine.generation, latest?.approvalId ?? null);
     if (latest?.approvalId !== approval.id) {
       return {
         status: "superseded",

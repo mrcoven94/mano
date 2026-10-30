@@ -20,7 +20,7 @@ import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
-import { closeSuperseded, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
+import { closeReplaced, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 
 const MAX_TEXTS = 10;
@@ -301,12 +301,7 @@ async function runTurn(
   const turnAtMs = Date.parse(turn.firstReceivedAt);
   const decision = body.attachmentCount === 0 ? parseDecision(body.texts.join(" ")) : null;
   // Closing replaced drafts is retried at every turn until it lands.
-  try {
-    const { latest } = await engine.getPending();
-    await closeSuperseded(engine, await engine.listApprovals(), engine.generation, latest?.approvalId ?? null);
-  } catch {
-    console.warn(JSON.stringify({ type: "mano_close_failed", count: null }));
-  }
+  await closeReplaced(engine);
   if (decision) {
     const decided = await decideTurn(engine, body, turn, decision);
     if (decided) return decided;
@@ -472,11 +467,7 @@ export async function handlePresented(request: Request, deps: { secret: string |
     // Not Engine's latest proposal: the report changes nothing and Engine
     // will never approve this draft. Closing it is cleanup; a failure is
     // logged and retried at the next turn.
-    try {
-      await engine.reject(approvalId);
-    } catch {
-      console.warn(JSON.stringify({ type: "mano_close_failed", count: 1 }));
-    }
+    await closeReplaced(engine);
     return Response.json({ ok: true, superseded: true });
   }
   return Response.json({ ok: true });
