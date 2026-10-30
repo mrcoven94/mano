@@ -1,7 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium } from "playwright";
 import type { ComputerAction } from "./actions";
 import type { Computer, ComputerOptions } from "./computer";
 
@@ -72,6 +71,9 @@ export class PlaywrightComputer implements Computer {
     if (this.options.launcher) return this.options.launcher;
     return {
       launch: async (opts) => {
+        // Loaded on first launch, so hosts that only drive the Modal desktop
+        // never load the local browser.
+        const { chromium } = await import("playwright");
         if (this.options.profileDir) {
           const context = await chromium.launchPersistentContext(this.options.profileDir, {
             headless: opts.headless,
