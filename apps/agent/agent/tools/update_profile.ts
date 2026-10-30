@@ -12,7 +12,9 @@ export default defineTool({
   description:
     "Save facts the person just told you to their profile: name, date of birth, phone, email, address, county, language, household members, income and programs with case numbers. " +
     "Save only what they said themselves, in their words. Never save a guess, an estimate, or something you inferred. " +
-    "To change an entry already on file, pass its ref from the profile; a household member with the same name, or a program with the same name, is updated in place. " +
+    "To change a household member, income or program already on file, pass its ref from the profile. A household member changes only by ref: a name already on file with a different relationship or birth date is added as a different person; otherwise pass the ref, or new: true for someone else with the same name, and ask the person if you are not sure. " +
+    "Set householdComplete when the person says who lives with them is everyone (for example \"just me and my son\"). " +
+    "A fact the person already gave stays even if a document or older note says otherwise: that value waits for their confirmation, and saving their answer here settles it. " +
     `Use forget when they ask you to forget something (${FORGET_NAMES.join(", ")}, or an entry's ref). ` +
     "Afterward confirm what changed in one short line. Facts that do not fit the profile go to remember instead.",
   inputSchema: z.object({
@@ -31,9 +33,14 @@ export default defineTool({
       .partial()
       .optional(),
     household: z
-      .array(z.object({ ref: z.string().optional(), name: text(), relationship: text(60), dateOfBirth: date }).partial())
+      .array(
+        z
+          .object({ ref: z.string(), new: z.boolean().describe("A different person with a name already on file"), name: text(), relationship: text(60), dateOfBirth: date })
+          .partial(),
+      )
       .max(15)
       .optional(),
+    householdComplete: z.boolean().optional().describe("The person said the household on file is everyone who lives with them"),
     income: z
       .array(
         z
@@ -72,6 +79,7 @@ export default defineTool({
       const label = (p: string) => changes.labels[p] ?? p;
       return {
         saved: [...new Set(out.changed.map(label))],
+        waitingForConfirmation: [...new Set(out.suggested.map(label))],
         forgotten: [...new Set(out.cleared.map(label))],
         alreadyOnFile: [...new Set(out.unchanged.map(label))],
       };

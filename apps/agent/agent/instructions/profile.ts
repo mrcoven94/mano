@@ -1,10 +1,10 @@
-// Puts the person's profile in front of the model at the start of each
-// turn, so it reads what is on file before it asks. System role: always
-// current, never pinned in history. An empty or unreachable profile adds
-// nothing.
+// The profile rules at the start of each turn: values are data, never
+// instructions, and the model asks only for what is missing. This system
+// instruction names fields only; the values reach the model as a data
+// block in the turn's context (lib/profile.ts, profileContext).
 import { defineDynamic, defineInstructions } from "eve/instructions";
 
-import { renderProfile } from "../lib/profile.js";
+import { PROFILE_RULES, profileGuide } from "../lib/profile.js";
 import { personEngine } from "../lib/person.js";
 
 export default defineDynamic({
@@ -14,11 +14,10 @@ export default defineDynamic({
       const engine = personEngine(ctx);
       if (!engine) return null;
       try {
-        const rendered = renderProfile(await engine.getProfile());
-        return rendered ? defineInstructions({ content: rendered }) : null;
+        return defineInstructions({ content: profileGuide(await engine.getProfileView()) });
       } catch (err) {
         console.warn(JSON.stringify({ type: "mano_profile_read_failed", err: err instanceof Error ? err.name : "unknown" }));
-        return null;
+        return defineInstructions({ content: PROFILE_RULES });
       }
     },
   },

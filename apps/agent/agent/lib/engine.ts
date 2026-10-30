@@ -59,18 +59,34 @@ export interface Profile {
     address: { line1?: Leaf; line2?: Leaf; city?: Leaf; state?: Leaf; zip?: Leaf };
     county?: Leaf;
     language?: Leaf;
+    householdConfirmed?: Leaf<boolean>;
   };
   household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];
   income: { id: string; memberId?: Leaf; source?: Leaf; amount?: Leaf<number>; frequency?: Leaf<Frequency> }[];
   programs: { id: string; program?: Leaf; state?: Leaf; caseNumber?: Leaf; status?: Leaf }[];
 }
 
-export interface ProfilePatchResult {
+// A value from a lower-trust source that differs from what is on file,
+// held until the person confirms it.
+export interface Suggestion {
+  path: string;
+  value: string | number | boolean;
+  source: ProfileSource;
+  documentId?: string;
+  suggestedAt: string;
+}
+
+export interface ProfileView {
+  profile: Profile;
+  suggestions: Suggestion[];
+}
+
+export interface ProfilePatchResult extends ProfileView {
   changed: string[];
   unchanged: string[];
   cleared: string[];
+  suggested: string[];
   replayed: boolean;
-  profile: Profile;
 }
 
 // A refused profile write: the fields did not fit (400), or the key was
@@ -336,10 +352,14 @@ export class PersonEngine {
     await this.json("DELETE", `/memory/${encodeURIComponent(memoryId)}`);
   }
 
-  async getProfile(): Promise<Profile> {
-    const out = (await this.json("GET", "/profile")) as { profile?: Profile };
+  async getProfileView(): Promise<ProfileView> {
+    const out = (await this.json("GET", "/profile")) as { profile?: Profile; suggestions?: Suggestion[] };
     if (!out.profile || typeof out.profile !== "object") throw new EngineError(502);
-    return out.profile;
+    return { profile: out.profile, suggestions: Array.isArray(out.suggestions) ? out.suggestions : [] };
+  }
+
+  async getProfile(): Promise<Profile> {
+    return (await this.getProfileView()).profile;
   }
 
   // fields: path to value, or null to clear. Engine answers a retried key
@@ -348,7 +368,7 @@ export class PersonEngine {
     idempotencyKey: string;
     source: ProfileSource;
     documentId?: string;
-    fields: Record<string, string | number | null>;
+    fields: Record<string, string | number | boolean | null>;
   }): Promise<ProfilePatchResult> {
     const res = await this.call("PATCH", "/profile", { ...input, generation: this.generation });
     const body = (await res.json().catch(() => null)) as (ProfilePatchResult & { error?: string }) | null;

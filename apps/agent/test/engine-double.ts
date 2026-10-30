@@ -38,7 +38,7 @@ import { authenticateService, serviceMayUse } from "../../engine/src/auth.js";
 import { ActionGateway } from "../../engine/src/gateway/gateway.js";
 import { InMemoryExecutor } from "../../engine/src/gateway/executors.js";
 import { CURRENT_GENERATION, SqlApprovalStore, ensureGatewayTables } from "../../engine/src/gateway/sql-store.js";
-import { ProfileStore, profilePatchResponse, type FieldCipher } from "../../engine/src/profile.js";
+import { ProfileStore, forgetMemoryNote, profilePatchResponse, type FieldCipher } from "../../engine/src/profile.js";
 
 export const ENGINE_AGENT_TOKEN = "agent-test-engine-token";
 export const ENGINE_CHANNELS_TOKEN = "channels-test-engine-token";
@@ -109,6 +109,8 @@ export class EngineDouble {
   executor = new InMemoryExecutor();
   persons = new Map<string, Person>();
   now = () => Date.now();
+  // Document IDs the person has, for facts recorded with source document.
+  documents = new Set<string>();
 
   person(personId: string): Person {
     let p = this.persons.get(personId);
@@ -124,7 +126,7 @@ export class EngineDouble {
           transaction: (fn) => sql.transaction(fn),
           cipher: testCipher,
           now: () => new Date(this.now()),
-          documentExists: () => false,
+          documentExists: (id) => this.documents.has(id),
         }),
       };
       this.persons.set(personId, p);
@@ -201,14 +203,16 @@ export class EngineDouble {
       const memoryMatch = rest.match(/^\/memory\/([^/]+)$/);
       if (memoryMatch && method === "DELETE") {
         const id = decodeURIComponent(memoryMatch[1]);
-        sql.exec("DELETE FROM memory WHERE id = ?", id);
+        sql.transaction(() => forgetMemoryNote(sql, id));
         return Response.json({ id, forgotten: true });
       }
-      if (rest === "/profile" && method === "GET") return Response.json({ profile: await profile.read() });
+      if (rest === "/profile" && method === "GET") {
+        return Response.json({ profile: await profile.read(), suggestions: await profile.suggestions() });
+      }
       if (rest === "/profile" && method === "PATCH") {
         if (!isGeneration(body?.generation)) return Response.json({ error: "generation is required." }, { status: 400 });
         const out = await profile.patch(body, body.generation);
-        return profilePatchResponse(out.status === "ok" ? { ...out, profile: await profile.read() } : out);
+        return profilePatchResponse(out.status === "ok" ? { ...out, profile: await profile.read(), suggestions: await profile.suggestions() } : out);
       }
       if (rest === "/approvals" && method === "GET") {
         const approvals = (sql.exec("SELECT id FROM approvals ORDER BY created_at DESC").toArray() as { id: string }[]).map((r) => {
