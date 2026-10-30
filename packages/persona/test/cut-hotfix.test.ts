@@ -75,3 +75,12 @@ describe("an exclusion neutralizes only its own trigger (PR 70 round 4)", () => 
     }
   });
 });
+
+describe("two passes, and an exclusion can only remove benefits cases (PR 70 round 5)", () => {
+  it("still reads Sol's round 5 inputs as a crisis on both detectors", () => {
+    for (const text of ["I'm cutting myself over rent", "I am in danger of being hit over rent"]) {
+      expect(mightBeCrisis(text), text).toBe(true);
+      expect(isCrisis(text), text).toBe(true);
+    }
+  });
+});
