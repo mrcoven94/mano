@@ -1,10 +1,10 @@
 // @mano/agent: Mano's brain. One Eve agent reads each text, remembers
 // the person, proposes actions and keeps reminders. Channels calls POST
 // /channels/mano/turn and gets the reply text back. Engine is the system
-// of record: memory and proposed actions live there, and only a texted
-// YES to Engine's frozen approval sends anything. Muse runs through the
-// Meta Model API directly, always on the Standard model ID with
-// store:false.
+// of record: the person's profile, memory and proposed actions live
+// there, and only a texted YES to Engine's frozen approval sends anything.
+// Muse runs through the Meta Model API directly, always on the Standard
+// model ID with store:false.
 //
 // Engine also holds the agent's own state for each person (reminders,
 // which its alarm delivers through Channels, the turn ledger and the

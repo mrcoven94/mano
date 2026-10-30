@@ -1,8 +1,8 @@
 // An in-process Engine for agent tests, built from Engine's own code:
 // its service authentication (agent token plus handle grant), its action
-// gateway over its SQL approval store, and its agent-state SQL
-// (generation fence, reminders, turn ledger, approval pointer,
-// conversation delete), all on one node:sqlite database per person, the
+// gateway over its SQL approval store, its agent-state SQL (generation
+// fence, reminders, turn ledger, approval pointer, conversation delete)
+// and its profile store, all on one node:sqlite database per person, the
 // way each PersonAgent keeps them in its own SQLite. Only the Durable
 // Object shell and its alarm are replaced: deliverDue() claims and hands
 // off due reminders the way the alarm does.
@@ -38,6 +38,7 @@ import { authenticateService, serviceMayUse } from "../../engine/src/auth.js";
 import { ActionGateway } from "../../engine/src/gateway/gateway.js";
 import { InMemoryExecutor } from "../../engine/src/gateway/executors.js";
 import { CURRENT_GENERATION, SqlApprovalStore, ensureGatewayTables } from "../../engine/src/gateway/sql-store.js";
+import { ProfileStore, profilePatchResponse, type FieldCipher } from "../../engine/src/profile.js";
 
 export const ENGINE_AGENT_TOKEN = "agent-test-engine-token";
 export const ENGINE_CHANNELS_TOKEN = "channels-test-engine-token";
@@ -50,9 +51,31 @@ export function grantFor(handleHash: string): Promise<string> {
   return mintHandleGrant(handleHash, GRANT_SECRET);
 }
 
+// Engine seals each profile value with the person's key (tested in
+// Engine); here a readable stand-in keeps the double free of key setup.
+const testCipher: FieldCipher = {
+  seal: async (path, plaintext) => JSON.stringify([path, plaintext]),
+  open: async (path, sealed) => {
+    const [boundTo, plaintext] = JSON.parse(sealed) as [string, string];
+    if (boundTo !== path) throw new Error("Sealed for another field.");
+    return plaintext;
+  },
+};
+
 function sqlite() {
   const db = new DatabaseSync(":memory:");
   const sql = {
+    transaction<T>(fn: () => T): T {
+      db.exec("BEGIN");
+      try {
+        const out = fn();
+        db.exec("COMMIT");
+        return out;
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+    },
     exec(query: string, ...bindings: unknown[]) {
       const head = query.trimStart().toUpperCase();
       if (head.startsWith("SELECT") || head.startsWith("PRAGMA")) {
@@ -75,6 +98,7 @@ interface Person {
   sql: ReturnType<typeof sqlite>;
   store: SqlApprovalStore;
   gateway: ActionGateway;
+  profile: ProfileStore;
 }
 
 function isGeneration(value: unknown): value is number {
@@ -91,7 +115,18 @@ export class EngineDouble {
     if (!p) {
       const sql = sqlite();
       const store = new SqlApprovalStore(sql as never);
-      p = { sql, store, gateway: new ActionGateway(store, this.executor, { linkCheck: async () => ({ allowed: true }) }) };
+      p = {
+        sql,
+        store,
+        gateway: new ActionGateway(store, this.executor, { linkCheck: async () => ({ allowed: true }) }),
+        profile: new ProfileStore({
+          sql,
+          transaction: (fn) => sql.transaction(fn),
+          cipher: testCipher,
+          now: () => new Date(this.now()),
+          documentExists: () => false,
+        }),
+      };
       this.persons.set(personId, p);
     }
     return p;
@@ -148,7 +183,7 @@ export class EngineDouble {
       return Response.json({ error: "Forbidden." }, { status: 403 });
     }
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    const { sql, store, gateway } = this.person(personId);
+    const { sql, store, gateway, profile } = this.person(personId);
     const nowIso = () => new Date(this.now()).toISOString();
     try {
       if (rest === "/memory" && method === "GET") {
@@ -168,6 +203,12 @@ export class EngineDouble {
         const id = decodeURIComponent(memoryMatch[1]);
         sql.exec("DELETE FROM memory WHERE id = ?", id);
         return Response.json({ id, forgotten: true });
+      }
+      if (rest === "/profile" && method === "GET") return Response.json({ profile: await profile.read() });
+      if (rest === "/profile" && method === "PATCH") {
+        if (!isGeneration(body?.generation)) return Response.json({ error: "generation is required." }, { status: 400 });
+        const out = await profile.patch(body, body.generation);
+        return profilePatchResponse(out.status === "ok" ? { ...out, profile: await profile.read() } : out);
       }
       if (rest === "/approvals" && method === "GET") {
         const approvals = (sql.exec("SELECT id FROM approvals ORDER BY created_at DESC").toArray() as { id: string }[]).map((r) => {
