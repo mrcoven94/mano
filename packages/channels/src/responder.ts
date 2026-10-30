@@ -37,6 +37,9 @@ export interface TurnInput {
   // The conversation's deletion generation and turn number. Stable across
   // retries and recovery of the same turn, so the agent runs it once.
   turnKey?: { generation: number; turn: number };
+  // When Channels received the turn's latest message, on its own clock.
+  // The agent orders a YES against the question it answers by this time.
+  receivedAtMs?: number;
 }
 
 export interface ResponderResult {

@@ -857,7 +857,9 @@ export class ConversationRunner {
       if (saved > 0) bubbles.push({ part: 0, tag: "ack", text: attachmentAck(saved) });
       if (turnText) {
         this.checkGeneration(generation);
-        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation, crisis);
+        // The turn's latest message: what the agent orders a YES by.
+        const receivedAtMs = Math.max(...items.map((i) => i.receivedAtMs));
+        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation, crisis, receivedAtMs);
         if (answer.ok) {
           // Links come out before splitting, and each final bubble is
           // checked again: a split must never leave an unchecked link
@@ -1039,6 +1041,7 @@ export class ConversationRunner {
     to: string | null,
     generation: number,
     crisis: boolean,
+    receivedAtMs: number,
   ): Promise<
     | {
         ok: true;
@@ -1076,7 +1079,10 @@ export class ConversationRunner {
           logger.warn("heads_up_failed", { handle: this.logHandle(), turn, err: errName(err) });
         }
       };
-      const result = await responder.respond({ texts: [turnText], attachmentCount, history, turnKey: { generation, turn } }, { onHeadsUp });
+      const result = await responder.respond(
+        { texts: [turnText], attachmentCount, history, turnKey: { generation, turn }, receivedAtMs },
+        { onHeadsUp },
+      );
       const costUsd =
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
       logger.info("turn_answered", { handle: this.logHandle(), turn, model: result.model, attempts: result.attempts });

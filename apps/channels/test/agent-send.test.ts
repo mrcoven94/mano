@@ -9,6 +9,7 @@ import {
   StandInResponder,
 } from "@mano/channels";
 import { signEngineSend } from "@mano/protocol";
+import type { TurnInput } from "@mano/channels";
 import { handleAgentSend } from "../src/index.js";
 import { buildResponder } from "../src/conversation.js";
 import type { Env } from "../src/env.js";
@@ -251,6 +252,29 @@ describe("runner.sendAgentText", () => {
     };
     await expect(h.runner.sendAgentText({ key: "rem_r", text: "Reminder: call", generation })).rejects.toThrow();
     expect(h.store.agentSend("rem_r")?.generation).toBe(generation);
+  });
+});
+
+describe("the receive time a turn carries to the agent", () => {
+  it("is when Channels received the turn's latest message", async () => {
+    const seen: TurnInput[] = [];
+    const h = makeHarness({
+      responder: {
+        name: "agent",
+        maxAttempts: 1,
+        respond: async (input) => {
+          seen.push(input);
+          return { text: "ok", bubbles: ["ok"], inputChars: 2, outputChars: 2, model: "agent", attempts: 1 };
+        },
+      },
+    });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_t1", text: "first", occurredAtMs: h.now }), "webhook");
+    h.advance(200);
+    const latest = h.now;
+    await h.runner.handleEvent(inboundEvent({ id: "evt_t2", text: "YES", occurredAtMs: h.now }), "webhook");
+    h.advance(5000);
+    await h.runner.runDueTurn();
+    expect(seen[0].receivedAtMs).toBe(latest);
   });
 });
 

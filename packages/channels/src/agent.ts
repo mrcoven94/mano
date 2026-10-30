@@ -123,12 +123,13 @@ export class AgentResponder implements Responder {
     const inputChars = turn.texts.join("\n").length;
     // Without a stable key the agent could run the turn twice, so it is
     // not called at all.
-    if (!turn.turnKey) return this.respondFallback(turn, inputChars);
+    if (!turn.turnKey || turn.receivedAtMs === undefined) return this.respondFallback(turn, inputChars);
     try {
       const { generation, turn: number } = turn.turnKey;
       const raw = JSON.stringify({
         turnId: `${this.handleHash}:${generation}:${number}`,
         generation,
+        receivedAt: turn.receivedAtMs,
         handleHash: this.handleHash,
         grant: await mintHandleGrant(this.handleHash, this.grantSecret),
         texts: turn.texts,
