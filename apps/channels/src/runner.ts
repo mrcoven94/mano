@@ -1514,15 +1514,8 @@ export class ConversationRunner {
     }
     try {
       this.checkGeneration(generation);
-      const final = await this.finalizeBubbles(turn, text);
-      if (final.removed > 0) {
-        logger.warn("agent_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
-      }
-      const bubbles: import("./store.js").AnswerBubble[] = final.bubbles.map((bubble, i) => ({
-        part: i + 1,
-        tag: "agent",
-        text: bubble,
-      }));
+      // The same finalizeReply pass as every reply (it logs removed links).
+      const bubbles: import("./store.js").AnswerBubble[] = (await this.finalize(turn, text, false, "")).map((b) => ({ ...b, tag: "agent" }));
       this.checkGeneration(generation);
       await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
       this.checkSendsResolved(turn, generation);
