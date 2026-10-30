@@ -669,12 +669,21 @@ export class ConversationRunner {
           // The decoration epoch is read before this first await, so a STOP
           // or close during the check is never missed by the turn.
           const epoch = store.meta().decorationEpoch;
-          const decision = await decideCrisis(groupText, this.deps.crisisCheck ?? null);
-          if (decision.reason !== "floor") {
-            logger.info("crisis_check", { handle: this.logHandle(), crisis: decision.crisis, reason: decision.reason, ms: decision.ms });
+          // The decision is stored with the inbound pieces before any turn
+          // starts, and read back on every retry and restart: a leftover
+          // piece of a long message keeps its message's decision.
+          const undecided = group.filter((p) => typeof p.crisis !== "boolean");
+          let crisis = group.some((p) => p.crisis === true);
+          if (undecided.length > 0) {
+            const decision = await decideCrisis(groupText, this.deps.crisisCheck ?? null);
+            if (decision.reason !== "floor") {
+              logger.info("crisis_check", { handle: this.logHandle(), crisis: decision.crisis, reason: decision.reason, ms: decision.ms });
+            }
+            crisis = crisis || decision.crisis;
+            store.setPendingCrisis(undecided.map((p) => p.eventId), crisis);
           }
           for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP)) {
-            const items = chunk.map((item) => ({ ...item, crisis: decision.crisis }));
+            const items = chunk.map((item) => ({ ...item, crisis }));
             const turnMeta = store.meta();
             const turn = turnMeta.turn + 1;
             store.patchMeta({ turn });

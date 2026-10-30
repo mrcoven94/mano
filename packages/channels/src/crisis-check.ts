@@ -91,7 +91,8 @@ export class ModelCrisisCheck implements CrisisCheck {
 
 // Written for this check alone, not the general extractor (Sol's fourth
 // review): "no" only for a completed response with exactly one assistant
-// message item holding exactly one output_text part that says "no".
+// message item, itself completed (Sol's fifth review), holding exactly one
+// output_text part that says "no".
 // Reasoning items may sit beside it; text anywhere else never counts. An
 // empty message is no answer (the hedge may still bring one); every other
 // shape is "yes".
@@ -100,7 +101,7 @@ export function classifierAnswer(data: unknown): string {
   const messages = data.output.filter((item) => isRecord(item) && item.type === "message");
   if (messages.length !== 1) return "yes";
   const message = messages[0] as Record<string, unknown>;
-  if (message.role !== "assistant" || !Array.isArray(message.content) || message.content.length !== 1) return "yes";
+  if (message.status !== "completed" || message.role !== "assistant" || !Array.isArray(message.content) || message.content.length !== 1) return "yes";
   const part = message.content[0];
   if (!isRecord(part) || part.type !== "output_text" || typeof part.text !== "string") return "yes";
   const text = part.text.trim();

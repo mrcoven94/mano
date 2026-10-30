@@ -1,7 +1,10 @@
+/// <reference types="node" />
 // The crisis decision in the worker (Sol's third review of PR 77): the
 // keyword floor, and for one short health question a model check where
 // only an exact "no" exempts. Without a check the worker fails closed.
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { SqlConversationStore } from "../src/store-sql.js";
 import type { CrisisCheck } from "@mano/persona";
 import { CRISIS_LINE } from "@mano/persona";
 import { inboundEvent, makeHarness, runTurnAfterBatch, type Harness } from "./helpers.js";
@@ -81,5 +84,99 @@ describe("one decision on the whole message, before any split (Sol's fourth revi
     h.store.patchMeta({ introduced: true });
     expect(await say(h, "evt_1", QUESTION)).toEqual(["a doctor can tell you"]);
     expect(c.asked).toHaveLength(1);
+  });
+});
+
+describe("the whole-message decision survives retries and restarts (Sol's fifth review, 1)", () => {
+  const LONG = "Can " + "a".repeat(3993) + " suicide?";
+  for (const method of ["startTurn", "updateTurnAnswer", "markTurnSettled", "finishTurn", "clearPending"] as const) {
+    it(`every chunk gets the crisis line when ${method} fails once`, async () => {
+      const c = check("no");
+      const h = makeHarness({ replies: ["part one", "part two", "part three"], crisisCheck: c });
+      h.store.patchMeta({ introduced: true });
+      const store = h.store as unknown as Record<string, (...a: unknown[]) => unknown>;
+      const original = store[method]!.bind(h.store);
+      let fail = true;
+      store[method] = (...args: unknown[]) => {
+        if (fail) {
+          fail = false;
+          throw new Error(`storage failed in ${method}`);
+        }
+        return original(...args);
+      };
+      await h.runner.handleEvent(inboundEvent({ id: "evt_long", text: LONG, occurredAtMs: h.now }), "webhook");
+      h.advance(h.batchMs + 100);
+      for (let i = 0; i < 12 && (h.store.pending().length > 0 || h.store.unfinishedTurn()); i++) {
+        h.advance(60_000);
+        await h.runner.runDueTurn().catch(() => "threw");
+      }
+      const sentTurns = new Set(h.store.outbounds().filter((r) => r.state === "sent" && r.tag === "").map((r) => r.turn));
+      expect(sentTurns.size).toBeGreaterThanOrEqual(2);
+      for (const turn of sentTurns) {
+        expect(h.store.outbounds().some((r) => r.turn === turn && r.text === CRISIS_LINE && r.state === "sent"), `turn ${turn}`).toBe(true);
+      }
+      expect(c.asked).toEqual([]);
+    });
+  }
+
+  it("persists the decision with the inbound pieces, so a fresh runner reads it", async () => {
+    const c = check("no");
+    const h = makeHarness({ replies: ["ok"], crisisCheck: c });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_q", text: QUESTION, occurredAtMs: h.now }), "webhook");
+    const store = h.store as unknown as { startTurn: (...a: unknown[]) => unknown };
+    const startTurn = store.startTurn.bind(h.store);
+    store.startTurn = () => {
+      throw new Error("down");
+    };
+    h.advance(h.batchMs + 100);
+    await h.runner.runDueTurn().catch(() => "threw");
+    expect(h.store.pending().map((p) => p.crisis)).toEqual([false]);
+    store.startTurn = startTurn;
+    await h.runner.runDueTurn();
+    expect(c.asked).toHaveLength(1);
+  });
+});
+
+describe("the stored decision on the SQL store", () => {
+  function sqliteStorage(db: DatabaseSync): SqlStorage {
+    return {
+      exec(sql: string, ...params: unknown[]) {
+        const select = /^\s*(SELECT|WITH)\b/i.test(sql);
+        if (!select && params.length === 0 && sql.includes(";")) {
+          db.exec(sql);
+          return { toArray: () => [] };
+        }
+        const stmt = db.prepare(sql);
+        const args = params as SQLInputValue[];
+        if (select) return { toArray: () => stmt.all(...args) };
+        stmt.run(...args);
+        return { toArray: () => [] };
+      },
+    } as unknown as SqlStorage;
+  }
+
+  it("keeps every chunk a crisis when a settle fails once, on SQLite", async () => {
+    const c = check("no");
+    const h = makeHarness({ replies: ["part one", "part two"], crisisCheck: c, store: new SqlConversationStore(sqliteStorage(new DatabaseSync(":memory:"))) });
+    h.store.patchMeta({ introduced: true });
+    const store = h.store as unknown as { markTurnSettled: (...a: unknown[]) => unknown };
+    const settle = store.markTurnSettled.bind(h.store);
+    let fail = true;
+    store.markTurnSettled = (...args: unknown[]) => {
+      if (fail) {
+        fail = false;
+        throw new Error("storage failed");
+      }
+      return settle(...args);
+    };
+    await h.runner.handleEvent(inboundEvent({ id: "evt_long", text: "Can " + "a".repeat(3993) + " suicide?", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    for (let i = 0; i < 12 && (h.store.pending().length > 0 || h.store.unfinishedTurn()); i++) {
+      h.advance(60_000);
+      await h.runner.runDueTurn().catch(() => "threw");
+    }
+    const sentTurns = new Set(h.store.outbounds().filter((r) => r.state === "sent" && r.tag === "").map((r) => r.turn));
+    expect(sentTurns.size).toBeGreaterThanOrEqual(2);
+    for (const turn of sentTurns) expect(h.store.outbounds().some((r) => r.turn === turn && r.text === CRISIS_LINE)).toBe(true);
   });
 });

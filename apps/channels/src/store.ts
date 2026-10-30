@@ -14,9 +14,10 @@ export interface PendingInbound {
   // The provider's id for the inbound message, for tapbacks and inline
   // replies. Null on continuation pieces and older rows.
   messageId?: string | null;
-  // Set when the whole message this piece came from might be a crisis.
-  // A long text is split into pieces at buffer time, and a crisis word
-  // can straddle the split, so the check runs on the rejoined message.
+  // The crisis decision for the whole message this piece came from, made
+  // once on the rejoined message before any split or send and stored with
+  // the piece (Sol's fifth review). Every chunk, retry, restart and replay
+  // reads it; it is never recomputed per chunk. Undefined until decided.
   crisis?: boolean;
 }
 
@@ -228,6 +229,8 @@ export interface ConversationStore {
   addPending(item: PendingInbound): void;
   pending(): PendingInbound[];
   clearPending(eventIds: string[]): void;
+  // Stores the crisis decision on pending pieces.
+  setPendingCrisis(eventIds: string[], crisis: boolean): void;
   addOutbound(row: OutboundRow): void;
   outboundByKey(key: string): OutboundRow | null;
   outboundByMessageId(messageId: string): OutboundRow | null;
@@ -299,6 +302,11 @@ export class MemoryStore implements ConversationStore {
 
   pending(): PendingInbound[] {
     return [...this.pendingRows];
+  }
+
+  setPendingCrisis(eventIds: string[], crisis: boolean): void {
+    const ids = new Set(eventIds);
+    this.pendingRows = this.pendingRows.map((p) => (ids.has(p.eventId) ? { ...p, crisis } : p));
   }
 
   clearPending(eventIds: string[]): void {

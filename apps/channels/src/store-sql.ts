@@ -225,6 +225,8 @@ export class SqlConversationStore implements ConversationStore {
       "ALTER TABLE turns ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
       // Native iMessage (LAP-636): tapbacks, inline replies, typing hold.
       "ALTER TABLE pending ADD COLUMN message_id TEXT",
+      // The whole-message crisis decision (PR 77, Sol's fifth review).
+      "ALTER TABLE pending ADD COLUMN crisis INTEGER",
       "ALTER TABLE outbounds ADD COLUMN reply_to TEXT",
       "ALTER TABLE meta ADD COLUMN typing_since_ms INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE meta ADD COLUMN typing_active INTEGER NOT NULL DEFAULT 0",
@@ -359,6 +361,7 @@ export class SqlConversationStore implements ConversationStore {
       attachments_json: string;
       from_reconcile: number;
       message_id: string | null;
+      crisis?: number | null;
     }>;
     return rows.map((r) => ({
       eventId: r.event_id,
@@ -369,7 +372,14 @@ export class SqlConversationStore implements ConversationStore {
       attachments: JSON.parse(r.attachments_json) as EventAttachment[],
       fromReconcile: r.from_reconcile === 1,
       messageId: r.message_id ?? null,
+      ...(r.crisis === 0 || r.crisis === 1 ? { crisis: r.crisis === 1 } : {}),
     }));
+  }
+
+  setPendingCrisis(eventIds: string[], crisis: boolean): void {
+    if (eventIds.length === 0) return;
+    const marks = eventIds.map(() => "?").join(",");
+    this.sql.exec(`UPDATE pending SET crisis = ? WHERE event_id IN (${marks})`, crisis ? 1 : 0, ...eventIds);
   }
 
   clearPending(eventIds: string[]): void {

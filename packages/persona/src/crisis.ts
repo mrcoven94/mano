@@ -335,6 +335,21 @@ const INSTRUCTIONS_ANY = new RegExp(
 );
 const ENGLISH_NO = /(?:^|[^\p{L}])no(?=[^\p{L}]|$)/iu;
 
+// Only plain text can be exempt: after NFKC, every character must be a
+// Latin letter (with Spanish accents and ñ), a digit, a space or basic
+// punctuation. Another script, a zero-width or format character, an emoji
+// or a symbol means not eligible, so the message stays a crisis. Curly
+// quotes and apostrophes (phone keyboards type them) count as straight.
+const PLAIN_LATIN = /^[A-Za-z0-9 áéíóúüñÁÉÍÓÚÜÑ.,?¿!¡'"()\/-]*$/u;
+
+export function plainLatin(text: string): boolean {
+  return PLAIN_LATIN.test(normalizeCurly(text));
+}
+
+function normalizeCurly(text: string): string {
+  return text.replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"');
+}
+
 export function mentionsInstructions(text: string): boolean {
   const t = text.trim();
   if (INSTRUCTIONS_ANY.test(t)) return true;
@@ -356,10 +371,14 @@ export async function decideCrisis(
 ): Promise<CrisisDecision> {
   const now = opts.nowMs ?? (() => Date.now());
   const started = now();
-  if (!crisisTurn(text)) return { crisis: false, reason: "floor", ms: 0 };
-  if (!isOneHealthQuestion(text)) return { crisis: true, reason: "floor", ms: 0 };
+  // The floor and the instruction rule read the NFKC form, so full-width
+  // and other compatibility forms read as plain letters (Sol's fifth
+  // review). The original is checked too: a crisis in either is a crisis.
+  const nfkc = text.normalize("NFKC");
+  if (!crisisTurn(nfkc) && !crisisTurn(text)) return { crisis: false, reason: "floor", ms: 0 };
+  if (!plainLatin(nfkc) || !isOneHealthQuestion(nfkc)) return { crisis: true, reason: "floor", ms: 0 };
   // A message that talks to the check never reaches it.
-  if (mentionsInstructions(text)) return { crisis: true, reason: "instructions", ms: 0 };
+  if (mentionsInstructions(nfkc)) return { crisis: true, reason: "instructions", ms: 0 };
   if (!check || !check.live) return { crisis: true, reason: "no-check", ms: 0 };
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;

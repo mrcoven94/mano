@@ -10,7 +10,7 @@
 //   exempt, which must be exactly the one-short-health-question set.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { crisisTurn, decideCrisis, isOneHealthQuestion, mentionsInstructions, type CrisisCheck } from "../src/crisis.js";
+import { crisisTurn, decideCrisis, isOneHealthQuestion, mentionsInstructions, plainLatin, type CrisisCheck } from "../src/crisis.js";
 
 interface Row {
   text: string;
@@ -29,7 +29,11 @@ describe("the crisis decision on a fixed list of strings", () => {
 
   it("gives every string its recorded floor and gate", () => {
     expect(rows.filter((r) => crisisTurn(r.text) !== r.crisis).map((r) => r.text)).toEqual([]);
-    expect(rows.filter((r) => (r.crisis && isOneHealthQuestion(r.text) && !mentionsInstructions(r.text)) !== r.oneQuestion).map((r) => r.text)).toEqual([]);
+    const gate = (t: string) => {
+      const n = t.normalize("NFKC");
+      return (crisisTurn(n) || crisisTurn(t)) && plainLatin(n) && isOneHealthQuestion(n) && !mentionsInstructions(n);
+    };
+    expect(rows.filter((r) => gate(r.text) !== r.oneQuestion).map((r) => r.text)).toEqual([]);
   });
 
   it("with a check that always says yes, equals the floor and drops no crisis main catches", async () => {
@@ -43,7 +47,7 @@ describe("the crisis decision on a fixed list of strings", () => {
   it("with a check that always says no, exempts exactly the one-short-health-question set", async () => {
     const no = always("no");
     const exempted: string[] = [];
-    for (const r of rows) if (r.crisis && !(await decideCrisis(r.text, no)).crisis) exempted.push(r.text);
+    for (const r of rows) if (!(await decideCrisis(r.text, no)).crisis && (r.crisis || crisisTurn(r.text.normalize("NFKC")))) exempted.push(r.text);
     expect(exempted).toEqual(rows.filter((r) => r.oneQuestion).map((r) => r.text));
   });
 });

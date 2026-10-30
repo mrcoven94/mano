@@ -3,7 +3,7 @@ import { CRISIS_CHECK_INSTRUCTIONS, crisisCheckInput, decideCrisis } from "@mano
 import { ModelCrisisCheck } from "../src/crisis-check.js";
 import { SparkResponder } from "../src/responder.js";
 
-const answer = (text: string) => new Response(JSON.stringify({ status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }] }), { status: 200 });
+const answer = (text: string) => new Response(JSON.stringify({ status: "completed", output: [{ type: "message", status: "completed", role: "assistant", content: [{ type: "output_text", text }] }] }), { status: 200 });
 
 describe("ModelCrisisCheck", () => {
   it("asks one question on a Standard model ID with store: false, and returns the answer", async () => {
@@ -74,7 +74,7 @@ describe("ModelCrisisCheck hedges a slow or empty answer", () => {
 
 describe("only a completed answer with one assistant message saying no exempts (Sol's fourth review, 2)", () => {
   const raw = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
-  const msg = (text: string) => ({ type: "message", role: "assistant", content: [{ type: "output_text", text }] });
+  const msg = (text: string) => ({ type: "message", status: "completed", role: "assistant", content: [{ type: "output_text", text }] });
   const cases: Array<[string, unknown]> = [
     ["incomplete", { status: "incomplete", output: [msg("no")] }],
     ["failed", { status: "failed", output: [msg("no")] }],
@@ -85,6 +85,10 @@ describe("only a completed answer with one assistant message saying no exempts (
     ["a user message", { status: "completed", output: [{ type: "message", role: "user", content: [{ type: "output_text", text: "no" }] }] }],
     ["two text parts", { status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "n" }, { type: "output_text", text: "o" }] }] }],
     ["yes", { status: "completed", output: [msg("yes")] }],
+    // Sol's fifth review: the message item's own status counts too.
+    ["a message item still incomplete", { status: "completed", output: [{ ...msg("no"), status: "incomplete" }] }],
+    ["a message item in progress", { status: "completed", output: [{ ...msg("no"), status: "in_progress" }] }],
+    ["a message item with no status", { status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "no" }] }] }],
   ];
   for (const [label, body] of cases) {
     it(`is a crisis when the response is ${label}`, async () => {
