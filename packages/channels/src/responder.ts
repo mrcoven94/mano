@@ -5,7 +5,7 @@
 // which the caller sends at once before the deep call at medium effort.
 // When the engine merges, its person agent becomes the Responder behind
 // this same interface.
-import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisLineFor, crisisNote, crisisTurn, routeReply, splitTapback, type Tapback } from "@mano/persona";
+import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, SAFETY_LINE, crisisLineFor, crisisNote, crisisTurn, routeReply, splitTapback, type Tapback } from "@mano/persona";
 import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 
@@ -29,9 +29,17 @@ export interface HistoryMessage {
   text: string;
 }
 
+// A photo from the turn, stored in the person's Engine documents.
+export interface StoredPhoto {
+  id: string;
+  mimeType: string;
+}
+
 export interface TurnInput {
   texts: string[];
+  // Photos the person sent with the turn; documents are the ones stored.
   attachmentCount: number;
+  documents?: StoredPhoto[];
   // Earlier messages, oldest first.
   history?: HistoryMessage[];
   // The conversation's deletion generation and turn number. Stable across
@@ -85,6 +93,9 @@ export interface Responder {
   // MAX_OUTPUT_CHARS.
   readonly inputSlackChars?: number;
   readonly maxOutputChars?: number;
+  // True when it reads the turn's stored photos (the agent). Others only
+  // hear that a photo came and was not read.
+  readonly readsPhotos?: boolean;
   respond(turn: TurnInput, hooks?: RespondHooks): Promise<ResponderResult>;
 }
 
@@ -122,8 +133,13 @@ export function buildMessages(turn: TurnInput): ModelMessage[] {
 export function attachmentNote(count: number): string {
   if (count === 0) return "";
   const photos = count === 1 ? "a photo" : `${count} photos`;
-  return `\n\nThe person also sent ${photos} with this message. They are saved and will be read separately; acknowledge briefly if you mention them.`;
+  return `\n\nThe person also sent ${photos} with this message. You cannot see ${count === 1 ? "it" : "them"} and ${count === 1 ? "it was" : "they were"} not read; if you mention ${count === 1 ? "it" : "them"}, say so and ask them to send ${count === 1 ? "it" : "them"} again in a few minutes.`;
 }
+
+// Sent without the model for a photo that came alone and was not read
+// (no reader answered) or not stored.
+export const PHOTO_UNREAD_TEXT = `I could not read your photo just now. Send it again in a few minutes and I will try once more. ${SAFETY_LINE}`;
+export const PHOTO_UNSAVED_TEXT = `I could not save your photo, so I have not read it. Please send it again. ${SAFETY_LINE}`;
 
 export function extractOutputText(data: unknown): string {
   const output = (data as { output?: unknown } | null)?.output;
