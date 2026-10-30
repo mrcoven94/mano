@@ -27,6 +27,8 @@ AI_GATEWAY_PROVIDER=
 # Extra allowlisted model IDs, comma separated (rarely needed):
 MODEL_ALLOWLIST_EXTRA=
 # Executor: simulated (default) or sandbox. Sandbox mode needs the
-# sandbox agency portal URL from the Spine session:
+# sandbox agency portal's URL and its access token (SANDBOX_PORTAL_TOKEN
+# on the portal Worker):
 EXECUTOR_MODE=
 SANDBOX_BASE_URL=
+SANDBOX_PORTAL_TOKEN=

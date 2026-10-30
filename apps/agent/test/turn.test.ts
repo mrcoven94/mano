@@ -6,10 +6,11 @@ import { engineFrom, personIdFor } from "../agent/lib/engine.js";
 import { presentationHash, renderQuestion } from "../agent/lib/pending.js";
 import { handlePresented, handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/turn.js";
 import remind from "../agent/tools/remind.js";
-import startFormDraft from "../agent/tools/start_form_draft.js";
+import fillForm from "../agent/tools/fill_form.js";
 import requestsInstruction from "../agent/instructions/requests.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_CHANNELS_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
+import { installFillDouble, uninstallFillDouble } from "./fill-double.js";
 
 const PRESENTATION_VECTOR = "33f67fe9f135d7efc24d4fbe91c1ed3c8bc540adde738809768ff2c8cbdb1245";
 const SECRET = "turn-test-secret";
@@ -19,10 +20,15 @@ const fields = {
   fullName: "Rosa Testcase",
   dateOfBirth: "1990-02-03",
   address: "12 Sample Street, Testville",
-  phone: "555-0100",
-  householdSize: 3,
-  monthlyIncome: 1800,
+  phone: "253-555-0100",
+  householdSize: "3",
+  monthlyIncome: "1800",
 };
+
+// The person's answers to fill_form, as the model passes them.
+function draft(over: Partial<typeof fields> = {}) {
+  return { form: "food-renewal", answers: { ...fields, ...over } };
+}
 
 let engine: EngineDouble;
 let agentCalls: AgentTurnInput[];
@@ -58,10 +64,10 @@ async function fakeAgent(input: AgentTurnInput) {
   if (/renewal/i.test(input.message)) {
     const ctx = toolCtx({ handleHash: input.handleHash, turnId: input.turnId, grant: input.grant, generation: input.generation, turnAtMs: input.turnAtMs });
     const name = /Claude Testcase/.test(input.message) ? "Claude Testcase" : fields.fullName;
-    const householdSize = /household of 4/.test(input.message) ? 4 : fields.householdSize;
+    const householdSize = /household of 4/.test(input.message) ? "4" : fields.householdSize;
     // The voice guard rewrites dashes, so this address cannot be shown word for word.
     const address = /with a dash/.test(input.message) ? "12 Sample Street \u2014 Unit 4, Testville" : fields.address;
-    await startFormDraft.execute({ ...fields, fullName: name, address, householdSize }, ctx);
+    await fillForm.execute(draft({ fullName: name, address, householdSize }), ctx);
     return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop" };
   }
   return { status: "replied" as const, text: `Answer ${agentCalls.length}`, reason: "stop" };
@@ -139,9 +145,11 @@ beforeEach(async () => {
   vi.stubGlobal("fetch", engine.fetch);
   grants.set(HANDLE, await grantFor(HANDLE));
   grants.set(OTHER, await grantFor(OTHER));
+  installFillDouble(engine);
 });
 
 afterEach(() => {
+  uninstallFillDouble();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -151,7 +159,7 @@ describe("approval by text", () => {
     const ask = await send(turn("turn_ask_000001", "Please file my renewal"));
     expect(ask.status).toBe(200);
     expect(ask.body.text).toContain("Reply YES");
-    expect(ask.body.text).toContain("Name: Rosa Testcase; Date of birth: 1990-02-03; Address: 12 Sample Street, Testville;");
+    expect(ask.body.text).toContain("Full legal name: Rosa Testcase; Date of birth: 1990-02-03; Mailing address: 12 Sample Street, Testville;");
     expect(engine.approvals()[0].status).toBe("pending");
     expect(engine.executor.calls).toHaveLength(0);
 
@@ -222,13 +230,13 @@ describe("a YES needs a question Channels confirmed it showed", () => {
 describe("the approval question reaches the person exactly", () => {
   it("the question survives the text line's voice guard word for word", async () => {
     const ask = await send(turn("turn_exact00001", "Please file my renewal"));
-    expect(ask.body.approval).toContain("Name: Rosa Testcase");
+    expect(ask.body.approval).toContain("Full legal name: Rosa Testcase");
     expect(guardReply(ask.body.text).text).toContain(ask.body.approval);
   });
 
   it("a person named Claude Testcase sees their own name in the question", async () => {
     const ask = await send(turn("turn_exact00004", "Please file my renewal for Claude Testcase"));
-    expect(ask.body.approval).toContain("Name: Claude Testcase");
+    expect(ask.body.approval).toContain("Full legal name: Claude Testcase");
     expect(guardReply(ask.body.text).text).toContain(ask.body.approval);
   });
 
@@ -429,7 +437,7 @@ describe("a slow draft against a newer one", () => {
     expect(b.body.status).toBe("waiting_approval");
     release();
     await preparingA;
-    const late = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === 3)!;
+    const late = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === "3")!;
     const retried = await present(late);
     expect(retried.body.ok).toBe(false);
     const yes = await send(turn("turn_slowY00001", "YES"));
@@ -452,7 +460,7 @@ describe("a slow draft against a newer one", () => {
     await preparingA;
     vi.stubGlobal("fetch", engine.fetch);
     expect(sizes()).toEqual(["3:pending", "4:pending"]);
-    const late = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === 3)!;
+    const late = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === "3")!;
     const retried = await present(late);
     expect(retried).toEqual({ status: 200, body: { ok: true, superseded: true } });
     expect(sizes()).toEqual(["3:rejected", "4:pending"]);
@@ -461,9 +469,10 @@ describe("a slow draft against a newer one", () => {
     expect(sizes()).toEqual(["3:rejected", "4:approved"]);
   });
 
-  // Sol's review 7: A's report fails, closing A fails (Engine 503), B's
-  // report fails, then A's report is retried, then YES.
-  it("an older draft that could not be closed never becomes answerable, and the YES approves nothing", async () => {
+  // Sol's review 7, after PR 81's review: A's report fails, then closing A
+  // fails (Engine 503) when B is asked for. B is not filled, so no newer
+  // version exists that the person did not see closed.
+  it("a correction whose earlier draft cannot be closed prepares nothing new, and the YES approves nothing", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await send(turn("turn_r7A0000001", "Please file my renewal"), deps(), { present: false });
     const refusing: typeof fetch = async (input, init) =>
@@ -471,40 +480,28 @@ describe("a slow draft against a newer one", () => {
     vi.stubGlobal("fetch", refusing);
     const closing = deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: refusing }) });
     const b = await send(turn("turn_r7B0000001", "Please file my renewal, household of 4"), closing, { present: false });
-    expect(b.body.status).toBe("waiting_approval");
+    expect(b.body.status).toBe("replied");
     vi.stubGlobal("fetch", engine.fetch);
-    const bySize = (n: number) => engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === n)!;
-    expect(bySize(3).status).toBe("pending");
+    expect(sizes()).toEqual(["3:pending"]);
     expect(warn.mock.calls.some(([line]) => String(line).includes("mano_close_failed"))).toBe(true);
-
-    const retried = await present(bySize(3));
-    expect(retried.body).toEqual({ ok: true, superseded: true });
     const yes = await send(turn("turn_r7Y0000001", "YES"));
     expect(yes.body.text).toMatch(/haven't shown you/i);
     expect(engine.executor.calls).toHaveLength(0);
-
-    // B's report lands on its retry: now the YES files B, and only B.
-    expect((await present(bySize(4))).body).toEqual({ ok: true });
-    await new Promise((r) => setTimeout(r, 3));
-    const yes2 = await send(turn("turn_r7Y0000002", "YES"));
-    expect(yes2.body.text).toMatch(/^Done/);
-    expect(engine.executor.calls).toHaveLength(1);
-    expect(sizes()).toEqual(["3:rejected", "4:approved"]);
     warn.mockRestore();
   });
 
-  it("an older draft is never approved once a newer one exists, even left unclosed", async () => {
+  it("an older draft is closed before a newer one is filled, so it is never approved even when the cleanup after fails", async () => {
     await send(turn("turn_r7C0000001", "Please file my renewal"), deps(), { present: false });
     const refusing: typeof fetch = async (input, init) =>
-      /\/(reject|supersede)$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init);
+      /\/supersede$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init);
     vi.stubGlobal("fetch", refusing);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await send(turn("turn_r7D0000001", "Please file my renewal, household of 4"), deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: refusing }) }), { present: false });
     vi.stubGlobal("fetch", engine.fetch);
-    const older = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === 3)!;
-    expect(older.status).toBe("pending");
+    expect(sizes()).toEqual(["3:rejected", "4:pending"]);
+    const older = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === "3")!;
     const person = engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0);
-    expect(await person.approve(older.id)).toMatchObject({ status: "blocked", superseded: true });
+    expect((await person.approve(older.id)).status).toBe("blocked");
     expect(engine.executor.calls).toHaveLength(0);
   });
 
@@ -519,12 +516,12 @@ describe("a slow draft against a newer one", () => {
         ? new Response("unavailable", { status: 503 })
         : engine.fetch(input, init),
     );
-    await Promise.resolve(startFormDraft.execute({ ...fields, householdSize: 4 }, ctx)).catch(() => undefined);
+    await Promise.resolve(fillForm.execute(draft({ householdSize: "4" }), ctx)).catch(() => undefined);
     vi.stubGlobal("fetch", engine.fetch);
     await new Promise((r) => setTimeout(r, 3));
     const yes = await send(turn("turn_r7G0000001", "YES"), deps(), { present: false });
     expect(yes.body.text).toMatch(/^I just updated that/);
-    expect(yes.body.text).toContain("Household size: 4");
+    expect(yes.body.text).toContain("People in household: 4");
     expect(yes.body.status).toBe("waiting_approval");
     expect(engine.executor.calls).toHaveLength(0);
   });

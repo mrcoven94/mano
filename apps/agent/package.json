@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.70",
+    "@mano/computer": "workspace:*",
     "@mano/guardian": "workspace:*",
     "@mano/persona": "workspace:*",
     "@mano/protocol": "workspace:*",

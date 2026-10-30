@@ -6,6 +6,14 @@
 // Meta Model API directly, always on the Standard model ID with
 // store:false.
 //
+// fill_form fills a fresh draft of a form on the person's computer
+// (packages/computer) from their Engine profile, reads the draft back
+// from the sandbox portal, and holds exactly what the portal saved for
+// their YES. It needs MANO_PORTAL_URL, SANDBOX_PORTAL_DRAFT_TOKEN and
+// MODAL_COMPUTER_URL (see .env.example) plus Engine's GET /profile, and
+// says it is unavailable without them; the model then prepares the
+// renewal with start_form_draft from the person's answers.
+//
 // Engine also holds the agent's own state for each person (reminders,
 // which its alarm delivers through Channels, the turn ledger and the
 // approval pointer), so the agent keeps no store of its own.

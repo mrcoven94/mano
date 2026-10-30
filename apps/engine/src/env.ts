@@ -24,4 +24,5 @@ export interface Env {
   MODEL_ALLOWLIST_EXTRA?: string;
   EXECUTOR_MODE?: string;
   SANDBOX_BASE_URL?: string;
+  SANDBOX_PORTAL_TOKEN?: string;
 }

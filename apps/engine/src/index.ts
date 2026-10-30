@@ -78,11 +78,12 @@
 // Executors: EXECUTOR_MODE=simulated (explicit, or the default in
 // development) records calls and labels receipts simulated, except share
 // receipts, which are real deliveries. EXECUTOR_MODE=sandbox with
-// SANDBOX_BASE_URL files into the sandbox agency portal:
-// POST {base}/v1/actions with the action JSON (idempotencyKey scoped as
-// "<personId>:<key>", plus document {hash, contentB64} when the gateway
-// verified one) returns { externalId }; GET
-// {base}/v1/actions/by-key/{key} returns {externalId} or 404.
+// SANDBOX_BASE_URL and SANDBOX_PORTAL_TOKEN files into the sandbox agency
+// portal over its JSON API: POST {base}/submissions with the bearer token
+// and { key, household, files } (the key is the SHA-256 of
+// "<personId>:<idempotencyKey>", the file is the document the gateway
+// verified) returns { confirmationNumber }; GET {base}/submissions/{key}
+// returns it again, or 404.
 //
 // Secrets: never put a key on a command line. Set secrets from stdin:
 //
@@ -91,7 +92,7 @@
 // Same for ENCRYPTION_KEK_B64 (32 bytes, base64), SESSION_SECRET and
 // OPERATOR_SECRET, and the optional CF_ACCOUNT_ID, AI_GATEWAY_ID,
 // AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA, MANO_ENV, EXECUTOR_MODE,
-// SANDBOX_BASE_URL.
+// SANDBOX_BASE_URL, SANDBOX_PORTAL_TOKEN.
 //
 // Deploy: ask David before the first deploy. After that, deploys go
 // through GitHub by pushing. Never run a production deploy from a laptop.

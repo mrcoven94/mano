@@ -1,6 +1,7 @@
 import type { ActionRequest, CheckOutcome, Executor } from "./types.js";
 import { DefiniteFailureError, TimeoutError } from "./types.js";
 import { boundFetch } from "../fetch.js";
+import { base64ToBytes, sha256Hex } from "../hash.js";
 
 // In-memory stand-in: records calls, invents external IDs, and can fail
 // once with a timeout for reconcile tests. Receipts are always labeled
@@ -31,13 +32,25 @@ export class InMemoryExecutor implements Executor {
   }
 }
 
-// Executor against the sandbox agency portal (owned by the Spine session).
-// Contract: POST {base}/v1/actions with the action JSON returns
-// {externalId}; the portal dedupes on idempotencyKey, which is scoped as
-// "<personId>:<key>". When the gateway verified a document, the post
-// carries document: {hash, contentB64}. GET
-// {base}/v1/actions/by-key/{key} returns {externalId} or 404. Receipts
-// from this executor are real filings into the sandbox, never simulated.
+// Executor against the sandbox agency portal (apps/sandbox-portal), over
+// its JSON API with the portal's bearer token. POST {base}/submissions
+// with { key, household, files } answers { confirmationNumber }, which
+// becomes the receipt's external ID. GET {base}/submissions/{key} answers
+// it again, or 404 when the key never filed. The portal dedupes on the
+// key, which is the SHA-256 of "<personId>:<idempotencyKey>" so it is
+// scoped to the person and fits the portal's 128-character limit. When
+// the gateway verified a document, its bytes go as the one attachment.
+// Receipts from this executor are real filings into the sandbox, never
+// simulated.
+const HOUSEHOLD_FIELDS = ["fullName", "dateOfBirth", "address", "phone", "householdSize", "monthlyIncome"] as const;
+
+function documentType(bytes: Uint8Array): { type: string; ext: string } | null {
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return { type: "image/png", ext: "png" };
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { type: "image/jpeg", ext: "jpg" };
+  if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return { type: "application/pdf", ext: "pdf" };
+  return null;
+}
+
 export class SandboxExecutor implements Executor {
   readonly simulated = false;
   calls: ActionRequest[] = [];
@@ -46,29 +59,40 @@ export class SandboxExecutor implements Executor {
     private baseUrl: string,
     private timeoutMs = 15000,
     private fetchFn: typeof fetch = boundFetch,
+    private token?: string,
   ) {}
 
-  private downstreamKey(req: ActionRequest): string {
-    return `${req.personId}:${req.idempotencyKey}`;
+  private async downstreamKey(personId: string, idempotencyKey: string): Promise<string> {
+    return `mano-${await sha256Hex(`${personId}:${idempotencyKey}`)}`;
+  }
+
+  private headers(json: boolean): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (json) headers["content-type"] = "application/json";
+    if (this.token) headers.authorization = `Bearer ${this.token}`;
+    return headers;
   }
 
   async execute(req: ActionRequest): Promise<{ externalId: string }> {
     this.calls.push(req);
+    const household: Record<string, string> = {};
+    for (const field of HOUSEHOLD_FIELDS) {
+      const value = req.payload[field];
+      if (typeof value === "string" || typeof value === "number") household[field] = String(value);
+    }
+    const body: Record<string, unknown> = { key: await this.downstreamKey(req.personId, req.idempotencyKey), household };
+    if (req.document) {
+      const kind = documentType(base64ToBytes(req.document.bytesB64));
+      if (!kind) throw new DefiniteFailureError("The portal takes PDF, PNG or JPG documents only.");
+      body.files = [{ name: `document-1.${kind.ext}`, type: kind.type, data: req.document.bytesB64 }];
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const body: Record<string, unknown> = {
-        idempotencyKey: this.downstreamKey(req),
-        type: req.type,
-        recipient: req.recipient,
-        purpose: req.purpose,
-        payload: req.payload,
-      };
-      if (req.document) body.document = { hash: req.document.hash, contentB64: req.document.bytesB64 };
-      const res = await this.fetchFn(`${this.baseUrl}/v1/actions`, {
+      const res = await this.fetchFn(`${this.baseUrl}/submissions`, {
         method: "POST",
         signal: controller.signal,
-        headers: { "content-type": "application/json" },
+        headers: this.headers(true),
         body: JSON.stringify(body),
       });
       clearTimeout(timer);
@@ -79,9 +103,11 @@ export class SandboxExecutor implements Executor {
         throw new DefiniteFailureError(`Sandbox portal rejected the action: ${res.status}`);
       }
       if (!res.ok) throw new Error(`Sandbox portal failed: ${res.status}`);
-      const data = (await res.json()) as { externalId?: string };
-      if (!data.externalId) throw new Error("Sandbox portal returned no external ID.");
-      return { externalId: data.externalId };
+      const data = (await res.json()) as { confirmationNumber?: unknown };
+      if (typeof data.confirmationNumber !== "string" || !data.confirmationNumber) {
+        throw new Error("Sandbox portal returned no confirmation number.");
+      }
+      return { externalId: data.confirmationNumber };
     } catch (err) {
       clearTimeout(timer);
       if (err instanceof Error && err.name === "AbortError") {
@@ -92,24 +118,25 @@ export class SandboxExecutor implements Executor {
   }
 
   async check(idempotencyKey: string, personId: string): Promise<CheckOutcome> {
+    const key = await this.downstreamKey(personId, idempotencyKey);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const res = await this.fetchFn(
-        `${this.baseUrl}/v1/actions/by-key/${encodeURIComponent(`${personId}:${idempotencyKey}`)}`,
-        { signal: controller.signal },
-      );
+      const res = await this.fetchFn(`${this.baseUrl}/submissions/${encodeURIComponent(key)}`, {
+        signal: controller.signal,
+        headers: this.headers(false),
+      });
       clearTimeout(timer);
       // Only the contract's explicit absent response means absent. A 200
-      // without an external ID is malformed: the lookup is unavailable,
-      // never "did not happen".
+      // without a confirmation number is malformed: the lookup is
+      // unavailable, never "did not happen".
       if (res.status === 404) return { found: false };
       if (!res.ok) throw new Error(`Sandbox portal check failed: ${res.status}`);
-      const data = (await res.json()) as { externalId?: string };
-      if (typeof data.externalId === "string" && data.externalId) {
-        return { found: true, externalId: data.externalId };
+      const data = (await res.json()) as { confirmationNumber?: unknown };
+      if (typeof data.confirmationNumber === "string" && data.confirmationNumber) {
+        return { found: true, externalId: data.confirmationNumber };
       }
-      throw new Error("Sandbox portal check returned malformed data: HTTP 200 without an external ID.");
+      throw new Error("Sandbox portal check returned malformed data: HTTP 200 without a confirmation number.");
     } catch (err) {
       clearTimeout(timer);
       if (err instanceof Error && err.name === "AbortError") {
@@ -126,6 +153,7 @@ export class SandboxExecutor implements Executor {
 let testFactory: ((env: {
   EXECUTOR_MODE?: string;
   SANDBOX_BASE_URL?: string;
+  SANDBOX_PORTAL_TOKEN?: string;
   MANO_ENV?: string;
 }) => Executor) | null = null;
 
@@ -146,6 +174,7 @@ export function setExecutorFactoryForTests(
 export function createExecutor(env: {
   EXECUTOR_MODE?: string;
   SANDBOX_BASE_URL?: string;
+  SANDBOX_PORTAL_TOKEN?: string;
   MANO_ENV?: string;
 }): Executor {
   if (testFactory) return testFactory(env);
@@ -159,7 +188,10 @@ export function createExecutor(env: {
     if (!env.SANDBOX_BASE_URL) {
       throw new Error("EXECUTOR_MODE is sandbox but SANDBOX_BASE_URL is not set.");
     }
-    return new SandboxExecutor(env.SANDBOX_BASE_URL.replace(/\/$/, ""));
+    if (!env.SANDBOX_PORTAL_TOKEN) {
+      throw new Error("EXECUTOR_MODE is sandbox but SANDBOX_PORTAL_TOKEN is not set.");
+    }
+    return new SandboxExecutor(env.SANDBOX_BASE_URL.replace(/\/$/, ""), undefined, undefined, env.SANDBOX_PORTAL_TOKEN);
   }
   throw new Error(`Unknown EXECUTOR_MODE: ${mode}.`);
 }
