@@ -828,7 +828,7 @@ export class ConversationRunner {
         const key = idempotencyKeyFor(config.handleHash, generation, turn, 0, "eyes");
         this.decorations.run("eyes", async () => {
           // Read fresh right before the call.
-          if (this.decorationBlock(generation, epoch) || store.outboundByKey(key)) return;
+          if (!config.reactionsEnabled || this.decorationBlock(generation, epoch) || store.outboundByKey(key)) return;
           store.addOutbound({
             key, turn, part: 0, tag: "eyes", text: EYES, attempts: 0, state: "sending", code: null,
             chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
@@ -1184,10 +1184,11 @@ export class ConversationRunner {
     // Words go first; a reaction is only ever added on top.
     for (const bubble of [...bubbles.filter((b) => b.tag !== "react"), ...bubbles.filter((b) => b.tag === "react")]) {
       if (bubble.tag === "react") {
-        // Only on top of words the provider accepted; otherwise dropped.
+        // Only on top of words the provider accepted, and only while
+        // reactions are on (a replayed answer included); otherwise dropped.
         // After the words, and outside the turn: never awaited.
-        if (!accepted) {
-          this.dropTapback(turn, bubble, chatId, generation, "no_text_accepted");
+        if (!this.deps.config.reactionsEnabled || !accepted) {
+          this.dropTapback(turn, bubble, chatId, generation, this.deps.config.reactionsEnabled ? "no_text_accepted" : "reactions_off");
           continue;
         }
         const planned = bubble.epoch ?? epoch;
@@ -1229,6 +1230,7 @@ export class ConversationRunner {
 
   private async sendTapback(turn: number, bubble: import("./store.js").AnswerBubble, chatId: string | null, generation: number, epoch: number): Promise<void> {
     const { store, channel, logger, nowMs, config } = this.deps;
+    if (!config.reactionsEnabled) return;
     const block = !chatId || !bubble.messageId ? "unroutable" : this.decorationBlock(generation, epoch);
     if (block === "generation") return;
     const key = idempotencyKeyFor(config.handleHash, generation, turn, bubble.part, "react");

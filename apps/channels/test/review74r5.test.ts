@@ -150,3 +150,29 @@ describe("one switch turns off every reaction and the eyes", () => {
     expect(reactionsEnabled({ MANO_REACTIONS_ENABLED: "false" } as never)).toBe(false);
   });
 });
+
+describe("Sol narrow check: a replayed reaction obeys the switch", () => {
+  it("sends no persisted reaction on a resumed turn once reactions are off", async () => {
+    const h = introduced(makeHarness({ responder: reply("anytime!", "love") }));
+    // The answer (with its reaction) is persisted, then cost settlement
+    // fails, so the turn is retried and resumes from the saved answer.
+    const settle = h.ledger.settle.bind(h.ledger);
+    let fail = true;
+    (h.ledger as unknown as { settle: (k: string, usd: number) => void }).settle = (key: string, usd: number) => {
+      if (fail) {
+        fail = false;
+        throw new Error("settlement failed in test");
+      }
+      settle(key, usd);
+    };
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "thank you", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(h.store.unfinishedTurn()?.answerJson).toContain('"react"');
+    // A fresh runner with the switch off resumes the turn.
+    (h.runner as unknown as { deps: { config: { reactionsEnabled: boolean } } }).deps.config.reactionsEnabled = false;
+    await h.runner.runDueTurn();
+    await h.decorations.idle();
+    expect(h.channel.reactions).toEqual([]);
+  });
+});
