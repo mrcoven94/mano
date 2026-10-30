@@ -1,5 +1,6 @@
 # Nightly quality run on main: every suite through the real text line, the
-# persona probes, Guardian against production and mail's deadline accuracy,
+# text cases again through Mano's agent on a local Engine (recorded, not
+# gated), the persona probes, Guardian against production and mail's deadline accuracy,
 # recorded with history in R2 (mano-quality for aggregates,
 # mano-quality-private for per-case results). After the run is recorded, the
 # job goes red when something regressed against the previous baseline.
@@ -70,4 +71,4 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          node --import ./src/register.ts src/bin/nightly.ts --out ../../runs-staging --ref "$GITHUB_REF" --upload
+          node --import ./src/register.ts src/bin/nightly.ts --out ../../runs-staging --ref "$GITHUB_REF" --agent-local --upload

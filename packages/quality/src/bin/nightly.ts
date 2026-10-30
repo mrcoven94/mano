@@ -3,20 +3,23 @@
 // record the run with its history. With --upload and R2 credentials the run
 // lands in R2 (mano-quality for aggregates, mano-quality-private for per-case
 // results); otherwise it stays in --out.
-// Usage: node --import ./src/register.ts src/bin/nightly.ts [--out runs-staging] [--date 2026-10-29] [--ref refs/heads/main] [--upload]
+// Usage: node --import ./src/register.ts src/bin/nightly.ts [--out runs-staging] [--date 2026-10-29] [--ref refs/heads/main] [--agent-local] [--upload]
 // Exits 1, after the run is recorded, when something regressed against the
 // previous baseline: a new safety failure or a judge or hard-check drop.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runGuardian } from "../guardian.ts";
 import { dnsFromEnv } from "../links.ts";
 import { scoreMailDeadlines } from "../mail.ts";
+import { startAgentStack } from "../agent-stack.ts";
+import { agentNotRun, runAgentStage } from "../agent-stage.ts";
+import { loadAgentPaths } from "../paths.ts";
 import { runProbes } from "../probes.ts";
 import { r2CredsFromEnv } from "../r2.ts";
 import { branchPrefix, evalGate, readHistory, writeNightlyStaging, type HistoryRow } from "../report.ts";
-import { finishReport, rerunNewlyFailing, runBench, type RunReport } from "../run.ts";
+import { finishReport, rerunNewlyFailing, runBench, type CaseResult, type RunReport } from "../run.ts";
 import { readPublic, uploadStaging } from "../sync.ts";
 import { textLineFromEnv } from "../textline.ts";
 
@@ -64,17 +67,33 @@ console.log(`probes: ${probes.passed}/${probes.total}`);
 const guardian = await runGuardian(process.env);
 console.log(guardian.ran ? `guardian: precision ${guardian.precision.toFixed(3)} recall ${guardian.recall.toFixed(3)}` : `guardian: not run (${guardian.detail})`);
 const mail = await scoreMailDeadlines();
+// --agent-local: the text cases again, through Mano's agent on a local
+// Engine, recorded next to the plain text line.
+let agent = agentNotRun("not requested (--agent-local)");
+let agentResults: CaseResult[] = [];
+if (process.argv.includes("--agent-local")) {
+  const stack = await startAgentStack(process.env);
+  try {
+    const env = { ...process.env, QUALITY_AGENT_URL: stack.agentUrl, MANO_AGENT_SECRET: stack.agentSecret, MANO_HANDLE_GRANT_SECRET: stack.grantSecret };
+    ({ summary: agent, results: agentResults } = await runAgentStage(await loadAgentPaths(env), { env }));
+  } finally {
+    stack.stop();
+  }
+  console.log(`agent: ${agent.cases} cases, ${agent.agentAnswered} by the agent, ${agent.fallbackAnswered} by the fallback, ${agent.answerErrors} unanswered`);
+}
 
 const full = finishReport(bench.report, {
   runId: day, startedAt, finishedAt: new Date().toISOString(), gitSha: gitSha(), broken: false,
   paths: bench.paths, judge: bench.judge, dns: dnsFromEnv(process.env).mode, env: process.env,
 }, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: bench.answeringModel, probes, rerun });
 full.guardian = guardian;
+full.agent = agent;
 full.mail = mail;
 if (!mail.live) full.standins = [...(full.standins ?? []), `mail deadlines: ${mail.detail}`];
 if (!guardian.ran) full.standins = [...(full.standins ?? []), `guardian: ${guardian.detail}`];
 
 const staging = writeNightlyStaging(root, full, bench.results, prior, { ref });
+if (agentResults.length > 0) writeFileSync(join(staging.privateRunDir, "agent-cases.json"), `${JSON.stringify(agentResults, null, 2)}\n`);
 for (const s of Object.values(full.suites)) {
   const t = s.traits;
   console.log(

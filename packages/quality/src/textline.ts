@@ -13,6 +13,7 @@ import {
   OPT_OUT_BUBBLE,
   ResponderFailed,
   SparkResponder,
+  type Responder,
   stripBlockedLinks,
   type HistoryMessage,
 } from "@mano/channels";
@@ -23,6 +24,9 @@ import type { BenchCase } from "./suites/types.ts";
 
 export interface TurnRun {
   route: "fast" | "deep";
+  // "agent" when Mano's agent answered, "fallback" when the agent responder
+  // fell back to the plain answer, "plain" with no agent in the path.
+  servedBy?: "agent" | "fallback" | "plain" | "worker";
   // The heads-up as sent on a deep turn, after the guard and link check.
   headsUp: string | null;
   // The answer bubbles as sent.
@@ -45,29 +49,36 @@ export interface TextLineOptions {
   fetchFn?: typeof fetch;
 }
 
+export function sparkResponder(opts: TextLineOptions): SparkResponder {
+  return new SparkResponder({
+    apiKey: opts.apiKey,
+    model: opts.model,
+    ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
+    ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
+    // Through AI Gateway, no request or reply is logged.
+    collectLogs: !viaAiGateway(opts.baseUrl ?? ""),
+  });
+}
+
 // Synthetic bench text may go to a -contributor ID; the judge never does.
+// The responder is the plain model answer by default, or the agent with the
+// plain answer as its fallback (agent.ts).
 export class TextLine {
   readonly model: string;
-  private responder: SparkResponder;
+  private responder: Responder;
   private fetchFn: typeof fetch | undefined;
+  private turnNumber = 0;
 
-  constructor(opts: TextLineOptions) {
+  constructor(opts: TextLineOptions & { responder?: Responder }) {
     this.model = opts.model;
     this.fetchFn = opts.fetchFn;
-    this.responder = new SparkResponder({
-      apiKey: opts.apiKey,
-      model: opts.model,
-      ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
-      ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
-      // Through AI Gateway, no request or reply is logged.
-      collectLogs: !viaAiGateway(opts.baseUrl ?? ""),
-    });
+    this.responder = opts.responder ?? sparkResponder(opts);
   }
 
   async turn(texts: string[], history: HistoryMessage[], attachmentCount = 0): Promise<TurnRun> {
     // The worker answers STOP and its kin itself, before any model call.
     if (texts.length === 1 && attachmentCount === 0 && isOptOut(texts[0]!)) {
-      return { route: "fast", headsUp: null, bubbles: [OPT_OUT_BUBBLE], firstTextMs: 0, totalMs: 0, guardChanges: [], linksRemoved: 0, attempts: 0, billedInputChars: 0, outputChars: 0 };
+      return { servedBy: "worker", route: "fast", headsUp: null, bubbles: [OPT_OUT_BUBBLE], firstTextMs: 0, totalMs: 0, guardChanges: [], linksRemoved: 0, attempts: 0, billedInputChars: 0, outputChars: 0 };
     }
     const turnText = texts.join("\n");
     // The worker's crisis decision: the broad detector, minus an exact
@@ -87,8 +98,10 @@ export class TextLine {
     const started = performance.now();
     let result;
     try {
+      // The agent runs a turn only with a stable turn key, as Channels sends.
+      this.turnNumber += 1;
       result = await this.responder.respond(
-        { texts, attachmentCount, history },
+        { texts, attachmentCount, history, turnKey: { generation: 0, turn: this.turnNumber }, receivedAtMs: Date.now() },
         {
           onHeadsUp: async (raw) => {
             if (crisis) return;
@@ -117,6 +130,7 @@ export class TextLine {
     changes.push(...final.changes);
 
     return {
+      servedBy: this.responder.name !== "agent" ? "plain" : result.model === "agent" ? "agent" : "fallback",
       route: headsUp === null ? "fast" : "deep",
       headsUp,
       bubbles: final.bubbles,
@@ -218,6 +232,7 @@ export class TextLinePath implements AnswerPath {
       firstTextMs: Math.round(last.firstTextMs),
       route: last.route,
       guardChanges: [...new Set(runs.flatMap((r) => r.guardChanges))],
+      servedBy: runs.some((r) => r.servedBy === "fallback") ? "fallback" : (last.servedBy ?? "plain"),
       earlier: [...sentBeforeRetry, ...runs.flatMap((r, i) => [...(r.headsUp ? [r.headsUp] : []), ...(i < runs.length - 1 ? r.bubbles : [])])],
       inputTokens: Math.round(billedInput / CHARS_PER_TOKEN),
       outputTokens: Math.round(output / CHARS_PER_TOKEN),

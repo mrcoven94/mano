@@ -12,6 +12,7 @@ import { loadHoldout } from "./holdout.ts";
 import { loadPaths, sentText, type BenchAnswer, type LoadedPath, type PathSet } from "./paths.ts";
 import { buildAllSuites } from "./suites/build.ts";
 import type { BenchCase, SuiteBuild, SuiteName } from "./suites/types.ts";
+import type { AgentSummary } from "./agent-stage.ts";
 import type { GuardianSummary } from "./guardian.ts";
 import type { MailSummary } from "./mail.ts";
 import type { ProbeSummary } from "./probes.ts";
@@ -33,6 +34,7 @@ export interface CaseResult {
     route?: "fast" | "deep";
     guardChanges?: string[];
     earlier?: string[];
+    servedBy?: "agent" | "fallback" | "plain" | "worker";
   };
   checks: CheckResult[];
   judge: JudgeScore | null;
@@ -135,6 +137,7 @@ export interface RunReport {
   guardian?: GuardianSummary;
   mail?: MailSummary;
   rerun?: RerunSummary;
+  agent?: AgentSummary;
 }
 
 export interface RerunSummary {
@@ -361,6 +364,7 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
         ...(answer.route ? { route: answer.route } : {}),
         ...(answer.guardChanges ? { guardChanges: answer.guardChanges } : {}),
         ...(answer.earlier && answer.earlier.length > 0 ? { earlier: answer.earlier } : {}),
+        ...(answer.servedBy ? { servedBy: answer.servedBy } : {}),
       },
       checks, judge: null,
       latencyMs: answer.latencyMs || Date.now() - start,
