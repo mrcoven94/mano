@@ -11,7 +11,8 @@ import type { JudgeClient } from "../src/judge.ts";
 import { LocalDns } from "../src/links.ts";
 import { MetaModelClient } from "../src/models.ts";
 import { runProbes } from "../src/probes.ts";
-import { evalGate, publicReport, writeNightlyStaging } from "../src/report.ts";
+import { decidePromotion, evalGate, publicReport, writeNightlyStaging } from "../src/report.ts";
+import type { AgentSummary } from "../src/agent-types.ts";
 import { finishReport, runBench, type CaseFingerprint, type CaseResult, type RunReport } from "../src/run.ts";
 import { buildAllSuites } from "../src/suites/build.ts";
 import { TextLine, TextLinePath } from "../src/textline.ts";
@@ -47,6 +48,12 @@ function modelFetch(reply: (input: { role: string; content: string }[]) => strin
 }
 
 // 1. An unusable gate must not pass in CI.
+// The decision a nightly would take for this run, against a prior that
+// holds the same plain results (so only the agent record can differ).
+function decideFor(rep: RunReport, ref: string, priorAgent?: AgentSummary) {
+  return decidePromotion(rep, priorAgent ? { ...rep, agent: priorAgent } : null, { ref, strict: false, accept: false }).decision;
+}
+
 test("in strict mode a missing baseline, missing R2 keys or an ineligible run fails, never neutral", () => {
   assert.equal(evalGate(run(fps(5)), null).status, "neutral", "offline runs stay neutral");
   assert.equal(evalGate(run(fps(5)), null, { strict: true }).status, "fail");
@@ -75,13 +82,13 @@ test("a probe that failed to run fails the run and blocks eligibility", async ()
 test("a branch run writes under its own prefix and never touches the baseline", () => {
   const root = mkdtempSync(join(tmpdir(), "quality-branch-"));
   const report = run(fps(3), { runId: "2026-10-30" });
-  const staged = writeNightlyStaging(root, report, [], [], { ref: "refs/heads/lap-567-quality" });
+  const staged = writeNightlyStaging(root, report, [], [], { ref: "refs/heads/lap-567-quality", decision: decideFor(report, "refs/heads/lap-567-quality") });
   assert.equal(staged.promoted, false);
   assert.equal(existsSync(join(root, "public", "baseline.json")), false);
   assert.equal(existsSync(join(root, "public", "latest.json")), false, "a branch must not replace main's latest");
   assert.ok(existsSync(join(root, "public", "branches", "lap-567-quality", "latest.json")));
   assert.ok(existsSync(join(root, "private", "branches", "lap-567-quality", "runs", "2026-10-30", "cases.json")));
-  const main = writeNightlyStaging(join(root, "m"), report, [], [], { ref: "refs/heads/main" });
+  const main = writeNightlyStaging(join(root, "m"), report, [], [], { ref: "refs/heads/main", decision: decideFor(report, "refs/heads/main") });
   assert.equal(main.promoted, true);
   assert.ok(existsSync(join(root, "m", "public", "baseline.json")));
 });
@@ -151,7 +158,7 @@ test("the public report drops judge reasons, check details and reader output", (
 test("a promoted baseline holds live cases only", () => {
   const root = mkdtempSync(join(tmpdir(), "quality-live-only-"));
   const fp = { ...fps(2), "letters-01": { suite: "letters", version: 1, live: false, hardPass: true, judgeMean: 5 } };
-  writeNightlyStaging(root, run(fp), [], [], { ref: "refs/heads/main" });
+  writeNightlyStaging(root, run(fp), [], [], { ref: "refs/heads/main", decision: decideFor(run(fp), "refs/heads/main") });
   const baseline = JSON.parse(readFileSync(join(root, "public", "baseline.json"), "utf8")) as RunReport;
   assert.equal(baseline.fingerprints["letters-01"], undefined);
   assert.ok(baseline.fingerprints["c-0"]);
@@ -177,12 +184,12 @@ test("a heads-up sent before a failed attempt is still checked", async () => {
 test("only refs/heads/main promotes; a tag named main does not", () => {
   const root = mkdtempSync(join(tmpdir(), "quality-ref-"));
   const report = run(fps(2), { runId: "2026-10-30" });
-  const tag = writeNightlyStaging(join(root, "t"), report, [], [], { ref: "refs/tags/main" });
+  const tag = writeNightlyStaging(join(root, "t"), report, [], [], { ref: "refs/tags/main", decision: decideFor(report, "refs/tags/main") });
   assert.equal(tag.promoted, false);
   assert.equal(existsSync(join(root, "t", "public", "baseline.json")), false);
   assert.equal(existsSync(join(root, "t", "public", "latest.json")), false);
-  const bare = writeNightlyStaging(join(root, "b"), report, [], [], { ref: "main" });
+  const bare = writeNightlyStaging(join(root, "b"), report, [], [], { ref: "main", decision: decideFor(report, "main") });
   assert.equal(bare.promoted, false, "a bare name is not a ref");
-  const main = writeNightlyStaging(join(root, "m"), report, [], [], { ref: "refs/heads/main" });
+  const main = writeNightlyStaging(join(root, "m"), report, [], [], { ref: "refs/heads/main", decision: decideFor(report, "refs/heads/main") });
   assert.equal(main.promoted, true);
 });

@@ -67,11 +67,14 @@ jobs:
         working-directory: packages/quality
         env:
           RESTORE_RUN: ${{ inputs.restore_from_run }}
+          ACCEPT_BASELINE: ${{ inputs.accept_baseline }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          node --import ./src/register.ts src/bin/restore-baseline.ts --run "$RESTORE_RUN" --ref "$GITHUB_REF"
+          ACCEPT=""
+          [ "$ACCEPT_BASELINE" = "true" ] && ACCEPT="--accept-baseline"
+          node --import ./src/register.ts src/bin/restore-baseline.ts --run "$RESTORE_RUN" --ref "$GITHUB_REF" $ACCEPT
       - name: Run and record every suite
         if: inputs.restore_from_run == ''
         working-directory: packages/quality

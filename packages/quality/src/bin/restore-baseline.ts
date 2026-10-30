@@ -1,7 +1,7 @@
 // restore-baseline: puts a past main run back as the baseline pull requests
 // are gated against, on purpose, and logs it in baseline-log.json. Run from
 // the quality-nightly workflow (input restore_from_run) on main only.
-// Usage: node --import ./src/register.ts src/bin/restore-baseline.ts --run <runId> --ref "$GITHUB_REF" [--out dir]
+// Usage: node --import ./src/register.ts src/bin/restore-baseline.ts --run <runId> --ref "$GITHUB_REF" [--accept-baseline] [--out dir]
 // The run's full report comes from mano-quality-private runs/<runId>/report.json.
 
 import { mkdtempSync } from "node:fs";
@@ -30,7 +30,6 @@ const current = await readPublic<RunReport>(creds, "baseline.json");
 const latest = await readPublic<RunReport>(creds, "latest.json");
 const history = (await readPublic<HistoryRow[]>(creds, "history.json")) ?? [];
 const root = arg("--out") ?? mkdtempSync(`${tmpdir()}/restore-`);
-restoreBaseline(root, { report, effective }, { ref, actor: process.env.GITHUB_ACTOR ?? null, priorLog, current, latest, history });
-if (!effective) console.log(`run ${runId} kept no effective baseline; rebuilt from its report`);
+restoreBaseline(root, { report, effective }, { ref, actor: process.env.GITHUB_ACTOR ?? null, priorLog, current, latest, history, accept: process.argv.includes("--accept-baseline") });
 const sent = await uploadStaging(root, creds);
 console.log(`restored run ${runId} (${report.gitSha?.slice(0, 7) ?? "no sha"}) as the baseline; wrote ${sent.map((s) => s.key).join(", ")}`);

@@ -10,7 +10,8 @@ import test from "node:test";
 import { LocalDns } from "../src/links.ts";
 import { FakeJudge } from "../src/judge.ts";
 import { rescoreRun } from "../src/rescore.ts";
-import { compareMatched, evalGate, prComment, publicReport, readHistory, readRun, writeNightlyStaging, writeRun } from "../src/report.ts";
+import { compareMatched, decidePromotion, evalGate, prComment, publicReport, readHistory, readRun, writeNightlyStaging, writeRun } from "../src/report.ts";
+import type { AgentSummary } from "../src/agent-types.ts";
 import { attachJudgeGate, finishReport, runBench, scoreSuite, type CaseResult, type RunReport } from "../src/run.ts";
 import { buildSuite } from "../src/suites/build.ts";
 import { SMOKE_CASE_IDS } from "../src/smoke.ts";
@@ -40,6 +41,12 @@ function eligible(report: RunReport): RunReport {
     eligibility: { eligible: true, reasons: [] },
     fingerprints: Object.fromEntries(Object.entries(report.fingerprints).map(([id, f]) => [id, { ...f, live: true }])),
   };
+}
+
+// The decision a nightly would take for this run, against a prior that
+// holds the same plain results (so only the agent record can differ).
+function decideFor(rep: RunReport, ref: string, priorAgent?: AgentSummary) {
+  return decidePromotion(rep, priorAgent ? { ...rep, agent: priorAgent } : null, { ref, strict: false, accept: false }).decision;
 }
 
 test("reference-path smoke is neutral, never a pass", async () => {
@@ -157,7 +164,7 @@ test("every nightly run is recorded; only eligible runs become the baseline", as
   const { full, results } = await smokeRun(false);
   const dir = mkdtempSync(join(tmpdir(), "quality-staging-"));
 
-  const first = writeNightlyStaging(join(dir, "n"), { ...full, runId: "2026-10-28" }, results, [], { ref: "refs/heads/main" });
+  const first = writeNightlyStaging(join(dir, "n"), { ...full, runId: "2026-10-28" }, results, [], { ref: "refs/heads/main", decision: decideFor({ ...full, runId: "2026-10-28" }, "refs/heads/main") });
   assert.equal(first.promoted, false);
   assert.ok(existsSync(join(dir, "n", "public", "latest.json")), "the page always sees the latest run");
   assert.equal(existsSync(join(dir, "n", "public", "baseline.json")), false, "an ineligible run never gates anyone");
@@ -165,13 +172,13 @@ test("every nightly run is recorded; only eligible runs become the baseline", as
   assert.equal(existsSync(join(dir, "n", "public", "cases.json")), false);
 
   const prior = readHistory(join(dir, "n", "public", "history.json"));
-  const second = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, prior, { ref: "refs/heads/main" });
+  const second = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, prior, { ref: "refs/heads/main", decision: decideFor({ ...eligible(full), runId: "2026-10-29" }, "refs/heads/main") });
   assert.equal(second.promoted, true);
   const baseline = JSON.parse(readFileSync(join(dir, "n", "public", "baseline.json"), "utf8")) as RunReport;
   assert.equal(baseline.runId, "2026-10-29");
   assert.equal(Object.keys(baseline.fingerprints).length, 28);
 
-  const rerun = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, readHistory(join(dir, "n", "public", "history.json")), { ref: "refs/heads/main" });
+  const rerun = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, readHistory(join(dir, "n", "public", "history.json")), { ref: "refs/heads/main", decision: decideFor({ ...eligible(full), runId: "2026-10-29" }, "refs/heads/main") });
   assert.ok(rerun.promoted);
   const history = readHistory(join(dir, "n", "public", "history.json"));
   assert.deepEqual(history.map((h) => h.runId), ["2026-10-28", "2026-10-29"], "a rerun replaces its own row");
