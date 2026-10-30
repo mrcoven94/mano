@@ -52,6 +52,22 @@ import {
   type DeliveryOutcome,
 } from "./agent-state.js";
 import { CURRENT_GENERATION } from "../gateway/sql-store.js";
+import {
+  cancelDeadline,
+  deadlineIdFor,
+  ensureDeadlineTables,
+  holdNudgeOutsideWindow,
+  isNudge,
+  listDeadlines,
+  nudgeTimeOf,
+  parseDeadlineInput,
+  parseDeadlinePatch,
+  removeDeadlines,
+  timeZoneForState,
+  trackDeadline,
+  updateDeadline,
+  type DeadlineResult,
+} from "../deadlines.js";
 
 // A delivery run holds its claim this long; a run that crashed is
 // reclaimed after it. Retries back off from 30 seconds to an hour and
@@ -134,7 +150,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         // The column already exists: additive migrations are idempotent.
       }
       sql.exec(`CREATE TABLE IF NOT EXISTS conversation(id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)`);
-      sql.exec(`CREATE TABLE IF NOT EXISTS deadlines(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_at TEXT NOT NULL)`);
+      ensureDeadlineTables(sql);
       sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
       // One consent row per recipient and case, so revocation deletes the
       // exact row the grant created.
@@ -505,9 +521,68 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { status: out.created ? ("created" as const) : ("existing" as const), reminder: out.reminder };
   }
 
+  // The reminders the person set. A deadline's nudges are listed with
+  // their deadline instead.
   async listReminders(verified: string) {
     await this.assertSubject(verified);
-    return listReminders(this.db());
+    return listReminders(this.db()).filter((r) => !isNudge(r.id));
+  }
+
+  // Deadlines Mano tracks itself (src/deadlines.ts). Their nudges are
+  // reminder rows, delivered by the wake-up below.
+  async trackDeadline(verified: string, input: unknown) {
+    await this.assertSubject(verified);
+    const parsed = parseDeadlineInput(input);
+    const id = await deadlineIdFor(parsed.idempotencyKey);
+    const timeZone = await this.deadlineTimeZone();
+    const out = this.ctx.storage.transactionSync(() =>
+      trackDeadline(this.db(), { ...parsed, id, timeZone }, Date.now(), nudgeTimeOf(this.env)),
+    );
+    return this.settleDeadline(out);
+  }
+
+  async listDeadlines(verified: string) {
+    await this.assertSubject(verified);
+    return listDeadlines(this.db());
+  }
+
+  async updateDeadline(verified: string, id: string, patch: unknown) {
+    await this.assertSubject(verified);
+    const parsed = parseDeadlinePatch(patch);
+    const timeZone = await this.deadlineTimeZone();
+    const out = this.ctx.storage.transactionSync(() =>
+      updateDeadline(this.db(), id, parsed, timeZone, Date.now(), nudgeTimeOf(this.env)),
+    );
+    return out && this.settleDeadline(out);
+  }
+
+  async cancelDeadline(verified: string, id: string) {
+    await this.assertSubject(verified);
+    const out = this.ctx.storage.transactionSync(() => cancelDeadline(this.db(), id, Date.now()));
+    return out && this.settleDeadline(out);
+  }
+
+  private async settleDeadline(out: DeadlineResult): Promise<DeadlineResult> {
+    if ("deadline" in out && out.status !== "existing" && out.status !== "closed") {
+      this.store.audit({ event: `deadline.${out.status}`, deadlineHash: await auditDigest(out.deadline.id) });
+    }
+    // An unchanged one re-arms too: a retry repairs a lost wake-up.
+    await this.armReminderWakeup();
+    return out;
+  }
+
+  // The zone nudges are timed in, from the state on the person's profile
+  // when the profile part of Engine is present; Pacific otherwise.
+  private async deadlineTimeZone(): Promise<string> {
+    const getProfile = (this as unknown as { getProfile?: (subject: string) => Promise<unknown> }).getProfile;
+    if (typeof getProfile !== "function") return timeZoneForState(null);
+    try {
+      const profile = (await getProfile.call(this, this.personId)) as { person?: { address?: { state?: { value?: unknown } } } } | null;
+      const state = profile?.person?.address?.state?.value;
+      return timeZoneForState(typeof state === "string" ? state : null);
+    } catch {
+      return timeZoneForState(null);
+    }
   }
 
   async cancelReminder(verified: string, id: unknown) {
@@ -571,6 +646,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const claimed = claimDueReminders(this.db(), Date.now(), REMINDER_LEASE_MS, token, REMINDER_BATCH);
     let sent = 0;
     for (const reminder of claimed) {
+      const held = holdNudgeOutsideWindow(this.db(), reminder.id, token, Date.now());
+      if (held) {
+        this.store.audit({ event: `deadline.nudge_${held}`, reminderHash: await auditDigest(reminder.id) });
+        continue;
+      }
       if (!handOffReminder(this.db(), reminder.id, token, Date.now())) continue;
       let outcome: DeliveryOutcome;
       if (!handleHash) {
@@ -653,12 +733,19 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // Channels deleted this person's conversation, moving it to generation
   // N: in one transaction, move to N, cancel reminders, clear the ledger
   // and the pointer, reject pending approvals, revoke approved ones that
-  // have not finished, and delete memory. Already at N or past it, it is
+  // have not finished, and delete memory and deadlines. Already at N or past it, it is
   // a no-op that answers with the recorded counts of that delete.
   async deleteConversation(verified: string, input: unknown) {
     await this.assertSubject(verified);
     const toGeneration = parseGenerationInput(input).generation;
-    const removed = this.ctx.storage.transactionSync(() => removeConversationState(this.db(), Date.now(), toGeneration));
+    const removed = this.ctx.storage.transactionSync(() => {
+      const before = currentGeneration(this.db());
+      const out = removeConversationState(this.db(), Date.now(), toGeneration);
+      // Only a delete that moved the generation removes deadlines: a
+      // retried old one never touches the conversation after it.
+      if (out.generation > before) removeDeadlines(this.db());
+      return out;
+    });
     this.store.audit({ event: "conversation.deleted", ...removed });
     await this.armReminderWakeup();
     this.syncState();

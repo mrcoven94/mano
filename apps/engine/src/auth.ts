@@ -256,6 +256,10 @@ const SERVICE_ROUTES: Record<Service, readonly (readonly [string, RegExp])[]> = 
     ["DELETE", /^\/pending-approval$/],
     ["GET", /^\/conversation$/],
     ["DELETE", /^\/conversation$/],
+    ["GET", /^\/deadlines$/],
+    ["POST", /^\/deadlines$/],
+    ["PATCH", /^\/deadlines\/[^/]+$/],
+    ["DELETE", /^\/deadlines\/[^/]+$/],
   ],
   channels: [["DELETE", /^\/conversation$/]],
 };

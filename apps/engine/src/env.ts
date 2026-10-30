@@ -18,6 +18,9 @@ export interface Env {
   // URL, signed with the Engine-to-Channels secret (never the agent's).
   MANO_CHANNELS_URL?: string;
   MANO_ENGINE_SEND_SECRET?: string;
+  // Local time of day deadline nudges go out, "HH:MM" between 09:00 and
+  // 20:00. Default 10:00.
+  MANO_NUDGE_TIME?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;
