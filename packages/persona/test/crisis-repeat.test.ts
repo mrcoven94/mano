@@ -17,7 +17,8 @@ describe("the crisis line is said once (safety-05)", () => {
 
   it("does the same in English, and keeps the line naming both numbers", () => {
     const bubbles = holdCrisisLines(["I'm really glad you told me. Please call or text 988 right now, it's free and open 24/7", "if you're in danger right now, call 911. I'm here with you. are you safe at this moment?"]);
-    expect(bubbles).toEqual([CRISIS_LINE, "I'm really glad you told me.", "I'm here with you. are you safe at this moment?"]);
+    // "I'm really glad you told me" is in the line already, so it goes too.
+    expect(bubbles).toEqual([CRISIS_LINE, "I'm here with you. are you safe at this moment?"]);
     expect(namesCrisisLines(bubbles.join(" "))).toBe(true);
   });
 
@@ -53,5 +54,20 @@ describe("the model is told the line is already sent", () => {
     expect(CRISIS_NOTE).toMatch(/Do not repeat 988 or 911/);
     expect(CRISIS_NOTE).toMatch(/are you safe right now\?/);
     expect(CRISIS_NOTE).toMatch(/¿estás a salvo ahora mismo\?/);
+  });
+});
+
+describe("the model's words never repeat what the line already says (live run, English)", () => {
+  it("drops a model sentence the line already says, and keeps the rest", () => {
+    expect(holdCrisisLines(["I'm really glad you told me", "I'm here with you", "are you safe right now?"])).toEqual([
+      CRISIS_LINE,
+      "I'm here with you",
+      "are you safe right now?",
+    ]);
+    expect(holdCrisisLines(["i'm really glad you told me.", "are you safe right now?"])).toEqual([CRISIS_LINE, "are you safe right now?"]);
+  });
+
+  it("tells the model not to repeat anything the line says, only to add what it leaves out", () => {
+    expect(CRISIS_NOTE).toMatch(/Do not repeat anything that line says/);
   });
 });

@@ -64,25 +64,31 @@ export function crisisFloor(reply: string): string {
 // the link check and splitting: the fixed crisis line, naming 988 and
 // 911, is always the first bubble and appears once. Callers cap the
 // bubbles after it, so the cap can never drop it. Since that line is
-// always there, a model sentence that only says 988 or 911 again is
-// dropped (safety-05: the judge marks the repeat down), and the safety
-// question keeps its question marks.
+// always there, a model sentence that only says 988 or 911 again, or
+// says a sentence of the line again, is dropped (safety-05: the judge
+// marks the repeat down), and the safety question keeps its question marks.
 export function holdCrisisLines(bubbles: readonly string[], line: string = CRISIS_LINE): string[] {
+  const said = new Set(sentencesOf(line).map(plain));
   const rest = bubbles
     .filter((b) => b !== CRISIS_LINE && b !== CRISIS_LINE_ES)
-    .map((b) => askSafety(withoutRepeatedLines(b)))
+    .map((b) => askSafety(withoutRepeatedLines(b, said)))
     .filter((b) => b.length > 0);
   return [line, ...rest];
+}
+
+// A sentence compared without case, punctuation or spacing.
+function plain(sentence: string): string {
+  return sentence.toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, "").replace(/\s+/g, " ").trim();
 }
 
 // A sentence that names 988 or 911 and asks nothing repeats the crisis
 // line. Other help a model adds (a hotline number) stays.
 const NAMES_LINE = /(?<!\d)(?:988|911)(?!\d)/;
 
-function withoutRepeatedLines(bubble: string): string {
+function withoutRepeatedLines(bubble: string, said: ReadonlySet<string>): string {
   return bubble
     .split(/(?<=[.!?])\s+/)
-    .filter((sentence) => !(NAMES_LINE.test(sentence) && !/[?¿]/.test(sentence)))
+    .filter((sentence) => !(NAMES_LINE.test(sentence) && !/[?¿]/.test(sentence)) && !said.has(plain(sentence)))
     .join(" ")
     .trim();
 }
@@ -104,8 +110,9 @@ function askSafety(bubble: string): string {
 // already on its way, so its own words are the human part.
 export const CRISIS_NOTE =
   "This person may be in crisis. Mano has already sent them this line first, word for word: {line} Do not repeat 988 or 911 or tell them again to call or text; it is already there. " +
-  "Write only the human part, in their language, in two or three short lines: that you're glad they told you, that you're here with them, " +
-  "and ask whether they are safe, with the question mark: \"are you safe right now?\" or \"¿estás a salvo ahora mismo?\"";
+  "Do not repeat anything that line says. Add only the human part it leaves out, in their language, in one to three short lines: " +
+  "that you're glad they told you and that you're here with them, unless the line already says so, " +
+  "and always ask whether they are safe, with the question mark: \"are you safe right now?\" or \"¿estás a salvo ahora mismo?\"";
 
 export function crisisNote(line: string): string {
   return CRISIS_NOTE.replace("{line}", `"${line}"`);

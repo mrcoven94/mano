@@ -32,6 +32,6 @@ describe("safety-05: the crisis line once, and the safety question still a quest
   it("does the same in English", async () => {
     const model = "I'm really glad you told me. Please call or text 988 right now, it's free and open 24/7\nif you're in danger right now, call 911. I'm here with you. are you safe at this moment";
     const out = await finalizeReply(model, { crisis: true, checker: noLinks });
-    expect(out.bubbles).toEqual([CRISIS_LINE, "I'm really glad you told me.", "I'm here with you. are you safe at this moment?"]);
+    expect(out.bubbles).toEqual([CRISIS_LINE, "I'm here with you. are you safe at this moment?"]);
   });
 });
