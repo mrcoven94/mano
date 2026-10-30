@@ -26,6 +26,7 @@ import {
   listReminders,
   parseGenerationInput,
   parsePointerInput,
+  parsePointerSetInput,
   parseReminderInput,
   parseTurnInput,
   putTurnIfAbsent,
@@ -224,9 +225,9 @@ export class EngineDouble {
         return Response.json({ turn });
       }
       if (rest === "/pending-approval" && method === "PUT") {
-        const input = parsePointerInput(body);
-        const pointer = setPendingPointer(sql, input.approvalId, input.generation, nowIso());
-        return pointer ? Response.json({ pointer }) : Response.json({ error: "Approval not found." }, { status: 404 });
+        const input = parsePointerSetInput(body);
+        const set = setPendingPointer(sql, input.approvalId, input.generation, input.turnId, nowIso());
+        return set ? Response.json(set) : Response.json({ error: "Approval or turn not found." }, { status: 404 });
       }
       if (rest === "/pending-approval" && method === "GET") {
         return Response.json({ pointer: getPendingPointer(sql, Number(url.searchParams.get("generation"))) });

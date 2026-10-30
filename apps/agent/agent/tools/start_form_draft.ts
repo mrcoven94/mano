@@ -8,7 +8,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 
 import type { EngineApproval } from "../lib/engine.js";
-import { presentsExactly, proposalKey, renderQuestion, waitingProposals } from "../lib/pending.js";
+import { draftOrders, olderTurn, presentsExactly, proposalKey, renderQuestion, waitingProposals, type TurnOrder } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { placeClaimId } from "../lib/reminders.js";
 
@@ -94,14 +94,29 @@ export default defineTool({
         note: "This draft cannot be shown word for word over text, so it was not put to a yes and nothing was sent. Tell the person plainly, without repeating the details, and offer to help another way.",
       };
     }
-    // One question waits at a time: drafts made before this message can no
-    // longer be answered, so Engine closes them. Drafts made after it (a
-    // replay of an older turn) are never touched.
-    const before = (a: EngineApproval) => Date.parse(a.createdAt) < turnAtMs;
-    const approvals = await engine.listApprovals();
-    const pointed = pointer ? approvals.find((a) => a.id === pointer.approvalId) : undefined;
-    if (pointer && pointed && before(pointed)) await engine.clearPointer(pointer.approvalId);
-    for (const earlier of waitingProposals(approvals, engine.generation, approval.id).filter(before)) {
+    // One question waits at a time, and the newest turn's draft is the
+    // one. Drafts are ordered by the turn that proposed them, never by
+    // when they were made: a slow turn can finish after a newer one.
+    // Drafts of older turns can no longer be answered, so Engine closes
+    // them; if a newer turn's draft already waits, this one is closed
+    // instead and never shown.
+    const mine: TurnOrder = { receivedAt: new Date(turnAtMs).toISOString(), turnId };
+    const others = waitingProposals(await engine.listApprovals(), engine.generation, approval.id);
+    const orders = await draftOrders(engine, others, engine.generation);
+    if (others.some((a) => orders.has(a.id) && olderTurn(mine, orders.get(a.id)!))) {
+      await engine.reject(approval.id).catch(() => undefined);
+      return {
+        status: "superseded",
+        sent: false,
+        note: "A newer request from the person is already waiting for their yes, so this draft was closed and nothing was sent. Say so in one short sentence.",
+      };
+    }
+    const older = (order: TurnOrder | undefined) => !order || olderTurn(order, mine);
+    if (pointer && pointer.approvalId !== approval.id) {
+      const shown = pointer.turnId && pointer.turnReceivedAt ? { receivedAt: pointer.turnReceivedAt, turnId: pointer.turnId } : undefined;
+      if (older(shown)) await engine.clearPointer(pointer.approvalId);
+    }
+    for (const earlier of others.filter((a) => older(orders.get(a.id)))) {
       await engine.reject(earlier.id).catch(() => undefined);
     }
     return {

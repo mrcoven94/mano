@@ -81,6 +81,8 @@ export interface EnginePointer {
   approvalId: string;
   generation: number;
   setAt: string;
+  turnId: string | null;
+  turnReceivedAt: string | null;
 }
 
 export interface EngineResult {
@@ -216,10 +218,13 @@ export class PersonEngine {
     return out.pointer ?? null;
   }
 
-  // null when Engine refused: the approval is not this person's, or not of
-  // the current generation.
-  async setPointer(approvalId: string): Promise<EnginePointer | null> {
-    const res = await this.call("PUT", "/pending-approval", { approvalId, generation: this.generation });
+  // Compare-and-set by turn order: Engine moves the pointer only to a
+  // draft of the same or a newer turn than the one it shows; an older
+  // turn's draft answers superseded and changes nothing. null when Engine
+  // refused: the approval or turn is not this person's, or not of the
+  // current generation.
+  async setPointer(approvalId: string, turnId: string): Promise<{ pointer: EnginePointer | null; superseded: boolean } | null> {
+    const res = await this.call("PUT", "/pending-approval", { approvalId, generation: this.generation, turnId });
     if (res.status === 404) {
       await res.body?.cancel().catch(() => undefined);
       return null;
@@ -228,7 +233,7 @@ export class PersonEngine {
       await res.body?.cancel().catch(() => undefined);
       throw new EngineError(res.status);
     }
-    return ((await res.json()) as { pointer: EnginePointer }).pointer;
+    return (await res.json()) as { pointer: EnginePointer | null; superseded: boolean };
   }
 
   // Compare-and-delete: clears only while the pointer still names this

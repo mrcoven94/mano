@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signBody } from "../agent/lib/auth.js";
 import { engineFrom, personIdFor } from "../agent/lib/engine.js";
-import { presentationHash } from "../agent/lib/pending.js";
+import { presentationHash, renderQuestion } from "../agent/lib/pending.js";
 import { handlePresented, handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/turn.js";
 import remind from "../agent/tools/remind.js";
 import startFormDraft from "../agent/tools/start_form_draft.js";
@@ -108,6 +108,28 @@ async function send(request: Request, d = deps(), opts: { present?: boolean } = 
   await new Promise((r) => setTimeout(r, 3));
   return { status: res.status, body };
 }
+
+// Channels reporting (or retrying the report of) a question it sent for
+// this approval.
+async function present(approval: Parameters<typeof renderQuestion>[0] & { id: string }, handleHash = HANDLE, generation = 0) {
+  const res = await handlePresented(
+    signedAt("/channels/mano/presented", {
+      handleHash,
+      approvalId: approval.id,
+      textHash: presentationHash(renderQuestion(approval)),
+      generation,
+      grant: grants.get(handleHash),
+    }),
+    { secret: SECRET, engine: engineClient() },
+  );
+  return { status: res.status, body: (await res.json()) as { ok: boolean; superseded?: boolean } };
+}
+
+const sizes = () =>
+  engine
+    .approvals()
+    .map((x) => `${JSON.parse(x.requestJson).payload.householdSize}:${x.status}`)
+    .sort();
 
 beforeEach(async () => {
   engine = new EngineDouble();
@@ -381,6 +403,71 @@ describe("ordering against Channels' receive time", () => {
       .map((x) => `${JSON.parse(x.requestJson).payload.householdSize}:${x.status}`)
       .sort();
     expect(sizes).toEqual(["3:rejected", "4:pending"]);
+  });
+});
+
+describe("a slow draft against a newer one", () => {
+  // Sol's sequence: B arrives while A is still being prepared. A's report
+  // fails, B's question is sent and reported, then A's report is retried.
+  function slowA() {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const d = deps({
+      runAgent: async (input) => {
+        if (input.turnId === "turn_slowA00001") await gate;
+        return fakeAgent(input);
+      },
+    });
+    return { d, release };
+  }
+
+  it("the YES files the newest question shown, never the older draft that finished late", async () => {
+    const { d, release } = slowA();
+    const preparingA = send(turn("turn_slowA00001", "Please file my renewal"), d, { present: false });
+    await new Promise((r) => setTimeout(r, 3));
+    const b = await send(turn("turn_slowB00001", "Please file my renewal, household of 4"), d);
+    expect(b.body.status).toBe("waiting_approval");
+    release();
+    await preparingA;
+    const late = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === 3)!;
+    const retried = await present(late);
+    expect(retried.body.ok).toBe(false);
+    const yes = await send(turn("turn_slowY00001", "YES"));
+    expect(yes.body.text).toMatch(/^Done/);
+    expect(engine.executor.calls).toHaveLength(1);
+    expect(sizes()).toEqual(["3:rejected", "4:approved"]);
+  });
+
+  it("an older draft's report after a newer question was shown is acknowledged, ignored and closes that draft", async () => {
+    const { d, release } = slowA();
+    const preparingA = send(turn("turn_slowA00001", "Please file my renewal"), d, { present: false });
+    await new Promise((r) => setTimeout(r, 3));
+    await send(turn("turn_slowB00001", "Please file my renewal, household of 4"), d);
+    // Engine refuses every close while A finishes, so both drafts still wait.
+    const realFetch = engine.fetch;
+    const refusing: typeof fetch = async (input, init) =>
+      /\/reject$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : realFetch(input, init);
+    vi.stubGlobal("fetch", refusing);
+    release();
+    await preparingA;
+    vi.stubGlobal("fetch", engine.fetch);
+    expect(sizes()).toEqual(["3:pending", "4:pending"]);
+    const late = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === 3)!;
+    const retried = await present(late);
+    expect(retried).toEqual({ status: 200, body: { ok: true, superseded: true } });
+    expect(sizes()).toEqual(["3:rejected", "4:pending"]);
+    const yes = await send(turn("turn_slowY00001", "YES"));
+    expect(yes.body.text).toMatch(/^Done/);
+    expect(sizes()).toEqual(["3:rejected", "4:approved"]);
+  });
+
+  it("a repeated report of the question keeps when it was first shown", async () => {
+    await send(turn("turn_rep_A00001", "Please file my renewal"));
+    const yesAt = Date.now();
+    await new Promise((r) => setTimeout(r, 3));
+    expect((await present(engine.approvals()[0])).status).toBe(200);
+    const yes = await send(turn("turn_rep_Y00001", "YES", HANDLE, 0, yesAt));
+    expect(yes.body.text).toMatch(/^Done/);
   });
 });
 

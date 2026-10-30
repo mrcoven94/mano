@@ -37,6 +37,48 @@ export function proposalKey(generation: number, turnId: string, place: number): 
   return `${prefix(generation)}${turnId}:d${place}`;
 }
 
+// The turn that proposed a draft, read back from its key.
+export function proposalTurn(approval: Pick<EngineApproval, "idempotencyKey">, generation: number): string | null {
+  const key = approval.idempotencyKey;
+  if (!key.startsWith(prefix(generation))) return null;
+  const m = /^(.+):d\d+$/.exec(key.slice(prefix(generation).length));
+  return m ? m[1] : null;
+}
+
+// Drafts are ordered by the turn that proposed them: when Channels
+// received it, then the turn ID. Never by when the draft was made, since a
+// slow turn can finish its draft after a newer turn finished its own.
+export interface TurnOrder {
+  receivedAt: string;
+  turnId: string;
+}
+
+export function olderTurn(a: TurnOrder, b: TurnOrder): boolean {
+  return a.receivedAt < b.receivedAt || (a.receivedAt === b.receivedAt && a.turnId < b.turnId);
+}
+
+// Each draft's turn order, from Engine's turn ledger. A draft whose turn
+// Engine does not know has no place in the order (absent from the map).
+export async function draftOrders(
+  engine: { getTurn(turnId: string): Promise<{ firstReceivedAt: string } | null> },
+  drafts: EngineApproval[],
+  generation: number,
+): Promise<Map<string, TurnOrder>> {
+  const out = new Map<string, TurnOrder>();
+  const seen = new Map<string, TurnOrder | null>();
+  for (const draft of drafts) {
+    const turnId = proposalTurn(draft, generation);
+    if (!turnId) continue;
+    if (!seen.has(turnId)) {
+      const turn = await engine.getTurn(turnId);
+      seen.set(turnId, turn ? { receivedAt: new Date(Date.parse(turn.firstReceivedAt)).toISOString(), turnId } : null);
+    }
+    const order = seen.get(turnId);
+    if (order) out.set(draft.id, order);
+  }
+  return out;
+}
+
 // The agent's proposals in this conversation, newest first.
 export function proposalsOf(approvals: EngineApproval[], generation: number): EngineApproval[] {
   return approvals

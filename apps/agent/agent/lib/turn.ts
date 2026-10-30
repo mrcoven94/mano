@@ -20,7 +20,7 @@ import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
-import { presentationHash, proposalsOf, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
+import { draftOrders, olderTurn, presentationHash, proposalTurn, proposalsOf, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 
 const MAX_TEXTS = 10;
@@ -302,9 +302,12 @@ async function runTurn(
   }
   const after = await engine.listApprovals();
   const own = proposedIn(after, body.generation, body.turnId);
-  // A replayed draft turn never brings back a question superseded by a
-  // later draft.
-  const proposed = own && !proposalsOf(after, body.generation).some((a) => a.createdAt > own.createdAt) ? own : null;
+  // A question is never shown while a draft of a newer turn waits: not
+  // from a replay, and not from a slow turn that finished after a newer one.
+  const mine = { receivedAt: new Date(turnAtMs).toISOString(), turnId: body.turnId };
+  const others = own ? waitingProposals(after, body.generation, own.id) : [];
+  const orders = await draftOrders(engine, others, body.generation);
+  const proposed = own && !others.some((a) => orders.has(a.id) && olderTurn(mine, orders.get(a.id)!)) ? own : null;
   const question = proposed ? renderQuestion(proposed) : null;
   const text = [settled.status === "failed" ? "" : settled.text, question ?? ""].filter(Boolean).join("\n\n");
   if (!text) return failure(502, "failed", settled.reason);
@@ -434,8 +437,19 @@ export async function handlePresented(request: Request, deps: { secret: string |
     console.warn(JSON.stringify({ type: "mano_presented_mismatch", handle: handleHash }));
     return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
   }
-  if (!(await engine.setPointer(approvalId))) {
-    return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
+  const turnId = proposalTurn(approval, generation);
+  const set = turnId ? await engine.setPointer(approvalId, turnId) : null;
+  if (!set) return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
+  if (set.superseded) {
+    // A newer turn's question was already shown: this report changes
+    // nothing, and its draft can never be answered, so Engine closes it.
+    // Until that close lands, Channels retries the report.
+    try {
+      await engine.reject(approvalId);
+    } catch {
+      return Response.json({ ok: false, reason: "engine" }, { status: 503 });
+    }
+    return Response.json({ ok: true, superseded: true });
   }
   return Response.json({ ok: true });
 }
