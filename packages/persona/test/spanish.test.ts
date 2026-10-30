@@ -61,3 +61,17 @@ describe("llama counts only in a model position", () => {
     }
   });
 });
+
+describe("Llama versions look like model versions (final round)", () => {
+  it("catches model versions", () => {
+    for (const text of ["Llama 3", "Llama 3.1", "I run llama-3.1-8b", "Llama3 answers here", "Uso Llama 3.1-instruct."]) {
+      expect(guardReply(text).changes, text).not.toEqual([]);
+    }
+  });
+
+  it("passes times, durations and phone numbers", () => {
+    for (const text of ["Llama 24 horas antes de tu entrevista de SNAP.", "Llama 1-800-555-0100", "Llama 2 días antes.", "Llama 3 hours before."]) {
+      expect(guardReply(text), text).toEqual({ text, changes: [] });
+    }
+  });
+});

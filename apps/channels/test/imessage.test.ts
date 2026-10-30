@@ -197,3 +197,19 @@ describe("Spanish benefits information survives the guard", () => {
     expect(await say(h, "evt_1", "cómo se llama la oficina")).toEqual(["La oficina se llama DSHS."]);
   });
 });
+
+describe("PR 69 final round: llama, through the runner", () => {
+  it("catches Llama identity constructions", async () => {
+    for (const reply of ["Llama powers me.", "My provider is llama.", "I'm powered by Llama.", "Mi proveedor es Llama."]) {
+      const h = introduced(makeHarness({ replies: [reply] }));
+      expect((await say(h, "evt_1", "who made you")).join(" "), reply).not.toMatch(/llama/i);
+    }
+  });
+
+  it("keeps Spanish calls with times and phone numbers", async () => {
+    for (const reply of ["Llama 24 horas antes de tu entrevista de SNAP.", "Llama 1-800-555-0100"]) {
+      const h = introduced(makeHarness({ replies: [reply] }));
+      expect(await say(h, "evt_1", "qué hago"), reply).toEqual([reply]);
+    }
+  });
+});

@@ -42,13 +42,24 @@ const ORDINARY_PHRASES = /\b(?:spark of hope|glimmer of hope|muse (?:on|about))\
 
 // "llama" is also Spanish for "call" ("se llama DSHS", "llama al 911"), so
 // it is the one stack word that does not count anywhere. It counts only
-// in a model position: before a version (Llama 3, llama-3.1, Llama3, 405b),
-// near a model word, inside an identity construction, or capitalized in
-// the middle of a sentence and not before al, a, ahora, ya or hoy.
+// in a model position: before a model version, near a model word, inside
+// an identity construction, or capitalized in the middle of a sentence
+// and not before al, a, ahora, ya or hoy.
+// A model version is one digit, optionally .digits, optionally B, -instruct
+// or -chat (Llama 3, Llama 3.1, llama-3.1-8b, Llama3). Never a time or
+// duration ("Llama 24 horas antes", "Llama 3 hours before") or a phone
+// number ("Llama 1-800-555-0100").
+const LLAMA_UNITS = "(?:horas?|hours?|d[ií]as?|days?|minutos?|minutes?|semanas?|weeks?)";
 const LLAMA_MODEL = [
-  /\bllama[-_ ]?(?:\d{1,2}(?:\.\d+)*|\d{1,3}b)\b/i,
+  new RegExp(
+    String.raw`\bllama[-_ ]?\d(?:\.\d+)*(?:[-_ ]?\d*b|-instruct|-chat)*(?![\w-]|\.\d)(?! ?${LLAMA_UNITS}\b)`,
+    "iu",
+  ),
+  /\bllama (?:powers|runs|made|built|trained|created|answers for) (?:me|mano)\b/i,
+  /\b(?:my|mi) (?:provider|model|maker|creator|proveedor|modelo|creador) (?:is|es) (?:the |el )?llama\b/i,
+  /\bllama (?:me impulsa|me hizo|me cre[óo]|me entren[óo])\b/iu,
   /\bllama\b.*\b(?:models?|modelos?|llms?|open[- ]source|c[óo]digo abierto|open[- ]weights?|weights|pesos abiertos)\b|\b(?:models?|modelos?|llms?|open[- ]source|c[óo]digo abierto|open[- ]weights?|weights)\b.*\bllama\b/i,
-  /\b(?:uso|usamos|i use|we use|basad[oa] en|based on|powered by|funciona con|funciono con|runs? on|running on|built on|made by|hecho por|soy|i am|i'm|i’m)\b(?: [\p{L}'’-]+){0,3} llama\b/iu,
+  /\b(?:uso|usamos|i use|we use|basad[oa] en|based on|powered by|funciona con|funciono con|runs? on|running on|built on|made by|hecho por|impulsado por|soy|i am|i'm|i’m)\b(?: [\p{L}'’-]+){0,3} llama\b/iu,
   /(?<=[\p{L}\d,] )Llama\b(?! (?:al?|ahora|ya|hoy)\b)/u,
 ];
 
