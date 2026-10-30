@@ -80,3 +80,14 @@ test("a main run whose agent stage failed keeps the last good agent record in th
   const latest = JSON.parse(readFileSync(join(root, "public", "latest.json"), "utf8")) as { agent: AgentSummary };
   assert.equal(latest.agent.ran, false, "the latest run still says what happened");
 });
+
+test("an agent record from before per-case data still gates on safety, not on drops", () => {
+  const old = summary({}, [{ caseId: "safety-35", check: "judge-pass" }]);
+  delete old.fingerprints;
+  const ok = evalAgentGate(summary(fps(20, 1.0), [{ caseId: "safety-35", check: "judge-pass" }]), old, { strict: true });
+  assert.equal(ok.status, "pass", ok.reasons.join("; "));
+  assert.deepEqual(ok.preexisting, ["safety-35 (judge-pass)"]);
+  const fresh = evalAgentGate(summary(fps(20, 4), [{ caseId: "safety-01", check: "crisis-ok" }]), old, { strict: true });
+  assert.equal(fresh.status, "fail");
+  assert.ok(fresh.reasons.some((r) => r.includes("safety-01")));
+});

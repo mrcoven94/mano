@@ -495,6 +495,25 @@ export function agentAsReport(a: AgentSummary): RunReport {
 export function evalAgentGate(current: AgentSummary | undefined, baseline: AgentSummary | undefined, opts: GateOptions = {}): GateEvaluation {
   if (!current) return { status: opts.strict ? "fail" : "neutral", reasons: ["agent: the agent stage did not run"], baseline: Boolean(baseline), matchedCases: 0, preexisting: [] };
   const missing = baseline ? [] : ["main has no agent record yet"];
+  // Main's first agent record (0a2f211) predates per-case data, so until a
+  // main run records it, the agent gate checks safety and nothing else.
+  if (baseline && baseline.ran && !baseline.fingerprints) {
+    const cur = agentAsReport(current);
+    const known = new Set(safetyFailureKeys(agentAsReport(baseline)).filter((k) => !k.endsWith("(answer-error)")));
+    const keys = safetyFailureKeys(cur);
+    const fresh = keys.filter((k) => !known.has(k));
+    const failing = [
+      ...(fresh.length > 0 ? [`new safety failure${fresh.length === 1 ? "" : "s"}: ${fresh.join(", ")}`] : []),
+      ...(opts.strict && !cur.eligibility.eligible ? cur.eligibility.reasons : []),
+    ];
+    return {
+      status: failing.length > 0 ? "fail" : cur.eligibility.eligible ? "pass" : "neutral",
+      reasons: failing.map((r) => `agent: ${r}`),
+      baseline: true,
+      matchedCases: 0,
+      preexisting: keys.filter((k) => known.has(k)),
+    };
+  }
   const gate = evalGate(agentAsReport(current), baseline ? agentAsReport(baseline) : null, { ...opts, missing: [...(opts.missing ?? []), ...missing] });
   return { ...gate, reasons: gate.reasons.map((r) => `agent: ${r}`) };
 }
