@@ -12,7 +12,6 @@ describe("cut my and cutting count only for a body part", () => {
       "they cut my pay",
       "they're cutting my medicaid",
       "they cut my power",
-      "I need to cut my bills",
       "can't afford to cut my hair",
       "they cut our SNAP",
       "they're cutting back my shifts",
@@ -82,5 +81,25 @@ describe("two passes, and an exclusion can only remove benefits cases (PR 70 rou
       expect(mightBeCrisis(text), text).toBe(true);
       expect(isCrisis(text), text).toBe(true);
     }
+  });
+});
+
+describe("the final exclusion rule (PR 70 round 6)", () => {
+  it("never excludes across a sentence boundary or when the speaker is the cutter", () => {
+    // mightBeCrisis is what the text line uses. The narrow isCrisis has
+    // never matched "cut my leg", on main or here.
+    for (const text of ["To punish myself I cut my leg hours ago.", "I cut my arm. Rent is due."]) {
+      expect(mightBeCrisis(text), text).toBe(true);
+    }
+  });
+
+  it("excludes only when someone else cuts a benefits noun that is the direct object", () => {
+    for (const text of ["they cut my food stamps", "my boss is cutting my shifts", "the county cut our SNAP", "they cut off my phone"]) {
+      expect(mightBeCrisis(text), text).toBe(false);
+    }
+  });
+
+  it("over-triggers on a first-person cut of a bill, which is accepted", () => {
+    expect(mightBeCrisis("I need to cut my bills")).toBe(true);
   });
 });

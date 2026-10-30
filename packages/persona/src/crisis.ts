@@ -28,32 +28,36 @@ const SELF_HARM =
 const VIOLENCE =
   /\b(?:(?:hit|hits|hitting|beat|beats|beating|hurt|hurts|hurting|choked?|choking|kick(?:s|ed|ing)?|attack(?:s|ed|ing)?|abus(?:es|ed|ing)) (?:me|us|my (?:kids?|children|son|daughter|baby))|(?:being|been|was|got) (?:abused|hit|beaten|attacked|choked)|abusive|domestic (?:abuse|violence)|(?:threaten(?:s|ed)?|going|gonna|wants?|tried|trying) to kill (?:me|us|myself|him|her|them)|kill me)\b/;
 const DANGER = /\b(?:immediate danger|in danger|not safe|unsafe|(?:don'?t|do not) feel safe)\b/;
-// Exclusion candidates: the trigger words of a benefits sentence, and
-// nothing else. A "cut", "cuts" or "cutting" followed within 3 words by a
-// benefits, money or work noun or an eviction word, or "being cut off";
-// and "in danger of losing" or "in danger of being" followed within 3
-// words by one. "cut myself" and anything followed by "myself" never
-// are, and neither is "in danger of being" followed by a crisis word.
-// Only the trigger words are removed; the noun and every neighbor stay.
-const CANDIDATES = [
-  new RegExp(String.raw`\bcut(?:s|ting)?(?! myself\b)(?=(?: [a-z']+){0,2} (?:${BENEFIT_WORDS})\b)`, "g"),
-  /(?<=\bbeing )cut(?= off\b)/g,
-  new RegExp(
-    String.raw`\bin danger of (?:losing|being)(?! myself\b)(?!(?: [a-z']+){0,2}? (?:hit|hurt|killed|attacked|threatened)\b)(?=(?: [a-z']+){0,2}? (?:${BENEFIT_WORDS})\b)`,
-    "g",
-  ),
-];
+// Exclusions. One is eligible only when all of these hold:
+// (a) it sits inside one sentence; sentence boundaries are never lost;
+// (b) for a cut, the speaker is not the cutter: no first-person singular
+//     in that sentence ("they cut my food stamps" is eligible, "I cut my
+//     arm" and "I need to cut my bills" are not);
+// (c) the benefits, money or work noun is the direct object right after
+//     the verb, with only my, our, the, back or off in between, so "cut
+//     my leg hours ago" is never a work cut;
+// (d) no other crisis word is left in the whole message once the trigger
+//     words are removed (the second pass).
+// "In danger of losing" or "in danger of being" before a benefits word
+// ("in danger of losing my SNAP", "in danger of being evicted") is
+// eligible under (a), (c) and (d). Only the trigger words are removed.
+const BETWEEN = "(?:(?:my|our|the|back|off) )*";
+const CUT_CANDIDATE = new RegExp(String.raw`\bcut(?:s|ting)?(?= ${BETWEEN}(?:${BENEFIT_NOUNS})\b)`, "g");
+const BEING_CUT_OFF = /(?<=\bbeing )cut(?= off\b)/g;
+const DANGER_CANDIDATE = new RegExp(String.raw`\bin danger of (?:losing|being)(?= ${BETWEEN}(?:${BENEFIT_WORDS})\b)`, "g");
+const FIRST_PERSON = /\b(?:i|i'm|im|i've|ive|i'd|me|myself|my self)\b/;
 
-// Every candidate is found on the unchanged text, then all are blanked
-// at once, so removing one can never change whether another matches.
-function withoutCandidates(words: string): string {
-  const blank = new Array<boolean>(words.length).fill(false);
-  for (const pattern of CANDIDATES) {
-    for (const match of words.matchAll(pattern)) {
+// The candidates of one sentence are all found on the unchanged words,
+// then blanked at once, so removing one never changes another.
+function withoutCandidates(sentence: string): string {
+  const patterns = FIRST_PERSON.test(sentence) ? [BEING_CUT_OFF, DANGER_CANDIDATE] : [CUT_CANDIDATE, BEING_CUT_OFF, DANGER_CANDIDATE];
+  const blank = new Array<boolean>(sentence.length).fill(false);
+  for (const pattern of patterns) {
+    for (const match of sentence.matchAll(pattern)) {
       for (let k = match.index; k < match.index + match[0].length; k++) blank[k] = true;
     }
   }
-  return [...words].map((ch, k) => (blank[k] ? " " : ch)).join("");
+  return [...sentence].map((ch, k) => (blank[k] ? " " : ch)).join("");
 }
 
 // "cut", "cuts" and "cutting" count: safe by default, since no list of
@@ -67,6 +71,15 @@ function normalize(text: string): string {
   return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]/g, " ").replace(/\s+/g, " ")} `;
 }
 
+// Each sentence on its own, so no pattern or exclusion reaches across a
+// boundary ("I cut my arm. Rent is due.").
+function sentencesOf(text: string): string[] {
+  return text
+    .split(/[.!?…;\n]+/)
+    .map(normalize)
+    .filter((s) => s.trim().length > 0);
+}
+
 function narrow(words: string): boolean {
   return SELF_HARM.test(words) || VIOLENCE.test(words) || DANGER.test(words);
 }
@@ -75,17 +88,18 @@ function broad(words: string): boolean {
   return narrow(words) || POSSIBLE_CRISIS.test(words);
 }
 
-// Two passes. The detectors run on the message unchanged; if one fires,
-// the exclusion candidates are removed and both run again. The crisis
-// line is suppressed only when neither fires on that second pass.
+// Two passes. The detectors run on every sentence unchanged; if one
+// fires, the eligible exclusions' trigger words are removed and both run
+// again on the whole message. The crisis line is suppressed only when
+// neither fires on that second pass.
 export function isCrisis(text: string): boolean {
-  const words = normalize(text);
-  return narrow(words) && broad(withoutCandidates(words));
+  const sentences = sentencesOf(text);
+  return sentences.some(narrow) && sentences.map(withoutCandidates).some(broad);
 }
 
 export function mightBeCrisis(text: string): boolean {
-  const words = normalize(text);
-  return broad(words) && broad(withoutCandidates(words));
+  const sentences = sentencesOf(text);
+  return sentences.some(broad) && sentences.map(withoutCandidates).some(broad);
 }
 
 export function namesCrisisLines(reply: string): boolean {
