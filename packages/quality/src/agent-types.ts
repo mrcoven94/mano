@@ -34,6 +34,10 @@ export interface AgentSummary {
   workerAnswered: number;
   answerErrors: number;
   suites: Record<string, AgentSuite>;
+  // Per case: identifiers and numbers only, for matched comparisons. Only
+  // cases the agent answered in both runs are compared.
+  fingerprints?: Record<string, { suite: string; version: number; live: boolean; hardPass: boolean; judgeMean: number | null; servedBy: string }>;
+  rerun?: { rerun: string[]; held: string[]; cleared: string[] };
   p50Ms: number;
   p95Ms: number;
 }

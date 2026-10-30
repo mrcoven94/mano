@@ -107,10 +107,13 @@ export function languageOf(text: string): "en" | "es" | "unknown" {
   return es > en ? "es" : "en";
 }
 
-// State names for SNAP and Medicaid. A must-include of the federal name is
-// met by the name the person's state uses.
+// State names for SNAP, LIHEAP and Medicaid. A must-include of the federal
+// name is met by the name the person's state uses (Arizona's Nutrition
+// Assistance, Texas's CEAP).
 const PROGRAM_ALIASES: Record<string, string[]> = {
-  snap: ["calfresh", "basic food", "food assistance", "food stamps", "fap", "cupones de alimentos", "estampillas de comida"],
+  snap: ["calfresh", "basic food", "food assistance", "nutrition assistance", "food stamps", "fap", "cupones de alimentos", "estampillas de comida"],
+  // Texas runs LIHEAP as the Comprehensive Energy Assistance Program.
+  liheap: ["ceap"],
   medicaid: ["medi-cal", "apple health", "masshealth", "ahcccs", "tenncare", "soonercare", "medical assistance", "husky health", "badgercare"],
 };
 

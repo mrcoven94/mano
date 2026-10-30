@@ -273,3 +273,11 @@ test("a forbidden phrase inside a refusal or a question is not said", async () =
   const said = await lineCheck(c, ["Yes, you have a case. Sue them."]);
   assert.ok(said.some((r) => r.id === "must-not-include" && !r.pass));
 });
+
+// Found by Channels on the live line: state names for the same programs.
+test("Texas CEAP counts as LIHEAP and Arizona Nutrition Assistance as SNAP", async () => {
+  const tx = await lineCheck(byId("chat-tx-01"), ["In Texas, food stamps (SNAP) help with groceries, and CEAP helps with electric bills."]);
+  assert.ok(tx.filter((r) => r.id === "must-include").every((r) => r.pass), JSON.stringify(tx.filter((r) => !r.pass)));
+  const az = await lineCheck(byId("chat-az-02"), ["Arizona's Nutrition Assistance renewal is due November 25, 2026."]);
+  assert.ok(az.filter((r) => r.id === "must-include").every((r) => r.pass), JSON.stringify(az.filter((r) => !r.pass)));
+});

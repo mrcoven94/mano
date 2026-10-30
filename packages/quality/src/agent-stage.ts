@@ -9,7 +9,8 @@ import { startAgentStack, type AgentStack } from "./agent-stack.ts";
 import { FakeJudge, MetaJudge, type JudgeClient } from "./judge.ts";
 import { DEFAULT_MODEL_BASE_URL, MetaModelClient, judgeClientFromEnv } from "./models.ts";
 import { loadAgentPaths, needsMailReader, type PathSet } from "./paths.ts";
-import { calibrate, percentile, runBench, type CaseResult, type RunOptions } from "./run.ts";
+import { agentAsReport } from "./report.ts";
+import { calibrate, fingerprintsOf, percentile, rerunNewlyFailing, runBench, type CaseResult, type RunOptions } from "./run.ts";
 import { buildAllSuites } from "./suites/build.ts";
 
 export type { AgentSuite, AgentSummary } from "./agent-types.ts";
@@ -28,10 +29,13 @@ export function textCaseIds(onlyCaseIds?: Set<string>): string[] {
 
 // The summary is aggregates only; the per-case results go to the private
 // bucket with the rest of the run.
-export async function runAgentStage(pathSet: PathSet | null, opts: RunOptions = {}): Promise<{ summary: AgentSummary; results: CaseResult[] }> {
+// With main's agent record as the baseline, a case that newly fails is run
+// once more and counts only if it fails again, as on the plain line.
+export async function runAgentStage(pathSet: PathSet | null, opts: RunOptions = {}, baseline?: AgentSummary): Promise<{ summary: AgentSummary; results: CaseResult[] }> {
   if (!pathSet) return { summary: agentNotRun("no agent configured (QUALITY_AGENT_URL, MANO_AGENT_SECRET, MANO_HANDLE_GRANT_SECRET)"), results: [] };
   const ids = textCaseIds(opts.onlyCaseIds);
-  const bench = await runBench({ ...opts, pathSet, onlyCaseIds: new Set(ids), skipCalibration: true });
+  const first = await runBench({ ...opts, pathSet, onlyCaseIds: new Set(ids), skipCalibration: true });
+  const { bench, rerun } = await rerunNewlyFailing(first, baseline ? agentAsReport(baseline) : null, { ...opts, pathSet });
   const suites: Record<string, AgentSuite> = {};
   for (const [name, s] of Object.entries(bench.report.suites)) {
     const rows = bench.results.filter((r) => r.suite === name);
@@ -63,6 +67,9 @@ export async function runAgentStage(pathSet: PathSet | null, opts: RunOptions = 
     p50Ms: percentile(latency, 50),
     p95Ms: percentile(latency, 95),
   };
+  const fps = fingerprintsOf(bench.results, bench.report.suites);
+  summary.fingerprints = Object.fromEntries(bench.results.filter((r) => fps[r.caseId]).map((r) => [r.caseId, { ...fps[r.caseId]!, live: fps[r.caseId]!.live === true, servedBy: r.answer.servedBy ?? "plain" }]));
+  summary.rerun = rerun;
   return { summary, results: bench.results };
 }
 
@@ -100,7 +107,7 @@ export interface StageDeps {
 // start, a turn throws), the nightly still stages and uploads the primary
 // results. The reason recorded is a fixed phrase, never an error message,
 // which could carry a URL or a secret. The stack is always stopped.
-export async function runAgentStageSafely(env: NodeJS.ProcessEnv, deps: StageDeps = {}, opts: RunOptions = {}): Promise<{ summary: AgentSummary; results: CaseResult[] }> {
+export async function runAgentStageSafely(env: NodeJS.ProcessEnv, deps: StageDeps = {}, opts: RunOptions = {}, baseline?: AgentSummary): Promise<{ summary: AgentSummary; results: CaseResult[] }> {
   let stack: AgentStack;
   try {
     stack = await (deps.start ?? startAgentStack)(env);
@@ -111,7 +118,7 @@ export async function runAgentStageSafely(env: NodeJS.ProcessEnv, deps: StageDep
   try {
     const stageEnv = { ...env, QUALITY_AGENT_URL: stack.agentUrl, MANO_AGENT_SECRET: stack.agentSecret, MANO_HANDLE_GRANT_SECRET: stack.grantSecret };
     const { judge, models, selfJudged } = agentJudgeFromEnv(stageEnv);
-    const out = await runAgentStage(await (deps.load ?? loadAgentPaths)(stageEnv), { ...opts, env: stageEnv, judge });
+    const out = await runAgentStage(await (deps.load ?? loadAgentPaths)(stageEnv), { ...opts, env: stageEnv, judge }, baseline);
     // The agent's judge may not be the bench's, so it is calibrated on its own.
     const cal = await calibrate(judge);
     return { summary: { ...out.summary, models, selfJudged, calibration: { agreement: cal.agreement, complete: cal.complete, kept: cal.kept } }, results: out.results };
