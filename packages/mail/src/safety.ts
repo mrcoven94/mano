@@ -168,6 +168,11 @@ export function screenScam(text: string): ContentFlag[] {
   if (urgency.length === 0) return [];
   const asksPayment = /pay\b|payment|verify|confirm\s+your|update\s+your\s+(account|information|benefits)/i.test(text);
   if (!asksPayment) return [];
+  // A real office never tells the person not to contact it.
+  const cutOff = text.match(/\b(?:do\s+not|don't|never)\s+(?:call|contact|phone|visit)\s+(?:the\s+|your\s+)?(?:county|office|agency|state|caseworker|benefits\s+office)\b[^.!?\n]*/i);
+  if (cutOff) {
+    return [{ kind: "scam", label: "urgent verification ask that tells the person not to contact their office", match: cutOff[0], detail: `urgency words: ${urgency.slice(0, 3).join(", ")}` }];
+  }
   const suspicious = findLinks(text).filter((l) => {
     const host = hostOf(l.match);
     return !host || !host.endsWith(".gov");

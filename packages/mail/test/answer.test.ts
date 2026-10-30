@@ -125,3 +125,32 @@ describe("held deadline fields", () => {
     expect(bare.deadlines).toEqual([expect.objectContaining({ kind: null, federalProgram: null, title: "County Help Fund" })]);
   });
 });
+
+describe("answerReading on the bench's letters", () => {
+  const short = (lines: string[], deadlines: { text: string; box_2d: number[] }[], asked: { text: string; box_2d: number[] }[] = []) =>
+    pageJson({
+      full_text: lines.join("\n\n"),
+      sender: { text: null, box_2d: null },
+      program: { text: null, box_2d: null },
+      subject: { text: lines[0], box_2d: [40, 60, 70, 400] },
+      asked,
+      deadlines,
+      consequence: { text: null, box_2d: null },
+      reference_no: { text: null, box_2d: null },
+      notice_date: { text: null, box_2d: null },
+      phones: [],
+    });
+
+  it("names a letter by its title and closes an unpunctuated quote", async () => {
+    const answer = await answerFor([short(["SNAP renewal notice", "Due November 15, 2026"], [{ text: "Due November 15, 2026", box_2d: [80, 60, 100, 300] }])]);
+    expect(answer.text).toContain('The letter is titled "SNAP renewal notice".');
+    expect(answer.text).toContain('The letter says: "Due November 15, 2026". Is November 15, 2026');
+  });
+
+  it("warns about an urgent letter that says not to call the county, and relays none of it", async () => {
+    const lines = ["URGENT BENEFITS ALERT", "Verify now or your case closes today", "Do not call the county"];
+    const answer = await answerFor([short(lines, [{ text: lines[1]!, box_2d: [80, 60, 100, 300] }], [{ text: lines[1]!, box_2d: [80, 60, 100, 300] }])]);
+    expect(answer.text).toMatch(/looks like a scam/);
+    expect(answer.text).not.toMatch(/verify now|which date/i);
+  });
+});

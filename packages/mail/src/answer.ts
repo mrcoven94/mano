@@ -83,22 +83,27 @@ function whatItIs(letter: Letter): string {
   const subject = [f.subject, f.program].find((c) => c && safe(c.value));
   const what = subject ? bare(subject!.value) : null;
   if (sender && what) return `This is a letter from ${sender}: ${what}.`;
-  if (what) return `This is a letter about ${what}.`;
+  if (what) return `The letter is titled "${what}".`;
   if (sender) return `This is a letter from ${sender}.`;
   return "I read this letter, but it does not say clearly who sent it or what it is about.";
 }
+
+// The letter's words in quotes, closed with a period outside the quote
+// when the sentence has none of its own.
+const quoted = (quote: string): string => (/[.!?]$/.test(quote.trim()) ? `"${quote.trim()}"` : `"${quote.trim()}".`);
 
 function deadlineLine(question: Question | undefined): { text: string; held: boolean } | null {
   if (!question) return null;
   const proposal = question.proposal;
   if (proposal?.confidence === "high") {
-    return { text: `It is due ${spoken(proposal.dueDate)}. The letter says: "${proposal.quote}"`, held: true };
+    return { text: `It is due ${spoken(proposal.dueDate)}. The letter says: ${quoted(proposal.quote)}`, held: true };
   }
   if (proposal) {
-    return { text: `The letter says: "${proposal.quote}" Is ${spoken(proposal.dueDate)} the date you need to meet?`, held: false };
+    return { text: `The letter says: ${quoted(proposal.quote)} Is ${spoken(proposal.dueDate)} the date you need to meet?`, held: false };
   }
-  const sentence = question.candidates?.[0]?.sentence;
-  if (sentence) return { text: `The letter says: "${bare(sentence)}." Which date is your deadline?`, held: false };
+  // Only a sentence that names a date is worth asking about.
+  const candidate = question.candidates?.find((c) => c.dates.length > 0);
+  if (candidate) return { text: `The letter says: ${quoted(candidate.sentence)} Which date is your deadline?`, held: false };
   return null;
 }
 
