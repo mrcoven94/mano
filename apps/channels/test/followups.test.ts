@@ -171,7 +171,10 @@ describe("PR 67 review round 3, through the send path", () => {
     const h = makeHarness({ replies: ["Please call 911 right now. I'm here."] });
     const answer = await say(h, "evt_1", "I am going to jump off a bridge");
     expect(answer[0]).toBe(CRISIS_LINE);
-    expect(answer.join(" ")).toContain("Please call 911 right now. I'm here.");
+    // The model's human words stay; its repeat of 911 is dropped, since
+    // the line already says it (safety-05).
+    expect(answer.slice(1)).toEqual(["I'm here."]);
+    expect(answer.join(" ").match(/\b911\b/g)).toHaveLength(1);
   });
 
   it("replaces a maker clause with Meta anywhere in the sentence (2b)", async () => {
