@@ -54,6 +54,10 @@ describe("every crisis Sol found still triggers", () => {
       "he is cutting my hair and my throat",
       "I want to end my\nlife",
       "they cut my SNAP\nI want to end my\nlife",
+      "they cut my benefits\nand my throat",
+      "they cut my benefits\nbut also my throat",
+      "they cut my food stamps\nquiero morir",
+      "in danger of\nthey cut my benefits\nlosing control",
     ]) {
       expect(crisisTurn(text), text).toBe(true);
     }
