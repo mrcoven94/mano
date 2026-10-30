@@ -138,6 +138,10 @@ export interface RunReport {
   mail?: MailSummary;
   rerun?: RerunSummary;
   agent?: AgentSummary;
+  // On main: whether this run became the baseline, and why not.
+  promotion?: import("./report.ts").Promotion;
+  // On latest.json after a restore: which run's baseline was put back.
+  restoredFrom?: { runId: string; at: string; by: string | null };
 }
 
 export interface RerunSummary {

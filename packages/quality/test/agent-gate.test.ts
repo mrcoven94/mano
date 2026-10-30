@@ -6,7 +6,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentSummary } from "../src/agent-types.ts";
-import { evalAgentGate } from "../src/report.ts";
+import { decidePromotion, evalAgentGate } from "../src/report.ts";
+import type { RunReport } from "../src/run.ts";
 
 type Fp = NonNullable<AgentSummary["fingerprints"]>[string];
 
@@ -22,6 +23,12 @@ function summary(fps: Record<string, Fp>, failures: { caseId: string; check: str
 }
 const fps = (n: number, judgeMean: number, failing = 0, servedBy: Fp["servedBy"] = "agent"): Record<string, Fp> =>
   Object.fromEntries(Array.from({ length: n }, (_, i) => [`c-${i}`, { suite: "chat", version: 1, live: true, hardPass: i >= failing, judgeMean, servedBy }]));
+
+// The decision a nightly would take for this run, against a prior that
+// holds the same plain results (so only the agent record can differ).
+function decideFor(rep: RunReport, ref: string, priorAgent?: AgentSummary) {
+  return decidePromotion(rep, priorAgent ? { ...rep, agent: priorAgent } : null, { ref, strict: false, accept: false }).decision;
+}
 
 test("no agent record on main yet: neutral offline, failing in CI", () => {
   assert.equal(evalAgentGate(summary(fps(20, 4)), undefined).status, "neutral");
@@ -76,7 +83,7 @@ test("a main run whose agent stage failed keeps the last good agent record in th
     agent: summary({}, [], { ran: false, detail: "the agent stage could not start Engine and the agent" }),
   };
   const root = mkdtempSync(join(tmpdir(), "agent-carry-"));
-  writeNightlyStaging(root, report, [], [], { ref: "refs/heads/main", priorAgent: good });
+  writeNightlyStaging(root, report, [], [], { ref: "refs/heads/main", priorAgent: good, decision: decideFor(report, "refs/heads/main", good) });
   const baseline = JSON.parse(readFileSync(join(root, "public", "baseline.json"), "utf8")) as { agent: AgentSummary };
   assert.equal(baseline.agent.ran, true);
   assert.equal(Object.keys(baseline.agent.fingerprints ?? {}).length, 5);
@@ -112,7 +119,7 @@ test("agent judge errors or failed calibration fail the gate in CI and never pro
     prices: { inputPer1k: 0, outputPer1k: 0, configured: false }, fingerprints: {}, eligibility: { eligible: true, reasons: [] }, agent: unjudged,
   };
   const root = mkdtempSync(join(tmpdir(), "agent-unjudged-"));
-  writeNightlyStaging(root, report, [], [], { ref: "refs/heads/main", priorAgent: base });
+  writeNightlyStaging(root, report, [], [], { ref: "refs/heads/main", priorAgent: base, decision: decideFor(report, "refs/heads/main", base) });
   const baseline = JSON.parse(readFileSync(join(root, "public", "baseline.json"), "utf8")) as { agent: AgentSummary };
   assert.equal(baseline.agent.judgeErrors ?? 0, 0, "an unjudged agent record replaced the last good one");
 });

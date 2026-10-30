@@ -9,6 +9,15 @@ on:
   schedule:
     - cron: "13 7 * * *"
   workflow_dispatch:
+    inputs:
+      accept_baseline:
+        description: "Make this run the baseline even if it regressed (logged)"
+        type: boolean
+        default: false
+      restore_from_run:
+        description: "Instead of a run, restore this past main run id as the baseline (logged)"
+        type: string
+        default: ""
 permissions:
   contents: read
 concurrency:
@@ -53,10 +62,25 @@ jobs:
           else
             echo "no holdout secret; the run is recorded with the holdout marked as not run"
           fi
+      - name: Restore a past baseline
+        if: inputs.restore_from_run != ''
+        working-directory: packages/quality
+        env:
+          RESTORE_RUN: ${{ inputs.restore_from_run }}
+          ACCEPT_BASELINE: ${{ inputs.accept_baseline }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          ACCEPT=""
+          [ "$ACCEPT_BASELINE" = "true" ] && ACCEPT="--accept-baseline"
+          node --import ./src/register.ts src/bin/restore-baseline.ts --run "$RESTORE_RUN" --ref "$GITHUB_REF" $ACCEPT
       - name: Run and record every suite
+        if: inputs.restore_from_run == ''
         working-directory: packages/quality
         env:
           QUALITY_GATE_STRICT: "1"
+          ACCEPT_BASELINE: ${{ inputs.accept_baseline }}
           META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
           MANO_MODEL_BASE_URL: ${{ secrets.MANO_MODEL_BASE_URL }}
           MANO_MODEL_JUDGE_ID: ${{ vars.MANO_MODEL_JUDGE_ID }}
@@ -72,4 +96,6 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          node --import ./src/register.ts src/bin/nightly.ts --out ../../runs-staging --ref "$GITHUB_REF" --agent-local --upload
+          ACCEPT=""
+          [ "$ACCEPT_BASELINE" = "true" ] && ACCEPT="--accept-baseline"
+          node --import ./src/register.ts src/bin/nightly.ts --out ../../runs-staging --ref "$GITHUB_REF" --agent-local --upload $ACCEPT
