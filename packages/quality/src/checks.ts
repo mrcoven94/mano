@@ -7,6 +7,7 @@ import { checkLink } from "./links.ts";
 import { sentText, type BenchAnswer } from "./paths.ts";
 import type { BenchCase } from "./suites/types.ts";
 import { MAX_DEEP_CHARS, MAX_FAST_CHARS } from "@mano/persona";
+import { STATES, listPrograms } from "@mano/programs";
 import { CRISIS_LINE as CRISIS_NUMBER } from "./facts.ts";
 
 // The worker's bubble cap (packages/channels MAX_BUBBLES).
@@ -129,6 +130,26 @@ const PROGRAM_ALIASES: Record<string, Alias[]> = {
   liheap: [{ text: "CEAP", state: "TX", exact: true }],
   medicaid: ["medi-cal", "apple health", "masshealth", "ahcccs", "tenncare", "soonercare", "medical assistance", "husky health", "badgercare"].map((text) => ({ text })),
 };
+
+// The state's own program names from @mano/programs ("Basic Food",
+// "Comprehensive Energy Assistance Program (CEAP)"): the full name, the name
+// without its parenthetical, and the short name inside it, each exact and
+// limited to that state.
+for (const state of STATES) {
+  for (const entry of listPrograms(state)) {
+    const name = entry.name?.value;
+    if (!name) continue;
+    const short = name.match(/\(([^)]+)\)/)?.[1];
+    const forms = new Set([name, name.replace(/\s*\([^)]*\)/, ""), ...(short ? [short] : [])]);
+    for (const text of forms) PROGRAM_ALIASES[entry.program]!.push({ text, state, exact: true });
+  }
+}
+
+// Official program phones from @mano/programs, by state: a number the agent
+// looked up there was not invented.
+function catalogPhones(state: string): Set<string> {
+  return new Set(listPrograms(state).flatMap((e) => (e.phone ? [normalizePhone(e.phone.value)] : [])));
+}
 
 function aliasMatches(haystack: string, alias: Alias, state: string): boolean {
   if (alias.state && alias.state !== state) return false;
@@ -294,12 +315,14 @@ function includesHaystack(haystack: string, needle: string): boolean {
 }
 
 
-// Phones the answer gives that came from nowhere: not a public help number
-// and not something the person wrote. For paths without the program catalog,
-// where a phone number cannot have been looked up.
+// Phones the answer gives that came from nowhere: not a public help number,
+// not an official program number from @mano/programs for the case's state,
+// and not something the person wrote. For paths without the bench catalog,
+// whose made-up numbers cannot have been looked up.
 export function unknownPhones(c: BenchCase, text: string): string[] {
   const said = new Set(extractPhones(c.input.turns.join("\n")).map(normalizePhone));
-  return extractPhones(text).filter((p) => !PUBLIC_PHONES.has(normalizePhone(p)) && !said.has(normalizePhone(p)));
+  const official = catalogPhones(c.state);
+  return extractPhones(text).filter((p) => !PUBLIC_PHONES.has(normalizePhone(p)) && !said.has(normalizePhone(p)) && !official.has(normalizePhone(p)));
 }
 
 // A must-include needle that only the program catalog could supply (a phone,
