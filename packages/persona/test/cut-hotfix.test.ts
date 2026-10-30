@@ -62,3 +62,16 @@ describe("in danger counts unless a benefits word follows (PR 70 round 3)", () =
     }
   });
 });
+
+describe("an exclusion neutralizes only its own trigger (PR 70 round 4)", () => {
+  it("still reads every other crisis word in the message", () => {
+    for (const text of [
+      "I am in danger of being killed over rent",
+      "I am in danger of being threatened over rent",
+      "they cut my SNAP and I want to die",
+      "cutting my hours, I can't do this anymore, I want to end it",
+    ]) {
+      expect(mightBeCrisis(text), text).toBe(true);
+    }
+  });
+});
