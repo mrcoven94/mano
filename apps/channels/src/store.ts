@@ -157,11 +157,19 @@ export interface ConversationMeta {
   optOutDated: boolean;
   // When Channels received that STOP, on its own clock.
   optOutReceivedAtMs: number;
-  // When Mano's chat background was set, 0 when not yet. It is set once
-  // per chat and kept across a delete, so it is never sent again.
-  backgroundSetAtMs: number;
-  // Tries at setting it; it stops after a few failures.
-  backgroundAttempts: number;
+}
+
+// Mano's chat background on one chat, keyed by a hash of the chat ID (so
+// no raw chat ID outlives a delete). "uncertain" means an upload may have
+// landed and is read back before any retry. Kept across a delete, so the
+// background is never sent twice.
+export type ChatBackgroundState = "uncertain" | "set" | "failed";
+export interface ChatBackground {
+  chatKey: string;
+  state: ChatBackgroundState;
+  // Uploads tried.
+  attempts: number;
+  updatedAtMs: number;
 }
 
 export function defaultMeta(): ConversationMeta {
@@ -188,8 +196,6 @@ export function defaultMeta(): ConversationMeta {
     optOutAtMs: 0,
     optOutDated: false,
     optOutReceivedAtMs: 0,
-    backgroundSetAtMs: 0,
-    backgroundAttempts: 0,
   };
 }
 
@@ -235,6 +241,8 @@ export interface ConversationStore {
   startAgentSend(row: AgentSendRow): void;
   finishAgentSend(key: string, atMs: number, state?: "sent" | "refused" | "failed"): void;
   wipe(deletedAtMs: number): void;
+  chatBackground(chatKey: string): ChatBackground | null;
+  saveChatBackground(row: ChatBackground): void;
 }
 
 export class MemoryStore implements ConversationStore {
@@ -411,13 +419,23 @@ export class MemoryStore implements ConversationStore {
     if (row) this.agentSendRows.set(key, { ...row, state, updatedAtMs: atMs });
   }
 
+  // Not cleared by wipe: see ChatBackground.
+  private chatBackgrounds = new Map<string, ChatBackground>();
+
+  chatBackground(chatKey: string): ChatBackground | null {
+    return this.chatBackgrounds.get(chatKey) ?? null;
+  }
+
+  saveChatBackground(row: ChatBackground): void {
+    this.chatBackgrounds.set(row.chatKey, { ...row });
+  }
+
   wipe(deletedAtMs: number): void {
     const generation = this.metaRow.generation + 1;
     const turn = this.metaRow.turn;
     this.events.clear();
     this.inboundMessages.clear();
-    const { backgroundSetAtMs, backgroundAttempts } = this.metaRow;
-    this.metaRow = { ...defaultMeta(), generation, turn, deletedAtMs, backgroundSetAtMs, backgroundAttempts };
+    this.metaRow = { ...defaultMeta(), generation, turn, deletedAtMs };
     this.pendingRows = [];
     this.outboundRows.clear();
     this.heldReceipts = [];

@@ -24,8 +24,11 @@ export interface Channel {
   // its own reaction).
   unreact(chatId: string, messageId: string, reaction: Reaction): Promise<void>;
   // Sets the chat's background image. Optional: providers without one
-  // skip it.
-  setBackground?(chatId: string, image: Blob): Promise<void>;
+  // skip it. Throws ChannelFailed when it was not set and
+  // ChannelUncertain when it may have been.
+  setBackground?(chatId: string, image: Blob, signal?: AbortSignal): Promise<void>;
+  // Whether the chat has a background now, to settle an uncertain upload.
+  hasBackground?(chatId: string, signal?: AbortSignal): Promise<boolean>;
   // Null when the provider has no record of the message.
   lookupMessage(chatId: string, messageId: string): Promise<ChannelMessageStatus | null>;
   listEvents(cursor: string | null, limit: number): Promise<ChannelEventPage>;

@@ -297,3 +297,14 @@ describe("a reaction never replaces an answer (LAP-508)", () => {
     expect(result).toMatchObject({ text: "", tapback: "love", attempts: 1 });
   });
 });
+
+describe("the deep path answers in text too (PR 74 review, blocker 3)", () => {
+  it("asks again for text when a deep answer to a question is a reaction alone", async () => {
+    const fetchFn = scripted(reply("DEEP: Let me check how that works."), reply("REACT: like"), reply("the date is on your renewal letter"));
+    const responder = new SparkResponder({ apiKey: "test-key-not-real", model: MODEL, fetchFn: fetchFn as typeof fetch, hedgeAfterMs: 60_000 });
+    const result = await responder.respond({ texts: ["When is my SNAP renewal due?"], attachmentCount: 0, history: [] }, { onHeadsUp: async () => {} });
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(String(bodyOf(fetchFn, 2).instructions)).toContain("answer it in text");
+    expect(result).toMatchObject({ text: "the date is on your renewal letter", tapback: "like", attempts: 3 });
+  });
+});

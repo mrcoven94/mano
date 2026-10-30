@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { guardReply } from "../src/guard.js";
 import { MANO_SOUL } from "../src/soul.js";
-import { EYES, allowedTapback, isReactionText, needsAnswer, splitTapback, tapbackText } from "../src/tapbacks.js";
+import { EYES, allowedTapback, isReactionText, needsAnswer, reactionEligible, splitTapback, tapbackText } from "../src/tapbacks.js";
 import { REACTION_PROBES, checkReactionSet, type ReactionRun } from "../src/probes.js";
 
 describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
@@ -25,12 +25,18 @@ describe("emoji reactions (LAP-508 dynamic tapbacks)", () => {
     expect(guardReply("ok\nREACT: 🙏").text).toBe("ok");
   });
 
-  it("never puts a heart, laugh, flex or party on bad news", () => {
-    for (const t of ["love", "laugh", "💪", "🎉"] as const) {
+  it("puts no reaction at all on bad news (PR 74 review, should 4)", () => {
+    for (const t of ["love", "laugh", "💪", "🎉", "like", "emphasize", "🙏"] as const) {
       expect(allowedTapback(t, "they denied my medicaid", false), t).toBeNull();
     }
-    expect(allowedTapback("🙏", "they denied my medicaid", false)).toBe("🙏");
     expect(allowedTapback("💪", "just mailed the renewal packet", false)).toBe("💪");
+  });
+
+  it("has one eligibility gate for every reaction, the eyes included", () => {
+    expect(reactionEligible("they denied my medicaid", false)).toBe(false);
+    expect(reactionEligible("Loved \u201cok\u201d", false)).toBe(false);
+    expect(reactionEligible("thank you", true)).toBe(false);
+    expect(reactionEligible("can you look at my case", false)).toBe(true);
   });
 
   it("never reacts on a crisis turn or on a reaction sent as text", () => {
@@ -85,7 +91,7 @@ describe("the 20-message reaction set", () => {
       runs[i] = runOf(REACTION_PROBES[i]!.id, tapback, reply);
       return REACTION_PROBES[i]!.id;
     };
-    const bad = set("bad-news", "love");
+    const bad = set("bad-news", "🙏");
     const crisis = set("crisis", "🙏", "please call or text 988");
     const reaction = set("reaction", "like");
     const question = set("question", "like", "");

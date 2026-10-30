@@ -4,6 +4,7 @@ import type { EventAttachment } from "@mano/channels";
 import {
   defaultMeta,
   type ApprovalRow,
+  type ChatBackground,
   type ConversationMeta,
   type ConversationStore,
   type OutboundRow,
@@ -104,6 +105,12 @@ CREATE TABLE IF NOT EXISTS agent_sends (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chat_backgrounds (
+  chat_key TEXT PRIMARY KEY,
+  state TEXT NOT NULL,
+  attempts INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS presentations (
   turn INTEGER PRIMARY KEY,
   approval_id TEXT NOT NULL,
@@ -136,8 +143,6 @@ interface MetaRow {
   opt_out_at_ms?: number;
   opt_out_dated?: number;
   opt_out_received_at_ms?: number;
-  background_set_at_ms?: number;
-  background_attempts?: number;
 }
 
 function firstRow<T>(cursor: SqlStorageCursor<Record<string, SqlStorageValue>>): T | null {
@@ -199,8 +204,6 @@ const META_COLUMNS: Record<keyof ConversationMeta, string> = {
   optOutAtMs: "opt_out_at_ms",
   optOutDated: "opt_out_dated",
   optOutReceivedAtMs: "opt_out_received_at_ms",
-  backgroundSetAtMs: "background_set_at_ms",
-  backgroundAttempts: "background_attempts",
 };
 
 export class SqlConversationStore implements ConversationStore {
@@ -226,9 +229,6 @@ export class SqlConversationStore implements ConversationStore {
       "ALTER TABLE meta ADD COLUMN opt_out_at_ms INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE meta ADD COLUMN opt_out_dated INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE meta ADD COLUMN opt_out_received_at_ms INTEGER NOT NULL DEFAULT 0",
-      // The chat background, set once (LAP-508).
-      "ALTER TABLE meta ADD COLUMN background_set_at_ms INTEGER NOT NULL DEFAULT 0",
-      "ALTER TABLE meta ADD COLUMN background_attempts INTEGER NOT NULL DEFAULT 0",
     ]) {
       try {
         this.sql.exec(ddl);
@@ -286,14 +286,12 @@ export class SqlConversationStore implements ConversationStore {
       optOutAtMs: row.opt_out_at_ms ?? 0,
       optOutDated: row.opt_out_dated === 1,
       optOutReceivedAtMs: row.opt_out_received_at_ms ?? 0,
-      backgroundSetAtMs: row.background_set_at_ms ?? 0,
-      backgroundAttempts: row.background_attempts ?? 0,
     };
   }
 
   saveMeta(meta: ConversationMeta): void {
     this.sql.exec(
-      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ?, typing_since_ms = ?, typing_active = ?, opt_out_at_ms = ?, opt_out_dated = ?, opt_out_received_at_ms = ?, background_set_at_ms = ?, background_attempts = ? WHERE id = 1",
+      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ?, typing_since_ms = ?, typing_active = ?, opt_out_at_ms = ?, opt_out_dated = ?, opt_out_received_at_ms = ? WHERE id = 1",
       meta.turn,
       meta.introduced ? 1 : 0,
       meta.closed ? 1 : 0,
@@ -316,8 +314,6 @@ export class SqlConversationStore implements ConversationStore {
       meta.optOutAtMs,
       meta.optOutDated ? 1 : 0,
       meta.optOutReceivedAtMs,
-      meta.backgroundSetAtMs,
-      meta.backgroundAttempts,
     );
   }
 
@@ -676,18 +672,29 @@ export class SqlConversationStore implements ConversationStore {
     this.sql.exec("UPDATE agent_sends SET state = ?, updated_at_ms = ? WHERE agent_key = ?", state, atMs, key);
   }
 
+  chatBackground(chatKey: string): ChatBackground | null {
+    const row = firstRow<{ chat_key: string; state: ChatBackground["state"]; attempts: number; updated_at_ms: number }>(
+      this.sql.exec("SELECT * FROM chat_backgrounds WHERE chat_key = ?", chatKey),
+    );
+    return row ? { chatKey: row.chat_key, state: row.state, attempts: row.attempts, updatedAtMs: row.updated_at_ms } : null;
+  }
+
+  saveChatBackground(row: ChatBackground): void {
+    this.sql.exec(
+      "INSERT OR REPLACE INTO chat_backgrounds (chat_key, state, attempts, updated_at_ms) VALUES (?, ?, ?, ?)",
+      row.chatKey,
+      row.state,
+      row.attempts,
+      row.updatedAtMs,
+    );
+  }
+
+  // chat_backgrounds is kept: see ChatBackground.
   wipe(deletedAtMs: number): void {
     const meta = this.meta();
     this.sql.exec(
       "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns; DELETE FROM inbound_messages; DELETE FROM agent_sends; DELETE FROM presentations;",
     );
-    this.saveMeta({
-      ...defaultMeta(),
-      generation: meta.generation + 1,
-      turn: meta.turn,
-      deletedAtMs,
-      backgroundSetAtMs: meta.backgroundSetAtMs,
-      backgroundAttempts: meta.backgroundAttempts,
-    });
+    this.saveMeta({ ...defaultMeta(), generation: meta.generation + 1, turn: meta.turn, deletedAtMs });
   }
 }

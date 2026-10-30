@@ -1,3 +1,4 @@
+import { Decorations } from "../src/decorations.js";
 import {
   RecordingChannel,
   StandInResponder,
@@ -23,6 +24,8 @@ export interface Harness {
   store: MemoryStore;
   channel: RecordingChannel;
   responder: Responder;
+  // Eyes and background work, run outside the turn.
+  decorations: Decorations;
   files: MemoryFileStore;
   ledger: GlobalLedger;
   lines: string[];
@@ -91,6 +94,8 @@ export function makeHarness(
     reportPresentation?: import("../src/runner.js").RunnerDeps["reportPresentation"];
     // Another store behind the same interface, such as SqlConversationStore.
     store?: ConversationStore;
+    // How long decoration work may run before it is cancelled.
+    decorationTimeoutMs?: number;
   } = {},
 ): Harness {
   const lines: string[] = [];
@@ -105,6 +110,7 @@ export function makeHarness(
     store,
     channel,
     responder,
+    decorations: new Decorations({ timeoutMs: opts.decorationTimeoutMs }),
     files,
     ledger: null as unknown as GlobalLedger,
     lines,
@@ -144,6 +150,7 @@ export function makeHarness(
     fetchFn: opts.fetchFn ?? (async () => new Response("missing", { status: 404 })),
     config: { handleHash: TEST_HANDLE_HASH, ...DEFAULT_RUNNER_CONFIG, ...opts.config },
     reportPresentation: opts.reportPresentation,
+    decorations: h.decorations,
   });
   return h;
 }

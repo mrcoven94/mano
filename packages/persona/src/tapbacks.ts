@@ -1,7 +1,7 @@
 // Tapbacks: the model may start its reply with one line, "REACT: love"
 // or "REACT: 🙏", to react to the person's message, with or without text
 // after it. The rules around it are deterministic: no reaction in a
-// crisis or on a reaction, and nothing celebratory on bad news. The
+// crisis, on a reaction or on bad news. The
 // worker alone sends EYES, while a slow turn is under way.
 
 // The four tapbacks every iMessage client shows natively.
@@ -43,8 +43,6 @@ export function splitTapback(text: string): { tapback: Tapback | null; text: str
 // Losing food, housing, coverage or income, or a denial.
 const BAD_NEWS =
   /\b(?:cut|cuts|denied|deny|denial|lost|losing|lose|evict\w*|terminat\w*|ended|ending|stopped|cancel\w*|overpay\w*|owe|behind|late|reject\w*|closed|shut ?off|disconnect\w*|died|passed away|sick|hospital)\b/i;
-// Nothing that reads as a celebration goes on bad news.
-const NOT_ON_BAD_NEWS: ReadonlySet<Tapback> = new Set(["love", "laugh", "💪", "🎉"]);
 
 // A reaction that reached Mano as text (SMS shows a tapback as
 // 'Loved "..."'). Mano never reacts to a reaction.
@@ -55,9 +53,15 @@ export function isReactionText(personText: string): boolean {
   return REACTION_TEXT.test(personText);
 }
 
+// The one gate for every reaction Mano puts on a message, the eyes
+// included: none in a crisis, none on a reaction, and none on bad news,
+// where the only fitting response is words.
+export function reactionEligible(personText: string, crisis: boolean): boolean {
+  return !crisis && !isReactionText(personText) && !BAD_NEWS.test(personText);
+}
+
 export function allowedTapback(tapback: Tapback | null, personText: string, crisis: boolean): Tapback | null {
-  if (!tapback || crisis || isReactionText(personText)) return null;
-  if (NOT_ON_BAD_NEWS.has(tapback) && BAD_NEWS.test(personText)) return null;
+  if (!tapback || !reactionEligible(personText, crisis)) return null;
   return tapback;
 }
 
@@ -88,3 +92,7 @@ export function tapbackText(tapback: Tapback): string {
 // Sent when the model replied with only a tapback the rules refused
 // (a heart on bad news), so the person still gets an answer.
 export const REFUSED_TAPBACK_TEXT = "that's rough. tell me what happened?";
+
+// Sent when the person asked something and the reply came back as a
+// reaction alone, even after the responder asked again for words.
+export const NEEDS_ANSWER_TEXT = "I don't have a good answer to that yet. Can you tell me a little more about what you need?";

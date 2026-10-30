@@ -36,7 +36,13 @@ export class RecordingChannel implements Channel {
   backgrounds: Array<{ chatId: string; type: string; size: number }> = [];
   // Set to make reactions or background uploads throw, for failure paths.
   failReactions = false;
-  failBackground = false;
+  // What setBackground does: lands, fails knowingly, ends uncertain, or
+  // never settles (until its signal aborts).
+  backgroundOutcome: "set" | "failed" | "uncertain" | "hang" = "set";
+  // What hasBackground answers per chat, for reconciling.
+  devicesWithBackground = new Set<string>();
+  backgroundReads: string[] = [];
+  backgroundSignals: AbortSignal[] = [];
   lookupCalls: Array<{ chatId: string; messageId: string }> = [];
   // Feed pages served to listEvents, in order.
   feedPages: NormalizedEvent[][] = [];
@@ -120,9 +126,20 @@ export class RecordingChannel implements Channel {
     this.unreactions.push({ chatId, messageId, reaction });
   }
 
-  async setBackground(chatId: string, image: Blob): Promise<void> {
-    if (this.failBackground) throw new Error("background failed");
+  async setBackground(chatId: string, image: Blob, signal?: AbortSignal): Promise<void> {
     this.backgrounds.push({ chatId, type: image.type, size: image.size });
+    if (signal) this.backgroundSignals.push(signal);
+    if (this.backgroundOutcome === "failed") throw new ChannelFailed(400, "bad_image", "background failed");
+    if (this.backgroundOutcome === "uncertain") throw new ChannelUncertain("background outcome unknown", 1);
+    if (this.backgroundOutcome === "hang") {
+      await new Promise<never>((_, reject) => signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+    }
+    this.devicesWithBackground.add(chatId);
+  }
+
+  async hasBackground(chatId: string): Promise<boolean> {
+    this.backgroundReads.push(chatId);
+    return this.devicesWithBackground.has(chatId);
   }
 
   async lookupMessage(chatId: string, messageId: string): Promise<ChannelMessageStatus | null> {

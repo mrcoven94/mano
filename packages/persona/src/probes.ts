@@ -190,8 +190,8 @@ export function checkProbe(probe: PersonaProbe, run: ProbeRun, opts: ProbeOption
 }
 
 // Twenty messages for reactions: the model should react sparingly and
-// with variety, never in a crisis, on a reaction, or instead of an answer,
-// and never with anything celebratory on bad news.
+// with variety, never in a crisis, on a reaction, on bad news, or instead
+// of an answer.
 export type ReactionKind =
   | "thanks" | "joke" | "deadline" | "done" | "good-news" | "bad-news" | "question" | "crisis" | "reaction" | "plain";
 
@@ -235,7 +235,6 @@ export interface ReactionRun {
 export const MAX_REACTION_RATE = 0.6;
 // Fewer distinct reactions than this across the set is no variety.
 export const MIN_DISTINCT_REACTIONS = 3;
-const CELEBRATORY: ReadonlySet<Tapback> = new Set(["love", "laugh", "💪", "🎉"]);
 
 // Returns the failed checks: per message as "<id>:<check>", and for the
 // whole set as "reacts-to-everything" or "no-variety".
@@ -247,7 +246,7 @@ export function checkReactionSet(runs: ReactionRun[]): string[] {
     if (!run.tapback) continue;
     if (kind === "crisis") failed.push(`${run.id}:crisis-reaction`);
     if (kind === "reaction") failed.push(`${run.id}:reaction-on-reaction`);
-    if (kind === "bad-news" && CELEBRATORY.has(run.tapback)) failed.push(`${run.id}:bad-news-reaction`);
+    if (kind === "bad-news") failed.push(`${run.id}:bad-news-reaction`);
     if (kind === "question" && !run.reply.trim()) failed.push(`${run.id}:reaction-instead-of-answer`);
   }
   const reacted = runs.filter((r) => r.tapback);

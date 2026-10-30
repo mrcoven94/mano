@@ -6,6 +6,7 @@ import type { Responder, RespondHooks, TurnInput } from "@mano/channels";
 import { CRISIS_LINE, EYES } from "@mano/persona";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { SqlConversationStore } from "../src/store-sql.js";
+import { backgroundKey } from "../src/runner.js";
 import { TEST_CHAT, inboundEvent, makeHarness, runTurnAfterBatch, type Harness } from "./helpers.js";
 
 function sqliteStorage(db: DatabaseSync): SqlStorage {
@@ -39,6 +40,8 @@ async function say(h: Harness, id: string, text: string, extra: Partial<Paramete
   const before = h.channel.sends.length;
   await h.runner.handleEvent(inboundEvent({ id, text, occurredAtMs: h.now, ...extra }), "webhook");
   await runTurnAfterBatch(h);
+  // Decoration runs outside the turn; the tests wait for it to settle.
+  await h.decorations.idle();
   return h.channel.sends.slice(before).map((s) => s.text);
 }
 
@@ -165,7 +168,7 @@ describe("the chat background, set once", () => {
     expect(order.indexOf("background")).toBeGreaterThan(lastSend);
     // The upload never holds the typing indicator up.
     expect(order.indexOf("background")).toBeGreaterThan(order.lastIndexOf("typing:stopped"));
-    expect(h.store.meta().backgroundSetAtMs).toBeGreaterThan(0);
+    expect(h.store.chatBackground(await backgroundKey(TEST_CHAT))?.state).toBe("set");
     await say(h, "evt_2", "ok thanks");
     expect(h.channel.backgrounds).toHaveLength(1);
   });
@@ -204,14 +207,14 @@ describe("the chat background, set once", () => {
     expect(h.channel.backgrounds).toEqual([]);
   });
 
-  it("stops after three failed tries, and a failure never touches the reply", async () => {
+  it("stops after three known failures, and a failure never touches the reply", async () => {
     const h = makeHarness({ replies: ["a", "b", "c", "d"], fetchFn: withImage(), config: { backgroundUrl: BACKGROUND_URL } });
-    h.channel.failBackground = true;
+    h.channel.backgroundOutcome = "failed";
     for (const [i, text] of ["one", "two", "three", "four"].entries()) {
       expect(await say(h, `evt_${i}`, text)).toContain(["a", "b", "c", "d"][i]);
     }
-    expect(h.store.meta().backgroundAttempts).toBe(3);
-    expect(h.store.meta().backgroundSetAtMs).toBe(0);
+    expect(h.channel.backgrounds).toHaveLength(3);
+    expect(h.store.chatBackground(await backgroundKey(TEST_CHAT))).toMatchObject({ state: "failed", attempts: 3 });
   });
 
   it("refuses an image that is not an image", async () => {
@@ -229,16 +232,17 @@ describe("the chat background, set once", () => {
     const h = makeHarness({ replies: ["hello"], fetchFn: withImage(), config: { backgroundUrl: BACKGROUND_URL } });
     await say(h, "evt_1", "hi");
     h.store.wipe(h.now);
-    expect(h.store.meta().backgroundSetAtMs).toBeGreaterThan(0);
+    expect(h.store.chatBackground(await backgroundKey(TEST_CHAT))?.state).toBe("set");
   });
 });
 
-describe("the SQL store keeps the background flag", () => {
-  it("round-trips it and keeps it across a wipe", () => {
+describe("the SQL store keeps the background record", () => {
+  it("round-trips it per chat and keeps it across a wipe", () => {
     const store = new SqlConversationStore(sqliteStorage(new DatabaseSync(":memory:")));
-    store.patchMeta({ backgroundSetAtMs: 1234, backgroundAttempts: 1 });
-    expect(store.meta()).toMatchObject({ backgroundSetAtMs: 1234, backgroundAttempts: 1 });
+    store.saveChatBackground({ chatKey: "k1", state: "uncertain", attempts: 1, updatedAtMs: 1234 });
+    expect(store.chatBackground("k1")).toEqual({ chatKey: "k1", state: "uncertain", attempts: 1, updatedAtMs: 1234 });
+    expect(store.chatBackground("k2")).toBeNull();
     store.wipe(5678);
-    expect(store.meta()).toMatchObject({ backgroundSetAtMs: 1234, backgroundAttempts: 1, deletedAtMs: 5678 });
+    expect(store.chatBackground("k1")?.state).toBe("uncertain");
   });
 });

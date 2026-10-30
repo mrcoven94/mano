@@ -23,7 +23,8 @@ describe("allowedTapback", () => {
   it("never puts a heart or a laugh on bad news", () => {
     expect(allowedTapback("love", "they cut my food stamps", false)).toBeNull();
     expect(allowedTapback("laugh", "we got denied again", false)).toBeNull();
-    expect(allowedTapback("like", "they cut my food stamps", false)).toBe("like");
+    // PR 74 review: no reaction of any kind on bad news.
+    expect(allowedTapback("like", "they cut my food stamps", false)).toBeNull();
   });
 
   it("allows a heart on thanks", () => {

@@ -6,6 +6,7 @@ import {
   FAILURE_BUBBLE,
   INTERIM_BUBBLE,
   INTRO_BUBBLE,
+  NEEDS_ANSWER_BUBBLE,
   OPT_OUT_BUBBLE,
   attachmentAck,
 } from "../src/text.js";
@@ -19,6 +20,7 @@ describe("static reply texts", () => {
       BUSY_BUBBLE,
       OPT_OUT_BUBBLE,
       APPROVAL_RECORDED_BUBBLE,
+      NEEDS_ANSWER_BUBBLE,
       attachmentAck(1),
       attachmentAck(5),
     ];

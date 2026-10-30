@@ -17,7 +17,7 @@ import {
   stripBlockedLinks,
   type HistoryMessage,
 } from "@mano/channels";
-import { REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, crisisTurn, guardReply, tapbackText, type GuardChange } from "@mano/persona";
+import { NEEDS_ANSWER_TEXT, REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, crisisTurn, guardReply, needsAnswer, tapbackText, type GuardChange } from "@mano/persona";
 import { viaAiGateway } from "./models.ts";
 import type { AnswerPath, BenchAnswer } from "./paths.ts";
 import type { BenchCase } from "./suites/types.ts";
@@ -138,7 +138,8 @@ export class TextLine {
     // the worker's text fallback, as it does when a tapback cannot be sent.
     const tapback = allowedTapback(result.tapback ?? null, turnText, crisis);
     let reply = result.text;
-    if (!reply.trim()) reply = crisis ? "" : tapback ? tapbackText(tapback) : result.tapback ? REFUSED_TAPBACK_TEXT : reply;
+    // As the worker does: a question always gets words.
+    if (!reply.trim()) reply = crisis ? "" : needsAnswer(turnText) ? NEEDS_ANSWER_TEXT : tapback ? tapbackText(tapback) : result.tapback ? REFUSED_TAPBACK_TEXT : reply;
     const final = await finalizeReply(reply, { modelIds, crisis, checker, crisisLine: crisisLineFor(turnText) });
     removed += final.removed;
     changes.push(...final.changes);

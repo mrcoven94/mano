@@ -3,7 +3,7 @@
 // (AGENTS.md rule 3). The failure reply is the voice guard's safe line.
 // Every reply sent without the model (busy, over a limit, failure)
 // carries SAFETY_LINE, so crisis help never depends on detection.
-import { INTRO_LINE, SAFE_REPLY, SAFETY_LINE } from "@mano/persona";
+import { INTRO_LINE, NEEDS_ANSWER_TEXT, SAFE_REPLY, SAFETY_LINE } from "@mano/persona";
 
 export const INTRO_BUBBLE = INTRO_LINE;
 
@@ -14,6 +14,9 @@ export const FAILURE_BUBBLE = SAFE_REPLY;
 export const BUSY_BUBBLE = `I'm busy right now, try me again later. ${SAFETY_LINE}`;
 
 export { OPT_OUT_BUBBLE } from "@mano/channels";
+
+// A question answered by a reaction alone gets these words instead.
+export const NEEDS_ANSWER_BUBBLE = NEEDS_ANSWER_TEXT;
 
 export const APPROVAL_RECORDED_BUBBLE = "Recorded. I will follow up when it is decided.";
 
