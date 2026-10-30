@@ -203,6 +203,7 @@ describe("fill_form", () => {
     model = new FakeModelClient([[call(typing({ ...VALUES, householdSize: "4" }))], [say("ACCEPTED")]]);
     const second = await run("turn_fill0011", { form: "food-renewal", answers: { householdSize: "4" } });
     expect(second.status).toBe("waiting_for_yes");
+    expect(engine.approvals().find((a) => a.id === first.approvalId)?.status).toBe("rejected");
     const old = await client().approve(first.approvalId as string);
     expect(old.status).not.toBe("completed");
     expect(engine.executor.calls).toHaveLength(0);
@@ -230,5 +231,13 @@ describe("fill_form", () => {
     const again = await client().approve(out.approvalId as string);
     expect(again.status).not.toBe("needs_approval");
     expect(engine.executor.calls).toHaveLength(1);
+  });
+
+  it("refuses when Engine is not configured, and touches nothing", async () => {
+    const c = await ctx("turn_fill0014");
+    vi.stubEnv("ENGINE_URL", "");
+    await expect(fillForm.execute({ form: "food-renewal" }, c)).rejects.toThrow(/not available/i);
+    expect(computer.visited).toEqual([]);
+    expect(outside).toEqual([]);
   });
 });

@@ -23,6 +23,7 @@ export interface FillDeps {
 // Inside the 90-second turn, with room for the reply around it.
 const DEFAULT_DEADLINE_MS = 60_000;
 const DEFAULT_MODEL = "muse-spark-1.3";
+const CLOSE_WAIT_MS = 3_000;
 const DEFAULT_BASE_URL = "https://api.meta.ai/v1";
 
 // The computer and model this deployment fills forms with, or why there is none.
@@ -58,6 +59,7 @@ function taskText(form: FormSpec, values: Record<string, string>): string {
     "Fill out the form open in this browser with exactly these values, then continue to the form's next step. Do not submit anything.",
     ...lines,
     "Type each value exactly as written. For a date field, click it, press Ctrl+A, then type the date.",
+    "A long value can look cut off in a narrow field; that is fine, do not retype it.",
     "When the form's next step appears, stop and reply with exactly: ACCEPTED",
     "If the form shows an error instead, stop and reply with REJECTED: and the error text.",
   ].join("\n");
@@ -78,6 +80,10 @@ export async function fillOnComputer(form: FormSpec, values: Record<string, stri
       return runLoop(deps.computer, deps.model, taskText(form, values), {
         model: deps.modelId,
         maxSteps: 8,
+        // The model's blanket per-action confirmation is answered here:
+        // this run only types into our sandbox form, and nothing is filed
+        // without the person's YES. Any other check stops the run.
+        onSafetyCheck: async (check) => check.code === "computer_action_requires_confirmation",
         instructions: "These fields do not depend on each other: fill all of them in one batch of click and type actions, then click Continue.",
         onTurn: (turn: { step: number; call: ComputerAction[] } | { step: number; message: string }) => {
           if ("call" in turn) for (const a of turn.call) if (a.type === "type") typed.push(a.text);
@@ -103,6 +109,9 @@ export async function fillOnComputer(form: FormSpec, values: Record<string, stri
     return { status: "failed", reason: err instanceof Deadline ? "deadline" : "error", ms };
   } finally {
     clearTimeout(timer);
-    await deps.computer.close().catch(() => undefined);
+    // Stopping a hosted desktop can take longer than the turn has left;
+    // wait briefly, and the service's own cap stops it otherwise.
+    const closing = deps.computer.close().catch(() => undefined);
+    await Promise.race([closing, new Promise((r) => setTimeout(r, CLOSE_WAIT_MS))]);
   }
 }

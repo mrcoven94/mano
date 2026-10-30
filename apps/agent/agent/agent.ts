@@ -6,6 +6,11 @@
 // Meta Model API directly, always on the Standard model ID with
 // store:false.
 //
+// fill_form fills a form on the person's computer (packages/computer)
+// from their Engine profile and holds the exact version for their YES;
+// it needs MANO_PORTAL_URL and MODAL_COMPUTER_URL (see .env.example) and
+// says so when they are missing.
+//
 // Engine also holds the agent's own state for each person (reminders,
 // which its alarm delivers through Channels, the turn ledger and the
 // approval pointer), so the agent keeps no store of its own.

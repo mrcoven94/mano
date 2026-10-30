@@ -69,7 +69,9 @@ export default defineTool({
       return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Say so and offer to try again soon." };
     }
     const fill = await fillOnComputer(form, filled.values, portalUrl, deps);
-    console.log(JSON.stringify({ type: "mano_fill", status: fill.status, ms: "ms" in fill ? fill.ms : 0, steps: "steps" in fill ? fill.steps : 0 }));
+    console.log(
+      JSON.stringify({ type: "mano_fill", status: fill.status, reason: "reason" in fill ? fill.reason : null, ms: "ms" in fill ? fill.ms : 0, steps: "steps" in fill ? fill.steps : 0 }),
+    );
     if (fill.status === "rejected") {
       return { status: "form_refused", sent: false, formSays: fill.message, note: "The form refused these values. Tell the person what the form said in one sentence and ask the one question that fixes it." };
     }
