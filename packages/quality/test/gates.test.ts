@@ -157,22 +157,22 @@ test("every nightly run is recorded; only eligible runs become the baseline", as
   const { full, results } = await smokeRun(false);
   const dir = mkdtempSync(join(tmpdir(), "quality-staging-"));
 
-  const first = writeNightlyStaging(join(dir, "n"), { ...full, runId: "2026-10-28" }, results);
-  assert.equal(first.eligible, false);
+  const first = writeNightlyStaging(join(dir, "n"), { ...full, runId: "2026-10-28" }, results, [], { branch: "main" });
+  assert.equal(first.promoted, false);
   assert.ok(existsSync(join(dir, "n", "public", "latest.json")), "the page always sees the latest run");
   assert.equal(existsSync(join(dir, "n", "public", "baseline.json")), false, "an ineligible run never gates anyone");
   assert.ok(existsSync(join(first.privateRunDir, "cases.json")), "per-case data stays private");
   assert.equal(existsSync(join(dir, "n", "public", "cases.json")), false);
 
   const prior = readHistory(join(dir, "n", "public", "history.json"));
-  const second = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, prior);
-  assert.equal(second.eligible, true);
+  const second = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, prior, { branch: "main" });
+  assert.equal(second.promoted, true);
   const baseline = JSON.parse(readFileSync(join(dir, "n", "public", "baseline.json"), "utf8")) as RunReport;
   assert.equal(baseline.runId, "2026-10-29");
   assert.equal(Object.keys(baseline.fingerprints).length, 28);
 
-  const rerun = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, readHistory(join(dir, "n", "public", "history.json")));
-  assert.ok(rerun.eligible);
+  const rerun = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, readHistory(join(dir, "n", "public", "history.json")), { branch: "main" });
+  assert.ok(rerun.promoted);
   const history = readHistory(join(dir, "n", "public", "history.json"));
   assert.deepEqual(history.map((h) => h.runId), ["2026-10-28", "2026-10-29"], "a rerun replaces its own row");
   assert.deepEqual(history.map((h) => h.eligible), [false, true]);

@@ -3,7 +3,9 @@
 # against main's last eligible nightly run. smoke.ts writes the gate's
 # outcome to runs/smoke/gate.json and exits 0 whatever it says;
 # smoke-publish.ts posts the one PR comment and the "quality gate" check, and
-# exits 1 only for a failing gate or a run that wrote no result.
+# exits 1 only for a failing gate or a run that wrote no result. In CI the
+# gate is strict: a missing key, no baseline or an ineligible run fails;
+# neutral exists only for offline runs.
 name: quality-smoke
 on:
   pull_request:
@@ -53,6 +55,7 @@ jobs:
       - name: Run smoke subset
         working-directory: packages/quality
         env:
+          QUALITY_GATE_STRICT: "1"
           META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
           MANO_MODEL_BASE_URL: ${{ secrets.MANO_MODEL_BASE_URL }}
           MANO_MODEL_JUDGE_ID: ${{ vars.MANO_MODEL_JUDGE_ID }}

@@ -25,6 +25,9 @@ export interface BenchAnswer {
   firstTextMs?: number;
   route?: "fast" | "deep";
   guardChanges?: string[];
+  // Everything else the person was sent on the way: heads-ups and earlier
+  // turns' replies. Safety checks read these as well as the answer.
+  earlier?: string[];
 }
 
 export interface AnswerPath {

@@ -30,16 +30,23 @@ export class MetaModelClient implements ModelClient {
   private baseUrl: string;
   private apiKey: string;
 
-  constructor(modelId: string, baseUrl: string, apiKey: string) {
+  private fetchFn: typeof fetch;
+
+  constructor(modelId: string, baseUrl: string, apiKey: string, fetchFn: typeof fetch = (input, init) => fetch(input, init)) {
     this.id = modelId;
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.apiKey = apiKey;
+    this.fetchFn = fetchFn;
   }
 
   async complete(messages: ChatMessage[], opts?: { maxTokens?: number }): Promise<ChatResult> {
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+    const res = await this.fetchFn(`${this.baseUrl}/chat/completions`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${this.apiKey}`,
+        ...(viaAiGateway(this.baseUrl) ? { "cf-aig-collect-log": "false" } : {}),
+      },
       body: JSON.stringify({ model: this.id, messages, store: false, max_tokens: opts?.maxTokens ?? 8192 }),
     });
     if (!res.ok) throw new Error(`model call failed: ${res.status}`);
@@ -66,6 +73,18 @@ export class FakeModelClient implements ModelClient {
   async complete(messages: ChatMessage[]): Promise<ChatResult> {
     const text = this.handler(messages);
     return { text, inputTokens: 10, outputTokens: 10 };
+  }
+}
+
+// AI Gateway logs every request, prompts and replies included, unless the
+// request opts out with cf-aig-collect-log: false, which skips the whole
+// log entry (developers.cloudflare.com/ai-gateway/observability/logging).
+// Every quality call through the Gateway opts out.
+export function viaAiGateway(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname === "gateway.ai.cloudflare.com";
+  } catch {
+    return false;
   }
 }
 

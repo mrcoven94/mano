@@ -19,7 +19,8 @@ jobs:
     timeout-minutes: 150
     steps:
       # The schedule runs on main. A manual run uses the ref it was started
-      # on, so a branch can be checked before it merges.
+      # on, so a branch can be checked before it merges; only main promotes
+      # the baseline, and a branch run is recorded under branches/<name>/.
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
@@ -54,6 +55,7 @@ jobs:
       - name: Run and record every suite
         working-directory: packages/quality
         env:
+          QUALITY_GATE_STRICT: "1"
           META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
           MANO_MODEL_BASE_URL: ${{ secrets.MANO_MODEL_BASE_URL }}
           MANO_MODEL_JUDGE_ID: ${{ vars.MANO_MODEL_JUDGE_ID }}
@@ -68,4 +70,4 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          node --import ./src/register.ts src/bin/nightly.ts --out ../../runs-staging --upload
+          node --import ./src/register.ts src/bin/nightly.ts --out ../../runs-staging --branch "$GITHUB_REF_NAME" --upload

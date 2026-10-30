@@ -30,6 +30,9 @@ export interface StaffCaseRow {
 
 export interface QualityData {
   latest: RunReport;
+  // "<case id> <check>" to the check's detail, from the private results.
+  // The public report carries identifiers only.
+  failureDetails: Record<string, string>;
   history: HistoryRow[];
   lowest: StaffCaseRow[];
   failed: StaffCaseRow[];
@@ -84,10 +87,16 @@ export async function loadQuality(): Promise<LoadResult> {
   if (latest.probes) latest.probes = { ...latest.probes, detail: stripModelNames(latest.probes.detail) };
   if (latest.guardian) latest.guardian = { ...latest.guardian, detail: stripModelNames(latest.guardian.detail) };
   if (latest.mail) latest.mail = { ...latest.mail, detail: stripModelNames(latest.mail.detail) };
+  const failureDetails: Record<string, string> = {};
+  for (const c of cases) {
+    if (c.suite === "safety-holdout") continue;
+    for (const r of c.checks) if (!r.pass && r.detail) failureDetails[`${c.caseId} ${r.id}`] = stripModelNames(r.detail);
+  }
   return {
     state: "ok",
     data: {
       latest,
+      failureDetails,
       history: history.slice(-60),
       lowest,
       failed,

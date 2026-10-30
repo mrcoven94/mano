@@ -47,4 +47,8 @@ test("nightly runs on main with every live part and records to both buckets", ()
     assert.ok(nightly.includes(`secrets.${name}`), `nightly misses ${name}`);
   }
   assert.ok(nightly.includes("--upload"), "nightly never records the run");
+  assert.ok(nightly.includes('--branch "$GITHUB_REF_NAME"'), "the run must say which branch it is, so only main promotes");
+  for (const [name, text] of [["smoke", smoke], ["nightly", nightly]] as const) {
+    assert.ok(text.includes('QUALITY_GATE_STRICT: "1"'), `${name} is not strict in CI`);
+  }
 });

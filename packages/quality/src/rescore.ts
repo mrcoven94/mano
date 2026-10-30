@@ -33,6 +33,7 @@ export async function rescoreRun(inDir: string, outDir: string): Promise<RunRepo
       {
         text: r.answer.text, bubbles: r.answer.bubbles, actions: r.answer.actions, latencyMs: r.latencyMs,
         inputTokens: r.inputTokens, outputTokens: r.outputTokens, ...(r.answer.route ? { route: r.answer.route } : {}),
+        ...(r.answer.earlier ? { earlier: r.answer.earlier } : {}),
       },
       dns,
       { knowsCatalog: r.path?.knowsCatalog ?? true },

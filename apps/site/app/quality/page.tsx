@@ -168,7 +168,7 @@ export default async function QualityPage() {
     );
   }
 
-  const { latest, history, lowest, failed, casesConnected, standins } = result.data;
+  const { latest, failureDetails, history, lowest, failed, casesConnected, standins } = result.data;
   const row = history.find((h) => h.runId === latest.runId) ?? null;
   const suites = Object.keys(latest.suites);
   const live = liveSuites(latest);
@@ -178,7 +178,7 @@ export default async function QualityPage() {
   const guardian = latest.guardian;
   const mail = latest.mail;
   const knownFailures = [
-    ...Object.values(latest.suites).flatMap((s) => s.gateFailures.map((f) => ({ id: `${f.caseId} ${f.check}`, detail: f.detail ?? "" }))),
+    ...Object.values(latest.suites).flatMap((s) => s.gateFailures.map((f) => ({ id: `${f.caseId} ${f.check}`, detail: failureDetails[`${f.caseId} ${f.check}`] ?? "" }))),
     ...(probes?.failures ?? [])
       .filter((f) => f.failed.some((x) => x.startsWith("crisis-") || x === "false-crisis"))
       .map((f) => ({ id: `probe ${f.id}`, detail: f.failed.join(", ") })),

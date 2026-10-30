@@ -32,6 +32,7 @@ export interface CaseResult {
     actions: { kind: string; detail?: string }[];
     route?: "fast" | "deep";
     guardChanges?: string[];
+    earlier?: string[];
   };
   checks: CheckResult[];
   judge: JudgeScore | null;
@@ -341,6 +342,7 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
         actions: answer.actions,
         ...(answer.route ? { route: answer.route } : {}),
         ...(answer.guardChanges ? { guardChanges: answer.guardChanges } : {}),
+        ...(answer.earlier && answer.earlier.length > 0 ? { earlier: answer.earlier } : {}),
       },
       checks, judge: null,
       latencyMs: answer.latencyMs || Date.now() - start,
@@ -394,12 +396,16 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
   const cal = buildCalibrationSet();
   const calRun = await judgeRobust(cal.map((c) => ({ answer: c.answer, facts: c.facts, reference: c.reference })), judge, 99);
   const calScored = calRun.scores.map((s, i) => ({ s, label: cal[i]!.label })).filter((x) => x.s !== null);
-  const calAgreement = agreement(calScored.map((x) => x.s!), calScored.map((x) => x.label));
+  // Agreement over the survivors of a failed batch is not calibration: every
+  // one of the 30 cases must be scored, and each one that is not counts as
+  // a judge error.
+  const calComplete = calScored.length === cal.length;
+  const calAgreement = calComplete ? agreement(calScored.map((x) => x.s!), calScored.map((x) => x.label)) : 0;
 
   return {
     report: {
       suites,
-      calibration: { agreement: calAgreement, kept: calAgreement >= JUDGE_AGREEMENT_MIN, provisional: CALIBRATION_LABELS_PROVISIONAL },
+      calibration: { agreement: calAgreement, kept: calComplete && calAgreement >= JUDGE_AGREEMENT_MIN, provisional: CALIBRATION_LABELS_PROVISIONAL },
       holdout: holdout.configured
         ? { configured: true, pinMatch: holdout.pinMatch }
         : { configured: false, reason: holdout.reason },
@@ -407,7 +413,7 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
     results,
     paths,
     judge,
-    judgeErrors: errors,
+    judgeErrors: errors + calRun.errors,
     answeringModel: pathSet.textLineModel,
     skippedSuites,
     // A requested case that no suite holds counts as missing, never as run.
@@ -423,6 +429,9 @@ export interface FinishInput {
   requireHoldout?: boolean;
   judgeErrors?: number;
   answeringModel?: string | null;
+  // Attached before eligibility is decided, so a probe that never ran
+  // keeps the run from becoming a baseline.
+  probes?: ProbeSummary;
 }
 
 export function fingerprintsOf(results: CaseResult[], suites: Record<string, SuiteScore>): Record<string, CaseFingerprint> {
@@ -472,6 +481,8 @@ export function finishReport(
   // Mano, and must never become the baseline later runs are judged against.
   const answerErrors = input.results.filter((r) => r.checks.some((c) => c.id === "answer-error"));
   if (answerErrors.length > 0) reasons.push(`${answerErrors.length} answer(s) failed to arrive`);
+  if (input.probes && !input.probes.live) reasons.push("persona probes did not run");
+  if ((input.probes?.errors ?? 0) > 0) reasons.push(`${input.probes!.errors} persona probe(s) failed to run`);
   if (missing.length > 0) reasons.push(`missing cases: ${missing.join(", ")}`);
   if (extra.length > 0) reasons.push(`unexpected cases: ${extra.join(", ")}`);
 
@@ -502,5 +513,6 @@ export function finishReport(
     fingerprints,
     eligibility: { eligible: reasons.length === 0, reasons },
     standins,
+    ...(input.probes ? { probes: input.probes } : {}),
   };
 }

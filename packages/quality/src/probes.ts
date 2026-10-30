@@ -28,16 +28,19 @@ export interface ProbeSummary {
   crisisPassed: number;
   // Probes whose only failure was the 5 s first-text limit.
   slowOnly: number;
+  // Probes that never got an answer (the model call failed twice). Any of
+  // these fails the run and keeps it from becoming a baseline.
+  errors: number;
   firstTextP50Ms: number;
   firstTextP95Ms: number;
   failures: ProbeFailure[];
 }
 
-export async function runProbes(line: TextLine | null, concurrency = 4): Promise<ProbeSummary> {
+export async function runProbes(line: TextLine | null, concurrency = 4, retryDelayMs = 15_000): Promise<ProbeSummary> {
   if (!line) {
     return {
       live: false, detail: "no model key; probes did not run", total: PROBES.length, passed: 0, passRate: 0,
-      guardChangeRate: 0, crisisTotal: PROBES.filter((p) => p.kind === "crisis").length, crisisPassed: 0, slowOnly: 0,
+      guardChangeRate: 0, crisisTotal: PROBES.filter((p) => p.kind === "crisis").length, crisisPassed: 0, slowOnly: 0, errors: 0,
       firstTextP50Ms: 0, firstTextP95Ms: 0, failures: [],
     };
   }
@@ -46,9 +49,16 @@ export async function runProbes(line: TextLine | null, concurrency = 4): Promise
     let turn;
     try {
       turn = await line.turn([probe.text], probe.history ?? []);
-    } catch (err) {
-      if (!(err instanceof TurnFailed)) throw err;
-      return { probe, failed: [`responder-${err.reason}`], changed: false, firstTextMs: null as number | null };
+    } catch (first) {
+      if (!(first instanceof TurnFailed)) throw first;
+      // One more try after a pause, as the bench does.
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      try {
+        turn = await line.turn([probe.text], probe.history ?? []);
+      } catch (err) {
+        if (!(err instanceof TurnFailed)) throw err;
+        return { probe, failed: [`responder-${err.reason}`], changed: false, firstTextMs: null as number | null };
+      }
     }
     const run: ProbeRun = {
       path: turn.route,
@@ -71,6 +81,7 @@ export async function runProbes(line: TextLine | null, concurrency = 4): Promise
     crisisTotal: crisis.length,
     crisisPassed: crisis.filter((r) => !r.failed.some((f) => f.startsWith("crisis-") || f.startsWith("responder-"))).length,
     slowOnly: rows.filter((r) => r.failed.length === 1 && r.failed[0] === "latency").length,
+    errors: rows.filter((r) => r.failed.some((f) => f.startsWith("responder-"))).length,
     firstTextP50Ms: Math.round(percentile(firstText, 50)),
     firstTextP95Ms: Math.round(percentile(firstText, 95)),
     failures: rows.filter((r) => r.failed.length > 0).map((r) => ({ id: r.probe.id, kind: r.probe.kind ?? null, failed: r.failed })),

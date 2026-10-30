@@ -3,7 +3,7 @@
 // record the run with its history. With --upload and R2 credentials the run
 // lands in R2 (mano-quality for aggregates, mano-quality-private for per-case
 // results); otherwise it stays in --out.
-// Usage: node --import ./src/register.ts src/bin/nightly.ts [--out runs-staging] [--date 2026-10-29] [--upload]
+// Usage: node --import ./src/register.ts src/bin/nightly.ts [--out runs-staging] [--date 2026-10-29] [--branch main] [--upload]
 // Exits 1, after the run is recorded, when something regressed against the
 // previous baseline: a new safety failure or a judge or hard-check drop.
 
@@ -15,7 +15,7 @@ import { dnsFromEnv } from "../links.ts";
 import { scoreMailDeadlines } from "../mail.ts";
 import { runProbes } from "../probes.ts";
 import { r2CredsFromEnv } from "../r2.ts";
-import { evalGate, readHistory, writeNightlyStaging, type HistoryRow } from "../report.ts";
+import { branchPrefix, evalGate, readHistory, writeNightlyStaging, type HistoryRow } from "../report.ts";
 import { finishReport, runBench, type RunReport } from "../run.ts";
 import { readPublic, uploadStaging } from "../sync.ts";
 import { textLineFromEnv } from "../textline.ts";
@@ -37,12 +37,17 @@ const startedAt = new Date().toISOString();
 const root = arg("--out") ?? "runs-staging";
 const day = arg("--date") ?? startedAt.slice(0, 10);
 const upload = process.argv.includes("--upload");
+// Only a run on main may write main's latest, history and baseline; any
+// other branch writes under branches/<name>/ (see writeNightlyStaging).
+const branch = arg("--branch") ?? "local";
+const strict = process.env.QUALITY_GATE_STRICT === "1";
 const creds = r2CredsFromEnv(process.env);
 if (upload && !creds) throw new Error("--upload needs R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_ACCOUNT_ID or R2_ENDPOINT");
+const prefix = branchPrefix(branch);
 
 const prior: HistoryRow[] = upload && creds
-  ? ((await readPublic<HistoryRow[]>(creds, "history.json")) ?? [])
-  : readHistory(join(root, "public", "history.json"));
+  ? ((await readPublic<HistoryRow[]>(creds, `${prefix}history.json`)) ?? [])
+  : readHistory(join(root, "public", prefix, "history.json"));
 // The baseline before tonight's run: the job goes red only on what is new.
 const priorBaseline: RunReport | null = upload && creds
   ? await readPublic<RunReport>(creds, "baseline.json")
@@ -59,14 +64,13 @@ const mail = await scoreMailDeadlines();
 const full = finishReport(bench.report, {
   runId: day, startedAt, finishedAt: new Date().toISOString(), gitSha: gitSha(), broken: false,
   paths: bench.paths, judge: bench.judge, dns: dnsFromEnv(process.env).mode, env: process.env,
-}, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: bench.answeringModel });
-full.probes = probes;
+}, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: bench.answeringModel, probes });
 full.guardian = guardian;
 full.mail = mail;
 if (!mail.live) full.standins = [...(full.standins ?? []), `mail deadlines: ${mail.detail}`];
 if (!guardian.ran) full.standins = [...(full.standins ?? []), `guardian: ${guardian.detail}`];
 
-const staging = writeNightlyStaging(root, full, bench.results, prior);
+const staging = writeNightlyStaging(root, full, bench.results, prior, { branch });
 for (const s of Object.values(full.suites)) {
   const t = s.traits;
   console.log(
@@ -83,14 +87,14 @@ if (guardian.ran) console.log(`guardian: ${guardian.cases} cases, precision ${gu
 console.log(`mail deadlines: ${mail.correct}/${mail.letters} (${mail.live ? "live" : mail.detail})`);
 console.log(`judge ${full.judge.live ? "live" : "stand-in"}, calibration ${Math.round(full.calibration.agreement * 100)}% on ${full.calibration.provisional ? "provisional" : "hand"} labels, ${full.judge.errors ?? 0} unscored`);
 for (const s of full.standins ?? []) console.log(`stand-in: ${s}`);
-console.log(full.eligibility.eligible ? "gate-eligible: this run becomes the baseline" : `not gate-eligible: ${full.eligibility.reasons.join("; ")}`);
+console.log(staging.promoted ? "gate-eligible on main: this run becomes the baseline" : full.eligibility.eligible ? `gate-eligible, recorded under ${prefix || "main"} without promotion` : `not gate-eligible: ${full.eligibility.reasons.join("; ")}`);
 console.log(`staged ${staging.publicDir} and ${staging.privateRunDir}`);
 
 if (upload && creds) {
   const sent = await uploadStaging(root, creds);
   console.log(`uploaded ${sent.length} objects to R2`);
 }
-const gate = evalGate(full, priorBaseline);
+const gate = evalGate(full, priorBaseline, { strict });
 if (gate.preexisting.length > 0) console.log(`known safety failures: ${gate.preexisting.join(", ")}`);
 if (gate.status === "fail") {
   console.error(`regressed since the last baseline: ${gate.reasons.join("; ")}`);

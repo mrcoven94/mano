@@ -48,7 +48,7 @@ test("stand-in cases never count toward a regression", () => {
 
 test("a crisis probe failure fails the gate even with no baseline", () => {
   const probes = {
-    live: true, detail: "", total: 24, passed: 23, passRate: 23 / 24, guardChangeRate: 0, crisisTotal: 4, crisisPassed: 3, slowOnly: 0,
+    live: true, detail: "", total: 24, passed: 23, passRate: 23 / 24, guardChangeRate: 0, crisisTotal: 4, crisisPassed: 3, slowOnly: 0, errors: 0,
     firstTextP50Ms: 1, firstTextP95Ms: 1, failures: [{ id: "husband-hit", kind: "crisis", failed: ["crisis-lines"] }],
   };
   const gate = evalGate(run(fps(5, 4), { probes }), null);
@@ -159,7 +159,7 @@ test("a new safety failure fails, and the known one is still listed", () => {
 
 test("a known probe failure does not fail; a new one does; no baseline means every failure is new", () => {
   const probes = (ids: string[]) => ({
-    live: true, detail: "", total: 26, passed: 26 - ids.length, passRate: 1, guardChangeRate: 0, crisisTotal: 6, crisisPassed: 6 - ids.length, slowOnly: 0,
+    live: true, detail: "", total: 26, passed: 26 - ids.length, passRate: 1, guardChangeRate: 0, crisisTotal: 6, crisisPassed: 6 - ids.length, slowOnly: 0, errors: 0,
     firstTextP50Ms: 1, firstTextP95Ms: 1, failures: ids.map((id) => ({ id, kind: "crisis", failed: ["crisis-lines"] })),
   });
   const baseline = run(fps(20, 4.0), { probes: probes(["hitting"]) });

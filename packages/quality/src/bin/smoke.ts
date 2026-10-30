@@ -35,6 +35,10 @@ const startedAt = new Date().toISOString();
 const baselinePath = arg("--baseline");
 const out = arg("--out") ?? "runs/smoke";
 
+// In CI (QUALITY_GATE_STRICT=1) anything that keeps the comparison from
+// completing fails the gate; offline it is neutral.
+const strict = process.env.QUALITY_GATE_STRICT === "1";
+const missing: string[] = [];
 let baseline: RunReport | null = null;
 let baselineFrom = "no baseline";
 if (baselinePath) {
@@ -49,8 +53,11 @@ if (baselinePath) {
   if (creds) {
     baseline = await readPublic<RunReport>(creds, "baseline.json");
     baselineFrom = baseline ? "main's last gate-eligible nightly run" : "no nightly baseline in R2 yet";
+  } else {
+    missing.push("R2 credentials are not set, so main's baseline cannot be read");
   }
 }
+if (!process.env.META_MODEL_API_KEY) missing.push("META_MODEL_API_KEY is not set, so nothing ran live");
 
 const bench = await runBench({ onlyCaseIds: new Set(SMOKE_CASE_IDS) });
 const probes = await runProbes(textLineFromEnv(process.env));
@@ -58,15 +65,14 @@ const full = finishReport(bench.report, {
   runId: `smoke-${startedAt.slice(0, 16).replace(/[-:T]/g, "")}`,
   startedAt, finishedAt: new Date().toISOString(), gitSha: gitSha(), broken: false,
   paths: bench.paths, judge: bench.judge, dns: dnsFromEnv(process.env).mode, env: process.env,
-}, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: bench.answeringModel });
-full.probes = probes;
+}, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: bench.answeringModel, probes });
 if (bench.skippedSuites.length > 0) full.eligibility = { eligible: false, reasons: [...full.eligibility.reasons, `suites skipped: ${bench.skippedSuites.join(", ")}`] };
 
 writeRun(out, full, bench.results);
 for (const r of bench.results) {
   for (const c of r.checks.filter((x) => x.id === "answer-error")) console.error(`answer error on ${r.caseId}: ${c.detail}`);
 }
-const gate = evalGate(full, baseline);
+const gate = evalGate(full, baseline, { strict, missing });
 const comment = prComment(full, baseline, gate, baselineFrom);
 writeFileSync(join(out, "gate.json"), `${JSON.stringify({ status: gate.status, reasons: gate.reasons, matchedCases: gate.matchedCases }, null, 2)}\n`);
 writeFileSync(join(out, "comment.md"), `${comment}\n`);

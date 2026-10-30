@@ -21,6 +21,7 @@ import { CRISIS_LINE, SAFE_REPLY, crisisTurn, guardReply, holdCrisisLines, type 
 // The worker's fixed opt-out reply. apps/channels keeps it next to its other
 // fixed texts; read in place until packages/channels exports it.
 import { OPT_OUT_BUBBLE } from "../../../apps/channels/src/text.ts";
+import { viaAiGateway } from "./models.ts";
 import type { AnswerPath, BenchAnswer } from "./paths.ts";
 import type { BenchCase } from "./suites/types.ts";
 
@@ -62,6 +63,8 @@ export class TextLine {
       model: opts.model,
       ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
+      // Through AI Gateway, no request or reply is logged.
+      collectLogs: !viaAiGateway(opts.baseUrl ?? ""),
     });
   }
 
@@ -212,6 +215,7 @@ export class TextLinePath implements AnswerPath {
       firstTextMs: Math.round(last.firstTextMs),
       route: last.route,
       guardChanges: [...new Set(runs.flatMap((r) => r.guardChanges))],
+      earlier: runs.flatMap((r, i) => [...(r.headsUp ? [r.headsUp] : []), ...(i < runs.length - 1 ? r.bubbles : [])]),
       inputTokens: Math.round(billedInput / CHARS_PER_TOKEN),
       outputTokens: Math.round(output / CHARS_PER_TOKEN),
     };
