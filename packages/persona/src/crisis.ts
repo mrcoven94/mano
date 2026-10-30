@@ -41,9 +41,25 @@ function normalize(text: string): string {
   return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]/g, " ").replace(/\s+/g, " ")} `;
 }
 
+// Wanting everything to end, "what's the point anymore", and taking a
+// whole bottle or all of a medicine: crises on their own (Lead's check of
+// PR 77). "What's the point of renewing" and "the program ended" are not.
+const ENDING = new RegExp(
+  [
+    String.raw`\b(?:want|wants|wanted|wish|need)(?: for)? (?:everything|it all|it|this|all of this|all this|the pain|my life|life)(?: all)? to (?:end|be over|stop forever|stop for good)\b`,
+    String.raw`\b(?:wish|want) (?:it|everything|this|it all) (?:would|could) (?:all )?(?:end|be over|stop forever)\b`,
+    String.raw`\b(?:make|let) (?:it|everything|this|it all)(?: all)? (?:end|be over)\b`,
+    String.raw`\bwhat'?s the point\b(?! (?:of|in|to) (?!living\b|life\b|anything\b|it all\b|going on\b|trying\b|being here\b|any of this\b))`,
+    String.raw`\bno point (?:anymore|in (?:living|anything|going on|trying|being here)|to (?:living|anything|life))\b`,
+    String.raw`\b(?:took|take|taking|swallowed|downed|drank|injected|used|ate) (?:my |the |a |an |all of my |all of the )?(?:whole|entire) (?:bottle|box|pack|vial|supply|prescription)\b`,
+    String.raw`\b(?:whole|entire) bottle\b`,
+    String.raw`\ball (?:of )?my (?:pills|meds|medications?|medicines?|insulin|tablets|painkillers)\b`,
+  ].join("|"),
+);
+
 export function isCrisis(text: string): boolean {
   const words = normalize(text);
-  return SELF_HARM.test(words) || VIOLENCE.test(words) || DANGER.test(words);
+  return SELF_HARM.test(words) || VIOLENCE.test(words) || DANGER.test(words) || ENDING.test(words);
 }
 
 export function mightBeCrisis(text: string): boolean {
@@ -190,7 +206,7 @@ const IMPLICIT = /\bbetter off without me\b|\b(?:hope|wish|want|going) (?:i|to) 
 const SPANISH_INTENT = "(?:me voy a|voy a|me quiero|quiero|estoy pensando en|pienso en|pienso)";
 const SPANISH_HARM = "(?:matar(?:me)?|suicidar(?:me)?|hacer(?:me)? da[ñn]o|cortarme|morir(?:me)?|quitarme la vida)";
 const SPANISH = new RegExp(
-  String.raw`(?:^|\s)(?:${SPANISH_INTENT}(?: \p{L}+){0,2} ${SPANISH_HARM}|matarme|suicid\p{L}*|hacerme da[ñn]o|quitarme la vida|no quiero vivir|me est[áa] (?:pegando|golpeando)|me (?:pega|golpea)|estoy en peligro(?! de perder)|no quiero (?:seguir|estar) (?:aqu[íi]|ac[áa]|viv\p{L}*|en este mundo)|no quiero seguir|no quiero despertar|ojal[áa] no despert\p{L}*)(?=\s|$)`,
+  String.raw`(?:^|\s)(?:${SPANISH_INTENT}(?: \p{L}+){0,2} ${SPANISH_HARM}|matarme|suicid\p{L}*|hacerme da[ñn]o|quitarme la vida|no quiero vivir|me est[áa] (?:pegando|golpeando)|me (?:pega|golpea)|estoy en peligro(?! de perder)|no quiero (?:seguir|estar) (?:aqu[íi]|ac[áa]|viv\p{L}*|en este mundo)|no quiero seguir|no quiero despertar|ojal[áa] no despert\p{L}*|quiero que (?:todo|esto|mi vida) (?:termine|se acabe|acabe)|que (?:se acabe todo|todo se acabe|todo termine)|acabar con todo|(?:ya no|nada) tiene sentido|toda la botella|todo el frasco|todas (?:mis|las) pastillas)(?=\s|$)`,
   "u",
 );
 
