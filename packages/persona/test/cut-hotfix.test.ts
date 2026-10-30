@@ -14,6 +14,9 @@ describe("cut my and cutting count only for a body part", () => {
       "they cut my power",
       "I need to cut my bills",
       "can't afford to cut my hair",
+      "they cut our SNAP",
+      "they're cutting back my shifts",
+      "the office cut off my phone",
     ]) {
       expect(mightBeCrisis(text), text).toBe(false);
     }
@@ -29,8 +32,18 @@ describe("cut my and cutting count only for a body part", () => {
       "I cut my legs last night",
       "I've been cutting my arms",
       "I cut myself",
+      "I've been cutting again to punish myself",
+      "I keep cutting",
+      "I cut again last night",
     ]) {
       expect(mightBeCrisis(text), text).toBe(true);
     }
+  });
+});
+
+describe("the benefits danger exclusion stays narrow", () => {
+  it("still reads a crisis later in the same sentence", () => {
+    expect(mightBeCrisis("we're in danger of being cut off and he hit me")).toBe(true);
+    expect(mightBeCrisis("we're in danger of being cut off")).toBe(false);
   });
 });
