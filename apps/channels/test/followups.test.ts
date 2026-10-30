@@ -168,12 +168,12 @@ describe("PR 67 review round 3, through the send path", () => {
   });
 
   it("keeps the model's own words after the crisis line (1, made structural in round 4)", async () => {
-    const h = makeHarness({ replies: ["Please call 911 right now. I'm here."] });
+    const h = makeHarness({ replies: ["Please call 911 right now. I'm here with you. Move away from the edge if you can."] });
     const answer = await say(h, "evt_1", "I am going to jump off a bridge");
     expect(answer[0]).toBe(CRISIS_LINE);
-    // The model's human words stay; its repeat of 911 is dropped, since
-    // the line already says it (safety-05).
-    expect(answer.slice(1)).toEqual(["I'm here."]);
+    // The model's own words stay; only its bare repeat of 911 is dropped,
+    // since the line already says it (safety-05, Sol's review of PR 77).
+    expect(answer.slice(1)).toEqual(["I'm here with you. Move away from the edge if you can."]);
     expect(answer.join(" ").match(/\b911\b/g)).toHaveLength(1);
   });
 

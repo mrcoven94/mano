@@ -68,27 +68,46 @@ export function crisisFloor(reply: string): string {
 // says a sentence of the line again, is dropped (safety-05: the judge
 // marks the repeat down), and the safety question keeps its question marks.
 export function holdCrisisLines(bubbles: readonly string[], line: string = CRISIS_LINE): string[] {
-  const said = new Set(sentencesOf(line).map(plain));
+  const lineWords = new Set(wordsOf(line));
   const rest = bubbles
     .filter((b) => b !== CRISIS_LINE && b !== CRISIS_LINE_ES)
-    .map((b) => askSafety(withoutRepeatedLines(b, said)))
+    // Question marks come back first, so a question is never read as a repeat.
+    .map((b) => withoutRepeats(askSafety(b), lineWords))
     .filter((b) => b.length > 0);
   return [line, ...rest];
 }
 
-// A sentence compared without case, punctuation or spacing.
-function plain(sentence: string): string {
-  return sentence.toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, "").replace(/\s+/g, " ").trim();
+// A sentence carries nothing new only when, without the numbers 988 and
+// 911 and filler (call or text, please, now, free, 24/7), every word it
+// has left is a word of the line. So a bare "call or text 988" or a near
+// copy of a sentence of the line is dropped, and a sentence is kept when
+// it names another resource or number (Poison Control, 999, a hotline),
+// gives an action (move away, ask someone to stay) or asks anything.
+const REPEAT_FILLER = new Set(
+  (
+    "please now right just again too also so it's its it is and or a an the to you can free open available 24 7 anytime any time day night " +
+    "call text dial or calling texting " +
+    "por favor ahora mismo ya también es y está esta gratis abierto disponible las horas día noche llama llamar llámale marca manda envía envia un mensaje texto al a el"
+  ).split(" "),
+);
+const ASKS = /[?¿]|(?:^|[,;:]\s*)(?:are|is|do|does|did|can|could|will|would|what|where|when|how|who|why|have|has|est[áa]s|tienes|puedes|qu[ée]|d[óo]nde|c[óo]mo|cu[áa]ndo|qui[ée]n)\b/iu;
+
+function wordsOf(text: string): string[] {
+  return text.toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, " ").split(/\s+/).filter(Boolean);
 }
 
-// A sentence that names 988 or 911 and asks nothing repeats the crisis
-// line. Other help a model adds (a hotline number) stays.
-const NAMES_LINE = /(?<!\d)(?:988|911)(?!\d)/;
+function carriesNothingNew(sentence: string, lineWords: ReadonlySet<string>): boolean {
+  if (ASKS.test(sentence)) return false;
+  const words = wordsOf(sentence).filter((w) => w !== "988" && w !== "911" && !REPEAT_FILLER.has(w));
+  // Any other number is new help (a hotline, 999).
+  if (words.some((w) => /\d/.test(w))) return false;
+  return words.every((w) => lineWords.has(w));
+}
 
-function withoutRepeatedLines(bubble: string, said: ReadonlySet<string>): string {
+function withoutRepeats(bubble: string, lineWords: ReadonlySet<string>): string {
   return bubble
     .split(/(?<=[.!?])\s+/)
-    .filter((sentence) => !(NAMES_LINE.test(sentence) && !/[?¿]/.test(sentence)) && !said.has(plain(sentence)))
+    .filter((sentence) => !carriesNothingNew(sentence, lineWords))
     .join(" ")
     .trim();
 }
@@ -162,7 +181,7 @@ export function suppressedBenefitsCut(text: string): boolean {
 // Detection on top of the detectors above: implicit self-harm in English,
 // and self-harm, violence and danger in Spanish. It reads lowercased text
 // that keeps its accents.
-const IMPLICIT = /\bbetter off without me\b/;
+const IMPLICIT = /\bbetter off without me\b|\b(?:hope|wish|want|going) (?:i|to) (?:never|not) wake up\b|\bhope i don'?t wake up\b/;
 // Spanish self-harm as a class: an intent (voy a, quiero, me voy a, me
 // quiero, pienso, estoy pensando en) followed within 3 words by a
 // self-harm verb, in any reflexive or plain form; the reflexive forms on
@@ -171,7 +190,7 @@ const IMPLICIT = /\bbetter off without me\b/;
 const SPANISH_INTENT = "(?:me voy a|voy a|me quiero|quiero|estoy pensando en|pienso en|pienso)";
 const SPANISH_HARM = "(?:matar(?:me)?|suicidar(?:me)?|hacer(?:me)? da[ñn]o|cortarme|morir(?:me)?|quitarme la vida)";
 const SPANISH = new RegExp(
-  String.raw`(?:^|\s)(?:${SPANISH_INTENT}(?: \p{L}+){0,2} ${SPANISH_HARM}|matarme|suicid\p{L}*|hacerme da[ñn]o|quitarme la vida|no quiero vivir|me est[áa] (?:pegando|golpeando)|me (?:pega|golpea)|estoy en peligro(?! de perder)|no quiero (?:seguir|estar) (?:aqu[íi]|ac[áa]|viv\p{L}*|en este mundo)|no quiero seguir)(?=\s|$)`,
+  String.raw`(?:^|\s)(?:${SPANISH_INTENT}(?: \p{L}+){0,2} ${SPANISH_HARM}|matarme|suicid\p{L}*|hacerme da[ñn]o|quitarme la vida|no quiero vivir|me est[áa] (?:pegando|golpeando)|me (?:pega|golpea)|estoy en peligro(?! de perder)|no quiero (?:seguir|estar) (?:aqu[íi]|ac[áa]|viv\p{L}*|en este mundo)|no quiero seguir|no quiero despertar|ojal[áa] no despert\p{L}*)(?=\s|$)`,
   "u",
 );
 
@@ -184,55 +203,73 @@ export function spanishOrImplicitCrisis(text: string): boolean {
   return IMPLICIT.test(words) || SPANISH.test(words);
 }
 
-// The second suppression, also used only after the broad detector fired:
-// an ordinary health question. "My surgery hurt for weeks" or "should I
-// stop taking my blood pressure pills" trip the broad words "hurt" and
-// "pills" with no crisis sense (nightly run 41017357447, safety-34 and
-// safety-35). Each benign span below is a body part or procedure that
-// hurts, an injury to a named body part, or managing a medication. The
-// line is suppressed only when the strict detector does not fire and,
-// with those spans blanked, the broad detector finds nothing else. So
-// "I took some pills and I feel strange", "my back hurts and I want to
-// die" and "I took all my blood pressure pills" all stay crisis turns.
-// The wrist is never benign, and neither are sleeping pills.
+// The second exemption, an ordinary health question. "My surgery hurt
+// for weeks" or "should I stop taking my blood pressure pills" trip the
+// broad words "hurt" and "pills" with no crisis sense (nightly run
+// 41017357447, safety-34 and safety-35). It is checked only after main's
+// detectors said crisis on the full, unmodified message, and it applies
+// only when all three hold:
+// 1. the strict detector does not fire;
+// 2. nothing anywhere in the message is on the deny list below (a number
+//    or quantity near a medicine, on purpose, myself, waking up, forever,
+//    death, giving up, "so I", someone else hurting them or not letting
+//    them leave, swallowing, poison, the Spanish equivalents);
+// 3. every broad crisis word in the message sits inside a health shape:
+//    a body part or procedure that hurts, an injury to a named body part,
+//    managing a medication, or a named everyday medication.
+// Nothing is removed from the message before any check. If in doubt, the
+// turn stays a crisis.
 const BODY = "(?:back|neck|knees?|legs?|arms?|feet|foot|hands?|head|stomach|belly|tooth|teeth|shoulders?|hips?|ankles?|chest|ears?|eyes?|throat|joints?|muscles?)";
 const PROCEDURE = "(?:surgery|operation|procedure|incision|stitches|scar)";
 const OWNER = "(?:my|his|her|their|the|our|your)";
 const MED = "(?:pills|meds|medications?|medicines?)";
-const HEALTH_BENIGN = new RegExp(
+const HEALTH_SHAPE = new RegExp(
   [
     // A body part or a procedure that hurts: "my surgery hurt for weeks".
     String.raw`\b${OWNER} (?:[a-z']+ ){0,2}?(?:${BODY}|${PROCEDURE}) (?:still |really |has |have |had |kept |keeps |been |has been )*(?:hurt|hurts|hurting)\b`,
     // An injury to a named body part: "I hurt my back at work".
-    String.raw`\b(?:hurt|injured|pulled|strained|twisted|sprained) ${OWNER} (?:back|neck|knee|leg|arm|foot|ankle|shoulder|hip|hand)\b`,
+    String.raw`\bi (?:hurt|injured|pulled|strained|twisted|sprained) ${OWNER} (?:back|neck|knee|leg|arm|foot|ankle|shoulder|hip|hand)\b`,
     // Managing a medication: "stop taking my blood pressure pills".
-    String.raw`\b(?:stop|stopping|start|starting|skip|skipping|switch|switching|change|changing|refill|refilling|quit|quitting|keep|lower|lowering|forgot to|forget to|remember to|afford|pay for|cover|covers|covered)(?: taking| to take| take)? (?:${OWNER}|these|those) (?:(?!sleeping\b)[a-z']+ ){0,2}?${MED}\b`,
+    String.raw`\b(?:stop|stopping|start|starting|skip|skipping|switch|switching|change|changing|refill|refilling|quit|quitting|keep|lower|lowering|forgot to|forget to|remember to|afford|pay for|cover|covers|covered)(?: taking| to take| take)? (?:${OWNER}|these|those) (?:[a-z']+ ){0,2}?${MED}\b`,
     // A named everyday medication.
     String.raw`\b(?:blood pressure|birth control|allergy|thyroid|cholesterol|diabetes|vitamin|iron|prenatal|heart|asthma) ${MED}\b`,
   ].join("|"),
   "g",
 );
-
-// Anything that reads like taking too much, or like death or giving up,
-// anywhere in the message, keeps the crisis line: "my knee hurts so I
-// took a handful", "...and nobody would care if I died".
-const HEALTH_BLOCK = new RegExp(
+const QUANTITY =
+  String.raw`(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|hundred|dozen|all|every|whole|bunch|handful|lots?|many|several|extra|double|triple|some|more|rest|bottle|box|pack|uno|dos|tres|cuatro|cinco|diez|veinte|treinta|cuarenta|cincuenta|todas?|todos?|muchas?|muchos?|varias?|varios?|botella|caja)`;
+const MEDICINE = String.raw`(?:pills?|meds?|medications?|medicines?|tablets?|capsules?|pastillas?|medicinas?|medicamentos?|pldoras?|píldoras?)`;
+const HEALTH_DENY = new RegExp(
   [
-    String.raw`\b(?:took|take|taking|swallow\w*|downed|ate) (?:all|some|a handful|a bunch|too many|them all|the rest|extra|more|double)\b`,
-    String.raw`\b(?:die|died|dies|dying|dead|death|kill\w*|suicid\w*|end it|end my|anymore|nobody would|no one would|wouldn't care|better off|give up|giving up|can'?t go on|goodbye|overdos\w*)\b`,
+    // A number or quantity near a medicine, either order.
+    String.raw`(?:^|\s)${QUANTITY}(?: \S+){0,5} ${MEDICINE}(?=\s|$)`,
+    String.raw`(?:^|\s)${MEDICINE}(?: \S+){0,2} (?:at once|all at once|de una vez|a la vez)(?=\s|$)`,
+    // Having taken too much of anything ("I took all of them").
+    String.raw`(?:^|\s)(?:took|swallowed|downed|tom[ée]|tragu[ée])(?: \S+){0,1} (?:all|them|the rest|a handful|a bunch|too many|some|extra|more|double|todas?|todos?|muchas?|muchos?)(?=\s|$)`,
+    // Having taken or swallowed a medicine at all, poison, bleach.
+    String.raw`(?:^|\s)(?:took|swallow\S*|downed|tom[ée]|tragu[ée]|trag[óo])(?: \S+){0,5} ${MEDICINE}(?=\s|$)`,
+    String.raw`(?:^|\s)(?:swallow\S*|downed|poison\S*|bleach|veneno\S*|cloro|lej[íi]a|trag\S*)(?=\s|$)`,
+    // Intent, self, waking up, forever, death, giving up.
+    String.raw`(?:^|\s)(?:on purpose|a prop[óo]sito|myself|me hice|me lastim[ée]|wake up|waking up|despert\S*|forever|para siempre|end it|end my|die|died|dies|dying|dead|death|morir\S*|muer\S*|no point|no tiene sentido|give up|giving up|rendirme|so i|kill\S*|matar\S*|suicid\S*|better off|anymore|ya no|can't do this|cannot do this|can't take|can't go on|nobody would|no one would|hope i|i hope|ojal[áa]|disappear|desaparec\S*|stop the pain|overdos\S*|wrists?|mu[ñn]ecas?|sleeping)(?=\s|$)`,
+    // Someone else hurting them, or not letting them leave.
+    String.raw`(?:^|\s)(?:he|she|they|someone|somebody|my (?:husband|wife|partner|boyfriend|girlfriend|dad|father|mom|mother|brother|sister|son|daughter|ex|roommate|landlord|boss)) (?:\S+ )?(?:hurt|hurts|hit|hits|beat|beats|kicked|pushed|choked|grabbed)(?=\s|$)`,
+    String.raw`(?:^|\s)(?:won't|will not|wouldn't|would not|doesn't|does not|don't) let me (?:leave|go|out)(?=\s|$)`,
+    String.raw`(?:^|\s)no me deja\S* (?:salir|ir)(?=\s|$)`,
   ].join("|"),
+  "u",
 );
 
 export function suppressedHealthQuestion(text: string): boolean {
   if (isCrisis(text)) return false;
-  if (HEALTH_BLOCK.test(normalize(text))) return false;
+  if (HEALTH_DENY.test(accented(text))) return false;
   const words = normalize(text);
-  const blanked = words.replace(HEALTH_BENIGN, " ");
-  if (blanked === words) return false;
-  return !POSSIBLE_CRISIS.test(blanked.replace(BENEFITS_DANGER, " "));
+  const shapes = [...words.matchAll(HEALTH_SHAPE)].map((m) => [m.index!, m.index! + m[0].length] as const);
+  if (shapes.length === 0) return false;
+  const triggers = [...words.replace(BENEFITS_DANGER, (m) => " ".repeat(m.length)).matchAll(new RegExp(POSSIBLE_CRISIS.source, "g"))];
+  return triggers.length > 0 && triggers.every((t) => shapes.some(([start, end]) => t.index! >= start && t.index! + t[0].length <= end));
 }
 
-// The decision a turn uses: a detector fired, and neither suppression
+// The decision a turn uses: a detector fired, and neither exemption
 // applies. Spanish and implicit self-harm are never suppressed.
 export function crisisTurn(text: string): boolean {
   return spanishOrImplicitCrisis(text) || (mightBeCrisis(text) && !suppressedBenefitsCut(text) && !suppressedHealthQuestion(text));
