@@ -71,12 +71,16 @@ describe.skipIf(!apiKey)("persona probes, live", () => {
     const responder = new SparkResponder({ apiKey, model, baseUrl: process.env.MANO_MODEL_BASE_URL || undefined });
     const runs: ReactionRun[] = [];
     const rows: string[] = [];
+    let overruled = 0;
     for (const probe of REACTION_PROBES) {
       try {
         const result = await responder.respond({ texts: [probe.text], attachmentCount: 0 });
-        // The model's own choice, before the rules, so the check grades the voice.
-        runs.push({ id: probe.id, tapback: result.tapback ?? null, reply: result.text });
+        // Code decides which reactions a message allows (PR 74 review 4),
+        // so the check grades what would be sent. Where the model picked
+        // outside the set, the row shows it and the run counts it.
         const sent = allowedTapback(result.tapback ?? null, probe.text, mightBeCrisis(probe.text));
+        if (sent !== (result.tapback ?? null)) overruled += 1;
+        runs.push({ id: probe.id, tapback: sent, reply: result.text });
         rows.push(`${probe.id} (${probe.kind}): ${result.tapback ?? "none"}${sent !== (result.tapback ?? null) ? ` (rules: ${sent ?? "none"})` : ""} / ${result.text.replace(/\n/g, " / ").slice(0, 90)}`);
       } catch (err) {
         runs.push({ id: probe.id, tapback: null, reply: "" });
@@ -86,7 +90,7 @@ describe.skipIf(!apiKey)("persona probes, live", () => {
     const failed = checkReactionSet(runs);
     const reacted = runs.filter((r) => r.tapback);
     console.log(
-      `reactions: ${reacted.length}/${runs.length} messages, distinct ${new Set(reacted.map((r) => r.tapback)).size}` +
+      `reactions sent: ${reacted.length}/${runs.length} messages, distinct ${new Set(reacted.map((r) => r.tapback)).size}, model picks overruled by code: ${overruled}` +
         `${failed.length ? `, failed: ${failed.join(", ")}` : ", all checks pass"}\n${rows.join("\n")}`,
     );
     expect(failed).toEqual([]);
