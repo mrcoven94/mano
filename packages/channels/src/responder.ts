@@ -54,10 +54,10 @@ export interface ResponderResult {
   // A tapback the model chose for the person's latest message, from a
   // leading "REACT: love" line. The text may then be empty.
   tapback?: Tapback | null;
-  // Called once the turn's bubbles went out, with the text of each one
-  // the provider accepted, in order. Not called for a turn resumed after
-  // a restart, so anything that depends on it fails closed.
-  afterSent?: (sentTexts: string[]) => Promise<void>;
+  // An approval question this answer carries. The runner persists it with
+  // the answer and reports it once the bubbles the provider accepted show
+  // it whole, retrying the report until it lands.
+  presentation?: { approvalId: string; approval: string };
 }
 
 export interface RespondHooks {

@@ -110,6 +110,16 @@ export interface AgentSendRow {
   updatedAtMs: number;
 }
 
+// An approval question a turn's answer carried, kept until the agent has
+// been told it reached the person (or that it did not).
+export interface PresentationRow {
+  turn: number;
+  approvalId: string;
+  approval: string;
+  generation: number;
+  state: "pending" | "reported" | "not_shown";
+}
+
 export interface ConversationMeta {
   turn: number;
   introduced: boolean;
@@ -197,6 +207,9 @@ export interface ConversationStore {
   finishTurn(turn: number, atMs: number): void;
   // Finished turns, newest first.
   recentTurns(limit: number): PersistedTurn[];
+  savePresentation(row: PresentationRow): void;
+  pendingPresentations(): PresentationRow[];
+  finishPresentation(turn: number, state: "reported" | "not_shown"): void;
   agentSend(key: string): AgentSendRow | null;
   startAgentSend(row: AgentSendRow): void;
   finishAgentSend(key: string, atMs: number, state?: "sent" | "refused" | "failed"): void;
@@ -345,6 +358,20 @@ export class MemoryStore implements ConversationStore {
   }
 
   private agentSendRows = new Map<string, AgentSendRow>();
+  private presentationRows = new Map<number, PresentationRow>();
+
+  savePresentation(row: PresentationRow): void {
+    if (!this.presentationRows.has(row.turn)) this.presentationRows.set(row.turn, { ...row });
+  }
+
+  pendingPresentations(): PresentationRow[] {
+    return [...this.presentationRows.values()].filter((r) => r.state === "pending").map((r) => ({ ...r }));
+  }
+
+  finishPresentation(turn: number, state: "reported" | "not_shown"): void {
+    const row = this.presentationRows.get(turn);
+    if (row) this.presentationRows.set(turn, { ...row, state });
+  }
 
   agentSend(key: string): AgentSendRow | null {
     return this.agentSendRows.get(key) ?? null;
@@ -371,6 +398,7 @@ export class MemoryStore implements ConversationStore {
     this.approvalRows.clear();
     this.turnRows.clear();
     this.agentSendRows.clear();
+    this.presentationRows.clear();
   }
 }
 

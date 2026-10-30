@@ -284,46 +284,86 @@ describe("what an Engine reminder send reports", () => {
 });
 
 describe("reporting what the person was shown", () => {
-  function reporting(seen: string[][], text: string) {
-    return makeHarness({
+  const QUESTION = "Ready to send: renewal. Reply YES to send exactly this, or NO to stop.";
+  type Report = { approvalId: string; approval: string; generation: number; sent: string[] };
+
+  function reporting(reports: Report[], opts: { failFirst?: number } = {}) {
+    let failures = opts.failFirst ?? 0;
+    const h = makeHarness({
       responder: {
         name: "agent",
         maxAttempts: 1,
         respond: async () => ({
-          text,
-          bubbles: [text],
+          text: QUESTION,
+          bubbles: [QUESTION],
           inputChars: 10,
-          outputChars: text.length,
+          outputChars: QUESTION.length,
           model: "agent",
           attempts: 1,
-          afterSent: async (sent: string[]) => {
-            seen.push(sent);
-          },
+          presentation: { approvalId: "appr_1", approval: QUESTION },
         }),
       },
+      reportPresentation: async (p, sent) => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error("agent unreachable");
+        }
+        reports.push({ ...p, sent });
+        return true;
+      },
     });
-  }
-
-  it("hands the responder the texts that actually went out, after they went out", async () => {
-    const seen: string[][] = [];
-    const h = reporting(seen, "Ready to send: renewal. Reply YES to send exactly this, or NO to stop.");
     const meta = h.store.meta();
     meta.introduced = true;
     h.store.saveMeta(meta);
+    return h;
+  }
+
+  it("reports the question with the texts that actually went out, after they went out", async () => {
+    const reports: Report[] = [];
+    const h = reporting(reports);
     await h.runner.handleEvent(inboundEvent({ id: "evt_shown", text: "file it", occurredAtMs: h.now }), "webhook");
     h.advance(5000);
     expect(await h.runner.runDueTurn()).toBe("ran");
-    expect(seen).toHaveLength(1);
-    expect(seen[0].join(" ")).toContain("Reply YES to send exactly this");
-    expect(h.channel.sends.map((s) => s.text).join(" ")).toContain("Reply YES to send exactly this");
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ approvalId: "appr_1", approval: QUESTION, generation: 0 });
+    expect(reports[0].sent.join(" ")).toContain("Reply YES to send exactly this");
+  });
+
+  it("a report that failed is kept and sent again on the next run", async () => {
+    const reports: Report[] = [];
+    const h = reporting(reports, { failFirst: 1 });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_retry", text: "file it", occurredAtMs: h.now }), "webhook");
+    h.advance(5000);
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(reports).toHaveLength(0);
+    h.advance(60_000);
+    await h.runner.runDueTurn();
+    expect(reports).toHaveLength(1);
+    expect(await h.runner.runDueTurn()).toBe("idle");
+  });
+
+  it("a resumed answer reports its question once its send goes through", async () => {
+    const reports: Report[] = [];
+    const h = reporting(reports);
+    const realSend = h.channel.send.bind(h.channel);
+    let down = true;
+    h.channel.send = async (input) => {
+      if (down) throw new Error("provider unreachable");
+      return realSend(input);
+    };
+    await h.runner.handleEvent(inboundEvent({ id: "evt_resume", text: "file it", occurredAtMs: h.now }), "webhook");
+    h.advance(5000);
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(reports).toHaveLength(0);
+    down = false;
+    h.advance(10 * 60_000);
+    while ((await h.runner.runDueTurn()) === "retry") h.advance(10 * 60_000);
+    expect(reports).toHaveLength(1);
   });
 
   it("reports nothing for a send the provider refused", async () => {
-    const seen: string[][] = [];
-    const h = reporting(seen, "Ready to send: renewal. Reply YES to send exactly this, or NO to stop.");
-    const meta = h.store.meta();
-    meta.introduced = true;
-    h.store.saveMeta(meta);
+    const reports: Report[] = [];
+    const h = reporting(reports);
     const realSend = h.channel.send.bind(h.channel);
     h.channel.send = async (input) => {
       if (input.text.includes("Reply YES")) throw new ChannelRefused(403, "blocked", "refused");
@@ -332,7 +372,7 @@ describe("reporting what the person was shown", () => {
     await h.runner.handleEvent(inboundEvent({ id: "evt_refused", text: "file it", occurredAtMs: h.now }), "webhook");
     h.advance(5000);
     await h.runner.runDueTurn();
-    expect(seen.flat().join(" ")).not.toContain("Reply YES");
+    expect(reports.flatMap((r) => r.sent).join(" ")).not.toContain("Reply YES");
   });
 });
 

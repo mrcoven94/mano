@@ -104,6 +104,13 @@ CREATE TABLE IF NOT EXISTS agent_sends (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS presentations (
+  turn INTEGER PRIMARY KEY,
+  approval_id TEXT NOT NULL,
+  approval TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  state TEXT NOT NULL
+);
 `;
 
 interface MetaRow {
@@ -541,6 +548,37 @@ export class SqlConversationStore implements ConversationStore {
     this.sql.exec("UPDATE turns SET state = 'finished', updated_at_ms = ? WHERE turn = ?", atMs, turn);
   }
 
+  savePresentation(row: import("./store.js").PresentationRow): void {
+    this.sql.exec(
+      "INSERT OR IGNORE INTO presentations (turn, approval_id, approval, generation, state) VALUES (?, ?, ?, ?, ?)",
+      row.turn,
+      row.approvalId,
+      row.approval,
+      row.generation,
+      row.state,
+    );
+  }
+
+  pendingPresentations(): import("./store.js").PresentationRow[] {
+    return this.sql
+      .exec("SELECT * FROM presentations WHERE state = 'pending' ORDER BY turn")
+      .toArray()
+      .map((r) => {
+        const row = r as { turn: number; approval_id: string; approval: string; generation: number; state: string };
+        return {
+          turn: Number(row.turn),
+          approvalId: row.approval_id,
+          approval: row.approval,
+          generation: Number(row.generation),
+          state: "pending" as const,
+        };
+      });
+  }
+
+  finishPresentation(turn: number, state: "reported" | "not_shown"): void {
+    this.sql.exec("UPDATE presentations SET state = ? WHERE turn = ?", state, turn);
+  }
+
   agentSend(key: string): import("./store.js").AgentSendRow | null {
     const row = firstRow<{
       agent_key: string;
@@ -580,7 +618,7 @@ export class SqlConversationStore implements ConversationStore {
   wipe(deletedAtMs: number): void {
     const meta = this.meta();
     this.sql.exec(
-      "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns; DELETE FROM inbound_messages; DELETE FROM agent_sends;",
+      "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns; DELETE FROM inbound_messages; DELETE FROM agent_sends; DELETE FROM presentations;",
     );
     this.saveMeta({ ...defaultMeta(), generation: meta.generation + 1, turn: meta.turn, deletedAtMs });
   }

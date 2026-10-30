@@ -4,6 +4,7 @@
 // reaches them from the queue consumer, never from the public internet.
 import {
   AgentResponder,
+  reportPresentation,
   BlooioChannel,
   RecordingChannel,
   boundFetch,
@@ -175,6 +176,17 @@ export class ConversationDO implements DurableObject {
       logger: this.logger,
       nowMs: () => Date.now(),
       fetchFn: boundFetch,
+      reportPresentation: agentConfigured(this.env)
+        ? (p, sentTexts) =>
+            reportPresentation({
+              agentUrl: this.env.AGENT_URL!,
+              secret: this.env.MANO_AGENT_SECRET!,
+              grantSecret: this.env.MANO_HANDLE_GRANT_SECRET!,
+              handleHash,
+              ...p,
+              sentTexts,
+            })
+        : undefined,
       config: {
         handleHash,
         batchMs: numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs),

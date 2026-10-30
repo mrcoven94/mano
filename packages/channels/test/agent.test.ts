@@ -7,6 +7,7 @@ import {
   deleteConversationInEngine,
   notifyAgentDeleted,
   presentationHash,
+  reportPresentation,
   ResponderFailed,
   signAgentRequest,
   StandInResponder,
@@ -239,37 +240,55 @@ describe("approval questions on the text line", () => {
 describe("reporting a shown approval question", () => {
   const approval = "Ready to send: renewal. Name: Rosa Testcase. Reply YES to send exactly this, or NO to stop.";
 
-  function agentWith(seen: { url: string; body: Record<string, unknown> }[]): AgentResponder {
-    return new AgentResponder({
+  it("a reply with an approval question carries it for the runner to persist", async () => {
+    const fetchFn = (async () =>
+      Response.json({ status: "waiting_approval", text: `Ready.\n\n${approval}`, approval, approvalId: "appr_1" })) as typeof fetch;
+    const result = await new AgentResponder({
       agentUrl: "https://agent.example",
       secret: "secret",
       grantSecret: "g",
       handleHash: HANDLE,
       fallback: new StandInResponder(["fallback reply"]),
-      fetchFn: (async (url: string, init: RequestInit) => {
-        if (url.endsWith("/channels/mano/presented")) {
-          seen.push({ url, body: JSON.parse(String(init.body)) });
-          return Response.json({ ok: true });
-        }
-        return Response.json({ status: "waiting_approval", text: `Ready.\n\n${approval}`, approval, approvalId: "appr_1" });
-      }) as typeof fetch,
-    });
+      fetchFn,
+    }).respond({ texts: ["file it"], attachmentCount: 0, turnKey: KEY });
+    expect(result.presentation).toEqual({ approvalId: "appr_1", approval });
+  });
+
+  function reportWith(seen: Record<string, unknown>[], status = 200) {
+    return (async (_url: string, init: RequestInit) => {
+      seen.push(JSON.parse(String(init.body)));
+      return Response.json({ ok: status === 200 }, { status });
+    }) as typeof fetch;
   }
 
-  it("reports the approval ID and the hash of the question once it went out whole", async () => {
-    const seen: { url: string; body: Record<string, unknown> }[] = [];
-    const result = await agentWith(seen).respond({ texts: ["file it"], attachmentCount: 0, turnKey: KEY });
-    await result.afterSent?.(["Ready.", "Ready to send: renewal. Name: Rosa Testcase.", "Reply YES to send exactly this, or NO to stop."]);
-    expect(seen).toHaveLength(1);
-    expect(seen[0].body).toMatchObject({ handleHash: HANDLE, approvalId: "appr_1", textHash: await presentationHash(approval), generation: 0 });
-    expect((await verifyHandleGrant(String(seen[0].body.grant), "g"))?.handle).toBe(HANDLE);
+  it("reports the approval ID, the question's hash, the generation and a grant once it went out whole", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const shown = await reportPresentation({
+      agentUrl: "https://agent.example",
+      secret: "secret",
+      grantSecret: "g",
+      handleHash: HANDLE,
+      approvalId: "appr_1",
+      approval,
+      generation: 2,
+      sentTexts: ["Ready.", "Ready to send: renewal. Name: Rosa Testcase.", "Reply YES to send exactly this, or NO to stop."],
+      fetchFn: reportWith(seen),
+    });
+    expect(shown).toBe(true);
+    expect(seen[0]).toMatchObject({ handleHash: HANDLE, approvalId: "appr_1", textHash: await presentationHash(approval), generation: 2 });
+    expect((await verifyHandleGrant(String(seen[0].grant), "g"))?.handle).toBe(HANDLE);
   });
 
   it("reports nothing when part of the question did not go out", async () => {
-    const seen: { url: string; body: Record<string, unknown> }[] = [];
-    const result = await agentWith(seen).respond({ texts: ["file it"], attachmentCount: 0, turnKey: KEY });
-    await result.afterSent?.(["Ready.", "Reply YES to send exactly this, or NO to stop."]);
+    const seen: Record<string, unknown>[] = [];
+    const base = { agentUrl: "https://a", secret: "s", grantSecret: "g", handleHash: HANDLE, approvalId: "x", approval, generation: 0 };
+    expect(await reportPresentation({ ...base, sentTexts: ["Reply YES to send exactly this, or NO to stop."], fetchFn: reportWith(seen) })).toBe(false);
     expect(seen).toHaveLength(0);
+  });
+
+  it("throws when the agent is unreachable, so the runner retries", async () => {
+    const base = { agentUrl: "https://a", secret: "s", grantSecret: "g", handleHash: HANDLE, approvalId: "x", approval, generation: 0 };
+    await expect(reportPresentation({ ...base, sentTexts: [approval], fetchFn: reportWith([], 503) })).rejects.toThrow();
   });
 
   it("hashes the same way the agent does", async () => {

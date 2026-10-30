@@ -105,6 +105,13 @@ export interface RunnerDeps {
   nowMs: () => number;
   fetchFn: typeof fetch;
   config: RunnerConfig;
+  // Tells the agent an approval question reached the person, given the
+  // texts the provider accepted for its turn. True when reported, false
+  // when the question was not shown whole; throws to retry later.
+  reportPresentation?: (
+    p: { approvalId: string; approval: string; generation: number },
+    sentTexts: string[],
+  ) => Promise<boolean>;
 }
 
 export type HandleResult =
@@ -561,6 +568,9 @@ export class ConversationRunner {
       meta.running = false;
       store.saveMeta(meta);
     }
+    // Only awaits when a report is owed, so the batch decision below stays
+    // synchronous otherwise.
+    if (this.deps.reportPresentation && store.pendingPresentations().length > 0) await this.reportPresentations();
     const pending = store.pending();
     if (pending.length === 0) return this.needsRetry() ? "retry" : "idle";
     if (nowMs() - meta.lastInboundMs < this.deps.config.batchMs) return "waiting";
@@ -657,6 +667,7 @@ export class ConversationRunner {
   // The alarm must re-arm until none remains, even with no new input.
   needsRetry(): boolean {
     if (this.store.unfinishedTurn()) return true;
+    if (this.deps.reportPresentation && this.store.pendingPresentations().length > 0) return true;
     return this.store.outbounds().some((r) => r.state === "uncertain" || r.state === "sending");
   }
 
@@ -668,6 +679,31 @@ export class ConversationRunner {
     const stuck = this.store.outbounds().filter((r) => r.state === "uncertain" || r.state === "sending");
     const attempts = stuck.reduce((max, r) => Math.max(max, r.attempts), 0);
     return retryDelayMs(Math.max(1, attempts));
+  }
+
+  // Reports each approval question whose turn's sends are all resolved.
+  // A report that fails stays pending; needsRetry re-arms the alarm, and
+  // the next run sends it again. The person's YES counts only once the
+  // agent has the report.
+  private async reportPresentations(): Promise<void> {
+    const { store, logger } = this.deps;
+    const report = this.deps.reportPresentation;
+    if (!report) return;
+    const outbounds = store.outbounds();
+    for (const p of store.pendingPresentations()) {
+      const rows = outbounds.filter((r) => r.turn === p.turn);
+      if (rows.length === 0 || rows.some((r) => r.state === "uncertain" || r.state === "sending")) continue;
+      const sent = rows
+        .filter((r) => r.state === "sent" || r.state === "delivered" || r.state === "read")
+        .sort((a, b) => a.part - b.part)
+        .map((r) => r.text);
+      try {
+        const shown = await report({ approvalId: p.approvalId, approval: p.approval, generation: p.generation }, sent);
+        store.finishPresentation(p.turn, shown ? "reported" : "not_shown");
+      } catch (err) {
+        logger.warn("presentation_report_failed", { handle: this.logHandle(), turn: p.turn, err: errName(err) });
+      }
+    }
   }
 
   private afterTurns(): TurnResult {
@@ -720,6 +756,7 @@ export class ConversationRunner {
       await this.settleResumedCost(turn, resumed);
       await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation);
       this.checkSendsResolved(turn, generation);
+      await this.reportPresentations();
       return;
     }
     const texts = items.map((i) => i.text).filter((t): t is string => !!t && t.length > 0);
@@ -815,7 +852,6 @@ export class ConversationRunner {
     try {
       const saved = await this.saveAttachments(turn, attachments);
       const bubbles: import("./store.js").AnswerBubble[] = [];
-      let afterSent: ((sentTexts: string[]) => Promise<void>) | undefined;
       // A crisis turn opens with the crisis line, never the friendly intro.
       if (!meta.introduced && !crisis) bubbles.push({ part: 0, tag: "", text: INTRO_BUBBLE });
       if (saved > 0) bubbles.push({ part: 0, tag: "ack", text: attachmentAck(saved) });
@@ -846,7 +882,8 @@ export class ConversationRunner {
           if (routable && tapback && latest) {
             bubbles.push({ part: 0, tag: "react", text: tapback, messageId: latest, fallback: hasText ? null : tapbackText(tapback) });
           }
-          afterSent = answer.afterSent;
+          // Persisted with the answer, so a resumed send reports it too.
+          if (answer.presentation) store.savePresentation({ turn, generation, state: "pending", ...answer.presentation });
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
@@ -866,14 +903,7 @@ export class ConversationRunner {
       this.checkGeneration(generation);
       await this.sendBubbles(turn, bubbles, chatId, to, saved, generation);
       this.checkSendsResolved(turn, generation);
-      if (afterSent) {
-        const sent = store
-          .outbounds()
-          .filter((r) => r.turn === turn && (r.state === "sent" || r.state === "delivered" || r.state === "read"))
-          .sort((a, b) => a.part - b.part)
-          .map((r) => r.text);
-        await this.bestEffort("answer_report_failed", () => afterSent(sent));
-      }
+      await this.reportPresentations();
     } finally {
       typingDone = true;
       clearInterval(typingTimer);
@@ -1015,7 +1045,7 @@ export class ConversationRunner {
         text: string;
         costUsd: number;
         tapback: import("@mano/channels").Tapback | null;
-        afterSent?: (sentTexts: string[]) => Promise<void>;
+        presentation?: { approvalId: string; approval: string };
       }
     | { ok: false; costUsd: number }
   > {
@@ -1050,7 +1080,7 @@ export class ConversationRunner {
       const costUsd =
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
       logger.info("turn_answered", { handle: this.logHandle(), turn, model: result.model, attempts: result.attempts });
-      return { ok: true, text: result.text, costUsd, tapback: result.tapback ?? null, afterSent: result.afterSent };
+      return { ok: true, text: result.text, costUsd, tapback: result.tapback ?? null, presentation: result.presentation };
     } catch (err) {
       logger.warn("responder_failed", {
         handle: this.logHandle(),

@@ -167,9 +167,7 @@ export class AgentResponder implements Responder {
           attempts: 1,
         };
         if (data.status === "waiting_approval" && typeof data.approvalId === "string" && typeof data.approval === "string") {
-          const approvalId = data.approvalId;
-          const approval = data.approval;
-          result.afterSent = (sent) => this.reportPresented(approvalId, approval, generation, sent);
+          result.presentation = { approvalId: data.approvalId, approval: data.approval };
         }
         return result;
       }
@@ -177,34 +175,6 @@ export class AgentResponder implements Responder {
       // Timeout, network, or malformed reply: fall through to the fallback.
     }
     return this.respondFallback(turn, inputChars);
-  }
-
-  // Tells the agent the question reached the person word for word, so a
-  // YES to it can count. Only bubbles the provider accepted count, and
-  // the question must appear in them whole (whitespace aside). Anything
-  // less reports nothing, and the agent will not accept a YES.
-  private async reportPresented(approvalId: string, approval: string, generation: number, sentTexts: string[]): Promise<void> {
-    if (!collapse(sentTexts.join(" ")).includes(collapse(approval))) return;
-    const raw = JSON.stringify({
-      handleHash: this.handleHash,
-      approvalId,
-      textHash: await presentationHash(approval),
-      generation,
-      grant: await mintHandleGrant(this.handleHash, this.grantSecret),
-    });
-    const timestamp = this.nowSeconds();
-    const res = await this.fetchFn(`${this.agentUrl}${AGENT_PRESENTED_PATH}`, {
-      method: "POST",
-      signal: AbortSignal.timeout(this.timeoutMs),
-      headers: {
-        "content-type": "application/json",
-        [AGENT_TIMESTAMP_HEADER]: String(timestamp),
-        [AGENT_SIGNATURE_HEADER]: await signAgentRequest(this.secret, timestamp, new TextEncoder().encode(raw)),
-      },
-      body: raw,
-    });
-    await res.body?.cancel().catch(() => undefined);
-    if (!res.ok) throw new Error(`Agent refused the presented report: ${res.status}`);
   }
 
   private async respondFallback(turn: TurnInput, inputChars: number): Promise<ResponderResult> {
@@ -298,4 +268,50 @@ export async function deleteConversationInEngine(
   }
   const body = (await res.json().catch(() => null)) as { removed?: Record<string, number | boolean> } | null;
   return body?.removed ?? null;
+}
+
+export interface PresentationReport {
+  agentUrl: string;
+  secret: string;
+  grantSecret: string;
+  handleHash: string;
+  approvalId: string;
+  approval: string;
+  generation: number;
+  // The text of each bubble of the turn the provider accepted, in order.
+  sentTexts: string[];
+  fetchFn?: typeof fetch;
+}
+
+// Tells the agent an approval question reached the person word for word,
+// so a YES to it can count. Only accepted bubbles count, and the question
+// must appear in them whole (whitespace aside). Returns false when it did
+// not (nothing is reported: the agent will not accept a YES), true once
+// the agent accepted the report, and throws when the agent could not be
+// reached so the caller retries.
+export async function reportPresentation(report: PresentationReport): Promise<boolean> {
+  if (!collapse(report.sentTexts.join(" ")).includes(collapse(report.approval))) return false;
+  const raw = JSON.stringify({
+    handleHash: report.handleHash,
+    approvalId: report.approvalId,
+    textHash: await presentationHash(report.approval),
+    generation: report.generation,
+    grant: await mintHandleGrant(report.handleHash, report.grantSecret),
+  });
+  const timestamp = Math.floor(Date.now() / 1000);
+  const res = await (report.fetchFn ?? boundFetch)(`${report.agentUrl.replace(/\/$/, "")}${AGENT_PRESENTED_PATH}`, {
+    method: "POST",
+    signal: AbortSignal.timeout(30_000),
+    headers: {
+      "content-type": "application/json",
+      [AGENT_TIMESTAMP_HEADER]: String(timestamp),
+      [AGENT_SIGNATURE_HEADER]: await signAgentRequest(report.secret, timestamp, new TextEncoder().encode(raw)),
+    },
+    body: raw,
+  });
+  await res.body?.cancel().catch(() => undefined);
+  // 409: the agent no longer holds that question as waiting. Final, not
+  // worth retrying: the person can ask for the question again.
+  if (res.ok || res.status === 409) return res.ok;
+  throw new Error(`Agent refused the presented report: ${res.status}`);
 }

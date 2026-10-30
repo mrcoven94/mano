@@ -88,6 +88,7 @@ export function makeHarness(
     byteBudget?: number;
     startMs?: number;
     fetchFn?: typeof fetch;
+    reportPresentation?: import("../src/runner.js").RunnerDeps["reportPresentation"];
   } = {},
 ): Harness {
   const lines: string[] = [];
@@ -140,6 +141,7 @@ export function makeHarness(
     nowMs: () => h.now,
     fetchFn: opts.fetchFn ?? (async () => new Response("missing", { status: 404 })),
     config: { handleHash: TEST_HANDLE_HASH, ...DEFAULT_RUNNER_CONFIG, ...opts.config },
+    reportPresentation: opts.reportPresentation,
   });
   return h;
 }
