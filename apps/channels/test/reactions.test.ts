@@ -163,6 +163,8 @@ describe("the chat background, set once", () => {
     expect(h.channel.backgrounds).toEqual([{ chatId: TEST_CHAT, type: "image/png", size: PNG.length }]);
     const lastSend = order.map((o) => o.startsWith("send:")).lastIndexOf(true);
     expect(order.indexOf("background")).toBeGreaterThan(lastSend);
+    // The upload never holds the typing indicator up.
+    expect(order.indexOf("background")).toBeGreaterThan(order.lastIndexOf("typing:stopped"));
     expect(h.store.meta().backgroundSetAtMs).toBeGreaterThan(0);
     await say(h, "evt_2", "ok thanks");
     expect(h.channel.backgrounds).toHaveLength(1);

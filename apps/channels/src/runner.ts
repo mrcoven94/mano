@@ -966,6 +966,7 @@ export class ConversationRunner {
     let typingTimer: ReturnType<typeof setInterval> | undefined;
     let refreshing: Promise<void> = Promise.resolve();
     let typingDone = false;
+    let replied = false;
     if (chatId) {
       await this.bestEffort("mark_read", () => this.deps.channel.markRead(chatId));
       await this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started"));
@@ -1034,16 +1035,20 @@ export class ConversationRunner {
       await this.sendBubbles(turn, bubbles, chatId, to, saved, generation);
       this.checkSendsResolved(turn, generation);
       await this.reportPresentations();
-      await this.maybeSetBackground(turn, chatId, crisis, generation);
+      replied = true;
     } finally {
       stopEyesTimer();
-      await eyes.settled();
-      this.eyes = null;
       typingDone = true;
       clearInterval(typingTimer);
       await refreshing;
       if (chatId) await this.bestEffort("typing_stopped", () => this.deps.channel.setTyping(chatId, "stopped"));
+      // A reaction call still in flight finishes after typing stops, so a
+      // slow provider never holds the indicator up.
+      await eyes.settled();
+      this.eyes = null;
     }
+    // After typing stops: the reply is out, and the upload never holds it.
+    if (replied) await this.maybeSetBackground(turn, chatId, crisis, generation);
   }
 
   // Every reply, model or fixed, becomes its bubbles through
