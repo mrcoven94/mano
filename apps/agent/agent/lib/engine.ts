@@ -136,7 +136,8 @@ export class PersonEngine {
     this.fetchFn = cfg.fetchFn ?? boundFetch;
   }
 
-  private async call(method: string, path: string, body?: unknown): Promise<Response> {
+  // timeoutMs: what is left of the caller's budget, when it has one.
+  private async call(method: string, path: string, body?: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
     return this.fetchFn(`${this.cfg.baseUrl}/api/persons/${encodeURIComponent(this.personId)}${path}`, {
       method,
       headers: {
@@ -145,12 +146,12 @@ export class PersonEngine {
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, timeoutMs)),
     });
   }
 
-  private async json(method: string, path: string, body?: unknown): Promise<unknown> {
-    const res = await this.call(method, path, body);
+  private async json(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<unknown> {
+    const res = await this.call(method, path, body, timeoutMs);
     if (!res.ok) {
       await res.body?.cancel().catch(() => undefined);
       throw new EngineError(res.status);
@@ -270,8 +271,8 @@ export class PersonEngine {
     await this.json("DELETE", "/conversation", { generation: this.generation });
   }
 
-  async listMemory(): Promise<MemoryRow[]> {
-    const out = (await this.json("GET", "/memory")) as { memories?: unknown };
+  async listMemory(timeoutMs?: number): Promise<MemoryRow[]> {
+    const out = (await this.json("GET", "/memory", undefined, timeoutMs)) as { memories?: unknown };
     const rows = Array.isArray(out.memories) ? out.memories : [];
     return rows
       .map((r) => r as Record<string, unknown>)
@@ -279,8 +280,8 @@ export class PersonEngine {
       .map((r) => ({ id: r.id as string, content: r.content as string }));
   }
 
-  async addMemory(content: string): Promise<string> {
-    const out = (await this.json("POST", "/memory", { content, source: "agent", generation: this.generation })) as { id?: unknown };
+  async addMemory(content: string, timeoutMs?: number): Promise<string> {
+    const out = (await this.json("POST", "/memory", { content, source: "agent", generation: this.generation }, timeoutMs)) as { id?: unknown };
     if (typeof out.id !== "string") throw new EngineError(502);
     return out.id;
   }
@@ -325,8 +326,8 @@ export class PersonEngine {
   }
 
   // A photo Channels stored for this person, or null when Engine has none.
-  async getDocument(documentId: string): Promise<Uint8Array | null> {
-    const res = await this.call("GET", `/documents/${encodeURIComponent(documentId)}`);
+  async getDocument(documentId: string, timeoutMs?: number): Promise<Uint8Array | null> {
+    const res = await this.call("GET", `/documents/${encodeURIComponent(documentId)}`, undefined, timeoutMs);
     if (res.status === 404) {
       await res.body?.cancel().catch(() => undefined);
       return null;
@@ -343,8 +344,8 @@ export class PersonEngine {
   // the generation this turn started under (fixed when the turn was
   // parsed, before any await), so Engine refuses it with 409 once the
   // conversation was deleted or moved on.
-  async saveDeadline(input: DeadlineInput): Promise<"saved" | "unavailable"> {
-    const res = await this.call("POST", "/deadlines", { ...input, generation: this.generation });
+  async saveDeadline(input: DeadlineInput, timeoutMs?: number): Promise<"saved" | "unavailable"> {
+    const res = await this.call("POST", "/deadlines", { ...input, generation: this.generation }, timeoutMs);
     await res.body?.cancel().catch(() => undefined);
     if (res.status === 404) return "unavailable";
     if (!res.ok) throw new EngineError(res.status);

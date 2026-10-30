@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { answerReading, readMail, type HeldDeadline, type ModelClient } from "@mano/mail";
 
 import { EngineError, type PersonEngine } from "./engine.js";
-import { rememberFact } from "./memory.js";
+import { rememberFact, timeLeft } from "./memory.js";
 
 export interface TextedPhoto {
   id: string;
@@ -60,10 +60,17 @@ const spoken = (iso: string): string => {
 
 // receivedAt: when the photo arrived (Channels' receive time for the
 // turn), so a nudge can name the letter by the day it was sent.
-async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt: string): Promise<string[]> {
+// Each write takes what is left of the step's budget; one that does not
+// fit is skipped, and the reply says the date is not saved yet.
+async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt: string, deadlineAt: number): Promise<string[]> {
   const lines: string[] = [];
   for (const d of deadlines) {
     let outcome: "saved" | "unavailable" | "failed";
+    const time = timeLeft(deadlineAt);
+    if (time === null) {
+      lines.push(`I could not save ${spoken(d.dueDate)} to your deadlines yet.`);
+      continue;
+    }
     try {
       outcome = await engine.saveDeadline({
         title: d.title,
@@ -72,10 +79,11 @@ async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt:
         ...(d.kind ? { kind: d.kind } : {}),
         source: { kind: "letter", documentId: d.file, sentence: d.sentence, receivedAt },
         idempotencyKey: deadlineKey(d),
-      });
+      }, time ?? undefined);
     } catch (err) {
-      console.warn(JSON.stringify({ type: "mano_deadline_failed", status: err instanceof EngineError ? err.status : null }));
-      outcome = "failed";
+      const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+      console.warn(JSON.stringify({ type: "mano_deadline_failed", status: err instanceof EngineError ? err.status : null, timedOut }));
+      outcome = timedOut ? "unavailable" : "failed";
     }
     const date = spoken(d.dueDate);
     lines.push(
@@ -125,7 +133,9 @@ export async function readTextedPhotos(
   try {
     const files = [];
     for (const photo of photos) {
-      const bytes = await engine.getDocument(photo.id);
+      const time = timeLeft(deadlineAt);
+      if (time === null) break;
+      const bytes = await engine.getDocument(photo.id, time ?? undefined);
       if (bytes) files.push({ bytes, mimeType: photo.mimeType, name: photo.id });
     }
     if (files.length === 0) throw new Error("No stored photo.");
@@ -136,9 +146,9 @@ export async function readTextedPhotos(
     if (!reading) throw new Error("Reading timed out.");
     const answer = answerReading(reading);
     read = answer.outcome === "read";
-    text = [answer.text, ...(await hold(engine, answer.deadlines, receivedAt))].join(" ");
+    text = [answer.text, ...(await hold(engine, answer.deadlines, receivedAt, deadlineAt))].join(" ");
     if (read) {
-      await rememberFact(engine, `From a letter photo: ${text}`).catch((err: unknown) =>
+      await rememberFact(engine, `From a letter photo: ${text}`, deadlineAt).catch((err: unknown) =>
         console.warn(JSON.stringify({ type: "mano_letters_remember_failed", status: err instanceof EngineError ? err.status : null })),
       );
     }

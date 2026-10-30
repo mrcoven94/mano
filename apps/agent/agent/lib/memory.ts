@@ -20,12 +20,27 @@ export async function recallFacts(engine: PersonEngine): Promise<string[]> {
   return rows.map((r) => r.content).slice(-MAX_RECALLED_FACTS);
 }
 
-export async function rememberFact(engine: PersonEngine, fact: string): Promise<{ saved: boolean }> {
+// The time left before deadlineAt for one Engine call, or null when too
+// little is left to start one.
+const MIN_CALL_MS = 1_500;
+export function timeLeft(deadlineAt: number | undefined): number | null | undefined {
+  if (deadlineAt === undefined) return undefined;
+  const left = deadlineAt - Date.now();
+  return left >= MIN_CALL_MS ? left : null;
+}
+
+// deadlineAt: when the caller's turn must be done. A call that does not
+// fit is skipped, and the fact is not saved.
+export async function rememberFact(engine: PersonEngine, fact: string, deadlineAt?: number): Promise<{ saved: boolean }> {
   const clean = normalizeFact(fact);
   if (!clean) return { saved: false };
-  const rows = await engine.listMemory();
+  const listTime = timeLeft(deadlineAt);
+  if (listTime === null) return { saved: false };
+  const rows = await engine.listMemory(listTime);
   if (rows.some((r) => sameFact(r.content, clean))) return { saved: true };
-  await engine.addMemory(clean);
+  const addTime = timeLeft(deadlineAt);
+  if (addTime === null) return { saved: false };
+  await engine.addMemory(clean, addTime);
   return { saved: true };
 }
 
