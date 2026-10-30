@@ -36,7 +36,8 @@ describe("answerReading", () => {
       {
         letterId: "L1",
         file: "doc-1",
-        title: "Renewal",
+        title: "Medi-Cal renewal",
+        kind: "renewal",
         dueDate: "2026-11-20",
         program: "Medi-Cal",
         sentence: "Your renewal is due November 20, 2026.",

@@ -282,6 +282,7 @@ export class EngineDouble {
       }
       if (rest === "/deadlines" && method === "POST") {
         if (!this.deadlinesLive) return new Response("Not found", { status: 404 });
+        if (body.generation !== currentGeneration(sql)) return Response.json(STALE, { status: 409 });
         this.deadlineCalls.push({ personId, body });
         return Response.json({ deadline: { id: String(body.idempotencyKey), ...body } }, { status: 201 });
       }

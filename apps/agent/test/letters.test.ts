@@ -27,10 +27,13 @@ let engine: EngineDouble;
 let grant: string;
 let calls: AgentTurnInput[];
 
-function photoTurn(turnId: string, opts: { texts?: string[]; documents?: { id: string; mimeType: string }[]; attachmentCount?: number } = {}) {
+function photoTurn(
+  turnId: string,
+  opts: { texts?: string[]; documents?: { id: string; mimeType: string }[]; attachmentCount?: number; generation?: number } = {},
+) {
   const raw = JSON.stringify({
     turnId,
-    generation: 0,
+    generation: opts.generation ?? 0,
     handleHash: HANDLE,
     grant,
     receivedAt: Date.now(),
@@ -87,7 +90,8 @@ describe("a texted letter", () => {
     expect(body.text).toContain("I saved November 20, 2026 to your deadlines.");
     expect(engine.deadlineCalls).toHaveLength(1);
     expect(engine.deadlineCalls[0]!.body).toMatchObject({
-      title: "Renewal",
+      title: "Medi-Cal renewal",
+      kind: "renewal",
       dueDate: "2026-11-20",
       program: "Medi-Cal",
       source: { kind: "letter", documentId: DOC, sentence: "Your renewal is due November 20, 2026." },
@@ -135,6 +139,31 @@ describe("a texted letter", () => {
     expect(body.text).toContain("November 20, 2026");
     expect(body.text).not.toContain("I saved");
     expect(body.text).toContain("I could not save November 20, 2026 to your deadlines yet.");
+  });
+
+  it("sends the generation the turn started under, and a refused deadline is never called saved", async () => {
+    await send(photoTurn("turn_letter0011", { generation: 2 }), deps([RENEWAL_PAGE]));
+    expect(engine.deadlineCalls[0]!.body.generation).toBe(2);
+
+    // The conversation is deleted (moved to generation 3) while the
+    // letter is read: Engine refuses the deadline, and the reply says so.
+    const moved = deps([RENEWAL_PAGE]);
+    const turnEngine = moved.engine!;
+    moved.engine = {
+      forHandle: (h, g, gen) => {
+        const person = turnEngine.forHandle(h, g, gen);
+        const save = person.saveDeadline.bind(person);
+        person.saveDeadline = async (input) => {
+          await turnEngine.forHandle(h, g, gen + 1).advanceConversation();
+          return save(input);
+        };
+        return person;
+      },
+    };
+    const { body } = await send(photoTurn("turn_letter0012", { generation: 2 }), moved);
+    expect(body.text).not.toContain("I saved");
+    expect(body.text).toContain("I could not save November 20, 2026 to your deadlines just now.");
+    expect(engine.deadlineCalls).toHaveLength(1);
   });
 
   it("a retried turn holds the same deadline once", async () => {

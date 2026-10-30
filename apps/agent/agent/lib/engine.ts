@@ -339,7 +339,10 @@ export class PersonEngine {
   }
 
   // Holds a deadline. "unavailable" when Engine has no deadlines route
-  // yet (404); the same idempotency key is the same deadline.
+  // yet (404); the same idempotency key is the same deadline. It carries
+  // the generation this turn started under (fixed when the turn was
+  // parsed, before any await), so Engine refuses it with 409 once the
+  // conversation was deleted or moved on.
   async saveDeadline(input: DeadlineInput): Promise<"saved" | "unavailable"> {
     const res = await this.call("POST", "/deadlines", { ...input, generation: this.generation });
     await res.body?.cancel().catch(() => undefined);
@@ -354,6 +357,7 @@ export interface DeadlineInput {
   title: string;
   dueDate: string;
   program?: string;
+  kind?: string;
   source: { kind: "letter"; documentId: string; sentence: string };
   idempotencyKey: string;
 }

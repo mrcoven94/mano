@@ -9,12 +9,17 @@
 import { findInstructions } from "./safety.js";
 import type { Letter, MailReading, Question } from "./types.js";
 
+// What a held deadline is for, when the sentence says.
+export type DeadlineKind = "renewal" | "recertification" | "interview" | "documents due" | "payment" | "hearing";
+
 // A deadline the gate published: Mano holds it without asking.
 export interface HeldDeadline {
   letterId: string;
   // The InputFile name its sentence is cited on.
   file: string;
+  // Short and plain ("Medi-Cal renewal"); never quoted to the person.
   title: string;
+  kind: DeadlineKind | null;
   dueDate: string;
   program: string | null;
   // The letter's sentence, verbatim.
@@ -78,6 +83,24 @@ function deadlineLine(question: Question | undefined): { text: string; held: boo
   return null;
 }
 
+function kindOf(sentence: string, obligation: string): DeadlineKind | null {
+  const t = sentence.toLowerCase();
+  if (/\brecertif/.test(t)) return "recertification";
+  if (/\binterview\b/.test(t)) return "interview";
+  if (/\bhearing\b/.test(t)) return "hearing";
+  if (obligation === "renew") return "renewal";
+  if (obligation === "pay") return "payment";
+  if (obligation === "respond" && /\b(send|submit|return|provide|bring|mail|proofs?|documents?|forms?|pay stubs?)\b/.test(t)) return "documents due";
+  return null;
+}
+
+function titleOf(letter: Letter, kind: DeadlineKind | null): string {
+  const program = letter.fields.program ? bare(letter.fields.program.value) : null;
+  if (program && kind) return `${program} ${kind}`;
+  if (kind) return kind.charAt(0).toUpperCase() + kind.slice(1);
+  return bare(program ?? letter.fields.subject?.value ?? "Letter deadline");
+}
+
 function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; held: HeldDeadline | null } {
   const warnings = reading.warnings.filter((w) => w.letterId === letter.id);
   if (warnings.some((w) => w.kind === "scam_suspect")) return { lines: [SCAM], held: null };
@@ -90,7 +113,8 @@ function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; 
       ? {
           letterId: letter.id,
           file: proposal.citation.file,
-          title: bare(letter.fields.subject?.value ?? letter.fields.program?.value ?? letter.fields.sender?.value ?? "Letter deadline"),
+          title: titleOf(letter, kindOf(proposal.quote, proposal.obligation)),
+          kind: kindOf(proposal.quote, proposal.obligation),
           dueDate: proposal.dueDate,
           program: letter.fields.program ? bare(letter.fields.program.value) : null,
           sentence: proposal.quote,

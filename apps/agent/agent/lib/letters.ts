@@ -68,6 +68,7 @@ async function hold(engine: PersonEngine, deadlines: HeldDeadline[]): Promise<st
         title: d.title,
         dueDate: d.dueDate,
         ...(d.program ? { program: d.program } : {}),
+        ...(d.kind ? { kind: d.kind } : {}),
         source: { kind: "letter", documentId: d.file, sentence: d.sentence },
         idempotencyKey: deadlineKey(d),
       });
