@@ -58,6 +58,7 @@ describe("every crisis Sol found still triggers", () => {
       "they cut my benefits\nbut also my throat",
       "they cut my food stamps\nquiero morir",
       "in danger of\nthey cut my benefits\nlosing control",
+      "I'm in danger of. They cut my food stamps. Losing control.",
     ]) {
       expect(crisisTurn(text), text).toBe(true);
     }
