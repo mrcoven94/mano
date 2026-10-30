@@ -1,16 +1,18 @@
 // Fills out a form for the person. It reads their profile from Engine,
-// asks for what is missing one question at a time, types the values into
-// the real form on the person's own computer, and holds the exact filled
-// version in Engine for their YES, bound to its content hash and the
-// document's bytes. It files nothing: on YES, Engine files it through the
-// action gateway and the reply carries the confirmation number.
+// asks for what is missing one question at a time, closes any earlier
+// version still waiting for their YES, types the values into a fresh
+// draft of the real form on the person's own computer, reads the draft
+// back from the portal, and holds exactly what the portal saved in Engine
+// for their YES, bound to its content hash and the document's bytes. It
+// files nothing: on YES, Engine files it through the action gateway and
+// the reply carries the confirmation number.
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
 import { fillDepsFromEnv, fillOnComputer, type FillDeps } from "../lib/computer-fill.js";
 import { FORMS, fillFrom, resolveForm } from "../lib/forms.js";
 import { personEngine, requireTurn } from "../lib/person.js";
-import { holdForYes } from "../lib/propose.js";
+import { closeEarlier, holdForYes } from "../lib/propose.js";
 
 const inputSchema = z.object({
   form: z
@@ -47,9 +49,14 @@ export default defineTool({
       return { status: "unknown_form", sent: false, note: "Mano cannot fill that form yet. Say so plainly and offer to help another way." };
     }
     if (!portalUrl) {
-      return { status: "unavailable", sent: false, note: "Filling forms is not set up here. Say so and offer to collect the answers." };
+      return { status: "unavailable", sent: false, note: "Filling forms on Mano's computer is not set up here. Prepare the renewal with start_form_draft from the person's answers instead." };
     }
+    // The proof document comes only from the profile, so without one the
+    // form cannot be completed here.
     const profile = await engine.getProfile();
+    if (!profile) {
+      return { status: "unavailable", sent: false, note: "Mano cannot read this person's saved details yet. Prepare the renewal with start_form_draft from the person's answers instead." };
+    }
     const filled = fillFrom(form, profile, input.answers ?? {});
     const bad = filled.invalid[0];
     if (bad) {
@@ -60,20 +67,37 @@ export default defineTool({
         filled.missing.name === "proof"
           ? "The form needs a proof of income document and Mano has none on file yet. Ask this one question, and nothing else."
           : "Ask this one question, and nothing else. Then call fill_form again with the answer added under this field name.";
-      return { status: "needs_answer", field: filled.missing.name, question: filled.missing.question, profileAvailable: profile !== null, sent: false, note };
+      return { status: "needs_answer", field: filled.missing.name, question: filled.missing.question, sent: false, note };
     }
 
+    if (!(await closeEarlier(engine, turn.turnId, form.recipient))) {
+      return { status: "fill_failed", sent: false, note: "Mano could not set aside the earlier version of this form, so nothing new was filled or sent. Say so and offer to try again." };
+    }
     const deps = depsForTests ? depsForTests(engine.personId) : fillDepsFromEnv(engine.personId);
     if ("unavailable" in deps) {
       console.warn(JSON.stringify({ type: "mano_fill_unavailable", reason: deps.unavailable }));
-      return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Say so and offer to try again soon." };
+      return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Prepare the renewal with start_form_draft from the person's answers instead." };
     }
     const fill = await fillOnComputer(form, filled.values, portalUrl, deps);
     console.log(
-      JSON.stringify({ type: "mano_fill", status: fill.status, reason: "reason" in fill ? fill.reason : null, ms: "ms" in fill ? fill.ms : 0, steps: "steps" in fill ? fill.steps : 0 }),
+      JSON.stringify({
+        type: "mano_fill",
+        status: fill.status,
+        reason: "reason" in fill ? fill.reason : null,
+        codes: "codes" in fill ? fill.codes : null,
+        ms: fill.ms,
+        steps: "steps" in fill ? fill.steps : 0,
+      }),
     );
     if (fill.status === "rejected") {
       return { status: "form_refused", sent: false, formSays: fill.message, note: "The form refused these values. Tell the person what the form said in one sentence and ask the one question that fixes it." };
+    }
+    if (fill.status === "safety_check") {
+      return {
+        status: "needs_go_ahead",
+        sent: false,
+        note: "Mano's computer stopped before filling the form because it needs the person's go-ahead, so nothing was filled or sent. Say so in one short sentence. Do not ask them to reply YES: a yes cannot continue this fill yet.",
+      };
     }
     if (fill.status !== "filled") {
       return { status: "fill_failed", sent: false, note: "Mano could not finish filling the form on its computer, so nothing was prepared or sent. Say so and offer to try again." };
@@ -83,14 +107,14 @@ export default defineTool({
       type: "submit",
       recipient: form.recipient,
       purpose: form.purpose,
-      payload: filled.values,
+      payload: fill.saved,
       ...(filled.documentId ? { documentId: filled.documentId } : {}),
     });
     if (!held.held) return { status: held.status, note: held.note, reason: held.reason, sent: false };
     return {
       status: "waiting_for_yes",
       approvalId: held.approval.id,
-      filled: form.fields.map((f) => ({ field: f.label, value: filled.values[f.name] })),
+      filled: form.fields.map((f) => ({ field: f.label, value: fill.saved[f.name] })),
       sent: false,
       note: "The form is filled out on Mano's computer and the exact version goes to the person with your reply. In one short sentence, say you filled it out and it is ready for their yes. Do not repeat the fields or ask the question yourself.",
     };

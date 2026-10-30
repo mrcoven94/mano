@@ -72,10 +72,15 @@ function dollars(answer: string): string | null {
 
 const PER_MONTH: Record<Frequency, number> = { weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, yearly: 1 / 12 };
 
+// Unknown unless every entry has an amount and how often it comes: a
+// total that left one out would understate the household's income.
 function monthlyIncome(profile: Profile): string | null {
-  const entries = profile.income.filter((i) => i.amount && i.frequency);
-  if (entries.length === 0) return null;
-  const total = entries.reduce((sum, i) => sum + i.amount!.value * PER_MONTH[i.frequency!.value], 0);
+  if (profile.income.length === 0) return null;
+  let total = 0;
+  for (const i of profile.income) {
+    if (!i.amount || !i.frequency) return null;
+    total += i.amount.value * PER_MONTH[i.frequency.value];
+  }
   return String(Math.round(total));
 }
 
@@ -177,7 +182,7 @@ export interface FilledForm {
 }
 
 // Fills the form from the person's own answers first, then the profile.
-export function fillFrom(form: FormSpec, profile: Profile | null, answers: Record<string, string>): FilledForm {
+export function fillFrom(form: FormSpec, profile: Profile, answers: Record<string, string>): FilledForm {
   const values: Record<string, string> = {};
   const invalid: FilledForm["invalid"] = [];
   let missing: FilledForm["missing"] = null;
@@ -185,14 +190,14 @@ export function fillFrom(form: FormSpec, profile: Profile | null, answers: Recor
     const answer = Object.hasOwn(answers, field.name) ? answers[field.name] : undefined;
     const fromAnswer = answer === undefined ? null : field.parse(answer);
     if (answer !== undefined && fromAnswer === null) invalid.push({ name: field.name, label: field.label, question: field.question });
-    const value = fromAnswer ?? (profile ? field.fromProfile(profile) : null);
+    const value = fromAnswer ?? field.fromProfile(profile);
     if (value === null) {
       missing ??= { name: field.name, label: field.label, question: field.question };
       continue;
     }
     values[field.name] = value;
   }
-  const documentId = profile ? form.proof.fromProfile(profile) : null;
+  const documentId = form.proof.fromProfile(profile);
   if (!documentId) missing ??= { name: "proof", label: form.proof.label, question: form.proof.question };
   return { values, documentId, missing, invalid };
 }

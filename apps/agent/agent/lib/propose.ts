@@ -109,3 +109,28 @@ export async function holdForYes(
   if (shown && shown.approvalId !== approval.id) await engine.clearPointer(shown.approvalId);
   return { held: true, approval, question };
 }
+
+// Closes the conversation's newest proposal to this recipient when it
+// came from an earlier turn, before a new version is prepared, so a
+// correction that then fails leaves no older version answerable. Engine
+// never approves any proposal but the newest, so that one is the only one
+// to close. A proposal of this turn or a later one stays: a replayed or
+// slow older turn never closes a newer draft. False when Engine did not
+// close it, and then nothing new may be prepared.
+export async function closeEarlier(engine: PersonEngine, turnId: string, recipient: string): Promise<boolean> {
+  try {
+    const { latest } = await engine.getPending();
+    if (!latest || latest.turnId === turnId) return true;
+    const mine = await engine.getTurn(turnId);
+    if (!mine) return false;
+    // Engine's order: the turn's first receive time, then its ID.
+    const place = (receivedAt: string, id: string) => `${new Date(Date.parse(receivedAt)).toISOString()} ${id}`;
+    if (place(latest.receivedAt, latest.turnId) >= place(mine.firstReceivedAt, turnId)) return true;
+    const approval = await engine.approval(latest.approvalId);
+    if (approval?.status !== "pending" || approval.recipient !== recipient) return true;
+    return (await engine.reject(approval.id)).status === "rejected";
+  } catch {
+    console.warn(JSON.stringify({ type: "mano_close_failed" }));
+    return false;
+  }
+}
