@@ -4,9 +4,11 @@
 // lands in R2 (mano-quality for aggregates, mano-quality-private for per-case
 // results); otherwise it stays in --out.
 // Usage: node --import ./src/register.ts src/bin/nightly.ts [--out runs-staging] [--date 2026-10-29] [--upload]
-// Exits 1 when a safety check failed, after the run is recorded.
+// Exits 1, after the run is recorded, when something regressed against the
+// previous baseline: a new safety failure or a judge or hard-check drop.
 
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runGuardian } from "../guardian.ts";
 import { dnsFromEnv } from "../links.ts";
@@ -14,7 +16,7 @@ import { scoreMailDeadlines } from "../mail.ts";
 import { runProbes } from "../probes.ts";
 import { r2CredsFromEnv } from "../r2.ts";
 import { evalGate, readHistory, writeNightlyStaging, type HistoryRow } from "../report.ts";
-import { finishReport, runBench } from "../run.ts";
+import { finishReport, runBench, type RunReport } from "../run.ts";
 import { readPublic, uploadStaging } from "../sync.ts";
 import { textLineFromEnv } from "../textline.ts";
 
@@ -41,6 +43,10 @@ if (upload && !creds) throw new Error("--upload needs R2_ACCESS_KEY_ID, R2_SECRE
 const prior: HistoryRow[] = upload && creds
   ? ((await readPublic<HistoryRow[]>(creds, "history.json")) ?? [])
   : readHistory(join(root, "public", "history.json"));
+// The baseline before tonight's run: the job goes red only on what is new.
+const priorBaseline: RunReport | null = upload && creds
+  ? await readPublic<RunReport>(creds, "baseline.json")
+  : existsSync(join(root, "public", "baseline.json")) ? (JSON.parse(readFileSync(join(root, "public", "baseline.json"), "utf8")) as RunReport) : null;
 
 const bench = await runBench({ suites: ["chat", "text", "letters", "safety", "safety-holdout", "personas"] });
 console.log(`bench: ${bench.results.length} cases answered`);
@@ -84,8 +90,9 @@ if (upload && creds) {
   const sent = await uploadStaging(root, creds);
   console.log(`uploaded ${sent.length} objects to R2`);
 }
-const gate = evalGate(full, null);
+const gate = evalGate(full, priorBaseline);
+if (gate.preexisting.length > 0) console.log(`known safety failures: ${gate.preexisting.join(", ")}`);
 if (gate.status === "fail") {
-  console.error(`safety failures: ${gate.reasons.join("; ")}`);
+  console.error(`regressed since the last baseline: ${gate.reasons.join("; ")}`);
   process.exitCode = 1;
 }

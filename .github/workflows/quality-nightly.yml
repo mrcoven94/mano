@@ -1,8 +1,8 @@
 # Nightly quality run on main: every suite through the real text line, the
 # persona probes, Guardian against production and mail's deadline accuracy,
 # recorded with history in R2 (mano-quality for aggregates,
-# mano-quality-private for per-case results). The job goes red when a safety
-# check failed, after the run is recorded.
+# mano-quality-private for per-case results). After the run is recorded, the
+# job goes red when something regressed against the previous baseline.
 name: quality-nightly
 on:
   schedule:

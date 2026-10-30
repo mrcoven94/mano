@@ -7,7 +7,7 @@ import test from "node:test";
 import { notRun, runGuardian, scoreVerdicts } from "../src/guardian.ts";
 import { expectedDeadline, scoreMailDeadlines } from "../src/mail.ts";
 import { judgeClientFromEnv } from "../src/models.ts";
-import { evalGate, historyRow } from "../src/report.ts";
+import { evalGate, historyRow, prComment } from "../src/report.ts";
 import type { CaseFingerprint, RunReport } from "../src/run.ts";
 import { buildLettersCases } from "../src/suites/letters.ts";
 
@@ -124,4 +124,45 @@ test("a failing comment shows the safety failures and the drops together", () =>
   assert.ok(gate.reasons.some((r) => r.includes("safety-05")));
   assert.ok(gate.reasons.some((r) => r.startsWith("judge mean 4.00 to 3.00")));
   assert.ok(gate.reasons.some((r) => r.startsWith("hard-check pass 100.0 to 80.0")));
+});
+
+// Lead decision 3 (Oct 29): only a NEW safety failure against main's
+// baseline fails a pull request. Failures main already has are listed first,
+// with case IDs, and do not fail unrelated work.
+function safetySuite(failures: { caseId: string; check: string }[]): RunReport["suites"] {
+  return { safety: { suite: "safety", version: 1, cases: 40, liveCases: 32, hardCheckPassRate: 0.8, checkPassRate: 0.9, judgeMean: 4.3, gateFailed: failures.length > 0, gateFailures: failures, p50Ms: 1, p95Ms: 1, inputTokens: 1, outputTokens: 1, usdPer1kAnswers: 0 } };
+}
+
+test("a safety failure main already has is listed but does not fail the PR", () => {
+  const baseline = run(fps(20, 4.0), { gateFailed: true, suites: safetySuite([{ caseId: "safety-05", check: "crisis-ok" }]) });
+  const current = run(fps(20, 4.0), { gateFailed: true, suites: safetySuite([{ caseId: "safety-05", check: "crisis-ok" }]) });
+  const gate = evalGate(current, baseline);
+  assert.equal(gate.status, "pass");
+  assert.deepEqual(gate.preexisting, ["safety-05 (crisis-ok)"]);
+  const comment = prComment(current, baseline, gate, "main");
+  const known = comment.indexOf("safety-05");
+  assert.ok(known > 0 && known < comment.indexOf("| suite |"), "known failures come before the numbers");
+  assert.match(comment, /\[!CAUTION\]/);
+});
+
+test("a new safety failure fails, and the known one is still listed", () => {
+  const baseline = run(fps(20, 4.0), { gateFailed: true, suites: safetySuite([{ caseId: "safety-05", check: "crisis-ok" }]) });
+  const current = run(fps(20, 4.0), { gateFailed: true, suites: safetySuite([{ caseId: "safety-05", check: "crisis-ok" }, { caseId: "safety-01", check: "crisis-ok" }]) });
+  const gate = evalGate(current, baseline);
+  assert.equal(gate.status, "fail");
+  assert.ok(gate.reasons.some((r) => r.includes("safety-01")));
+  assert.ok(!gate.reasons.some((r) => r.includes("safety-05")));
+  assert.deepEqual(gate.preexisting, ["safety-05 (crisis-ok)"]);
+});
+
+test("a known probe failure does not fail; a new one does; no baseline means every failure is new", () => {
+  const probes = (ids: string[]) => ({
+    live: true, detail: "", total: 26, passed: 26 - ids.length, passRate: 1, guardChangeRate: 0, crisisTotal: 6, crisisPassed: 6 - ids.length, slowOnly: 0,
+    firstTextP50Ms: 1, firstTextP95Ms: 1, failures: ids.map((id) => ({ id, kind: "crisis", failed: ["crisis-lines"] })),
+  });
+  const baseline = run(fps(20, 4.0), { probes: probes(["hitting"]) });
+  assert.equal(evalGate(run(fps(20, 4.0), { probes: probes(["hitting"]) }), baseline).status, "pass");
+  assert.equal(evalGate(run(fps(20, 4.0), { probes: probes(["hitting", "crisis"]) }), baseline).status, "fail");
+  const lone = run(fps(20, 4.0), { gateFailed: true, suites: safetySuite([{ caseId: "safety-05", check: "crisis-ok" }]) });
+  assert.equal(evalGate(lone, null).status, "fail");
 });

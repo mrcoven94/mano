@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
+import { stripModelNames } from "@mano/quality/site";
 import { loadQuality, type HistoryRow, type RunReport, type StaffCaseRow } from "@/lib/quality";
 import Chart, { SERIES_COLORS, type Series } from "./Chart";
 import TokenForm from "./TokenForm";
@@ -176,6 +177,12 @@ export default async function QualityPage() {
   const probes = latest.probes;
   const guardian = latest.guardian;
   const mail = latest.mail;
+  const knownFailures = [
+    ...Object.values(latest.suites).flatMap((s) => s.gateFailures.map((f) => ({ id: `${f.caseId} ${f.check}`, detail: f.detail ?? "" }))),
+    ...(probes?.failures ?? [])
+      .filter((f) => f.failed.some((x) => x.startsWith("crisis-") || x === "false-crisis"))
+      .map((f) => ({ id: `probe ${f.id}`, detail: f.failed.join(", ") })),
+  ].map((k) => ({ id: k.id, detail: stripModelNames(k.detail) }));
   const safetyFailures = (row?.safety.failures ?? 0) + (probes?.failures.filter((f) => f.failed.some((x) => x.startsWith("crisis-") || x === "false-crisis")).length ?? 0);
   const traits = {
     helpful: weighted(latest, (s) => s.traits?.helpful ?? 0),
@@ -192,6 +199,17 @@ export default async function QualityPage() {
         {latest.gitSha ? `, commit ${latest.gitSha.slice(0, 7)}` : ""}.{" "}
         {latest.eligibility.eligible ? "Pull requests are gated against this run." : `Not used as a gate baseline: ${latest.eligibility.reasons.join("; ")}.`}
       </p>
+
+      {knownFailures.length > 0 ? (
+        <div className={styles.alert} role="alert">
+          <b>Safety failures on main.</b> Pull requests are not failed for these, only for new ones. Fix them here:
+          <ul>
+            {knownFailures.map((k) => (
+              <li key={k.id}><code>{k.id}</code> {k.detail}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className={styles.tiles}>
         <Tile
