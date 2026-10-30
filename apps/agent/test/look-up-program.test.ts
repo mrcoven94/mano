@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import lookUpProgram from "../agent/tools/look_up_program.js";
+import lookUpProgram, { inputSchema } from "../agent/tools/look_up_program.js";
 import { toolCtx } from "./ctx.js";
 
 const ctx = toolCtx({ handleHash: "c".repeat(64), turnId: "turn_programs01" });
@@ -77,8 +77,15 @@ describe("look_up_program", () => {
   });
 
   it("uses what the person said about work to pick New York's SNAP table (Sol)", async () => {
-    const out = await run({ state: "NY", program: "snap", householdSize: 1, monthlyIncome: 1900, earnedIncome: true, elderlyOrDisabled: false });
+    const out = await run({ state: "NY", program: "snap", householdSize: 1, monthlyIncome: 1900, earnedIncome: true });
     expect(out.found && out.programs[0]!.screen!.result).toBe("may_qualify");
+  });
+
+  it("takes no age or disability input, so a reported disability never selects a higher limit (Sol, round 2)", () => {
+    const keys = Object.keys(inputSchema.shape);
+    expect(keys).toContain("earnedIncome");
+    expect(keys).not.toContain("elderlyOrDisabled");
+    expect(keys).not.toContain("dependentCare");
   });
 
   it("gives a Brooklyn applicant New York City's route (Sol)", async () => {

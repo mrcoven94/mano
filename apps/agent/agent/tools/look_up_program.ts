@@ -8,15 +8,13 @@ import { z } from "zod";
 
 const FEDERAL_NAME: Record<ProgramId, string> = { snap: "SNAP", medicaid: "Medicaid", liheap: "LIHEAP" };
 
-const inputSchema = z.object({
+export const inputSchema = z.object({
   state: z.string().min(2).max(40),
   program: z.string().min(2).max(80).optional(),
   place: z.string().min(2).max(80).optional(),
   householdSize: z.number().int().min(1).max(30).optional(),
   monthlyIncome: z.number().min(0).max(1_000_000).optional(),
   earnedIncome: z.boolean().optional(),
-  elderlyOrDisabled: z.boolean().optional(),
-  dependentCare: z.boolean().optional(),
 });
 
 type Shown = { value: unknown; source: string; checked: string };
@@ -47,7 +45,7 @@ function present(entry: LookedUp, household: Partial<Household>) {
 
 export default defineTool({
   description:
-    "Look up checked facts about SNAP, Medicaid and LIHEAP in California, Texas, New York, Florida, Illinois, Washington, Arizona and Ohio: the state's own program name, what it covers, income limits by household size with the year they are for and what income they are measured on, the renewal cycle, how to apply or renew, and the official phone and site. Give the state, and the city or county when you know it (New York City applies through its own office). Give a program (any name, such as CalFresh or food stamps) for one program, or leave it out for all three. Give householdSize and monthlyIncome only when the person told you both, plus earnedIncome, elderlyOrDisabled (someone 60 or older or disabled) and dependentCare only when they said so: the result then has a rough screen. Its result is may_qualify or cant_tell, never a no. Use only the facts the question needs, never a whole table. Say a fact only if it is in facts; anything in notConfirmed, or not returned, you do not know. For may_qualify say they may qualify and why, and how to check; for cant_tell say how to check with the office and offer to help them apply. Never say they qualify, are over a limit, or do not qualify.",
+    "Look up checked facts about SNAP, Medicaid and LIHEAP in California, Texas, New York, Florida, Illinois, Washington, Arizona and Ohio: the state's own program name, what it covers, income limits by household size with the year they are for and what income they are measured on, the renewal cycle, how to apply or renew, and the official phone and site. Give the state, and the city or county when you know it (New York City applies through its own office). Give a program (any name, such as CalFresh or food stamps) for one program, or leave it out for all three. Give householdSize and monthlyIncome only when the person told you both, plus earnedIncome (anyone in the household has income from work) only when they said: the result then has a rough screen. Its result is may_qualify or cant_tell, never a no. Use only the facts the question needs, never a whole table. Say a fact only if it is in facts; anything in notConfirmed, or not returned, you do not know. For may_qualify say they may qualify and why, and how to check; for cant_tell say how to check with the office and offer to help them apply. Never say they qualify, are over a limit, or do not qualify.",
   inputSchema,
   label: {
     start: () => "Look up the program",
