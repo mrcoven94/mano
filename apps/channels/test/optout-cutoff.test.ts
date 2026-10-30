@@ -162,6 +162,32 @@ describe("an inbound sent before STOP but delivered after it", () => {
     expect(sentTexts(await w.state())).toBe(afterStop);
   });
 
+  // Sol's final pass: STOP at T1, STOP again at T3, then an inbound sent
+  // at T2 arrives late. The cutoff must be T3.
+  for (const via of ["routeEvent", "reconcile"] as const) {
+    it(`a repeated STOP moves the cutoff forward (late inbound by ${via})`, async () => {
+      const w = world();
+      const t0 = Date.now();
+      await w.deliver(inbound(`evt_hi_${via}`, "Hello", t0 - 40_000));
+      await w.turn();
+      await w.deliver(inbound(`evt_t1_${via}`, "STOP", t0 - 30_000));
+      await w.deliver(inbound(`evt_t3_${via}`, "STOP", t0 - 10_000));
+      const afterStop = sentTexts(await w.state());
+      const late = inbound(`evt_t2_${via}`, "Are you there?", t0 - 20_000);
+      if (via === "routeEvent") {
+        await w.deliver(late);
+      } else {
+        const feed = new RecordingChannel();
+        feed.feedPages = [[late]];
+        expect(await reconcile(w.env, feed)).toEqual({ pages: 1, enqueued: 1 });
+        for (const event of w.queued) await w.deliver(event);
+      }
+      expect((await w.state()).pending).toBe(0);
+      await w.turn();
+      expect(sentTexts(await w.state())).toBe(afterStop);
+    });
+  }
+
   it("an undated STOP is honored on Channels' clock, and only START or a message a minute later re-engages", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const t0 = Date.parse("2026-10-30T15:00:00Z");

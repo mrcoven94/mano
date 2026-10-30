@@ -512,10 +512,20 @@ export class ConversationRunner {
   private async applyOptOut(event: NormalizedEvent): Promise<HandleResult> {
     const { store, logger, nowMs } = this.deps;
     const before = store.meta();
-    if (before.optedOut) return "opted-out";
     // The cutoff: the provider's timestamp of the STOP, else Channels'
     // receive time.
     const dated = event.occurredAtMs !== null && event.occurredAtMs > 0;
+    if (before.optedOut) {
+      // A repeat STOP sends nothing, but the cutoff only ever moves
+      // forward to it. Once any STOP was undated, the stricter undated
+      // rule holds, timed from the latest STOP.
+      store.patchMeta({
+        optOutAtMs: Math.max(before.optOutAtMs, dated ? event.occurredAtMs! : nowMs()),
+        optOutDated: before.optOutDated && dated,
+        optOutReceivedAtMs: nowMs(),
+      });
+      return "opted-out";
+    }
     const meta = {
       optedOut: true,
       optOutAtMs: dated ? event.occurredAtMs! : nowMs(),
