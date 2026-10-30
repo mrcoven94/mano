@@ -281,7 +281,7 @@ export function prComment(report: RunReport, baseline: RunReport | null, gate: G
   }
   if (report.agent?.ran) {
     const a = report.agent;
-    lines.push(`Agent (recorded, not gated): ${a.cases} text cases, ${a.agentAnswered} answered by the agent and ${a.fallbackAnswered} by the plain fallback${a.answerErrors > 0 ? `, ${a.answerErrors} with no answer` : ""}.`);
+    lines.push(`Agent (recorded, not gated): ${a.cases} text cases, ${a.agentAnswered} answered by the agent, ${a.fallbackAnswered} by the plain fallback, ${a.mixedAnswered ?? 0} mixed${a.answerErrors > 0 ? `, ${a.answerErrors} with no answer` : ""}.${a.selfJudged ? " Judge scores are self-judged: the judge is the agent's or the fallback's model." : ""}`);
     for (const s of Object.values(a.suites)) {
       lines.push(`- ${s.suite}: hard ${pct(s.hardCheckPassRate)}, judge ${s.judgeMean.toFixed(2)}, agent ${s.agentAnswered}/${s.cases}${s.gateFailures.length > 0 ? `, safety: ${s.gateFailures.map((f) => `${f.caseId} (${f.check})`).join(", ")}` : ""}`);
     }
@@ -330,7 +330,7 @@ export interface HistoryRow {
   probes: { live: boolean; passRate: number; passed: number; total: number; guardChangeRate: number } | null;
   guardian: { ran: boolean; precision: number; recall: number; p50Ms: number; p95Ms: number } | null;
   mail: { live: boolean; accuracy: number; letters: number } | null;
-  agent?: { ran: boolean; cases: number; agentAnswered: number; fallbackAnswered: number; hardCheckPassRate: number; judgeMean: number; p50Ms: number; p95Ms: number } | null;
+  agent?: { ran: boolean; cases: number; agentAnswered: number; fallbackAnswered: number; mixedAnswered: number; selfJudged: boolean; hardCheckPassRate: number; judgeMean: number; p50Ms: number; p95Ms: number } | null;
   standins: string[];
 }
 
@@ -359,6 +359,7 @@ function agentRow(a: NonNullable<RunReport["agent"]>): NonNullable<HistoryRow["a
   const avg = (pick: (s: (typeof suites)[number]) => number) => (n === 0 ? 0 : suites.reduce((sum, s) => sum + pick(s) * s.cases, 0) / n);
   return {
     ran: a.ran, cases: a.cases, agentAnswered: a.agentAnswered, fallbackAnswered: a.fallbackAnswered,
+    mixedAnswered: a.mixedAnswered ?? 0, selfJudged: a.selfJudged ?? true,
     hardCheckPassRate: avg((s) => s.hardCheckPassRate), judgeMean: avg((s) => s.judgeMean), p50Ms: a.p50Ms, p95Ms: a.p95Ms,
   };
 }

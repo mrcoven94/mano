@@ -5,39 +5,18 @@
 // "the agent" never silently means the fallback. It is recorded, not gated,
 // until a main run of it becomes a baseline.
 
-import { needsMailReader, type PathSet } from "./paths.ts";
-import { percentile, runBench, type CaseResult, type RunOptions, type SuiteScore } from "./run.ts";
+import { startAgentStack, type AgentStack } from "./agent-stack.ts";
+import { FakeJudge, MetaJudge, type JudgeClient } from "./judge.ts";
+import { DEFAULT_MODEL_BASE_URL, MetaModelClient, judgeClientFromEnv } from "./models.ts";
+import { loadAgentPaths, needsMailReader, type PathSet } from "./paths.ts";
+import { percentile, runBench, type CaseResult, type RunOptions } from "./run.ts";
 import { buildAllSuites } from "./suites/build.ts";
 
-export interface AgentSuite {
-  suite: string;
-  cases: number;
-  agentAnswered: number;
-  fallbackAnswered: number;
-  hardCheckPassRate: number;
-  judgeMean: number;
-  traits: SuiteScore["traits"] | null;
-  gateFailures: { caseId: string; check: string }[];
-  p50Ms: number;
-  p95Ms: number;
-}
-
-export interface AgentSummary {
-  ran: boolean;
-  detail: string;
-  cases: number;
-  agentAnswered: number;
-  fallbackAnswered: number;
-  // Answered by the worker itself, with no responder (STOP).
-  workerAnswered: number;
-  answerErrors: number;
-  suites: Record<string, AgentSuite>;
-  p50Ms: number;
-  p95Ms: number;
-}
+export type { AgentSuite, AgentSummary } from "./agent-types.ts";
+import type { AgentSummary, AgentSuite } from "./agent-types.ts";
 
 export function agentNotRun(detail: string): AgentSummary {
-  return { ran: false, detail, cases: 0, agentAnswered: 0, fallbackAnswered: 0, workerAnswered: 0, answerErrors: 0, suites: {}, p50Ms: 0, p95Ms: 0 };
+  return { ran: false, detail, cases: 0, agentAnswered: 0, fallbackAnswered: 0, mixedAnswered: 0, workerAnswered: 0, answerErrors: 0, suites: {}, p50Ms: 0, p95Ms: 0 };
 }
 
 export function textCaseIds(onlyCaseIds?: Set<string>): string[] {
@@ -61,6 +40,7 @@ export async function runAgentStage(pathSet: PathSet | null, opts: RunOptions = 
       cases: s.cases,
       agentAnswered: rows.filter((r) => r.answer.servedBy === "agent").length,
       fallbackAnswered: rows.filter((r) => r.answer.servedBy === "fallback").length,
+      mixedAnswered: rows.filter((r) => r.answer.servedBy === "mixed").length,
       hardCheckPassRate: s.hardCheckPassRate,
       judgeMean: s.judgeMean,
       traits: s.traits ?? null,
@@ -76,6 +56,7 @@ export async function runAgentStage(pathSet: PathSet | null, opts: RunOptions = 
     cases: bench.results.length,
     agentAnswered: bench.results.filter((r) => r.answer.servedBy === "agent").length,
     fallbackAnswered: bench.results.filter((r) => r.answer.servedBy === "fallback").length,
+    mixedAnswered: bench.results.filter((r) => r.answer.servedBy === "mixed").length,
     workerAnswered: bench.results.filter((r) => r.answer.servedBy === "worker").length,
     answerErrors: bench.results.filter((r) => r.checks.some((c) => c.id === "answer-error")).length,
     suites,
@@ -83,4 +64,59 @@ export async function runAgentStage(pathSet: PathSet | null, opts: RunOptions = 
     p95Ms: percentile(latency, 95),
   };
   return { summary, results: bench.results };
+}
+
+// The model apps/agent calls on every turn (STANDARD_MODEL_ID in
+// apps/agent/agent/lib/muse.ts; a test keeps the two equal).
+export const AGENT_MODEL_ID = "muse-spark-1.3";
+
+const family = (id: string) => id.replace(/-contributor$/i, "").toLowerCase();
+
+// The agent stage's judge: MANO_MODEL_AGENT_JUDGE_ID when set (a Standard
+// Meta model other than the agent's), otherwise the bench judge. If that is
+// the agent's or the fallback's model, the scores are marked self-judged.
+export function agentJudgeFromEnv(env: NodeJS.ProcessEnv): { judge: JudgeClient; models: { agent: string; fallback: string; judge: string }; selfJudged: boolean } {
+  const fallback = env.MANO_MODEL_BENCH_ID ?? "";
+  const own = env.MANO_MODEL_AGENT_JUDGE_ID ?? "";
+  if (/-contributor$/i.test(own)) throw new Error("the agent's judge must run on a Standard model ID, not a -contributor one");
+  let judge: JudgeClient;
+  if (own && env.META_MODEL_API_KEY) {
+    judge = new MetaJudge(new MetaModelClient(own, env.MANO_MODEL_BASE_URL || DEFAULT_MODEL_BASE_URL, env.META_MODEL_API_KEY));
+  } else {
+    const client = judgeClientFromEnv(env);
+    judge = client.live ? new MetaJudge(client) : new FakeJudge();
+  }
+  const judgeId = judge.id.replace(/^judge:/, "");
+  const selfJudged = [AGENT_MODEL_ID, fallback].filter(Boolean).some((m) => family(m) === family(judgeId));
+  return { judge, models: { agent: AGENT_MODEL_ID, fallback, judge: judgeId }, selfJudged };
+}
+
+export interface StageDeps {
+  start?: (env: NodeJS.ProcessEnv) => Promise<AgentStack>;
+  load?: (env: NodeJS.ProcessEnv) => Promise<PathSet | null>;
+}
+
+// The agent stage is optional: whatever goes wrong in it (the stack does not
+// start, a turn throws), the nightly still stages and uploads the primary
+// results. The reason recorded is a fixed phrase, never an error message,
+// which could carry a URL or a secret. The stack is always stopped.
+export async function runAgentStageSafely(env: NodeJS.ProcessEnv, deps: StageDeps = {}, opts: RunOptions = {}): Promise<{ summary: AgentSummary; results: CaseResult[] }> {
+  let stack: AgentStack;
+  try {
+    stack = await (deps.start ?? startAgentStack)(env);
+  } catch (err) {
+    console.error(`agent stage: could not start (${err instanceof Error ? err.name : "error"})`);
+    return { summary: agentNotRun("the agent stage could not start Engine and the agent"), results: [] };
+  }
+  try {
+    const stageEnv = { ...env, QUALITY_AGENT_URL: stack.agentUrl, MANO_AGENT_SECRET: stack.agentSecret, MANO_HANDLE_GRANT_SECRET: stack.grantSecret };
+    const { judge, models, selfJudged } = agentJudgeFromEnv(stageEnv);
+    const out = await runAgentStage(await (deps.load ?? loadAgentPaths)(stageEnv), { ...opts, env: stageEnv, judge });
+    return { summary: { ...out.summary, models, selfJudged }, results: out.results };
+  } catch (err) {
+    console.error(`agent stage: failed while running (${err instanceof Error ? err.name : "error"})`);
+    return { summary: agentNotRun("the agent stage failed while running"), results: [] };
+  } finally {
+    await stack.stop();
+  }
 }

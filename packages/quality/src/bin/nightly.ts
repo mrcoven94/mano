@@ -13,9 +13,7 @@ import { join } from "node:path";
 import { runGuardian } from "../guardian.ts";
 import { dnsFromEnv } from "../links.ts";
 import { scoreMailDeadlines } from "../mail.ts";
-import { startAgentStack } from "../agent-stack.ts";
-import { agentNotRun, runAgentStage } from "../agent-stage.ts";
-import { loadAgentPaths } from "../paths.ts";
+import { agentNotRun, runAgentStageSafely } from "../agent-stage.ts";
 import { runProbes } from "../probes.ts";
 import { r2CredsFromEnv } from "../r2.ts";
 import { branchPrefix, evalGate, readHistory, writeNightlyStaging, type HistoryRow } from "../report.ts";
@@ -72,13 +70,7 @@ const mail = await scoreMailDeadlines();
 let agent = agentNotRun("not requested (--agent-local)");
 let agentResults: CaseResult[] = [];
 if (process.argv.includes("--agent-local")) {
-  const stack = await startAgentStack(process.env);
-  try {
-    const env = { ...process.env, QUALITY_AGENT_URL: stack.agentUrl, MANO_AGENT_SECRET: stack.agentSecret, MANO_HANDLE_GRANT_SECRET: stack.grantSecret };
-    ({ summary: agent, results: agentResults } = await runAgentStage(await loadAgentPaths(env), { env }));
-  } finally {
-    stack.stop();
-  }
+  ({ summary: agent, results: agentResults } = await runAgentStageSafely(process.env));
   console.log(`agent: ${agent.cases} cases, ${agent.agentAnswered} by the agent, ${agent.fallbackAnswered} by the fallback, ${agent.answerErrors} unanswered`);
 }
 

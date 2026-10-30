@@ -22,11 +22,23 @@ import { viaAiGateway } from "./models.ts";
 import type { AnswerPath, BenchAnswer } from "./paths.ts";
 import type { BenchCase } from "./suites/types.ts";
 
+// Who wrote a case's answers: the agent on every turn, the plain fallback on
+// every turn, a mix, the plain line with no agent, or the worker itself
+// (STOP, which no responder sees).
+export type ServedBy = "agent" | "fallback" | "mixed" | "plain" | "worker";
+
+export function combineServedBy(labels: (ServedBy | undefined)[]): ServedBy {
+  const seen = new Set(labels.filter((l): l is ServedBy => l !== undefined && l !== "worker"));
+  if (seen.size === 0) return labels.includes("worker") ? "worker" : "plain";
+  if (seen.has("mixed") || (seen.has("agent") && seen.has("fallback"))) return "mixed";
+  return [...seen][0]!;
+}
+
 export interface TurnRun {
   route: "fast" | "deep";
   // "agent" when Mano's agent answered, "fallback" when the agent responder
   // fell back to the plain answer, "plain" with no agent in the path.
-  servedBy?: "agent" | "fallback" | "plain" | "worker";
+  servedBy?: ServedBy;
   // The heads-up as sent on a deep turn, after the guard and link check.
   headsUp: string | null;
   // The answer bubbles as sent.
@@ -75,7 +87,9 @@ export class TextLine {
     this.responder = opts.responder ?? sparkResponder(opts);
   }
 
-  async turn(texts: string[], history: HistoryMessage[], attachmentCount = 0): Promise<TurnRun> {
+  // `at` fixes the turn's key and receive time, so a retry of the same turn
+  // reaches the agent as the same turn, as Channels' recovery does.
+  async turn(texts: string[], history: HistoryMessage[], attachmentCount = 0, at?: { turn: number; receivedAtMs: number }): Promise<TurnRun> {
     // The worker answers STOP and its kin itself, before any model call.
     if (texts.length === 1 && attachmentCount === 0 && isOptOut(texts[0]!)) {
       return { servedBy: "worker", route: "fast", headsUp: null, bubbles: [OPT_OUT_BUBBLE], firstTextMs: 0, totalMs: 0, guardChanges: [], linksRemoved: 0, attempts: 0, billedInputChars: 0, outputChars: 0 };
@@ -99,9 +113,9 @@ export class TextLine {
     let result;
     try {
       // The agent runs a turn only with a stable turn key, as Channels sends.
-      this.turnNumber += 1;
+      const key = at ?? { turn: ++this.turnNumber, receivedAtMs: Date.now() };
       result = await this.responder.respond(
-        { texts, attachmentCount, history, turnKey: { generation: 0, turn: this.turnNumber }, receivedAtMs: Date.now() },
+        { texts, attachmentCount, history, turnKey: { generation: 0, turn: key.turn }, receivedAtMs: key.receivedAtMs },
         {
           onHeadsUp: async (raw) => {
             if (crisis) return;
@@ -162,24 +176,38 @@ export class TurnFailed extends Error {
 }
 
 // Runs a conversation turn by turn, feeding the real replies back as
-// history, the way the worker builds it.
-export async function converse(line: TextLine, turns: string[], attachmentCount = 0): Promise<TurnRun[]> {
+// history, the way the worker builds it. A turn whose call fails is retried
+// once, alone, after a pause: same turn key, same receive time, same
+// history, the way Channels recovers a turn. Completed turns are never sent
+// again. Texts a failed try already sent are kept for the safety checks.
+export async function converse(line: TextLine, turns: string[], attachmentCount = 0, retryDelayMs = 0): Promise<{ runs: TurnRun[]; sentByFailedTries: string[] }> {
   const history: HistoryMessage[] = [];
   const runs: TurnRun[] = [];
+  const sentByFailedTries: string[] = [];
   for (const [i, text] of turns.entries()) {
+    const at = { turn: i + 1, receivedAtMs: Date.now() };
+    const attach = i === turns.length - 1 ? attachmentCount : 0;
     let run: TurnRun;
     try {
-      run = await line.turn([text], [...history], i === turns.length - 1 ? attachmentCount : 0);
-    } catch (err) {
-      if (!(err instanceof TurnFailed)) throw err;
-      const before = runs.flatMap((r) => [...(r.headsUp ? [r.headsUp] : []), ...r.bubbles]);
-      throw new TurnFailed(err.reason, err.attempts, [...before, ...err.sent]);
+      run = await line.turn([text], [...history], attach, at);
+    } catch (first) {
+      if (!(first instanceof TurnFailed)) throw first;
+      sentByFailedTries.push(...first.sent);
+      // The responder already retried within a second; a burst of rate
+      // limits outlasts that, so wait before the last try.
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      try {
+        run = await line.turn([text], [...history], attach, at);
+      } catch (second) {
+        if (!(second instanceof TurnFailed)) throw second;
+        throw new TurnFailed(second.reason, second.attempts, [...sentByFailedTries, ...second.sent]);
+      }
     }
     runs.push(run);
     history.push({ role: "person", text });
     history.push({ role: "mano", text: run.bubbles.join(" ") });
   }
-  return runs;
+  return { runs, sentByFailedTries };
 }
 
 export function textLineFromEnv(env: NodeJS.ProcessEnv = process.env): TextLine | null {
@@ -208,19 +236,7 @@ export class TextLinePath implements AnswerPath {
   }
 
   async answer(c: BenchCase): Promise<BenchAnswer> {
-    let runs: TurnRun[];
-    // Everything a failed try sent stays in the record and is checked.
-    let sentBeforeRetry: string[] = [];
-    try {
-      runs = await converse(this.line, c.input.turns, c.input.images?.length ?? 0);
-    } catch (err) {
-      if (!(err instanceof TurnFailed)) throw err;
-      sentBeforeRetry = err.sent;
-      // The responder already retried within a second; a burst of rate
-      // limits outlasts that, so wait before the last try.
-      await new Promise((resolve) => setTimeout(resolve, this.retryDelayMs));
-      runs = await converse(this.line, c.input.turns, c.input.images?.length ?? 0);
-    }
+    const { runs, sentByFailedTries } = await converse(this.line, c.input.turns, c.input.images?.length ?? 0, this.retryDelayMs);
     const last = runs[runs.length - 1]!;
     const billedInput = runs.reduce((sum, r) => sum + r.billedInputChars, 0);
     const output = runs.reduce((sum, r) => sum + r.outputChars, 0);
@@ -232,8 +248,8 @@ export class TextLinePath implements AnswerPath {
       firstTextMs: Math.round(last.firstTextMs),
       route: last.route,
       guardChanges: [...new Set(runs.flatMap((r) => r.guardChanges))],
-      servedBy: runs.some((r) => r.servedBy === "fallback") ? "fallback" : (last.servedBy ?? "plain"),
-      earlier: [...sentBeforeRetry, ...runs.flatMap((r, i) => [...(r.headsUp ? [r.headsUp] : []), ...(i < runs.length - 1 ? r.bubbles : [])])],
+      servedBy: combineServedBy(runs.map((r) => r.servedBy)),
+      earlier: [...sentByFailedTries, ...runs.flatMap((r, i) => [...(r.headsUp ? [r.headsUp] : []), ...(i < runs.length - 1 ? r.bubbles : [])])],
       inputTokens: Math.round(billedInput / CHARS_PER_TOKEN),
       outputTokens: Math.round(output / CHARS_PER_TOKEN),
     };

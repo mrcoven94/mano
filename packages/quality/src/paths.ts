@@ -30,7 +30,7 @@ export interface BenchAnswer {
   earlier?: string[];
   // Through the agent path: whether the agent answered every turn, or the
   // plain fallback answered at least one.
-  servedBy?: "agent" | "fallback" | "plain" | "worker";
+  servedBy?: "agent" | "fallback" | "mixed" | "plain" | "worker";
 }
 
 export interface AnswerPath {

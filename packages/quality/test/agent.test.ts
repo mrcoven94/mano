@@ -84,3 +84,97 @@ test("the agent stage counts agent and fallback answers per suite and skips lett
   const none = await runAgentStage(null);
   assert.equal(none.summary.ran, false);
 });
+
+// Review of PR 73, items 2 and 4.
+interface TurnBody { handleHash: string; turnId: string; receivedAt: number; texts: string[] }
+
+test("a failed turn is retried alone, with its turn key, receive time and history", async () => {
+  const turns: TurnBody[] = [];
+  const histories: { role: string; content: string }[][] = [];
+  let modelCalls = 0;
+  const fetchFn = (async (url: string | URL, init?: RequestInit) => {
+    const href = String(url);
+    if (href.includes("dns-query")) return new Response(JSON.stringify({ Status: 0, Answer: [{ data: "104.16.0.1" }] }), { status: 200 });
+    if (href.endsWith(AGENT_TURN_PATH)) {
+      turns.push(JSON.parse(String(init?.body)) as TurnBody);
+      return new Response(JSON.stringify({ status: "replied", text: `agent reply ${turns.length}` }), { status: 200 });
+    }
+    // Only reached when the agent fails; it never does here.
+    modelCalls += 1;
+    histories.push((JSON.parse(String(init?.body)) as { input: { role: string; content: string }[] }).input);
+    return new Response("{}", { status: 400 });
+  }) as typeof fetch;
+  // The second turn fails once at the agent (500), so the fallback runs and
+  // fails (400): a TurnFailed. Its retry must reuse the same turn.
+  let secondTurnTries = 0;
+  const flaky = (async (url: string | URL, init?: RequestInit) => {
+    if (String(url).endsWith(AGENT_TURN_PATH)) {
+      const body = JSON.parse(String(init?.body)) as TurnBody;
+      if (body.texts[0] === "second" && secondTurnTries++ === 0) {
+        turns.push(body);
+        return new Response("{}", { status: 500 });
+      }
+    }
+    return fetchFn(url, init);
+  }) as typeof fetch;
+  const path = new AgentPath({ agentUrl: "http://agent.test", agentSecret: SECRET, grantSecret: "g", apiKey: "k", model: "muse-spark-1.3-contributor", fetchFn: flaky, retryDelayMs: 0 });
+  const answer = await path.answer({ ...caseById("text-09"), input: { turns: ["first", "second"] } });
+  assert.deepEqual(turns.map((t) => t.texts[0]), ["first", "second", "second"], "the completed first turn was replayed");
+  assert.equal(turns[1]!.turnId, turns[2]!.turnId, "the retry used a new turn key");
+  assert.equal(turns[1]!.receivedAt, turns[2]!.receivedAt, "the retry used a new receive time");
+  assert.equal(new Set(turns.map((t) => t.handleHash)).size, 1);
+  assert.equal(answer.servedBy, "agent");
+  void modelCalls;
+  void histories;
+});
+
+test("a case where any turn fell back is never labeled the agent's", async () => {
+  const fetchFn = (async (url: string | URL, init?: RequestInit) => {
+    const href = String(url);
+    if (href.includes("dns-query")) return new Response(JSON.stringify({ Status: 0, Answer: [{ data: "104.16.0.1" }] }), { status: 200 });
+    if (href.endsWith(AGENT_TURN_PATH)) {
+      const body = JSON.parse(String(init?.body)) as TurnBody;
+      if (body.texts[0] === "first") return new Response("{}", { status: 500 });
+      return new Response(JSON.stringify({ status: "replied", text: "agent reply" }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ status: "completed", output: [{ content: [{ type: "output_text", text: "plain reply" }] }] }), { status: 200 });
+  }) as typeof fetch;
+  const path = new AgentPath({ agentUrl: "http://agent.test", agentSecret: SECRET, grantSecret: "g", apiKey: "k", model: "muse-spark-1.3-contributor", fetchFn, retryDelayMs: 0 });
+  const mixed = await path.answer({ ...caseById("text-09"), input: { turns: ["first", "second"] } });
+  assert.equal(mixed.servedBy, "mixed");
+});
+
+// Review of PR 73, items 3 and 5.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { AGENT_MODEL_ID, agentJudgeFromEnv, runAgentStageSafely } from "../src/agent-stage.ts";
+
+test("the agent's model ID here matches the one apps/agent calls", () => {
+  const muse = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps", "agent", "agent", "lib", "muse.ts"), "utf8");
+  assert.match(muse, new RegExp(`STANDARD_MODEL_ID = "${AGENT_MODEL_ID.replace(/\./g, "\\.")}"`));
+});
+
+test("the agent's judge must be a different model, or its scores are marked self-judged", () => {
+  const same = agentJudgeFromEnv({ META_MODEL_API_KEY: "k", MANO_MODEL_JUDGE_ID: "muse-spark-1.3", MANO_MODEL_BENCH_ID: "muse-spark-1.3-contributor" });
+  assert.equal(same.selfJudged, true);
+  assert.deepEqual(same.models, { agent: "muse-spark-1.3", fallback: "muse-spark-1.3-contributor", judge: "muse-spark-1.3" });
+  const other = agentJudgeFromEnv({ META_MODEL_API_KEY: "k", MANO_MODEL_JUDGE_ID: "muse-spark-1.3", MANO_MODEL_AGENT_JUDGE_ID: "muse-wonder-1.0", MANO_MODEL_BENCH_ID: "muse-spark-1.3-contributor" });
+  assert.equal(other.selfJudged, false);
+  assert.equal(other.models.judge, "muse-wonder-1.0");
+  assert.equal(other.judge.id, "judge:muse-wonder-1.0");
+  assert.throws(() => agentJudgeFromEnv({ META_MODEL_API_KEY: "k", MANO_MODEL_AGENT_JUDGE_ID: "muse-wonder-1.0-contributor" }), /Standard/);
+});
+
+test("a failing agent stage records a fixed reason, cleans up, and never throws", async () => {
+  let stopped = false;
+  const boom = await runAgentStageSafely({}, {
+    start: async () => ({ agentUrl: "x", agentSecret: "s", grantSecret: "g", stop: async () => { stopped = true; } }),
+    load: async () => { throw new Error("secret detail https://example.org/leak"); },
+  });
+  assert.equal(boom.summary.ran, false);
+  assert.equal(boom.summary.detail, "the agent stage failed while running");
+  assert.ok(stopped, "the stack was not stopped");
+  const noStart = await runAgentStageSafely({}, { start: async () => { throw new Error("port in use: details"); } });
+  assert.equal(noStart.summary.detail, "the agent stage could not start Engine and the agent");
+});

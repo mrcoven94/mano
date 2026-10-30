@@ -12,7 +12,7 @@ import { loadHoldout } from "./holdout.ts";
 import { loadPaths, sentText, type BenchAnswer, type LoadedPath, type PathSet } from "./paths.ts";
 import { buildAllSuites } from "./suites/build.ts";
 import type { BenchCase, SuiteBuild, SuiteName } from "./suites/types.ts";
-import type { AgentSummary } from "./agent-stage.ts";
+import type { AgentSummary } from "./agent-types.ts";
 import type { GuardianSummary } from "./guardian.ts";
 import type { MailSummary } from "./mail.ts";
 import type { ProbeSummary } from "./probes.ts";
@@ -34,7 +34,7 @@ export interface CaseResult {
     route?: "fast" | "deep";
     guardChanges?: string[];
     earlier?: string[];
-    servedBy?: "agent" | "fallback" | "plain" | "worker";
+    servedBy?: "agent" | "fallback" | "mixed" | "plain" | "worker";
   };
   checks: CheckResult[];
   judge: JudgeScore | null;
