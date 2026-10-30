@@ -5,7 +5,7 @@
 // which the caller sends at once before the deep call at medium effort.
 // When the engine merges, its person agent becomes the Responder behind
 // this same interface.
-import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisFloor, crisisTurn, routeReply, splitTapback, type Tapback } from "@mano/persona";
+import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisFloor, crisisTurn, needsAnswer, routeReply, splitTapback, type Tapback } from "@mano/persona";
 import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 
@@ -191,9 +191,13 @@ class FatalCall extends Error {
   }
 }
 
+// Sent when a reply was a reaction alone but the person asked something.
+const ANSWER_IN_TEXT = "They asked something, so answer it in text now. A reaction alone is not an answer. Do not start with REACT: or DEEP:.";
+
 export class SparkResponder implements Responder {
   readonly name = "spark";
-  // Worst case: the fast call's tries, each hedged, then the deep call's.
+  // Worst case: the fast call's tries, each hedged, then either the deep
+  // call's or a hedged second fast call when a question got a reaction alone.
   readonly maxAttempts: number;
   readonly inputSlackChars = MANO_SOUL.length + PACING.length + DEEP_INSTRUCTIONS.length + 1000;
   readonly maxOutputChars = 2 * MAX_OUTPUT_CHARS;
@@ -219,7 +223,7 @@ export class SparkResponder implements Responder {
     this.hedgeAfterMs = opts.hedgeAfterMs ?? HEDGE_AFTER_MS;
     this.fastEffort = opts.reasoningEffort ?? FAST_REASONING_EFFORT;
     this.deepEffort = opts.deepReasoningEffort ?? DEEP_REASONING_EFFORT;
-    this.maxAttempts = 3 * (this.maxRetries + 1);
+    this.maxAttempts = 4 * (this.maxRetries + 1);
     this.fetchFn = opts.fetchFn ?? boundFetch;
     this.collectLogs = opts.collectLogs ?? true;
   }
@@ -234,6 +238,17 @@ export class SparkResponder implements Responder {
     const route = crisis ? ({ path: "fast", text: fast.text } as const) : routeReply(fast.text);
     if (route.path === "fast") {
       const text = crisis ? crisisFloor(route.text) : route.text;
+      const split = splitTapback(text);
+      // A reaction never replaces an answer: when they asked something,
+      // one more call asks for the text, and the reaction stays with it.
+      if (!crisis && split.tapback && !split.text.trim() && needsAnswer(turn.texts.join("\n"))) {
+        const again = await this.call(`${MANO_SOUL}${note}\n\n${ANSWER_IN_TEXT}`, messages, this.fastEffort, fast.attempts, true);
+        const retried = splitTapback(again.text).text;
+        if (retried.trim()) {
+          return this.result(`REACT: ${split.tapback}\n${retried}`, fast.attempts + again.attempts, Math.max(fast.inputChars, again.inputChars));
+        }
+        return this.result(text, fast.attempts + again.attempts, Math.max(fast.inputChars, again.inputChars));
+      }
       return this.result(text, fast.attempts, fast.inputChars);
     }
     await hooks.onHeadsUp?.(route.headsUp);

@@ -28,8 +28,8 @@ export interface EventGroup {
   name: string | null;
 }
 
-import type { Tapback } from "@mano/persona";
-export type { Tapback };
+import type { Reaction, Tapback } from "@mano/persona";
+export type { Reaction, Tapback };
 
 export interface NormalizedEvent {
   id: string;

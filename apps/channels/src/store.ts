@@ -157,6 +157,11 @@ export interface ConversationMeta {
   optOutDated: boolean;
   // When Channels received that STOP, on its own clock.
   optOutReceivedAtMs: number;
+  // When Mano's chat background was set, 0 when not yet. It is set once
+  // per chat and kept across a delete, so it is never sent again.
+  backgroundSetAtMs: number;
+  // Tries at setting it; it stops after a few failures.
+  backgroundAttempts: number;
 }
 
 export function defaultMeta(): ConversationMeta {
@@ -183,6 +188,8 @@ export function defaultMeta(): ConversationMeta {
     optOutAtMs: 0,
     optOutDated: false,
     optOutReceivedAtMs: 0,
+    backgroundSetAtMs: 0,
+    backgroundAttempts: 0,
   };
 }
 
@@ -409,7 +416,8 @@ export class MemoryStore implements ConversationStore {
     const turn = this.metaRow.turn;
     this.events.clear();
     this.inboundMessages.clear();
-    this.metaRow = { ...defaultMeta(), generation, turn, deletedAtMs };
+    const { backgroundSetAtMs, backgroundAttempts } = this.metaRow;
+    this.metaRow = { ...defaultMeta(), generation, turn, deletedAtMs, backgroundSetAtMs, backgroundAttempts };
     this.pendingRows = [];
     this.outboundRows.clear();
     this.heldReceipts = [];

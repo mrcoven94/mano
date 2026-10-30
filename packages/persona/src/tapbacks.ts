@@ -1,29 +1,72 @@
-// Tapbacks: the model may start its reply with one line, "REACT: love",
-// to put a tapback on the person's message, with or without text after
-// it. The rules around it are deterministic: no tapback in a crisis, and
-// no heart or laugh on bad news.
+// Tapbacks: the model may start its reply with one line, "REACT: love"
+// or "REACT: 🙏", to react to the person's message, with or without text
+// after it. The rules around it are deterministic: no reaction in a
+// crisis or on a reaction, and nothing celebratory on bad news. The
+// worker alone sends EYES, while a slow turn is under way.
 
-export type Tapback = "love" | "like" | "laugh" | "emphasize";
+// The four tapbacks every iMessage client shows natively.
+export type NativeTapback = "love" | "like" | "laugh" | "emphasize";
+// Emoji reactions, for clients that show any emoji as a tapback.
+export type EmojiTapback = "🙏" | "💪" | "🎉";
+export type Tapback = NativeTapback | EmojiTapback;
+// "Mano is on it": put on a message when the turn will take more than a
+// moment, and swapped for the reply's own reaction when it has one.
+export const EYES = "👀";
+export type Reaction = Tapback | typeof EYES;
 
-const TAPBACKS: readonly Tapback[] = ["love", "like", "laugh", "emphasize"];
-const REACT_LINE = /^\s*REACT:[ \t]*([a-z]*)[ \t]*(?:\n|$)/i;
+const NAMES: Record<string, Tapback> = {
+  love: "love",
+  like: "like",
+  laugh: "laugh",
+  emphasize: "emphasize",
+  "❤": "love",
+  "👍": "like",
+  "😂": "laugh",
+  "‼": "emphasize",
+  "🙏": "🙏",
+  "💪": "💪",
+  "🎉": "🎉",
+};
+
+const REACT_LINE = /^\s*REACT:[ \t]*(\S*)[ \t]*(?:\n|$)/i;
+// Variation selectors and skin tones do not change which reaction it is.
+const EMOJI_MODIFIERS = /[\u{FE0E}\u{FE0F}\u{1F3FB}-\u{1F3FF}]/gu;
 
 export function splitTapback(text: string): { tapback: Tapback | null; text: string } {
   const match = REACT_LINE.exec(text);
   if (!match) return { tapback: null, text };
-  const value = match[1].toLowerCase();
-  const tapback = (TAPBACKS as readonly string[]).includes(value) ? (value as Tapback) : null;
+  const value = match[1].replace(EMOJI_MODIFIERS, "").toLowerCase();
+  const tapback = Object.hasOwn(NAMES, value) ? NAMES[value]! : null;
   return { tapback, text: text.slice(match[0].length).trim() };
 }
 
-// Losing food, housing, coverage or income, or a denial: no heart, no laugh.
+// Losing food, housing, coverage or income, or a denial.
 const BAD_NEWS =
   /\b(?:cut|cuts|denied|deny|denial|lost|losing|lose|evict\w*|terminat\w*|ended|ending|stopped|cancel\w*|overpay\w*|owe|behind|late|reject\w*|closed|shut ?off|disconnect\w*|died|passed away|sick|hospital)\b/i;
+// Nothing that reads as a celebration goes on bad news.
+const NOT_ON_BAD_NEWS: ReadonlySet<Tapback> = new Set(["love", "laugh", "💪", "🎉"]);
+
+// A reaction that reached Mano as text (SMS shows a tapback as
+// 'Loved "..."'). Mano never reacts to a reaction.
+const REACTION_TEXT =
+  /^\s*(?:loved|liked|disliked|laughed at|emphasi[sz]ed|questioned|reacted \S{1,12} to|removed an? \S+ from|le (?:encantó|gustó|hizo gracia|dio risa|dio énfasis a)|no le gustó)\s+["“«]/iu;
+
+export function isReactionText(personText: string): boolean {
+  return REACTION_TEXT.test(personText);
+}
 
 export function allowedTapback(tapback: Tapback | null, personText: string, crisis: boolean): Tapback | null {
-  if (!tapback || crisis) return null;
-  if ((tapback === "love" || tapback === "laugh") && BAD_NEWS.test(personText)) return null;
+  if (!tapback || crisis || isReactionText(personText)) return null;
+  if (NOT_ON_BAD_NEWS.has(tapback) && BAD_NEWS.test(personText)) return null;
   return tapback;
+}
+
+// The person asked something, so a reaction alone is not an answer.
+const QUESTION =
+  /[?¿]|^\s*(?:what|when|where|which|who|whom|whose|why|how|can|could|would|will|should|do|does|did|is|are|am|was|were|qu[ée]|cu[áa]ndo|c[óo]mo|d[óo]nde|cu[áa]l(?:es)?|qui[ée]n(?:es)?|por qu[ée]|puedo|puedes|necesito)\b/imu;
+
+export function needsAnswer(personText: string): boolean {
+  return !isReactionText(personText) && QUESTION.test(personText);
 }
 
 // A tapback is decoration: when it cannot carry the reply (it fails, or
@@ -33,6 +76,9 @@ const TAPBACK_TEXT: Record<Tapback, string> = {
   like: "sounds good",
   laugh: "ha, yeah",
   emphasize: "noted",
+  "🙏": "anytime!",
+  "💪": "nice work!",
+  "🎉": "that's great news!",
 };
 
 export function tapbackText(tapback: Tapback): string {

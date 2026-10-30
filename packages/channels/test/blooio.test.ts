@@ -345,6 +345,33 @@ describe("Blooio native iMessage calls (LAP-636)", () => {
     expect(JSON.parse(init.body as string)).toEqual({ reaction: "+love" });
   });
 
+  it("adds an emoji reaction, removes one, and sets the chat background as a multipart upload (LAP-508)", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, { data: { chat_id: "chat_aaa", background_id: "bg_1" } }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    await channel.react("chat_aaa", "msg_in_1", "🙏");
+    await channel.unreact("chat_aaa", "msg_in_1", "👀");
+    const image = new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" });
+    await channel.setBackground("chat_aaa", image);
+    const calls = fetchFn.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(JSON.parse(calls[0]![1].body as string)).toEqual({ reaction: "+🙏" });
+    expect(calls[1]![0]).toBe("https://api.blooio.com/v4/chats/chat_aaa/messages/msg_in_1/reactions");
+    expect(JSON.parse(calls[1]![1].body as string)).toEqual({ reaction: "-👀" });
+    expect(calls[2]![0]).toBe("https://api.blooio.com/v4/chats/chat_aaa/background");
+    expect(calls[2]![1].method).toBe("PUT");
+    const form = calls[2]![1].body as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    const file = form.get("background") as File;
+    expect(file.type).toBe("image/png");
+    expect(file.size).toBe(4);
+    expect(new Headers(calls[2]![1].headers).has("content-type")).toBe(false);
+  });
+
+  it("throws when the background upload is refused", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(400, { error: { code: "bad_image" } }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    await expect(channel.setBackground("chat_aaa", new Blob(["x"], { type: "image/png" }))).rejects.toThrow(/400/);
+  });
+
   it("sends reply_to when a reply answers an earlier message", async () => {
     const fetchFn = vi.fn(async () => jsonResponse(201, { id: "msg_out_9", chat_id: "chat_aaa", status: "queued" }));
     const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });

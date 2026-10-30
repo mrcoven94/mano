@@ -7,7 +7,7 @@ import type {
   ChannelSendInput,
   ChannelSendResult,
   NormalizedEvent,
-  Tapback,
+  Reaction,
 } from "./types.js";
 
 export interface Channel {
@@ -19,7 +19,13 @@ export interface Channel {
   markRead(chatId: string): Promise<void>;
   // Adds a tapback to a message. Not a message: it spends none of the
   // provider's per-conversation send allowance.
-  react(chatId: string, messageId: string, reaction: Tapback): Promise<void>;
+  react(chatId: string, messageId: string, reaction: Reaction): Promise<void>;
+  // Takes Mano's reaction off a message (the eyes, when the reply brings
+  // its own reaction).
+  unreact(chatId: string, messageId: string, reaction: Reaction): Promise<void>;
+  // Sets the chat's background image. Optional: providers without one
+  // skip it.
+  setBackground?(chatId: string, image: Blob): Promise<void>;
   // Null when the provider has no record of the message.
   lookupMessage(chatId: string, messageId: string): Promise<ChannelMessageStatus | null>;
   listEvents(cursor: string | null, limit: number): Promise<ChannelEventPage>;

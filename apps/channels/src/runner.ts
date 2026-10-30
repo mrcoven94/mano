@@ -34,7 +34,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, crisisTurn, guardReply, tapbackText } from "@mano/persona";
+import { EYES, REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, crisisTurn, guardReply, tapbackText } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -66,6 +66,12 @@ export interface RunnerConfig {
   usdPer1kChars: number;
   maxInboundAgeMs: number;
   mediaHosts: string[];
+  // A turn still working after this long gets the eyes on the person's
+  // message ("Mano is on it"). A photo or a deep turn gets them at once.
+  eyesAfterMs: number;
+  // Mano's chat background image, set once per chat after the first
+  // reply. Null leaves chats as they are.
+  backgroundUrl: string | null;
 }
 
 export const DEFAULT_MEDIA_HOSTS = ["bucket.blooio.com"];
@@ -93,7 +99,15 @@ export const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "handleHash"> = {
   usdPer1kChars: 0.001,
   maxInboundAgeMs: 5 * 60 * 1000,
   mediaHosts: DEFAULT_MEDIA_HOSTS,
+  eyesAfterMs: 5000,
+  backgroundUrl: null,
 };
+
+// Tries at setting the chat background before Channels gives up on it.
+export const BACKGROUND_MAX_ATTEMPTS = 3;
+// Blooio takes a background image of at most 10 MB.
+export const BACKGROUND_MAX_BYTES = 10 * 1024 * 1024;
+const BACKGROUND_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/heic", "image/heif"]);
 
 export interface RunnerDeps {
   store: import("./store.js").ConversationStore;
@@ -750,6 +764,78 @@ export class ConversationRunner {
 
   private active = false;
 
+  // The running turn's eyes, so its tapback can swap them.
+  private eyes: Eyes | null = null;
+
+  private eyesFor(turn: number, chatId: string | null, messageId: string | null, crisis: boolean, generation: number): Eyes {
+    const { channel, logger, store } = this.deps;
+    let landed: Promise<boolean> | null = null;
+    return {
+      turn,
+      messageId,
+      put: (why: string): void => {
+        if (landed || crisis || !chatId || !messageId) return;
+        const meta = store.meta();
+        if (meta.optedOut || meta.closed || meta.generation !== generation) return;
+        landed = channel.react(chatId, messageId, EYES).then(
+          () => {
+            logger.info("eyes_sent", { handle: this.logHandle(), turn, why });
+            return true;
+          },
+          (err: unknown) => {
+            logger.warn("eyes_failed", { handle: this.logHandle(), turn, err: errName(err) });
+            return false;
+          },
+        );
+      },
+      takeOff: async (): Promise<void> => {
+        if (!landed || !(await landed) || !chatId || !messageId) return;
+        await this.bestEffort("eyes_remove_failed", () => channel.unreact(chatId, messageId, EYES));
+      },
+      settled: async (): Promise<void> => {
+        await landed;
+      },
+    };
+  }
+
+  // Mano's chat background goes on once per chat, after a reply reached
+  // the person, never on a crisis turn, after STOP or on a closed chat.
+  // It is decoration: a failure is logged, counted and never retried
+  // past BACKGROUND_MAX_ATTEMPTS, and it never touches the reply.
+  private async maybeSetBackground(turn: number, chatId: string | null, crisis: boolean, generation: number): Promise<void> {
+    const { store, channel, config, logger, nowMs } = this.deps;
+    const url = config.backgroundUrl;
+    if (!url || !channel.setBackground || !chatId || crisis) return;
+    const meta = store.meta();
+    if (meta.backgroundSetAtMs > 0 || meta.backgroundAttempts >= BACKGROUND_MAX_ATTEMPTS) return;
+    if (meta.optedOut || meta.closed || meta.generation !== generation) return;
+    if (!store.outbounds().some((r) => r.turn === turn && r.state === "sent" && r.tag !== "react")) return;
+    store.patchMeta({ backgroundAttempts: meta.backgroundAttempts + 1 });
+    try {
+      const image = await this.fetchBackground(url);
+      const now = store.meta();
+      if (now.optedOut || now.closed || now.generation !== generation) return;
+      await channel.setBackground(chatId, image);
+      store.patchMeta({ backgroundSetAtMs: nowMs() });
+      logger.info("background_set", { handle: this.logHandle(), turn });
+    } catch (err) {
+      logger.warn("background_failed", { handle: this.logHandle(), turn, err: errName(err) });
+    }
+  }
+
+  // Our own image, from config, checked like any link before it is used.
+  private async fetchBackground(url: string): Promise<Blob> {
+    const check = await new LinkChecker({ fetchFn: this.deps.fetchFn }).checkUrl(url);
+    if (!check.ok) throw new Error(`background link blocked: ${check.reason}`);
+    const res = await this.deps.fetchFn(url, { signal: AbortSignal.timeout(15000), redirect: "error" });
+    if (!res.ok) throw new Error(`background fetch failed: ${res.status}`);
+    const type = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+    if (!BACKGROUND_TYPES.has(type)) throw new Error("background is not an image");
+    const bytes = await res.arrayBuffer();
+    if (bytes.byteLength === 0 || bytes.byteLength > BACKGROUND_MAX_BYTES) throw new Error("background size out of range");
+    return new Blob([bytes], { type });
+  }
+
   private async runGuarded(fn: () => Promise<void>): Promise<void> {
     const { store } = this.deps;
     store.patchMeta({ running: true });
@@ -861,6 +947,19 @@ export class ConversationRunner {
       return;
     }
 
+    // The eyes say Mano is on it: at once for a photo, before typing
+    // shows, and otherwise when the turn routes deep or runs past
+    // eyesAfterMs. They are decoration, never awaited before the reply.
+    const latest = [...items].reverse().find((i) => i.messageId)?.messageId ?? null;
+    const eyes = this.eyesFor(turn, chatId, latest, crisis, generation);
+    this.eyes = eyes;
+    if (attachments.length > 0) eyes.put("attachment");
+    let eyesTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => eyes.put("slow"), config.eyesAfterMs);
+    const stopEyesTimer = (): void => {
+      clearTimeout(eyesTimer);
+      eyesTimer = undefined;
+    };
+
     // Keepalive refreshes run one at a time. Before the final stop, no
     // new refresh starts and the one in flight finishes, so typing can
     // never come back on after Mano is done.
@@ -886,7 +985,8 @@ export class ConversationRunner {
         this.checkGeneration(generation);
         // The turn's latest message: what the agent orders a YES by.
         const receivedAtMs = Math.max(...items.map((i) => i.receivedAtMs));
-        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation, crisis, receivedAtMs);
+        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation, crisis, receivedAtMs, () => eyes.put("deep"));
+        stopEyesTimer();
         if (answer.ok) {
           // Links come out before splitting, and each final bubble is
           // checked again: a split must never leave an unchecked link
@@ -929,11 +1029,16 @@ export class ConversationRunner {
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
       }
+      stopEyesTimer();
       this.checkGeneration(generation);
       await this.sendBubbles(turn, bubbles, chatId, to, saved, generation);
       this.checkSendsResolved(turn, generation);
       await this.reportPresentations();
+      await this.maybeSetBackground(turn, chatId, crisis, generation);
     } finally {
+      stopEyesTimer();
+      await eyes.settled();
+      this.eyes = null;
       typingDone = true;
       clearInterval(typingTimer);
       await refreshing;
@@ -1045,6 +1150,8 @@ export class ConversationRunner {
       return;
     }
     try {
+      // One reaction per message: the eyes come off before the reply's own.
+      if (this.eyes?.turn === turn && this.eyes.messageId === bubble.messageId) await this.eyes.takeOff();
       await channel.react(chatId, bubble.messageId, bubble.text as import("@mano/channels").Tapback);
       this.checkGeneration(generation);
       store.updateOutbound(key, { state: "sent", updatedAtMs: nowMs() });
@@ -1067,6 +1174,7 @@ export class ConversationRunner {
     generation: number,
     crisis: boolean,
     receivedAtMs: number,
+    onDeep: () => void = () => {},
   ): Promise<
     | {
         ok: true;
@@ -1096,6 +1204,7 @@ export class ConversationRunner {
       estimateCostUsd(inputChars * attempts, 0, config.usdPer1kChars);
     try {
       const onHeadsUp = async (text: string): Promise<void> => {
+        if (!crisis) onDeep();
         if (done || interimSent || crisis) return;
         interimSent = true;
         try {
@@ -1597,4 +1706,17 @@ export class ConversationRunner {
     await this.sendBubble({ turn, part, tag: "", text: APPROVAL_RECORDED_BUBBLE, chatId, to });
     return true;
   }
+}
+
+// The eyes on one turn's latest message.
+interface Eyes {
+  turn: number;
+  messageId: string | null;
+  // Puts them on, once, unless it is a crisis, the chat is closed or the
+  // person opted out. Never awaited by the turn.
+  put(why: string): void;
+  // Takes them off before another reaction goes on the same message.
+  takeOff(): Promise<void>;
+  // Waits for a reaction call still in flight.
+  settled(): Promise<void>;
 }

@@ -13,12 +13,14 @@ import {
 } from "./channel.js";
 import { normalizeHandle } from "./handles.js";
 import { boundFetch } from "./fetch.js";
-import type { EventAttachment, NormalizedEvent, NormalizedEventKind, Tapback } from "./types.js";
+import type { EventAttachment, NormalizedEvent, NormalizedEventKind, Reaction } from "./types.js";
 
 export const BLOOIO_BASE_URL = "https://api.blooio.com/v4";
 export const BLOOIO_WEBHOOK_API_VERSION = "2026-10-01";
 
 const SEND_TIMEOUT_MS = 15000;
+// An image upload gets longer than a text send.
+const BACKGROUND_TIMEOUT_MS = 30_000;
 const SEND_MAX_ATTEMPTS = 3;
 
 export interface BlooioOptions {
@@ -273,19 +275,43 @@ export class BlooioChannel implements Channel {
     }
   }
 
-  async react(chatId: string, messageId: string, reaction: Tapback): Promise<void> {
+  async react(chatId: string, messageId: string, reaction: Reaction): Promise<void> {
+    await this.reaction(chatId, messageId, `+${reaction}`);
+  }
+
+  async unreact(chatId: string, messageId: string, reaction: Reaction): Promise<void> {
+    await this.reaction(chatId, messageId, `-${reaction}`);
+  }
+
+  // A native tapback goes by name (+love); an emoji goes as itself (+🙏).
+  private async reaction(chatId: string, messageId: string, value: string): Promise<void> {
     const res = await this.fetchFn(
       `${this.baseUrl}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/reactions`,
       {
         method: "POST",
         signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
         headers: this.headers({ "content-type": "application/json" }),
-        body: JSON.stringify({ reaction: `+${reaction}` }),
+        body: JSON.stringify({ reaction: value }),
       },
     );
     if (!res.ok && res.status !== 409) {
       throw new Error(`Blooio reaction failed: ${res.status}`);
     }
+  }
+
+  // PUT /chats/{chatId}/background takes the image as a multipart field
+  // named "background" (jpeg, png, gif, webp or heic, at most 10 MB).
+  // fetch sets the multipart content type with its boundary.
+  async setBackground(chatId: string, image: Blob): Promise<void> {
+    const form = new FormData();
+    form.append("background", image, "background.png");
+    const res = await this.fetchFn(`${this.baseUrl}/chats/${encodeURIComponent(chatId)}/background`, {
+      method: "PUT",
+      signal: AbortSignal.timeout(BACKGROUND_TIMEOUT_MS),
+      headers: this.headers(),
+      body: form,
+    });
+    if (!res.ok) throw new Error(`Blooio background failed: ${res.status}`);
   }
 
   async markRead(chatId: string): Promise<void> {

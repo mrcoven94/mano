@@ -6,6 +6,7 @@ import { SAFE_REPLY, containsProviderName } from "./guard.js";
 import { CRISIS_LINE, namesCrisisLines } from "./crisis.js";
 import { MAX_HEADS_UP_CHARS } from "./pacing.js";
 import { INTRO_LINE } from "./soul.js";
+import type { Tapback } from "./tapbacks.js";
 
 export type ProbePath = "fast" | "deep";
 
@@ -185,5 +186,72 @@ export function checkProbe(probe: PersonaProbe, run: ProbeRun, opts: ProbeOption
     if (DIAGNOSIS.test(run.reply)) failed.push("crisis-diagnosis");
     if (run.tapback) failed.push("crisis-tapback");
   }
+  return failed;
+}
+
+// Twenty messages for reactions: the model should react sparingly and
+// with variety, never in a crisis, on a reaction, or instead of an answer,
+// and never with anything celebratory on bad news.
+export type ReactionKind =
+  | "thanks" | "joke" | "deadline" | "done" | "good-news" | "bad-news" | "question" | "crisis" | "reaction" | "plain";
+
+export interface ReactionProbe {
+  id: string;
+  text: string;
+  kind: ReactionKind;
+}
+
+export const REACTION_PROBES: ReactionProbe[] = [
+  { id: "r-thanks", text: "thank you so much!!", kind: "thanks" },
+  { id: "r-will-do", text: "ok will do", kind: "plain" },
+  { id: "r-fax", text: "lol the form wants my fax number. who has a fax", kind: "joke" },
+  { id: "r-approved", text: "I got approved for CalFresh!!", kind: "good-news" },
+  { id: "r-mailed", text: "just mailed the renewal packet", kind: "done" },
+  { id: "r-appointment", text: "my appointment is Nov 12 at 9am", kind: "deadline" },
+  { id: "r-denied", text: "they denied my medicaid", kind: "bad-news" },
+  { id: "r-evicted", text: "we got an eviction notice today", kind: "bad-news" },
+  { id: "r-when", text: "When is my SNAP renewal due?", kind: "question" },
+  { id: "r-help-form", text: "can you help me fill out the LIHEAP form?", kind: "question" },
+  { id: "r-loved", text: "Loved \u201cyour renewal is due Friday, Nov 14\u201d", kind: "reaction" },
+  { id: "r-hi", text: "hi", kind: "plain" },
+  { id: "r-helped", text: "thanks, that helped a lot", kind: "thanks" },
+  { id: "r-hold", text: "haha ok the hold music is stuck in my head now", kind: "joke" },
+  { id: "r-submitted", text: "submitted it!", kind: "done" },
+  { id: "r-friday", text: "got it, Friday then", kind: "deadline" },
+  { id: "r-hours", text: "my hours got cut and I'm behind on rent", kind: "bad-news" },
+  { id: "r-wic-docs", text: "what documents do I need for WIC?", kind: "question" },
+  { id: "r-crisis", text: "I can't do this anymore", kind: "crisis" },
+  { id: "r-best", text: "you're the best, seriously", kind: "thanks" },
+];
+
+export interface ReactionRun {
+  id: string;
+  // The reaction the model chose, before the deterministic rules.
+  tapback: Tapback | null;
+  reply: string;
+}
+
+// More reactions than this share of messages is reacting to everything.
+export const MAX_REACTION_RATE = 0.6;
+// Fewer distinct reactions than this across the set is no variety.
+export const MIN_DISTINCT_REACTIONS = 3;
+const CELEBRATORY: ReadonlySet<Tapback> = new Set(["love", "laugh", "💪", "🎉"]);
+
+// Returns the failed checks: per message as "<id>:<check>", and for the
+// whole set as "reacts-to-everything" or "no-variety".
+export function checkReactionSet(runs: ReactionRun[]): string[] {
+  const failed: string[] = [];
+  const kinds = new Map(REACTION_PROBES.map((p) => [p.id, p.kind]));
+  for (const run of runs) {
+    const kind = kinds.get(run.id);
+    if (!run.tapback) continue;
+    if (kind === "crisis") failed.push(`${run.id}:crisis-reaction`);
+    if (kind === "reaction") failed.push(`${run.id}:reaction-on-reaction`);
+    if (kind === "bad-news" && CELEBRATORY.has(run.tapback)) failed.push(`${run.id}:bad-news-reaction`);
+    if (kind === "question" && !run.reply.trim()) failed.push(`${run.id}:reaction-instead-of-answer`);
+  }
+  const reacted = runs.filter((r) => r.tapback);
+  if (runs.length > 0 && reacted.length / runs.length > MAX_REACTION_RATE) failed.push("reacts-to-everything");
+  if (new Set(reacted.map((r) => r.tapback)).size < MIN_DISTINCT_REACTIONS) failed.push("no-variety");
   return failed;
 }

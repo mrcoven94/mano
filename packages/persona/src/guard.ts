@@ -283,7 +283,7 @@ export function guardReply(raw: string, opts: GuardOptions = {}): GuardResult {
   const ids = idPattern(opts.modelIds ?? []);
   const changes: GuardChange[] = [];
   let text = raw;
-  const unrouted = text.replace(/(^|[^A-Za-z])REACT:[ \t]*[a-z]*/gi, "$1 ").replace(/(^|[^A-Za-z])DEEP:[ \t]*/g, "$1 ");
+  const unrouted = text.replace(/(^|[^A-Za-z])REACT:[ \t]*(?:[a-z]+|[\p{Extended_Pictographic}\u{FE0F}\u{1F3FB}-\u{1F3FF}\u{200D}]+)?/giu, "$1 ").replace(/(^|[^A-Za-z])DEEP:[ \t]*/g, "$1 ");
   if (unrouted !== text) changes.push("route-marker");
   text = unrouted;
   // The soul's examples are written as "Mano: ..." lines, and a reply

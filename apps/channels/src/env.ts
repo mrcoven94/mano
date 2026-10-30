@@ -21,6 +21,11 @@ export interface Env {
   TURN_BATCH_MS?: string;
   TURN_INTERIM_MS?: string;
   BLOOIO_MEDIA_HOSTS?: string;
+  // How long a turn runs before the eyes go on the person's message.
+  TURN_EYES_AFTER_MS?: string;
+  // Mano's chat background image (an https URL we host), set once per
+  // chat. Unset leaves chats as they are.
+  MANO_CHAT_BACKGROUND_URL?: string;
   // Our line's own number or alias, checked against the channel_address
   // on inbound webhooks when both are present. Public value; optional.
   MANO_TEXT_NUMBER?: string;

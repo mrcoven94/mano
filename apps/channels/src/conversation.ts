@@ -197,6 +197,8 @@ export class ConversationDO implements DurableObject {
         usdPer1kChars: numberEnv(this.env.MANO_TEXT_USD_PER_1K_CHARS, DEFAULT_RUNNER_CONFIG.usdPer1kChars),
         maxInboundAgeMs: DEFAULT_RUNNER_CONFIG.maxInboundAgeMs,
         mediaHosts: parseMediaHosts(this.env.BLOOIO_MEDIA_HOSTS),
+        eyesAfterMs: numberEnv(this.env.TURN_EYES_AFTER_MS, DEFAULT_RUNNER_CONFIG.eyesAfterMs),
+        backgroundUrl: this.env.MANO_CHAT_BACKGROUND_URL?.trim() || null,
       },
     });
     return { runner, channel, responder };

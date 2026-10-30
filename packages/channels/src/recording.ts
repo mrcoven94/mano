@@ -12,7 +12,7 @@ import {
   type ChannelSendResult,
 } from "./channel.js";
 import { parseBlooioEvent } from "./blooio.js";
-import type { NormalizedEvent, Tapback } from "./types.js";
+import type { NormalizedEvent, Reaction } from "./types.js";
 
 export interface RecordedSend extends ChannelSendInput {
   messageId: string;
@@ -31,7 +31,12 @@ export class RecordingChannel implements Channel {
   sends: RecordedSend[] = [];
   typingCalls: Array<{ chatId: string; state: "started" | "stopped" }> = [];
   readCalls: string[] = [];
-  reactions: Array<{ chatId: string; messageId: string; reaction: Tapback }> = [];
+  reactions: Array<{ chatId: string; messageId: string; reaction: Reaction }> = [];
+  unreactions: Array<{ chatId: string; messageId: string; reaction: Reaction }> = [];
+  backgrounds: Array<{ chatId: string; type: string; size: number }> = [];
+  // Set to make reactions or background uploads throw, for failure paths.
+  failReactions = false;
+  failBackground = false;
   lookupCalls: Array<{ chatId: string; messageId: string }> = [];
   // Feed pages served to listEvents, in order.
   feedPages: NormalizedEvent[][] = [];
@@ -105,8 +110,19 @@ export class RecordingChannel implements Channel {
     this.readCalls.push(chatId);
   }
 
-  async react(chatId: string, messageId: string, reaction: Tapback): Promise<void> {
+  async react(chatId: string, messageId: string, reaction: Reaction): Promise<void> {
+    if (this.failReactions) throw new Error("reaction failed");
     this.reactions.push({ chatId, messageId, reaction });
+  }
+
+  async unreact(chatId: string, messageId: string, reaction: Reaction): Promise<void> {
+    if (this.failReactions) throw new Error("reaction failed");
+    this.unreactions.push({ chatId, messageId, reaction });
+  }
+
+  async setBackground(chatId: string, image: Blob): Promise<void> {
+    if (this.failBackground) throw new Error("background failed");
+    this.backgrounds.push({ chatId, type: image.type, size: image.size });
   }
 
   async lookupMessage(chatId: string, messageId: string): Promise<ChannelMessageStatus | null> {
