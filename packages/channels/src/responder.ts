@@ -5,7 +5,7 @@
 // which the caller sends at once before the deep call at medium effort.
 // When the engine merges, its person agent becomes the Responder behind
 // this same interface.
-import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisFloor, crisisTurn, routeReply, splitTapback, type Tapback } from "@mano/persona";
+import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisLineFor, crisisNote, crisisTurn, routeReply, splitTapback, type Tapback } from "@mano/persona";
 import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 
@@ -40,6 +40,9 @@ export interface TurnInput {
   // When Channels received the turn's latest message, on its own clock.
   // The agent orders a YES against the question it answers by this time.
   receivedAtMs?: number;
+  // The turn's crisis decision, made once by the worker (decideCrisis).
+  // Without it the responder falls back to the keyword floor.
+  crisis?: boolean;
 }
 
 export interface ResponderResult {
@@ -227,14 +230,21 @@ export class SparkResponder implements Responder {
   async respond(turn: TurnInput, hooks: RespondHooks = {}): Promise<ResponderResult> {
     const messages = buildMessages(turn);
     const note = attachmentNote(turn.attachmentCount);
-    // A crisis never waits on a heads-up: no router, and the reply must
-    // name 988 and 911.
-    const crisis = crisisTurn(turn.texts.join("\n"));
-    const fast = await this.call(`${MANO_SOUL}${note}${crisis ? "" : `\n\n${PACING}`}`, messages, this.fastEffort, 0, true);
+    // A crisis never waits on a heads-up: no router. finalizeReply sends
+    // the crisis line first on every path, so the model is told it is
+    // already there and writes the human part (safety-05).
+    const text = turn.texts.join("\n");
+    const crisis = turn.crisis ?? crisisTurn(text);
+    const fast = await this.call(
+      `${MANO_SOUL}${note}${crisis ? `\n\n${crisisNote(crisisLineFor(text))}` : `\n\n${PACING}`}`,
+      messages,
+      this.fastEffort,
+      0,
+      true,
+    );
     const route = crisis ? ({ path: "fast", text: fast.text } as const) : routeReply(fast.text);
     if (route.path === "fast") {
-      const text = crisis ? crisisFloor(route.text) : route.text;
-      return this.result(text, fast.attempts, fast.inputChars);
+      return this.result(route.text, fast.attempts, fast.inputChars);
     }
     await hooks.onHeadsUp?.(route.headsUp);
     const deep = await this.call(

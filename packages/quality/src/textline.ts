@@ -7,6 +7,7 @@
 // tapback, the heads-up check) is mirrored from apps/channels/src/runner.ts.
 
 import {
+  ModelCrisisCheck,
   isOptOut,
   finalizeReply,
   LinkChecker,
@@ -17,7 +18,7 @@ import {
   stripBlockedLinks,
   type HistoryMessage,
 } from "@mano/channels";
-import { crisisLineFor, crisisTurn, guardReply, type GuardChange } from "@mano/persona";
+import { crisisLineFor, decideCrisis, guardReply, type CrisisCheck, type GuardChange } from "@mano/persona";
 import { viaAiGateway } from "./models.ts";
 import type { AnswerPath, BenchAnswer } from "./paths.ts";
 import type { BenchCase } from "./suites/types.ts";
@@ -59,6 +60,18 @@ export interface TextLineOptions {
   model: string;
   baseUrl?: string;
   fetchFn?: typeof fetch;
+  // The Standard model ID for the crisis check, as the worker uses. None
+  // fails closed: every short health question gets the crisis line.
+  crisisCheckModel?: string;
+}
+
+// The worker's crisis check runs on its Standard reply model.
+export const DEFAULT_CRISIS_CHECK_MODEL = "muse-spark-1.3";
+
+// The crisis check model for every text line Quality builds, the plain one
+// and the agent's, so both decide crisis the way the worker does.
+export function crisisCheckModelFromEnv(env: NodeJS.ProcessEnv = process.env): string {
+  return env.MANO_MODEL_CRISIS_CHECK_ID || DEFAULT_CRISIS_CHECK_MODEL;
 }
 
 export function sparkResponder(opts: TextLineOptions): SparkResponder {
@@ -81,10 +94,24 @@ export class TextLine {
   private fetchFn: typeof fetch | undefined;
   private turnNumber = 0;
 
-  constructor(opts: TextLineOptions & { responder?: Responder }) {
+  private crisisCheck: CrisisCheck | null;
+
+  constructor(opts: TextLineOptions & { responder?: Responder; crisisCheck?: CrisisCheck | null }) {
     this.model = opts.model;
     this.fetchFn = opts.fetchFn;
     this.responder = opts.responder ?? sparkResponder(opts);
+    this.crisisCheck =
+      opts.crisisCheck !== undefined
+        ? opts.crisisCheck
+        : opts.crisisCheckModel && !/-contributor$/i.test(opts.crisisCheckModel)
+          ? new ModelCrisisCheck({
+              apiKey: opts.apiKey,
+              model: opts.crisisCheckModel,
+              ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
+              ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
+              collectLogs: !viaAiGateway(opts.baseUrl ?? ""),
+            })
+          : null;
   }
 
   // `at` fixes the turn's key and receive time, so a retry of the same turn
@@ -95,9 +122,9 @@ export class TextLine {
       return { servedBy: "worker", route: "fast", headsUp: null, bubbles: [OPT_OUT_BUBBLE], firstTextMs: 0, totalMs: 0, guardChanges: [], linksRemoved: 0, attempts: 0, billedInputChars: 0, outputChars: 0 };
     }
     const turnText = texts.join("\n");
-    // The worker's crisis decision: the broad detector, minus an exact
-    // benefits cut ("they cut my food stamps").
-    const crisis = crisisTurn(turnText);
+    // The worker's crisis decision: the keyword floor, and for one short
+    // health question the model check, where only an exact "no" exempts.
+    const crisis = (await decideCrisis(turnText, this.crisisCheck)).crisis;
     const modelIds = [this.model];
     const changes: GuardChange[] = [];
     const guard = (text: string): string => {
@@ -115,7 +142,7 @@ export class TextLine {
       // The agent runs a turn only with a stable turn key, as Channels sends.
       const key = at ?? { turn: ++this.turnNumber, receivedAtMs: Date.now() };
       result = await this.responder.respond(
-        { texts, attachmentCount, history, turnKey: { generation: 0, turn: key.turn }, receivedAtMs: key.receivedAtMs },
+        { texts, attachmentCount, history, turnKey: { generation: 0, turn: key.turn }, receivedAtMs: key.receivedAtMs, crisis },
         {
           onHeadsUp: async (raw) => {
             if (crisis) return;
@@ -213,7 +240,12 @@ export function textLineFromEnv(env: NodeJS.ProcessEnv = process.env): TextLine 
   const apiKey = env.META_MODEL_API_KEY ?? "";
   const model = env.MANO_MODEL_BENCH_ID ?? "";
   if (!apiKey || !model) return null;
-  return new TextLine({ apiKey, model, ...(env.MANO_MODEL_BASE_URL ? { baseUrl: env.MANO_MODEL_BASE_URL } : {}) });
+  return new TextLine({
+    apiKey,
+    model,
+    crisisCheckModel: crisisCheckModelFromEnv(env),
+    ...(env.MANO_MODEL_BASE_URL ? { baseUrl: env.MANO_MODEL_BASE_URL } : {}),
+  });
 }
 
 const CHARS_PER_TOKEN = 4;

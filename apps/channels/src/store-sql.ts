@@ -225,6 +225,8 @@ export class SqlConversationStore implements ConversationStore {
       "ALTER TABLE turns ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
       // Native iMessage (LAP-636): tapbacks, inline replies, typing hold.
       "ALTER TABLE pending ADD COLUMN message_id TEXT",
+      // The whole-message crisis decision (PR 77, Sol's fifth review).
+      "ALTER TABLE pending ADD COLUMN crisis INTEGER",
       "ALTER TABLE outbounds ADD COLUMN reply_to TEXT",
       "ALTER TABLE meta ADD COLUMN typing_since_ms INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE meta ADD COLUMN typing_active INTEGER NOT NULL DEFAULT 0",
@@ -241,6 +243,10 @@ export class SqlConversationStore implements ConversationStore {
         // The column already exists.
       }
     }
+    // Pieces stored before the decision was (no value) are crises: every
+    // piece written since carries a value, so only those rows change
+    // (Sol's sixth review).
+    this.sql.exec("UPDATE pending SET crisis = 1 WHERE crisis IS NULL");
     const existing = firstRow(this.sql.exec("SELECT id FROM meta WHERE id = 1"));
     if (!existing) {
       this.sql.exec(
@@ -337,7 +343,7 @@ export class SqlConversationStore implements ConversationStore {
 
   addPending(item: PendingInbound): void {
     this.sql.exec(
-      "INSERT OR IGNORE INTO pending (event_id, received_at_ms, chat_id, handle_to, text, attachments_json, from_reconcile, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO pending (event_id, received_at_ms, chat_id, handle_to, text, attachments_json, from_reconcile, message_id, crisis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       item.eventId,
       item.receivedAtMs,
       item.chatId,
@@ -346,6 +352,7 @@ export class SqlConversationStore implements ConversationStore {
       JSON.stringify(item.attachments),
       item.fromReconcile ? 1 : 0,
       item.messageId ?? null,
+      crisisColumn(item.crisis),
     );
   }
 
@@ -359,6 +366,7 @@ export class SqlConversationStore implements ConversationStore {
       attachments_json: string;
       from_reconcile: number;
       message_id: string | null;
+      crisis?: number | null;
     }>;
     return rows.map((r) => ({
       eventId: r.event_id,
@@ -369,7 +377,15 @@ export class SqlConversationStore implements ConversationStore {
       attachments: JSON.parse(r.attachments_json) as EventAttachment[],
       fromReconcile: r.from_reconcile === 1,
       messageId: r.message_id ?? null,
+      // Anything but a stored "no" or "ask" is a crisis: missing means crisis.
+      crisis: r.crisis === 0 ? false : r.crisis === 2 ? ("ask" as const) : true,
     }));
+  }
+
+  setPendingCrisis(eventIds: string[], crisis: boolean): void {
+    if (eventIds.length === 0) return;
+    const marks = eventIds.map(() => "?").join(",");
+    this.sql.exec(`UPDATE pending SET crisis = ? WHERE event_id IN (${marks})`, crisis ? 1 : 0, ...eventIds);
   }
 
   clearPending(eventIds: string[]): void {
@@ -707,4 +723,9 @@ export class SqlConversationStore implements ConversationStore {
     );
     this.saveMeta({ ...defaultMeta(), generation: meta.generation + 1, turn: meta.turn, deletedAtMs, decorationEpoch: meta.decorationEpoch + 1 });
   }
+}
+
+// 0 not a crisis, 1 a crisis, 2 ask the model check; never null.
+function crisisColumn(crisis: boolean | "ask" | undefined): number {
+  return crisis === false ? 0 : crisis === "ask" ? 2 : 1;
 }

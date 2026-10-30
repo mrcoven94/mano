@@ -14,7 +14,7 @@ import { randomBytes } from "node:crypto";
 import { AgentResponder } from "@mano/channels";
 import type { AnswerPath, BenchAnswer } from "./paths.ts";
 import type { BenchCase } from "./suites/types.ts";
-import { TextLine, TextLinePath, sparkResponder, type TextLineOptions } from "./textline.ts";
+import { TextLine, TextLinePath, crisisCheckModelFromEnv, sparkResponder, type TextLineOptions } from "./textline.ts";
 
 export interface AgentPathOptions extends TextLineOptions {
   agentUrl: string;
@@ -61,5 +61,13 @@ export function agentPathFromEnv(env: NodeJS.ProcessEnv = process.env): AgentPat
   const apiKey = env.META_MODEL_API_KEY ?? "";
   const model = env.MANO_MODEL_BENCH_ID ?? "";
   if (!agentUrl || !agentSecret || !grantSecret || !apiKey || !model) return null;
-  return new AgentPath({ agentUrl, agentSecret, grantSecret, apiKey, model, ...(env.MANO_MODEL_BASE_URL ? { baseUrl: env.MANO_MODEL_BASE_URL } : {}) });
+  return new AgentPath({
+    agentUrl,
+    agentSecret,
+    grantSecret,
+    apiKey,
+    model,
+    crisisCheckModel: crisisCheckModelFromEnv(env),
+    ...(env.MANO_MODEL_BASE_URL ? { baseUrl: env.MANO_MODEL_BASE_URL } : {}),
+  });
 }
