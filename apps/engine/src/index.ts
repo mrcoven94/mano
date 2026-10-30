@@ -51,7 +51,7 @@
 //   POST /api/persons/:id/turns                { turnId, receivedAt, generation } (agent)
 //   GET  /api/persons/:id/turns/:turnId        (agent)
 //   POST /api/persons/:id/turns/:turnId/complete  { generation } (agent)
-//   PUT  /api/persons/:id/pending-approval     { approvalId, generation } (agent)
+//   PUT  /api/persons/:id/pending-approval     { approvalId, generation, turnId } compare-and-set by turn order (agent)
 //   GET  /api/persons/:id/pending-approval?generation=N  (agent)
 //   DELETE /api/persons/:id/pending-approval   { approvalId, generation } compare-and-delete (agent)
 //
@@ -99,6 +99,7 @@ import {
   AgentStateInputError,
   parseGenerationInput,
   parsePointerInput,
+  parsePointerSetInput,
   parseReminderInput,
   parseTurnInput,
   requireGeneration,
@@ -346,11 +347,11 @@ async function handleAgentState(
     }
     if (rest === "/pending-approval" && method === "PUT") {
       const input = await body();
-      parsePointerInput(input);
-      const pointer = await agent.setPendingApproval(subject, input);
-      if (isStale(pointer)) return STALE();
-      if (!pointer) return Response.json({ error: "Approval not found." }, { status: 404 });
-      return Response.json({ pointer });
+      parsePointerSetInput(input);
+      const set = await agent.setPendingApproval(subject, input);
+      if (isStale(set)) return STALE();
+      if (!set) return Response.json({ error: "Approval or turn not found." }, { status: 404 });
+      return Response.json(set);
     }
     if (rest === "/pending-approval" && method === "GET") {
       const raw = url.searchParams.get("generation");

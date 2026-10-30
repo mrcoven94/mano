@@ -39,6 +39,7 @@ import {
   nextReminderRunMs,
   parseGenerationInput,
   parsePointerInput,
+  parsePointerSetInput,
   parseReminderInput,
   parseTurnInput,
   putTurnIfAbsent,
@@ -623,9 +624,9 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // under the current generation.
   async setPendingApproval(verified: string, input: unknown) {
     await this.assertSubject(verified);
-    const { approvalId, generation } = parsePointerInput(input);
+    const { approvalId, generation, turnId } = parsePointerSetInput(input);
     if (generation !== currentGeneration(this.db())) return STALE_STATE;
-    return setPendingPointer(this.db(), approvalId, generation, new Date().toISOString());
+    return setPendingPointer(this.db(), approvalId, generation, turnId, new Date().toISOString());
   }
 
   async getPendingApproval(verified: string, generation: unknown) {

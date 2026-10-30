@@ -83,6 +83,14 @@ export function parsePointerInput(raw: unknown): { approvalId: string; generatio
   return { approvalId: f.approvalId, generation: requireGeneration(f.generation) };
 }
 
+// Setting the pointer also names the turn whose draft the question shows.
+export function parsePointerSetInput(raw: unknown): { approvalId: string; generation: number; turnId: string } {
+  const { approvalId, generation } = parsePointerInput(raw);
+  const turnId = fields(raw).turnId;
+  if (!isIdentity(turnId)) throw new AgentStateInputError(`turnId: ${IDENTITY_RULE}`);
+  return { approvalId, generation, turnId };
+}
+
 export function ensureAgentStateTables(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS reminders(
     id TEXT PRIMARY KEY, text TEXT NOT NULL, due_at_ms INTEGER NOT NULL, generation INTEGER NOT NULL,
@@ -96,6 +104,17 @@ export function ensureAgentStateTables(sql: SqlExec): void {
     generation INTEGER NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS pending_pointer(
     slot INTEGER PRIMARY KEY CHECK (slot = 1), approval_id TEXT NOT NULL, generation INTEGER NOT NULL, set_at TEXT NOT NULL)`);
+  // The turn whose draft the pointer shows, and when Channels received it:
+  // the pointer only ever moves to a draft of the same or a newer turn.
+  // A cleared pointer keeps its turn, so a late report of an older draft
+  // cannot come back after the newer question was answered.
+  for (const column of ["turn_id TEXT", "turn_received_at TEXT", "cleared INTEGER NOT NULL DEFAULT 0"]) {
+    try {
+      sql.exec(`ALTER TABLE pending_pointer ADD COLUMN ${column}`);
+    } catch {
+      // The column already exists: additive migrations are idempotent.
+    }
+  }
   // Each conversation delete, by the generation it moved to, with its
   // answer: a retried delete gets the same answer and changes nothing.
   sql.exec(`CREATE TABLE IF NOT EXISTS conversation_deletes(
@@ -337,29 +356,57 @@ export interface PendingPointer {
   approvalId: string;
   generation: number;
   setAt: string;
+  turnId: string | null;
+  turnReceivedAt: string | null;
 }
 
-// Sets the pointer only while the generation is current and the approval
-// was made under it.
-export function setPendingPointer(sql: SqlExec, approvalId: string, generation: number, setAt: string): PendingPointer | null {
+export type PointerSet = { pointer: PendingPointer; superseded: false } | { pointer: PendingPointer | null; superseded: true } | null;
+
+// Compare-and-set, in one statement. The pointer moves only while the
+// generation is current, the approval and the turn were made under it, and
+// the turn is the same as or newer than the one the pointer shows now
+// (Channels' receive time, then turn ID). A report for an older turn's
+// draft changes nothing and answers superseded. Repeating the report of
+// the question already pointed at keeps when it was first shown.
+// Receive times are ISO strings of one fixed width, so text order is time
+// order.
+export function setPendingPointer(sql: SqlExec, approvalId: string, generation: number, turnId: string, setAt: string): PointerSet {
   const written = sql.exec(
-    "INSERT INTO pending_pointer(slot, approval_id, generation, set_at)" +
-      ` SELECT 1, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?` +
+    "INSERT INTO pending_pointer(slot, approval_id, generation, set_at, turn_id, turn_received_at)" +
+      ` SELECT 1, ?, ?, ?, turn_id, first_received_at FROM turns WHERE turn_id = ? AND generation = ${CURRENT_GENERATION}` +
+      ` AND ${CURRENT_GENERATION} = ?` +
       ` AND EXISTS (SELECT 1 FROM approvals WHERE id = ? AND generation = ${CURRENT_GENERATION})` +
-      " ON CONFLICT(slot) DO UPDATE SET approval_id = excluded.approval_id, generation = excluded.generation, set_at = excluded.set_at",
-    approvalId, generation, setAt, generation, approvalId,
+      " ON CONFLICT(slot) DO UPDATE SET approval_id = excluded.approval_id, generation = excluded.generation," +
+      " set_at = CASE WHEN pending_pointer.approval_id = excluded.approval_id AND pending_pointer.generation = excluded.generation" +
+      " AND pending_pointer.cleared = 0 THEN pending_pointer.set_at ELSE excluded.set_at END," +
+      " turn_id = excluded.turn_id, turn_received_at = excluded.turn_received_at, cleared = 0" +
+      " WHERE pending_pointer.generation <> excluded.generation OR pending_pointer.turn_received_at IS NULL" +
+      " OR (excluded.turn_received_at, excluded.turn_id) >= (pending_pointer.turn_received_at, pending_pointer.turn_id)",
+    approvalId, generation, setAt, turnId, generation, approvalId,
   ).rowsWritten;
-  return written > 0 ? { approvalId, generation, setAt } : null;
+  const current = getPendingPointer(sql, generation);
+  if (written > 0 && current) return { pointer: current, superseded: false };
+  const known =
+    currentGeneration(sql) === generation &&
+    sql.exec(`SELECT 1 FROM approvals WHERE id = ? AND generation = ${CURRENT_GENERATION}`, approvalId).toArray().length > 0 &&
+    sql.exec(`SELECT 1 FROM turns WHERE turn_id = ? AND generation = ${CURRENT_GENERATION}`, turnId).toArray().length > 0;
+  return known ? { pointer: current, superseded: true } : null;
 }
 
 // A pointer stored under another conversation generation belongs to a
 // conversation that no longer exists: it reads as nothing.
 export function getPendingPointer(sql: SqlExec, generation: number): PendingPointer | null {
-  const row = sql.exec("SELECT approval_id, generation, set_at FROM pending_pointer WHERE slot = 1").toArray()[0] as
-    | { approval_id: string; generation: number; set_at: string }
+  const row = sql.exec("SELECT approval_id, generation, set_at, turn_id, turn_received_at FROM pending_pointer WHERE slot = 1 AND cleared = 0").toArray()[0] as
+    | { approval_id: string; generation: number; set_at: string; turn_id: string | null; turn_received_at: string | null }
     | undefined;
   if (!row || Number(row.generation) !== generation) return null;
-  return { approvalId: row.approval_id, generation: Number(row.generation), setAt: row.set_at };
+  return {
+    approvalId: row.approval_id,
+    generation: Number(row.generation),
+    setAt: row.set_at,
+    turnId: row.turn_id ?? null,
+    turnReceivedAt: row.turn_received_at ?? null,
+  };
 }
 
 // Compare-and-delete: clears the pointer only when it still names this
@@ -368,7 +415,7 @@ export function getPendingPointer(sql: SqlExec, generation: number): PendingPoin
 export function clearPendingPointer(sql: SqlExec, approvalId: string, generation: number): boolean {
   return (
     sql.exec(
-      `DELETE FROM pending_pointer WHERE slot = 1 AND approval_id = ? AND generation = ? AND generation = ${CURRENT_GENERATION}`,
+      `UPDATE pending_pointer SET cleared = 1 WHERE slot = 1 AND cleared = 0 AND approval_id = ? AND generation = ? AND generation = ${CURRENT_GENERATION}`,
       approvalId, generation,
     ).rowsWritten > 0
   );
@@ -426,7 +473,7 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
   const remindersInFlight = count("SELECT COUNT(*) AS n FROM reminders WHERE status = 'sending'");
   const turnsDeleted = count("SELECT COUNT(*) AS n FROM turns");
   sql.exec("DELETE FROM turns");
-  const pendingPointerCleared = count("SELECT COUNT(*) AS n FROM pending_pointer") > 0;
+  const pendingPointerCleared = count("SELECT COUNT(*) AS n FROM pending_pointer WHERE cleared = 0") > 0;
   sql.exec("DELETE FROM pending_pointer");
   const approvalsRejected = count("SELECT COUNT(*) AS n FROM approvals WHERE status = 'pending'");
   sql.exec("UPDATE approvals SET status = 'rejected' WHERE status = 'pending'");

@@ -182,17 +182,43 @@ describe("pending approval pointer", () => {
   it("reads as nothing under a different generation", async () => {
     const h = handle("pointer");
     const approvalId = await pendingApproval(h);
-    expect((await call(h, "PUT", "/pending-approval", { approvalId, generation: 0 })).status).toBe(200);
+    await call(h, "POST", "/turns", { turnId: "t-p", receivedAt: "2026-11-01T15:00:00.000Z", generation: 0 });
+    expect((await call(h, "PUT", "/pending-approval", { approvalId, generation: 0 })).status).toBe(400);
+    expect((await call(h, "PUT", "/pending-approval", { approvalId, generation: 0, turnId: "t-unknown" })).status).toBe(404);
+    expect((await call(h, "PUT", "/pending-approval", { approvalId, generation: 0, turnId: "t-p" })).status).toBe(200);
     const same = (await (await call(h, "GET", "/pending-approval?generation=0")).json()) as { pointer: { approvalId: string } | null };
     expect(same.pointer?.approvalId).toBe(approvalId);
     const other = (await (await call(h, "GET", "/pending-approval?generation=1")).json()) as { pointer: unknown };
     expect(other.pointer).toBeNull();
-    expect((await call(h, "PUT", "/pending-approval", { approvalId: crypto.randomUUID(), generation: 0 })).status).toBe(404);
+    expect((await call(h, "PUT", "/pending-approval", { approvalId: crypto.randomUUID(), generation: 0, turnId: "t-p" })).status).toBe(404);
     expect(await (await call(h, "DELETE", "/pending-approval", { approvalId: crypto.randomUUID(), generation: 0 })).json()).toEqual({
       cleared: false,
     });
     expect(await (await call(h, "DELETE", "/pending-approval", { approvalId, generation: 0 })).json()).toEqual({ cleared: true });
     expect((await (await call(h, "GET", "/pending-approval?generation=0")).json()) as unknown).toEqual({ pointer: null });
+  });
+
+  it("moves only to a draft of the same or a newer turn, and a repeat keeps when it was first shown", async () => {
+    const h = handle("pointer-order");
+    await call(h, "POST", "/turns", { turnId: "t-a", receivedAt: "2026-11-01T15:00:00.000Z", generation: 0 });
+    await call(h, "POST", "/turns", { turnId: "t-b", receivedAt: "2026-11-01T15:00:05.000Z", generation: 0 });
+    const a = await pendingApproval(h);
+    const b = await pendingApproval(h);
+    const put = async (approvalId: string, turnId: string) =>
+      (await (await call(h, "PUT", "/pending-approval", { approvalId, generation: 0, turnId })).json()) as {
+        pointer: { approvalId: string; setAt: string; turnId: string } | null;
+        superseded: boolean;
+      };
+    const shownB = await put(b, "t-b");
+    expect(shownB).toMatchObject({ superseded: false, pointer: { approvalId: b, turnId: "t-b" } });
+    // The older turn's report, retried after the newer question was shown.
+    expect(await put(a, "t-a")).toMatchObject({ superseded: true, pointer: { approvalId: b } });
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await put(b, "t-b")).pointer?.setAt).toBe(shownB.pointer?.setAt);
+    // Answered and cleared, the newer turn still holds the line.
+    await call(h, "DELETE", "/pending-approval", { approvalId: b, generation: 0 });
+    expect(await put(a, "t-a")).toEqual({ superseded: true, pointer: null });
+    expect(((await (await call(h, "GET", "/pending-approval?generation=0")).json()) as { pointer: unknown }).pointer).toBeNull();
   });
 });
 
@@ -204,7 +230,7 @@ describe("conversation delete", () => {
     await call(h, "POST", "/reminders", { id: "d:1", text: "Two.", dueAt: "2026-12-01T15:00:00.000Z", generation: 0 });
     await call(h, "POST", "/turns", { turnId: "t-1", receivedAt: "2026-11-01T15:00:00.000Z", generation: 0 });
     const approvalId = await pendingApproval(h);
-    await call(h, "PUT", "/pending-approval", { approvalId, generation: 0 });
+    await call(h, "PUT", "/pending-approval", { approvalId, generation: 0, turnId: "t-1" });
     await call(h, "POST", "/memory", { content: "Has two kids.", source: "text", generation: 0 });
     await call(h, "POST", "/memory", { content: "Prefers texts.", source: "text", generation: 0 });
 
@@ -335,7 +361,7 @@ describe("old turn after a delete", () => {
     expect((await call(h, "POST", "/memory", { content: "Late.", source: "text", generation: 0 })).status).toBe(409);
     expect((await call(h, "POST", "/reminders", { id: "old:0", text: "Late.", dueAt: later, generation: 0 })).status).toBe(409);
     expect((await call(h, "POST", "/turns", { turnId: "t-old", receivedAt: later, generation: 0 })).status).toBe(409);
-    expect((await call(h, "PUT", "/pending-approval", { approvalId, generation: 0 })).status).toBe(409);
+    expect((await call(h, "PUT", "/pending-approval", { approvalId, generation: 0, turnId: "t-old" })).status).toBe(409);
     expect((await call(h, "POST", "/memory", { content: "No generation.", source: "text" })).status).toBe(400);
 
     const approvals = (await (await call(h, "GET", "/approvals")).json()) as { approvals: unknown[] };
