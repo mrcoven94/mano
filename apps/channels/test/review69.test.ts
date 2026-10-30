@@ -170,3 +170,22 @@ describe("PR 69 review, should 7: no typing after the final stop", () => {
     expect(completed[completed.length - 1]).toBe("stopped");
   });
 });
+
+describe("PR 69 review round 2: alternating typing never extends the hold", () => {
+  it("answers by the first start plus the cap when every stop is followed by a new start", async () => {
+    const h = introduced(makeHarness({ replies: ["one answer"] }));
+    const t0 = h.now;
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "so the letter says", occurredAtMs: h.now }), "webhook");
+    await h.runner.handleEvent(typingStart("evt_s0", h.now), "webhook");
+    let ranAt: number | null = null;
+    for (let i = 1; i <= 10 && ranAt === null; i++) {
+      h.advance(3000);
+      await h.runner.handleEvent({ ...typingStart(`evt_stop_${i}`, h.now), kind: "typing.stopped", rawType: "typing.stopped" }, "webhook");
+      await h.runner.handleEvent(typingStart(`evt_start_${i}`, h.now), "webhook");
+      if ((await h.runner.runDueTurn()) === "ran") ranAt = h.now;
+    }
+    expect(ranAt).not.toBeNull();
+    expect(ranAt! - t0).toBeLessThanOrEqual(TYPING_HOLD_CAP_MS + 3000);
+    expect(h.channel.sends.map((s) => s.text)).toEqual(["one answer"]);
+  });
+});

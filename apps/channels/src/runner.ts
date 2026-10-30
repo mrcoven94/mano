@@ -276,19 +276,23 @@ export class ConversationRunner {
   // "queued" when the caller must (re)schedule the batch alarm.
   async handleEvent(event: NormalizedEvent, source: "webhook" | "reconcile"): Promise<HandleResult> {
     const { store, logger, nowMs, config } = this.deps;
-    // The person's typing sets one fixed hold deadline for the pending
-    // turn: a duplicate, a stale start or a later refresh never moves it.
+    // The person's typing holds the pending turn, with one fixed deadline:
+    // the first start for that turn plus the cap. A stop releases the hold
+    // early. A duplicate, a stale start or any later start, even after a
+    // stop, never moves the deadline.
     if (event.kind === "typing.started" || event.kind === "typing.stopped") {
       if (store.hasEvent(event.id)) return "duplicate";
       store.recordEvent(event.id, event.kind, nowMs());
       if (event.direction === "outbound") return "recorded";
       const meta = store.meta();
       if (event.kind === "typing.stopped") {
-        meta.typingSinceMs = 0;
+        meta.typingActive = false;
       } else {
         const at = event.occurredAtMs ?? nowMs();
-        if (nowMs() - at >= TYPING_HOLD_CAP_MS || meta.typingSinceMs > 0) return "recorded";
-        meta.typingSinceMs = nowMs();
+        if (nowMs() - at >= TYPING_HOLD_CAP_MS) return "recorded";
+        // With nothing pending there is no turn to hold yet: a new burst.
+        if (meta.typingSinceMs === 0 || store.pending().length === 0) meta.typingSinceMs = nowMs();
+        meta.typingActive = true;
       }
       store.saveMeta(meta);
       return "recorded";
@@ -558,10 +562,11 @@ export class ConversationRunner {
     const pending = store.pending();
     if (pending.length === 0) return this.needsRetry() ? "retry" : "idle";
     if (nowMs() - meta.lastInboundMs < this.deps.config.batchMs) return "waiting";
-    if (meta.typingSinceMs > 0 && nowMs() - meta.typingSinceMs < TYPING_HOLD_CAP_MS) return "waiting";
-    if (meta.typingSinceMs > 0) {
-      // The hold is over: the next burst gets its own deadline.
+    if (meta.typingActive && meta.typingSinceMs > 0 && nowMs() - meta.typingSinceMs < TYPING_HOLD_CAP_MS) return "waiting";
+    if (meta.typingSinceMs > 0 || meta.typingActive) {
+      // This turn runs now: the next burst gets its own deadline.
       meta.typingSinceMs = 0;
+      meta.typingActive = false;
       store.saveMeta(meta);
     }
     // A turn finishes only after a persisted final outcome. An

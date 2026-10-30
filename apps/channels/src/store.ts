@@ -109,9 +109,13 @@ export interface ConversationMeta {
   dayCount: number;
   busyNoticeKey: string | null;
   lastInboundMs: number;
-  // When the person started typing, 0 when they are not. A turn waits
-  // while they type, up to TYPING_HOLD_CAP_MS.
+  // The pending turn's hold anchor: when the person first started typing
+  // for it, 0 when there is none. The hold never runs past this plus
+  // TYPING_HOLD_CAP_MS, however often typing stops and starts.
   typingSinceMs: number;
+  // Whether the person is typing right now. A stop releases the hold
+  // early; it never resets the anchor.
+  typingActive: boolean;
   byteDayKey: string;
   byteDayCount: number;
   // Bumped on every delete. Idempotency keys carry the generation, and
@@ -139,6 +143,7 @@ export function defaultMeta(): ConversationMeta {
     busyNoticeKey: null,
     lastInboundMs: 0,
     typingSinceMs: 0,
+    typingActive: false,
     byteDayKey: "",
     byteDayCount: 0,
     generation: 0,

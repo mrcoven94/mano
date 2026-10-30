@@ -117,6 +117,7 @@ interface MetaRow {
   generation: number;
   deleted_at_ms: number;
   typing_since_ms?: number;
+  typing_active?: number;
 }
 
 function firstRow<T>(cursor: SqlStorageCursor<Record<string, SqlStorageValue>>): T | null {
@@ -172,6 +173,7 @@ export class SqlConversationStore implements ConversationStore {
       "ALTER TABLE pending ADD COLUMN message_id TEXT",
       "ALTER TABLE outbounds ADD COLUMN reply_to TEXT",
       "ALTER TABLE meta ADD COLUMN typing_since_ms INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE meta ADD COLUMN typing_active INTEGER NOT NULL DEFAULT 0",
     ]) {
       try {
         this.sql.exec(ddl);
@@ -221,6 +223,7 @@ export class SqlConversationStore implements ConversationStore {
       busyNoticeKey: row.busy_notice_key,
       lastInboundMs: row.last_inbound_ms,
       typingSinceMs: row.typing_since_ms ?? 0,
+      typingActive: row.typing_active === 1,
       byteDayKey: row.byte_day_key ?? "",
       byteDayCount: row.byte_day_count ?? 0,
       generation: row.generation ?? 0,
@@ -230,7 +233,7 @@ export class SqlConversationStore implements ConversationStore {
 
   saveMeta(meta: ConversationMeta): void {
     this.sql.exec(
-      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ?, typing_since_ms = ? WHERE id = 1",
+      "UPDATE meta SET turn = ?, introduced = ?, closed = ?, opted_out = ?, running = ?, chat_id = ?, handle_to = ?, hour_key = ?, hour_count = ?, day_key = ?, day_count = ?, busy_notice_key = ?, last_inbound_ms = ?, byte_day_key = ?, byte_day_count = ?, generation = ?, deleted_at_ms = ?, typing_since_ms = ?, typing_active = ? WHERE id = 1",
       meta.turn,
       meta.introduced ? 1 : 0,
       meta.closed ? 1 : 0,
@@ -249,6 +252,7 @@ export class SqlConversationStore implements ConversationStore {
       meta.generation,
       meta.deletedAtMs,
       meta.typingSinceMs,
+      meta.typingActive ? 1 : 0,
     );
   }
 
