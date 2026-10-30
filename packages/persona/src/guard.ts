@@ -33,15 +33,28 @@ export interface GuardResult {
 // Names on no list count only in "my name is X", a capitalized "I'm X",
 // or the assistant itself made or built by X, outside quotation marks.
 
-const STACK_PATTERN = /\b(?:meta|spark|muse|glimmer|llama)\b/i;
+const STACK_PATTERN = /\b(?:meta|spark|muse|glimmer)\b/i;
 // A family name, at most one more model word, then a version: "muse spark
-// 1.3", "llama3", "gpt-4o". Not "llama al 911", which is Spanish for "call 911".
+// 1.3", "gpt-4o". Llama has its own rule below.
 const MODEL_ID_PATTERN =
-  /\b(?:muse|spark|glimmer|llama|gpt|claude|gemini|mistral|grok)(?:[-_. ]?(?:spark|glimmer|instruct|chat|pro|mini|nano|turbo|flash|sonnet|opus|haiku))?[-_. ]?\d[\w.-]*/i;
-// "llama" is also Spanish for "call", exempt only before al, a, ahora, ya,
-// hoy or a phone number ("llama al 911", "Llama a tu oficina"); never
-// before "de" or anything model-like ("Llama de código abierto", "Llama 3").
-const ORDINARY_PHRASES = /\b(?:spark of hope|glimmer of hope|muse (?:on|about)|llama (?:al?|ahora|ya|hoy)\b|llama \+?1?[ -]?\(?\d{3}(?![\w.]))/gi;
+  /\b(?:muse|spark|glimmer|gpt|claude|gemini|mistral|grok)(?:[-_. ]?(?:spark|glimmer|instruct|chat|pro|mini|nano|turbo|flash|sonnet|opus|haiku))?[-_. ]?\d[\w.-]*/i;
+const ORDINARY_PHRASES = /\b(?:spark of hope|glimmer of hope|muse (?:on|about))\b/gi;
+
+// "llama" is also Spanish for "call" ("se llama DSHS", "llama al 911"), so
+// it is the one stack word that does not count anywhere. It counts only
+// in a model position: before a version (Llama 3, llama-3.1, Llama3, 405b),
+// near a model word, inside an identity construction, or capitalized in
+// the middle of a sentence and not before al, a, ahora, ya or hoy.
+const LLAMA_MODEL = [
+  /\bllama[-_ ]?(?:\d{1,2}(?:\.\d+)*|\d{1,3}b)\b/i,
+  /\bllama\b.*\b(?:models?|modelos?|llms?|open[- ]source|c[óo]digo abierto|open[- ]weights?|weights|pesos abiertos)\b|\b(?:models?|modelos?|llms?|open[- ]source|c[óo]digo abierto|open[- ]weights?|weights)\b.*\bllama\b/i,
+  /\b(?:uso|usamos|i use|we use|basad[oa] en|based on|powered by|funciona con|funciono con|runs? on|running on|built on|made by|hecho por|soy|i am|i'm|i’m)\b(?: [\p{L}'’-]+){0,3} llama\b/iu,
+  /(?<=[\p{L}\d,] )Llama\b(?! (?:al?|ahora|ya|hoy)\b)/u,
+];
+
+function namesLlama(sentence: string): boolean {
+  return LLAMA_MODEL.some((pattern) => pattern.test(sentence));
+}
 // An identity statement beats the idioms: "I'm powered by the spark of hope" still leaks.
 const IDENTITY_STATEMENT =
   /\b(?:i am|i'm|i’m|im|my name is|this is|powered by|built (?:on|by)|made by|trained by|runs? on|running on|based on|models?|assistant from)\b/i;
@@ -138,8 +151,7 @@ function restoreQuotes(text: string, quotes: readonly string[]): string {
 
 function namesOurStack(sentence: string, ids: RegExp | null): boolean {
   sentence = separated(sentence);
-  // "llama 911" is a phone call, not a model ID.
-  if (MODEL_ID_PATTERN.test(sentence.replace(ORDINARY_PHRASES, " ")) || ids?.test(sentence)) return true;
+  if (MODEL_ID_PATTERN.test(sentence) || namesLlama(sentence) || ids?.test(sentence)) return true;
   if (!STACK_PATTERN.test(sentence)) return false;
   return IDENTITY_STATEMENT.test(sentence) || STACK_PATTERN.test(sentence.replace(ORDINARY_PHRASES, " "));
 }

@@ -190,3 +190,10 @@ describe("PR 69 review round 3, through the runner", () => {
     }
   });
 });
+
+describe("Spanish benefits information survives the guard", () => {
+  it("sends se llama unchanged", async () => {
+    const h = introduced(makeHarness({ replies: ["La oficina se llama DSHS."] }));
+    expect(await say(h, "evt_1", "cómo se llama la oficina")).toEqual(["La oficina se llama DSHS."]);
+  });
+});

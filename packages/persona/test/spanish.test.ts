@@ -42,7 +42,21 @@ describe("Spanish llama is a verb", () => {
       expect(guardReply(text), text).toEqual({ text, changes: [] });
     }
     // Only al, a, ahora, ya, hoy or a phone number exempt it.
-    for (const text of ["I run on Llama.", "Uso Llama de código abierto para responderte.", "La oficina se llama DSHS.", "Uso Llama 3.1 para responderte."]) {
+    for (const text of ["I run on Llama.", "Uso Llama de código abierto para responderte.", "Uso Llama 3.1 para responderte."]) {
+      expect(guardReply(text).changes, text).not.toEqual([]);
+    }
+  });
+});
+
+describe("llama counts only in a model position", () => {
+  it("passes Spanish uses of llamar", () => {
+    for (const text of ["La oficina se llama DSHS.", "Llama al 911", "Llámame mañana", "Me llamo Rosa.", "¿Cómo te llamas?", "Llama a tu oficina hoy."]) {
+      expect(guardReply(text), text).toEqual({ text, changes: [] });
+    }
+  });
+
+  it("catches Llama the model", () => {
+    for (const text of ["Uso Llama de código abierto para responderte.", "Llama 3.1", "I'm built on Llama", "The model is llama-3.1.", "Funciono con el modelo Llama."]) {
       expect(guardReply(text).changes, text).not.toEqual([]);
     }
   });

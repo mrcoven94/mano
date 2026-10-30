@@ -87,7 +87,7 @@ describe("guardReply empty and unsendable replies", () => {
     }
     expect(guardReply("")).toEqual({ text: SAFE_REPLY, changes: ["empty"] });
     expect(guardReply("**")).toEqual({ text: SAFE_REPLY, changes: ["markdown", "empty"] });
-    expect(guardReply("Llama.")).toEqual({ text: SAFE_REPLY, changes: ["provider-name", "empty"] });
+    expect(guardReply("Muse.")).toEqual({ text: SAFE_REPLY, changes: ["provider-name", "empty"] });
   });
 
   it("strips a leaked routing marker anywhere", () => {
