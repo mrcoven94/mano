@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signBody } from "../agent/lib/auth.js";
 import { engineFrom, engineFromEnv, personIdFor, type Profile } from "../agent/lib/engine.js";
-import { PROFILE_CLOSE, PROFILE_OPEN } from "../agent/lib/profile.js";
+import { PROFILE_CLOSE, PROFILE_OPEN, profileGuide } from "../agent/lib/profile.js";
 import { handleTurn, type AgentTurnInput } from "../agent/lib/turn.js";
 import profileInstruction from "../agent/instructions/profile.js";
 import readProfile from "../agent/tools/read_profile.js";
@@ -254,7 +254,9 @@ describe("the profile at the start of every turn", () => {
     expect((await stored()).person.address.line1).toMatchObject({ value: "12 Sample Street", source: "person" });
     expect(await toldAtTurnStart()).toContain("Waiting for the person to confirm: 1 item.");
     const [call] = await runTurnWith("hi");
-    expect(call.context.join("\n")).toContain('"waitingForThePersonToConfirm":[{"field":"street address","value":"4 Oak St","from":"their document"}]');
+    expect(call.context.join("\n")).toContain(
+      '"waitingForThePersonToConfirm":[{"path":"person.address.line1","entry":"you","field":"street address","value":"4 Oak St","from":"their document"}]',
+    );
     // The person says yes: their word replaces it and the question is settled.
     await update({ person: { address: { line1: "4 Oak St" } } }, "turn_profile0012");
     const view = await engineFromEnv()!.forHandle(HANDLE, grant, 0).getProfileView();
@@ -287,5 +289,75 @@ describe("deleting the conversation", () => {
     await update({ person: { fullName: "Rosa Testcase" } });
     await engineFromEnv()!.forHandle(HANDLE, grant, 1).advanceConversation();
     expect(await stored()).toEqual({ person: { address: {} }, household: [], income: [], programs: [] });
+  });
+});
+
+describe("Sol's second review", () => {
+  const docWrite = async (key: string, fields: Record<string, string | number>) => {
+    engine.documents.add("doc_r2");
+    return engineFromEnv()!.forHandle(HANDLE, grant, 0).patchProfile({ idempotencyKey: key, source: "document", documentId: "doc_r2", fields });
+  };
+  const view = () => engineFromEnv()!.forHandle(HANDLE, grant, 0).getProfileView();
+
+  it("a confirmation that is not the person's own never counts", () => {
+    const at = "2026-10-30T00:00:00.000Z";
+    const told = profileGuide({
+      profile: {
+        person: { address: {}, householdConfirmed: { value: true, source: "document", updatedAt: at } },
+        household: [],
+        income: [],
+        programs: [],
+      },
+      suggestions: [],
+    });
+    expect(told).not.toMatch(/Household size/);
+    expect(told).toMatch(/has not confirmed who lives with them/);
+  });
+
+  it("forgetting the household, or one member, clears the confirmation", async () => {
+    await update({ household: [{ name: "Leo", relationship: "son" }, { name: "Mia", relationship: "daughter" }], householdComplete: true });
+    expect(await toldAtTurnStart()).toContain("Household size: 3");
+    const mia = (await stored()).household.find((m) => m.name?.value === "Mia")!.id;
+    await update({ forget: [mia] }, "turn_profile0030");
+    expect(await toldAtTurnStart()).not.toMatch(/Household size/);
+    await update({ householdComplete: true }, "turn_profile0031");
+    await update({ forget: ["household"] }, "turn_profile0032");
+    expect(await toldAtTurnStart()).toContain("Household members on file besides the person: 0. The person has not confirmed");
+  });
+
+  it("the person keeping their own value against a document settles the question", async () => {
+    await update({ household: [{ name: "Leo", relationship: "son" }] });
+    const leo = (await stored()).household[0].id;
+    await docWrite("leon-1", { [`household.${leo}.name`]: "Leon" });
+    expect((await view()).suggestions).toHaveLength(1);
+    // "It's Leo, not Leon."
+    await update({ household: [{ ref: leo, name: "Leo" }] }, "turn_profile0033");
+    const after = await view();
+    expect(after.suggestions).toEqual([]);
+    expect(after.profile.household[0].name).toMatchObject({ value: "Leo", source: "person" });
+  });
+
+  it("suggestions keep their path, ref and entry, so two jobs' amounts stay apart", async () => {
+    await update({
+      income: [
+        { member: "self", source: "Diner job", amount: 1800, frequency: "monthly" },
+        { member: "self", source: "Weekend cleaning", amount: 300, frequency: "monthly" },
+      ],
+    });
+    const [diner, cleaning] = (await stored()).income;
+    await docWrite("jobs-1", { [`income.${diner.id}.amount`]: 1750, [`income.${cleaning.id}.amount`]: 320 });
+    const out = (await readProfile.execute({}, ctxFor("turn_profile0034"))) as {
+      profile: { waitingForThePersonToConfirm: Record<string, unknown>[] };
+      summary: string;
+    };
+    expect(out.profile.waitingForThePersonToConfirm).toHaveLength(2);
+    expect(out.profile.waitingForThePersonToConfirm).toEqual(expect.arrayContaining([
+      { path: `income.${diner.id}.amount`, ref: diner.id, entry: "income: Diner job", field: "amount", value: 1750, from: "their document" },
+      { path: `income.${cleaning.id}.amount`, ref: cleaning.id, entry: "income: Weekend cleaning", field: "amount", value: 320, from: "their document" },
+    ]));
+    const [call] = await runTurnWith("hi");
+    expect(call.context.join("\n")).toContain(`"entry":"income: Weekend cleaning"`);
+    expect(out.summary).toContain("Diner job amount 1750");
+    expect(out.summary).toContain("Weekend cleaning amount 320");
   });
 });

@@ -9,7 +9,9 @@
 //
 //   person.fullName  person.dateOfBirth  person.phone  person.email
 //   person.address.line1|line2|city|state|zip  person.county  person.language
-//   person.householdConfirmed   (true once the person said who lives with them)
+//   person.householdConfirmed   (true once the person said who lives with them;
+//                                only source person sets it, and forgetting
+//                                any household member clears it)
 //   household.<id>.name|relationship|dateOfBirth
 //   income.<id>.memberId|source|amount|frequency   (memberId: a household id, or "self")
 //   programs.<id>.program|state|caseNumber|status
@@ -184,6 +186,9 @@ export function parseProfilePatch(raw: unknown): ParsedPatch {
       continue;
     }
     if (target.kind === "group") throw new ProfileInputError(`${path} is a group; set its fields one by one.`);
+    if (path === "person.householdConfirmed" && source !== "person") {
+      throw new ProfileInputError("Only the person can confirm who lives with them.");
+    }
     const clean = NORMALIZE[target.type](value);
     if (clean === null) throw new ProfileInputError(`${path} is not a valid ${target.type}.`);
     sets.push({ path, value: clean });
@@ -477,6 +482,11 @@ export class ProfileStore {
           path: string;
         }[];
         for (const r of rows) retireLinkedNotes(sql, r.path, false);
+        // A roster with someone forgotten is no longer the one the person
+        // confirmed.
+        if (rows.some((r) => r.path.startsWith("household."))) {
+          sql.exec("DELETE FROM profile_fields WHERE path = 'person.householdConfirmed'");
+        }
         sql.exec(`DELETE FROM profile_fields WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
         sql.exec(`DELETE FROM profile_suggestions WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
       }

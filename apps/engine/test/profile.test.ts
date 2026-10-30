@@ -426,3 +426,35 @@ describe("profile: read inside Engine", () => {
     expect(state).toBe("UT");
   });
 });
+
+describe("profile: the household confirmation is the person's alone", () => {
+  it("only a person-sourced write may set it", async () => {
+    const h = handle("profile-confirm-src");
+    const personId = personIdForHandle(h);
+    const doc = await asPerson(personId, "POST", "/documents", { name: "letter.txt", contentB64: btoa("Synthetic letter") });
+    const { id: documentId } = (await doc.json()) as { id: string };
+    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(personId)) as unknown as PersonAgent;
+    expect(await stub.recordDocumentFacts(personId, { documentId, idempotencyKey: "hc1", fields: { "person.householdConfirmed": true } })).toMatchObject({
+      status: "invalid",
+    });
+    const agentWrite = await asAgent(h, "PATCH", "/profile", { idempotencyKey: "hc2", source: "agent", generation: 0, fields: { "person.householdConfirmed": true } });
+    expect(agentWrite.status).toBe(400);
+    expect((await profileOf(await asAgent(h, "GET", "/profile"))).person.householdConfirmed).toBeUndefined();
+    const own = await asAgent(h, "PATCH", "/profile", { idempotencyKey: "hc3", source: "person", generation: 0, fields: { "person.householdConfirmed": true } });
+    expect(own.status).toBe(200);
+  });
+
+  it("forgetting the household or one member clears the confirmation", async () => {
+    const h = handle("profile-confirm-forget");
+    const write = (key: string, fields: Record<string, unknown>) =>
+      asAgent(h, "PATCH", "/profile", { idempotencyKey: key, source: "person", generation: 0, fields });
+    await write("cf1", { "household.leo.name": "Leo", "household.mia.name": "Mia", "person.householdConfirmed": true });
+    await write("cf2", { "household.mia": null });
+    expect((await profileOf(await asAgent(h, "GET", "/profile"))).person.householdConfirmed).toBeUndefined();
+    await write("cf3", { "person.householdConfirmed": true });
+    await write("cf4", { household: null });
+    const profile = await profileOf(await asAgent(h, "GET", "/profile"));
+    expect(profile.person.householdConfirmed).toBeUndefined();
+    expect(profile.household).toEqual([]);
+  });
+});

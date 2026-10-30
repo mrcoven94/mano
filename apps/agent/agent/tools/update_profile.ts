@@ -67,7 +67,8 @@ export default defineTool({
     if (!engine) throw new Error("The profile is not available right now. Say so plainly and do not claim anything was saved.");
     let changes;
     try {
-      changes = profileChanges(input, await engine.getProfile(), turnId);
+      const view = await engine.getProfileView();
+      changes = profileChanges(input, view.profile, turnId, new Set(view.suggestions.map((s) => s.path)));
     } catch (err) {
       if (err instanceof ProfileInputProblem) return { saved: [], problem: err.message };
       throw err;

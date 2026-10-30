@@ -96,7 +96,9 @@ export interface ProfileChanges {
 // facts again (nothing to write), or a question for the model to settle
 // with a ref. New entries get a ref derived from the turn, so a retried
 // turn writes the same entry, not a second one.
-export function profileChanges(input: ProfileInput, current: Profile, turnId: string): ProfileChanges {
+// pending: paths with a suggestion waiting. The person restating what is
+// on file for one of them is still sent, so Engine settles the question.
+export function profileChanges(input: ProfileInput, current: Profile, turnId: string, pending: ReadonlySet<string> = new Set()): ProfileChanges {
   const fields: Record<string, Value | null> = {};
   const labels: Record<string, string> = {};
   const set = (path: string, value: Value | undefined, label: string) => {
@@ -138,18 +140,23 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
         const match = named.find((e) => !someoneElse(e))!;
         const nothingNew =
           (!m.relationship || match.relationship) && (!m.dateOfBirth || match.dateOfBirth) && !someoneElse(match);
-        if (nothingNew) return;
-        throw new ProfileInputProblem(
-          `${m.name} is already on file (${[match.relationship?.value, match.dateOfBirth?.value].filter(Boolean).join(", ") || "no details"}, ref ${match.id}). ` +
-            `To change them pass ref ${match.id}. If this is a different person, pass new: true. If you are not sure, ask the person.`,
-        );
+        const settles = [...pending].some((path) => path.startsWith(`household.${match.id}.`));
+        if (nothingNew && !settles) return;
+        if (!nothingNew) {
+          throw new ProfileInputProblem(
+            `${m.name} is already on file (${[match.relationship?.value, match.dateOfBirth?.value].filter(Boolean).join(", ") || "no details"}, ref ${match.id}). ` +
+              `To change them pass ref ${match.id}. If this is a different person, pass new: true. If you are not sure, ask the person.`,
+          );
+        }
+        id = match.id;
       }
     }
     id ??= turnRef;
     const stored = current.household.find((e) => e.id === id);
     const who = stored?.name?.value ?? m.name ?? "household member";
     if (!stored) added.push({ id, ...(m.name ? { name: { value: m.name } as Leaf } : {}) });
-    set(`household.${id}.name`, m.name && !same(stored?.name?.value, m.name) ? m.name : undefined, who);
+    const namePath = `household.${id}.name`;
+    set(namePath, m.name && (!same(stored?.name?.value, m.name) || pending.has(namePath)) ? m.name : undefined, who);
     set(`household.${id}.relationship`, m.relationship, `${who}'s relationship`);
     set(`household.${id}.dateOfBirth`, m.dateOfBirth, `${who}'s date of birth`);
   });
@@ -227,12 +234,35 @@ const PERSON_FIELDS: [string, (p: Profile) => { value: string | null; leaf?: Lea
 
 const SUGGESTION_LABELS: Record<string, string> = { ...FIELD_LABELS, "person.address.line1": "street address", "person.address.line2": "apartment or unit", "person.address.city": "city", "person.address.state": "state", "person.address.zip": "zip code" };
 
-function suggestionLabel(s: Suggestion, profile: Profile): string {
+// Where a suggestion sits: the person's own fields, or one entry of a
+// collection named by what tells it apart (a member's name, a job, a
+// program), with its ref so the model can save the answer to that entry.
+function suggestionPlace(s: Suggestion, profile: Profile): { ref?: string; entry: string; entryName: string | null; field: string } {
   const fixed = SUGGESTION_LABELS[s.path];
-  if (fixed) return fixed;
-  const [collection, id, field] = s.path.split(".");
-  if (collection === "household") return `${profile.household.find((m) => m.id === id)?.name?.value ?? "household member"}'s ${field}`;
-  return `${collection} ${field}`;
+  if (fixed) return { entry: "you", entryName: null, field: fixed };
+  const [collection, ref, field] = s.path.split(".") as ["household" | "income" | "programs", string, string];
+  const name =
+    collection === "household"
+      ? profile.household.find((m) => m.id === ref)?.name?.value
+      : collection === "income"
+        ? (() => {
+            const inc = profile.income.find((e) => e.id === ref);
+            return inc?.source?.value ?? (inc ? incomeText(profile, inc, "the person") : undefined);
+          })()
+        : profile.programs.find((p) => p.id === ref)?.program?.value;
+  const entryName = name ?? ref;
+  return { ref, entry: `${collection}: ${entryName}`, entryName, field };
+}
+
+function suggestionText(s: Suggestion, profile: Profile): string {
+  const place = suggestionPlace(s, profile);
+  return `${place.entryName ? `${place.entryName} ` : ""}${place.field} ${String(s.value)} from ${FROM[s.source]}`;
+}
+
+// Only the person's own word confirms who lives with them.
+function confirmedByPerson(profile: Profile): boolean {
+  const leaf = profile.person.householdConfirmed;
+  return leaf?.value === true && leaf.source === "person";
 }
 
 function isEmpty(profile: Profile): boolean {
@@ -257,7 +287,7 @@ export function profileData(view: ProfileView): Record<string, unknown> {
       dateOfBirth: m.dateOfBirth?.value,
       from: from(m.name ?? m.relationship),
     })),
-    householdConfirmed: profile.person.householdConfirmed?.value === true,
+    householdConfirmed: confirmedByPerson(profile),
     income: profile.income.map((inc) => ({
       ref: inc.id,
       earner: !inc.memberId || inc.memberId.value === "self" ? "the person" : (profile.household.find((m) => m.id === inc.memberId?.value)?.name?.value ?? "a household member"),
@@ -274,7 +304,10 @@ export function profileData(view: ProfileView): Record<string, unknown> {
       status: p.status?.value,
       from: from(p.caseNumber ?? p.program),
     })),
-    waitingForThePersonToConfirm: suggestions.map((s) => ({ field: suggestionLabel(s, profile), value: s.value, from: FROM[s.source] })),
+    waitingForThePersonToConfirm: suggestions.map((s) => {
+      const { ref, entry, field } = suggestionPlace(s, profile);
+      return { path: s.path, ...(ref ? { ref } : {}), entry, field, value: s.value, from: FROM[s.source] };
+    }),
   };
 }
 
@@ -324,7 +357,7 @@ export function profileGuide(view: ProfileView): string {
   if (missing.length) lines.push(`Not on file yet: ${missing.join(", ")}.`);
   const others = profile.household.length;
   lines.push(
-    profile.person.householdConfirmed?.value === true
+    confirmedByPerson(profile)
       ? `Household size: ${1 + others} including the person (they confirmed who lives with them).`
       : `Household members on file besides the person: ${others}. The person has not confirmed who lives with them, so ask before using a household size, and save their answer with householdComplete.`,
   );
@@ -366,7 +399,7 @@ export function summarizeProfile(view: ProfileView): string {
     );
   }
   if (suggestions.length) {
-    sentences.push(`Not changed until you confirm: ${suggestions.map((s) => `${suggestionLabel(s, profile)} ${String(s.value)} from ${FROM[s.source]}`).join("; ")}`);
+    sentences.push(`Not changed until you confirm: ${suggestions.map((s) => suggestionText(s, profile)).join("; ")}`);
   }
   return `Here is what I have on you: ${sentences.join(". ")}.`;
 }
