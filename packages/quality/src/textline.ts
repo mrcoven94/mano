@@ -1,26 +1,22 @@
 // The real text line as an answer path: the production SparkResponder with
-// Mano's voice from @mano/persona, then the same send pipeline the channels
-// worker runs before a text leaves (apps/channels/src/runner.ts,
-// finalizeBubbles and answerBubbles): voice guard, link check against the
-// Cloudflare resolvers, bubble split and cap, and the crisis hold. The
-// pipeline is mirrored here because the worker keeps it private; it moves
-// to an import once packages/channels exports it.
+// Mano's voice from @mano/persona, then finalizeReply from @mano/channels,
+// the same function the worker runs on every reply before it is sent
+// (voice guard, link check against the Cloudflare resolvers, bubble split
+// and cap, and the crisis line first on a crisis turn). The worker's turn
+// logic around it (opt-out, the crisis decision, an empty reply with a
+// tapback, the heads-up check) is mirrored from apps/channels/src/runner.ts.
 
 import {
   isOptOut,
+  finalizeReply,
   LinkChecker,
-  MAX_BUBBLES,
-  MAX_BUBBLE_CHARS,
+  OPT_OUT_BUBBLE,
   ResponderFailed,
   SparkResponder,
-  splitBubbles,
   stripBlockedLinks,
   type HistoryMessage,
 } from "@mano/channels";
-import { CRISIS_LINE, SAFE_REPLY, crisisTurn, guardReply, holdCrisisLines, type GuardChange } from "@mano/persona";
-// The worker's fixed opt-out reply. apps/channels keeps it next to its other
-// fixed texts; read in place until packages/channels exports it.
-import { OPT_OUT_BUBBLE } from "../../../apps/channels/src/text.ts";
+import { REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, crisisTurn, guardReply, tapbackText, type GuardChange } from "@mano/persona";
 import { viaAiGateway } from "./models.ts";
 import type { AnswerPath, BenchAnswer } from "./paths.ts";
 import type { BenchCase } from "./suites/types.ts";
@@ -109,27 +105,19 @@ export class TextLine {
     }
     const totalMs = performance.now() - started;
 
-    const first = await stripBlockedLinks(guard(result.text), checker);
-    removed += first.removed;
-    const out: string[] = [];
-    for (const bubble of splitBubbles(first.text)) {
-      const rechecked = await stripBlockedLinks(bubble, checker);
-      removed += rechecked.removed;
-      if (rechecked.text.length <= MAX_BUBBLE_CHARS) out.push(rechecked.text);
-      else out.push(...splitBubbles(rechecked.text));
-    }
-    const capped = out.length <= MAX_BUBBLES ? out : splitBubbles(out.join(" "));
-    const voiced = capped.map(guard);
-    // On a crisis turn the fixed crisis line goes first, once: the model's
-    // own copy of it is taken out and the rest re-split and guarded.
-    const final = crisis
-      ? holdCrisisLines(splitBubbles(voiced.join(" ").split(CRISIS_LINE).join(" ")).map(guard).filter((t) => t !== SAFE_REPLY)).slice(0, MAX_BUBBLES)
-      : voiced;
+    // The bench has no message to react to, so a tapback-only reply takes
+    // the worker's text fallback, as it does when a tapback cannot be sent.
+    const tapback = allowedTapback(result.tapback ?? null, turnText, crisis);
+    let reply = result.text;
+    if (!reply.trim()) reply = crisis ? "" : tapback ? tapbackText(tapback) : result.tapback ? REFUSED_TAPBACK_TEXT : reply;
+    const final = await finalizeReply(reply, { modelIds, crisis, checker, crisisLine: crisisLineFor(turnText) });
+    removed += final.removed;
+    changes.push(...final.changes);
 
     return {
       route: headsUp === null ? "fast" : "deep",
       headsUp,
-      bubbles: final,
+      bubbles: final.bubbles,
       firstTextMs: headsUpAt === null ? totalMs : headsUpAt - started,
       totalMs,
       guardChanges: [...new Set(changes)],
