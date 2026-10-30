@@ -16,17 +16,23 @@ export const SAFETY_LINE = "If you're in danger or thinking about hurting yourse
 // many, a whole bottle) plus a substance, so "a bottle of water" or
 // "my meds every morning" does not count.
 // Self-harm, violence and explicit danger count anywhere, next to
-// housing or money words too. The one exception is "in danger of
-// losing", which is a benefits question.
+// housing or money words too.
+// Benefits, money and work words. "cut my food stamps" and "in danger of
+// losing my benefits" are benefits questions, not a crisis.
+const BENEFIT_NOUNS =
+  "food stamps|snap|ebt|benefits?|hours|shifts?|pay|paycheck|check|wages|salary|coverage|insurance|medicaid|rent|budget|bills?|phone|power|lights|water|gas|hair";
+const BENEFIT_WORDS = `${BENEFIT_NOUNS}|evicted|cut off|dropped|shut off|kicked out`;
+
 const SELF_HARM =
   /\b(?:suicid(?:e|al)|kill(?:ing)? myself|hang(?:ing)? myself|end (?:my life|it all)|(?:want|wanna) to die|wanna die|better off dead|(?:hurt|hurting|harm|harming|cut|cutting) myself|self harm|overdos\w*|(?:swallowed|took all|take all|downed|took (?:a|the) (?:whole|entire)|took too many|took a (?:handful|bunch))\b[^.!?]{0,30}\b(?:pills|meds|medications?|medicines?|tablets|painkillers)|(?:swallowed|took all|downed) (?:a |the )?(?:whole|entire) bottle|(?:don'?t|do not) want to (?:be here|live))\b/;
 const VIOLENCE =
   /\b(?:(?:hit|hits|hitting|beat|beats|beating|hurt|hurts|hurting|choked?|choking|kick(?:s|ed|ing)?|attack(?:s|ed|ing)?|abus(?:es|ed|ing)) (?:me|us|my (?:kids?|children|son|daughter|baby))|(?:being|been|was|got) (?:abused|hit|beaten|attacked|choked)|abusive|domestic (?:abuse|violence)|(?:threaten(?:s|ed)?|going|gonna|wants?|tried|trying) to kill (?:me|us|myself|him|her|them)|kill me)\b/;
-const DANGER = /\b(?:immediate danger|in danger(?! of (?:losing|being)\b)|not safe|unsafe|(?:don'?t|do not) feel safe)\b/;
-// "In danger of losing" and "in danger of being cut off, evicted or
-// dropped" are the most common benefits sentences, so neither check
-// reads them as danger. Explicit danger still counts.
-const BENEFITS_DANGER = /\bin danger of (?:losing|being)\b(?: [a-z']+){0,3}/g;
+const DANGER = new RegExp(`\\b(?:immediate danger|in danger(?! of (?:losing|being)(?: [a-z']+){0,2}? (?:${BENEFIT_WORDS})\\b)|not safe|unsafe|(?:don'?t|do not) feel safe)\\b`);
+// "In danger of losing" or "in danger of being" is a benefits question
+// only when a benefits word comes within the next 3 words ("in danger of
+// losing my SNAP", "in danger of being evicted"). Otherwise, as in "in
+// danger of being hurt", it counts as danger.
+const BENEFITS_DANGER = new RegExp(`\\bin danger of (?:losing|being)(?: [a-z']+){0,2}? (?:${BENEFIT_WORDS})\\b`, "g");
 
 // "cut", "cuts" and "cutting" count unless a benefits, money or work
 // word comes within the next 3 words ("they cut my food stamps",
@@ -35,8 +41,7 @@ const BENEFITS_DANGER = /\bin danger of (?:losing|being)\b(?: [a-z']+){0,3}/g;
 // Broad on purpose, with no other exclusions: used only where no model runs
 // (over a limit, out of budget, a failed call), so a match costs one
 // fixed text and silence is never the answer.
-const POSSIBLE_CRISIS =
-  /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut(?:s|ting)?(?!(?: [a-z']+){0,2} (?:food stamps|snap|ebt|benefits?|hours|shifts?|pay|paycheck|check|wages|salary|coverage|insurance|medicaid|rent|budget|bills?|phone|power|lights|water|gas|hair)\b)|slit\w*|wrists?|throw(?:ing)? myself|jump(?:ing)? off|kill myself|end it|end my life|(?:not|don'?t|do not) want to (?:live|be here)|better off dead)\b/;
+const POSSIBLE_CRISIS = new RegExp(String.raw`\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut(?:s|ting)?(?!(?: [a-z']+){0,2} (?:${BENEFIT_NOUNS})\b)|slit\w*|wrists?|throw(?:ing)? myself|jump(?:ing)? off|kill myself|end it|end my life|(?:not|don'?t|do not) want to (?:live|be here)|better off dead)\b`);
 
 function normalize(text: string): string {
   return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]/g, " ").replace(/\s+/g, " ")} `;

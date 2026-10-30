@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mightBeCrisis } from "../src/crisis.js";
+import { isCrisis, mightBeCrisis } from "../src/crisis.js";
 
 describe("cut my and cutting count only for a body part", () => {
   it("does not read a benefits or work cut as self-harm", () => {
@@ -45,5 +45,20 @@ describe("the benefits danger exclusion stays narrow", () => {
   it("still reads a crisis later in the same sentence", () => {
     expect(mightBeCrisis("we're in danger of being cut off and he hit me")).toBe(true);
     expect(mightBeCrisis("we're in danger of being cut off")).toBe(false);
+  });
+});
+
+describe("in danger counts unless a benefits word follows (PR 70 round 3)", () => {
+  it("reads danger to a person as a crisis", () => {
+    for (const text of ["I am in danger of being killed", "in danger of losing control, cutting again", "in danger of being hurt"]) {
+      expect(mightBeCrisis(text), text).toBe(true);
+      expect(isCrisis(text), text).toBe(true);
+    }
+  });
+
+  it("keeps danger to benefits a benefits question", () => {
+    for (const text of ["in danger of losing my benefits", "in danger of being evicted", "in danger of losing my SNAP", "we're in danger of being cut off", "in danger of being kicked out"]) {
+      expect(mightBeCrisis(text), text).toBe(false);
+    }
   });
 });
