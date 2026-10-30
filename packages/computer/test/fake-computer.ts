@@ -13,8 +13,6 @@ export class FakeComputer implements Computer {
   closes = 0;
   failOnAct = false;
 
-  constructor(private viewUrl: string | null = null) {}
-
   async screenshot(): Promise<Uint8Array> {
     this.screenshots += 1;
     return FAKE_PNG;
@@ -39,7 +37,7 @@ export class FakeComputer implements Computer {
   }
 
   liveViewUrl(): string | null {
-    return this.viewUrl;
+    return null;
   }
 
   async close(): Promise<void> {

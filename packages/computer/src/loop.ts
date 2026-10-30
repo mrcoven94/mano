@@ -22,10 +22,6 @@ export interface LoopOptions {
   maxSteps?: number;
   /** Extra instructions for this run, appended to the base rules. */
   instructions?: string;
-  /** Decide a safety check. Fail closed: unanswered checks stop the run. */
-  onSafetyCheck?: (check: SafetyCheck) => Promise<boolean>;
-  /** Called with the live-view URL when the model asks for credentials. Resolves when the person is done. */
-  onCredentialsNeeded?: (liveViewUrl: string | null) => Promise<void>;
   /** Progress callback after each model turn. Never blocks the run. */
   onTurn?: (turn: { step: number; call: ComputerAction[] } | { step: number; message: string }) => void;
 }
@@ -33,7 +29,8 @@ export interface LoopOptions {
 export type LoopOutcome =
   | { status: "done"; message: string; steps: number }
   | { status: "infeasible"; message: string; steps: number }
-  | { status: "safety_declined"; steps: number }
+  /** The model flagged its next actions. Nothing ran; the caller decides, never this loop. */
+  | { status: "safety_check"; checks: SafetyCheck[]; steps: number }
   | { status: "step_budget"; steps: number };
 
 function dataUrl(png: Uint8Array): string {
@@ -69,34 +66,20 @@ export async function runLoop(computer: Computer, model: ModelClient, task: stri
     const response = await model.createResponse({ model: options.model, instructions, tools: [{ type: "computer" }], input: [...history], store: false });
     const calls = response.output.filter(isComputerCall);
     if (calls.length === 0) {
-      options.onTurn?.({ step: step + 1, message: outputText(response.output) });
       const message = outputText(response.output);
-      if (/CREDENTIALS NEEDED/i.test(message) && options.onCredentialsNeeded) {
-        await options.onCredentialsNeeded(computer.liveViewUrl());
-        history.push({
-          role: "user",
-          content: [
-            { type: "input_text", text: "The person finished on the login page. Look at the fresh screenshot and continue." },
-            { type: "input_image", image_url: dataUrl(await computer.screenshot()) },
-          ],
-        });
-        continue;
-      }
-      return { status: /^INFEASIBLE:/im.test(message) ? "infeasible" : "done", message, steps: step + 1 };
+      options.onTurn?.({ step: step + 1, message });
+      // There is no live view to hand a login to, so a login ends the run.
+      const infeasible = /^INFEASIBLE:/im.test(message) || /CREDENTIALS NEEDED/i.test(message);
+      return { status: infeasible ? "infeasible" : "done", message, steps: step + 1 };
     }
     const call: ComputerCall = calls[0]!;
+    if (call.pending_safety_checks.length > 0) return { status: "safety_check", checks: call.pending_safety_checks, steps: step + 1 };
     options.onTurn?.({ step: step + 1, call: call.actions });
-    const approved: SafetyCheck[] = [];
-    for (const check of call.pending_safety_checks) {
-      const ok = options.onSafetyCheck ? await options.onSafetyCheck(check) : false;
-      if (!ok) return { status: "safety_declined", steps: step + 1 };
-      approved.push(check);
-    }
     await computer.act(call.actions);
     const output = {
       type: "computer_call_output",
       call_id: call.call_id,
-      acknowledged_safety_checks: approved,
+      acknowledged_safety_checks: [],
       output: { type: "computer_screenshot", image_url: dataUrl(await computer.screenshot()) },
     };
     history.push(call, output);

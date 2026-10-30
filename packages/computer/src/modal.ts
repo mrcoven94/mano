@@ -4,88 +4,88 @@ import type { Computer, ComputerOptions } from "./computer";
 export interface ModalComputerOptions extends ComputerOptions {
   /** Session service base URL, from the modal/ app deploy. */
   baseUrl: string;
-  /** Person the browser profile belongs to. Profiles live in a Modal volume. */
-  profile: string;
+  /** Engine's id for the person. The service derives the person's own profile volume from it. */
+  personId: string;
   /** Bearer token the session service requires (MANO_COMPUTER_TOKEN in its Modal secret). */
   token?: string;
+  /** Waits between delete attempts when closing. Defaults to 0.5, 1 and 2 seconds. */
+  retryDelaysMs?: number[];
   fetchImpl?: typeof fetch;
 }
 
-/**
- * Hosted desktop behind the session service in modal/. One Sandbox per run,
- * reusing the person's browser profile; the service stops it when idle.
- */
-interface SessionEndpoints {
+interface Session {
   id: string;
   controlUrl: string;
+  secret: string;
 }
 
+const DEFAULT_RETRY_DELAYS_MS = [500, 1000, 2000];
+
+/**
+ * Hosted desktop behind the session service in modal/. One Sandbox per run,
+ * on the person's own profile volume. Control calls carry the per-session
+ * secret the service returned; session calls carry the service token.
+ */
 export class ModalComputer implements Computer {
-  private sessionValue: SessionEndpoints | null = null;
-  private starting: Promise<SessionEndpoints> | null = null;
-  private viewUrl: string | null = null;
+  private starting: Promise<Session> | null = null;
   private baseUrl: string;
   private fetchImpl: typeof fetch;
   private closed = false;
 
   constructor(private options: ModalComputerOptions) {
+    if (!options.personId) throw new Error("ModalComputer needs the person's id");
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  private async session(): Promise<SessionEndpoints> {
+  private async session(): Promise<Session> {
     if (this.closed) throw new Error("computer is closed");
-    if (this.sessionValue) return this.sessionValue;
-    if (!this.starting) {
-      this.starting = this.post("/sessions", {
-        profile: this.options.profile,
-        width: this.options.width ?? 1280,
-        height: this.options.height ?? 800,
-      }).then((body) => {
-        const parsed = body as { id?: unknown; control_url?: unknown; live_view_url?: unknown };
-        if (typeof parsed.id !== "string" || typeof parsed.control_url !== "string") throw new Error("session service returned no session");
-        this.sessionValue = { id: parsed.id, controlUrl: parsed.control_url.replace(/\/$/, "") };
-        this.viewUrl = typeof parsed.live_view_url === "string" ? parsed.live_view_url : null;
-        return this.sessionValue;
-      });
+    this.starting ??= this.open();
+    const session = await this.starting;
+    if (this.closed) throw new Error("computer is closed");
+    return session;
+  }
+
+  private async open(): Promise<Session> {
+    const res = await this.fetchImpl(`${this.baseUrl}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...this.serviceHeaders() },
+      body: JSON.stringify({ person_id: this.options.personId, width: this.options.width ?? 1280, height: this.options.height ?? 800 }),
+    });
+    if (!res.ok) throw new Error(`session service /sessions failed with status ${res.status}`);
+    const body = (await res.json()) as { id?: unknown; control_url?: unknown; session_secret?: unknown };
+    if (typeof body.id !== "string" || typeof body.control_url !== "string" || typeof body.session_secret !== "string" || !body.session_secret) {
+      throw new Error("session service returned no session");
     }
-    return this.starting;
+    return { id: body.id, controlUrl: body.control_url.replace(/\/$/, ""), secret: body.session_secret };
+  }
+
+  private async control(path: string, body?: unknown): Promise<Response> {
+    const { controlUrl, secret } = await this.session();
+    const headers: Record<string, string> = { authorization: `Bearer ${secret}` };
+    if (body === undefined) return this.fetchImpl(`${controlUrl}${path}`, { headers });
+    headers["content-type"] = "application/json";
+    return this.fetchImpl(`${controlUrl}${path}`, { method: "POST", headers, body: JSON.stringify(body) });
   }
 
   async screenshot(): Promise<Uint8Array> {
-    const { controlUrl } = await this.session();
-    const res = await this.fetchImpl(`${controlUrl}/screenshot`);
+    const res = await this.control("/screenshot");
     if (!res.ok) throw new Error(`screenshot failed with status ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());
   }
 
   async act(actions: ComputerAction[]): Promise<void> {
-    const { controlUrl } = await this.session();
-    const res = await this.fetchImpl(`${controlUrl}/act`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ actions }),
-    });
+    const res = await this.control("/act", { actions });
     if (!res.ok) throw new Error(`actions failed with status ${res.status}`);
   }
 
   async goto(url: string): Promise<void> {
-    const { controlUrl } = await this.session();
-    const res = await this.fetchImpl(`${controlUrl}/goto`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url }),
-    });
+    const res = await this.control("/goto", { url });
     if (!res.ok) throw new Error(`goto failed with status ${res.status}`);
   }
 
   async stageFile(name: string, data: Uint8Array): Promise<string> {
-    const { controlUrl } = await this.session();
-    const res = await this.fetchImpl(`${controlUrl}/stage`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, data_base64: Buffer.from(data).toString("base64") }),
-    });
+    const res = await this.control("/stage", { name, data_base64: Buffer.from(data).toString("base64") });
     if (!res.ok) throw new Error(`stage failed with status ${res.status}`);
     const body = (await res.json()) as { path?: unknown };
     if (typeof body.path !== "string") throw new Error("session service returned no path");
@@ -97,31 +97,28 @@ export class ModalComputer implements Computer {
   }
 
   liveViewUrl(): string | null {
-    return this.viewUrl;
+    return null;
   }
 
+  /** Deletes the session, retrying until the service confirms the desktop stopped. Throws if it never does. */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    const starting = this.starting;
     this.starting = null;
-    if (this.sessionValue) {
-      const id = this.sessionValue.id;
-      this.sessionValue = null;
-      await this.fetchImpl(`${this.baseUrl}/sessions/${id}`, { method: "DELETE", headers: this.serviceHeaders() }).catch(() => undefined);
+    const session = starting ? await starting.catch(() => null) : null;
+    if (!session) return;
+    const delays = this.options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+    for (let attempt = 0; ; attempt++) {
+      const res = await this.fetchImpl(`${this.baseUrl}/sessions/${session.id}`, { method: "DELETE", headers: this.serviceHeaders() }).catch(() => null);
+      if (res && (res.ok || res.status === 404)) return;
+      if (res && res.status < 500 && res.status !== 429) throw new Error(`session ${session.id} was not deleted: status ${res.status}`);
+      if (attempt >= delays.length) throw new Error(`session ${session.id} was not confirmed stopped after ${attempt + 1} attempts`);
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
     }
   }
 
   private serviceHeaders(): Record<string, string> {
     return this.options.token ? { authorization: `Bearer ${this.options.token}` } : {};
-  }
-
-  private async post(path: string, body: unknown): Promise<unknown> {
-    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...this.serviceHeaders() },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`session service ${path} failed with status ${res.status}`);
-    return (await res.json()) as unknown;
   }
 }
