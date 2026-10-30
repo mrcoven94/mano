@@ -240,6 +240,10 @@ export const WA: StateCatalog = {
         {
           "field": "incomeLimit.eachAdditional",
           "reason": "The PY27 guidelines chart lists sizes 1 to 12 with no per-person add-on amount stated, so eachAdditional is left null."
+        },
+        {
+          "field": "phone",
+          "reason": "This is the Commerce LIHEAP program office contact, not an application line. Commerce does not take applications; each county provider has its own number, found only through the map tool."
         }
       ]
     }

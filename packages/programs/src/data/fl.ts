@@ -161,7 +161,7 @@ export const FL: StateCatalog = {
       "gaps": [
         {
           "field": "incomeLimit (adults without children)",
-          "reason": "No official page fetched states a limit for adults 19 to 64 without children; DCF's Medicaid page and Family-Related Medicaid fact sheet list no such coverage group. I did not find an official page that states in words that Florida did not expand Medicaid, so that is not recorded as a fact."
+          "reason": "No official page fetched states a limit for adults 19 to 64 without children; DCF's Medicaid page and Family-Related Medicaid fact sheet list no such coverage group. No official page fetched states in words that Florida did not expand Medicaid, so that is not recorded as a fact."
         }
       ]
     },
