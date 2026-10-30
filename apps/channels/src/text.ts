@@ -16,9 +16,3 @@ export const BUSY_BUBBLE = `I'm busy right now, try me again later. ${SAFETY_LIN
 export { OPT_OUT_BUBBLE } from "@mano/channels";
 
 export const APPROVAL_RECORDED_BUBBLE = "Recorded. I will follow up when it is decided.";
-
-export function attachmentAck(count: number): string {
-  return count === 1
-    ? "Got your photo. I will read it and follow up."
-    : `Got your ${count} photos. I will read them and follow up.`;
-}
