@@ -36,7 +36,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { EYES, REFUSED_TAPBACK_TEXT, allowedReactions, allowedTapback, crisisLineFor, crisisTurn, eyesAllowed, guardReply, needsAnswer, reactionOnlyAllowed, tapbackText } from "@mano/persona";
+import { EYES, allowedReactions, allowedTapback, crisisLineFor, crisisTurn, eyesAllowed, guardReply, needsAnswer, reactionOnlyAllowed, refusedReactionText, tapbackText } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -1064,7 +1064,7 @@ export class ConversationRunner {
           else if (!hasText && asked) reply = NEEDS_ANSWER_BUBBLE;
           else if (!hasText && routable && reactionOnlyAllowed(targetText)) reply = null;
           else if (!hasText && tapback) reply = tapbackText(tapback);
-          else if (!hasText && answer.tapback) reply = allowed[0] ? tapbackText(allowed[0]) : REFUSED_TAPBACK_TEXT;
+          else if (!hasText && answer.tapback) reply = allowed[0] ? tapbackText(allowed[0]) : refusedReactionText(targetText);
           const answered = reply === null ? [] : await this.finalize(turn, reply, crisis, turnText);
           const replyTo = inlineReplyTarget(items);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };

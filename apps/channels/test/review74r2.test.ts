@@ -2,7 +2,7 @@
 // runner test that failed before the simplification.
 import { describe, expect, it } from "vitest";
 import type { Responder, RespondHooks, TurnInput } from "@mano/channels";
-import { EYES } from "@mano/persona";
+import { EYES, NEUTRAL_REACTION_TEXT as PRAISE_FALLBACK, REFUSED_TAPBACK_TEXT } from "@mano/persona";
 import { NEEDS_ANSWER_BUBBLE } from "../src/text.js";
 import { inboundEvent, makeHarness, runTurnAfterBatch, TEST_CHAT, type Harness } from "./helpers.js";
 
@@ -148,5 +148,20 @@ describe("Sol round 2, repro 6: a question without a question mark always gets w
     const h = introduced(makeHarness({ responder: reply("glad it helped", "🎉") }));
     await say(h, "evt_1", "thank you");
     expect(h.channel.reactions).toEqual([]);
+  });
+});
+
+describe("live probe r-best: a refused reaction alone gets fitting words", () => {
+  it("answers praise the model met with a heart alone in neutral words, not the bad-news line", async () => {
+    const h = introduced(makeHarness({ responder: reply("", "love") }));
+    const sent = await say(h, "evt_1", "you're the best, seriously");
+    expect(h.channel.reactions).toEqual([]);
+    expect(sent).toEqual([PRAISE_FALLBACK]);
+  });
+
+  it("still answers bad news met with a heart alone with the bad-news line", async () => {
+    const h = introduced(makeHarness({ responder: reply("", "love") }));
+    const sent = await say(h, "evt_1", "they denied my medicaid");
+    expect(sent).toEqual([REFUSED_TAPBACK_TEXT]);
   });
 });

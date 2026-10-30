@@ -134,9 +134,14 @@ export function tapbackText(tapback: Tapback): string {
   return TAPBACK_TEXT[tapback];
 }
 
-// Sent when the model replied with only a tapback the rules refused
-// (a heart on bad news), so the person still gets an answer.
+// Sent when the model replied with only a reaction the rules refused, so
+// the person still gets words: one line for bad news, one for anything else.
 export const REFUSED_TAPBACK_TEXT = "that's rough. tell me what happened?";
+export const NEUTRAL_REACTION_TEXT = "ha, glad I could help. what's next?";
+
+export function refusedReactionText(targetText: string): string {
+  return VETO.test(targetText) ? REFUSED_TAPBACK_TEXT : NEUTRAL_REACTION_TEXT;
+}
 
 // Sent when the person asked something and the reply came back as a
 // reaction alone, even after the responder asked again for words.
