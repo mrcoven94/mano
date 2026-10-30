@@ -40,6 +40,7 @@ describe("answerReading", () => {
         kind: "renewal",
         dueDate: "2026-11-20",
         program: "Medi-Cal",
+        federalProgram: "Medicaid",
         sentence: "Your renewal is due November 20, 2026.",
       },
     ]);
@@ -101,5 +102,26 @@ describe("answerReading wording", () => {
     ]);
     expect(answer.text).toContain("This is a letter from Sacramento County Medi-Cal Office: Medi-Cal Renewal.");
     expect(answer.text).toContain("It asks for: signed renewal form and proof of income.");
+  });
+});
+
+describe("held deadline fields", () => {
+  const withSentence = (sentence: string, program: string | null) =>
+    pageJson({
+      full_text: `County Office\n${program ?? ""}\nNotice date November 2, 2026\n\n${sentence}`,
+      program: program ? { text: program, box_2d: [80, 60, 100, 200] } : { text: null, box_2d: null },
+      subject: { text: null, box_2d: null },
+      asked: [],
+      consequence: { text: null, box_2d: null },
+      reference_no: { text: null, box_2d: null },
+      phones: [],
+      deadlines: [{ text: sentence, box_2d: [200, 60, 220, 300] }],
+    });
+
+  it("takes the kind only from what the sentence says, and names the federal program", async () => {
+    const proof = await answerFor([withSentence("Submit proof of income by November 20, 2026.", "CalFresh")]);
+    expect(proof.deadlines).toEqual([expect.objectContaining({ kind: "documents", program: "CalFresh", federalProgram: "SNAP", title: "CalFresh documents" })]);
+    const bare = await answerFor([withSentence("Respond by November 20, 2026.", "County Help Fund")]);
+    expect(bare.deadlines).toEqual([expect.objectContaining({ kind: null, federalProgram: null, title: "County Help Fund" })]);
   });
 });

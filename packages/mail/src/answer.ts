@@ -10,7 +10,7 @@ import { findInstructions } from "./safety.js";
 import type { Letter, MailReading, Question } from "./types.js";
 
 // What a held deadline is for, when the sentence says.
-export type DeadlineKind = "renewal" | "recertification" | "interview" | "documents due" | "payment" | "hearing";
+export type DeadlineKind = "renewal" | "recertification" | "interview" | "hearing" | "appeal" | "payment" | "documents";
 
 // A deadline the gate published: Mano holds it without asking.
 export interface HeldDeadline {
@@ -21,7 +21,10 @@ export interface HeldDeadline {
   title: string;
   kind: DeadlineKind | null;
   dueDate: string;
+  // The program as the letter names it, and its federal name when Mano
+  // knows it ("Medi-Cal" is Medicaid).
   program: string | null;
+  federalProgram: string | null;
   // The letter's sentence, verbatim.
   sentence: string;
 }
@@ -99,15 +102,32 @@ function deadlineLine(question: Question | undefined): { text: string; held: boo
   return null;
 }
 
+// Only what the published sentence says; no kind when it says none.
 function kindOf(sentence: string, obligation: string): DeadlineKind | null {
   const t = sentence.toLowerCase();
   if (/\brecertif/.test(t)) return "recertification";
   if (/\binterview\b/.test(t)) return "interview";
   if (/\bhearing\b/.test(t)) return "hearing";
-  if (obligation === "renew") return "renewal";
+  if (/\bappeal\b/.test(t)) return "appeal";
+  if (obligation === "renew" && /\b(renew|renewal)\b/.test(t)) return "renewal";
   if (obligation === "pay") return "payment";
-  if (obligation === "respond" && /\b(send|submit|return|provide|bring|mail|proofs?|documents?|forms?|pay stubs?)\b/.test(t)) return "documents due";
+  if (obligation === "respond" && /\b(proofs?|documents?|forms?|pay stubs?|paperwork|records?|statements?|receipts?)\b/.test(t)) return "documents";
   return null;
+}
+
+// State names for federal programs, and the federal names themselves.
+const FEDERAL: [RegExp, string][] = [
+  [/^(snap|calfresh|food stamps|basic food|food assistance)\b/i, "SNAP"],
+  [/^(medicaid|medi-cal|masshealth|apple health|tenncare|soonercare|badgercare)\b/i, "Medicaid"],
+  [/^(tanf|calworks|cash assistance)\b/i, "TANF"],
+  [/^(wic)\b/i, "WIC"],
+  [/^(ssi|supplemental security income)\b/i, "SSI"],
+  [/^(liheap)\b/i, "LIHEAP"],
+  [/^(housing choice voucher|section 8)\b/i, "Housing Choice Voucher"],
+];
+function federalOf(program: string | null): string | null {
+  if (!program) return null;
+  return FEDERAL.find(([re]) => re.test(program.trim()))?.[1] ?? null;
 }
 
 function titleOf(letter: Letter, kind: DeadlineKind | null): string {
@@ -133,6 +153,7 @@ function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; 
           kind: kindOf(proposal.quote, proposal.obligation),
           dueDate: proposal.dueDate,
           program: letter.fields.program ? bare(letter.fields.program.value) : null,
+          federalProgram: federalOf(letter.fields.program ? bare(letter.fields.program.value) : null),
           sentence: proposal.quote,
         }
       : null;

@@ -358,7 +358,7 @@ export interface DeadlineInput {
   dueDate: string;
   program?: string;
   kind?: string;
-  source: { kind: "letter"; documentId: string; sentence: string };
+  source: { kind: "letter"; documentId: string; sentence: string; receivedAt?: string };
   idempotencyKey: string;
 }
 

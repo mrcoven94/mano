@@ -349,7 +349,7 @@ async function runTurn(
   // through Channels' finalize when the turn is a crisis.
   let letter: { text: string; context: string } | null = null;
   if (body.attachmentCount > 0) {
-    letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), deps.readTimeoutMs);
+    letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), turn.firstReceivedAt, deps.readTimeoutMs);
     if (body.texts.length === 0) return reply(letter.text);
     context.push(letter.context);
   }

@@ -59,7 +59,9 @@ const spoken = (iso: string): string => {
   return `${MONTHS[m! - 1]} ${d}, ${y}`;
 };
 
-async function hold(engine: PersonEngine, deadlines: HeldDeadline[]): Promise<string[]> {
+// receivedAt: when the photo arrived (Channels' receive time for the
+// turn), so a nudge can name the letter by the day it was sent.
+async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt: string): Promise<string[]> {
   const lines: string[] = [];
   for (const d of deadlines) {
     let outcome: "saved" | "unavailable" | "failed";
@@ -67,9 +69,9 @@ async function hold(engine: PersonEngine, deadlines: HeldDeadline[]): Promise<st
       outcome = await engine.saveDeadline({
         title: d.title,
         dueDate: d.dueDate,
-        ...(d.program ? { program: d.program } : {}),
+        ...(d.federalProgram ? { program: d.federalProgram } : {}),
         ...(d.kind ? { kind: d.kind } : {}),
-        source: { kind: "letter", documentId: d.file, sentence: d.sentence },
+        source: { kind: "letter", documentId: d.file, sentence: d.sentence, receivedAt },
         idempotencyKey: deadlineKey(d),
       });
     } catch (err) {
@@ -103,6 +105,7 @@ export async function readTextedPhotos(
   engine: PersonEngine,
   photos: TextedPhoto[],
   model: ModelClient,
+  receivedAt: string,
   timeoutMs = READ_TIMEOUT_MS,
 ): Promise<LetterReply> {
   if (photos.length === 0) return { text: UNSAVED, context: forModel(UNSAVED, false) };
@@ -124,7 +127,7 @@ export async function readTextedPhotos(
     if (!reading) throw new Error("Reading timed out.");
     const answer = answerReading(reading);
     read = answer.outcome === "read";
-    text = [answer.text, ...(await hold(engine, answer.deadlines))].join(" ");
+    text = [answer.text, ...(await hold(engine, answer.deadlines, receivedAt))].join(" ");
     if (read) {
       await rememberFact(engine, `From a letter photo: ${text}`).catch((err: unknown) =>
         console.warn(JSON.stringify({ type: "mano_letters_remember_failed", status: err instanceof EngineError ? err.status : null })),

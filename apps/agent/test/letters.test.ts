@@ -93,11 +93,14 @@ describe("a texted letter", () => {
       title: "Medi-Cal renewal",
       kind: "renewal",
       dueDate: "2026-11-20",
-      program: "Medi-Cal",
+      program: "Medicaid",
       source: { kind: "letter", documentId: DOC, sentence: "Your renewal is due November 20, 2026." },
       generation: 0,
     });
     expect(String(engine.deadlineCalls[0]!.body.idempotencyKey)).toMatch(/^[0-9a-f]{40}$/);
+    // When the photo arrived: the turn's receive time from Channels.
+    const source = engine.deadlineCalls[0]!.body.source as { receivedAt?: string };
+    expect(Date.parse(source.receivedAt ?? "")).toBeGreaterThan(Date.now() - 60_000);
     // A photo with no words is answered from the reading alone, and Mano
     // remembers what it said for the next turn.
     expect(calls).toHaveLength(0);
