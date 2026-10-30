@@ -3,7 +3,7 @@
 // record the run with its history. With --upload and R2 credentials the run
 // lands in R2 (mano-quality for aggregates, mano-quality-private for per-case
 // results); otherwise it stays in --out.
-// Usage: node --import ./src/register.ts src/bin/nightly.ts [--out runs-staging] [--date 2026-10-29] [--branch main] [--upload]
+// Usage: node --import ./src/register.ts src/bin/nightly.ts [--out runs-staging] [--date 2026-10-29] [--ref refs/heads/main] [--upload]
 // Exits 1, after the run is recorded, when something regressed against the
 // previous baseline: a new safety failure or a judge or hard-check drop.
 
@@ -37,13 +37,13 @@ const startedAt = new Date().toISOString();
 const root = arg("--out") ?? "runs-staging";
 const day = arg("--date") ?? startedAt.slice(0, 10);
 const upload = process.argv.includes("--upload");
-// Only a run on main may write main's latest, history and baseline; any
-// other branch writes under branches/<name>/ (see writeNightlyStaging).
-const branch = arg("--branch") ?? "local";
+// Only a run on exactly refs/heads/main may write main's latest, history and
+// baseline; any other ref writes under branches/<name>/ (writeNightlyStaging).
+const ref = arg("--ref") ?? "local";
 const strict = process.env.QUALITY_GATE_STRICT === "1";
 const creds = r2CredsFromEnv(process.env);
 if (upload && !creds) throw new Error("--upload needs R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_ACCOUNT_ID or R2_ENDPOINT");
-const prefix = branchPrefix(branch);
+const prefix = branchPrefix(ref);
 
 const prior: HistoryRow[] = upload && creds
   ? ((await readPublic<HistoryRow[]>(creds, `${prefix}history.json`)) ?? [])
@@ -70,7 +70,7 @@ full.mail = mail;
 if (!mail.live) full.standins = [...(full.standins ?? []), `mail deadlines: ${mail.detail}`];
 if (!guardian.ran) full.standins = [...(full.standins ?? []), `guardian: ${guardian.detail}`];
 
-const staging = writeNightlyStaging(root, full, bench.results, prior, { branch });
+const staging = writeNightlyStaging(root, full, bench.results, prior, { ref });
 for (const s of Object.values(full.suites)) {
   const t = s.traits;
   console.log(

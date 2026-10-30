@@ -100,7 +100,9 @@ export class TextLine {
         },
       );
     } catch (err) {
-      if (err instanceof ResponderFailed) throw new TurnFailed(err.reason, err.attempts);
+      // A heads-up already went out before the call failed; it was sent, so
+      // it is still checked.
+      if (err instanceof ResponderFailed) throw new TurnFailed(err.reason, err.attempts, headsUp === null ? [] : [headsUp]);
       throw err;
     }
     const totalMs = performance.now() - started;
@@ -134,11 +136,14 @@ export class TextLine {
 export class TurnFailed extends Error {
   readonly reason: string;
   readonly attempts: number;
-  constructor(reason: string, attempts: number) {
+  // Texts the person was already sent before the failure.
+  readonly sent: string[];
+  constructor(reason: string, attempts: number, sent: string[] = []) {
     super(`text line failed: ${reason}`);
     this.name = "TurnFailed";
     this.reason = reason;
     this.attempts = attempts;
+    this.sent = sent;
   }
 }
 
@@ -148,7 +153,14 @@ export async function converse(line: TextLine, turns: string[], attachmentCount 
   const history: HistoryMessage[] = [];
   const runs: TurnRun[] = [];
   for (const [i, text] of turns.entries()) {
-    const run = await line.turn([text], [...history], i === turns.length - 1 ? attachmentCount : 0);
+    let run: TurnRun;
+    try {
+      run = await line.turn([text], [...history], i === turns.length - 1 ? attachmentCount : 0);
+    } catch (err) {
+      if (!(err instanceof TurnFailed)) throw err;
+      const before = runs.flatMap((r) => [...(r.headsUp ? [r.headsUp] : []), ...r.bubbles]);
+      throw new TurnFailed(err.reason, err.attempts, [...before, ...err.sent]);
+    }
     runs.push(run);
     history.push({ role: "person", text });
     history.push({ role: "mano", text: run.bubbles.join(" ") });
@@ -183,10 +195,13 @@ export class TextLinePath implements AnswerPath {
 
   async answer(c: BenchCase): Promise<BenchAnswer> {
     let runs: TurnRun[];
+    // Everything a failed try sent stays in the record and is checked.
+    let sentBeforeRetry: string[] = [];
     try {
       runs = await converse(this.line, c.input.turns, c.input.images?.length ?? 0);
     } catch (err) {
       if (!(err instanceof TurnFailed)) throw err;
+      sentBeforeRetry = err.sent;
       // The responder already retried within a second; a burst of rate
       // limits outlasts that, so wait before the last try.
       await new Promise((resolve) => setTimeout(resolve, this.retryDelayMs));
@@ -203,7 +218,7 @@ export class TextLinePath implements AnswerPath {
       firstTextMs: Math.round(last.firstTextMs),
       route: last.route,
       guardChanges: [...new Set(runs.flatMap((r) => r.guardChanges))],
-      earlier: runs.flatMap((r, i) => [...(r.headsUp ? [r.headsUp] : []), ...(i < runs.length - 1 ? r.bubbles : [])]),
+      earlier: [...sentBeforeRetry, ...runs.flatMap((r, i) => [...(r.headsUp ? [r.headsUp] : []), ...(i < runs.length - 1 ? r.bubbles : [])])],
       inputTokens: Math.round(billedInput / CHARS_PER_TOKEN),
       outputTokens: Math.round(output / CHARS_PER_TOKEN),
     };

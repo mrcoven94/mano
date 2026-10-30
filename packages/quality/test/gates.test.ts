@@ -157,7 +157,7 @@ test("every nightly run is recorded; only eligible runs become the baseline", as
   const { full, results } = await smokeRun(false);
   const dir = mkdtempSync(join(tmpdir(), "quality-staging-"));
 
-  const first = writeNightlyStaging(join(dir, "n"), { ...full, runId: "2026-10-28" }, results, [], { branch: "main" });
+  const first = writeNightlyStaging(join(dir, "n"), { ...full, runId: "2026-10-28" }, results, [], { ref: "refs/heads/main" });
   assert.equal(first.promoted, false);
   assert.ok(existsSync(join(dir, "n", "public", "latest.json")), "the page always sees the latest run");
   assert.equal(existsSync(join(dir, "n", "public", "baseline.json")), false, "an ineligible run never gates anyone");
@@ -165,13 +165,13 @@ test("every nightly run is recorded; only eligible runs become the baseline", as
   assert.equal(existsSync(join(dir, "n", "public", "cases.json")), false);
 
   const prior = readHistory(join(dir, "n", "public", "history.json"));
-  const second = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, prior, { branch: "main" });
+  const second = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, prior, { ref: "refs/heads/main" });
   assert.equal(second.promoted, true);
   const baseline = JSON.parse(readFileSync(join(dir, "n", "public", "baseline.json"), "utf8")) as RunReport;
   assert.equal(baseline.runId, "2026-10-29");
   assert.equal(Object.keys(baseline.fingerprints).length, 28);
 
-  const rerun = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, readHistory(join(dir, "n", "public", "history.json")), { branch: "main" });
+  const rerun = writeNightlyStaging(join(dir, "n"), { ...eligible(full), runId: "2026-10-29" }, results, readHistory(join(dir, "n", "public", "history.json")), { ref: "refs/heads/main" });
   assert.ok(rerun.promoted);
   const history = readHistory(join(dir, "n", "public", "history.json"));
   assert.deepEqual(history.map((h) => h.runId), ["2026-10-28", "2026-10-29"], "a rerun replaces its own row");

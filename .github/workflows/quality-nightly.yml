@@ -70,4 +70,4 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          node --import ./src/register.ts src/bin/nightly.ts --out ../../runs-staging --branch "$GITHUB_REF_NAME" --upload
+          node --import ./src/register.ts src/bin/nightly.ts --out ../../runs-staging --ref "$GITHUB_REF" --upload

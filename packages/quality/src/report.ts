@@ -377,14 +377,17 @@ export interface NightlyStaging {
 }
 
 export interface StagingOptions {
-  // The branch the run checked out. Only "main" writes the shared latest,
-  // history and baseline; any other branch writes under branches/<name>/
-  // and never touches them.
-  branch: string;
+  // The full git ref the run checked out (GITHUB_REF). Only exactly
+  // refs/heads/main writes the shared latest, history and baseline, so a tag
+  // or a branch named main cannot; any other ref writes under
+  // branches/<name>/ and never touches them.
+  ref: string;
 }
 
-export function branchPrefix(branch: string): string {
-  return branch === "main" ? "" : `branches/${branch.replace(/[^A-Za-z0-9._-]/g, "-")}/`;
+export const MAIN_REF = "refs/heads/main";
+
+export function branchPrefix(ref: string): string {
+  return ref === MAIN_REF ? "" : `branches/${ref.replace(/^refs\/heads\//, "").replace(/[^A-Za-z0-9._-]/g, "-")}/`;
 }
 
 // Stages a nightly run for upload. public/ (bucket mano-quality) gets
@@ -392,15 +395,15 @@ export function branchPrefix(branch: string): string {
 // 120) and, for an eligible run on main, baseline.json, which pull requests
 // are gated against and which holds live cases only. private/ (bucket
 // mano-quality-private) gets the per-case results.
-export function writeNightlyStaging(root: string, report: RunReport, results: CaseResult[], priorHistory: HistoryRow[] = [], opts: StagingOptions = { branch: "local" }): NightlyStaging {
-  const prefix = branchPrefix(opts.branch);
+export function writeNightlyStaging(root: string, report: RunReport, results: CaseResult[], priorHistory: HistoryRow[] = [], opts: StagingOptions = { ref: "local" }): NightlyStaging {
+  const prefix = branchPrefix(opts.ref);
   const publicDir = join(root, "public", prefix);
   const privateRunDir = join(root, "private", prefix, "runs", report.runId);
   mkdirSync(publicDir, { recursive: true });
   writeRun(privateRunDir, report, results);
   const pub = publicReport(report);
   writeFileSync(join(publicDir, "latest.json"), `${JSON.stringify(pub, null, 2)}\n`);
-  const promoted = opts.branch === "main" && report.eligibility.eligible;
+  const promoted = opts.ref === MAIN_REF && report.eligibility.eligible;
   if (promoted) {
     const liveOnly = Object.fromEntries(Object.entries(pub.fingerprints).filter(([, f]) => f.live === true));
     writeFileSync(join(publicDir, "baseline.json"), `${JSON.stringify({ ...pub, fingerprints: liveOnly }, null, 2)}\n`);

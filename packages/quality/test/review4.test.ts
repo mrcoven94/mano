@@ -75,13 +75,13 @@ test("a probe that failed to run fails the run and blocks eligibility", async ()
 test("a branch run writes under its own prefix and never touches the baseline", () => {
   const root = mkdtempSync(join(tmpdir(), "quality-branch-"));
   const report = run(fps(3), { runId: "2026-10-30" });
-  const staged = writeNightlyStaging(root, report, [], [], { branch: "lap-567-quality" });
+  const staged = writeNightlyStaging(root, report, [], [], { ref: "refs/heads/lap-567-quality" });
   assert.equal(staged.promoted, false);
   assert.equal(existsSync(join(root, "public", "baseline.json")), false);
   assert.equal(existsSync(join(root, "public", "latest.json")), false, "a branch must not replace main's latest");
   assert.ok(existsSync(join(root, "public", "branches", "lap-567-quality", "latest.json")));
   assert.ok(existsSync(join(root, "private", "branches", "lap-567-quality", "runs", "2026-10-30", "cases.json")));
-  const main = writeNightlyStaging(join(root, "m"), report, [], [], { branch: "main" });
+  const main = writeNightlyStaging(join(root, "m"), report, [], [], { ref: "refs/heads/main" });
   assert.equal(main.promoted, true);
   assert.ok(existsSync(join(root, "m", "public", "baseline.json")));
 });
@@ -151,10 +151,38 @@ test("the public report drops judge reasons, check details and reader output", (
 test("a promoted baseline holds live cases only", () => {
   const root = mkdtempSync(join(tmpdir(), "quality-live-only-"));
   const fp = { ...fps(2), "letters-01": { suite: "letters", version: 1, live: false, hardPass: true, judgeMean: 5 } };
-  writeNightlyStaging(root, run(fp), [], [], { branch: "main" });
+  writeNightlyStaging(root, run(fp), [], [], { ref: "refs/heads/main" });
   const baseline = JSON.parse(readFileSync(join(root, "public", "baseline.json"), "utf8")) as RunReport;
   assert.equal(baseline.fingerprints["letters-01"], undefined);
   assert.ok(baseline.fingerprints["c-0"]);
 });
 
 void ({} as CaseResult);
+
+// Review 4, round 2 (Sol, 719649d).
+test("a heads-up sent before a failed attempt is still checked", async () => {
+  // The first try sends a promise as its heads-up, then its deep call fails
+  // with a 400; the retry answers harmlessly on the fast path.
+  let fastCalls = 0;
+  const fetchFn = modelFetch((input) => {
+    if (input.at(-1)!.role === "assistant") return new Response("{}", { status: 400 });
+    fastCalls += 1;
+    return fastCalls === 1 ? "DEEP: You are approved, guaranteed." : "Happy to walk you through renewals.";
+  });
+  const answer = await new TextLinePath(new TextLine({ apiKey: "k", model: "muse-spark-1.3-contributor", fetchFn }), 0).answer(caseById("chat-ca-01"));
+  const checks = await runHardChecks(caseById("chat-ca-01"), answer, new LocalDns(), { knowsCatalog: false });
+  assert.equal(checks.find((c) => c.id === "no-promise")!.pass, false, `sent before the retry: ${JSON.stringify(answer.earlier)}`);
+});
+
+test("only refs/heads/main promotes; a tag named main does not", () => {
+  const root = mkdtempSync(join(tmpdir(), "quality-ref-"));
+  const report = run(fps(2), { runId: "2026-10-30" });
+  const tag = writeNightlyStaging(join(root, "t"), report, [], [], { ref: "refs/tags/main" });
+  assert.equal(tag.promoted, false);
+  assert.equal(existsSync(join(root, "t", "public", "baseline.json")), false);
+  assert.equal(existsSync(join(root, "t", "public", "latest.json")), false);
+  const bare = writeNightlyStaging(join(root, "b"), report, [], [], { ref: "main" });
+  assert.equal(bare.promoted, false, "a bare name is not a ref");
+  const main = writeNightlyStaging(join(root, "m"), report, [], [], { ref: "refs/heads/main" });
+  assert.equal(main.promoted, true);
+});
