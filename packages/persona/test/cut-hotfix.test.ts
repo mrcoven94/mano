@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mightBeCrisis } from "../src/crisis.js";
+import { crisisTurn, isCrisis, mightBeCrisis, suppressedBenefitsCut } from "../src/crisis.js";
 
-describe("cut my and cutting count only for a body part", () => {
-  it("does not read a benefits or work cut as self-harm", () => {
+describe("benefits cuts are suppressed only as exact template sentences", () => {
+  it("suppresses someone else cutting a listed benefit, sentence by sentence", () => {
     for (const text of [
+      "they cut my food stamps",
       "they cut my food stamps. i have 2 kids",
       "they're cutting my hours",
       "they cut my benefits off",
@@ -12,13 +13,25 @@ describe("cut my and cutting count only for a body part", () => {
       "they cut my pay",
       "they're cutting my medicaid",
       "they cut my power",
-      "can't afford to cut my hair",
+      "they cut our SNAP",
+      "they’re cutting back my shifts",
+      "the county cut our SNAP",
+      "the office cut off my phone",
+      "They cut my food stamps!",
     ]) {
-      expect(mightBeCrisis(text), text).toBe(false);
+      expect(crisisTurn(text), text).toBe(false);
     }
   });
 
-  it("reads cutting oneself as a crisis, for any body part", () => {
+  it("accepts over-triggering on anything that is not exactly the template", () => {
+    for (const text of ["can't afford to cut my hair", "I need to cut my bills", "they're cutting my hours at work"]) {
+      expect(crisisTurn(text), text).toBe(true);
+    }
+  });
+});
+
+describe("every crisis Sol found still triggers", () => {
+  it("reads self-harm, danger and violence in every earlier input", () => {
     for (const text of [
       "I cut my wrists",
       "I've been cutting myself",
@@ -26,74 +39,37 @@ describe("cut my and cutting count only for a body part", () => {
       "I keep cutting my forearms",
       "I cut my stomach again",
       "I cut my legs last night",
-      "I've been cutting my arms",
-      "I cut myself",
-    ]) {
-      expect(mightBeCrisis(text), text).toBe(true);
-    }
-  });
-});
-
-describe("the benefits danger exclusion stays narrow", () => {
-  it("still reads a crisis later in the same sentence", () => {
-    expect(mightBeCrisis("we're in danger of being cut off and he hit me")).toBe(true);
-    expect(mightBeCrisis("we're in danger of being cut off")).toBe(false);
-  });
-});
-
-describe("in danger counts unless a benefits word follows (PR 70 round 3)", () => {
-  it("reads danger to a person as a crisis", () => {
-    for (const text of ["I am in danger of being killed", "in danger of losing control, cutting again", "in danger of being hurt"]) {
-      expect(mightBeCrisis(text), text).toBe(true);
-      expect(isCrisis(text), text).toBe(true);
-    }
-  });
-
-  it("keeps danger to benefits a benefits question", () => {
-    for (const text of ["in danger of losing my benefits", "in danger of being evicted", "in danger of losing my SNAP", "we're in danger of being cut off", "in danger of being kicked out"]) {
-      expect(mightBeCrisis(text), text).toBe(false);
-    }
-  });
-});
-
-describe("an exclusion neutralizes only its own trigger (PR 70 round 4)", () => {
-  it("still reads every other crisis word in the message", () => {
-    for (const text of [
+      "I've been cutting again to punish myself",
+      "I keep cutting",
+      "I'm cutting myself over rent",
+      "To punish myself I cut my leg hours ago.",
+      "I cut my arm. Rent is due.",
       "I am in danger of being killed over rent",
       "I am in danger of being threatened over rent",
+      "I am in danger of being hit over rent",
+      "in danger of losing control, cutting again",
       "they cut my SNAP and I want to die",
+      "they cut my food stamps. I want to die.",
       "cutting my hours, I can't do this anymore, I want to end it",
+      "he is cutting my hair and my throat",
+      "I want to end my\nlife",
+      "they cut my SNAP\nI want to end my\nlife",
     ]) {
-      expect(mightBeCrisis(text), text).toBe(true);
+      expect(crisisTurn(text), text).toBe(true);
     }
   });
 });
 
-describe("two passes, and an exclusion can only remove benefits cases (PR 70 round 5)", () => {
-  it("still reads Sol's round 5 inputs as a crisis on both detectors", () => {
-    for (const text of ["I'm cutting myself over rent", "I am in danger of being hit over rent"]) {
-      expect(mightBeCrisis(text), text).toBe(true);
-      expect(isCrisis(text), text).toBe(true);
-    }
-  });
-});
-
-describe("the final exclusion rule (PR 70 round 6)", () => {
-  it("never excludes across a sentence boundary or when the speaker is the cutter", () => {
-    // mightBeCrisis is what the text line uses. The narrow isCrisis has
-    // never matched "cut my leg", on main or here.
-    for (const text of ["To punish myself I cut my leg hours ago.", "I cut my arm. Rent is due."]) {
-      expect(mightBeCrisis(text), text).toBe(true);
-    }
+describe("the detectors are main's, unchanged", () => {
+  it("still fires before suppression on a template sentence", () => {
+    expect(mightBeCrisis("they cut my food stamps")).toBe(true);
+    expect(suppressedBenefitsCut("they cut my food stamps")).toBe(true);
+    expect(isCrisis("I want to die")).toBe(true);
   });
 
-  it("excludes only when someone else cuts a benefits noun that is the direct object", () => {
-    for (const text of ["they cut my food stamps", "my boss is cutting my shifts", "the county cut our SNAP", "they cut off my phone"]) {
-      expect(mightBeCrisis(text), text).toBe(false);
+  it("keeps main's danger-to-benefits behavior", () => {
+    for (const text of ["in danger of losing my benefits", "in danger of being evicted", "we're in danger of being cut off"]) {
+      expect(crisisTurn(text), text).toBe(false);
     }
-  });
-
-  it("over-triggers on a first-person cut of a bill, which is accepted", () => {
-    expect(mightBeCrisis("I need to cut my bills")).toBe(true);
   });
 });

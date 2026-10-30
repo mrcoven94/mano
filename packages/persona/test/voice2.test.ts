@@ -50,12 +50,12 @@ describe("the guard and voice v2", () => {
 
 describe("the broad crisis check and benefits cuts", () => {
   it("does not read a benefits cut as self-harm", async () => {
-    const { mightBeCrisis } = await import("../src/crisis.js");
-    for (const text of ["they cut my food stamps. i have 2 kids", "they're cutting my hours at work", "they cut my benefits off"]) {
-      expect(mightBeCrisis(text), text).toBe(false);
+    const { crisisTurn } = await import("../src/crisis.js");
+    for (const text of ["they cut my food stamps. i have 2 kids", "they're cutting my hours", "they cut my benefits off"]) {
+      expect(crisisTurn(text), text).toBe(false);
     }
     for (const text of ["I'm going to cut my arm", "I keep cutting myself", "I cut my wrists"]) {
-      expect(mightBeCrisis(text), text).toBe(true);
+      expect(crisisTurn(text), text).toBe(true);
     }
   });
 });

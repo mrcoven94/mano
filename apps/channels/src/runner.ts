@@ -33,7 +33,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, guardReply, mightBeCrisis, tapbackText } from "@mano/persona";
+import { REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, crisisTurn, guardReply, tapbackText } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -578,7 +578,7 @@ export class ConversationRunner {
     try {
       await this.runGuarded(async () => {
         for (const group of partitionByChat(pending, store.meta().chatId)) {
-          const groupCrisis = mightBeCrisis(rejoinPieces(group));
+          const groupCrisis = crisisTurn(rejoinPieces(group));
           for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP)) {
             const items = groupCrisis ? chunk.map((item) => ({ ...item, crisis: true })) : chunk;
             const turnMeta = store.meta();
@@ -729,7 +729,7 @@ export class ConversationRunner {
     // admission and any model work, on the whole message even when the
     // buffer split it. It is broad on purpose: a match makes the reply
     // name 988 and 911, and over-triggering is accepted.
-    const crisis = mightBeCrisis(texts.join("\n")) || items.some((i) => i.crisis === true);
+    const crisis = crisisTurn(texts.join("\n")) || items.some((i) => i.crisis === true);
     // A crisis turn never sends the friendly intro, and later turns do not
     // send it either.
     if (crisis && !meta.introduced) {
