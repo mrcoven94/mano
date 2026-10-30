@@ -296,6 +296,14 @@ describe("after a deletion", () => {
     expect(await conversation.json()).toEqual({ generation: 1 });
   });
 
+  it("the new conversation is told nothing about requests from before the deletion", async () => {
+    await send(turn("turn_ask_000019", "Please file my renewal"));
+    await send(turn("turn_yes_000019", "YES"));
+    await deleteConversation(1);
+    await send(turn("turn_new_000019", "what do you know about me?", HANDLE, 1));
+    expect(agentCalls.at(-1)!.context.join("\n")).not.toMatch(/latest request/i);
+  });
+
   it("a turn from before the deletion is refused and writes nothing", async () => {
     await deleteConversation(1);
     const stale = await send(turn("turn_old_000013", "remind me of something", HANDLE, 0));

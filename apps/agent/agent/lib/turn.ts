@@ -18,7 +18,7 @@ import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
-import { presentationHash, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
+import { presentationHash, proposalsOf, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 
 const MAX_TEXTS = 10;
@@ -190,9 +190,7 @@ async function answerUnshown(engine: PersonEngine, waiting: EngineApproval[], de
 // proposal this decision could have settled is asked again, and Engine's
 // approve and reject are idempotent for the same person.
 async function answerAgain(engine: PersonEngine, approvals: EngineApproval[], decision: "yes" | "no"): Promise<TurnResponse | null> {
-  const settled = approvals
-    .filter((a) => a.idempotencyKey.startsWith("agent:") && a.status === (decision === "yes" ? "approved" : "rejected"))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const settled = proposalsOf(approvals, engine.generation).find((a) => a.status === (decision === "yes" ? "approved" : "rejected"));
   if (!settled) return null;
   if (decision === "no") return reply("Okay, I did not send it. Nothing left Mano.");
   return decide(engine, settled.id, "yes");
@@ -211,7 +209,7 @@ async function runTurn(
   if (decision && pointer) return decide(engine, pointer.approvalId, decision);
   const approvals = await engine.listApprovals();
   if (decision) {
-    const waiting = waitingProposals(approvals);
+    const waiting = waitingProposals(approvals, body.generation);
     if (waiting.length > 0) return answerUnshown(engine, waiting, decision);
     if (replay) {
       const again = await answerAgain(engine, approvals, decision);
@@ -222,7 +220,7 @@ async function runTurn(
   const context: string[] = [];
   if (body.texts.some(detectCrisis)) context.push(CRISIS_LINE);
   if (!pointer) {
-    const line = latestRequestLine(approvals);
+    const line = latestRequestLine(approvals, body.generation);
     if (line) context.push(line);
   }
   if (pointer) {
@@ -248,7 +246,7 @@ async function runTurn(
     if (err instanceof SettleTimeout) return failure(504, "timeout");
     throw err;
   }
-  const proposed = proposedIn(await engine.listApprovals(), body.turnId);
+  const proposed = proposedIn(await engine.listApprovals(), body.generation, body.turnId);
   const question = proposed ? renderQuestion(proposed) : null;
   const text = [settled.status === "failed" ? "" : settled.text, question ?? ""].filter(Boolean).join("\n\n");
   if (!text) return failure(502, "failed", settled.reason);
@@ -276,10 +274,8 @@ async function recordTurn(engine: PersonEngine, turnId: string, receivedAt: stri
 // One line about the latest request the agent proposed, so the model,
 // which never sees the deterministic YES and NO exchanges, knows where it
 // stands.
-function latestRequestLine(approvals: EngineApproval[]): string | null {
-  const latest = approvals
-    .filter((a) => a.idempotencyKey.startsWith("agent:"))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+function latestRequestLine(approvals: EngineApproval[], generation: number): string | null {
+  const latest = proposalsOf(approvals, generation)[0];
   if (!latest) return null;
   const state =
     latest.status === "approved"
@@ -392,7 +388,7 @@ export async function handlePresented(request: Request, deps: { secret: string |
   }
   const engine = deps.engine?.forHandle(handleHash, grant, generation);
   if (!engine) return Response.json({ ok: false, reason: "engine" }, { status: 503 });
-  const approval = waitingProposals(await engine.listApprovals()).find((a) => a.id === approvalId);
+  const approval = waitingProposals(await engine.listApprovals(), generation).find((a) => a.id === approvalId);
   if (!approval || presentationHash(renderQuestion(approval)) !== textHash) {
     console.warn(JSON.stringify({ type: "mano_presented_mismatch", handle: handleHash }));
     return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });

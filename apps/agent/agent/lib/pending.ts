@@ -24,31 +24,37 @@ const LABELS: Record<string, string> = {
   monthlyIncome: "Monthly income",
 };
 
-const AGENT_KEY_PREFIX = "agent:";
-
 // Every proposal gets its own key. Engine closes an approval by closing
-// every approval under its key, so two proposals never share one; the
-// turn ID in the key tells which turn proposed it.
-export function proposalKey(turnId: string): string {
-  return `${AGENT_KEY_PREFIX}${turnId}:${randomUUID().slice(0, 8)}`;
+// every approval under its key, so two proposals never share one. The
+// key names the conversation generation and the turn that proposed it,
+// so the agent only ever reads proposals of the current conversation.
+function prefix(generation: number): string {
+  return `agent:g${generation}:`;
 }
 
-function isAgentProposal(approval: EngineApproval): boolean {
-  return approval.idempotencyKey.startsWith(AGENT_KEY_PREFIX);
+export function proposalKey(generation: number, turnId: string): string {
+  return `${prefix(generation)}${turnId}:${randomUUID().slice(0, 8)}`;
 }
 
-// The approval this turn proposed and Engine still holds, newest first.
-export function proposedIn(approvals: EngineApproval[], turnId: string): EngineApproval | null {
+// The agent's proposals in this conversation, newest first.
+export function proposalsOf(approvals: EngineApproval[], generation: number): EngineApproval[] {
+  return approvals
+    .filter((a) => a.idempotencyKey.startsWith(prefix(generation)))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+// The approval this turn proposed and Engine still holds.
+export function proposedIn(approvals: EngineApproval[], generation: number, turnId: string): EngineApproval | null {
   return (
-    approvals
-      .filter((a) => a.status === "pending" && a.idempotencyKey.startsWith(`${AGENT_KEY_PREFIX}${turnId}:`))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null
+    proposalsOf(approvals, generation).find(
+      (a) => a.status === "pending" && a.idempotencyKey.startsWith(`${prefix(generation)}${turnId}:`),
+    ) ?? null
   );
 }
 
-// Agent proposals still waiting that are not the answerable one.
-export function waitingProposals(approvals: EngineApproval[], exceptId: string | null = null): EngineApproval[] {
-  return approvals.filter((a) => a.status === "pending" && isAgentProposal(a) && a.id !== exceptId);
+// Proposals of this conversation still waiting that are not the answerable one.
+export function waitingProposals(approvals: EngineApproval[], generation: number, exceptId: string | null = null): EngineApproval[] {
+  return proposalsOf(approvals, generation).filter((a) => a.status === "pending" && a.id !== exceptId);
 }
 
 export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">): string {

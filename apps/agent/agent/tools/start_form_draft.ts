@@ -49,7 +49,7 @@ export default defineTool({
       recipient: RENEWAL_RECIPIENT,
       purpose: RENEWAL_PURPOSE,
       payload: { ...input },
-      idempotencyKey: proposalKey(turnId),
+      idempotencyKey: proposalKey(engine.generation, turnId),
     });
     if (result.status !== "needs_approval" || !result.approval) {
       return { status: result.status, reason: result.reason ?? "Engine did not hold it for approval.", sent: false };
@@ -65,7 +65,7 @@ export default defineTool({
     // One question waits at a time: earlier proposals, shown or not, can
     // never be answered now, so Engine closes them.
     if (pointer) await engine.clearPointer(pointer.approvalId);
-    for (const earlier of waitingProposals(await engine.listApprovals(), result.approval.id)) {
+    for (const earlier of waitingProposals(await engine.listApprovals(), engine.generation, result.approval.id)) {
       await engine.reject(earlier.id).catch(() => undefined);
     }
     return {
