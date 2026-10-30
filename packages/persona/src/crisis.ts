@@ -72,8 +72,8 @@ export function holdCrisisLines(bubbles: readonly string[], line: string = CRISI
 // after one fired. A sentence that is exactly someone else cutting a
 // benefit ("they cut my food stamps", "my boss is cutting my shifts") is
 // a benefits question. The crisis line is suppressed only when every
-// sentence that triggers is exactly that, and the rest of the message,
-// with those sentences removed, triggers nothing. The detectors stay
+// sentence that triggers is exactly that: no other sentence triggers on
+// its own, and the other sentences rejoined trigger nothing either. The detectors stay
 // exactly as they are; nothing here can make them miss a crisis word.
 const BENEFITS_CUT_SENTENCE = new RegExp(
   "^(?:they|he|she|my boss|my job|work|the county|the state|the office|snap|medicaid|the landlord|the company|my employer)" +
@@ -102,8 +102,11 @@ export function suppressedBenefitsCut(text: string): boolean {
   if (!template.some((s) => mightBeCrisis(s))) return false;
   // Rejoined with ". " so phrases on either side of a removed sentence
   // can never fuse into a new one.
-  const rest = sentences.filter((s) => !BENEFITS_CUT_SENTENCE.test(s)).join(". ");
-  return !mightBeCrisis(rest);
+  const others = sentences.filter((s) => !BENEFITS_CUT_SENTENCE.test(s));
+  // Both must hold: no other sentence triggers on its own, and the other
+  // sentences rejoined trigger nothing either.
+  if (others.some((s) => mightBeCrisis(s))) return false;
+  return !mightBeCrisis(others.join(". "));
 }
 
 // Detection on top of the detectors above: implicit self-harm in English,
