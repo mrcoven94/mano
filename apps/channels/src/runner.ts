@@ -36,7 +36,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { EYES, allowedTapback, crisisLineFor, crisisTurn, eyesAllowed, guardReply } from "@mano/persona";
+import { EYES, allowedTapback, crisisGate, crisisLineFor, decideCrisis, eyesAllowed, guardReply, type CrisisCheck } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -137,6 +137,9 @@ export interface RunnerDeps {
   // passes one that lives across requests, so STOP and a delete can
   // cancel work a previous request started.
   decorations?: Decorations;
+  // The model check for one short health question (decideCrisis). Null
+  // or missing fails closed: every such question gets the crisis line.
+  crisisCheck?: CrisisCheck | null;
   // Tells the agent an approval question reached the person, given the
   // texts the provider accepted for its turn. True when reported, false
   // when the question was not shown whole; throws to retry later.
@@ -432,8 +435,14 @@ export class ConversationRunner {
       // runner never has to cut. Continuation pieces take derived IDs;
       // the event still dedupes on its own ID.
       const pieces = text ? splitTextCap(text, TURN_TEXT_CAP) : [null];
+      // The crisis decision on the whole message, before it is split, and
+      // stored with every piece. Only one short health question is left
+      // as "ask", for the model check before its turn.
+      const gate = crisisGate(text);
+      const crisis = gate === "none" ? false : gate === "ask" ? ("ask" as const) : true;
       pieces.forEach((piece, i) => {
         store.addPending({
+          crisis,
           eventId: i === 0 ? event.id : `${event.id}#${i + 1}`,
           receivedAtMs: nowMs(),
           chatId: event.chatId ?? meta.chatId ?? "",
@@ -659,9 +668,31 @@ export class ConversationRunner {
     try {
       await this.runGuarded(async () => {
         for (const group of partitionByChat(pending, store.meta().chatId)) {
-          const groupCrisis = crisisTurn(rejoinPieces(group));
+          // One crisis decision on the whole message, before any split, and
+          // the same decision on every chunk (Sol's fourth review): a split
+          // can never cut a crisis word into pieces nobody checks.
+          const groupText = rejoinPieces(group);
+          // The decoration epoch is read before this first await, so a STOP
+          // or close during the check is never missed by the turn.
+          const epoch = store.meta().decorationEpoch;
+          // The decision was stored with every piece when the message
+          // arrived, and is read back on every retry and restart; a missing
+          // one is a crisis. Only pieces stored as "ask" (one short health
+          // question) go to the model check, once, and the answer is stored.
+          const asks = group.filter((p) => p.crisis === "ask");
+          let crisis = group.some((p) => p.crisis !== false && p.crisis !== "ask");
+          if (asks.length > 0) {
+            if (!crisis) {
+              const decision = await decideCrisis(groupText, this.deps.crisisCheck ?? null);
+              if (decision.reason !== "floor") {
+                logger.info("crisis_check", { handle: this.logHandle(), crisis: decision.crisis, reason: decision.reason, ms: decision.ms });
+              }
+              crisis = decision.crisis;
+            }
+            store.setPendingCrisis(asks.map((p) => p.eventId), crisis);
+          }
           for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP)) {
-            const items = groupCrisis ? chunk.map((item) => ({ ...item, crisis: true })) : chunk;
+            const items = chunk.map((item) => ({ ...item, crisis }));
             const turnMeta = store.meta();
             const turn = turnMeta.turn + 1;
             store.patchMeta({ turn });
@@ -681,7 +712,7 @@ export class ConversationRunner {
                 createdAtMs: nowMs(),
                 updatedAtMs: nowMs(),
               });
-              await this.runTurnBody(turn, items, null, generation);
+              await this.runTurnBody(turn, items, null, generation, epoch);
               this.finishTurnRow(turn, items);
             } catch (err) {
               if (err instanceof GenerationStopped) throw err;
@@ -939,13 +970,16 @@ export class ConversationRunner {
     items: import("./store.js").PendingInbound[],
     resumed: import("./store.js").PersistedTurn | null,
     generation: number,
+    // The decoration epoch read before the turn's first await; a resumed
+    // turn reads it now.
+    startEpoch?: number,
   ): Promise<void> {
     const { store, logger, nowMs, config } = this.deps;
     this.checkGeneration(generation);
     const meta = store.meta();
     // Captured before the turn's first await and carried everywhere: a
     // decoration this turn schedules sends only while it still holds.
-    const epoch = meta.decorationEpoch;
+    const epoch = startEpoch ?? meta.decorationEpoch;
     const chatId = resumed?.chatId ?? [...items].reverse().find((i) => i.chatId)?.chatId ?? meta.chatId;
     const to = resumed?.to ?? [...items].reverse().find((i) => i.to)?.to ?? meta.to;
     if (!chatId && !to) {
@@ -968,7 +1002,10 @@ export class ConversationRunner {
     // admission and any model work, on the whole message even when the
     // buffer split it. It is broad on purpose: a match makes the reply
     // name 988 and 911, and over-triggering is accepted.
-    const crisis = crisisTurn(texts.join("\n")) || items.some((i) => i.crisis === true);
+    // The decision was made once on the whole message before it was
+    // split, and every chunk carries it. An item with no decision (a turn
+    // persisted before decisions were stored) is a crisis, always.
+    const crisis = items.some((i) => i.crisis !== false);
     // A crisis turn never sends the friendly intro, and later turns do not
     // send it either.
     if (crisis && !meta.introduced) store.patchMeta({ introduced: true });
@@ -1306,7 +1343,7 @@ export class ConversationRunner {
         }
       };
       const result = await responder.respond(
-        { texts: [turnText], attachmentCount, history, turnKey: { generation, turn }, receivedAtMs },
+        { texts: [turnText], attachmentCount, history, turnKey: { generation, turn }, receivedAtMs, crisis },
         { onHeadsUp },
       );
       const costUsd =

@@ -190,3 +190,17 @@ test("the agent's judge is calibrated on all 30 labeled cases", async () => {
   assert.equal(out.summary.calibration!.complete, true);
   assert.ok(out.summary.calibration!.agreement >= 0.8, `fake judge agreement ${out.summary.calibration!.agreement}`);
 });
+
+// PR 77: the agent line decides crisis the way the worker does. Before
+// this, its text line had no crisis check and failed closed, so a short
+// health question on the agent line always got the crisis line.
+test("the agent path and the plain text line both get the worker's crisis check", async () => {
+  const { agentPathFromEnv } = await import("../src/agent.ts");
+  const { textLineFromEnv, crisisCheckModelFromEnv, DEFAULT_CRISIS_CHECK_MODEL } = await import("../src/textline.ts");
+  const env = { QUALITY_AGENT_URL: "http://agent.test", MANO_AGENT_SECRET: "s", MANO_HANDLE_GRANT_SECRET: "g", META_MODEL_API_KEY: "k", MANO_MODEL_BENCH_ID: "muse-spark-1.3-contributor" } as NodeJS.ProcessEnv;
+  assert.equal(crisisCheckModelFromEnv(env), DEFAULT_CRISIS_CHECK_MODEL);
+  const agent = agentPathFromEnv(env) as unknown as { opts: { crisisCheckModel?: string } };
+  assert.equal(agent.opts.crisisCheckModel, DEFAULT_CRISIS_CHECK_MODEL);
+  const line = textLineFromEnv(env) as unknown as { crisisCheck: { live: boolean } | null };
+  assert.equal(line.crisisCheck?.live, true);
+});

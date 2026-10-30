@@ -14,10 +14,14 @@ export interface PendingInbound {
   // The provider's id for the inbound message, for tapbacks and inline
   // replies. Null on continuation pieces and older rows.
   messageId?: string | null;
-  // Set when the whole message this piece came from might be a crisis.
-  // A long text is split into pieces at buffer time, and a crisis word
-  // can straddle the split, so the check runs on the rejoined message.
-  crisis?: boolean;
+  // The crisis decision for the whole message this piece came from, made
+  // when the message arrives, before it is split, and stored with every
+  // piece: true, false, or "ask" (one short health question, decided once
+  // by the model check before its turn and then stored as true or false).
+  // Every chunk, retry, restart and replay reads it; nothing is ever
+  // recomputed per piece. Missing means crisis, always (Sol's sixth
+  // review: rows from before the decision was stored).
+  crisis?: boolean | "ask";
 }
 
 export interface OutboundRow {
@@ -228,6 +232,8 @@ export interface ConversationStore {
   addPending(item: PendingInbound): void;
   pending(): PendingInbound[];
   clearPending(eventIds: string[]): void;
+  // Stores the crisis decision on pending pieces.
+  setPendingCrisis(eventIds: string[], crisis: boolean): void;
   addOutbound(row: OutboundRow): void;
   outboundByKey(key: string): OutboundRow | null;
   outboundByMessageId(messageId: string): OutboundRow | null;
@@ -294,11 +300,17 @@ export class MemoryStore implements ConversationStore {
   }
 
   addPending(item: PendingInbound): void {
-    this.pendingRows.push(item);
+    // Missing means crisis, as on the SQL store.
+    this.pendingRows.push({ ...item, crisis: item.crisis ?? true });
   }
 
   pending(): PendingInbound[] {
     return [...this.pendingRows];
+  }
+
+  setPendingCrisis(eventIds: string[], crisis: boolean): void {
+    const ids = new Set(eventIds);
+    this.pendingRows = this.pendingRows.map((p) => (ids.has(p.eventId) ? { ...p, crisis } : p));
   }
 
   clearPending(eventIds: string[]): void {

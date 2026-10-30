@@ -5,6 +5,7 @@
 import { Decorations } from "./decorations.js";
 import {
   AgentResponder,
+  ModelCrisisCheck,
   reportPresentation,
   BlooioChannel,
   RecordingChannel,
@@ -131,6 +132,21 @@ function buildFallbackResponder(env: Env): Responder {
   return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, model, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
 }
 
+// The model behind the crisis check for one short health question: the
+// Standard reply model, store: false, through AI Gateway. With no key, or
+// no Standard model ID, there is no check, and every such question gets
+// the crisis line (fail closed).
+export function buildCrisisCheck(env: Env): ModelCrisisCheck | null {
+  const model = env.MANO_REPLY_MODEL ?? "";
+  if (!env.META_MODEL_API_KEY || !model || model.endsWith("-contributor")) return null;
+  const endpoint = buildModelBaseUrl({
+    accountId: env.CF_ACCOUNT_ID,
+    gatewayId: env.AI_GATEWAY_ID,
+    provider: env.AI_GATEWAY_PROVIDER,
+  });
+  return new ModelCrisisCheck({ apiKey: env.META_MODEL_API_KEY, model, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
+}
+
 export function buildResponder(env: Env, handleHash?: string, opts: { agentAllowed?: boolean } = {}): Responder {
   const fallback = buildFallbackResponder(env);
   if (opts.agentAllowed === false) return fallback;
@@ -182,6 +198,18 @@ export class ConversationDO implements DurableObject {
     return next;
   }
 
+  private crisisCheckNoticed = false;
+
+  // Built per request from env; says once per instance when it is off.
+  private crisisCheck(): ModelCrisisCheck | null {
+    const check = buildCrisisCheck(this.env);
+    if (!check && !this.crisisCheckNoticed) {
+      this.crisisCheckNoticed = true;
+      this.logger.warn("crisis_check_not_live", { detail: "no key or Standard model: every short health question gets the crisis line" });
+    }
+    return check;
+  }
+
   private runner(handleHash: string): { runner: ConversationRunner; channel: Channel; responder: Responder } {
     const channel = buildChannel(this.env);
     // While a delete waits for Engine, old approvals could still be
@@ -198,6 +226,7 @@ export class ConversationDO implements DurableObject {
       nowMs: () => Date.now(),
       fetchFn: boundFetch,
       decorations: this.decorations,
+      crisisCheck: this.crisisCheck(),
       reportPresentation: agentConfigured(this.env)
         ? (p, sentTexts) =>
             reportPresentation({

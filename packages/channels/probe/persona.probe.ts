@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { PROBES, REACTION_PROBES, allowedTapback, checkProbe, checkReactionSet, guardReply, mightBeCrisis, type GuardChange, type ProbeRun, type ReactionRun } from "@mano/persona";
+import { PROBES, REACTION_PROBES, allowedTapback, checkProbe, checkReactionSet, crisisLineFor, crisisTurn, guardReply, holdCrisisLines, mightBeCrisis, type GuardChange, type ProbeRun, type ReactionRun } from "@mano/persona";
+import { splitBubbles } from "../src/bubbles.js";
 import { SparkResponder } from "../src/responder.js";
 
 const apiKey = process.env.META_MODEL_API_KEY ?? "";
@@ -38,7 +39,12 @@ describe.skipIf(!apiKey)("persona probes, live", () => {
       const modelIds = [model];
       // Mirrors the runner: the tapback rules, and a tapback alone is a reply.
       const tapback = allowedTapback(chosen, probe.text, mightBeCrisis(probe.text));
-      const reply = raw.trim().length === 0 && chosen ? { text: "", changes: [] as GuardChange[] } : guardReply(raw, { modelIds });
+      const guarded = raw.trim().length === 0 && chosen ? { text: "", changes: [] as GuardChange[] } : guardReply(raw, { modelIds });
+      // Mirrors finalizeReply on a crisis turn: the crisis line in the
+      // person's language goes first, once, and the model writes the rest.
+      const reply = crisisTurn(probe.text)
+        ? { text: holdCrisisLines(splitBubbles(guarded.text), crisisLineFor(probe.text)).join("\n"), changes: guarded.changes }
+        : guarded;
       const headsUp = heard[0] ? guardReply(heard[0].text, { modelIds }) : null;
       const changes: GuardChange[] = [...(headsUp?.changes ?? []), ...reply.changes];
       const run: ProbeRun = {
