@@ -319,7 +319,9 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
       const result: CaseResult = {
         caseId: c.id, suite: c.suite, path,
         answer: { text: "", actions: [{ kind: "answer-error", detail: err instanceof Error ? err.name : "unknown" }] },
-        checks: [{ id: "answer-error", pass: false, detail: `the answer path threw ${err instanceof Error ? err.name : "an error"}` }],
+        // The reason is a safe machine string (an HTTP or run status), so the
+        // log can say why without any model text.
+        checks: [{ id: "answer-error", pass: false, detail: `the answer path threw ${err instanceof Error ? err.name : "an error"}${typeof (err as { reason?: unknown }).reason === "string" ? ` (${(err as { reason: string }).reason})` : ""}` }],
         judge: null, latencyMs: Date.now() - start, inputTokens: 0, outputTokens: 0,
       };
       return { c, result, judged: null, detail: loaded.detail };

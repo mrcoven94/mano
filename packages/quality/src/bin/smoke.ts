@@ -63,6 +63,9 @@ full.probes = probes;
 if (bench.skippedSuites.length > 0) full.eligibility = { eligible: false, reasons: [...full.eligibility.reasons, `suites skipped: ${bench.skippedSuites.join(", ")}`] };
 
 writeRun(out, full, bench.results);
+for (const r of bench.results) {
+  for (const c of r.checks.filter((x) => x.id === "answer-error")) console.error(`answer error on ${r.caseId}: ${c.detail}`);
+}
 const gate = evalGate(full, baseline);
 const comment = prComment(full, baseline, gate, baselineFrom);
 writeFileSync(join(out, "gate.json"), `${JSON.stringify({ status: gate.status, reasons: gate.reasons, matchedCases: gate.matchedCases }, null, 2)}\n`);
