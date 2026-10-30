@@ -63,6 +63,7 @@ MANO_REACTIONS_ENABLED = "true"
 #   MANO_AGENT_SECRET (signs agent traffic both ways, shared with the
 #   agent) and MANO_HANDLE_GRANT_SECRET (signs per-turn handle grants,
 #   shared with the engine, never the agent)
-# Engine: MANO_ENGINE_URL, MANO_ENGINE_CHANNELS_TOKEN (removes a deleted
+# Engine: MANO_ENGINE_URL, MANO_ENGINE_CHANNELS_TOKEN (stores texted
+#   photos in the person's Engine documents and removes a deleted
 #   conversation's agent state) and MANO_ENGINE_SEND_SECRET (verifies
 #   Engine's reminder deliveries on /internal/agent-send only)

@@ -13,6 +13,8 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_OUTPUT_CHARS,
   OUTBOUND_RANK,
+  PHOTO_UNREAD_TEXT,
+  PHOTO_UNSAVED_TEXT,
   ResponderFailed,
   TURN_TEXT_CAP,
   finalizeReply,
@@ -35,7 +37,7 @@ import {
   type NormalizedEvent,
   type OutboundState,
 } from "@mano/channels";
-import type { HistoryMessage, Responder } from "@mano/channels";
+import type { HistoryMessage, Responder, StoredPhoto } from "@mano/channels";
 import { EYES, allowedTapback, crisisGate, crisisLineFor, decideCrisis, eyesAllowed, guardReply, type CrisisCheck } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
@@ -44,9 +46,8 @@ import {
   INTERIM_BUBBLE,
   INTRO_BUBBLE,
   OPT_OUT_BUBBLE,
-  attachmentAck,
 } from "./text.js";
-import { attachmentDocumentId, fetchAttachment, saveAttachment, type FileStore } from "./files.js";
+import { attachmentDocumentId, fetchAttachment, type DocumentStore } from "./files.js";
 
 export interface SpendLedger {
   reserve(key: string, worstUsd: number): Promise<{ allowed: boolean; spentUsd: number }>;
@@ -126,8 +127,8 @@ export interface RunnerDeps {
   store: import("./store.js").ConversationStore;
   channel: Channel;
   responder: Responder;
-  files: FileStore | null;
-  kekB64: string | null;
+  // The person's Engine documents, where texted photos are stored.
+  documents: DocumentStore | null;
   spend: SpendLedger;
   logger: Logger;
   nowMs: () => number;
@@ -1098,16 +1099,19 @@ export class ConversationRunner {
       }, config.typingRefreshMs);
     }
     try {
-      const saved = await this.saveAttachments(turn, attachments);
+      const saved = await this.saveAttachments(turn, attachments, generation);
       const bubbles: import("./store.js").AnswerBubble[] = [];
       // A crisis turn opens with the crisis line, never the friendly intro.
       if (!meta.introduced && !crisis) bubbles.push({ part: 0, tag: "", text: INTRO_BUBBLE });
-      if (saved > 0) bubbles.push({ part: 0, tag: "ack", text: attachmentAck(saved) });
-      if (turnText) {
+      // A photo with no words goes to the agent, which reads it. Without
+      // a reader, or when it was not stored, a fixed line says so.
+      const photoOnly = !turnText && attachments.length > 0;
+      const photoLine = !photoOnly ? null : saved.length === 0 ? PHOTO_UNSAVED_TEXT : this.deps.responder.readsPhotos ? null : PHOTO_UNREAD_TEXT;
+      if (turnText || (photoOnly && !photoLine)) {
         this.checkGeneration(generation);
         // The turn's latest message: what the agent orders a YES by.
         const receivedAtMs = Math.max(...items.map((i) => i.receivedAtMs));
-        const answer = await this.respondWithInterim(turn, turnText, history, saved, chatId, to, generation, crisis, receivedAtMs, () => eyes.put("deep"));
+        const answer = await this.respondWithInterim(turn, turnText, history, attachments.length, saved, chatId, to, generation, crisis, receivedAtMs, () => eyes.put("deep"));
         stopEyesTimer();
         if (answer.ok) {
           // Links come out before splitting, and each final bubble is
@@ -1140,13 +1144,14 @@ export class ConversationRunner {
       } else {
         // A textless turn costs nothing: settle zero to release the hold
         // instead of holding the whole budget.
+        if (photoLine) bubbles.push(...(await this.finalize(turn, photoLine, crisis, turnText)));
         await this.deps.spend.settle(reserveKey, 0);
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
       }
       stopEyesTimer();
       this.checkGeneration(generation);
-      await this.sendBubbles(turn, bubbles, chatId, to, saved, generation, epoch);
+      await this.sendBubbles(turn, bubbles, chatId, to, saved.length, generation, epoch);
       this.checkSendsResolved(turn, generation);
       await this.reportPresentations();
       replied = true;
@@ -1298,6 +1303,7 @@ export class ConversationRunner {
     turnText: string,
     history: HistoryMessage[],
     attachmentCount: number,
+    documents: StoredPhoto[],
     chatId: string | null,
     to: string | null,
     generation: number,
@@ -1343,7 +1349,7 @@ export class ConversationRunner {
         }
       };
       const result = await responder.respond(
-        { texts: [turnText], attachmentCount, history, turnKey: { generation, turn }, receivedAtMs, crisis },
+        { texts: turnText ? [turnText] : [], attachmentCount, documents, history, turnKey: { generation, turn }, receivedAtMs, crisis },
         { onHeadsUp },
       );
       const costUsd =
@@ -1440,15 +1446,21 @@ export class ConversationRunner {
 
   // Downloads run only after the turn passed admission, and only inside
   // the per-handle and global daily byte budgets. Each file reserves the
-  // worst case up front and settles its actual size after.
-  private async saveAttachments(turn: number, attachments: import("@mano/channels").EventAttachment[]): Promise<number> {
-    const { store, files, kekB64, fetchFn, config, logger, nowMs, spend } = this.deps;
-    if (attachments.length === 0) return 0;
-    if (!files || !kekB64) {
+  // worst case up front and settles its actual size after. Each one is
+  // stored in the person's Engine documents under an ID derived from the
+  // generation, turn and position, so a replayed turn stores the same one.
+  private async saveAttachments(
+    turn: number,
+    attachments: import("@mano/channels").EventAttachment[],
+    generation: number,
+  ): Promise<StoredPhoto[]> {
+    const { store, documents, fetchFn, config, logger, nowMs, spend } = this.deps;
+    if (attachments.length === 0) return [];
+    if (!documents) {
       logger.warn("attachments_unsaved", { handle: this.logHandle(), turn, reason: "no_storage" });
-      return 0;
+      return [];
     }
-    let saved = 0;
+    const saved: StoredPhoto[] = [];
     for (const attachment of attachments.slice(0, MAX_ATTACHMENTS_PER_TURN)) {
       const meta = store.meta();
       const byteDay = dayKeyFor(nowMs());
@@ -1457,7 +1469,7 @@ export class ConversationRunner {
         logger.warn("attachment_capped", { handle: this.logHandle(), turn, scope: "handle" });
         continue;
       }
-      const byteKey = `${config.handleHash}:${turn}:${saved}`;
+      const byteKey = `${config.handleHash}:${turn}:${saved.length}`;
       const reservation = await spend.byteReserve(byteKey, MAX_ATTACHMENT_BYTES);
       if (!reservation.allowed) {
         logger.warn("attachment_capped", { handle: this.logHandle(), turn, scope: "global" });
@@ -1475,16 +1487,23 @@ export class ConversationRunner {
           continue;
         }
         const bytes = fetched.bytes;
-        const documentId = await attachmentDocumentId(turn, saved, attachment.url);
-        await saveAttachment(files, kekB64, config.handleHash, documentId, bytes);
+        const mimeType = fetched.contentType || attachment.mediaType || "application/octet-stream";
+        const id = await attachmentDocumentId(generation, turn, saved.length, attachment.url);
+        this.checkGeneration(generation);
+        if (!(await documents.put({ id, name: id, bytes, generation }))) {
+          await spend.byteRelease(byteKey);
+          logger.warn("attachment_refused", { handle: this.logHandle(), turn, reason: "store" });
+          continue;
+        }
         await spend.byteSettle(byteKey, bytes.byteLength);
         const counted = store.meta();
         store.patchMeta({
           byteDayCount: (counted.byteDayKey === byteDay ? counted.byteDayCount : 0) + bytes.byteLength,
           byteDayKey: byteDay,
         });
-        saved += 1;
+        saved.push({ id, mimeType });
       } catch (err) {
+        if (err instanceof GenerationStopped) throw err;
         await spend.byteRelease(byteKey);
         logger.warn("attachment_failed", { handle: this.logHandle(), turn, err: errName(err) });
       }

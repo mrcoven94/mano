@@ -6,6 +6,11 @@
 // Meta Model API directly, always on the Standard model ID with
 // store:false.
 //
+// A texted photo is read inside the turn (lib/letters.ts, @mano/mail):
+// Channels stores it in Engine, the agent reads it back, answers what the
+// letter is, its deadline and what to send, and holds a published
+// deadline in Engine.
+//
 // Engine also holds the agent's own state for each person (reminders,
 // which its alarm delivers through Channels, the turn ledger and the
 // approval pointer), so the agent keeps no store of its own.

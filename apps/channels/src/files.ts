@@ -1,13 +1,15 @@
-// Attachment storage: downloaded with a size guard, encrypted per handle
-// with the same envelope the engine uses for files, stored in R2.
-import {
-  MAX_ATTACHMENT_BYTES,
-  documentAad,
-  encryptForPerson,
-  sha256Hex,
-  type EventAttachment,
-  type LinkChecker,
-} from "@mano/channels";
+// Attachments: downloaded with a size guard and stored in the person's
+// Engine documents (DocumentStore), encrypted per person there. FileStore
+// is Channels' own bucket, which older turns wrote to; the retention
+// sweep and a conversation delete still clear it.
+import { MAX_ATTACHMENT_BYTES, sha256Hex, type EventAttachment, type LinkChecker } from "@mano/channels";
+
+export interface DocumentStore {
+  // Stores one photo under its ID for the conversation's person. True
+  // once stored (again for a retried upload of the same bytes); false
+  // when refused, as after a delete moved past the generation.
+  put(doc: { id: string; name: string; bytes: Uint8Array; generation: number }): Promise<boolean>;
+}
 
 export interface FileStore {
   put(key: string, data: Uint8Array): Promise<void>;
@@ -21,11 +23,11 @@ export function conversationFilePrefix(handleHash: string): string {
   return `persons/${handleHash}/docs/`;
 }
 
-// Slug-safe document ID, deterministic per turn and position so a replayed
-// turn writes the same keys.
-export async function attachmentDocumentId(turn: number, index: number, url: string): Promise<string> {
+// Slug-safe document ID, deterministic per generation, turn and position
+// so a replayed turn stores the same document.
+export async function attachmentDocumentId(generation: number, turn: number, index: number, url: string): Promise<string> {
   const digest = await sha256Hex(url);
-  return `t${turn}i${index}-${digest.slice(0, 12)}`;
+  return `g${generation}t${turn}i${index}-${digest.slice(0, 12)}`;
 }
 
 export interface AttachmentFetchOptions {
@@ -93,19 +95,6 @@ export async function fetchAttachment(
     return { bytes: out, contentType: (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() };
   }
   return { bytes: null, reason: "fetch" };
-}
-
-export async function saveAttachment(
-  files: FileStore,
-  kekB64: string,
-  handleHash: string,
-  documentId: string,
-  content: Uint8Array,
-): Promise<{ hash: string; r2Key: string }> {
-  const blob = await encryptForPerson(content, kekB64, documentAad(handleHash, documentId));
-  const r2Key = `${conversationFilePrefix(handleHash)}${documentId}`;
-  await files.put(r2Key, new TextEncoder().encode(JSON.stringify(blob)));
-  return { hash: await sha256Hex(content), r2Key };
 }
 
 export class R2FileStore implements FileStore {

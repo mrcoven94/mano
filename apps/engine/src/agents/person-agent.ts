@@ -10,11 +10,11 @@ import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow,
 import type { ActionRequest, Approval, CheckOutcome, ProposalOrder } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
-import { getDocumentBytes, putDocument } from "../files.js";
+import { getDocumentBytes, putDocument, sweepDocuments } from "../files.js";
 import { CASE_ID_RULE, isCaseId } from "../case-id.js";
 import { auditDigest } from "../gateway/audit.js";
 import { checkLinkSafety, redactBlockedLinks } from "../link-safety.js";
-import { base64ToBytes, bytesToBase64 } from "../hash.js";
+import { base64ToBytes, bytesToBase64, sha256Hex } from "../hash.js";
 import { createModelClient, defaultModelFor } from "../model-client.js";
 import { getSessionSecret, verifyWsTicket } from "../auth.js";
 import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
@@ -61,6 +61,8 @@ const MAX_REMINDER_ATTEMPTS = 8;
 // The answer when a write was prepared under a conversation generation
 // that a delete has since moved past: nothing was written.
 export const STALE_STATE = { stale: true } as const;
+export const DOCUMENT_CONFLICT = { conflict: true } as const;
+const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,200}$/;
 
 // One delivery run claims at most this many; a run that leaves more due
 // re-arms the wake-up for now.
@@ -117,8 +119,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       {
         listConsents: () => this.listStoredConsents(),
         documents: {
-          getBytes: (documentId) =>
-            getDocumentBytes(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, documentId),
+          getBytes: (documentId) => this.documentBytes(documentId),
         },
       },
     );
@@ -658,7 +659,12 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async deleteConversation(verified: string, input: unknown) {
     await this.assertSubject(verified);
     const toGeneration = parseGenerationInput(input).generation;
+    // The generation moves and the rows go first, in one transaction, so
+    // no upload prepared before can commit after it. Then the files of
+    // older generations go by prefix, including one that landed during
+    // the delete. A failed sweep throws, and Channels' retry sweeps again.
     const removed = this.ctx.storage.transactionSync(() => removeConversationState(this.db(), Date.now(), toGeneration));
+    await sweepDocuments(this.env.FILES, this.personId, currentGeneration(this.db()));
     this.store.audit({ event: "conversation.deleted", ...removed });
     await this.armReminderWakeup();
     this.syncState();
@@ -1063,10 +1069,17 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return recorded ? { found: true, externalId: stored.id } : { found: false };
   }
 
-  async registerDocument(verified: string, input: { name: string; contentB64: string }) {
+  // id: a caller-chosen, slug-safe ID (Channels derives one per texted
+  // photo), so a retried upload is the same document; the same ID with
+  // other bytes is a conflict. generation: the conversation the upload
+  // was prepared under, checked again at the insert.
+  async registerDocument(verified: string, input: { name: string; contentB64: string; id?: string }, generation?: number) {
     await this.assertSubject(verified);
     if (!input.name || typeof input.name !== "string" || input.name.length > 300) {
       throw new Error("Document needs a name.");
+    }
+    if (input.id !== undefined && (typeof input.id !== "string" || !DOCUMENT_ID.test(input.id))) {
+      throw new Error("Document id must be slug-safe.");
     }
     let bytes: Uint8Array;
     try {
@@ -1077,25 +1090,53 @@ export class PersonAgent extends Agent<Env, PersonState> {
     if (bytes.length === 0 || bytes.length > 10_000_000) {
       throw new Error("Document is empty or larger than 10 MB.");
     }
-    const id = crypto.randomUUID();
-    const { hash, r2Key } = await putDocument(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, id, bytes);
-    this.db().exec("INSERT INTO documents VALUES (?,?,?,?)", id, input.name, hash, r2Key);
+    const id = input.id ?? crypto.randomUUID();
+    const prepared = generation ?? currentGeneration(this.db());
+    const hash = await sha256Hex(bytes);
+    const existing = this.documentRow(id);
+    if (existing) return existing.hash === hash ? { id, hash } : DOCUMENT_CONFLICT;
+    if (prepared !== currentGeneration(this.db())) return STALE_STATE;
+    // The bytes go under their own generation and hash first; the row
+    // commits only while that generation is current. Whoever loses, a
+    // racing upload or a delete, removes its own object and nothing else.
+    const { r2Key } = await putDocument(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, id, bytes, prepared);
+    const written = this.db().exec(
+      `INSERT OR IGNORE INTO documents(id, name, hash, r2_key) SELECT ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?`,
+      id, input.name, hash, r2Key, prepared,
+    ).rowsWritten;
+    if (written === 0) {
+      const raced = this.documentRow(id);
+      if (raced?.r2_key !== r2Key) await this.env.FILES.delete(r2Key);
+      if (!raced) return STALE_STATE;
+      return raced.hash === hash ? { id, hash } : DOCUMENT_CONFLICT;
+    }
     this.store.audit({ event: "document.registered", documentHash: await auditDigest(id) });
     return { id, hash };
+  }
+
+  private documentRow(id: string): { hash: string; r2_key: string; name: string } | undefined {
+    return this.db().exec("SELECT hash, r2_key, name FROM documents WHERE id = ?", id).toArray()[0] as
+      | { hash: string; r2_key: string; name: string }
+      | undefined;
+  }
+
+  // Bytes for the gateway, read from the key the row recorded.
+  private async documentBytes(documentId: string): Promise<Uint8Array | null> {
+    const row = this.documentRow(documentId);
+    if (!row) return null;
+    return getDocumentBytes(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, documentId, row.r2_key);
   }
 
   // Returns a document's decrypted bytes to its owner, so the person can
   // see exactly what they are approving.
   async getDocument(verified: string, docId: string): Promise<{ name: string; contentB64: string }> {
     await this.assertSubject(verified);
-    const rows = this.db().exec("SELECT name FROM documents WHERE id = ?", docId).toArray() as unknown as {
-      name: string;
-    }[];
-    if (!rows[0]?.name) throw new Error("Document not found.");
-    const bytes = await getDocumentBytes(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, docId);
+    const row = this.documentRow(docId);
+    if (!row?.name) throw new Error("Document not found.");
+    const bytes = await this.documentBytes(docId);
     if (bytes == null) throw new Error("Document not found.");
     const raw = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
-    return { name: rows[0].name, contentB64: bytesToBase64(raw) };
+    return { name: row.name, contentB64: bytesToBase64(raw) };
   }
 }
 

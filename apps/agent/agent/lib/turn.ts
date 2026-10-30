@@ -16,15 +16,27 @@
 // instead of doing anything twice.
 import { createHash } from "node:crypto";
 
+import { createModelClient, type ModelClient } from "@mano/mail";
+
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
+import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
 import { closeReplaced, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 
 const MAX_TEXTS = 10;
 const MAX_TEXT_CHARS = 4000;
+const MAX_PHOTOS = 10;
+// One deadline for the whole turn (downloads, reading, deadline writes
+// and the model), under Channels' 100-second wait for the agent.
+export const TURN_BUDGET_MS = 95_000;
+// Below this much time left after a reading, the reading is the reply.
+const MODEL_MIN_MS = 15_000;
+// The reading and its deadline writes end this long before the turn does.
+const READ_MARGIN_MS = 3_000;
+const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,200}$/;
 // Engine's identity rule for turn IDs.
 const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9:_-]{7,127}$/;
 // A person quiet this long is starting a new conversation.
@@ -38,6 +50,9 @@ export interface AgentTurnInput {
   grant: string;
   message: string;
   context: string[];
+  // When the model must be done (epoch ms): the turn's one deadline,
+  // under Channels' wait for the agent.
+  deadlineMs: number;
 }
 
 export interface TurnDeps {
@@ -52,6 +67,12 @@ export interface TurnDeps {
   // effort: another instance may warm again, which costs one request.
   lastTurnAt?: Map<string, number>;
   now?: () => number;
+  // Reads texted photos (SAM 3.1 and Muse Spark through @mano/mail), and
+  // how long a reading may take before the turn says it could not finish.
+  mailModel?: ModelClient;
+  // The whole turn's budget from its arrival; under Channels' 100-second
+  // wait. Default TURN_BUDGET_MS.
+  turnBudgetMs?: number;
 }
 
 export interface TurnResponse {
@@ -68,7 +89,23 @@ interface TurnBody {
   grant: string;
   handleHash: string;
   texts: string[];
+  // Photos the person sent; documents are the ones Channels stored in
+  // Engine, by ID.
   attachmentCount: number;
+  documents: TextedPhoto[];
+}
+
+function parseDocuments(value: unknown): TextedPhoto[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_PHOTOS) return null;
+  const out: TextedPhoto[] = [];
+  for (const d of value) {
+    const doc = d as { id?: unknown; mimeType?: unknown } | null;
+    if (typeof doc?.id !== "string" || !DOCUMENT_ID.test(doc.id)) return null;
+    if (typeof doc.mimeType !== "string" || doc.mimeType.length > 100) return null;
+    out.push({ id: doc.id, mimeType: doc.mimeType });
+  }
+  return out;
 }
 
 function parseBody(value: unknown): TurnBody | null {
@@ -86,6 +123,8 @@ function parseBody(value: unknown): TurnBody | null {
     typeof body.attachmentCount === "number" && Number.isInteger(body.attachmentCount) && body.attachmentCount >= 0
       ? Math.min(body.attachmentCount, 10)
       : 0;
+  const documents = parseDocuments(body.documents);
+  if (!documents) return null;
   if (texts.length === 0 && attachmentCount === 0) return null;
   return {
     turnId: body.turnId,
@@ -94,25 +133,33 @@ function parseBody(value: unknown): TurnBody | null {
     grant: body.grant,
     handleHash: body.handleHash,
     texts,
-    attachmentCount,
+    attachmentCount: Math.max(attachmentCount, documents.length),
+    documents,
   };
 }
 
 function turnText(body: TurnBody): string {
   const parts = [...body.texts];
   if (body.attachmentCount > 0) {
-    parts.push(
-      `(The person also sent ${body.attachmentCount} photo${body.attachmentCount === 1 ? "" : "s"}; they are saved and will be read separately. Acknowledge briefly if you mention them.)`,
-    );
+    parts.push(`(The person also sent ${body.attachmentCount === 1 ? "a photo" : `${body.attachmentCount} photos`}. What Mano read from it is in your instructions.)`);
   }
   return parts.join("\n");
 }
 
 const reply = (text: string, status = "replied"): TurnResponse => ({ httpStatus: 200, body: { status, text } });
+
 const failure = (httpStatus: number, status: string, reason?: string): TurnResponse => ({
   httpStatus,
   body: { status, text: "", ...(reason ? { reason } : {}) },
 });
+
+// Live readings use the Standard model ID with store: false. Without a
+// key the stand-in answers nothing, so the reply says it could not read.
+let mailModel: ModelClient | null = null;
+function defaultMailModel(): ModelClient {
+  mailModel ??= createModelClient(process.env, { synthetic: false });
+  return mailModel;
+}
 
 const CHECKING =
   "I'm checking whether it went through. It will not be sent twice. Reply YES in a few minutes and I will check again.";
@@ -296,8 +343,9 @@ async function runTurn(
   engine: PersonEngine,
   body: TurnBody,
   turn: { firstReceivedAt: string; created: boolean },
+  deadlineMs: number,
 ): Promise<TurnResponse> {
-  const message = turnText(body);
+  let message = turnText(body);
   const turnAtMs = Date.parse(turn.firstReceivedAt);
   const decision = body.attachmentCount === 0 ? parseDecision(body.texts.join(" ")) : null;
   // Closing replaced drafts is retried at every turn until it lands.
@@ -309,6 +357,17 @@ async function runTurn(
 
   const context: string[] = [];
   if (body.texts.some(detectCrisis)) context.push(CRISIS_LINE);
+  // A texted photo is read first and answered in this same reply. With no
+  // words that answer is the whole reply; the crisis line still leads
+  // through Channels' finalize when the turn is a crisis.
+  // The reading reaches the model only as data in the person's own turn.
+  let letter: LetterReply | null = null;
+  if (body.attachmentCount > 0) {
+    letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), turn.firstReceivedAt, deadlineMs - READ_MARGIN_MS);
+    if (body.texts.length === 0 || deadlineMs - Date.now() < MODEL_MIN_MS) return reply(letter.text);
+    context.push(LETTER_RULES);
+    message = `${message}\n\n${letterBlock(letter)}`;
+  }
   // Where earlier requests stand (instructions/requests.ts) reaches the
   // model as a system instruction, never as part of the person's message.
   let settled: SettleResult;
@@ -321,9 +380,11 @@ async function runTurn(
       grant: body.grant,
       message,
       context,
+      deadlineMs,
     });
   } catch (err) {
-    if (err instanceof SettleTimeout) return failure(504, "timeout");
+    // A reading already made is the answer even when the model is not.
+    if (err instanceof SettleTimeout) return letter ? reply(letter.text) : failure(504, "timeout");
     throw err;
   }
   const after = await engine.listApprovals();
@@ -333,9 +394,9 @@ async function runTurn(
   const latest = own ? (await engine.getPending()).latest : null;
   const proposed = own && latest?.approvalId === own.id && presentsExactly(renderQuestion(own)) ? own : null;
   const question = proposed ? renderQuestion(proposed) : null;
-  const text = [settled.status === "failed" ? "" : settled.text, question ?? ""].filter(Boolean).join("\n\n");
+  const text = [letter?.text ?? "", settled.status === "failed" ? "" : settled.text, question ?? ""].filter(Boolean).join("\n\n");
   if (!text) return failure(502, "failed", settled.reason);
-  if (!proposed || !question) return reply(text, settled.status);
+  if (!proposed || !question) return reply(text, letter ? "replied" : settled.status);
   return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: proposed.id } };
 }
 
@@ -411,7 +472,7 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
 
   let response: TurnResponse;
   try {
-    response = await runTurn(deps, engine, body, turn);
+    response = await runTurn(deps, engine, body, turn, receivedMs + (deps.turnBudgetMs ?? TURN_BUDGET_MS));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_turn_error", handle: body.handleHash, err: err instanceof Error ? err.name : "unknown" }));
     response = failure(502, "error");
