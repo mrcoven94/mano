@@ -41,6 +41,8 @@ export interface StackOptions {
   commands?: { engine: StackCommand; agent: StackCommand };
   startupMs?: number;
   graceMs?: number;
+  // Test seam for spawn itself.
+  spawnFn?: typeof spawn;
 }
 
 function secret(): string {
@@ -144,17 +146,15 @@ export async function startAgentStack(env: NodeJS.ProcessEnv = process.env, opts
     agent: { command: join(REPO, "apps", "agent", "node_modules", ".bin", "eve"), args: ["dev", "--port", String(ports.agent), "--no-ui", "--logs", "error"], cwd: join(REPO, "apps", "agent"), readyPath: "/" },
   };
   const base = { PATH: env.PATH, HOME: env.HOME, CI: env.CI };
-  const launch = (c: StackCommand, extra: Record<string, string | undefined>): Launched =>
-    track(spawn(c.command, c.args, { cwd: c.cwd, env: { ...base, ...extra }, detached: true, stdio: ["ignore", "ignore", "inherit"] }));
-  const engine = launch(commands.engine, { FAKE_PID_FILE: env.FAKE_PID_FILE });
-  const agent = launch(commands.agent, {
-    FAKE_PID_FILE: env.FAKE_PID_FILE,
-    META_MODEL_API_KEY: env.META_MODEL_API_KEY,
-    ...(env.MANO_MODEL_BASE_URL ? { MANO_MODEL_BASE_URL: env.MANO_MODEL_BASE_URL } : {}),
-    MANO_AGENT_SECRET: agentSecret,
-    ENGINE_URL: `http://127.0.0.1:${ports.engine}`,
-    MANO_ENGINE_AGENT_TOKEN: agentToken,
-  });
+  const spawnFn = opts.spawnFn ?? spawn;
+  // Every child that started, so cleanup reaches it whatever failed next:
+  // spawn() can throw synchronously (E2BIG, EACCES) as well as emit 'error'.
+  const started: Launched[] = [];
+  const launch = (c: StackCommand, extra: Record<string, string | undefined>): Launched => {
+    const launched = track(spawnFn(c.command, c.args, { cwd: c.cwd, env: { ...base, ...extra }, detached: true, stdio: ["ignore", "ignore", "inherit"] }));
+    started.push(launched);
+    return launched;
+  };
 
   let stopping: Promise<void> | null = null;
   const onSignal = (signal: NodeJS.Signals): void => {
@@ -164,7 +164,7 @@ export async function startAgentStack(env: NodeJS.ProcessEnv = process.env, opts
     stopping ??= (async () => {
       process.off("SIGTERM", onSignal);
       process.off("SIGINT", onSignal);
-      await stopGroups([engine.proc, agent.proc], graceMs);
+      await stopGroups(started.map((l) => l.proc), graceMs);
       rmSync(dir, { recursive: true, force: true });
     })();
     return stopping;
@@ -173,6 +173,15 @@ export async function startAgentStack(env: NodeJS.ProcessEnv = process.env, opts
   process.once("SIGINT", onSignal);
 
   try {
+    const engine = launch(commands.engine, { FAKE_PID_FILE: env.FAKE_PID_FILE });
+    const agent = launch(commands.agent, {
+      FAKE_PID_FILE: env.FAKE_PID_FILE,
+      META_MODEL_API_KEY: env.META_MODEL_API_KEY,
+      ...(env.MANO_MODEL_BASE_URL ? { MANO_MODEL_BASE_URL: env.MANO_MODEL_BASE_URL } : {}),
+      MANO_AGENT_SECRET: agentSecret,
+      ENGINE_URL: `http://127.0.0.1:${ports.engine}`,
+      MANO_ENGINE_AGENT_TOKEN: agentToken,
+    });
     const deadline = Date.now() + (opts.startupMs ?? 180_000);
     await Promise.all([
       waitFor(`http://127.0.0.1:${ports.engine}${commands.engine.readyPath}`, engine, "Engine", deadline),

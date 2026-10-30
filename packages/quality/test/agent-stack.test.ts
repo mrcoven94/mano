@@ -91,3 +91,23 @@ test("a missing agent binary fails the stage cleanly and kills Engine", async ()
   const pids = existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim().split("\n").filter(Boolean).map(Number) : [];
   assert.deepEqual(pids.filter(alive), [], "the Engine stand-in outlived a failed start");
 });
+
+// Sol, narrow check at 3da93d7: spawn() can throw synchronously (E2BIG).
+test("a synchronous spawn failure for the second child kills the first", async () => {
+  const { spawn } = await import("node:child_process");
+  const pidFile = join(mkdtempSync(join(tmpdir(), "stack-")), "pids");
+  let calls = 0;
+  const throwing = ((...args: Parameters<typeof spawn>) => {
+    calls += 1;
+    if (calls === 2) throw Object.assign(new Error("spawn E2BIG"), { code: "E2BIG" });
+    return spawn(...args);
+  }) as typeof spawn;
+  await assert.rejects(
+    startAgentStack({ PATH: process.env.PATH, FAKE_PID_FILE: pidFile }, { ports: { engine: 18799, agent: 18800 }, commands: { engine: fake(18799), agent: fake(18800) }, graceMs: 500, spawnFn: throwing }),
+    /E2BIG/,
+  );
+  // Give the Engine stand-in time to have written its pids if it got that far.
+  await new Promise((r) => setTimeout(r, 500));
+  const pids = existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim().split("\n").filter(Boolean).map(Number) : [];
+  assert.deepEqual(pids.filter(alive), [], "Engine outlived a failed launch of the agent");
+});
