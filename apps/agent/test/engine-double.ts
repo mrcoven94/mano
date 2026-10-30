@@ -81,10 +81,32 @@ function isGeneration(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+export interface DeadlineCall {
+  personId: string;
+  body: Record<string, unknown>;
+}
+
 export class EngineDouble {
   executor = new InMemoryExecutor();
   persons = new Map<string, Person>();
   now = () => Date.now();
+  // Texted photos Channels stored, by person and document ID.
+  documents = new Map<string, Uint8Array>();
+  // POST /deadlines is the Deadlines session's route: until it exists
+  // Engine answers 404. With deadlinesLive, each call is recorded, and
+  // one idempotency key is one deadline.
+  deadlinesLive = true;
+  deadlineCalls: DeadlineCall[] = [];
+
+  putDocument(personId: string, documentId: string, bytes: Uint8Array): void {
+    this.documents.set(`${personId}/${documentId}`, bytes);
+  }
+
+  deadlinesOf(personId: string): Record<string, unknown>[] {
+    const byKey = new Map<string, Record<string, unknown>>();
+    for (const c of this.deadlineCalls) if (c.personId === personId) byKey.set(String(c.body.idempotencyKey), c.body);
+    return [...byKey.values()];
+  }
 
   person(personId: string): Person {
     let p = this.persons.get(personId);
@@ -252,6 +274,16 @@ export class EngineDouble {
       if (rest === "/pending-approval" && method === "DELETE") {
         const input = parsePointerInput(body);
         return Response.json({ cleared: clearPendingPointer(sql, input.approvalId, input.generation) });
+      }
+      const documentGet = rest.match(/^\/documents\/([^/]+)$/);
+      if (documentGet && method === "GET") {
+        const bytes = this.documents.get(`${personId}/${decodeURIComponent(documentGet[1])}`);
+        return bytes ? new Response(bytes as BodyInit, { headers: { "content-type": "application/octet-stream" } }) : Response.json({ error: "Document not found." }, { status: 404 });
+      }
+      if (rest === "/deadlines" && method === "POST") {
+        if (!this.deadlinesLive) return new Response("Not found", { status: 404 });
+        this.deadlineCalls.push({ personId, body });
+        return Response.json({ deadline: { id: String(body.idempotencyKey), ...body } }, { status: 201 });
       }
       if (rest === "/conversation" && method === "GET") return Response.json({ generation: currentGeneration(sql) });
       if (rest === "/conversation" && method === "DELETE") {
