@@ -86,7 +86,7 @@ describe("a texted letter", () => {
     expect(status).toBe(200);
     expect(body.text).toContain("Sacramento County Medi-Cal Office");
     expect(body.text).toContain("November 20, 2026");
-    expect(body.text).toContain("Send the signed renewal form");
+    expect(body.text).toContain("It asks you to: send the signed renewal form.");
     expect(body.text).toContain("I saved November 20, 2026 to your deadlines.");
     expect(engine.deadlineCalls).toHaveLength(1);
     expect(engine.deadlineCalls[0]!.body).toMatchObject({

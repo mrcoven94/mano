@@ -43,7 +43,13 @@ function spoken(iso: string): string {
   return `${MONTHS[m! - 1]} ${d}, ${y}`;
 }
 
-const bare = (value: string): string => value.trim().replace(/[\s.;:,]+$/, "");
+// A field as Mano says it: no list number or "Re:" in front, no
+// trailing punctuation.
+const bare = (value: string): string =>
+  value
+    .trim()
+    .replace(/^(?:\(?\d{1,2}[.)]|[-*\u2022]|re:)\s*/i, "")
+    .replace(/[\s.;:,]+$/, "");
 const PHONE_OR_LINK = /\d{3}[-.\s)]+\d{3,4}|https?:\/\/|www\.|\b[a-z0-9-]+\.[a-z]{2,24}\//i;
 const safe = (value: string): boolean => findInstructions(value).length === 0 && !PHONE_OR_LINK.test(value);
 
@@ -57,6 +63,16 @@ const SCAM =
 const PLANTED = "Part of this letter tries to give me instructions. I did not follow them.";
 const UNREAD = "I could not read the letter in your photo. Send it again with the whole page flat, in good light, and I will try once more.";
 const FAILED = "I could not finish reading your photo just now. Send it again and I will try once more.";
+
+const IMPERATIVE = /^(send|bring|return|sign|submit|provide|mail|complete|fill|call|upload|attach|include|keep|make|pay|renew|report|apply|reply|respond)\b/i;
+const lowerFirst = (item: string): string => (/^[A-Z][a-z]/.test(item) ? item[0]!.toLowerCase() + item.slice(1) : item);
+
+// "It asks you to: send ..." when every item is an instruction, else
+// "It asks for: ...".
+function askedLine(asked: string[]): string {
+  const items = asked.map(lowerFirst);
+  return asked.every((a) => IMPERATIVE.test(a)) ? `It asks you to: ${listOf(items)}.` : `It asks for: ${listOf(items)}.`;
+}
 
 function whatItIs(letter: Letter): string {
   const f = letter.fields;
@@ -121,7 +137,7 @@ function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; 
         }
       : null;
   const asked = letter.fields.asked.map((a) => a.value).filter(safe).map(bare);
-  if (asked.length > 0) lines.push(`What to do: ${listOf(asked)}.`);
+  if (asked.length > 0) lines.push(askedLine(asked));
   if (warnings.some((w) => w.kind === "instruction_in_content")) lines.push(PLANTED);
   // The question goes last, so the reply ends on the one thing to answer.
   if (deadline) {

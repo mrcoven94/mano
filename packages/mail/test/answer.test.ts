@@ -30,7 +30,7 @@ describe("answerReading", () => {
     expect(answer.text).toContain("Renewal");
     expect(answer.text).toContain("November 20, 2026");
     expect(answer.text).toContain('"Your renewal is due November 20, 2026."');
-    expect(answer.text).toContain("Send the signed renewal form");
+    expect(answer.text).toContain("It asks you to: send the signed renewal form.");
     expect(answer.text).not.toContain("?");
     expect(answer.deadlines).toEqual([
       {
@@ -59,7 +59,7 @@ describe("answerReading", () => {
     expect(answer.text).not.toContain("300-4000");
     expect(findInstructions(answer.text)).toEqual([]);
     expect(answer.text).toContain("I did not follow");
-    expect(answer.text).toContain("Send the signed renewal form");
+    expect(answer.text).toContain("send the signed renewal form");
   });
 
   it("warns plainly about a scam letter and holds no deadline or request from it", async () => {
@@ -67,7 +67,7 @@ describe("answerReading", () => {
     expect(answer.deadlines).toEqual([]);
     expect(answer.text).toMatch(/scam/i);
     expect(answer.text).not.toContain("November 20, 2026");
-    expect(answer.text).not.toContain("Send the signed renewal form");
+    expect(answer.text).not.toContain("send the signed renewal form");
     expect(answer.text).not.toMatch(/prepaid/i);
   });
 
@@ -84,5 +84,22 @@ describe("answerReading", () => {
     expect(answer.outcome).toBe("unread");
     expect(answer.text).toMatch(/could not/i);
     expect(answer.text).toMatch(/again/i);
+  });
+});
+
+describe("answerReading wording", () => {
+  it("drops a Re: prefix and list numbers from what the letter says", async () => {
+    const answer = await answerFor([
+      pageJson({
+        subject: { text: "Re: Medi-Cal Renewal", box_2d: [110, 60, 130, 200] },
+        full_text: "Sacramento County Medi-Cal Office\nRe: Medi-Cal Renewal\n1. Signed renewal form\n2. Proof of income\nYour renewal is due November 20, 2026.",
+        asked: [
+          { text: "1. Signed renewal form", box_2d: [150, 60, 170, 400] },
+          { text: "2. Proof of income", box_2d: [175, 60, 190, 400] },
+        ],
+      }),
+    ]);
+    expect(answer.text).toContain("This is a letter from Sacramento County Medi-Cal Office: Medi-Cal Renewal.");
+    expect(answer.text).toContain("It asks for: signed renewal form and proof of income.");
   });
 });
