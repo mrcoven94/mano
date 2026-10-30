@@ -26,20 +26,47 @@ export const WA: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "April 1, 2026 to March 31, 2027 (200% of the federal poverty guidelines published January 2026)",
-          "basis": "200% of the federal poverty level, broad-based categorical eligibility (CE). CE households skip the gross, net and resource tests. Households that cannot be CE (for example an intentional program violation disqualification) face the federal 130% FPL gross test instead.",
+          "year": "April 1, 2026 to March 31, 2027 (200 percent of Federal Poverty Guidelines published January 2026)",
+          "basis": "Washington uses broad-based categorical eligibility (CE): an assistance unit with gross countable income at or under 200% FPL skips the gross income, net income and resource tests. Units that cannot be CE (a member disqualified for an intentional program violation, a substantial lottery or gambling win, or a head of household disqualified for work requirements) must meet the regular tests instead.",
           "period": "monthly",
-          "bySize": [
-            2660,
-            3607,
-            4553,
-            5500,
-            6447,
-            7393,
-            8340,
-            9287
-          ],
-          "eachAdditional": null
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "all assistance units that can be categorically eligible (every household except those named in the next table)",
+              "bySize": [
+                2660,
+                3607,
+                4553,
+                5500,
+                6447,
+                7393,
+                8340,
+                9287,
+                10233,
+                11180
+              ],
+              "eachAdditional": 947
+            },
+            {
+              "appliesTo": "assistance units that cannot be categorically eligible (IPV disqualification, substantial lottery or gambling win, or head of household disqualified for work requirements); the state sets 130% of the federal poverty level for them, and the amounts are the federal FY2027 130% table",
+              "bySize": [
+                1729,
+                2345,
+                2960,
+                3575,
+                4191,
+                4806,
+                5421,
+                6037
+              ],
+              "eachAdditional": 616,
+              "source": {
+                "sourceUrl": "https://www.fna.usda.gov/snap/allotment/cola",
+                "checkedAt": "2026-10-30",
+                "quote": "Table 2. Gross Monthly Income Limit (130% of Federal Poverty Level)"
+              }
+            }
+          ]
         },
         "sourceUrl": "https://www.dshs.wa.gov/categorical-eligibility-basic-food",
         "checkedAt": "2026-10-30",
@@ -47,20 +74,26 @@ export const WA: StateCatalog = {
       },
       "netIncomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "Federal 100% FPL net standard, which DSHS says Washington uses and updates each October 1. Applies only to households that are not categorically eligible; CE households skip the net income test.",
+          "year": "FY 2027 (effective Oct. 1, 2026, through Sept. 30, 2027)",
+          "basis": "Federal net income limit at 100% of the federal poverty level, 48 states column. In Washington it applies only to assistance units that cannot be categorically eligible; CE units skip the net income test.",
           "period": "monthly",
-          "bySize": [
-            1330,
-            1804,
-            2277,
-            2750,
-            3224,
-            3697,
-            4170,
-            4644
-          ],
-          "eachAdditional": 474
+          "measuredOn": "net",
+          "tables": [
+            {
+              "appliesTo": "assistance units that cannot be categorically eligible (CE units skip this test)",
+              "bySize": [
+                1330,
+                1804,
+                2277,
+                2750,
+                3224,
+                3697,
+                4170,
+                4644
+              ],
+              "eachAdditional": 474
+            }
+          ]
         },
         "sourceUrl": "https://www.fna.usda.gov/snap/allotment/cola",
         "checkedAt": "2026-10-30",
@@ -92,8 +125,12 @@ export const WA: StateCatalog = {
       },
       "gaps": [
         {
-          "field": "incomeLimit.eachAdditional",
-          "reason": "The DSHS CE table lists sizes 9 ($10,233) and 10 ($11,180) and says 'Add $947 for each person over 10 AU members'; it states no per-person amount for going from 8 to 9, so eachAdditional is left null rather than inferred."
+          "field": "incomeLimit",
+          "reason": "The non-CE table has no dollar amounts. DSHS's Basic Food standards page (dshs.wa.gov/basic-food) says the gross standard is 130% FPL but prints no table, and WAC 388-478-0060 still shows the FY 2026 table effective 10/1/2025. FNS publishes FY 2027 130% amounts ($1,729 for 1 person, +$616 each) on a different page, so they are not mixed into this fact."
+        },
+        {
+          "field": "incomeLimit",
+          "reason": "The 165% standard (WAC 388-478-0060 and FNS Table 3) is left out. It only decides whether a member who is both elderly and disabled and cannot cook can be a separate assistance unit; it is not a limit for the household applying."
         }
       ]
     },
@@ -120,24 +157,32 @@ export const WA: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "HCA income standards effective October 1, 2026",
-          "basis": "138% FPL, New Adult group (N05): Medicaid expansion adults 19 to 64. HCA's chart says these MAGI limits include the 5% income disregard.",
+          "year": "October 1, 2026",
+          "basis": "138% FPL, New Adult group (N05), the Medicaid expansion group for adults 19 to 64. HCA's chart says these MAGI limits already include the 5% income disregard.",
           "period": "monthly",
-          "bySize": [
-            1835,
-            2490,
-            3142,
-            3795,
-            4449,
-            5102,
-            5755,
-            6409
-          ],
-          "eachAdditional": null
+          "measuredOn": "magi",
+          "tables": [
+            {
+              "appliesTo": "adults 19 to 64 in the New Adult group (N05)",
+              "bySize": [
+                1835,
+                2490,
+                3142,
+                3795,
+                4449,
+                5102,
+                5755,
+                6409,
+                7061,
+                7714
+              ],
+              "eachAdditional": null
+            }
+          ]
         },
         "sourceUrl": "https://www.hca.wa.gov/assets/free-or-low-cost/income-standards.pdf",
         "checkedAt": "2026-10-30",
-        "quote": "Washington Apple Health Income and Resource Standards October 1, 2026"
+        "quote": "Above MAGI limits include 5% income disregard except for Family-related N01."
       },
       "renewal": {
         "value": "Coverage must be renewed every 12 months today. Starting January 1, 2027, people in Apple Health for Adults must renew every 6 months because of H.R. 1. If coverage lapses and the person is found eligible within 90 days, HCA covers the gap.",
@@ -165,8 +210,12 @@ export const WA: StateCatalog = {
       },
       "gaps": [
         {
-          "field": "incomeLimit.eachAdditional",
-          "reason": "HCA's October 1, 2026 chart lists sizes 1 to 10 and an '11-person+ Household' column of $654 for the adult row; it does not say in words that this is a per-person add-on, so eachAdditional is left null."
+          "field": "incomeLimit",
+          "reason": "eachAdditional is null. The chart's '11-person+ Household' column shows $654 for N05, which matches the $653 step from 9 to 10 people, but the chart does not say it is added per person past 10."
+        },
+        {
+          "field": "incomeLimit",
+          "reason": "The same chart publishes Family N01 (parents and caretakers, $511 for 1 person, no 5% disregard) and Pregnancy and After Pregnancy Coverage (215% FPL) limits. They are left out because they are not the adults 19 to 64 group and pregnancy cannot be expressed with the allowed 'when' keys."
         }
       ]
     },
@@ -193,24 +242,34 @@ export const WA: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "PY27, the LIHEAP program year from October 1, 2026 to September 30, 2027",
-          "basis": "150% of the federal poverty guidelines, average monthly household income; the local LIHEAP provider makes the final determination.",
+          "year": "PY27, the program year from October 1, 2026 to September 30, 2027",
+          "basis": "Household average monthly income at or below 150% of the federal poverty guidelines (FPG). The local LIHEAP provider calculates actual income and allows various deductions and exclusions.",
           "period": "monthly",
-          "bySize": [
-            1995,
-            2705,
-            3415,
-            4125,
-            4835,
-            5545,
-            6255,
-            6965
-          ],
-          "eachAdditional": null
+          "measuredOn": "unstated",
+          "tables": [
+            {
+              "appliesTo": "all households",
+              "bySize": [
+                1995,
+                2705,
+                3415,
+                4125,
+                4835,
+                5545,
+                6255,
+                6965,
+                7675,
+                8385,
+                9095,
+                9805
+              ],
+              "eachAdditional": null
+            }
+          ]
         },
         "sourceUrl": "https://deptofcommerce.box.com/shared/static/3fp0xz4y2x2p4hedw9ww4sk7ma36srlx.pdf",
         "checkedAt": "2026-10-30",
-        "quote": "Below is a chart of the current income guidelines by household for the current program year."
+        "quote": "The household’s average monthly income is at or below 150% of the federal poverty guidelines (FPG)."
       },
       "renewal": {
         "value": "There is no renewal; a household can get one LIHEAP grant per program year (October 1 to September 30) and applies again each year.",
@@ -238,12 +297,12 @@ export const WA: StateCatalog = {
       },
       "gaps": [
         {
-          "field": "incomeLimit.eachAdditional",
-          "reason": "The PY27 guidelines chart lists sizes 1 to 12 with no per-person add-on amount stated, so eachAdditional is left null."
-        },
-        {
           "field": "phone",
           "reason": "This is the Commerce LIHEAP program office contact, not an application line. Commerce does not take applications; each county provider has its own number, found only through the map tool."
+        },
+        {
+          "field": "incomeLimit",
+          "reason": "eachAdditional is null: the PY27 chart stops at 12 people and states no per-person amount past 12. The chart says 'average monthly income' with deductions and exclusions, not gross income, so measuredOn is unstated."
         }
       ]
     }

@@ -7,8 +7,10 @@
 // confirmed is listed in each entry's gaps instead of guessed.
 //
 // lookupProgram({ state, program }) and listPrograms(state) take codes or
-// names ("CA" or "California", "snap" or "CalFresh"); screenIncome gives a
-// rough screen against the gross limit that never promises eligibility.
+// names ("CA" or "California", "snap" or "CalFresh") and an optional place
+// ("Brooklyn" gets New York City's route). screenIncome gives a rough screen
+// with two outcomes, may qualify or can't tell: it never promises and never
+// tells a person they are past a limit.
 //
 // Test: pnpm --filter @mano/programs check (tsc, the catalog check and the
 // lookup tests; no network, no keys). Recheck the sources: pnpm --filter
@@ -17,5 +19,5 @@
 export * from "./types.js";
 export { CATALOG, CATALOG_VERSION } from "./catalog.js";
 export { isOfficialUrl, validateCatalog, REQUIRED_FIELDS } from "./validate.js";
-export { listPrograms, lookupProgram, parseProgram, parseState } from "./lookup.js";
-export { screenIncome, type Screen } from "./screen.js";
+export { listPrograms, lookupProgram, parseProgram, parseState, type LookedUp } from "./lookup.js";
+export { limitAt, screenIncome, type Household, type Screen } from "./screen.js";

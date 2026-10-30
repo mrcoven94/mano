@@ -26,45 +26,71 @@ export const CA: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "Gross monthly limit of 200% of the federal poverty level under California's Modified Categorical Eligibility (CDSS MCE fact sheet). Households that cannot be given MCE status (for example a member disqualified for an intentional program violation) face the 130% federal gross limit instead.",
+          "year": "FFY 2027 (October 1, 2026 through September 30, 2027)",
+          "basis": "CDSS ACIN I-40-26, Attachment I, publishes three gross monthly income eligibility standards: 200% of poverty for Modified Categorical Eligibility (MCE)/Broad-Based Categorical Eligibility (BBCE), 130% of poverty for Semi-Annual Reporting, and 165% of poverty for households where an elderly or disabled person is a separate household.",
           "period": "monthly",
-          "bySize": [
-            2660,
-            3608,
-            4554,
-            5500,
-            6448,
-            7394,
-            8340,
-            9288
-          ],
-          "eachAdditional": 948
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "households with Modified Categorical Eligibility (MCE)/Broad-Based Categorical Eligibility (BBCE) status (200% of poverty)",
+              "bySize": [
+                2660,
+                3608,
+                4554,
+                5500,
+                6448,
+                7394,
+                8340,
+                9288
+              ],
+              "eachAdditional": 948
+            },
+            {
+              "appliesTo": "households without MCE/BBCE status (130% of poverty; the notice labels it the Semi-Annual Reporting gross standard, and the same figures are the income reporting threshold)",
+              "bySize": [
+                1729,
+                2345,
+                2960,
+                3575,
+                4191,
+                4806,
+                5421,
+                6037
+              ],
+              "eachAdditional": 616
+            }
+          ]
         },
-        "sourceUrl": "https://cdss.ca.gov/portals/9/calfreshoutreach/220000_English_Income_Inserts_FFY2027.pdf",
+        "sourceUrl": "https://www.cdss.ca.gov/Portals/9/Additional-Resources/Letters-and-Notices/ACINs/2026/I-40_26.pdf",
         "checkedAt": "2026-10-30",
-        "quote": "2026-2027 CalFresh Income & Eligibility Limits"
+        "quote": "Gross Monthly Income Eligibility Standards for Modified Categorical Eligibility (MCE)/Broad-Based Categorical Eligibility (BBCE)"
       },
       "netIncomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "Net monthly limit of 100% of the federal poverty level, as published on the CDSS FFY2027 income chart; the chart does not say which households it applies to.",
+          "year": "FFY 2027 (October 1, 2026 through September 30, 2027)",
+          "basis": "CDSS ACIN I-40-26, Attachment I, Net Monthly Income Eligibility Standards at 100% of poverty. The notice publishes one net table and does not say which households it applies to.",
           "period": "monthly",
-          "bySize": [
-            1330,
-            1804,
-            2277,
-            2750,
-            3224,
-            3697,
-            4170,
-            4644
-          ],
-          "eachAdditional": 474
+          "measuredOn": "net",
+          "tables": [
+            {
+              "appliesTo": "all households (one net table, no group named)",
+              "bySize": [
+                1330,
+                1804,
+                2277,
+                2750,
+                3224,
+                3697,
+                4170,
+                4644
+              ],
+              "eachAdditional": 474
+            }
+          ]
         },
-        "sourceUrl": "https://cdss.ca.gov/portals/9/calfreshoutreach/220000_English_Income_Inserts_FFY2027.pdf",
+        "sourceUrl": "https://www.cdss.ca.gov/Portals/9/Additional-Resources/Letters-and-Notices/ACINs/2026/I-40_26.pdf",
         "checkedAt": "2026-10-30",
-        "quote": "2026-2027 CalFresh Income & Eligibility Limits"
+        "quote": "Net Monthly Income Eligibility Standards (100% of Poverty Level)"
       },
       "renewal": {
         "value": "Most households recertify every year and file a semi-annual report (SAR 7) in between; households with older adults recertify every two years, and households of older adults or people with disabilities with no earned income can get certification periods of up to 36 months.",
@@ -90,7 +116,20 @@ export const CA: StateCatalog = {
         "checkedAt": "2026-10-30",
         "quote": "You can apply online at BenefitsCal.com."
       },
-      "gaps": []
+      "gaps": [
+        {
+          "field": "incomeLimit.tables",
+          "reason": "The source also prints a 165% table for an elderly or disabled member who buys and cooks apart and is counted as a separate household. It is not a limit for the household applying, so it is left out."
+        },
+        {
+          "field": "incomeLimit",
+          "reason": "The ACIN publishes no separate gross table for households with a member 60 or older or disabled and does not say on this page whether those households skip the gross test, so no table with an elderlyOrDisabled condition is given. The 165% table is for an elderly or disabled person who is a separate household, which the notice does not define and a resident would not know to say, so it has no when."
+        },
+        {
+          "field": "netIncomeLimit",
+          "reason": "The ACIN does not say which households must pass the net test (for example whether MCE/BBCE households are exempt), so the single net table carries no group."
+        }
+      ]
     },
     "medicaid": {
       "state": "CA",
@@ -115,24 +154,30 @@ export const CA: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "Covered California chart for 2027 (dated 10/2026); its Medi-Cal monthly values are sourced to DHCS ACWDL 26-01",
-          "basis": "138% of the federal poverty level, Medi-Cal for Adults (the DHCS monthly 138% column). Children qualify up to 266% FPL and pregnant individuals up to 213% FPL on the same chart.",
+          "year": "Program Eligibility by Federal Poverty Level for 2027 (Covered California chart dated 10/2026); Medi-Cal monthly values sourced to DHCS ACWDL 26-01",
+          "basis": "Medi-Cal for Adults, up to 138% of the federal poverty level, using the chart's DHCS monthly 138% column. The chart does not name the income measure or say whether a 5% disregard is included; magi is set because Covered California's own Medi-Cal training lists Adults Expansion (ages 19 to 64, 138% FPL) as a Modified Adjusted Gross Income (MAGI) Medi-Cal group. The same chart lists children up to 266% FPL and pregnant individuals up to 213% FPL.",
           "period": "monthly",
-          "bySize": [
-            1836,
-            2490,
-            3143,
-            3795,
-            4450,
-            5102,
-            5755,
-            6409
-          ],
-          "eachAdditional": 655
+          "measuredOn": "magi",
+          "tables": [
+            {
+              "appliesTo": "adults (Medi-Cal for Adults, 138% FPL)",
+              "bySize": [
+                1836,
+                2490,
+                3143,
+                3795,
+                4450,
+                5102,
+                5755,
+                6409
+              ],
+              "eachAdditional": 655
+            }
+          ]
         },
         "sourceUrl": "https://www.coveredca.com/pdfs/FPL-chart.pdf",
         "checkedAt": "2026-10-30",
-        "quote": "Program Eligibility by Federal Poverty Level for 2027"
+        "quote": "Medi-Cal monthly values are provided above, for reference. Source: DHCS ACWDL 26-01"
       },
       "apply": {
         "value": "Apply any time of year online with the single Covered California application, which checks Medi-Cal and Covered California eligibility at once; you can also call Covered California at (800) 300-1506 or call or visit your county Medi-Cal office.",
@@ -156,6 +201,10 @@ export const CA: StateCatalog = {
         {
           "field": "renewal",
           "reason": "dhcs.ca.gov (every page and PDF tried, including sps2016.dhcs.ca.gov) returns an Incapsula bot-check page instead of content, so no DHCS renewal page could be read. The Covered California Medi-Cal and Losing Medi-Cal Coverage pages do not state a renewal cycle, and the CDSS H.R. 1 FAQ only refers readers to DHCS for Medi-Cal changes."
+        },
+        {
+          "field": "incomeLimit",
+          "reason": "The fact's source chart does not name the income measure (MAGI) or say whether the 138% column includes the 5% disregard; magi rests on a separate 2018 Covered California training document (hbex.coveredca.com Medi-Cal-Application-Eligibility-and-Enrollment-Process.pdf). DHCS pages, including ACWDL 26-01, could not be read because dhcs.ca.gov blocks scripted fetches. The pregnant individuals column (213% FPL) is not included as a table because there is no when key for pregnancy."
         }
       ]
     },
@@ -182,24 +231,32 @@ export const CA: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "2026 LIHEAP program year (latest table CSD publishes)",
-          "basis": "CSD's 2026 LIHEAP gross monthly income limits. CSD's Draft 2027 LIHEAP State Plan sets the threshold at 60% of State Median Income for all household sizes and uses gross income. The table also lists 9 people at 9034.08 and 10 people at 9226.25, and adds 192.21 for each person above 10, so there is no single per-person step after 8.",
+          "year": "2026 LIHEAP Income Eligibility",
+          "basis": "CSD's 2026 LIHEAP monthly income limits by household size, one table for all households. The page does not say gross or net; CSD's Draft 2027 LIHEAP State Plan (a separate document) says gross income and a 60% of State Median Income threshold.",
           "period": "monthly",
-          "bySize": [
-            3331.66,
-            4356.83,
-            5382,
-            6407.16,
-            7432.25,
-            8457.41,
-            8649.66,
-            8841.83
-          ],
-          "eachAdditional": null
+          "measuredOn": "unstated",
+          "tables": [
+            {
+              "appliesTo": "all households",
+              "bySize": [
+                3331.66,
+                4356.83,
+                5382,
+                6407.16,
+                7432.25,
+                8457.41,
+                8649.66,
+                8841.83,
+                9034.08,
+                9226.25
+              ],
+              "eachAdditional": 192.21
+            }
+          ]
         },
         "sourceUrl": "https://www.csd.ca.gov/Pages/LIHEAP-Income-Eligibility.aspx",
         "checkedAt": "2026-10-30",
-        "quote": "2026 LIHEAP Income Eligibility"
+        "quote": "Eligibility for services may vary depending on sources of income and other factors."
       },
       "renewal": {
         "value": "LIHEAP is not an ongoing enrolled benefit: CSD's Draft 2027 State Plan lets a provider give an eligible household one HEAP or ECIP Fast Track payment per program year, with supplemental payments only in extenuating circumstances.",
@@ -225,7 +282,12 @@ export const CA: StateCatalog = {
         "checkedAt": "2026-10-30",
         "quote": "Behind on your energy bills? LIHEAP may be able to help."
       },
-      "gaps": []
+      "gaps": [
+        {
+          "field": "incomeLimit",
+          "reason": "The CSD income page does not state gross or net income, so measuredOn is unstated; only the separate Draft 2027 State Plan says gross. No 2027 LIHEAP dollar table was found; the page still shows the 2026 table."
+        }
+      ]
     }
   },
   "documentedSites": [

@@ -47,27 +47,46 @@ function strings(v: unknown): string[] {
   return [];
 }
 
-function limitProblems(where: string, v: IncomeLimit): string[] {
+const MEASURES = new Set(["gross", "net", "magi", "unstated"]);
+const HOUSEHOLD_FACTS = new Set(["earnedIncome", "elderlyOrDisabled", "dependentCare"]);
+
+function limitProblems(where: string, v: IncomeLimit, catalog: StateCatalog, today: string): string[] {
   const out: string[] = [];
   if (!v.year.trim()) out.push(`${where}: no year`);
   if (!v.basis.trim()) out.push(`${where}: no basis`);
-  if (v.bySize.length === 0) out.push(`${where}: no household sizes`);
-  if (v.bySize.some((n, i) => !(n > 0) || (i > 0 && n < v.bySize[i - 1]!))) out.push(`${where}: amounts must be positive and grow with household size`);
-  if (v.eachAdditional !== null && !(v.eachAdditional > 0)) out.push(`${where}: eachAdditional must be positive or null`);
+  if (!MEASURES.has(v.measuredOn)) out.push(`${where}: measuredOn must say what income the limit is compared with`);
+  if (v.tables.length === 0) out.push(`${where}: no tables`);
+  for (const [i, t] of v.tables.entries()) {
+    const at = `${where} table ${i + 1}`;
+    if (!t.appliesTo.trim()) out.push(`${at}: no appliesTo`);
+    const rows = t.bySize.filter((n): n is number => n !== null);
+    if (rows.some((n, j) => !(n > 0) || (j > 0 && n < rows[j - 1]!))) out.push(`${at}: amounts must be positive and grow with household size`);
+    if (t.eachAdditional !== null && !(t.eachAdditional > 0)) out.push(`${at}: eachAdditional must be positive or null`);
+    if (t.bySize.length === 0 && t.eachAdditional !== null) out.push(`${at}: an add-on needs published rows`);
+    for (const c of t.when ?? []) for (const k of Object.keys(c)) if (!HOUSEHOLD_FACTS.has(k)) out.push(`${at}: unknown household fact ${k}`);
+    if (t.when && t.when.length === 0) out.push(`${at}: an empty when matches no household; omit it instead`);
+    if (t.source) out.push(...sourceProblems(at, t.source, catalog, today));
+  }
+  return out;
+}
+
+function sourceProblems(where: string, s: { sourceUrl: string; checkedAt: string; quote: string }, catalog: StateCatalog, today: string): string[] {
+  const out: string[] = [];
+  if (!s.sourceUrl) out.push(`${where}: no source`);
+  else if (!isOfficialUrl(s.sourceUrl, catalog)) out.push(`${where}: source ${s.sourceUrl} is not https on a .gov host or a documented state site`);
+  if (!s.checkedAt) out.push(`${where}: no checked date`);
+  else if (!realDate(s.checkedAt, today)) out.push(`${where}: checked date ${s.checkedAt} is not a real past date (YYYY-MM-DD)`);
+  if (!s.quote || s.quote.trim().length < 10) out.push(`${where}: no quote from the source`);
   return out;
 }
 
 function factProblems(where: string, field: FactField, fact: Fact<unknown>, catalog: StateCatalog, today: string): string[] {
-  const out: string[] = [];
-  if (strings(fact.value).every((s) => !s.trim()) && field !== "incomeLimit" && field !== "netIncomeLimit") out.push(`${where}: empty value`);
-  if (!fact.sourceUrl) out.push(`${where}: no source`);
-  else if (!isOfficialUrl(fact.sourceUrl, catalog)) out.push(`${where}: source ${fact.sourceUrl} is not https on a .gov host or a documented state site`);
-  if (!fact.checkedAt) out.push(`${where}: no checked date`);
-  else if (!realDate(fact.checkedAt, today)) out.push(`${where}: checked date ${fact.checkedAt} is not a real past date (YYYY-MM-DD)`);
-  if (!fact.quote || fact.quote.trim().length < 10) out.push(`${where}: no quote from the source`);
+  const limit = field === "incomeLimit" || field === "netIncomeLimit";
+  const out = sourceProblems(where, fact, catalog, today);
+  if (!limit && strings(fact.value).every((s) => !s.trim())) out.push(`${where}: empty value`);
   if (field === "phone" && !PHONE_RE.test(String(fact.value).trim())) out.push(`${where}: ${String(fact.value)} is not one US phone number`);
   if (field === "website" && !isOfficialUrl(String(fact.value), catalog)) out.push(`${where}: ${String(fact.value)} is not https on a .gov host or a documented state site`);
-  if (field === "incomeLimit" || field === "netIncomeLimit") out.push(...limitProblems(where, fact.value as IncomeLimit));
+  if (limit) out.push(...limitProblems(where, fact.value as IncomeLimit, catalog, today));
   return out;
 }
 
@@ -84,6 +103,10 @@ function entryProblems(state: StateCode, program: ProgramId, entry: ProgramEntry
     if (!entry[field] && !named) out.push(`${at} ${field}: missing and not named in gaps`);
   }
   for (const g of entry.gaps) if (!g.reason.trim()) out.push(`${at} gap ${g.field}: no reason`);
+  for (const route of entry.areas ?? []) {
+    if (route.places.length === 0 || route.places.some((p) => p !== p.toLowerCase())) out.push(`${at} ${route.area}: places must be lowercase names`);
+    for (const [field, fact] of Object.entries(route.facts) as [FactField, Fact<unknown>][]) out.push(...factProblems(`${at} ${route.area} ${field}`, field, fact, catalog, today));
+  }
   return out;
 }
 

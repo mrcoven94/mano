@@ -26,20 +26,76 @@ export const NY: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027); NY charts say SNAP Standards effective October 1, 2026",
-          "basis": "Gross monthly limit for households without earned income and with no member 60 or older or disabled; the figures equal the federal 130% FPL limit. NY publishes higher gross limits on the same page: households with earned income (no member 60+ or disabled) 1995, 2705, 3415, 4125, 4835, 5545, 6255, 6965, each additional 710; households with a member 60 or older or disabled, or with dependent care expenses, 2660, 3607, 4553, 5500, 6447, 7393, 8340, 9287, each additional 947. Meeting the gross limit does not guarantee eligibility.",
+          "year": "SNAP Standards effective October 1, 2026",
+          "basis": "OTDA publishes three gross monthly income charts by household type: households without earned income, households with earned income (both with no member 60 or older or disabled), and households with a member 60 or older or disabled or with dependent care expenses. The page gives dollar amounts only, and says meeting the chart does not ensure eligibility.",
           "period": "monthly",
-          "bySize": [
-            1729,
-            2345,
-            2960,
-            3575,
-            4191,
-            4806,
-            5421,
-            6037
-          ],
-          "eachAdditional": 616
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "households without earned income, with no member 60 or older or disabled, and without dependent care expenses (households with dependent care expenses use the third chart)",
+              "when": [
+                {
+                  "earnedIncome": false,
+                  "elderlyOrDisabled": false,
+                  "dependentCare": false
+                }
+              ],
+              "bySize": [
+                1729,
+                2345,
+                2960,
+                3575,
+                4191,
+                4806,
+                5421,
+                6037
+              ],
+              "eachAdditional": 616
+            },
+            {
+              "appliesTo": "households with earned income, with no member 60 or older or disabled, and without dependent care expenses (households with dependent care expenses use the third chart)",
+              "when": [
+                {
+                  "earnedIncome": true,
+                  "elderlyOrDisabled": false,
+                  "dependentCare": false
+                }
+              ],
+              "bySize": [
+                1995,
+                2705,
+                3415,
+                4125,
+                4835,
+                5545,
+                6255,
+                6965
+              ],
+              "eachAdditional": 710
+            },
+            {
+              "appliesTo": "households with a member 60 or older or a disabled member, and households with dependent care expenses",
+              "when": [
+                {
+                  "elderlyOrDisabled": true
+                },
+                {
+                  "dependentCare": true
+                }
+              ],
+              "bySize": [
+                2660,
+                3607,
+                4553,
+                5500,
+                6447,
+                7393,
+                8340,
+                9287
+              ],
+              "eachAdditional": 947
+            }
+          ]
         },
         "sourceUrl": "https://otda.ny.gov/programs/snap/",
         "checkedAt": "2026-10-30",
@@ -71,12 +127,90 @@ export const NY: StateCatalog = {
       },
       "gaps": [
         {
-          "field": "netIncomeLimit",
-          "reason": "OTDA's SNAP page, SNAP FAQ (qanda.asp) and recertification FAQ publish only gross income charts and never state a net income test or net limit for New York households; not filled from the federal table because NY's use of it is not stated on a fetched page."
-        },
-        {
           "field": "renewalLength",
           "reason": "Value is recorded, but the length of the SNAP certification period (for example 12 or 24 months) is not stated on the OTDA SNAP page or recertification FAQ."
+        },
+        {
+          "field": "incomeLimit",
+          "reason": "Not a missing fact, a known limit left out: GIS 26 DC 045 also lists 165% FPL (2195, 2976, 3757, 4538, 5319, 6100, 6881, 7662, each additional 781), which applies only when an elderly member (60 or older) or a member who cannot buy food or prepare meals because of a disability (with their spouse) applies as a separate food unit. That limit is tested on the income of the other people in the home, which a screen cannot ask about simply. It is not on the SNAP page that holds the three gross charts, so it is not included as a table."
+        },
+        {
+          "field": "areas.New York City.phone",
+          "reason": "Not a gap in the value. The DSS OneNumber (718) 557-1399 is printed for questions about a specific SNAP case, and the page sends general SNAP questions to 311. The interview line is a separate number, 718-SNAP-NOW (718-762-7669), on the same page; the HRA interview instructions page prints 929-273-1872 for the same On Demand interview line. No page fetched uses the name 'HRA Infoline'."
+        }
+      ],
+      "netIncomeLimit": {
+        "value": {
+          "year": "FFY 2027 (SNAP standards effective October 1, 2026)",
+          "basis": "OTDA's FFY 2027 SNAP standards message (GIS 26 DC 045, Upstate and New York City) lists Maximum Net Monthly Income at 100% of the federal poverty level. It does not say which households must pass a net income test; it says households of three or more must also have net income that works out to a positive allotment after the applicable gross and/or net tests.",
+          "period": "monthly",
+          "measuredOn": "net",
+          "tables": [
+            {
+              "appliesTo": "households that are subject to a net income test; the source does not say which households these are",
+              "bySize": [
+                1330,
+                1804,
+                2277,
+                2750,
+                3224,
+                3697,
+                4170,
+                4644
+              ],
+              "eachAdditional": 474
+            }
+          ]
+        },
+        "sourceUrl": "https://otda.ny.gov/policy/gis/2026/26DC045.pdf",
+        "checkedAt": "2026-10-30",
+        "quote": "The purpose of this release is to describe the annual changes to SNAP standard values for"
+      },
+      "areas": [
+        {
+          "area": "New York City",
+          "places": [
+            "new york city",
+            "nyc",
+            "new york ny",
+            "manhattan",
+            "brooklyn",
+            "queens",
+            "the bronx",
+            "bronx",
+            "staten island",
+            "new york county",
+            "kings county",
+            "queens county",
+            "bronx county",
+            "richmond county"
+          ],
+          "facts": {
+            "apply": {
+              "value": "In New York City, SNAP is run by the Human Resources Administration (HRA). Apply online on ACCESS HRA (the best option), in person at a SNAP center or with a community-based partner organization, or print the application and mail or fax it. After applying you must complete an interview, by phone on the SNAP on demand line or in person at a SNAP center.",
+              "sourceUrl": "https://www.nyc.gov/main/services/snap-benefits",
+              "checkedAt": "2026-10-30",
+              "quote": "In New York City, SNAP is administered by the Human Resources Administration (HRA)."
+            },
+            "renewal": {
+              "value": "HRA mails a notice when it is time to recertify, and ACCESS HRA shows the case as Expiring Soon. Submit a recertification form (best on the ACCESS HRA website or app; also by mail or in person at a SNAP center), complete an interview and submit required documents. You can recertify as early as 60 days before the certification period ends, and periods in NYC are usually one year. Some seniors and people with disabilities may recertify by phone if HRA mails them instructions.",
+              "sourceUrl": "https://www.nyc.gov/main/services/snap-benefits",
+              "checkedAt": "2026-10-30",
+              "quote": "Certification periods in NYC are usually one year long."
+            },
+            "website": {
+              "value": "https://a069-access.nyc.gov/accesshra/",
+              "sourceUrl": "https://www.nyc.gov/main/services/snap-benefits",
+              "checkedAt": "2026-10-30",
+              "quote": "Submit your recertification form using the ACCESS HRA website or mobile app."
+            },
+            "phone": {
+              "value": "(718) 557-1399",
+              "sourceUrl": "https://www.nyc.gov/main/services/snap-benefits",
+              "checkedAt": "2026-10-30",
+              "quote": "DSS OneNumber (718) 557-1399"
+            }
+          }
         }
       ]
     },
@@ -103,24 +237,32 @@ export const NY: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "2026 (2026 federal poverty levels; DOH MAGI income standards effective January 1, 2026)",
-          "basis": "138% of the federal poverty level, adults 19 to 64 (Medicaid expansion, MAGI rules). Children 1 to 18 qualify up to 154% FPL, 19 and 20 year olds living with a parent up to 155%, pregnant women and infants up to 223%.",
+          "year": "Effective January 1, 2026 (2026 federal poverty levels, GIS 26 MA/05 attachment)",
+          "basis": "138% of the federal poverty level for adults in the MAGI population: single adults and childless couples, parents and caretaker relatives, and 19 and 20 year olds living alone, from the DOH chart New York State Income Standards for MAGI Population. The table is labeled 138% FPL and the page does not mention a separate 5% disregard, so these are the figures to compare with MAGI as published. The same page lists 155% FPL for 19 and 20 year olds living with parents and 223% FPL for pregnant people; its category chart also shows a 100% FPL line for single and childless couples without saying what it applies to.",
           "period": "monthly",
-          "bySize": [
-            1836,
-            2489,
-            3142,
-            3795,
-            4449,
-            5102,
-            5755,
-            6408
-          ],
-          "eachAdditional": 654
+          "measuredOn": "magi",
+          "tables": [
+            {
+              "appliesTo": "adults 19 to 64 (single adults and childless couples, parents and caretaker relatives)",
+              "bySize": [
+                1836,
+                2489,
+                3142,
+                3795,
+                4449,
+                5102,
+                5755,
+                6408,
+                7061,
+                7715
+              ],
+              "eachAdditional": 654
+            }
+          ]
         },
-        "sourceUrl": "https://info.nystateofhealth.ny.gov/sites/default/files/2026%20Income%20Levels_for%20Medicaid,%20CHPlus%20&%20EP.pdf",
+        "sourceUrl": "https://www.health.ny.gov/health_care/medicaid/publications/docs/gis/26ma05_att1.pdf",
         "checkedAt": "2026-10-30",
-        "quote": "Adults: Up to 138% FPL"
+        "quote": "New York State Income Standards for MAGI Population"
       },
       "renewal": {
         "value": "Coverage is renewed once a year today, and NY State of Health sends a renewal notice when it is time. Starting January 1, 2027, most adults 19 to 64 must renew every 6 months: people who apply before January 1, 2027 or renew before March 1, 2027 get 12 months first, then renew every 6 months. American Indian and Alaska Native adults, children and people with disabilities still renew once a year.",
@@ -171,20 +313,31 @@ export const NY: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "2026-2027 HEAP program year",
-          "basis": "Maximum gross monthly household income. Households receiving SNAP, federally funded Temporary Assistance or Code A SSI (living alone) can also qualify. The table continues: 9 people 9662, 10 people 9867, 11 people 10073, 12 people 10278, 13 people 10515, then add 710 for each additional person beyond 13 (so eachAdditional is not given for sizes 9 to 13).",
+          "year": "2026-2027 HEAP Monthly Income Limits",
+          "basis": "Maximum gross monthly household income for HEAP. Households that receive SNAP, federally funded Temporary Assistance, or Code A SSI (living alone) can also qualify without meeting this table.",
           "period": "monthly",
-          "bySize": [
-            3563,
-            4659,
-            5756,
-            6852,
-            7948,
-            9045,
-            9250,
-            9456
-          ],
-          "eachAdditional": null
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "all households",
+              "bySize": [
+                3563,
+                4659,
+                5756,
+                6852,
+                7948,
+                9045,
+                9250,
+                9456,
+                9662,
+                9867,
+                10073,
+                10278,
+                10515
+              ],
+              "eachAdditional": 710
+            }
+          ]
         },
         "sourceUrl": "https://otda.ny.gov/programs/heap/",
         "checkedAt": "2026-10-30",
@@ -218,6 +371,47 @@ export const NY: StateCatalog = {
         {
           "field": "regularBenefitOpenDate",
           "reason": "OTDA's apply page says the 2026-2027 Regular HEAP benefit 'opened November 2, 2026' while the HEAP page says it 'is scheduled to open November 2, 2026'; as of 2026-10-30 it has not opened yet. The renewal value uses the HEAP page wording."
+        }
+      ],
+      "areas": [
+        {
+          "area": "New York City",
+          "places": [
+            "new york city",
+            "nyc",
+            "new york ny",
+            "manhattan",
+            "brooklyn",
+            "queens",
+            "the bronx",
+            "bronx",
+            "staten island",
+            "new york county",
+            "kings county",
+            "queens county",
+            "bronx county",
+            "richmond county"
+          ],
+          "facts": {
+            "apply": {
+              "value": "When the Regular HEAP benefit is open, apply online on ACCESS HRA, in person at a HEAP office or outreach location, or by faxing the HEAP Application (LDSS 3421) to 917-639-2900 or mailing it to Home Energy Assistance Program/HEAP, P.O. Box 1401, Church Street Station, New York, NY 10008. You may be contacted for an eligibility interview, which can be done by phone. Emergency HEAP is applied for by phone through the DSS OneNumber or in person at a HEAP office.",
+              "sourceUrl": "https://www.nyc.gov/site/hra/help/energy-assistance.page",
+              "checkedAt": "2026-10-30",
+              "quote": "You can apply for HEAP Regular benefit online, in person by visiting a HEAP office, or by mail."
+            },
+            "website": {
+              "value": "https://a069-access.nyc.gov/accesshra/",
+              "sourceUrl": "https://www.nyc.gov/site/hra/help/energy-assistance.page",
+              "checkedAt": "2026-10-30",
+              "quote": "Apply online on ACCESS HRA."
+            },
+            "phone": {
+              "value": "718-557-1399",
+              "sourceUrl": "https://www.nyc.gov/site/hra/help/energy-assistance.page",
+              "checkedAt": "2026-10-30",
+              "quote": "You can request an application be mailed to you by calling 718-557-1399"
+            }
+          }
         }
       ]
     }

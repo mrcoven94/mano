@@ -26,41 +26,88 @@ export const IL: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "165% of the federal poverty level, Illinois broad-based categorical eligibility, for households without a qualifying member. Households with a qualifying member (a person who is 60 or older, blind or disabled) use the 200% FPL limit instead: 2660, 3607, 4554, 5500, 6447, 7394, 8340, 9287 for sizes 1 to 8, plus 947 for each additional person.",
+          "year": "October 2026 issuances (IDHS Manual Release 26.26, dated 10/01/2026)",
+          "basis": "Illinois broad-based categorical eligibility: 165% of the federal poverty level for households without a qualifying member, and 200% of the federal poverty level for households with a qualifying member (60 or older, or receiving a listed disability benefit). Households in which every person is authorized for TANF, GA or SSI do not have to meet a gross limit.",
           "period": "monthly",
-          "bySize": [
-            2195,
-            2976,
-            3757,
-            4538,
-            5319,
-            6100,
-            6881,
-            7662
-          ],
-          "eachAdditional": 781
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "households with no qualifying member, that is no member 60 or older and no member receiving SSI, Social Security disability or blindness benefits, AABD, a VA total disability rating or another disability benefit IDHS lists (165% FPL)",
+              "when": [
+                {
+                  "elderlyOrDisabled": false
+                }
+              ],
+              "bySize": [
+                2195,
+                2976,
+                3757,
+                4538,
+                5319,
+                6100,
+                6881,
+                7662,
+                8443,
+                9224
+              ],
+              "eachAdditional": 781
+            },
+            {
+              "appliesTo": "households with a qualifying member: a member 60 or older (from the month they turn 60) or a member receiving SSI, Social Security disability or blindness benefits, AABD, a VA total disability rating or another disability benefit IDHS lists (200% FPL). Such a household with a higher gross income can still qualify by meeting the net income limit.",
+              "when": [
+                {
+                  "elderlyOrDisabled": true
+                }
+              ],
+              "bySize": [
+                2660,
+                3607,
+                4554,
+                5500,
+                6447,
+                7394,
+                8340,
+                9287,
+                10234,
+                11180
+              ],
+              "eachAdditional": 947
+            }
+          ]
         },
         "sourceUrl": "https://www.dhs.state.il.us/page.aspx?item=180098",
         "checkedAt": "2026-10-30",
-        "quote": "Federal law provides for an increase to the Maximum Monthly Gross (165% FPL) and Net Income Standards (100% FPL) effective with October 2026 issuances."
+        "quote": "The SNAP 200% FPL Gross Income Standards have increased and are used to determine categorical eligibility for qualifying member households."
       },
       "netIncomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "100% of the federal poverty level. Per IDHS PM 13-01-01, a household with a qualifying member (blind, 60 or older, or disabled) whose gross income is over the 200% limit can still qualify by meeting this net limit, and households with a member disqualified for an intentional program violation or sanctioned under a work rule must meet both the gross and net limits.",
+          "year": "October 2026 issuances (IDHS Manual Release 26.26, dated 10/01/2026)",
+          "basis": "100% of the federal poverty level. Per IDHS PM 13-01-01, a household with a qualifying member whose gross income is over the 200% limit can still qualify by meeting this net limit. Households with a member disqualified for an intentional program violation or sanctioned under a work rule must meet both the gross and the net limit; that group is defined by program status and is not encoded in when.",
           "period": "monthly",
-          "bySize": [
-            1330,
-            1804,
-            2277,
-            2750,
-            3224,
-            3697,
-            4170,
-            4644
-          ],
-          "eachAdditional": 474
+          "measuredOn": "net",
+          "tables": [
+            {
+              "appliesTo": "households with a qualifying member (60 or older, or receiving a listed disability benefit) whose gross income is over the 200% FPL limit; also households with a disqualified or sanctioned member, who must meet it in addition to the gross limit",
+              "when": [
+                {
+                  "elderlyOrDisabled": true
+                }
+              ],
+              "bySize": [
+                1330,
+                1804,
+                2277,
+                2750,
+                3224,
+                3697,
+                4170,
+                4644,
+                5118,
+                5592
+              ],
+              "eachAdditional": 474
+            }
+          ]
         },
         "sourceUrl": "https://www.dhs.state.il.us/page.aspx?item=180098",
         "checkedAt": "2026-10-30",
@@ -93,7 +140,11 @@ export const IL: StateCatalog = {
       "gaps": [
         {
           "field": "incomeLimit",
-          "reason": "The main IDHS SNAP page (item=30357) and the DHS 124 brochure (item=33412) still show the October 2025 limits (for example $2,152 for one person). The FY2027 numbers here come from IDHS Manual Release 26.26, effective October 2026 issuances, which matches WAG 13-01-01-a."
+          "reason": "The main IDHS SNAP page (item=30357) and the DHS 124 brochure still show October 2025 limits. The October 2026 tables here come from Manual Release 26.26, which publishes rows for sizes 1 to 10 and matches WAG 13-01-01-a. The qualifying member definition (60 or older, or receiving a listed disability benefit) is from PM 05-06-01 (item=13632), not the release page; someone with a disability but no listed benefit or VA rating may not count as a qualifying member."
+        },
+        {
+          "field": "netIncomeLimit",
+          "reason": "Households with a member disqualified for an intentional program violation or sanctioned under a work rule must also meet the net limit (PM 13-01-01); that group is a program status, so it is described in appliesTo but not encoded in when."
         }
       ]
     },
@@ -120,20 +171,28 @@ export const IL: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "2026 (IDHS chart Program Standards 2026, WAG 25-03-02 (2))",
-          "basis": "ACA Adults (adults 19 to 64 under the Medicaid expansion) and FamilyCare parents and caretaker relatives: 138% of the federal poverty level, including the 5% disregard, MAGI income",
+          "year": "2026 (IDHS chart 2026 Family Health Plans Monthly Income Standards, WAG 25-03-02 (2))",
+          "basis": "FamilyCare (parents and caretaker relatives) and ACA Adults (adults 19 to 64 under the Medicaid expansion): 138% of the federal poverty level on MAGI income. The chart's dollar amounts already include the 5% disregard.",
           "period": "monthly",
-          "bySize": [
-            1835,
-            2488,
-            3141,
-            3795,
-            4448,
-            5101,
-            5754,
-            6407
-          ],
-          "eachAdditional": 652
+          "measuredOn": "magi",
+          "tables": [
+            {
+              "appliesTo": "adults 19 to 64 (ACA Adults) and parents and caretaker relatives (FamilyCare)",
+              "bySize": [
+                1835,
+                2488,
+                3141,
+                3795,
+                4448,
+                5101,
+                5754,
+                6407,
+                7061,
+                7714
+              ],
+              "eachAdditional": 652
+            }
+          ]
         },
         "sourceUrl": "https://www.dhs.state.il.us/page.aspx?item=21741",
         "checkedAt": "2026-10-30",
@@ -165,12 +224,12 @@ export const IL: StateCatalog = {
       },
       "gaps": [
         {
-          "field": "incomeLimit",
-          "reason": "The HFS Medical Programs page still prints an older ACA Adults figure ($1,366 per individual, $1,845 per couple). The numbers here come from the IDHS chart that the HFS Medicaid guide links as Medicaid Program Income Standards; that chart is labeled 2026 and does not state an end date."
-        },
-        {
           "field": "phone",
           "reason": "The number given is the DHS Help Line for applying. HFS also lists a Health Benefits Hotline (1-866-468-7543 in Illinois) for questions about medical benefits and a renewal line (1-866-255-5437) on its HealthChoice renewal page."
+        },
+        {
+          "field": "incomeLimit",
+          "reason": "The chart publishes sizes 1 to 10 and +652 for each additional person, but its own size 8 to 9 step is 654 and 9 to 10 is 653, so applying +652 past size 10 may run a few dollars low. The HFS Medical Programs page still prints an older ACA Adults figure ($1,366 for one person). The chart is labeled 2026 with no end date; only the Family Assist column says Effective 10/01/2026."
         }
       ]
     },
@@ -197,20 +256,31 @@ export const IL: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "Program Year 2027 (applications Oct 1, 2026 to Aug 13, 2027), based on 2026 federal poverty guidelines",
-          "basis": "300% of the federal poverty guidelines, gross income for the 30 days before applying, for customers of Ameren Illinois, ComEd, Nicor Gas, North Shore Gas and Peoples Gas. Customers of other energy vendors must be at or below 60% of state median income, which DCEO does not list in dollars on this page.",
+          "year": "Program Year 2027 (applications from October 1, 2026), based on 2026 federal poverty guidelines",
+          "basis": "Combined gross household income for the 30 days before applying. Customers of Ameren Illinois, ComEd, Nicor Gas, North Shore Gas and Peoples Gas must be at or below 300% of the federal poverty guidelines; customers of other energy vendors must be at or below 60% of state median income. The state may adjust these levels based on federal funding.",
           "period": "monthly",
-          "bySize": [
-            3990,
-            5410,
-            6830,
-            8250,
-            9670,
-            11090,
-            12510,
-            13930
-          ],
-          "eachAdditional": null
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "customers of Ameren Illinois, ComEd, Nicor Gas, North Shore Gas or Peoples Gas (300% of the federal poverty guidelines, 30 day income)",
+              "bySize": [
+                3990,
+                5410,
+                6830,
+                8250,
+                9670,
+                11090,
+                12510,
+                13930
+              ],
+              "eachAdditional": null
+            },
+            {
+              "appliesTo": "customers of any other utility or energy vendor (60% of state median income); the page names this limit but publishes no dollar amounts",
+              "bySize": [],
+              "eachAdditional": null
+            }
+          ]
         },
         "sourceUrl": "https://dceo.illinois.gov/communityservices/utilitybillassistance/howtoapply.html",
         "checkedAt": "2026-10-30",
@@ -242,12 +312,12 @@ export const IL: StateCatalog = {
       },
       "gaps": [
         {
-          "field": "incomeLimit",
-          "reason": "DCEO publishes dollar limits only for the 300% FPL utility-customer group (sizes 1 to 8, no per-person add-on). The 60% state median income limit for customers of other vendors is stated as a rule but no dollar table was found on the How to Apply page or in the FY27 LIHEAP state plan PDF."
-        },
-        {
           "field": "website",
           "reason": "https://helpillinoisfamilies.com and https://www.helpillinoisfamilies.com refused HTTPS connections when checked; http://helpillinoisfamilies.com redirected to the DCEO Help Illinois Families page used here, which links the Request for Services form."
+        },
+        {
+          "field": "incomeLimit",
+          "reason": "DCEO names a 60% of state median income limit for customers of other energy vendors but publishes no dollar amounts on this page, and the FY2027 LIHEAP state plan also gives only the percentage, so that table has bySize []. The 300% table stops at family size 8 and gives no per-person increment, so eachAdditional is null."
         }
       ]
     }

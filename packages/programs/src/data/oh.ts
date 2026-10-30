@@ -26,41 +26,67 @@ export const OH: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "200% of the federal poverty level, Ohio's expanded (broad-based) categorical eligibility, in effect since October 1, 2024. The same transmittal also lists the 130% table (1729, 2345, 2960, 3575, 4191, 4806, 5421, 6037; each additional 616) and a 165% separate-group standard for elderly and disabled assistance groups.",
+          "year": "FY 2027 (October 1, 2026 Mass Change, Food Assistance Change Transmittal No. 112)",
+          "basis": "The transmittal publishes gross income standards at 130% and 200% of poverty and a 165% separate assistance group standard, without saying who each applies to. Ohio Administrative Code 5101:4-2-02 (codes.ohio.gov) makes any assistance group with gross income at or below 200% that receives the Ohio careline notice categorically eligible, which waives the 130% gross limit, the net limit and the resource limit; 5101:4-6-29 sets the 165% test.",
           "period": "monthly",
-          "bySize": [
-            2660,
-            3607,
-            4554,
-            5500,
-            6447,
-            7394,
-            8340,
-            9287
-          ],
-          "eachAdditional": 947
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "assistance groups that are categorically eligible through Ohio careline (broad-based categorical eligibility); per OAC 5101:4-2-02 this covers groups with gross income at or below 200% of poverty, so it is the limit that applies to most households",
+              "bySize": [
+                2660,
+                3607,
+                4554,
+                5500,
+                6447,
+                7394,
+                8340,
+                9287
+              ],
+              "eachAdditional": 947
+            },
+            {
+              "appliesTo": "assistance groups that are not categorically eligible, for example when a member is disqualified for an intentional program violation or is otherwise excluded from categorical eligibility under OAC 5101:4-2-02(D)(2)",
+              "bySize": [
+                1729,
+                2345,
+                2960,
+                3575,
+                4191,
+                4806,
+                5421,
+                6037
+              ],
+              "eachAdditional": 616
+            }
+          ]
         },
         "sourceUrl": "https://dam.assets.ohio.gov/image/upload/jfs.ohio.gov/EBS/Programs%20Rules%20and%20Resources/Food%20Assistance/Food%20Assistance%20Change%20Letters/2026/FACT_112_October_1_2026_Mass_Change.pdf",
         "checkedAt": "2026-10-30",
-        "quote": "Gross Income Standards (200% of poverty)"
+        "quote": "monthly gross income standards (130% and 200% of poverty), and monthly separate assistance group standards for elderly and disabled assistance groups only (165% of poverty)"
       },
       "netIncomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "100% of the federal poverty level (Ohio Net Income Standards). The transmittal does not say in this table which assistance groups the net test applies to.",
+          "year": "FY 2027 (October 1, 2026 Mass Change, Food Assistance Change Transmittal No. 112)",
+          "basis": "Net Income Standards at 100% of poverty from the transmittal. OAC 5101:4-2-02(C) waives the net income limit for categorically eligible assistance groups, so this test applies only to groups that are not categorically eligible.",
           "period": "monthly",
-          "bySize": [
-            1330,
-            1804,
-            2277,
-            2750,
-            3224,
-            3697,
-            4170,
-            4644
-          ],
-          "eachAdditional": 474
+          "measuredOn": "net",
+          "tables": [
+            {
+              "appliesTo": "assistance groups that are not categorically eligible (categorically eligible groups, including Ohio careline groups at or below 200% gross, have this limit waived)",
+              "bySize": [
+                1330,
+                1804,
+                2277,
+                2750,
+                3224,
+                3697,
+                4170,
+                4644
+              ],
+              "eachAdditional": 474
+            }
+          ]
         },
         "sourceUrl": "https://dam.assets.ohio.gov/image/upload/jfs.ohio.gov/EBS/Programs%20Rules%20and%20Resources/Food%20Assistance/Food%20Assistance%20Change%20Letters/2026/FACT_112_October_1_2026_Mass_Change.pdf",
         "checkedAt": "2026-10-30",
@@ -90,7 +116,16 @@ export const OH: StateCatalog = {
         "checkedAt": "2026-10-30",
         "quote": "Online: Create or access your online account at ssp.benefits.ohio.gov."
       },
-      "gaps": []
+      "gaps": [
+        {
+          "field": "incomeLimit.tables",
+          "reason": "The source also prints a 165% table for an elderly or disabled member who buys and cooks apart and is counted as a separate household. It is not a limit for the household applying, so it is left out."
+        },
+        {
+          "field": "incomeLimit",
+          "reason": "Not confirmed on an Ohio page: whether a household with a member 60 or older or disabled whose gross income is over 200% is exempt from the gross test and judged only on the 100% net test (the federal rule). The Ohio Benefits SNAP page says such households may be allowed up to 200%, but no fetched Ohio rule or transmittal states the exemption, so no table carries an elderlyOrDisabled condition. The Ohio Benefits SNAP page also still prints an older 130% chart (size 1: 1,632) that does not match the October 2026 transmittal."
+        }
+      ]
     },
     "medicaid": {
       "state": "OH",
@@ -115,24 +150,34 @@ export const OH: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "2026 (2026 federal poverty guidelines; same figures on the Medicaid Standards Help Sheet effective 9/1/2026)",
-          "basis": "Adults age 19 to 64 (Ohio's Medicaid expansion adult group), 133% of the federal poverty level, monthly household income. Ohio's help sheet notes a 5% of poverty income deduction for MAGI groups when comparing income to the highest category.",
+          "year": "2026 (Medicaid Standards Help Sheet, effective 9/1/2026)",
+          "basis": "MAGI Adult column, 133% FPL, which the sheet says is the highest standard for every category in the MAGI Adult group (young adults 19-20, non-disabled adults, parents and caretaker relatives, and others). The table does not include the 5% disregard; the sheet lists the 5% of FPL amount by size separately (67, 91, 114, 138, 162, 185, 209, 233, 256, 280, 304, 327) for MAGI groups when comparing income to the highest category. The sheet also prints a lower 90% Parent/Caretaker Relative column, not used here because parents also fall in the 133% MAGI Adult group.",
           "period": "monthly",
-          "bySize": [
-            1769,
-            2399,
-            3028,
-            3658,
-            4288,
-            4917,
-            5547,
-            6176
-          ],
-          "eachAdditional": null
+          "measuredOn": "magi",
+          "tables": [
+            {
+              "appliesTo": "adults age 19 to 64 in the MAGI Adult group, including parents and caretaker relatives",
+              "bySize": [
+                1769,
+                2399,
+                3028,
+                3658,
+                4288,
+                4917,
+                5547,
+                6176,
+                6806,
+                7435,
+                8065,
+                8694
+              ],
+              "eachAdditional": null
+            }
+          ]
         },
-        "sourceUrl": "https://dam.assets.ohio.gov/image/upload/medicaid.ohio.gov/Families%2C%20Individuals/Programs/whoQualifies/2026_Children_Families_Adults.pdf",
+        "sourceUrl": "https://dam.assets.ohio.gov/image/upload/benefits.ohio.gov/2026_Medicaid_Standards_Help_Sheet_09012026.pdf",
         "checkedAt": "2026-10-30",
-        "quote": "2026 Monthly Financial Eligibility Children, Families, and Adults"
+        "quote": "133% FPL denotes the highest FPL standard for all categories within the MAGI Adult coverage group"
       },
       "renewal": {
         "value": "Every 12 months the county JFS office tries to renew coverage automatically; if it cannot renew electronically, you may need to complete an annual Medicaid renewal form.",
@@ -161,7 +206,7 @@ export const OH: StateCatalog = {
       "gaps": [
         {
           "field": "incomeLimit",
-          "reason": "Partial: the 2026 Ohio Medicaid table lists household sizes 1 to 12 with no per-person increment, so eachAdditional is null; bySize gives sizes 1 to 8 from the Adults (age 19-64) column."
+          "reason": "The help sheet stops at household size 12 and gives no per-person increment, so eachAdditional is null."
         }
       ]
     },
@@ -188,24 +233,34 @@ export const OH: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "2026-2027 program year",
-          "basis": "175% of the federal poverty guidelines for households of 1 to 7; 60% of State Median Income for 8 or more (the size 8 figure is the 60% SMI limit). Total gross household income for the past 12 months; the same page also lists 30-day limits (1 person 2295.62).",
+          "year": "2026-2027",
+          "basis": "175% of the federal poverty guidelines for households of 1 to 7 and 60% of State Median Income for 8 or more. The page prints these as two charts split only by household size, so they are combined here into one table in size order. Limits are the 12-month figures; the page also gives 30-day limits (size 1: 2,295.62) and says income is based on the last 30 days or 12 months, with wages of dependent minors under 18 excluded.",
           "period": "annual",
-          "bySize": [
-            27930,
-            37870,
-            47810,
-            57750,
-            67690,
-            77630,
-            87570,
-            94881
-          ],
-          "eachAdditional": null
+          "measuredOn": "unstated",
+          "tables": [
+            {
+              "appliesTo": "all households (sizes 1 to 7 at 175% of poverty, sizes 8 to 12 at 60% of State Median Income)",
+              "bySize": [
+                27930,
+                37870,
+                47810,
+                57750,
+                67690,
+                77630,
+                87570,
+                94881,
+                96946,
+                99010,
+                101069,
+                103132
+              ],
+              "eachAdditional": null
+            }
+          ]
         },
         "sourceUrl": "https://www.occ.ohio.gov/factsheet/home-energy-assistance-program-heap",
         "checkedAt": "2026-10-30",
-        "quote": "2026-2027 175% Income Guidelines"
+        "quote": "at or below 175 percent of the federal income guidelines for households with up to seven people, and 60 percent of the State Median Income (SMI) for households of eight or more"
       },
       "renewal": {
         "value": "HEAP is paid once per winter heating season, so households apply again each season; applications for the 2026-2027 season are accepted from July 1, 2026 to May 31, 2027.",
@@ -232,7 +287,7 @@ export const OH: StateCatalog = {
         },
         {
           "field": "incomeLimit",
-          "reason": "Partial: no fixed per-person increment above 8 (60% SMI table runs to size 12), so eachAdditional is null. PUCO's HEAP page lists $29,930 for a 1-person household, which conflicts with OCC's $27,930; 175% of the 2026 poverty guideline ($15,960) is $27,930, so the OCC figure is used. The ODJFS FY2027 LIHEAP plan PDF is inconsistent on whether 175% applies up to 7 or 8 people."
+          "reason": "The OCC page says total household income, not gross, so measuredOn is unstated. The 60% SMI chart stops at size 12 with no per-person increment, so eachAdditional is null. Earlier research found PUCO listing 29,930 for one person; 175% of the 2026 guideline (15,960) is 27,930, matching OCC."
         }
       ]
     }

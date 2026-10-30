@@ -26,20 +26,45 @@ export const AZ: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "200% of the federal poverty level, expanded categorical eligibility (broad-based). Households that are not categorically eligible face the federal 130% FPL gross limit (1729, 2345, 2960, 3575, 4191, 4806, 5421, 6037; each additional 616), published on the DES policy page FAA6/NA_Gross_Monthly_Income_Eligibility_Standard.html.",
+          "year": "Effective 10/01/2026",
+          "basis": "DES Nutrition Assistance policy: a budgetary unit is expanded categorically eligible when gross income does not exceed 200% of the current federal poverty level, and is then treated as meeting the gross and net income tests. Units that are not categorically eligible face the 130% FPL gross income standard, which DES publishes on a separate policy page; units with a member 60 or older or with a disability are not subject to that gross standard.",
           "period": "monthly",
-          "bySize": [
-            2660,
-            3608,
-            4554,
-            5500,
-            6448,
-            7394,
-            8340,
-            9288
-          ],
-          "eachAdditional": 948
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "expanded categorically eligible households (200% of the federal poverty level); this is the gross limit most households are screened against",
+              "bySize": [
+                2660,
+                3608,
+                4554,
+                5500,
+                6448,
+                7394,
+                8340,
+                9288
+              ],
+              "eachAdditional": 948
+            },
+            {
+              "appliesTo": "households that are not categorically eligible and have no member 60 or older or with a disability (130% of the federal poverty level); the state sets 130% of the federal poverty level for them, and the amounts are the federal FY2027 130% table",
+              "bySize": [
+                1729,
+                2345,
+                2960,
+                3575,
+                4191,
+                4806,
+                5421,
+                6037
+              ],
+              "eachAdditional": 616,
+              "source": {
+                "sourceUrl": "https://www.fna.usda.gov/snap/allotment/cola",
+                "checkedAt": "2026-10-30",
+                "quote": "Table 2. Gross Monthly Income Limit (130% of Federal Poverty Level)"
+              }
+            }
+          ]
         },
         "sourceUrl": "https://dbmefaapolicy.azdes.gov/FAA6/NA_200__of_the_Federal_Poverty_Level.html",
         "checkedAt": "2026-10-30",
@@ -47,20 +72,26 @@ export const AZ: StateCatalog = {
       },
       "netIncomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "100% of the federal poverty level. DES policy says expanded categorically eligible households are treated as meeting the gross and net income tests, so this limit applies to households that are not expanded categorically eligible; basic categorically eligible households are compared against it to calculate benefits.",
+          "year": "Effective 10/01/2026",
+          "basis": "100% of the federal poverty level. DES policy treats expanded categorically eligible households as meeting the net income test, so this limit decides eligibility for households that are not categorically eligible, including households with a member 60 or older or with a disability whose gross income is over 200% FPL; basic categorically eligible households are compared against it to calculate benefits.",
           "period": "monthly",
-          "bySize": [
-            1330,
-            1804,
-            2277,
-            2750,
-            3224,
-            3697,
-            4170,
-            4644
-          ],
-          "eachAdditional": 474
+          "measuredOn": "net",
+          "tables": [
+            {
+              "appliesTo": "all households whose eligibility depends on the net income test",
+              "bySize": [
+                1330,
+                1804,
+                2277,
+                2750,
+                3224,
+                3697,
+                4170,
+                4644
+              ],
+              "eachAdditional": 474
+            }
+          ]
         },
         "sourceUrl": "https://dbmefaapolicy.azdes.gov/FAA6/NA_Net_Monthly_Income_Eligibility_Standard_(.html",
         "checkedAt": "2026-10-30",
@@ -90,7 +121,16 @@ export const AZ: StateCatalog = {
         "checkedAt": "2026-10-30",
         "quote": "Ready to apply? Get started through Health-e-Arizona Plus"
       },
-      "gaps": []
+      "gaps": [
+        {
+          "field": "incomeLimit",
+          "reason": "Each DES income standard is on its own policy page, so the 130% FPL table (1729, 2345, 2960, 3575, 4191, 4806, 5421, 6037; each additional 616, effective 10/01/2026) is not on the 200% page and is left as bySize []. The 165% FPL Elderly or Disability standard is not a household limit: DES applies it to separate budgetary units living with an elderly or disabled member who cannot buy and cook food alone, so it is left out. Households with a member 60 or older or disabled are not subject to the gross standard and can qualify above 200% FPL on the net test, which the table shape cannot express. dbmefaapolicy.azdes.gov returns 403 to curl, so a curl quote check will fail; the text was read in a browser."
+        },
+        {
+          "field": "netIncomeLimit",
+          "reason": "dbmefaapolicy.azdes.gov returns 403 to curl, so a curl quote check will fail; the quote was read in a browser."
+        }
+      ]
     },
     "medicaid": {
       "state": "AZ",
@@ -116,16 +156,22 @@ export const AZ: StateCatalog = {
       "incomeLimit": {
         "value": {
           "year": "Effective 02/01/2026",
-          "basis": "AHCCCS Adult Group (Medicaid expansion), adults 19 to 64 who do not qualify for another AHCCCS group, not pregnant and not on Medicare. The page lists sizes 1 to 5 only; its each-additional amount of $630 is marked as approximate, so it is not used here.",
+          "basis": "AHCCCS Adult Group: adults 19 to 64 who are not pregnant, do not qualify for Medicare and do not fit another AHCCCS group. The page calls the table a gross monthly income limit (income before taxes and other deductions); it does not mention MAGI, a 5% disregard or a percent of the federal poverty level.",
           "period": "monthly",
-          "bySize": [
-            1769,
-            2399,
-            3028,
-            3658,
-            4288
-          ],
-          "eachAdditional": null
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "adults 19 to 64 in the AHCCCS Adult Group",
+              "bySize": [
+                1769,
+                2399,
+                3028,
+                3658,
+                4288
+              ],
+              "eachAdditional": null
+            }
+          ]
         },
         "sourceUrl": "https://www.azahcccs.gov/Members/GetCovered/Categories/adults.html",
         "checkedAt": "2026-10-30",
@@ -158,7 +204,7 @@ export const AZ: StateCatalog = {
       "gaps": [
         {
           "field": "incomeLimit",
-          "reason": "The AHCCCS adults page lists household sizes 1 to 5 only, so sizes 6 to 8 are not given; the $630 each-additional figure is labeled approximate on the page. The page does not state the percent of the federal poverty level."
+          "reason": "The page lists household sizes 1 to 5 only and marks its $630 each-additional amount as approximate, so eachAdditional is null and sizes 6 and up have no limit. The page does not say whether the limit is MAGI-based or includes a 5% disregard; measuredOn follows its own label, gross."
         }
       ]
     },
@@ -185,20 +231,30 @@ export const AZ: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "Current DES LIHEAP table; the page does not date it. The posted LIHEAP State Plan covers 10/01/2025 to 09/30/2026.",
-          "basis": "Monthly gross household income. The LIHEAP State Plan sets 60% of state median income for household sizes 1 to 9 and 150% of HHS poverty guidelines for 10 or more. The page also lists sizes 9 to 12 (7962, 8385, 9095, 9805) and $710 for each person over 12. Households on DES Nutrition Assistance or Cash Assistance are categorically eligible.",
+          "year": "Not dated on the page; the page says its information is effective for applications received on or after October 12, 2024",
+          "basis": "DES LIHEAP Maximum Household Income table of monthly gross income limits. Households where a member receives DES Nutrition Assistance or Cash Assistance are categorically eligible and treated as meeting the income requirement.",
           "period": "monthly",
-          "bySize": [
-            2936,
-            3840,
-            4743,
-            5647,
-            6550,
-            7454,
-            7623,
-            7793
-          ],
-          "eachAdditional": null
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "all households applying for LIHEAP",
+              "bySize": [
+                2936,
+                3840,
+                4743,
+                5647,
+                6550,
+                7454,
+                7623,
+                7793,
+                7962,
+                8385,
+                9095,
+                9805
+              ],
+              "eachAdditional": 710
+            }
+          ]
         },
         "sourceUrl": "https://des.az.gov/liheap",
         "checkedAt": "2026-10-30",
@@ -231,7 +287,7 @@ export const AZ: StateCatalog = {
       "gaps": [
         {
           "field": "incomeLimit",
-          "reason": "The DES LIHEAP page does not say which program year its income table is for, and the only State Plan posted covers FFY2026 (10/01/2025 to 09/30/2026); no FFY2027 table or plan was found on des.az.gov."
+          "reason": "The page does not date its income table, and the posted LIHEAP State Plan PDF was not read this pass (des.az.gov returns 403 to curl), so the percent of state median income or poverty guideline behind each row is not stated here. des.az.gov also blocks curl, so a curl quote check will fail; the text was read in a browser."
         }
       ]
     }

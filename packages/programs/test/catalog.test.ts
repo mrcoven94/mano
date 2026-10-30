@@ -94,7 +94,7 @@ describe("the check fails", () => {
 
   it("on an income table that shrinks with household size", () => {
     const c = copy();
-    c.NY.programs.snap.incomeLimit!.value.bySize = [2000, 1500];
-    expect(validateCatalog(c, TODAY)).toContain("NY snap incomeLimit: amounts must be positive and grow with household size");
+    c.NY.programs.snap.incomeLimit!.value.tables[0]!.bySize = [2000, 1500];
+    expect(validateCatalog(c, TODAY)).toContain("NY snap incomeLimit table 1: amounts must be positive and grow with household size");
   });
 });

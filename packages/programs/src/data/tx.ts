@@ -26,41 +26,73 @@ export const TX: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "165% of the federal poverty level, the column HHSC says is the income limit for categorically eligible households (Texas Works Handbook C-121, Revision 26-4). Households that are not categorically eligible use the 130% gross column: 1729, 2345, 2960, 3575, 4191, 4806, 5421, 6037, each additional 616.",
+          "year": "Revision 26-4; Effective Oct. 1, 2026",
+          "basis": "Texas Works Handbook C-121 SNAP maximum income limits: a 165% FPL column that HHSC says is the income limit for categorically eligible households, and a Gross (130%) column for the gross income test. A-1341 says the gross income test applies to all households except those with a member who is elderly or has a disability, or that are categorically eligible.",
           "period": "monthly",
-          "bySize": [
-            2195,
-            2976,
-            3757,
-            4538,
-            5319,
-            6100,
-            6881,
-            7662
-          ],
-          "eachAdditional": 781
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "Categorically eligible households (165% FPL column). HHSC also uses this column to decide whether an elderly or disabled person who buys and prepares food with others may be a separate household.",
+              "bySize": [
+                2195,
+                2976,
+                3757,
+                4538,
+                5319,
+                6100,
+                6881,
+                7662,
+                8443,
+                9224
+              ],
+              "eachAdditional": 781
+            },
+            {
+              "appliesTo": "Households that are not categorically eligible (Gross 130% column). Households with a member who is elderly or has a disability do not take this gross income test (A-1341).",
+              "bySize": [
+                1729,
+                2345,
+                2960,
+                3575,
+                4191,
+                4806,
+                5421,
+                6037,
+                6653,
+                7269
+              ],
+              "eachAdditional": 616
+            }
+          ]
         },
         "sourceUrl": "https://fhb.hhs.texas.gov/book/export/html/306316",
         "checkedAt": "2026-10-30",
-        "quote": "SNAP Maximum Income Limits Effective Oct. 1, 2026"
+        "quote": "The figures in this column are also the income limits for categorically eligible households."
       },
       "netIncomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "Net (100%) column of the HHSC SNAP maximum income limits table (Texas Works Handbook C-121, Revision 26-4); the table does not say which households it applies to.",
+          "year": "Revision 26-4; Effective Oct. 1, 2026",
+          "basis": "Net (100%) column of the Texas Works Handbook C-121 SNAP maximum income limits. A-1341 says the net income test applies to all households except categorically eligible ones, including a household with an elderly or disabled member whose gross income is over 165% FPL and that is not categorically eligible.",
           "period": "monthly",
-          "bySize": [
-            1330,
-            1804,
-            2277,
-            2750,
-            3224,
-            3697,
-            4170,
-            4644
-          ],
-          "eachAdditional": 474
+          "measuredOn": "net",
+          "tables": [
+            {
+              "appliesTo": "Households that are not categorically eligible (Net 100% column).",
+              "bySize": [
+                1330,
+                1804,
+                2277,
+                2750,
+                3224,
+                3697,
+                4170,
+                4644,
+                5118,
+                5592
+              ],
+              "eachAdditional": 474
+            }
+          ]
         },
         "sourceUrl": "https://fhb.hhs.texas.gov/book/export/html/306316",
         "checkedAt": "2026-10-30",
@@ -115,20 +147,54 @@ export const TX: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "Texas Works Handbook C-131.2, Revision 15-4, effective October 1, 2015 (still the current table on 2026-10-30)",
-          "basis": "Medicaid for Parents and Caretaker Relatives (TP 08), one-parent column. This is the only income-based Medicaid group for adults 19-64 that the fetched pages show, and it requires caring for a child who gets Medicaid. Two-parent column: size 2 161, 3 251, 4 285, 5 332, 6 367, 7 412, 8 447. Adults not caring for a child who are not refugees are sent to HealthCare.gov by the state application. Other adult routes are pregnancy, disability and Healthy Texas Women, each with its own rules.",
+          "year": "Revision 15-4; Effective October 1, 2015 (still the current C-131.2 table on 2026-10-30)",
+          "basis": "Medicaid for Parents and Caretaker Relatives (TP 08) limits in Texas Works Handbook C-131.2, compared with MAGI household income, which A-1341 Step 4 defines as the sum of MAGI individual incomes minus the standard MAGI disregard of five percentage points of FPL (C-131.4, on this page; $113.85 a month for size 3 in 2026). The table does not include the disregard, and the program requires a parent or caretaker relative living with a dependent child (A-240).",
           "period": "monthly",
-          "bySize": [
-            103,
-            196,
-            230,
-            277,
-            310,
-            356,
-            389,
-            441
-          ],
-          "eachAdditional": 52
+          "measuredOn": "magi",
+          "tables": [
+            {
+              "appliesTo": "TP 08 households with one parent or caretaker relative (One Parent column).",
+              "bySize": [
+                103,
+                196,
+                230,
+                277,
+                310,
+                356,
+                389,
+                441,
+                476,
+                527,
+                562,
+                613,
+                648,
+                700,
+                734
+              ],
+              "eachAdditional": 52
+            },
+            {
+              "appliesTo": "TP 08 households with two parents (Two Parents column). The page prints N/A for size 1, shown here as null; rows start at size 2.",
+              "bySize": [
+                null,
+                161,
+                251,
+                285,
+                332,
+                367,
+                412,
+                447,
+                500,
+                535,
+                587,
+                622,
+                675,
+                710,
+                762
+              ],
+              "eachAdditional": 52
+            }
+          ]
         },
         "sourceUrl": "https://fhb.hhs.texas.gov/handbooks/texas-works-handbook/c-130-medical-programs",
         "checkedAt": "2026-10-30",
@@ -162,6 +228,10 @@ export const TX: StateCatalog = {
         {
           "field": "phone",
           "reason": "No Medicaid-only application line found. The number given is the HHSC benefits line printed on Form H1010, the state's combined application for SNAP, TANF and Medicaid (also printed on the HHS Lone Star Card contacts page, which returns 403 to scripted fetches). The Statewide Medicaid help line 800-335-8957 (Texas Works Handbook C-1460) is for questions about covered services and bills, not applying."
+        },
+        {
+          "field": "incomeLimit",
+          "reason": "The two-parent column prints N/A for household size 1, so that table's first bySize entry is null rather than a number. If the schema requires numbers only, the consumer should treat size 1 as no two-parent limit (a two-parent household has at least two people)."
         }
       ]
     },
@@ -188,20 +258,26 @@ export const TX: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "Program Year 2026 (federal poverty guidelines effective January 26, 2026)",
-          "basis": "150% of the federal poverty income guidelines (TDHCA: CEAP at 150% of FPIG)",
+          "year": "Program Year 2026 (Effective January 26, 2026)",
+          "basis": "TDHCA calculates CEAP eligibility at 150% of the federal poverty income guidelines; the page does not say whether income is gross or net.",
           "period": "annual",
-          "bySize": [
-            23940,
-            32460,
-            40980,
-            49500,
-            58020,
-            66540,
-            75060,
-            83580
-          ],
-          "eachAdditional": 8520
+          "measuredOn": "unstated",
+          "tables": [
+            {
+              "appliesTo": "All CEAP households (150% of Federal Poverty Income Limits column).",
+              "bySize": [
+                23940,
+                32460,
+                40980,
+                49500,
+                58020,
+                66540,
+                75060,
+                83580
+              ],
+              "eachAdditional": 8520
+            }
+          ]
         },
         "sourceUrl": "https://www.tdhca.texas.gov/community-affairs-income-guidelines",
         "checkedAt": "2026-10-30",

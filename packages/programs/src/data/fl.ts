@@ -26,45 +26,77 @@ export const FL: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "200% of the federal poverty level, broad-based categorical eligibility; DCF says most households must have gross income at or below 200% FPL (Appendix A-1 also lists a 130% FPL gross column, 1729 for one person, without saying here which households it applies to)",
+          "year": "FY2027 (Appendix A-1, effective October 1, 2026)",
+          "basis": "DCF Appendix A-1 Gross and Net Income Limits, effective October 1, 2026, prints a 200% FPL and a 130% FPL monthly gross column. DCF's SNAP Eligibility page says most households must have gross income at or below 200% FPL; neither page says which households are held to the 130% column.",
           "period": "monthly",
-          "bySize": [
-            2660,
-            3608,
-            4554,
-            5500,
-            6448,
-            7394,
-            8340,
-            9288
-          ],
-          "eachAdditional": 948
+          "measuredOn": "gross",
+          "tables": [
+            {
+              "appliesTo": "Most households (200% FPL gross limit; DCF says most households must meet it)",
+              "bySize": [
+                2660,
+                3608,
+                4554,
+                5500,
+                6448,
+                7394,
+                8340,
+                9288,
+                10236,
+                11184
+              ],
+              "eachAdditional": 948
+            },
+            {
+              "appliesTo": "Households held to the 130% FPL gross limit; Appendix A-1 does not say which households these are, so no household should be screened against it until the group is confirmed",
+              "bySize": [
+                1729,
+                2345,
+                2960,
+                3575,
+                4191,
+                4806,
+                5421,
+                6037,
+                6653,
+                7269
+              ],
+              "eachAdditional": 616
+            }
+          ]
         },
         "sourceUrl": "https://ffic.myflfamilies.com/manual/essfiles/31176.pdf",
         "checkedAt": "2026-10-30",
-        "quote": "Gross and Net Income Limits"
+        "quote": "Gross and Net Income Limits Effective October 1, 2026"
       },
       "netIncomeLimit": {
         "value": {
-          "year": "FY2027 (Oct 1, 2026 to Sep 30, 2027)",
-          "basis": "100% of the federal poverty level, from DCF Appendix A-1 (effective October 1, 2026); the chart does not say which households must meet it",
+          "year": "FY2027 (Appendix A-1, effective October 1, 2026)",
+          "basis": "100% of the federal poverty level, the Monthly 100% Net Income Limit column of DCF Appendix A-1, effective October 1, 2026. The chart does not say which households must meet the net test.",
           "period": "monthly",
-          "bySize": [
-            1330,
-            1804,
-            2277,
-            2750,
-            3224,
-            3697,
-            4170,
-            4644
-          ],
-          "eachAdditional": 474
+          "measuredOn": "net",
+          "tables": [
+            {
+              "appliesTo": "Households that must pass the net income test (the chart does not name them)",
+              "bySize": [
+                1330,
+                1804,
+                2277,
+                2750,
+                3224,
+                3697,
+                4170,
+                4644,
+                5118,
+                5592
+              ],
+              "eachAdditional": 474
+            }
+          ]
         },
         "sourceUrl": "https://ffic.myflfamilies.com/manual/essfiles/31176.pdf",
         "checkedAt": "2026-10-30",
-        "quote": "Gross and Net Income Limits"
+        "quote": "Monthly 100% Net Income Limit"
       },
       "renewal": {
         "value": "Most cases are approved for 6 or 12 months; DCF sends a letter when it is time to renew, and the renewal should be completed by the 15th of the month the benefit period ends, even if nothing has changed.",
@@ -90,7 +122,20 @@ export const FL: StateCatalog = {
         "checkedAt": "2026-10-30",
         "quote": "renew as quickly as possible by going to https://myaccess.myflfamilies.com to update your Medicaid information"
       },
-      "gaps": []
+      "gaps": [
+        {
+          "field": "incomeLimit",
+          "reason": "Appendix A-1 prints a 130% FPL gross column but no fetched DCF page says which households it applies to (the SNAP Eligibility page uses 130% FPL only as the change reporting threshold), so its table has no 'when' and its appliesTo says not to screen against it. The ESS Program Policy Manual index and CFOP 165 page returned 404, so the manual passage could not be read."
+        },
+        {
+          "field": "incomeLimit",
+          "reason": "Appendix A-1 also prints a '165% Need Standards' column (2,195 for one person, +781 each additional). It is labeled a need standard, not an income limit, and the chart does not say which households use it, so it is left out of the tables."
+        },
+        {
+          "field": "netIncomeLimit",
+          "reason": "Appendix A-1 does not say which households must pass the 100% FPL net test, so the table has no 'when'."
+        }
+      ]
     },
     "medicaid": {
       "state": "FL",
@@ -115,24 +160,46 @@ export const FL: StateCatalog = {
       },
       "incomeLimit": {
         "value": {
-          "year": "DCF Appendix A-7, updated 02/02/2026 (the chart's effective date row lists April 1992 for this column and April 2026 for the FPL columns)",
-          "basis": "Parents and other caretaker relatives living with a dependent child under 18 (the same column covers children 19 and 20). Florida's chart has no full-coverage group for adults 19 to 64 without children unless they are pregnant, aged, or disabled; DCF's Medicaid page lists only parents and caretakers, children, pregnant women, former foster youth under 26, emergency care for non-citizens, and aged or disabled people. Adults over the limit may qualify for the Medically Needy program, which covers costs after a monthly share of cost. The chart lists a separate standard disregard next to this limit (109 for one person, 146 for two, 183 for three).",
+          "year": "Appendix A-7, updated 02/02/2026 (this column's effective date is April 1992)",
+          "basis": "Family-Related Medicaid limit for parents and other caretaker relatives of a dependent child (the same column covers children 19 and 20); Florida's chart has no full-coverage group for adults 19 to 64 without children unless pregnant, aged or disabled, and adults over the limit may get Medically Needy coverage with a share of cost. Income is counted by expected tax filing status after allowable tax deductions (DCF fact sheet), and the table includes neither disregard: the chart prints a separate standard disregard for this group (109, 146, 183, 221, 258, 296, 333, 371 for sizes 1 to 8, up to 978 for 24), its MNIL note gives this limit plus the standard disregard as the combined figure (289 for one person), and a 5% MAGI disregard (67 for one person) is used only if it makes a failing person pass.",
           "period": "monthly",
-          "bySize": [
-            180,
-            241,
-            303,
-            364,
-            426,
-            487,
-            549,
-            610
-          ],
-          "eachAdditional": 62
+          "measuredOn": "magi",
+          "tables": [
+            {
+              "appliesTo": "Parents and other caretaker relatives living with a dependent child (adults 19 to 64 without children have no full-coverage group on this chart)",
+              "bySize": [
+                180,
+                241,
+                303,
+                364,
+                426,
+                487,
+                549,
+                610,
+                671,
+                733,
+                795,
+                857,
+                919,
+                981,
+                1043,
+                1105,
+                1167,
+                1229,
+                1291,
+                1353,
+                1415,
+                1477,
+                1539,
+                1601
+              ],
+              "eachAdditional": 62
+            }
+          ]
         },
         "sourceUrl": "https://ffic.myflfamilies.com/manual/essfiles/30446.pdf",
         "checkedAt": "2026-10-30",
-        "quote": "Family Related Medicaid Income Limits"
+        "quote": "MNIL--The Medically Needy Income Limit (MNIL) includes the appropriate standard disregard."
       },
       "renewal": {
         "value": "Coverage is approved for 12 months at a time and must be renewed every year through MyACCESS or DCF; changes that affect eligibility must be reported within 10 days.",
@@ -160,8 +227,8 @@ export const FL: StateCatalog = {
       },
       "gaps": [
         {
-          "field": "incomeLimit (adults without children)",
-          "reason": "No official page fetched states a limit for adults 19 to 64 without children; DCF's Medicaid page and Family-Related Medicaid fact sheet list no such coverage group. No official page fetched states in words that Florida did not expand Medicaid, so that is not recorded as a fact."
+          "field": "incomeLimit",
+          "reason": "No official page fetched states a limit for adults 19 to 64 without children; DCF's Medicaid page and the Family-Related Medicaid fact sheet list no such coverage group. No fetched page states in words that Florida did not expand Medicaid. Appendix A-7 does not use the word MAGI for the limit itself; measuredOn magi rests on its 5% MAGI disregard column and the fact sheet's tax filing rules. The chart does not say in words whether the standard disregard is subtracted from income or added to the limit."
         }
       ]
     },
@@ -189,19 +256,25 @@ export const FL: StateCatalog = {
       "incomeLimit": {
         "value": {
           "year": "Not stated on the page; current FloridaCommerce LIHEAP page as fetched 2026-10-30",
-          "basis": "Total household income no more than 60% of Florida State Median Income or 150% of the federal poverty level; the page lists maximum annual income",
+          "basis": "Total household income no more than 60% of Florida State Median Income or 150% of the federal poverty level; the page lists maximum annual income for households of 1 to 8.",
           "period": "annual",
-          "bySize": [
-            32155,
-            42049,
-            51943,
-            61837,
-            71730,
-            81624,
-            83479,
-            85335
-          ],
-          "eachAdditional": null
+          "measuredOn": "unstated",
+          "tables": [
+            {
+              "appliesTo": "All households",
+              "bySize": [
+                32155,
+                42049,
+                51943,
+                61837,
+                71730,
+                81624,
+                83479,
+                85335
+              ],
+              "eachAdditional": null
+            }
+          ]
         },
         "sourceUrl": "https://floridajobs.org/community-development/Low-Income-Home-Energy-Assistance-Program",
         "checkedAt": "2026-10-30",
@@ -231,8 +304,12 @@ export const FL: StateCatalog = {
           "reason": "The FloridaCommerce LIHEAP page has no statewide application line; it tells residents to call their local county provider. The ACF contact listing prints 850-717-8450 as public inquiries for the state program office, which is an administrator line, not an application line, so it is not recorded."
         },
         {
+          "field": "incomeLimit.measuredOn",
+          "reason": "The FloridaCommerce page says 'total household income' and asks for proof of current gross income, but does not say the limit is measured on gross income. The page's linked LIHEAP DRAFT State Plan FFY 2027 (a separate, watermarked draft PDF) checks Gross Income at question 1.8; kept as unstated because the fact's source page does not say it."
+        },
+        {
           "field": "incomeLimit.year",
-          "reason": "The FloridaCommerce page gives the annual income table without a program year; the FFY 2027 draft state plan PDF returned 403, so the year could not be confirmed."
+          "reason": "The FloridaCommerce page gives the annual table without a program year; the only plan linked is a draft for FFY 2027 and it does not print these dollar amounts."
         },
         {
           "field": "incomeLimit.eachAdditional",

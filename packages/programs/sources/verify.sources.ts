@@ -71,12 +71,18 @@ function page(url: string): Promise<Page> {
   return pages.get(url)!;
 }
 
+type Sourced = Omit<Fact<unknown>, "value">;
+const isSourced = (v: unknown): v is Sourced => Boolean(v && typeof v === "object" && "sourceUrl" in v);
+
 const facts = STATES.flatMap((state) =>
   PROGRAMS.flatMap((program) => {
     const entry = CATALOG[state].programs[program];
-    return Object.entries(entry)
-      .filter(([, v]) => v && typeof v === "object" && "sourceUrl" in v)
-      .map(([field, v]) => ({ id: `${state} ${program} ${field}`, fact: v as Fact<unknown> }));
+    const statewide = Object.entries(entry).filter(([, v]) => isSourced(v)) as [string, Fact<unknown>][];
+    const tables = (["incomeLimit", "netIncomeLimit"] as const).flatMap((k) =>
+      (entry[k]?.value.tables ?? []).flatMap((t, i) => (t.source ? [[`${k} table ${i + 1}`, t.source] as [string, Sourced]] : [])),
+    );
+    const areas = (entry.areas ?? []).flatMap((a) => Object.entries(a.facts).map(([k, v]) => [`${a.area} ${k}`, v as Sourced] as [string, Sourced]));
+    return [...statewide, ...tables, ...areas].map(([field, fact]) => ({ id: `${state} ${program} ${field}`, fact }));
   }),
 );
 

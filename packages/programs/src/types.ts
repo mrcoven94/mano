@@ -14,16 +14,40 @@ export interface Fact<T> {
   quote: string;
 }
 
+// What a person can tell Mano that settles which of a program's limits
+// applies to them.
+export type HouseholdFact = "earnedIncome" | "elderlyOrDisabled" | "dependentCare";
+export type Condition = Partial<Record<HouseholdFact, boolean>>;
+
+// One published income table and the households it applies to.
+export interface LimitTable {
+  appliesTo: string;
+  // Alternatives: the table applies when any one of them holds. Absent means
+  // nothing a person says settles it (for example categorical eligibility),
+  // so the table always stays possible.
+  when?: Condition[];
+  // Dollars for household sizes 1, 2, 3, ... in order, every row the source
+  // publishes; null where the source prints no limit for that size. Empty
+  // when the source names this group but gives no amounts.
+  bySize: (number | null)[];
+  // Dollars added for each person past the last published row, only when the
+  // source gives that increment.
+  eachAdditional: number | null;
+  // When this table is on a different official page than the rest of the fact.
+  source?: Omit<Fact<never>, "value">;
+}
+
 export interface IncomeLimit {
   // The year the numbers are for, as the source labels it.
   year: string;
-  // Who the limit applies to and which rule sets it.
+  // Which rule sets the limits.
   basis: string;
   period: "monthly" | "annual";
-  // Dollars for household sizes 1, 2, 3, ... in order.
-  bySize: number[];
-  // Dollars added for each person past the last size, when the source gives one.
-  eachAdditional: number | null;
+  // The income the limit is compared with: gross income before deductions,
+  // net income after them, MAGI (modified adjusted gross income, with any
+  // disregard), or not stated by the source.
+  measuredOn: "gross" | "net" | "magi" | "unstated";
+  tables: LimitTable[];
 }
 
 export interface ProgramFacts {
@@ -50,10 +74,21 @@ export interface Gap {
   reason: string;
 }
 
+// A part of the state where people apply or renew another way (New York
+// City through ACCESS HRA). Its facts replace the statewide ones there.
+export interface AreaRoute {
+  area: string;
+  // Lowercase names a person may give for a place in the area: the city,
+  // boroughs, counties.
+  places: string[];
+  facts: Partial<Pick<ProgramFacts, "apply" | "renewal" | "phone" | "website">>;
+}
+
 export type ProgramEntry = {
   state: StateCode;
   program: ProgramId;
   gaps: Gap[];
+  areas?: AreaRoute[];
 } & Partial<ProgramFacts>;
 
 // A program site that is not on .gov, counted as official because a .gov

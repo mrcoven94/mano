@@ -41,16 +41,28 @@ export function parseProgram(input: string, state: StateCode): ProgramId | null 
   return PROGRAMS.find((p) => PROGRAM_NAMES[p].includes(s) || aliasesOf(CATALOG[state].programs[p]).includes(s)) ?? null;
 }
 
-// One program in one state, by code or name for either. Null when the
-// catalog does not have it: the caller says so, never guesses.
-export function lookupProgram(query: { state: string; program: string }): ProgramEntry | null {
+// The entry as it applies in one place: in an area with its own route (New
+// York City), that area's facts replace the statewide ones.
+export type LookedUp = ProgramEntry & { area?: string };
+
+function inPlace(entry: ProgramEntry, place?: string): LookedUp {
+  // "Brooklyn, NY" and "Kings County" name the same place as "brooklyn".
+  const p = place ? norm(place).replace(/ (ny|new york)$/, "") : "";
+  const route = p ? entry.areas?.find((a) => a.places.includes(p) || a.places.includes(p.replace(/ (borough|county)$/, ""))) : undefined;
+  return route ? { ...entry, ...route.facts, area: route.area } : entry;
+}
+
+// One program in one state, by code or name for either, optionally in a
+// city or county. Null when the catalog does not have it: the caller says
+// so, never guesses.
+export function lookupProgram(query: { state: string; program: string; place?: string }): LookedUp | null {
   const state = parseState(query.state);
   if (!state) return null;
   const program = parseProgram(query.program, state);
-  return program ? CATALOG[state].programs[program] : null;
+  return program ? inPlace(CATALOG[state].programs[program], query.place) : null;
 }
 
-export function listPrograms(state: string): ProgramEntry[] {
+export function listPrograms(state: string, place?: string): LookedUp[] {
   const code = parseState(state);
-  return code ? PROGRAMS.map((p) => CATALOG[code].programs[p]) : [];
+  return code ? PROGRAMS.map((p) => inPlace(CATALOG[code].programs[p], place)) : [];
 }
