@@ -38,3 +38,36 @@ describe("the responder uses the worker's crisis decision", () => {
     expect(String(JSON.parse(init.body as string).instructions)).not.toContain("Mano has already sent them this line");
   });
 });
+
+describe("ModelCrisisCheck hedges a slow or empty answer", () => {
+  it("sends a second request when the first is slow, and takes the first answer", async () => {
+    let n = 0;
+    const fetchFn = vi.fn(async (_u: string, init: RequestInit) => {
+      n += 1;
+      if (n === 1) {
+        await new Promise((resolve, reject) => {
+          const t = setTimeout(resolve, 500);
+          init.signal?.addEventListener("abort", () => (clearTimeout(t), reject(new Error("aborted"))));
+        });
+      }
+      return answer("no");
+    });
+    const check = new ModelCrisisCheck({ apiKey: "k", model: "muse-spark-1.3", fetchFn: fetchFn as unknown as typeof fetch, hedgeAfterMs: 20 });
+    const started = Date.now();
+    expect(await decideCrisis("Should I stop taking my blood pressure pills?", check)).toMatchObject({ crisis: false });
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats an empty answer as no answer, and uses the hedge's", async () => {
+    let n = 0;
+    const fetchFn = vi.fn(async () => (++n === 1 ? answer("") : answer("no")));
+    const check = new ModelCrisisCheck({ apiKey: "k", model: "muse-spark-1.3", fetchFn: fetchFn as typeof fetch, hedgeAfterMs: 10 });
+    expect(await decideCrisis("Should I stop taking my blood pressure pills?", check)).toMatchObject({ crisis: false });
+  });
+
+  it("is a crisis when both answers are empty", async () => {
+    const check = new ModelCrisisCheck({ apiKey: "k", model: "muse-spark-1.3", fetchFn: (async () => answer("")) as typeof fetch, hedgeAfterMs: 10 });
+    expect(await decideCrisis("Should I stop taking my blood pressure pills?", check)).toMatchObject({ crisis: true });
+  });
+});

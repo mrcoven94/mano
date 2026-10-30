@@ -15,6 +15,8 @@ export interface ModelCrisisCheckOptions {
   fetchFn?: typeof fetch;
   // False sends cf-aig-collect-log: false, so AI Gateway keeps no copy.
   collectLogs?: boolean;
+  // When the second, identical request goes out.
+  hedgeAfterMs?: number;
 }
 
 export class ModelCrisisCheck implements CrisisCheck {
@@ -24,6 +26,7 @@ export class ModelCrisisCheck implements CrisisCheck {
   private baseUrl: string;
   private fetchFn: typeof fetch;
   private collectLogs: boolean;
+  private hedgeAfterMs: number;
 
   constructor(opts: ModelCrisisCheckOptions) {
     if (!opts.apiKey) throw new Error("A model API key is required.");
@@ -33,9 +36,38 @@ export class ModelCrisisCheck implements CrisisCheck {
     this.baseUrl = (opts.baseUrl ?? "https://api.meta.ai/v1").replace(/\/$/, "");
     this.fetchFn = opts.fetchFn ?? boundFetch;
     this.collectLogs = opts.collectLogs ?? true;
+    this.hedgeAfterMs = opts.hedgeAfterMs ?? 700;
   }
 
+  // The answer has 2 seconds (decideCrisis). The model sometimes takes
+  // longer or returns nothing, so a second identical request goes out
+  // after hedgeAfterMs; the first non-empty answer wins and the other is
+  // cancelled. An empty answer is not an answer.
   async ask(text: string, signal: AbortSignal): Promise<string> {
+    const controllers = [new AbortController(), new AbortController()];
+    const cancelAll = () => controllers.forEach((c) => c.abort());
+    signal.addEventListener("abort", cancelAll, { once: true });
+    const once = async (c: AbortController): Promise<string> => {
+      const answer = (await this.request(text, AbortSignal.any([signal, c.signal]))).trim();
+      if (!answer) throw new Error("crisis check returned no text");
+      return answer;
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const hedged = new Promise<string>((resolve, reject) => {
+      timer = setTimeout(() => once(controllers[1]!).then(resolve, reject), this.hedgeAfterMs);
+    });
+    try {
+      return await Promise.any([once(controllers[0]!), hedged]);
+    } catch (err) {
+      throw err instanceof AggregateError ? (err.errors[0] ?? err) : err;
+    } finally {
+      clearTimeout(timer);
+      cancelAll();
+      signal.removeEventListener("abort", cancelAll);
+    }
+  }
+
+  private async request(text: string, signal: AbortSignal): Promise<string> {
     const headers: Record<string, string> = { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" };
     if (!this.collectLogs) headers["cf-aig-collect-log"] = "false";
     const res = await this.fetchFn(`${this.baseUrl}/responses`, {
@@ -47,7 +79,8 @@ export class ModelCrisisCheck implements CrisisCheck {
         instructions: CRISIS_CHECK_INSTRUCTIONS,
         input: [{ role: "user", content: text }],
         store: false,
-        max_output_tokens: 256,
+        // Room for the model's reasoning tokens; a small cap returns no text.
+        max_output_tokens: 512,
         reasoning: { effort: "minimal" },
       }),
     });
