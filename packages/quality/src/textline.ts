@@ -17,7 +17,7 @@ import {
   stripBlockedLinks,
   type HistoryMessage,
 } from "@mano/channels";
-import { CRISIS_LINE, SAFE_REPLY, guardReply, holdCrisisLines, mightBeCrisis, type GuardChange } from "@mano/persona";
+import { CRISIS_LINE, SAFE_REPLY, crisisTurn, guardReply, holdCrisisLines, type GuardChange } from "@mano/persona";
 // The worker's fixed opt-out reply. apps/channels keeps it next to its other
 // fixed texts; read in place until packages/channels exports it.
 import { OPT_OUT_BUBBLE } from "../../../apps/channels/src/text.ts";
@@ -71,8 +71,9 @@ export class TextLine {
       return { route: "fast", headsUp: null, bubbles: [OPT_OUT_BUBBLE], firstTextMs: 0, totalMs: 0, guardChanges: [], linksRemoved: 0, attempts: 0, billedInputChars: 0, outputChars: 0 };
     }
     const turnText = texts.join("\n");
-    // The worker's one crisis detector, broad on purpose.
-    const crisis = mightBeCrisis(turnText);
+    // The worker's crisis decision: the broad detector, minus an exact
+    // benefits cut ("they cut my food stamps").
+    const crisis = crisisTurn(turnText);
     const modelIds = [this.model];
     const changes: GuardChange[] = [];
     const guard = (text: string): string => {

@@ -140,3 +140,11 @@ test("STOP gets the worker's own opt-out reply with no model call", async () => 
   assert.equal(script.seen.length, 0);
   assert.match(run.bubbles[0]!, /unsubscribed/);
 });
+
+test("a benefits cut is not a crisis turn, as on the worker", async () => {
+  const script: Script = { replies: ["That's rough. Did they send a letter saying why?"], seen: [] };
+  const run = await line(script).turn(["They cut my food stamps."], []);
+  assert.ok(!run.bubbles.join(" ").includes(CRISIS_LINE), "a benefits cut got the crisis line");
+  const crisis = await line({ replies: ["I hear you."], seen: [] }).turn(["They cut my food stamps. I want to kill myself."], []);
+  assert.ok(crisis.bubbles.join(" ").startsWith(CRISIS_LINE));
+});
