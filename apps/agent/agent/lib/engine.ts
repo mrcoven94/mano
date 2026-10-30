@@ -221,6 +221,19 @@ export class PersonEngine {
     await this.json("DELETE", "/pending-approval", { approvalId, generation: this.generation });
   }
 
+  async getConversationGeneration(): Promise<number> {
+    const out = (await this.json("GET", "/conversation")) as { generation?: unknown };
+    if (typeof out.generation !== "number") throw new EngineError(502);
+    return out.generation;
+  }
+
+  // Moves Engine to this turn's generation when Channels deleted the
+  // conversation but its own call to Engine never landed. A transition:
+  // at or past it, Engine changes nothing.
+  async advanceConversation(): Promise<void> {
+    await this.json("DELETE", "/conversation", { generation: this.generation });
+  }
+
   async listMemory(): Promise<MemoryRow[]> {
     const out = (await this.json("GET", "/memory")) as { memories?: unknown };
     const rows = Array.isArray(out.memories) ? out.memories : [];

@@ -198,6 +198,24 @@ describe("the approval question reaches the person exactly", () => {
   });
 });
 
+describe("what the model is told about earlier requests", () => {
+  it("after a YES is filed, the next turn knows it was filed, not still waiting", async () => {
+    await send(turn("turn_ask_000017", "Please file my renewal"));
+    await send(turn("turn_yes_000017", "YES"));
+    await send(turn("turn_next000017", "and a second copy please"));
+    const last = agentCalls.at(-1)!;
+    expect(last.context.join("\n")).toMatch(/approved it and it was filed/i);
+    expect(last.context.join("\n")).not.toMatch(/waiting for this person/i);
+  });
+
+  it("after a NO, the next turn knows nothing was sent", async () => {
+    await send(turn("turn_ask_000018", "Please file my renewal"));
+    await send(turn("turn_no_0000018", "NO"));
+    await send(turn("turn_next000018", "what happened with my renewal?"));
+    expect(agentCalls.at(-1)!.context.join("\n")).toMatch(/declined/i);
+  });
+});
+
 describe("uncertain and refused outcomes", () => {
   it("an unknown filing outcome is never reported as nothing sent, and the same approval is reconciled", async () => {
     await send(turn("turn_ask_000010", "Please file my renewal"));
@@ -265,6 +283,17 @@ describe("after a deletion", () => {
     expect(removed).toMatchObject({ generation: 1, pendingPointerCleared: true, approvalsRejected: 1 });
     await send(turn("turn_yes_000013", "YES", HANDLE, 1));
     expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  it("a turn in a newer conversation brings Engine forward when Channels' delete never reached it", async () => {
+    await send(turn("turn_ask_000016", "Please file my renewal"));
+    const res = await send(turn("turn_new_000016", "hello again", HANDLE, 1));
+    expect(res.status).toBe(200);
+    expect(engine.approvals()[0].status).toBe("rejected");
+    const conversation = await engine.fetch(`${ENGINE_URL}/api/persons/${personIdFor(HANDLE)}/conversation`, {
+      headers: { authorization: `Bearer ${ENGINE_AGENT_TOKEN}`, "x-mano-handle-grant": grants.get(HANDLE)! },
+    });
+    expect(await conversation.json()).toEqual({ generation: 1 });
   });
 
   it("a turn from before the deletion is refused and writes nothing", async () => {

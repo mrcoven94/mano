@@ -17,7 +17,7 @@
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { parseDecision } from "./decision.js";
-import { EngineError, type Engine, type EngineApproval, type PersonEngine } from "./engine.js";
+import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
 import { presentationHash, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 
@@ -209,8 +209,8 @@ async function runTurn(
   const pointer = await engine.getPointer();
   const decision = body.attachmentCount === 0 ? parseDecision(body.texts.join(" ")) : null;
   if (decision && pointer) return decide(engine, pointer.approvalId, decision);
+  const approvals = await engine.listApprovals();
   if (decision) {
-    const approvals = await engine.listApprovals();
     const waiting = waitingProposals(approvals);
     if (waiting.length > 0) return answerUnshown(engine, waiting, decision);
     if (replay) {
@@ -221,8 +221,12 @@ async function runTurn(
 
   const context: string[] = [];
   if (body.texts.some(detectCrisis)) context.push(CRISIS_LINE);
+  if (!pointer) {
+    const line = latestRequestLine(approvals);
+    if (line) context.push(line);
+  }
   if (pointer) {
-    const answerable = await engine.approval(pointer.approvalId);
+    const answerable = approvals.find((a) => a.id === pointer.approvalId);
     if (answerable) {
       context.push(
         `A yes-or-no approval question is waiting for this person:\n${renderQuestion(answerable)}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`,
@@ -250,6 +254,44 @@ async function runTurn(
   if (!text) return failure(502, "failed", settled.reason);
   if (!proposed || !question) return reply(text, settled.status);
   return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: proposed.id } };
+}
+
+// Records the turn in Engine's ledger. Engine's generation fence answers
+// 409 when the turn and Engine disagree on the conversation: a turn from
+// before a deletion is stale (null); a turn from after one that Engine
+// never heard of (Channels' own call failed) brings Engine forward, which
+// removes the old conversation's state, and is recorded then.
+async function recordTurn(engine: PersonEngine, turnId: string, receivedAt: string): Promise<EngineTurn | null> {
+  try {
+    return await engine.putTurn(turnId, receivedAt);
+  } catch (err) {
+    if (!(err instanceof EngineError) || err.status !== 409) throw err;
+    if ((await engine.getConversationGeneration()) >= engine.generation) return null;
+    await engine.advanceConversation();
+    console.log(JSON.stringify({ type: "mano_conversation_advanced", generation: engine.generation }));
+    return engine.putTurn(turnId, receivedAt);
+  }
+}
+
+// One line about the latest request the agent proposed, so the model,
+// which never sees the deterministic YES and NO exchanges, knows where it
+// stands.
+function latestRequestLine(approvals: EngineApproval[]): string | null {
+  const latest = approvals
+    .filter((a) => a.idempotencyKey.startsWith("agent:"))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  if (!latest) return null;
+  const state =
+    latest.status === "approved"
+      ? latest.outcome?.attempt === "done"
+        ? "the person approved it and it was filed"
+        : "the person approved it and Mano is checking whether it went through"
+      : latest.status === "rejected"
+        ? "the person declined it, or it was closed; nothing was sent"
+        : latest.status === "pending"
+          ? "it was prepared but has not been shown to the person yet"
+          : `it can no longer be used (${latest.status}); nothing was sent`;
+  return `Latest request Mano prepared: ${latest.purpose}. Status: ${state}. Do not say it is still waiting unless this says so.`;
 }
 
 // True for the first turn after a quiet stretch, as far as this process
@@ -288,14 +330,12 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
   let turnAtMs: number;
   let replay: boolean;
   try {
-    const turn = await engine.putTurn(body.turnId, new Date(receivedMs).toISOString());
+    const turn = await recordTurn(engine, body.turnId, new Date(receivedMs).toISOString());
+    if (!turn) return Response.json({ status: "stale", text: "" }, { status: 409 });
     turnAtMs = Date.parse(turn.firstReceivedAt);
     replay = turn.status === "complete";
   } catch (err) {
     const status = err instanceof EngineError ? err.status : null;
-    // 409 is Engine's generation fence: this turn is from a conversation
-    // that was deleted, so it never runs.
-    if (status === 409) return Response.json({ status: "stale", text: "" }, { status: 409 });
     console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "ledger", status }));
     return Response.json({ status: "error", text: "", reason: "ledger" }, { status: 503 });
   }

@@ -2,7 +2,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 
 import { personEngine, requireTurn } from "../lib/person.js";
-import { reminderIdFor } from "../lib/reminders.js";
+import { REMINDER_PREFIX, reminderIdFor } from "../lib/reminders.js";
 import { parseWhen, validateDue } from "../lib/when.js";
 
 export default defineTool({
@@ -24,9 +24,10 @@ export default defineTool({
     if (invalid) throw new Error(invalid);
     const saved = await engine.createReminder({
       id: reminderIdFor(turnId, parsed.dueAtMs, text),
-      text: text.trim(),
+      // Engine delivers this text as is, so it says what it is.
+      text: `${REMINDER_PREFIX}${text.trim()}`,
       dueAt: new Date(parsed.dueAtMs).toISOString(),
     });
-    return { reminderId: saved.id, dueAt: saved.dueAt, text: saved.text };
+    return { reminderId: saved.id, dueAt: saved.dueAt, text: saved.text.replace(REMINDER_PREFIX, "") };
   },
 });

@@ -34,7 +34,7 @@ describe("reminders in Engine", () => {
     const out = await remind.execute({ text: "call the county", when: "tomorrow at 9" }, ctx("turn_aaaaaaaa3"));
     expect(out).toMatchObject({ text: "call the county" });
     const [saved] = engine.remindersOf(PERSON);
-    expect(saved).toMatchObject({ text: "call the county", generation: 0, status: "scheduled" });
+    expect(saved).toMatchObject({ text: "Reminder: call the county", generation: 0, status: "scheduled" });
   });
 
   it("refuses when Engine is not configured", async () => {
@@ -53,7 +53,7 @@ describe("reminders in Engine", () => {
   it("two different reminders at the same time in one turn are both kept", async () => {
     await remind.execute({ text: "call the office", when: "tomorrow at 9" }, ctx("turn_pair000001"));
     await remind.execute({ text: "bring the pay stub", when: "tomorrow at 9" }, ctx("turn_pair000001"));
-    expect(engine.remindersOf(PERSON).map((r) => r.text).sort()).toEqual(["bring the pay stub", "call the office"]);
+    expect(engine.remindersOf(PERSON).map((r) => r.text).sort()).toEqual(["Reminder: bring the pay stub", "Reminder: call the office"]);
   });
 
   it("a turn without an ID cannot set a reminder", async () => {

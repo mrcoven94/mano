@@ -6,6 +6,8 @@
 // cancelled.
 import { createHash } from "node:crypto";
 
+export const REMINDER_PREFIX = "Reminder: ";
+
 // One reminder per turn, due time and wording: a replayed or recovered
 // turn derives the same ID, so it finds the reminder it already made,
 // while two different reminders set for the same time stay two. Case,
