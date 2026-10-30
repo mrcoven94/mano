@@ -23,9 +23,7 @@ export interface FileChooserLike {
 }
 
 export interface PageLike {
-  url(): string;
   goto(url: string): Promise<unknown>;
-  goBack(): Promise<unknown>;
   screenshot(): Promise<Buffer>;
   waitForTimeout(ms: number): Promise<void>;
   mouse: MouseLike;
@@ -39,7 +37,16 @@ export interface LaunchedPage {
 }
 
 export interface BrowserLauncher {
-  launch(options: { headless: boolean; width: number; height: number; profileDir?: string }): Promise<LaunchedPage>;
+  /** Every request of every page in the browser, popups included, must pass allowRequest before it is sent. */
+  launch(options: {
+    headless: boolean;
+    width: number;
+    height: number;
+    profileDir?: string;
+    allowRequest: (url: string) => boolean;
+    /** Proxy bypass rules (scheme://host:port), one per allowed origin; all other traffic must fail. */
+    bypass: string[];
+  }): Promise<LaunchedPage>;
 }
 
 export interface PlaywrightComputerOptions extends ComputerOptions {
@@ -47,7 +54,7 @@ export interface PlaywrightComputerOptions extends ComputerOptions {
   headless?: boolean;
   /** Persistent profile directory (per person). Defaults to a temp dir. */
   profileDir?: string;
-  /** Origins the page may stay on. Defaults to the first page opened. */
+  /** The only origins any request may go to. Defaults to the origin of the first page the caller opens. */
   allowedOrigins?: string[];
   /** Injected for tests. Defaults to real Chromium. */
   launcher?: BrowserLauncher;
@@ -64,7 +71,7 @@ export class PlaywrightComputer implements Computer {
   private closed = false;
 
   constructor(private options: PlaywrightComputerOptions = {}) {
-    this.origins = options.allowedOrigins ? [...options.allowedOrigins] : null;
+    this.origins = options.allowedOrigins ? options.allowedOrigins.map((o) => new URL(o).origin) : null;
   }
 
   private launcher(): BrowserLauncher {
@@ -74,19 +81,26 @@ export class PlaywrightComputer implements Computer {
         // Loaded on first launch, so hosts that only drive the Modal desktop
         // never load the local browser.
         const { chromium } = await import("playwright");
-        if (this.options.profileDir) {
-          const context = await chromium.launchPersistentContext(this.options.profileDir, {
-            headless: opts.headless,
-            viewport: { width: opts.width, height: opts.height },
-            deviceScaleFactor: 1,
-          });
-          const page = await context.newPage();
-          return { page: page as unknown as PageLike, close: () => context.close() };
-        }
-        const browser = await chromium.launch({ headless: opts.headless });
-        const context = await browser.newContext({ viewport: { width: opts.width, height: opts.height }, deviceScaleFactor: 1 });
+        // Two layers. The route aborts off-origin requests in every page and
+        // popup, but Playwright routes only the first hop of a redirect. So
+        // Chromium also sends every origin but the allowed ones to a closed
+        // local port: later hops fail before anything reaches another host.
+        // Chromium reads bypass rules last to first, so <-loopback> (proxy
+        // localhost too) goes first; this flag replaces Playwright's own.
+        const launch = {
+          headless: opts.headless,
+          proxy: { server: "http://127.0.0.1:9" },
+          args: [`--proxy-bypass-list=${["<-loopback>", ...opts.bypass].join(";")}`],
+        };
+        // Service workers would answer requests the route never sees.
+        const contextOptions = { viewport: { width: opts.width, height: opts.height }, deviceScaleFactor: 1, serviceWorkers: "block" as const };
+        const browser = opts.profileDir ? null : await chromium.launch(launch);
+        const context = opts.profileDir
+          ? await chromium.launchPersistentContext(opts.profileDir, { ...launch, ...contextOptions })
+          : await browser!.newContext(contextOptions);
+        await context.route("**/*", (route) => (opts.allowRequest(route.request().url()) ? route.continue() : route.abort("blockedbyclient")));
         const page = await context.newPage();
-        return { page: page as unknown as PageLike, close: () => browser.close() };
+        return { page: page as unknown as PageLike, close: () => (browser ? browser.close() : context.close()) };
       },
     };
   }
@@ -102,6 +116,8 @@ export class PlaywrightComputer implements Computer {
           width: this.options.width ?? 1280,
           height: this.options.height ?? 800,
           ...(profileDir ? { profileDir } : {}),
+          allowRequest: (url) => this.allows(url),
+          bypass: (this.origins ?? []).map(bypassRule),
         })
         .then((launched) => {
           // File pickers are answered with staged files, cycling so a repeated
@@ -165,14 +181,13 @@ export class PlaywrightComputer implements Computer {
           break;
       }
     }
-    await this.stayInside(page);
   }
 
+  /** The first call fixes the allowed origin when none was configured, so open the portal before anything else. */
   async goto(url: string): Promise<void> {
+    this.origins ??= [new URL(url).origin];
     const { page } = await this.started();
     await page.goto(url);
-    if (!this.origins) this.origins = [new URL(page.url()).origin];
-    await this.stayInside(page);
   }
 
   async stageFile(name: string, data: Uint8Array): Promise<string> {
@@ -206,12 +221,20 @@ export class PlaywrightComputer implements Computer {
     }
   }
 
-  private async stayInside(page: PageLike): Promise<void> {
-    if (!this.origins) return;
-    const here = page.url();
-    if (here === "about:blank") return;
-    if (!this.origins.includes(new URL(here).origin)) await page.goBack();
+  private allows(url: string): boolean {
+    if (!this.origins) return false;
+    try {
+      const { protocol, origin } = new URL(url);
+      return (protocol === "https:" || protocol === "http:") && this.origins.includes(origin);
+    } catch {
+      return false;
+    }
   }
+}
+
+function bypassRule(origin: string): string {
+  const { protocol, hostname, port } = new URL(origin);
+  return `${protocol}//${hostname}:${port || (protocol === "https:" ? "443" : "80")}`;
 }
 
 const KEY_ALIASES: Record<string, string> = { ctrl: "Control", control: "Control", return: "Enter" };

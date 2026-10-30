@@ -1,30 +1,18 @@
 import { existsSync } from "node:fs";
 import { describe, expect, test, vi } from "vitest";
-import { PlaywrightComputer, type FileChooserLike, type PageLike } from "../src/playwright";
+import { PlaywrightComputer, type BrowserLauncher, type FileChooserLike, type PageLike } from "../src/playwright";
 
 /** A page that records calls and never touches a browser. */
-function stubPage(url = "https://portal.test/apply"): PageLike & {
+function stubPage(): PageLike & {
   calls: string[];
   chooserHandler: ((chooser: FileChooserLike) => void) | null;
-  currentUrl: string;
-  goBacks: number;
 } {
   const calls: string[] = [];
   const stub = {
     calls,
     chooserHandler: null as ((chooser: FileChooserLike) => void) | null,
-    currentUrl: url,
-    goBacks: 0,
-    url() {
-      return stub.currentUrl;
-    },
     async goto(next: string) {
       calls.push(`goto ${next}`);
-      stub.currentUrl = next;
-    },
-    async goBack() {
-      calls.push("goBack");
-      stub.goBacks += 1;
     },
     async screenshot() {
       calls.push("screenshot");
@@ -63,6 +51,22 @@ function stubPage(url = "https://portal.test/apply"): PageLike & {
     },
   };
   return stub;
+}
+
+function recordingLauncher() {
+  const page = stubPage();
+  let allowRequest: ((url: string) => boolean) | null = null;
+  const launcher: BrowserLauncher & { page: typeof page; allow(url: string): boolean; bypass: string[] | null } = {
+    page,
+    bypass: null,
+    allow: (url) => allowRequest!(url),
+    launch: async (options) => {
+      allowRequest = options.allowRequest;
+      launcher.bypass = options.bypass;
+      return { page, close: async () => undefined };
+    },
+  };
+  return launcher;
 }
 
 describe("playwright stand-in", () => {
@@ -116,14 +120,37 @@ describe("playwright stand-in", () => {
     await computer.close();
   });
 
-  test("leaving the allowed origin goes back", async () => {
-    const page = stubPage();
-    const computer = new PlaywrightComputer({ launcher: { launch: async () => ({ page, close: async () => undefined }) } });
+  test("before the first page opens, every request is refused", async () => {
+    const launcher = recordingLauncher();
+    const computer = new PlaywrightComputer({ launcher });
+    await computer.screenshot();
+    expect(launcher.allow("https://portal.test/apply")).toBe(false);
+    expect(launcher.allow("about:blank")).toBe(false);
+    expect(launcher.bypass).toEqual([]);
+    await computer.close();
+  });
+
+  test("the first page the caller opens fixes the one allowed origin", async () => {
+    const launcher = recordingLauncher();
+    const computer = new PlaywrightComputer({ launcher });
     await computer.goto("https://portal.test/apply");
-    expect(page.goBacks).toBe(0);
-    page.currentUrl = "https://elsewhere.test/phish";
-    await computer.act([{ type: "wait" }]);
-    expect(page.goBacks).toBe(1);
+    expect(launcher.page.calls).toEqual(["goto https://portal.test/apply"]);
+    expect(launcher.bypass).toEqual(["https://portal.test:443"]);
+    expect(launcher.allow("https://portal.test/review?step=2")).toBe(true);
+    for (const url of ["https://elsewhere.test/", "http://portal.test/apply", "https://portal.test.elsewhere.test/", "https://sub.portal.test/", "file:///etc/passwd", "data:text/html,hi"]) {
+      expect(launcher.allow(url), url).toBe(false);
+    }
+    await computer.goto("https://elsewhere.test/");
+    expect(launcher.allow("https://elsewhere.test/")).toBe(false);
+    await computer.close();
+  });
+
+  test("configured origins win over the first page", async () => {
+    const launcher = recordingLauncher();
+    const computer = new PlaywrightComputer({ launcher, allowedOrigins: ["https://portal.test"] });
+    await computer.goto("https://elsewhere.test/");
+    expect(launcher.allow("https://elsewhere.test/")).toBe(false);
+    expect(launcher.allow("https://portal.test/apply")).toBe(true);
     await computer.close();
   });
 
