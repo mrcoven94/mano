@@ -1,12 +1,14 @@
-import type { Condition, HouseholdFact, LimitTable, ProgramEntry } from "./types.js";
+import type { Condition, LimitTable, ProgramEntry } from "./types.js";
 
 export interface Household {
   householdSize: number;
   // Gross monthly income, before taxes and deductions, as the person said it.
   monthlyIncome: number;
+  // Anyone in the household has income from work. The one household fact the
+  // screen uses to choose a table, because it means the same thing in every
+  // source. Age, disability and dependent care each have a source-specific
+  // definition the tool does not ask, so tables tied to them stay possible.
   earnedIncome?: boolean;
-  elderlyOrDisabled?: boolean;
-  dependentCare?: boolean;
 }
 
 // A rough screen has two outcomes. It never tells a person they are past a
@@ -32,11 +34,11 @@ export function limitAt(table: Pick<LimitTable, "bySize" | "eachAdditional">, si
   return end == null || table.eachAdditional === null ? null : end + (size - last) * table.eachAdditional;
 }
 
-// A table stays possible unless what the person said rules out every one of
-// its alternatives.
+// A table stays possible unless what the person said about earned income
+// rules out every one of its alternatives.
 function possible(table: LimitTable, household: Household): boolean {
-  if (!table.when) return true;
-  const fits = (c: Condition) => (Object.entries(c) as [HouseholdFact, boolean][]).every(([k, v]) => household[k] === undefined || household[k] === v);
+  if (!table.when || household.earnedIncome === undefined) return true;
+  const fits = (c: Condition) => c.earnedIncome === undefined || c.earnedIncome === household.earnedIncome;
   return table.when.some(fits);
 }
 
@@ -47,8 +49,9 @@ function cantTell(name: string, why: string): Screen {
 }
 
 // Compares the person's gross monthly income with every income table that
-// could apply to their household, and says they may qualify only when it is
-// at or under all of them. Anything else (a limit on MAGI or net income, a
+// could apply to a household of that size (every subgroup, age group and
+// category), and says they may qualify only when it is at or under the
+// lowest of them. Anything else (a limit on MAGI or net income, a
 // table with no amounts, a size with no published limit, an income the
 // tables do not settle) is "can't tell".
 export function screenIncome(entry: ProgramEntry, household: Household): Screen {
@@ -59,7 +62,8 @@ export function screenIncome(entry: ProgramEntry, household: Household): Screen 
   if (size < 1) return cantTell(name, "it needs the household size");
   const { measuredOn, period, year, tables } = fact.value;
   if (measuredOn !== "gross") return cantTell(name, `this limit is measured on ${measuredOn === "magi" ? "MAGI income" : measuredOn === "net" ? "income after deductions" : "income the source does not define"}, which monthly pay alone does not show`);
-  const candidates = tables.filter((t) => possible(t, household)).map((t) => ({ table: t, amount: limitAt(t, size) }));
+  const facts: Household = { householdSize: size, monthlyIncome: household.monthlyIncome, ...(household.earnedIncome === undefined ? {} : { earnedIncome: household.earnedIncome }) };
+  const candidates = tables.filter((t) => possible(t, facts)).map((t) => ({ table: t, amount: limitAt(t, size) }));
   if (candidates.length === 0 || candidates.some((c) => c.amount === null)) return cantTell(name, "which limit applies, or its amount for this household size, depends on facts Mano does not have");
   const lowest = candidates.reduce((a, b) => (b.amount! < a.amount! ? b : a));
   const income = period === "annual" ? household.monthlyIncome * 12 : household.monthlyIncome;

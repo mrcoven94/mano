@@ -14,8 +14,9 @@ export interface Fact<T> {
   quote: string;
 }
 
-// What a person can tell Mano that settles which of a program's limits
-// applies to them.
+// The household facts a source ties a table to. Only earnedIncome selects a
+// table in the screen (see screen.ts); the others describe the source's
+// groups.
 export type HouseholdFact = "earnedIncome" | "elderlyOrDisabled" | "dependentCare";
 export type Condition = Partial<Record<HouseholdFact, boolean>>;
 

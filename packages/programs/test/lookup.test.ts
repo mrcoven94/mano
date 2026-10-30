@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { limitAt, listPrograms, lookupProgram, screenIncome } from "../src/index.js";
+import { limitAt, listPrograms, lookupProgram, screenIncome, type Household } from "../src/index.js";
 
 describe("lookupProgram", () => {
   it("finds a program by state code and federal name", () => {
@@ -71,7 +71,7 @@ describe("screenIncome (Sol's households)", () => {
 
   it("says a working single New Yorker at $1,900 may qualify for SNAP, by the earned-income table", () => {
     const ny = lookupProgram({ state: "NY", program: "snap" })!;
-    const s = screenIncome(ny, { householdSize: 1, monthlyIncome: 1900, earnedIncome: true, elderlyOrDisabled: false });
+    const s = screenIncome(ny, { householdSize: 1, monthlyIncome: 1900, earnedIncome: true });
     expect(s.result).toBe("may_qualify");
     expect(s.limit?.amount).toBe(1995);
     expect(s.limit?.appliesTo).toMatch(/earned income/);
@@ -114,6 +114,30 @@ describe("screenIncome (Sol's households)", () => {
   });
 });
 
+describe("a higher table only from a fact the tool collects exactly (Sol, round 2)", () => {
+  it("can't tell for a 40-year-old in Illinois reporting a disability at $2,400: the 200% table needs IDHS's listed benefits", () => {
+    const il = lookupProgram({ state: "IL", program: "snap" })!;
+    const reported = { householdSize: 1, monthlyIncome: 2400, elderlyOrDisabled: true } as Household;
+    expect(screenIncome(il, reported).result).toBe("cant_tell");
+    const under = screenIncome(il, { householdSize: 1, monthlyIncome: 2195 });
+    expect(under.result).toBe("may_qualify");
+    expect(under.limit?.amount).toBe(2195);
+  });
+
+  it("can't tell for a 70-year-old in Arizona at $1,700: the 65 or older limit is $1,330", () => {
+    const ahcccs = lookupProgram({ state: "AZ", program: "medicaid" })!;
+    expect(screenIncome(ahcccs, { householdSize: 1, monthlyIncome: 1700, elderlyOrDisabled: true } as Household).result).toBe("cant_tell");
+    expect(screenIncome(ahcccs, { householdSize: 1, monthlyIncome: 1330 }).limit?.amount).toBe(1330);
+  });
+
+  it("can't tell for a categorically eligible Washington household at $1,900, and says how to check", () => {
+    const wa = lookupProgram({ state: "WA", program: "snap" })!;
+    const s = screenIncome(wa, { householdSize: 1, monthlyIncome: 1900 });
+    expect(s.result).toBe("cant_tell");
+    expect(s.note).toMatch(/how to check with the office/);
+  });
+});
+
 describe("New York City applies through ACCESS HRA (Sol, should-fix 4)", () => {
   it("gives a Brooklyn applicant the city's route, with its own source", () => {
     const snap = lookupProgram({ state: "NY", program: "snap", place: "Brooklyn" })!;
@@ -146,17 +170,33 @@ const OVER = /\bover\b|above|exceed|too (much|high)|ineligible|not eligible|(don
 
 describe("a screen never promises and never says over the limit", () => {
   const entries = ["CA", "TX", "NY", "FL", "IL", "WA", "AZ", "OH"].flatMap((s) => listPrograms(s));
-  const facts = [{}, { earnedIncome: true }, { earnedIncome: false, elderlyOrDisabled: false, dependentCare: false }, { elderlyOrDisabled: true }, { dependentCare: true }];
+  // elderlyOrDisabled and dependentCare are what a caller might pass; the
+  // screen must ignore them.
+  const facts = [{}, { earnedIncome: true }, { earnedIncome: false }, { elderlyOrDisabled: true }, { earnedIncome: true, elderlyOrDisabled: true, dependentCare: true }];
+  // The lowest limit among every table that could apply to this household
+  // size; only earned income, which the tool asks as the sources define it,
+  // can rule a table out.
+  const lowest = (entry: (typeof entries)[number], size: number, earnedIncome?: boolean) => {
+    const tables = entry.incomeLimit!.value.tables.filter((t) => earnedIncome === undefined || !t.when || t.when.some((c) => c.earnedIncome === undefined || c.earnedIncome === earnedIncome));
+    const amounts = tables.map((t) => limitAt(t, size));
+    return amounts.some((a) => a === null) ? null : Math.min(...(amounts as number[]));
+  };
   it.each([0, 300, 1900, 5000, 100000])("with %d a month, for every program, household size 0 to 12 and household facts", (income) => {
     for (const entry of entries) {
       for (let size = 0; size <= 12; size++) {
         for (const f of facts) {
-          const s = screenIncome(entry, { householdSize: size, monthlyIncome: income, ...f });
+          const s = screenIncome(entry, { householdSize: size, monthlyIncome: income, ...f } as Household);
           expect(["may_qualify", "cant_tell"]).toContain(s.result);
           const said = JSON.stringify(s);
           for (const re of PROMISE) expect(said).not.toMatch(re);
           expect(said).not.toMatch(OVER);
           if (s.result === "cant_tell") expect(s.limit).toBeUndefined();
+          if (s.result === "may_qualify") {
+            const floor = lowest(entry, size, (f as { earnedIncome?: boolean }).earnedIncome);
+            expect(floor).not.toBeNull();
+            expect(s.limit!.amount).toBe(floor);
+            expect(entry.incomeLimit!.value.period === "annual" ? income * 12 : income).toBeLessThanOrEqual(floor!);
+          }
         }
       }
     }

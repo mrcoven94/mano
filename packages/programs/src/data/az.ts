@@ -156,7 +156,7 @@ export const AZ: StateCatalog = {
       "incomeLimit": {
         "value": {
           "year": "Effective 02/01/2026",
-          "basis": "AHCCCS Adult Group: adults 19 to 64 who are not pregnant, do not qualify for Medicare and do not fit another AHCCCS group. The page calls the table a gross monthly income limit (income before taxes and other deductions); it does not mention MAGI, a 5% disregard or a percent of the federal poverty level.",
+          "basis": "AHCCCS publishes a gross monthly limit for each coverage category on its own page, all effective 02/01/2026. The screen does not ask age, disability, pregnancy or whether someone cares for a child, so it compares income with the lowest limit among these categories.",
           "period": "monthly",
           "measuredOn": "gross",
           "tables": [
@@ -170,6 +170,112 @@ export const AZ: StateCatalog = {
                 4288
               ],
               "eachAdditional": null
+            },
+            {
+              "appliesTo": "people 65 or older (the applicant, or the applicant and spouse)",
+              "bySize": [
+                1330,
+                1804
+              ],
+              "eachAdditional": null,
+              "source": {
+                "sourceUrl": "https://www.azahcccs.gov/Members/GetCovered/Categories/elderly.html",
+                "checkedAt": "2026-10-30",
+                "quote": "This chart shows how much money the person can receive each month (gross monthly income) before taxes and other deductions are subtracted."
+              }
+            },
+            {
+              "appliesTo": "people who are blind or have a disability (the applicant, or the applicant and spouse)",
+              "bySize": [
+                1330,
+                1804
+              ],
+              "eachAdditional": null,
+              "source": {
+                "sourceUrl": "https://www.azahcccs.gov/Members/GetCovered/Categories/disabled.html",
+                "checkedAt": "2026-10-30",
+                "quote": "If your monthly income is higher than the limit listed below, you may be eligible for the new adult category."
+              }
+            },
+            {
+              "appliesTo": "parents and caretaker relatives living with a child (the page marks its each-additional amount as approximate, so it is not used)",
+              "bySize": [
+                1410,
+                1912,
+                2414,
+                2915,
+                3417
+              ],
+              "eachAdditional": null,
+              "source": {
+                "sourceUrl": "https://www.azahcccs.gov/Members/GetCovered/Categories/families.html",
+                "checkedAt": "2026-10-30",
+                "quote": "A person may be able to qualify even if the person is not the parent of the child, if the person is related to and taking care of the child."
+              }
+            },
+            {
+              "appliesTo": "children age 6 through 18",
+              "bySize": [
+                1769,
+                2399,
+                3028,
+                3658,
+                4288
+              ],
+              "eachAdditional": null,
+              "source": {
+                "sourceUrl": "https://www.azahcccs.gov/Members/GetCovered/Categories/children.html",
+                "checkedAt": "2026-10-30",
+                "quote": "Monthly Income Limit (Age 6 through 18)"
+              }
+            },
+            {
+              "appliesTo": "children age 1 through 5",
+              "bySize": [
+                1876,
+                2543,
+                3211,
+                3878,
+                4545
+              ],
+              "eachAdditional": null,
+              "source": {
+                "sourceUrl": "https://www.azahcccs.gov/Members/GetCovered/Categories/children.html",
+                "checkedAt": "2026-10-30",
+                "quote": "Monthly Income Limit (Age 1 through 5)"
+              }
+            },
+            {
+              "appliesTo": "children under age 1",
+              "bySize": [
+                1956,
+                2651,
+                3347,
+                4043,
+                4739
+              ],
+              "eachAdditional": null,
+              "source": {
+                "sourceUrl": "https://www.azahcccs.gov/Members/GetCovered/Categories/children.html",
+                "checkedAt": "2026-10-30",
+                "quote": "Monthly Income Limit (Under age 1)"
+              }
+            },
+            {
+              "appliesTo": "pregnant people",
+              "bySize": [
+                2075,
+                2814,
+                3552,
+                4290,
+                5029
+              ],
+              "eachAdditional": null,
+              "source": {
+                "sourceUrl": "https://www.azahcccs.gov/Members/GetCovered/Categories/pregnant.html",
+                "checkedAt": "2026-10-30",
+                "quote": "This chart shows how much money the applicant can receive each month before taxes (gross monthly income) and other deductions are subtracted."
+              }
             }
           ]
         },
@@ -205,6 +311,10 @@ export const AZ: StateCatalog = {
         {
           "field": "incomeLimit",
           "reason": "The page lists household sizes 1 to 5 only and marks its $630 each-additional amount as approximate, so eachAdditional is null and sizes 6 and up have no limit. The page does not say whether the limit is MAGI-based or includes a 5% disregard; measuredOn follows its own label, gross."
+        },
+        {
+          "field": "incomeLimit.tables",
+          "reason": "The 65 or older and the blind or disabled categories list only the applicant and the applicant and spouse, so no limit is published for larger household sizes there; ALTCS and the Medicare Savings Programs are not included. Each-additional amounts on these pages are marked approximate and are not used."
         }
       ]
     },
