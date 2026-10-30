@@ -185,7 +185,11 @@ export interface ConversationStore {
   hasInboundMessage(messageId: string): boolean;
   recordInboundMessage(messageId: string, atMs: number): void;
   meta(): ConversationMeta;
+  // Writes the whole row: only for a reset, never with a snapshot read
+  // before an await. Every other write is patchMeta.
   saveMeta(meta: ConversationMeta): void;
+  // Writes only the given fields, leaving every other field as it is now.
+  patchMeta(patch: Partial<ConversationMeta>): void;
   addPending(item: PendingInbound): void;
   pending(): PendingInbound[];
   clearPending(eventIds: string[]): void;
@@ -246,6 +250,10 @@ export class MemoryStore implements ConversationStore {
 
   saveMeta(meta: ConversationMeta): void {
     this.metaRow = { ...meta };
+  }
+
+  patchMeta(patch: Partial<ConversationMeta>): void {
+    this.metaRow = { ...this.metaRow, ...patch };
   }
 
   addPending(item: PendingInbound): void {

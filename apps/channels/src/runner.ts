@@ -293,17 +293,15 @@ export class ConversationRunner {
       if (store.hasEvent(event.id)) return "duplicate";
       store.recordEvent(event.id, event.kind, nowMs());
       if (event.direction === "outbound") return "recorded";
-      const meta = store.meta();
       if (event.kind === "typing.stopped") {
-        meta.typingActive = false;
+        store.patchMeta({ typingActive: false });
       } else {
         const at = event.occurredAtMs ?? nowMs();
         if (nowMs() - at >= TYPING_HOLD_CAP_MS) return "recorded";
         // With nothing pending there is no turn to hold yet: a new burst.
-        if (meta.typingSinceMs === 0 || store.pending().length === 0) meta.typingSinceMs = nowMs();
-        meta.typingActive = true;
+        const fresh = store.meta().typingSinceMs === 0 || store.pending().length === 0;
+        store.patchMeta(fresh ? { typingSinceMs: nowMs(), typingActive: true } : { typingActive: true });
       }
-      store.saveMeta(meta);
       return "recorded";
     }
     if (event.kind === "ignored") {
@@ -367,12 +365,13 @@ export class ConversationRunner {
         return "recorded";
       }
       const meta = store.meta();
-      meta.chatId = event.chatId ?? meta.chatId;
-      meta.to = event.handle ?? meta.to;
-      meta.closed = false;
-      meta.optedOut = false;
-      meta.lastInboundMs = nowMs();
-      store.saveMeta(meta);
+      store.patchMeta({
+        chatId: event.chatId ?? meta.chatId,
+        to: event.handle ?? meta.to,
+        closed: false,
+        optedOut: false,
+        lastInboundMs: nowMs(),
+      });
       // Oversized texts split into cap-sized pieces now, so the turn
       // runner never has to cut. Continuation pieces take derived IDs;
       // the event still dedupes on its own ID.
@@ -438,9 +437,7 @@ export class ConversationRunner {
     }
 
     if (event.kind === "chat.closed") {
-      const meta = store.meta();
-      meta.closed = true;
-      store.saveMeta(meta);
+      store.patchMeta({ closed: true });
       logger.info("conversation_closed", { handle: this.logHandle(), eventId: event.id });
       return "recorded";
     }
@@ -489,13 +486,15 @@ export class ConversationRunner {
 
   private async applyOptOut(event: NormalizedEvent): Promise<HandleResult> {
     const { store, logger, nowMs } = this.deps;
-    const meta = store.meta();
-    if (meta.optedOut) return "opted-out";
-    meta.optedOut = true;
-    meta.chatId = event.chatId ?? meta.chatId;
-    meta.to = event.handle ?? meta.to;
-    meta.turn += 1;
-    store.saveMeta(meta);
+    const before = store.meta();
+    if (before.optedOut) return "opted-out";
+    const meta = {
+      optedOut: true,
+      chatId: event.chatId ?? before.chatId,
+      to: event.handle ?? before.to,
+      turn: before.turn + 1,
+    };
+    store.patchMeta(meta);
     logger.info("opted_out", { handle: this.logHandle(), eventId: event.id, turn: meta.turn });
     await this.sendBubble({
       turn: meta.turn,
@@ -561,25 +560,20 @@ export class ConversationRunner {
       }
       return this.afterTurns();
     }
-    const meta = store.meta();
-    if (meta.running) {
-      // Stale flag with no turn row behind it: a crash before the first
-      // persist. Clear it and proceed; nothing was sent yet.
-      meta.running = false;
-      store.saveMeta(meta);
-    }
-    // Only awaits when a report is owed, so the batch decision below stays
-    // synchronous otherwise.
+    // Stale flag with no turn row behind it: a crash before the first
+    // persist. Clear it and proceed; nothing was sent yet.
+    if (store.meta().running) store.patchMeta({ running: false });
+    // Only awaits when a report is owed. Everything after it reads the
+    // meta fresh: STOP, a close or a delete can land during the await.
     if (this.deps.reportPresentation && store.pendingPresentations().length > 0) await this.reportPresentations();
+    const meta = store.meta();
     const pending = store.pending();
     if (pending.length === 0) return this.needsRetry() ? "retry" : "idle";
     if (nowMs() - meta.lastInboundMs < this.deps.config.batchMs) return "waiting";
     if (meta.typingActive && meta.typingSinceMs > 0 && nowMs() - meta.typingSinceMs < TYPING_HOLD_CAP_MS) return "waiting";
     if (meta.typingSinceMs > 0 || meta.typingActive) {
       // This turn runs now: the next burst gets its own deadline.
-      meta.typingSinceMs = 0;
-      meta.typingActive = false;
-      store.saveMeta(meta);
+      store.patchMeta({ typingSinceMs: 0, typingActive: false });
     }
     // A turn finishes only after a persisted final outcome. An
     // infrastructure error keeps the turn row and its input and returns
@@ -592,9 +586,8 @@ export class ConversationRunner {
           for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP)) {
             const items = groupCrisis ? chunk.map((item) => ({ ...item, crisis: true })) : chunk;
             const turnMeta = store.meta();
-            turnMeta.turn += 1;
-            store.saveMeta(turnMeta);
-            const turn = turnMeta.turn;
+            const turn = turnMeta.turn + 1;
+            store.patchMeta({ turn });
             const chatId = [...items].reverse().find((i) => i.chatId)?.chatId ?? turnMeta.chatId;
             const to = [...items].reverse().find((i) => i.to)?.to ?? turnMeta.to;
             try {
@@ -718,15 +711,11 @@ export class ConversationRunner {
 
   private async runGuarded(fn: () => Promise<void>): Promise<void> {
     const { store } = this.deps;
-    const meta = store.meta();
-    meta.running = true;
-    store.saveMeta(meta);
+    store.patchMeta({ running: true });
     try {
       await fn();
     } finally {
-      const done = store.meta();
-      done.running = false;
-      store.saveMeta(done);
+      store.patchMeta({ running: false });
     }
   }
 
@@ -769,10 +758,7 @@ export class ConversationRunner {
     const crisis = crisisTurn(texts.join("\n")) || items.some((i) => i.crisis === true);
     // A crisis turn never sends the friendly intro, and later turns do not
     // send it either.
-    if (crisis && !meta.introduced) {
-      meta.introduced = true;
-      store.saveMeta(meta);
-    }
+    if (crisis && !meta.introduced) store.patchMeta({ introduced: true });
 
     const approval = texts.length === 1 && attachments.length === 0 ? parseApprovalReply(texts[0]) : null;
     if (approval && store.pendingApprovals(nowMs()).length > 0) {
@@ -973,9 +959,7 @@ export class ConversationRunner {
       const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation, replyTo: bubble.replyTo ?? null });
       if (row.fresh) fresh += 1;
       if (bubble.tag === "" && bubble.part === 0 && row.state === "sent") {
-        const introduced = store.meta();
-        introduced.introduced = true;
-        store.saveMeta(introduced);
+        store.patchMeta({ introduced: true });
       }
     }
     // Limits count inside the one send path; the turn only reports.
@@ -1112,9 +1096,7 @@ export class ConversationRunner {
     if (!this.store.meta().introduced) {
       const intro = await this.sendBubble({ turn, part: 0, tag: "", text: INTRO_BUBBLE, chatId, to, generation });
       if (intro.state === "sent") {
-        const meta = this.store.meta();
-        meta.introduced = true;
-        this.store.saveMeta(meta);
+        this.store.patchMeta({ introduced: true });
       }
     }
     await this.sendBubble({ turn, part: 0, tag: "headsup", text, chatId, to, generation });
@@ -1171,8 +1153,7 @@ export class ConversationRunner {
     const match = /^busy:([^:]+):(\d+)$/.exec(meta.busyNoticeKey ?? "");
     const count = match && match[1] === day ? Number(match[2]) : 0;
     if (count >= BUSY_DAILY_CAP) return false;
-    meta.busyNoticeKey = `busy:${day}:${count + 1}`;
-    this.store.saveMeta(meta);
+    this.store.patchMeta({ busyNoticeKey: `busy:${day}:${count + 1}` });
     await this.sendBubble({ turn, part: 0, tag: "busy", text: BUSY_BUBBLE, chatId, to });
     return true;
   }
@@ -1219,9 +1200,10 @@ export class ConversationRunner {
         await saveAttachment(files, kekB64, config.handleHash, documentId, bytes);
         await spend.byteSettle(byteKey, bytes.byteLength);
         const counted = store.meta();
-        counted.byteDayCount = (counted.byteDayKey === byteDay ? counted.byteDayCount : 0) + bytes.byteLength;
-        counted.byteDayKey = byteDay;
-        store.saveMeta(counted);
+        store.patchMeta({
+          byteDayCount: (counted.byteDayKey === byteDay ? counted.byteDayCount : 0) + bytes.byteLength,
+          byteDayKey: byteDay,
+        });
         saved += 1;
       } catch (err) {
         await spend.byteRelease(byteKey);
@@ -1372,6 +1354,22 @@ export class ConversationRunner {
       logger.warn("send_failed", { handle: this.logHandle(), key, code: "unguarded_legacy", status: null });
       return finish({ key, state: "failed", code: "unguarded_legacy", fresh: false, counted: false });
     }
+    // Read fresh after the lookup's await: a STOP, a close or a delete
+    // that landed meanwhile stops the replay. The opt-out confirmation
+    // itself still goes out. While the lookup is down the row stays
+    // uncertain, since the first attempt may have landed.
+    this.checkGeneration(generation);
+    const now = store.meta();
+    if (row?.tag !== "optout" && (now.optedOut || now.closed)) {
+      const code = now.closed ? "conversation_closed" : "opted_out";
+      if (lookupFailed) {
+        store.updateOutbound(key, { state: "uncertain", attempts: (row?.attempts ?? 0) + 1, updatedAtMs: nowMs() });
+        return finish({ key, state: "uncertain", code: null, fresh: false, counted: false });
+      }
+      store.updateOutbound(key, { state: "refused", code, updatedAtMs: nowMs() });
+      logger.info("send_suppressed", { handle: this.logHandle(), key, code });
+      return finish({ key, state: "refused", code, fresh: false, counted: false });
+    }
     try {
       // The replay carries the stored reply target: the key is bound to
       // the exact body, so it must not change.
@@ -1426,11 +1424,12 @@ export class ConversationRunner {
     const meta = this.store.meta();
     const hourKey = hourKeyFor(nowMs);
     const dayKey = dayKeyFor(nowMs);
-    meta.hourCount = meta.hourKey === hourKey ? meta.hourCount + sent : sent;
-    meta.dayCount = meta.dayKey === dayKey ? meta.dayCount + sent : sent;
-    meta.hourKey = hourKey;
-    meta.dayKey = dayKey;
-    this.store.saveMeta(meta);
+    this.store.patchMeta({
+      hourCount: meta.hourKey === hourKey ? meta.hourCount + sent : sent,
+      dayCount: meta.dayKey === dayKey ? meta.dayCount + sent : sent,
+      hourKey,
+      dayKey,
+    });
   }
 
   private async bestEffort(name: string, fn: () => Promise<void>): Promise<void> {
@@ -1490,10 +1489,8 @@ export class ConversationRunner {
     if (prior) {
       turn = prior.turn;
     } else {
-      const bumped = store.meta();
-      bumped.turn += 1;
-      store.saveMeta(bumped);
-      turn = bumped.turn;
+      turn = store.meta().turn + 1;
+      store.patchMeta({ turn });
       store.startAgentSend({ key: opts.key, turn, generation, state: "sending", createdAtMs: nowMs(), updatedAtMs: nowMs() });
     }
     const over = handleOverLimit(

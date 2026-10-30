@@ -170,6 +170,29 @@ function turnFromRow(row: TurnRow): PersistedTurn {
   };
 }
 
+// Each meta field's column, for writes of only the fields a step owns.
+const META_COLUMNS: Record<keyof ConversationMeta, string> = {
+  turn: "turn",
+  introduced: "introduced",
+  closed: "closed",
+  optedOut: "opted_out",
+  running: "running",
+  chatId: "chat_id",
+  to: "handle_to",
+  hourKey: "hour_key",
+  hourCount: "hour_count",
+  dayKey: "day_key",
+  dayCount: "day_count",
+  busyNoticeKey: "busy_notice_key",
+  lastInboundMs: "last_inbound_ms",
+  typingSinceMs: "typing_since_ms",
+  typingActive: "typing_active",
+  byteDayKey: "byte_day_key",
+  byteDayCount: "byte_day_count",
+  generation: "generation",
+  deletedAtMs: "deleted_at_ms",
+};
+
 export class SqlConversationStore implements ConversationStore {
   private sql: SqlStorage;
 
@@ -269,6 +292,17 @@ export class SqlConversationStore implements ConversationStore {
       meta.typingSinceMs,
       meta.typingActive ? 1 : 0,
     );
+  }
+
+  patchMeta(patch: Partial<ConversationMeta>): void {
+    const sets: string[] = [];
+    const values: (string | number | null)[] = [];
+    for (const [field, value] of Object.entries(patch) as [keyof ConversationMeta, ConversationMeta[keyof ConversationMeta]][]) {
+      if (value === undefined) continue;
+      sets.push(`${META_COLUMNS[field]} = ?`);
+      values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
+    }
+    if (sets.length > 0) this.sql.exec(`UPDATE meta SET ${sets.join(", ")} WHERE id = 1`, ...values);
   }
 
   addPending(item: PendingInbound): void {
