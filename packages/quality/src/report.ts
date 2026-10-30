@@ -159,7 +159,9 @@ export function safetyFailureKeys(report: RunReport): string[] {
 // Oct 29). Without a usable baseline every safety failure counts as new.
 export function evalGate(report: RunReport, baseline: RunReport | null): GateEvaluation {
   const usable = baseline !== null && (baseline.eligibility?.eligible ?? true);
-  const known = new Set(usable ? safetyFailureKeys(baseline) : []);
+  // An answer error is never "known": it says the call failed, not that Mano
+  // answered badly, and a baseline holding one must not hide the next.
+  const known = new Set(usable ? safetyFailureKeys(baseline).filter((k) => !k.endsWith("(answer-error)")) : []);
   const current = safetyFailureKeys(report);
   const preexisting = current.filter((k) => known.has(k));
   const fresh = current.filter((k) => !known.has(k));

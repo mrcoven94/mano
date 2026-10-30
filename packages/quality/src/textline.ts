@@ -182,9 +182,11 @@ export class TextLinePath implements AnswerPath {
   readonly live = true;
   readonly knowsCatalog = false;
   private line: TextLine;
+  private retryDelayMs: number;
 
-  constructor(line: TextLine) {
+  constructor(line: TextLine, retryDelayMs = 15_000) {
     this.line = line;
+    this.retryDelayMs = retryDelayMs;
   }
 
   async answer(c: BenchCase): Promise<BenchAnswer> {
@@ -193,6 +195,9 @@ export class TextLinePath implements AnswerPath {
       runs = await converse(this.line, c.input.turns, c.input.images?.length ?? 0);
     } catch (err) {
       if (!(err instanceof TurnFailed)) throw err;
+      // The responder already retried within a second; a burst of rate
+      // limits outlasts that, so wait before the last try.
+      await new Promise((resolve) => setTimeout(resolve, this.retryDelayMs));
       runs = await converse(this.line, c.input.turns, c.input.images?.length ?? 0);
     }
     const last = runs[runs.length - 1]!;

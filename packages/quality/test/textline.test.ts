@@ -100,7 +100,7 @@ test("one failed model call is retried; two make an answer error", async () => {
     calls += 1;
     return new Response("{}", { status: 400 });
   }) as typeof fetch;
-  const path = new TextLinePath(new TextLine({ apiKey: "k", model: "muse-spark-1.3-contributor", fetchFn: flaky }));
+  const path = new TextLinePath(new TextLine({ apiKey: "k", model: "muse-spark-1.3-contributor", fetchFn: flaky }), 0);
   await assert.rejects(() => path.answer(caseById("text-09")), /text line failed: http_400/);
   assert.equal(calls, 2, "a 400 is fatal for the responder, so each try is one request");
 });

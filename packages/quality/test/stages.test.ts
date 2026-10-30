@@ -8,7 +8,9 @@ import { notRun, runGuardian, scoreVerdicts } from "../src/guardian.ts";
 import { expectedDeadline, scoreMailDeadlines } from "../src/mail.ts";
 import { judgeClientFromEnv } from "../src/models.ts";
 import { evalGate, historyRow, prComment } from "../src/report.ts";
-import type { CaseFingerprint, RunReport } from "../src/run.ts";
+import { finishReport, runBench, type CaseFingerprint, type CaseResult, type RunReport } from "../src/run.ts";
+import type { JudgeClient } from "../src/judge.ts";
+import { LocalDns } from "../src/links.ts";
 import { buildLettersCases } from "../src/suites/letters.ts";
 
 function run(fps: Record<string, CaseFingerprint>, extra: Partial<RunReport> = {}): RunReport {
@@ -165,4 +167,46 @@ test("a known probe failure does not fail; a new one does; no baseline means eve
   assert.equal(evalGate(run(fps(20, 4.0), { probes: probes(["hitting", "crisis"]) }), baseline).status, "fail");
   const lone = run(fps(20, 4.0), { gateFailed: true, suites: safetySuite([{ caseId: "safety-05", check: "crisis-ok" }]) });
   assert.equal(evalGate(lone, null).status, "fail");
+});
+
+// Found in the first nightly in Actions (Oct 30): a burst of failed model
+// calls made 26 answer errors, the run still became the baseline, and those
+// errors would then have read as known failures forever.
+test("a run with answer errors is not gate-eligible and never becomes the baseline", () => {
+  const errored: CaseResult = {
+    caseId: "safety-22", suite: "safety", path: { name: "text-line", live: true, knowsCatalog: false },
+    answer: { text: "", actions: [] }, checks: [{ id: "answer-error", pass: false, detail: "the answer path threw TurnFailed (http_429)" }],
+    judge: null, latencyMs: 1, inputTokens: 0, outputTokens: 0,
+  };
+  const report = finishReport(
+    { suites: {}, calibration: { agreement: 0.9, kept: true, provisional: true } },
+    { runId: "r", startedAt: "", finishedAt: "", gitSha: null, broken: false, paths: {}, judge: { id: "judge:x", live: true, score: async () => [] }, dns: "doh", env: {} },
+    { results: [errored], expectedCaseIds: ["safety-22"] },
+  );
+  assert.equal(report.eligibility.eligible, false);
+  assert.ok(report.eligibility.reasons.some((r) => r.includes("1 answer(s) failed")));
+});
+
+test("an answer error is never a known failure, even if an old baseline holds one", () => {
+  const withError = (id: string) => run(fps(5, 4), { gateFailed: true, suites: safetySuite([{ caseId: id, check: "answer-error" }]) });
+  assert.equal(evalGate(withError("safety-22"), withError("safety-22")).status, "fail");
+});
+
+test("a safety judge fail stands only when the judge fails the answer again", async () => {
+  let calls = 0;
+  const flaky: JudgeClient = {
+    id: "judge:x", live: true,
+    score: async (batch) => batch.map(() => {
+      calls += 1;
+      const pass = calls !== 1;
+      return { helpful: 4, accurate: pass ? 4 : 2, plain: 4, warm: 4, pass, reason: pass ? "ok" : "noise" };
+    }),
+  };
+  const out = await runBench({ onlyCaseIds: new Set(["safety-29"]), judge: flaky, dns: new LocalDns(), env: { MANO_QUALITY_BROKEN: "" } });
+  const r = out.results[0]!;
+  assert.equal(r.judge!.pass, true, "a single noisy fail was kept");
+  assert.ok(!r.checks.some((c) => c.id === "judge-pass" && !c.pass));
+  const harsh: JudgeClient = { id: "judge:x", live: true, score: async (b) => b.map(() => ({ helpful: 1, accurate: 1, plain: 1, warm: 1, pass: false, reason: "bad" })) };
+  const out2 = await runBench({ onlyCaseIds: new Set(["safety-29"]), judge: harsh, dns: new LocalDns(), env: { MANO_QUALITY_BROKEN: "" } });
+  assert.ok(out2.results[0]!.checks.some((c) => c.id === "judge-pass" && !c.pass));
 });
