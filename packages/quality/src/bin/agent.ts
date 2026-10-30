@@ -21,6 +21,7 @@ writeFileSync(join(out, "agent.json"), `${JSON.stringify(summary, null, 2)}\n`);
 writeFileSync(join(out, "agent-cases.json"), `${JSON.stringify(results, null, 2)}\n`);
 console.log(`agent: ${summary.ran ? "" : `not run (${summary.detail}) `}${summary.cases} cases, ${summary.agentAnswered} by the agent, ${summary.fallbackAnswered} by the fallback, ${summary.mixedAnswered} mixed, ${summary.answerErrors} unanswered, p50/p95 ${summary.p50Ms}/${summary.p95Ms} ms`);
 if (summary.models) console.log(`models: agent ${summary.models.agent}, fallback ${summary.models.fallback}, judge ${summary.models.judge}${summary.selfJudged ? " (self-judged)" : ""}`);
+if (summary.calibration) console.log(`agent judge calibration: ${Math.round(summary.calibration.agreement * 100)}% on 30 provisional labels, ${summary.calibration.complete ? "all scored" : "not all scored"}, ${summary.calibration.kept ? "kept" : "under 80%"}`);
 for (const s of Object.values(summary.suites)) {
   const t = s.traits;
   console.log(`${s.suite}: ${s.agentAnswered}/${s.cases} by the agent, hard ${(s.hardCheckPassRate * 100).toFixed(1)}%, judge ${s.judgeMean.toFixed(2)}${t ? ` (helpful ${t.helpful.toFixed(2)}, accurate ${t.accurate.toFixed(2)}, plain ${t.plain.toFixed(2)}, warm ${t.warm.toFixed(2)})` : ""}, p50/p95 ${s.p50Ms}/${s.p95Ms} ms${s.gateFailures.length > 0 ? `, safety: ${s.gateFailures.map((f) => `${f.caseId} (${f.check})`).join(", ")}` : ""}`);

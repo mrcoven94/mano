@@ -76,16 +76,31 @@ async function stopGroups(procs: ChildProcess[], graceMs: number): Promise<void>
   while (Date.now() < killDeadline && pids.some(groupAlive)) await new Promise((r) => setTimeout(r, 50));
 }
 
+// What happened to a child since spawn. The listeners go on at spawn time:
+// a binary that cannot be launched emits 'error' instead of 'exit', and an
+// 'error' with no listener would crash the whole bench.
+interface Launched {
+  proc: ChildProcess;
+  ended: string | null;
+}
+
+function track(proc: ChildProcess): Launched {
+  const launched: Launched = { proc, ended: null };
+  proc.on("error", (err) => {
+    launched.ended ??= `could not run (${(err as NodeJS.ErrnoException).code ?? err.name})`;
+  });
+  proc.on("exit", (code) => {
+    launched.ended ??= `exited with code ${code ?? "none"}`;
+  });
+  return launched;
+}
+
 // Polls until the server answers. Each request is bounded by what is left of
 // the startup budget, so a server that accepts and never replies cannot hold
 // startup past it.
-async function waitFor(url: string, proc: ChildProcess, name: string, deadline: number): Promise<void> {
-  let exited: number | null = null;
-  proc.once("exit", (code) => {
-    exited = code ?? -1;
-  });
+async function waitFor(url: string, launched: Launched, name: string, deadline: number): Promise<void> {
   while (Date.now() < deadline) {
-    if (exited !== null) throw new Error(`${name} exited with code ${exited} before it was ready`);
+    if (launched.ended !== null) throw new Error(`${name} ${launched.ended} before it was ready`);
     const left = deadline - Date.now();
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(Math.max(1, Math.min(5000, left))) });
@@ -129,8 +144,8 @@ export async function startAgentStack(env: NodeJS.ProcessEnv = process.env, opts
     agent: { command: join(REPO, "apps", "agent", "node_modules", ".bin", "eve"), args: ["dev", "--port", String(ports.agent), "--no-ui", "--logs", "error"], cwd: join(REPO, "apps", "agent"), readyPath: "/" },
   };
   const base = { PATH: env.PATH, HOME: env.HOME, CI: env.CI };
-  const launch = (c: StackCommand, extra: Record<string, string | undefined>): ChildProcess =>
-    spawn(c.command, c.args, { cwd: c.cwd, env: { ...base, ...extra }, detached: true, stdio: ["ignore", "ignore", "inherit"] });
+  const launch = (c: StackCommand, extra: Record<string, string | undefined>): Launched =>
+    track(spawn(c.command, c.args, { cwd: c.cwd, env: { ...base, ...extra }, detached: true, stdio: ["ignore", "ignore", "inherit"] }));
   const engine = launch(commands.engine, { FAKE_PID_FILE: env.FAKE_PID_FILE });
   const agent = launch(commands.agent, {
     FAKE_PID_FILE: env.FAKE_PID_FILE,
@@ -149,7 +164,7 @@ export async function startAgentStack(env: NodeJS.ProcessEnv = process.env, opts
     stopping ??= (async () => {
       process.off("SIGTERM", onSignal);
       process.off("SIGINT", onSignal);
-      await stopGroups([engine, agent], graceMs);
+      await stopGroups([engine.proc, agent.proc], graceMs);
       rmSync(dir, { recursive: true, force: true });
     })();
     return stopping;

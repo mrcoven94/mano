@@ -24,6 +24,8 @@ export interface AgentSummary {
   // fallback's, its scores grade its own family and are marked self-judged.
   models?: { agent: string; fallback: string; judge: string };
   selfJudged?: boolean;
+  // The agent's judge on the 30 labeled cases (provisional labels).
+  calibration?: { agreement: number; complete: boolean; kept: boolean };
   cases: number;
   agentAnswered: number;
   fallbackAnswered: number;

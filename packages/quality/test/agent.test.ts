@@ -178,3 +178,15 @@ test("a failing agent stage records a fixed reason, cleans up, and never throws"
   const noStart = await runAgentStageSafely({}, { start: async () => { throw new Error("port in use: details"); } });
   assert.equal(noStart.summary.detail, "the agent stage could not start Engine and the agent");
 });
+
+test("the agent's judge is calibrated on all 30 labeled cases", async () => {
+  const seen: Seen = { handles: [], modelCalls: 0 };
+  const path = agentPath(seen);
+  const out = await runAgentStageSafely({}, {
+    start: async () => ({ agentUrl: "x", agentSecret: "s", grantSecret: "g", stop: async () => {} }),
+    load: async () => ({ forCase: () => ({ path, standin: false, detail: "agent" }), textLineModel: null }),
+  }, { onlyCaseIds: new Set(["text-09"]), dns: new LocalDns() });
+  assert.ok(out.summary.calibration, "no calibration recorded");
+  assert.equal(out.summary.calibration!.complete, true);
+  assert.ok(out.summary.calibration!.agreement >= 0.8, `fake judge agreement ${out.summary.calibration!.agreement}`);
+});

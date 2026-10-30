@@ -4,7 +4,7 @@
 // the startup budget allows.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,4 +73,21 @@ test("SIGTERM to the bench stops the stack before it exits", async () => {
   await new Promise((r) => bench.once("exit", r));
   await new Promise((r) => setTimeout(r, 300));
   assert.deepEqual(pids.filter(alive), [], "SIGTERM left processes running");
+});
+
+// Sol, round 2 at 5d60f0e: a binary that cannot be launched emits 'error'
+// on its child process. It must fail startup through the awaited cleanup,
+// kill the sibling, and leave the nightly running with a fixed reason.
+test("a missing agent binary fails the stage cleanly and kills Engine", async () => {
+  const { runAgentStageSafely } = await import("../src/agent-stage.ts");
+  const pidFile = join(mkdtempSync(join(tmpdir(), "stack-")), "pids");
+  const missing: StackCommand = { command: join(tmpdir(), "no-such-binary-for-quality"), args: [], cwd: tmpdir(), readyPath: "/" };
+  const out = await runAgentStageSafely({ PATH: process.env.PATH }, {
+    start: (env) => startAgentStack({ ...env, FAKE_PID_FILE: pidFile }, { ports: { engine: 18797, agent: 18798 }, commands: { engine: fake(18797), agent: missing }, graceMs: 500, startupMs: 20_000 }),
+  });
+  assert.equal(out.summary.ran, false);
+  assert.equal(out.summary.detail, "the agent stage could not start Engine and the agent");
+  await new Promise((r) => setTimeout(r, 300));
+  const pids = existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim().split("\n").filter(Boolean).map(Number) : [];
+  assert.deepEqual(pids.filter(alive), [], "the Engine stand-in outlived a failed start");
 });

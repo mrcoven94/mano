@@ -9,7 +9,7 @@ import { startAgentStack, type AgentStack } from "./agent-stack.ts";
 import { FakeJudge, MetaJudge, type JudgeClient } from "./judge.ts";
 import { DEFAULT_MODEL_BASE_URL, MetaModelClient, judgeClientFromEnv } from "./models.ts";
 import { loadAgentPaths, needsMailReader, type PathSet } from "./paths.ts";
-import { percentile, runBench, type CaseResult, type RunOptions } from "./run.ts";
+import { calibrate, percentile, runBench, type CaseResult, type RunOptions } from "./run.ts";
 import { buildAllSuites } from "./suites/build.ts";
 
 export type { AgentSuite, AgentSummary } from "./agent-types.ts";
@@ -112,7 +112,9 @@ export async function runAgentStageSafely(env: NodeJS.ProcessEnv, deps: StageDep
     const stageEnv = { ...env, QUALITY_AGENT_URL: stack.agentUrl, MANO_AGENT_SECRET: stack.agentSecret, MANO_HANDLE_GRANT_SECRET: stack.grantSecret };
     const { judge, models, selfJudged } = agentJudgeFromEnv(stageEnv);
     const out = await runAgentStage(await (deps.load ?? loadAgentPaths)(stageEnv), { ...opts, env: stageEnv, judge });
-    return { summary: { ...out.summary, models, selfJudged }, results: out.results };
+    // The agent's judge may not be the bench's, so it is calibrated on its own.
+    const cal = await calibrate(judge);
+    return { summary: { ...out.summary, models, selfJudged, calibration: { agreement: cal.agreement, complete: cal.complete, kept: cal.kept } }, results: out.results };
   } catch (err) {
     console.error(`agent stage: failed while running (${err instanceof Error ? err.name : "error"})`);
     return { summary: agentNotRun("the agent stage failed while running"), results: [] };

@@ -281,7 +281,7 @@ export function prComment(report: RunReport, baseline: RunReport | null, gate: G
   }
   if (report.agent?.ran) {
     const a = report.agent;
-    lines.push(`Agent (recorded, not gated): ${a.cases} text cases, ${a.agentAnswered} answered by the agent, ${a.fallbackAnswered} by the plain fallback, ${a.mixedAnswered ?? 0} mixed${a.answerErrors > 0 ? `, ${a.answerErrors} with no answer` : ""}.${a.selfJudged ? " Judge scores are self-judged: the judge is the agent's or the fallback's model." : ""}`);
+    lines.push(`Agent (recorded, not gated): ${a.cases} text cases, ${a.agentAnswered} answered by the agent, ${a.fallbackAnswered} by the plain fallback, ${a.mixedAnswered ?? 0} mixed${a.answerErrors > 0 ? `, ${a.answerErrors} with no answer` : ""}.${a.selfJudged ? " Judge scores are self-judged: the judge is the agent's or the fallback's model." : ""}${a.calibration ? ` Agent judge agreement ${Math.round(a.calibration.agreement * 100)}% on the 30 provisional labels${a.calibration.complete ? "" : " (not every case scored)"}.` : ""}`);
     for (const s of Object.values(a.suites)) {
       lines.push(`- ${s.suite}: hard ${pct(s.hardCheckPassRate)}, judge ${s.judgeMean.toFixed(2)}, agent ${s.agentAnswered}/${s.cases}${s.gateFailures.length > 0 ? `, safety: ${s.gateFailures.map((f) => `${f.caseId} (${f.check})`).join(", ")}` : ""}`);
     }
