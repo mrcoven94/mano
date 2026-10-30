@@ -70,6 +70,25 @@ export interface EngineReminder {
   attempts: number;
 }
 
+// A deadline Engine tracks, as its /deadlines routes return it.
+export interface EngineDeadline {
+  id: string;
+  title: string;
+  dueDate: string;
+  program: string | null;
+  status: "open" | "done" | "cancelled";
+  timeZone: string;
+  previousDueDate: string | null;
+  nudges: { reminderId: string; at: string; daysBefore: number; status: ReminderStatus | "claimed"; text: string }[];
+}
+
+export interface EngineDeadlineResult {
+  status: "created" | "existing" | "moved" | "updated" | "closed" | "done" | "cancelled";
+  deadline: EngineDeadline;
+  moved?: { from: string; to: string };
+  nudgesInFlight?: number;
+}
+
 export interface EngineTurn {
   turnId: string;
   firstReceivedAt: string;
@@ -193,6 +212,48 @@ export class PersonEngine {
       throw new EngineError(res.status);
     }
     return (await res.json()) as { reminder: EngineReminder; cancelled: boolean };
+  }
+
+  // Deadlines. null from list and track: this Engine has no deadline
+  // routes yet (404), so the agent says so and never invents one. null
+  // from update and cancel: no such deadline for this person.
+  async listDeadlines(): Promise<EngineDeadline[] | null> {
+    const res = await this.call("GET", "/deadlines");
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    const out = (await res.json()) as { deadlines?: unknown };
+    return Array.isArray(out.deadlines) ? (out.deadlines as EngineDeadline[]) : [];
+  }
+
+  async trackDeadline(input: { title: string; dueDate: string; program?: string; idempotencyKey: string }): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("POST", "/deadlines", { ...input, source: { kind: "person" }, generation: this.generation });
+  }
+
+  async updateDeadline(id: string, patch: { dueDate?: string; title?: string; status?: "done" }): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("PATCH", `/deadlines/${encodeURIComponent(id)}`, patch);
+  }
+
+  async cancelDeadline(id: string): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("DELETE", `/deadlines/${encodeURIComponent(id)}`);
+  }
+
+  private async deadlineCall(method: string, path: string, body?: unknown): Promise<EngineDeadlineResult | null> {
+    const res = await this.call(method, path, body);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return (await res.json()) as EngineDeadlineResult;
   }
 
   // The turn as Engine first recorded it: firstReceivedAt never changes.
