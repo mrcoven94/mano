@@ -34,8 +34,12 @@ export interface GuardResult {
 // or the assistant itself made or built by X, outside quotation marks.
 
 const STACK_PATTERN = /\b(?:meta|spark|muse|glimmer|llama)\b/i;
-const MODEL_ID_PATTERN = /\b(?:muse|spark|glimmer|llama|gpt|claude|gemini|mistral|grok)[-_. ]?(?:[a-z]+[-_. ]?)?\d[\w.-]*/i;
-const ORDINARY_PHRASES = /\b(?:spark of hope|glimmer of hope|muse (?:on|about))\b/gi;
+// A family name, at most one more model word, then a version: "muse spark
+// 1.3", "llama3", "gpt-4o". Not "llama al 911", which is Spanish for "call 911".
+const MODEL_ID_PATTERN =
+  /\b(?:muse|spark|glimmer|llama|gpt|claude|gemini|mistral|grok)(?:[-_. ]?(?:spark|glimmer|instruct|chat|pro|mini|nano|turbo|flash|sonnet|opus|haiku))?[-_. ]?\d[\w.-]*/i;
+// "llama" is also Spanish for "call": "llama al 911", "se llama".
+const ORDINARY_PHRASES = /\b(?:spark of hope|glimmer of hope|muse (?:on|about)|llama (?:al?|de|o)|(?:se|te|me|lo|la|les) llama)\b/gi;
 // An identity statement beats the idioms: "I'm powered by the spark of hope" still leaks.
 const IDENTITY_STATEMENT =
   /\b(?:i am|i'm|i’m|im|my name is|this is|powered by|built (?:on|by)|made by|trained by|runs? on|running on|based on|models?|assistant from)\b/i;
