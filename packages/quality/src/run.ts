@@ -9,7 +9,7 @@ import { assertJudgeServingDiffer, judgeClientFromEnv } from "./models.ts";
 import { FakeJudge, JUDGE_AGREEMENT_MIN, MetaJudge, judgeAll, judgeMean, type JudgeClient, type JudgeItem, type JudgeScore } from "./judge.ts";
 import { buildHoldoutSuite } from "./suites/holdout-suite.ts";
 import { loadHoldout } from "./holdout.ts";
-import { loadPaths, sentText, type BenchAnswer, type LoadedPath } from "./paths.ts";
+import { loadPaths, sentText, type BenchAnswer, type LoadedPath, type PathSet } from "./paths.ts";
 import { buildAllSuites } from "./suites/build.ts";
 import type { BenchCase, SuiteBuild, SuiteName } from "./suites/types.ts";
 import type { GuardianSummary } from "./guardian.ts";
@@ -40,6 +40,11 @@ export interface CaseResult {
   firstTextMs?: number;
   inputTokens: number;
   outputTokens: number;
+  // A case that newly failed against the baseline was run twice. This is the
+  // other attempt, kept in the private results; the result itself is the one
+  // that counts (the rerun if it passed, the first try if it failed again).
+  otherAttempt?: CaseResult;
+  rerun?: "held" | "cleared";
 }
 
 export interface GateFailure {
@@ -129,6 +134,15 @@ export interface RunReport {
   probes?: ProbeSummary;
   guardian?: GuardianSummary;
   mail?: MailSummary;
+  rerun?: RerunSummary;
+}
+
+export interface RerunSummary {
+  // Case IDs run a second time, the ones that failed again, and the ones
+  // that passed on the second try and so do not count.
+  rerun: string[];
+  held: string[];
+  cleared: string[];
 }
 
 export interface RunOptions {
@@ -140,6 +154,10 @@ export interface RunOptions {
   runId?: string;
   onlyCaseIds?: Set<string>;
   concurrency?: number;
+  // Test seam: answer every case through these paths instead of loading them.
+  pathSet?: PathSet;
+  // Reruns skip the 30-case calibration; the first pass already ran it.
+  skipCalibration?: boolean;
 }
 
 export function percentile(values: number[], p: number): number {
@@ -312,7 +330,7 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
   const built = new Set<string>(builds.map((b) => b.suite));
   const skippedSuites = [...wanted].filter((s) => !built.has(s));
 
-  const pathSet = await loadPaths(env, broken);
+  const pathSet = opts.pathSet ?? (await loadPaths(env, broken));
   const cases = builds.flatMap((b) => b.cases.filter((c) => !opts.onlyCaseIds || opts.onlyCaseIds.has(c.id)));
 
   const answered = await mapPool(cases, opts.concurrency ?? 4, async (c) => {
@@ -393,13 +411,13 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
   }
 
   // Calibration runs on every bench so a drifting judge cannot pass silently.
-  const cal = buildCalibrationSet();
+  const cal = opts.skipCalibration ? [] : buildCalibrationSet();
   const calRun = await judgeRobust(cal.map((c) => ({ answer: c.answer, facts: c.facts, reference: c.reference })), judge, 99);
   const calScored = calRun.scores.map((s, i) => ({ s, label: cal[i]!.label })).filter((x) => x.s !== null);
   // Agreement over the survivors of a failed batch is not calibration: every
   // one of the 30 cases must be scored, and each one that is not counts as
   // a judge error.
-  const calComplete = calScored.length === cal.length;
+  const calComplete = cal.length > 0 && calScored.length === cal.length;
   const calAgreement = calComplete ? agreement(calScored.map((x) => x.s!), calScored.map((x) => x.label)) : 0;
 
   return {
@@ -432,6 +450,7 @@ export interface FinishInput {
   // Attached before eligibility is decided, so a probe that never ran
   // keeps the run from becoming a baseline.
   probes?: ProbeSummary;
+  rerun?: RerunSummary;
 }
 
 export function fingerprintsOf(results: CaseResult[], suites: Record<string, SuiteScore>): Record<string, CaseFingerprint> {
@@ -514,5 +533,60 @@ export function finishReport(
     eligibility: { eligible: reasons.length === 0, reasons },
     standins,
     ...(input.probes ? { probes: input.probes } : {}),
+    ...(input.rerun ? { rerun: input.rerun } : {}),
+  };
+}
+
+// A case fails "newly" when the baseline passed it live at the same suite
+// version and this run does not: a hard check now fails, or its judge mean
+// fell by a full point or more.
+export const JUDGE_CASE_FALL = 1;
+
+function newlyFailing(fp: CaseFingerprint, base: CaseFingerprint | undefined): boolean {
+  if (!base || base.live !== true || fp.live !== true || base.suite !== fp.suite || base.version !== fp.version) return false;
+  if (base.hardPass && !fp.hardPass) return true;
+  return base.judgeMean !== null && fp.judgeMean !== null && base.judgeMean - fp.judgeMean >= JUDGE_CASE_FALL;
+}
+
+// Lead decision, Oct 30: answers vary from run to run, so before the gate
+// decides, every newly failing case runs once more and counts only if it
+// fails again. Both attempts are kept.
+export async function rerunNewlyFailing(
+  first: BenchOutcome,
+  baseline: RunReport | null,
+  opts: RunOptions,
+): Promise<{ bench: BenchOutcome; rerun: RerunSummary }> {
+  const none = { bench: first, rerun: { rerun: [], held: [], cleared: [] } };
+  if (!baseline) return none;
+  const fps = fingerprintsOf(first.results, first.report.suites);
+  const ids = first.results.map((r) => r.caseId).filter((id) => fps[id] && newlyFailing(fps[id]!, baseline.fingerprints[id]));
+  if (ids.length === 0) return none;
+
+  const again = await runBench({ ...opts, onlyCaseIds: new Set(ids), skipCalibration: true });
+  const againFps = fingerprintsOf(again.results, again.report.suites);
+  const byId = new Map(again.results.map((r) => [r.caseId, r]));
+  const held: string[] = [];
+  const cleared: string[] = [];
+  const results = first.results.map((r) => {
+    const second = byId.get(r.caseId);
+    if (!second) return r;
+    if (againFps[r.caseId] && !newlyFailing(againFps[r.caseId]!, baseline.fingerprints[r.caseId])) {
+      cleared.push(r.caseId);
+      return { ...second, otherAttempt: r, rerun: "cleared" as const };
+    }
+    held.push(r.caseId);
+    return { ...r, otherAttempt: second, rerun: "held" as const };
+  });
+
+  const prices = pricesFromEnv(opts.env ?? process.env);
+  const builds = new Map(buildAllSuites().map((b) => [b.suite as string, b]));
+  const suites = { ...first.report.suites };
+  for (const name of new Set(cleared.map((id) => results.find((r) => r.caseId === id)!.suite as string))) {
+    const build = builds.get(name);
+    if (build) suites[name] = scoreSuite(build, results.filter((r) => r.suite === name), prices);
+  }
+  return {
+    bench: { ...first, results, report: { ...first.report, suites }, judgeErrors: first.judgeErrors + again.judgeErrors },
+    rerun: { rerun: ids, held, cleared },
   };
 }

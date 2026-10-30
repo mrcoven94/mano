@@ -273,6 +273,12 @@ export function prComment(report: RunReport, baseline: RunReport | null, gate: G
     if (p.failures.length > 0) lines.push(`Probe failures: ${p.failures.map((f) => `${f.id} (${f.failed.join(", ")})`).join("; ")}.`);
   }
   lines.push("");
+  if (report.rerun && report.rerun.rerun.length > 0) {
+    const r = report.rerun;
+    lines.push(`Reran ${r.rerun.length} newly failing case(s): ${r.held.length} held, ${r.cleared.length} passed on rerun${r.cleared.length > 0 ? ` (${r.cleared.join(", ")})` : ""}.`);
+  } else if (report.rerun) {
+    lines.push("No case newly failed, so nothing was rerun.");
+  }
   for (const s of report.standins ?? []) lines.push(`- Stand-in: ${s}`);
   lines.push(`Judge ${report.judge.live ? "live" : "stand-in"}, agreement ${Math.round(report.calibration.agreement * 100)}% on ${report.calibration.provisional ? "provisional" : "hand"} labels${report.judge.errors ? `, ${report.judge.errors} answer(s) unscored` : ""}. DNS ${report.dns}.`);
   lines.push(report.eligibility.eligible ? "Gate-eligible." : `Not gate-eligible: ${report.eligibility.reasons.join("; ")}.`);

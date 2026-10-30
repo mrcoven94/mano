@@ -13,7 +13,7 @@ import { dnsFromEnv } from "../links.ts";
 import { runProbes } from "../probes.ts";
 import { r2CredsFromEnv } from "../r2.ts";
 import { evalGate, prComment, writeRun } from "../report.ts";
-import { finishReport, runBench, type RunReport } from "../run.ts";
+import { finishReport, rerunNewlyFailing, runBench, type RunReport } from "../run.ts";
 import { SMOKE_CASE_IDS } from "../smoke.ts";
 import { readPublic } from "../sync.ts";
 import { textLineFromEnv } from "../textline.ts";
@@ -59,13 +59,16 @@ if (baselinePath) {
 }
 if (!process.env.META_MODEL_API_KEY) missing.push("META_MODEL_API_KEY is not set, so nothing ran live");
 
-const bench = await runBench({ onlyCaseIds: new Set(SMOKE_CASE_IDS) });
+const first = await runBench({ onlyCaseIds: new Set(SMOKE_CASE_IDS) });
+// A case that newly fails against the baseline runs once more and counts
+// only if it fails again; both attempts stay in cases.json.
+const { bench, rerun } = await rerunNewlyFailing(first, baseline, {});
 const probes = await runProbes(textLineFromEnv(process.env));
 const full = finishReport(bench.report, {
   runId: `smoke-${startedAt.slice(0, 16).replace(/[-:T]/g, "")}`,
   startedAt, finishedAt: new Date().toISOString(), gitSha: gitSha(), broken: false,
   paths: bench.paths, judge: bench.judge, dns: dnsFromEnv(process.env).mode, env: process.env,
-}, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: bench.answeringModel, probes });
+}, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: bench.answeringModel, probes, rerun });
 if (bench.skippedSuites.length > 0) full.eligibility = { eligible: false, reasons: [...full.eligibility.reasons, `suites skipped: ${bench.skippedSuites.join(", ")}`] };
 
 writeRun(out, full, bench.results);

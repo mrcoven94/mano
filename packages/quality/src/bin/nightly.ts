@@ -16,7 +16,7 @@ import { scoreMailDeadlines } from "../mail.ts";
 import { runProbes } from "../probes.ts";
 import { r2CredsFromEnv } from "../r2.ts";
 import { branchPrefix, evalGate, readHistory, writeNightlyStaging, type HistoryRow } from "../report.ts";
-import { finishReport, runBench, type RunReport } from "../run.ts";
+import { finishReport, rerunNewlyFailing, runBench, type RunReport } from "../run.ts";
 import { readPublic, uploadStaging } from "../sync.ts";
 import { textLineFromEnv } from "../textline.ts";
 
@@ -53,7 +53,11 @@ const priorBaseline: RunReport | null = upload && creds
   ? await readPublic<RunReport>(creds, "baseline.json")
   : existsSync(join(root, "public", "baseline.json")) ? (JSON.parse(readFileSync(join(root, "public", "baseline.json"), "utf8")) as RunReport) : null;
 
-const bench = await runBench({ suites: ["chat", "text", "letters", "safety", "safety-holdout", "personas"] });
+const first = await runBench({ suites: ["chat", "text", "letters", "safety", "safety-holdout", "personas"] });
+// As on pull requests: a case that newly fails against main's baseline runs
+// once more and counts only if it fails again.
+const { bench, rerun } = await rerunNewlyFailing(first, priorBaseline, {});
+if (rerun.rerun.length > 0) console.log(`reran ${rerun.rerun.length} newly failing case(s): ${rerun.held.length} held, ${rerun.cleared.length} passed on rerun`);
 console.log(`bench: ${bench.results.length} cases answered`);
 const probes = await runProbes(textLineFromEnv(process.env));
 console.log(`probes: ${probes.passed}/${probes.total}`);
@@ -64,7 +68,7 @@ const mail = await scoreMailDeadlines();
 const full = finishReport(bench.report, {
   runId: day, startedAt, finishedAt: new Date().toISOString(), gitSha: gitSha(), broken: false,
   paths: bench.paths, judge: bench.judge, dns: dnsFromEnv(process.env).mode, env: process.env,
-}, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: bench.answeringModel, probes });
+}, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: bench.answeringModel, probes, rerun });
 full.guardian = guardian;
 full.mail = mail;
 if (!mail.live) full.standins = [...(full.standins ?? []), `mail deadlines: ${mail.detail}`];
