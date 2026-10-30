@@ -279,6 +279,13 @@ export function prComment(report: RunReport, baseline: RunReport | null, gate: G
   } else if (report.rerun) {
     lines.push("No case newly failed, so nothing was rerun.");
   }
+  if (report.agent?.ran) {
+    const a = report.agent;
+    lines.push(`Agent (recorded, not gated): ${a.cases} text cases, ${a.agentAnswered} answered by the agent, ${a.fallbackAnswered} by the plain fallback, ${a.mixedAnswered ?? 0} mixed${a.answerErrors > 0 ? `, ${a.answerErrors} with no answer` : ""}.${a.selfJudged ? " Judge scores are self-judged: the judge is the agent's or the fallback's model." : ""}${a.calibration ? ` Agent judge agreement ${Math.round(a.calibration.agreement * 100)}% on the 30 provisional labels${a.calibration.complete ? "" : " (not every case scored)"}.` : ""}`);
+    for (const s of Object.values(a.suites)) {
+      lines.push(`- ${s.suite}: hard ${pct(s.hardCheckPassRate)}, judge ${s.judgeMean.toFixed(2)}, agent ${s.agentAnswered}/${s.cases}${s.gateFailures.length > 0 ? `, safety: ${s.gateFailures.map((f) => `${f.caseId} (${f.check})`).join(", ")}` : ""}`);
+    }
+  }
   for (const s of report.standins ?? []) lines.push(`- Stand-in: ${s}`);
   lines.push(`Judge ${report.judge.live ? "live" : "stand-in"}, agreement ${Math.round(report.calibration.agreement * 100)}% on ${report.calibration.provisional ? "provisional" : "hand"} labels${report.judge.errors ? `, ${report.judge.errors} answer(s) unscored` : ""}. DNS ${report.dns}.`);
   lines.push(report.eligibility.eligible ? "Gate-eligible." : `Not gate-eligible: ${report.eligibility.reasons.join("; ")}.`);
@@ -323,6 +330,7 @@ export interface HistoryRow {
   probes: { live: boolean; passRate: number; passed: number; total: number; guardChangeRate: number } | null;
   guardian: { ran: boolean; precision: number; recall: number; p50Ms: number; p95Ms: number } | null;
   mail: { live: boolean; accuracy: number; letters: number } | null;
+  agent?: { ran: boolean; cases: number; agentAnswered: number; fallbackAnswered: number; mixedAnswered: number; selfJudged: boolean; hardCheckPassRate: number; judgeMean: number; p50Ms: number; p95Ms: number } | null;
   standins: string[];
 }
 
@@ -342,6 +350,18 @@ function weighted(report: RunReport, pick: (s: SuiteScore) => number | undefined
   const live = Object.values(report.suites).filter((s) => (s.liveCases ?? 0) > 0 && pick(s) !== undefined);
   const n = live.reduce((sum, s) => sum + (s.liveCases ?? 0), 0);
   return n === 0 ? 0 : live.reduce((sum, s) => sum + pick(s)! * (s.liveCases ?? 0), 0) / n;
+}
+
+// The agent stage across suites, weighted by cases.
+function agentRow(a: NonNullable<RunReport["agent"]>): NonNullable<HistoryRow["agent"]> {
+  const suites = Object.values(a.suites);
+  const n = suites.reduce((sum, s) => sum + s.cases, 0);
+  const avg = (pick: (s: (typeof suites)[number]) => number) => (n === 0 ? 0 : suites.reduce((sum, s) => sum + pick(s) * s.cases, 0) / n);
+  return {
+    ran: a.ran, cases: a.cases, agentAnswered: a.agentAnswered, fallbackAnswered: a.fallbackAnswered,
+    mixedAnswered: a.mixedAnswered ?? 0, selfJudged: a.selfJudged ?? true,
+    hardCheckPassRate: avg((s) => s.hardCheckPassRate), judgeMean: avg((s) => s.judgeMean), p50Ms: a.p50Ms, p95Ms: a.p95Ms,
+  };
 }
 
 export function historyRow(report: RunReport, results: CaseResult[] = []): HistoryRow {
@@ -377,6 +397,7 @@ export function historyRow(report: RunReport, results: CaseResult[] = []): Histo
       ? { ran: report.guardian.ran, precision: report.guardian.precision, recall: report.guardian.recall, p50Ms: report.guardian.p50Ms, p95Ms: report.guardian.p95Ms }
       : null,
     mail: report.mail ? { live: report.mail.live, accuracy: report.mail.accuracy, letters: report.mail.letters } : null,
+    agent: report.agent ? agentRow(report.agent) : null,
     standins: report.standins ?? [],
   };
 }

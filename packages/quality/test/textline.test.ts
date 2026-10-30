@@ -77,7 +77,7 @@ test("a reply that names the model is rewritten before it is scored", async () =
 
 test("conversations replay real replies as history", async () => {
   const script: Script = { replies: ["Hi, I'm Mano.", "Sure, what state are you in?"], seen: [] };
-  const runs = await converse(line(script), ["hi", "can you help with rent"]);
+  const { runs } = await converse(line(script), ["hi", "can you help with rent"]);
   assert.equal(runs.length, 2);
   const second = script.seen.at(-1)!.input;
   assert.deepEqual(second.map((m) => m.role), ["user", "assistant", "user"]);

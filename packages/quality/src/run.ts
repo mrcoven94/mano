@@ -12,6 +12,7 @@ import { loadHoldout } from "./holdout.ts";
 import { loadPaths, sentText, type BenchAnswer, type LoadedPath, type PathSet } from "./paths.ts";
 import { buildAllSuites } from "./suites/build.ts";
 import type { BenchCase, SuiteBuild, SuiteName } from "./suites/types.ts";
+import type { AgentSummary } from "./agent-types.ts";
 import type { GuardianSummary } from "./guardian.ts";
 import type { MailSummary } from "./mail.ts";
 import type { ProbeSummary } from "./probes.ts";
@@ -33,6 +34,7 @@ export interface CaseResult {
     route?: "fast" | "deep";
     guardChanges?: string[];
     earlier?: string[];
+    servedBy?: "agent" | "fallback" | "mixed" | "plain" | "worker";
   };
   checks: CheckResult[];
   judge: JudgeScore | null;
@@ -135,6 +137,7 @@ export interface RunReport {
   guardian?: GuardianSummary;
   mail?: MailSummary;
   rerun?: RerunSummary;
+  agent?: AgentSummary;
 }
 
 export interface RerunSummary {
@@ -361,6 +364,7 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
         ...(answer.route ? { route: answer.route } : {}),
         ...(answer.guardChanges ? { guardChanges: answer.guardChanges } : {}),
         ...(answer.earlier && answer.earlier.length > 0 ? { earlier: answer.earlier } : {}),
+        ...(answer.servedBy ? { servedBy: answer.servedBy } : {}),
       },
       checks, judge: null,
       latencyMs: answer.latencyMs || Date.now() - start,
@@ -411,14 +415,9 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
   }
 
   // Calibration runs on every bench so a drifting judge cannot pass silently.
-  const cal = opts.skipCalibration ? [] : buildCalibrationSet();
-  const calRun = await judgeRobust(cal.map((c) => ({ answer: c.answer, facts: c.facts, reference: c.reference })), judge, 99);
-  const calScored = calRun.scores.map((s, i) => ({ s, label: cal[i]!.label })).filter((x) => x.s !== null);
-  // Agreement over the survivors of a failed batch is not calibration: every
-  // one of the 30 cases must be scored, and each one that is not counts as
-  // a judge error.
-  const calComplete = cal.length > 0 && calScored.length === cal.length;
-  const calAgreement = calComplete ? agreement(calScored.map((x) => x.s!), calScored.map((x) => x.label)) : 0;
+  const calRun = opts.skipCalibration ? { agreement: 0, complete: false, errors: 0 } : await calibrate(judge);
+  const calAgreement = calRun.agreement;
+  const calComplete = calRun.complete;
 
   return {
     report: {
@@ -589,4 +588,16 @@ export async function rerunNewlyFailing(
     bench: { ...first, results, report: { ...first.report, suites }, judgeErrors: first.judgeErrors + again.judgeErrors },
     rerun: { rerun: ids, held, cleared },
   };
+}
+
+// Scores the 30 labeled calibration cases with a judge. Agreement over the
+// survivors of a failed batch is not calibration: every case must be scored,
+// and each one that is not counts as a judge error.
+export async function calibrate(judge: JudgeClient): Promise<{ agreement: number; complete: boolean; errors: number; kept: boolean }> {
+  const cal = buildCalibrationSet();
+  const run = await judgeRobust(cal.map((c) => ({ answer: c.answer, facts: c.facts, reference: c.reference })), judge, 99);
+  const scored = run.scores.map((s, i) => ({ s, label: cal[i]!.label })).filter((x) => x.s !== null);
+  const complete = scored.length === cal.length;
+  const rate = complete ? agreement(scored.map((x) => x.s!), scored.map((x) => x.label)) : 0;
+  return { agreement: rate, complete, errors: run.errors, kept: complete && rate >= JUDGE_AGREEMENT_MIN };
 }

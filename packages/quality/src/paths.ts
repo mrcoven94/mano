@@ -28,6 +28,9 @@ export interface BenchAnswer {
   // Everything else the person was sent on the way: heads-ups and earlier
   // turns' replies. Safety checks read these as well as the answer.
   earlier?: string[];
+  // Through the agent path: whether the agent answered every turn, or the
+  // plain fallback answered at least one.
+  servedBy?: "agent" | "fallback" | "mixed" | "plain" | "worker";
 }
 
 export interface AnswerPath {
@@ -104,6 +107,17 @@ async function mailPath(): Promise<LoadedPath> {
   } catch {
     return { path: new ReferencePath(), standin: true, detail: "packages/mail exports no qualityAnswerPath yet; reference stand-in" };
   }
+}
+
+// Text cases through Mano's agent (agent.ts); letters and photos still go to
+// the mail reader. Null when no agent is configured.
+export async function loadAgentPaths(env: NodeJS.ProcessEnv = process.env): Promise<PathSet | null> {
+  const { agentPathFromEnv } = await import("./agent.ts");
+  const agent = agentPathFromEnv(env);
+  if (!agent) return null;
+  const mail = await mailPath();
+  const loaded: LoadedPath = { path: agent, standin: false, detail: "Mano's agent, with the plain answer as its fallback, and the send pipeline" };
+  return { forCase: (c) => (needsMailReader(c) ? mail : loaded), textLineModel: env.MANO_MODEL_BENCH_ID ?? null };
 }
 
 export async function loadPaths(env: NodeJS.ProcessEnv = process.env, broken = false): Promise<PathSet> {
