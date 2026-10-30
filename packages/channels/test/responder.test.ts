@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING } from "@mano/persona";
+import { CRISIS_LINE, CRISIS_LINE_ES, DEEP_INSTRUCTIONS, MANO_SOUL, PACING, crisisNote } from "@mano/persona";
 import { ResponderFailed, SparkResponder, StandInResponder } from "../src/responder.js";
 import { RecordingChannel } from "../src/recording.js";
 import { ChannelRefused, ChannelUncertain } from "../src/channel.js";
@@ -78,16 +78,15 @@ describe("SparkResponder", () => {
     expect(result).toMatchObject({ text: "You likely qualify for about $400 a month.", attempts: 2 });
   });
 
-  it("never routes a crisis deep, and makes sure the reply names 988 and 911", async () => {
+  it("never routes a crisis deep, and leaves the crisis line to finalizeReply (safety-05)", async () => {
     const fetchFn = scripted(reply("I'm so glad you told me. I'm here."));
     const onHeadsUp = vi.fn(async () => {});
     const responder = new SparkResponder({ apiKey: "test-key-not-real", model: MODEL, fetchFn: fetchFn as typeof fetch });
     const result = await responder.respond({ texts: ["I don't want to be here anymore"], attachmentCount: 0 }, { onHeadsUp });
-    expect(bodyOf(fetchFn, 0).instructions).toBe(MANO_SOUL);
+    expect(bodyOf(fetchFn, 0).instructions).toBe(`${MANO_SOUL}\n\n${crisisNote(CRISIS_LINE)}`);
     expect(onHeadsUp).not.toHaveBeenCalled();
-    expect(result.text).toContain("988");
-    expect(result.text).toContain("911");
-    expect(result.text).toContain("I'm here.");
+    // The line names 988 and 911 in finalizeReply, on every path.
+    expect(result.text).toBe("I'm so glad you told me. I'm here.");
   });
 
   it("tells the model about photos in its instructions, not in the person's words", async () => {
@@ -272,7 +271,7 @@ describe("SparkResponder crisis routing uses the broad check", () => {
     const onHeadsUp = vi.fn(async () => {});
     const responder = new SparkResponder({ apiKey: "test-key-not-real", model: MODEL, fetchFn: fetchFn as typeof fetch, hedgeAfterMs: 60_000 });
     await responder.respond({ texts: ["I am going to jump off a bridge"], attachmentCount: 0 }, { onHeadsUp });
-    expect(bodyOf(fetchFn, 0).instructions).toBe(MANO_SOUL);
+    expect(bodyOf(fetchFn, 0).instructions).toBe(`${MANO_SOUL}\n\n${crisisNote(CRISIS_LINE)}`);
     expect(onHeadsUp).not.toHaveBeenCalled();
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
@@ -285,5 +284,24 @@ describe("no corrective call (PR 74 review 3: every reply has words)", () => {
     const result = await responder.respond({ texts: ["When is my SNAP renewal due?"], attachmentCount: 0, history: [] });
     expect(fetchFn).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ text: "", tapback: "like", attempts: 1 });
+  });
+});
+
+describe("a crisis turn: the line is already sent, the model writes the human part (safety-05)", () => {
+  it("tells the model the exact line in the person's language and adds no second line itself", async () => {
+    const fetchFn = scripted(reply("Me alegra que me lo hayas dicho.\nEstoy aquí contigo. ¿Estás a salvo ahora mismo?"));
+    const responder = new SparkResponder({ apiKey: "test-key-not-real", model: MODEL, fetchFn: fetchFn as typeof fetch });
+    const result = await responder.respond({ texts: ["Quiero hacerme daño esta noche."], attachmentCount: 0, history: [] });
+    const instructions = String(bodyOf(fetchFn, 0).instructions);
+    expect(instructions).toContain(crisisNote(CRISIS_LINE_ES));
+    expect(instructions).not.toContain(PACING);
+    expect(result.text).toBe("Me alegra que me lo hayas dicho.\nEstoy aquí contigo. ¿Estás a salvo ahora mismo?");
+  });
+
+  it("uses the English line for an English message", async () => {
+    const fetchFn = scripted(reply("I'm really glad you told me.\nI'm here with you. are you safe right now?"));
+    const responder = new SparkResponder({ apiKey: "test-key-not-real", model: MODEL, fetchFn: fetchFn as typeof fetch });
+    await responder.respond({ texts: ["I want to hurt myself tonight."], attachmentCount: 0, history: [] });
+    expect(String(bodyOf(fetchFn, 0).instructions)).toContain(crisisNote(CRISIS_LINE));
   });
 });

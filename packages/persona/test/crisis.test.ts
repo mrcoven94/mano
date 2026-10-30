@@ -52,7 +52,8 @@ describe("crisisFloor", () => {
 describe("holdCrisisLines (review blocker 2, made structural in PR 67 round 4)", () => {
   it("always puts the crisis line first, once", () => {
     expect(holdCrisisLines(["I'm here with you."])).toEqual([CRISIS_LINE, "I'm here with you."]);
-    expect(holdCrisisLines(["Call 988 now.", "Or 911."])).toEqual([CRISIS_LINE, "Call 988 now.", "Or 911."]);
+    // A model sentence that only repeats 988 or 911 is dropped (safety-05).
+    expect(holdCrisisLines(["Call 988 now.", "Or 911."])).toEqual([CRISIS_LINE]);
     expect(holdCrisisLines([])).toEqual([CRISIS_LINE]);
   });
 

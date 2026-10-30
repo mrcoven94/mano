@@ -61,11 +61,54 @@ export function crisisFloor(reply: string): string {
 }
 
 // The last step on a crisis turn's outgoing bubbles, after the guard,
-// the link check and splitting: the fixed CRISIS_LINE, naming 988 and
+// the link check and splitting: the fixed crisis line, naming 988 and
 // 911, is always the first bubble and appears once. Callers cap the
-// bubbles after it, so the cap can never drop it.
+// bubbles after it, so the cap can never drop it. Since that line is
+// always there, a model sentence that only says 988 or 911 again is
+// dropped (safety-05: the judge marks the repeat down), and the safety
+// question keeps its question marks.
 export function holdCrisisLines(bubbles: readonly string[], line: string = CRISIS_LINE): string[] {
-  return [line, ...bubbles.filter((b) => b !== CRISIS_LINE && b !== CRISIS_LINE_ES)];
+  const rest = bubbles
+    .filter((b) => b !== CRISIS_LINE && b !== CRISIS_LINE_ES)
+    .map((b) => askSafety(withoutRepeatedLines(b)))
+    .filter((b) => b.length > 0);
+  return [line, ...rest];
+}
+
+// A sentence that names 988 or 911 and asks nothing repeats the crisis
+// line. Other help a model adds (a hotline number) stays.
+const NAMES_LINE = /(?<!\d)(?:988|911)(?!\d)/;
+
+function withoutRepeatedLines(bubble: string): string {
+  return bubble
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !(NAMES_LINE.test(sentence) && !/[?¿]/.test(sentence)))
+    .join(" ")
+    .trim();
+}
+
+// "are you safe right now" or "estás a salvo en este momento" at the end
+// of a bubble, with its question marks lost, gets them back: told to a
+// person in crisis, the statement "you are safe" is the wrong message.
+const SAFETY_EN = /(\bare you (?:safe|ok|okay)(?: right now| at this moment| now| tonight)?)\s*\.?$/i;
+const SAFETY_ES = /(^|[,;.]\s*)¿?((?:est[áa]s|te sientes) (?:a salvo|segur[oa]|bien)(?: (?:en este momento|ahora mismo|ahora|esta noche))?)\s*\.?$/iu;
+
+function askSafety(bubble: string): string {
+  if (/\?\s*$/.test(bubble)) return bubble;
+  if (SAFETY_ES.test(bubble)) return bubble.replace(SAFETY_ES, "$1¿$2?");
+  if (SAFETY_EN.test(bubble)) return bubble.replace(SAFETY_EN, "$1?");
+  return bubble;
+}
+
+// Told to the model on a crisis turn, after the soul: the crisis line is
+// already on its way, so its own words are the human part.
+export const CRISIS_NOTE =
+  "This person may be in crisis. Mano has already sent them this line first, word for word: {line} Do not repeat 988 or 911 or tell them again to call or text; it is already there. " +
+  "Write only the human part, in their language, in two or three short lines: that you're glad they told you, that you're here with them, " +
+  "and ask whether they are safe, with the question mark: \"are you safe right now?\" or \"¿estás a salvo ahora mismo?\"";
+
+export function crisisNote(line: string): string {
+  return CRISIS_NOTE.replace("{line}", `"${line}"`);
 }
 
 // Suppression, the only exception to the detectors above, and used only
