@@ -28,11 +28,14 @@ const DANGER = /\b(?:immediate danger|in danger(?! of (?:losing|being)\b)|not sa
 // reads them as danger. Explicit danger still counts.
 const BENEFITS_DANGER = /\bin danger of (?:losing|being)\b/g;
 
-// Broad on purpose, with no exclusions: used only where no model runs
+// "cut my" and "cutting my" count unless a benefits, money or work word
+// follows ("cut my food stamps", "cutting my hours"): safe by default,
+// since no list of body parts is ever complete.
+// Broad on purpose, with no other exclusions: used only where no model runs
 // (over a limit, out of budget, a failed call), so a match costs one
 // fixed text and silence is never the answer.
 const POSSIBLE_CRISIS =
-  /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut(?:ting)? myself|cut(?:ting)? my (?:arms?|wrists?|legs?|skin|thighs?|body)|slit\w*|wrists?|throw(?:ing)? myself|jump(?:ing)? off|kill myself|end it|end my life|(?:not|don'?t|do not) want to (?:live|be here)|better off dead)\b/;
+  /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut(?:ting)? myself|cut(?:ting)? my (?!(?:food stamps|snap|ebt|benefits?|hours|shifts?|pay|paycheck|check|wages|salary|coverage|insurance|medicaid|rent|budget|bills?|phone|power|lights|water|gas|hair)\b)[a-z]+|slit\w*|wrists?|throw(?:ing)? myself|jump(?:ing)? off|kill myself|end it|end my life|(?:not|don'?t|do not) want to (?:live|be here)|better off dead)\b/;
 
 function normalize(text: string): string {
   return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]/g, " ").replace(/\s+/g, " ")} `;
