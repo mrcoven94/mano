@@ -573,8 +573,8 @@ export class SqlConversationStore implements ConversationStore {
     );
   }
 
-  finishAgentSend(key: string, atMs: number): void {
-    this.sql.exec("UPDATE agent_sends SET state = 'sent', updated_at_ms = ? WHERE agent_key = ?", atMs, key);
+  finishAgentSend(key: string, atMs: number, state: "sent" | "refused" | "failed" = "sent"): void {
+    this.sql.exec("UPDATE agent_sends SET state = ?, updated_at_ms = ? WHERE agent_key = ?", state, atMs, key);
   }
 
   wipe(deletedAtMs: number): void {

@@ -104,7 +104,8 @@ export interface AgentSendRow {
   // The deletion generation the delivery belongs to, fixed when it was
   // first accepted. A retry never adopts a newer generation.
   generation: number;
-  state: "sending" | "sent";
+  // refused and failed are final: the provider declined a bubble for good.
+  state: "sending" | "sent" | "refused" | "failed";
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -198,7 +199,7 @@ export interface ConversationStore {
   recentTurns(limit: number): PersistedTurn[];
   agentSend(key: string): AgentSendRow | null;
   startAgentSend(row: AgentSendRow): void;
-  finishAgentSend(key: string, atMs: number): void;
+  finishAgentSend(key: string, atMs: number, state?: "sent" | "refused" | "failed"): void;
   wipe(deletedAtMs: number): void;
 }
 
@@ -353,9 +354,9 @@ export class MemoryStore implements ConversationStore {
     if (!this.agentSendRows.has(row.key)) this.agentSendRows.set(row.key, { ...row });
   }
 
-  finishAgentSend(key: string, atMs: number): void {
+  finishAgentSend(key: string, atMs: number, state: "sent" | "refused" | "failed" = "sent"): void {
     const row = this.agentSendRows.get(key);
-    if (row) this.agentSendRows.set(key, { ...row, state: "sent", updatedAtMs: atMs });
+    if (row) this.agentSendRows.set(key, { ...row, state, updatedAtMs: atMs });
   }
 
   wipe(deletedAtMs: number): void {

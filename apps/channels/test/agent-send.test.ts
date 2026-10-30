@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentResponder,
+  ChannelFailed,
   ChannelRefused,
   computeSignatureHex,
   idempotencyKeyFor,
@@ -250,6 +251,35 @@ describe("runner.sendAgentText", () => {
     };
     await expect(h.runner.sendAgentText({ key: "rem_r", text: "Reminder: call", generation })).rejects.toThrow();
     expect(h.store.agentSend("rem_r")?.generation).toBe(generation);
+  });
+});
+
+describe("what an Engine reminder send reports", () => {
+  function chattingHarness() {
+    const h = makeHarness();
+    const meta = h.store.meta();
+    meta.chatId = "chat_agent";
+    meta.to = "+15550001001";
+    meta.introduced = true;
+    h.store.saveMeta(meta);
+    return h;
+  }
+
+  it("a send the provider refused is reported as not sent, with the reason, and stays that way", async () => {
+    const h = chattingHarness();
+    h.channel.send = async () => {
+      throw new ChannelRefused(403, "blocked", "refused");
+    };
+    expect(await h.runner.sendAgentText({ key: "reminder:r1", text: "Reminder: call", generation: 0 })).toEqual({ sent: false, reason: "refused" });
+    expect(await h.runner.sendAgentText({ key: "reminder:r1", text: "Reminder: call", generation: 0 })).toEqual({ sent: false, reason: "refused" });
+  });
+
+  it("a send that failed for good is reported as not sent", async () => {
+    const h = chattingHarness();
+    h.channel.send = async () => {
+      throw new ChannelFailed(400, "bad_request", "failed");
+    };
+    expect(await h.runner.sendAgentText({ key: "reminder:r2", text: "Reminder: call", generation: 0 })).toEqual({ sent: false, reason: "failed" });
   });
 });
 

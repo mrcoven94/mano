@@ -1433,7 +1433,7 @@ export class ConversationRunner {
   // closed, opted out, deleted) is a handled 200.
   async sendAgentText(opts: { key: string; text: string; generation: number }): Promise<{
     sent: boolean;
-    reason?: "empty" | "unknown" | "closed" | "opted_out" | "budget" | "deleted";
+    reason?: "empty" | "unknown" | "closed" | "opted_out" | "budget" | "deleted" | "refused" | "failed";
     duplicate?: boolean;
   }> {
     const { store, logger, nowMs, config } = this.deps;
@@ -1441,6 +1441,7 @@ export class ConversationRunner {
     if (!text) return { sent: false, reason: "empty" };
     const prior = store.agentSend(opts.key);
     if (prior?.state === "sent") return { sent: true, duplicate: true };
+    if (prior?.state === "refused" || prior?.state === "failed") return { sent: false, reason: prior.state };
     const generation = prior ? prior.generation : opts.generation;
     const meta = store.meta();
     if (meta.generation !== generation) return { sent: false, reason: "deleted" };
@@ -1489,10 +1490,18 @@ export class ConversationRunner {
       this.checkGeneration(generation);
       await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
       this.checkSendsResolved(turn, generation);
-      await this.deps.spend.settle(reserveKey, costUsd);
-      store.finishAgentSend(opts.key, nowMs());
-      logger.info("agent_sent", { handle: this.logHandle(), turn, bubbles: bubbles.length });
-      return { sent: true };
+      // Sent only when the provider accepted every bubble; a refusal or a
+      // definite failure is final and reported as not sent.
+      const states = store.outbounds().filter((r) => r.turn === turn).map((r) => r.state);
+      const outcome: "sent" | "refused" | "failed" = states.includes("refused")
+        ? "refused"
+        : states.includes("failed")
+          ? "failed"
+          : "sent";
+      await this.deps.spend.settle(reserveKey, outcome === "sent" ? costUsd : 0);
+      store.finishAgentSend(opts.key, nowMs(), outcome);
+      logger.info("agent_sent", { handle: this.logHandle(), turn, bubbles: bubbles.length, outcome });
+      return outcome === "sent" ? { sent: true } : { sent: false, reason: outcome };
     } catch (err) {
       try {
         await this.deps.spend.release(reserveKey);
