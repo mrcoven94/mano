@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { env } from "cloudflare:test";
+import { env, runDurableObjectAlarm } from "cloudflare:test";
 import { hashHandle, parseBlooioEvent } from "@mano/channels";
 import type { Env } from "../src/env.js";
 
@@ -191,7 +191,9 @@ describe("ConversationDO on SQLite", () => {
       method: "POST",
       body: JSON.stringify({ handleHash: "hash-wipe" }),
     });
-    expect(res.status).toBe(200);
+    // Engine is unreachable in this env, so the delete reports pending;
+    // Channels' own store is wiped either way.
+    expect(res.status).toBe(202);
     const after = (await (await stub.fetch("https://conversation/internal/standin")).json()) as {
       sends: unknown[];
       pending: number;
@@ -200,16 +202,25 @@ describe("ConversationDO on SQLite", () => {
     expect(after).toMatchObject({ sends: [], pending: 0, approvals: 0 });
   });
 
-  it("deletes the conversation and its files", async () => {
+  it("deletes the conversation, and fails closed while Engine has not confirmed it", async () => {
+    // The worker test env points MANO_ENGINE_URL at a closed port, so the
+    // Engine delete cannot be confirmed.
+    const handleHash = "a".repeat(64);
     const stub = stubFor(`do-del-${Date.now()}`);
-    await postEvent(stub, "hash-del", inbound("evt_do_del", "Hello."));
+    await postEvent(stub, handleHash, inbound("evt_do_del", "Hello."));
     const res = await stub.fetch("https://conversation/internal/delete", {
       method: "POST",
-      body: JSON.stringify({ handleHash: "hash-del" }),
+      body: JSON.stringify({ handleHash }),
     });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, filesDeleted: 0, engineRemoved: null, agentCleared: null });
-    expect(await postEvent(stub, "hash-del", inbound("evt_do_del", "Hello."))).toBe("queued");
+    expect(res.status).toBe(202);
+    expect(await res.json()).toMatchObject({ ok: false, pending: true, engineConfirmed: false });
+    const state = (await (await stub.fetch("https://conversation/internal/standin")).json()) as { engineDeletePending: unknown };
+    expect(state.engineDeletePending).toMatchObject({ generation: 1, engineDone: false, attempts: 1 });
+    // An alarm before the retry is due leaves it pending and re-armed.
+    await runDurableObjectAlarm(stub);
+    const later = (await (await stub.fetch("https://conversation/internal/standin")).json()) as { engineDeletePending: unknown };
+    expect(later.engineDeletePending).toMatchObject({ generation: 1, engineDone: false, attempts: 1 });
+    expect(await postEvent(stub, handleHash, inbound("evt_do_del", "Hello."))).toBe("queued");
   });
 
   it("delivers an agent-started text and dedupes its key", async () => {

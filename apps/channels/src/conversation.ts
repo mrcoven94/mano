@@ -4,8 +4,6 @@
 // reaches them from the queue consumer, never from the public internet.
 import {
   AgentResponder,
-  deleteConversationInEngine,
-  notifyAgentDeleted,
   BlooioChannel,
   RecordingChannel,
   boundFetch,
@@ -28,6 +26,16 @@ export function parseMediaHosts(raw: string | undefined): string[] {
 }
 import { R2FileStore, conversationFilePrefix } from "./files.js";
 import { SqlConversationStore } from "./store-sql.js";
+import {
+  advanceDelete,
+  agentConfigured,
+  clearPendingDelete,
+  isDone,
+  loadPendingDelete,
+  newPendingDelete,
+  retryDelayMs,
+  savePendingDelete,
+} from "./conversation-delete.js";
 import { numberEnv, type Env } from "./env.js";
 
 export const GLOBAL_STATE_ID = "global";
@@ -108,8 +116,9 @@ function buildFallbackResponder(env: Env): Responder {
   return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, model, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
 }
 
-export function buildResponder(env: Env, handleHash?: string): Responder {
+export function buildResponder(env: Env, handleHash?: string, opts: { agentAllowed?: boolean } = {}): Responder {
   const fallback = buildFallbackResponder(env);
+  if (opts.agentAllowed === false) return fallback;
   // The agent answers when configured; otherwise the plain model answer
   // stays the responder, and the agent falls back to it per turn.
   if (env.AGENT_URL && env.MANO_AGENT_SECRET && env.MANO_HANDLE_GRANT_SECRET && handleHash) {
@@ -153,7 +162,9 @@ export class ConversationDO implements DurableObject {
 
   private runner(handleHash: string): { runner: ConversationRunner; channel: Channel; responder: Responder } {
     const channel = buildChannel(this.env);
-    const responder = buildResponder(this.env, handleHash);
+    // While a delete waits for Engine, old approvals could still be
+    // answered, so the agent is not used: the plain model answers.
+    const responder = buildResponder(this.env, handleHash, { agentAllowed: loadPendingDelete(this.ctx.storage.sql) === null });
     const runner = new ConversationRunner({
       store: new SqlConversationStore(this.ctx.storage.sql),
       channel,
@@ -289,33 +300,27 @@ export class ConversationDO implements DurableObject {
         filesDeleted = await new R2FileStore(this.env.FILES).deletePrefix(conversationFilePrefix(body.handleHash));
       }
       await this.ctx.storage.deleteAlarm();
-      // Engine holds the rest of this person's state (reminders, turn
-      // ledger, approval pointer, pending approvals, memory) and removes it
-      // in one transaction; the agent then retires its session history.
-      let engineRemoved: Record<string, number | boolean> | null = null;
-      if (this.env.MANO_ENGINE_URL && this.env.MANO_ENGINE_CHANNELS_TOKEN && this.env.MANO_HANDLE_GRANT_SECRET) {
-        engineRemoved = await deleteConversationInEngine({
-          engineUrl: this.env.MANO_ENGINE_URL,
-          channelsToken: this.env.MANO_ENGINE_CHANNELS_TOKEN,
-          grantSecret: this.env.MANO_HANDLE_GRANT_SECRET,
-          handleHash: body.handleHash,
-          generation: store.meta().generation,
-        }).catch(() => null);
-        if (!engineRemoved) this.logger.warn("engine_delete_failed", { handle: body.handleHash });
+      // Engine and the agent hold the rest of this person's state. Until
+      // both confirm, the delete stays pending (see conversation-delete.ts).
+      const fresh = newPendingDelete(this.env, body.handleHash, store.meta().generation);
+      const { pending, engineRemoved } = await advanceDelete(this.env, fresh);
+      if (isDone(pending)) {
+        clearPendingDelete(this.ctx.storage.sql);
+        this.logger.info("conversation_deleted", { handle: body.handleHash, filesDeleted, engineCleared: true, agentCleared: true });
+        return Response.json({ ok: true, filesDeleted, engineRemoved, agentCleared: agentConfigured(this.env) ? true : null });
       }
-      let agentCleared: boolean | null = null;
-      if (this.env.AGENT_URL && this.env.MANO_AGENT_SECRET && this.env.MANO_HANDLE_GRANT_SECRET) {
-        agentCleared = await notifyAgentDeleted({
-          agentUrl: this.env.AGENT_URL,
-          secret: this.env.MANO_AGENT_SECRET,
-          grantSecret: this.env.MANO_HANDLE_GRANT_SECRET,
-          handleHash: body.handleHash,
-          generation: store.meta().generation,
-        }).catch(() => false);
-        if (!agentCleared) this.logger.warn("agent_delete_failed", { handle: body.handleHash });
-      }
-      this.logger.info("conversation_deleted", { handle: body.handleHash, filesDeleted, engineCleared: engineRemoved !== null, agentCleared });
-      return Response.json({ ok: true, filesDeleted, engineRemoved, agentCleared });
+      const attempts = 1;
+      savePendingDelete(this.ctx.storage.sql, { ...pending, attempts, nextAtMs: Date.now() + retryDelayMs(attempts) });
+      await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(attempts));
+      this.logger.warn("conversation_delete_pending", {
+        handle: body.handleHash,
+        engineConfirmed: pending.engineDone,
+        agentCleared: pending.agentDone,
+      });
+      return Response.json(
+        { ok: false, pending: true, filesDeleted, engineConfirmed: pending.engineDone, agentCleared: pending.agentDone },
+        { status: 202 },
+      );
     }
     if (request.method === "GET" && url.pathname === "/internal/standin") {
       // Only reachable when no provider key is configured, in which case
@@ -331,12 +336,33 @@ export class ConversationDO implements DurableObject {
         introduced: store.meta().introduced,
         pending: store.pending().length,
         approvals: store.pendingApprovals(Date.now()).length,
+        engineDeletePending: loadPendingDelete(this.ctx.storage.sql),
       });
     }
     return new Response("Not found.", { status: 404 });
   }
 
+  // Retries a delete that Engine or the agent has not confirmed yet.
+  private async retryPendingDelete(): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const before = loadPendingDelete(sql);
+    if (!before || before.nextAtMs > Date.now()) return;
+    const { pending } = await advanceDelete(this.env, before);
+    if (isDone(pending)) {
+      clearPendingDelete(sql);
+      this.logger.info("conversation_delete_confirmed", { handle: pending.handleHash, attempts: before.attempts + 1 });
+      return;
+    }
+    const attempts = before.attempts + 1;
+    const nextAtMs = Date.now() + retryDelayMs(attempts);
+    savePendingDelete(sql, { ...pending, attempts, nextAtMs });
+    this.logger.warn("conversation_delete_pending", { handle: pending.handleHash, attempts });
+  }
+
   async alarm(): Promise<void> {
+    await this.retryPendingDelete();
+    const stillPending = loadPendingDelete(this.ctx.storage.sql);
+    if (stillPending) await this.ctx.storage.setAlarm(stillPending.nextAtMs);
     const { result, retryAfterMs } = await this.runTurnSerialized(this.ctx.id.name ?? this.ctx.id.toString());
     const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
     if (result === "retry") {
