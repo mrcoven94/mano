@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { SqlApprovalStore, ensureGatewayTables } from "../src/gateway/sql-store.js";
+import { MemoryApprovalStore } from "../src/gateway/gateway.js";
 import type { Approval } from "../src/gateway/types.js";
 
 // Minimal adapter from node:sqlite to the SqlStorage surface the store uses.
@@ -129,4 +130,38 @@ describe("blocker 6: approvals, attempts and receipts survive eviction", () => {
     ).toBeNull();
     expect(first.getApproval(approval.id)?.status).toBe("pending");
   });
+});
+
+describe("the latest proposal", () => {
+  // Sol's review 7: closing an older draft can fail. Whether or not it
+  // closed, an older draft can never be approved once a newer turn drafted.
+  for (const [name, make] of [
+    ["SQL store", () => openStorePair().first],
+    ["memory store", () => new MemoryApprovalStore()],
+  ] as const) {
+    it(`${name}: moves only forward, and only the latest drafted approval can be consumed`, () => {
+      const store = make();
+      const a = pendingApproval({ requestHash: "content-1" });
+      const b = pendingApproval({ requestHash: "content-1" });
+      const plain = pendingApproval({ requestHash: "content-1" });
+      const atA = { receivedAt: "2026-11-01T15:00:00.000Z", turnId: "turn-a" };
+      const atB = { receivedAt: "2026-11-01T15:00:05.000Z", turnId: "turn-b" };
+      store.createApprovalForKey(b, 0, atB);
+      // A finishes after B: it is created, but never becomes the latest.
+      store.createApprovalForKey(a, 0, atA);
+      store.createApprovalForKey(plain, 0);
+      expect(store.latestProposal()).toEqual({ approvalId: b.id, ...atB });
+      expect(store.proposalCurrent(a.id)).toBe(false);
+      expect(store.proposalCurrent(b.id)).toBe(true);
+      expect(store.proposalCurrent(plain.id)).toBe(true);
+      expect(store.consumeApprovalAndClaim(a.id, "maria", attemptFor(a), { personId: "maria", requestHash: "content-1" })).toBeNull();
+      expect(store.getApproval(a.id)?.status).toBe("pending");
+      expect(store.consumeApprovalAndClaim(b.id, "maria", attemptFor(b), { personId: "maria", requestHash: "content-1" })?.status).toBe(
+        "approved",
+      );
+      expect(store.consumeApprovalAndClaim(plain.id, "maria", attemptFor(plain), { personId: "maria", requestHash: "content-1" })?.status).toBe(
+        "approved",
+      );
+    });
+  }
 });

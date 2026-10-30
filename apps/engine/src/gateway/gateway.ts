@@ -8,7 +8,9 @@ import type {
   Attempt,
   Executor,
   GatewayResult,
+  LatestProposal,
   PolicyDecision,
+  ProposalOrder,
   Receipt,
 } from "./types.js";
 import { DefiniteFailureError, TimeoutError } from "./types.js";
@@ -40,7 +42,16 @@ export interface ApprovalStore {
   // approval holds its key and generation is still current, in one step.
   // Returns whichever approval holds the key afterwards (a itself when
   // inserted), or null when the generation moved on.
-  createApprovalForKey(a: Approval, generation: number): Approval | null;
+  // With an order, the new approval is a drafted proposal: in the same
+  // synchronous step it becomes the person's latest proposal, unless a
+  // proposal of a newer turn already is. The latest proposal never moves
+  // backwards within a generation.
+  createApprovalForKey(a: Approval, generation: number, order?: ProposalOrder): Approval | null;
+  // The newest drafted proposal of the current generation, or null.
+  latestProposal(): LatestProposal | null;
+  // False only for a drafted proposal that is no longer the latest one: it
+  // can never be approved, whether or not closing it worked.
+  proposalCurrent(id: string): boolean;
   // True while an approval's recorded generation is still current.
   approvalCurrent(id: string): boolean;
   // True while an approval is approved and its generation is current:
@@ -94,6 +105,13 @@ export interface ApprovalStore {
   audit<const T extends { event: string }>(entry: T & AuditEntry<T>): void;
 }
 
+// True when proposal a was drafted by an older turn than b.
+export function olderProposal(a: ProposalOrder, b: ProposalOrder): boolean {
+  return a.receivedAt < b.receivedAt || (a.receivedAt === b.receivedAt && a.turnId < b.turnId);
+}
+
+export const SUPERSEDED_REASON = "A newer request replaced this one, so it can no longer be approved.";
+
 // Statuses that hold an action key, in the order a lookup prefers them:
 // a NO first, then a revocation, then the consumed approval, then the
 // live one.
@@ -131,7 +149,17 @@ export class MemoryApprovalStore implements ApprovalStore {
   generation() {
     return this.conversationGeneration;
   }
-  createApprovalForKey(a: Approval, generation: number): Approval | null {
+  private latest: (LatestProposal & { generation: number }) | null = null;
+  private drafted = new Set<string>();
+  latestProposal(): LatestProposal | null {
+    if (!this.latest || this.latest.generation !== this.conversationGeneration) return null;
+    const { generation: _g, ...latest } = this.latest;
+    return latest;
+  }
+  proposalCurrent(id: string) {
+    return !this.drafted.has(id) || this.latestProposal()?.approvalId === id;
+  }
+  createApprovalForKey(a: Approval, generation: number, order?: ProposalOrder): Approval | null {
     if (generation !== this.conversationGeneration) return null;
     const holders = [...this.approvals.values()].filter(
       (x) => x.idempotencyKey === a.idempotencyKey && KEY_HOLDING.includes(x.status),
@@ -139,6 +167,11 @@ export class MemoryApprovalStore implements ApprovalStore {
     if (holders.length === 0) {
       this.approvals.set(a.id, a);
       this.approvalGenerations.set(a.id, generation);
+      if (order) {
+        this.drafted.add(a.id);
+        const cur = this.latestProposal();
+        if (!cur || !olderProposal(order, cur)) this.latest = { approvalId: a.id, ...order, generation };
+      }
       return a;
     }
     holders.sort((x, y) => KEY_HOLDING.indexOf(x.status) - KEY_HOLDING.indexOf(y.status) || (x.createdAt < y.createdAt ? -1 : 1));
@@ -166,6 +199,7 @@ export class MemoryApprovalStore implements ApprovalStore {
   consumeApprovalAndClaim(id: string, humanId: string, attempt: Attempt, guard: ConsumeGuard): Approval | null {
     const current = this.approvals.get(id);
     if (!current || current.status !== "pending") return null;
+    if (!this.proposalCurrent(id)) return null;
     if (this.keyDeclined(current.idempotencyKey)) return null;
     if (this.generationOf(id) !== this.conversationGeneration) return null;
     if (current.personId !== guard.personId) return null;
@@ -394,6 +428,9 @@ export const STALE: GatewayResult = {
   reason: "This conversation was deleted after the request was prepared. Nothing was done.",
 };
 
+// Refused: a newer drafted proposal replaced this one.
+export const SUPERSEDED: GatewayResult = { status: "blocked", reason: SUPERSEDED_REASON, superseded: true };
+
 // Audit digests for one approval, computed before any check or claim.
 type AuditHashes = { key: AuditDigest; approval: AuditDigest };
 
@@ -510,7 +547,7 @@ export class ActionGateway {
   // request under; without one, the current generation when it arrives.
   // The approval insert and the execution claim commit only while it is
   // still current, re-checked at the write itself.
-  async requestAction(raw: unknown, now = new Date(), opts: { generation?: number } = {}): Promise<GatewayResult> {
+  async requestAction(raw: unknown, now = new Date(), opts: { generation?: number; proposal?: ProposalOrder } = {}): Promise<GatewayResult> {
     const generation = opts.generation ?? this.store.generation();
     if (generation !== this.store.generation()) return STALE;
     let req: ActionRequest;
@@ -566,7 +603,7 @@ export class ActionGateway {
         expiresAt: win.expiresAt.toISOString(),
         escalated: win.escalated,
       };
-      const holder = this.store.createApprovalForKey(approval, generation);
+      const holder = this.store.createApprovalForKey(approval, generation, opts.proposal);
       if (!holder) return STALE;
       if (holder.id === approval.id) return { status: "needs_approval", approval };
       if (holder.status === "rejected") return { status: "blocked", reason: approvalGoneReason("rejected") };
@@ -620,6 +657,7 @@ export class ActionGateway {
     if (!approval) return { status: "blocked", reason: "Approval not found." };
     if (this.store.keyDeclined(approval.idempotencyKey)) return { status: "blocked", reason: approvalGoneReason("rejected") };
     if (approval.status === "pending" && !this.store.approvalCurrent(approval.id)) return STALE;
+    if (approval.status === "pending" && !this.store.proposalCurrent(approval.id)) return SUPERSEDED;
     // Every audit digest is computed here, before any expiry check or
     // claim, so nothing awaits between the final claim and execute.
     const hashes: AuditHashes = {
@@ -704,6 +742,7 @@ export class ActionGateway {
     if (!consumed) {
       if (this.store.keyDeclined(approval.idempotencyKey)) return { status: "blocked", reason: approvalGoneReason("rejected") };
       if (!this.store.approvalCurrent(approvalId)) return STALE;
+      if (!this.store.proposalCurrent(approvalId)) return SUPERSEDED;
       const fresh = this.store.getApproval(approvalId);
       // The claim reads a fresh clock, so a window that lapsed during
       // the awaits above lands here: report expiry, not a phantom race.

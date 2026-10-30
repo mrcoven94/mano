@@ -30,7 +30,8 @@
 //   GET  /health
 //   POST /api/check-link                       { url } (person token; 200 with allowed:false when blocked)
 //   POST /api/persons/:id/chat                 { message }
-//   POST /api/persons/:id/action               action request (worker stamps personId from the token)
+//   POST /api/persons/:id/action               action request (worker stamps personId from the token);
+//                                              proposalTurn names the turn an agent draft belongs to
 //   GET  /api/persons/:id/approvals
 //   POST /api/persons/:id/approvals/:aid/approve
 //   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
@@ -51,8 +52,8 @@
 //   POST /api/persons/:id/turns                { turnId, receivedAt, generation } (agent)
 //   GET  /api/persons/:id/turns/:turnId        (agent)
 //   POST /api/persons/:id/turns/:turnId/complete  { generation } (agent)
-//   PUT  /api/persons/:id/pending-approval     { approvalId, generation, turnId } compare-and-set by turn order (agent)
-//   GET  /api/persons/:id/pending-approval?generation=N  (agent)
+//   PUT  /api/persons/:id/pending-approval     { approvalId, generation } compare-and-set: only the latest proposal (agent)
+//   GET  /api/persons/:id/pending-approval?generation=N  { pointer, latest } (agent)
 //   DELETE /api/persons/:id/pending-approval   { approvalId, generation } compare-and-delete (agent)
 //
 // Due reminders go out from the person's one delivery wake-up through
@@ -99,7 +100,6 @@ import {
   AgentStateInputError,
   parseGenerationInput,
   parsePointerInput,
-  parsePointerSetInput,
   parseReminderInput,
   parseTurnInput,
   requireGeneration,
@@ -347,16 +347,16 @@ async function handleAgentState(
     }
     if (rest === "/pending-approval" && method === "PUT") {
       const input = await body();
-      parsePointerSetInput(input);
+      parsePointerInput(input);
       const set = await agent.setPendingApproval(subject, input);
       if (isStale(set)) return STALE();
-      if (!set) return Response.json({ error: "Approval or turn not found." }, { status: 404 });
+      if (!set) return Response.json({ error: "Approval not found." }, { status: 404 });
       return Response.json(set);
     }
     if (rest === "/pending-approval" && method === "GET") {
       const raw = url.searchParams.get("generation");
       const generation = raw !== null && /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
-      return Response.json({ pointer: await agent.getPendingApproval(subject, requireGeneration(generation)) });
+      return Response.json(await agent.getPendingApproval(subject, requireGeneration(generation)));
     }
     if (rest === "/pending-approval" && method === "DELETE") {
       const input = await body();

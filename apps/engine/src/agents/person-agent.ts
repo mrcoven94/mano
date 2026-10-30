@@ -7,7 +7,7 @@ import {
 } from "@mano/protocol";
 import type { Env } from "../env.js";
 import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, contentHashOf, createExecutor, ensureGatewayTables } from "../gateway/index.js";
-import type { ActionRequest, Approval, CheckOutcome } from "../gateway/index.js";
+import type { ActionRequest, Approval, CheckOutcome, ProposalOrder } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
 import { getDocumentBytes, putDocument } from "../files.js";
@@ -32,6 +32,8 @@ import {
   ensureAgentStateTables,
   finishReminder,
   getPendingPointer,
+  proposalOrderFor,
+  splitProposalTurn,
   getTurn,
   getWakeup,
   handOffReminder,
@@ -39,7 +41,6 @@ import {
   nextReminderRunMs,
   parseGenerationInput,
   parsePointerInput,
-  parsePointerSetInput,
   parseReminderInput,
   parseTurnInput,
   putTurnIfAbsent,
@@ -624,14 +625,16 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // under the current generation.
   async setPendingApproval(verified: string, input: unknown) {
     await this.assertSubject(verified);
-    const { approvalId, generation, turnId } = parsePointerSetInput(input);
+    const { approvalId, generation } = parsePointerInput(input);
     if (generation !== currentGeneration(this.db())) return STALE_STATE;
-    return setPendingPointer(this.db(), approvalId, generation, turnId, new Date().toISOString());
+    return setPendingPointer(this.db(), approvalId, generation, new Date().toISOString());
   }
 
+  // The pointer and the latest proposal it may name.
   async getPendingApproval(verified: string, generation: unknown) {
     await this.assertSubject(verified);
-    return getPendingPointer(this.db(), requireGeneration(generation));
+    const g = requireGeneration(generation);
+    return { pointer: getPendingPointer(this.db(), g), latest: g === currentGeneration(this.db()) ? this.store.latestProposal() : null };
   }
 
   // Compare-and-delete: the caller names the approval and the generation
@@ -662,9 +665,19 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return removed;
   }
 
+  // proposalTurn, when the agent drafts for a turn: the approval is a
+  // proposal ordered by that turn in Engine's ledger, and the newest one
+  // becomes the latest proposal in the step that creates it.
   async requestAction(raw: unknown, verified: string, generation?: number) {
     await this.assertSubject(verified);
-    const result = await this.gateway.requestAction(raw, new Date(), { generation });
+    const split = splitProposalTurn(raw);
+    if (!split) return { status: "blocked" as const, reason: "proposalTurn must name a turn." };
+    let proposal: ProposalOrder | undefined;
+    if (split.turnId !== null) {
+      proposal = proposalOrderFor(this.db(), split.turnId) ?? undefined;
+      if (!proposal) return { status: "blocked" as const, reason: "That turn is not in this conversation's ledger." };
+    }
+    const result = await this.gateway.requestAction(split.request, new Date(), { generation, proposal });
     this.store.audit({ event: "gateway.request", status: result.status });
     if (result.status === "needs_approval" && result.approval) {
       // Durable schedules drive the reminder and the expiry; each firing

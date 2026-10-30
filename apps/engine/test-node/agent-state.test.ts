@@ -51,6 +51,15 @@ function approvalRow(sql: ReturnType<typeof openDb>, id: string, status: string,
   );
 }
 
+// Makes an approval the person's latest proposal, as drafting it would.
+function latest(sql: ReturnType<typeof openDb>, id: string, generation = 0) {
+  sql.exec(
+    "INSERT INTO latest_proposal(slot, generation, approval_id, received_at, turn_id) VALUES (1, ?, ?, '2026-11-01T15:00:00.000Z', 't')" +
+      " ON CONFLICT(slot) DO UPDATE SET generation = excluded.generation, approval_id = excluded.approval_id",
+    generation, id,
+  );
+}
+
 const T0 = Date.parse("2026-11-01T15:00:00Z");
 const LEASE = 60_000;
 const BATCH = 25;
@@ -158,7 +167,7 @@ describe("generation fence", () => {
     expect(createReminder(sql, reminder("late", 0), T0)).toEqual({ stale: true });
     expect(putTurnIfAbsent(sql, "turn-late", "2026-11-01T15:00:00.000Z", 0)).toEqual({ stale: true });
     expect(completeTurn(sql, "turn-old", "2026-11-01T15:00:01.000Z", 0)).toEqual({ stale: true });
-    expect(setPendingPointer(sql, "appr-old", 1, "turn-old", "2026-11-01T15:00:00.000Z")).toBeNull();
+    expect(setPendingPointer(sql, "appr-old", 1, "2026-11-01T15:00:00.000Z")).toBeNull();
     expect(listReminders(sql)).toEqual([]);
     expect("created" in createReminder(sql, reminder("fresh", 1), T0)).toBe(true);
   });
@@ -182,12 +191,12 @@ describe("pending approval pointer", () => {
   it("is cleared only by the approval and generation it holds", () => {
     const sql = openDb();
     approvalRow(sql, "appr-old", "pending", "k-old", 0);
-    putTurnIfAbsent(sql, "t-old", "2026-11-01T15:00:00.000Z", 0);
-    setPendingPointer(sql, "appr-old", 0, "t-old", "2026-11-01T15:00:00.000Z");
+    latest(sql, "appr-old", 0);
+    setPendingPointer(sql, "appr-old", 0, "2026-11-01T15:00:00.000Z");
     removeConversationState(sql, T0, 1);
     approvalRow(sql, "appr-new", "pending", "k-new", 1);
-    putTurnIfAbsent(sql, "t-new", "2026-11-01T15:10:00.000Z", 1);
-    setPendingPointer(sql, "appr-new", 1, "t-new", "2026-11-01T15:10:00.000Z");
+    latest(sql, "appr-new", 1);
+    setPendingPointer(sql, "appr-new", 1, "2026-11-01T15:10:00.000Z");
     // A stale turn from the deleted conversation tries to clear it.
     expect(clearPendingPointer(sql, "appr-new", 0)).toBe(false);
     expect(clearPendingPointer(sql, "appr-old", 1)).toBe(false);
@@ -199,31 +208,24 @@ describe("pending approval pointer", () => {
   it("reads as nothing under a different generation", () => {
     const sql = openDb();
     approvalRow(sql, "appr-1", "pending", "k-1", 0);
-    putTurnIfAbsent(sql, "t-1", "2026-11-01T15:00:00.000Z", 0);
-    expect(setPendingPointer(sql, "appr-1", 0, "t-1", "2026-11-01T15:00:00.000Z")?.pointer?.approvalId).toBe("appr-1");
+    latest(sql, "appr-1", 0);
+    expect(setPendingPointer(sql, "appr-1", 0, "2026-11-01T15:00:00.000Z")?.pointer?.approvalId).toBe("appr-1");
     expect(getPendingPointer(sql, 0)?.approvalId).toBe("appr-1");
     expect(getPendingPointer(sql, 1)).toBeNull();
   });
 
-  it("moves only to a draft of the same or a newer turn, even after it was cleared", () => {
+  it("names only the latest proposal, and a repeat keeps when it was first shown", () => {
     const sql = openDb();
     approvalRow(sql, "appr-a", "pending", "k-a", 0);
     approvalRow(sql, "appr-b", "pending", "k-b", 0);
-    approvalRow(sql, "appr-b2", "pending", "k-b2", 0);
-    putTurnIfAbsent(sql, "t-a", "2026-11-01T15:00:00.000Z", 0);
-    putTurnIfAbsent(sql, "t-b", "2026-11-01T15:00:05.000Z", 0);
-    expect(setPendingPointer(sql, "appr-b", 0, "t-b", "2026-11-01T15:00:10.000Z")?.superseded).toBe(false);
-    expect(setPendingPointer(sql, "appr-a", 0, "t-a", "2026-11-01T15:00:11.000Z")).toMatchObject({
-      superseded: true,
-      pointer: { approvalId: "appr-b", turnId: "t-b" },
-    });
-    // A repeat keeps when the question was first shown.
-    expect(setPendingPointer(sql, "appr-b", 0, "t-b", "2026-11-01T15:00:12.000Z")?.pointer?.setAt).toBe("2026-11-01T15:00:10.000Z");
-    // Another draft of the same turn may take the pointer.
-    expect(setPendingPointer(sql, "appr-b2", 0, "t-b", "2026-11-01T15:00:13.000Z")?.pointer?.approvalId).toBe("appr-b2");
-    clearPendingPointer(sql, "appr-b2", 0);
-    expect(setPendingPointer(sql, "appr-a", 0, "t-a", "2026-11-01T15:00:14.000Z")).toEqual({ superseded: true, pointer: null });
-    expect(getPendingPointer(sql, 0)).toBeNull();
+    latest(sql, "appr-b", 0);
+    // The older draft's report, whether or not the newer one was shown yet.
+    expect(setPendingPointer(sql, "appr-a", 0, "2026-11-01T15:00:10.000Z")).toEqual({ superseded: true, pointer: null });
+    expect(setPendingPointer(sql, "appr-b", 0, "2026-11-01T15:00:11.000Z")?.superseded).toBe(false);
+    expect(setPendingPointer(sql, "appr-a", 0, "2026-11-01T15:00:12.000Z")).toMatchObject({ superseded: true, pointer: { approvalId: "appr-b" } });
+    expect(setPendingPointer(sql, "appr-b", 0, "2026-11-01T15:00:13.000Z")?.pointer?.setAt).toBe("2026-11-01T15:00:11.000Z");
+    clearPendingPointer(sql, "appr-b", 0);
+    expect(setPendingPointer(sql, "appr-a", 0, "2026-11-01T15:00:14.000Z")).toEqual({ superseded: true, pointer: null });
   });
 });
 
@@ -244,7 +246,8 @@ describe("conversation delete", () => {
     approvalRow(sql, "appr-unresolved", "approved", "k-u");
     approvalRow(sql, "appr-done", "approved", "k-d");
     sql.exec("INSERT INTO attempts(idempotency_key, status, updated_at) VALUES ('k-u', 'unknown', ''), ('k-d', 'done', '')");
-    setPendingPointer(sql, "appr-pending", 0, "turn-1", "2026-11-01T15:00:00.000Z");
+    latest(sql, "appr-pending", 0);
+    setPendingPointer(sql, "appr-pending", 0, "2026-11-01T15:00:00.000Z");
     sql.exec("INSERT INTO memory(id, content) VALUES ('m-1', 'a'), ('m-2', 'b'), ('m-3', 'c')");
 
     expect(removeConversationState(sql, T0 + 2, 4)).toEqual({

@@ -89,6 +89,19 @@ export interface GatewayResult {
   approval?: Approval;
   receipt?: Receipt;
   reason?: string;
+  // Set on a refused approve: a newer proposal replaced this one.
+  superseded?: true;
+}
+
+// Where a drafted approval sits among the person's proposals: when the
+// turn that drafted it was received, then that turn's ID.
+export interface ProposalOrder {
+  receivedAt: string;
+  turnId: string;
+}
+
+export interface LatestProposal extends ProposalOrder {
+  approvalId: string;
 }
 
 export interface Executor {
