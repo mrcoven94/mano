@@ -1703,3 +1703,114 @@ describe("readMail deadline proposals", () => {
     expect(reading.questions.some((q) => q.proposal)).toBe(false);
   });
 });
+
+describe("readMail review 9", () => {
+  const HEAD = "County Office\nNotice date November 2, 2026\n\n";
+  const SUBMIT = "Submit proof by November 20, 2026.";
+  const page = (fullText: string, deadlines: { text: string; box_2d: number[] }[], over: Record<string, unknown> = {}) =>
+    pageJson({
+      full_text: fullText,
+      sender: { text: "County Office", box_2d: [40, 60, 70, 400] },
+      program: NIL,
+      subject: NIL,
+      asked: [],
+      deadlines,
+      consequence: NIL,
+      reference_no: NIL,
+      notice_date: { text: "November 2, 2026", box_2d: [135, 60, 150, 300] },
+      phones: [],
+      ...over,
+    });
+  async function read(pages: string[]) {
+    const bytes = await photo();
+    return readMail(
+      pages.map((_, i) => ({ bytes, mimeType: "image/jpeg", name: `p${i + 1}.jpg` })),
+      { personId: "p1", synthetic: true, model: clientFor(pages) },
+    );
+  }
+  const dl = (text: string, ymin = 200): { text: string; box_2d: number[] } => ({ text, box_2d: [ymin, 60, ymin + 20, 300] });
+  const proposals = (reading: Awaited<ReturnType<typeof read>>) =>
+    reading.questions.filter((q) => q.kind === "confirm_deadline").flatMap((q) => (q.proposal ? [q.proposal] : []));
+  const neverPublished = (reading: Awaited<ReturnType<typeof read>>): void => {
+    expect("deadlines" in reading).toBe(false);
+    expect(reading.letters.every((l) => !("deadlineIso" in l.fields))).toBe(true);
+  };
+
+  it("never publishes a clean deadline; it proposes it with high confidence", async () => {
+    const reading = await read([page(`${HEAD}${SUBMIT}`, [dl(SUBMIT)])]);
+    neverPublished(reading);
+    expect(proposals(reading)).toEqual([
+      expect.objectContaining({ dueDate: "2026-11-20", confidence: "high", reasons: [] }),
+    ]);
+  });
+
+  it.each([
+    ["The following request has been withdrawn."],
+    ["No action is needed."],
+    ["For health care providers:"],
+    ["Provided that you moved:"],
+  ])("finding 1: %s yields a low-confidence proposal with a reason", async (prefix) => {
+    const reading = await read([page(`${HEAD}${prefix}\n\n${SUBMIT}`, [dl(SUBMIT)])]);
+    neverPublished(reading);
+    const [proposal] = proposals(reading);
+    expect(proposal).toMatchObject({ dueDate: "2026-11-20", confidence: "low" });
+    expect(proposal!.reasons.some((r) => r.includes(prefix))).toBe(true);
+  });
+
+  it("finding 2: a yearless earlier cutoff is resolved against the notice date and quoted", async () => {
+    const cutoff = "The last day to provide proof this year is 15 November.";
+    const reading = await read([page(`${HEAD}${cutoff} ${SUBMIT}`, [dl(SUBMIT)])]);
+    neverPublished(reading);
+    const [proposal] = proposals(reading);
+    expect(proposal).toMatchObject({ dueDate: "2026-11-20", confidence: "low" });
+    expect(proposal!.reasons.some((r) => r.includes("November 15, 2026") && r.includes(cutoff))).toBe(true);
+    expect(proposal!.others.map((c) => c.sentence)).toContain(cutoff.replace(/\.$/, ""));
+  });
+
+  it("finding 3: a scam split across two merged pages is caught on the whole letter", async () => {
+    const ref = { text: "CA-9", box_2d: [110, 220, 130, 350] };
+    const reading = await read([
+      page(`${HEAD}Case CA-9\n\nURGENT: your benefits are suspended. Pay $500 by November 20, 2026. If you need help, call us.\n\npage 1 of 2`, [dl("Pay $500 by November 20, 2026.")], {
+        reference_no: ref,
+        page_marker: { text: "page 1 of 2", box_2d: [300, 60, 320, 250] },
+      }),
+      page("County Office\nCase CA-9\n\nVerify your account at https://benefits-unlock.example/login.\n\npage 2 of 2", [], {
+        reference_no: ref,
+        notice_date: NIL,
+        links: [{ text: "https://benefits-unlock.example/login", box_2d: [250, 60, 270, 400] }],
+        page_marker: { text: "page 2 of 2", box_2d: [300, 60, 320, 250] },
+      }),
+    ]);
+    expect(reading.letters).toHaveLength(1);
+    expect(reading.warnings.map((w) => w.kind)).toContain("scam_suspect");
+    expect(proposals(reading)).toEqual([]);
+  });
+
+  it("finding 4: a printed sender never exempts the link's domain", async () => {
+    const body = "URGENT: Pay $500 by November 20, 2026. Buy gift cards and send their codes to https://benefitsunlock.example/login.";
+    const reading = await read([
+      page(`Benefitsunlock\nNotice date November 2, 2026\n\n${body}`, [dl("Pay $500 by November 20, 2026.")], {
+        sender: { text: "Benefitsunlock", box_2d: [40, 60, 70, 400] },
+        links: [{ text: "https://benefitsunlock.example/login", box_2d: [250, 60, 270, 400] }],
+      }),
+    ]);
+    expect(reading.warnings.map((w) => w.kind)).toContain("scam_suspect");
+    expect(proposals(reading)).toEqual([]);
+  });
+
+  it("finding 5: a gift-card demand with no link is a scam", async () => {
+    const body = "URGENT: Pay $500 by November 20, 2026. Buy gift cards and text their codes to (555) 100-2000.";
+    const reading = await read([
+      page(`${HEAD}${body}`, [dl("Pay $500 by November 20, 2026.")], {
+        phones: [{ text: "(555) 100-2000", box_2d: [250, 60, 270, 220] }],
+      }),
+    ]);
+    expect(reading.warnings.map((w) => w.kind)).toContain("scam_suspect");
+    expect(proposals(reading)).toEqual([]);
+  });
+
+  it("does not flag a letter that warns it never asks for gift cards", async () => {
+    const reading = await read([page(`${HEAD}${SUBMIT} We will never ask you to pay with gift cards.`, [dl(SUBMIT)])]);
+    expect(reading.warnings.map((w) => w.kind)).not.toContain("scam_suspect");
+  });
+});
