@@ -113,8 +113,16 @@ export function suppressedBenefitsCut(text: string): boolean {
 // and self-harm, violence and danger in Spanish. It reads lowercased text
 // that keeps its accents.
 const IMPLICIT = /\bbetter off without me\b/;
-const SPANISH =
-  /(?:^|\s)(?:quiero morir(?:me)?|me quiero (?:morir|matar)|quiero matarme|me voy a matar|suicid\p{L}*|hacerme da[ñn]o|no quiero vivir|me est[áa] (?:pegando|golpeando)|me (?:pega|golpea)|estoy en peligro(?! de perder))(?=\s|$)/u;
+// Spanish self-harm as a class: an intent (voy a, quiero, me voy a, me
+// quiero, pienso, estoy pensando en) followed within 3 words by a
+// self-harm verb, in any reflexive or plain form; the reflexive forms on
+// their own anywhere; and violence and danger.
+const SPANISH_INTENT = "(?:me voy a|voy a|me quiero|quiero|estoy pensando en|pienso en|pienso)";
+const SPANISH_HARM = "(?:matar(?:me)?|suicidar(?:me)?|hacer(?:me)? da[ñn]o|cortarme|morir(?:me)?|quitarme la vida)";
+const SPANISH = new RegExp(
+  String.raw`(?:^|\s)(?:${SPANISH_INTENT}(?: \p{L}+){0,2} ${SPANISH_HARM}|matarme|suicid\p{L}*|hacerme da[ñn]o|quitarme la vida|no quiero vivir|me est[áa] (?:pegando|golpeando)|me (?:pega|golpea)|estoy en peligro(?! de perder))(?=\s|$)`,
+  "u",
+);
 
 function accented(text: string): string {
   return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, " ").replace(/\s+/g, " ")} `;

@@ -38,9 +38,12 @@ describe("the crisis line in Spanish", () => {
 
 describe("Spanish llama is a verb", () => {
   it("keeps llama as call in Spanish, and still catches Llama the model", () => {
-    for (const text of ["Llama al 911 si estás en peligro.", "La oficina se llama DSHS.", "Llama a tu trabajadora mañana."]) {
+    for (const text of ["Llama al 911 si estás en peligro.", "Llama a tu trabajadora mañana.", "Llama 911 ahora.", "Llama ya."]) {
       expect(guardReply(text), text).toEqual({ text, changes: [] });
     }
-    expect(guardReply("I run on Llama.").changes).not.toEqual([]);
+    // Only al, a, ahora, ya, hoy or a phone number exempt it.
+    for (const text of ["I run on Llama.", "Uso Llama de código abierto para responderte.", "La oficina se llama DSHS.", "Uso Llama 3.1 para responderte."]) {
+      expect(guardReply(text).changes, text).not.toEqual([]);
+    }
   });
 });

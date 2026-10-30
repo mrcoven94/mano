@@ -167,3 +167,26 @@ describe("Spanish crisis (PR 69)", () => {
     expect((await say(h, "evt_1", "quiero morir, ya no puedo más"))[0]).toBe(CRISIS_LINE_ES);
   });
 });
+
+describe("PR 69 review round 3, through the runner", () => {
+  it("opens reflexive and future Spanish self-harm with the Spanish crisis line (1)", async () => {
+    const { CRISIS_LINE_ES } = await import("@mano/persona");
+    for (const message of ["voy a matarme", "me voy a hacer daño", "me quiero hacer daño", "estoy pensando en quitarme la vida"]) {
+      const h = makeHarness({ replies: ["Estoy aquí contigo."] });
+      const sent = await say(h, "evt_1", message);
+      expect(sent[0], message).toBe(CRISIS_LINE_ES);
+      expect(sent.join(" "), message).toMatch(/\b988\b.*\b911\b|\b911\b.*\b988\b/);
+    }
+  });
+
+  it("catches Llama the model in Spanish and passes llama as call (2)", async () => {
+    const leak = makeHarness({ replies: ["Uso Llama de código abierto para responderte."] });
+    await leak.runner.handleEvent(inboundEvent({ id: "evt_1", text: "hola", occurredAtMs: leak.now }), "webhook");
+    await runTurnAfterBatch(leak);
+    expect(leak.channel.sends.map((s) => s.text).join(" ")).not.toMatch(/llama/i);
+    for (const reply of ["Llama al 911 si estás en peligro.", "Llama a tu oficina mañana.", "Llama 911 ahora."]) {
+      const h = introduced(makeHarness({ replies: [reply] }));
+      expect(await say(h, "evt_1", "qué hago"), reply).toEqual([reply]);
+    }
+  });
+});

@@ -38,8 +38,10 @@ const STACK_PATTERN = /\b(?:meta|spark|muse|glimmer|llama)\b/i;
 // 1.3", "llama3", "gpt-4o". Not "llama al 911", which is Spanish for "call 911".
 const MODEL_ID_PATTERN =
   /\b(?:muse|spark|glimmer|llama|gpt|claude|gemini|mistral|grok)(?:[-_. ]?(?:spark|glimmer|instruct|chat|pro|mini|nano|turbo|flash|sonnet|opus|haiku))?[-_. ]?\d[\w.-]*/i;
-// "llama" is also Spanish for "call": "llama al 911", "se llama".
-const ORDINARY_PHRASES = /\b(?:spark of hope|glimmer of hope|muse (?:on|about)|llama (?:al?|de|o)|(?:se|te|me|lo|la|les) llama)\b/gi;
+// "llama" is also Spanish for "call", exempt only before al, a, ahora, ya,
+// hoy or a phone number ("llama al 911", "Llama a tu oficina"); never
+// before "de" or anything model-like ("Llama de código abierto", "Llama 3").
+const ORDINARY_PHRASES = /\b(?:spark of hope|glimmer of hope|muse (?:on|about)|llama (?:al?|ahora|ya|hoy)\b|llama \+?1?[ -]?\(?\d{3}(?![\w.]))/gi;
 // An identity statement beats the idioms: "I'm powered by the spark of hope" still leaks.
 const IDENTITY_STATEMENT =
   /\b(?:i am|i'm|i’m|im|my name is|this is|powered by|built (?:on|by)|made by|trained by|runs? on|running on|based on|models?|assistant from)\b/i;
@@ -136,7 +138,8 @@ function restoreQuotes(text: string, quotes: readonly string[]): string {
 
 function namesOurStack(sentence: string, ids: RegExp | null): boolean {
   sentence = separated(sentence);
-  if (MODEL_ID_PATTERN.test(sentence) || ids?.test(sentence)) return true;
+  // "llama 911" is a phone call, not a model ID.
+  if (MODEL_ID_PATTERN.test(sentence.replace(ORDINARY_PHRASES, " ")) || ids?.test(sentence)) return true;
   if (!STACK_PATTERN.test(sentence)) return false;
   return IDENTITY_STATEMENT.test(sentence) || STACK_PATTERN.test(sentence.replace(ORDINARY_PHRASES, " "));
 }
