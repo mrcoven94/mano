@@ -11,3 +11,4 @@ export * from "./pacing.js";
 export * from "./guard.js";
 export * from "./crisis.js";
 export * from "./probes.js";
+export * from "./tapbacks.js";

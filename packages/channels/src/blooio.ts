@@ -13,7 +13,7 @@ import {
 } from "./channel.js";
 import { normalizeHandle } from "./handles.js";
 import { boundFetch } from "./fetch.js";
-import type { EventAttachment, NormalizedEvent, NormalizedEventKind } from "./types.js";
+import type { EventAttachment, NormalizedEvent, NormalizedEventKind, Tapback } from "./types.js";
 
 export const BLOOIO_BASE_URL = "https://api.blooio.com/v4";
 export const BLOOIO_WEBHOOK_API_VERSION = "2026-10-01";
@@ -138,6 +138,10 @@ export function parseBlooioEvent(raw: unknown): NormalizedEvent | null {
     direction,
     text: typeof data.text === "string" ? data.text : null,
     attachments: parseAttachments(data.attachments),
+    reaction:
+      kind === "reaction" && asString(data.reaction)
+        ? { value: asString(data.reaction)!, action: asString(data.action) === "remove" ? "remove" : "add" }
+        : null,
     errorCode: asString(error?.code),
     errorMessage: typeof error?.message === "string" ? (error.message as string) : null,
     occurredAtMs,
@@ -214,7 +218,8 @@ export class BlooioChannel implements Channel {
     const path = input.chatId
       ? `/chats/${encodeURIComponent(input.chatId)}/messages`
       : `/channels/${encodeURIComponent(this.channelId)}/messages`;
-    const body = input.chatId ? { text: input.text } : { to: input.to, text: input.text };
+    const body: Record<string, string> = input.chatId ? { text: input.text } : { to: input.to, text: input.text };
+    if (input.replyTo) body.reply_to = input.replyTo;
     let lastErr: unknown = null;
     for (let attempt = 1; attempt <= SEND_MAX_ATTEMPTS; attempt++) {
       try {
@@ -265,6 +270,21 @@ export class BlooioChannel implements Channel {
     });
     if (!res.ok && res.status !== 409) {
       throw new Error(`Blooio typing failed: ${res.status}`);
+    }
+  }
+
+  async react(chatId: string, messageId: string, reaction: Tapback): Promise<void> {
+    const res = await this.fetchFn(
+      `${this.baseUrl}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/reactions`,
+      {
+        method: "POST",
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+        headers: this.headers({ "content-type": "application/json" }),
+        body: JSON.stringify({ reaction: `+${reaction}` }),
+      },
+    );
+    if (!res.ok && res.status !== 409) {
+      throw new Error(`Blooio reaction failed: ${res.status}`);
     }
   }
 

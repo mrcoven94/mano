@@ -9,6 +9,9 @@ export const CRISIS_LINE =
   "I'm really glad you told me. Please call or text 988 right now, they're there 24/7 and it's free. " +
   "If you're in danger right now, call 911. I'm here too.";
 
+// The crisis line for a message written in Spanish, with both numbers.
+export const CRISIS_LINE_ES = "Si estás en peligro o piensas en hacerte daño, llama al 911 o envía un mensaje al 988.";
+
 // One sentence, added to every reply Mano sends without the model.
 export const SAFETY_LINE = "If you're in danger or thinking about hurting yourself, call 911 or text 988.";
 
@@ -61,8 +64,8 @@ export function crisisFloor(reply: string): string {
 // the link check and splitting: the fixed CRISIS_LINE, naming 988 and
 // 911, is always the first bubble and appears once. Callers cap the
 // bubbles after it, so the cap can never drop it.
-export function holdCrisisLines(bubbles: readonly string[]): string[] {
-  return [CRISIS_LINE, ...bubbles.filter((b) => b !== CRISIS_LINE)];
+export function holdCrisisLines(bubbles: readonly string[], line: string = CRISIS_LINE): string[] {
+  return [line, ...bubbles.filter((b) => b !== CRISIS_LINE && b !== CRISIS_LINE_ES)];
 }
 
 // Suppression, the only exception to the detectors above, and used only
@@ -106,7 +109,51 @@ export function suppressedBenefitsCut(text: string): boolean {
   return !mightBeCrisis(others.join(". "));
 }
 
+// Detection on top of the detectors above: implicit self-harm in English,
+// and self-harm, violence and danger in Spanish. It reads lowercased text
+// that keeps its accents.
+const IMPLICIT = /\bbetter off without me\b/;
+// Spanish self-harm as a class: an intent (voy a, quiero, me voy a, me
+// quiero, pienso, estoy pensando en) followed within 3 words by a
+// self-harm verb, in any reflexive or plain form; the reflexive forms on
+// their own anywhere; and violence and danger.
+const SPANISH_INTENT = "(?:me voy a|voy a|me quiero|quiero|estoy pensando en|pienso en|pienso)";
+const SPANISH_HARM = "(?:matar(?:me)?|suicidar(?:me)?|hacer(?:me)? da[ñn]o|cortarme|morir(?:me)?|quitarme la vida)";
+const SPANISH = new RegExp(
+  String.raw`(?:^|\s)(?:${SPANISH_INTENT}(?: \p{L}+){0,2} ${SPANISH_HARM}|matarme|suicid\p{L}*|hacerme da[ñn]o|quitarme la vida|no quiero vivir|me est[áa] (?:pegando|golpeando)|me (?:pega|golpea)|estoy en peligro(?! de perder))(?=\s|$)`,
+  "u",
+);
+
+function accented(text: string): string {
+  return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, " ").replace(/\s+/g, " ")} `;
+}
+
+export function spanishOrImplicitCrisis(text: string): boolean {
+  const words = accented(text);
+  return IMPLICIT.test(words) || SPANISH.test(words);
+}
+
 // The decision a turn uses: a detector fired, and suppression does not apply.
+// Spanish and implicit self-harm are never suppressed.
 export function crisisTurn(text: string): boolean {
-  return mightBeCrisis(text) && !suppressedBenefitsCut(text);
+  return spanishOrImplicitCrisis(text) || (mightBeCrisis(text) && !suppressedBenefitsCut(text));
+}
+
+// A message is treated as Spanish when its Spanish function words
+// outnumber its English ones, or it uses a Spanish crisis phrase.
+const SPANISH_WORDS = new Set(
+  "que de el la los las mi mis y es en con por para pero muy porque tengo ya yo se lo te una un del al más como está estoy eso esto quiero puedo".split(" "),
+);
+const ENGLISH_WORDS = new Set("the i to and my is you it of in that this was for on are with have be".split(" "));
+
+export function isSpanish(text: string): boolean {
+  const words = accented(text).trim().split(" ");
+  const es = words.filter((w) => SPANISH_WORDS.has(w)).length;
+  const en = words.filter((w) => ENGLISH_WORDS.has(w)).length;
+  return SPANISH.test(accented(text)) || (es >= 2 && es > en);
+}
+
+// The crisis line in the person's language.
+export function crisisLineFor(personText: string): string {
+  return isSpanish(personText) ? CRISIS_LINE_ES : CRISIS_LINE;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PROBES, checkProbe, guardReply, type GuardChange, type ProbeRun } from "@mano/persona";
+import { PROBES, allowedTapback, checkProbe, guardReply, mightBeCrisis, type GuardChange, type ProbeRun } from "@mano/persona";
 import { SparkResponder } from "../src/responder.js";
 
 const apiKey = process.env.META_MODEL_API_KEY ?? "";
@@ -21,12 +21,14 @@ describe.skipIf(!apiKey)("persona probes, live", () => {
       const started = performance.now();
       const heard: { at: number; text: string }[] = [];
       let raw: string;
+      let chosen: ReturnType<typeof allowedTapback> = null;
       try {
         const result = await responder.respond(
           { texts: [probe.text], attachmentCount: 0, history: probe.history },
           { onHeadsUp: async (text) => void heard.push({ at: performance.now(), text }) },
         );
         raw = result.text;
+        chosen = result.tapback ?? null;
       } catch (err) {
         failures += 1;
         rows.push(`FAIL ${probe.id}: responder error ${(err as Error).name}`);
@@ -34,7 +36,9 @@ describe.skipIf(!apiKey)("persona probes, live", () => {
       }
       const totalMs = performance.now() - started;
       const modelIds = [model];
-      const reply = guardReply(raw, { modelIds });
+      // Mirrors the runner: the tapback rules, and a tapback alone is a reply.
+      const tapback = allowedTapback(chosen, probe.text, mightBeCrisis(probe.text));
+      const reply = raw.trim().length === 0 && chosen ? { text: "", changes: [] as GuardChange[] } : guardReply(raw, { modelIds });
       const headsUp = heard[0] ? guardReply(heard[0].text, { modelIds }) : null;
       const changes: GuardChange[] = [...(headsUp?.changes ?? []), ...reply.changes];
       const run: ProbeRun = {
@@ -42,6 +46,7 @@ describe.skipIf(!apiKey)("persona probes, live", () => {
         reply: reply.text,
         headsUp: headsUp?.text ?? null,
         firstTextMs: heard[0] ? heard[0].at - started : totalMs,
+        tapback,
       };
       const failed = checkProbe(probe, run, { modelIds });
       if (failed.length > 0) failures += 1;
@@ -50,6 +55,7 @@ describe.skipIf(!apiKey)("persona probes, live", () => {
           `${failed.length === 0 ? "PASS" : "FAIL"} ${probe.id} (${run.path}, first text ${(run.firstTextMs / 1000).toFixed(1)} s, total ${(totalMs / 1000).toFixed(1)} s)`,
           `  person: ${probe.text}`,
           ...(run.headsUp === null ? [] : [`  heads-up: ${run.headsUp}`]),
+          ...(run.tapback ? [`  tapback: ${run.tapback}`] : []),
           `  mano: ${run.reply.replace(/\n/g, " / ")}`,
           `  guard: ${changes.length === 0 ? "nothing to fix" : changes.join(", ")}`,
           ...(failed.length === 0 ? [] : [`  failed: ${failed.join(", ")}`]),

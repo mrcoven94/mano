@@ -13,7 +13,7 @@ export const FAILURE_BUBBLE = SAFE_REPLY;
 
 export const BUSY_BUBBLE = `I'm busy right now, try me again later. ${SAFETY_LINE}`;
 
-export const OPT_OUT_BUBBLE = "You are unsubscribed from Mano's texts. Send any message to start again.";
+export { OPT_OUT_BUBBLE } from "@mano/channels";
 
 export const APPROVAL_RECORDED_BUBBLE = "Recorded. I will follow up when it is decided.";
 

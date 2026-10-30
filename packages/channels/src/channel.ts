@@ -7,6 +7,7 @@ import type {
   ChannelSendInput,
   ChannelSendResult,
   NormalizedEvent,
+  Tapback,
 } from "./types.js";
 
 export interface Channel {
@@ -16,6 +17,9 @@ export interface Channel {
   send(input: ChannelSendInput): Promise<ChannelSendResult>;
   setTyping(chatId: string, state: "started" | "stopped"): Promise<void>;
   markRead(chatId: string): Promise<void>;
+  // Adds a tapback to a message. Not a message: it spends none of the
+  // provider's per-conversation send allowance.
+  react(chatId: string, messageId: string, reaction: Tapback): Promise<void>;
   // Null when the provider has no record of the message.
   lookupMessage(chatId: string, messageId: string): Promise<ChannelMessageStatus | null>;
   listEvents(cursor: string | null, limit: number): Promise<ChannelEventPage>;

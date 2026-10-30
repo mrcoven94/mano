@@ -12,7 +12,7 @@ import {
   type ChannelSendResult,
 } from "./channel.js";
 import { parseBlooioEvent } from "./blooio.js";
-import type { NormalizedEvent } from "./types.js";
+import type { NormalizedEvent, Tapback } from "./types.js";
 
 export interface RecordedSend extends ChannelSendInput {
   messageId: string;
@@ -31,6 +31,7 @@ export class RecordingChannel implements Channel {
   sends: RecordedSend[] = [];
   typingCalls: Array<{ chatId: string; state: "started" | "stopped" }> = [];
   readCalls: string[] = [];
+  reactions: Array<{ chatId: string; messageId: string; reaction: Tapback }> = [];
   lookupCalls: Array<{ chatId: string; messageId: string }> = [];
   // Feed pages served to listEvents, in order.
   feedPages: NormalizedEvent[][] = [];
@@ -102,6 +103,10 @@ export class RecordingChannel implements Channel {
 
   async markRead(chatId: string): Promise<void> {
     this.readCalls.push(chatId);
+  }
+
+  async react(chatId: string, messageId: string, reaction: Tapback): Promise<void> {
+    this.reactions.push({ chatId, messageId, reaction });
   }
 
   async lookupMessage(chatId: string, messageId: string): Promise<ChannelMessageStatus | null> {

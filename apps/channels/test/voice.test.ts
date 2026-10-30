@@ -48,7 +48,8 @@ describe("the voice guard on every send path", () => {
       "webhook",
     );
     await runTurnAfterBatch(h);
-    expect(sentTexts(h)).toEqual([INTRO_BUBBLE, "Let me check Ohio's rules, one sec.", "The short answer. You likely qualify."]);
+    // Voice v2: one thought per line, one line per bubble.
+    expect(sentTexts(h)).toEqual([INTRO_BUBBLE, "Let me check Ohio's rules, one sec.", "The short answer.", "You likely qualify."]);
     expectAllInVoice(h);
     expect(h.lines.join("\n")).toContain("heads_up_sent");
   });
@@ -79,7 +80,7 @@ describe("the voice guard on every send path", () => {
   });
 
   it("never sends an empty text: an unsendable answer becomes the safe line", async () => {
-    for (const reply of ["", "**", "Llama."]) {
+    for (const reply of ["", "**", "Muse."]) {
       const h = makeHarness({ replies: [reply] });
       await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "hi", occurredAtMs: h.now }), "webhook");
       await runTurnAfterBatch(h);

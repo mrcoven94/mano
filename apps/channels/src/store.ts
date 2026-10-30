@@ -11,6 +11,13 @@ export interface PendingInbound {
   text: string | null;
   attachments: EventAttachment[];
   fromReconcile: boolean;
+  // The provider's id for the inbound message, for tapbacks and inline
+  // replies. Null on continuation pieces and older rows.
+  messageId?: string | null;
+  // Set when the whole message this piece came from might be a crisis.
+  // A long text is split into pieces at buffer time, and a crisis word
+  // can straddle the split, so the check runs on the rejoined message.
+  crisis?: boolean;
 }
 
 export interface OutboundRow {
@@ -27,6 +34,9 @@ export interface OutboundRow {
   code: string | null;
   chatId: string | null;
   messageId: string | null;
+  // The inbound message this bubble answers inline. Part of the payload
+  // bound to the idempotency key, so a replay sends it unchanged.
+  replyTo?: string | null;
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -55,8 +65,14 @@ export interface ApprovalRow {
 
 export interface AnswerBubble {
   part: number;
+  // "" for a text bubble, "react" for a tapback, whose text is the
+  // tapback and messageId the message it goes on.
   tag: string;
   text: string;
+  messageId?: string | null;
+  replyTo?: string | null;
+  // For a tapback that is the whole reply: the text sent if it fails.
+  fallback?: string | null;
 }
 
 // A turn persisted before any external call. Pending input is cleared
@@ -93,6 +109,13 @@ export interface ConversationMeta {
   dayCount: number;
   busyNoticeKey: string | null;
   lastInboundMs: number;
+  // The pending turn's hold anchor: when the person first started typing
+  // for it, 0 when there is none. The hold never runs past this plus
+  // TYPING_HOLD_CAP_MS, however often typing stops and starts.
+  typingSinceMs: number;
+  // Whether the person is typing right now. A stop releases the hold
+  // early; it never resets the anchor.
+  typingActive: boolean;
   byteDayKey: string;
   byteDayCount: number;
   // Bumped on every delete. Idempotency keys carry the generation, and
@@ -119,6 +142,8 @@ export function defaultMeta(): ConversationMeta {
     dayCount: 0,
     busyNoticeKey: null,
     lastInboundMs: 0,
+    typingSinceMs: 0,
+    typingActive: false,
     byteDayKey: "",
     byteDayCount: 0,
     generation: 0,

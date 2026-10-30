@@ -13,12 +13,11 @@ import {
   OUTBOUND_RANK,
   ResponderFailed,
   TURN_TEXT_CAP,
+  finalizeReply,
   dayKeyFor,
   errName,
   estimateCostUsd,
   LinkChecker,
-  MAX_BUBBLES,
-  MAX_BUBBLE_CHARS,
   MAX_PENDING_CHARS,
   handleOverLimit,
   hourKeyFor,
@@ -27,7 +26,6 @@ import {
   lifecycleStateFor,
   parseApprovalReply,
   sha256Hex,
-  splitBubbles,
   stripBlockedLinks,
   type Channel,
   type Logger,
@@ -35,7 +33,7 @@ import {
   type OutboundState,
 } from "@mano/channels";
 import type { HistoryMessage, Responder } from "@mano/channels";
-import { CRISIS_LINE, SAFE_REPLY, crisisTurn, guardReply, holdCrisisLines } from "@mano/persona";
+import { REFUSED_TAPBACK_TEXT, allowedTapback, crisisLineFor, crisisTurn, guardReply, tapbackText } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
   BUSY_BUBBLE,
@@ -60,6 +58,9 @@ export interface RunnerConfig {
   handleHash: string;
   batchMs: number;
   interimMs: number;
+  // How often the typing indicator is sent again while Mano works, so it
+  // stays up across the fast and deep paths.
+  typingRefreshMs: number;
   budgetUsd: number;
   usdPer1kChars: number;
   maxInboundAgeMs: number;
@@ -76,11 +77,17 @@ export const HISTORY_TURNS = 6;
 // with its safety line, up to this many per person per day. Past the
 // cap only a message that might be a crisis gets a reply.
 export const BUSY_DAILY_CAP = 20;
+
+// A turn waits while the person is typing, so a burst of texts gets one
+// answer, but never longer than this after they started: a stuck typing
+// indicator cannot hold a reply back.
+export const TYPING_HOLD_CAP_MS = 8000;
 export const HISTORY_CHARS = 4000;
 
 export const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "handleHash"> = {
   batchMs: 2500,
   interimMs: 20000,
+  typingRefreshMs: 10000,
   budgetUsd: 5,
   usdPer1kChars: 0.001,
   maxInboundAgeMs: 5 * 60 * 1000,
@@ -172,6 +179,32 @@ export function partitionByChat(
   return [...groups.values()];
 }
 
+// In a burst of two or more texts, the reply answers the one question
+// that is not the latest message, shown inline under it. With no such
+// question, or more than one, the reply is not threaded.
+export function inlineReplyTarget(items: import("./store.js").PendingInbound[]): string | null {
+  const texts = items.filter((i) => (i.text ?? "").trim().length > 0 && i.messageId);
+  if (texts.length < 2) return null;
+  const earlier = texts.slice(0, -1).filter((i) => /\?\s*$/.test(i.text ?? ""));
+  return earlier.length === 1 && !/\?\s*$/.test(texts[texts.length - 1].text ?? "") ? (earlier[0].messageId ?? null) : null;
+}
+
+function turnTextOf(texts: string[]): string {
+  return texts.join("\n");
+}
+
+// The full text of each message in a group: pieces split from one long
+// text at buffer time ("evt#2", "evt#3") join back without a separator,
+// separate messages with a newline.
+export function rejoinPieces(items: import("./store.js").PendingInbound[]): string {
+  let out = "";
+  items.forEach((item, i) => {
+    if (i > 0) out += /#\d+$/.test(item.eventId) ? "" : "\n";
+    out += item.text ?? "";
+  });
+  return out;
+}
+
 // Retry backoff from a persisted attempt count: 5 seconds, doubling to
 // a 5 minute ceiling. The count survives crashes, so a stuck turn or
 // send backs off instead of spinning the alarm.
@@ -245,7 +278,28 @@ export class ConversationRunner {
   // "queued" when the caller must (re)schedule the batch alarm.
   async handleEvent(event: NormalizedEvent, source: "webhook" | "reconcile"): Promise<HandleResult> {
     const { store, logger, nowMs, config } = this.deps;
-    if (event.kind === "ignored" || event.kind === "typing.started" || event.kind === "typing.stopped") {
+    // The person's typing holds the pending turn, with one fixed deadline:
+    // the first start for that turn plus the cap. A stop releases the hold
+    // early. A duplicate, a stale start or any later start, even after a
+    // stop, never moves the deadline.
+    if (event.kind === "typing.started" || event.kind === "typing.stopped") {
+      if (store.hasEvent(event.id)) return "duplicate";
+      store.recordEvent(event.id, event.kind, nowMs());
+      if (event.direction === "outbound") return "recorded";
+      const meta = store.meta();
+      if (event.kind === "typing.stopped") {
+        meta.typingActive = false;
+      } else {
+        const at = event.occurredAtMs ?? nowMs();
+        if (nowMs() - at >= TYPING_HOLD_CAP_MS) return "recorded";
+        // With nothing pending there is no turn to hold yet: a new burst.
+        if (meta.typingSinceMs === 0 || store.pending().length === 0) meta.typingSinceMs = nowMs();
+        meta.typingActive = true;
+      }
+      store.saveMeta(meta);
+      return "recorded";
+    }
+    if (event.kind === "ignored") {
       if (!store.hasEvent(event.id)) store.recordEvent(event.id, event.kind, nowMs());
       return "recorded";
     }
@@ -325,6 +379,7 @@ export class ConversationRunner {
           text: piece,
           attachments: i === 0 ? event.attachments : [],
           fromReconcile: source === "reconcile",
+          messageId: i === 0 ? event.messageId : null,
         });
       });
       logger.info("inbound_queued", {
@@ -360,7 +415,20 @@ export class ConversationRunner {
       return "recorded";
     }
 
-    if (event.kind === "reaction") return "activity";
+    // A tapback from the person is acknowledgement only. It never answers
+    // an approval here: Engine and the Agent own approvals, so Channels
+    // records it and passes it on.
+    if (event.kind === "reaction") {
+      const onMano = event.messageId ? store.outboundByMessageId(event.messageId) !== null : false;
+      logger.info("reaction_received", {
+        handle: this.logHandle(),
+        eventId: event.id,
+        reaction: event.reaction?.value ?? null,
+        action: event.reaction?.action ?? null,
+        onMano,
+      });
+      return "activity";
+    }
 
     if (event.kind === "chat.closed") {
       const meta = store.meta();
@@ -496,6 +564,13 @@ export class ConversationRunner {
     const pending = store.pending();
     if (pending.length === 0) return this.needsRetry() ? "retry" : "idle";
     if (nowMs() - meta.lastInboundMs < this.deps.config.batchMs) return "waiting";
+    if (meta.typingActive && meta.typingSinceMs > 0 && nowMs() - meta.typingSinceMs < TYPING_HOLD_CAP_MS) return "waiting";
+    if (meta.typingSinceMs > 0 || meta.typingActive) {
+      // This turn runs now: the next burst gets its own deadline.
+      meta.typingSinceMs = 0;
+      meta.typingActive = false;
+      store.saveMeta(meta);
+    }
     // A turn finishes only after a persisted final outcome. An
     // infrastructure error keeps the turn row and its input and returns
     // "retry": the alarm re-arms with backoff and the turn resumes.
@@ -503,7 +578,9 @@ export class ConversationRunner {
     try {
       await this.runGuarded(async () => {
         for (const group of partitionByChat(pending, store.meta().chatId)) {
-          for (const items of chunkByTextCap(group, TURN_TEXT_CAP)) {
+          const groupCrisis = crisisTurn(rejoinPieces(group));
+          for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP)) {
+            const items = groupCrisis ? chunk.map((item) => ({ ...item, crisis: true })) : chunk;
             const turnMeta = store.meta();
             turnMeta.turn += 1;
             store.saveMeta(turnMeta);
@@ -648,11 +725,27 @@ export class ConversationRunner {
     const texts = items.map((i) => i.text).filter((t): t is string => !!t && t.length > 0);
     const attachments = items.flatMap((i) => i.attachments);
 
+    // One crisis detector for every path, classified before approvals,
+    // admission and any model work, on the whole message even when the
+    // buffer split it. It is broad on purpose: a match makes the reply
+    // name 988 and 911, and over-triggering is accepted.
+    const crisis = crisisTurn(texts.join("\n")) || items.some((i) => i.crisis === true);
+    // A crisis turn never sends the friendly intro, and later turns do not
+    // send it either.
+    if (crisis && !meta.introduced) {
+      meta.introduced = true;
+      store.saveMeta(meta);
+    }
+
     const approval = texts.length === 1 && attachments.length === 0 ? parseApprovalReply(texts[0]) : null;
     if (approval && store.pendingApprovals(nowMs()).length > 0) {
-      const answered = await this.answerApproval(approval.code, approval.decision, turn, chatId, to);
+      // A crisis reply goes first; the decision is still recorded.
+      const crisisBubbles = crisis ? await this.finalize(turn, "", true, turnTextOf(texts)) : [];
+      if (crisisBubbles.length > 0) await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation);
+      const recordedPart = crisisBubbles.length + 1;
+      const answered = await this.answerApproval(approval.code, approval.decision, turn, chatId, to, recordedPart);
       if (answered) {
-        store.updateTurnAnswer(turn, JSON.stringify([{ part: 1, tag: "", text: APPROVAL_RECORDED_BUBBLE }]), 0, nowMs());
+        store.updateTurnAnswer(turn, JSON.stringify([...crisisBubbles, { part: recordedPart, tag: "", text: APPROVAL_RECORDED_BUBBLE }]), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
         return;
       }
@@ -666,10 +759,6 @@ export class ConversationRunner {
     // plus chunkByTextCap), so the join is never cut: every input
     // reaches the responder exactly once, across as many turns as needed.
     const turnText = texts.join("\n");
-    // One crisis detector for every path, classified before admission
-    // and before any model work. It is broad on purpose: a match makes
-    // the reply name 988 and 911, and over-triggering is accepted.
-    const crisis = crisisTurn(turnText);
     const history = this.history(meta.introduced);
     const historyChars = history.reduce((sum, h) => sum + h.text.length, 0);
     const { responder } = this.deps;
@@ -690,10 +779,7 @@ export class ConversationRunner {
       });
       if (crisis) {
         // No model and no cost: the deterministic crisis reply, past any limit.
-        const bubbles = [
-          ...(meta.introduced ? [] : [{ part: 0, tag: "", text: INTRO_BUBBLE }]),
-          ...this.answerBubbles(turn, [], true),
-        ];
+        const bubbles = await this.finalize(turn, "", true, turnText);
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
         await this.sendBubbles(turn, bubbles, chatId, to, 0, generation);
@@ -711,14 +797,26 @@ export class ConversationRunner {
       return;
     }
 
+    // Keepalive refreshes run one at a time. Before the final stop, no
+    // new refresh starts and the one in flight finishes, so typing can
+    // never come back on after Mano is done.
+    let typingTimer: ReturnType<typeof setInterval> | undefined;
+    let refreshing: Promise<void> = Promise.resolve();
+    let typingDone = false;
     if (chatId) {
       await this.bestEffort("mark_read", () => this.deps.channel.markRead(chatId));
       await this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started"));
+      typingTimer = setInterval(() => {
+        refreshing = refreshing.then(() =>
+          typingDone ? undefined : this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started")),
+        );
+      }, config.typingRefreshMs);
     }
     try {
       const saved = await this.saveAttachments(turn, attachments);
       const bubbles: import("./store.js").AnswerBubble[] = [];
-      if (!meta.introduced) bubbles.push({ part: 0, tag: "", text: INTRO_BUBBLE });
+      // A crisis turn opens with the crisis line, never the friendly intro.
+      if (!meta.introduced && !crisis) bubbles.push({ part: 0, tag: "", text: INTRO_BUBBLE });
       if (saved > 0) bubbles.push({ part: 0, tag: "ack", text: attachmentAck(saved) });
       if (turnText) {
         this.checkGeneration(generation);
@@ -728,16 +826,30 @@ export class ConversationRunner {
           // checked again: a split must never leave an unchecked link
           // behind. The persisted bubbles are final and capped. A crisis
           // turn's final bubbles must still name 988 and 911.
-          const final = await this.finalizeBubbles(turn, answer.text);
-          if (final.removed > 0) {
-            logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
+          // A tapback is decoration. It carries the reply alone only when
+          // the rules allow it and it has a message to go on; even then a
+          // fallback text is persisted with it, sent if the tapback fails.
+          const tapback = allowedTapback(answer.tapback, turnText, crisis);
+          const latest = [...items].reverse().find((i) => i.messageId)?.messageId ?? null;
+          const routable = tapback !== null && latest !== null && chatId !== null;
+          const hasText = answer.text.trim().length > 0;
+          let reply: string | null = answer.text;
+          if (!hasText && crisis) reply = "";
+          else if (!hasText && routable) reply = null;
+          else if (!hasText && tapback) reply = tapbackText(tapback);
+          else if (!hasText && answer.tapback) reply = REFUSED_TAPBACK_TEXT;
+          const answered = reply === null ? [] : await this.finalize(turn, reply, crisis, turnText);
+          const replyTo = inlineReplyTarget(items);
+          if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
+          bubbles.push(...answered);
+          if (routable && tapback && latest) {
+            bubbles.push({ part: 0, tag: "react", text: tapback, messageId: latest, fallback: hasText ? null : tapbackText(tapback) });
           }
-          bubbles.push(...this.answerBubbles(turn, final.bubbles, crisis));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
         } else {
-          bubbles.push(...this.answerBubbles(turn, crisis ? [] : [FAILURE_BUBBLE], crisis));
+          bubbles.push(...(await this.finalize(turn, crisis ? "" : FAILURE_BUBBLE, crisis, turnText)));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
           await this.deps.spend.settle(reserveKey, answer.costUsd);
           store.markTurnSettled(turn, nowMs());
@@ -753,35 +865,33 @@ export class ConversationRunner {
       await this.sendBubbles(turn, bubbles, chatId, to, saved, generation);
       this.checkSendsResolved(turn, generation);
     } finally {
+      typingDone = true;
+      clearInterval(typingTimer);
+      await refreshing;
       if (chatId) await this.bestEffort("typing_stopped", () => this.deps.channel.setTyping(chatId, "stopped"));
     }
   }
 
-  // Guards the raw answer's voice, sanitizes it, splits it into capped
-  // bubbles, and checks each final bubble again. The guard runs before
-  // splitting because bullets and headers are line-based and the
-  // splitter joins lines. The splitter never breaks a word, so the
-  // recheck normally finds nothing; it exists so a future extraction
-  // gap cannot ship an unchecked link. A bubble that grows past the cap
-  // under replacement splits again, stripped text having no links left
-  // to expose.
-  private async finalizeBubbles(turn: number, text: string): Promise<{ bubbles: string[]; removed: number }> {
-    const voiced = this.guard(text, { turn, part: 1, tag: "" });
-    const checker = new LinkChecker({ fetchFn: this.deps.fetchFn });
-    const first = await stripBlockedLinks(voiced, checker);
-    let removed = first.removed;
-    const out: string[] = [];
-    for (const bubble of splitBubbles(first.text)) {
-      const rechecked = await stripBlockedLinks(bubble, checker);
-      removed += rechecked.removed;
-      if (rechecked.text.length <= MAX_BUBBLE_CHARS) {
-        out.push(rechecked.text);
-      } else {
-        out.push(...splitBubbles(rechecked.text));
-      }
+  // Every reply, model or fixed, becomes its bubbles through
+  // finalizeReply (@mano/channels), the same function Quality runs. It
+  // logs which guard rules fired and how many links it removed, never
+  // the text. sendBubble's own guard pass then changes nothing, since
+  // the guard is idempotent.
+  private async finalize(turn: number, text: string, crisis: boolean, personText: string): Promise<import("./store.js").AnswerBubble[]> {
+    const model = this.deps.responder.model;
+    const final = await finalizeReply(text, {
+      modelIds: model ? [model] : [],
+      crisis,
+      checker: new LinkChecker({ fetchFn: this.deps.fetchFn }),
+      crisisLine: crisisLineFor(personText),
+    });
+    if (final.changes.length > 0) {
+      this.deps.logger.info("voice_guarded", { handle: this.logHandle(), turn, part: 1, tag: "", changes: final.changes.join(",") });
     }
-    return { bubbles: out.length <= MAX_BUBBLES ? out : splitBubbles(out.join(" ")), removed };
+    if (final.removed > 0) this.deps.logger.warn("reply_links_removed", { handle: this.logHandle(), turn, removed: final.removed });
+    return final.bubbles.map((t, i) => ({ part: i + 1, tag: "", text: t }));
   }
+
 
   // A turn is finished only when every send resolved. Anything still
   // uncertain or sending aborts the turn: the row and its input stay,
@@ -812,8 +922,13 @@ export class ConversationRunner {
     // (pinned by test). Nothing here mutates them, so a replayed turn
     // sends byte-identical bubbles under the same keys.
     let fresh = 0;
-    for (const bubble of bubbles) {
-      const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation });
+    // Text goes first: a tapback never holds back a message.
+    for (const bubble of [...bubbles.filter((b) => b.tag !== "react"), ...bubbles.filter((b) => b.tag === "react")]) {
+      if (bubble.tag === "react") {
+        await this.sendTapback(turn, bubble, chatId, to, generation);
+        continue;
+      }
+      const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation, replyTo: bubble.replyTo ?? null });
       if (row.fresh) fresh += 1;
       if (bubble.tag === "" && bubble.part === 0 && row.state === "sent") {
         const introduced = store.meta();
@@ -828,6 +943,53 @@ export class ConversationRunner {
   // Runs the responder. A deep turn's heads-up goes out the moment the
   // responder has it, after the intro on a first contact, and takes the
   // place of the interim notice.
+  // A tapback has its own outbound row, so a resumed turn knows whether
+  // it landed. It is not a message and never counts toward limits. Right
+  // before every attempt, including a replay, it checks the generation,
+  // opt-out and closed state. When it fails, its persisted fallback text
+  // goes through the one send path under its own key.
+  private async sendTapback(
+    turn: number,
+    bubble: import("./store.js").AnswerBubble,
+    chatId: string | null,
+    to: string | null,
+    generation: number,
+  ): Promise<void> {
+    const { store, channel, logger, nowMs, config } = this.deps;
+    const key = idempotencyKeyFor(config.handleHash, generation, turn, bubble.part, "react");
+    const sendFallback = async (): Promise<void> => {
+      if (bubble.fallback) await this.sendBubble({ turn, part: bubble.part, tag: "react-fallback", text: bubble.fallback, chatId, to, generation });
+    };
+    const prior = store.outboundByKey(key);
+    if (prior?.state === "sent" || prior?.state === "refused") return;
+    if (prior?.state === "failed") return sendFallback();
+    this.checkGeneration(generation);
+    const meta = store.meta();
+    if (!prior) {
+      store.addOutbound({
+        key, turn, part: bubble.part, tag: "react", text: bubble.text, attempts: 0, state: "planned", code: null,
+        chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+      });
+    }
+    if (meta.optedOut || meta.closed || !chatId || !bubble.messageId) {
+      const code = meta.optedOut ? "opted_out" : meta.closed ? "conversation_closed" : "unroutable";
+      store.updateOutbound(key, { state: "refused", code, updatedAtMs: nowMs() });
+      logger.info("tapback_suppressed", { handle: this.logHandle(), turn, code });
+      return;
+    }
+    try {
+      await channel.react(chatId, bubble.messageId, bubble.text as import("@mano/channels").Tapback);
+      this.checkGeneration(generation);
+      store.updateOutbound(key, { state: "sent", updatedAtMs: nowMs() });
+      logger.info("tapback_sent", { handle: this.logHandle(), turn, tapback: bubble.text });
+    } catch (err) {
+      if (err instanceof GenerationStopped) throw err;
+      store.updateOutbound(key, { state: "failed", code: "tapback_failed", updatedAtMs: nowMs() });
+      logger.warn("tapback_failed", { handle: this.logHandle(), turn, err: errName(err) });
+      await sendFallback();
+    }
+  }
+
   private async respondWithInterim(
     turn: number,
     turnText: string,
@@ -837,7 +999,7 @@ export class ConversationRunner {
     to: string | null,
     generation: number,
     crisis: boolean,
-  ): Promise<{ ok: true; text: string; costUsd: number } | { ok: false; costUsd: number }> {
+  ): Promise<{ ok: true; text: string; costUsd: number; tapback: import("@mano/channels").Tapback | null } | { ok: false; costUsd: number }> {
     const { responder, config, logger } = this.deps;
     let done = false;
     let interimSent = false;
@@ -868,7 +1030,7 @@ export class ConversationRunner {
       const result = await responder.respond({ texts: [turnText], attachmentCount, history }, { onHeadsUp });
       const costUsd =
         result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
-      return { ok: true, text: result.text, costUsd };
+      return { ok: true, text: result.text, costUsd, tapback: result.tapback ?? null };
     } catch (err) {
       logger.warn("responder_failed", {
         handle: this.logHandle(),
@@ -913,7 +1075,7 @@ export class ConversationRunner {
       const items = JSON.parse(row.itemsJson) as import("./store.js").PendingInbound[];
       const person = items.map((i) => i.text ?? "").filter((t) => t.length > 0).join("\n");
       const bubbles = row.answerJson ? (JSON.parse(row.answerJson) as import("./store.js").AnswerBubble[]) : [];
-      const mano = bubbles.map((b) => b.text).join(" ");
+      const mano = bubbles.filter((b) => b.tag !== "react").map((b) => b.text).join(" ");
       if (person) messages.push({ role: "person", text: person });
       if (mano) messages.push({ role: "mano", text: mano });
     }
@@ -923,22 +1085,7 @@ export class ConversationRunner {
     return messages;
   }
 
-  // The answer bubbles exactly as sendBubble will send them: each one
-  // through the same send-time guard. On a crisis turn the fixed crisis
-  // line is the first bubble, once, and only the bubbles after it are
-  // capped, so neither the guard nor the cap can remove 988 and 911.
-  // The guard is idempotent, so sendBubble's own pass changes nothing.
-  private answerBubbles(turn: number, texts: string[], crisis: boolean): import("./store.js").AnswerBubble[] {
-    const voiced = texts.map((text, i) => this.guard(text, { turn, part: i + 1, tag: "" }));
-    if (!crisis) return voiced.map((text, i) => ({ part: i + 1, tag: "", text }));
-    // The model may have written the crisis line into its own text.
-    const rest = splitBubbles(voiced.join(" ").split(CRISIS_LINE).join(" "))
-      .map((text, i) => this.guard(text, { turn, part: i + 2, tag: "" }))
-      .filter((text) => text !== SAFE_REPLY);
-    return holdCrisisLines(rest)
-      .slice(0, MAX_BUBBLES)
-      .map((text, i) => ({ part: i + 1, tag: "", text }));
-  }
+
 
   private guardOptions(): { modelIds: string[] } {
     const model = this.deps.responder.model;
@@ -1045,6 +1192,7 @@ export class ConversationRunner {
     to: string | null;
     force?: boolean;
     generation?: number;
+    replyTo?: string | null;
   }): Promise<SendBubbleResult> {
     const { store, channel, logger, nowMs, config } = this.deps;
     opts = { ...opts, text: this.guard(opts.text, { turn: opts.turn, part: opts.part, tag: opts.tag }) };
@@ -1083,12 +1231,12 @@ export class ConversationRunner {
     if (!prior) {
       store.addOutbound({
         key, turn: opts.turn, part: opts.part, tag: opts.tag, text: opts.text, attempts: 0, state: "planned", code: null,
-        chatId: opts.chatId, messageId: null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
+        chatId: opts.chatId, messageId: null, replyTo: opts.replyTo ?? null, createdAtMs: nowMs(), updatedAtMs: nowMs(),
       });
     }
     store.updateOutbound(key, { state: "sending", updatedAtMs: nowMs() });
     try {
-      const result = await channel.send({ to: opts.to ?? "", chatId: opts.chatId, text: opts.text, idempotencyKey: key });
+      const result = await channel.send({ to: opts.to ?? "", chatId: opts.chatId, text: opts.text, idempotencyKey: key, replyTo: opts.replyTo ?? null });
       // The conversation may have been deleted mid-send. Never write the
       // result into a newer generation.
       this.checkGeneration(generation);
@@ -1169,7 +1317,9 @@ export class ConversationRunner {
       return finish({ key, state: "failed", code: "unguarded_legacy", fresh: false, counted: false });
     }
     try {
-      const result = await channel.send({ to: opts.to ?? "", chatId: opts.chatId, text: opts.text, idempotencyKey: key });
+      // The replay carries the stored reply target: the key is bound to
+      // the exact body, so it must not change.
+      const result = await channel.send({ to: opts.to ?? "", chatId: opts.chatId, text: opts.text, idempotencyKey: key, replyTo: row?.replyTo ?? null });
       this.checkGeneration(generation);
       store.updateOutbound(key, {
         state: "sent", messageId: result.messageId, chatId: result.chatId, updatedAtMs: nowMs(),
@@ -1255,6 +1405,7 @@ export class ConversationRunner {
     turn: number,
     chatId: string | null,
     to: string | null,
+    part = 1,
   ): Promise<boolean> {
     const { store, logger, nowMs } = this.deps;
     const codeHash = await sha256Hex(code);
@@ -1262,7 +1413,7 @@ export class ConversationRunner {
     if (!match) return false;
     store.answerApproval(match.id, decision);
     logger.info("approval_answered", { handle: this.logHandle(), approval: match.id, decision });
-    await this.sendBubble({ turn, part: 1, tag: "", text: APPROVAL_RECORDED_BUBBLE, chatId, to });
+    await this.sendBubble({ turn, part, tag: "", text: APPROVAL_RECORDED_BUBBLE, chatId, to });
     return true;
   }
 }

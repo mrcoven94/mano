@@ -162,14 +162,14 @@ describe("a caseworker named Claude, through the send path (lead decision)", () 
 describe("PR 67 review round 3, through the send path", () => {
   it("puts 988 and 911 on a crisis turn the narrow detector missed (1)", async () => {
     const h = makeHarness({ replies: ["Can you tell me more?"] });
-    const answer = (await say(h, "evt_1", "I am going to jump off a bridge")).slice(1).join(" ");
+    const answer = (await say(h, "evt_1", "I am going to jump off a bridge")).join(" ");
     expect(answer).toMatch(/\b988\b/);
     expect(answer).toMatch(/\b911\b/);
   });
 
   it("keeps the model's own words after the crisis line (1, made structural in round 4)", async () => {
     const h = makeHarness({ replies: ["Please call 911 right now. I'm here."] });
-    const answer = (await say(h, "evt_1", "I am going to jump off a bridge")).slice(1);
+    const answer = await say(h, "evt_1", "I am going to jump off a bridge");
     expect(answer[0]).toBe(CRISIS_LINE);
     expect(answer.join(" ")).toContain("Please call 911 right now. I'm here.");
   });
@@ -197,7 +197,7 @@ describe("PR 67 review round 4, through the send path", () => {
   it("always opens a crisis answer with the fixed crisis line, and the cap never drops it (1)", async () => {
     const long = Array.from({ length: 100 }, () => "I'm here with you and we will get through tonight together.").join(" ");
     const h = makeHarness({ replies: [`Please call 911 now. ${long} Call 988.`] });
-    const answer = (await say(h, "evt_1", "I want to die")).slice(1);
+    const answer = await say(h, "evt_1", "I want to die");
     expect(answer[0]).toBe(CRISIS_LINE);
     expect(answer.length).toBeLessThanOrEqual(4);
     expect(answer.join(" ")).toMatch(/\b988\b/);
@@ -207,7 +207,7 @@ describe("PR 67 review round 4, through the send path", () => {
   it("opens with the crisis line for Sol's two inputs, even after a generic reply (2)", async () => {
     for (const message of ["I want to slit my wrists", "I am going to throw myself off a bridge"]) {
       const h = makeHarness({ replies: ["Can you tell me more?"] });
-      const answer = (await say(h, "evt_1", message)).slice(1);
+      const answer = await say(h, "evt_1", message);
       expect(answer[0], message).toBe(CRISIS_LINE);
     }
   });
@@ -243,7 +243,7 @@ describe("the most common benefits sentence is not a crisis (lead decision)", ()
   it("still opens with the crisis line for explicit danger", async () => {
     for (const message of ["I'm in danger", "I am in immediate danger", "I'm not safe here"]) {
       const h = makeHarness({ replies: ["Can you tell me more?"] });
-      expect((await say(h, "evt_1", message)).slice(1)[0], message).toBe(CRISIS_LINE);
+      expect((await say(h, "evt_1", message))[0], message).toBe(CRISIS_LINE);
     }
   });
 });

@@ -150,6 +150,7 @@ export class ConversationDO implements DurableObject {
         handleHash,
         batchMs: numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs),
         interimMs: numberEnv(this.env.TURN_INTERIM_MS, DEFAULT_RUNNER_CONFIG.interimMs),
+        typingRefreshMs: DEFAULT_RUNNER_CONFIG.typingRefreshMs,
         budgetUsd: numberEnv(this.env.MANO_TEXT_DAILY_BUDGET_USD, DEFAULT_RUNNER_CONFIG.budgetUsd),
         usdPer1kChars: numberEnv(this.env.MANO_TEXT_USD_PER_1K_CHARS, DEFAULT_RUNNER_CONFIG.usdPer1kChars),
         maxInboundAgeMs: DEFAULT_RUNNER_CONFIG.maxInboundAgeMs,

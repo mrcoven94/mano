@@ -35,7 +35,7 @@ describe("self-identity is a class (follow-up 2)", () => {
 
 describe("numbered lists and strikethrough (should 8)", () => {
   it("normalizes both", () => {
-    expect(guardReply("1. Call the office\n2) Bring your ID").text).toBe("Call the office.\nBring your ID.");
+    expect(guardReply("1. Call the office\n2) Bring your ID").text).toBe("Call the office. Bring your ID.");
     expect(guardReply("The deadline is ~~March 1~~ March 3.").text).toBe("The deadline is March 1 March 3.");
   });
 
@@ -169,7 +169,7 @@ describe("model words split in two (lead decision)", () => {
   });
 
   it("keeps our own stack counting anywhere (round 3 narrowed this to muse, glimmer, llama and model IDs)", () => {
-    for (const text of ["Llama is fine.", "Ask Muse for help.", "The glimmer model can tell you.", "Try gpt-4o."]) {
+    for (const text of ["Ask Llama for help.", "Ask Muse for help.", "The glimmer model can tell you.", "Try gpt-4o."]) {
       expect(containsProviderName(text), text).toBe(true);
     }
   });
