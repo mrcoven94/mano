@@ -8,6 +8,17 @@
 
 import { SAFETY_LINE } from "./crisis.js";
 
+// A Unicode-aware \b. JavaScript's \b only knows ASCII letters, so it sees
+// no word end after an accented letter ("Llama me creó."). Every guard
+// pattern is built through uw(), which swaps \b for this edge and adds the
+// u flag.
+const WORD_EDGE = String.raw`(?:(?<=[\p{L}\p{N}])(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])(?=[\p{L}\p{N}]))`;
+
+function uw(pattern: RegExp): RegExp {
+  const flags = pattern.flags.includes("u") ? pattern.flags : `${pattern.flags}u`;
+  return new RegExp(pattern.source.replaceAll(String.raw`\b`, WORD_EDGE), flags);
+}
+
 export const SELF_DESCRIPTION = "I'm Mano, an automated assistant.";
 
 // Sent when a reply has nothing sendable left, and when the model fails.
@@ -33,12 +44,12 @@ export interface GuardResult {
 // Names on no list count only in "my name is X", a capitalized "I'm X",
 // or the assistant itself made or built by X, outside quotation marks.
 
-const STACK_PATTERN = /\b(?:meta|spark|muse|glimmer)\b/i;
+const STACK_PATTERN = uw(/\b(?:meta|spark|muse|glimmer)\b/i);
 // A family name, at most one more model word, then a version: "muse spark
 // 1.3", "gpt-4o". Llama has its own rule below.
 const MODEL_ID_PATTERN =
-  /\b(?:muse|spark|glimmer|gpt|claude|gemini|mistral|grok)(?:[-_. ]?(?:spark|glimmer|instruct|chat|pro|mini|nano|turbo|flash|sonnet|opus|haiku))?[-_. ]?\d[\w.-]*/i;
-const ORDINARY_PHRASES = /\b(?:spark of hope|glimmer of hope|muse (?:on|about))\b/gi;
+  uw(/\b(?:muse|spark|glimmer|gpt|claude|gemini|mistral|grok)(?:[-_. ]?(?:spark|glimmer|instruct|chat|pro|mini|nano|turbo|flash|sonnet|opus|haiku))?[-_. ]?\d[\w.-]*/i);
+const ORDINARY_PHRASES = uw(/\b(?:spark of hope|glimmer of hope|muse (?:on|about))\b/gi);
 
 // "llama" is also Spanish for "call" ("se llama DSHS", "llama al 911"), so
 // it is the one stack word that does not count anywhere. It counts only
@@ -51,16 +62,16 @@ const ORDINARY_PHRASES = /\b(?:spark of hope|glimmer of hope|muse (?:on|about))\
 // number ("Llama 1-800-555-0100").
 const LLAMA_UNITS = "(?:horas?|hours?|d[ií]as?|days?|minutos?|minutes?|semanas?|weeks?)";
 const LLAMA_MODEL = [
-  new RegExp(
+  uw(new RegExp(
     String.raw`\bllama[-_ ]?\d(?:\.\d+)*(?:[-_ ]?\d*b|-instruct|-chat)*(?![\w-]|\.\d)(?! ?${LLAMA_UNITS}\b)`,
     "iu",
-  ),
-  /\bllama (?:powers|runs|made|built|trained|created|answers for) (?:me|mano)\b/i,
-  /\b(?:my|mi) (?:provider|model|maker|creator|proveedor|modelo|creador) (?:is|es) (?:the |el )?llama\b/i,
-  /\bllama (?:me impulsa|me hizo|me cre[óo]|me entren[óo])\b/iu,
-  /\bllama\b.*\b(?:models?|modelos?|llms?|open[- ]source|c[óo]digo abierto|open[- ]weights?|weights|pesos abiertos)\b|\b(?:models?|modelos?|llms?|open[- ]source|c[óo]digo abierto|open[- ]weights?|weights)\b.*\bllama\b/i,
-  /\b(?:uso|usamos|i use|we use|basad[oa] en|based on|powered by|funciona con|funciono con|runs? on|running on|built on|made by|hecho por|impulsado por|soy|i am|i'm|i’m)\b(?: [\p{L}'’-]+){0,3} llama\b/iu,
-  /(?<=[\p{L}\d,] )Llama\b(?! (?:al?|ahora|ya|hoy)\b)/u,
+  )),
+  uw(/\bllama (?:powers|runs|made|built|trained|created|answers for) (?:me|mano)\b/i),
+  uw(/\b(?:my|mi) (?:provider|model|maker|creator|proveedor|modelo|creador) (?:is|es) (?:the |el )?llama\b/i),
+  uw(/\bllama (?:me impulsa|me hizo|me cre[óo]|me entren[óo])\b/iu),
+  uw(/\bllama\b.*\b(?:models?|modelos?|llms?|open[- ]source|c[óo]digo abierto|open[- ]weights?|weights|pesos abiertos)\b|\b(?:models?|modelos?|llms?|open[- ]source|c[óo]digo abierto|open[- ]weights?|weights)\b.*\bllama\b/i),
+  uw(/\b(?:uso|usamos|i use|we use|basad[oa] en|based on|powered by|funciona con|funciono con|runs? on|running on|built on|made by|hecho por|impulsado por|soy|i am|i'm|i’m)\b(?: [\p{L}'’-]+){0,3} llama\b/iu),
+  uw(/(?<=[\p{L}\d,] )Llama\b(?! (?:al?|ahora|ya|hoy)\b)/u),
 ];
 
 function namesLlama(sentence: string): boolean {
@@ -68,7 +79,7 @@ function namesLlama(sentence: string): boolean {
 }
 // An identity statement beats the idioms: "I'm powered by the spark of hope" still leaks.
 const IDENTITY_STATEMENT =
-  /\b(?:i am|i'm|i’m|im|my name is|this is|powered by|built (?:on|by)|made by|trained by|runs? on|running on|based on|models?|assistant from)\b/i;
+  uw(/\b(?:i am|i'm|i’m|im|my name is|this is|powered by|built (?:on|by)|made by|trained by|runs? on|running on|based on|models?|assistant from)\b/i);
 const QUOTED = /"[^"\n]*"|“[^”\n]*”/g;
 
 const OTHER_NAMES = [
@@ -95,16 +106,16 @@ const OTHER_IDENTITY = [
   `\\b(?:i|mano) (?:use|uses) ${NAME} (?:to|for) (?:answer|answers|reply|replies|respond|think|talk|write)\\b`,
   `\\b${NAME} (?:made|built|created|developed|trained|powers|runs|designed) (?:me|mano)\\b`,
   `\\bmy (?:maker|creator|developer|provider|company|model) is ${FILLER}${NAME}\\b`,
-].map((source) => new RegExp(source, "i"));
-const PROGRAM_NAMES = /\bapple health\b/gi;
+].map((source) => uw(new RegExp(source, "i")));
+const PROGRAM_NAMES = uw(/\bapple health\b/gi);
 
 const UNLISTED_SELF = [
-  /\bi(?: was| am|'m|’m)(?: (?:an?|the) (?:[\w-]+ )?(?:assistant|ai|model|bot|chatbot))? (?:developed|built|made|created|trained|designed|programmed|powered|engineered) (?:by|at|on)\s+(?!mano\b)\S/i,
-  /\bmy name is\s+(?!mano\b)\S/i,
+  uw(/\bi(?: was| am|'m|’m)(?: (?:an?|the) (?:[\w-]+ )?(?:assistant|ai|model|bot|chatbot))? (?:developed|built|made|created|trained|designed|programmed|powered|engineered) (?:by|at|on)\s+(?!mano\b)\S/i),
+  uw(/\bmy name is\s+(?!mano\b)\S/i),
   // Case-sensitive on purpose: the name after it is capitalized. An
   // article counts only before an assistant word, so "I'm a Medicaid
   // expert" passes.
-  /\b[Ii](?:'m|’m| am) (?:(?:an?|the) (?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version|virtual) )+|(?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version) )*)(?:called |named )?(?!Mano\b)[A-Z]/,
+  uw(/\b[Ii](?:'m|’m| am) (?:(?:an?|the) (?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version|virtual) )+|(?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version) )*)(?:called |named )?(?!Mano\b)[A-Z]/),
 ];
 
 function escapePattern(word: string): string {
@@ -192,7 +203,7 @@ export interface GuardOptions {
 
 // A sentence that names a provider and talks about the speaker is a
 // self-description: "I'm Muse Spark!", "This is ChatGPT", "Mano runs on Llama".
-const SELF_REFERENCE = /\b(?:i|i'm|i’m|im|me|my|myself|mano|this is|you(?:'re|’re| are) (?:talking|chatting|texting) (?:to|with))\b/i;
+const SELF_REFERENCE = uw(/\b(?:i|i'm|i’m|im|me|my|myself|mano|this is|you(?:'re|’re| are) (?:talking|chatting|texting) (?:to|with))\b/i);
 
 const DASHES = "‒–—―";
 

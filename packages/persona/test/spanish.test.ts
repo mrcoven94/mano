@@ -75,3 +75,18 @@ describe("Llama versions look like model versions (final round)", () => {
     }
   });
 });
+
+describe("boundaries after accented letters", () => {
+  it("catches Llama identities that end in an accented letter", () => {
+    for (const text of ["Llama me creó.", "Llama me entrenó."]) {
+      expect(guardReply(text).changes, text).not.toEqual([]);
+    }
+  });
+
+  it("reads Spanish crisis phrases that end in accented letters", async () => {
+    const { crisisTurn } = await import("../src/crisis.js");
+    for (const text of ["quiero hacerme daño", "me quiero matar ya", "voy a suicidarme así", "estoy en peligro aquí"]) {
+      expect(crisisTurn(text), text).toBe(true);
+    }
+  });
+});
