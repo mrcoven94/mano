@@ -97,6 +97,7 @@ META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
 | `packages/protocol` | The open message format agents use to work a case together | landing during the hackathon |
 | `packages/guardian` | The checker that reviews every outside action before a person approves it | live |
 | `packages/quality` | The nightly answer-quality bench | landing during the hackathon |
+| `packages/programs` | Sourced facts for SNAP, Medicaid and LIHEAP in eight states, which the agent looks up before stating any | landing during the hackathon |
 | `apps/app` | The resident app in React Native (iOS, Android, web) | landing during the hackathon |
 | `eval` | The held-out test: scenarios, baselines and results | landing during the hackathon |
 | `docs` | Decisions and design notes | live |
@@ -104,6 +105,10 @@ META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
 ### Guardian
 
 Guardian runs on one GPU on Modal and scales to zero when idle. A cold start takes about three minutes, and a check fails closed after 10 seconds, so Mano calls `warm()` when a conversation starts. To keep one GPU warm (about $1.95 an hour), run the `guardian-modal` workflow from `main` under Actions with `min_containers` set to 1. To turn it off, run it again with 0. Any merge that touches the guardian also deploys 0.
+
+### Programs
+
+`packages/programs` is the only place the agent gets program facts: the state's own name for SNAP, Medicaid and LIHEAP in California, Texas, New York, Florida, Illinois, Washington, Arizona and Ohio, what each covers, income limits by household size with their year, the renewal cycle, how to apply and the official phone and site. Every fact carries the official page it came from, the day it was checked and the text that shows it; anything not confirmed is listed in the entry's gaps. `pnpm --filter @mano/programs check` fails on a missing source or date or a site that is not official; `pnpm --filter @mano/programs verify-sources` fetches every source again and looks for each quote.
 
 ## Held-out test
 
