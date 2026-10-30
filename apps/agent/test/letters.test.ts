@@ -86,9 +86,8 @@ describe("a texted letter", () => {
   it("is answered in the same reply: what it is, the deadline, what to send, and the deadline is held in Engine", async () => {
     const { status, body } = await send(photoTurn("turn_letter0001"), deps([RENEWAL_PAGE]));
     expect(status).toBe(200);
-    expect(body.text).toContain("Sacramento County Medi-Cal Office");
-    expect(body.text).toContain("November 20, 2026");
-    expect(body.text).toContain("It asks you to: send the signed renewal form.");
+    expect(body.text).toMatch(/^This is a Medi-Cal renewal letter\. It is due November 20, 2026\./);
+    expect(body.text).toContain("It asks you to send: other documents the letter lists.");
     expect(body.text).toContain("I saved November 20, 2026 to your deadlines.");
     expect(engine.deadlineCalls).toHaveLength(1);
     expect(engine.deadlineCalls[0]!.body).toMatchObject({
@@ -111,23 +110,23 @@ describe("a texted letter", () => {
 
   it("with words, the model answers them after the reading, seeing it only as evidence", async () => {
     const { body } = await send(photoTurn("turn_letter0010", { texts: ["Can you help me renew?"] }), deps([RENEWAL_PAGE]));
-    expect(body.text).toMatch(/^This is a letter from Sacramento County Medi-Cal Office/);
+    expect(body.text).toMatch(/^This is a Medi-Cal renewal letter\./);
     expect(body.text).toMatch(/\n\nWant a reminder a week before\?$/);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.message).toContain("Can you help me renew?");
     // The reading is data in the person's turn, never a system instruction.
-    expect(calls[0]!.message).toMatch(/<letter_reading>\n\{"photoRead":true,"alreadySent":"This is a letter from Sacramento County[^\n]*\n<\/letter_reading>$/);
+    expect(calls[0]!.message).toMatch(/<letter_reading>\n\{"photoRead":true,"alreadySent":"This is a Medi-Cal renewal letter\.[^\n]*\n<\/letter_reading>$/);
     const context = calls[0]!.context.join("\n");
     expect(context).not.toContain("November 20, 2026");
-    expect(context).not.toContain("Sacramento");
+    expect(context).not.toContain("Medi-Cal");
     expect(context).toMatch(/letter_reading block/);
   });
 
   it("asks one question quoting the sentence when the gate does not publish the deadline, and holds nothing", async () => {
     const { body } = await send(photoTurn("turn_letter0002"), deps([DOUBTFUL_PAGE]));
     expect(engine.deadlineCalls).toHaveLength(0);
-    expect(body.text).toContain('"Your renewal is due November 20, 2026."');
-    expect(body.text).toContain("Is November 20, 2026 the date you need to meet?");
+    expect(body.text).toMatch(/Your letter mentions more than one date, and I don't want to guess wrong\. Which date does it say you need to meet\?$/);
+    expect(body.text).not.toContain("November 20");
     expect(body.text).not.toContain("to your deadlines");
   });
 
@@ -222,7 +221,7 @@ describe("a texted letter", () => {
     const { status, body } = await send(photoTurn("turn_letter0014", { texts: ["Can you help me renew?"] }), failing);
     expect(status).toBe(200);
     expect(body.status).toBe("replied");
-    expect(body.text).toMatch(/^This is a letter from Sacramento County Medi-Cal Office/);
+    expect(body.text).toMatch(/^This is a Medi-Cal renewal letter\./);
   });
 
   it("review should-fix 5: one deadline for the turn; a reading that uses most of it is the whole reply", async () => {
@@ -233,8 +232,19 @@ describe("a texted letter", () => {
     } };
     const { body } = await send(photoTurn("turn_letter0015", { texts: ["Can you help me renew?"] }), deps([], { mailModel: slowRead as never, turnBudgetMs: 20_000 }));
     expect(calls).toHaveLength(0);
-    expect(body.text).toMatch(/^This is a letter from Sacramento County Medi-Cal Office/);
+    expect(body.text).toMatch(/^This is a Medi-Cal renewal letter\./);
     expect(body.text).toContain("November 20, 2026");
+  }, 15_000);
+
+  it("review 2 should-fix 3: a deadline write that does not fit the turn is cut off, and the reply says the date is not saved yet", async () => {
+    engine.deadlinesDelayMs = 30_000;
+    const started = Date.now();
+    const { body } = await send(photoTurn("turn_letter0016"), deps([RENEWAL_PAGE], { turnBudgetMs: 10_000 }));
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(body.text).toContain("I could not save November 20, 2026 to your deadlines yet.");
+    expect(body.text).not.toContain("I saved");
+    // Too little was left to remember it; the reply still went out.
+    expect(engine.memoryOf(PERSON)).toEqual([]);
   }, 15_000);
 
   it("refuses a document reference that is not slug-safe", async () => {

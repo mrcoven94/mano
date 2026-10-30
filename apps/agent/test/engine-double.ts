@@ -97,6 +97,8 @@ export class EngineDouble {
   // one idempotency key is one deadline.
   deadlinesLive = true;
   deadlineCalls: DeadlineCall[] = [];
+  // How long POST /deadlines takes to answer; the caller's abort ends it.
+  deadlinesDelayMs = 0;
 
   putDocument(personId: string, documentId: string, bytes: Uint8Array): void {
     this.documents.set(`${personId}/${documentId}`, bytes);
@@ -281,6 +283,16 @@ export class EngineDouble {
         return bytes ? new Response(bytes as BodyInit, { headers: { "content-type": "application/octet-stream" } }) : Response.json({ error: "Document not found." }, { status: 404 });
       }
       if (rest === "/deadlines" && method === "POST") {
+        if (this.deadlinesDelayMs > 0) {
+          const signal = init?.signal;
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, this.deadlinesDelayMs);
+            signal?.addEventListener("abort", () => {
+              clearTimeout(timer);
+              reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+            });
+          });
+        }
         if (!this.deadlinesLive) return new Response("Not found", { status: 404 });
         if (body.generation !== currentGeneration(sql)) return Response.json(STALE, { status: 409 });
         this.deadlineCalls.push({ personId, body });
