@@ -2,8 +2,8 @@
 // through Mano's agent on a local Engine (agent-stack.ts), scored with the
 // same checks and judge as the plain text line. It reports how many answers
 // came from the agent and how many from the plain fallback, per suite, so
-// "the agent" never silently means the fallback. It is recorded, not gated,
-// until a main run of it becomes a baseline.
+// "the agent" never silently means the fallback. Pull requests are gated on
+// it against main's agent record (report.ts evalAgentGate).
 
 import { startAgentStack, type AgentStack } from "./agent-stack.ts";
 import { FakeJudge, MetaJudge, type JudgeClient } from "./judge.ts";
