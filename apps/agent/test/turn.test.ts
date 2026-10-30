@@ -151,7 +151,7 @@ describe("approval by text", () => {
     const ask = await send(turn("turn_ask_000001", "Please file my renewal"));
     expect(ask.status).toBe(200);
     expect(ask.body.text).toContain("Reply YES");
-    expect(ask.body.text).toContain("Name: Rosa Testcase; Date of birth: 1990-02-03; Address: 12 Sample Street, Testville;");
+    expect(ask.body.text).toContain("Full legal name: Rosa Testcase; Date of birth: 1990-02-03; Mailing address: 12 Sample Street, Testville;");
     expect(engine.approvals()[0].status).toBe("pending");
     expect(engine.executor.calls).toHaveLength(0);
 
@@ -222,13 +222,13 @@ describe("a YES needs a question Channels confirmed it showed", () => {
 describe("the approval question reaches the person exactly", () => {
   it("the question survives the text line's voice guard word for word", async () => {
     const ask = await send(turn("turn_exact00001", "Please file my renewal"));
-    expect(ask.body.approval).toContain("Name: Rosa Testcase");
+    expect(ask.body.approval).toContain("Full legal name: Rosa Testcase");
     expect(guardReply(ask.body.text).text).toContain(ask.body.approval);
   });
 
   it("a person named Claude Testcase sees their own name in the question", async () => {
     const ask = await send(turn("turn_exact00004", "Please file my renewal for Claude Testcase"));
-    expect(ask.body.approval).toContain("Name: Claude Testcase");
+    expect(ask.body.approval).toContain("Full legal name: Claude Testcase");
     expect(guardReply(ask.body.text).text).toContain(ask.body.approval);
   });
 
@@ -524,7 +524,7 @@ describe("a slow draft against a newer one", () => {
     await new Promise((r) => setTimeout(r, 3));
     const yes = await send(turn("turn_r7G0000001", "YES"), deps(), { present: false });
     expect(yes.body.text).toMatch(/^I just updated that/);
-    expect(yes.body.text).toContain("Household size: 4");
+    expect(yes.body.text).toContain("People in household: 4");
     expect(yes.body.status).toBe("waiting_approval");
     expect(engine.executor.calls).toHaveLength(0);
   });
