@@ -37,7 +37,7 @@ describe("r3 blocker 5: malformed lookups are unavailable, never absent", () => 
     const seen: string[] = [];
     const fetchFn = (async (url: string) => {
       seen.push(url);
-      if (url.endsWith("/v1/actions")) throw new TimeoutError();
+      if (url.endsWith("/submissions")) throw new TimeoutError();
       return new Response("{}", { status: 200 });
     }) as typeof fetch;
     const store = new MemoryApprovalStore();
@@ -53,6 +53,6 @@ describe("r3 blocker 5: malformed lookups are unavailable, never absent", () => 
     expect(retry.status).toBe("blocked");
     expect(retry.reason).toMatch(/reconcile|cannot reach|try again/i);
     expect(store.getAttempt(key)?.status).toBe("unknown");
-    expect(seen.filter((u) => u.endsWith("/v1/actions")).length).toBe(1);
+    expect(seen.filter((u) => u.endsWith("/submissions")).length).toBe(1);
   });
 });

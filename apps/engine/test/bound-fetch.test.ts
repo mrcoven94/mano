@@ -46,7 +46,7 @@ describe("bound fetch defaults", () => {
   });
 
   it("executes and reconciles through SandboxExecutor with no fetchFn override", async () => {
-    installStrictFetch(() => Response.json({ externalId: "ext-9" }));
+    installStrictFetch(() => Response.json({ confirmationNumber: "ext-9" }));
     const exec = new SandboxExecutor("https://portal.test");
     const req: ActionRequest = {
       type: "submit",
