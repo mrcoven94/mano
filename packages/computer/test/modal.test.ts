@@ -67,3 +67,17 @@ describe("modal desktop client", () => {
     await expect(computer.goto("https://portal.test")).rejects.toThrow("closed");
   });
 });
+
+describe("modal session service access", () => {
+  test("sends the service token when it opens and closes a session", async () => {
+    const { fetchImpl, calls } = service();
+    const computer = new ModalComputer({ baseUrl: "https://computer.test", profile: "maria", token: "service-token", fetchImpl });
+    await computer.screenshot();
+    await computer.close();
+    const sessionCalls = calls.filter((c) => c.url.startsWith("https://computer.test/sessions"));
+    expect(sessionCalls).toHaveLength(2);
+    for (const call of sessionCalls) {
+      expect(new Headers((call.init as RequestInit).headers).get("authorization")).toBe("Bearer service-token");
+    }
+  });
+});

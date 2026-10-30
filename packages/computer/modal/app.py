@@ -1,7 +1,9 @@
 """Mano computer service: hosted desktops on Modal Sandboxes.
 
-Deploy once with `modal deploy app.py` from this directory; the printed web
-URL is MODAL_COMPUTER_URL for the TypeScript client. Each session is one
+Deploy once with `modal deploy app.py` from this directory, after creating
+the mano-computer secret holding MANO_COMPUTER_TOKEN in the Modal dashboard
+(never on a command line); the printed web URL is MODAL_COMPUTER_URL and the
+token is MODAL_COMPUTER_TOKEN for the TypeScript client. Each session is one
 Sandbox running an Xvfb desktop with Chromium, a VNC live view, and the
 control server answering the REST contract. Browser profiles persist per
 person in the mano-profiles volume. Sandboxes stop when the session is
@@ -15,6 +17,7 @@ START_SH here.
 """
 
 import asyncio
+import os
 import secrets
 import time
 import urllib.request
@@ -243,6 +246,9 @@ service = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi")
 app = modal.App("mano-computer")
 profiles = modal.Volume.from_name("mano-profiles", create_if_missing=True)
 sessions = modal.Dict.from_name("mano-computer-sessions", create_if_missing=True)
+# MANO_COMPUTER_TOKEN: the bearer token every session call must carry. A
+# session opens a person's browser profile, so the service never runs open.
+api_secret = modal.Secret.from_name("mano-computer", required_keys=["MANO_COMPUTER_TOKEN"])
 
 SANDBOX_TIMEOUT = 60 * 60
 
@@ -316,8 +322,16 @@ async def kill_desktop(sandbox_id: str):
 web = FastAPI()
 
 
+def authorized(request: Request) -> bool:
+    token = os.environ.get("MANO_COMPUTER_TOKEN", "")
+    presented = request.headers.get("authorization", "")
+    return bool(token) and secrets.compare_digest(presented.encode(), f"Bearer {token}".encode())
+
+
 @web.post("/sessions")
 async def create_session(request: Request):
+    if not authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
     body = await request.json()
     width = int(body.get("width", 1280))
     height = int(body.get("height", 800))
@@ -329,7 +343,9 @@ async def create_session(request: Request):
 
 
 @web.delete("/sessions/{sid}")
-async def delete_session(sid: str):
+async def delete_session(sid: str, request: Request):
+    if not authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
     sandbox_id = sessions.get(sid)
     if sandbox_id is None:
         return JSONResponse({"error": "unknown session"}, status_code=404)
@@ -338,7 +354,7 @@ async def delete_session(sid: str):
     return JSONResponse({})
 
 
-@app.function(image=service, timeout=300)
+@app.function(image=service, timeout=300, secrets=[api_secret])
 @modal.asgi_app()
 def api():
     return web

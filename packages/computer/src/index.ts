@@ -40,7 +40,8 @@ export function computerFromEnv(env: Record<string, string | undefined>, options
     const baseUrl = env["MODAL_COMPUTER_URL"];
     const profile = env["COMPUTER_PROFILE"] ?? "default";
     if (!baseUrl) throw new Error("COMPUTER_BACKEND=modal needs MODAL_COMPUTER_URL");
-    return new ModalComputer({ baseUrl, profile, ...options });
+    const token = env["MODAL_COMPUTER_TOKEN"];
+    return new ModalComputer({ baseUrl, profile, ...(token ? { token } : {}), ...options });
   }
   const profileDir = env["COMPUTER_PROFILE_DIR"];
   return new PlaywrightComputer({ ...(profileDir ? { profileDir } : {}), ...options });

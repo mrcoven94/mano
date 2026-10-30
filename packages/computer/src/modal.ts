@@ -6,6 +6,8 @@ export interface ModalComputerOptions extends ComputerOptions {
   baseUrl: string;
   /** Person the browser profile belongs to. Profiles live in a Modal volume. */
   profile: string;
+  /** Bearer token the session service requires (MANO_COMPUTER_TOKEN in its Modal secret). */
+  token?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -105,14 +107,18 @@ export class ModalComputer implements Computer {
     if (this.sessionValue) {
       const id = this.sessionValue.id;
       this.sessionValue = null;
-      await this.fetchImpl(`${this.baseUrl}/sessions/${id}`, { method: "DELETE" }).catch(() => undefined);
+      await this.fetchImpl(`${this.baseUrl}/sessions/${id}`, { method: "DELETE", headers: this.serviceHeaders() }).catch(() => undefined);
     }
+  }
+
+  private serviceHeaders(): Record<string, string> {
+    return this.options.token ? { authorization: `Bearer ${this.options.token}` } : {};
   }
 
   private async post(path: string, body: unknown): Promise<unknown> {
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...this.serviceHeaders() },
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`session service ${path} failed with status ${res.status}`);
