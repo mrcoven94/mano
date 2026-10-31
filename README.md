@@ -35,11 +35,11 @@ flowchart LR
 <!-- status:start -->
 | Piece | Status | URL | Last deploy |
 | --- | --- | --- | --- |
-| Site | live | https://withmano.com | none |
-| Sandbox portal | in progress | [Deployments panel](https://github.com/mrcoven94/mano/deployments) | none |
-| Engine | in progress | not deployed yet | none |
-| Channels | live | https://text.withmano.com/health | none |
-| Guardian | in progress | not deployed yet | none |
+| Site | live | https://withmano.com | d03f93b failure 2026-10-30 |
+| Sandbox portal | live | [Deployments panel](https://github.com/mrcoven94/mano/deployments) | 871b1d0 success 2026-10-29 |
+| Engine | live | not deployed yet | 2f97d6b success 2026-10-30 |
+| Channels | live | https://text.withmano.com/health | c4f337e success 2026-10-30 |
+| Guardian | live | not deployed yet | 25c099c success 2026-10-29 |
 | Quality | in progress | not deployed yet | none |
 <!-- status:end -->
 
