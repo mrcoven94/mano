@@ -125,6 +125,8 @@ describe("guardReply model and provider names", () => {
       "The fireworks are on the Fourth, and the office is closed.",
       "Close the pop-up modal and press Renew.",
       "The pop-up modal runs the payment step, so finish it first.",
+      "Read the messages on the modal, then press Next.",
+      "The form was built with the modal open.",
       "The Together Rx Access card can lower what you pay for medicine.",
       "Write the amount in base ten.",
     ]) {
