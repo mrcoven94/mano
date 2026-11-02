@@ -103,9 +103,10 @@ export interface ReplayOutcome {
   withoutModel: string[];
 }
 
-export function replayCaseIds(fixture: ReplayFixture): string[] {
-  return [...Object.keys(fixture.replies), ...NO_MODEL_CASE_IDS];
-}
+// The cases the replay covers, fixed here and not read from the fixture, so
+// a recording deleted from smoke-replay.json fails the replay instead of
+// quietly dropping its case.
+export const REPLAYED_CASE_IDS = ["chat-ca-01", "text-16", "safety-01", "safety-05", "safety-07", "safety-19", "safety-27"];
 
 // Cases that run with no model call. A texted letter photo and the scam
 // letter go to the mail reader, which the live smoke also answers with the
@@ -113,7 +114,21 @@ export function replayCaseIds(fixture: ReplayFixture): string[] {
 // answered by the worker before any model call.
 export const NO_MODEL_CASE_IDS = ["text-17", "letters-16", "text-19"];
 
-export async function runReplay(fixture: ReplayFixture = loadReplayFixture()): Promise<ReplayOutcome> {
+// What the fixture's recordings must cover: exactly REPLAYED_CASE_IDS.
+function coverageGaps(fixture: ReplayFixture): string[] {
+  const recorded = Object.keys(fixture.replies);
+  return [
+    ...REPLAYED_CASE_IDS.filter((id) => !recorded.includes(id)).map((id) => `${id} has no recording in smoke-replay.json`),
+    ...recorded.filter((id) => !REPLAYED_CASE_IDS.includes(id)).map((id) => `smoke-replay.json records ${id}, which is not a replay case`),
+  ];
+}
+
+export async function runReplay(loaded: ReplayFixture = loadReplayFixture()): Promise<ReplayOutcome> {
+  const gaps = coverageGaps(loaded);
+  const fixture: ReplayFixture = {
+    ...loaded,
+    replies: Object.fromEntries(Object.entries(loaded.replies).filter(([id]) => REPLAYED_CASE_IDS.includes(id))),
+  };
   const used = new Set<string>();
   const misses: string[] = [];
   const line = new TextLine({
@@ -126,7 +141,7 @@ export async function runReplay(fixture: ReplayFixture = loadReplayFixture()): P
   const text: LoadedPath = { path: new TextLinePath(line, 0), standin: false, detail: "the text line on recorded replies" };
   const mail: LoadedPath = { path: new ReferencePath(), standin: true, detail: "reference stand-in, as in the live smoke" };
   const pathSet: PathSet = { forCase: (c) => (needsMailReader(c) ? mail : text), textLineModel: line.model };
-  const ids = replayCaseIds(fixture);
+  const ids = [...REPLAYED_CASE_IDS, ...NO_MODEL_CASE_IDS];
   const startedAt = new Date().toISOString();
   const judge = new FakeJudge();
   const bench = await runBench({ onlyCaseIds: new Set(ids), judge, dns: new LocalDns(), pathSet, env: {}, skipCalibration: true });
@@ -136,7 +151,7 @@ export async function runReplay(fixture: ReplayFixture = loadReplayFixture()): P
     paths: bench.paths, judge, dns: "local", env: {},
   }, { results: bench.results, expectedCaseIds: bench.expectedCaseIds, judgeErrors: bench.judgeErrors, answeringModel: line.model });
 
-  const reasons: string[] = [...new Set(misses)];
+  const reasons: string[] = [...gaps, ...new Set(misses)];
   const ran = new Set(bench.results.map((r) => r.caseId));
   for (const id of ids) if (!ran.has(id)) reasons.push(`${id} did not run`);
   // Fails exactly where the live gate does. Quality misses that do not gate
@@ -162,7 +177,7 @@ export async function runReplay(fixture: ReplayFixture = loadReplayFixture()): P
     notes,
     report,
     results: bench.results,
-    replayed: Object.keys(fixture.replies),
+    replayed: REPLAYED_CASE_IDS,
     withoutModel: NO_MODEL_CASE_IDS,
   };
 }

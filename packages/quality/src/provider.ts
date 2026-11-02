@@ -91,3 +91,15 @@ export function unavailableSummary(lane: "smoke" | "nightly", check: Extract<Pro
       : "Run the nightly again by hand once the provider account is fixed.",
   ].join("\n");
 }
+
+// The smoke gate on a 402. The outage stands in only for what needs the
+// model; a strict failure that does not (main's baseline unreadable) still
+// fails the gate, with the outage named next to it.
+export function unavailableGate(
+  check: Extract<ProviderCheck, { state: "unavailable" }>,
+  opts: { strict: boolean; missing: string[] },
+): { status: "provider-unavailable" | "fail"; reasons: string[] } {
+  const reason = unavailableReason(check);
+  if (opts.strict && opts.missing.length > 0) return { status: "fail", reasons: [...opts.missing, reason] };
+  return { status: "provider-unavailable", reasons: [reason] };
+}
