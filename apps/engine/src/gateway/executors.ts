@@ -1,16 +1,23 @@
-import type { ActionRequest, ActionType, CheckOutcome, Executor } from "./types.js";
+import type { ActionRequest, ActionType, CheckOutcome, DocumentFiling, Executor, StoredDocumentFacts } from "./types.js";
 import { DefiniteFailureError, TimeoutError } from "./types.js";
 import { boundFetch } from "../fetch.js";
 import { base64ToBytes, sha256Hex } from "../hash.js";
 
 // In-memory stand-in: records calls, invents external IDs, and can fail
 // once with a timeout for reconcile tests. Receipts are always labeled
-// simulated so a drill never reads as real filing.
+// simulated so a drill never reads as real filing. It judges documents by
+// the portal's limits, so Mano picks the same proof a sandbox deploy would.
 export class InMemoryExecutor implements Executor {
   readonly simulated = true;
   calls: ActionRequest[] = [];
   completed = new Map<string, { externalId: string }>();
   failNextWithTimeout = false;
+
+  constructor(private limits: PortalLimits = DEFAULT_PORTAL_LIMITS) {}
+
+  documentFiling(doc: StoredDocumentFacts): DocumentFiling {
+    return documentFiling(doc, this.limits);
+  }
 
   async execute(req: ActionRequest): Promise<{ externalId: string }> {
     if (this.completed.has(req.idempotencyKey)) {
@@ -83,6 +90,15 @@ const NOT_FILED: Record<Exclude<ActionType, "submit">, string> = {
   share: "share a case",
 };
 
+// Whether the portal takes a document of this media type and size: the
+// check portalFiling applies to the bytes, and the document list applies
+// to what Engine recorded when it stored them.
+export function documentFiling(doc: StoredDocumentFacts, limits: PortalLimits): DocumentFiling {
+  if (!PORTAL_DOCUMENT_TYPES.some((k) => k.type === doc.mediaType)) return "wrong_type";
+  if (doc.sizeBytes === null) return "size_unknown";
+  return doc.sizeBytes > limits.maxDocumentBytes ? "too_large" : "fileable";
+}
+
 type PortalFiling =
   | { ok: true; household: Record<HouseholdField, string>; file: { name: string; type: string; data: string } }
   | { ok: false; problem: string };
@@ -113,10 +129,11 @@ function portalFiling(req: ActionRequest, limits: PortalLimits): PortalFiling {
     return { ok: false, problem: "The sandbox agency portal needs at least one document attached, such as a photo of the letter." };
   }
   const bytes = base64ToBytes(req.document.bytesB64);
-  if (bytes.length > limits.maxDocumentBytes) {
+  const kind = PORTAL_DOCUMENT_TYPES.find((k) => bytes.length >= k.magic.length && k.magic.every((b, i) => bytes[i] === b));
+  const filing = documentFiling({ mediaType: kind?.type ?? null, sizeBytes: bytes.length }, limits);
+  if (filing === "too_large") {
     return { ok: false, problem: `The document is larger than the ${describeBytes(limits.maxDocumentBytes)} the sandbox agency portal accepts.` };
   }
-  const kind = PORTAL_DOCUMENT_TYPES.find((k) => bytes.length >= k.magic.length && k.magic.every((b, i) => bytes[i] === b));
   if (!kind) return { ok: false, problem: "The sandbox agency portal takes PDF, PNG or JPG documents only." };
   return { ok: true, household, file: { name: `document-1.${kind.ext}`, type: kind.type, data: req.document.bytesB64 } };
 }
@@ -147,6 +164,10 @@ export class SandboxExecutor implements Executor {
   refuse(req: ActionRequest): string | null {
     const filing = portalFiling(req, this.limits);
     return filing.ok ? null : filing.problem;
+  }
+
+  documentFiling(doc: StoredDocumentFacts): DocumentFiling {
+    return documentFiling(doc, this.limits);
   }
 
   async execute(req: ActionRequest): Promise<{ externalId: string }> {
@@ -262,8 +283,12 @@ export function createExecutor(env: {
 }): Executor {
   if (testFactory) return testFactory(env);
   const mode = env.EXECUTOR_MODE;
-  if (mode === "simulated") return new InMemoryExecutor();
-  if (mode === undefined && env.MANO_ENV === "development") return new InMemoryExecutor();
+  const limits: PortalLimits = {
+    maxFieldLength: portalLimit("SANDBOX_MAX_FIELD_LENGTH", env.SANDBOX_MAX_FIELD_LENGTH, DEFAULT_PORTAL_LIMITS.maxFieldLength),
+    maxDocumentBytes: portalLimit("SANDBOX_MAX_UPLOAD_BYTES", env.SANDBOX_MAX_UPLOAD_BYTES, DEFAULT_PORTAL_LIMITS.maxDocumentBytes),
+  };
+  if (mode === "simulated") return new InMemoryExecutor(limits);
+  if (mode === undefined && env.MANO_ENV === "development") return new InMemoryExecutor(limits);
   if (mode === undefined) {
     throw new Error("Set EXECUTOR_MODE=simulated on purpose, or MANO_ENV=development for local stand-ins.");
   }
@@ -274,10 +299,6 @@ export function createExecutor(env: {
     if (!env.SANDBOX_PORTAL_TOKEN) {
       throw new Error("EXECUTOR_MODE is sandbox but SANDBOX_PORTAL_TOKEN is not set.");
     }
-    const limits: PortalLimits = {
-      maxFieldLength: portalLimit("SANDBOX_MAX_FIELD_LENGTH", env.SANDBOX_MAX_FIELD_LENGTH, DEFAULT_PORTAL_LIMITS.maxFieldLength),
-      maxDocumentBytes: portalLimit("SANDBOX_MAX_UPLOAD_BYTES", env.SANDBOX_MAX_UPLOAD_BYTES, DEFAULT_PORTAL_LIMITS.maxDocumentBytes),
-    };
     return new SandboxExecutor(env.SANDBOX_BASE_URL.replace(/\/$/, ""), undefined, undefined, env.SANDBOX_PORTAL_TOKEN, limits);
   }
   throw new Error(`Unknown EXECUTOR_MODE: ${mode}.`);

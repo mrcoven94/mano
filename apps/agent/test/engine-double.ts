@@ -2,12 +2,13 @@
 // its service authentication (agent token plus handle grant), its action
 // gateway over its SQL approval store, its agent-state SQL (generation
 // fence, reminders, turn ledger, approval pointer, conversation delete),
-// its deadlines with their nudges, its profile store and its fill
-// replays, all on one node:sqlite database per person, the way each
-// PersonAgent keeps them in its own SQLite. Only the Durable Object shell
-// and its alarm are replaced: deliverDue() claims and hands off due
-// reminders the way the alarm does, and replay images and links live in
-// memory where Engine keeps them in R2.
+// its deadlines with their nudges, its document list, its profile store
+// and its fill replays, all on one node:sqlite database per person, the
+// way each PersonAgent keeps them in its own SQLite. Only the Durable
+// Object shell and its alarm are replaced: deliverDue() claims and hands
+// off due reminders the way the alarm does, and replay images and links
+// live in memory where Engine keeps them in R2.
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 import { mintHandleGrant } from "@mano/protocol";
@@ -63,8 +64,17 @@ import {
   type ReplayLinkEntry,
   type ReplayStorage,
 } from "../../engine/src/fill-replay.js";
+import {
+  ensureDocumentTables,
+  listDocuments,
+  markDocument,
+  mediaTypeOf,
+  parseDocumentMark,
+  recordDocument,
+} from "../../engine/src/documents.js";
 import { ActionGateway } from "../../engine/src/gateway/gateway.js";
 import { InMemoryExecutor } from "../../engine/src/gateway/executors.js";
+import type { Executor } from "../../engine/src/gateway/types.js";
 import { MapDocumentStore } from "../../engine/src/gateway/gateway.js";
 import { CURRENT_GENERATION, SqlApprovalStore, ensureGatewayTables } from "../../engine/src/gateway/sql-store.js";
 import { sha256Hex } from "../../engine/src/hash.js";
@@ -120,6 +130,7 @@ function sqlite() {
   ensureAgentStateTables(sql);
   ensureDeadlineTables(sql);
   ensureFillReplayTables(sql);
+  ensureDocumentTables(sql);
   sql.exec(
     "CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 0)",
   );
@@ -145,6 +156,9 @@ export interface DeadlineCall {
 
 export class EngineDouble {
   executor = new InMemoryExecutor();
+  // What gateways file through in place of executor, such as the real
+  // sandbox portal. Set it before the person's first request.
+  filer: Executor | null = null;
   // The person's stored documents: the gateway reads them as Engine reads
   // R2, a profile fact with source document must name one of them, and the
   // agent reads a texted photo back (GET /documents/:docId).
@@ -172,8 +186,21 @@ export class EngineDouble {
   // that fails or has no replay route. Null: the routes answer.
   replayFailure: number | null = null;
 
-  // A texted photo Channels stored for this person.
+  // A texted photo Channels stored for this person (POST /documents):
+  // Engine records it under the current generation, received now.
   putDocument(personId: string, documentId: string, bytes: Uint8Array): void {
+    const { sql } = this.person(personId);
+    const recorded = recordDocument(sql, {
+      id: documentId,
+      name: documentId,
+      hash: createHash("sha256").update(bytes).digest("hex"),
+      r2Key: `persons/${personId}/docs/g${currentGeneration(sql)}/${documentId}`,
+      mediaType: mediaTypeOf(bytes),
+      sizeBytes: bytes.length,
+      receivedAt: new Date(this.now()).toISOString(),
+      generation: currentGeneration(sql),
+    });
+    if (!recorded) throw new Error(`Engine refused document ${documentId}.`);
     this.documentOwners.set(documentId, personId);
     this.documents.set(documentId, bytes);
   }
@@ -194,7 +221,7 @@ export class EngineDouble {
       p = {
         sql,
         store,
-        gateway: new ActionGateway(store, this.executor, { linkCheck: async () => ({ allowed: true }), documents: this.documents }),
+        gateway: new ActionGateway(store, this.filer ?? this.executor, { linkCheck: async () => ({ allowed: true }), documents: this.documents }),
         profile: new ProfileStore({
           sql,
           transaction: (fn) => sql.transaction(fn),
@@ -448,7 +475,17 @@ export class EngineDouble {
         const input = parsePointerInput(body);
         return Response.json({ cleared: clearPendingPointer(sql, input.approvalId, input.generation) });
       }
+      if (rest === "/documents" && method === "GET") {
+        return Response.json({ documents: listDocuments(sql, DEFAULT_TIME_ZONE, this.filer ?? this.executor) });
+      }
       const documentGet = rest.match(/^\/documents\/([^/]+)$/);
+      if (documentGet && method === "PATCH") {
+        const mark = parseDocumentMark(body);
+        const out = markDocument(sql, decodeURIComponent(documentGet[1]), mark);
+        if (out === "stale") return Response.json(STALE, { status: 409 });
+        if (out === "missing") return Response.json({ error: "Document not found." }, { status: 404 });
+        return Response.json({ id: decodeURIComponent(documentGet[1]), kind: mark.kind });
+      }
       if (documentGet && method === "GET") {
         const id = decodeURIComponent(documentGet[1]);
         const bytes = this.documentOwners.get(id) === personId ? this.documentBytes.get(id) : undefined;

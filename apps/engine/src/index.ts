@@ -25,7 +25,8 @@
 // just texted (see packages/protocol handle-grant.ts). The grant names one
 // person, handle-<hash>, and opens only the routes in auth.ts
 // SERVICE_ROUTES: for the agent, memory, profile, action, approvals, its
-// own state, deadlines and reading a texted photo (GET /documents/:docId).
+// own state, deadlines, the person's documents (src/documents.ts) and
+// reading a texted photo (GET /documents/:docId).
 //
 // HTTP surface:
 //
@@ -80,6 +81,8 @@
 // MANO_ENGINE_SEND_SECRET (packages/protocol engine-send.ts).
 //   POST /api/persons/:id/documents            { name, contentB64, id?, generation? } (Channels with a grant:
 //                                              a texted photo under its own ID, generation required)
+//   GET  /api/persons/:id/documents            { documents } this conversation's, newest first (src/documents.ts)
+//   PATCH /api/persons/:id/documents/:docId    { kind, generation } what Mail found it to be (agent)
 //   GET  /api/persons/:id/documents/:docId     decrypted bytes, owner only
 //   POST /api/persons/:id/ws-ticket            one 60-second single-use ticket for /ws
 //   GET  /api/persons/:id/ws?ticket=           chat socket (closes when the session expires)
@@ -154,6 +157,7 @@ import {
   renderReplayPage,
   type ReplayLinkEntry,
 } from "./fill-replay.js";
+import { parseDocumentMark } from "./documents.js";
 
 export { PersonAgent, OrgAgent };
 export { ActionGateway, MemoryApprovalStore, InMemoryExecutor } from "./gateway/index.js";
@@ -651,7 +655,25 @@ export default {
           return Response.json({ error: message }, { status });
         }
       }
+      if (rest === "/documents" && request.method === "GET") {
+        return Response.json({ documents: await agent.listDocuments(subject) });
+      }
       const documentMatch = rest.match(/^\/documents\/([^/]+)$/);
+      if (documentMatch && request.method === "PATCH") {
+        const read = await readCappedJson(request, MAX_ACTION_BODY);
+        if (!read.ok) return read.response;
+        let mark: ReturnType<typeof parseDocumentMark>;
+        try {
+          mark = parseDocumentMark(read.value);
+        } catch (err) {
+          return Response.json({ error: (err as Error).message }, { status: 400 });
+        }
+        const id = decodeURIComponent(documentMatch[1]);
+        const out = await agent.markDocument(subject, id, mark);
+        if (out === "stale") return STALE();
+        if (out === "missing") return Response.json({ error: "Document not found." }, { status: 404 });
+        return Response.json({ id, kind: mark.kind });
+      }
       if (documentMatch && request.method === "GET") {
         const docId = decodeURIComponent(documentMatch[1]);
         try {

@@ -103,8 +103,9 @@ export function proposalOrderFor(sql: SqlExec, turnId: string): { receivedAt: st
 }
 
 export function ensureAgentStateTables(sql: SqlExec): void {
-  // The person's files (texted photos among them), also created by
-  // PersonAgent; here so a conversation delete can remove their rows.
+  // The person's files (texted photos among them), also created with
+  // their list columns in documents.ts; here so a conversation delete can
+  // remove their rows.
   sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS reminders(
     id TEXT PRIMARY KEY, text TEXT NOT NULL, due_at_ms INTEGER NOT NULL, generation INTEGER NOT NULL,
