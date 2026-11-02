@@ -15,6 +15,7 @@
     "@mano/computer": "workspace:*",
     "@mano/guardian": "workspace:*",
     "@mano/persona": "workspace:*",
+    "@mano/programs": "workspace:*",
     "@mano/protocol": "workspace:*",
     "ai": "7.0.137",
     "eve": "0.79.1",

@@ -98,6 +98,7 @@ META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
 | `packages/guardian` | The checker that reviews every outside action before a person approves it | live |
 | `packages/computer` | The desktop Mano drives: screenshots in, mouse and keyboard out, on Modal or local Playwright | landing during the hackathon |
 | `packages/quality` | The nightly answer-quality bench | landing during the hackathon |
+| `packages/programs` | Sourced facts for SNAP, Medicaid and LIHEAP in eight states, which the agent looks up before stating any | landing during the hackathon |
 | `apps/app` | The resident app in React Native (iOS, Android, web) | landing during the hackathon |
 | `eval` | The held-out test: scenarios, baselines and results | landing during the hackathon |
 | `docs` | Decisions and design notes | live |
@@ -109,6 +110,10 @@ Guardian runs on one GPU on Modal and scales to zero when idle. A cold start tak
 ### Computer
 
 `packages/computer` is the desktop Mano drives: a loop that shows the model a screenshot and executes the mouse and keyboard actions it returns. The hosted backend is a Modal Sandbox running a Linux desktop with Chromium (see `packages/computer/modal/`); the local stand-in drives Chromium through Playwright. The desktop fills forms and never files them: filing goes through Engine's action gateway after the person's yes. A pending safety check stops the run and goes back to the caller, and a login prompt ends it, because there is no live view and the agent never sees passwords. Each desktop opens only the portal origin, mounts only its own person's profile, and answers only the caller holding its per-session secret. Details in the header comment of its `src/index.ts` and the docstring of `modal/app.py`; `modal run modal/prove.py` checks those rules live on throwaway Modal resources.
+
+### Programs
+
+`packages/programs` is the only place the agent gets program facts: the state's own name for SNAP, Medicaid and LIHEAP in California, Texas, New York, Florida, Illinois, Washington, Arizona and Ohio, what each covers, income limits by household size with their year, the renewal cycle, how to apply and the official phone and site. Every fact carries the official page it came from, the day it was checked and the text that shows it; anything not confirmed is listed in the entry's gaps. `pnpm --filter @mano/programs check` fails on a missing source or date or a site that is not official; `pnpm --filter @mano/programs verify-sources` fetches every source again and looks for each quote.
 
 ## Held-out test
 
