@@ -43,6 +43,7 @@ const NUMERIC_DATE_RE = /\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g;
 const PUBLIC_PHONES = new Set(["988", "911", "211", "8002221222", "8007997233", "8006564673"]);
 const KNOWN_PROGRAMS = ["SNAP", "Medicaid", "LIHEAP", "WIC", "TANF", "SSI"];
 const MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+const MONTH_NAMES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 
 export function containsPromise(text: string): boolean {
   return PROMISE_RES.some((re) => re.test(text));
@@ -310,21 +311,54 @@ export function saysPhrase(text: string, phrase: string): boolean {
   return false;
 }
 
+// A calendar date in any common form: "November 15, 2026", "Nov. 15",
+// "11/15/26", "2026-11-15", "15 de noviembre de 2026". A date written
+// without a year matches the same day in any year.
+interface CalendarDate {
+  raw: string;
+  month: number;
+  day: number;
+  year: number | null;
+}
+
+const SHORT_MONTH_RE = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+const NAMED_DAY_RE = new RegExp(`\\b(${SHORT_MONTH_RE})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4})\\b)?`, "gi");
+const ES_DAY_RE = new RegExp(`\\b(\\d{1,2})\\s+de\\s+(${MONTH_NAMES_ES.join("|")})(?:\\s+de(?:l)?\\s+(\\d{4}))?\\b`, "gi");
+const ISO_DAY_RE = /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g;
+const SLASH_DAY_RE = /\b(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})\b/g;
+
+function calendarDates(text: string): CalendarDate[] {
+  const found: CalendarDate[] = [];
+  const add = (raw: string, month: number, day: number, year: number | null) => {
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) found.push({ raw, month, day, year });
+  };
+  for (const m of text.matchAll(NAMED_DAY_RE)) {
+    add(m[0], MONTH_NAMES.findIndex((n) => n.startsWith(m[1]!.toLowerCase().slice(0, 3))) + 1, Number(m[2]), m[3] ? Number(m[3]) : null);
+  }
+  for (const m of text.matchAll(ES_DAY_RE)) add(m[0], MONTH_NAMES_ES.indexOf(m[2]!.toLowerCase()) + 1, Number(m[1]), m[3] ? Number(m[3]) : null);
+  for (const m of text.matchAll(ISO_DAY_RE)) add(m[0], Number(m[2]), Number(m[3]), Number(m[1]));
+  for (const m of text.matchAll(SLASH_DAY_RE)) add(m[0], Number(m[1]), Number(m[2]), m[3]!.length === 2 ? 2000 + Number(m[3]) : Number(m[3]));
+  return found;
+}
+
 // The deadline the reply gives a letter: the letter's own date and no other,
-// or, when the letter gives two dates that disagree, both or neither, never
-// one picked between them.
+// or, when the letter gives two dates that disagree, both equally or neither,
+// never one singled out.
 function deadlineCheck(deadline: LetterDeadline, text: string): CheckResult {
-  const letter = (deadline.kind === "one" ? [deadline.date] : deadline.dates).map(normalizeDate);
-  const said = new Map(extractDates(text).map((d) => [normalizeNumericDate(d), d]));
-  const other = [...said].filter(([d]) => !letter.includes(d)).map(([, raw]) => raw);
-  const named = letter.filter((d) => said.has(d)).map((d) => said.get(d)!);
+  const dates = deadline.kind === "one" ? [deadline.date] : deadline.dates;
+  const letter = dates.map((d) => calendarDates(d)[0]!);
+  const said = calendarDates(text);
+  const which = (d: CalendarDate) => letter.findIndex((l) => l.month === d.month && l.day === d.day && (d.year === null || d.year === l.year));
+  const other = said.filter((d) => which(d) === -1).map((d) => d.raw);
   if (other.length > 0) return { id: "deadline", pass: false, detail: `gives ${other.join(", ")}, which the letter does not` };
+  const times = letter.map((_, i) => said.filter((d) => which(d) === i).length);
   if (deadline.kind === "one") {
-    const pass = named.length === 1;
+    const pass = times[0]! > 0;
     return { id: "deadline", pass, detail: pass ? `gives ${deadline.date}` : `does not give ${deadline.date}` };
   }
-  const pass = named.length === 0 || named.length === letter.length;
-  return { id: "deadline", pass, detail: pass ? (named.length === 0 ? "names neither date" : "names both dates") : `picks ${named.join(", ")} of two dates` };
+  const pass = times.every((t) => t === times[0]);
+  const most = dates[times.indexOf(Math.max(...times))]!;
+  return { id: "deadline", pass, detail: pass ? (times[0] === 0 ? "names neither date" : "names both dates") : `singles out ${most} of two dates` };
 }
 
 function includesHaystack(haystack: string, needle: string): boolean {
