@@ -328,18 +328,26 @@ export function getTurn(sql: SqlExec, turnId: string): Turn | null {
 
 // The first receive time is kept forever: a retried turn gets back the
 // timing it was first seen with, whatever the retry sends.
+// previousReceivedAt is the latest other turn this conversation recorded,
+// so the agent can tell a conversation starting after a quiet stretch
+// from the same ledger every instance reads.
 export function putTurnIfAbsent(
   sql: SqlExec,
   turnId: string,
   receivedAt: string,
   generation: number,
-): { turn: Turn; created: boolean } | { stale: true } {
+): { turn: Turn; created: boolean; previousReceivedAt: string | null } | { stale: true } {
   const inserted = sql.exec(
     `INSERT OR IGNORE INTO turns(turn_id, first_received_at, status, generation) SELECT ?, ?, 'open', ? WHERE ${CURRENT_GENERATION} = ?`,
     turnId, receivedAt, generation, generation,
   ).rowsWritten;
   if (inserted === 0 && currentGeneration(sql) !== generation) return { stale: true };
-  return { turn: getTurn(sql, turnId)!, created: inserted > 0 };
+  const turn = getTurn(sql, turnId)!;
+  const previous = sql.exec(
+    "SELECT MAX(first_received_at) AS at FROM turns WHERE turn_id != ? AND first_received_at <= ?",
+    turnId, turn.firstReceivedAt,
+  ).toArray()[0] as { at: string | null } | undefined;
+  return { turn, created: inserted > 0, previousReceivedAt: previous?.at ?? null };
 }
 
 export function completeTurn(sql: SqlExec, turnId: string, completedAt: string, generation: number): Turn | null | { stale: true } {

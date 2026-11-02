@@ -72,7 +72,7 @@ function engineClient() {
 }
 
 function deps(overrides: Partial<TurnDeps> = {}): TurnDeps {
-  return { secret: SECRET, engine: engineClient(), runAgent: fakeAgent, lastTurnAt: new Map(), ...overrides };
+  return { secret: SECRET, engine: engineClient(), runAgent: fakeAgent, ...overrides };
 }
 
 // What the request-status instruction tells the model at the next turn.
@@ -660,16 +660,27 @@ describe("turn replay and recovery", () => {
 
 describe("Guardian warm-up", () => {
   it("warms Guardian when a conversation starts, not on every turn", async () => {
-    let now = Date.now();
+    let now = Date.now() - 30 * 60_000;
     const warms: number[] = [];
-    const d = deps({ now: () => now, warmGuardian: async () => warms.push(now) });
-    await send(turn("turn_warm000001", "hello"), d);
+    const d = deps({ warmGuardian: async () => warms.push(now) });
+    await send(turn("turn_warm000001", "hello", HANDLE, 0, now), d);
     now += 60_000;
-    await send(turn("turn_warm000002", "and another thing"), d);
+    await send(turn("turn_warm000002", "and another thing", HANDLE, 0, now), d);
+    expect(warms).toHaveLength(1);
+    // A retry of a turn already recorded never warms again.
+    await send(turn("turn_warm000002", "and another thing", HANDLE, 0, now), d);
     expect(warms).toHaveLength(1);
     now += 20 * 60_000;
-    await send(turn("turn_warm000003", "back again"), d);
+    await send(turn("turn_warm000003", "back again", HANDLE, 0, now), d);
     expect(warms).toHaveLength(2);
+  });
+
+  it("reads the gap from Engine, so a second instance does not warm mid-conversation", async () => {
+    const at = Date.now() - 60_000;
+    const warms: number[] = [];
+    await send(turn("turn_warm000005", "hello", HANDLE, 0, at), deps({ warmGuardian: async () => warms.push(1) }));
+    await send(turn("turn_warm000006", "more", HANDLE, 0, at + 30_000), deps({ warmGuardian: async () => warms.push(2) }));
+    expect(warms).toEqual([1]);
   });
 
   it("a failed warm-up never affects the turn", async () => {
