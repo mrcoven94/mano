@@ -1,4 +1,5 @@
 /// <reference types="node" />
+import { MapDocumentStore } from "../src/gateway/index.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
@@ -294,6 +295,42 @@ describe("a yes that finds the safety check unavailable", () => {
     expect(again.status).not.toBe("completed");
     expect(again.retryable).toBeUndefined();
     expect(executor.calls).toHaveLength(1);
+  });
+
+  it("a late unavailable check never says retryable after another yes filed it", async () => {
+    let calls = 0;
+    const checker = {
+      async check() {
+        calls += 1;
+        if (calls === 2) {
+          await new Promise((r) => setTimeout(r, 50));
+          return { verdict: "block", problems: ["The safety check is taking longer than usual."], unavailable: true };
+        }
+        return { verdict: "pass", problems: [] };
+      },
+    } as unknown as GatewayOptions["checker"];
+    const { gateway, executor, approvalId } = await drafted({ checker });
+    const [late, first] = await Promise.all([
+      gateway.approveAndExecute(approvalId, "maria"),
+      gateway.approveAndExecute(approvalId, "maria"),
+    ]);
+    expect(first.status).toBe("completed");
+    expect(late.status).toBe("blocked");
+    expect(late.retryable).toBeUndefined();
+    expect(executor.calls).toHaveLength(1);
+  });
+
+  it("a changed document is stale at the yes even when Guardian cannot answer", async () => {
+    const documents = new MapDocumentStore(new Map<string, Uint8Array | string>([["letter", "%PDF-1.4 renewal v1"]]));
+    const env = setup(GUARDIAN_ENV(), { documents }, 300);
+    const drafted1 = await env.gateway.requestAction(renewal({ documentId: "letter" }));
+    expect(drafted1.status).toBe("needs_approval");
+    documents.set("letter", "%PDF-1.4 renewal v2, changed");
+    mode = "hang";
+    const yes = await env.gateway.approveAndExecute(drafted1.approval!.id, "maria");
+    expect(yes.status).toBe("stale");
+    expect(yes.retryable).toBeUndefined();
+    expect(env.executor.calls).toHaveLength(0);
   });
 
   it("marks a Guardian error or an unreachable Guardian at the yes as retryable", async () => {

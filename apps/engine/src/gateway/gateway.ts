@@ -744,17 +744,26 @@ export class ActionGateway {
     const docRead = await this.readDocumentBytes(stored.documentId);
     if (!docRead.ok) return docRead.result;
     const frozen = await freezeActionRequest(stored, docRead.bytes);
-    const check = await this.runChecker(stored, frozen.documentHash);
-    if (!check.ok) {
-      // Nothing has run for a pending approval, so a check that could not
-      // answer leaves it waiting for the same yes again.
-      return { status: "blocked", reason: check.reason, ...(check.unavailable ? { retryable: true as const } : {}) };
-    }
+    // A changed document makes the approval stale whatever the safety
+    // check says, so it is decided before the check.
     if (frozen.requestHash !== approval.requestHash) {
       this.store.markApprovalStale(approvalId);
       this.store.audit({ event: "gateway.stale_block", approvalHash: hashes.approval });
       const fresh = this.store.getApproval(approvalId);
       return { status: "stale", approval: fresh ?? approval, reason: "Document changed after approval." };
+    }
+    const check = await this.runChecker(stored, frozen.documentHash);
+    if (!check.ok) {
+      if (!check.unavailable) return { status: "blocked", reason: check.reason };
+      // A check that could not answer leaves the approval waiting for the
+      // same yes again, but only if it still is: another yes may have filed
+      // it, or it may have expired, while the check was out.
+      const latest = this.store.getApproval(approvalId);
+      const attempted = this.store.getAttempt(stored.idempotencyKey) !== null;
+      if (attempted) return { status: "blocked", reason: approvalGoneReason("approved") };
+      if (latest?.status !== "pending") return { status: "blocked", reason: approvalGoneReason(latest?.status ?? "revoked") };
+      if (Date.parse(latest.expiresAt) < Date.now()) return { status: "blocked", reason: approvalGoneReason("expired") };
+      return { status: "blocked", reason: check.reason, retryable: true };
     }
     if (check.problems.length > 0) {
       // Field-only: the status column is untouched, so a fix verdict that
