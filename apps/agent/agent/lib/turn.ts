@@ -20,6 +20,7 @@ import { createModelClient, type ModelClient } from "@mano/mail";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
+import { profileContext } from "./profile.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
 import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
@@ -368,6 +369,9 @@ async function runTurn(
     context.push(LETTER_RULES);
     message = `${message}\n\n${letterBlock(letter)}`;
   }
+  // The profile as data, never instructions (lib/profile.ts).
+  const profile = await profileContext(engine);
+  if (profile) context.push(profile);
   // Where earlier requests stand (instructions/requests.ts) reaches the
   // model as a system instruction, never as part of the person's message.
   let settled: SettleResult;

@@ -1,19 +1,28 @@
 // @mano/agent: Mano's brain. One Eve agent reads each text, remembers
 // the person, proposes actions and keeps reminders. Channels calls POST
 // /channels/mano/turn and gets the reply text back. Engine is the system
-// of record: memory and proposed actions live there, and only a texted
-// YES to Engine's frozen approval sends anything. Muse runs through the
-// Meta Model API directly, always on the Standard model ID with
-// store:false.
+// of record: the person's profile, memory and proposed actions live
+// there, and only a texted YES to Engine's frozen approval sends anything.
+// Muse runs through the Meta Model API directly, always on the Standard
+// model ID with store:false.
 //
 // A texted photo is read inside the turn (lib/letters.ts, @mano/mail):
 // Channels stores it in Engine, the agent reads it back, answers what the
 // letter is, its deadline and what to send, and holds a published
 // deadline in Engine.
 //
-// Engine also holds the agent's own state for each person (reminders,
-// which its alarm delivers through Channels, the turn ledger and the
-// approval pointer), so the agent keeps no store of its own.
+// fill_form fills a fresh draft of a form on the person's computer
+// (packages/computer) from their Engine profile, reads the draft back
+// from the sandbox portal, and holds exactly what the portal saved for
+// their YES. It needs MANO_PORTAL_URL, SANDBOX_PORTAL_DRAFT_TOKEN and
+// MODAL_COMPUTER_URL (see .env.example) plus Engine's GET /profile, and
+// says it is unavailable without them; the model then prepares the
+// renewal with start_form_draft from the person's answers.
+//
+// Engine also holds the agent's own state for each person (reminders
+// and tracked deadlines, whose texts its alarm delivers through Channels,
+// the turn ledger and the approval pointer), so the agent keeps no store
+// of its own.
 //
 // Run: pnpm --filter @mano/agent dev, with Engine running (locally,
 // pnpm --filter @mano/engine dev). Without META_MODEL_API_KEY a stand-in

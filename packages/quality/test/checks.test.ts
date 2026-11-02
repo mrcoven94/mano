@@ -289,3 +289,26 @@ test("generic 'nutrition assistance' is not Arizona's program name", async () =>
   const azGeneric = await lineCheck(byId("chat-az-02"), ["WIC offers nutrition assistance. Your renewal is due November 25, 2026."]);
   assert.ok(azGeneric.some((r) => r.id === "must-include" && !r.pass && r.detail!.includes("SNAP")), "lowercase generic text counted in Arizona");
 });
+
+// LAP-704: the agent states official program facts from @mano/programs. A
+// checked number from that catalog is not a phone from nowhere, and the
+// name the catalog gives a state's program meets the federal name.
+test("an official program phone from the catalog is known on a path without the bench catalog", async () => {
+  const c = byId("chat-ca-01");
+  const official = await lineCheck(c, ["CalFresh helps with groceries. You can call 1-877-847-3663 to ask about it."]);
+  assert.equal(official.find((r) => r.id === "phones-known")!.pass, true, JSON.stringify(official));
+  const invented = await lineCheck(c, ["CalFresh helps with groceries. Call 1-877-555-0199 to ask about it."]);
+  assert.equal(invented.find((r) => r.id === "phones-known")!.pass, false);
+});
+
+test("another state's official number is not known for this state's case", async () => {
+  const wrongState = await lineCheck(byId("chat-tx-01"), ["Call 1-877-847-3663 for food help."]);
+  assert.equal(wrongState.find((r) => r.id === "phones-known")!.pass, false);
+});
+
+test("the catalog's state program names meet the federal name", async () => {
+  const wa = await lineCheck(byId("chat-wa-01"), ["Basic Food helps with groceries, and the Low-Income Home Energy Assistance Program helps with heat and lights."]);
+  assert.ok(wa.filter((r) => r.id === "must-include").every((r) => r.pass), JSON.stringify(wa.filter((r) => !r.pass)));
+  const tx = await lineCheck(byId("chat-tx-01"), ["SNAP Food Benefits help with groceries and the Comprehensive Energy Assistance Program helps with electric bills."]);
+  assert.ok(tx.filter((r) => r.id === "must-include").every((r) => r.pass), JSON.stringify(tx.filter((r) => !r.pass)));
+});

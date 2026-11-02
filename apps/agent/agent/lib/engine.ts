@@ -38,6 +38,69 @@ export interface MemoryRow {
   content: string;
 }
 
+// The person's profile, as Engine's GET /profile returns it. Every leaf
+// says where it came from and when it changed.
+export type ProfileSource = "person" | "document" | "agent";
+export type Frequency = "weekly" | "biweekly" | "monthly" | "yearly";
+
+export interface Leaf<T = string> {
+  value: T;
+  source: ProfileSource;
+  documentId?: string;
+  updatedAt: string;
+}
+
+export interface Profile {
+  person: {
+    fullName?: Leaf;
+    dateOfBirth?: Leaf;
+    phone?: Leaf;
+    email?: Leaf;
+    address: { line1?: Leaf; line2?: Leaf; city?: Leaf; state?: Leaf; zip?: Leaf };
+    county?: Leaf;
+    language?: Leaf;
+    householdConfirmed?: Leaf<boolean>;
+  };
+  household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];
+  income: { id: string; memberId?: Leaf; source?: Leaf; amount?: Leaf<number>; frequency?: Leaf<Frequency> }[];
+  programs: { id: string; program?: Leaf; state?: Leaf; caseNumber?: Leaf; status?: Leaf }[];
+}
+
+// A value from a lower-trust source that differs from what is on file,
+// held until the person confirms it.
+export interface Suggestion {
+  path: string;
+  value: string | number | boolean;
+  source: ProfileSource;
+  documentId?: string;
+  suggestedAt: string;
+}
+
+export interface ProfileView {
+  profile: Profile;
+  suggestions: Suggestion[];
+}
+
+export interface ProfilePatchResult extends ProfileView {
+  changed: string[];
+  unchanged: string[];
+  cleared: string[];
+  suggested: string[];
+  replayed: boolean;
+}
+
+// A refused profile write: the fields did not fit (400), or the key was
+// used for other fields or the conversation was deleted (409).
+export class ProfileRefused extends Error {
+  constructor(
+    readonly status: number,
+    readonly reason: string,
+  ) {
+    super(reason);
+    this.name = "ProfileRefused";
+  }
+}
+
 export interface EngineApproval {
   id: string;
   status: string;
@@ -59,7 +122,7 @@ export interface EngineApproval {
 
 // Engine's per-person agent state (reminders, turn ledger, approval
 // pointer), shapes as Engine's agent-state routes return them.
-export type ReminderStatus = "scheduled" | "sending" | "sent" | "dropped" | "failed" | "cancelled";
+export type ReminderStatus = "scheduled" | "sending" | "sent" | "dropped" | "failed" | "cancelled" | "withdrawn";
 
 export interface EngineReminder {
   id: string;
@@ -68,6 +131,31 @@ export interface EngineReminder {
   generation: number;
   status: ReminderStatus;
   attempts: number;
+}
+
+// The kinds of deadline Engine names in a nudge. With no kind, a nudge
+// names no action.
+export const DEADLINE_KINDS = ["renewal", "recertification", "interview", "hearing", "appeal", "payment", "documents"] as const;
+export type DeadlineKind = (typeof DEADLINE_KINDS)[number];
+
+// A deadline Engine tracks, as its /deadlines routes return it.
+export interface EngineDeadline {
+  id: string;
+  title: string;
+  dueDate: string;
+  program: string | null;
+  kind: DeadlineKind | null;
+  status: "open" | "done" | "cancelled";
+  timeZone: string;
+  previousDueDate: string | null;
+  nudges: { reminderId: string; at: string; daysBefore: number; status: ReminderStatus | "claimed"; text: string }[];
+}
+
+export interface EngineDeadlineResult {
+  status: "created" | "existing" | "moved" | "updated" | "closed" | "done" | "cancelled";
+  deadline: EngineDeadline;
+  moved?: { from: string; to: string };
+  nudgesInFlight?: number;
 }
 
 export interface EngineTurn {
@@ -108,6 +196,9 @@ export interface ActionProposal {
   purpose: string;
   payload: Record<string, unknown>;
   idempotencyKey: string;
+  // A document in the person's Engine storage. Engine reads its bytes
+  // itself and binds their hash into the approval.
+  documentId?: string;
 }
 
 const RESULT_STATUSES = new Set(["completed", "needs_approval", "blocked", "stale", "reconciled", "in_progress", "rejected"]);
@@ -194,6 +285,60 @@ export class PersonEngine {
       throw new EngineError(res.status);
     }
     return (await res.json()) as { reminder: EngineReminder; cancelled: boolean };
+  }
+
+  // Deadlines. null from list and track: this Engine has no deadline
+  // routes yet (404), so the agent says so and never invents one. null
+  // from update and cancel: no such deadline for this person.
+  async listDeadlines(): Promise<EngineDeadline[] | null> {
+    const res = await this.call("GET", "/deadlines");
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    const out = (await res.json()) as { deadlines?: unknown };
+    return Array.isArray(out.deadlines) ? (out.deadlines as EngineDeadline[]) : [];
+  }
+
+  async trackDeadline(input: {
+    title: string;
+    dueDate: string;
+    program?: string;
+    kind?: DeadlineKind;
+    idempotencyKey: string;
+  }): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("POST", "/deadlines", { ...input, source: { kind: "person" }, generation: this.generation });
+  }
+
+  async updateDeadline(id: string, patch: { dueDate?: string; title?: string; status?: "done" }): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("PATCH", `/deadlines/${encodeURIComponent(id)}`, patch);
+  }
+
+  async cancelDeadline(id: string): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("DELETE", `/deadlines/${encodeURIComponent(id)}`);
+  }
+
+  private async deadlineCall(method: string, path: string, body?: unknown): Promise<EngineDeadlineResult | null> {
+    const res = await this.call(method, path, body);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    // Engine says what it refused (a date, or a title that does more than
+    // name the task) in words the model can act on.
+    if (res.status === 400) {
+      const out = (await res.json().catch(() => null)) as { error?: unknown } | null;
+      throw new Error(typeof out?.error === "string" ? out.error : "Engine refused that deadline.");
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return (await res.json()) as EngineDeadlineResult;
   }
 
   // The turn as Engine first recorded it: firstReceivedAt never changes.
@@ -288,6 +433,39 @@ export class PersonEngine {
 
   async deleteMemory(memoryId: string): Promise<void> {
     await this.json("DELETE", `/memory/${encodeURIComponent(memoryId)}`);
+  }
+
+  async getProfileView(): Promise<ProfileView> {
+    const out = (await this.json("GET", "/profile")) as { profile?: Profile; suggestions?: Suggestion[] };
+    if (!out.profile || typeof out.profile !== "object") throw new EngineError(502);
+    return { profile: out.profile, suggestions: Array.isArray(out.suggestions) ? out.suggestions : [] };
+  }
+
+  // The profile alone, or null while Engine cannot serve it: 404 or 403
+  // from an Engine without the route, 503 from one without the key that
+  // seals profiles. Forms then fall back to asking the person.
+  async getProfile(): Promise<Profile | null> {
+    try {
+      return (await this.getProfileView()).profile;
+    } catch (err) {
+      if (err instanceof EngineError && [403, 404, 503].includes(err.status)) return null;
+      throw err;
+    }
+  }
+
+  // fields: path to value, or null to clear. Engine answers a retried key
+  // with the first answer and writes nothing.
+  async patchProfile(input: {
+    idempotencyKey: string;
+    source: ProfileSource;
+    documentId?: string;
+    fields: Record<string, string | number | boolean | null>;
+  }): Promise<ProfilePatchResult> {
+    const res = await this.call("PATCH", "/profile", { ...input, generation: this.generation });
+    const body = (await res.json().catch(() => null)) as (ProfilePatchResult & { error?: string }) | null;
+    if (res.ok && body?.profile) return body;
+    if ((res.status === 400 || res.status === 409) && typeof body?.error === "string") throw new ProfileRefused(res.status, body.error);
+    throw new EngineError(res.status);
   }
 
   // turnId: the turn this draft belongs to. Engine orders proposals by it.

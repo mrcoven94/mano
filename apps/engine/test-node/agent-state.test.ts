@@ -260,6 +260,7 @@ describe("conversation delete", () => {
       approvalsRevoked: 1,
       memoriesDeleted: 3,
       documentsDeleted: 0,
+      profileFieldsDeleted: 0,
     });
     const statuses = Object.fromEntries(listReminders(sql).map((r) => [r.id, r.status]));
     expect(statuses).toEqual({ "d-1": "cancelled", "d-2": "cancelled", "d-flight": "sending", "d-sent": "sent" });
@@ -280,6 +281,7 @@ describe("conversation delete", () => {
       approvalsRevoked: 0,
       memoriesDeleted: 0,
       documentsDeleted: 0,
+      profileFieldsDeleted: 0,
     });
   });
 
