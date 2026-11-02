@@ -5,6 +5,7 @@
 import type { DnsClient } from "./links.ts";
 import { checkLink } from "./links.ts";
 import { sentText, type BenchAnswer } from "./paths.ts";
+import { letterDeadline, type LetterDeadline } from "./suites/letters.ts";
 import type { BenchCase } from "./suites/types.ts";
 import { MAX_DEEP_CHARS, MAX_FAST_CHARS } from "@mano/persona";
 import { STATES, listPrograms } from "@mano/programs";
@@ -184,7 +185,6 @@ function factNeedle(c: BenchCase, needle: string): boolean {
   return /\d/.test(needle) || /^[A-Z]{2,}$/.test(needle) || key in PROGRAM_ALIASES || key in RESOURCE_ALIASES
     || KNOWN_PROGRAMS.some((p) => p.toLowerCase() === key) || includesHaystack(c.input.turns.join("\n"), needle);
 }
-const CITATION_RE = /\[letter\s+\d+\]/i;
 
 function blank(text: string, matches: RegExpMatchArray[]): string {
   let out = text;
@@ -310,6 +310,23 @@ export function saysPhrase(text: string, phrase: string): boolean {
   return false;
 }
 
+// The deadline the reply gives a letter: the letter's own date and no other,
+// or, when the letter gives two dates that disagree, both or neither, never
+// one picked between them.
+function deadlineCheck(deadline: LetterDeadline, text: string): CheckResult {
+  const letter = (deadline.kind === "one" ? [deadline.date] : deadline.dates).map(normalizeDate);
+  const said = new Map(extractDates(text).map((d) => [normalizeNumericDate(d), d]));
+  const other = [...said].filter(([d]) => !letter.includes(d)).map(([, raw]) => raw);
+  const named = letter.filter((d) => said.has(d)).map((d) => said.get(d)!);
+  if (other.length > 0) return { id: "deadline", pass: false, detail: `gives ${other.join(", ")}, which the letter does not` };
+  if (deadline.kind === "one") {
+    const pass = named.length === 1;
+    return { id: "deadline", pass, detail: pass ? `gives ${deadline.date}` : `does not give ${deadline.date}` };
+  }
+  const pass = named.length === 0 || named.length === letter.length;
+  return { id: "deadline", pass, detail: pass ? (named.length === 0 ? "names neither date" : "names both dates") : `picks ${named.join(", ")} of two dates` };
+}
+
 function includesHaystack(haystack: string, needle: string): boolean {
   return haystack.toLowerCase().includes(needle.toLowerCase());
 }
@@ -418,10 +435,8 @@ export async function runHardChecks(c: BenchCase, answer: BenchAnswer, dns: DnsC
     }
   }
 
-  if (c.expect.citationRequired === true) {
-    const pass = CITATION_RE.test(text);
-    results.push({ id: "citations", pass, detail: pass ? "letter cited" : "no [letter N] citation" });
-  }
+  const deadline = letterDeadline(c);
+  if (deadline) results.push(deadlineCheck(deadline, text));
 
   if (c.expect.crisis === true) {
     // Mano's own rule (packages/persona): a crisis reply names 988 and 911.
