@@ -117,11 +117,11 @@ describe("storing a fill's steps", () => {
     expect(listed.objects).toHaveLength(3);
     for (const object of listed.objects) {
       const raw = await (await files().get(object.key))!.text();
-      const i = Number(/fill-[^/]+-(\d+)\.[0-9a-f]+$/.exec(object.key)![1]);
+      const [, id, step] = /\/(fill-[^/]+-(\d+))\.[0-9a-f]+$/.exec(object.key)!;
+      const i = Number(step);
       expect(raw).not.toContain(b64(png(i + 1)));
-      const id = `fill-${approvalId}-${i}`;
-      expect(await getDocumentBytes(files(), KEK, person, id, object.key)).toEqual(png(i + 1));
-      await expect(getDocumentBytes(files(), KEK, personIdForHandle(handle("someone-else")), id, object.key)).rejects.toThrow();
+      expect(await getDocumentBytes(files(), KEK, person, id!, object.key)).toEqual(png(i + 1));
+      await expect(getDocumentBytes(files(), KEK, personIdForHandle(handle("someone-else")), id!, object.key)).rejects.toThrow();
     }
     // R2 keeps the link's hash, never the link.
     const token = url.split("/").pop()!;

@@ -8,7 +8,8 @@
 // and the link token. Images are stored the way documents are
 // (src/files.ts): encrypted for the person, bound to the person and an
 // ID, in R2 under the conversation generation, so a conversation delete
-// sweeps them with the documents.
+// sweeps them with the documents. Each bind writes under IDs of its own,
+// so a bind that loses never deletes what another bind wrote.
 //
 // The link is a random 128-bit token in hex, which the text line's voice
 // guard leaves whole. Only the person's own thread carries it. R2 keeps
@@ -55,6 +56,7 @@ export interface ReplayInput {
 // size from its PNG header, which the close-up view is computed from.
 export interface StoredStep {
   caption: string;
+  imageId: string;
   hash: string;
   r2Key: string;
   width: number;
@@ -229,12 +231,8 @@ export async function linkKey(token: string): Promise<string> {
   return `fill-links/v1/${await sha256Hex(`mano-fill-link:v1:${token}`)}`;
 }
 
-function mintToken(): string {
-  return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function imageId(approvalId: string, index: number): string {
-  return `fill-${approvalId}-${index}`;
+function randomHex(bytes: number): string {
+  return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 // Binds a recorded fill to the approval it produced. Images and the link
@@ -255,31 +253,28 @@ export async function bindFillReplay(
   if (generation !== currentGeneration(sql)) return { status: "stale" };
   if (approval.status !== "pending" || !approvals.approvalCurrent(approvalId)) return { status: "closed" };
 
-  const token = mintToken();
+  const token = randomHex(16);
   const expiresAtMs = deps.nowMs + REPLAY_LINK_TTL_MS;
   const key = await linkKey(token);
-  // Removes what this bind wrote and no row holds: after it loses, or
-  // after a write failed partway.
-  const discard = async (written: string[]) => {
-    const kept = new Set(getFillReplay(sql, approvalId)?.steps.map((s) => s.r2Key) ?? []);
-    await storage.deleteObjects(written.filter((k) => !kept.has(k)));
-  };
-  const puts = await Promise.allSettled(input.steps.map((step, i) => storage.putImage(imageId(approvalId, i), step.png, generation)));
+  const bind = randomHex(8);
+  const imageIds = input.steps.map((_, i) => `fill-${approvalId}-${bind}-${i}`);
+  const puts = await Promise.allSettled(input.steps.map((step, i) => storage.putImage(imageIds[i]!, step.png, generation)));
   const stored = puts.flatMap((p) => (p.status === "fulfilled" ? [p.value.r2Key] : []));
   const failed = puts.find((p): p is PromiseRejectedResult => p.status === "rejected");
   if (failed) {
-    await discard(stored);
+    await storage.deleteObjects(stored);
     throw failed.reason;
   }
   try {
     await storage.putLink(key, { personId: deps.personId, approvalId, expiresAtMs });
   } catch (err) {
-    await discard([key, ...stored]);
+    await storage.deleteObjects([key, ...stored]);
     throw err;
   }
   const images = puts.map((p) => (p as PromiseFulfilledResult<{ hash: string; r2Key: string }>).value);
   const steps: StoredStep[] = input.steps.map((step, i) => ({
     caption: step.caption,
+    imageId: imageIds[i]!,
     hash: images[i]!.hash,
     r2Key: images[i]!.r2Key,
     ...pngSize(step.png)!,
@@ -294,7 +289,7 @@ export async function bindFillReplay(
   ).rowsWritten;
   if (written > 0) return { status: "created", token };
 
-  await discard([key, ...stored]);
+  await storage.deleteObjects([key, ...stored]);
   const raced = getFillReplay(sql, approvalId);
   if (raced) return { status: "existing", token: raced.linkToken };
   return generation !== currentGeneration(sql) ? { status: "stale" } : { status: "closed" };
@@ -350,7 +345,7 @@ export async function replayPage(
   if (!first) return null;
   const early = settledState(first.facts);
   if (early === "changed" || early === "closed") return renderReplayPage({ state: early });
-  const images = await Promise.all(first.replay.steps.map((s, i) => deps.storage.getImage(imageId(approvalId, i), s.r2Key)));
+  const images = await Promise.all(first.replay.steps.map((s) => deps.storage.getImage(s.imageId, s.r2Key)));
   // The document is checked after the images and the rows after both, so
   // nothing a page shows as current changed during an earlier wait.
   const exact = early === null ? await deps.exact(first.approval) : true;
