@@ -15,7 +15,7 @@ import { fillDepsFromEnv, fillOnComputer, type FillDeps, type ReplayStep } from 
 import { EngineError, type PersonEngine } from "../lib/engine.js";
 import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
 import { personEngine, requireTurn } from "../lib/person.js";
-import { closeEarlier, holdForYes } from "../lib/propose.js";
+import { closeEarlier, holdForYes, sameDraft, type Draft } from "../lib/propose.js";
 
 const inputSchema = z.object({
   form: z
@@ -122,15 +122,18 @@ export default defineTool({
       return { status: "fill_failed", sent: false, note: "Mano could not finish filling the form on its computer, so nothing was prepared or sent. Say so and offer to try again." };
     }
 
-    const held = await holdForYes(engine, ctx, turn, {
+    const draft: Draft = {
       type: "submit",
       recipient: form.recipient,
       purpose: form.purpose,
       payload: fill.saved,
       ...(filled.documentId ? { documentId: filled.documentId } : {}),
-    });
+    };
+    const held = await holdForYes(engine, ctx, turn, draft);
     if (!held.held) return { status: held.status, note: held.note, reason: held.reason, sent: false };
-    await shareReplay(engine, held.approval.id, form, fill.replay);
+    // A retried turn gets back the approval its first attempt froze. Only
+    // screens of those same values may stand beside its question.
+    if (sameDraft(held.approval, draft)) await shareReplay(engine, held.approval.id, form, fill.replay);
     return {
       status: "waiting_for_yes",
       approvalId: held.approval.id,
