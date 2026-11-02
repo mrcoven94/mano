@@ -1,6 +1,8 @@
 name = "mano-sandbox-portal"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
+workers_dev = false
+routes = [{ pattern = "sandbox.withmano.com", custom_domain = true }]
 
 [[durable_objects.bindings]]
 name = "PORTAL_STORE"

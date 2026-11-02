@@ -1,7 +1,10 @@
 import type { FileStore } from "../src/files";
 import {
+  API_SCOPE_PREFIX,
   newConfirmationNumber,
+  type Draft,
   type SessionData,
+  type StagedClaim,
   type StagedEntry,
   type Store,
   type Submission,
@@ -23,11 +26,21 @@ export class MemoryStore implements Store {
   byConfirmation = new Map<string, Submission>();
 
   async getSession(id: string): Promise<SessionData | null> {
-    return this.sessions.get(id) ?? null;
+    // A copy, like SQL deserializing a fresh row: mutating it without saving changes nothing.
+    const found = this.sessions.get(id);
+    return found ? structuredClone(found) : null;
   }
 
   async putSession(session: SessionData): Promise<void> {
     this.sessions.set(session.id, structuredClone(session));
+  }
+
+  async renewSession(session: SessionData, now: number): Promise<boolean> {
+    // Check and write with no await between, so concurrent callers cannot interleave.
+    const current = this.sessions.get(session.id);
+    if (!current || current.expiresAt <= now) return false;
+    this.sessions.set(session.id, structuredClone(session));
+    return true;
   }
 
   async deleteSession(id: string): Promise<void> {
@@ -42,8 +55,12 @@ export class MemoryStore implements Store {
     return expired;
   }
 
-  async deleteSessions(ids: string[]): Promise<void> {
-    for (const id of ids) this.sessions.delete(id);
+  async deleteSessionIfExpired(id: string, now: number): Promise<SessionData | null> {
+    // Check and delete with no await between, so a renewal cannot slip in.
+    const current = this.sessions.get(id);
+    if (!current || current.expiresAt > now) return null;
+    this.sessions.delete(id);
+    return structuredClone(current);
   }
 
   stagedObjects = new Map<string, number>();
@@ -56,12 +73,92 @@ export class MemoryStore implements Store {
     for (const key of keys) this.stagedObjects.delete(key);
   }
 
-  async listStaleStaged(olderThan: number): Promise<string[]> {
-    const stale: string[] = [];
-    for (const [key, createdAt] of this.stagedObjects) {
-      if (createdAt < olderThan) stale.push(key);
+  async listTrackedStaged(): Promise<StagedEntry[]> {
+    return [...this.stagedObjects]
+      .map(([key, createdAt]) => ({ key, createdAt }))
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  }
+
+  /** r2key to (attempt id to hold expiry) */
+  filingHolds = new Map<string, Map<string, number>>();
+  pendingDeletes = new Set<string>();
+
+  async holdForFiling(attemptId: string, entries: StagedEntry[], until: number): Promise<boolean> {
+    // Check and write with no await between, like one Durable Object turn.
+    if (entries.some((entry) => this.pendingDeletes.has(entry.key))) return false;
+    for (const entry of entries) {
+      this.stagedObjects.set(entry.key, entry.createdAt);
+      const holds = this.filingHolds.get(entry.key) ?? new Map<string, number>();
+      holds.set(attemptId, until);
+      this.filingHolds.set(entry.key, holds);
     }
-    return stale;
+    return true;
+  }
+
+  async releaseHolds(attemptId: string): Promise<void> {
+    for (const holds of this.filingHolds.values()) holds.delete(attemptId);
+  }
+
+  async purgeExpiredHolds(now: number): Promise<void> {
+    for (const [key, holds] of this.filingHolds) {
+      for (const [attemptId, until] of holds) if (until <= now) holds.delete(attemptId);
+      if (holds.size === 0) this.filingHolds.delete(key);
+    }
+  }
+
+  async claimUnreferencedStaged(claims: StagedClaim[]): Promise<string[]> {
+    // Each guard check, untrack and pending record runs with no await between, like one SQL statement.
+    const claimed: string[] = [];
+    for (const claim of claims) {
+      const createdAt = this.stagedObjects.get(claim.key);
+      if (createdAt === undefined) continue;
+      const guard = claim.guard;
+      const held =
+        guard.kind === "attempt"
+          ? createdAt >= guard.olderThan
+          : guard.kind === "session"
+            ? (this.sessions.get(guard.sessionId)?.expiresAt ?? 0) > guard.now
+            : this.submissions.has(`${guard.scope}\n${guard.key}`) ||
+              [...(this.filingHolds.get(claim.key)?.values() ?? [])].some((until) => until > guard.now);
+      if (held) continue;
+      this.stagedObjects.delete(claim.key);
+      this.pendingDeletes.add(claim.key);
+      claimed.push(claim.key);
+    }
+    return claimed;
+  }
+
+  async listPendingDeletes(): Promise<string[]> {
+    return [...this.pendingDeletes].sort();
+  }
+
+  async clearPendingDeletes(keys: string[]): Promise<void> {
+    for (const key of keys) this.pendingDeletes.delete(key);
+  }
+
+  drafts = new Map<string, Draft>();
+
+  async saveDraft(draft: Draft): Promise<boolean> {
+    const current = this.drafts.get(draft.id);
+    if (current && current.sessionId !== draft.sessionId && current.expiresAt > draft.savedAt) return false;
+    this.drafts.set(draft.id, structuredClone(draft));
+    return true;
+  }
+
+  async getDraft(id: string, now: number): Promise<Draft | null> {
+    const found = this.drafts.get(id);
+    return found && found.expiresAt > now ? structuredClone(found) : null;
+  }
+
+  async purgeExpiredDrafts(now: number): Promise<number> {
+    let purged = 0;
+    for (const [id, draft] of this.drafts) {
+      if (draft.expiresAt <= now) {
+        this.drafts.delete(id);
+        purged += 1;
+      }
+    }
+    return purged;
   }
 
   receipts = new Map<string, SubmissionReceipt>();
@@ -110,7 +207,8 @@ export class MemoryStore implements Store {
   }
 
   async getSubmissionByConfirmation(confirmation: string): Promise<Submission | null> {
-    return this.byConfirmation.get(confirmation) ?? null;
+    const found = this.byConfirmation.get(confirmation);
+    return found?.scope.startsWith(API_SCOPE_PREFIX) ? found : null;
   }
 
   async submit(input: SubmitInput): Promise<SubmitResult> {
@@ -137,7 +235,6 @@ export class MemoryStore implements Store {
       status: "received",
       receivedAt: input.receivedAt,
       slowMs: input.slowMs,
-      source: input.source,
     };
     this.submissions.set(scopedKey(submission.scope, submission.key), submission);
     this.byConfirmation.set(submission.confirmationNumber, submission);
@@ -146,6 +243,7 @@ export class MemoryStore implements Store {
 
   async listSubmissionSummaries(limit: number, offset: number): Promise<SubmissionSummary[]> {
     return [...this.submissions.values()]
+      .filter((s) => s.scope.startsWith(API_SCOPE_PREFIX))
       .sort(
         (a, b) =>
           b.receivedAt - a.receivedAt || (a.scope + a.key < b.scope + b.key ? -1 : a.scope + a.key > b.scope + b.key ? 1 : 0),
@@ -155,7 +253,7 @@ export class MemoryStore implements Store {
   }
 
   async countSubmissions(): Promise<number> {
-    return this.submissions.size;
+    return [...this.submissions.values()].filter((s) => s.scope.startsWith(API_SCOPE_PREFIX)).length;
   }
 
   rateBuckets = new Map<string, { windowStart: number; count: number }>();
