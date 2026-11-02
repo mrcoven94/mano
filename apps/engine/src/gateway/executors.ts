@@ -42,12 +42,11 @@ export class InMemoryExecutor implements Executor {
 // Receipts from this executor are real filings into the sandbox, never
 // simulated.
 
-// What the portal's POST /submissions accepts, at its default limits:
-// handleSubmit, validateHousehold and sniffType in
-// apps/sandbox-portal/src/app.ts. portalFiling is the one place the
-// executor applies it, both when the gateway asks before drafting an
-// approval and again right before filing. The contract test runs these
-// rules against the real portal code.
+// What the portal's POST /submissions accepts: handleSubmit,
+// validateHousehold and sniffType in apps/sandbox-portal/src/app.ts.
+// portalFiling is the one place the executor applies it, both when the
+// gateway asks before drafting an approval and again right before filing.
+// The contract test runs these rules against the real portal code.
 const PORTAL_HOUSEHOLD = {
   fullName: "full legal name",
   dateOfBirth: "date of birth",
@@ -57,8 +56,21 @@ const PORTAL_HOUSEHOLD = {
   monthlyIncome: "monthly income",
 } as const;
 type HouseholdField = keyof typeof PORTAL_HOUSEHOLD;
-const PORTAL_MAX_FIELD_LENGTH = 500;
-const PORTAL_MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
+// The portal reads its limits from MAX_FIELD_LENGTH and MAX_UPLOAD_BYTES;
+// the engine names the same numbers as SANDBOX_MAX_FIELD_LENGTH and
+// SANDBOX_MAX_UPLOAD_BYTES, and a test fails when the two wrangler.toml
+// files disagree. The defaults are the portal's defaults.
+export interface PortalLimits {
+  maxFieldLength: number;
+  maxDocumentBytes: number;
+}
+export const DEFAULT_PORTAL_LIMITS: PortalLimits = { maxFieldLength: 500, maxDocumentBytes: 5 * 1024 * 1024 };
+
+function describeBytes(n: number): string {
+  if (n % (1024 * 1024) === 0) return `${n / (1024 * 1024)} MB`;
+  if (n % 1024 === 0) return `${n / 1024} KB`;
+  return `${n} bytes`;
+}
 const PORTAL_DOCUMENT_TYPES = [
   { type: "application/pdf", ext: "pdf", magic: [0x25, 0x50, 0x44, 0x46, 0x2d] },
   { type: "image/png", ext: "png", magic: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
@@ -75,7 +87,7 @@ type PortalFiling =
   | { ok: true; household: Record<HouseholdField, string>; file: { name: string; type: string; data: string } }
   | { ok: false; problem: string };
 
-function portalFiling(req: ActionRequest): PortalFiling {
+function portalFiling(req: ActionRequest, limits: PortalLimits): PortalFiling {
   if (req.type !== "submit") {
     return { ok: false, problem: `The sandbox agency portal only takes filed applications, so Mano cannot ${NOT_FILED[req.type]} there.` };
   }
@@ -83,7 +95,7 @@ function portalFiling(req: ActionRequest): PortalFiling {
   for (const field of Object.keys(PORTAL_HOUSEHOLD) as HouseholdField[]) {
     const raw = req.payload[field];
     const value = typeof raw === "string" || typeof raw === "number" ? String(raw) : "";
-    if (value.length > PORTAL_MAX_FIELD_LENGTH) {
+    if (value.length > limits.maxFieldLength) {
       return { ok: false, problem: `The applicant's ${PORTAL_HOUSEHOLD[field]} is longer than the sandbox agency portal accepts.` };
     }
     if (!value.trim()) return { ok: false, problem: `The sandbox agency portal needs the applicant's ${PORTAL_HOUSEHOLD[field]}.` };
@@ -101,8 +113,8 @@ function portalFiling(req: ActionRequest): PortalFiling {
     return { ok: false, problem: "The sandbox agency portal needs at least one document attached, such as a photo of the letter." };
   }
   const bytes = base64ToBytes(req.document.bytesB64);
-  if (bytes.length > PORTAL_MAX_DOCUMENT_BYTES) {
-    return { ok: false, problem: "The document is larger than the 5 MB the sandbox agency portal accepts." };
+  if (bytes.length > limits.maxDocumentBytes) {
+    return { ok: false, problem: `The document is larger than the ${describeBytes(limits.maxDocumentBytes)} the sandbox agency portal accepts.` };
   }
   const kind = PORTAL_DOCUMENT_TYPES.find((k) => bytes.length >= k.magic.length && k.magic.every((b, i) => bytes[i] === b));
   if (!kind) return { ok: false, problem: "The sandbox agency portal takes PDF, PNG or JPG documents only." };
@@ -118,6 +130,7 @@ export class SandboxExecutor implements Executor {
     private timeoutMs = 15000,
     private fetchFn: typeof fetch = boundFetch,
     private token?: string,
+    private limits: PortalLimits = DEFAULT_PORTAL_LIMITS,
   ) {}
 
   private async downstreamKey(personId: string, idempotencyKey: string): Promise<string> {
@@ -132,7 +145,7 @@ export class SandboxExecutor implements Executor {
   }
 
   refuse(req: ActionRequest): string | null {
-    const filing = portalFiling(req);
+    const filing = portalFiling(req, this.limits);
     return filing.ok ? null : filing.problem;
   }
 
@@ -140,7 +153,7 @@ export class SandboxExecutor implements Executor {
     this.calls.push(req);
     // The gateway already asked before the approval. This covers an
     // approval drafted before that check existed or under another mode.
-    const filing = portalFiling(req);
+    const filing = portalFiling(req, this.limits);
     if (!filing.ok) throw new DefiniteFailureError(filing.problem);
     const body = {
       key: await this.downstreamKey(req.personId, req.idempotencyKey),
@@ -228,6 +241,13 @@ export function setExecutorFactoryForTests(
   testFactory = factory;
 }
 
+function portalLimit(name: string, value: string | undefined, fallback: number): number {
+  if (value === undefined || value === "") return fallback;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`${name} must be a whole number above 0.`);
+  return n;
+}
+
 // Picks the executor from config. Simulated must be an explicit choice:
 // EXECUTOR_MODE=simulated set on purpose, or unset in development. Outside
 // development with no choice made, construction fails loud instead of
@@ -236,6 +256,8 @@ export function createExecutor(env: {
   EXECUTOR_MODE?: string;
   SANDBOX_BASE_URL?: string;
   SANDBOX_PORTAL_TOKEN?: string;
+  SANDBOX_MAX_FIELD_LENGTH?: string;
+  SANDBOX_MAX_UPLOAD_BYTES?: string;
   MANO_ENV?: string;
 }): Executor {
   if (testFactory) return testFactory(env);
@@ -252,7 +274,11 @@ export function createExecutor(env: {
     if (!env.SANDBOX_PORTAL_TOKEN) {
       throw new Error("EXECUTOR_MODE is sandbox but SANDBOX_PORTAL_TOKEN is not set.");
     }
-    return new SandboxExecutor(env.SANDBOX_BASE_URL.replace(/\/$/, ""), undefined, undefined, env.SANDBOX_PORTAL_TOKEN);
+    const limits: PortalLimits = {
+      maxFieldLength: portalLimit("SANDBOX_MAX_FIELD_LENGTH", env.SANDBOX_MAX_FIELD_LENGTH, DEFAULT_PORTAL_LIMITS.maxFieldLength),
+      maxDocumentBytes: portalLimit("SANDBOX_MAX_UPLOAD_BYTES", env.SANDBOX_MAX_UPLOAD_BYTES, DEFAULT_PORTAL_LIMITS.maxDocumentBytes),
+    };
+    return new SandboxExecutor(env.SANDBOX_BASE_URL.replace(/\/$/, ""), undefined, undefined, env.SANDBOX_PORTAL_TOKEN, limits);
   }
   throw new Error(`Unknown EXECUTOR_MODE: ${mode}.`);
 }
