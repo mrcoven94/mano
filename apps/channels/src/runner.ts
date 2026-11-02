@@ -1015,12 +1015,24 @@ export class ConversationRunner {
     // A crisis turn never sends the friendly intro, and later turns do not
     // send it either.
     if (crisis && !meta.introduced) store.patchMeta({ introduced: true });
+    // The crisis line goes out before anything the turn waits on (the
+    // ledger, attachments, any model), so 988 and 911 never wait on them.
+    // Every path below opens its saved answer with this same bubble under
+    // the same key, so it is sent once.
+    const crisisBubbles = crisis ? await this.finalize(turn, "", true, turnTextOf(texts)) : [];
+    const replyTo = inlineReplyTarget(items);
+    if (replyTo && crisisBubbles[0]) crisisBubbles[0] = { ...crisisBubbles[0], replyTo };
+    if (crisisBubbles.length > 0) {
+      await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation, epoch);
+      // Nothing else goes out until the crisis line is known to have gone
+      // out: an uncertain send ends this run, and the next one reconciles
+      // it before any model, interim or other bubble.
+      this.checkSendsResolved(turn, generation);
+    }
 
     const approval = texts.length === 1 && attachments.length === 0 ? parseApprovalReply(texts[0]) : null;
     if (approval && store.pendingApprovals(nowMs()).length > 0) {
-      // A crisis reply goes first; the decision is still recorded.
-      const crisisBubbles = crisis ? await this.finalize(turn, "", true, turnTextOf(texts)) : [];
-      if (crisisBubbles.length > 0) await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation, epoch);
+      // The decision is recorded after the crisis line.
       const recordedPart = crisisBubbles.length + 1;
       const answered = await this.answerApproval(approval.code, approval.decision, turn, chatId, to, recordedPart);
       if (answered) {
@@ -1057,11 +1069,9 @@ export class ConversationRunner {
         crisis,
       });
       if (crisis) {
-        // No model and no cost: the deterministic crisis reply, past any limit.
-        const bubbles = await this.finalize(turn, "", true, turnText);
-        store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
+        // No model and no cost: the crisis line, already sent past any limit.
+        store.updateTurnAnswer(turn, JSON.stringify(crisisBubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
-        await this.sendBubbles(turn, bubbles, chatId, to, 0, generation, epoch);
         this.checkSendsResolved(turn, generation);
       } else {
         const noticed = await this.sendBusy(turn, chatId, to, nowMs());
@@ -1134,7 +1144,6 @@ export class ConversationRunner {
           // message that has the eyes, and sent outside the turn.
           const tapback = config.reactionsEnabled && target && !eyes.placed ? allowedTapback(answer.tapback, target.text, crisis) : null;
           const answered = await this.finalize(turn, answer.text, crisis, turnText);
-          const replyTo = inlineReplyTarget(items);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
           bubbles.push(...answered);
           if (tapback && target && chatId && answered.length > 0) {
