@@ -602,14 +602,16 @@ export class ActionGateway {
 
     const frozen = await freezeActionRequest(req, docRead.bytes);
     const withDocument = this.enrichWithDocument(req, docRead.bytes, frozen.documentHash);
-    // Asked before any approval exists: a person never says yes to an
-    // action the executor already knows it cannot carry out. Only a key
-    // with no attempt and no approval: the content hash leaves out the
-    // document bytes, so a replay after the document changed keeps its
-    // key, and a key with history must reconcile or answer its approval
-    // below rather than claim nothing was sent.
-    const untouched = !this.store.getAttempt(req.idempotencyKey) && !this.store.getApprovalByKey(req.idempotencyKey);
-    const refusal = untouched ? this.executor.refuse?.(withDocument) : null;
+    // Asked whenever a new approval would be drafted, so a person never
+    // says yes to an action the executor already knows it cannot carry
+    // out: a key with no attempt whose approvals, if any, no longer hold
+    // it (stale or expired ones are replaced below). A key with an attempt
+    // or a holding approval must reconcile or answer that approval rather
+    // than claim nothing was sent; the content hash leaves out the
+    // document bytes, so a replay after the document changed keeps its key.
+    const prior = this.store.getApprovalByKey(req.idempotencyKey);
+    const drafting = !this.store.getAttempt(req.idempotencyKey) && (!prior || !KEY_HOLDING.includes(prior.status));
+    const refusal = drafting ? this.executor.refuse?.(withDocument) : null;
     if (refusal) {
       this.store.audit({ event: "gateway.block", type: req.type, reason: "executor" });
       return { status: "blocked", reason: `${refusal} Nothing was sent.` };

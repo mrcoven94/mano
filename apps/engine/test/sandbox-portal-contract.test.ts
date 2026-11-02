@@ -363,6 +363,45 @@ describe("LAP-739: a replay of a key with history is never refused up front", ()
   });
 });
 
+describe("LAP-739: a stale or expired approval is not a way around the check", () => {
+  function setup() {
+    const portal = realPortal();
+    const store = new MemoryApprovalStore();
+    const documents = new MapDocumentStore(new Map<string, Uint8Array | string>([["letter", PDF_BYTES]]));
+    return { portal, store, documents, gateway: new ActionGateway(store, portal.executor, { documents }) };
+  }
+  const pending = (store: MemoryApprovalStore) => [...store.approvals.values()].filter((a) => a.status === "pending");
+
+  it("a stale approval repeated after its document became unfileable is refused, not drafted again", async () => {
+    const { portal, store, documents, gateway } = setup();
+    const action = proposal({ documentId: "letter" });
+    const held = await gateway.requestAction(action);
+    expect(held.status).toBe("needs_approval");
+    documents.set("letter", "plain text notes, not a document the portal takes");
+    const answered = await gateway.approveAndExecute(held.approval!.id, "person-rosa");
+    expect(answered.status).toBe("stale");
+    const repeat = await gateway.requestAction(action);
+    expect(repeat.status).toBe("blocked");
+    expect(repeat.reason).toMatch(/PDF, PNG or JPG/);
+    expect(pending(store)).toHaveLength(0);
+    expect(portal.posts).toHaveLength(0);
+  });
+
+  it("an expired approval repeated with an unfileable document is refused, not drafted again", async () => {
+    const { portal, store, documents, gateway } = setup();
+    const action = proposal({ documentId: "letter" });
+    const held = await gateway.requestAction(action);
+    expect(held.status).toBe("needs_approval");
+    store.putApproval({ ...store.getApproval(held.approval!.id)!, status: "expired" });
+    documents.set("letter", "plain text notes, not a document the portal takes");
+    const repeat = await gateway.requestAction(action);
+    expect(repeat.status).toBe("blocked");
+    expect(repeat.reason).toMatch(/PDF, PNG or JPG/);
+    expect(pending(store)).toHaveLength(0);
+    expect(portal.posts).toHaveLength(0);
+  });
+});
+
 describe("LAP-739: the executor applies the portal's configured limits", () => {
   it("defaults to the portal's own default field and upload limits", () => {
     expect(DEFAULT_PORTAL_LIMITS).toEqual({
