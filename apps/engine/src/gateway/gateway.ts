@@ -33,6 +33,9 @@ export interface ApprovalStore {
   // More than one approval can share a key; recovery wants the one that
   // claimed the attempt.
   getApprovalByKey(key: string): Approval | null;
+  // Whether any approval still holds key (pending, approved, rejected or
+  // revoked): exactly when createApprovalForKey would not draft a new one.
+  keyHeld(key: string): boolean;
   putApproval(a: Approval): void;
   // The person's conversation generation. A conversation delete advances
   // it; anything prepared under an older one is stale and never written.
@@ -136,6 +139,10 @@ export class MemoryApprovalStore implements ApprovalStore {
   getApproval(id: string) {
     return this.approvals.get(id) ?? null;
   }
+  keyHeld(key: string): boolean {
+    return [...this.approvals.values()].some((a) => a.idempotencyKey === key && KEY_HOLDING.includes(a.status));
+  }
+
   getApprovalByKey(key: string): Approval | null {
     const matches = [...this.approvals.values()].filter((a) => a.idempotencyKey === key);
     if (matches.length === 0) return null;
@@ -602,9 +609,15 @@ export class ActionGateway {
 
     const frozen = await freezeActionRequest(req, docRead.bytes);
     const withDocument = this.enrichWithDocument(req, docRead.bytes, frozen.documentHash);
-    // Asked before any approval exists: a person never says yes to an
-    // action the executor already knows it cannot carry out.
-    const refusal = this.executor.refuse?.(withDocument);
+    // Asked whenever a new approval would be drafted, so a person never
+    // says yes to an action the executor already knows it cannot carry
+    // out: a key with no attempt whose approvals, if any, no longer hold
+    // it (stale or expired ones are replaced below). A key with an attempt
+    // or a holding approval must reconcile or answer that approval rather
+    // than claim nothing was sent; the content hash leaves out the
+    // document bytes, so a replay after the document changed keeps its key.
+    const drafting = !this.store.getAttempt(req.idempotencyKey) && !this.store.keyHeld(req.idempotencyKey);
+    const refusal = drafting ? this.executor.refuse?.(withDocument) : null;
     if (refusal) {
       this.store.audit({ event: "gateway.block", type: req.type, reason: "executor" });
       return { status: "blocked", reason: `${refusal} Nothing was sent.` };

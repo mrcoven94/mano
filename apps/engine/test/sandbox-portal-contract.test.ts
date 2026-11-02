@@ -1,4 +1,6 @@
+import { env as testEnv, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { SqlApprovalStore, ensureGatewayTables } from "../src/gateway/sql-store.js";
 import {
   ActionGateway,
   DefiniteFailureError,
@@ -8,6 +10,7 @@ import {
   SandboxExecutor,
   TimeoutError,
 } from "../src/gateway/index.js";
+import { DEFAULT_PORTAL_LIMITS } from "../src/gateway/executors.js";
 import type { ActionRequest, Executor } from "../src/gateway/index.js";
 import { ConsentDeliveringExecutor } from "../src/agents/person-executor.js";
 import { sha256Hex } from "../src/hash.js";
@@ -291,5 +294,181 @@ describe("LAP-739: the executor and the real portal agree on what can be filed",
     const files = portalFiles ?? [{ name: "document-1.png", type: "image/png", data: PNG }];
     const raw = await portal.fileRaw({ household, files });
     expect(raw.status).toBe(400);
+  });
+});
+
+// The document bytes are not part of an idempotency key's content hash,
+// so a replay after the document was replaced keeps the same key. Only a
+// key with no attempt and no approval may be refused up front; a key with
+// history must reconcile or answer its approval, never claim nothing was
+// sent while a filing may have reached the portal.
+function timingOutPortal() {
+  const store = new MemoryStore();
+  const files = new MemoryFileStore();
+  const config = { ...DEFAULT_CONFIG, portalToken: PORTAL_TOKEN };
+  const state = { posts: 0, checkDown: true };
+  const fetchFn = (async (url: string, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      state.posts += 1;
+      await handleRequest(new Request(url, init), store, files, config);
+      throw new TimeoutError();
+    }
+    if (state.checkDown) return new Response("unavailable", { status: 503 });
+    return handleRequest(new Request(url, init), store, files, config);
+  }) as typeof fetch;
+  return { state, executor: new SandboxExecutor("https://portal.test", 1000, fetchFn, PORTAL_TOKEN) };
+}
+
+describe("LAP-739: a replay of a key with history is never refused up front", () => {
+  it("allow policy: a timed-out filing replayed after the document became plain text reconciles to its receipt", async () => {
+    const portal = timingOutPortal();
+    const documents = new MapDocumentStore(new Map<string, Uint8Array | string>([["letter", PNG_BYTES]]));
+    const gateway = new ActionGateway(new MemoryApprovalStore(), portal.executor, {
+      policyOverrides: { submit: "allow" },
+      documents,
+    });
+    const action = proposal({ documentId: "letter" });
+    const first = await gateway.requestAction(action);
+    expect(first.status).toBe("blocked");
+    expect(first.reason).toMatch(/stays unknown/);
+    expect(portal.state.posts).toBe(1);
+
+    documents.set("letter", "plain text notes, not a document the portal takes");
+    portal.state.checkDown = false;
+    const replay = await gateway.requestAction(action);
+    expect(replay.reason ?? "").not.toMatch(/Nothing was sent/);
+    expect(replay.status).toBe("reconciled");
+    expect(replay.receipt?.externalId).toMatch(/\S/);
+    expect(portal.state.posts).toBe(1);
+  });
+
+  it("ask policy: an approved filing whose outcome is unknown, repeated after the document became plain text", async () => {
+    const portal = timingOutPortal();
+    const documents = new MapDocumentStore(new Map<string, Uint8Array | string>([["letter", PNG_BYTES]]));
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, portal.executor, { documents });
+    const action = proposal({ documentId: "letter" });
+    const held = await gateway.requestAction(action);
+    expect(held.status).toBe("needs_approval");
+    const approved = await gateway.approveAndExecute(held.approval!.id, "person-rosa");
+    expect(approved.status).toBe("blocked");
+    expect(approved.reason).toMatch(/stays unknown/);
+    expect(portal.state.posts).toBe(1);
+
+    documents.set("letter", "plain text notes, not a document the portal takes");
+    const repeat = await gateway.requestAction(action);
+    expect(repeat.status).toBe("blocked");
+    expect(repeat.reason).not.toMatch(/Nothing was sent/);
+    expect(repeat.reason).toBe("This idempotency key was already used with different content.");
+    expect(store.approvals.size).toBe(1);
+    expect(portal.state.posts).toBe(1);
+  });
+});
+
+describe("LAP-739: a stale or expired approval is not a way around the check", () => {
+  function setup() {
+    const portal = realPortal();
+    const store = new MemoryApprovalStore();
+    const documents = new MapDocumentStore(new Map<string, Uint8Array | string>([["letter", PDF_BYTES]]));
+    return { portal, store, documents, gateway: new ActionGateway(store, portal.executor, { documents }) };
+  }
+  const pending = (store: MemoryApprovalStore) => [...store.approvals.values()].filter((a) => a.status === "pending");
+
+  it("a stale approval repeated after its document became unfileable is refused, not drafted again", async () => {
+    const { portal, store, documents, gateway } = setup();
+    const action = proposal({ documentId: "letter" });
+    const held = await gateway.requestAction(action);
+    expect(held.status).toBe("needs_approval");
+    documents.set("letter", "plain text notes, not a document the portal takes");
+    const answered = await gateway.approveAndExecute(held.approval!.id, "person-rosa");
+    expect(answered.status).toBe("stale");
+    const repeat = await gateway.requestAction(action);
+    expect(repeat.status).toBe("blocked");
+    expect(repeat.reason).toMatch(/PDF, PNG or JPG/);
+    expect(pending(store)).toHaveLength(0);
+    expect(portal.posts).toHaveLength(0);
+  });
+
+  it("an older approval that still holds the key wins over a newer stale one", async () => {
+    const { portal, store, documents, gateway } = setup();
+    const action = proposal({ documentId: "letter" });
+    const held = await gateway.requestAction(action);
+    expect(held.status).toBe("needs_approval");
+    const holder = store.getApproval(held.approval!.id)!;
+    store.putApproval({ ...holder, id: crypto.randomUUID(), status: "stale", createdAt: new Date(Date.parse(holder.createdAt) + 60_000).toISOString() });
+    expect(store.getApprovalByKey(action.idempotencyKey)?.status).toBe("stale");
+    documents.set("letter", "plain text notes, not a document the portal takes");
+    const repeat = await gateway.requestAction(action);
+    // The holder answers, as createApprovalForKey would: the document
+    // changed, so the key was used with different content.
+    expect(repeat.status).toBe("blocked");
+    expect(repeat.reason).toBe("This idempotency key was already used with different content.");
+    expect(pending(store).map((a) => a.id)).toEqual([holder.id]);
+    expect(portal.posts).toHaveLength(0);
+  });
+
+  it("an expired approval repeated with an unfileable document is refused, not drafted again", async () => {
+    const { portal, store, documents, gateway } = setup();
+    const action = proposal({ documentId: "letter" });
+    const held = await gateway.requestAction(action);
+    expect(held.status).toBe("needs_approval");
+    store.putApproval({ ...store.getApproval(held.approval!.id)!, status: "expired" });
+    documents.set("letter", "plain text notes, not a document the portal takes");
+    const repeat = await gateway.requestAction(action);
+    expect(repeat.status).toBe("blocked");
+    expect(repeat.reason).toMatch(/PDF, PNG or JPG/);
+    expect(pending(store)).toHaveLength(0);
+    expect(portal.posts).toHaveLength(0);
+  });
+});
+
+describe("LAP-739: the executor applies the portal's configured limits", () => {
+  it("defaults to the portal's own default field and upload limits", () => {
+    expect(DEFAULT_PORTAL_LIMITS).toEqual({
+      maxFieldLength: DEFAULT_CONFIG.maxFieldLength,
+      maxDocumentBytes: DEFAULT_CONFIG.maxUploadBytes,
+    });
+  });
+
+  it("agrees with a portal configured to other limits", async () => {
+    const limits = { maxFieldLength: 600, maxDocumentBytes: 50 };
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = { ...DEFAULT_CONFIG, portalToken: PORTAL_TOKEN, maxFieldLength: 600, maxUploadBytes: 50 };
+    const fetchFn = ((url: string, init?: RequestInit) => handleRequest(new Request(url, init), store, files, config)) as typeof fetch;
+    const { gateway } = sandboxGateway(new SandboxExecutor("https://portal.test", 1000, fetchFn, PORTAL_TOKEN, limits));
+
+    const longAddress = { ...HOUSEHOLD, address: "x".repeat(550) };
+    const held = await gateway.requestAction(proposal({ payload: longAddress, documentId: "proof-pdf" }));
+    expect(held.status).toBe("needs_approval");
+    expect((await gateway.approveAndExecute(held.approval!.id, "person-rosa")).status).toBe("completed");
+
+    const tooBig = await gateway.requestAction(proposal({ documentId: "letter-png" }));
+    expect(PNG_BYTES.length).toBeGreaterThan(50);
+    expect(tooBig.status).toBe("blocked");
+    expect(tooBig.reason).toMatch(/larger than/);
+  });
+});
+
+describe("LAP-739: Engine's SQL store holds a key exactly when it would not draft again", () => {
+  it("keyHeld looks at every approval for the key, not only the newest", async () => {
+    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName("lap739-keyheld"));
+    await runInDurableObject(stub, (_i, state) => {
+      const sql = state.storage.sql;
+      ensureGatewayTables(sql);
+      const store = new SqlApprovalStore(sql);
+      const base = {
+        actionType: "submit", recipient: "sandbox-agency-portal", purpose: "renewal", documentHash: null, documentId: null,
+        approvedByHumanId: null, personId: "person-rosa", requestJson: "{}", requestHash: "h", problems: [],
+        remindAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600_000).toISOString(), escalated: false,
+      } as const;
+      expect(store.keyHeld("k1")).toBe(false);
+      store.putApproval({ ...base, id: "older", idempotencyKey: "k1", status: "pending", createdAt: "2026-11-02T10:00:00.000Z" } as never);
+      store.putApproval({ ...base, id: "newer", idempotencyKey: "k1", status: "stale", createdAt: "2026-11-02T11:00:00.000Z" } as never);
+      expect(store.getApprovalByKey("k1")?.id).toBe("newer");
+      expect(store.keyHeld("k1")).toBe(true);
+      store.putApproval({ ...base, id: "only", idempotencyKey: "k2", status: "expired", createdAt: "2026-11-02T10:00:00.000Z" } as never);
+      expect(store.keyHeld("k2")).toBe(false);
+    });
   });
 });

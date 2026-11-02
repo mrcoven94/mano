@@ -19,6 +19,9 @@ bucket_name = "mano-sandbox-portal-files"
 [triggers]
 crons = ["*/15 * * * *"]
 
+# MAX_UPLOAD_BYTES and MAX_FIELD_LENGTH are also the engine's
+# SANDBOX_MAX_UPLOAD_BYTES and SANDBOX_MAX_FIELD_LENGTH
+# (apps/engine/wrangler.toml); change both together.
 [vars]
 SESSION_TIMEOUT_MINUTES = "15"
 SLOW_MS_DEFAULT = "20000"
