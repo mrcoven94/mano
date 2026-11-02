@@ -35,3 +35,11 @@ MODEL_ALLOWLIST_EXTRA=
 EXECUTOR_MODE=
 SANDBOX_BASE_URL=
 SANDBOX_PORTAL_TOKEN=
+# Guardian checks every action after the local rules when its URL is set;
+# without one the checker is local rules only. The key pair is Modal's
+# proxy auth, needed for the hosted endpoint and not for the local
+# stand-in (packages/guardian/standin/server.mjs).
+MANO_GUARDIAN_URL=
+MANO_GUARDIAN_TOKEN= # gitleaks:allow (empty example value)
+MANO_GUARDIAN_KEY_ID=
+MANO_GUARDIAN_KEY_SECRET= # gitleaks:allow (empty example value)
