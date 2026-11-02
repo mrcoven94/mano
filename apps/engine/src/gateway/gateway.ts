@@ -500,15 +500,25 @@ export class ActionGateway {
     return { ok: true, problems: result.problems };
   }
 
-  private async checkLinks(req: ActionRequest): Promise<GatewayResult | null> {
-    for (const url of collectActionUrls(req)) {
-      const verdict = await this.linkCheck(url, { forDisplay: false });
-      if (!verdict.allowed) {
-        this.store.audit({ event: "gateway.link_block", urlHash: await auditDigest(url), reason: verdict.reason });
-        return { status: "blocked", reason: `Blocked before acting: link check failed for ${url}: ${verdict.reason ?? "blocked"}` };
-      }
-    }
-    return null;
+  // Every link is checked at once; the first blocked one, in request
+  // order, is the one reported. Pure: the caller audits the block only
+  // when it is the answer, so it can run beside the document read.
+  private async findBlockedLink(req: ActionRequest): Promise<{ url: string; reason?: LinkBlockReason } | null> {
+    const urls = collectActionUrls(req);
+    const verdicts = await Promise.all(urls.map((url) => this.linkCheck(url, { forDisplay: false })));
+    const i = verdicts.findIndex((v) => !v.allowed);
+    return i < 0 ? null : { url: urls[i], reason: verdicts[i].reason };
+  }
+
+  private async linkBlocked(found: { url: string; reason?: LinkBlockReason }): Promise<GatewayResult> {
+    this.store.audit({ event: "gateway.link_block", urlHash: await auditDigest(found.url), reason: found.reason });
+    return { status: "blocked", reason: `Blocked before acting: link check failed for ${found.url}: ${found.reason ?? "blocked"}` };
+  }
+
+  // The link check and the document read share nothing, so they run at
+  // once. Each caller keeps its own precedence between the two answers.
+  private linksAndDocument(req: ActionRequest) {
+    return Promise.all([this.findBlockedLink(req), this.readDocumentBytes(req.documentId)]);
   }
 
   private async readDocumentBytes(documentId: string | undefined): Promise<
@@ -584,11 +594,9 @@ export class ActionGateway {
       return { status: "blocked", reason: "Policy blocks this action." };
     }
 
-    const docRead = await this.readDocumentBytes(req.documentId);
+    const [blockedLink, docRead] = await this.linksAndDocument(req);
     if (!docRead.ok) return docRead.result;
-
-    const linkBlock = await this.checkLinks(req);
-    if (linkBlock) return linkBlock;
+    if (blockedLink) return this.linkBlocked(blockedLink);
 
     if (decision === "ask") {
       const frozen = await freezeActionRequest(req, docRead.bytes);
@@ -708,9 +716,8 @@ export class ActionGateway {
       this.store.audit({ event: "gateway.block", type: stored.type, reason: "policy-rerun" });
       return { status: "blocked", reason: "Policy now blocks this action." };
     }
-    const linkBlock = await this.checkLinks(stored);
-    if (linkBlock) return linkBlock;
-    const docRead = await this.readDocumentBytes(stored.documentId);
+    const [blockedLink, docRead] = await this.linksAndDocument(stored);
+    if (blockedLink) return this.linkBlocked(blockedLink);
     if (!docRead.ok) return docRead.result;
     const frozen = await freezeActionRequest(stored, docRead.bytes);
     const check = await this.runChecker(stored, frozen.documentHash);
@@ -790,9 +797,8 @@ export class ActionGateway {
     if (evaluatePolicy(stored, this.opts.policyOverrides as never) === "block") {
       return { status: "blocked", reason: "Policy now blocks this action." };
     }
-    const linkBlock = await this.checkLinks(stored);
-    if (linkBlock) return linkBlock;
-    const docRead = await this.readDocumentBytes(stored.documentId);
+    const [blockedLink, docRead] = await this.linksAndDocument(stored);
+    if (blockedLink) return this.linkBlocked(blockedLink);
     if (!docRead.ok) return docRead.result;
     const frozen = await freezeActionRequest(stored, docRead.bytes);
     const check = await this.runChecker(stored, frozen.documentHash);
@@ -999,12 +1005,11 @@ export class ActionGateway {
       this.store.updateAttempt(key, "failed");
       return { status: "blocked", reason: "Policy now blocks this action." };
     }
-    const linkBlock = await this.checkLinks(stored);
-    if (linkBlock) {
+    const [blockedLink, docRead] = await this.linksAndDocument(stored);
+    if (blockedLink) {
       this.store.updateAttempt(key, "failed");
-      return linkBlock;
+      return this.linkBlocked(blockedLink);
     }
-    const docRead = await this.readDocumentBytes(stored.documentId);
     if (!docRead.ok) {
       // Storage may be briefly down; the fresh timestamp keeps this key
       // out of the next recovery sweep until it ages again.
