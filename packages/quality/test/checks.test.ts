@@ -312,3 +312,43 @@ test("the catalog's state program names meet the federal name", async () => {
   const tx = await lineCheck(byId("chat-tx-01"), ["SNAP Food Benefits help with groceries and the Comprehensive Energy Assistance Program helps with electric bills."]);
   assert.ok(tx.filter((r) => r.id === "must-include").every((r) => r.pass), JSON.stringify(tx.filter((r) => !r.pass)));
 });
+
+// Replies the mail reader sent in the November 2 nightly (run 41530424607),
+// word for word. The reply is built from closed fields, so it never carries
+// a [letter N] marker.
+const OFFICIAL = "If you need to call the office, use the number on your state's official site, not one from a letter.";
+const READER_REPLIES: Record<string, string> = {
+  "letters-01": `This is a SNAP renewal letter. It asks you to send: ID, pay stubs and rent or utility bills. ${OFFICIAL} It looks like the letter gives a deadline of November 15, 2026. Is that the date you need to meet?`,
+  "letters-09": `This is a benefits letter asking for documents. It is due November 12, 2026. It asks you to send: pay stubs. ${OFFICIAL}`,
+  "letters-13": `This is a SNAP renewal letter. ${OFFICIAL}`,
+  "letters-16": "This letter looks like a scam. Do not pay, call, or open anything it lists. If you are not sure, call your office at a number you already trust.",
+  "letters-19": `This is a benefits renewal letter. ${OFFICIAL} Your letter mentions more than one date, and I don't want to guess wrong. Which date does it say you need to meet?`,
+};
+
+async function readerCheck(id: string, text: string) {
+  return runHardChecks(byId(id), { text, actions: [], latencyMs: 1, inputTokens: 1, outputTokens: 1 }, dns, { knowsCatalog: false });
+}
+
+test("a letter reply that gives the letter's deadline passes without a [letter N] marker", async () => {
+  for (const id of ["letters-01", "letters-09", "letters-16", "letters-19"]) {
+    const results = await readerCheck(id, READER_REPLIES[id]!);
+    const failed = results.filter((r) => !r.pass);
+    assert.equal(failed.length, 0, `${id}: ${failed.map((f) => `${f.id} (${f.detail})`).join("; ")}`);
+  }
+});
+
+test("a letter reply with a wrong date, no date or an extra date fails the deadline check", async () => {
+  const deadline = async (id: string, text: string) => (await readerCheck(id, text)).find((r) => r.id === "deadline");
+  assert.equal((await deadline("letters-01", READER_REPLIES["letters-01"]!))?.pass, true);
+  assert.equal((await deadline("letters-01", READER_REPLIES["letters-01"]!.replace("November 15", "November 16")))?.pass, false, "wrong date");
+  assert.equal((await deadline("letters-13", READER_REPLIES["letters-13"]!))?.pass, false, "an approval letter's next renewal date left out");
+  assert.equal((await deadline("letters-09", `${READER_REPLIES["letters-09"]} The office closes November 1, 2026.`))?.pass, false, "a date the letter does not print");
+});
+
+test("a reply to a letter with two dates names both or neither, never one", async () => {
+  const deadline = async (text: string) => (await readerCheck("letters-19", text)).find((r) => r.id === "deadline");
+  assert.equal((await deadline(READER_REPLIES["letters-19"]!))?.pass, true, "asks without naming a date");
+  assert.equal((await deadline("Your letter says November 25, 2026 on one page and November 1, 2026 on another."))?.pass, true, "names both");
+  assert.equal((await deadline("Your renewal is due November 25, 2026."))?.pass, false, "picks the later date");
+  assert.equal((await deadline("Your renewal is due November 1, 2026."))?.pass, false, "picks the earlier date");
+});
