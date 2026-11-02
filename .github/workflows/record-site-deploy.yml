@@ -1,0 +1,42 @@
+name: record-site-deploy
+# The site deploys through Vercel's GitHub integration, which does not report
+# here. After site changes land on main, verify the live site serves and record
+# it in the site-production environment so the Deployments panel shows the site
+# next to the other pieces. This workflow deploys nothing.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/site/**"
+      - ".github/workflows/record-site-deploy.yml"
+permissions:
+  contents: read
+  deployments: write
+concurrency:
+  group: record-site-deploy
+  cancel-in-progress: false
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    environment:
+      name: site-production
+      url: https://withmano.com
+    steps:
+      - name: Wait for the live site, then record the deployment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 15 https://withmano.com/) || code="000"
+            if [ "$code" = "200" ]; then break; fi
+            if [ "$i" = "30" ]; then echo "::error::withmano.com never returned 200"; exit 1; fi
+            sleep 20
+          done
+          id=$(gh api "repos/${{ github.repository }}/deployments" \
+            -f ref="${{ github.sha }}" -f environment="site-production" \
+            -f description="Vercel deploy of ${{ github.sha }}" \
+            -F auto_merge=false --jq .id)
+          gh api "repos/${{ github.repository }}/deployments/$id/statuses" \
+            -f state="success" -f environment_url="https://withmano.com" \
+            -f description="withmano.com serves 200" > /dev/null

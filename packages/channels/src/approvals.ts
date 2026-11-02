@@ -21,3 +21,11 @@ const OPT_OUT_KEYWORDS = new Set(["STOP", "QUIT", "CANCEL", "UNSUBSCRIBE", "END"
 export function isOptOut(text: string): boolean {
   return OPT_OUT_KEYWORDS.has(text.trim().toUpperCase());
 }
+
+// Clear re-opt-in keywords. After a STOP whose own timestamp is unknown,
+// these re-engage at once; any other message waits out a short window.
+const OPT_IN_KEYWORDS = new Set(["START", "UNSTOP"]);
+
+export function isOptIn(text: string): boolean {
+  return OPT_IN_KEYWORDS.has(text.trim().toUpperCase());
+}

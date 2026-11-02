@@ -1,50 +1,141 @@
 # Mano
 
-Apply once, for anything that makes your life better.
+[![check](https://github.com/mrcoven94/mano/actions/workflows/check.yml/badge.svg)](https://github.com/mrcoven94/mano/actions/workflows/check.yml) [![license](https://img.shields.io/github/license/mrcoven94/mano)](LICENSE) [![latest release](https://img.shields.io/github/v/release/mrcoven94/mano)](https://github.com/mrcoven94/mano/releases)
 
-Mano gives every person their own agent. It applies for benefits, cash assistance, jobs, scholarships and training, fills out any form you hand it, reads your mail from a photo, renews on time and waits on hold for you. Every government office and nonprofit that runs those programs can claim agents of their own, and the agents work a case together with the resident's consent. A person approves every decision.
+Mano gives every person an agent that applies for help, fills out any form, reads their mail, renews on time and waits on hold. Agencies and nonprofits claim agents for their staff, and the agents work a shared case together only with the resident's consent. A person approves every decision.
 
-Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026) on Meta's Muse models.
+Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026) on Meta's Muse models. Everything in this repository was written from October 26, 2026 onward.
 
-## Status
+## Try it now
 
-Under construction during the hackathon. Everything in this repository was written from October 26, 2026 onward.
+- Text Mano at (801) 920-3370. The current number is always on the site.
+- Visit the site: [withmano.com](https://withmano.com).
+- The resident app (iOS, Android, web) is in progress.
 
-## Team
+Demo submissions go to our own sandbox agency portal, our own phone lines and our own fax number. Synthetic people only, never real resident data.
 
-Three members: David Coven, Claude and Muse.
+## How it works
 
-- David decides what gets built, owns the accounts and approves every merge.
-- Claude is the architect. It plans the work, writes each build session's brief, orchestrates the sessions and reviews what they produce.
-- Muse writes the code. Each part of Mano is built by a Muse Code session running Muse Spark, working from one brief and one ticket.
-- Other models handle evaluation and review: an independent critique of every pull request from a model outside the build, plus a panel of open-weight models for changes that touch security, personal data or anything irreversible. A session never reviews its own work.
+A resident talks to Mano by text, app or web. Their agent reads mail, tracks deadlines, fills out forms and drafts submissions. It keeps one profile of the person (name, address, household, income, programs and case numbers), each fact marked with whether the person said it or a document showed it, so they never answer the same question twice. Every outside action goes through the action gateway: the agent decides, the person approves the exact version, then Mano acts. Staff agents at agencies and nonprofits see only the cases residents shared with them, and the agents coordinate over an open protocol.
 
-## Layout
+```mermaid
+flowchart LR
+    resident[Resident: text, app, web] --> agent[Personal agent]
+    agent --> mail[Mail and deadlines]
+    agent --> forms[Forms and renewals]
+    agent --> gateway[Action gateway: decide, approve, act]
+    gateway --> portal[Sandbox agency portal]
+    gateway --> phone[Phone and fax, in progress]
+    agent <--> protocol[Open protocol]
+    protocol <--> staff[Staff agent: shared cases only]
+```
 
-| Path | What |
-| --- | --- |
-| `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway |
-| `apps/sandbox-portal` | A fake benefits portal every demo submits to, on Cloudflare Workers |
-| `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text |
-| `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel |
-| `packages/accounts` | One person, one account: phone and email sign-in, linking, merge, the account page |
-| `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits |
-| `packages/protocol` | The open message format agents use to work a case together |
-| `packages/guardian` | The checker that reviews every outside action before a person approves it |
-| `eval` | The held-out test: scenarios, baselines and results |
-| `docs` | Decisions and design notes |
+## Live versus in progress
 
-## Accounts
+<!-- status:start -->
+| Piece | Status | URL | Last deploy |
+| --- | --- | --- | --- |
+| Site | live | https://withmano.com | none |
+| Sandbox portal | in progress | [Deployments panel](https://github.com/mrcoven94/mano/deployments) | none |
+| Engine | in progress | not deployed yet | none |
+| Channels | live | https://text.withmano.com/health | none |
+| Guardian | in progress | not deployed yet | none |
+| Quality | in progress | not deployed yet | none |
+<!-- status:end -->
+
+This table is generated by `scripts/status.mjs`, which checks each health URL and the latest deploy per environment. A scheduled workflow refreshes it and opens a pull request when it changes. Deployments are visible in the repository's [Deployments panel](https://github.com/mrcoven94/mano/deployments).
+
+## Run it locally
+
+You need Node 24 and pnpm. No accounts and no keys. Each package runs with local stand-ins when its keys are missing (a fake model client, an in-memory store, a local link check) and says which parts are not live.
+
+```sh
+pnpm install
+pnpm check
+```
+
+Run the site:
+
+```sh
+pnpm --filter @mano/site dev
+```
+
+Run the sandbox agency portal (needs [wrangler](https://developers.cloudflare.com/workers/wrangler/)):
+
+```sh
+pnpm --filter @mano/sandbox-portal dev
+```
+
+Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. To deploy your own copy, see the deploy workflows in `.github/workflows/`.
+
+## The text line
+
+Texts to Mano land on `apps/channels`, a Cloudflare Worker. Each reply is a Meta model call to Muse Spark 1.3 (a Standard model ID with `store: false`, set as `MANO_REPLY_MODEL` in `apps/channels/wrangler.toml`). Mano's voice lives in `packages/persona` and goes to the model as its instructions, with the conversation as role messages.
+
+- Simple questions take the fast path: one call at minimal reasoning effort, sent a second time 300 ms later, and the first answer wins. Replies arrive in about 2 to 4 seconds.
+- Questions that need real digging take the deep path: the fast call returns a short heads-up, which is texted at once, then a second call at medium effort writes the full answer.
+- Every outgoing text passes a deterministic voice guard (plain code, not a model call). It rewrites dashes and markdown, replaces any model or provider name with "I'm Mano, an automated assistant", and sends a short safe line instead of an empty text.
+- A message about self-harm or danger never waits on a heads-up, and its reply always names 988 and 911.
+
+Check the voice against the real model with your own key (synthetic messages only, sent to a `-contributor` model ID). Without a key, the probes are skipped:
+
+```sh
+META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
+```
+
+## Packages and apps
+
+| Path | What | Status |
+| --- | --- | --- |
+| `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel | live |
+| `apps/sandbox-portal` | The fake state benefits portal every demo submits to, on Cloudflare Workers | live |
+| `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway | landing during the hackathon |
+| `apps/agent` | The agent brain on Eve by Vercel: reads each text, remembers and proposes actions through the engine, fills out forms on the person's computer, keeps reminders and the deadlines Mano texts about on its own | landing during the hackathon |
+| `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text | live |
+| `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits | live |
+| `packages/persona` | Mano's voice: the soul, the fast and deep paths, the voice guard, the crisis floor and the persona probes | live |
+| `packages/protocol` | The open message format agents use to work a case together | landing during the hackathon |
+| `packages/guardian` | The checker that reviews every outside action before a person approves it | live |
+| `packages/computer` | The desktop Mano drives: screenshots in, mouse and keyboard out, on Modal or local Playwright | landing during the hackathon |
+| `packages/quality` | The nightly answer-quality bench | landing during the hackathon |
+| `packages/programs` | Sourced facts for SNAP, Medicaid and LIHEAP in eight states, which the agent looks up before stating any | landing during the hackathon |
+| `packages/accounts` | One person, one account: phone and email sign-in, linking, merge, the account page | landing during the hackathon |
+| `apps/app` | The resident app in React Native (iOS, Android, web) | landing during the hackathon |
+| `eval` | The held-out test: scenarios, baselines and results | landing during the hackathon |
+| `docs` | Decisions and design notes | live |
+
+### Guardian
+
+Guardian runs on one GPU on Modal and scales to zero when idle. A cold start takes about three minutes, and a check fails closed after 10 seconds, so Mano calls `warm()` when a conversation starts. To keep one GPU warm (about $1.95 an hour), run the `guardian-modal` workflow from `main` under Actions with `min_containers` set to 1. To turn it off, run it again with 0. Any merge that touches the guardian also deploys 0.
+
+### Quality
+
+Pull requests that can change what Mano says run the quality smoke: 28 synthetic cases through the real text line on a Meta model, gated against main's last nightly run. When the model provider refuses calls for billing (HTTP 402), the smoke and the nightly score nothing and report "model provider unavailable" in the job summary instead of failing. Any other error still fails. The `smoke-replay` job runs the same text line and safety checks on recorded synthetic replies with no key, so the code path stays covered while the provider is down: `pnpm --filter @mano/quality smoke-replay`.
+
+### Computer
+
+`packages/computer` is the desktop Mano drives: a loop that shows the model a screenshot and executes the mouse and keyboard actions it returns. The hosted backend is a Modal Sandbox running a Linux desktop with Chromium (see `packages/computer/modal/`); the local stand-in drives Chromium through Playwright. The desktop fills forms and never files them: filing goes through Engine's action gateway after the person's yes. A pending safety check stops the run and goes back to the caller, and a login prompt ends it, because there is no live view and the agent never sees passwords. Each desktop opens only the portal origin, mounts only its own person's profile, and answers only the caller holding its per-session secret. Details in the header comment of its `src/index.ts` and the docstring of `modal/app.py`; `modal run modal/prove.py` checks those rules live on throwaway Modal resources.
+
+### Programs
+
+`packages/programs` is the only place the agent gets program facts: the state's own name for SNAP, Medicaid and LIHEAP in California, Texas, New York, Florida, Illinois, Washington, Arizona and Ohio, what each covers, income limits by household size with their year, the renewal cycle, how to apply and the official phone and site. Every fact carries the official page it came from, the day it was checked and the text that shows it; anything not confirmed is listed in the entry's gaps. `pnpm --filter @mano/programs check` fails on a missing source or date or a site that is not official; `pnpm --filter @mano/programs verify-sources` fetches every source again and looks for each quote.
+
+### Accounts
 
 Texting Mano creates the account. The same person signs in on the web at `/sign-in` with that phone number (a 6-digit code by text) or with email through WorkOS, and manages sign-in methods at `/account`. Details live in the header comment of `packages/accounts/src/index.ts`; run its checks with `pnpm --filter @mano/accounts run check`.
 
-## Sandbox portal
+## Held-out test
 
-`apps/sandbox-portal` is a fake state benefits portal: a three-step renewal application with uploads, confirmation numbers, and idempotency keys the action gateway reconciles against. Demos submit here; Mano never touches a real benefits site. Run it with `pnpm --filter @mano/sandbox-portal dev` (details in the header comment of its `src/index.ts`). Pushing to `main` deploys it.
+Not run yet. The Results session will publish the headline here after the final run: correct packets, missed deadlines, blocked unsafe actions, failures, cost and time.
 
-## Guardian
+## Team
 
-`packages/guardian` reviews every outside action after the gateway policy check and before a person approves it. The rules checker needs no keys; the model checker runs the rules first and only calls the guardian model (Muse Glimmer on Modal, scale to zero) when they pass. Local rules-only runs set `MANO_GUARDIAN_RULES_ONLY=1`; without an endpoint and without that flag, checks block. The local stand-in (`node packages/guardian/standin/server.mjs`) serves the `/check` route for development. Details in the header comment of its `src/index.ts`. Pushing to `main` redeploys the model endpoint.
+David Coven decides what gets built and owns the accounts. The code is written with coding agents, and every model Mano itself calls at runtime is a Meta model.
+
+- From October 26 to 29, Muse Code sessions built the first parts, one session per workstream.
+- From October 29, one Claude Code session leads: it plans the work, briefs a builder agent for each workstream, reads every diff and merges.
+- GPT Sol reviews every pull request at its current head, with a multi-model panel for changes that touch auth, personal data or anything that sends. Nothing merges on its author's word.
+- `AGENTS.md` is the full operating manual, and anyone can run the same process.
 
 ## Prior work
 

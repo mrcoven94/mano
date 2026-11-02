@@ -19,6 +19,7 @@ export default function Footer() {
               <ul>
                 <li><Link href="/">For people</Link></li>
                 <li><Link href="/how-it-works">How Mano works</Link></li>
+                <li><Link href="/renewals">Renewals</Link></li>
                 <li><Link href="/#pricing">Pricing</Link></li>
                 <li><Link href="/#questions">Questions</Link></li>
               </ul>

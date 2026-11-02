@@ -1,4 +1,4 @@
-import type { FileMeta, Household, Submission, SubmissionSummary, SubmittedRef } from "./store";
+import type { FileMeta, Household, Submission, SubmissionSummary } from "./store";
 
 export const TEST_BANNER = "TEST SYSTEM: this is a fake benefits portal for demos. No real benefits. No real data.";
 
@@ -57,14 +57,14 @@ export function homePage(): string {
     "Welcome",
     `<div class="notice"><b>Notice:</b> This demonstration portal accepts renewal applications from test residents only. It is not connected to any real benefits system.</div>
 <table class="form">
-<tr><td class="label">Renew your benefits</td><td>File your yearly renewal online in three steps: household information, supporting documents, review and submit. You will receive a confirmation number.</td></tr>
+<tr><td class="label">Renew your benefits</td><td>Fill out your yearly renewal online in three steps: household information, supporting documents, review. Submitting saves your application as a draft. The office files it and sends you a confirmation number.</td></tr>
 <tr><td class="label">Caseworkers</td><td><a href="/caseworker">View submitted applications</a> (staff test view).</td></tr>
 </table>
 <p><a class="btn" style="text-decoration:none; display:inline-block; margin-top:10px;" href="/apply">Start renewal application</a></p>`,
   );
 }
 
-export function householdPage(error?: string, previous?: Partial<Household>): string {
+export function householdPage(draftId: string | null, error?: string, previous?: Partial<Household>): string {
   const v = (name: keyof Household): string => escapeHtml(previous?.[name] ?? "");
   const err = error ? `<div class="error"><b>Error:</b> ${escapeHtml(error)}</div>` : "";
   return layout(
@@ -72,6 +72,7 @@ export function householdPage(error?: string, previous?: Partial<Household>): st
     `<div class="steps"><b>Step 1: Household</b> &gt; Step 2: Documents &gt; Step 3: Review</div>
 ${err}
 <form method="post" action="/apply/household">
+${draftId ? `<input type="hidden" name="draft" value="${escapeHtml(draftId)}">` : ""}
 <table class="form">
 <tr><td class="label">Full legal name</td><td><input type="text" name="fullName" value="${v("fullName")}"></td></tr>
 <tr><td class="label">Date of birth</td><td><input type="date" name="dateOfBirth" value="${v("dateOfBirth")}"></td></tr>
@@ -103,14 +104,14 @@ ${err}
   );
 }
 
-export function reviewPage(household: Household, files: FileMeta[], key: string, digest: string): string {
+export function reviewPage(household: Household, files: FileMeta[]): string {
   const rows = files
     .map((f) => `<tr><td class="label">Attached file</td><td>${escapeHtml(f.name)} (${escapeHtml(f.type)}, ${f.size} bytes)</td></tr>`)
     .join("");
   return layout(
     "Step 3 of 3: Review",
     `<div class="steps">Step 1: Household &gt; Step 2: Documents &gt; <b>Step 3: Review</b></div>
-<div class="notice"><b>Check every field.</b> Pressing Submit sends this exact application. Your submission key is <span class="key">${escapeHtml(key)}</span>. Keep this number: if the page times out it proves what was received without filing twice.</div>
+<div class="notice"><b>Check every field.</b> Pressing Submit saves this application as a draft. Nothing is filed from this page. The office files it and sends the confirmation number.</div>
 <table class="form">
 <tr><td class="label">Full legal name</td><td>${escapeHtml(household.fullName)}</td></tr>
 <tr><td class="label">Date of birth</td><td>${escapeHtml(household.dateOfBirth)}</td></tr>
@@ -120,56 +121,27 @@ export function reviewPage(household: Household, files: FileMeta[], key: string,
 <tr><td class="label">Monthly income ($)</td><td>${escapeHtml(household.monthlyIncome)}</td></tr>
 ${rows}
 </table>
-<form method="post" action="/submissions">
-<input type="hidden" name="key" value="${escapeHtml(key)}">
-<input type="hidden" name="digest" value="${escapeHtml(digest)}">
-<table class="form" style="margin-top:10px;">
-<tr><td class="label">Slow mode (demo)</td><td><label><input type="checkbox" name="slow" value="1"> Hold the response past the caller's timeout (the office still receives it)</label></td></tr>
-</table>
+<form method="post" action="/apply/submit">
 <p><button class="btn" type="submit">Submit application</button></p>
 </form>`,
   );
 }
 
-export function confirmationPage(sub: Submission, duplicate: boolean): string {
-  const dup = duplicate
-    ? `<div class="notice"><b>Already received:</b> this submission key arrived before. No second application was filed. Your original confirmation number is below.</div>`
-    : "";
-  const slow =
-    sub.slowMs > 0
-      ? `<div class="notice"><b>Slow mode:</b> the office held this response for ${(sub.slowMs / 1000).toFixed(0)} seconds after receiving your application.</div>`
-      : "";
+export function savedPage(draftId: string): string {
   return layout(
-    "Confirmation",
-    `${dup}${slow}
+    "Saved as a draft",
+    `<div class="notice"><b>Your application was saved as a draft.</b> Nothing has been filed yet. The office files it and sends the confirmation number.</div>
 <table class="form">
-<tr><td class="label">Confirmation number</td><td><span class="conf">${escapeHtml(sub.confirmationNumber)}</span></td></tr>
-<tr><td class="label">Applicant</td><td>${escapeHtml(sub.household.fullName)}</td></tr>
-<tr><td class="label">Received</td><td>${escapeHtml(new Date(sub.receivedAt).toUTCString())}</td></tr>
-<tr><td class="label">Submission key</td><td><span class="key">${escapeHtml(sub.key)}</span></td></tr>
+<tr><td class="label">Draft number</td><td><span class="key">${escapeHtml(draftId)}</span></td></tr>
 </table>
-<p>Write down your confirmation number. A caseworker will review your renewal.</p>
-<p><a href="/">Return to the home page</a></p>`,
-  );
-}
-
-export function submittedPage(ref: SubmittedRef): string {
-  return layout(
-    "Already submitted",
-    `<div class="notice"><b>This application was already submitted.</b> Nothing more needs filing. If you need to change details, start a new application.</div>
-<table class="form">
-<tr><td class="label">Confirmation number</td><td><span class="conf">${escapeHtml(ref.confirmationNumber)}</span></td></tr>
-<tr><td class="label">Received</td><td>${escapeHtml(new Date(ref.receivedAt).toUTCString())}</td></tr>
-<tr><td class="label">Submission key</td><td><span class="key">${escapeHtml(ref.key)}</span></td></tr>
-</table>
-<p><a href="/">Return to the home page</a></p>`,
+<p><a href="/apply/review">Back to review</a> | <a href="/">Return to the home page</a></p>`,
   );
 }
 
 export function timeoutPage(): string {
   return layout(
     "Session timed out",
-    `<div class="error"><b>Your session timed out.</b> For your protection this office signs you out after a period without activity. Nothing was submitted.</div>
+    `<div class="error"><b>Your session timed out.</b> For your protection this office signs you out after a period without activity. Nothing was filed.</div>
 <p><a class="btn" style="text-decoration:none; display:inline-block;" href="/apply">Start a new application</a></p>`,
   );
 }
@@ -198,7 +170,7 @@ export function caseworkerListPage(subs: SubmissionSummary[], page: number, tota
   const next = page < totalPages ? `<a href="/caseworker?page=${page + 1}">Next page</a>` : "Next page";
   return layout(
     "Caseworker view",
-    `<div class="notice"><b>Staff test view.</b> Applications submitted through the renewal portal appear below, newest first.</div>
+    `<div class="notice"><b>Staff test view.</b> Applications the office filed appear below, newest first. Drafts saved in the browser are not filings and do not appear here.</div>
 <table class="form">
 <tr><td class="label">Confirmation</td><td class="label">Applicant</td><td class="label">Received</td><td class="label">Files</td></tr>
 ${rows}
@@ -225,7 +197,7 @@ export function caseworkerDetailPage(sub: Submission): string {
 <tr><td class="label">Phone</td><td>${escapeHtml(sub.household.phone)}</td></tr>
 <tr><td class="label">Household size</td><td>${escapeHtml(sub.household.householdSize)}</td></tr>
 <tr><td class="label">Monthly income</td><td>$${escapeHtml(sub.household.monthlyIncome)}</td></tr>
-<tr><td class="label">Received</td><td>${escapeHtml(new Date(sub.receivedAt).toUTCString())} via ${escapeHtml(sub.source)}</td></tr>
+<tr><td class="label">Received</td><td>${escapeHtml(new Date(sub.receivedAt).toUTCString())}</td></tr>
 <tr><td class="label">Submission key</td><td><span class="key">${escapeHtml(sub.key)}</span></td></tr>
 ${files}
 </table>

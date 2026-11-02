@@ -1,3 +1,4 @@
+import { Decorations } from "../src/decorations.js";
 import {
   RecordingChannel,
   StandInResponder,
@@ -8,8 +9,19 @@ import {
 } from "@mano/channels";
 import { ConversationRunner, DEFAULT_RUNNER_CONFIG, type RunnerConfig, type SpendLedger } from "../src/runner.js";
 import { GlobalLedger, MemoryGlobalStore } from "../src/global.js";
-import { MemoryStore } from "../src/store.js";
-import { MemoryFileStore } from "../src/files.js";
+import { MemoryStore, type ConversationStore } from "../src/store.js";
+import type { DocumentStore } from "../src/files.js";
+
+// The person's Engine documents, in memory: what Channels stored, by ID.
+export class MemoryDocumentStore implements DocumentStore {
+  docs = new Map<string, { name: string; bytes: Uint8Array; generation: number }>();
+  refuse = false;
+  async put(doc: { id: string; name: string; bytes: Uint8Array; generation: number }): Promise<boolean> {
+    if (this.refuse) return false;
+    this.docs.set(doc.id, { name: doc.name, bytes: doc.bytes, generation: doc.generation });
+    return true;
+  }
+}
 
 export const TEST_PEPPER = "test-pepper-not-real";
 export const TEST_KEK_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
@@ -23,7 +35,9 @@ export interface Harness {
   store: MemoryStore;
   channel: RecordingChannel;
   responder: Responder;
-  files: MemoryFileStore;
+  // Eyes and background work, run outside the turn.
+  decorations: Decorations;
+  documents: MemoryDocumentStore;
   ledger: GlobalLedger;
   lines: string[];
   logger: Logger;
@@ -88,21 +102,29 @@ export function makeHarness(
     byteBudget?: number;
     startMs?: number;
     fetchFn?: typeof fetch;
+    reportPresentation?: import("../src/runner.js").RunnerDeps["reportPresentation"];
+    // Another store behind the same interface, such as SqlConversationStore.
+    store?: ConversationStore;
+    // How long decoration work may run before it is cancelled.
+    decorationTimeoutMs?: number;
+    // The model check for one short health question; none fails closed.
+    crisisCheck?: import("@mano/persona").CrisisCheck | null;
   } = {},
 ): Harness {
   const lines: string[] = [];
   const logger = createLogger((line) => lines.push(line));
-  const store = new MemoryStore();
+  const store = (opts.store ?? new MemoryStore()) as MemoryStore;
   const channel = new RecordingChannel();
   const responder = opts.responder ?? new StandInResponder(opts.replies ?? ["Thanks for writing. Here is what I found."]);
-  const files = new MemoryFileStore();
+  const documents = new MemoryDocumentStore();
   const batchMs = opts.config?.batchMs ?? DEFAULT_RUNNER_CONFIG.batchMs;
   const h: Harness = {
     runner: null as unknown as ConversationRunner,
     store,
     channel,
     responder,
-    files,
+    decorations: new Decorations({ timeoutMs: opts.decorationTimeoutMs }),
+    documents,
     ledger: null as unknown as GlobalLedger,
     lines,
     logger,
@@ -133,13 +155,15 @@ export function makeHarness(
     store,
     channel,
     responder,
-    files,
-    kekB64: TEST_KEK_B64,
+    documents,
     spend,
     logger,
     nowMs: () => h.now,
     fetchFn: opts.fetchFn ?? (async () => new Response("missing", { status: 404 })),
     config: { handleHash: TEST_HANDLE_HASH, ...DEFAULT_RUNNER_CONFIG, ...opts.config },
+    reportPresentation: opts.reportPresentation,
+    decorations: h.decorations,
+    crisisCheck: opts.crisisCheck ?? null,
   });
   return h;
 }

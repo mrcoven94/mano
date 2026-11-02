@@ -1,0 +1,41 @@
+name = "mano-engine"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+# Served only on the custom domain: no workers.dev URL and no preview URLs,
+# so the account subdomain is never used.
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "engine.withmano.com", custom_domain = true }]
+
+[durable_objects]
+bindings = [
+  { name = "PERSON_AGENT", class_name = "PersonAgent" },
+  { name = "ORG_AGENT", class_name = "OrgAgent" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PersonAgent", "OrgAgent"]
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "mano-files"
+
+# Secrets (never commit values):
+#   wrangler secret put META_MODEL_API_KEY  (reads from stdin)
+#   wrangler secret put ENCRYPTION_KEK_B64
+#   wrangler secret put SESSION_SECRET
+#   wrangler secret put OPERATOR_SECRET  (marks people synthetic via the admin route)
+#   wrangler secret put MANO_ENGINE_AGENT_TOKEN  (the agent's service token)
+#   wrangler secret put MANO_HANDLE_GRANT_SECRET  (Channels signs handle grants with it)
+#   wrangler secret put MANO_ENGINE_CHANNELS_TOKEN  (Channels' token for the conversation delete)
+#   wrangler secret put MANO_ENGINE_SEND_SECRET  (signs reminder sends to Channels' agent-send route)
+#   MANO_CHANNELS_URL (Channels' base URL, https://text.withmano.com in production)
+#   MANO_NUDGE_TIME (optional, local HH:MM deadline nudges go out, default 10:00)
+#   EXECUTOR_MODE (simulated or sandbox), plus SANDBOX_BASE_URL and
+#   SANDBOX_PORTAL_TOKEN (the portal's own token) for sandbox
+# Production sets all of these from the engine-production GitHub
+# environment in .github/workflows/deploy-engine.yml.
+# Optional model routing (see .dev.vars.example):
+#   CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA

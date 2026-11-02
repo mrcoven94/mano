@@ -1,0 +1,43 @@
+# Groups generated release notes by the session that wrote the change (see label-pr.yml).
+changelog:
+  categories:
+    - title: App
+      labels: [app]
+    - title: Channels
+      labels: [channels]
+    - title: Engine
+      labels: [engine]
+    - title: Eval
+      labels: [eval]
+    - title: Extensions
+      labels: [extensions]
+    - title: Forms
+      labels: [forms]
+    - title: Guardian
+      labels: [guardian]
+    - title: Mail
+      labels: [mail]
+    - title: Orgs
+      labels: [orgs]
+    - title: Phone
+      labels: [phone]
+    - title: Platform
+      labels: [platform]
+    - title: Program
+      labels: [program]
+    - title: Quality
+      labels: [quality]
+    - title: Results
+      labels: [results]
+    - title: Screens
+      labels: [screens]
+    - title: Ship
+      labels: [ship]
+    - title: Site
+      labels: [site]
+    - title: Spine
+      labels: [spine]
+    - title: Vault
+      labels: [vault]
+    - title: Other changes
+      labels: ["*"]
