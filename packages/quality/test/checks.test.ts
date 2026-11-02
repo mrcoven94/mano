@@ -366,3 +366,20 @@ test("a reply that names both dates and then picks one fails", async () => {
   const text = "Your letter says November 1, 2026 and November 25, 2026. Use November 25, 2026 as the deadline.";
   assert.equal((await readerCheck("letters-19", text)).find((r) => r.id === "deadline")?.pass, false);
 });
+
+test("a date's year, order and negation count when reading the deadline", async () => {
+  const deadline = async (id: string, text: string) => (await readerCheck(id, text)).find((r) => r.id === "deadline");
+  for (const text of ["It is due 15/11/2026.", "It is due 15 November 2026.", "Vence el 15 de noviembre 2026."]) {
+    assert.equal((await deadline("letters-01", text))?.pass, true, text);
+  }
+  for (const text of [
+    "It is due November 15, 27.",
+    "Vence el 15 de noviembre 2027.",
+    "It is due November 15, 2026 or 16/11/2026.",
+    "It is due 16 November 2026.",
+    "The deadline is not November 15, 2026.",
+  ]) {
+    assert.equal((await deadline("letters-01", text))?.pass, false, text);
+  }
+  assert.equal((await deadline("letters-19", "Your renewal is due 11/30."))?.pass, false, "a date with no year");
+});
