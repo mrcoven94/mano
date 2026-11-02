@@ -325,13 +325,13 @@ interface CalendarDate {
 }
 
 const SHORT_MONTH_RE = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
-const YEAR_RE = String.raw`(?:(?:,\s*|\s+)'?(\d{4}|\d{2})\b)?`;
+const YEAR_RE = String.raw`(?:(?:(?:,\s*|\s+)'?|')(\d{4}|\d{2})\b)?`;
 const MONTH_DAY_RE = new RegExp(String.raw`\b(${SHORT_MONTH_RE})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b${YEAR_RE}`, "gi");
 const DAY_MONTH_RE = new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(${SHORT_MONTH_RE})\b\.?${YEAR_RE}`, "gi");
 const ES_DAY_RE = new RegExp(String.raw`\b(\d{1,2})\s+de\s+(${MONTH_NAMES_ES.join("|")})(?:\s+(?:del?\s+)?(\d{4}|\d{2}))?\b`, "gi");
 const ISO_DAY_RE = /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g;
 // "24/7" is round the clock, not July 24.
-const SLASH_DAY_RE = /\b(?!24\/7\b)(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?\b/g;
+const SLASH_DAY_RE = /\b(?!24\/7\b(?!\/))(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?\b/g;
 
 function yearOf(written: string | undefined): number | null {
   if (!written) return null;
