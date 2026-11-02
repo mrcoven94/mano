@@ -63,7 +63,7 @@ import {
   type ReplayStorage,
 } from "../fill-replay.js";
 import { ProfileStore, forgetMemoryNote, type PatchAnswer, type Profile, type Suggestion } from "../profile.js";
-import { profileCipher } from "../crypto.js";
+import { decryptForPerson, documentAad, encryptForPerson, profileCipher, type EncryptedBlob } from "../crypto.js";
 import {
   cancelDeadline,
   deadlineIdFor,
@@ -1273,11 +1273,16 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { id, hash };
   }
 
-  // The person's replay images and link entries, in R2. Images are
-  // encrypted like documents, under their own IDs.
+  // The person's replay images and link entries, in R2. Images and the
+  // link's token are encrypted like documents, under their own IDs.
   private replayStorage(): ReplayStorage {
     const files = this.env.FILES;
+    const kek = this.env.ENCRYPTION_KEK_B64;
+    const tokenAad = (approvalId: string) => documentAad(this.personId, `fill-link-${approvalId}`);
     return {
+      sealToken: async (approvalId, token) => JSON.stringify(await encryptForPerson(new TextEncoder().encode(token), kek, tokenAad(approvalId))),
+      openToken: async (approvalId, sealed) =>
+        new TextDecoder().decode(await decryptForPerson(JSON.parse(sealed) as EncryptedBlob, kek, tokenAad(approvalId))),
       putImage: (id, png, generation) => putDocument(files, this.env.ENCRYPTION_KEK_B64, this.personId, id, png, generation),
       getImage: (id, r2Key) => getDocumentBytes(files, this.env.ENCRYPTION_KEK_B64, this.personId, id, r2Key),
       deleteObjects: (keys) => files.delete(keys),
@@ -1304,7 +1309,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // The token of this approval's replay link while it still opens.
   async fillReplayLink(verified: string, approvalId: string): Promise<string | null> {
     await this.assertSubject(verified);
-    return replayLinkToken(this.db(), approvalId, Date.now());
+    return replayLinkToken({ sql: this.db(), storage: this.replayStorage() }, approvalId, Date.now());
   }
 
   // The replay page a link opens. The worker found the person and the

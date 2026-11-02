@@ -5,7 +5,9 @@
 // One row per approval, written once: the first bind wins and a retry
 // gets the same link. The row holds the approval's request hash at bind
 // time, the form's labels, each step's caption and where its image lives,
-// and the link token. Images are stored the way documents are
+// and the link token's hash. The token itself is kept only sealed with
+// the person's key, so the database alone holds no working link; a retry
+// opens it to answer the same link. Images are stored the way documents are
 // (src/files.ts): encrypted for the person, bound to the person and an
 // ID, in R2 under the conversation generation, so a conversation delete
 // sweeps them with the documents. Each bind writes under IDs of its own,
@@ -70,7 +72,8 @@ export interface StoredReplay {
   generation: number;
   labels: Record<string, string>;
   steps: StoredStep[];
-  linkToken: string;
+  linkKey: string;
+  sealedToken: string;
   linkExpiresAtMs: number;
 }
 
@@ -81,12 +84,15 @@ export interface ReplayLinkEntry {
   expiresAtMs: number;
 }
 
-// The person's image and link storage. In Engine both are R2.
+// The person's image and link storage, in Engine both R2, and the
+// person's key for the link's token.
 export interface ReplayStorage {
   putImage(imageId: string, png: Uint8Array, generation: number): Promise<{ hash: string; r2Key: string }>;
   getImage(imageId: string, r2Key: string): Promise<Uint8Array | null>;
   deleteObjects(keys: string[]): Promise<void>;
   putLink(key: string, entry: ReplayLinkEntry): Promise<void>;
+  sealToken(approvalId: string, token: string): Promise<string>;
+  openToken(approvalId: string, sealed: string): Promise<string>;
 }
 
 export interface ReplayApprovals {
@@ -121,7 +127,7 @@ export class ReplayInputError extends Error {
 export function ensureFillReplayTables(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS fill_replays(
     approval_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, generation INTEGER NOT NULL,
-    labels_json TEXT NOT NULL, steps_json TEXT NOT NULL, link_token TEXT NOT NULL, link_key TEXT NOT NULL,
+    labels_json TEXT NOT NULL, steps_json TEXT NOT NULL, link_token_sealed TEXT NOT NULL, link_key TEXT NOT NULL,
     link_expires_at_ms INTEGER NOT NULL, created_at TEXT NOT NULL)`);
   sql.exec("CREATE TABLE IF NOT EXISTS fill_link_cleanup(link_key TEXT PRIMARY KEY)");
 }
@@ -188,7 +194,8 @@ export function getFillReplay(sql: SqlExec, approvalId: string): StoredReplay | 
         generation: number;
         labels_json: string;
         steps_json: string;
-        link_token: string;
+        link_key: string;
+        link_token_sealed: string;
         link_expires_at_ms: number;
       }
     | undefined;
@@ -199,7 +206,8 @@ export function getFillReplay(sql: SqlExec, approvalId: string): StoredReplay | 
     generation: Number(row.generation),
     labels: JSON.parse(row.labels_json) as Record<string, string>,
     steps: JSON.parse(row.steps_json) as StoredReplay["steps"],
-    linkToken: row.link_token,
+    linkKey: row.link_key,
+    sealedToken: row.link_token_sealed,
     linkExpiresAtMs: Number(row.link_expires_at_ms),
   };
 }
@@ -222,9 +230,9 @@ export async function finishLinkCleanup(sql: SqlExec, deleteObjects: (keys: stri
 }
 
 // The link's token while it still opens, or null.
-export function replayLinkToken(sql: SqlExec, approvalId: string, nowMs: number): string | null {
-  const replay = getFillReplay(sql, approvalId);
-  return replay && replay.linkExpiresAtMs > nowMs ? replay.linkToken : null;
+export async function replayLinkToken(deps: { sql: SqlExec; storage: ReplayStorage }, approvalId: string, nowMs: number): Promise<string | null> {
+  const replay = getFillReplay(deps.sql, approvalId);
+  return replay && replay.linkExpiresAtMs > nowMs ? deps.storage.openToken(approvalId, replay.sealedToken) : null;
 }
 
 export async function linkKey(token: string): Promise<string> {
@@ -247,7 +255,7 @@ export async function bindFillReplay(
 ): Promise<BindOutcome> {
   const { sql, approvals, storage } = deps;
   const existing = getFillReplay(sql, approvalId);
-  if (existing) return { status: "existing", token: existing.linkToken };
+  if (existing) return { status: "existing", token: await storage.openToken(approvalId, existing.sealedToken) };
   const approval = approvals.getApproval(approvalId);
   if (!approval) return { status: "not_found" };
   if (generation !== currentGeneration(sql)) return { status: "stale" };
@@ -255,7 +263,7 @@ export async function bindFillReplay(
 
   const token = randomHex(16);
   const expiresAtMs = deps.nowMs + REPLAY_LINK_TTL_MS;
-  const key = await linkKey(token);
+  const [key, sealed] = await Promise.all([linkKey(token), storage.sealToken(approvalId, token)]);
   const bind = randomHex(8);
   const imageIds = input.steps.map((_, i) => `fill-${approvalId}-${bind}-${i}`);
   const puts = await Promise.allSettled(input.steps.map((step, i) => storage.putImage(imageIds[i]!, step.png, generation)));
@@ -281,17 +289,17 @@ export async function bindFillReplay(
     focus: step.focus,
   }));
   const written = sql.exec(
-    `INSERT OR IGNORE INTO fill_replays(approval_id, request_hash, generation, labels_json, steps_json, link_token, link_key, link_expires_at_ms, created_at)
+    `INSERT OR IGNORE INTO fill_replays(approval_id, request_hash, generation, labels_json, steps_json, link_token_sealed, link_key, link_expires_at_ms, created_at)
      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?
        AND EXISTS (SELECT 1 FROM approvals WHERE id = ? AND status = 'pending' AND request_hash = ? AND generation = ?)`,
-    approvalId, approval.requestHash, generation, JSON.stringify(input.labels), JSON.stringify(steps), token, key, expiresAtMs,
+    approvalId, approval.requestHash, generation, JSON.stringify(input.labels), JSON.stringify(steps), sealed, key, expiresAtMs,
     new Date(deps.nowMs).toISOString(), generation, approvalId, approval.requestHash, generation,
   ).rowsWritten;
   if (written > 0) return { status: "created", token };
 
   await storage.deleteObjects([key, ...stored]);
   const raced = getFillReplay(sql, approvalId);
-  if (raced) return { status: "existing", token: raced.linkToken };
+  if (raced) return { status: "existing", token: await storage.openToken(approvalId, raced.sealedToken) };
   return generation !== currentGeneration(sql) ? { status: "stale" } : { status: "closed" };
 }
 
@@ -323,12 +331,13 @@ export async function replayPage(
   approvalId: string,
   token: string,
 ): Promise<string | null> {
+  const key = await linkKey(token);
   // Read again after every wait: other requests to this person run while
   // the document and the images are read, and may decline, replace or
   // delete this version in between.
   const read = () => {
     const replay = getFillReplay(deps.sql, approvalId);
-    if (!replay || !timingSafeEqual(replay.linkToken, token) || replay.linkExpiresAtMs <= deps.nowMs) return null;
+    if (!replay || !timingSafeEqual(replay.linkKey, key) || replay.linkExpiresAtMs <= deps.nowMs) return null;
     const approval = deps.approvals.getApproval(approvalId);
     if (!approval) return null;
     const facts: ReplayFacts = {
