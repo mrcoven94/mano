@@ -91,6 +91,10 @@ export interface GatewayResult {
   reason?: string;
   // Set on a refused approve: a newer proposal replaced this one.
   superseded?: true;
+  // Set on a refused approve when the safety check could not answer. The
+  // approval still waits, nothing ran, and the same approve may be sent
+  // again later.
+  retryable?: true;
 }
 
 // Where a drafted approval sits among the person's proposals: when the

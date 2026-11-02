@@ -20,10 +20,12 @@ export interface CheckInput {
   origin: "person" | "content";
 }
 
-export interface CheckResult {
-  verdict: "pass" | "fix" | "block";
-  problems: string[];
-}
+// unavailable: the block came from a checker that could not answer (a
+// timeout, an unreachable endpoint, an error status), not from a verdict
+// on the action, so the same action may be checked again later.
+export type CheckResult =
+  | { verdict: "pass" | "fix"; problems: string[] }
+  | { verdict: "block"; problems: string[]; unavailable?: true };
 
 export interface Checker {
   check(input: CheckInput): Promise<CheckResult>;

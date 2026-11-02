@@ -36,7 +36,8 @@
 //                                              proposalTurn names the turn an agent draft belongs to
 //   GET  /api/persons/:id/approvals
 //   POST /api/persons/:id/approvals/supersede     { generation } closes every waiting draft but the latest
-//   POST /api/persons/:id/approvals/:aid/approve
+//   POST /api/persons/:id/approvals/:aid/approve  a YES; retryable:true when the safety check could not
+//                                              answer and the approval still waits for another YES
 //   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
 //   GET  /api/persons/:id/memory
 //   POST /api/persons/:id/memory              { content, source }

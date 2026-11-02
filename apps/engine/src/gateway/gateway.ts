@@ -482,7 +482,7 @@ export class ActionGateway {
   private async runChecker(
     req: ActionRequest,
     documentHash: string | null,
-  ): Promise<{ ok: true; problems: string[] } | { ok: false; reason: string }> {
+  ): Promise<{ ok: true; problems: string[] } | { ok: false; reason: string; unavailable: boolean }> {
     let result: CheckResult;
     try {
       result = await checkerWithTimeout(this.checker, this.checkerTimeoutMs).check({
@@ -499,11 +499,11 @@ export class ActionGateway {
       });
     } catch (err) {
       this.store.audit({ event: "gateway.checker_error", detailHash: await auditDigest(String(err)) });
-      return { ok: false, reason: "Blocked by review: the checker failed and the gateway fails closed." };
+      return { ok: false, reason: "Blocked by review: the checker failed and the gateway fails closed.", unavailable: true };
     }
     if (result.verdict === "pass") return { ok: true, problems: [] };
     const reason = `Blocked by review: ${result.problems.join("; ") || "no detail"}`;
-    if (result.verdict === "block") return { ok: false, reason };
+    if (result.verdict === "block") return { ok: false, reason, unavailable: result.unavailable === true };
     return { ok: true, problems: result.problems };
   }
 
@@ -745,7 +745,11 @@ export class ActionGateway {
     if (!docRead.ok) return docRead.result;
     const frozen = await freezeActionRequest(stored, docRead.bytes);
     const check = await this.runChecker(stored, frozen.documentHash);
-    if (!check.ok) return { status: "blocked", reason: check.reason };
+    if (!check.ok) {
+      // Nothing has run for a pending approval, so a check that could not
+      // answer leaves it waiting for the same yes again.
+      return { status: "blocked", reason: check.reason, ...(check.unavailable ? { retryable: true as const } : {}) };
+    }
     if (frozen.requestHash !== approval.requestHash) {
       this.store.markApprovalStale(approvalId);
       this.store.audit({ event: "gateway.stale_block", approvalHash: hashes.approval });
