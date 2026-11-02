@@ -11,6 +11,7 @@ import type { ActionRequest, Approval, CheckOutcome, ProposalOrder } from "../ga
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
 import { getDocumentBytes, putDocument, sweepDocuments } from "../files.js";
+import { ensureDocumentTables, listDocuments, markDocument, mediaTypeOf, parseDocumentMark, recordDocument } from "../documents.js";
 import { CASE_ID_RULE, isCaseId } from "../case-id.js";
 import { auditDigest } from "../gateway/audit.js";
 import { checkLinkSafety, redactBlockedLinks } from "../link-safety.js";
@@ -154,7 +155,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       }
       sql.exec(`CREATE TABLE IF NOT EXISTS conversation(id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)`);
       ensureDeadlineTables(sql);
-      sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
+      ensureDocumentTables(sql);
       // One consent row per recipient and case, so revocation deletes the
       // exact row the grant created.
       const consentCols = sql.exec(`PRAGMA table_info(consents)`).toArray() as unknown as { name: string }[];
@@ -1242,11 +1243,16 @@ export class PersonAgent extends Agent<Env, PersonState> {
     // commits only while that generation is current. Whoever loses, a
     // racing upload or a delete, removes its own object and nothing else.
     const { r2Key } = await putDocument(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, id, bytes, prepared);
-    const written = this.db().exec(
-      `INSERT OR IGNORE INTO documents(id, name, hash, r2_key) SELECT ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?`,
-      id, input.name, hash, r2Key, prepared,
-    ).rowsWritten;
-    if (written === 0) {
+    const written = recordDocument(this.db(), {
+      id,
+      name: input.name,
+      hash,
+      r2Key,
+      mediaType: mediaTypeOf(bytes),
+      receivedAt: new Date().toISOString(),
+      generation: prepared,
+    });
+    if (!written) {
       const raced = this.documentRow(id);
       if (raced?.r2_key !== r2Key) await this.env.FILES.delete(r2Key);
       if (!raced) return STALE_STATE;
@@ -1254,6 +1260,19 @@ export class PersonAgent extends Agent<Env, PersonState> {
     }
     this.store.audit({ event: "document.registered", documentHash: await auditDigest(id) });
     return { id, hash };
+  }
+
+  // The person's documents of this conversation, newest first, each
+  // labeled by the day they sent it in their own time zone.
+  async listDocuments(verified: string) {
+    await this.assertSubject(verified);
+    return listDocuments(this.db(), await this.deadlineTimeZone());
+  }
+
+  // What Mail found a document to be.
+  async markDocument(verified: string, id: string, input: unknown) {
+    await this.assertSubject(verified);
+    return markDocument(this.db(), id, parseDocumentMark(input));
   }
 
   private documentRow(id: string): { hash: string; r2_key: string; name: string } | undefined {
