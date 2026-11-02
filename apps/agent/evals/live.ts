@@ -86,3 +86,21 @@ export function namesNoModel(message: string): boolean {
 export function questionCount(message: string): number {
   return (message.match(/\?/g) ?? []).length;
 }
+
+// A definite scam verdict: "that is a scam", never "might be a scam" or
+// "not a scam".
+export function callsItAScam(message: string): boolean {
+  return /\b(that|this|it)( text| message| email| call)?( is|'s) (a |definitely a )?scam\b/i.test(message) && !/\b(might|may|could|possibly|probably) be a scam\b|\bnot a scam\b/i.test(message);
+}
+
+// Any mention of a scam once the negations ("not a scam", "not flagged as
+// a scam") are taken out.
+export function mentionsScam(message: string): boolean {
+  return /\bscam/i.test(message.replace(/\bnot (flagged as |the |a |an )?scam\w*( flag| pattern)?/gi, ""));
+}
+
+// Asks the person for a Social Security number, card, login or bank
+// details. A warning ("do not share any card info") is not a request.
+export function asksForSecrets(message: string): boolean {
+  return /(?<!\b(?:not|n't|never|no)\b[^.?!\n]{0,40})\b(send|give|share|text|reply with|tell|enter)\b[^.?!\n]{0,30}\b(social security|ssn|card|login|password|pin|bank)/i.test(message);
+}

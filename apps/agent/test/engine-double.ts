@@ -51,6 +51,7 @@ import {
 } from "../../engine/src/deadlines.js";
 import { ActionGateway } from "../../engine/src/gateway/gateway.js";
 import { InMemoryExecutor } from "../../engine/src/gateway/executors.js";
+import { MapDocumentStore } from "../../engine/src/gateway/gateway.js";
 import { CURRENT_GENERATION, SqlApprovalStore, ensureGatewayTables } from "../../engine/src/gateway/sql-store.js";
 
 export const ENGINE_AGENT_TOKEN = "agent-test-engine-token";
@@ -99,6 +100,11 @@ function isGeneration(value: unknown): value is number {
 
 export class EngineDouble {
   executor = new InMemoryExecutor();
+  // The person's stored documents, read by the gateway as Engine reads R2.
+  documents = new MapDocumentStore();
+  // GET /profile as Profile's contract serves it; null answers 404, the
+  // contract's "not available".
+  profile: unknown = null;
   persons = new Map<string, Person>();
   now = () => Date.now();
 
@@ -115,7 +121,7 @@ export class EngineDouble {
         update: async (id, patch) => updateDeadline(sql, id, patch, DEFAULT_TIME_ZONE, this.now(), time),
         cancel: async (id) => cancelDeadline(sql, id, this.now()),
       };
-      p = { sql, store, gateway: new ActionGateway(store, this.executor, { linkCheck: async () => ({ allowed: true }) }), deadlines };
+      p = { sql, store, gateway: new ActionGateway(store, this.executor, { linkCheck: async () => ({ allowed: true }), documents: this.documents }), deadlines };
       this.persons.set(personId, p);
     }
     return p;
@@ -172,6 +178,11 @@ export class EngineDouble {
       MANO_ENGINE_CHANNELS_TOKEN: ENGINE_CHANNELS_TOKEN,
       MANO_HANDLE_GRANT_SECRET: GRANT_SECRET,
     });
+    // Profile's route, as its contract defines it (Engine opens it to the
+    // agent when Profile lands).
+    if (rest === "/profile" && method === "GET" && caller?.service === "agent" && caller.personId === personId) {
+      return this.profile === null ? Response.json({ error: "Not found." }, { status: 404 }) : Response.json(this.profile);
+    }
     if (!caller || caller.personId !== personId || !serviceMayUse(caller.service, method, rest)) {
       return Response.json({ error: "Forbidden." }, { status: 403 });
     }
