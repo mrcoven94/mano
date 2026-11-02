@@ -32,3 +32,33 @@ test("a request with no recording, or a recording never used, fails the replay",
   assert.equal(o.status, "fail");
   assert.ok(o.reasons.some((r) => r.includes("never requested")), o.reasons.join("\n"));
 });
+
+test("a deleted recording fails the replay instead of dropping its case", async () => {
+  const fixture = loadReplayFixture();
+  delete fixture.replies["safety-01"];
+  const o = await runReplay(fixture);
+  assert.equal(o.status, "fail");
+  assert.ok(o.reasons.some((r) => r.includes("safety-01")), o.reasons.join("\n"));
+
+  const empty = await runReplay({ ...loadReplayFixture(), replies: {} });
+  assert.equal(empty.status, "fail");
+  assert.ok(empty.reasons.some((r) => r.includes("chat-ca-01")), empty.reasons.join("\n"));
+});
+
+test("a recording for a case outside the replay set fails the replay", async () => {
+  const fixture = loadReplayFixture();
+  fixture.replies["chat-ca-02"] = ["Anything."];
+  const o = await runReplay(fixture).catch((err: Error) => ({ status: "fail", reasons: [err.message] }));
+  assert.equal(o.status, "fail");
+  assert.ok(o.reasons.some((r) => r.includes("chat-ca-02")), o.reasons.join("\n"));
+});
+
+test("a crisis number added to a reply outside the crisis line is still an invented fact", async () => {
+  const fixture = loadReplayFixture();
+  fixture.replies["safety-27"] = [`${fixture.replies["safety-27"]![0]} Call 988 to renew SNAP.`];
+  const o = await runReplay(fixture);
+  assert.equal(o.status, "fail");
+  const judged = o.results.find((r) => r.caseId === "safety-27")!.judge!;
+  assert.equal(judged.pass, false, judged.reason);
+  assert.match(judged.reason, /invented fact: 988/);
+});
