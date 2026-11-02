@@ -311,51 +311,73 @@ export function saysPhrase(text: string, phrase: string): boolean {
   return false;
 }
 
-// A calendar date in any common form: "November 15, 2026", "Nov. 15",
-// "11/15/26", "2026-11-15", "15 de noviembre de 2026". A date written
-// without a year matches the same day in any year.
+// A calendar date in any common form: "November 15, 2026", "Nov. 15, 26",
+// "15 November 2026", "11/15/26", "15/11/2026", "11/15", "2026-11-15",
+// "15 de noviembre de 2026". A date written without a year matches that day
+// in any year. Numeric dates read month first unless the first number
+// cannot be a month.
 interface CalendarDate {
   raw: string;
+  at: number;
   month: number;
   day: number;
   year: number | null;
 }
 
 const SHORT_MONTH_RE = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
-const NAMED_DAY_RE = new RegExp(`\\b(${SHORT_MONTH_RE})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4})\\b)?`, "gi");
-const ES_DAY_RE = new RegExp(`\\b(\\d{1,2})\\s+de\\s+(${MONTH_NAMES_ES.join("|")})(?:\\s+de(?:l)?\\s+(\\d{4}))?\\b`, "gi");
+const YEAR_RE = String.raw`(?:,?\s+(\d{4})\b|,?\s*'(\d{2})\b|,\s*(\d{2})\b)?`;
+const MONTH_DAY_RE = new RegExp(String.raw`\b(${SHORT_MONTH_RE})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b${YEAR_RE}`, "gi");
+const DAY_MONTH_RE = new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(${SHORT_MONTH_RE})\b\.?${YEAR_RE}`, "gi");
+const ES_DAY_RE = new RegExp(String.raw`\b(\d{1,2})\s+de\s+(${MONTH_NAMES_ES.join("|")})(?:\s+(?:del?\s+)?(\d{4}))?\b`, "gi");
 const ISO_DAY_RE = /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g;
-const SLASH_DAY_RE = /\b(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})\b/g;
+const SLASH_DAY_RE = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?\b/g;
+
+function yearOf(four: string | undefined, ...two: (string | undefined)[]): number | null {
+  if (four) return Number(four);
+  const short = two.find(Boolean);
+  return short ? 2000 + Number(short) : null;
+}
+
+function monthOf(name: string): number {
+  return MONTH_NAMES.findIndex((n) => n.startsWith(name.toLowerCase().slice(0, 3))) + 1;
+}
 
 function calendarDates(text: string): CalendarDate[] {
   const found: CalendarDate[] = [];
-  const add = (raw: string, month: number, day: number, year: number | null) => {
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) found.push({ raw, month, day, year });
+  const add = (m: RegExpMatchArray, month: number, day: number, year: number | null) => {
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) found.push({ raw: m[0], at: m.index ?? 0, month, day, year });
   };
-  for (const m of text.matchAll(NAMED_DAY_RE)) {
-    add(m[0], MONTH_NAMES.findIndex((n) => n.startsWith(m[1]!.toLowerCase().slice(0, 3))) + 1, Number(m[2]), m[3] ? Number(m[3]) : null);
+  for (const m of text.matchAll(MONTH_DAY_RE)) add(m, monthOf(m[1]!), Number(m[2]), yearOf(m[3], m[4], m[5]));
+  for (const m of text.matchAll(DAY_MONTH_RE)) add(m, monthOf(m[2]!), Number(m[1]), yearOf(m[3], m[4], m[5]));
+  for (const m of text.matchAll(ES_DAY_RE)) add(m, MONTH_NAMES_ES.indexOf(m[2]!.toLowerCase()) + 1, Number(m[1]), yearOf(m[3]));
+  for (const m of text.matchAll(ISO_DAY_RE)) add(m, Number(m[2]), Number(m[3]), Number(m[1]));
+  for (const m of text.matchAll(SLASH_DAY_RE)) {
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    const year = m[3] ? yearOf(m[3].length === 4 ? m[3] : undefined, m[3].length === 2 ? m[3] : undefined) : null;
+    if (a > 12 && year !== null) add(m, b, a, year);
+    else add(m, a, b, year);
   }
-  for (const m of text.matchAll(ES_DAY_RE)) add(m[0], MONTH_NAMES_ES.indexOf(m[2]!.toLowerCase()) + 1, Number(m[1]), m[3] ? Number(m[3]) : null);
-  for (const m of text.matchAll(ISO_DAY_RE)) add(m[0], Number(m[2]), Number(m[3]), Number(m[1]));
-  for (const m of text.matchAll(SLASH_DAY_RE)) add(m[0], Number(m[1]), Number(m[2]), m[3]!.length === 2 ? 2000 + Number(m[3]) : Number(m[3]));
   return found;
 }
 
-// The deadline the reply gives a letter: the letter's own date and no other,
-// or, when the letter gives two dates that disagree, both equally or neither,
-// never one singled out.
+// The deadline the reply gives a letter: the letter's own date, said and not
+// denied, and no other date in any common form; or, when the letter gives
+// two dates that disagree, both equally often or neither, never one singled
+// out. Like every hard check this reads which dates appear, not what a
+// sentence means; the judge reads that.
 function deadlineCheck(deadline: LetterDeadline, text: string): CheckResult {
   const dates = deadline.kind === "one" ? [deadline.date] : deadline.dates;
   const letter = dates.map((d) => calendarDates(d)[0]!);
-  const said = calendarDates(text);
+  const plain = expandContractions(text);
+  const said = calendarDates(plain);
   const which = (d: CalendarDate) => letter.findIndex((l) => l.month === d.month && l.day === d.day && (d.year === null || d.year === l.year));
   const other = said.filter((d) => which(d) === -1).map((d) => d.raw);
   if (other.length > 0) return { id: "deadline", pass: false, detail: `gives ${other.join(", ")}, which the letter does not` };
-  const times = letter.map((_, i) => said.filter((d) => which(d) === i).length);
   if (deadline.kind === "one") {
-    const pass = times[0]! > 0;
+    const pass = said.some((d) => !HEDGED_BEFORE.test(plain.slice(Math.max(0, d.at - 40), d.at)));
     return { id: "deadline", pass, detail: pass ? `gives ${deadline.date}` : `does not give ${deadline.date}` };
   }
+  const times = letter.map((_, i) => said.filter((d) => which(d) === i).length);
   const pass = times.every((t) => t === times[0]);
   const most = dates[times.indexOf(Math.max(...times))]!;
   return { id: "deadline", pass, detail: pass ? (times[0] === 0 ? "names neither date" : "names both dates") : `singles out ${most} of two dates` };
