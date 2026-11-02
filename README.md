@@ -99,6 +99,7 @@ META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
 | `packages/computer` | The desktop Mano drives: screenshots in, mouse and keyboard out, on Modal or local Playwright | landing during the hackathon |
 | `packages/quality` | The nightly answer-quality bench | landing during the hackathon |
 | `packages/programs` | Sourced facts for SNAP, Medicaid and LIHEAP in eight states, which the agent looks up before stating any | landing during the hackathon |
+| `packages/accounts` | One person, one account: phone and email sign-in, linking, merge, the account page | landing during the hackathon |
 | `apps/app` | The resident app in React Native (iOS, Android, web) | landing during the hackathon |
 | `eval` | The held-out test: scenarios, baselines and results | landing during the hackathon |
 | `docs` | Decisions and design notes | live |
@@ -118,6 +119,10 @@ Pull requests that can change what Mano says run the quality smoke: 28 synthetic
 ### Programs
 
 `packages/programs` is the only place the agent gets program facts: the state's own name for SNAP, Medicaid and LIHEAP in California, Texas, New York, Florida, Illinois, Washington, Arizona and Ohio, what each covers, income limits by household size with their year, the renewal cycle, how to apply and the official phone and site. Every fact carries the official page it came from, the day it was checked and the text that shows it; anything not confirmed is listed in the entry's gaps. `pnpm --filter @mano/programs check` fails on a missing source or date or a site that is not official; `pnpm --filter @mano/programs verify-sources` fetches every source again and looks for each quote.
+
+### Accounts
+
+Texting Mano creates the account. The same person signs in on the web at `/sign-in` with that phone number (a 6-digit code by text) or with email through WorkOS, and manages sign-in methods at `/account`. Details live in the header comment of `packages/accounts/src/index.ts`; run its checks with `pnpm --filter @mano/accounts run check`.
 
 ## Held-out test
 
