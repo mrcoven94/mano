@@ -25,6 +25,9 @@ function ctx(turnId: string) {
 }
 
 beforeEach(async () => {
+  // list_deadlines counts days left from the wall clock, not the turn.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(TURN_AT);
   engine = new EngineDouble();
   engine.now = () => TURN_AT;
   grant = await grantFor(HANDLE);
@@ -34,6 +37,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
