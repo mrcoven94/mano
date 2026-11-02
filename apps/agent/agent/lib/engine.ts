@@ -146,8 +146,11 @@ export interface EngineDeadline {
   program: string | null;
   kind: DeadlineKind | null;
   status: "open" | "done" | "cancelled";
+  // Where it came from: a letter names the texted photo it was read from.
+  source: { kind: "letter" | "case" | "person"; documentId?: string };
   timeZone: string;
   previousDueDate: string | null;
+  createdAt: string;
   nudges: { reminderId: string; at: string; daysBefore: number; status: ReminderStatus | "claimed"; text: string }[];
 }
 

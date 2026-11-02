@@ -51,6 +51,7 @@ import {
 } from "../../engine/src/deadlines.js";
 import { ActionGateway } from "../../engine/src/gateway/gateway.js";
 import { InMemoryExecutor } from "../../engine/src/gateway/executors.js";
+import type { Executor } from "../../engine/src/gateway/types.js";
 import { MapDocumentStore } from "../../engine/src/gateway/gateway.js";
 import { CURRENT_GENERATION, SqlApprovalStore, ensureGatewayTables } from "../../engine/src/gateway/sql-store.js";
 import { ProfileStore, forgetMemoryNote, profilePatchResponse, type FieldCipher } from "../../engine/src/profile.js";
@@ -129,6 +130,9 @@ export interface DeadlineCall {
 
 export class EngineDouble {
   executor = new InMemoryExecutor();
+  // What gateways file through in place of executor, such as the real
+  // sandbox portal. Set it before the person's first request.
+  filer: Executor | null = null;
   // The person's stored documents: the gateway reads them as Engine reads
   // R2, a profile fact with source document must name one of them, and the
   // agent reads a texted photo back (GET /documents/:docId).
@@ -172,7 +176,7 @@ export class EngineDouble {
       p = {
         sql,
         store,
-        gateway: new ActionGateway(store, this.executor, { linkCheck: async () => ({ allowed: true }), documents: this.documents }),
+        gateway: new ActionGateway(store, this.filer ?? this.executor, { linkCheck: async () => ({ allowed: true }), documents: this.documents }),
         profile: new ProfileStore({
           sql,
           transaction: (fn) => sql.transaction(fn),
