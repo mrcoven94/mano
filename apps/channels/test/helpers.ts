@@ -137,8 +137,8 @@ export function makeHarness(
   h.ledger = new GlobalLedger(new MemoryGlobalStore(), () => h.now, opts.budgetUsd ?? 5, opts.byteBudget);
   const spend: SpendLedger = {
     reserve: async (key: string, worstUsd: number) => h.ledger.reserve(key, worstUsd),
-    settle: async (key: string, actualUsd: number) => {
-      h.ledger.settle(key, actualUsd);
+    settle: async (key: string, actualUsd: number, byModel?: Record<string, number>) => {
+      h.ledger.settle(key, actualUsd, byModel);
     },
     release: async (key: string) => {
       h.ledger.release(key);

@@ -22,7 +22,7 @@ import {
   type NormalizedEvent,
   type Responder,
 } from "@mano/channels";
-import { DEFAULT_MEDIA_HOSTS, DEFAULT_RUNNER_CONFIG, ConversationRunner, type SpendLedger } from "./runner.js";
+import { DEFAULT_MEDIA_HOSTS, DEFAULT_RUNNER_CONFIG, ConversationRunner, type ModelCosts, type SpendLedger } from "./runner.js";
 
 export function parseMediaHosts(raw: string | undefined): string[] {
   const hosts = (raw ?? "").split(",").map((h) => h.trim().toLowerCase()).filter((h) => h.length > 0);
@@ -59,10 +59,10 @@ class StateSpendLedger implements SpendLedger {
     return (await res.json()) as { allowed: boolean; spentUsd: number };
   }
 
-  async settle(key: string, actualUsd: number): Promise<void> {
+  async settle(key: string, actualUsd: number, byModel?: ModelCosts): Promise<void> {
     await this.stub.fetch("https://state/internal/spend-settle", {
       method: "POST",
-      body: JSON.stringify({ key, actualUsd }),
+      body: JSON.stringify({ key, actualUsd, byModel }),
     });
   }
 
