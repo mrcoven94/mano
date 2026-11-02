@@ -107,6 +107,10 @@ META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
 
 Guardian runs on one GPU on Modal and scales to zero when idle. A cold start takes about three minutes, and a check fails closed after 10 seconds, so Mano calls `warm()` when a conversation starts. To keep one GPU warm (about $1.95 an hour), run the `guardian-modal` workflow from `main` under Actions with `min_containers` set to 1. To turn it off, run it again with 0. Any merge that touches the guardian also deploys 0.
 
+### Quality
+
+Pull requests that can change what Mano says run the quality smoke: 28 synthetic cases through the real text line on a Meta model, gated against main's last nightly run. When the model provider refuses calls for billing (HTTP 402), the smoke and the nightly score nothing and report "model provider unavailable" in the job summary instead of failing. Any other error still fails. The `smoke-replay` job runs the same text line and safety checks on recorded synthetic replies with no key, so the code path stays covered while the provider is down: `pnpm --filter @mano/quality smoke-replay`.
+
 ### Computer
 
 `packages/computer` is the desktop Mano drives: a loop that shows the model a screenshot and executes the mouse and keyboard actions it returns. The hosted backend is a Modal Sandbox running a Linux desktop with Chromium (see `packages/computer/modal/`); the local stand-in drives Chromium through Playwright. The desktop fills forms and never files them: filing goes through Engine's action gateway after the person's yes. A pending safety check stops the run and goes back to the caller, and a login prompt ends it, because there is no live view and the agent never sees passwords. Each desktop opens only the portal origin, mounts only its own person's profile, and answers only the caller holding its per-session secret. Details in the header comment of its `src/index.ts` and the docstring of `modal/app.py`; `modal run modal/prove.py` checks those rules live on throwaway Modal resources.

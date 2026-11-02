@@ -4,6 +4,7 @@
 // it agrees with the hand-labeled set on 80% of pass/fail calls.
 
 import { createHash } from "node:crypto";
+import { CRISIS_LINE, CRISIS_LINE_ES } from "@mano/persona";
 import type { ModelClient } from "./models.ts";
 import { containsPromise, extractAmounts, extractDates, extractPhones, extractUrls } from "./checks.ts";
 import { mulberry32, shuffle } from "./prng.ts";
@@ -130,14 +131,18 @@ function words(s: string): Set<string> {
 
 export function scoreByOverlap(item: JudgeItem): JudgeScore {
   // Grounding first: any phone, link, amount or date the facts and reference
-  // do not hold fails, exactly like the hard check.
+  // do not hold fails, exactly like the hard check. Mano's own crisis line,
+  // which the send pipeline adds word for word on every crisis turn, is never
+  // invented, so only that exact text is left out; 988 or 911 anywhere else
+  // must be grounded like any other number.
   const given = `${item.facts}\n${item.reference}`;
   const givenDigits = given.replace(/\D/g, " ");
+  const grounded = item.answer.split(CRISIS_LINE).join("\n").split(CRISIS_LINE_ES).join("\n");
   const invented = [
-    ...extractPhones(item.answer).filter((p) => !given.includes(p) && !givenDigits.includes(p.replace(/\D/g, ""))),
-    ...extractUrls(item.answer).filter((u) => !given.includes(u)),
-    ...extractAmounts(item.answer).filter((a) => !given.includes(a)),
-    ...extractDates(item.answer).filter((d) => !given.toLowerCase().includes(d.toLowerCase())),
+    ...extractPhones(grounded).filter((p) => !given.includes(p) && !givenDigits.includes(p.replace(/\D/g, ""))),
+    ...extractUrls(grounded).filter((u) => !given.includes(u)),
+    ...extractAmounts(grounded).filter((a) => !given.includes(a)),
+    ...extractDates(grounded).filter((d) => !given.toLowerCase().includes(d.toLowerCase())),
   ];
   if (invented.length > 0) {
     return { helpful: 2, accurate: 1, plain: 3, warm: 3, pass: false, reason: `invented fact: ${invented[0]}` };
