@@ -393,3 +393,11 @@ test("a written year is never dropped and a day-first date needs no year", async
   assert.equal((await deadline("letters-19", "Your renewal is due 16/11."))?.pass, false);
   assert.equal((await deadline("letters-01", "It is due November 15, 2026. The help line is open 24/7."))?.pass, true, "24/7 is not a date");
 });
+
+test("an apostrophe year and a 24/7/year date are still read", async () => {
+  const deadline = async (id: string, text: string) => (await readerCheck(id, text)).find((r) => r.id === "deadline");
+  for (const text of ["It is due November 15'27.", "It is due 15 November'27."]) {
+    assert.equal((await deadline("letters-01", text))?.pass, false, text);
+  }
+  assert.equal((await deadline("letters-19", "Your renewal is due 24/7/2027."))?.pass, false);
+});
