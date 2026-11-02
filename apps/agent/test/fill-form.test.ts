@@ -152,6 +152,11 @@ async function ctx(turnId: string) {
   return toolCtx({ handleHash: HANDLE, turnId, grant, turnAtMs: clock });
 }
 
+// Another attempt of the same turn, as Eve runs it after a failure.
+function retryCtx(turnId: string, eveTurn: string) {
+  return toolCtx({ handleHash: HANDLE, turnId, grant, turnAtMs: clock, eveTurn });
+}
+
 async function run(turnId: string, input: { form: string; answers?: Record<string, string> }) {
   return (await fillForm.execute(input, await ctx(turnId))) as Record<string, unknown>;
 }
@@ -260,6 +265,44 @@ describe("fill_form", () => {
     const lines = warn.mock.calls.map(([line]) => String(line));
     expect(lines).toContain(JSON.stringify({ type: "mano_replay_failed", status: 500 }));
     expect(lines.some((l) => l.includes("Rosa") || l.includes("253-555"))).toBe(false);
+  });
+
+  it("a retry that filled the same values binds its screens to the approval still waiting", async () => {
+    engine.profile = profile();
+    engine.replayFailure = 500;
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const first = await run("turn_fill0032", { form: "food-renewal" });
+    expect(await client().replayLink(String(first.approvalId)).catch(() => null)).toBeNull();
+
+    engine.replayFailure = null;
+    model = new FakeModelClient([[call(typing(VALUES))], [say("ACCEPTED")]]);
+    const retry = (await fillForm.execute({ form: "food-renewal" }, retryCtx("turn_fill0032", "eve-turn-2"))) as Record<string, unknown>;
+    expect(retry).toMatchObject({ status: "waiting_for_yes", approvalId: first.approvalId });
+    const page = (await engine.replayPageAt((await client().replayLink(String(first.approvalId)))!))!;
+    expect(page).toContain("<dt>People in household</dt><dd>3</dd>");
+  });
+
+  it("a retry that filled different values binds no screens to the approval the first attempt froze", async () => {
+    engine.profile = profile();
+    engine.replayFailure = 500;
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const first = await run("turn_fill0033", { form: "food-renewal" });
+
+    // The profile changed before the retry, so the retry types a different
+    // household size than the approval froze.
+    engine.replayFailure = null;
+    const grown = profile();
+    grown.household.push({ id: "m3", name: leaf("Eva Testcase"), relationship: leaf("child") });
+    engine.profile = grown;
+    model = new FakeModelClient([[call(typing({ ...VALUES, householdSize: "4" }))], [say("ACCEPTED")]]);
+    const retry = (await fillForm.execute({ form: "food-renewal" }, retryCtx("turn_fill0033", "eve-turn-2"))) as Record<string, unknown>;
+
+    // The question still asks about what the first attempt froze, and YES
+    // sends that, so no screen of the retry's values may stand beside it.
+    expect(retry).toMatchObject({ status: "waiting_for_yes", approvalId: first.approvalId });
+    const [approval] = engine.approvals();
+    expect(JSON.parse(approval.requestJson).payload.householdSize).toBe("3");
+    expect(await client().replayLink(String(first.approvalId))).toBeNull();
   });
 
   it("each fill opens its own fresh draft", async () => {
