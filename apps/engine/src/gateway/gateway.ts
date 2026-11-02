@@ -600,8 +600,17 @@ export class ActionGateway {
     if (!docRead.ok) return docRead.result;
     if (blockedLink) return this.linkBlocked(blockedLink);
 
+    const frozen = await freezeActionRequest(req, docRead.bytes);
+    const withDocument = this.enrichWithDocument(req, docRead.bytes, frozen.documentHash);
+    // Asked before any approval exists: a person never says yes to an
+    // action the executor already knows it cannot carry out.
+    const refusal = this.executor.refuse?.(withDocument);
+    if (refusal) {
+      this.store.audit({ event: "gateway.block", type: req.type, reason: "executor" });
+      return { status: "blocked", reason: `${refusal} Nothing was sent.` };
+    }
+
     if (decision === "ask") {
-      const frozen = await freezeActionRequest(req, docRead.bytes);
       const check = await this.runChecker(req, frozen.documentHash);
       if (!check.ok) {
         this.store.audit({ event: "gateway.block", type: req.type, reason: "checker" });
@@ -641,14 +650,13 @@ export class ActionGateway {
       return { status: "blocked", reason: "This action was already approved. Approve it again to retry it." };
     }
 
-    const frozen = await freezeActionRequest(req, docRead.bytes);
     const check = await this.runChecker(req, frozen.documentHash);
     if (!check.ok) return { status: "blocked", reason: check.reason };
     if (check.problems.length > 0) {
       // A fix verdict needs a person to review; the allow path has none.
       return { status: "blocked", reason: `Blocked by review: ${check.problems.join("; ")}` };
     }
-    return this.execute(this.enrichWithDocument(req, docRead.bytes, frozen.documentHash), now, generation);
+    return this.execute(withDocument, now, generation);
   }
 
   // A person's NO. Ends the action at once: every pending approval under

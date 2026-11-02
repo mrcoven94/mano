@@ -117,6 +117,12 @@ export interface Executor {
   // keeps the attempt unknown and blocks. personId scopes the lookup to
   // the person's own downstream keys.
   check(idempotencyKey: string, personId: string): Promise<CheckOutcome>;
+  // Why this executor could not carry out the request, or null when it
+  // can. req carries the verified document exactly as execute would get
+  // it. The gateway asks before it drafts an approval or executes, so a
+  // person is never asked to approve an action that would then be
+  // refused. An executor without it takes every request.
+  refuse?(req: ActionRequest): string | null;
 }
 
 // The recorded outcome for a key: found carries the outside ID, absent

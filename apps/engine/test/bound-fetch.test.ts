@@ -52,12 +52,20 @@ describe("bound fetch defaults", () => {
       type: "submit",
       recipient: "sandbox-agency",
       purpose: "renewal",
-      payload: {},
+      payload: {
+        fullName: "Maria Testcase",
+        dateOfBirth: "1988-04-12",
+        address: "42 Test Street, Fresno, CA 93701",
+        phone: "555-010-2030",
+        householdSize: "3",
+        monthlyIncome: "2400",
+      },
       idempotencyKey: "key-bound-1",
       actor: "foreground",
       personId: "maria",
       sources: [],
       origin: "person",
+      document: { bytesB64: btoa("%PDF-1.4 synthetic"), hash: "h" },
     };
     const done = await exec.execute(req);
     expect(done.externalId).toBe("ext-9");

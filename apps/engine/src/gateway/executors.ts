@@ -1,4 +1,4 @@
-import type { ActionRequest, CheckOutcome, Executor } from "./types.js";
+import type { ActionRequest, ActionType, CheckOutcome, Executor } from "./types.js";
 import { DefiniteFailureError, TimeoutError } from "./types.js";
 import { boundFetch } from "../fetch.js";
 import { base64ToBytes, sha256Hex } from "../hash.js";
@@ -38,17 +38,75 @@ export class InMemoryExecutor implements Executor {
 // becomes the receipt's external ID. GET {base}/submissions/{key} answers
 // it again, or 404 when the key never filed. The portal dedupes on the
 // key, which is the SHA-256 of "<personId>:<idempotencyKey>" so it is
-// scoped to the person and fits the portal's 128-character limit. When
-// the gateway verified a document, its bytes go as the one attachment.
+// scoped to the person and fits the portal's 128-character limit.
 // Receipts from this executor are real filings into the sandbox, never
 // simulated.
-const HOUSEHOLD_FIELDS = ["fullName", "dateOfBirth", "address", "phone", "householdSize", "monthlyIncome"] as const;
 
-function documentType(bytes: Uint8Array): { type: string; ext: string } | null {
-  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return { type: "image/png", ext: "png" };
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { type: "image/jpeg", ext: "jpg" };
-  if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return { type: "application/pdf", ext: "pdf" };
-  return null;
+// What the portal's POST /submissions accepts, at its default limits:
+// handleSubmit, validateHousehold and sniffType in
+// apps/sandbox-portal/src/app.ts. portalFiling is the one place the
+// executor applies it, both when the gateway asks before drafting an
+// approval and again right before filing. The contract test runs these
+// rules against the real portal code.
+const PORTAL_HOUSEHOLD = {
+  fullName: "full legal name",
+  dateOfBirth: "date of birth",
+  address: "mailing address",
+  phone: "phone number",
+  householdSize: "household size",
+  monthlyIncome: "monthly income",
+} as const;
+type HouseholdField = keyof typeof PORTAL_HOUSEHOLD;
+const PORTAL_MAX_FIELD_LENGTH = 500;
+const PORTAL_MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
+const PORTAL_DOCUMENT_TYPES = [
+  { type: "application/pdf", ext: "pdf", magic: [0x25, 0x50, 0x44, 0x46, 0x2d] },
+  { type: "image/png", ext: "png", magic: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
+  { type: "image/jpeg", ext: "jpg", magic: [0xff, 0xd8, 0xff] },
+] as const;
+const NOT_FILED: Record<Exclude<ActionType, "submit">, string> = {
+  send: "send a message",
+  call: "make a phone call",
+  fax: "send a fax",
+  share: "share a case",
+};
+
+type PortalFiling =
+  | { ok: true; household: Record<HouseholdField, string>; file: { name: string; type: string; data: string } }
+  | { ok: false; problem: string };
+
+function portalFiling(req: ActionRequest): PortalFiling {
+  if (req.type !== "submit") {
+    return { ok: false, problem: `The sandbox agency portal only takes filed applications, so Mano cannot ${NOT_FILED[req.type]} there.` };
+  }
+  const household = {} as Record<HouseholdField, string>;
+  for (const field of Object.keys(PORTAL_HOUSEHOLD) as HouseholdField[]) {
+    const raw = req.payload[field];
+    const value = typeof raw === "string" || typeof raw === "number" ? String(raw) : "";
+    if (value.length > PORTAL_MAX_FIELD_LENGTH) {
+      return { ok: false, problem: `The applicant's ${PORTAL_HOUSEHOLD[field]} is longer than the sandbox agency portal accepts.` };
+    }
+    if (!value.trim()) return { ok: false, problem: `The sandbox agency portal needs the applicant's ${PORTAL_HOUSEHOLD[field]}.` };
+    household[field] = value;
+  }
+  const size = Number(household.householdSize.trim());
+  if (!Number.isInteger(size) || size < 1 || size > 30) {
+    return { ok: false, problem: "The sandbox agency portal needs a household size that is a whole number from 1 to 30." };
+  }
+  const income = Number(household.monthlyIncome.trim());
+  if (Number.isNaN(income) || income < 0) {
+    return { ok: false, problem: "The sandbox agency portal needs a monthly income that is a number, 0 or more." };
+  }
+  if (!req.document) {
+    return { ok: false, problem: "The sandbox agency portal needs at least one document attached, such as a photo of the letter." };
+  }
+  const bytes = base64ToBytes(req.document.bytesB64);
+  if (bytes.length > PORTAL_MAX_DOCUMENT_BYTES) {
+    return { ok: false, problem: "The document is larger than the 5 MB the sandbox agency portal accepts." };
+  }
+  const kind = PORTAL_DOCUMENT_TYPES.find((k) => bytes.length >= k.magic.length && k.magic.every((b, i) => bytes[i] === b));
+  if (!kind) return { ok: false, problem: "The sandbox agency portal takes PDF, PNG or JPG documents only." };
+  return { ok: true, household, file: { name: `document-1.${kind.ext}`, type: kind.type, data: req.document.bytesB64 } };
 }
 
 export class SandboxExecutor implements Executor {
@@ -73,19 +131,22 @@ export class SandboxExecutor implements Executor {
     return headers;
   }
 
+  refuse(req: ActionRequest): string | null {
+    const filing = portalFiling(req);
+    return filing.ok ? null : filing.problem;
+  }
+
   async execute(req: ActionRequest): Promise<{ externalId: string }> {
     this.calls.push(req);
-    const household: Record<string, string> = {};
-    for (const field of HOUSEHOLD_FIELDS) {
-      const value = req.payload[field];
-      if (typeof value === "string" || typeof value === "number") household[field] = String(value);
-    }
-    const body: Record<string, unknown> = { key: await this.downstreamKey(req.personId, req.idempotencyKey), household };
-    if (req.document) {
-      const kind = documentType(base64ToBytes(req.document.bytesB64));
-      if (!kind) throw new DefiniteFailureError("The portal takes PDF, PNG or JPG documents only.");
-      body.files = [{ name: `document-1.${kind.ext}`, type: kind.type, data: req.document.bytesB64 }];
-    }
+    // The gateway already asked before the approval. This covers an
+    // approval drafted before that check existed or under another mode.
+    const filing = portalFiling(req);
+    if (!filing.ok) throw new DefiniteFailureError(filing.problem);
+    const body = {
+      key: await this.downstreamKey(req.personId, req.idempotencyKey),
+      household: filing.household,
+      files: [filing.file],
+    };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {

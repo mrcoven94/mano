@@ -19,6 +19,7 @@ import { MemoryFileStore, MemoryStore } from "../../sandbox-portal/test/memory-s
 // { confirmationNumber }; GET /submissions/:key answers it or 404.
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const PNG_BYTES = Uint8Array.from(atob(PNG), (c) => c.charCodeAt(0));
 const HOUSEHOLD = {
   fullName: "Rosa Testcase",
   dateOfBirth: "1984-03-12",
@@ -102,9 +103,10 @@ describe("SandboxExecutor speaks the sandbox portal's JSON API", () => {
   });
 
   it("records a refused filing as a definite failure", async () => {
-    const { fetchFn } = portal(() => Response.json({ error: "Attach at least one document." }, { status: 400 }));
+    const { seen, fetchFn } = portal(() => Response.json({ error: "This office is not taking filings today." }, { status: 400 }));
     const exec = new SandboxExecutor("https://portal.test", 1000, fetchFn, "portal-token");
-    await expect(exec.execute(req({ document: undefined }))).rejects.toMatchObject({ name: "DefiniteFailureError" });
+    await expect(exec.execute(req())).rejects.toMatchObject({ name: "DefiniteFailureError" });
+    expect(seen).toHaveLength(1);
   });
 
   it("after a timeout, reconciles the filing before any retry and never files twice", async () => {
@@ -123,13 +125,14 @@ describe("SandboxExecutor speaks the sandbox portal's JSON API", () => {
     const store = new MemoryApprovalStore();
     const gw = new ActionGateway(store, new SandboxExecutor("https://portal.test", 1000, fetchFn, "portal-token"), {
       policyOverrides: { submit: "allow" },
+      documents: new MapDocumentStore(new Map([["letter-png", PNG_BYTES]])),
     });
     // The post timed out after the portal stored it: the gateway asks the
     // portal before calling anything failed, and finds the filing.
-    const first = await gw.requestAction(req({ document: undefined }));
+    const first = await gw.requestAction(req({ document: undefined, documentId: "letter-png" }));
     expect(first.status).toBe("reconciled");
     expect(first.receipt?.externalId).toBe("WA-2026-000777");
-    const again = await gw.requestAction(req({ document: undefined }));
+    const again = await gw.requestAction(req({ document: undefined, documentId: "letter-png" }));
     expect(again.receipt?.externalId).toBe("WA-2026-000777");
     expect(posts).toBe(1);
   });
@@ -141,7 +144,6 @@ describe("SandboxExecutor speaks the sandbox portal's JSON API", () => {
 // executor's rules and the portal's rules cannot drift apart unnoticed.
 const PORTAL_TOKEN = "portal-test-token";
 const PDF_BYTES = "%PDF-1.4 synthetic renewal proof";
-const PNG_BYTES = Uint8Array.from(atob(PNG), (c) => c.charCodeAt(0));
 
 function realPortal() {
   const store = new MemoryStore();
