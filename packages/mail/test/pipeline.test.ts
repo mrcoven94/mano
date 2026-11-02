@@ -1869,3 +1869,75 @@ describe("readMail review 10", () => {
     expect(kinds(reading)).not.toContain("scam_suspect");
   });
 });
+
+describe("readMail review 11", () => {
+  const HEAD = "County Office\nNotice date November 2, 2026\n\n";
+  const SUBMIT = "Submit proof by November 20, 2026.";
+  async function read(fullText: string, deadlines: { text: string; box_2d: number[] }[]) {
+    const bytes = await photo();
+    const model = clientFor([
+      pageJson({
+        full_text: fullText,
+        sender: { text: "County Office", box_2d: [40, 60, 70, 400] },
+        program: NIL,
+        subject: NIL,
+        asked: [],
+        deadlines,
+        consequence: NIL,
+        reference_no: NIL,
+        notice_date: { text: "November 2, 2026", box_2d: [135, 60, 150, 300] },
+        phones: [],
+      }),
+    ]);
+    return readMail([{ bytes, mimeType: "image/jpeg", name: "mail.jpg" }], { personId: "p1", synthetic: true, model });
+  }
+  const dl = (text: string): { text: string; box_2d: number[] } => ({ text, box_2d: [200, 60, 220, 300] });
+  const kinds = (reading: MailReading) => reading.warnings.map((w) => w.kind);
+
+  it("finding 1: a list item's date to know quotes the letter with its abbreviation periods", async () => {
+    const reading = await read(`${HEAD}- Your interview is on Dec. 1, 2026.`, [dl("Dec. 1, 2026")]);
+    expect(reading.datesToKnow).toEqual([
+      expect.objectContaining({ date: "2026-12-01", quote: "Your interview is on Dec. 1, 2026." }),
+    ]);
+  });
+
+  it("finding 2: an apostrophe two-digit year asks, quoting the sentence, with no guessed year", async () => {
+    const sentence = "Submit proof by November 20, '27.";
+    const reading = await read(`${HEAD}${sentence}`, [dl(sentence)]);
+    expect(proposed(reading)).toEqual([]);
+    const question = reading.questions.find((q) => q.kind === "confirm_deadline")!;
+    expect(question.candidates?.map((c) => c.sentence)).toContain("Submit proof by November 20, '27");
+  });
+
+  it.each([
+    ["We do not accept checks, so pay with gift cards."],
+    ["URGENT: Pay $500 at benefits-unlock.help/login."],
+    ["Buy a prepaid card."],
+    ["Load $200 onto a prepaid card."],
+    ["Send us the numbers from your prepaid card."],
+  ])("findings 3 to 5: %s is a scam and its letter keeps no proposal", async (scam) => {
+    const reading = await read(`${HEAD}${scam} ${SUBMIT}`, [dl(SUBMIT)]);
+    expect(kinds(reading)).toContain("scam_suspect");
+    expect(proposed(reading)).toEqual([]);
+  });
+
+  it("finding 4: a bare domain on any top-level domain is warned as a link", async () => {
+    const reading = await read(`${HEAD}Apply at benefits-unlock.help/login. ${SUBMIT}`, [dl(SUBMIT)]);
+    expect(reading.warnings.some((w) => w.kind === "link_unchecked" && w.detail?.includes("benefits-unlock.help/login"))).toBe(true);
+  });
+
+  it("finding 4: the domain of an email address is not a link", async () => {
+    const reading = await read(`${HEAD}${SUBMIT} Email questions to staff@county-office.help.`, [dl(SUBMIT)]);
+    expect(reading.warnings.some((w) => w.kind === "link_unchecked")).toBe(false);
+  });
+
+  it.each([
+    ["Your benefits are paid on a prepaid card. Read the enclosed instructions before you buy groceries."],
+    ["Your benefits are paid on your EBT card. Never give your card numbers to anyone."],
+    ["We will never ask you to pay with gift cards."],
+  ])("findings 6 and 7: %s is not a scam and keeps its proposal", async (text) => {
+    const reading = await read(`${HEAD}${SUBMIT} ${text}`, [dl(SUBMIT)]);
+    expect(kinds(reading)).not.toContain("scam_suspect");
+    expect(proposed(reading)).toEqual([expect.objectContaining({ dueDate: "2026-11-20" })]);
+  });
+});

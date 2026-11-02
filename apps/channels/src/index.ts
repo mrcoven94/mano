@@ -262,8 +262,9 @@ export function handleDeadLetters(batch: MessageBatch<unknown>): void {
   }
 }
 
-// Stored attachments expire 30 days after upload. The cron deletes the
-// oldest batch each run until none remain.
+// Attachments older turns stored in Channels' own bucket expire 30 days
+// after upload. The cron deletes the oldest batch each run until none
+// remain. New photos go to the person's Engine documents (files.ts).
 export async function sweepExpiredFiles(files: FileStore, nowMs: number): Promise<{ deleted: number }> {
   const keys = await files.listOlderThan("persons/", nowMs - ATTACHMENT_RETENTION_MS, SWEEP_LIMIT);
   const deleted = keys.length > 0 ? await files.deleteKeys(keys) : 0;

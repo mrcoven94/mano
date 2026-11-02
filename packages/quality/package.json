@@ -26,6 +26,7 @@
   "dependencies": {
     "@mano/channels": "workspace:*",
     "@mano/guardian": "workspace:*",
+    "@mano/mail": "workspace:*",
     "@mano/persona": "workspace:*",
     "@mano/programs": "workspace:*"
   }

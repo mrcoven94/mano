@@ -131,11 +131,12 @@ describe("agent service credential", () => {
     expect((await asAgent(PERSON_A, "/memory", { token: sessionA })).status).toBe(403);
   });
 
+  // Reading a texted photo back (GET /documents/:docId) is the agent's;
+  // storing one is Channels' (test/text-documents.test.ts).
   it("refuses routes outside memory, action and approvals", async () => {
     for (const [method, path] of [
       ["POST", "/chat"],
       ["POST", "/documents"],
-      ["GET", `/documents/${crypto.randomUUID()}`],
       ["POST", "/ws-ticket"],
     ] as const) {
       const body = method === "POST" ? "{}" : undefined;

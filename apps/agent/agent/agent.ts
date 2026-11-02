@@ -6,6 +6,11 @@
 // Muse runs through the Meta Model API directly, always on the Standard
 // model ID with store:false.
 //
+// A texted photo is read inside the turn (lib/letters.ts, @mano/mail):
+// Channels stores it in Engine, the agent reads it back, answers what the
+// letter is, its deadline and what to send, and holds a published
+// deadline in Engine.
+//
 // fill_form fills a fresh draft of a form on the person's computer
 // (packages/computer) from their Engine profile, reads the draft back
 // from the sandbox portal, and holds exactly what the portal saved for

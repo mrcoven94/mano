@@ -39,7 +39,7 @@ export default defineChannel({
         engine: engineFromEnv(),
         warmGuardian: () => warmGuardian(),
         background: (work) => waitUntil(work),
-        async runAgent({ handleHash, turnId, turnAtMs, generation, grant, message, context }) {
+        async runAgent({ handleHash, turnId, turnAtMs, generation, grant, message, context, deadlineMs }) {
           // The grant reaches tools as an attribute. It is only good with
           // the agent's own Engine token, for this one handle, for minutes.
           const auth = {
@@ -65,7 +65,7 @@ export default defineChannel({
           const session = await from(handleHash).send(message, { auth, context });
           const startIndex = startIndexFor(existingId, tailBefore, session.id);
           const stream = (await session.getEventStream({ startIndex })) as unknown as ReadableStream<StreamEventLike>;
-          return settleStream(stream, { timeoutMs: SETTLE_TIMEOUT_MS });
+          return settleStream(stream, { timeoutMs: Math.max(1_000, Math.min(SETTLE_TIMEOUT_MS, deadlineMs - Date.now())) });
         },
       }),
     ),

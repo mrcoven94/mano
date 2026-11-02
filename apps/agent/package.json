@@ -14,6 +14,7 @@
     "@ai-sdk/openai-compatible": "3.0.70",
     "@mano/computer": "workspace:*",
     "@mano/guardian": "workspace:*",
+    "@mano/mail": "workspace:*",
     "@mano/persona": "workspace:*",
     "@mano/programs": "workspace:*",
     "@mano/protocol": "workspace:*",

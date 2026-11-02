@@ -122,11 +122,18 @@ function isGeneration(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+export interface DeadlineCall {
+  personId: string;
+  body: Record<string, unknown>;
+}
+
 export class EngineDouble {
   executor = new InMemoryExecutor();
   // The person's stored documents: the gateway reads them as Engine reads
-  // R2, and a profile fact with source document must name one of them.
+  // R2, a profile fact with source document must name one of them, and the
+  // agent reads a texted photo back (GET /documents/:docId).
   private documentBytes = new Map<string, Uint8Array | string>();
+  private documentOwners = new Map<string, string>();
   documents = new MapDocumentStore(this.documentBytes);
   // A filled profile GET /profile serves in place of the person's profile
   // store, for tests that start from one. Null: the store answers.
@@ -136,6 +143,18 @@ export class EngineDouble {
   profileKeySet = true;
   persons = new Map<string, Person>();
   now = () => Date.now();
+  // False: an Engine without the deadline routes, which answers them 404.
+  deadlinesLive = true;
+  // Every POST /deadlines Engine accepted, as sent.
+  deadlineCalls: DeadlineCall[] = [];
+  // How long POST /deadlines takes to answer; the caller's abort ends it.
+  deadlinesDelayMs = 0;
+
+  // A texted photo Channels stored for this person.
+  putDocument(personId: string, documentId: string, bytes: Uint8Array): void {
+    this.documentOwners.set(documentId, personId);
+    this.documents.set(documentId, bytes);
+  }
 
   person(personId: string): Person {
     let p = this.persons.get(personId);
@@ -225,8 +244,24 @@ export class EngineDouble {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     const { sql, store, gateway, profile, deadlines } = this.person(personId);
     const nowIso = () => new Date(this.now()).toISOString();
+    if (rest === "/deadlines" || rest.startsWith("/deadlines/")) {
+      if (rest === "/deadlines" && method === "POST" && this.deadlinesDelayMs > 0) {
+        const signal = init?.signal;
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, this.deadlinesDelayMs);
+          signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+          });
+        });
+      }
+      if (!this.deadlinesLive) return new Response("Not found", { status: 404 });
+    }
     const deadlineResponse = await routeDeadlines(deadlines, method, rest, async () => body);
-    if (deadlineResponse) return deadlineResponse;
+    if (deadlineResponse) {
+      if (rest === "/deadlines" && method === "POST" && deadlineResponse.ok) this.deadlineCalls.push({ personId, body });
+      return deadlineResponse;
+    }
     try {
       if (rest === "/memory" && method === "GET") {
         return Response.json({ memories: sql.exec("SELECT * FROM memory ORDER BY created_at").toArray() });
@@ -339,6 +374,12 @@ export class EngineDouble {
       if (rest === "/pending-approval" && method === "DELETE") {
         const input = parsePointerInput(body);
         return Response.json({ cleared: clearPendingPointer(sql, input.approvalId, input.generation) });
+      }
+      const documentGet = rest.match(/^\/documents\/([^/]+)$/);
+      if (documentGet && method === "GET") {
+        const id = decodeURIComponent(documentGet[1]);
+        const bytes = this.documentOwners.get(id) === personId ? this.documentBytes.get(id) : undefined;
+        return bytes ? new Response(bytes as BodyInit, { headers: { "content-type": "application/octet-stream" } }) : Response.json({ error: "Document not found." }, { status: 404 });
       }
       if (rest === "/conversation" && method === "GET") return Response.json({ generation: currentGeneration(sql) });
       if (rest === "/conversation" && method === "DELETE") {
