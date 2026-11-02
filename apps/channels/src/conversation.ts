@@ -6,6 +6,9 @@ import { Decorations } from "./decorations.js";
 import {
   AgentResponder,
   ModelCrisisCheck,
+  OpenWeightClient,
+  PrimaryBreaker,
+  isMetaModelId,
   reportPresentation,
   saveDocumentInEngine,
   BlooioChannel,
@@ -20,6 +23,7 @@ import {
   type Channel,
   type Logger,
   type NormalizedEvent,
+  type OpenWeightFallback,
   type Responder,
 } from "@mano/channels";
 import { DEFAULT_MEDIA_HOSTS, DEFAULT_RUNNER_CONFIG, ConversationRunner, type ModelCosts, type SpendLedger } from "./runner.js";
@@ -119,10 +123,30 @@ export function buildChannel(env: Env): Channel {
   return new RecordingChannel();
 }
 
+// One breaker per Worker isolate, shared by every conversation and crisis
+// check this isolate runs. Not in the global state object: the breaker
+// only saves time, since both paths answer, and reading it there would add
+// a Durable Object round trip before every model call, the crisis check's
+// 3 seconds included. An isolate that never saw the primary fail asks it
+// once, finds it down and skips it from then on.
+const primaryBreaker = new PrimaryBreaker();
+
+// Meta's open-weight model on zero-retention endpoints, for when the Meta
+// Model API is down. It sends real texts outside the Standard model IDs,
+// so it stays off until OPENROUTER_API_KEY is set; MANO_OPEN_WEIGHT_MODEL
+// names the model and must be a Meta one (AGENTS.md rule 13), never a
+// -contributor ID. Off, every reply and crisis check works exactly as
+// before.
+export function buildOpenWeight(env: Env, breaker: PrimaryBreaker = primaryBreaker): OpenWeightFallback | undefined {
+  const model = env.MANO_OPEN_WEIGHT_MODEL?.trim() ?? "";
+  if (!env.OPENROUTER_API_KEY || !isMetaModelId(model) || model.endsWith("-contributor")) return undefined;
+  return { client: new OpenWeightClient({ apiKey: env.OPENROUTER_API_KEY, model }), breaker };
+}
+
 // Real texts go only to a Standard model ID (AGENTS.md rule 7). A
 // missing or -contributor ID fails closed to the stand-in, which calls
 // no model.
-function buildFallbackResponder(env: Env): Responder {
+function buildFallbackResponder(env: Env, breaker?: PrimaryBreaker): Responder {
   const model = env.MANO_REPLY_MODEL ?? "";
   if (!env.META_MODEL_API_KEY || !model || model.endsWith("-contributor")) return new StandInResponder();
   const endpoint = buildModelBaseUrl({
@@ -130,14 +154,21 @@ function buildFallbackResponder(env: Env): Responder {
     gatewayId: env.AI_GATEWAY_ID,
     provider: env.AI_GATEWAY_PROVIDER,
   });
-  return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, model, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
+  return new SparkResponder({
+    apiKey: env.META_MODEL_API_KEY,
+    model,
+    baseUrl: endpoint.url,
+    collectLogs: endpoint.via === "direct",
+    openWeight: buildOpenWeight(env, breaker),
+  });
 }
 
 // The model behind the crisis check for one short health question: the
-// Standard reply model, store: false, through AI Gateway. With no key, or
-// no Standard model ID, there is no check, and every such question gets
-// the crisis line (fail closed).
-export function buildCrisisCheck(env: Env): ModelCrisisCheck | null {
+// Standard reply model, store: false, through AI Gateway, with the same
+// open-weight fallback as the replies. With no key, or no Standard model
+// ID, there is no check, and every such question gets the crisis line
+// (fail closed).
+export function buildCrisisCheck(env: Env, breaker?: PrimaryBreaker): ModelCrisisCheck | null {
   const model = env.MANO_REPLY_MODEL ?? "";
   if (!env.META_MODEL_API_KEY || !model || model.endsWith("-contributor")) return null;
   const endpoint = buildModelBaseUrl({
@@ -145,7 +176,13 @@ export function buildCrisisCheck(env: Env): ModelCrisisCheck | null {
     gatewayId: env.AI_GATEWAY_ID,
     provider: env.AI_GATEWAY_PROVIDER,
   });
-  return new ModelCrisisCheck({ apiKey: env.META_MODEL_API_KEY, model, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
+  return new ModelCrisisCheck({
+    apiKey: env.META_MODEL_API_KEY,
+    model,
+    baseUrl: endpoint.url,
+    collectLogs: endpoint.via === "direct",
+    openWeight: buildOpenWeight(env, breaker),
+  });
 }
 
 // Texted photos go to the person's Engine documents. Without Engine
@@ -165,8 +202,8 @@ export function engineDocuments(env: Env, handleHash: string): DocumentStore | n
   };
 }
 
-export function buildResponder(env: Env, handleHash?: string, opts: { agentAllowed?: boolean } = {}): Responder {
-  const fallback = buildFallbackResponder(env);
+export function buildResponder(env: Env, handleHash?: string, opts: { agentAllowed?: boolean; breaker?: PrimaryBreaker } = {}): Responder {
+  const fallback = buildFallbackResponder(env, opts.breaker);
   if (opts.agentAllowed === false) return fallback;
   // The agent answers when configured; otherwise the plain model answer
   // stays the responder, and the agent falls back to it per turn.

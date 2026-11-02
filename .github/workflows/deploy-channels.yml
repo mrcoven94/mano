@@ -125,6 +125,8 @@ jobs:
           maybe "$MANO_TEXT_USD_PER_1K_CHARS" MANO_TEXT_USD_PER_1K_CHARS
           maybe "$BLOOIO_MEDIA_HOSTS" BLOOIO_MEDIA_HOSTS
           maybe "$MANO_TEXT_NUMBER" MANO_TEXT_NUMBER
+          # Turns on the open-weight fallback for when the Meta Model API is down.
+          maybe "$OPENROUTER_API_KEY" OPENROUTER_API_KEY
           # Set once the agent is deployed; until then turns use the plain answer.
           maybe "$AGENT_URL" AGENT_URL
         env:
@@ -138,4 +140,5 @@ jobs:
           MANO_TEXT_USD_PER_1K_CHARS: ${{ secrets.MANO_TEXT_USD_PER_1K_CHARS }}
           BLOOIO_MEDIA_HOSTS: ${{ secrets.BLOOIO_MEDIA_HOSTS }}
           MANO_TEXT_NUMBER: ${{ secrets.MANO_TEXT_NUMBER }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AGENT_URL: ${{ secrets.AGENT_URL }}

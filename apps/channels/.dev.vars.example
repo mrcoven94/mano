@@ -7,6 +7,9 @@ BLOOIO_BASE_URL=
 MANO_HANDLE_PEPPER=
 ENCRYPTION_KEK_B64=
 META_MODEL_API_KEY=
+# Optional: turns on Meta's open-weight fallback for when the Meta Model
+# API is down (the model ID is MANO_OPEN_WEIGHT_MODEL in wrangler.toml).
+OPENROUTER_API_KEY=
 CF_ACCOUNT_ID=
 AI_GATEWAY_ID=
 AI_GATEWAY_PROVIDER=
