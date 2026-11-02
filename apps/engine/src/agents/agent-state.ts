@@ -6,6 +6,7 @@
 // commits only while that generation is current (CURRENT_GENERATION, in
 // the same statement), so work from a deleted conversation never lands.
 import { CURRENT_GENERATION } from "../gateway/sql-store.js";
+import { clearProfile, ensureProfileTables } from "../profile.js";
 
 interface SqlExec {
   exec(query: string, ...bindings: unknown[]): { toArray(): unknown[]; rowsWritten: number };
@@ -102,6 +103,9 @@ export function proposalOrderFor(sql: SqlExec, turnId: string): { receivedAt: st
 }
 
 export function ensureAgentStateTables(sql: SqlExec): void {
+  // The person's files (texted photos among them), also created by
+  // PersonAgent; here so a conversation delete can remove their rows.
+  sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS reminders(
     id TEXT PRIMARY KEY, text TEXT NOT NULL, due_at_ms INTEGER NOT NULL, generation INTEGER NOT NULL,
     status TEXT NOT NULL, next_at_ms INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
@@ -121,6 +125,7 @@ export function ensureAgentStateTables(sql: SqlExec): void {
   // The one delivery wake-up a person has: the schedule's ID and time.
   sql.exec(`CREATE TABLE IF NOT EXISTS reminder_wakeup(
     slot INTEGER PRIMARY KEY CHECK (slot = 1), schedule_id TEXT NOT NULL, at_ms INTEGER NOT NULL)`);
+  ensureProfileTables(sql);
 }
 
 export function currentGeneration(sql: SqlExec): number {
@@ -134,9 +139,10 @@ export function currentGeneration(sql: SqlExec): number {
 // never returns to a cancellable state: an uncertain answer or a crashed
 // run leaves it sending, and the next run re-sends it under the same key
 // for Channels to dedupe. sent, dropped (Channels refused it for good, or
-// its conversation was deleted), failed (retries ran out) and cancelled
-// are final.
-export type ReminderStatus = "scheduled" | "claimed" | "sending" | "sent" | "dropped" | "failed" | "cancelled";
+// its conversation was deleted), failed (retries ran out), cancelled and
+// withdrawn (a deadline's nudge stopped after it was handed off, because
+// the deadline closed or moved: never handed off again) are final.
+export type ReminderStatus = "scheduled" | "claimed" | "sending" | "sent" | "dropped" | "failed" | "cancelled" | "withdrawn";
 
 export interface Reminder {
   id: string;
@@ -422,6 +428,8 @@ export interface ConversationRemoval {
   approvalsRejected: number;
   approvalsRevoked: number;
   memoriesDeleted: number;
+  documentsDeleted: number;
+  profileFieldsDeleted: number;
 }
 
 // Everything a deleted conversation leaves behind for this person, as a
@@ -453,6 +461,8 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
       approvalsRejected: 0,
       approvalsRevoked: 0,
       memoriesDeleted: 0,
+      documentsDeleted: 0,
+      profileFieldsDeleted: 0,
     };
   }
   // Counted with SELECT, not rowsWritten: Durable Object SQLite counts
@@ -475,6 +485,11 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
   sql.exec(`UPDATE approvals SET status = 'revoked' WHERE ${unresolved}`);
   const memoriesDeleted = count("SELECT COUNT(*) AS n FROM memory");
   sql.exec("DELETE FROM memory");
+  // Their R2 objects go by prefix right after this transaction
+  // (files.ts sweepDocuments).
+  const documentsDeleted = count("SELECT COUNT(*) AS n FROM documents");
+  sql.exec("DELETE FROM documents");
+  const profileFieldsDeleted = clearProfile(sql);
   const result: ConversationRemoval = {
     generation,
     remindersCancelled,
@@ -484,6 +499,8 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
     approvalsRejected,
     approvalsRevoked,
     memoriesDeleted,
+    documentsDeleted,
+    profileFieldsDeleted,
   };
   sql.exec(
     "INSERT INTO conversation_deletes(generation, result_json, at_ms) VALUES (?, ?, ?)",

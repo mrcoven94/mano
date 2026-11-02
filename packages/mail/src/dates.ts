@@ -174,8 +174,8 @@ export function verbatimSentences(fullText: string): string[] {
 // text, for quoting; the split sentence itself when none matches.
 export function quoteOf(sentence: string, fullText: string): string {
   const tidy = (s: string): string =>
-    normalizeMonthAbbreviations(s).replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "");
-  return verbatimSentences(fullText).find((q) => tidy(q) === sentence) ?? sentence;
+    normalizeMonthAbbreviations(s.trim().replace(LIST_MARKER, "")).replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "");
+  return verbatimSentences(fullText).find((q) => tidy(q) === tidy(sentence)) ?? sentence;
 }
 
 // The one sentence of the original transcription that contains the
@@ -211,11 +211,11 @@ export function dateOccurrences(text: string, refIso: string | null = null): str
   }
   if (refIso) {
     const yearless: RegExp[] = [
-      // Any digits after the day ("November 20, 27") are a year the
-      // parser cannot read in full, so the date is not resolved; the
-      // sentence asks instead (findAmbiguousDate).
-      new RegExp(`\\b(${monthNames})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?!\\s*,?\\s*\\d)`, "gi"),
-      new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthNames})\\b(?!\\.?\\s*,?\\s*\\d)`, "gi"),
+      // Any digits after the day ("November 20, 27" or "November 20,
+      // '27") are a year the parser cannot read in full, so the date is
+      // not resolved; the sentence asks instead (findAmbiguousDate).
+      new RegExp(`\\b(${monthNames})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?!\\s*,?\\s*['\u2019]?\\d)`, "gi"),
+      new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthNames})\\b(?!\\.?\\s*,?\\s*['\u2019]?\\d)`, "gi"),
     ];
     yearless.forEach((re, k) => {
       for (const m of cleaned.matchAll(re)) {

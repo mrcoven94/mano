@@ -10,11 +10,11 @@ import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow,
 import type { ActionRequest, Approval, CheckOutcome, ProposalOrder } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
-import { getDocumentBytes, putDocument } from "../files.js";
+import { getDocumentBytes, putDocument, sweepDocuments } from "../files.js";
 import { CASE_ID_RULE, isCaseId } from "../case-id.js";
 import { auditDigest } from "../gateway/audit.js";
 import { checkLinkSafety, redactBlockedLinks } from "../link-safety.js";
-import { base64ToBytes, bytesToBase64 } from "../hash.js";
+import { base64ToBytes, bytesToBase64, sha256Hex } from "../hash.js";
 import { createModelClient, defaultModelFor } from "../model-client.js";
 import { getSessionSecret, verifyWsTicket } from "../auth.js";
 import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
@@ -52,6 +52,24 @@ import {
   type DeliveryOutcome,
 } from "./agent-state.js";
 import { CURRENT_GENERATION } from "../gateway/sql-store.js";
+import { ProfileStore, forgetMemoryNote, type PatchAnswer, type Profile, type Suggestion } from "../profile.js";
+import { profileCipher } from "../crypto.js";
+import {
+  cancelDeadline,
+  deadlineIdFor,
+  ensureDeadlineTables,
+  gateNudge,
+  isNudge,
+  listDeadlines,
+  nudgeTimeOf,
+  parseDeadlineInput,
+  parseDeadlinePatch,
+  removeDeadlines,
+  timeZoneForState,
+  trackDeadline,
+  updateDeadline,
+  type DeadlineResult,
+} from "../deadlines.js";
 
 // A delivery run holds its claim this long; a run that crashed is
 // reclaimed after it. Retries back off from 30 seconds to an hour and
@@ -61,6 +79,8 @@ const MAX_REMINDER_ATTEMPTS = 8;
 // The answer when a write was prepared under a conversation generation
 // that a delete has since moved past: nothing was written.
 export const STALE_STATE = { stale: true } as const;
+export const DOCUMENT_CONFLICT = { conflict: true } as const;
+const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,200}$/;
 
 // One delivery run claims at most this many; a run that leaves more due
 // re-arms the wake-up for now.
@@ -117,8 +137,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       {
         listConsents: () => this.listStoredConsents(),
         documents: {
-          getBytes: (documentId) =>
-            getDocumentBytes(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, documentId),
+          getBytes: (documentId) => this.documentBytes(documentId),
         },
       },
     );
@@ -134,7 +153,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         // The column already exists: additive migrations are idempotent.
       }
       sql.exec(`CREATE TABLE IF NOT EXISTS conversation(id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)`);
-      sql.exec(`CREATE TABLE IF NOT EXISTS deadlines(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_at TEXT NOT NULL)`);
+      ensureDeadlineTables(sql);
       sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
       // One consent row per recipient and case, so revocation deletes the
       // exact row the grant created.
@@ -479,7 +498,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // answers the same, so a retried forget is safe.
   async forgetMemory(verified: string, memoryId: string) {
     await this.assertSubject(verified);
-    this.db().exec("DELETE FROM memory WHERE id = ?", memoryId);
+    this.ctx.storage.transactionSync(() => forgetMemoryNote(this.db(), memoryId));
     this.store.audit({ event: "memory.forgotten", memoryHash: await auditDigest(memoryId) });
     return { id: memoryId, forgotten: true as const };
   }
@@ -487,6 +506,53 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async listMemory(verified: string) {
     await this.assertSubject(verified);
     return [...this.db().exec("SELECT * FROM memory ORDER BY created_at").toArray()];
+  }
+
+  // The person's profile (src/profile.ts). Null without the key that
+  // seals it: the profile is never stored in the clear.
+  private profileStore(): ProfileStore | null {
+    if (!this.env.ENCRYPTION_KEK_B64) return null;
+    return new ProfileStore({
+      sql: this.db(),
+      transaction: (fn) => this.ctx.storage.transactionSync(fn),
+      cipher: profileCipher(this.env.ENCRYPTION_KEK_B64, this.personId),
+      now: () => new Date(),
+      documentExists: (id) => this.db().exec("SELECT 1 FROM documents WHERE id = ?", id).toArray().length > 0,
+    });
+  }
+
+  // Code inside Engine reads the profile with this, as the person:
+  // getProfile(this.personId). Null when the profile key is not set.
+  async getProfile(verified: string): Promise<Profile | null> {
+    await this.assertSubject(verified);
+    return (await this.profileStore()?.read()) ?? null;
+  }
+
+  // Values from a lower-trust source that differ from what is on file,
+  // waiting for the person to confirm.
+  async getProfileSuggestions(verified: string): Promise<Suggestion[]> {
+    await this.assertSubject(verified);
+    return (await this.profileStore()?.suggestions()) ?? [];
+  }
+
+  // generation: as for memory, the conversation generation the caller
+  // prepared this under, or the current one.
+  async patchProfile(verified: string, raw: unknown, generation?: number): Promise<PatchAnswer> {
+    await this.assertSubject(verified);
+    const store = this.profileStore();
+    if (!store) return { status: "unavailable" };
+    const out = await store.patch(raw, generation ?? currentGeneration(this.db()));
+    return out.status === "ok" ? { ...out, profile: await store.read(), suggestions: await store.suggestions() } : out;
+  }
+
+  // For code inside Engine that reads a document (Mail, Forms): facts it
+  // read from one of this person's documents, recorded with source
+  // document and that documentId.
+  async recordDocumentFacts(
+    verified: string,
+    input: { documentId: string; idempotencyKey: string; fields: Record<string, unknown> },
+  ): Promise<PatchAnswer> {
+    return this.patchProfile(verified, { ...input, source: "document" });
   }
 
   // Reminders. The caller names each one: the same ID returns the
@@ -505,9 +571,68 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { status: out.created ? ("created" as const) : ("existing" as const), reminder: out.reminder };
   }
 
+  // The reminders the person set. A deadline's nudges are listed with
+  // their deadline instead.
   async listReminders(verified: string) {
     await this.assertSubject(verified);
-    return listReminders(this.db());
+    return listReminders(this.db()).filter((r) => !isNudge(r.id));
+  }
+
+  // Deadlines Mano tracks itself (src/deadlines.ts). Their nudges are
+  // reminder rows, delivered by the wake-up below.
+  async trackDeadline(verified: string, input: unknown) {
+    await this.assertSubject(verified);
+    const parsed = parseDeadlineInput(input);
+    const id = await deadlineIdFor(parsed.idempotencyKey);
+    const timeZone = await this.deadlineTimeZone();
+    const out = this.ctx.storage.transactionSync(() =>
+      trackDeadline(this.db(), { ...parsed, id, timeZone }, Date.now(), nudgeTimeOf(this.env)),
+    );
+    return this.settleDeadline(out);
+  }
+
+  async listDeadlines(verified: string) {
+    await this.assertSubject(verified);
+    return listDeadlines(this.db());
+  }
+
+  async updateDeadline(verified: string, id: string, patch: unknown) {
+    await this.assertSubject(verified);
+    const parsed = parseDeadlinePatch(patch);
+    const timeZone = await this.deadlineTimeZone();
+    const out = this.ctx.storage.transactionSync(() =>
+      updateDeadline(this.db(), id, parsed, timeZone, Date.now(), nudgeTimeOf(this.env)),
+    );
+    return out && this.settleDeadline(out);
+  }
+
+  async cancelDeadline(verified: string, id: string) {
+    await this.assertSubject(verified);
+    const out = this.ctx.storage.transactionSync(() => cancelDeadline(this.db(), id, Date.now()));
+    return out && this.settleDeadline(out);
+  }
+
+  private async settleDeadline(out: DeadlineResult): Promise<DeadlineResult> {
+    if ("deadline" in out && out.status !== "existing" && out.status !== "closed") {
+      this.store.audit({ event: `deadline.${out.status}`, deadlineHash: await auditDigest(out.deadline.id) });
+    }
+    // An unchanged one re-arms too: a retry repairs a lost wake-up.
+    await this.armReminderWakeup();
+    return out;
+  }
+
+  // The zone nudges are timed in, from the state on the person's profile
+  // when the profile part of Engine is present; Pacific otherwise.
+  private async deadlineTimeZone(): Promise<string> {
+    const getProfile = (this as unknown as { getProfile?: (subject: string) => Promise<unknown> }).getProfile;
+    if (typeof getProfile !== "function") return timeZoneForState(null);
+    try {
+      const profile = (await getProfile.call(this, this.personId)) as { person?: { address?: { state?: { value?: unknown } } } } | null;
+      const state = profile?.person?.address?.state?.value;
+      return timeZoneForState(typeof state === "string" ? state : null);
+    } catch {
+      return timeZoneForState(null);
+    }
   }
 
   async cancelReminder(verified: string, id: unknown) {
@@ -571,7 +696,17 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const claimed = claimDueReminders(this.db(), Date.now(), REMINDER_LEASE_MS, token, REMINDER_BATCH);
     let sent = 0;
     for (const reminder of claimed) {
-      if (!handOffReminder(this.db(), reminder.id, token, Date.now())) continue;
+      // A deadline's nudge is checked against its deadline and its quiet
+      // hours in the same step as the handoff, so nothing lands between.
+      const step = this.ctx.storage.transactionSync(() => {
+        const held = gateNudge(this.db(), reminder.id, token, Date.now());
+        return held ?? (handOffReminder(this.db(), reminder.id, token, Date.now()) ? "handed" : "lost");
+      });
+      if (step === "withdrawn" || step === "deferred" || step === "missed") {
+        this.store.audit({ event: `deadline.nudge_${step}`, reminderHash: await auditDigest(reminder.id) });
+        continue;
+      }
+      if (step === "lost") continue;
       let outcome: DeliveryOutcome;
       if (!handleHash) {
         outcome = { kind: "failed" };
@@ -653,12 +788,25 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // Channels deleted this person's conversation, moving it to generation
   // N: in one transaction, move to N, cancel reminders, clear the ledger
   // and the pointer, reject pending approvals, revoke approved ones that
-  // have not finished, and delete memory. Already at N or past it, it is
-  // a no-op that answers with the recorded counts of that delete.
+  // have not finished, and delete memory, documents, the profile and
+  // deadlines. Already at N or past it, it is a no-op that answers with
+  // the recorded counts of that delete.
   async deleteConversation(verified: string, input: unknown) {
     await this.assertSubject(verified);
     const toGeneration = parseGenerationInput(input).generation;
-    const removed = this.ctx.storage.transactionSync(() => removeConversationState(this.db(), Date.now(), toGeneration));
+    // The generation moves and the rows go first, in one transaction, so
+    // no upload prepared before can commit after it. Then the files of
+    // older generations go by prefix, including one that landed during
+    // the delete. A failed sweep throws, and Channels' retry sweeps again.
+    const removed = this.ctx.storage.transactionSync(() => {
+      const before = currentGeneration(this.db());
+      const out = removeConversationState(this.db(), Date.now(), toGeneration);
+      // Only a delete that moved the generation removes deadlines: a
+      // retried old one never touches the conversation after it.
+      if (out.generation > before) removeDeadlines(this.db(), Date.now());
+      return out;
+    });
+    await sweepDocuments(this.env.FILES, this.personId, currentGeneration(this.db()));
     this.store.audit({ event: "conversation.deleted", ...removed });
     await this.armReminderWakeup();
     this.syncState();
@@ -1063,10 +1211,17 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return recorded ? { found: true, externalId: stored.id } : { found: false };
   }
 
-  async registerDocument(verified: string, input: { name: string; contentB64: string }) {
+  // id: a caller-chosen, slug-safe ID (Channels derives one per texted
+  // photo), so a retried upload is the same document; the same ID with
+  // other bytes is a conflict. generation: the conversation the upload
+  // was prepared under, checked again at the insert.
+  async registerDocument(verified: string, input: { name: string; contentB64: string; id?: string }, generation?: number) {
     await this.assertSubject(verified);
     if (!input.name || typeof input.name !== "string" || input.name.length > 300) {
       throw new Error("Document needs a name.");
+    }
+    if (input.id !== undefined && (typeof input.id !== "string" || !DOCUMENT_ID.test(input.id))) {
+      throw new Error("Document id must be slug-safe.");
     }
     let bytes: Uint8Array;
     try {
@@ -1077,25 +1232,53 @@ export class PersonAgent extends Agent<Env, PersonState> {
     if (bytes.length === 0 || bytes.length > 10_000_000) {
       throw new Error("Document is empty or larger than 10 MB.");
     }
-    const id = crypto.randomUUID();
-    const { hash, r2Key } = await putDocument(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, id, bytes);
-    this.db().exec("INSERT INTO documents VALUES (?,?,?,?)", id, input.name, hash, r2Key);
+    const id = input.id ?? crypto.randomUUID();
+    const prepared = generation ?? currentGeneration(this.db());
+    const hash = await sha256Hex(bytes);
+    const existing = this.documentRow(id);
+    if (existing) return existing.hash === hash ? { id, hash } : DOCUMENT_CONFLICT;
+    if (prepared !== currentGeneration(this.db())) return STALE_STATE;
+    // The bytes go under their own generation and hash first; the row
+    // commits only while that generation is current. Whoever loses, a
+    // racing upload or a delete, removes its own object and nothing else.
+    const { r2Key } = await putDocument(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, id, bytes, prepared);
+    const written = this.db().exec(
+      `INSERT OR IGNORE INTO documents(id, name, hash, r2_key) SELECT ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?`,
+      id, input.name, hash, r2Key, prepared,
+    ).rowsWritten;
+    if (written === 0) {
+      const raced = this.documentRow(id);
+      if (raced?.r2_key !== r2Key) await this.env.FILES.delete(r2Key);
+      if (!raced) return STALE_STATE;
+      return raced.hash === hash ? { id, hash } : DOCUMENT_CONFLICT;
+    }
     this.store.audit({ event: "document.registered", documentHash: await auditDigest(id) });
     return { id, hash };
+  }
+
+  private documentRow(id: string): { hash: string; r2_key: string; name: string } | undefined {
+    return this.db().exec("SELECT hash, r2_key, name FROM documents WHERE id = ?", id).toArray()[0] as
+      | { hash: string; r2_key: string; name: string }
+      | undefined;
+  }
+
+  // Bytes for the gateway, read from the key the row recorded.
+  private async documentBytes(documentId: string): Promise<Uint8Array | null> {
+    const row = this.documentRow(documentId);
+    if (!row) return null;
+    return getDocumentBytes(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, documentId, row.r2_key);
   }
 
   // Returns a document's decrypted bytes to its owner, so the person can
   // see exactly what they are approving.
   async getDocument(verified: string, docId: string): Promise<{ name: string; contentB64: string }> {
     await this.assertSubject(verified);
-    const rows = this.db().exec("SELECT name FROM documents WHERE id = ?", docId).toArray() as unknown as {
-      name: string;
-    }[];
-    if (!rows[0]?.name) throw new Error("Document not found.");
-    const bytes = await getDocumentBytes(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, docId);
+    const row = this.documentRow(docId);
+    if (!row?.name) throw new Error("Document not found.");
+    const bytes = await this.documentBytes(docId);
     if (bytes == null) throw new Error("Document not found.");
     const raw = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
-    return { name: rows[0].name, contentB64: bytesToBase64(raw) };
+    return { name: row.name, contentB64: bytesToBase64(raw) };
   }
 }
 

@@ -275,6 +275,8 @@ describe("conversation delete", () => {
         approvalsRejected: 1,
         approvalsRevoked: 0,
         memoriesDeleted: 2,
+        documentsDeleted: 0,
+        profileFieldsDeleted: 0,
       },
     });
 
@@ -299,6 +301,8 @@ describe("conversation delete", () => {
       approvalsRejected: 1,
       approvalsRevoked: 0,
       memoriesDeleted: 2,
+      documentsDeleted: 0,
+      profileFieldsDeleted: 0,
     });
     expect(((await (await call(h, "GET", "/memory")).json()) as { memories: unknown[] }).memories.length).toBe(1);
   });

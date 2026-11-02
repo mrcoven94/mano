@@ -32,6 +32,32 @@ export function stagingAttemptKey(attemptId: string, index: number, sha256: stri
   return `staging/${attemptId}/${index}-${sha256}`;
 }
 
+/**
+ * Which row guards a tracked object. The sweep reads the owner back out of
+ * the key: every writer namespaces its keys, so the key alone says who can
+ * still need the bytes. Anything unrecognized is attempt staging, the oldest
+ * tracked kind, which age alone guards.
+ */
+export type TrackedOwner =
+  | { kind: "attempt" }
+  | { kind: "session"; sessionId: string }
+  | { kind: "submission"; scope: string; key: string };
+
+export function trackedOwner(r2key: string): TrackedOwner {
+  const draft = /^drafts\/([^/]+)\//.exec(r2key);
+  if (draft?.[1]) return { kind: "session", sessionId: draft[1] };
+  if (r2key.startsWith("submissions/")) {
+    // submissions/<scope>/<key>/<index>-<sha256>; the key itself may hold slashes.
+    const rest = r2key.slice("submissions/".length).split("/");
+    if (rest.length >= 3) {
+      const scope = rest[0]!;
+      const key = rest.slice(1, -1).join("/");
+      if (scope && key) return { kind: "submission", scope, key };
+    }
+  }
+  return { kind: "attempt" };
+}
+
 /** Minimal R2 surface, so app code never imports cloudflare:workers. */
 export interface R2ObjectLike {
   readonly httpMetadata?: { contentType?: string };

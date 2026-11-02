@@ -52,20 +52,20 @@ describe("r2 items 7, 8, 12, 13, 18: gateway rework confirmations", () => {
     const posted: Record<string, unknown>[] = [];
     const fetchFn = (async (url: string, init?: RequestInit) => {
       posted.push(JSON.parse(init?.body as string) as Record<string, unknown>);
-      return new Response(JSON.stringify({ externalId: "portal-doc" }), { status: 200 });
+      return new Response(JSON.stringify({ confirmationNumber: "portal-doc" }), { status: 200 });
     }) as typeof fetch;
     const { SandboxExecutor } = await import("../src/gateway/index.js");
     const exec = new SandboxExecutor("https://portal.test", 1000, fetchFn);
     const gw = new ActionGateway(new MemoryApprovalStore(), exec, {
       policyOverrides: { submit: "allow" },
-      documents: new MapDocumentStore(new Map([["doc-8", "exact bytes v1"]])),
+      documents: new MapDocumentStore(new Map([["doc-8", "%PDF-1.4 exact bytes v1"]])),
     });
     const result = await gw.requestAction(baseReq({ idempotencyKey: "r2i8-key", documentId: "doc-8" }));
     expect(result.status).toBe("completed");
-    const document = posted[0].document as { hash: string; contentB64: string };
-    expect(typeof document.hash).toBe("string");
-    expect(document.hash).toHaveLength(64);
-    expect(atob(document.contentB64)).toBe("exact bytes v1");
+    const files = posted[0].files as { name: string; type: string; data: string }[];
+    expect(files).toHaveLength(1);
+    expect(files[0].type).toBe("application/pdf");
+    expect(atob(files[0].data)).toBe("%PDF-1.4 exact bytes v1");
   });
 
   it("item 12: checks URLs nested anywhere in the payload", async () => {

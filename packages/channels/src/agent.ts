@@ -14,7 +14,7 @@ import { guardReply } from "@mano/persona";
 import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
 
 import { boundFetch } from "./fetch.js";
-import { ResponderFailed, type Responder, type ResponderResult, type TurnInput } from "./responder.js";
+import { PHOTO_UNREAD_TEXT, ResponderFailed, type Responder, type ResponderResult, type TurnInput } from "./responder.js";
 import { splitBubbles } from "./bubbles.js";
 import { computeSignatureHex, SIGNATURE_WINDOW_SECONDS, timingSafeEqualHex } from "./verify.js";
 
@@ -93,6 +93,7 @@ interface AgentTurnResponse {
 
 export class AgentResponder implements Responder {
   readonly name = "agent";
+  readonly readsPhotos = true;
   readonly maxAttempts: number;
   private agentUrl: string;
   private secret: string;
@@ -134,6 +135,7 @@ export class AgentResponder implements Responder {
         grant: await mintHandleGrant(this.handleHash, this.grantSecret),
         texts: turn.texts,
         attachmentCount: turn.attachmentCount,
+        documents: turn.documents ?? [],
       });
       const timestamp = this.nowSeconds();
       const res = await this.fetchFn(`${this.agentUrl}${AGENT_TURN_PATH}`, {
@@ -179,6 +181,18 @@ export class AgentResponder implements Responder {
   }
 
   private async respondFallback(turn: TurnInput, inputChars: number): Promise<ResponderResult> {
+    // A photo with no words has nothing for the plain model to answer:
+    // it says the photo was not read.
+    if (turn.texts.every((t) => !t.trim()) && turn.attachmentCount > 0) {
+      return {
+        text: PHOTO_UNREAD_TEXT,
+        bubbles: splitBubbles(PHOTO_UNREAD_TEXT),
+        inputChars,
+        outputChars: PHOTO_UNREAD_TEXT.length,
+        model: "agent",
+        attempts: 1,
+      };
+    }
     try {
       const result = await this.fallback.respond(turn);
       return { ...result, attempts: 1 + result.attempts };
@@ -269,6 +283,50 @@ export async function deleteConversationInEngine(
   }
   const body = (await res.json().catch(() => null)) as { removed?: Record<string, number | boolean> } | null;
   return body?.removed ?? null;
+}
+
+export interface EngineDocumentUpload {
+  engineUrl: string;
+  channelsToken: string;
+  grantSecret: string;
+  handleHash: string;
+  // The conversation generation the photo arrived under.
+  generation: number;
+  // Slug-safe and derived from the turn, so a retried upload is the same
+  // document.
+  id: string;
+  name: string;
+  bytes: Uint8Array;
+  fetchFn?: typeof fetch;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+// Stores a texted photo in the person's Engine documents (encrypted per
+// person there) with Channels' own token and a grant for this handle.
+// True once Engine holds it; false when Engine refused it (a delete moved
+// past this generation, or other bytes hold the ID).
+export async function saveDocumentInEngine(req: EngineDocumentUpload): Promise<boolean> {
+  const personId = personIdForHandle(req.handleHash);
+  const res = await (req.fetchFn ?? boundFetch)(
+    `${req.engineUrl.replace(/\/$/, "")}/api/persons/${encodeURIComponent(personId)}/documents`,
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(30_000),
+      headers: {
+        authorization: `Bearer ${req.channelsToken}`,
+        "content-type": "application/json",
+        "x-mano-handle-grant": await mintHandleGrant(req.handleHash, req.grantSecret),
+      },
+      body: JSON.stringify({ id: req.id, name: req.name, contentB64: bytesToBase64(req.bytes), generation: req.generation }),
+    },
+  );
+  await res.body?.cancel().catch(() => undefined);
+  return res.ok;
 }
 
 export interface PresentationReport {

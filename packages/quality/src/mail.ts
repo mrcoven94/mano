@@ -1,9 +1,9 @@
 // Mail's published-deadline accuracy: for each synthetic letter in the
 // letters suite, does the deadline the mail reader publishes match the one
 // the letter sets (none for a scam or a letter with two dates)? The real
-// reader is packages/mail, which has no quality adapter yet; until it exports
-// qualityDeadlineReader, a stand-in reads the letter's transcript and every
-// report says so.
+// reader is packages/mail qualityDeadlineReader, used whenever
+// META_MODEL_API_KEY is set; without a key a stand-in reads the letter's
+// transcript and every report says so.
 
 import { stateByCode } from "./facts.ts";
 import { extractDates } from "./checks.ts";
@@ -46,15 +46,16 @@ export class TranscriptDeadlineReader implements DeadlineReader {
   }
 }
 
-export async function loadDeadlineReader(): Promise<{ reader: DeadlineReader; detail: string }> {
+export async function loadDeadlineReader(env: NodeJS.ProcessEnv = process.env): Promise<{ reader: DeadlineReader; detail: string }> {
+  if (!env.META_MODEL_API_KEY) return { reader: new TranscriptDeadlineReader(), detail: "stand-in: no META_MODEL_API_KEY" };
   try {
     const mod = (await import("@mano/mail" as string)) as { qualityDeadlineReader?: DeadlineReader };
     if (mod.qualityDeadlineReader && typeof mod.qualityDeadlineReader.readDeadline === "function") {
       return { reader: mod.qualityDeadlineReader, detail: "packages/mail qualityDeadlineReader" };
     }
-    return { reader: new TranscriptDeadlineReader(), detail: "stand-in: packages/mail exports no qualityDeadlineReader yet" };
+    return { reader: new TranscriptDeadlineReader(), detail: "stand-in: packages/mail exports no qualityDeadlineReader" };
   } catch {
-    return { reader: new TranscriptDeadlineReader(), detail: "stand-in: packages/mail exports no qualityDeadlineReader yet" };
+    return { reader: new TranscriptDeadlineReader(), detail: "stand-in: packages/mail did not load" };
   }
 }
 

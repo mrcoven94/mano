@@ -1,20 +1,24 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { ApplyScene, FormScene, MailScene, RenewScene, HoldScene } from "./Scenes";
+import { ApplyScene, FormScene, RenewScene, HoldScene } from "./Scenes";
+import SpineDemo, { SPINE_SECONDS } from "./SpineDemo";
 import Mascot from "@/components/Mascot";
 
 /* The hero: one headline whose highlighted outcome follows the demo below it. Each tab names the outcome and the work behind it.
-   Scenes advance on their own while the stage is on screen; choosing a tab stops that. */
+   Scenes advance on their own while the stage is on screen; choosing a tab stops that. The first scene is the spine
+   (a text thread that ends with a renewal filed); it moves on when its loop ends, and chosen, it keeps looping. */
 
-const SCENES = [
+const SECONDS = 8;
+
+type SceneDef = { key: string; tab: string; how: string; phrase: string; Scene: (props: { onLoop?: () => void }) => React.ReactNode; seconds?: number; flush?: boolean };
+
+const SCENES: SceneDef[] = [
+  { key: "spine", tab: "Keep your benefits", how: "Renews by text", phrase: "keeps food coming", Scene: SpineDemo, seconds: SPINE_SECONDS, flush: true },
   { key: "apply", tab: "Pay rent", how: "Applies for help", phrase: "helps you pay rent", Scene: ApplyScene },
   { key: "forms", tab: "Find child care", how: "Fills out any form", phrase: "finds child care", Scene: FormScene },
-  { key: "mail", tab: "Keep your benefits", how: "Reads your mail", phrase: "keeps food coming", Scene: MailScene },
   { key: "renew", tab: "Keep the lights on", how: "Renews on time", phrase: "keeps the lights on", Scene: RenewScene },
   { key: "hold", tab: "Get your medicine", how: "Waits on hold", phrase: "gets your medicine", Scene: HoldScene },
 ];
-
-const SECONDS = 8;
 
 export default function HeroStage() {
   const [i, setI] = useState(0);
@@ -32,6 +36,7 @@ export default function HeroStage() {
   }, []);
 
   const pick = (n: number) => { setAuto(false); setI(n); };
+  const next = () => setI((x) => (x + 1) % SCENES.length);
   const onKey = (e: React.KeyboardEvent) => {
     const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
     if (!d) return;
@@ -41,14 +46,14 @@ export default function HeroStage() {
     document.getElementById(`tab-${SCENES[n].key}`)?.focus();
   };
 
-  const { Scene } = SCENES[i];
+  const { Scene, flush } = SCENES[i];
   const playing = auto && visible;
 
   return (
     <div className="h-hero">
       <div className="wrap h-hero-head">
         <h1>
-          <span className="sr-only">Mano is AI that helps you pay rent, finds child care, keeps food coming, keeps the lights on and gets your medicine.</span>
+          <span className="sr-only">Mano is AI that keeps food coming, helps you pay rent, finds child care, keeps the lights on and gets your medicine.</span>
           <span aria-hidden="true">
             <span className="h-line">Mano <Mascot tile wave tone="orange" size="1em" className="h-mascot" /> is AI that</span>
             <span className="h-line"><mark key={i} className="h-phrase">{SCENES[i].phrase}</mark>.</span>
@@ -84,16 +89,16 @@ export default function HeroStage() {
                 <span
                   key={`p-${i}`}
                   className="h-tab-bar"
-                  style={{ animationDuration: `${SECONDS}s`, animationPlayState: playing ? "running" : "paused" }}
-                  onAnimationEnd={() => setI((x) => (x + 1) % SCENES.length)}
+                  style={{ animationDuration: `${s.seconds ?? SECONDS}s`, animationPlayState: playing ? "running" : "paused" }}
+                  onAnimationEnd={s.seconds ? undefined : next}
                   aria-hidden="true"
                 />
               )}
             </button>
           ))}
         </div>
-        <div className="h-stage" id="h-panel" role="tabpanel" aria-labelledby={`tab-${SCENES[i].key}`} data-paused={(auto && !visible) || undefined}>
-          <Scene key={SCENES[i].key} />
+        <div className="h-stage" id="h-panel" role="tabpanel" aria-labelledby={`tab-${SCENES[i].key}`} data-paused={(auto && !visible) || undefined} data-flush={flush || undefined}>
+          <Scene key={SCENES[i].key} onLoop={auto ? next : undefined} />
         </div>
       </div>
     </div>

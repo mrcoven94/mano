@@ -7,6 +7,7 @@ import {
   AgentResponder,
   ModelCrisisCheck,
   reportPresentation,
+  saveDocumentInEngine,
   BlooioChannel,
   RecordingChannel,
   boundFetch,
@@ -27,7 +28,7 @@ export function parseMediaHosts(raw: string | undefined): string[] {
   const hosts = (raw ?? "").split(",").map((h) => h.trim().toLowerCase()).filter((h) => h.length > 0);
   return hosts.length > 0 ? hosts : [...DEFAULT_MEDIA_HOSTS];
 }
-import { R2FileStore, conversationFilePrefix } from "./files.js";
+import { R2FileStore, conversationFilePrefix, type DocumentStore } from "./files.js";
 import { SqlConversationStore } from "./store-sql.js";
 import {
   advanceDelete,
@@ -147,6 +148,23 @@ export function buildCrisisCheck(env: Env): ModelCrisisCheck | null {
   return new ModelCrisisCheck({ apiKey: env.META_MODEL_API_KEY, model, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
 }
 
+// Texted photos go to the person's Engine documents. Without Engine
+// configured nothing is stored, and the reply says the photo was not
+// saved.
+export function engineDocuments(env: Env, handleHash: string): DocumentStore | null {
+  if (!env.MANO_ENGINE_URL || !env.MANO_ENGINE_CHANNELS_TOKEN || !env.MANO_HANDLE_GRANT_SECRET) return null;
+  return {
+    put: (doc) =>
+      saveDocumentInEngine({
+        engineUrl: env.MANO_ENGINE_URL!,
+        channelsToken: env.MANO_ENGINE_CHANNELS_TOKEN!,
+        grantSecret: env.MANO_HANDLE_GRANT_SECRET!,
+        handleHash,
+        ...doc,
+      }),
+  };
+}
+
 export function buildResponder(env: Env, handleHash?: string, opts: { agentAllowed?: boolean } = {}): Responder {
   const fallback = buildFallbackResponder(env);
   if (opts.agentAllowed === false) return fallback;
@@ -219,8 +237,7 @@ export class ConversationDO implements DurableObject {
       store: new SqlConversationStore(this.ctx.storage.sql),
       channel,
       responder,
-      files: this.env.FILES ? new R2FileStore(this.env.FILES) : null,
-      kekB64: this.env.ENCRYPTION_KEK_B64 || null,
+      documents: engineDocuments(this.env, handleHash),
       spend: new StateSpendLedger(globalStateStub(this.env)),
       logger: this.logger,
       nowMs: () => Date.now(),

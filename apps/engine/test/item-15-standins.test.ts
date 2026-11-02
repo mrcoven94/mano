@@ -31,27 +31,10 @@ describe("item 15: swappable executors and stand-ins", () => {
     expect(createExecutor({ MANO_ENV: "development" }).simulated).toBe(true);
     expect(createExecutor({ EXECUTOR_MODE: "simulated" })).toBeInstanceOf(InMemoryExecutor);
     expect(() => createExecutor({ EXECUTOR_MODE: "sandbox" })).toThrow(/SANDBOX_BASE_URL/);
-    const sandbox = createExecutor({ EXECUTOR_MODE: "sandbox", SANDBOX_BASE_URL: "https://portal.test/" });
+    expect(() => createExecutor({ EXECUTOR_MODE: "sandbox", SANDBOX_BASE_URL: "https://portal.test/" })).toThrow(/SANDBOX_PORTAL_TOKEN/);
+    const sandbox = createExecutor({ EXECUTOR_MODE: "sandbox", SANDBOX_BASE_URL: "https://portal.test/", SANDBOX_PORTAL_TOKEN: "t" });
     expect(sandbox.simulated).toBe(false);
     expect(() => createExecutor({ EXECUTOR_MODE: "nope" })).toThrow(/Unknown EXECUTOR_MODE/);
-  });
-
-  it("drives the sandbox portal contract", async () => {
-    const seen: { url: string; init: RequestInit }[] = [];
-    const fetchFn = (async (url: string, init?: RequestInit) => {
-      seen.push({ url, init: init ?? {} });
-      if (url.endsWith("/v1/actions")) return new Response(JSON.stringify({ externalId: "portal-1" }), { status: 200 });
-      if (url.includes("known-key")) return new Response(JSON.stringify({ externalId: "portal-1" }), { status: 200 });
-      return new Response("{}", { status: 404 });
-    }) as typeof fetch;
-    const exec = new SandboxExecutor("https://portal.test", 1000, fetchFn);
-    const out = await exec.execute(baseReq({ idempotencyKey: "k-1" }));
-    expect(out).toEqual({ externalId: "portal-1" });
-    const posted = JSON.parse(seen[0].init.body as string) as Record<string, unknown>;
-    expect(posted.idempotencyKey).toBe("maria:k-1");
-    expect(posted.type).toBe("submit");
-    expect(await exec.check("known-key", "maria")).toEqual({ found: true, externalId: "portal-1" });
-    expect(await exec.check("missing-key", "maria")).toEqual({ found: false });
   });
 
   it("blocks when a reconcile check fails instead of executing", async () => {

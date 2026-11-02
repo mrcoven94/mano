@@ -34,11 +34,12 @@ const INSTRUCTION_PATTERNS: { re: RegExp; label: string }[] = [
 
 const LINK_RE = /https?:\/\/[^\s<>"')\]]+/gi;
 const WWW_RE = /\bwww\.[a-z0-9-]+(\.[a-z0-9-]+)+[^\s<>"')\]]*/gi;
-// A bare domain with no scheme or www ("benefits-unlock.example/login"),
-// on a known top-level domain so "Case No." or "Inc." never match, and
-// never the domain of an email address.
+// A bare domain with no scheme or www ("benefits-unlock.help/login"),
+// on any lowercase top-level domain of two or more letters, so "Case
+// No." or "U.S." never match and neither does a missing space after a
+// period ("form.Please"). Never the domain of an email address.
 const BARE_DOMAIN_RE =
-  /(?<![@\w.-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|gov|edu|us|info|biz|io|co|me|app|online|site|xyz|example)\b(?:\/[^\s<>"')\]]*)?/gi;
+  /(?<![@\w.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[a-z]{2,24}(?![\w@-])(?:\/[^\s<>"')\]]*)?/g;
 // NANP-ish numbers: (555) 123-4567, 555-123-4567, 555.123.4567,
 // 5551234567 with separators, optional leading 1.
 const PHONE_RE = /(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}\b/g;
@@ -111,33 +112,42 @@ function hostOf(url: string): string | null {
 // whenever the letter also mentions paying, in any sentence, so passive
 // demands and demands split across sentences count. Gift and prepaid
 // cards are different: benefits are paid onto EBT and prepaid cards,
-// so a card counts only with a demand to buy, load or purchase one and
-// send, text, call or read out its numbers or codes, or to pay a fee or
-// amount with it. Texting or calling with card codes always counts. A
-// sentence where the sender says it never asks for, requires or accepts
-// such payment is set aside. EBT is never a signal.
+// so a card counts only with a demand to buy, load or purchase one, to
+// pay a fee or amount with it, or to hand over its numbers. Handing
+// over codes or card numbers always counts. Only the clause where the
+// sender says it never asks for, requires or accepts such a method, or
+// tells the person never to give out codes or card numbers, is set
+// aside; the rest of that sentence is still screened. EBT is never a
+// signal.
 const APP_METHOD = /\b(?:bitcoin|crypto(?:currency)?|wire\s+transfers?|zelle|cash\s*app|venmo)\b/i;
 const PAYING = /\b(?:pay|pays|paid|paying|payment|payments|fee|fees|purchase|buy|send\s+them)\b|\$\s*\d/i;
 const CARD = /\b(?:gift|prepaid)\s+(?:debit\s+)?cards?\b/i;
-const BUY_CARD = /\b(?:buy|purchase|load)\b/i;
-const HAND_OVER = /\b(?:send|text|call|read|give|email)\b/i;
+const BUY_CARD =
+  /(?:^|[:;,]\s*|\b(?:and|then|please|now|must|need\s+to|have\s+to|required\s+to)\s+)(?:buy|purchase|load)\b(?:(?!\b(?:with|using|for|at)\b)[^.!?,;]){0,40}\b(?:gift|prepaid)\s+(?:debit\s+)?cards?\b/i;
 const PAY_WITH_CARD =
   /\b(?:pay|payment)\b[^.!?]{0,60}\b(?:with|in|using|by|on)\s+(?:a\s+|an\s+|the\s+)?(?:(?:gift|prepaid)\s+(?:debit\s+)?cards?|it|them)\b|\bpayment\s+must\s+be\s+in\s+(?:gift|prepaid)/i;
-const CODES_DEMAND = /\b(?:text|call|send|read|give|email)\b[^.!?]{0,60}\b(?:codes|card\s+numbers)\b/i;
-const NEVER_ASKS =
-  /\b(?:never|not|won't|don't|doesn't)\s+(?:ever\s+)?(?:ask|request|require|accept|take)\b/i;
+const CODES_DEMAND =
+  /\b(?:text|call|send|read|give|email)\b[^.!?]{0,60}\b(?:codes|card\s+numbers|(?:numbers?|pins?)\b[^.!?]{0,30}\b(?:gift|prepaid)\s+(?:debit\s+)?cards?)\b/i;
+const METHOD =
+  String.raw`(?:(?:gift|prepaid)\s+(?:debit\s+)?cards?|bitcoin|crypto(?:currency)?|wire\s+transfers?|zelle|cash\s*app|venmo|codes|card\s+numbers)`;
+const NEVER_ASKS = new RegExp(
+  String.raw`\b(?:never|not|won't|don't|doesn't)\s+(?:ever\s+)?(?:ask|request|require|accept|take|give|send|share)\b` +
+    String.raw`(?:(?!\b(?:so|but|instead|then)\b)[^.!?,;:]){0,60}?\b${METHOD}(?:\s*,?\s*(?:(?:and|or)\s+)?${METHOD})*`,
+  "gi",
+);
 
 function paymentDemand(text: string): string | null {
   const sentences = text.split(/(?<=[.!?])\s+|\n\s*\n/).map((s) => s.trim()).filter(Boolean);
-  const counted = sentences.filter((s) => !(NEVER_ASKS.test(s) && (APP_METHOD.test(s) || CARD.test(s))));
-  const codes = counted.find((s) => CODES_DEMAND.test(s));
+  const counted = sentences.map((s) => s.replace(NEVER_ASKS, " "));
+  const find = (test: (s: string) => boolean): string | null => {
+    const k = counted.findIndex(test);
+    return k < 0 ? null : sentences[k]!;
+  };
+  const codes = find((s) => CODES_DEMAND.test(s));
   if (codes) return codes;
-  const app = counted.find((s) => APP_METHOD.test(s));
+  const app = find((s) => APP_METHOD.test(s));
   if (app && PAYING.test(text)) return app;
-  if (counted.some((s) => CARD.test(s))) {
-    const demand = counted.find((s) => (BUY_CARD.test(s) && HAND_OVER.test(s)) || PAY_WITH_CARD.test(s));
-    if (demand) return demand;
-  }
+  if (counted.some((s) => CARD.test(s))) return find((s) => BUY_CARD.test(s) || PAY_WITH_CARD.test(s));
   return null;
 }
 
@@ -158,6 +168,11 @@ export function screenScam(text: string): ContentFlag[] {
   if (urgency.length === 0) return [];
   const asksPayment = /pay\b|payment|verify|confirm\s+your|update\s+your\s+(account|information|benefits)/i.test(text);
   if (!asksPayment) return [];
+  // A real office never tells the person not to contact it.
+  const cutOff = text.match(/\b(?:do\s+not|don't|never)\s+(?:call|contact|phone|visit)\s+(?:the\s+|your\s+)?(?:county|office|agency|state|caseworker|benefits\s+office)\b[^.!?\n]*/i);
+  if (cutOff) {
+    return [{ kind: "scam", label: "urgent verification ask that tells the person not to contact their office", match: cutOff[0], detail: `urgency words: ${urgency.slice(0, 3).join(", ")}` }];
+  }
   const suspicious = findLinks(text).filter((l) => {
     const host = hostOf(l.match);
     return !host || !host.endsWith(".gov");
