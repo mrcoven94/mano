@@ -279,9 +279,30 @@ export async function routeInLanes(
     });
     message.retry();
   };
-  const resolved = await Promise.all(
-    messages.map((message) => resolve(message.body as NormalizedEvent).then((conversation) => ({ conversation }), (err: unknown) => ({ err }))),
-  );
+  type Resolved = { conversation: string | null } | { err: unknown };
+  const settle = (message: (typeof messages)[number]): Promise<Resolved> =>
+    resolve(message.body as NormalizedEvent).then((conversation) => ({ conversation }), (err: unknown) => ({ err }));
+  const eventOf = (message: (typeof messages)[number]) => (message.body ?? {}) as Partial<NormalizedEvent>;
+  // Events that name a handle resolve on their own. A chat-only event (a
+  // receipt, typing, a reaction) takes the conversation of an earlier event
+  // in this batch with the same chat, since that event writes the chat's
+  // route only when it is delivered; otherwise it asks the route table.
+  const resolved: Resolved[] = new Array(messages.length);
+  await Promise.all(messages.map(async (message, i) => {
+    if (eventOf(message).handle) resolved[i] = await settle(message);
+  }));
+  await Promise.all(messages.map(async (message, i) => {
+    if (resolved[i]) return;
+    const chatId = eventOf(message).chatId;
+    for (let j = i - 1; j >= 0 && chatId; j--) {
+      const earlier = resolved[j];
+      if (eventOf(messages[j]!).chatId === chatId && eventOf(messages[j]!).handle && earlier && "conversation" in earlier && earlier.conversation) {
+        resolved[i] = { conversation: earlier.conversation };
+        return;
+      }
+    }
+    resolved[i] = await settle(message);
+  }));
   const lanes = new Map<string, (typeof messages)[number][]>();
   messages.forEach((message, i) => {
     const r = resolved[i]!;

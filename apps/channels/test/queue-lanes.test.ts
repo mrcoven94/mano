@@ -46,4 +46,20 @@ describe("queue batches route in lanes", () => {
       ["dead", false, true],
     ]);
   });
+
+  it("a chat-only event in a new chat's first batch follows the message that opens the chat", async () => {
+    const routes = new Map<string, string>();
+    const delivered: string[] = [];
+    const batch = [message("first", { handle: "+15550111", chatId: "chat-new" }), message("typing", { chatId: "chat-new" })];
+    await routeInLanes(
+      batch,
+      async (event) => (event.handle ? "new-person" : routes.get(event.chatId ?? "") ?? null),
+      async (event, conversation) => {
+        if (event.chatId) routes.set(event.chatId, conversation);
+        delivered.push(`${conversation}:${event.id}`);
+      },
+    );
+    expect(delivered).toEqual(["new-person:first", "new-person:typing"]);
+    expect(batch.every((m) => m.acked)).toBe(true);
+  });
 });
