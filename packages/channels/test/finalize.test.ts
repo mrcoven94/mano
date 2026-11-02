@@ -16,6 +16,29 @@ describe("finalizeReply (exported for Quality)", () => {
     expect((await finalizeReply("", { crisis: true, checker: blocked })).bubbles).toEqual([CRISIS_LINE]);
   });
 
+  it("looks each link up once per filter, both filters and all links at once", async () => {
+    const asked: string[] = [];
+    let inFlight = 0;
+    let most = 0;
+    const checker = new LinkChecker({
+      fetchFn: (async (input: string) => {
+        asked.push(String(input));
+        most = Math.max(most, ++inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight--;
+        return Response.json({ Status: 0, Answer: [{ data: "93.184.216.34" }] });
+      }) as unknown as typeof fetch,
+    });
+    const out = await finalizeReply("Renew at benefits.example.gov\nOr call first: help.example.org and benefits.example.gov", {
+      crisis: false,
+      checker,
+    });
+    expect(out.removed).toBe(0);
+    // Two hosts, two filters each: four lookups, all in flight together.
+    expect(asked).toHaveLength(4);
+    expect(most).toBe(4);
+  });
+
   it("exports the opt-out text", () => {
     expect(OPT_OUT_BUBBLE).toContain("unsubscribed");
   });
