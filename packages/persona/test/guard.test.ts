@@ -91,12 +91,40 @@ describe("guardReply model and provider names", () => {
     }
   });
 
+  it("drops an ambiguous host named as the provider, before or after the provider words (PR 102 review, round 2)", () => {
+    const hostNames = /fireworks|together|modal|makora/i;
+    for (const text of [
+      "Together hosts my replies.",
+      "Fireworks is my model provider.",
+      "Modal AI serves my replies.",
+      "Fireworks runs the model.",
+      "Modal powers me.",
+      "The Together API answers for me.",
+      "Fireworks Labs and modal.run keep it up.",
+      "The model provider is Fireworks.",
+      "My host is Modal.",
+      "I'm powered by Together.",
+      "Mano is built on Modal.",
+      "My answers come from Together.",
+      "The model runs through Fireworks.",
+      "Makora serves the model.",
+      "This came through makora today.",
+    ]) {
+      expect(containsProviderName(text), text).toBe(true);
+      expect(guardReply(`${text} Bring the letter.`).text).not.toMatch(hostNames);
+    }
+  });
+
   it("leaves the ordinary words among those host names alone", () => {
     for (const text of [
       "We can work through this together.",
       "Together, we'll get your renewal in on time.",
+      "Together we run the numbers, then you sign.",
+      "Let's go over your answers together.",
       "The fireworks show is at 9, so the office closes early.",
+      "The fireworks are on the Fourth, and the office is closed.",
       "Close the pop-up modal and press Renew.",
+      "The pop-up modal runs the payment step, so finish it first.",
       "The Together Rx Access card can lower what you pay for medicine.",
       "Write the amount in base ten.",
     ]) {
