@@ -145,7 +145,20 @@ export class ModelCrisisCheck implements CrisisCheck {
       throw new CheckFailed("crisis check could not connect", true);
     }
     if (!res.ok) throw new CheckFailed(`crisis check failed: ${res.status}`, primaryDownStatus(res.status));
-    return classifierAnswer(await res.json().catch(() => null));
+    // A connection lost while the body streams in is a failed connection,
+    // as in the reply path. A whole body that is not JSON is "yes".
+    let raw: string;
+    try {
+      raw = await res.text();
+    } catch (err) {
+      if (signal.aborted) throw err;
+      throw new CheckFailed("crisis check was cut off", true);
+    }
+    try {
+      return classifierAnswer(JSON.parse(raw));
+    } catch {
+      return "yes";
+    }
   }
 }
 
