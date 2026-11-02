@@ -158,6 +158,7 @@ describe.skipIf(!installed)("fill_form in real Chromium", () => {
         dateOfBirth: leaf("1984-03-12"),
         phone: leaf("253-555-0142"),
         address: { line1: leaf("100 Sample St"), city: leaf("Tacoma"), state: leaf("WA"), zip: leaf("98402") },
+        householdConfirmed: leaf(true),
       },
       household: [{ id: "m1" }, { id: "m2" }],
       income: [{ id: "i1", amount: { value: 1075, source: "document", documentId: "doc-stub", updatedAt: at }, frequency: leaf("biweekly") }],

@@ -260,7 +260,7 @@ function suggestionText(s: Suggestion, profile: Profile): string {
 }
 
 // Only the person's own word confirms who lives with them.
-function confirmedByPerson(profile: Profile): boolean {
+export function confirmedByPerson(profile: Profile): boolean {
   const leaf = profile.person.householdConfirmed;
   return leaf?.value === true && leaf.source === "person";
 }

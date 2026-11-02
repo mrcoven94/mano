@@ -4,7 +4,8 @@ import { FakeModelClient, type Computer, type ComputerAction } from "@mano/compu
 
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv } from "../agent/lib/computer-fill.js";
-import { engineFrom } from "../agent/lib/engine.js";
+import { engineFrom, type Profile } from "../agent/lib/engine.js";
+import { FORMS } from "../agent/lib/forms.js";
 import { renderQuestion } from "../agent/lib/pending.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
@@ -24,6 +25,7 @@ function profile() {
       dateOfBirth: leaf("1984-03-12"),
       phone: leaf("253-555-0142"),
       address: { line1: leaf("100 Sample St"), city: leaf("Tacoma"), state: leaf("WA"), zip: leaf("98402") },
+      householdConfirmed: leaf(true),
     },
     household: [
       { id: "m1", name: leaf("Ana Testcase"), relationship: leaf("child") },
@@ -376,6 +378,24 @@ describe("fill_form", () => {
     await expect(fillForm.execute({ form: "food-renewal" }, c)).rejects.toThrow(/not available/i);
     expect(computer.visited).toEqual([]);
     expect(outside).toEqual([]);
+  });
+});
+
+describe("household size from the profile", () => {
+  const field = FORMS["food-renewal"]!.fields.find((f) => f.name === "householdSize")!;
+  const base = profile() as unknown as Profile;
+  const unconfirmed = { ...base, person: { ...base.person, householdConfirmed: undefined } } as Profile;
+  const notByPerson = { ...base, person: { ...base.person, householdConfirmed: { ...leaf(true), source: "document" } } } as Profile;
+  const alone = { ...base, household: [] } as Profile;
+
+  it("counts the household only once the person confirmed who lives with them", () => {
+    expect(field.fromProfile!(base)).toBe("3");
+    expect(field.fromProfile!(unconfirmed)).toBeNull();
+    expect(field.fromProfile!(notByPerson)).toBeNull();
+  });
+
+  it("a confirmed empty household is one person, not a question", () => {
+    expect(field.fromProfile!(alone)).toBe("1");
   });
 });
 
