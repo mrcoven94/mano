@@ -18,6 +18,13 @@ function orgStub(name: string): OrgAgent {
   return ns.get(ns.idFromName(name)) as unknown as OrgAgent;
 }
 
+// A consent that must still be live while it is granted and approved,
+// and expire right after. A slow runner can take well over half a second
+// to grant and approve, so the window is generous, and the test waits
+// for the expiry itself instead of a fixed sleep.
+const soon = () => new Date(Date.now() + 3000).toISOString();
+const untilPast = (iso: string) => new Promise((r) => setTimeout(r, Math.max(0, Date.parse(iso) - Date.now()) + 300));
+
 describe("r3 blocker 9: consent expiry end to end", () => {
   it("refuses a grant whose expiry already passed", async () => {
     const person = personStub("r3b9-past");
@@ -63,12 +70,13 @@ describe("r3 blocker 9: consent expiry end to end", () => {
     });
     const liveDone = await person.approve(live.approval!.id, "r3b9-reads");
     expect(liveDone.status, liveDone.reason).toBe("completed");
+    const briefExpiry = soon();
     const brief = await person.grantConsent("r3b9-reads", {
       orgAgentId,
       purpose: "renewal",
       scope: ["documents"],
       caseId: "case-r3b9-brief",
-      expiresAt: new Date(Date.now() + 600).toISOString(),
+      expiresAt: briefExpiry,
     });
     const briefDone = await person.approve(brief.approval!.id, "r3b9-reads");
     expect(briefDone.status, briefDone.reason).toBe("completed");
@@ -76,7 +84,7 @@ describe("r3 blocker 9: consent expiry end to end", () => {
       expect.arrayContaining(["case-r3b9-live", "case-r3b9-brief"]),
     );
 
-    await new Promise((r) => setTimeout(r, 1500));
+    await untilPast(briefExpiry);
     const cases = (await org.listCases("r3b9-reads-county")).map((c) => c.caseId);
     expect(cases).toContain("case-r3b9-live");
     expect(cases).not.toContain("case-r3b9-brief");
@@ -91,12 +99,12 @@ describe("r3 blocker 9: consent expiry end to end", () => {
       purpose: "renewal",
       scope: ["documents"],
       caseId: "case-r3b9-again",
-      expiresAt: new Date(Date.now() + 600).toISOString(),
+      expiresAt: soon(),
     };
     const first = await person.grantConsent("r3b9-again", input);
     const firstDone = await person.approve(first.approval!.id, "r3b9-again");
     expect(firstDone.status, firstDone.reason).toBe("completed");
-    await new Promise((r) => setTimeout(r, 1500));
+    await untilPast(input.expiresAt);
     expect((await org.listCases("r3b9-again-county")).map((c) => c.caseId)).not.toContain("case-r3b9-again");
 
     const freshExpiry = new Date(Date.now() + 3600_000).toISOString();
