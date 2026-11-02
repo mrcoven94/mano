@@ -6,7 +6,7 @@ import {
   type ConsentRevokePayload,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
-import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, contentHashOf, createExecutor, ensureGatewayTables } from "../gateway/index.js";
+import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureGatewayTables, gatewayChecker } from "../gateway/index.js";
 import type { ActionRequest, Approval, CheckOutcome, ProposalOrder } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
@@ -135,6 +135,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         (key) => this.store.getAttempt(key)?.actionType ?? null,
       ),
       {
+        ...gatewayChecker(checkerSetting(env)),
         listConsents: () => this.listStoredConsents(),
         documents: {
           getBytes: (documentId) => this.documentBytes(documentId),
