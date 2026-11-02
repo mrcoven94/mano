@@ -352,3 +352,17 @@ test("a reply to a letter with two dates names both or neither, never one", asyn
   assert.equal((await deadline("Your renewal is due November 25, 2026."))?.pass, false, "picks the later date");
   assert.equal((await deadline("Your renewal is due November 1, 2026."))?.pass, false, "picks the earlier date");
 });
+
+test("the deadline check reads a date in any common format", async () => {
+  const deadline = async (id: string, text: string) => (await readerCheck(id, text)).find((r) => r.id === "deadline");
+  for (const text of ["It is due 2026-11-15.", "It is due November 15 2026.", "It is due Nov. 15.", "It is due 11/15/26.", "Vence el 15 de noviembre de 2026."]) {
+    assert.equal((await deadline("letters-01", text))?.pass, true, text);
+  }
+  assert.equal((await deadline("letters-01", "Your letter was printed November 15, 2026. Your renewal is due 11/16/26."))?.pass, false, "a wrong date beside the right one");
+  assert.equal((await deadline("letters-19", "Your renewal is due Nov 30."))?.pass, false, "a short date the letter does not print");
+});
+
+test("a reply that names both dates and then picks one fails", async () => {
+  const text = "Your letter says November 1, 2026 and November 25, 2026. Use November 25, 2026 as the deadline.";
+  assert.equal((await readerCheck("letters-19", text)).find((r) => r.id === "deadline")?.pass, false);
+});
