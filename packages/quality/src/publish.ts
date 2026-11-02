@@ -1,7 +1,9 @@
 // Posts a smoke run to its pull request: one comment, found by its marker and
 // edited in place on every run, and one check run whose conclusion is the
 // gate (success, neutral or failure). The CI step exits with exitCodeFor, so
-// only a failing gate, or a run that wrote no result, turns the job red.
+// only a failing gate, or a run that wrote no result, turns the job red. A
+// run the model provider refused for billing ("provider-unavailable") posts a
+// neutral check under its own title and leaves the job green.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -10,8 +12,10 @@ import type { GateStatus } from "./report.ts";
 export const COMMENT_MARKER = "<!-- mano-quality-smoke -->";
 export const CHECK_NAME = "quality gate";
 
+export type SmokeStatus = GateStatus | "provider-unavailable" | "error";
+
 export interface SmokeOutcome {
-  status: GateStatus | "error";
+  status: SmokeStatus;
   reasons: string[];
   comment: string;
 }
@@ -26,7 +30,7 @@ export function readOutcome(dir: string): SmokeOutcome {
       comment: "## Quality smoke: error\n\nThe smoke run stopped before scoring. See the job log.",
     };
   }
-  const gate = JSON.parse(readFileSync(gatePath, "utf8")) as { status: GateStatus; reasons: string[] };
+  const gate = JSON.parse(readFileSync(gatePath, "utf8")) as { status: SmokeStatus; reasons: string[] };
   return { status: gate.status, reasons: gate.reasons, comment: readFileSync(commentPath, "utf8").trim() };
 }
 
@@ -34,11 +38,20 @@ export function exitCodeFor(status: SmokeOutcome["status"]): number {
   return status === "fail" || status === "error" ? 1 : 0;
 }
 
-const CONCLUSION: Record<SmokeOutcome["status"], "success" | "neutral" | "failure"> = {
+const CONCLUSION: Record<SmokeStatus, "success" | "neutral" | "failure"> = {
   pass: "success",
   neutral: "neutral",
+  "provider-unavailable": "neutral",
   fail: "failure",
   error: "failure",
+};
+
+const TITLE: Record<SmokeStatus, string> = {
+  pass: "Quality holds",
+  neutral: "Not gate-eligible",
+  "provider-unavailable": "Model provider unavailable, nothing scored",
+  fail: "Quality regressed",
+  error: "Smoke run broke",
 };
 
 export interface PublishTarget {
@@ -79,7 +92,7 @@ export async function publishSmoke(outcome: SmokeOutcome, t: PublishTarget): Pro
     commentId = made.id;
   }
   const conclusion = CONCLUSION[outcome.status];
-  const title = outcome.status === "pass" ? "Quality holds" : outcome.status === "neutral" ? "Not gate-eligible" : outcome.status === "fail" ? "Quality regressed" : "Smoke run broke";
+  const title = TITLE[outcome.status];
   await gh(t, "POST", `/repos/${t.repo}/check-runs`, {
     name: CHECK_NAME,
     head_sha: t.sha,

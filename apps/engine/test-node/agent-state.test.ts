@@ -259,6 +259,7 @@ describe("conversation delete", () => {
       approvalsRejected: 1,
       approvalsRevoked: 1,
       memoriesDeleted: 3,
+      documentsDeleted: 0,
       profileFieldsDeleted: 0,
     });
     const statuses = Object.fromEntries(listReminders(sql).map((r) => [r.id, r.status]));
@@ -279,6 +280,7 @@ describe("conversation delete", () => {
       approvalsRejected: 0,
       approvalsRevoked: 0,
       memoriesDeleted: 0,
+      documentsDeleted: 0,
       profileFieldsDeleted: 0,
     });
   });

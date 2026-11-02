@@ -1,5 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  transpilePackages: ["@mano/quality"],
+  transpilePackages: ["@mano/accounts", "@mano/quality"],
 };
 export default nextConfig;

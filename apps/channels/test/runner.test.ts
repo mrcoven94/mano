@@ -278,8 +278,7 @@ describe("delete", () => {
       store: h.store,
       channel: wiping as unknown as typeof h.channel,
       responder: h.responder,
-      files: h.files,
-      kekB64: TEST_KEK_B64,
+      documents: h.documents,
       spend: {
         reserve: async (key: string, worst: number) => h.ledger.reserve(key, worst),
         settle: async (key: string, actual: number) => void h.ledger.settle(key, actual),

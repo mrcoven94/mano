@@ -6,7 +6,15 @@
 # smoke-publish.ts posts the one PR comment and the "quality gate" check, and
 # exits 1 only for a failing gate or a run that wrote no result. In CI the
 # gate is strict: a missing key, no baseline or an ineligible run fails;
-# neutral exists only for offline runs.
+# neutral exists only for offline runs. One exception: when the model
+# provider answers a check call with HTTP 402 (billing), nothing is scored,
+# and the gate posts a neutral "Model provider unavailable" check with the
+# job left green (src/provider.ts).
+#
+# smoke-replay runs the same smoke path on recorded synthetic replies with
+# no key, so every pull request here still proves the text line and the
+# gate's safety checks while the provider is down. It needs no secrets, so
+# it also runs on forks.
 name: quality-smoke
 on:
   pull_request:
@@ -78,3 +86,17 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           node --import ./src/register.ts src/bin/smoke-publish.ts ../../runs/smoke
+  smoke-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - name: Replay the smoke on recorded replies
+        working-directory: packages/quality
+        run: |
+          node --import ./src/register.ts src/bin/smoke-replay.ts --out ../../runs/smoke-replay

@@ -232,8 +232,8 @@ export interface ServiceEnv {
 }
 
 // Two services call person routes, each with its own token plus a handle
-// grant: the agent on the routes it needs, Channels only to delete a
-// conversation's state.
+// grant: the agent on the routes it needs, Channels to store a texted
+// photo and to delete a conversation's state.
 export type Service = "agent" | "channels";
 
 const SERVICE_ROUTES: Record<Service, readonly (readonly [string, RegExp])[]> = {
@@ -258,12 +258,16 @@ const SERVICE_ROUTES: Record<Service, readonly (readonly [string, RegExp])[]> = 
     ["DELETE", /^\/pending-approval$/],
     ["GET", /^\/conversation$/],
     ["DELETE", /^\/conversation$/],
+    ["GET", /^\/documents\/[^/]+$/],
     ["GET", /^\/deadlines$/],
     ["POST", /^\/deadlines$/],
     ["PATCH", /^\/deadlines\/[^/]+$/],
     ["DELETE", /^\/deadlines\/[^/]+$/],
   ],
-  channels: [["DELETE", /^\/conversation$/]],
+  channels: [
+    ["POST", /^\/documents$/],
+    ["DELETE", /^\/conversation$/],
+  ],
 };
 
 export function serviceMayUse(service: Service, method: string, personRoute: string): boolean {

@@ -13,6 +13,7 @@
     "check": "tsc --noEmit && node --import ./src/register.ts --test test/*.test.ts",
     "bench": "node --import ./src/register.ts src/bin/bench.ts",
     "smoke": "node --import ./src/register.ts src/bin/smoke.ts",
+    "smoke-replay": "node --import ./src/register.ts src/bin/smoke-replay.ts",
     "nightly": "node --import ./src/register.ts src/bin/nightly.ts",
     "rescore": "node --import ./src/register.ts src/bin/rescore.ts",
     "calibrate": "node --import ./src/register.ts src/bin/calibrate.ts",
@@ -25,6 +26,7 @@
   "dependencies": {
     "@mano/channels": "workspace:*",
     "@mano/guardian": "workspace:*",
+    "@mano/mail": "workspace:*",
     "@mano/persona": "workspace:*",
     "@mano/programs": "workspace:*"
   }

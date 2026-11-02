@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { HANDLE_BYTES_DAILY, ResponderFailed, decryptForPerson, documentAad } from "@mano/channels";
+import { HANDLE_BYTES_DAILY, PHOTO_UNREAD_TEXT, PHOTO_UNSAVED_TEXT, ResponderFailed, StandInResponder } from "@mano/channels";
 import { FAILURE_BUBBLE, INTERIM_BUBBLE } from "../src/text.js";
 import {
-  TEST_HANDLE_HASH,
-  TEST_KEK_B64,
   inboundEvent,
   makeHarness,
   runTurnAfterBatch,
@@ -86,12 +84,14 @@ describe("attachments", () => {
 
   const MEDIA = { mediaHosts: ["cdn.example.test"] };
 
-  it("saves photos encrypted and acknowledges in one line", async () => {
-    const h = makeHarness({
-      fetchFn: photoFetch(),
-      replies: ["About your bill."],
-      config: MEDIA,
-    });
+  // Stands in for Mano's agent: it reads photos, and records each turn.
+  function reader(): StandInResponder & { readsPhotos: true } {
+    return Object.assign(new StandInResponder(["This is your renewal letter."]), { readsPhotos: true as const });
+  }
+
+  it("stores the photo in the person's documents and passes the agent its reference, with no promise to read it later", async () => {
+    const responder = reader();
+    const h = makeHarness({ fetchFn: photoFetch(), responder, config: MEDIA });
     await h.runner.handleEvent(
       inboundEvent({
         id: "evt_photo",
@@ -102,15 +102,69 @@ describe("attachments", () => {
       "webhook",
     );
     await runTurnAfterBatch(h);
-    expect(h.files.files.size).toBe(1);
-    const [key, stored] = [...h.files.files.entries()][0];
-    expect(key.startsWith(`persons/${TEST_HANDLE_HASH}/docs/t1i0-`)).toBe(true);
-    const blob = JSON.parse(new TextDecoder().decode(stored)) as Parameters<typeof decryptForPerson>[0];
-    const back = await decryptForPerson(blob, TEST_KEK_B64, documentAad(TEST_HANDLE_HASH, key.split("/").pop()!));
-    expect(new TextDecoder().decode(back)).toBe("synthetic-photo-bytes");
-    const ack = h.channel.sends.find((s) => s.text.startsWith("Got your"))!;
-    expect(ack.text).toBe("Got your photo. I will read it and follow up.");
-    expect(ack.text).not.toContain("\n");
+    expect(h.documents.docs.size).toBe(1);
+    const [id, stored] = [...h.documents.docs.entries()][0];
+    expect(id).toMatch(/^g0t1i0-[0-9a-f]{12}$/);
+    expect(new TextDecoder().decode(stored.bytes)).toBe("synthetic-photo-bytes");
+    expect(stored.generation).toBe(0);
+    expect(responder.prompts[0]).toMatchObject({ texts: ["What is this?"], attachmentCount: 1, documents: [{ id, mimeType: "image/jpeg" }] });
+    const texts = h.channel.sends.map((s) => s.text);
+    expect(texts).toContain("This is your renewal letter.");
+    expect(texts.some((t) => /will read|follow up/i.test(t))).toBe(false);
+  });
+
+  it("a photo with no words goes to the agent to read", async () => {
+    const responder = reader();
+    const h = makeHarness({ fetchFn: photoFetch(), responder, config: MEDIA });
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_photo_alone",
+        occurredAtMs: h.now,
+        text: null,
+        attachments: [{ url: "https://cdn.example.test/p1.jpg", mediaType: "image/jpeg", size: 21 }],
+      }),
+      "webhook",
+    );
+    await runTurnAfterBatch(h);
+    expect(responder.prompts).toHaveLength(1);
+    expect(responder.prompts[0]).toMatchObject({ texts: [], attachmentCount: 1 });
+    expect(responder.prompts[0].documents).toHaveLength(1);
+    expect(h.channel.sends.map((s) => s.text)).toContain("This is your renewal letter.");
+  });
+
+  it("without a reader, a photo with no words gets a plain line that it was not read", async () => {
+    const h = makeHarness({ fetchFn: photoFetch(), config: MEDIA });
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_photo_noreader",
+        occurredAtMs: h.now,
+        text: null,
+        attachments: [{ url: "https://cdn.example.test/p1.jpg", mediaType: "image/jpeg", size: 21 }],
+      }),
+      "webhook",
+    );
+    await runTurnAfterBatch(h);
+    expect((h.responder as StandInResponder).prompts).toHaveLength(0);
+    expect(h.channel.sends.map((s) => s.text)).toContain(PHOTO_UNREAD_TEXT);
+  });
+
+  it("says so when a photo with no words could not be stored", async () => {
+    const responder = reader();
+    const h = makeHarness({ fetchFn: photoFetch(), responder, config: MEDIA });
+    h.documents.refuse = true;
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_photo_refused",
+        occurredAtMs: h.now,
+        text: null,
+        attachments: [{ url: "https://cdn.example.test/p1.jpg", mediaType: "image/jpeg", size: 21 }],
+      }),
+      "webhook",
+    );
+    await runTurnAfterBatch(h);
+    expect(responder.prompts).toHaveLength(0);
+    expect(h.channel.sends.map((s) => s.text)).toContain(PHOTO_UNSAVED_TEXT);
+    expect(h.lines.join("\n")).toContain("attachment_refused");
   });
 
   it("skips files over the size cap", async () => {
@@ -125,8 +179,8 @@ describe("attachments", () => {
       "webhook",
     );
     await runTurnAfterBatch(h);
-    expect(h.files.files.size).toBe(0);
-    expect(h.channel.sends.some((s) => s.text.startsWith("Got your"))).toBe(false);
+    expect(h.documents.docs.size).toBe(0);
+    expect(h.channel.sends.map((s) => s.text)).toContain(PHOTO_UNSAVED_TEXT);
   });
 
   it("downloads nothing when admission fails", async () => {
@@ -149,7 +203,7 @@ describe("attachments", () => {
     );
     await runTurnAfterBatch(h);
     expect(downloads).toBe(0);
-    expect(h.files.files.size).toBe(0);
+    expect(h.documents.docs.size).toBe(0);
     expect(h.channel.sends[0].text).toContain("busy");
   });
 
@@ -169,7 +223,7 @@ describe("attachments", () => {
       "webhook",
     );
     await runTurnAfterBatch(h);
-    expect(h.files.files.size).toBe(0);
+    expect(h.documents.docs.size).toBe(0);
     expect(h.lines.join("\n")).toContain("attachment_capped");
     h.advance(24 * 3600 * 1000 + 1000);
     await h.runner.handleEvent(
@@ -182,7 +236,7 @@ describe("attachments", () => {
       "webhook",
     );
     await runTurnAfterBatch(h);
-    expect(h.files.files.size).toBe(1);
+    expect(h.documents.docs.size).toBe(1);
   });
 
   it("releases the budget hold on a photo-only turn", async () => {
@@ -197,7 +251,7 @@ describe("attachments", () => {
       "webhook",
     );
     await runTurnAfterBatch(h);
-    expect(h.files.files.size).toBe(1);
+    expect(h.documents.docs.size).toBe(1);
     expect(h.ledger.spent().spentUsd).toBe(0);
     expect(h.ledger.reserve("probe:1", 5).allowed).toBe(true);
   });
@@ -214,8 +268,8 @@ describe("attachments", () => {
       "webhook",
     );
     await runTurnAfterBatch(h);
-    expect(h.files.files.size).toBe(0);
-    expect(h.channel.sends.some((s) => s.text.startsWith("Got your"))).toBe(false);
+    expect(h.documents.docs.size).toBe(0);
+    expect(h.channel.sends.some((s) => /will read|follow up/i.test(s.text))).toBe(false);
   });
 });
 
@@ -278,7 +332,7 @@ describe("link safety", () => {
       "webhook",
     );
     await runTurnAfterBatch(h);
-    expect(h.files.files.size).toBe(0);
+    expect(h.documents.docs.size).toBe(0);
     expect(fetched).toHaveLength(0);
   });
 
@@ -386,7 +440,7 @@ describe("link safety", () => {
       "webhook",
     );
     await runTurnAfterBatch(h);
-    expect(h.files.files.size).toBe(0);
+    expect(h.documents.docs.size).toBe(0);
     expect(fetched).not.toContain("https://evil.test/payload.bin");
   });
 });

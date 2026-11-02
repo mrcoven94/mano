@@ -103,6 +103,9 @@ export function proposalOrderFor(sql: SqlExec, turnId: string): { receivedAt: st
 }
 
 export function ensureAgentStateTables(sql: SqlExec): void {
+  // The person's files (texted photos among them), also created by
+  // PersonAgent; here so a conversation delete can remove their rows.
+  sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS reminders(
     id TEXT PRIMARY KEY, text TEXT NOT NULL, due_at_ms INTEGER NOT NULL, generation INTEGER NOT NULL,
     status TEXT NOT NULL, next_at_ms INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
@@ -417,6 +420,7 @@ export interface ConversationRemoval {
   approvalsRejected: number;
   approvalsRevoked: number;
   memoriesDeleted: number;
+  documentsDeleted: number;
   profileFieldsDeleted: number;
 }
 
@@ -449,6 +453,7 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
       approvalsRejected: 0,
       approvalsRevoked: 0,
       memoriesDeleted: 0,
+      documentsDeleted: 0,
       profileFieldsDeleted: 0,
     };
   }
@@ -472,6 +477,10 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
   sql.exec(`UPDATE approvals SET status = 'revoked' WHERE ${unresolved}`);
   const memoriesDeleted = count("SELECT COUNT(*) AS n FROM memory");
   sql.exec("DELETE FROM memory");
+  // Their R2 objects go by prefix right after this transaction
+  // (files.ts sweepDocuments).
+  const documentsDeleted = count("SELECT COUNT(*) AS n FROM documents");
+  sql.exec("DELETE FROM documents");
   const profileFieldsDeleted = clearProfile(sql);
   const result: ConversationRemoval = {
     generation,
@@ -482,6 +491,7 @@ export function removeConversationState(sql: SqlExec, nowMs: number, toGeneratio
     approvalsRejected,
     approvalsRevoked,
     memoriesDeleted,
+    documentsDeleted,
     profileFieldsDeleted,
   };
   sql.exec(
