@@ -244,6 +244,14 @@ class CallFailed extends Error {
   }
 }
 
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
+}
+
 function callFailed(err: unknown): CallFailed {
   return err instanceof CallFailed ? err : new CallFailed("request_error", err instanceof Error ? err.message : "Model request failed.", true, false);
 }
@@ -465,13 +473,20 @@ export class SparkResponder implements Responder {
     } catch (err) {
       throw new CallFailed("network", err instanceof Error ? err.message : "Model request failed.", true, true);
     }
-    if (res.status !== 429 && res.status < 500 && !res.ok) {
-      throw new CallFailed(`http_${res.status}`, `Model request failed: ${res.status}`, false, primaryDownStatus(res.status));
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      const retry = res.status === 429 || res.status >= 500;
+      throw new CallFailed(`http_${res.status}`, `Model request failed: ${res.status}`, retry, primaryDownStatus(res.status));
     }
-    const data: unknown = await res.json().catch(() => ({}));
-    if (res.status === 429 || res.status >= 500) {
-      throw new CallFailed(`http_${res.status}`, `Model request failed: ${res.status}`, true, primaryDownStatus(res.status));
+    // A connection lost while the body streams in is a failed connection,
+    // as if it never connected. A whole body that is not JSON is no answer.
+    let raw: string;
+    try {
+      raw = await res.text();
+    } catch (err) {
+      throw new CallFailed("network", err instanceof Error ? err.message : "Model response was cut off.", true, true);
     }
+    const data = parseJson(raw);
     const status = (data as { status?: unknown })?.status;
     if (typeof status === "string" && status !== "completed") throw new CallFailed(`run_${status}`, `Model run ${status}.`, false, false);
     const text = extractOutputText(data).trim();
