@@ -175,6 +175,7 @@ export class EngineDouble {
       hash: createHash("sha256").update(bytes).digest("hex"),
       r2Key: `persons/${personId}/docs/g${currentGeneration(sql)}/${documentId}`,
       mediaType: mediaTypeOf(bytes),
+      sizeBytes: bytes.length,
       receivedAt: new Date(this.now()).toISOString(),
       generation: currentGeneration(sql),
     });
@@ -403,7 +404,7 @@ export class EngineDouble {
         return Response.json({ cleared: clearPendingPointer(sql, input.approvalId, input.generation) });
       }
       if (rest === "/documents" && method === "GET") {
-        return Response.json({ documents: listDocuments(sql, DEFAULT_TIME_ZONE) });
+        return Response.json({ documents: listDocuments(sql, DEFAULT_TIME_ZONE, this.filer ?? this.executor) });
       }
       const documentGet = rest.match(/^\/documents\/([^/]+)$/);
       if (documentGet && method === "PATCH") {

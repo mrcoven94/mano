@@ -121,20 +121,22 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // approval, attempt and receipt where it left them.
   private store: SqlApprovalStore;
   private gateway: ActionGateway;
+  private executor: ConsentDeliveringExecutor;
   private keypair: { privateKey: CryptoKey; publicKeyB64: string } | null = null;
   personId = "";
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = new SqlApprovalStore(ctx.storage.sql);
+    this.executor = new ConsentDeliveringExecutor(
+      createExecutor(env),
+      (req) => this.deliverShare(req),
+      (key) => this.checkShareDelivery(key),
+      (key) => this.store.getAttempt(key)?.actionType ?? null,
+    );
     this.gateway = new ActionGateway(
       this.store,
-      new ConsentDeliveringExecutor(
-        createExecutor(env),
-        (req) => this.deliverShare(req),
-        (key) => this.checkShareDelivery(key),
-        (key) => this.store.getAttempt(key)?.actionType ?? null,
-      ),
+      this.executor,
       {
         listConsents: () => this.listStoredConsents(),
         documents: {
@@ -1249,6 +1251,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       hash,
       r2Key,
       mediaType: mediaTypeOf(bytes),
+      sizeBytes: bytes.length,
       receivedAt: new Date().toISOString(),
       generation: prepared,
     });
@@ -1263,10 +1266,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
   }
 
   // The person's documents of this conversation, newest first, each
-  // labeled by the day they sent it in their own time zone.
+  // labeled by the day they sent it in their own time zone, and judged by
+  // the executor this agent files through.
   async listDocuments(verified: string) {
     await this.assertSubject(verified);
-    return listDocuments(this.db(), await this.deadlineTimeZone());
+    return listDocuments(this.db(), await this.deadlineTimeZone(), this.executor);
   }
 
   // What Mail found a document to be.

@@ -6,9 +6,10 @@
 // answerable. Nothing leaves Mano until the person texts YES to it.
 //
 // The portal takes a renewal only with one document attached, so without
-// a document on file that the portal takes, this asks for one and drafts
-// nothing. The question names the attached document by its label, which
-// the draft freezes, so the person sees what their yes sends.
+// a document on file that Engine says its executor could file (by kind
+// and size), this asks for one and drafts nothing. The question names the
+// attached document by its label, which the draft freezes, so the person
+// sees what their yes sends.
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
@@ -29,21 +30,30 @@ const inputSchema = z.object({
 
 const RENEWAL = FORMS["food-renewal"];
 
-// What the sandbox portal takes as the renewal's document.
-const PORTAL_TAKES = new Set(["application/pdf", "image/png", "image/jpeg"]);
-
 const PROOF_QUESTION = "Can you send me a photo of the letter about your renewal? It has to be attached to the renewal.";
-const FORMAT_QUESTION =
-  "The renewal portal only takes PDF, PNG or JPG files, and what you sent is another kind. Can you send a screenshot of the letter instead?";
+
+// Why the newest document on file cannot go, said plainly with its label.
+// One stored before Engine recorded sizes is simply asked for again.
+function unfileableQuestion(newest: EngineDocument): string {
+  const it = newest.label.charAt(0).toUpperCase() + newest.label.slice(1);
+  switch (newest.filing) {
+    case "too_large":
+      return `${it} is too large for the renewal portal. Can you send a smaller photo or a screenshot of the letter?`;
+    case "wrong_type":
+      return `${it} is a kind of file the renewal portal does not take. Can you send a screenshot of the letter instead?`;
+    default:
+      return PROOF_QUESTION;
+  }
+}
 
 // The renewal's proof among the person's documents, which Engine lists
 // newest first: the one fill_form would attach (a profile value was read
-// from it), else the newest the portal takes.
-async function proofOnFile(engine: PersonEngine): Promise<{ proof: EngineDocument | null; onFile: boolean }> {
+// from it) if Engine could file it, else the newest it could file.
+async function proofOnFile(engine: PersonEngine): Promise<{ proof: EngineDocument | null; newest: EngineDocument | null }> {
   const [profile, documents] = await Promise.all([engine.getProfile(), engine.listDocuments()]);
-  const takes = documents.filter((d) => d.mediaType !== null && PORTAL_TAKES.has(d.mediaType));
+  const fileable = documents.filter((d) => d.filing === "fileable");
   const fromProfile = profile ? RENEWAL.proof.fromProfile(profile) : null;
-  return { proof: takes.find((d) => d.id === fromProfile) ?? takes[0] ?? null, onFile: documents.length > 0 };
+  return { proof: fileable.find((d) => d.id === fromProfile) ?? fileable[0] ?? null, newest: documents[0] ?? null };
 }
 
 export default defineTool({
@@ -57,12 +67,12 @@ export default defineTool({
     const turn = requireTurn(ctx);
     const engine = personEngine(ctx);
     if (!engine) throw new Error("Preparing forms is not available right now. Say so and offer to collect the answers.");
-    const { proof, onFile } = await proofOnFile(engine);
+    const { proof, newest } = await proofOnFile(engine);
     if (!proof) {
       return {
         status: "needs_answer",
         field: "proof",
-        question: onFile ? FORMAT_QUESTION : PROOF_QUESTION,
+        question: newest ? unfileableQuestion(newest) : PROOF_QUESTION,
         sent: false,
         note: "The renewal needs one document attached and Mano has none on file the portal takes, so nothing was prepared. Ask this one question, and nothing else. Once they send it, call start_form_draft again with the same details.",
       };

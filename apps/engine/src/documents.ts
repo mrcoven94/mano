@@ -1,7 +1,9 @@
 // The person's documents as Engine records them: one row per stored file
 // (each photo Channels stores from the text line), with when it arrived,
-// what its bytes are, what Mail found it to be, and the conversation
-// generation it belongs to. The bytes stay in R2 (files.ts). A
+// what its bytes are and how large, what Mail found it to be, and the
+// conversation generation it belongs to. The list also says whether the
+// configured executor could file each one (filing), so Mano attaches a
+// document the portal takes. The bytes stay in R2 (files.ts). A
 // conversation delete removes the rows (agent-state.ts) and the files, so
 // the list holds only the current conversation's documents, newest first.
 //
@@ -12,6 +14,7 @@
 //                         moved past the generation
 import { AgentStateInputError, currentGeneration, isGeneration } from "./agents/agent-state.js";
 import { CURRENT_GENERATION } from "./gateway/sql-store.js";
+import type { DocumentFiling, Executor } from "./gateway/types.js";
 
 interface SqlExec {
   exec(query: string, ...bindings: unknown[]): { toArray(): unknown[]; rowsWritten: number };
@@ -38,6 +41,9 @@ export interface PersonDocument {
   // How Mano names it to the person: "the letter you sent on November 2".
   label: string;
   generation: number;
+  // null for a document stored before sizes were recorded.
+  sizeBytes: number | null;
+  filing: DocumentFiling;
 }
 
 export function mediaTypeOf(bytes: Uint8Array): MediaType | null {
@@ -49,7 +55,7 @@ export function mediaTypeOf(bytes: Uint8Array): MediaType | null {
 export function ensureDocumentTables(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
   const have = new Set((sql.exec("PRAGMA table_info(documents)").toArray() as { name: string }[]).map((c) => c.name));
-  for (const [name, type] of [["received_at", "TEXT"], ["generation", "INTEGER"], ["kind", "TEXT"], ["media_type", "TEXT"]]) {
+  for (const [name, type] of [["received_at", "TEXT"], ["generation", "INTEGER"], ["kind", "TEXT"], ["media_type", "TEXT"], ["size_bytes", "INTEGER"]]) {
     if (!have.has(name)) sql.exec(`ALTER TABLE documents ADD COLUMN ${name} ${type}`);
   }
 }
@@ -58,13 +64,22 @@ export function ensureDocumentTables(sql: SqlExec): void {
 // already taken or a delete moved past the generation.
 export function recordDocument(
   sql: SqlExec,
-  doc: { id: string; name: string; hash: string; r2Key: string; mediaType: MediaType | null; receivedAt: string; generation: number },
+  doc: {
+    id: string;
+    name: string;
+    hash: string;
+    r2Key: string;
+    mediaType: MediaType | null;
+    sizeBytes: number;
+    receivedAt: string;
+    generation: number;
+  },
 ): boolean {
   return (
     sql.exec(
-      "INSERT OR IGNORE INTO documents(id, name, hash, r2_key, media_type, received_at, generation)" +
-        ` SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?`,
-      doc.id, doc.name, doc.hash, doc.r2Key, doc.mediaType, doc.receivedAt, doc.generation, doc.generation,
+      "INSERT OR IGNORE INTO documents(id, name, hash, r2_key, media_type, size_bytes, received_at, generation)" +
+        ` SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?`,
+      doc.id, doc.name, doc.hash, doc.r2Key, doc.mediaType, doc.sizeBytes, doc.receivedAt, doc.generation, doc.generation,
     ).rowsWritten > 0
   );
 }
@@ -81,12 +96,22 @@ function dayIn(receivedAt: string, timeZone: string): string {
 }
 
 // timeZone: the person's, so the day is the one they sent it on.
-export function listDocuments(sql: SqlExec, timeZone: string): PersonDocument[] {
+// executor: the one Engine files through, which judges each document by
+// its recorded media type and size.
+export function listDocuments(sql: SqlExec, timeZone: string, executor: Pick<Executor, "documentFiling">): PersonDocument[] {
   const rows = sql.exec(
-    "SELECT id, kind, media_type, received_at, generation FROM documents" +
+    "SELECT id, kind, media_type, size_bytes, received_at, generation FROM documents" +
       ` WHERE received_at IS NOT NULL AND generation = ${CURRENT_GENERATION} ORDER BY received_at DESC, rowid DESC`,
-  ).toArray() as { id: string; kind: DocumentKind | null; media_type: MediaType | null; received_at: string; generation: number }[];
+  ).toArray() as {
+    id: string;
+    kind: DocumentKind | null;
+    media_type: MediaType | null;
+    size_bytes: number | null;
+    received_at: string;
+    generation: number;
+  }[];
   return rows.map((r) => {
+    const sizeBytes = r.size_bytes === null ? null : Number(r.size_bytes);
     const noun = r.kind ? KIND_NOUNS[r.kind] : (MEDIA_TYPES.find((m) => m.type === r.media_type)?.noun ?? "file");
     return {
       id: r.id,
@@ -95,6 +120,8 @@ export function listDocuments(sql: SqlExec, timeZone: string): PersonDocument[] 
       receivedAt: r.received_at,
       label: `the ${noun} you sent on ${dayIn(r.received_at, timeZone)}`,
       generation: Number(r.generation),
+      sizeBytes,
+      filing: executor.documentFiling?.({ mediaType: r.media_type, sizeBytes }) ?? "fileable",
     };
   });
 }

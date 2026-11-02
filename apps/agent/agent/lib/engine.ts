@@ -154,7 +154,9 @@ export interface EngineDeadline {
 // A document Engine holds for the person, as GET /documents lists it:
 // this conversation's, newest first. mediaType is read from the bytes;
 // kind is what Mail found it to be; label names it to the person, such
-// as "the letter you sent on November 2".
+// as "the letter you sent on November 2". filing is whether Engine's
+// executor could file it: too large, the wrong kind of file, or of
+// unknown size when stored before Engine recorded sizes.
 export interface EngineDocument {
   id: string;
   kind: "letter" | null;
@@ -162,6 +164,8 @@ export interface EngineDocument {
   receivedAt: string;
   label: string;
   generation: number;
+  sizeBytes: number | null;
+  filing: "fileable" | "too_large" | "wrong_type" | "size_unknown";
 }
 
 export interface EngineDeadlineResult {
