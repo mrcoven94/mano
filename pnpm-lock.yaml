@@ -13,6 +13,9 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: 3.0.70
         version: 3.0.70(zod@4.6.7)
+      '@mano/computer':
+        specifier: workspace:*
+        version: link:../../packages/computer
       '@mano/guardian':
         specifier: workspace:*
         version: link:../../packages/guardian

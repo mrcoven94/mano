@@ -6,6 +6,8 @@
 // person who just texted; it never holds the secret that signs grants.
 import { personIdForHandle } from "@mano/protocol";
 
+import { parseProfile, type Profile } from "./profile.js";
+
 const REQUEST_TIMEOUT_MS = 15_000;
 export const HANDLE_GRANT_HEADER = "x-mano-handle-grant";
 
@@ -108,6 +110,9 @@ export interface ActionProposal {
   purpose: string;
   payload: Record<string, unknown>;
   idempotencyKey: string;
+  // A document in the person's Engine storage. Engine reads its bytes
+  // itself and binds their hash into the approval.
+  documentId?: string;
 }
 
 const RESULT_STATUSES = new Set(["completed", "needs_approval", "blocked", "stale", "reconciled", "in_progress", "rejected"]);
@@ -287,6 +292,16 @@ export class PersonEngine {
 
   async deleteMemory(memoryId: string): Promise<void> {
     await this.json("DELETE", `/memory/${encodeURIComponent(memoryId)}`);
+  }
+
+  // The person's profile (Profile's contract), or null while Engine does
+  // not serve it to the agent: 404 is the contract's "not available", and
+  // 403 is an Engine that has not opened the route to the agent yet.
+  async getProfile(): Promise<Profile | null> {
+    const res = await this.call("GET", "/profile");
+    if (res.status === 404 || res.status === 403) return null;
+    if (!res.ok) throw new EngineError(res.status);
+    return parseProfile(await res.json());
   }
 
   // turnId: the turn this draft belongs to. Engine orders proposals by it.

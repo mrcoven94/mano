@@ -32,7 +32,8 @@ bucket_name = "mano-files"
 #   wrangler secret put MANO_ENGINE_CHANNELS_TOKEN  (Channels' token for the conversation delete)
 #   wrangler secret put MANO_ENGINE_SEND_SECRET  (signs reminder sends to Channels' agent-send route)
 #   MANO_CHANNELS_URL (Channels' base URL, https://text.withmano.com in production)
-#   EXECUTOR_MODE (simulated or sandbox) and SANDBOX_BASE_URL for sandbox
+#   EXECUTOR_MODE (simulated or sandbox), plus SANDBOX_BASE_URL and
+#   SANDBOX_PORTAL_TOKEN (the portal's own token) for sandbox
 # Production sets all of these from the engine-production GitHub
 # environment in .github/workflows/deploy-engine.yml.
 # Optional model routing (see .dev.vars.example):
