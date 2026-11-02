@@ -10,8 +10,11 @@
  * GlimmerModelChecker is the model alone, for a caller that runs its own
  * rules first (Engine's action gateway does). Its warm()
  * starts the model ahead of a check, for example when a conversation
- * starts, since a cold start takes minutes. redact()
- * strips personal details from text going to logs or outside graders.
+ * starts, since a cold start takes minutes. check() takes the person's
+ * own names and details to redact by value (Engine reads them from the
+ * profile), and a submit carries its form fields with personal values as
+ * labels. redact() strips personal details from text going to logs or
+ * outside graders.
  *
  * Run it: set MANO_GUARDIAN_RULES_ONLY=1 for explicit local rules-only,
  * or set MANO_GUARDIAN_URL and MANO_GUARDIAN_TOKEN (see .env.example)
@@ -24,7 +27,8 @@
  *
  * Test it: pnpm --filter @mano/guardian check (tsc plus vitest: unit
  * tests, fail-closed integration tests against the stand-in over real
- * HTTP, and a 40-case eval that scores both checkers).
+ * HTTP, a 44-case eval that scores both checkers, and 8 renewal forms
+ * scored on the model alone the way Engine runs it).
  *
  * Deploy it: the model endpoint deploys only through
  * .github/workflows/guardian-modal.yml on merge to main, never from a

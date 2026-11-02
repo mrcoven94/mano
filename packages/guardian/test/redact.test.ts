@@ -235,3 +235,125 @@ describe("buildModelRequest", () => {
     expect(payload.body).toBe("See [RECIPIENT] and [URL-1]");
   });
 });
+
+describe("buildModelRequest for a renewal form", () => {
+  const MARIA = {
+    fullName: "Maria Synthetic",
+    dateOfBirth: "1990-01-01",
+    address: "12 Example Lane, Springfield, IL 62701",
+    phone: "(312) 555-0142",
+  };
+  const RAW = [
+    "Maria Synthetic",
+    "1990-01-01",
+    "12 Example Lane",
+    "Springfield",
+    "62701",
+    "(312) 555-0142",
+    "555-0142",
+  ];
+
+  function renewal(payload: Record<string, unknown>, documentHash: string | null = "doc-hash"): CheckInput {
+    return {
+      action: {
+        type: "submit",
+        recipient: "sandbox-agency-portal",
+        purpose: "Food benefits renewal in the sandbox agency portal",
+        payload,
+        documentHash,
+      },
+      sources: [],
+      consents: [],
+      origin: "person",
+    };
+  }
+
+  it("sends every form field, personal values as labels and numbers as numbers", () => {
+    const sent = buildModelRequest(renewal({ ...MARIA, householdSize: 3, monthlyIncome: 1200 }));
+    expect(sent.action.payload).toEqual({
+      fullName: "[NAME]",
+      dateOfBirth: "[DATE OF BIRTH]",
+      address: "[ADDRESS]",
+      phone: "[PHONE]",
+      householdSize: 3,
+      monthlyIncome: 1200,
+      attachment: "[DOCUMENT]",
+    });
+    const wire = JSON.stringify(sent);
+    for (const raw of RAW) expect(wire).not.toContain(raw);
+    expect(wire).not.toContain("doc-hash");
+  });
+
+  it("reads the portal's saved strings as numbers and keeps impossible values visible", () => {
+    const filled = buildModelRequest(renewal({ ...MARIA, householdSize: "3", monthlyIncome: "1200.50" }));
+    expect(filled.action.payload).toMatchObject({ householdSize: 3, monthlyIncome: 1200.5 });
+    const wrong = buildModelRequest(renewal({ ...MARIA, householdSize: 0, monthlyIncome: -200 }));
+    expect(wrong.action.payload).toMatchObject({ householdSize: 0, monthlyIncome: -200 });
+  });
+
+  it("shows an empty personal field as empty and leaves out a missing one", () => {
+    const sent = buildModelRequest(renewal({ fullName: "  ", householdSize: 2 }, null));
+    expect(sent.action.payload).toEqual({ fullName: "", householdSize: 2 });
+  });
+
+  it("scrubs text in a number field, so a phone typed there is still caught", () => {
+    const sent = buildModelRequest(
+      renewal({
+        ...MARIA,
+        householdSize: "three",
+        monthlyIncome: "(312) 555-0142, call Maria Synthetic",
+      }),
+    );
+    expect(sent.action.payload).toMatchObject({ householdSize: "three" });
+    const income = (sent.action.payload as { monthlyIncome: string }).monthlyIncome;
+    expect(income).not.toContain("555-0142");
+    expect(income).not.toContain("Maria Synthetic");
+  });
+
+  it("removes the form's personal values from the purpose, text, claims and quotes", () => {
+    const input = renewal({
+      ...MARIA,
+      householdSize: 3,
+      monthlyIncome: 1200,
+      text: "Maria Synthetic lives at 12 Example Lane, Springfield, IL 62701.",
+      claims: ["Maria Synthetic was born 1990-01-01."],
+    });
+    input.action.purpose = "Food benefits renewal for Maria Synthetic";
+    input.sources = [{ kind: "profile", id: "p1", quote: "maria synthetic, Springfield" }];
+    const wire = JSON.stringify(buildModelRequest(input));
+    for (const raw of RAW) expect(wire.toLowerCase()).not.toContain(raw.toLowerCase());
+    expect(wire).toContain("Food benefits renewal for [NAME]");
+  });
+
+  it("sends form fields only on a submit, and the attachment only on a submit", () => {
+    const send: CheckInput = {
+      ...renewal({ ...MARIA, text: "Hello." }),
+      action: { ...renewal({}).action, type: "send", payload: { ...MARIA, text: "Hello." } },
+    };
+    const sent = buildModelRequest(send);
+    expect(sent.action.payload).toEqual({ text: "Hello." });
+  });
+});
+
+describe("known entities", () => {
+  it("removes each kind by value, longest first across kinds", () => {
+    const out = redact(
+      "Maria's Bakery pays Maria. Write to Unit 4, Springfield. Case A77Q. mail m.s@post.example.",
+      {
+        names: ["Maria"],
+        employers: ["Maria's Bakery"],
+        addresses: ["Unit 4", "Springfield"],
+        caseNumbers: ["A77Q"],
+        emails: ["m.s@post.example"],
+      },
+    );
+    expect(out).toBe("[EMPLOYER] pays [NAME]. Write to [ADDRESS], [ADDRESS]. Case [CASE NUMBER]. mail [EMAIL].");
+  });
+
+  it("removes a known address whole before a pattern can split it", () => {
+    const out = redact("Send it to 12 Example Lane, Springfield, IL 62701 today.", {
+      addresses: ["12 Example Lane, Springfield, IL 62701"],
+    });
+    expect(out).toBe("Send it to [ADDRESS] today.");
+  });
+});

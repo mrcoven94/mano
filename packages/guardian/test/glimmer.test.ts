@@ -294,6 +294,26 @@ describe("GlimmerChecker", () => {
     expect(init.body as string).not.toContain("Ana Ruiz");
   });
 
+  it("redacts the entities a check passes on top of its own", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
+    );
+    const checker = new GlimmerModelChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      knownEntities: { names: ["Ana Ruiz"] },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const input = passInput();
+    input.action.purpose = "SNAP renewal for Ana Ruiz of Synthetic Bakery";
+    input.action.payload = { text: "Ana Ruiz works at Synthetic Bakery." };
+    await checker.check(input, { employers: ["Synthetic Bakery"] });
+    const sent = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body as string;
+    expect(sent).not.toContain("Ana Ruiz");
+    expect(sent).not.toContain("Synthetic Bakery");
+    expect(sent).toContain("[NAME] works at [EMPLOYER].");
+  });
+
   it("passes fix and block verdicts through", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({

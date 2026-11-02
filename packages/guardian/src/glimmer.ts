@@ -1,4 +1,4 @@
-import { buildModelRequest, type KnownEntities } from "./redact.js";
+import { buildModelRequest, mergeEntities, type KnownEntities } from "./redact.js";
 import { RulesChecker } from "./rules.js";
 import type { CheckInput, CheckResult, Checker, Verdict, WarmState } from "./types.js";
 
@@ -24,7 +24,8 @@ export interface GlimmerCheckerOptions {
   model?: string;
   // Per-check timeout in milliseconds. A timeout is a block.
   timeoutMs?: number;
-  // Names and employers to redact before sending.
+  // Personal values to redact before every check, on top of any a check
+  // passes itself.
   knownEntities?: KnownEntities;
   fetchImpl?: typeof fetch;
 }
@@ -140,7 +141,9 @@ export class GlimmerModelChecker implements Checker {
     }
   }
 
-  async check(input: CheckInput): Promise<CheckResult> {
+  // known: this person's own values to redact, read by the caller at
+  // check time (Engine reads them from the person's profile).
+  async check(input: CheckInput, known?: KnownEntities): Promise<CheckResult> {
     this.lastServer = null;
 
     let response: Response;
@@ -148,7 +151,7 @@ export class GlimmerModelChecker implements Checker {
       response = await this.fetchImpl(this.url, {
         method: "POST",
         headers: this.headers(),
-        body: JSON.stringify(buildModelRequest(input, this.knownEntities)),
+        body: JSON.stringify(buildModelRequest(input, mergeEntities(this.knownEntities, known))),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
@@ -230,10 +233,10 @@ export class GlimmerModelChecker implements Checker {
 export class GlimmerChecker extends GlimmerModelChecker {
   private readonly rules = new RulesChecker();
 
-  override async check(input: CheckInput): Promise<CheckResult> {
+  override async check(input: CheckInput, known?: KnownEntities): Promise<CheckResult> {
     const rules = await this.rules.check(input);
     if (rules.verdict === "block") return rules;
-    return super.check(input);
+    return super.check(input, known);
   }
 }
 
