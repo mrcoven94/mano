@@ -13,25 +13,16 @@ export function extractHttpUrls(text: string): string[] {
 }
 
 // Replaces every blocked URL in person-visible text. A check error blocks,
-// same as a block verdict: fail closed.
+// same as a block verdict: fail closed. The checks run together.
 export async function redactBlockedLinks(
   text: string,
   check: (url: string) => Promise<{ allowed: boolean }>,
 ): Promise<{ text: string; blocked: string[] }> {
-  const blocked: string[] = [];
+  const urls = extractHttpUrls(text);
+  const allowed = await Promise.all(urls.map((url) => check(url).then((v) => v.allowed, () => false)));
+  const blocked = urls.filter((_, i) => !allowed[i]);
   let out = text;
-  for (const url of extractHttpUrls(text)) {
-    let allowed = false;
-    try {
-      allowed = (await check(url)).allowed;
-    } catch {
-      allowed = false;
-    }
-    if (!allowed) {
-      blocked.push(url);
-      out = out.split(url).join("[blocked link]");
-    }
-  }
+  for (const url of blocked) out = out.split(url).join("[blocked link]");
   return { text: out, blocked };
 }
 
@@ -51,21 +42,26 @@ export async function checkLinkSafety(
   }
   const endpoints = ["https://security.cloudflare-dns.com/dns-query"];
   if (opts.forDisplay) endpoints.push("https://family.cloudflare-dns.com/dns-query");
-  for (const base of endpoints) {
-    try {
-      const res = await fetchFn(`${base}?name=${encodeURIComponent(host)}&type=A`, {
-        headers: { accept: "application/dns-json" },
-      });
-      if (!res.ok) return { allowed: false, reason: "DNS check failed." };
-      const data = (await res.json()) as DohAnswer;
-      const answers = data.Answer ?? [];
-      if (answers.length === 0) return { allowed: false, reason: "No DNS answer." };
-      for (const a of answers) {
-        if (a.data === "0.0.0.0") return { allowed: false, reason: "Blocked domain." };
-      }
-    } catch {
-      return { allowed: false, reason: "DNS check error." };
+  // Both resolvers are asked at once. Any block wins, and the reason is
+  // the first endpoint's, as when they were asked in turn.
+  const reasons = await Promise.all(endpoints.map((base) => lookupBlockReason(fetchFn, base, host)));
+  const reason = reasons.find((r) => r !== null);
+  return reason ? { allowed: false, reason } : { allowed: true };
+}
+
+async function lookupBlockReason(fetchFn: FetchFn, base: string, host: string): Promise<LinkBlockReason | null> {
+  try {
+    const res = await fetchFn(`${base}?name=${encodeURIComponent(host)}&type=A`, {
+      headers: { accept: "application/dns-json" },
+    });
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      return "DNS check failed.";
     }
+    const answers = ((await res.json()) as DohAnswer).Answer ?? [];
+    if (answers.length === 0) return "No DNS answer.";
+    return answers.some((a) => a.data === "0.0.0.0") ? "Blocked domain." : null;
+  } catch {
+    return "DNS check error.";
   }
-  return { allowed: true };
 }

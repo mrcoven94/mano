@@ -55,7 +55,6 @@ function deps(pages: string[], overrides: Partial<TurnDeps> = {}): TurnDeps {
   return {
     secret: SECRET,
     engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch }),
-    lastTurnAt: new Map(),
     mailModel: recordedReader(pages),
     async runAgent(input) {
       calls.push(input);

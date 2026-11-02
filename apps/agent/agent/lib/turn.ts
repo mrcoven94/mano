@@ -64,9 +64,6 @@ export interface TurnDeps {
   // background and never affects the turn.
   warmGuardian?: () => Promise<unknown>;
   background?: (work: Promise<unknown>) => void;
-  // Last turn time per handle in this process, for the warm-up gap. Best
-  // effort: another instance may warm again, which costs one request.
-  lastTurnAt?: Map<string, number>;
   now?: () => number;
   // Reads texted photos (SAM 3.1 and Muse Spark through @mano/mail), and
   // how long a reading may take before the turn says it could not finish.
@@ -413,7 +410,7 @@ async function recordTurn(
   engine: PersonEngine,
   turnId: string,
   receivedAt: string,
-): Promise<{ turn: EngineTurn; created: boolean } | null> {
+): Promise<{ turn: EngineTurn; created: boolean; previousReceivedAt: string | null } | null> {
   try {
     return await engine.putTurn(turnId, receivedAt);
   } catch (err) {
@@ -425,15 +422,13 @@ async function recordTurn(
   }
 }
 
-// True for the first turn after a quiet stretch, as far as this process
-// has seen.
-function conversationStarts(seen: Map<string, number>, handleHash: string, nowMs: number): boolean {
-  const last = seen.get(handleHash);
-  seen.set(handleHash, nowMs);
-  return last === undefined || nowMs - last > CONVERSATION_GAP_MS;
+// True for the first turn after a quiet stretch, read from Engine's turn
+// ledger. A retried turn never counts: it was already warmed for.
+function conversationStarts(recorded: { turn: EngineTurn; created: boolean; previousReceivedAt: string | null }): boolean {
+  if (!recorded.created) return false;
+  if (recorded.previousReceivedAt === null) return true;
+  return Date.parse(recorded.turn.firstReceivedAt) - Date.parse(recorded.previousReceivedAt) > CONVERSATION_GAP_MS;
 }
-
-const processTurns = new Map<string, number>();
 
 export async function handleTurn(request: Request, deps: TurnDeps): Promise<Response> {
   const now = deps.now ?? Date.now;
@@ -459,17 +454,19 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
   }
 
   let turn: { firstReceivedAt: string; created: boolean };
+  let starts: boolean;
   try {
     const recorded = await recordTurn(engine, body.turnId, new Date(body.receivedAtMs).toISOString());
     if (!recorded) return Response.json({ status: "stale", text: "" }, { status: 409 });
     turn = { firstReceivedAt: recorded.turn.firstReceivedAt, created: recorded.created };
+    starts = conversationStarts(recorded);
   } catch (err) {
     const status = err instanceof EngineError ? err.status : null;
     console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "ledger", status }));
     return Response.json({ status: "error", text: "", reason: "ledger" }, { status: 503 });
   }
 
-  if (deps.warmGuardian && conversationStarts(deps.lastTurnAt ?? processTurns, body.handleHash, receivedMs)) {
+  if (deps.warmGuardian && starts) {
     const warming = deps.warmGuardian().catch(() => undefined);
     if (deps.background) deps.background(warming);
   }
@@ -481,8 +478,12 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
     console.warn(JSON.stringify({ type: "mano_turn_error", handle: body.handleHash, err: err instanceof Error ? err.name : "unknown" }));
     response = failure(502, "error");
   }
+  // Nothing reads a turn's completion before the reply, and its failure
+  // is ignored, so the reply does not wait for it where it can run on.
   if (response.httpStatus === 200) {
-    await engine.completeTurn(body.turnId).catch(() => undefined);
+    const completing = engine.completeTurn(body.turnId).catch(() => undefined);
+    if (deps.background) deps.background(completing);
+    else await completing;
   }
   console.log(
     JSON.stringify({ type: "mano_turn", handle: body.handleHash, status: response.body.status, latencyMs: now() - receivedMs }),

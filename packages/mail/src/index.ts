@@ -352,19 +352,34 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
   // transcription. Unverified fields are dropped and become questions.
   // A file past its budget stops early: its unread pages are dropped
   // and one question says so.
-  const skipped = new Set<number>();
-  for (const page of pages) {
-    if (overBudget(page.file)) {
-      askBudget(page.file);
-      skipped.add(page.order);
-      continue;
-    }
+  // Pages are read PAGE_READS_AT_ONCE at a time. The budget is checked as
+  // each read starts, so a file can pass its token cap by at most the
+  // reads already in flight; the time cap still binds every call. The
+  // results are recorded in page order, so questions, warnings and model
+  // calls come out as a one-at-a-time run would write them.
+  type PageRead = { kind: "skipped" } | { kind: "read"; extraction: PageExtraction } | { kind: "failed"; err: unknown };
+  const reads = await mapPool(pages, PAGE_READS_AT_ONCE, async (page): Promise<PageRead> => {
+    if (overBudget(page.file)) return { kind: "skipped" };
     try {
       const readBuffer = await downscaleForModel(page.image);
       const extraction = await readPage(readBuffer, opts.model, {
         synthetic: opts.synthetic,
         deadline: deadlineFor(page.file),
       });
+      addUsage(page.file, extraction.usage);
+      return { kind: "read", extraction };
+    } catch (err) {
+      return { kind: "failed", err };
+    }
+  });
+  const skipped = new Set<number>();
+  pages.forEach((page, i) => {
+    const read = reads[i]!;
+    if (read.kind === "skipped") {
+      askBudget(page.file);
+      skipped.add(page.order);
+    } else if (read.kind === "read") {
+      const { extraction } = read;
       page.extraction = extraction;
       if (extraction.readable) {
         page.dropped = verifyExtraction(extraction, extraction.fullText);
@@ -376,12 +391,11 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         outputTokens: extraction.usage?.outputTokens ?? 0,
         elapsedMs: extraction.elapsedMs,
       });
-      addUsage(page.file, extraction.usage);
-    } catch (err) {
+    } else {
       page.readFailed = true;
       warnings.push({
         kind: "model_error",
-        message: `Reading failed for a page in ${page.file} (${shortMessage(err)}).`,
+        message: `Reading failed for a page in ${page.file} (${shortMessage(read.err)}).`,
         letterId: null,
         citation: null,
       });
@@ -392,7 +406,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         citation: null,
       });
     }
-  }
+  });
 
   if (skipped.size > 0) {
     const kept = pages.filter((p) => !skipped.has(p.order));
@@ -1135,4 +1149,22 @@ function pickProposal(
 function shortMessage(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   return msg.slice(0, 160);
+}
+
+// Page reads in flight at once: each is a vision call of seconds, and the
+// model client retries a rate limit only twice, so the bound stays small.
+const PAGE_READS_AT_ONCE = 3;
+
+// Runs fn over items, limit at a time, and answers in item order.
+async function mapPool<T, R>(items: readonly T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!, i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }

@@ -39,10 +39,11 @@ export async function finalizeReply(text: string, opts: FinalizeOptions): Promis
   const first = await stripBlockedLinks(guard(text), opts.checker);
   let removed = first.removed;
   const split: string[] = [];
-  for (const bubble of splitBubbles(first.text)) {
-    // The splitter never breaks a word, so this normally finds nothing; it
-    // keeps a future extraction gap from shipping an unchecked link.
-    const rechecked = await stripBlockedLinks(bubble, opts.checker);
+  // The splitter never breaks a word, so this normally finds nothing; it
+  // keeps a future extraction gap from shipping an unchecked link. Links
+  // the whole text already cleared are not looked up again.
+  const rechecks = await Promise.all(splitBubbles(first.text).map((bubble) => stripBlockedLinks(bubble, opts.checker, first.cleared)));
+  for (const rechecked of rechecks) {
     removed += rechecked.removed;
     split.push(...(rechecked.text.length <= MAX_BUBBLE_CHARS ? [rechecked.text] : splitBubbles(rechecked.text)));
   }

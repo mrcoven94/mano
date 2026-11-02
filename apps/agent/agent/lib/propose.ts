@@ -83,8 +83,9 @@ export async function holdForYes(
   // One question waits at a time: Engine's latest proposal, the draft of
   // the newest turn. A slow turn whose draft lands after a newer turn's
   // is not the latest; Engine never approves it, and it is closed here.
-  await closeReplaced(engine);
-  const { pointer: shown, latest } = await engine.getPending();
+  // Closing changes only approval statuses, never the pointer or the
+  // latest proposal, so both run at once.
+  const [, { pointer: shown, latest }] = await Promise.all([closeReplaced(engine), engine.getPending()]);
   if (latest?.approvalId !== approval.id) {
     return {
       held: false,

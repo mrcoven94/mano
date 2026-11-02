@@ -115,10 +115,19 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
 // route by their chat instead, through the route table the conversations
 // keep.
 export async function routeEvent(event: NormalizedEvent, env: Env): Promise<"routed" | "skipped"> {
+  const handleHash = await conversationFor(event, env);
+  if (!handleHash) return "skipped";
+  await deliverEvent(event, handleHash, env);
+  return "routed";
+}
+
+// The conversation an event belongs to, by handle hash, or null when it
+// is ignored or unroutable.
+export async function conversationFor(event: NormalizedEvent, env: Env): Promise<string | null> {
   const logger = createLogger();
   if (event.kind === "ignored") {
     logger.info("event_skipped", { eventId: event.id, type: event.rawType });
-    return "skipped";
+    return null;
   }
   let handleHash = event.handle ? await hashHandle(event.handle, env.MANO_HANDLE_PEPPER) : null;
   // Receipts, typing and reactions often name only the chat: they route
@@ -130,8 +139,12 @@ export async function routeEvent(event: NormalizedEvent, env: Env): Promise<"rou
   }
   if (!handleHash) {
     logger.info("event_skipped", { eventId: event.id, type: event.rawType, reason: "unroutable" });
-    return "skipped";
+    return null;
   }
+  return handleHash;
+}
+
+async function deliverEvent(event: NormalizedEvent, handleHash: string, env: Env): Promise<void> {
   const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));
   const res = await stub.fetch("https://conversation/internal/event", {
     method: "POST",
@@ -139,8 +152,7 @@ export async function routeEvent(event: NormalizedEvent, env: Env): Promise<"rou
   });
   if (!res.ok) throw new Error(`Conversation route failed: ${res.status}`);
   const data = (await res.json()) as { result?: string };
-  logger.info("event_routed", { eventId: event.id, type: event.rawType, handle: handleHash, result: data.result ?? "unknown" });
-  return "routed";
+  createLogger().info("event_routed", { eventId: event.id, type: event.rawType, handle: handleHash, result: data.result ?? "unknown" });
 }
 
 async function routeForChat(env: Env, chatId: string): Promise<string | null> {
@@ -250,6 +262,70 @@ async function noteSeenIds(env: Env, ids: string[]): Promise<void> {
 
 // Dead letters record the event ID and reason, then drop the body. The
 // full event, with its message text, never sits in the DLQ.
+// Each event is first resolved to its conversation, all at once. Then one
+// conversation's events are delivered in batch order (STOP before a later
+// message, typing started before stopped), whichever of chat or handle
+// named them, and different conversations are delivered at once. Each
+// message is acked or retried on its own.
+export async function routeInLanes(
+  messages: readonly Pick<Message<unknown>, "id" | "body" | "ack" | "retry">[],
+  resolve: (event: NormalizedEvent) => Promise<string | null>,
+  deliver: (event: NormalizedEvent, conversation: string) => Promise<void>,
+): Promise<void> {
+  const failed = (message: (typeof messages)[number], err: unknown) => {
+    createLogger().warn("event_route_failed", {
+      eventId: String((message.body as { id?: unknown } | null)?.id ?? "unknown"),
+      err: errName(err),
+    });
+    message.retry();
+  };
+  type Resolved = { conversation: string | null } | { err: unknown };
+  const settle = (message: (typeof messages)[number]): Promise<Resolved> =>
+    resolve(message.body as NormalizedEvent).then((conversation) => ({ conversation }), (err: unknown) => ({ err }));
+  const eventOf = (message: (typeof messages)[number]) => (message.body ?? {}) as Partial<NormalizedEvent>;
+  // Events that name a handle resolve on their own. A chat-only event (a
+  // receipt, typing, a reaction) takes the conversation of an earlier event
+  // in this batch with the same chat, since that event writes the chat's
+  // route only when it is delivered; otherwise it asks the route table.
+  const resolved: Resolved[] = new Array(messages.length);
+  await Promise.all(messages.map(async (message, i) => {
+    if (eventOf(message).handle) resolved[i] = await settle(message);
+  }));
+  await Promise.all(messages.map(async (message, i) => {
+    if (resolved[i]) return;
+    const chatId = eventOf(message).chatId;
+    for (let j = i - 1; j >= 0 && chatId; j--) {
+      const earlier = resolved[j];
+      if (eventOf(messages[j]!).chatId === chatId && eventOf(messages[j]!).handle && earlier && "conversation" in earlier && earlier.conversation) {
+        resolved[i] = { conversation: earlier.conversation };
+        return;
+      }
+    }
+    resolved[i] = await settle(message);
+  }));
+  const lanes = new Map<string, (typeof messages)[number][]>();
+  messages.forEach((message, i) => {
+    const r = resolved[i]!;
+    if ("err" in r) return failed(message, r.err);
+    if (r.conversation === null) return message.ack();
+    const lane = lanes.get(r.conversation);
+    if (lane) lane.push(message);
+    else lanes.set(r.conversation, [message]);
+  });
+  await Promise.all(
+    [...lanes].map(async ([conversation, lane]) => {
+      for (const message of lane) {
+        try {
+          await deliver(message.body as NormalizedEvent, conversation);
+          message.ack();
+        } catch (err) {
+          failed(message, err);
+        }
+      }
+    }),
+  );
+}
+
 export function handleDeadLetters(batch: MessageBatch<unknown>): void {
   const logger = createLogger();
   for (const message of batch.messages) {
@@ -372,19 +448,7 @@ export default {
       handleDeadLetters(batch);
       return;
     }
-    for (const message of batch.messages) {
-      const event = message.body as NormalizedEvent;
-      try {
-        await routeEvent(event, env);
-        message.ack();
-      } catch (err) {
-        createLogger().warn("event_route_failed", {
-          eventId: String((event as { id?: unknown })?.id ?? "unknown"),
-          err: errName(err),
-        });
-        message.retry();
-      }
-    }
+    await routeInLanes(batch.messages, (event) => conversationFor(event, env), (event, conversation) => deliverEvent(event, conversation, env));
   },
 
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {

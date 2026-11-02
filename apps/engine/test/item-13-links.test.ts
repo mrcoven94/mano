@@ -10,7 +10,7 @@ import {
   MemoryApprovalStore,
 } from "../src/gateway/index.js";
 import type { ActionRequest } from "../src/gateway/index.js";
-import { extractHttpUrls, redactBlockedLinks } from "../src/link-safety.js";
+import { checkLinkSafety, extractHttpUrls, redactBlockedLinks } from "../src/link-safety.js";
 
 function baseReq(over: Partial<ActionRequest> = {}): ActionRequest {
   return {
@@ -77,6 +77,42 @@ describe("item 13: enforced link checks", () => {
       throw new Error("dns down");
     });
     expect(errored.text).toBe("click [blocked link]");
+  });
+
+  it("checks every link at once and still reports the first block in order", async () => {
+    let inFlight = 0;
+    let most = 0;
+    const gw = new ActionGateway(new MemoryApprovalStore(), new InMemoryExecutor(), {
+      linkCheck: async (url) => {
+        most = Math.max(most, ++inFlight);
+        await new Promise((r) => setTimeout(r, url.includes("one") ? 20 : 1));
+        inFlight--;
+        return url.includes("example.org") ? { allowed: true } : { allowed: false, reason: "Blocked domain." };
+      },
+    });
+    const result = await gw.requestAction(
+      baseReq({ payload: { a: "https://one.example.net/x", b: "https://two.example.net/y", c: "https://ok.example.org/" } }),
+    );
+    expect(most).toBe(3);
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toContain("one.example.net");
+  });
+
+  it("asks both resolvers at once for a link shown to a person", async () => {
+    let inFlight = 0;
+    let most = 0;
+    const fetchFn = (async (input: string) => {
+      most = Math.max(most, ++inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      const family = String(input).startsWith("https://family.");
+      return Response.json({ Answer: [{ type: 1, data: family ? "0.0.0.0" : "93.184.216.34" }] });
+    }) as unknown as typeof fetch;
+    expect(await checkLinkSafety("https://kids.example.com/", { forDisplay: true, fetchFn })).toEqual({
+      allowed: false,
+      reason: "Blocked domain.",
+    });
+    expect(most).toBe(2);
   });
 
   it("refuses invalid URLs on the check endpoint without fetching", async () => {

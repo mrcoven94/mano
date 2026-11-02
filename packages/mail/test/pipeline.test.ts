@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { readMail, type MailReading } from "../src/index.js";
 import { ffmpegAvailable } from "../src/media.js";
-import { RecordedModelClient, recordedText } from "../src/model.js";
+import { RecordedModelClient, recordedText, type ModelClient } from "../src/model.js";
 import { LETTERS } from "../scripts/letters.js";
 
 async function photo(): Promise<Buffer> {
@@ -267,12 +267,15 @@ describe("readMail", () => {
   });
 
   it("stops a photo past its token budget and asks once", async () => {
+    // Four letters, read three at a time: the first read blows the token
+    // cap, so the read that would start after it never does.
     const bytes = await photo();
     const model = new RecordedModelClient([
       {
         match: (req) => req.model === "sam-3.1",
         result: recordedText(
-          '{"detections":[{"box_2d":[40,60,600,500],"label":"letter","score":0.9},{"box_2d":[400,450,950,950],"label":"letter","score":0.85}]}',
+          '{"detections":[{"box_2d":[20,20,480,480],"label":"letter","score":0.9},{"box_2d":[20,520,480,980],"label":"letter","score":0.9},' +
+            '{"box_2d":[520,20,980,480],"label":"letter","score":0.9},{"box_2d":[520,520,980,980],"label":"letter","score":0.9}]}',
         ),
       },
       {
@@ -280,20 +283,44 @@ describe("readMail", () => {
         consume: true,
         result: { text: pageJson(), usage: { inputTokens: 200000, outputTokens: 0 }, raw: {} },
       },
-      {
-        match: (req) => req.model !== "sam-3.1",
-        consume: true,
-        result: recordedText(pageJson()),
-      },
+      { match: (req) => req.model !== "sam-3.1", result: recordedText(pageJson()) },
     ]);
     const reading = await readMail([{ bytes, mimeType: "image/jpeg", name: "pile.jpg" }], {
       personId: "p1",
       synthetic: true,
       model,
     });
-    expect(reading.letters).toHaveLength(1);
     expect(reading.questions.filter((q) => q.kind === "budget_exceeded")).toHaveLength(1);
-    expect(model.calls.filter((c) => c.model !== "sam-3.1")).toHaveLength(1);
+    expect(model.calls.filter((c) => c.model !== "sam-3.1")).toHaveLength(3);
+  });
+
+  it("reads a photo's pages at once", async () => {
+    const bytes = await photo();
+    let inFlight = 0;
+    let most = 0;
+    const recorded = new RecordedModelClient([
+      {
+        match: (req) => req.model === "sam-3.1",
+        result: recordedText(
+          '{"detections":[{"box_2d":[20,20,480,480],"label":"letter","score":0.9},{"box_2d":[20,520,480,980],"label":"letter","score":0.9},' +
+            '{"box_2d":[520,20,980,480],"label":"letter","score":0.9},{"box_2d":[520,520,980,980],"label":"letter","score":0.9}]}',
+        ),
+      },
+      { match: (req) => req.model !== "sam-3.1", result: recordedText(pageJson()) },
+    ]);
+    const model: ModelClient = {
+      live: false,
+      responses: async (req, opts) => {
+        if (req.model === "sam-3.1") return recorded.responses(req, opts);
+        most = Math.max(most, ++inFlight);
+        await new Promise((r) => setTimeout(r, 10));
+        inFlight--;
+        return recorded.responses(req, opts);
+      },
+    };
+    const reading = await readMail([{ bytes, mimeType: "image/jpeg", name: "pile.jpg" }], { personId: "p1", synthetic: true, model });
+    expect(reading.questions.filter((q) => q.kind === "read_failed")).toHaveLength(0);
+    expect(most).toBe(3);
   });
 
   it("uses the standard model for non-synthetic runs", async () => {

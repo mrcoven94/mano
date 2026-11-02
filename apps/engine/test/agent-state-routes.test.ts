@@ -161,6 +161,18 @@ describe("turn ledger", () => {
     expect(done.turn.status).toBe("complete");
     expect((await call(h, "GET", "/turns/t-404")).status).toBe(404);
   });
+
+  it("answers the conversation's previous turn time", async () => {
+    const h = handle("turns-previous");
+    type Out = { previousReceivedAt: string | null };
+    const put = async (turnId: string, receivedAt: string) =>
+      ((await (await call(h, "POST", "/turns", { turnId, receivedAt, generation: 0 })).json()) as Out).previousReceivedAt;
+    expect(await put("t-1", "2026-11-01T15:00:00.000Z")).toBeNull();
+    expect(await put("t-2", "2026-11-01T15:20:00.000Z")).toBe("2026-11-01T15:00:00.000Z");
+    // A late turn received between the two sees only the one before it.
+    expect(await put("t-late", "2026-11-01T15:10:00.000Z")).toBe("2026-11-01T15:00:00.000Z");
+    expect(await put("t-2", "2026-11-01T15:30:00.000Z")).toBe("2026-11-01T15:10:00.000Z");
+  });
 });
 
 // An agent draft for a turn (recorded first when it is new), or a plain

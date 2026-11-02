@@ -282,15 +282,8 @@ export class ConversationDO implements DurableObject {
       const { runner } = this.runner(body.handleHash);
       const event = body.event as NormalizedEvent;
       const result = await runner.handleEvent(event, "webhook");
-      // Every event with a chat refreshes the chat route, keyed by hash,
-      // so handle-less delivery receipts find this conversation later.
-      if (event.chatId) {
-        const chat = await hashChatId(event.chatId, this.env.MANO_HANDLE_PEPPER);
-        await globalStateStub(this.env).fetch("https://state/internal/route", {
-          method: "POST",
-          body: JSON.stringify({ chat, handleHash: body.handleHash }),
-        });
-      }
+      // The turn's alarm is armed first: it is local, and the batch window
+      // starts when the message arrived, not after the route update below.
       const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
       if (result === "queued") {
         await this.ctx.storage.setAlarm(Date.now() + batchMs);
@@ -301,6 +294,17 @@ export class ConversationDO implements DurableObject {
         if (store.pending().length > 0 && (await this.ctx.storage.getAlarm()) === null) {
           await this.ctx.storage.setAlarm(Date.now() + batchMs);
         }
+      }
+      // Every event with a chat refreshes the chat route, keyed by hash,
+      // so handle-less delivery receipts find this conversation later. A
+      // failure throws, and the redelivery finds the alarm already armed.
+      if (event.chatId) {
+        const chat = await hashChatId(event.chatId, this.env.MANO_HANDLE_PEPPER);
+        const res = await globalStateStub(this.env).fetch("https://state/internal/route", {
+          method: "POST",
+          body: JSON.stringify({ chat, handleHash: body.handleHash }),
+        });
+        await res.body?.cancel();
       }
       return Response.json({ result });
     }

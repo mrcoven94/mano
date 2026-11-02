@@ -63,7 +63,6 @@ async function runTurnWith(text: string): Promise<AgentTurnInput[]> {
   const res = await handleTurn(request, {
     secret: TURN_SECRET,
     engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch }),
-    lastTurnAt: new Map(),
     runAgent: async (input) => {
       calls.push(input);
       return { status: "replied" as const, text: "ok", reason: "stop" };

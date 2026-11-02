@@ -71,13 +71,11 @@ export class LinkChecker {
   async checkHost(host: string, family = false): Promise<LinkCheckResult> {
     const normalized = host.toLowerCase();
     if (!normalized || normalized.includes(" ")) return { ok: false, reason: "bad_url", host: normalized };
-    // Person-visible hosts clear both filters; either one blocks.
+    // Person-visible hosts clear both filters; either one blocks. Both are
+    // asked at once, and the first block in this order is the answer.
     const bases = family ? [this.familyBase, this.securityBase] : [this.securityBase];
-    for (const base of bases) {
-      const verdict = await this.lookup(base, normalized);
-      if (!verdict.ok) return verdict;
-    }
-    return { ok: true, reason: "clean", host: normalized };
+    const verdicts = await Promise.all(bases.map((base) => this.lookup(base, normalized)));
+    return verdicts.find((v) => !v.ok) ?? { ok: true, reason: "clean", host: normalized };
   }
 
   private async lookup(base: string, host: string): Promise<LinkCheckResult> {
@@ -105,34 +103,46 @@ export class LinkChecker {
 export const LINK_REMOVED = "(link removed)";
 
 // Removes blocked links from reply text rather than sending them. Only
-// the count is logged; URLs stay out of logs.
+// the count is logged; URLs stay out of logs. Every distinct link is
+// checked at once. cleared names links this same reply already passed,
+// so a second pass over its bubbles looks up only what is new; the
+// answer's cleared adds the links this pass passed.
 export async function stripBlockedLinks(
   text: string,
   checker: LinkChecker,
-): Promise<{ text: string; removed: number }> {
+  cleared: ReadonlySet<string> = new Set(),
+): Promise<{ text: string; removed: number; cleared: Set<string> }> {
+  const matches = [...text.matchAll(LINK_PATTERN)].map((m) => ({
+    start: m.index ?? 0,
+    length: m[0].length,
+    cleaned: m[0].replace(TRAILING_PUNCT, ""),
+  }));
+  const fresh = [...new Set(matches.map((m) => m.cleaned).filter((url) => url && !cleared.has(url)))];
+  const verdicts = await Promise.all(fresh.map((url) => checker.checkUrl(url, true)));
+  const passed = new Set(cleared);
+  fresh.forEach((url, i) => {
+    if (verdicts[i].ok) passed.add(url);
+  });
   // Replaces each match in place by index. A substring replace would
   // also rewrite the match inside a longer host (evil.test inside
   // xevil.test); index replacement cannot.
   let out = "";
   let last = 0;
   let removed = 0;
-  for (const match of text.matchAll(LINK_PATTERN)) {
-    const start = match.index ?? 0;
-    const cleaned = match[0].replace(TRAILING_PUNCT, "");
+  for (const { start, length, cleaned } of matches) {
     out += text.slice(last, start);
     if (!cleaned) {
-      last = start + match[0].length;
+      last = start + length;
       continue;
     }
-    const check = await checker.checkUrl(cleaned, true);
-    if (!check.ok) {
+    if (passed.has(cleaned)) {
+      out += cleaned;
+    } else {
       out += LINK_REMOVED;
       removed += 1;
-    } else {
-      out += cleaned;
     }
     last = start + cleaned.length;
   }
   out += text.slice(last);
-  return { text: out, removed };
+  return { text: out, removed, cleared: passed };
 }

@@ -343,11 +343,14 @@ export class PersonEngine {
 
   // The turn as Engine first recorded it: firstReceivedAt never changes.
   // created is false when Engine already knew the turn (a retry or replay).
-  async putTurn(turnId: string, receivedAt: string): Promise<{ turn: EngineTurn; created: boolean }> {
-    return (await this.json("POST", "/turns", { turnId, receivedAt, generation: this.generation })) as {
+  // previousReceivedAt is the conversation's latest other turn, or null.
+  async putTurn(turnId: string, receivedAt: string): Promise<{ turn: EngineTurn; created: boolean; previousReceivedAt: string | null }> {
+    const out = (await this.json("POST", "/turns", { turnId, receivedAt, generation: this.generation })) as {
       turn: EngineTurn;
       created: boolean;
+      previousReceivedAt?: string | null;
     };
+    return { turn: out.turn, created: out.created, previousReceivedAt: out.previousReceivedAt ?? null };
   }
 
   async getTurn(turnId: string): Promise<EngineTurn | null> {

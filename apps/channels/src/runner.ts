@@ -1090,8 +1090,13 @@ export class ConversationRunner {
     let typingDone = false;
     let replied = false;
     if (chatId) {
-      await this.bestEffort("mark_read", () => this.deps.channel.markRead(chatId));
-      await this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started"));
+      // Read and typing start the refresh chain instead of holding the
+      // turn: the answer is asked for at once, and the stop below still
+      // waits for both.
+      refreshing = Promise.all([
+        this.bestEffort("mark_read", () => this.deps.channel.markRead(chatId)),
+        this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started")),
+      ]).then(() => undefined);
       typingTimer = setInterval(() => {
         refreshing = refreshing.then(() =>
           typingDone ? undefined : this.bestEffort("typing_started", () => this.deps.channel.setTyping(chatId, "started")),
