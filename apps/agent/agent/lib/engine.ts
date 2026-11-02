@@ -6,8 +6,6 @@
 // person who just texted; it never holds the secret that signs grants.
 import { personIdForHandle } from "@mano/protocol";
 
-import { parseProfile, type Profile } from "./profile.js";
-
 const REQUEST_TIMEOUT_MS = 15_000;
 export const HANDLE_GRANT_HEADER = "x-mano-handle-grant";
 
@@ -38,6 +36,69 @@ export class EngineError extends Error {
 export interface MemoryRow {
   id: string;
   content: string;
+}
+
+// The person's profile, as Engine's GET /profile returns it. Every leaf
+// says where it came from and when it changed.
+export type ProfileSource = "person" | "document" | "agent";
+export type Frequency = "weekly" | "biweekly" | "monthly" | "yearly";
+
+export interface Leaf<T = string> {
+  value: T;
+  source: ProfileSource;
+  documentId?: string;
+  updatedAt: string;
+}
+
+export interface Profile {
+  person: {
+    fullName?: Leaf;
+    dateOfBirth?: Leaf;
+    phone?: Leaf;
+    email?: Leaf;
+    address: { line1?: Leaf; line2?: Leaf; city?: Leaf; state?: Leaf; zip?: Leaf };
+    county?: Leaf;
+    language?: Leaf;
+    householdConfirmed?: Leaf<boolean>;
+  };
+  household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];
+  income: { id: string; memberId?: Leaf; source?: Leaf; amount?: Leaf<number>; frequency?: Leaf<Frequency> }[];
+  programs: { id: string; program?: Leaf; state?: Leaf; caseNumber?: Leaf; status?: Leaf }[];
+}
+
+// A value from a lower-trust source that differs from what is on file,
+// held until the person confirms it.
+export interface Suggestion {
+  path: string;
+  value: string | number | boolean;
+  source: ProfileSource;
+  documentId?: string;
+  suggestedAt: string;
+}
+
+export interface ProfileView {
+  profile: Profile;
+  suggestions: Suggestion[];
+}
+
+export interface ProfilePatchResult extends ProfileView {
+  changed: string[];
+  unchanged: string[];
+  cleared: string[];
+  suggested: string[];
+  replayed: boolean;
+}
+
+// A refused profile write: the fields did not fit (400), or the key was
+// used for other fields or the conversation was deleted (409).
+export class ProfileRefused extends Error {
+  constructor(
+    readonly status: number,
+    readonly reason: string,
+  ) {
+    super(reason);
+    this.name = "ProfileRefused";
+  }
 }
 
 export interface EngineApproval {
@@ -373,14 +434,37 @@ export class PersonEngine {
     await this.json("DELETE", `/memory/${encodeURIComponent(memoryId)}`);
   }
 
-  // The person's profile (Profile's contract), or null while Engine does
-  // not serve it to the agent: 404 is the contract's "not available", and
-  // 403 is an Engine that has not opened the route to the agent yet.
+  async getProfileView(): Promise<ProfileView> {
+    const out = (await this.json("GET", "/profile")) as { profile?: Profile; suggestions?: Suggestion[] };
+    if (!out.profile || typeof out.profile !== "object") throw new EngineError(502);
+    return { profile: out.profile, suggestions: Array.isArray(out.suggestions) ? out.suggestions : [] };
+  }
+
+  // The profile alone, or null while Engine cannot serve it: 404 or 403
+  // from an Engine without the route, 503 from one without the key that
+  // seals profiles. Forms then fall back to asking the person.
   async getProfile(): Promise<Profile | null> {
-    const res = await this.call("GET", "/profile");
-    if (res.status === 404 || res.status === 403) return null;
-    if (!res.ok) throw new EngineError(res.status);
-    return parseProfile(await res.json());
+    try {
+      return (await this.getProfileView()).profile;
+    } catch (err) {
+      if (err instanceof EngineError && [403, 404, 503].includes(err.status)) return null;
+      throw err;
+    }
+  }
+
+  // fields: path to value, or null to clear. Engine answers a retried key
+  // with the first answer and writes nothing.
+  async patchProfile(input: {
+    idempotencyKey: string;
+    source: ProfileSource;
+    documentId?: string;
+    fields: Record<string, string | number | boolean | null>;
+  }): Promise<ProfilePatchResult> {
+    const res = await this.call("PATCH", "/profile", { ...input, generation: this.generation });
+    const body = (await res.json().catch(() => null)) as (ProfilePatchResult & { error?: string }) | null;
+    if (res.ok && body?.profile) return body;
+    if ((res.status === 400 || res.status === 409) && typeof body?.error === "string") throw new ProfileRefused(res.status, body.error);
+    throw new EngineError(res.status);
   }
 
   // turnId: the turn this draft belongs to. Engine orders proposals by it.

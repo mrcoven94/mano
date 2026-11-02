@@ -241,6 +241,8 @@ const SERVICE_ROUTES: Record<Service, readonly (readonly [string, RegExp])[]> = 
     ["GET", /^\/memory$/],
     ["POST", /^\/memory$/],
     ["DELETE", /^\/memory\/[^/]+$/],
+    ["GET", /^\/profile$/],
+    ["PATCH", /^\/profile$/],
     ["POST", /^\/action$/],
     ["GET", /^\/approvals$/],
     ["POST", /^\/approvals\/[^/]+\/(approve|reject)$/],

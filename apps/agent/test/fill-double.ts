@@ -63,7 +63,7 @@ export function installFillDouble(engine: EngineDouble): void {
   drafts.clear();
   engine.documents.set(PROOF_ID, "%PDF-1.4 synthetic pay stub");
   engine.profile = {
-    person: {},
+    person: { address: {} },
     household: [],
     income: [{ id: "i1", amount: { value: 1800, source: "document", documentId: PROOF_ID, updatedAt: at }, frequency: { value: "monthly", source: "person", updatedAt: at } }],
     programs: [],

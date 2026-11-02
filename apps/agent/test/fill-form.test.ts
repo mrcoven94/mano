@@ -30,7 +30,7 @@ function profile() {
       { id: "m2", name: leaf("Luis Testcase"), relationship: leaf("child") },
     ],
     income: [
-      { id: "i1", memberId: "self", source: leaf("job"), amount: { value: 1075, source: "document", documentId: "doc-stub", updatedAt: at }, frequency: leaf("biweekly") },
+      { id: "i1", memberId: leaf("self"), source: leaf("job"), amount: { value: 1075, source: "document", documentId: "doc-stub", updatedAt: at }, frequency: leaf("biweekly") },
     ],
     programs: [],
   };
@@ -251,7 +251,8 @@ describe("fill_form", () => {
   });
 
   it("without a profile, says it is unavailable so the renewal goes through start_form_draft, and touches no computer", async () => {
-    const out = await run("turn_fill0002", { form: "food-renewal", answers: { fullName: "Rosa Testcase" } });
+    engine.profileKeySet = false;
+    const out =await run("turn_fill0002", { form: "food-renewal", answers: { fullName: "Rosa Testcase" } });
     expect(out).toMatchObject({ status: "unavailable", sent: false });
     expect(String(out.note)).toContain("start_form_draft");
     expect(computer.visited).toEqual([]);
@@ -275,7 +276,7 @@ describe("fill_form", () => {
 
   it("asks for the monthly income when any income entry lacks an amount or how often it comes", async () => {
     const p = profile();
-    p.income.push({ id: "i2", memberId: "m1", source: leaf("job"), amount: { value: 400, source: "person", updatedAt: at }, frequency: undefined } as never);
+    p.income.push({ id: "i2", memberId: leaf("m1"), source: leaf("job"), amount: { value: 400, source: "person", updatedAt: at }, frequency: undefined } as never);
     engine.profile = p;
     const out = await run("turn_fill0021", { form: "food-renewal" });
     expect(out).toMatchObject({ status: "needs_answer", field: "monthlyIncome" });

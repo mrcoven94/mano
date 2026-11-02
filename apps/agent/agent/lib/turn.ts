@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
+import { profileContext } from "./profile.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
 import { closeReplaced, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
@@ -309,6 +310,9 @@ async function runTurn(
 
   const context: string[] = [];
   if (body.texts.some(detectCrisis)) context.push(CRISIS_LINE);
+  // The profile as data, never instructions (lib/profile.ts).
+  const profile = await profileContext(engine);
+  if (profile) context.push(profile);
   // Where earlier requests stand (instructions/requests.ts) reaches the
   // model as a system instruction, never as part of the person's message.
   let settled: SettleResult;

@@ -3,7 +3,7 @@
 // profile, the one question to ask when it is missing, and how an answer
 // is checked. Only forms on our own sandbox portal are listed (hard rule
 // 2): a resident's real portal is never a target.
-import type { Frequency, Profile } from "./profile.js";
+import type { Frequency, Profile } from "./engine.js";
 
 export interface FormField {
   // The form's own input name, which the filing carries.

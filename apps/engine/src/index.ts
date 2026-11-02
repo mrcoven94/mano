@@ -23,7 +23,7 @@
 // routes with Bearer MANO_ENGINE_AGENT_TOKEN plus x-mano-handle-grant, a
 // grant Channels signs with MANO_HANDLE_GRANT_SECRET for the handle that
 // just texted (see packages/protocol handle-grant.ts). The grant names one
-// person, handle-<hash>, and opens only memory, action and approvals.
+// person, handle-<hash>, and opens only memory, profile, action and approvals.
 //
 // HTTP surface:
 //
@@ -39,6 +39,8 @@
 //   GET  /api/persons/:id/memory
 //   POST /api/persons/:id/memory              { content, source }
 //   DELETE /api/persons/:id/memory/:memoryId  forget: deletes the row
+//   GET  /api/persons/:id/profile              the person's structured record (src/profile.ts)
+//   PATCH /api/persons/:id/profile             { idempotencyKey, source, documentId?, fields }
 //   POST /api/persons/:id/deadlines           { title, dueDate, program?, source, idempotencyKey, generation }
 //                                              (generation required, 409 when stale)
 //   GET  /api/persons/:id/deadlines           (session or agent; nudges per deadline, see src/deadlines.ts)
@@ -125,6 +127,7 @@ import {
 import { createExecutor } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
+import { profilePatchResponse } from "./profile.js";
 import { routeDeadlines } from "./deadlines.js";
 
 export { PersonAgent, OrgAgent };
@@ -604,6 +607,18 @@ export default {
       const memoryMatch = rest.match(/^\/memory\/([^/]+)$/);
       if (memoryMatch && request.method === "DELETE") {
         return Response.json(await agent.forgetMemory(subject, decodeURIComponent(memoryMatch[1])));
+      }
+      if (rest === "/profile" && request.method === "GET") {
+        const profile = await agent.getProfile(subject);
+        if (!profile) return profilePatchResponse({ status: "unavailable" });
+        return Response.json({ profile, suggestions: await agent.getProfileSuggestions(subject) });
+      }
+      if (rest === "/profile" && request.method === "PATCH") {
+        const read = await readCappedJson(request, MAX_ACTION_BODY);
+        if (!read.ok) return read.response;
+        const generation = writeGeneration(service, (read.value as { generation?: unknown } | null)?.generation);
+        if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
+        return profilePatchResponse(await agent.patchProfile(subject, read.value, generation));
       }
       if (rest === "/approvals/supersede" && request.method === "POST") {
         const read = await readCappedJson(request, MAX_ACTION_BODY);

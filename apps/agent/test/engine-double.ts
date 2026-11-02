@@ -1,12 +1,12 @@
 // An in-process Engine for agent tests, built from Engine's own code:
 // its service authentication (agent token plus handle grant), its action
-// gateway over its SQL approval store, and its agent-state SQL
-// (generation fence, reminders, turn ledger, approval pointer,
-// conversation delete) and its deadlines with their nudges, all on one
-// node:sqlite database per person, the
-// way each PersonAgent keeps them in its own SQLite. Only the Durable
-// Object shell and its alarm are replaced: deliverDue() claims and hands
-// off due reminders the way the alarm does.
+// gateway over its SQL approval store, its agent-state SQL (generation
+// fence, reminders, turn ledger, approval pointer, conversation delete),
+// its deadlines with their nudges and its profile store, all on one
+// node:sqlite database per person, the way each PersonAgent keeps them in
+// its own SQLite. Only the Durable Object shell and its alarm are
+// replaced: deliverDue() claims and hands off due reminders the way the
+// alarm does.
 import { DatabaseSync } from "node:sqlite";
 
 import { mintHandleGrant } from "@mano/protocol";
@@ -53,6 +53,7 @@ import { ActionGateway } from "../../engine/src/gateway/gateway.js";
 import { InMemoryExecutor } from "../../engine/src/gateway/executors.js";
 import { MapDocumentStore } from "../../engine/src/gateway/gateway.js";
 import { CURRENT_GENERATION, SqlApprovalStore, ensureGatewayTables } from "../../engine/src/gateway/sql-store.js";
+import { ProfileStore, forgetMemoryNote, profilePatchResponse, type FieldCipher } from "../../engine/src/profile.js";
 
 export const ENGINE_AGENT_TOKEN = "agent-test-engine-token";
 export const ENGINE_CHANNELS_TOKEN = "channels-test-engine-token";
@@ -65,9 +66,31 @@ export function grantFor(handleHash: string): Promise<string> {
   return mintHandleGrant(handleHash, GRANT_SECRET);
 }
 
+// Engine seals each profile value with the person's key (tested in
+// Engine); here a readable stand-in keeps the double free of key setup.
+const testCipher: FieldCipher = {
+  seal: async (path, plaintext) => JSON.stringify([path, plaintext]),
+  open: async (path, sealed) => {
+    const [boundTo, plaintext] = JSON.parse(sealed) as [string, string];
+    if (boundTo !== path) throw new Error("Sealed for another field.");
+    return plaintext;
+  },
+};
+
 function sqlite() {
   const db = new DatabaseSync(":memory:");
   const sql = {
+    transaction<T>(fn: () => T): T {
+      db.exec("BEGIN");
+      try {
+        const out = fn();
+        db.exec("COMMIT");
+        return out;
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+    },
     exec(query: string, ...bindings: unknown[]) {
       const head = query.trimStart().toUpperCase();
       if (head.startsWith("SELECT") || head.startsWith("PRAGMA")) {
@@ -91,6 +114,7 @@ interface Person {
   sql: ReturnType<typeof sqlite>;
   store: SqlApprovalStore;
   gateway: ActionGateway;
+  profile: ProfileStore;
   deadlines: DeadlineCalls;
 }
 
@@ -100,11 +124,16 @@ function isGeneration(value: unknown): value is number {
 
 export class EngineDouble {
   executor = new InMemoryExecutor();
-  // The person's stored documents, read by the gateway as Engine reads R2.
-  documents = new MapDocumentStore();
-  // GET /profile as Profile's contract serves it; null answers 404, the
-  // contract's "not available".
+  // The person's stored documents: the gateway reads them as Engine reads
+  // R2, and a profile fact with source document must name one of them.
+  private documentBytes = new Map<string, Uint8Array | string>();
+  documents = new MapDocumentStore(this.documentBytes);
+  // A filled profile GET /profile serves in place of the person's profile
+  // store, for tests that start from one. Null: the store answers.
   profile: unknown = null;
+  // False: an Engine without the key that seals profiles, whose /profile
+  // answers 503.
+  profileKeySet = true;
   persons = new Map<string, Person>();
   now = () => Date.now();
 
@@ -121,7 +150,19 @@ export class EngineDouble {
         update: async (id, patch) => updateDeadline(sql, id, patch, DEFAULT_TIME_ZONE, this.now(), time),
         cancel: async (id) => cancelDeadline(sql, id, this.now()),
       };
-      p = { sql, store, gateway: new ActionGateway(store, this.executor, { linkCheck: async () => ({ allowed: true }), documents: this.documents }), deadlines };
+      p = {
+        sql,
+        store,
+        gateway: new ActionGateway(store, this.executor, { linkCheck: async () => ({ allowed: true }), documents: this.documents }),
+        profile: new ProfileStore({
+          sql,
+          transaction: (fn) => sql.transaction(fn),
+          cipher: testCipher,
+          now: () => new Date(this.now()),
+          documentExists: (id) => this.documentBytes.has(id),
+        }),
+        deadlines,
+      };
       this.persons.set(personId, p);
     }
     return p;
@@ -178,16 +219,11 @@ export class EngineDouble {
       MANO_ENGINE_CHANNELS_TOKEN: ENGINE_CHANNELS_TOKEN,
       MANO_HANDLE_GRANT_SECRET: GRANT_SECRET,
     });
-    // Profile's route, as its contract defines it (Engine opens it to the
-    // agent when Profile lands).
-    if (rest === "/profile" && method === "GET" && caller?.service === "agent" && caller.personId === personId) {
-      return this.profile === null ? Response.json({ error: "Not found." }, { status: 404 }) : Response.json(this.profile);
-    }
     if (!caller || caller.personId !== personId || !serviceMayUse(caller.service, method, rest)) {
       return Response.json({ error: "Forbidden." }, { status: 403 });
     }
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    const { sql, store, gateway, deadlines } = this.person(personId);
+    const { sql, store, gateway, profile, deadlines } = this.person(personId);
     const nowIso = () => new Date(this.now()).toISOString();
     const deadlineResponse = await routeDeadlines(deadlines, method, rest, async () => body);
     if (deadlineResponse) return deadlineResponse;
@@ -207,8 +243,18 @@ export class EngineDouble {
       const memoryMatch = rest.match(/^\/memory\/([^/]+)$/);
       if (memoryMatch && method === "DELETE") {
         const id = decodeURIComponent(memoryMatch[1]);
-        sql.exec("DELETE FROM memory WHERE id = ?", id);
+        sql.transaction(() => forgetMemoryNote(sql, id));
         return Response.json({ id, forgotten: true });
+      }
+      if (rest === "/profile" && !this.profileKeySet) return profilePatchResponse({ status: "unavailable" });
+      if (rest === "/profile" && method === "GET") {
+        if (this.profile !== null) return Response.json({ profile: this.profile, suggestions: [] });
+        return Response.json({ profile: await profile.read(), suggestions: await profile.suggestions() });
+      }
+      if (rest === "/profile" && method === "PATCH") {
+        if (!isGeneration(body?.generation)) return Response.json({ error: "generation is required." }, { status: 400 });
+        const out = await profile.patch(body, body.generation);
+        return profilePatchResponse(out.status === "ok" ? { ...out, profile: await profile.read(), suggestions: await profile.suggestions() } : out);
       }
       if (rest === "/approvals" && method === "GET") {
         const approvals = (sql.exec("SELECT id FROM approvals ORDER BY created_at DESC").toArray() as { id: string }[]).map((r) => {

@@ -16,7 +16,7 @@ Demo submissions go to our own sandbox agency portal, our own phone lines and ou
 
 ## How it works
 
-A resident talks to Mano by text, app or web. Their agent reads mail, tracks deadlines, fills out forms and drafts submissions. Every outside action goes through the action gateway: the agent decides, the person approves the exact version, then Mano acts. Staff agents at agencies and nonprofits see only the cases residents shared with them, and the agents coordinate over an open protocol.
+A resident talks to Mano by text, app or web. Their agent reads mail, tracks deadlines, fills out forms and drafts submissions. It keeps one profile of the person (name, address, household, income, programs and case numbers), each fact marked with whether the person said it or a document showed it, so they never answer the same question twice. Every outside action goes through the action gateway: the agent decides, the person approves the exact version, then Mano acts. Staff agents at agencies and nonprofits see only the cases residents shared with them, and the agents coordinate over an open protocol.
 
 ```mermaid
 flowchart LR
