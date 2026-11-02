@@ -320,10 +320,6 @@ function settledState(facts: ReplayFacts): ReplayState | null {
   return null;
 }
 
-export async function replayState(facts: ReplayFacts & { exact: () => Promise<boolean> }): Promise<ReplayState> {
-  return settledState(facts) ?? ((await facts.exact()) ? "current" : "changed");
-}
-
 // The page for one approval's replay, or null when there is none for
 // this token. exact asks the gateway whether a YES now would send
 // exactly what the approval froze.
@@ -352,13 +348,15 @@ export async function replayPage(
   };
   const first = read();
   if (!first) return null;
-  const checked = await replayState({ ...first.facts, exact: () => deps.exact(first.approval) });
-  if (checked === "changed" || checked === "closed") return renderReplayPage({ state: checked });
+  const early = settledState(first.facts);
+  if (early === "changed" || early === "closed") return renderReplayPage({ state: early });
   const images = await Promise.all(first.replay.steps.map((s, i) => deps.storage.getImage(imageId(approvalId, i), s.r2Key)));
+  // The document is checked after the images and the rows after both, so
+  // nothing a page shows as current changed during an earlier wait.
+  const exact = early === null ? await deps.exact(first.approval) : true;
   const now = read();
   if (!now) return null;
-  // The document matched above; whatever the row says now decides.
-  const state = settledState(now.facts) ?? checked;
+  const state = settledState(now.facts) ?? (exact ? "current" : "changed");
   if (state === "changed" || state === "closed") return renderReplayPage({ state });
   if (images.some((png) => png === null)) return null;
   const { replay, approval } = now;
