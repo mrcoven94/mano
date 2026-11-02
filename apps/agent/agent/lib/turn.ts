@@ -345,7 +345,7 @@ async function recordTurn(
   engine: PersonEngine,
   turnId: string,
   receivedAt: string,
-): Promise<{ turn: EngineTurn; created: boolean } | null> {
+): Promise<{ turn: EngineTurn; created: boolean; previousReceivedAt: string | null } | null> {
   try {
     return await engine.putTurn(turnId, receivedAt);
   } catch (err) {
@@ -413,8 +413,12 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
     console.warn(JSON.stringify({ type: "mano_turn_error", handle: body.handleHash, err: err instanceof Error ? err.name : "unknown" }));
     response = failure(502, "error");
   }
+  // Nothing reads a turn's completion before the reply, and its failure
+  // is ignored, so the reply does not wait for it where it can run on.
   if (response.httpStatus === 200) {
-    await engine.completeTurn(body.turnId).catch(() => undefined);
+    const completing = engine.completeTurn(body.turnId).catch(() => undefined);
+    if (deps.background) deps.background(completing);
+    else await completing;
   }
   console.log(
     JSON.stringify({ type: "mano_turn", handle: body.handleHash, status: response.body.status, latencyMs: now() - receivedMs }),
