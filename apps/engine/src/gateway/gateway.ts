@@ -515,8 +515,10 @@ export class ActionGateway {
     return { status: "blocked", reason: `Blocked before acting: link check failed for ${found.url}: ${found.reason ?? "blocked"}` };
   }
 
-  // The link check and the document read share nothing, so they run at
-  // once. Each caller keeps its own precedence between the two answers.
+  // Only a new request reads its document beside the link check. Paths
+  // that act on an approval read the document last, right before it is
+  // hashed against the approval, so a change made while links are checked
+  // still makes the approval stale.
   private linksAndDocument(req: ActionRequest) {
     return Promise.all([this.findBlockedLink(req), this.readDocumentBytes(req.documentId)]);
   }
@@ -716,8 +718,9 @@ export class ActionGateway {
       this.store.audit({ event: "gateway.block", type: stored.type, reason: "policy-rerun" });
       return { status: "blocked", reason: "Policy now blocks this action." };
     }
-    const [blockedLink, docRead] = await this.linksAndDocument(stored);
+    const blockedLink = await this.findBlockedLink(stored);
     if (blockedLink) return this.linkBlocked(blockedLink);
+    const docRead = await this.readDocumentBytes(stored.documentId);
     if (!docRead.ok) return docRead.result;
     const frozen = await freezeActionRequest(stored, docRead.bytes);
     const check = await this.runChecker(stored, frozen.documentHash);
@@ -797,8 +800,9 @@ export class ActionGateway {
     if (evaluatePolicy(stored, this.opts.policyOverrides as never) === "block") {
       return { status: "blocked", reason: "Policy now blocks this action." };
     }
-    const [blockedLink, docRead] = await this.linksAndDocument(stored);
+    const blockedLink = await this.findBlockedLink(stored);
     if (blockedLink) return this.linkBlocked(blockedLink);
+    const docRead = await this.readDocumentBytes(stored.documentId);
     if (!docRead.ok) return docRead.result;
     const frozen = await freezeActionRequest(stored, docRead.bytes);
     const check = await this.runChecker(stored, frozen.documentHash);
@@ -1005,11 +1009,12 @@ export class ActionGateway {
       this.store.updateAttempt(key, "failed");
       return { status: "blocked", reason: "Policy now blocks this action." };
     }
-    const [blockedLink, docRead] = await this.linksAndDocument(stored);
+    const blockedLink = await this.findBlockedLink(stored);
     if (blockedLink) {
       this.store.updateAttempt(key, "failed");
       return this.linkBlocked(blockedLink);
     }
+    const docRead = await this.readDocumentBytes(stored.documentId);
     if (!docRead.ok) {
       // Storage may be briefly down; the fresh timestamp keeps this key
       // out of the next recovery sweep until it ages again.

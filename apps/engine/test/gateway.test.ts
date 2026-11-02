@@ -44,6 +44,26 @@ describe("action gateway", () => {
     expect(exec.calls.length).toBe(0);
   });
 
+  it("blocks a stale approval when the document changes while its links are checked", async () => {
+    const docs = new MapDocumentStore(new Map([["doc-1", "Form v1: Maria Lopez, renewal"]]));
+    const exec = new InMemoryExecutor();
+    let approving = false;
+    const gw = new ActionGateway(new MemoryApprovalStore(), exec, {
+      documents: docs,
+      linkCheck: async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        if (approving) docs.set("doc-1", "Form v2: Maria Lopez, CHANGED");
+        return { allowed: true };
+      },
+    });
+    const first = await gw.requestAction(baseReq({ payload: { portal: "https://portal.example.org/renew" } }));
+    expect(first.status).toBe("needs_approval");
+    approving = true;
+    const result = await gw.approveAndExecute(first.approval!.id, "maria");
+    expect(result.status).toBe("stale");
+    expect(exec.calls.length).toBe(0);
+  });
+
   it("reconciles a timed-out submit without duplicating", async () => {
     const exec = new InMemoryExecutor();
     const gw = new ActionGateway(new MemoryApprovalStore(), exec, {
