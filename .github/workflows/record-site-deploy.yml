@@ -33,10 +33,11 @@ jobs:
             if [ "$i" = "30" ]; then echo "::error::withmano.com never returned 200"; exit 1; fi
             sleep 20
           done
-          id=$(gh api "repos/${{ github.repository }}/deployments" \
-            -f ref="${{ github.sha }}" -f environment="site-production" \
-            -f description="Vercel deploy of ${{ github.sha }}" \
-            -F auto_merge=false --jq .id)
+          # required_contexts is empty so an unrelated failing check on this
+          # commit (HTTP 409 otherwise) cannot stop the record.
+          id=$(jq -n --arg ref "${{ github.sha }}" \
+            '{ref: $ref, environment: "site-production", description: "Vercel deploy of \($ref)", auto_merge: false, required_contexts: []}' \
+            | gh api "repos/${{ github.repository }}/deployments" --input - --jq .id)
           gh api "repos/${{ github.repository }}/deployments/$id/statuses" \
             -f state="success" -f environment_url="https://withmano.com" \
             -f description="withmano.com serves 200" > /dev/null
