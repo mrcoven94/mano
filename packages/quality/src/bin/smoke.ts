@@ -5,12 +5,15 @@
 // Writes report.json, cases.json, gate.json and comment.md to --out and
 // exits 0 whatever the gate says; src/bin/smoke-publish.ts posts the result
 // and sets the job's outcome. Any other exit means the run itself broke.
+// When the model provider answers a check call with HTTP 402 (billing), the
+// suite does not run and gate.json says "provider-unavailable" (provider.ts).
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { dnsFromEnv } from "../links.ts";
 import { runProbes } from "../probes.ts";
+import { checkProvider, unavailableReason, unavailableSummary } from "../provider.ts";
 import { r2CredsFromEnv } from "../r2.ts";
 import { combineGates, evalAgentGate, evalGate, prComment, writeRun } from "../report.ts";
 import { runAgentStageSafely } from "../agent-stage.ts";
@@ -59,6 +62,20 @@ if (baselinePath) {
   }
 }
 if (!process.env.META_MODEL_API_KEY) missing.push("META_MODEL_API_KEY is not set, so nothing ran live");
+
+// A provider that refuses every call for billing gets its own outcome, so
+// the gate reports the outage instead of 28 failed cases. Anything else the
+// check sees runs the suite as before.
+const provider = await checkProvider(process.env);
+if (provider?.state === "unavailable") {
+  const comment = unavailableSummary("smoke", provider);
+  mkdirSync(out, { recursive: true });
+  writeFileSync(join(out, "gate.json"), `${JSON.stringify({ status: "provider-unavailable", reasons: [unavailableReason(provider)], matchedCases: 0 }, null, 2)}\n`);
+  writeFileSync(join(out, "comment.md"), `${comment}\n`);
+  console.log(comment);
+  process.exit(0);
+}
+if (provider?.state === "error") console.error(`note: the provider check call failed (${provider.detail}); running the suite anyway`);
 
 const first = await runBench({ onlyCaseIds: new Set(SMOKE_CASE_IDS) });
 // A case that newly fails against the baseline runs once more and counts

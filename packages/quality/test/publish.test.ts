@@ -55,6 +55,17 @@ test("a neutral run posts its comment and a neutral check, and the job passes", 
   assert.equal(exitCodeFor(outcome.status), 0);
 });
 
+test("a provider billing outage posts a neutral check under its own title, and the job passes", async () => {
+  const outcome = readOutcome(stage({ status: "provider-unavailable", reasons: ["the model provider refused the check call with HTTP 402 (billing_error / billing_not_configured)"] }));
+  const gh = fakeGitHub();
+  await publishSmoke(outcome, gh.target);
+  const check = gh.calls.find((c) => c.path.endsWith("/check-runs"))!;
+  assert.equal(check.body!.conclusion, "neutral");
+  assert.match(String((check.body!.output as { title: string }).title), /Model provider unavailable/);
+  assert.match(String((check.body!.output as { summary: string }).summary), /HTTP 402/);
+  assert.equal(exitCodeFor(outcome.status), 0);
+});
+
 test("the comment is edited in place on the next run, including the old unmarked one", async () => {
   const marked = fakeGitHub([{ id: 77, body: `${COMMENT_MARKER}\n## Quality smoke: pass` }]);
   const posted = await publishSmoke(readOutcome(stage({ status: "pass", reasons: [] })), marked.target);

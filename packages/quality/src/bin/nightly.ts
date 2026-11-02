@@ -6,15 +6,19 @@
 // Usage: node --import ./src/register.ts src/bin/nightly.ts [--out runs-staging] [--date 2026-10-29] [--ref refs/heads/main] [--agent-local] [--accept-baseline] [--upload]
 // Exits 1, after the run is recorded, when something regressed against the
 // previous baseline: a new safety failure or a judge or hard-check drop.
+// When the model provider answers a check call with HTTP 402 (billing),
+// nothing runs or is recorded, and the job ends green with the outage named
+// in the job summary and a warning (provider.ts).
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runGuardian } from "../guardian.ts";
 import { dnsFromEnv } from "../links.ts";
 import { scoreMailDeadlines } from "../mail.ts";
 import { agentNotRun, runAgentStageSafely } from "../agent-stage.ts";
 import { runProbes } from "../probes.ts";
+import { checkProvider, unavailableReason, unavailableSummary } from "../provider.ts";
 import { r2CredsFromEnv } from "../r2.ts";
 import { MAIN_REF, branchPrefix, combineGates, decidePromotion, readHistory, runIdFor, writeNightlyStaging, type BaselineLogEntry, type HistoryRow } from "../report.ts";
 import { finishReport, rerunNewlyFailing, runBench, type CaseResult, type RunReport } from "../run.ts";
@@ -45,6 +49,16 @@ const strict = process.env.QUALITY_GATE_STRICT === "1";
 const creds = r2CredsFromEnv(process.env);
 if (upload && !creds) throw new Error("--upload needs R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_ACCOUNT_ID or R2_ENDPOINT");
 const prefix = branchPrefix(ref);
+
+const provider = await checkProvider(process.env);
+if (provider?.state === "unavailable") {
+  const summary = unavailableSummary("nightly", provider);
+  console.log(summary);
+  console.log(`::warning title=Model provider unavailable::${unavailableReason(provider)}`);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+  process.exit(0);
+}
+if (provider?.state === "error") console.error(`note: the provider check call failed (${provider.detail}); running the suites anyway`);
 
 const prior: HistoryRow[] = upload && creds
   ? ((await readPublic<HistoryRow[]>(creds, `${prefix}history.json`)) ?? [])
