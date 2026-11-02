@@ -1,4 +1,6 @@
+import { env as testEnv, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { SqlApprovalStore, ensureGatewayTables } from "../src/gateway/sql-store.js";
 import {
   ActionGateway,
   DefiniteFailureError,
@@ -387,6 +389,24 @@ describe("LAP-739: a stale or expired approval is not a way around the check", (
     expect(portal.posts).toHaveLength(0);
   });
 
+  it("an older approval that still holds the key wins over a newer stale one", async () => {
+    const { portal, store, documents, gateway } = setup();
+    const action = proposal({ documentId: "letter" });
+    const held = await gateway.requestAction(action);
+    expect(held.status).toBe("needs_approval");
+    const holder = store.getApproval(held.approval!.id)!;
+    store.putApproval({ ...holder, id: crypto.randomUUID(), status: "stale", createdAt: new Date(Date.parse(holder.createdAt) + 60_000).toISOString() });
+    expect(store.getApprovalByKey(action.idempotencyKey)?.status).toBe("stale");
+    documents.set("letter", "plain text notes, not a document the portal takes");
+    const repeat = await gateway.requestAction(action);
+    // The holder answers, as createApprovalForKey would: the document
+    // changed, so the key was used with different content.
+    expect(repeat.status).toBe("blocked");
+    expect(repeat.reason).toBe("This idempotency key was already used with different content.");
+    expect(pending(store).map((a) => a.id)).toEqual([holder.id]);
+    expect(portal.posts).toHaveLength(0);
+  });
+
   it("an expired approval repeated with an unfileable document is refused, not drafted again", async () => {
     const { portal, store, documents, gateway } = setup();
     const action = proposal({ documentId: "letter" });
@@ -427,5 +447,28 @@ describe("LAP-739: the executor applies the portal's configured limits", () => {
     expect(PNG_BYTES.length).toBeGreaterThan(50);
     expect(tooBig.status).toBe("blocked");
     expect(tooBig.reason).toMatch(/larger than/);
+  });
+});
+
+describe("LAP-739: Engine's SQL store holds a key exactly when it would not draft again", () => {
+  it("keyHeld looks at every approval for the key, not only the newest", async () => {
+    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName("lap739-keyheld"));
+    await runInDurableObject(stub, (_i, state) => {
+      const sql = state.storage.sql;
+      ensureGatewayTables(sql);
+      const store = new SqlApprovalStore(sql);
+      const base = {
+        actionType: "submit", recipient: "sandbox-agency-portal", purpose: "renewal", documentHash: null, documentId: null,
+        approvedByHumanId: null, personId: "person-rosa", requestJson: "{}", requestHash: "h", problems: [],
+        remindAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600_000).toISOString(), escalated: false,
+      } as const;
+      expect(store.keyHeld("k1")).toBe(false);
+      store.putApproval({ ...base, id: "older", idempotencyKey: "k1", status: "pending", createdAt: "2026-11-02T10:00:00.000Z" } as never);
+      store.putApproval({ ...base, id: "newer", idempotencyKey: "k1", status: "stale", createdAt: "2026-11-02T11:00:00.000Z" } as never);
+      expect(store.getApprovalByKey("k1")?.id).toBe("newer");
+      expect(store.keyHeld("k1")).toBe(true);
+      store.putApproval({ ...base, id: "only", idempotencyKey: "k2", status: "expired", createdAt: "2026-11-02T10:00:00.000Z" } as never);
+      expect(store.keyHeld("k2")).toBe(false);
+    });
   });
 });

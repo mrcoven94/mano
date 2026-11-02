@@ -128,6 +128,14 @@ export class SqlApprovalStore implements ApprovalStore {
     return approvalFromRow(rows[0] as Record<string, unknown>);
   }
 
+  keyHeld(key: string): boolean {
+    return (
+      this.sql
+        .exec("SELECT 1 FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected', 'revoked') LIMIT 1", key)
+        .toArray().length > 0
+    );
+  }
+
   getApprovalByKey(key: string): Approval | null {
     const rows = this.sql.exec(
       `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE idempotency_key = ?` +
