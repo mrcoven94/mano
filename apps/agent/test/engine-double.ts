@@ -387,11 +387,11 @@ export class EngineDouble {
         if (out.status === "stale") return Response.json(STALE, { status: 409 });
         if (out.status === "not_found") return Response.json({ error: "Approval not found." }, { status: 404 });
         if (out.status === "closed") return Response.json({ error: "That approval no longer waits for a yes." }, { status: 409 });
-        return Response.json({ url: `${ENGINE_URL}/fill/${out.token}` }, { status: out.status === "created" ? 201 : 200 });
+        return Response.json({ path: `/fill/${out.token}` }, { status: out.status === "created" ? 201 : 200 });
       }
       if (replay && method === "GET") {
         const token = replayLinkToken(sql, decodeURIComponent(replay[1]), this.now());
-        return token ? Response.json({ url: `${ENGINE_URL}/fill/${token}` }) : Response.json({ error: "No replay." }, { status: 404 });
+        return token ? Response.json({ path: `/fill/${token}` }) : Response.json({ error: "No replay." }, { status: 404 });
       }
       const decision = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
       if (decision && method === "POST") {

@@ -33,14 +33,20 @@ async function call(h: string, method: string, path: string, body?: unknown, tok
   });
 }
 
-// A PNG signature plus a marker byte: what each step's screenshot looks like here.
-const png = (marker: number) => new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, marker]);
+// A PNG signature, its header for a 1280x800 screen, and a marker byte:
+// what each step's screenshot looks like here.
+const png = (marker: number) =>
+  new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 5, 0, 0, 0, 3, 32, 8, 6, 0, 0, 0, 0, 0, 0, 0, marker]);
 const b64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 const LABELS = { fullName: "Full legal name", householdSize: "People in household" };
 const replayBody = (markers = [1, 2, 3], generation = 0) => ({
   generation,
   labels: LABELS,
-  steps: markers.map((m, i) => ({ caption: i === 0 ? "Mano opened the form." : `Mano filled in step ${i}.`, pngB64: b64(png(m)) })),
+  steps: markers.map((m, i) => ({
+    caption: i === 0 ? "Mano opened the form." : `Mano filled in step ${i}.`,
+    pngB64: b64(png(m)),
+    ...(i === 0 ? {} : { focus: { x: 640, y: 100 + 40 * i } }),
+  })),
 });
 
 async function storeProof(h: string, text = "synthetic pay stub v1"): Promise<string> {
@@ -77,10 +83,14 @@ async function bind(h: string, approvalId: string, body: unknown = replayBody())
   return call(h, "PUT", `/approvals/${approvalId}/replay`, body);
 }
 
+// The page's address: Engine answers its path, and the caller joins it
+// to the Engine address it uses.
+const pageUrl = async (res: Response) => `https://engine.test${((await res.json()) as { path: string }).path}`;
+
 async function bound(h: string, approvalId: string, body?: unknown): Promise<string> {
   const res = await bind(h, approvalId, body);
   expect(res.status).toBe(201);
-  return ((await res.json()) as { url: string }).url;
+  return pageUrl(res);
 }
 
 async function open(url: string): Promise<{ status: number; html: string; headers: Headers }> {
@@ -100,13 +110,14 @@ describe("storing a fill's steps", () => {
 
     const again = await bind(h, approvalId, replayBody([7, 8]));
     expect(again.status).toBe(200);
-    expect(((await again.json()) as { url: string }).url).toBe(url);
-    expect(((await (await call(h, "GET", `/approvals/${approvalId}/replay`)).json()) as { url: string }).url).toBe(url);
+    expect(await pageUrl(again)).toBe(url);
+    expect(await pageUrl(await call(h, "GET", `/approvals/${approvalId}/replay`))).toBe(url);
 
     const listed = await files().list({ prefix: `persons/${person}/docs/g0/fill-${approvalId}-` });
     expect(listed.objects).toHaveLength(3);
-    for (const [i, object] of listed.objects.entries()) {
+    for (const object of listed.objects) {
       const raw = await (await files().get(object.key))!.text();
+      const i = Number(/fill-[^/]+-(\d+)\.[0-9a-f]+$/.exec(object.key)![1]);
       expect(raw).not.toContain(b64(png(i + 1)));
       const id = `fill-${approvalId}-${i}`;
       expect(await getDocumentBytes(files(), KEK, person, id, object.key)).toEqual(png(i + 1));
@@ -126,6 +137,10 @@ describe("storing a fill's steps", () => {
     expect((await bind(h, approvalId, notPng)).status).toBe(400);
     expect((await bind(h, approvalId, replayBody(Array.from({ length: 25 }, (_, i) => i)))).status).toBe(400);
     expect((await bind(h, approvalId, { labels: LABELS, steps: replayBody().steps })).status).toBe(400);
+    const halfPixel = { generation: 0, labels: LABELS, steps: [{ caption: "Mano filled in a field.", pngB64: b64(png(1)), focus: { x: 10.5, y: 10 } }] };
+    expect((await bind(h, approvalId, halfPixel)).status).toBe(400);
+    const noHeader = { generation: 0, labels: LABELS, steps: [{ caption: "Mano opened the form.", pngB64: b64(png(1).subarray(0, 9)) }] };
+    expect((await bind(h, approvalId, noHeader)).status).toBe(400);
     expect((await call(h, "PUT", `/approvals/${approvalId}/replay`, replayBody(), CHANNELS_TOKEN)).status).toBe(403);
   });
 });
@@ -150,7 +165,14 @@ describe("binding a replay to its approval", () => {
     const page = await open(await bound(h, approvalId));
 
     expect(page.status).toBe(200);
-    expect(images(page.html)).toBe(3);
+    // Three steps, then the whole filled form: a typed step shows its
+    // field up close, centered on where Mano clicked.
+    expect(images(page.html)).toBe(4);
+    expect(page.html.match(/<div class="zoom">/g)).toHaveLength(2);
+    // Near the top edge the close-up stops at the edge instead of past it.
+    expect(page.html).toContain('style="width:250%;left:-55.00%;top:0.00%"');
+    expect(page.html).toContain('style="width:250%;left:-55.00%;top:-12.50%"');
+    expect(page.html).toContain('<h2>The filled form</h2><img src="data:image/png;base64,');
     expect(page.html).toContain("This is exactly what Mano will send when you reply YES.");
     expect(page.html).toContain("<dt>Full legal name</dt><dd>Rosa Testcase</dd>");
     expect(page.html).toContain("<dt>People in household</dt><dd>3</dd>");
@@ -158,6 +180,15 @@ describe("binding a replay to its approval", () => {
     expect(page.headers.get("cache-control")).toBe("no-store");
     expect(page.headers.get("referrer-policy")).toBe("no-referrer");
     expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
+  });
+
+  it("a focus off the screenshot shows the whole screenshot", async () => {
+    const h = handle("replay-offscreen");
+    const approvalId = await propose(h);
+    const body = { generation: 0, labels: LABELS, steps: [{ caption: "Mano filled in a field.", pngB64: b64(png(1)), focus: { x: 1280, y: 10 } }] };
+    const page = await open(await bound(h, approvalId, body));
+    expect(page.html).not.toContain('class="zoom"');
+    expect(images(page.html)).toBe(1);
   });
 
   it("captions and labels are text on the page, never markup", async () => {
@@ -177,7 +208,7 @@ describe("binding a replay to its approval", () => {
     expect(((await (await call(h, "POST", `/approvals/${approvalId}/approve`)).json()) as { status: string }).status).toBe("completed");
     const page = await open(url);
     expect(page.html).toContain("You said yes to this version.");
-    expect(images(page.html)).toBe(3);
+    expect(images(page.html)).toBe(4);
   });
 });
 
@@ -187,7 +218,7 @@ describe("a link opened after the draft changed", () => {
     await turn(h, "turn-replay-1");
     const first = await propose(h, { turnId: "turn-replay-1" });
     const oldUrl = await bound(h, first);
-    expect(images((await open(oldUrl)).html)).toBe(3);
+    expect(images((await open(oldUrl)).html)).toBe(4);
 
     await turn(h, "turn-replay-2");
     const second = await propose(h, { turnId: "turn-replay-2", size: "4" });
@@ -199,7 +230,7 @@ describe("a link opened after the draft changed", () => {
     expect(images(old.html)).toBe(0);
     expect(old.html).not.toContain("Rosa Testcase");
     const fresh = await open(newUrl);
-    expect(images(fresh.html)).toBe(2);
+    expect(images(fresh.html)).toBe(3);
     expect(fresh.html).toContain("<dt>People in household</dt><dd>4</dd>");
   });
 

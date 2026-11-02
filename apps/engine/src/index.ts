@@ -40,8 +40,11 @@
 //   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
 //   PUT  /api/persons/:id/approvals/:aid/replay   { generation, labels, steps: [{ caption, pngB64 }] } (agent):
 //                                              the screens of the fill behind a waiting approval; first bind wins.
-//                                              201 or 200 with { url }, 404 no approval, 409 no longer waiting
-//   GET  /api/persons/:id/approvals/:aid/replay   { url } of the replay page while its link opens, else 404
+//                                              201 or 200 with { path } of the page, 404 no approval,
+//                                              409 no longer waiting. The caller joins the path to the
+//                                              Engine address it uses: under wrangler dev a request's own
+//                                              URL names the production route, not the local worker.
+//   GET  /api/persons/:id/approvals/:aid/replay   { path } of the replay page while its link opens, else 404
 //   GET  /fill/:token                          the replay page (src/fill-replay.ts): the token is the only key,
 //                                              and the page asks the approval again on every view
 //   GET  /api/persons/:id/memory
@@ -598,12 +601,12 @@ export default {
         if (out.status === "stale") return STALE();
         if (out.status === "not_found") return Response.json({ error: "Approval not found." }, { status: 404 });
         if (out.status === "closed") return Response.json({ error: "That approval no longer waits for a yes." }, { status: 409 });
-        return Response.json({ url: `${url.origin}/fill/${out.token}` }, { status: out.status === "created" ? 201 : 200 });
+        return Response.json({ path: `/fill/${out.token}` }, { status: out.status === "created" ? 201 : 200 });
       }
       if (replayMatch && request.method === "GET") {
         const token = await agent.fillReplayLink(subject, decodeURIComponent(replayMatch[1]));
         if (!token) return Response.json({ error: "No replay for that approval." }, { status: 404 });
-        return Response.json({ url: `${url.origin}/fill/${token}` });
+        return Response.json({ path: `/fill/${token}` });
       }
       if (rest === "/action" && request.method === "POST") {
         // The gateway binds the approval to the request's person ID, so the

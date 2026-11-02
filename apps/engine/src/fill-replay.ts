@@ -38,10 +38,28 @@ const LABEL_KEY = /^[A-Za-z0-9_]{1,64}$/;
 const MAX_LABELS = 50;
 const MAX_TEXT = 200;
 
+// A place on a screenshot, in its pixels: where Mano clicked before it
+// typed, so the page can show that field up close.
+export interface Point {
+  x: number;
+  y: number;
+}
+
 export interface ReplayInput {
   // Field name to the label the form shows, in the form's order.
   labels: Record<string, string>;
-  steps: { caption: string; png: Uint8Array }[];
+  steps: { caption: string; png: Uint8Array; focus: Point | null }[];
+}
+
+// One stored step: its caption, where its image lives, and the image's
+// size from its PNG header, which the close-up view is computed from.
+export interface StoredStep {
+  caption: string;
+  hash: string;
+  r2Key: string;
+  width: number;
+  height: number;
+  focus: Point | null;
 }
 
 export interface StoredReplay {
@@ -49,7 +67,7 @@ export interface StoredReplay {
   requestHash: string;
   generation: number;
   labels: Record<string, string>;
-  steps: { caption: string; hash: string; r2Key: string }[];
+  steps: StoredStep[];
   linkToken: string;
   linkExpiresAtMs: number;
 }
@@ -102,6 +120,26 @@ export function ensureFillReplayTables(sql: SqlExec): void {
     link_expires_at_ms INTEGER NOT NULL, created_at TEXT NOT NULL)`);
 }
 
+// Width and height from a PNG's header, or null when it has none.
+function pngSize(png: Uint8Array): { width: number; height: number } | null {
+  if (png.length < 24 || PNG_SIGNATURE.some((b, i) => png[i] !== b)) return null;
+  if (String.fromCharCode(...png.subarray(12, 16)) !== "IHDR") return null;
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  const width = view.getUint32(16);
+  const height = view.getUint32(20);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+// A focus off the screenshot shows the whole screenshot instead: it is a
+// hint for the close-up, and the step is still worth showing.
+function focusOn(raw: unknown, size: { width: number; height: number }): Point | null {
+  if (raw === undefined || raw === null) return null;
+  const { x, y } = raw as { x?: unknown; y?: unknown };
+  if (!Number.isInteger(x) || !Number.isInteger(y)) throw new ReplayInputError("A step's focus must be whole pixels.");
+  const [px, py] = [x as number, y as number];
+  return px >= 0 && px < size.width && py >= 0 && py < size.height ? { x: px, y: py } : null;
+}
+
 function plainText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_TEXT && !/[\u0000-\u001f\u007f]/.test(value);
 }
@@ -119,7 +157,7 @@ export function parseReplayInput(raw: unknown): ReplayInput {
   }
   let total = 0;
   const parsed = steps.map((step: unknown) => {
-    const { caption, pngB64 } = (step ?? {}) as { caption?: unknown; pngB64?: unknown };
+    const { caption, pngB64, focus } = (step ?? {}) as { caption?: unknown; pngB64?: unknown; focus?: unknown };
     if (!plainText(caption)) throw new ReplayInputError("Each step needs a one-line caption.");
     let png: Uint8Array;
     try {
@@ -127,11 +165,10 @@ export function parseReplayInput(raw: unknown): ReplayInput {
     } catch {
       throw new ReplayInputError("Each step needs its screenshot as base64.");
     }
-    if (png.length > MAX_STEP_BYTES || PNG_SIGNATURE.some((b, i) => png[i] !== b)) {
-      throw new ReplayInputError(`Each screenshot must be a PNG of at most ${MAX_STEP_BYTES} bytes.`);
-    }
+    const size = pngSize(png);
+    if (png.length > MAX_STEP_BYTES || !size) throw new ReplayInputError(`Each screenshot must be a PNG of at most ${MAX_STEP_BYTES} bytes.`);
     total += png.length;
-    return { caption, png };
+    return { caption, png, focus: focusOn(focus, size) };
   });
   if (total > MAX_REPLAY_BYTES) throw new ReplayInputError(`The screenshots must total at most ${MAX_REPLAY_BYTES} bytes.`);
   return { labels: Object.fromEntries(labelEntries) as Record<string, string>, steps: parsed };
@@ -210,7 +247,13 @@ export async function bindFillReplay(
   const key = await linkKey(token);
   const images = await Promise.all(input.steps.map((step, i) => storage.putImage(imageId(approvalId, i), step.png, generation)));
   await storage.putLink(key, { personId: deps.personId, approvalId, expiresAtMs });
-  const steps = input.steps.map((step, i) => ({ caption: step.caption, hash: images[i]!.hash, r2Key: images[i]!.r2Key }));
+  const steps: StoredStep[] = input.steps.map((step, i) => ({
+    caption: step.caption,
+    hash: images[i]!.hash,
+    r2Key: images[i]!.r2Key,
+    ...pngSize(step.png)!,
+    focus: step.focus,
+  }));
   const written = sql.exec(
     `INSERT OR IGNORE INTO fill_replays(approval_id, request_hash, generation, labels_json, steps_json, link_token, link_expires_at_ms, created_at)
      SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?
@@ -271,7 +314,7 @@ export async function replayPage(
   return renderReplayPage({
     state,
     purpose: approval.purpose,
-    steps: replay.steps.map((s, i) => ({ caption: s.caption, png: images[i]! })),
+    steps: replay.steps.map((s, i) => ({ ...s, png: images[i]! })),
     ...frozenFields(approval.requestJson, replay.labels),
   });
 }
@@ -301,7 +344,7 @@ export type ReplayView =
   | {
       state: "current" | "approved";
       purpose: string;
-      steps: { caption: string; png: Uint8Array }[];
+      steps: (Pick<StoredStep, "caption" | "width" | "height" | "focus"> & { png: Uint8Array })[];
       fields: { label: string; value: string }[];
       attached: boolean;
     }
@@ -323,6 +366,8 @@ ol{margin:24px 0 0;padding-left:1.4rem}
 li{margin:0 0 28px}
 li p{margin:0 0 8px}
 img{display:block;width:100%;height:auto;border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.zoom{position:relative;aspect-ratio:16/9;overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.zoom img{position:absolute;max-width:none;border-radius:0;box-shadow:none}
 dl{margin:0}
 dl div{padding:10px 0}
 dt{color:#5f5f5a;font-size:.9rem}
@@ -337,7 +382,7 @@ function page(title: string, body: string): string {
 const NOTICES: Record<"changed" | "closed" | "missing", { title: string; text: string }> = {
   changed: {
     title: "This form changed",
-    text: "The form Mano showed you changed after this link was sent, so this version will not be sent. Text Mano to see the latest one.",
+    text: "This version changed after Mano shared this link, so Mano will not send it. Text Mano to see the latest one.",
   },
   closed: { title: "This form is closed", text: "This version will not be sent. Text Mano if you want to start it again." },
   missing: { title: "This page is not available", text: "The link may have expired. Text Mano to see your form again." },
@@ -349,22 +394,42 @@ export function renderReplayPage(view: ReplayView): string {
   return page(notice.title, `<h1>${notice.title}</h1><p>${notice.text}</p>`);
 }
 
+// A step that typed shows the field up close: the screenshot at ZOOM
+// times the page's width in a 16:9 window, with where Mano clicked 70%
+// across (a form's labels sit left of its fields) and halfway down, kept
+// inside the screenshot's edges.
+const ZOOM = 2.5;
+const WINDOW = 16 / 9;
+const ACROSS = 70;
+
+type ViewStep = Extract<ReplayView, { steps: unknown }>["steps"][number];
+
+function image(step: ViewStep, caption: string, style = ""): string {
+  return `<img src="data:image/png;base64,${bytesToBase64(step.png)}" alt="${caption}"${style ? ` style="${style}"` : ""}>`;
+}
+
+function stepView(step: ViewStep, caption: string): string {
+  if (!step.focus) return image(step, caption);
+  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+  const left = clamp(ACROSS - (100 * ZOOM * step.focus.x) / step.width, 100 - 100 * ZOOM, 0);
+  const top = clamp(50 - (100 * ZOOM * step.focus.y * WINDOW) / step.width, 100 - (100 * ZOOM * step.height * WINDOW) / step.width, 0);
+  return `<div class="zoom">${image(step, caption, `width:${100 * ZOOM}%;left:${left.toFixed(2)}%;top:${top.toFixed(2)}%`)}</div>`;
+}
+
 function stepsPage(view: Extract<ReplayView, { steps: unknown }>): string {
   const status =
     view.state === "current"
       ? "This is exactly what Mano will send when you reply YES. Nothing is sent before that."
       : "You said yes to this version.";
-  const steps = view.steps
-    .map((s) => {
-      const caption = escapeHtml(s.caption);
-      return `<li><p>${caption}</p><img src="data:image/png;base64,${bytesToBase64(s.png)}" alt="${caption}"></li>`;
-    })
-    .join("");
+  const steps = view.steps.map((s) => `<li><p>${escapeHtml(s.caption)}</p>${stepView(s, escapeHtml(s.caption))}</li>`).join("");
+  // The replay ends on the whole form as Mano left it.
+  const last = view.steps[view.steps.length - 1]!;
+  const whole = last.focus ? `<h2>The filled form</h2>${image(last, "The filled form")}` : "";
   const fields = view.fields.map((f) => `<div><dt>${escapeHtml(f.label)}</dt><dd>${escapeHtml(f.value)}</dd></div>`).join("");
   const sends = view.state === "current" ? "What Mano will send" : "What you said yes to";
   return page(
     "Your form, step by step",
-    `<h1>${escapeHtml(view.purpose)}</h1><p>${status}</p><ol>${steps}</ol><h2>${sends}</h2><dl>${fields}</dl>${view.attached ? "<p>With your document attached.</p>" : ""}`,
+    `<h1>${escapeHtml(view.purpose)}</h1><p>${status}</p><ol>${steps}</ol>${whole}<h2>${sends}</h2><dl>${fields}</dl>${view.attached ? "<p>With your document attached.</p>" : ""}`,
   );
 }
 

@@ -9,6 +9,7 @@ import { FORMS } from "../agent/lib/forms.js";
 import { renderQuestion } from "../agent/lib/pending.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
+import { screen } from "./fill-double.js";
 
 const HANDLE = "f".repeat(64);
 const PORTAL = "http://portal.test";
@@ -80,10 +81,8 @@ class FakeComputer implements Computer {
   private typed: string[] = [];
   private draft: string | null = null;
   constructor(private portal: FakePortal) {}
-  // A PNG signature plus how many values the form shows, so each step of
-  // a replay is a distinct screen.
   async screenshot() {
-    return new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, this.typed.length]);
+    return screen(this.typed.length);
   }
   async act(actions: ComputerAction[]) {
     for (const a of actions) {
@@ -224,9 +223,12 @@ describe("fill_form", () => {
       "Mano opened the form.",
       ...FORMS["food-renewal"]!.fields.map((f) => `Mano filled in &quot;${f.label}&quot;.`),
     ]);
-    // The last screen is the form with all six values, before Continue.
-    const shown = [...page.matchAll(/data:image\/png;base64,([^"]+)"/g)].map((m) => Buffer.from(m[1]!, "base64")[8]);
-    expect(shown).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    // Each typed step shows its field up close, centered where Mano
+    // clicked it; the replay ends on the form with all six values.
+    const shown = [...page.matchAll(/data:image\/png;base64,([^"]+)"/g)].map((m) => Buffer.from(m[1]!, "base64")[33]);
+    expect(shown).toEqual([0, 1, 2, 3, 4, 5, 6, 6]);
+    expect(page.match(/<div class="zoom">/g)).toHaveLength(6);
+    expect(page).toContain('style="width:250%;left:-47.19%;top:-43.75%"');
     expect(page).toContain("<dt>People in household</dt><dd>3</dd>");
     expect(page).toContain("This is exactly what Mano will send when you reply YES.");
   });

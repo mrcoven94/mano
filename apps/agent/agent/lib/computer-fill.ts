@@ -25,10 +25,13 @@ import {
 
 import type { FormSpec } from "./forms.js";
 
-// One screen of a fill, as the person sees it on the replay page.
+// One screen of a fill, as the person sees it on the replay page. focus:
+// where Mano clicked before it typed, in screenshot pixels, so the page
+// can show that field up close.
 export interface ReplayStep {
   caption: string;
   png: Uint8Array;
+  focus: { x: number; y: number } | null;
 }
 
 export type FillOutcome =
@@ -114,8 +117,19 @@ export function replayOf(frames: Frame[], form: FormSpec, values: Record<string,
   }
   return frames
     .slice(0, end)
-    .map((frame) => ({ caption: captionFor(frame.actions, labelOf), png: frame.png }))
+    .map((frame) => ({ caption: captionFor(frame.actions, labelOf), png: frame.png, focus: focusOf(frame.actions) }))
     .slice(-MAX_REPLAY_STEPS);
+}
+
+// The last click before the last value typed: the field that value went into.
+function focusOf(actions: ComputerAction[]): { x: number; y: number } | null {
+  let i = actions.length - 1;
+  while (i >= 0 && actions[i]!.type !== "type") i--;
+  for (i--; i >= 0; i--) {
+    const a = actions[i]!;
+    if (a.type === "click" || a.type === "double_click") return { x: Math.round(a.x), y: Math.round(a.y) };
+  }
+  return null;
 }
 
 function captionFor(actions: ComputerAction[], labelOf: Map<string, string>): string {

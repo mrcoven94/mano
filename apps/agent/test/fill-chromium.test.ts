@@ -207,12 +207,13 @@ describe.skipIf(!installed)("fill_form in real Chromium", () => {
     // per typed value, ending on the whole form before Continue.
     const page = (await engine.replayPageAt((await client().replayLink(approval.id))!))!;
     const shots = [...page.matchAll(/data:image\/png;base64,([^"]+)"/g)].map((m) => Buffer.from(m[1]!, "base64"));
-    expect(shots).toHaveLength(7);
+    expect(shots).toHaveLength(8);
     for (const png of shots) {
       expect(png.subarray(1, 4).toString()).toBe("PNG");
       expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1280, 800]);
     }
     expect(new Set(shots.map((png) => png.toString("base64"))).size).toBe(7);
+    expect(shots[7]!.equals(shots[6]!)).toBe(true);
   }, 60_000);
 
   it("a form that sends the values off the portal sends nothing there, and the fill fails without preparing an approval", async () => {
