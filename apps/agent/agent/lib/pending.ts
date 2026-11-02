@@ -21,6 +21,11 @@ const LABELS: Record<string, string> = Object.fromEntries(
   Object.values(FORMS).flatMap((form) => form.fields.map((field) => [field.name, field.label])),
 );
 
+// The payload key a draft freezes the attached document's label under,
+// such as "the letter you sent on November 2". The portal files only the
+// form's own fields, so it never receives it.
+export const ATTACHMENT = "attachment";
+
 // The key names the conversation generation and the turn that proposed
 // it, so the agent only ever reads proposals of the current conversation.
 function prefix(generation: number): string {
@@ -70,11 +75,14 @@ export function waitingProposals(approvals: EngineApproval[], generation: number
 
 export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">): string {
   let payload: Record<string, unknown> = {};
-  let attached = false;
+  let attached: string | null = null;
   try {
     const frozen = JSON.parse(approval.requestJson) as { payload?: Record<string, unknown>; documentId?: unknown };
     payload = frozen.payload ?? {};
-    attached = typeof frozen.documentId === "string" && frozen.documentId !== "";
+    const label = payload[ATTACHMENT];
+    if (typeof frozen.documentId === "string" && frozen.documentId !== "") {
+      attached = typeof label === "string" && label !== "" ? label : "your document";
+    }
   } catch {
     // Unreadable frozen request: the question shows purpose and recipient only.
   }
@@ -83,7 +91,7 @@ export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recip
     return i === -1 ? Number.MAX_SAFE_INTEGER : i;
   };
   const lines = Object.entries(payload)
-    .filter(([, v]) => typeof v === "string" || typeof v === "number")
+    .filter(([k, v]) => k !== ATTACHMENT && (typeof v === "string" || typeof v === "number"))
     .sort(([a], [b]) => order(a) - order(b))
     .map(([k, v]) => `${LABELS[k] ?? k}: ${v}`);
   // One paragraph: the text line flattens line breaks, so fields are
@@ -91,11 +99,19 @@ export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recip
   return [
     `Ready to send: ${approval.purpose} (to ${approval.recipient}).`,
     lines.length > 0 ? `${lines.join("; ")}.` : "",
-    attached ? "With your document attached." : "",
+    attached ? `With ${attached} attached.` : "",
     "Reply YES to send exactly this, or NO to stop.",
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+// The line after the question that links to the replay of the fill
+// behind it. It is never part of the question: the question stays the
+// exact text the person answers, and the line can be dropped (a link
+// check that blocks it) without touching the question.
+export function replayLine(url: string): string {
+  return `See each step Mano took on the form: ${url}`;
 }
 
 // True when the text line would carry the question word for word: the
