@@ -2,25 +2,29 @@
 // The text line keeps answering when the Meta Model API is down: the
 // worker's real responder and crisis check, with a fetch that plays the
 // Meta Model API and the open-weight fallback, through the turn runner.
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelCrisisCheck, OpenWeightClient, PrimaryBreaker, SparkResponder, StandInResponder, type OpenWeightFallback } from "@mano/channels";
 import { CRISIS_LINE, SAFE_REPLY } from "@mano/persona";
 import { buildCrisisCheck, buildOpenWeight, buildResponder } from "../src/conversation.js";
 import type { Env } from "../src/env.js";
+import { SqlConversationStore } from "../src/store-sql.js";
+import type { ConversationStore } from "../src/store.js";
 import { INTRO_BUBBLE } from "../src/text.js";
-import { inboundEvent, makeHarness, runTurnAfterBatch, type Harness } from "./helpers.js";
+import { inboundEvent, makeHarness, runTurnAfterBatch, sqliteStorage, type Harness } from "./helpers.js";
 
 const PRIMARY = "muse-spark-1.3";
 const OPEN = "meta/muse-spark-open";
 const PRIMARY_URL = "https://api.meta.ai/v1/responses";
 const OPEN_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-type Handler = () => Response;
+type Handler = () => Response | Promise<Response>;
 const status = (code: number): Handler => () => new Response("{}", { status: code });
 const primaryAnswer = (text: string): Handler => () =>
   new Response(JSON.stringify({ status: "completed", output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text }] }] }), { status: 200 });
-const openAnswer = (text: string): Handler => () =>
+const openResponse = (text: string): Response =>
   new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: text } }] }), { status: 200 });
+const openAnswer = (text: string): Handler => () => openResponse(text);
 
 // Each host answers from its own script; an unscripted call is a 500.
 function hosts(script: { primary?: Handler[]; open?: Handler[] }) {
@@ -36,7 +40,7 @@ function hosts(script: { primary?: Handler[]; open?: Handler[] }) {
   return { fetchFn: fetchFn as typeof fetch, urls, bodies, count: (url: string) => urls.filter((u) => u === url).length };
 }
 
-function line(script: { primary?: Handler[]; open?: Handler[] }) {
+function line(script: { primary?: Handler[]; open?: Handler[] }, store?: ConversationStore) {
   const net = hosts(script);
   const openWeight: OpenWeightFallback = {
     client: new OpenWeightClient({ apiKey: "test-open-key-not-real", model: OPEN, fetchFn: net.fetchFn }),
@@ -44,7 +48,7 @@ function line(script: { primary?: Handler[]; open?: Handler[] }) {
   };
   const responder = new SparkResponder({ apiKey: "test-key-not-real", model: PRIMARY, fetchFn: net.fetchFn, maxRetries: 0, hedgeAfterMs: 10_000, openWeight });
   const crisisCheck = new ModelCrisisCheck({ apiKey: "test-key-not-real", model: PRIMARY, fetchFn: net.fetchFn, hedgeAfterMs: 10_000, openWeight });
-  const h = makeHarness({ responder, crisisCheck });
+  const h = makeHarness({ responder, crisisCheck, store });
   return { ...net, h };
 }
 
@@ -86,6 +90,16 @@ describe("a text gets an answer when the Meta Model API is down", () => {
     for (const body of t.bodies) expect(body.provider).toEqual({ zdr: true, data_collection: "deny" });
   });
 
+  it("never names the fallback's provider or the host behind it (PR 102 review)", async () => {
+    const t = line({
+      primary: [status(402)],
+      open: [openAnswer("This answer came through OpenRouter. Fireworks AI hosts the model and Nebius backs it up. Bring your letter to the office.")],
+    });
+    const sent = (await say(t.h, "evt_1", "who answers these texts")).join(" ");
+    expect(sent).not.toMatch(/openrouter|fireworks|nebius/i);
+    expect(sent).toContain("Bring your letter to the office.");
+  });
+
   it("sends the safe line, with 988 and 911, when both models are down", async () => {
     const t = line({ primary: [status(402)], open: [status(503)] });
     expect(await say(t.h, "evt_1", "my food stamps are ending")).toEqual([INTRO_BUBBLE, SAFE_REPLY]);
@@ -103,6 +117,19 @@ describe("a crisis text never depends on the Meta Model API alone", () => {
     expect(sent.join(" ")).toMatch(/911/);
   });
 
+  it("sends the crisis line at once when the primary says 402 and the fallback is still working (PR 102 review, blocker)", async () => {
+    let answerOpen!: (res: Response) => void;
+    const working: Handler = () => new Promise<Response>((resolve) => (answerOpen = resolve));
+    const t = line({ primary: [status(402)], open: [working] });
+    await t.h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "I want to end my life", occurredAtMs: t.h.now }), "webhook");
+    const turn = runTurnAfterBatch(t.h);
+    await vi.waitFor(() => expect(t.count(OPEN_URL)).toBe(1));
+    expect(t.h.channel.sends.map((s) => s.text)).toEqual([CRISIS_LINE]);
+    answerOpen(openResponse("I'm here with you. What is happening tonight?"));
+    await turn;
+    expect(t.h.channel.sends.map((s) => s.text)).toEqual([CRISIS_LINE, "I'm here with you. What is happening tonight?"]);
+  });
+
   it("gives a short health question the crisis line when the check and the reply both find every model down", async () => {
     const t = line({ primary: [status(402), status(402)], open: [status(500), status(500)] });
     t.h.store.patchMeta({ introduced: true });
@@ -117,6 +144,29 @@ describe("a crisis text never depends on the Meta Model API alone", () => {
     const sent = await say(t.h, "evt_1", "Should I stop taking my blood pressure pills?");
     expect(sent).toEqual(["Do not stop them on your own. A doctor or pharmacist can tell you."]);
     expect(loggedEvents(t.h, "crisis_check")[0]).toMatchObject({ crisis: false, reason: "model-no" });
+  });
+});
+
+describe("what each model cost survives a failed settlement and a restart (PR 102 review)", () => {
+  it("settles the per-model breakdown when a new runner resumes the saved answer", async () => {
+    const store = new SqlConversationStore(sqliteStorage(new DatabaseSync(":memory:")));
+    const first = line({ primary: [status(402)], open: [openAnswer("Here is what I found.")] }, store);
+    first.h.ledger.settle = () => {
+      throw new Error("ledger down");
+    };
+    await first.h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "my food stamps are ending", occurredAtMs: first.h.now }), "webhook");
+    first.h.advance(first.h.batchMs + 100);
+    expect(await first.h.runner.runDueTurn()).toBe("retry");
+    // A restart: a new runner and ledger over the same stored turn.
+    const restarted = line({}, store);
+    restarted.h.now = first.h.now + 60_000;
+    expect(await restarted.h.runner.runDueTurn()).toBe("ran");
+    expect(restarted.urls).toEqual([]);
+    expect(restarted.h.channel.sends.map((s) => s.text)).toContain("Here is what I found.");
+    const { spentUsd, byModel } = restarted.h.ledger.spent();
+    expect(spentUsd).toBeGreaterThan(0);
+    expect(Object.keys(byModel).sort()).toEqual([OPEN, PRIMARY].sort());
+    expect(byModel[OPEN]! + byModel[PRIMARY]!).toBeCloseTo(spentUsd, 10);
   });
 });
 

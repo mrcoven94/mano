@@ -71,6 +71,40 @@ describe("guardReply model and provider names", () => {
     });
   });
 
+  it("drops the fallback's provider and the hosts that serve open-weight models (PR 102 review)", () => {
+    const hostNames = /openrouter|fireworks|together|modal|baseten|nebius|deepinfra|groq|cerebras|sambanova/i;
+    for (const text of [
+      "This answer came through OpenRouter.",
+      "I'm routed via openrouter.ai today.",
+      "Fireworks AI hosts the model.",
+      "The model runs at fireworks.ai.",
+      "Together AI serves my answers.",
+      "I run on Together.",
+      "My replies are served by Modal.",
+      "Modal Labs keeps the server up.",
+      "Baseten runs the model.",
+      "My answers come from Nebius.",
+      "DeepInfra, Groq, Cerebras and SambaNova host it too.",
+    ]) {
+      expect(containsProviderName(text)).toBe(true);
+      expect(guardReply(`${text} Bring the letter.`).text).not.toMatch(hostNames);
+    }
+  });
+
+  it("leaves the ordinary words among those host names alone", () => {
+    for (const text of [
+      "We can work through this together.",
+      "Together, we'll get your renewal in on time.",
+      "The fireworks show is at 9, so the office closes early.",
+      "Close the pop-up modal and press Renew.",
+      "The Together Rx Access card can lower what you pay for medicine.",
+      "Write the amount in base ten.",
+    ]) {
+      expect(containsProviderName(text)).toBe(false);
+      expect(guardReply(text).changes).toEqual([]);
+    }
+  });
+
   it("does not flag ordinary words", () => {
     for (const text of ["The museum is closed.", "A spark of hope.", "Check your metadata.", "Llamas are calm.", "Let me muse on it."]) {
       expect(containsProviderName(text)).toBe(false);

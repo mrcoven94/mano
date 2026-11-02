@@ -36,6 +36,17 @@ function hosts(primary: Handler[], open: Handler[]) {
 const status = (code: number): Handler => () => new Response("{}", { status: code });
 const answer = (text: string): Handler => () => primaryReply(text);
 const open = (text: string, finish?: string): Handler => () => openReply(text, finish);
+// 200 headers, then the connection resets partway through the body.
+const resetAfterHeaders: Handler = () =>
+  new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"status":"comp'));
+        controller.error(new TypeError("Network connection lost."));
+      },
+    }),
+    { status: 200 },
+  );
 // Never answers; rejects when the request is aborted.
 const hang: Handler = (init) =>
   new Promise<Response>((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
@@ -83,6 +94,13 @@ describe("the open-weight fallback answers when the Meta Model API is down", () 
     const result = await t.responder.respond(turn);
     expect(result).toMatchObject({ text: "Here is what I found.", model: OPEN });
     expect(t.to(PRIMARY_URL)).toHaveLength(1);
+  });
+
+  it("answers from the fallback when the connection resets after the primary's 200 headers (PR 102 review)", async () => {
+    const t = setup([resetAfterHeaders, resetAfterHeaders, resetAfterHeaders], [open("Here is what I found.")]);
+    const result = await t.responder.respond(turn);
+    expect(result).toMatchObject({ text: "Here is what I found.", model: OPEN });
+    expect(t.to(PRIMARY_URL)).toHaveLength(3);
   });
 
   it("falls back on the deep call too, after the heads-up went out from the primary", async () => {
