@@ -13,7 +13,7 @@ import {
   type ReplayLinkEntry,
   type ReplayStorage,
 } from "../src/fill-replay.js";
-import { ActionGateway } from "../src/gateway/gateway.js";
+import { ActionGateway, MapDocumentStore } from "../src/gateway/gateway.js";
 import { InMemoryExecutor } from "../src/gateway/executors.js";
 import { SqlApprovalStore, ensureGatewayTables } from "../src/gateway/sql-store.js";
 
@@ -78,10 +78,12 @@ class MemoryStorage implements ReplayStorage {
   }
 }
 
-async function setup() {
+async function setup(opts: { documentId?: string } = {}) {
   const sql = openDb();
   const store = new SqlApprovalStore(sql as never);
-  const gateway = new ActionGateway(store, new InMemoryExecutor(), { linkCheck: async () => ({ allowed: true }) });
+  const documents = new MapDocumentStore();
+  if (opts.documentId) documents.set(opts.documentId, "synthetic pay stub v1");
+  const gateway = new ActionGateway(store, new InMemoryExecutor(), { linkCheck: async () => ({ allowed: true }), documents });
   const proposed = await gateway.requestAction({
     type: "submit",
     recipient: "sandbox-agency-portal",
@@ -92,10 +94,11 @@ async function setup() {
     personId: "p",
     sources: [],
     origin: "person",
+    ...(opts.documentId ? { documentId: opts.documentId } : {}),
   });
   const storage = new MemoryStorage();
   const deps = { sql, approvals: store, storage, personId: "p", nowMs: Date.now() };
-  return { sql, store, gateway, storage, deps, approvalId: proposed.approval!.id };
+  return { sql, store, gateway, documents, storage, deps, approvalId: proposed.approval!.id };
 }
 
 describe("a replay while other requests run", () => {
@@ -111,6 +114,20 @@ describe("a replay while other requests run", () => {
     expect(page).toContain("This form is closed");
     expect(page).not.toContain("<img");
     expect(store.getApproval(approvalId)?.status).toBe("rejected");
+  });
+
+  it("an attachment that changes while the page reads its images shows the changed page, as YES is refused", async () => {
+    const { gateway, documents, storage, deps, approvalId } = await setup({ documentId: "proof-1" });
+    const bound = await bindFillReplay(deps, approvalId, INPUT, 0);
+    if (bound.status !== "created") throw new Error(bound.status);
+    const view = () => replayPage({ ...deps, exact: (a) => gateway.stillExact(a) }, approvalId, bound.token);
+    expect(await view()).toContain("This is exactly what Mano will send");
+
+    storage.duringRead = () => documents.set("proof-1", "synthetic pay stub v2");
+    const page = (await view())!;
+    expect(page).toContain("This form changed");
+    expect(page).not.toContain("<img");
+    expect((await gateway.approveAndExecute(approvalId, "p")).status).toBe("stale");
   });
 
   it("a conversation delete that lands while the page reads shows nothing", async () => {
