@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HANDLE_HOURLY_LIMIT, hourKeyFor, type Responder } from "@mano/channels";
+import { CRISIS_LINE } from "@mano/persona";
 import { BUSY_BUBBLE, FAILURE_BUBBLE } from "../src/text.js";
 import { inboundEvent, makeHarness, runTurnAfterBatch } from "./helpers.js";
 
@@ -47,5 +48,31 @@ describe("every busy, over-limit and failure reply names 988 and 911 (review rou
     await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: UNDETECTED, occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     expect(names988And911(h.channel.sends.map((s) => s.text).join(" "))).toBe(true);
+  });
+});
+
+describe("a crisis text gets 988 and 911 before any model answers (PR 102 review, blocker)", () => {
+  it("sends the crisis line while the model is still working, then the model's words, with the line once", async () => {
+    let asked!: () => void;
+    const modelAsked = new Promise<void>((resolve) => (asked = resolve));
+    let answer!: (text: string) => void;
+    const slow: Responder = {
+      name: "slow",
+      maxAttempts: 1,
+      respond: () => {
+        asked();
+        return new Promise((resolve) => {
+          answer = (text) => resolve({ text, bubbles: [text], inputChars: 1, outputChars: text.length, model: "slow", attempts: 1 });
+        });
+      },
+    };
+    const h = makeHarness({ responder: slow });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "I want to end my life", occurredAtMs: h.now }), "webhook");
+    const turn = runTurnAfterBatch(h);
+    await modelAsked;
+    expect(h.channel.sends.map((s) => s.text)).toEqual([CRISIS_LINE]);
+    answer("I'm here with you. What is happening tonight?");
+    await turn;
+    expect(h.channel.sends.map((s) => s.text)).toEqual([CRISIS_LINE, "I'm here with you. What is happening tonight?"]);
   });
 });
