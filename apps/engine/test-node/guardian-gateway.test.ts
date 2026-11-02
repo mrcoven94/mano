@@ -10,10 +10,12 @@ import {
   checkerSetting,
   ensureGatewayTables,
   gatewayChecker,
+  profileEntities,
   type ActionRequest,
   type GatewayOptions,
 } from "../src/gateway/index.js";
-import { GlimmerModelChecker } from "@mano/guardian";
+import { GlimmerModelChecker, type KnownEntities } from "@mano/guardian";
+import type { Profile } from "../src/profile.js";
 
 // Guardian on the gateway's live path, against a fake Guardian over real
 // HTTP: the same route, headers and answers as the Modal endpoint
@@ -95,13 +97,18 @@ const GUARDIAN_ENV = () => ({
   MANO_GUARDIAN_KEY_SECRET: "modal-secret-not-real",
 });
 
-function setup(env: Record<string, string>, extra: GatewayOptions = {}, timeoutMs?: number) {
+function setup(
+  env: Record<string, string>,
+  extra: GatewayOptions = {},
+  timeoutMs?: number,
+  entities?: () => Promise<KnownEntities>,
+) {
   const storage = openStorage();
   ensureGatewayTables(storage as never);
   const store = new SqlApprovalStore(storage as never);
   const executor = new InMemoryExecutor();
   const gateway = new ActionGateway(store, executor, {
-    ...gatewayChecker(checkerSetting(env), { timeoutMs }),
+    ...gatewayChecker(checkerSetting(env), { timeoutMs, ...(entities ? { entities } : {}) }),
     linkCheck: async () => ({ allowed: true }),
     ...extra,
   });
@@ -116,7 +123,14 @@ function renewal(over: Partial<ActionRequest> = {}): ActionRequest {
     type: "submit",
     recipient: "sandbox-agency-portal",
     purpose: "Food benefits renewal in the sandbox agency portal",
-    payload: { fullName: "Maria Synthetic", householdSize: 3, monthlyIncome: 1200 },
+    payload: {
+      fullName: "Maria Synthetic",
+      dateOfBirth: "1990-01-01",
+      address: "12 Example Lane, Springfield, IL 62701",
+      phone: "(312) 555-0142",
+      householdSize: 3,
+      monthlyIncome: 1200,
+    },
     idempotencyKey: `guardian-${crypto.randomUUID()}`,
     actor: "foreground",
     personId: "maria",
@@ -138,12 +152,103 @@ describe("Guardian on the live path", () => {
     expect(sent.headers.authorization).toBe("Bearer guardian-token-not-real");
     expect(sent.headers["modal-key"]).toBe("modal-key-not-real");
     expect(sent.headers["modal-secret"]).toBe("modal-secret-not-real");
-    expect(sent.body.action).toMatchObject({ type: "submit", recipient: "[RECIPIENT]" });
-    expect(JSON.stringify(sent.body)).not.toContain("Maria Synthetic");
+    expect(sent.body.action).toEqual({
+      type: "submit",
+      recipient: "[RECIPIENT]",
+      purpose: "Food benefits renewal in the sandbox agency portal",
+      payload: {
+        fullName: "[NAME]",
+        dateOfBirth: "[DATE OF BIRTH]",
+        address: "[ADDRESS]",
+        phone: "[PHONE]",
+        householdSize: 3,
+        monthlyIncome: 1200,
+      },
+    });
+    for (const raw of ["Maria Synthetic", "1990-01-01", "12 Example Lane", "Springfield", "62701", "555-0142"]) {
+      expect(JSON.stringify(sent.body)).not.toContain(raw);
+    }
 
     const done = await gateway.approveAndExecute(result.approval!.id, "maria");
     expect(done.status).toBe("completed");
     expect(checks).toHaveLength(2);
+  });
+
+  it("removes the person's profile names and employers before Guardian sees anything", async () => {
+    const leaf = (value: string) => ({ value, source: "person" as const, updatedAt: "2026-11-01T00:00:00.000Z" });
+    const profile: Profile = {
+      person: { fullName: leaf("Maria Synthetic"), address: { city: leaf("Springfield") } },
+      household: [{ id: "kid1", name: leaf("Leo Synthetic") }],
+      income: [{ id: "job1", source: leaf("Synthetic Bakery") }],
+      programs: [],
+    };
+    const { gateway } = setup(GUARDIAN_ENV(), {}, undefined, async () => profileEntities(profile));
+    const said = "Maria Synthetic works at Synthetic Bakery. Leo Synthetic is her son.";
+    const sources = [{ kind: "document" as const, id: "letter-1", quote: said }];
+    await gateway.requestAction(
+      renewal({
+        purpose: "Food benefits renewal for Maria Synthetic of Synthetic Bakery",
+        payload: { fullName: "Maria Synthetic", householdSize: 2, monthlyIncome: 1200, text: said },
+        sources,
+      }),
+    );
+    await gateway.requestAction(
+      renewal({
+        type: "send",
+        recipient: "caseworker@agency.example",
+        purpose: "Income check for Maria Synthetic",
+        payload: { to: "caseworker@agency.example", subject: "Maria Synthetic, Synthetic Bakery", body: said },
+        sources,
+      }),
+    );
+    expect(checks).toHaveLength(2);
+    for (const { body } of checks) {
+      const wire = JSON.stringify(body);
+      for (const raw of ["Maria Synthetic", "Leo Synthetic", "Synthetic Bakery", "Springfield"]) {
+        expect(wire).not.toContain(raw);
+      }
+      expect(wire).toContain("[NAME] works at [EMPLOYER]. [NAME] is her son.");
+    }
+    expect(checks[0]!.body.action).toMatchObject({ purpose: "Food benefits renewal for [NAME] of [EMPLOYER]" });
+    expect(checks[1]!.body.action).toMatchObject({ payload: { subject: "[NAME], [EMPLOYER]" } });
+  });
+
+  it("blocks without asking Guardian when the person's details cannot be read", async () => {
+    const { gateway } = setup(GUARDIAN_ENV(), {}, undefined, async () => {
+      throw new Error("profile unreadable");
+    });
+    const result = await gateway.requestAction(renewal());
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toMatch(/checker failed and the gateway fails closed/);
+    expect(checks).toHaveLength(0);
+  });
+
+  it("lists every name, employer and detail on the profile", () => {
+    const leaf = (value: string) => ({ value, source: "person" as const, updatedAt: "2026-11-01T00:00:00.000Z" });
+    expect(profileEntities(null)).toEqual({});
+    expect(
+      profileEntities({
+        person: {
+          fullName: leaf("Maria Synthetic"),
+          dateOfBirth: leaf("1990-01-01"),
+          phone: leaf("(312) 555-0142"),
+          email: leaf("maria@mail.example"),
+          address: { line1: leaf("12 Example Lane"), line2: leaf("Unit 4"), city: leaf("Springfield"), state: leaf("IL"), zip: leaf("62701") },
+          county: leaf("Sample County"),
+        },
+        household: [{ id: "kid1", name: leaf("Leo Synthetic"), relationship: leaf("son"), dateOfBirth: leaf("2018-04-02") }],
+        income: [{ id: "job1", source: leaf("Synthetic Bakery") }],
+        programs: [{ id: "snap", program: leaf("SNAP"), caseNumber: leaf("A77Q") }],
+      }),
+    ).toEqual({
+      names: ["Maria Synthetic", "Leo Synthetic"],
+      employers: ["Synthetic Bakery"],
+      addresses: ["12 Example Lane", "Unit 4", "Springfield", "62701", "Sample County"],
+      phones: ["(312) 555-0142"],
+      emails: ["maria@mail.example"],
+      datesOfBirth: ["1990-01-01", "2018-04-02"],
+      caseNumbers: ["A77Q"],
+    });
   });
 
   it("attaches Guardian's problems to the approval on a fix", async () => {

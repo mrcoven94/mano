@@ -1,4 +1,5 @@
-import { DEFAULT_CHECK_TIMEOUT_MS, GlimmerModelChecker, MisconfiguredChecker } from "@mano/guardian";
+import { DEFAULT_CHECK_TIMEOUT_MS, GlimmerModelChecker, MisconfiguredChecker, type KnownEntities } from "@mano/guardian";
+import type { Profile } from "../profile.js";
 import { LocalRulesChecker, type Checker, type CheckInput, type CheckResult } from "./checker.js";
 import type { GatewayOptions } from "./gateway.js";
 
@@ -8,7 +9,9 @@ import type { GatewayOptions } from "./gateway.js";
 // so every Guardian check also sends a warm-up: a check that finds it
 // cold blocks with "try again in a few minutes" and leaves it starting,
 // and a check that finds it warm keeps it up for the person's yes, when
-// the gateway checks again.
+// the gateway checks again. Before each Guardian call Engine reads the
+// person's own names, employers and other details from their profile, so
+// Guardian's redactor removes them by value wherever they appear.
 
 export interface GuardianEnv {
   MANO_GUARDIAN_URL?: string;
@@ -52,16 +55,42 @@ function isLocalHost(url: string): boolean {
 
 const SEVERITY: Record<CheckResult["verdict"], number> = { pass: 0, fix: 1, block: 2 };
 
+// The person's own values for Guardian's redactor. Names and employers
+// have no shape a pattern catches; the other details are listed too, so a
+// value written an unusual way is still removed.
+export function profileEntities(profile: Profile | null): KnownEntities {
+  if (!profile) return {};
+  const values = (...leaves: ({ value: unknown } | undefined)[]): string[] =>
+    leaves.flatMap((leaf) => (typeof leaf?.value === "string" ? [leaf.value] : []));
+  const { person, household, income, programs } = profile;
+  const address = person.address;
+  return {
+    names: values(person.fullName, ...household.map((member) => member.name)),
+    employers: values(...income.map((entry) => entry.source)),
+    addresses: values(address.line1, address.line2, address.city, address.zip, person.county),
+    phones: values(person.phone),
+    emails: values(person.email),
+    datesOfBirth: values(person.dateOfBirth, ...household.map((member) => member.dateOfBirth)),
+    caseNumbers: values(...programs.map((program) => program.caseNumber)),
+  };
+}
+
 export class GuardianChecker implements Checker {
   constructor(
     private readonly rules: Checker,
     private readonly guardian: GlimmerModelChecker,
+    // Read at check time. A read that throws fails the check, and the
+    // gateway blocks.
+    private readonly entities: () => Promise<KnownEntities> = async () => ({}),
   ) {}
 
   async check(input: CheckInput): Promise<CheckResult> {
     const local = await this.rules.check(input);
     if (local.verdict === "block") return local;
-    const [model] = await Promise.all([this.guardian.check(input), this.guardian.warm()]);
+    const [model] = await Promise.all([
+      this.entities().then((known) => this.guardian.check(input, known)),
+      this.guardian.warm(),
+    ]);
     return {
       verdict: SEVERITY[model.verdict] > SEVERITY[local.verdict] ? model.verdict : local.verdict,
       problems: [...local.problems, ...model.problems],
@@ -75,7 +104,7 @@ export class GuardianChecker implements Checker {
 // to 7.5 seconds, and the agent gives Engine 15 seconds per call.
 export function gatewayChecker(
   setting: CheckerSetting,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; entities?: () => Promise<KnownEntities> } = {},
 ): Pick<GatewayOptions, "checker" | "checkerTimeoutMs"> {
   switch (setting.kind) {
     case "local-rules":
@@ -90,7 +119,10 @@ export function gatewayChecker(
         timeoutMs,
         ...(setting.proxyAuth ? { proxyAuth: setting.proxyAuth } : {}),
       });
-      return { checker: new GuardianChecker(new LocalRulesChecker(), guardian), checkerTimeoutMs: timeoutMs + 1000 };
+      return {
+        checker: new GuardianChecker(new LocalRulesChecker(), guardian, opts.entities),
+        checkerTimeoutMs: timeoutMs + 1000,
+      };
     }
   }
 }
