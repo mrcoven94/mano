@@ -314,8 +314,8 @@ export function saysPhrase(text: string, phrase: string): boolean {
 // A calendar date in any common form: "November 15, 2026", "Nov. 15, 26",
 // "15 November 2026", "11/15/26", "15/11/2026", "11/15", "2026-11-15",
 // "15 de noviembre de 2026". A date written without a year matches that day
-// in any year. Numeric dates read month first unless the first number
-// cannot be a month.
+// in any year; a written year, two digits or four, always counts. Numeric
+// dates read month first unless the first number cannot be a month.
 interface CalendarDate {
   raw: string;
   at: number;
@@ -325,17 +325,17 @@ interface CalendarDate {
 }
 
 const SHORT_MONTH_RE = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
-const YEAR_RE = String.raw`(?:,?\s+(\d{4})\b|,?\s*'(\d{2})\b|,\s*(\d{2})\b)?`;
+const YEAR_RE = String.raw`(?:(?:,\s*|\s+)'?(\d{4}|\d{2})\b)?`;
 const MONTH_DAY_RE = new RegExp(String.raw`\b(${SHORT_MONTH_RE})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b${YEAR_RE}`, "gi");
 const DAY_MONTH_RE = new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(${SHORT_MONTH_RE})\b\.?${YEAR_RE}`, "gi");
-const ES_DAY_RE = new RegExp(String.raw`\b(\d{1,2})\s+de\s+(${MONTH_NAMES_ES.join("|")})(?:\s+(?:del?\s+)?(\d{4}))?\b`, "gi");
+const ES_DAY_RE = new RegExp(String.raw`\b(\d{1,2})\s+de\s+(${MONTH_NAMES_ES.join("|")})(?:\s+(?:del?\s+)?(\d{4}|\d{2}))?\b`, "gi");
 const ISO_DAY_RE = /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g;
-const SLASH_DAY_RE = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?\b/g;
+// "24/7" is round the clock, not July 24.
+const SLASH_DAY_RE = /\b(?!24\/7\b)(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?\b/g;
 
-function yearOf(four: string | undefined, ...two: (string | undefined)[]): number | null {
-  if (four) return Number(four);
-  const short = two.find(Boolean);
-  return short ? 2000 + Number(short) : null;
+function yearOf(written: string | undefined): number | null {
+  if (!written) return null;
+  return written.length === 2 ? 2000 + Number(written) : Number(written);
 }
 
 function monthOf(name: string): number {
@@ -347,15 +347,14 @@ function calendarDates(text: string): CalendarDate[] {
   const add = (m: RegExpMatchArray, month: number, day: number, year: number | null) => {
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31) found.push({ raw: m[0], at: m.index ?? 0, month, day, year });
   };
-  for (const m of text.matchAll(MONTH_DAY_RE)) add(m, monthOf(m[1]!), Number(m[2]), yearOf(m[3], m[4], m[5]));
-  for (const m of text.matchAll(DAY_MONTH_RE)) add(m, monthOf(m[2]!), Number(m[1]), yearOf(m[3], m[4], m[5]));
+  for (const m of text.matchAll(MONTH_DAY_RE)) add(m, monthOf(m[1]!), Number(m[2]), yearOf(m[3]));
+  for (const m of text.matchAll(DAY_MONTH_RE)) add(m, monthOf(m[2]!), Number(m[1]), yearOf(m[3]));
   for (const m of text.matchAll(ES_DAY_RE)) add(m, MONTH_NAMES_ES.indexOf(m[2]!.toLowerCase()) + 1, Number(m[1]), yearOf(m[3]));
   for (const m of text.matchAll(ISO_DAY_RE)) add(m, Number(m[2]), Number(m[3]), Number(m[1]));
   for (const m of text.matchAll(SLASH_DAY_RE)) {
     const [a, b] = [Number(m[1]), Number(m[2])];
-    const year = m[3] ? yearOf(m[3].length === 4 ? m[3] : undefined, m[3].length === 2 ? m[3] : undefined) : null;
-    if (a > 12 && year !== null) add(m, b, a, year);
-    else add(m, a, b, year);
+    if (a > 12) add(m, b, a, yearOf(m[3]));
+    else add(m, a, b, yearOf(m[3]));
   }
   return found;
 }
