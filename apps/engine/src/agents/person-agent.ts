@@ -1283,8 +1283,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
       sealToken: async (approvalId, token) => JSON.stringify(await encryptForPerson(new TextEncoder().encode(token), kek, tokenAad(approvalId))),
       openToken: async (approvalId, sealed) =>
         new TextDecoder().decode(await decryptForPerson(JSON.parse(sealed) as EncryptedBlob, kek, tokenAad(approvalId))),
-      putImage: (id, png, generation) => putDocument(files, this.env.ENCRYPTION_KEK_B64, this.personId, id, png, generation),
-      getImage: (id, r2Key) => getDocumentBytes(files, this.env.ENCRYPTION_KEK_B64, this.personId, id, r2Key),
+      putImage: (id, png, generation) => putDocument(files, kek, this.personId, id, png, generation),
+      getImage: (id, r2Key) => getDocumentBytes(files, kek, this.personId, id, r2Key),
       deleteObjects: (keys) => files.delete(keys),
       putLink: async (key, entry) => {
         await files.put(key, JSON.stringify(entry));
