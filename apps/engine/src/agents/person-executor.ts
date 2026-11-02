@@ -1,4 +1,4 @@
-import type { ActionRequest, CheckOutcome, Executor } from "../gateway/index.js";
+import type { ActionRequest, CheckOutcome, DocumentFiling, Executor, StoredDocumentFacts } from "../gateway/index.js";
 
 // An executor that delivers share actions as signed consent messages to
 // the target org agent and delegates every other action to an inner
@@ -38,6 +38,10 @@ export class ConsentDeliveringExecutor implements Executor {
   refuse(req: ActionRequest): string | null {
     if (req.type === "share") return null;
     return this.inner.refuse?.(req) ?? null;
+  }
+
+  documentFiling(doc: StoredDocumentFacts): DocumentFiling {
+    return this.inner.documentFiling?.(doc) ?? "fileable";
   }
 
   async check(idempotencyKey: string, personId: string): Promise<CheckOutcome> {
