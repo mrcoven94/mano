@@ -20,12 +20,15 @@ const FIELDS = FORMS["food-renewal"]!.fields.map((f) => f.name);
 
 const drafts = new Map<string, Record<string, string>>();
 
+// A screenshot is a PNG signature plus how many values the form shows,
+// so each step of a replay is a distinct screen.
 function desktop(): Computer {
   let draft: string | null = null;
+  const typed: string[] = [];
   return {
-    screenshot: async () => new Uint8Array([137, 80, 78, 71]),
+    screenshot: async () => new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, typed.length]),
     act: async (actions) => {
-      const typed = actions.flatMap((a) => (a.type === "type" ? [a.text.trim()] : []));
+      typed.push(...actions.flatMap((a) => (a.type === "type" ? [a.text.trim()] : [])));
       if (!draft || typed.length === 0) return;
       const saved = Object.fromEntries(FIELDS.map((name, i) => [name, typed[i] ?? ""]));
       saved.dateOfBirth = saved.dateOfBirth!.replace(/^(\d{2})\/(\d{2})\/(\d{4})$/, "$3-$1-$2");
@@ -33,6 +36,7 @@ function desktop(): Computer {
     },
     goto: async (url) => {
       draft = new URL(url).searchParams.get("draft");
+      typed.length = 0;
     },
     stageFile: async (name) => `/uploads/${name}`,
     fileUploadHint: () => "",

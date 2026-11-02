@@ -201,6 +201,11 @@ export interface ActionProposal {
   documentId?: string;
 }
 
+function linkFrom(body: unknown): string | null {
+  const url = (body as { url?: unknown } | null)?.url;
+  return typeof url === "string" && /^https?:\/\/\S+$/.test(url) ? url : null;
+}
+
 const RESULT_STATUSES = new Set(["completed", "needs_approval", "blocked", "stale", "reconciled", "in_progress", "rejected"]);
 
 function parseResult(value: unknown): EngineResult {
@@ -504,6 +509,40 @@ export class PersonEngine {
 
   async reject(approvalId: string): Promise<EngineResult> {
     return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/reject`));
+  }
+
+  // Binds the screens of the fill behind a waiting approval, so the
+  // question can link to them. The link, or null when Engine refused:
+  // the approval no longer waits, or this Engine has no replay route.
+  async bindReplay(approvalId: string, replay: { labels: Record<string, string>; steps: { caption: string; png: Uint8Array }[] }): Promise<string | null> {
+    const res = await this.call("PUT", `/approvals/${encodeURIComponent(approvalId)}/replay`, {
+      generation: this.generation,
+      labels: replay.labels,
+      steps: replay.steps.map((s) => ({ caption: s.caption, pngB64: Buffer.from(s.png).toString("base64") })),
+    });
+    if ([400, 404, 409].includes(res.status)) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return linkFrom(await res.json());
+  }
+
+  // The link to this approval's replay page while it opens, or null.
+  async replayLink(approvalId: string, timeoutMs?: number): Promise<string | null> {
+    const res = await this.call("GET", `/approvals/${encodeURIComponent(approvalId)}/replay`, undefined, timeoutMs);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return linkFrom(await res.json());
   }
 
   // A photo Channels stored for this person, or null when Engine has none.

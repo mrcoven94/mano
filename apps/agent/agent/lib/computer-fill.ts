@@ -6,15 +6,34 @@
 // back from the portal and returns exactly what it saved; any difference
 // from the intended values fails the fill. The desktop can only save
 // drafts: filing happens only through Engine after a YES.
+//
+// A filled outcome carries its replay: each screen of the run up to the
+// whole form filled, captioned with the field it shows filled, so the
+// person can see what Mano did before they say yes.
 import { randomBytes } from "node:crypto";
 
-import { FetchModelClient, computerFromEnv, runLoop, type Computer, type ModelClient } from "@mano/computer";
+import {
+  FetchModelClient,
+  computerFromEnv,
+  recordFrames,
+  runLoop,
+  type Computer,
+  type ComputerAction,
+  type Frame,
+  type ModelClient,
+} from "@mano/computer";
 
 import type { FormSpec } from "./forms.js";
 
+// One screen of a fill, as the person sees it on the replay page.
+export interface ReplayStep {
+  caption: string;
+  png: Uint8Array;
+}
+
 export type FillOutcome =
   // saved: the draft as the portal holds it, field by field.
-  | { status: "filled"; saved: Record<string, string>; steps: number; ms: number }
+  | { status: "filled"; saved: Record<string, string>; replay: ReplayStep[]; steps: number; ms: number }
   | { status: "rejected"; message: string; steps: number; ms: number }
   // The model flagged its next actions; nothing ran. Codes only, never messages.
   | { status: "safety_check"; codes: string[]; steps: number; ms: number }
@@ -78,6 +97,39 @@ function taskText(form: FormSpec, values: Record<string, string>): string {
   ].join("\n");
 }
 
+// Engine keeps at most this many steps of one fill.
+const MAX_REPLAY_STEPS = 24;
+
+// The screens up to the last one that shows a value typed, which is the
+// whole form filled. Captions name the field, never its value: the value
+// is on the screen, and the page lists what Engine will send.
+export function replayOf(frames: Frame[], form: FormSpec, values: Record<string, string>): ReplayStep[] {
+  const labelOf = new Map(form.fields.map((f) => [typedValue(f.name, values[f.name] ?? "").trim(), f.label]));
+  let end = frames.length;
+  for (let i = frames.length - 1; i >= 0; i--) {
+    if (frames[i]!.actions.some((a) => a.type === "type")) {
+      end = i + 1;
+      break;
+    }
+  }
+  return frames
+    .slice(0, end)
+    .map((frame) => ({ caption: captionFor(frame.actions, labelOf), png: frame.png }))
+    .slice(-MAX_REPLAY_STEPS);
+}
+
+function captionFor(actions: ComputerAction[], labelOf: Map<string, string>): string {
+  if (actions.length === 0) return "Mano opened the form.";
+  const typed = actions.filter((a): a is Extract<ComputerAction, { type: "type" }> => a.type === "type").pop();
+  if (typed) {
+    const label = labelOf.get(typed.text.trim());
+    return label ? `Mano filled in "${label}".` : "Mano typed into the form.";
+  }
+  if (actions.some((a) => a.type === "scroll")) return "Mano scrolled the form.";
+  if (actions.some((a) => a.type === "click" || a.type === "double_click")) return "Mano clicked on the form.";
+  return "Mano waited for the form.";
+}
+
 class Deadline extends Error {}
 
 class DraftReadFailed extends Error {
@@ -105,6 +157,7 @@ export async function fillOnComputer(form: FormSpec, values: Record<string, stri
   const started = Date.now();
   // Fresh per fill, so a draft read back can only be this fill's.
   const draftId = randomBytes(32).toString("hex");
+  const { computer, frames } = recordFrames(deps.computer);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Deadline()), deps.deadlineMs);
@@ -113,8 +166,8 @@ export async function fillOnComputer(form: FormSpec, values: Record<string, stri
     const run = (async (): Promise<FillOutcome> => {
       const page = new URL(`${portalUrl.replace(/\/$/, "")}${form.path}`);
       page.searchParams.set("draft", draftId);
-      await deps.computer.goto(page.toString());
-      const outcome = await runLoop(deps.computer, deps.model, taskText(form, values), {
+      await computer.goto(page.toString());
+      const outcome = await runLoop(computer, deps.model, taskText(form, values), {
         model: deps.modelId,
         maxSteps: 8,
         instructions: "These fields do not depend on each other: fill all of them in one batch of click and type actions, then click Continue.",
@@ -129,7 +182,13 @@ export async function fillOnComputer(form: FormSpec, values: Record<string, stri
       if (!saved) return { status: "failed", reason: "no draft saved", ms: ms() };
       const differs = form.fields.filter((f) => saved[f.name] !== values[f.name]);
       if (differs.length > 0) return { status: "failed", reason: `saved differs: ${differs.map((f) => f.name).join(",")}`, ms: ms() };
-      return { status: "filled", saved: Object.fromEntries(form.fields.map((f) => [f.name, saved[f.name]!])), steps: outcome.steps, ms: ms() };
+      return {
+        status: "filled",
+        saved: Object.fromEntries(form.fields.map((f) => [f.name, saved[f.name]!])),
+        replay: replayOf(frames(), form, values),
+        steps: outcome.steps,
+        ms: ms(),
+      };
     })();
     // A run past the deadline ends when its computer is closed below.
     run.catch(() => undefined);

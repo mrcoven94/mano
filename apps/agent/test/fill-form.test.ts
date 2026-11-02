@@ -80,8 +80,10 @@ class FakeComputer implements Computer {
   private typed: string[] = [];
   private draft: string | null = null;
   constructor(private portal: FakePortal) {}
+  // A PNG signature plus how many values the form shows, so each step of
+  // a replay is a distinct screen.
   async screenshot() {
-    return new Uint8Array([137, 80, 78, 71]);
+    return new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, this.typed.length]);
   }
   async act(actions: ComputerAction[]) {
     for (const a of actions) {
@@ -207,6 +209,38 @@ describe("fill_form", () => {
     );
     expect(question).toContain("With your document attached.");
     expect(model.requests.every((r) => r.store === false)).toBe(true);
+  });
+
+  it("binds each screen up to the whole form filled to the approval it holds, captioned by field and never by value", async () => {
+    engine.profile = profile();
+    const out = await run("turn_fill0030", { form: "food-renewal" });
+    expect(out.status).toBe("waiting_for_yes");
+    const url = await client().replayLink(String(out.approvalId));
+    expect(url).toMatch(/^http:\/\/engine\.test\/fill\/[0-9a-f]{32}$/);
+
+    const page = (await engine.replayPageAt(url!))!;
+    const captions = [...page.matchAll(/<li><p>([^<]*)<\/p>/g)].map((m) => m[1]);
+    expect(captions).toEqual([
+      "Mano opened the form.",
+      ...FORMS["food-renewal"]!.fields.map((f) => `Mano filled in &quot;${f.label}&quot;.`),
+    ]);
+    // The last screen is the form with all six values, before Continue.
+    const shown = [...page.matchAll(/data:image\/png;base64,([^"]+)"/g)].map((m) => Buffer.from(m[1]!, "base64")[8]);
+    expect(shown).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(page).toContain("<dt>People in household</dt><dd>3</dd>");
+    expect(page).toContain("This is exactly what Mano will send when you reply YES.");
+  });
+
+  it("a replay Engine cannot store leaves the question waiting, and the log carries no personal data", async () => {
+    engine.profile = profile();
+    engine.replayFailure = 500;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const out = await run("turn_fill0031", { form: "food-renewal" });
+    expect(out.status).toBe("waiting_for_yes");
+    expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
+    const lines = warn.mock.calls.map(([line]) => String(line));
+    expect(lines).toContain(JSON.stringify({ type: "mano_replay_failed", status: 500 }));
+    expect(lines.some((l) => l.includes("Rosa") || l.includes("253-555"))).toBe(false);
   });
 
   it("each fill opens its own fresh draft", async () => {
