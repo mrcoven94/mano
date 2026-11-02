@@ -784,24 +784,30 @@ export class ConversationRunner {
   }
 
   // Reports each approval question whose turn's sends are all resolved.
-  // A report that fails stays pending; needsRetry re-arms the alarm, and
-  // the next run sends it again. The person's YES counts only once the
-  // agent has the report.
-  private async reportPresentations(): Promise<void> {
+  // For the turn still sending, a question is reported as soon as the
+  // bubbles that went out carry it whole, so a bubble after it (a replay
+  // link) never holds it back; "not shown" waits until every send of that
+  // turn resolved. A report that fails stays pending; needsRetry re-arms
+  // the alarm, and the next run sends it again. The person's YES counts
+  // only once the agent has the report.
+  private async reportPresentations(sendingTurn: number | null = null): Promise<void> {
     const { store, logger } = this.deps;
     const report = this.deps.reportPresentation;
-    if (!report) return;
+    const pending = report ? store.pendingPresentations() : [];
+    if (!report || pending.length === 0) return;
     const outbounds = store.outbounds();
-    for (const p of store.pendingPresentations()) {
+    for (const p of pending) {
+      const sending = p.turn === sendingTurn;
       const rows = outbounds.filter((r) => r.turn === p.turn && !DECORATION_TAGS.has(r.tag));
-      if (rows.length === 0 || rows.some((r) => openSend(r))) continue;
+      if (rows.length === 0 || (!sending && rows.some((r) => openSend(r)))) continue;
       const sent = rows
         .filter((r) => r.state === "sent" || r.state === "delivered" || r.state === "read")
         .sort((a, b) => a.part - b.part)
         .map((r) => r.text);
       try {
         const shown = await report({ approvalId: p.approvalId, approval: p.approval, generation: p.generation }, sent);
-        store.finishPresentation(p.turn, shown ? "reported" : "not_shown");
+        if (shown) store.finishPresentation(p.turn, "reported");
+        else if (!sending) store.finishPresentation(p.turn, "not_shown");
       } catch (err) {
         logger.warn("presentation_report_failed", { handle: this.logHandle(), turn: p.turn, err: errName(err) });
       }
@@ -993,7 +999,6 @@ export class ConversationRunner {
       await this.settleResumedCost(turn, resumed);
       await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation, epoch);
       this.checkSendsResolved(turn, generation);
-      await this.reportPresentations();
       return;
     }
     const texts = items.map((i) => i.text).filter((t): t is string => !!t && t.length > 0);
@@ -1158,7 +1163,6 @@ export class ConversationRunner {
       this.checkGeneration(generation);
       await this.sendBubbles(turn, bubbles, chatId, to, saved.length, generation, epoch);
       this.checkSendsResolved(turn, generation);
-      await this.reportPresentations();
       replied = true;
     } finally {
       stopEyesTimer();
@@ -1244,7 +1248,12 @@ export class ConversationRunner {
       }
       const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation, replyTo: bubble.replyTo ?? null });
       if (row.fresh) fresh += 1;
-      if (bubble.tag === "" && bubble.part >= 1 && (row.state === "sent" || row.state === "delivered" || row.state === "read")) accepted = true;
+      if (bubble.tag === "" && bubble.part >= 1 && (row.state === "sent" || row.state === "delivered" || row.state === "read")) {
+        accepted = true;
+        // Before the next bubble goes: a YES sent while it is still going
+        // must find the question already reported.
+        await this.reportPresentations(turn);
+      }
       if (bubble.tag === "" && bubble.part === 0 && row.state === "sent") {
         store.patchMeta({ introduced: true });
       }

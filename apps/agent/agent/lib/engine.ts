@@ -523,6 +523,52 @@ export class PersonEngine {
     return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/reject`));
   }
 
+  // Binds the screens of the fill behind a waiting approval, so the
+  // question can link to them. The link, or null when Engine refused:
+  // the approval no longer waits, or this Engine has no replay route.
+  async bindReplay(
+    approvalId: string,
+    replay: { labels: Record<string, string>; steps: { caption: string; png: Uint8Array; focus: { x: number; y: number } | null }[] },
+    timeoutMs?: number,
+  ): Promise<string | null> {
+    const body = {
+      generation: this.generation,
+      labels: replay.labels,
+      steps: replay.steps.map((s) => ({ caption: s.caption, pngB64: Buffer.from(s.png).toString("base64"), focus: s.focus })),
+    };
+    const res = await this.call("PUT", `/approvals/${encodeURIComponent(approvalId)}/replay`, body, timeoutMs);
+    if ([400, 404, 409].includes(res.status)) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return this.linkFrom(await res.json());
+  }
+
+  // The link to this approval's replay page while it opens, or null.
+  async replayLink(approvalId: string, timeoutMs?: number): Promise<string | null> {
+    const res = await this.call("GET", `/approvals/${encodeURIComponent(approvalId)}/replay`, undefined, timeoutMs);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return this.linkFrom(await res.json());
+  }
+
+  // Engine answers the page's path; the link is that path on the Engine
+  // address this agent uses, which is the one the person can open too.
+  private linkFrom(body: unknown): string | null {
+    const path = (body as { path?: unknown } | null)?.path;
+    return typeof path === "string" && /^\/fill\/[0-9a-f]{32}$/.test(path) ? `${this.cfg.baseUrl}${path}` : null;
+  }
+
   // A photo Channels stored for this person, or null when Engine has none.
   async getDocument(documentId: string, timeoutMs?: number): Promise<Uint8Array | null> {
     const res = await this.call("GET", `/documents/${encodeURIComponent(documentId)}`, undefined, timeoutMs);

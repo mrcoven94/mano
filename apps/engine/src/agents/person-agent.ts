@@ -53,8 +53,18 @@ import {
   type DeliveryOutcome,
 } from "./agent-state.js";
 import { CURRENT_GENERATION } from "../gateway/sql-store.js";
+import {
+  bindFillReplay,
+  ensureFillReplayTables,
+  finishLinkCleanup,
+  removeFillReplays,
+  replayLinkToken,
+  replayPage,
+  type ReplayInput,
+  type ReplayStorage,
+} from "../fill-replay.js";
 import { ProfileStore, forgetMemoryNote, type PatchAnswer, type Profile, type Suggestion } from "../profile.js";
-import { profileCipher } from "../crypto.js";
+import { decryptForPerson, documentAad, encryptForPerson, profileCipher, type EncryptedBlob } from "../crypto.js";
 import {
   cancelDeadline,
   deadlineIdFor,
@@ -157,6 +167,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       }
       sql.exec(`CREATE TABLE IF NOT EXISTS conversation(id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)`);
       ensureDeadlineTables(sql);
+      ensureFillReplayTables(sql);
       ensureDocumentTables(sql);
       // One consent row per recipient and case, so revocation deletes the
       // exact row the grant created.
@@ -804,12 +815,18 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const removed = this.ctx.storage.transactionSync(() => {
       const before = currentGeneration(this.db());
       const out = removeConversationState(this.db(), Date.now(), toGeneration);
-      // Only a delete that moved the generation removes deadlines: a
-      // retried old one never touches the conversation after it.
-      if (out.generation > before) removeDeadlines(this.db(), Date.now());
+      // Only a delete that moved the generation removes deadlines and
+      // fill replays: a retried old one never touches the conversation
+      // after it.
+      if (out.generation > before) {
+        removeDeadlines(this.db(), Date.now());
+        removeFillReplays(this.db());
+      }
       return out;
     });
+    // Replay images live with the documents and go with them.
     await sweepDocuments(this.env.FILES, this.personId, currentGeneration(this.db()));
+    await finishLinkCleanup(this.db(), (keys) => this.env.FILES.delete(keys));
     this.store.audit({ event: "conversation.deleted", ...removed });
     await this.armReminderWakeup();
     this.syncState();
@@ -1263,6 +1280,56 @@ export class PersonAgent extends Agent<Env, PersonState> {
     }
     this.store.audit({ event: "document.registered", documentHash: await auditDigest(id) });
     return { id, hash };
+  }
+
+  // The person's replay images and link entries, in R2. Images and the
+  // link's token are encrypted like documents, under their own IDs.
+  private replayStorage(): ReplayStorage {
+    const files = this.env.FILES;
+    const kek = this.env.ENCRYPTION_KEK_B64;
+    const tokenAad = (approvalId: string) => documentAad(this.personId, `fill-link-${approvalId}`);
+    return {
+      sealToken: async (approvalId, token) => JSON.stringify(await encryptForPerson(new TextEncoder().encode(token), kek, tokenAad(approvalId))),
+      openToken: async (approvalId, sealed) =>
+        new TextDecoder().decode(await decryptForPerson(JSON.parse(sealed) as EncryptedBlob, kek, tokenAad(approvalId))),
+      putImage: (id, png, generation) => putDocument(files, kek, this.personId, id, png, generation),
+      getImage: (id, r2Key) => getDocumentBytes(files, kek, this.personId, id, r2Key),
+      deleteObjects: (keys) => files.delete(keys),
+      putLink: async (key, entry) => {
+        await files.put(key, JSON.stringify(entry));
+      },
+    };
+  }
+
+  // Binds the screens of the fill that produced this approval. The first
+  // bind wins; the answer carries the link's token.
+  async bindFillReplay(verified: string, approvalId: string, input: ReplayInput, generation?: number) {
+    await this.assertSubject(verified);
+    const out = await bindFillReplay(
+      { sql: this.db(), approvals: this.store, storage: this.replayStorage(), personId: this.personId, nowMs: Date.now() },
+      approvalId,
+      input,
+      generation ?? currentGeneration(this.db()),
+    );
+    if (out.status === "created") this.store.audit({ event: "replay.bound", approvalHash: await auditDigest(approvalId), steps: input.steps.length });
+    return out;
+  }
+
+  // The token of this approval's replay link while it still opens.
+  async fillReplayLink(verified: string, approvalId: string): Promise<string | null> {
+    await this.assertSubject(verified);
+    return replayLinkToken({ sql: this.db(), storage: this.replayStorage() }, approvalId, Date.now());
+  }
+
+  // The replay page a link opens. The worker found the person and the
+  // approval under the token's hash; the row must hold the same token.
+  async fillReplayPage(personId: string, approvalId: string, token: string): Promise<string | null> {
+    if (!this.personId || this.personId !== personId) return null;
+    return replayPage(
+      { sql: this.db(), approvals: this.store, storage: this.replayStorage(), nowMs: Date.now(), exact: (approval) => this.gateway.stillExact(approval) },
+      approvalId,
+      token,
+    );
   }
 
   // The person's documents of this conversation, newest first, each

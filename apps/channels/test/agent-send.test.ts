@@ -311,27 +311,35 @@ describe("reporting what the person was shown", () => {
   const QUESTION = "Ready to send: renewal. Reply YES to send exactly this, or NO to stop.";
   type Report = { approvalId: string; approval: string; generation: number; sent: string[] };
 
-  function reporting(reports: Report[], opts: { failFirst?: number } = {}) {
+  // The line after a filled form's question that links to its replay.
+  const LINK = "See each step Mano took on the form: https://engine.example.org/fill/0123456789abcdef0123456789abcdef";
+
+  function reporting(reports: Report[], opts: { failFirst?: number; text?: string } = {}) {
     let failures = opts.failFirst ?? 0;
+    const text = opts.text ?? QUESTION;
     const h = makeHarness({
       responder: {
         name: "agent",
         maxAttempts: 1,
         respond: async () => ({
-          text: QUESTION,
-          bubbles: [QUESTION],
+          text,
+          bubbles: text.split("\n\n"),
           inputChars: 10,
-          outputChars: QUESTION.length,
+          outputChars: text.length,
           model: "agent",
           attempts: 1,
           presentation: { approvalId: "appr_1", approval: QUESTION },
         }),
       },
+      fetchFn: (async () => Response.json({ Status: 0, Answer: [{ type: 1, data: "93.184.216.34" }] })) as typeof fetch,
+      // The agent's contract: true once reported, false when the texts
+      // that went out do not carry the question whole.
       reportPresentation: async (p, sent) => {
         if (failures > 0) {
           failures -= 1;
           throw new Error("agent unreachable");
         }
+        if (!sent.join(" ").includes(p.approval)) return false;
         reports.push({ ...p, sent });
         return true;
       },
@@ -383,6 +391,46 @@ describe("reporting what the person was shown", () => {
     h.advance(10 * 60_000);
     while ((await h.runner.runDueTurn()) === "retry") h.advance(10 * 60_000);
     expect(reports).toHaveLength(1);
+  });
+
+  it("reports a question that went out before the replay link after it is tried, and while that send stays uncertain", async () => {
+    const reports: Report[] = [];
+    const h = reporting(reports, { text: `${QUESTION}\n\n${LINK}` });
+    const realSend = h.channel.send.bind(h.channel);
+    let reportedWhenLinkTried: number | null = null;
+    h.channel.send = async (input) => {
+      if (!input.text.includes("/fill/")) return realSend(input);
+      reportedWhenLinkTried ??= reports.length;
+      throw new Error("provider timed out");
+    };
+    await h.runner.handleEvent(inboundEvent({ id: "evt_link", text: "file it", occurredAtMs: h.now }), "webhook");
+    h.advance(5000);
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    // A YES that arrives while the link is still sending finds the
+    // question already shown.
+    expect(reportedWhenLinkTried).toBe(1);
+    expect(reports).toHaveLength(1);
+    expect(reports[0].sent).toEqual([QUESTION]);
+  });
+
+  it("a question whose own send is uncertain waits for it, and is not given up while the link after it went out", async () => {
+    const reports: Report[] = [];
+    const h = reporting(reports, { text: `${QUESTION}\n\n${LINK}` });
+    const realSend = h.channel.send.bind(h.channel);
+    let down = true;
+    h.channel.send = async (input) => {
+      if (down && input.text.includes("Reply YES")) throw new Error("provider timed out");
+      return realSend(input);
+    };
+    await h.runner.handleEvent(inboundEvent({ id: "evt_question_late", text: "file it", occurredAtMs: h.now }), "webhook");
+    h.advance(5000);
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(reports).toHaveLength(0);
+    down = false;
+    h.advance(10 * 60_000);
+    while ((await h.runner.runDueTurn()) === "retry") h.advance(10 * 60_000);
+    expect(reports).toHaveLength(1);
+    expect(reports[0].sent.join(" ")).toContain(QUESTION);
   });
 
   it("reports nothing for a send the provider refused", async () => {

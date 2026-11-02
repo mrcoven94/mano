@@ -39,6 +39,15 @@
 //   POST /api/persons/:id/approvals/supersede     { generation } closes every waiting draft but the latest
 //   POST /api/persons/:id/approvals/:aid/approve
 //   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
+//   PUT  /api/persons/:id/approvals/:aid/replay   { generation, labels, steps: [{ caption, pngB64 }] } (agent):
+//                                              the screens of the fill behind a waiting approval; first bind wins.
+//                                              201 or 200 with { path } of the page, 404 no approval,
+//                                              409 no longer waiting. The caller joins the path to the
+//                                              Engine address it uses: under wrangler dev a request's own
+//                                              URL names the production route, not the local worker.
+//   GET  /api/persons/:id/approvals/:aid/replay   { path } of the replay page while its link opens, else 404
+//   GET  /fill/:token                          the replay page (src/fill-replay.ts): the token is the only key,
+//                                              and the page asks the approval again on every view
 //   GET  /api/persons/:id/memory
 //   POST /api/persons/:id/memory              { content, source }
 //   DELETE /api/persons/:id/memory/:memoryId  forget: deletes the row
@@ -139,6 +148,15 @@ import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
 import { profilePatchResponse } from "./profile.js";
 import { routeDeadlines } from "./deadlines.js";
+import {
+  REPLAY_LINK_PATH,
+  REPLAY_PAGE_HEADERS,
+  ReplayInputError,
+  linkKey,
+  parseReplayInput,
+  renderReplayPage,
+  type ReplayLinkEntry,
+} from "./fill-replay.js";
 import { parseDocumentMark } from "./documents.js";
 
 export { PersonAgent, OrgAgent };
@@ -407,6 +425,28 @@ async function handleAgentState(
   }
 }
 
+// A replay page by its link. The token's hash names the person and the
+// approval; the person's agent checks its own row holds the same token.
+// Anything else, an expired link included, gets the same 404 page.
+async function fillReplayResponse(env: Env, pathname: string): Promise<Response> {
+  const unavailable = (status: number) => new Response(renderReplayPage({ state: "missing" }), { status, headers: REPLAY_PAGE_HEADERS });
+  const token = REPLAY_LINK_PATH.exec(pathname)?.[1];
+  if (!token || !env.FILES) return unavailable(404);
+  try {
+    const stored = await env.FILES.get(await linkKey(token));
+    if (!stored) return unavailable(404);
+    const entry = JSON.parse(await stored.text()) as Partial<ReplayLinkEntry>;
+    if (typeof entry.personId !== "string" || typeof entry.approvalId !== "string" || !(Number(entry.expiresAtMs) > Date.now())) {
+      return unavailable(404);
+    }
+    const agent = personStub(env, entry.personId) as unknown as PersonAgent;
+    const html = await agent.fillReplayPage(entry.personId, entry.approvalId, token);
+    return html ? new Response(html, { headers: REPLAY_PAGE_HEADERS }) : unavailable(404);
+  } catch {
+    return unavailable(503);
+  }
+}
+
 let loggedStartup = false;
 
 export default {
@@ -418,6 +458,11 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/health") return Response.json({ ok: healthOk(env), live: liveStatus(env) });
+
+    if (url.pathname === "/fill" || url.pathname.startsWith("/fill/")) {
+      if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed.", { status: 405 });
+      return fillReplayResponse(env, url.pathname);
+    }
 
     // Outside development, a partly configured engine answers only
     // /health: no business request runs while required config is missing.
@@ -545,6 +590,31 @@ export default {
       }
       if (rest === "/approvals" && request.method === "GET") {
         return Response.json({ approvals: await agent.listApprovals(subject) });
+      }
+      const replayMatch = rest.match(/^\/approvals\/([^/]+)\/replay$/);
+      if (replayMatch && request.method === "PUT") {
+        if (service !== "agent") return FORBIDDEN();
+        const read = await readCappedJson(request, MAX_UPLOAD_BODY);
+        if (!read.ok) return read.response;
+        const generation = writeGeneration(service, (read.value as { generation?: unknown } | null)?.generation);
+        if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
+        let input;
+        try {
+          input = parseReplayInput(read.value);
+        } catch (err) {
+          if (err instanceof ReplayInputError) return Response.json({ error: err.message }, { status: 400 });
+          throw err;
+        }
+        const out = await agent.bindFillReplay(subject, decodeURIComponent(replayMatch[1]), input, generation);
+        if (out.status === "stale") return STALE();
+        if (out.status === "not_found") return Response.json({ error: "Approval not found." }, { status: 404 });
+        if (out.status === "closed") return Response.json({ error: "That approval no longer waits for a yes." }, { status: 409 });
+        return Response.json({ path: `/fill/${out.token}` }, { status: out.status === "created" ? 201 : 200 });
+      }
+      if (replayMatch && request.method === "GET") {
+        const token = await agent.fillReplayLink(subject, decodeURIComponent(replayMatch[1]));
+        if (!token) return Response.json({ error: "No replay for that approval." }, { status: 404 });
+        return Response.json({ path: `/fill/${token}` });
       }
       if (rest === "/action" && request.method === "POST") {
         // The gateway binds the approval to the request's person ID, so the

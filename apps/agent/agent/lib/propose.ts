@@ -24,7 +24,8 @@ function canonical(v: Record<string, unknown>): string {
   return JSON.stringify(Object.keys(v).sort().map((k) => [k, v[k]]));
 }
 
-function sameDraft(a: EngineApproval, draft: Draft): boolean {
+// True when the approval froze exactly this draft's values and document.
+export function sameDraft(a: EngineApproval, draft: Draft): boolean {
   try {
     const frozen = JSON.parse(a.requestJson) as { payload?: Record<string, unknown>; documentId?: string };
     return canonical(frozen.payload ?? {}) === canonical(draft.payload) && (frozen.documentId ?? null) === (draft.documentId ?? null);

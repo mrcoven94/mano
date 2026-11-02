@@ -106,6 +106,14 @@ export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recip
     .join(" ");
 }
 
+// The line after the question that links to the replay of the fill
+// behind it. It is never part of the question: the question stays the
+// exact text the person answers, and the line can be dropped (a link
+// check that blocks it) without touching the question.
+export function replayLine(url: string): string {
+  return `See each step Mano took on the form: ${url}`;
+}
+
 // True when the text line would carry the question word for word: the
 // shared voice guard (which drops any sentence naming a model or
 // provider, and rewrites dashes and markdown) leaves it unchanged, and it

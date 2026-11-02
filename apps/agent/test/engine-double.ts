@@ -2,12 +2,12 @@
 // its service authentication (agent token plus handle grant), its action
 // gateway over its SQL approval store, its agent-state SQL (generation
 // fence, reminders, turn ledger, approval pointer, conversation delete),
-// its deadlines with their nudges, its document list and its profile
-// store, all on one
-// node:sqlite database per person, the way each PersonAgent keeps them in
-// its own SQLite. Only the Durable Object shell and its alarm are
-// replaced: deliverDue() claims and hands off due reminders the way the
-// alarm does.
+// its deadlines with their nudges, its document list, its profile store
+// and its fill replays, all on one node:sqlite database per person, the
+// way each PersonAgent keeps them in its own SQLite. Only the Durable
+// Object shell and its alarm are replaced: deliverDue() claims and hands
+// off due reminders the way the alarm does, and replay images and links
+// live in memory where Engine keeps them in R2.
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
@@ -52,6 +52,19 @@ import {
   type DeadlineCalls,
 } from "../../engine/src/deadlines.js";
 import {
+  REPLAY_LINK_PATH,
+  bindFillReplay,
+  ensureFillReplayTables,
+  finishLinkCleanup,
+  linkKey,
+  parseReplayInput,
+  removeFillReplays,
+  replayLinkToken,
+  replayPage,
+  type ReplayLinkEntry,
+  type ReplayStorage,
+} from "../../engine/src/fill-replay.js";
+import {
   ensureDocumentTables,
   listDocuments,
   markDocument,
@@ -64,6 +77,7 @@ import { InMemoryExecutor } from "../../engine/src/gateway/executors.js";
 import type { Executor } from "../../engine/src/gateway/types.js";
 import { MapDocumentStore } from "../../engine/src/gateway/gateway.js";
 import { CURRENT_GENERATION, SqlApprovalStore, ensureGatewayTables } from "../../engine/src/gateway/sql-store.js";
+import { sha256Hex } from "../../engine/src/hash.js";
 import { ProfileStore, forgetMemoryNote, profilePatchResponse, type FieldCipher } from "../../engine/src/profile.js";
 
 export const ENGINE_AGENT_TOKEN = "agent-test-engine-token";
@@ -115,6 +129,7 @@ function sqlite() {
   ensureGatewayTables(sql as never);
   ensureAgentStateTables(sql);
   ensureDeadlineTables(sql);
+  ensureFillReplayTables(sql);
   ensureDocumentTables(sql);
   sql.exec(
     "CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 0)",
@@ -164,6 +179,12 @@ export class EngineDouble {
   deadlineCalls: DeadlineCall[] = [];
   // How long POST /deadlines takes to answer; the caller's abort ends it.
   deadlinesDelayMs = 0;
+  // Replay images and link entries, where Engine keeps them in R2.
+  replayObjects = new Map<string, Uint8Array>();
+  replayLinks = new Map<string, ReplayLinkEntry>();
+  // A status every replay route answers instead, to stand for an Engine
+  // that fails or has no replay route. Null: the routes answer.
+  replayFailure: number | null = null;
 
   // A texted photo Channels stored for this person (POST /documents):
   // Engine records it under the current generation, received now.
@@ -213,6 +234,38 @@ export class EngineDouble {
       this.persons.set(personId, p);
     }
     return p;
+  }
+
+  private replayStorage(personId: string): ReplayStorage {
+    return {
+      putImage: async (id, png, generation) => {
+        const hash = await sha256Hex(png);
+        const r2Key = `persons/${personId}/docs/g${generation}/${id}.${hash.slice(0, 16)}`;
+        this.replayObjects.set(r2Key, png);
+        return { hash, r2Key };
+      },
+      getImage: async (_id, r2Key) => this.replayObjects.get(r2Key) ?? null,
+      deleteObjects: async (keys) => keys.forEach((k) => this.replayObjects.delete(k)),
+      putLink: async (key, entry) => {
+        this.replayLinks.set(key, entry);
+      },
+      sealToken: (approvalId, token) => testCipher.seal(`fill-link-${approvalId}`, token),
+      openToken: (approvalId, sealed) => testCipher.open(`fill-link-${approvalId}`, sealed),
+    };
+  }
+
+  // What GET /fill/<token> answers: the replay page's HTML, or null for
+  // Engine's 404.
+  async replayPageAt(url: string): Promise<string | null> {
+    const token = REPLAY_LINK_PATH.exec(new URL(url).pathname)?.[1];
+    const entry = token ? this.replayLinks.get(await linkKey(token)) : undefined;
+    if (!token || !entry || entry.expiresAtMs <= this.now()) return null;
+    const { sql, store, gateway } = this.person(entry.personId);
+    return replayPage(
+      { sql, approvals: store, storage: this.replayStorage(entry.personId), nowMs: this.now(), exact: (a) => gateway.stillExact(a) },
+      entry.approvalId,
+      token,
+    );
   }
 
   gatewayFor(personId: string): ActionGateway {
@@ -351,6 +404,25 @@ export class EngineDouble {
         if (body.generation !== currentGeneration(sql)) return Response.json(STALE, { status: 409 });
         return Response.json({ closed: store.rejectSupersededProposals(body.generation) });
       }
+      const replay = rest.match(/^\/approvals\/([^/]+)\/replay$/);
+      if (replay && this.replayFailure !== null) return Response.json({ error: "Replay failed." }, { status: this.replayFailure });
+      if (replay && method === "PUT") {
+        if (!isGeneration(body?.generation)) return Response.json({ error: "Body needs a generation." }, { status: 400 });
+        const out = await bindFillReplay(
+          { sql, approvals: store, storage: this.replayStorage(personId), personId, nowMs: this.now() },
+          decodeURIComponent(replay[1]),
+          parseReplayInput(body),
+          body.generation,
+        );
+        if (out.status === "stale") return Response.json(STALE, { status: 409 });
+        if (out.status === "not_found") return Response.json({ error: "Approval not found." }, { status: 404 });
+        if (out.status === "closed") return Response.json({ error: "That approval no longer waits for a yes." }, { status: 409 });
+        return Response.json({ path: `/fill/${out.token}` }, { status: out.status === "created" ? 201 : 200 });
+      }
+      if (replay && method === "GET") {
+        const token = await replayLinkToken({ sql, storage: this.replayStorage(personId) }, decodeURIComponent(replay[1]), this.now());
+        return token ? Response.json({ path: `/fill/${token}` }) : Response.json({ error: "No replay." }, { status: 404 });
+      }
       const decision = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
       if (decision && method === "POST") {
         const id = decodeURIComponent(decision[1]);
@@ -423,7 +495,11 @@ export class EngineDouble {
       if (rest === "/conversation" && method === "DELETE") {
         const before = currentGeneration(sql);
         const removed = removeConversationState(sql, this.now(), parseGenerationInput(body).generation);
-        if (removed.generation > before) removeDeadlines(sql, this.now());
+        if (removed.generation > before) {
+          removeDeadlines(sql, this.now());
+          removeFillReplays(sql);
+        }
+        await finishLinkCleanup(sql, async (keys) => keys.forEach((k) => this.replayLinks.delete(k)));
         return Response.json({ removed });
       }
     } catch (err) {

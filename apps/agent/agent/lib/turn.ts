@@ -7,9 +7,11 @@
 // starts, then either answer the approval question Engine holds as
 // answerable or run the agent. A plain YES or NO to that question is the
 // person's decision on that exact Engine approval and never goes to the
-// model. When a turn proposes an action, its reply ends with the question
+// model. When a turn proposes an action, its reply carries the question
 // rendered from the request Engine froze, and the question travels on its
 // own too so Channels can check it goes out word for word and report it.
+// When the draft came from a fill, a line after the question links to the
+// page that replays it.
 //
 // A retried turn runs again: every mutation it makes is keyed by the turn
 // (reminders, memory) or held by Engine (approvals), so a rerun converges
@@ -24,7 +26,7 @@ import { profileContext } from "./profile.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
 import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
-import { closeReplaced, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, waitingProposals } from "./pending.js";
+import { closeReplaced, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, replayLine, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 
 const MAX_TEXTS = 10;
@@ -42,6 +44,8 @@ const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,200}$/;
 const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9:_-]{7,127}$/;
 // A person quiet this long is starting a new conversation.
 const CONVERSATION_GAP_MS = 15 * 60_000;
+// The replay link is optional; asking Engine for it never holds the reply long.
+const REPLAY_LINK_MS = 5_000;
 
 export interface AgentTurnInput {
   handleHash: string;
@@ -392,13 +396,27 @@ async function runTurn(
   const own = proposedIn(after, body.generation, body.turnId);
   // Only Engine's latest proposal is ever shown: never a draft a newer
   // turn replaced, whether this turn is a replay or just slow.
-  const latest = own ? (await engine.getPending()).latest : null;
+  const [pending, link] = own ? await Promise.all([engine.getPending(), replayLinkOf(engine, own.id)]) : [null, null];
+  const latest = pending?.latest ?? null;
   const proposed = own && latest?.approvalId === own.id && presentsExactly(renderQuestion(own)) ? own : null;
   const question = proposed ? renderQuestion(proposed) : null;
-  const text = [letter?.text ?? "", settled.status === "failed" ? "" : settled.text, question ?? ""].filter(Boolean).join("\n\n");
+  const text = [letter?.text ?? "", settled.status === "failed" ? "" : settled.text, question ?? "", question && link ? replayLine(link) : ""]
+    .filter(Boolean)
+    .join("\n\n");
   if (!text) return failure(502, "failed", settled.reason);
   if (!proposed || !question) return reply(text, letter ? "replied" : settled.status);
   return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: proposed.id } };
+}
+
+// The replay page of a filled form, or null: a question without a link
+// is still the whole question.
+async function replayLinkOf(engine: PersonEngine, approvalId: string): Promise<string | null> {
+  try {
+    return await engine.replayLink(approvalId, REPLAY_LINK_MS);
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_replay_link_failed", status: err instanceof EngineError ? err.status : null }));
+    return null;
+  }
 }
 
 // Records the turn in Engine's ledger. Engine's generation fence answers
