@@ -35,6 +35,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SANDBOX_PORTAL_TOKEN: ${{ secrets.SANDBOX_PORTAL_TOKEN }}
+          SANDBOX_PORTAL_DRAFT_TOKEN: ${{ secrets.SANDBOX_PORTAL_DRAFT_TOKEN }}
       # Succeeds when the bucket already exists; deploy below fails loudly on bad credentials.
       - run: wrangler r2 bucket create mano-sandbox-portal-files || true
         working-directory: apps/sandbox-portal
@@ -53,3 +54,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SANDBOX_PORTAL_TOKEN: ${{ secrets.SANDBOX_PORTAL_TOKEN }}
+      # Optional read-only token for GET /drafts/:id. Without it that route answers 503.
+      - run: |
+          if [ -n "$SANDBOX_PORTAL_DRAFT_TOKEN" ]; then
+            printf '%s' "$SANDBOX_PORTAL_DRAFT_TOKEN" | wrangler secret put SANDBOX_PORTAL_DRAFT_TOKEN
+          else
+            echo "SANDBOX_PORTAL_DRAFT_TOKEN is not set; GET /drafts/:id stays off."
+          fi
+        shell: bash
+        working-directory: apps/sandbox-portal
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SANDBOX_PORTAL_DRAFT_TOKEN: ${{ secrets.SANDBOX_PORTAL_DRAFT_TOKEN }}
