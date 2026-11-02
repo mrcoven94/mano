@@ -6,7 +6,9 @@
  * What it does: RulesChecker needs no keys and blocks content-originated
  * actions, missing consent, and claims with no cited source. GlimmerChecker
  * runs the rules first, then asks the guardian model for a strict-JSON
- * verdict with a 10 second timeout; any failure is a block. Its warm()
+ * verdict with a 10 second timeout; any failure is a block.
+ * GlimmerModelChecker is the model alone, for a caller that runs its own
+ * rules first (Engine's action gateway does). Its warm()
  * starts the model ahead of a check, for example when a conversation
  * starts, since a cold start takes minutes. redact()
  * strips personal details from text going to logs or outside graders.
@@ -48,6 +50,7 @@ export {
   DEFAULT_CHECK_TIMEOUT_MS,
   DEFAULT_GUARDIAN_MODEL,
   GlimmerChecker,
+  GlimmerModelChecker,
   MisconfiguredChecker,
   glimmerCheckerFromEnv,
 } from "./glimmer.js";
