@@ -241,6 +241,12 @@ describe("Guardian on the live path", () => {
     expect(warms).toBe(0);
   });
 
+  it("lets only a Guardian on this machine leave out the Modal key pair", () => {
+    expect(checkerSetting({ MANO_GUARDIAN_URL: "http://127.0.0.1:8899/check", MANO_GUARDIAN_TOKEN: "t" }).kind).toBe("guardian");
+    expect(checkerSetting({ MANO_GUARDIAN_URL: "http://localhost:8899/check", MANO_GUARDIAN_TOKEN: "t" }).kind).toBe("guardian");
+    expect(checkerSetting({ MANO_GUARDIAN_URL: "https://localhost.example/check", MANO_GUARDIAN_TOKEN: "t" }).kind).toBe("guardian-misconfigured");
+  });
+
   it("blocks everything when Guardian is half set up", async () => {
     const { MANO_GUARDIAN_URL: _url, ...credentialsOnly } = GUARDIAN_ENV();
     const halfSet: Record<string, string>[] = [
@@ -249,6 +255,9 @@ describe("Guardian on the live path", () => {
       { MANO_GUARDIAN_TOKEN: "guardian-token-not-real" },
       { ...GUARDIAN_ENV(), MANO_GUARDIAN_KEY_SECRET: "" },
       { ...GUARDIAN_ENV(), MANO_GUARDIAN_URL: "guardian.example" },
+      // A deployed Guardian with its URL and token but no Modal key pair
+      // would fail every check while /health said ok.
+      { MANO_GUARDIAN_URL: "https://guardian.example/check", MANO_GUARDIAN_TOKEN: "guardian-token-not-real" },
     ];
     for (const env of halfSet) {
       expect(checkerSetting(env).kind).toBe("guardian-misconfigured");
