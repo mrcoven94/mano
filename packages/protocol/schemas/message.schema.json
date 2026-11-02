@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://withmano.com/protocol/message.schema.json",
+  "type": "object",
+  "required": ["id", "version", "type", "caseId", "fromAgentId", "toAgentId", "payload", "sources", "approvedByHumanId", "idempotencyKey", "createdAt", "signature", "signerPublicKey"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "version": { "type": "number", "const": 1 },
+    "type": { "type": "string", "enum": ["case.open", "document.request", "document.provide", "decision", "notice", "consent.grant", "consent.revoke"] },
+    "caseId": { "type": "string", "minLength": 1 },
+    "fromAgentId": { "type": "string", "minLength": 1 },
+    "toAgentId": { "type": "string", "minLength": 1 },
+    "payload": { "type": "object" },
+    "sources": { "type": "array", "items": { "type": "object", "required": ["kind", "id"], "properties": { "kind": { "type": "string", "enum": ["document", "message", "profile", "program"] }, "id": { "type": "string" }, "quote": { "type": "string" } } } },
+    "approvedByHumanId": { "type": ["string", "null"] },
+    "idempotencyKey": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string" },
+    "signature": { "type": "string", "minLength": 1 },
+    "signerPublicKey": { "type": "string", "minLength": 1 }
+  }
+}

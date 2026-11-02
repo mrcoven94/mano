@@ -10,7 +10,18 @@ export const MAX_BUBBLE_CHARS = 600;
 
 const SENTENCE_END = /([.!?…]+["”’)]?\s+)/;
 
+// Each line is one thought and one bubble (voice v2): the model puts
+// separate thoughts on separate lines and keeps a checklist on one. A
+// line past the cap splits at sentences. Past maxBubbles, the remaining
+// lines join the last bubble, still capped.
 export function splitBubbles(text: string, maxBubbles = MAX_BUBBLES, maxCharsPerBubble = MAX_BUBBLE_CHARS): string[] {
+  const lines = text.split(/\n+/).map((l) => l.trim()).filter((l) => l.length > 0);
+  const bubbles = lines.flatMap((line) => splitLine(line, maxCharsPerBubble));
+  if (bubbles.length <= maxBubbles) return bubbles;
+  return [...bubbles.slice(0, maxBubbles - 1), ...splitLine(bubbles.slice(maxBubbles - 1).join(" "), maxCharsPerBubble, 1)];
+}
+
+function splitLine(text: string, maxCharsPerBubble: number, maxBubbles = Number.MAX_SAFE_INTEGER): string[] {
   const clean = text.replace(/\s+/g, " ").trim();
   if (!clean) return [];
   const sentences = clean

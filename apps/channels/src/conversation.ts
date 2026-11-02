@@ -2,7 +2,12 @@
 // handle. It owns the event log, the outbound state machine and the turn
 // runner for exactly one conversation. Internal routes only; the worker
 // reaches them from the queue consumer, never from the public internet.
+import { Decorations } from "./decorations.js";
 import {
+  AgentResponder,
+  ModelCrisisCheck,
+  reportPresentation,
+  saveDocumentInEngine,
   BlooioChannel,
   RecordingChannel,
   boundFetch,
@@ -10,6 +15,7 @@ import {
   StandInResponder,
   buildModelBaseUrl,
   createLogger,
+  errName,
   hashChatId,
   type Channel,
   type Logger,
@@ -22,8 +28,19 @@ export function parseMediaHosts(raw: string | undefined): string[] {
   const hosts = (raw ?? "").split(",").map((h) => h.trim().toLowerCase()).filter((h) => h.length > 0);
   return hosts.length > 0 ? hosts : [...DEFAULT_MEDIA_HOSTS];
 }
-import { R2FileStore, conversationFilePrefix } from "./files.js";
+import { R2FileStore, conversationFilePrefix, type DocumentStore } from "./files.js";
 import { SqlConversationStore } from "./store-sql.js";
+import {
+  advanceDelete,
+  agentConfigured,
+  type PendingDelete,
+  clearPendingDelete,
+  isDone,
+  loadPendingDelete,
+  newPendingDelete,
+  retryDelayMs,
+  savePendingDelete,
+} from "./conversation-delete.js";
 import { numberEnv, type Env } from "./env.js";
 
 export const GLOBAL_STATE_ID = "global";
@@ -83,23 +100,86 @@ export function globalStateStub(env: Env): DurableObjectStub {
   return env.CHANNEL_STATE.get(env.CHANNEL_STATE.idFromName(GLOBAL_STATE_ID));
 }
 
+// Mano's chat background is off unless turned on: the first version did
+// not fill the screen on an iPhone and dimmed badly in dark mode (PR 74).
+export function chatBackgroundUrl(env: Env): string | null {
+  if (env.MANO_CHAT_BACKGROUND_ENABLED !== "true") return null;
+  return env.MANO_CHAT_BACKGROUND_URL?.trim() || null;
+}
+
+// One switch for every reaction and the eyes: on unless set to "false".
+export function reactionsEnabled(env: Env): boolean {
+  return env.MANO_REACTIONS_ENABLED?.trim().toLowerCase() !== "false";
+}
+
 export function buildChannel(env: Env): Channel {
   if (env.BLOOIO_API_KEY && env.BLOOIO_CHANNEL_ID) {
-    return new BlooioChannel({ apiKey: env.BLOOIO_API_KEY, channelId: env.BLOOIO_CHANNEL_ID });
+    return new BlooioChannel({ apiKey: env.BLOOIO_API_KEY, channelId: env.BLOOIO_CHANNEL_ID, baseUrl: env.BLOOIO_BASE_URL || undefined });
   }
   return new RecordingChannel();
 }
 
-export function buildResponder(env: Env): Responder {
-  if (env.META_MODEL_API_KEY) {
-    const endpoint = buildModelBaseUrl({
-      accountId: env.CF_ACCOUNT_ID,
-      gatewayId: env.AI_GATEWAY_ID,
-      provider: env.AI_GATEWAY_PROVIDER,
+// Real texts go only to a Standard model ID (AGENTS.md rule 7). A
+// missing or -contributor ID fails closed to the stand-in, which calls
+// no model.
+function buildFallbackResponder(env: Env): Responder {
+  const model = env.MANO_REPLY_MODEL ?? "";
+  if (!env.META_MODEL_API_KEY || !model || model.endsWith("-contributor")) return new StandInResponder();
+  const endpoint = buildModelBaseUrl({
+    accountId: env.CF_ACCOUNT_ID,
+    gatewayId: env.AI_GATEWAY_ID,
+    provider: env.AI_GATEWAY_PROVIDER,
+  });
+  return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, model, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
+}
+
+// The model behind the crisis check for one short health question: the
+// Standard reply model, store: false, through AI Gateway. With no key, or
+// no Standard model ID, there is no check, and every such question gets
+// the crisis line (fail closed).
+export function buildCrisisCheck(env: Env): ModelCrisisCheck | null {
+  const model = env.MANO_REPLY_MODEL ?? "";
+  if (!env.META_MODEL_API_KEY || !model || model.endsWith("-contributor")) return null;
+  const endpoint = buildModelBaseUrl({
+    accountId: env.CF_ACCOUNT_ID,
+    gatewayId: env.AI_GATEWAY_ID,
+    provider: env.AI_GATEWAY_PROVIDER,
+  });
+  return new ModelCrisisCheck({ apiKey: env.META_MODEL_API_KEY, model, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
+}
+
+// Texted photos go to the person's Engine documents. Without Engine
+// configured nothing is stored, and the reply says the photo was not
+// saved.
+export function engineDocuments(env: Env, handleHash: string): DocumentStore | null {
+  if (!env.MANO_ENGINE_URL || !env.MANO_ENGINE_CHANNELS_TOKEN || !env.MANO_HANDLE_GRANT_SECRET) return null;
+  return {
+    put: (doc) =>
+      saveDocumentInEngine({
+        engineUrl: env.MANO_ENGINE_URL!,
+        channelsToken: env.MANO_ENGINE_CHANNELS_TOKEN!,
+        grantSecret: env.MANO_HANDLE_GRANT_SECRET!,
+        handleHash,
+        ...doc,
+      }),
+  };
+}
+
+export function buildResponder(env: Env, handleHash?: string, opts: { agentAllowed?: boolean } = {}): Responder {
+  const fallback = buildFallbackResponder(env);
+  if (opts.agentAllowed === false) return fallback;
+  // The agent answers when configured; otherwise the plain model answer
+  // stays the responder, and the agent falls back to it per turn.
+  if (env.AGENT_URL && env.MANO_AGENT_SECRET && env.MANO_HANDLE_GRANT_SECRET && handleHash) {
+    return new AgentResponder({
+      agentUrl: env.AGENT_URL,
+      secret: env.MANO_AGENT_SECRET,
+      grantSecret: env.MANO_HANDLE_GRANT_SECRET,
+      handleHash,
+      fallback,
     });
-    return new SparkResponder({ apiKey: env.META_MODEL_API_KEY, baseUrl: endpoint.url, collectLogs: endpoint.via === "direct" });
   }
-  return new StandInResponder();
+  return fallback;
 }
 
 export class ConversationDO implements DurableObject {
@@ -109,11 +189,18 @@ export class ConversationDO implements DurableObject {
   // Serializes turns across requests in one isolate, so an unfinished
   // row always means the last attempt died rather than a concurrent run.
   private turnChain: Promise<unknown> = Promise.resolve();
+  // Eyes and background work, outside the turn chain, kept across
+  // requests so STOP and a delete can cancel what an earlier one started.
+  private decorations: Decorations;
 
   constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx;
     this.env = env;
     this.logger = createLogger();
+    this.decorations = new Decorations({
+      hold: (work) => ctx.waitUntil(work),
+      onError: (name, err) => this.logger.warn("decoration_failed", { name, err: err instanceof Error ? err.name : "unknown" }),
+    });
   }
 
   private runTurnSerialized(handleHash: string): Promise<{ result: import("./runner.js").TurnResult; retryAfterMs: number }> {
@@ -129,27 +216,57 @@ export class ConversationDO implements DurableObject {
     return next;
   }
 
+  private crisisCheckNoticed = false;
+
+  // Built per request from env; says once per instance when it is off.
+  private crisisCheck(): ModelCrisisCheck | null {
+    const check = buildCrisisCheck(this.env);
+    if (!check && !this.crisisCheckNoticed) {
+      this.crisisCheckNoticed = true;
+      this.logger.warn("crisis_check_not_live", { detail: "no key or Standard model: every short health question gets the crisis line" });
+    }
+    return check;
+  }
+
   private runner(handleHash: string): { runner: ConversationRunner; channel: Channel; responder: Responder } {
     const channel = buildChannel(this.env);
-    const responder = buildResponder(this.env);
+    // While a delete waits for Engine, old approvals could still be
+    // answered, so the agent is not used: the plain model answers.
+    const responder = buildResponder(this.env, handleHash, { agentAllowed: loadPendingDelete(this.ctx.storage.sql) === null });
     const runner = new ConversationRunner({
       store: new SqlConversationStore(this.ctx.storage.sql),
       channel,
       responder,
-      files: this.env.FILES ? new R2FileStore(this.env.FILES) : null,
-      kekB64: this.env.ENCRYPTION_KEK_B64 || null,
+      documents: engineDocuments(this.env, handleHash),
       spend: new StateSpendLedger(globalStateStub(this.env)),
       logger: this.logger,
       nowMs: () => Date.now(),
       fetchFn: boundFetch,
+      decorations: this.decorations,
+      crisisCheck: this.crisisCheck(),
+      reportPresentation: agentConfigured(this.env)
+        ? (p, sentTexts) =>
+            reportPresentation({
+              agentUrl: this.env.AGENT_URL!,
+              secret: this.env.MANO_AGENT_SECRET!,
+              grantSecret: this.env.MANO_HANDLE_GRANT_SECRET!,
+              handleHash,
+              ...p,
+              sentTexts,
+            })
+        : undefined,
       config: {
         handleHash,
         batchMs: numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs),
         interimMs: numberEnv(this.env.TURN_INTERIM_MS, DEFAULT_RUNNER_CONFIG.interimMs),
+        typingRefreshMs: DEFAULT_RUNNER_CONFIG.typingRefreshMs,
         budgetUsd: numberEnv(this.env.MANO_TEXT_DAILY_BUDGET_USD, DEFAULT_RUNNER_CONFIG.budgetUsd),
         usdPer1kChars: numberEnv(this.env.MANO_TEXT_USD_PER_1K_CHARS, DEFAULT_RUNNER_CONFIG.usdPer1kChars),
         maxInboundAgeMs: DEFAULT_RUNNER_CONFIG.maxInboundAgeMs,
         mediaHosts: parseMediaHosts(this.env.BLOOIO_MEDIA_HOSTS),
+        eyesAfterMs: numberEnv(this.env.TURN_EYES_AFTER_MS, DEFAULT_RUNNER_CONFIG.eyesAfterMs),
+        backgroundUrl: chatBackgroundUrl(this.env),
+        reactionsEnabled: reactionsEnabled(this.env),
       },
     });
     return { runner, channel, responder };
@@ -224,17 +341,66 @@ export class ConversationDO implements DurableObject {
       });
       return Response.json({ ok: true });
     }
+    if (request.method === "POST" && url.pathname === "/internal/agent-send") {
+      const body = (await request.json().catch(() => null)) as {
+        handleHash?: unknown;
+        key?: unknown;
+        text?: unknown;
+        generation?: unknown;
+      } | null;
+      if (
+        !body ||
+        typeof body.handleHash !== "string" ||
+        typeof body.key !== "string" ||
+        !body.key ||
+        typeof body.text !== "string" ||
+        !body.text ||
+        typeof body.generation !== "number" ||
+        !Number.isInteger(body.generation) ||
+        body.generation < 0
+      ) {
+        return new Response("Bad agent send.", { status: 400 });
+      }
+      const { runner } = this.runner(body.handleHash);
+      try {
+        const result = await runner.sendAgentText({ key: body.key, text: body.text, generation: body.generation });
+        if (!result.sent && result.reason === "budget") {
+          return Response.json({ sent: false, reason: "budget" }, { status: 429 });
+        }
+        return Response.json(result);
+      } catch (err) {
+        this.logger.warn("agent_send_failed", { handle: body.handleHash, err: errName(err) });
+        return new Response("Agent send failed.", { status: 500 });
+      }
+    }
     if (request.method === "POST" && url.pathname === "/internal/delete") {
       const body = (await request.json().catch(() => null)) as { handleHash?: unknown } | null;
       if (!body || typeof body.handleHash !== "string") return new Response("Bad delete.", { status: 400 });
-      new SqlConversationStore(this.ctx.storage.sql).wipe(Date.now());
-      let filesDeleted = 0;
-      if (this.env.FILES) {
-        filesDeleted = await new R2FileStore(this.env.FILES).deletePrefix(conversationFilePrefix(body.handleHash));
+      // One synchronous step, before any await: wipe Channels' store and
+      // record everything still owed. Until the record is cleared the
+      // agent stays off for this handle and the alarm keeps retrying.
+      const sql = this.ctx.storage.sql;
+      const store = new SqlConversationStore(sql);
+      store.wipe(Date.now());
+      this.decorations.cancelAll("deleted");
+      const intent = { ...newPendingDelete(this.env, body.handleHash, store.meta().generation), nextAtMs: Date.now() };
+      savePendingDelete(sql, intent);
+      await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(1));
+      const { pending, engineRemoved } = await this.advancePendingDelete(intent);
+      if (!pending) {
+        this.logger.info("conversation_deleted", { handle: body.handleHash, engineCleared: true, agentCleared: true });
+        return Response.json({ ok: true, engineRemoved, agentCleared: agentConfigured(this.env) ? true : null });
       }
-      await this.ctx.storage.deleteAlarm();
-      this.logger.info("conversation_deleted", { handle: body.handleHash, filesDeleted });
-      return Response.json({ ok: true, filesDeleted });
+      return Response.json(
+        {
+          ok: false,
+          pending: true,
+          filesDeleted: pending.filesDone,
+          engineConfirmed: pending.engineDone,
+          agentCleared: pending.agentDone,
+        },
+        { status: 202 },
+      );
     }
     if (request.method === "GET" && url.pathname === "/internal/standin") {
       // Only reachable when no provider key is configured, in which case
@@ -250,12 +416,57 @@ export class ConversationDO implements DurableObject {
         introduced: store.meta().introduced,
         pending: store.pending().length,
         approvals: store.pendingApprovals(Date.now()).length,
+        engineDeletePending: loadPendingDelete(this.ctx.storage.sql),
       });
     }
     return new Response("Not found.", { status: 404 });
   }
 
+  // Works through a recorded delete once. Clears the record when every
+  // part is done; otherwise counts the attempt and schedules the next.
+  // Never throws: whatever fails stays in the record for the alarm.
+  private async advancePendingDelete(
+    before: PendingDelete,
+  ): Promise<{ pending: PendingDelete | null; engineRemoved: Record<string, number | boolean> | null }> {
+    const sql = this.ctx.storage.sql;
+    let result: { pending: PendingDelete; engineRemoved: Record<string, number | boolean> | null };
+    try {
+      result = await advanceDelete(this.env, before, undefined, async () => {
+        if (this.env.FILES) await new R2FileStore(this.env.FILES).deletePrefix(conversationFilePrefix(before.handleHash));
+      });
+    } catch (err) {
+      this.logger.warn("conversation_delete_failed", { handle: before.handleHash, err: errName(err) });
+      result = { pending: before, engineRemoved: null };
+    }
+    if (isDone(result.pending)) {
+      clearPendingDelete(sql);
+      return { pending: null, engineRemoved: result.engineRemoved };
+    }
+    const attempts = before.attempts + 1;
+    const next = { ...result.pending, attempts, nextAtMs: Date.now() + retryDelayMs(attempts) };
+    savePendingDelete(sql, next);
+    this.logger.warn("conversation_delete_pending", {
+      handle: before.handleHash,
+      attempts,
+      filesDeleted: next.filesDone,
+      engineConfirmed: next.engineDone,
+      agentCleared: next.agentDone,
+    });
+    return { pending: next, engineRemoved: result.engineRemoved };
+  }
+
+  // Retries a recorded delete once its next attempt is due.
+  private async retryPendingDelete(): Promise<void> {
+    const before = loadPendingDelete(this.ctx.storage.sql);
+    if (!before || before.nextAtMs > Date.now()) return;
+    const { pending } = await this.advancePendingDelete(before);
+    if (!pending) this.logger.info("conversation_delete_confirmed", { handle: before.handleHash, attempts: before.attempts + 1 });
+  }
+
   async alarm(): Promise<void> {
+    await this.retryPendingDelete();
+    const stillPending = loadPendingDelete(this.ctx.storage.sql);
+    if (stillPending) await this.ctx.storage.setAlarm(stillPending.nextAtMs);
     const { result, retryAfterMs } = await this.runTurnSerialized(this.ctx.id.name ?? this.ctx.id.toString());
     const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
     if (result === "retry") {

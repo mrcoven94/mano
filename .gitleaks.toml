@@ -1,0 +1,8 @@
+# Mano secret-scan config. Example env files list variable names only,
+# never values; findings in them (including historical blobs) are
+# allowlisted by path.
+title = "Mano gitleaks config"
+
+[allowlist]
+description = "Example files carry names only, never values."
+paths = ['''.*\.example$''']

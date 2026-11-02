@@ -13,12 +13,19 @@ import {
 } from "./channel.js";
 import { normalizeHandle } from "./handles.js";
 import { boundFetch } from "./fetch.js";
-import type { EventAttachment, NormalizedEvent, NormalizedEventKind } from "./types.js";
+import type { EventAttachment, NormalizedEvent, NormalizedEventKind, Reaction } from "./types.js";
 
 export const BLOOIO_BASE_URL = "https://api.blooio.com/v4";
 export const BLOOIO_WEBHOOK_API_VERSION = "2026-10-01";
 
 const SEND_TIMEOUT_MS = 15000;
+// An image upload gets longer than a text send.
+const BACKGROUND_TIMEOUT_MS = 30_000;
+
+// The caller's cancel signal, bounded by a timeout either way.
+function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
+  return signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
+}
 const SEND_MAX_ATTEMPTS = 3;
 
 export interface BlooioOptions {
@@ -138,6 +145,10 @@ export function parseBlooioEvent(raw: unknown): NormalizedEvent | null {
     direction,
     text: typeof data.text === "string" ? data.text : null,
     attachments: parseAttachments(data.attachments),
+    reaction:
+      kind === "reaction" && asString(data.reaction)
+        ? { value: asString(data.reaction)!, action: asString(data.action) === "remove" ? "remove" : "add" }
+        : null,
     errorCode: asString(error?.code),
     errorMessage: typeof error?.message === "string" ? (error.message as string) : null,
     occurredAtMs,
@@ -214,7 +225,8 @@ export class BlooioChannel implements Channel {
     const path = input.chatId
       ? `/chats/${encodeURIComponent(input.chatId)}/messages`
       : `/channels/${encodeURIComponent(this.channelId)}/messages`;
-    const body = input.chatId ? { text: input.text } : { to: input.to, text: input.text };
+    const body: Record<string, string> = input.chatId ? { text: input.text } : { to: input.to, text: input.text };
+    if (input.replyTo) body.reply_to = input.replyTo;
     let lastErr: unknown = null;
     for (let attempt = 1; attempt <= SEND_MAX_ATTEMPTS; attempt++) {
       try {
@@ -266,6 +278,66 @@ export class BlooioChannel implements Channel {
     if (!res.ok && res.status !== 409) {
       throw new Error(`Blooio typing failed: ${res.status}`);
     }
+  }
+
+  async react(chatId: string, messageId: string, reaction: Reaction): Promise<void> {
+    await this.reaction(chatId, messageId, `+${reaction}`);
+  }
+
+  // A native tapback goes by name (+love); an emoji goes as itself (+🙏).
+  private async reaction(chatId: string, messageId: string, value: string): Promise<void> {
+    const res = await this.fetchFn(
+      `${this.baseUrl}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/reactions`,
+      {
+        method: "POST",
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+        headers: this.headers({ "content-type": "application/json" }),
+        body: JSON.stringify({ reaction: value }),
+      },
+    );
+    if (!res.ok && res.status !== 409) {
+      throw new Error(`Blooio reaction failed: ${res.status}`);
+    }
+  }
+
+  // PUT /chats/{chatId}/background takes the image as a multipart field
+  // named "background" (jpeg, png, gif, webp or heic, at most 10 MB).
+  // fetch sets the multipart content type with its boundary. A 4xx other
+  // than 408 means it was not set (ChannelFailed); a 5xx, a 408, a
+  // timeout or a dropped connection may have set it (ChannelUncertain),
+  // so the caller reads it back before trying again.
+  async setBackground(chatId: string, image: Blob, signal?: AbortSignal): Promise<void> {
+    const form = new FormData();
+    form.append("background", image, "background.png");
+    let res: Response;
+    try {
+      res = await this.fetchFn(`${this.baseUrl}/chats/${encodeURIComponent(chatId)}/background`, {
+        method: "PUT",
+        signal: withTimeout(signal, BACKGROUND_TIMEOUT_MS),
+        headers: this.headers(),
+        body: form,
+      });
+    } catch (err) {
+      throw new ChannelUncertain(err instanceof Error ? err.message : "Blooio background outcome unknown.", 1);
+    }
+    if (res.ok) return;
+    if (res.status !== 408 && res.status < 500) {
+      const data: unknown = await this.readJson(res);
+      throw new ChannelFailed(res.status, errorCodeOf(res.status, data), `Blooio background failed: ${res.status}`);
+    }
+    throw new ChannelUncertain(`Blooio background outcome unknown: ${res.status}`, 1);
+  }
+
+  // GET /chats/{chatId}/background, read live from the device.
+  async hasBackground(chatId: string, signal?: AbortSignal): Promise<boolean> {
+    const res = await this.fetchFn(`${this.baseUrl}/chats/${encodeURIComponent(chatId)}/background`, {
+      signal: withTimeout(signal, SEND_TIMEOUT_MS),
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error(`Blooio background read failed: ${res.status}`);
+    const data: unknown = await this.readJson(res);
+    const inner = isRecord(data) && isRecord(data.data) ? data.data : null;
+    return inner?.has_background === true;
   }
 
   async markRead(chatId: string): Promise<void> {

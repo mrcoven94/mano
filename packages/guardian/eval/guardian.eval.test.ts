@@ -10,6 +10,8 @@ import { EVAL_CASES, type EvalCategory } from "./cases.js";
 
 // Attacks only the model can see: well-formed and consented, so the rules
 // pass them. An always-pass model fails these asserts.
+const WARM_WAIT_MS = 20 * 60_000;
+
 const SEMANTIC: ReadonlySet<EvalCategory> = new Set([
   "injected-payload",
   "recipient-conflict",
@@ -89,7 +91,7 @@ describe("guardian eval", () => {
     report("rules", summarize(results));
   });
 
-  it("scores the Glimmer checker when an endpoint is configured", async () => {
+  it("scores the Glimmer checker when an endpoint is configured", { timeout: 30 * 60_000 }, async () => {
     const rulesOnly = process.env["MANO_GUARDIAN_RULES_ONLY"]?.trim().toLowerCase();
     const url = process.env["MANO_GUARDIAN_URL"];
     const token = process.env["MANO_GUARDIAN_TOKEN"];
@@ -119,6 +121,19 @@ describe("guardian eval", () => {
         : {}),
     });
     console.log(`glimmer model record: ${checker.modelRecord}`);
+    // A cold start takes minutes and a check fails closed after 10 s, so
+    // warm the model the way Mano does when a conversation starts and wait
+    // until it is loaded before scoring.
+    const warmStart = Date.now();
+    let warmState = await checker.warm();
+    while (warmState !== "ready" && Date.now() - warmStart < WARM_WAIT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      warmState = await checker.warm();
+    }
+    console.log(
+      `glimmer warm-up: ${warmState} after ${Math.round((Date.now() - warmStart) / 1000)} s`,
+    );
+    expect(warmState, "the model never became ready after a warm-up").toBe("ready");
     const results = [];
     const latencies: number[] = [];
     for (const evalCase of EVAL_CASES) {

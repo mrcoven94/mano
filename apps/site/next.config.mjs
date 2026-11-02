@@ -1,3 +1,5 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {};
+const nextConfig = {
+  transpilePackages: ["@mano/accounts", "@mano/quality"],
+};
 export default nextConfig;

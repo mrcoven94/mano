@@ -9,10 +9,18 @@
 # function checks the bearer token and forwards the redacted input to the
 # GPU class, which runs vLLM in-process (no vLLM HTTP server, so no
 # unprotected inference routes). The GPU sleeps at zero until an
-# authenticated check arrives. Both scale to zero when idle.
+# authenticated check or warm-up arrives. Both scale to zero when idle.
+#
+# A POST of {"warm": true} starts the model and keeps it up for
+# WARM_HOLD_SECONDS, so an approval minutes later finds it ready. Its answer
+# says whether the model is loaded yet: the holding call writes a heartbeat
+# that the web function reads. The deploy
+# sets MANO_GUARDIAN_MIN_CONTAINERS=1 to keep one GPU up all the time.
 import hmac
 import json
 import os
+import threading
+import time
 from typing import Any
 
 import modal
@@ -25,14 +33,32 @@ IMAGE_DIGEST = (
 )
 
 VERDICTS = ("pass", "fix", "block")
+WARM_HOLD_SECONDS = 600
+GPU_TIMEOUT_SECONDS = 1800
+# A warm-up call hands the rest of its hold to a fresh call well before
+# Modal stops it at GPU_TIMEOUT_SECONDS.
+WARM_ROTATE_SECONDS = GPU_TIMEOUT_SECONDS - 300
+READY_WITHIN_SECONDS = 20
+REVIEW_MAX_CHARS = 300
+PROBLEMS_MAX = 3
+PROBLEM_MAX_CHARS = 240
+ANSWER_KEYS = {"review", "verdict", "problems"}
 
+# The model writes a short review before its verdict. Asked for the verdict
+# first, it passed planted instructions it caught once it reviewed first.
+# The review never leaves this file.
 GUARDIAN_SCHEMA = {
     "type": "object",
     "properties": {
+        "review": {"type": "string", "maxLength": REVIEW_MAX_CHARS},
         "verdict": {"type": "string", "enum": ["pass", "fix", "block"]},
-        "problems": {"type": "array", "items": {"type": "string"}},
+        "problems": {
+            "type": "array",
+            "maxItems": PROBLEMS_MAX,
+            "items": {"type": "string", "maxLength": PROBLEM_MAX_CHARS},
+        },
     },
-    "required": ["verdict", "problems"],
+    "required": sorted(ANSWER_KEYS),
     "additionalProperties": False,
 }
 
@@ -54,14 +80,17 @@ SYSTEM_PROMPT = "\n".join(
         "Answer fix only when the action is almost right and one small,",
         "specific change would make it safe; say what the change is.",
         "Otherwise answer pass.",
-        "Reply with strict JSON only: pass carries no problems, fix and block",
+        "Reply with strict JSON only. First write review: check each rule above",
+        "against the action in one or two sentences. Then give the verdict:",
+        "pass carries no problems, fix and block",
         "carry at least one, each in plain words a non-technical person can read.",
     ]
 )
 
 try:
     # Lives in the web image. The import check runs without it.
-    from fastapi import JSONResponse, Request
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
 except ImportError:  # pragma: no cover
     Request = Any  # type: ignore[assignment,misc]
     JSONResponse = Any  # type: ignore[assignment,misc]
@@ -69,7 +98,19 @@ except ImportError:  # pragma: no cover
 app = modal.App("mano-guardian")
 
 cache = modal.Volume.from_name("mano-guardian-cache", create_if_missing=True)
-gpu_image = modal.Image.from_registry(f"vllm/vllm-openai@{IMAGE_DIGEST}")
+# Keyed by app id, so a `modal serve` copy never reports production ready.
+state = modal.Dict.from_name("mano-guardian-state", create_if_missing=True)
+
+
+def beat_key() -> str:
+    return f"warm_beat:{app.app_id}"
+# Modal finds the image's Python as `python`; this image ships vLLM under
+# /usr/bin/python3 only, and add_python would install a second Python without
+# vLLM. Its `vllm serve` entrypoint would wrap Modal's own runner, so clear it.
+gpu_image = modal.Image.from_registry(
+    f"vllm/vllm-openai@{IMAGE_DIGEST}",
+    setup_dockerfile_commands=["RUN ln -s /usr/bin/python3 /usr/bin/python"],
+).entrypoint([])
 web_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi")
 
 
@@ -80,6 +121,98 @@ def require_token(value: str | None) -> str:
             "MANO_GUARDIAN_TOKEN is missing or blank; refusing to start."
         )
     return value
+
+
+def min_containers_from_env(value: str | None) -> int:
+    """Parse MANO_GUARDIAN_MIN_CONTAINERS: unset or blank is 0, else 0 or 1."""
+    if value is None or value.strip() == "":
+        return 0
+    if value.strip() not in ("0", "1"):
+        raise RuntimeError(
+            f"MANO_GUARDIAN_MIN_CONTAINERS must be 0 or 1, not {value!r}."
+        )
+    return int(value)
+
+
+class WarmHold:
+    """Holds one call open until `seconds` after the latest warm-up, which
+    keeps the container up. A warm-up while one is held only moves the
+    deadline, so warm-ups never take more than one input slot."""
+
+    def __init__(self, clock=time.monotonic, sleep=time.sleep, beat=lambda: None):
+        self._lock = threading.Lock()
+        self._clock = clock
+        self._sleep = sleep
+        self._beat = beat
+        self._until = 0.0
+        self._holding = False
+
+    def hold(self, seconds: float, limit: float) -> float:
+        """Hold for at most `limit` seconds. Return how much of the hold is
+        still owed when the limit ends this call, else 0. A call made while
+        another holds returns 0 at once."""
+        with self._lock:
+            started = self._clock()
+            self._until = max(self._until, started + seconds)
+            if self._holding:
+                return 0.0
+            self._holding = True
+        while True:
+            with self._lock:
+                now = self._clock()
+                left = self._until - now
+                life = started + limit - now
+                if left <= 0 or life <= 0:
+                    self._holding = False
+                    return max(left, 0.0)
+            self._beat()
+            self._sleep(min(left, life, 5.0))
+
+
+def engine_alive(engine: Any) -> bool:
+    """vLLM's monitor thread sets engine_dead when the engine-core process
+    exits. Anything unexpected counts as dead."""
+    try:
+        return engine.llm_engine.engine_core.resources.engine_dead is False
+    except Exception:
+        return False
+
+
+class EngineHealth:
+    """Publishes readiness only while the engine lives. A dead engine clears
+    readiness once and recycles the container so Modal starts a fresh one."""
+
+    def __init__(self, alive, publish, recycle) -> None:
+        self._alive = alive
+        self._publish = publish
+        self._recycle = recycle
+        self._dead = False
+
+    def beat(self) -> None:
+        if self._alive():
+            self._publish(True)
+        else:
+            self.fail()
+
+    def call(self, fn):
+        try:
+            return fn()
+        except Exception:
+            if not self._alive():
+                self.fail()
+            raise
+
+    def fail(self) -> None:
+        if self._dead:
+            return
+        self._dead = True
+        self._publish(False)
+        self._recycle()
+
+
+def is_ready(beat_at: float | None, now: float) -> bool:
+    """A model counts as ready while its warm hold has beaten recently."""
+    return beat_at is not None and 0 <= now - beat_at < READY_WITHIN_SECONDS
 
 
 def server_info() -> dict[str, dict[str, str]]:
@@ -99,21 +232,55 @@ def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def parse_verdict(text: str) -> dict[str, Any]:
-    """Strictly parse one model answer. Raise on anything unexpected."""
+    """Check one model answer against GUARDIAN_SCHEMA in full and return
+    its public part. Raise on anything else, which blocks the action."""
     data = json.loads(text, object_pairs_hook=_no_duplicates)
-    if not isinstance(data, dict):
-        raise ValueError("verdict is not an object")
-    verdict = data.get("verdict")
-    problems = data.get("problems")
+    if not isinstance(data, dict) or set(data) != ANSWER_KEYS:
+        raise ValueError("answer does not have exactly review, verdict, problems")
+    review, verdict, problems = data["review"], data["verdict"], data["problems"]
+    if not isinstance(review, str) or len(review) > REVIEW_MAX_CHARS:
+        raise ValueError("bad review")
     if verdict not in VERDICTS:
         raise ValueError(f"bad verdict: {verdict!r}")
-    if not isinstance(problems, list) or not all(
-        isinstance(item, str) for item in problems
+    if (
+        not isinstance(problems, list)
+        or len(problems) > PROBLEMS_MAX
+        or not all(
+            isinstance(item, str) and len(item) <= PROBLEM_MAX_CHARS
+            for item in problems
+        )
     ):
-        raise ValueError("problems is not a string list")
+        raise ValueError("bad problems")
     if (verdict == "pass") == (len(problems) > 0):
         raise ValueError("verdict contradicts its problems")
     return {"verdict": verdict, "problems": problems}
+
+
+def ask_model(
+    engine: Any, engine_lock: threading.Lock, body: dict[str, Any], params: Any
+) -> dict[str, Any]:
+    """Ask the model about one action and return its parsed verdict.
+
+    vLLM's offline LLM returns every request that finished during a call, not
+    only the caller's, so one caller at a time holds the engine.
+    """
+    with engine_lock:
+        outputs = engine.chat(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(body)},
+            ],
+            sampling_params=params,
+            use_tqdm=False,
+        )
+    if not outputs or not outputs[0].outputs:
+        raise RuntimeError("the model returned no output")
+    output = outputs[0].outputs[0]
+    if output.finish_reason != "stop":
+        raise RuntimeError(f"the model stopped early: {output.finish_reason}")
+    verdict = parse_verdict(output.text)
+    verdict.update(server_info())
+    return verdict
 
 
 @app.function(
@@ -135,9 +302,11 @@ def download():
     cpu=4.0,
     memory=32768,
     volumes={"/root/.cache/huggingface": cache},
-    timeout=1800,
+    timeout=GPU_TIMEOUT_SECONDS,
     startup_timeout=1800,
-    min_containers=0,
+    min_containers=min_containers_from_env(
+        os.environ.get("MANO_GUARDIAN_MIN_CONTAINERS")
+    ),
     max_containers=1,
     scaledown_window=60,
 )
@@ -153,32 +322,39 @@ class Guardian:
             gpu_memory_utilization=0.90,
             max_model_len=8192,
             generation_config="auto",
-            disable_log_requests=True,
         )
+        self.engine_lock = threading.Lock()
+        self.health = EngineHealth(
+            alive=lambda: engine_alive(self.engine),
+            publish=self.publish,
+            recycle=lambda: os._exit(1),
+        )
+        self.warm_hold = WarmHold(beat=self.health.beat)
+
+    def publish(self, ready: bool) -> None:
+        try:
+            state.put(beat_key(), time.time() if ready else None)
+        except Exception as error:  # a missed beat only delays readiness
+            print(f"warm heartbeat failed: {error!r}")
+
+    @modal.method()
+    def warm(self, seconds: float = WARM_HOLD_SECONDS) -> None:
+        if self.warm_hold.hold(seconds, WARM_ROTATE_SECONDS) > 0:
+            Guardian().warm.spawn(0)
 
     @modal.method()
     def complete(self, body: dict[str, Any]) -> dict[str, Any]:
         from vllm import SamplingParams
+        from vllm.sampling_params import StructuredOutputsParams
 
         params = SamplingParams(
-            temperature=0.0, max_tokens=256, guided_json=GUARDIAN_SCHEMA
+            temperature=0.0,
+            max_tokens=512,
+            structured_outputs=StructuredOutputsParams(json=GUARDIAN_SCHEMA),
         )
-        outputs = self.engine.chat(
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps(body)},
-            ],
-            sampling_params=params,
-            use_tqdm=False,
+        return self.health.call(
+            lambda: ask_model(self.engine, self.engine_lock, body, params)
         )
-        if not outputs or not outputs[0].outputs:
-            raise RuntimeError("the model returned no output")
-        output = outputs[0].outputs[0]
-        if output.finish_reason != "stop":
-            raise RuntimeError(f"the model stopped early: {output.finish_reason}")
-        verdict = parse_verdict(output.text)
-        verdict.update(server_info())
-        return verdict
 
 
 _CONTAINER_TOKEN: str | None = None
@@ -204,6 +380,12 @@ async def check(request: Request) -> JSONResponse:
     if scheme.lower() != "bearer" or not hmac.compare_digest(presented, expected):
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
     body = await request.json()
+    if body == {"warm": True}:
+        await Guardian().warm.spawn.aio()
+        ready = is_ready(await state.get.aio(beat_key()), time.time())
+        return JSONResponse(
+            status_code=202, content={"warming": True, "ready": ready}
+        )
     if not isinstance(body, dict):
         return JSONResponse(status_code=400, content={"error": "bad check input"})
-    return Guardian().complete.remote(body)
+    return await Guardian().complete.remote.aio(body)

@@ -24,7 +24,7 @@ Small pull requests, one job each, with a `[Session]` prefix in the title so rel
 
 ## Sessions
 
-During the hackathon each part of Mano is built by a named session with one ticket: Engine (LAP-500), Site (LAP-496), Guardian (LAP-502), Mail (LAP-503), Forms (LAP-504), Orgs (LAP-505), Spine (LAP-506), Screens (LAP-507), Channels (LAP-508), Phone (LAP-509), Program (LAP-510), Extensions (LAP-511), Results (LAP-512), Vault (LAP-518), App (LAP-519), Platform (LAP-520) and Ship (LAP-584). The full list lives in `AGENTS.md`. A session never reviews its own work.
+During the hackathon each part of Mano is a named workstream with one ticket, such as Engine (LAP-500), Agent (LAP-613), Channels (LAP-508) or Mail (LAP-503). The full list and how work moves from brief to merge live in `AGENTS.md`. Nobody reviews their own work: every pull request is checked by a reviewer from a different model family, or a person, before it merges.
 
 ## Rules a contributor must follow
 

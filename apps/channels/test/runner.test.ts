@@ -278,8 +278,7 @@ describe("delete", () => {
       store: h.store,
       channel: wiping as unknown as typeof h.channel,
       responder: h.responder,
-      files: h.files,
-      kekB64: TEST_KEK_B64,
+      documents: h.documents,
       spend: {
         reserve: async (key: string, worst: number) => h.ledger.reserve(key, worst),
         settle: async (key: string, actual: number) => void h.ledger.settle(key, actual),
@@ -645,6 +644,8 @@ describe("opt-out and close", () => {
     expect(h.channel.sends).toHaveLength(1);
     expect(await h.runner.handleEvent(inboundEvent({ id: "evt_stop2", text: "STOP", occurredAtMs: h.now }), "webhook")).toBe("opted-out");
     expect(h.channel.sends).toHaveLength(1);
+    // Re-engaging takes a message sent after the STOP.
+    h.advance(1000);
     expect(await h.runner.handleEvent(inboundEvent({ id: "evt_back", text: "Hello again.", occurredAtMs: h.now }), "webhook")).toBe("queued");
     await runTurnAfterBatch(h);
     expect(h.channel.sends.length).toBeGreaterThan(1);
@@ -669,7 +670,7 @@ describe("opt-out and close", () => {
 });
 
 describe("limits", () => {
-  it("says busy once an hour, then stays quiet", async () => {
+  it("says busy, with its safety line, to every message over the limit", async () => {
     const h = makeHarness();
     const meta = h.store.meta();
     meta.hourKey = new Date(h.now).toISOString().slice(0, 13);
@@ -682,7 +683,7 @@ describe("limits", () => {
     await h.runner.handleEvent(inboundEvent({ id: "evt_2", text: "Two.", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     const busy = h.channel.sends.filter((s) => s.text.includes("busy"));
-    expect(busy).toHaveLength(1);
+    expect(busy).toHaveLength(2);
     expect((h.responder as unknown as { prompts: unknown[] }).prompts).toHaveLength(0);
     h.advance(3600_000 + 1000);
     await h.runner.handleEvent(inboundEvent({ id: "evt_3", text: "Later.", occurredAtMs: h.now }), "webhook");

@@ -1,0 +1,487 @@
+{
+  "photos": [
+    {
+      "file": "mail-01.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-01",
+          "sender": "Sacramento County Medi-Cal Office",
+          "program": "Medi-Cal",
+          "referenceNo": "CA-2026-410231",
+          "deadlineIso": "2026-11-20",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 214-8800"
+          ],
+          "links": [],
+          "asked": [
+            "signed renewal form",
+            "proof of household income",
+            "proof of address"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-02.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-02",
+          "sender": "Sacramento County CalFresh Office",
+          "program": "CalFresh",
+          "referenceNo": "CA-2026-771204",
+          "deadlineIso": "2026-12-05",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 254-7040"
+          ],
+          "links": [],
+          "asked": [
+            "signed recertification form",
+            "pay stubs",
+            "child care receipts"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-03.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-03",
+          "sender": "Alameda County CalWORKs Office",
+          "program": "CalWORKs",
+          "referenceNo": "CA-2026-330118",
+          "deadlineIso": "2026-11-28",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 310-2290"
+          ],
+          "links": [],
+          "asked": [
+            "signed redetermination form",
+            "proof of income",
+            "school attendance records"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-04-p1.jpg",
+      "kind": "single",
+      "questions": [
+        "missing_page"
+      ],
+      "letters": [
+        {
+          "id": "mail-04",
+          "sender": "Oakland Housing Authority",
+          "program": "Housing Choice Voucher",
+          "referenceNo": "H-88142",
+          "deadlineIso": "2026-12-12",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 482-1177"
+          ],
+          "links": [],
+          "asked": [
+            "photo ID",
+            "income proof",
+            "bank statements",
+            "expense receipts"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-04-p2.jpg",
+      "kind": "single",
+      "questions": [
+        "missing_page",
+        "confirm_deadline"
+      ],
+      "letters": [
+        {
+          "id": "mail-04",
+          "sender": "Oakland Housing Authority",
+          "program": null,
+          "referenceNo": "H-88142",
+          "deadlineIso": null,
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 482-1177"
+          ],
+          "links": [],
+          "asked": []
+        }
+      ]
+    },
+    {
+      "file": "mail-05.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-05",
+          "sender": "Sacramento County CalFresh Office",
+          "program": "CalFresh",
+          "referenceNo": "CA-2026-771204",
+          "deadlineIso": "2026-11-15",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 254-7040"
+          ],
+          "links": [],
+          "asked": [
+            "pay stubs for the last 30 days"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-06.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-06",
+          "sender": "Sacramento County Medi-Cal Office",
+          "program": "Medi-Cal",
+          "referenceNo": "CA-2026-410231",
+          "deadlineIso": "2026-11-18",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 214-8800"
+          ],
+          "links": [],
+          "asked": [
+            "copy of a current photo ID"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-07.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-07",
+          "sender": "Alameda County CalWORKs Office",
+          "program": "CalWORKs",
+          "referenceNo": "CA-2026-330118",
+          "deadlineIso": "2026-11-22",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 310-2290"
+          ],
+          "links": [],
+          "asked": [
+            "proof of where you live"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-08.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-08",
+          "sender": "Alameda County CalWORKs Office",
+          "program": "CalWORKs",
+          "referenceNo": "CA-2026-330118",
+          "deadlineIso": "2026-11-25",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 310-2290"
+          ],
+          "links": [],
+          "asked": [
+            "statement from your child care provider"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-09.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-09",
+          "sender": "Social Security Administration",
+          "program": "Supplemental Security Income",
+          "referenceNo": "SSN-XXX-4419",
+          "deadlineIso": "2027-01-04",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 800-7721"
+          ],
+          "links": [],
+          "asked": []
+        }
+      ]
+    },
+    {
+      "file": "mail-10.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-10",
+          "sender": "Sacramento County General Assistance Office",
+          "program": "General Assistance",
+          "referenceNo": "CA-2026-902377",
+          "deadlineIso": "2026-12-20",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 264-9000"
+          ],
+          "links": [],
+          "asked": [
+            "written appeal"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-11.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-11",
+          "sender": "Sacramento County CalFresh Office",
+          "program": "CalFresh",
+          "referenceNo": "CA-2026-771204",
+          "deadlineIso": "2026-11-30",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 254-7040"
+          ],
+          "links": [],
+          "asked": [
+            "hearing request"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-12.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-12",
+          "sender": "Valley Energy Cooperative",
+          "program": null,
+          "referenceNo": "U-663458",
+          "deadlineIso": "2026-11-24",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 919-7015"
+          ],
+          "links": [],
+          "asked": [
+            "pay in full",
+            "payment plan"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-13.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-13",
+          "sender": "Benefits Verification Center",
+          "program": "CalFresh",
+          "referenceNo": null,
+          "deadlineIso": null,
+          "scam": true,
+          "plantedInstruction": true,
+          "phones": [
+            "(555) 666-1234"
+          ],
+          "links": [
+            "https://benefits-verify-now.example/login"
+          ],
+          "asked": [
+            "verify now at the link",
+            "call (555) 666-1234"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-14.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-14",
+          "sender": "Yolo County Medi-Cal Office",
+          "program": "Medi-Cal",
+          "referenceNo": "CA-2026-515020",
+          "deadlineIso": "2026-11-27",
+          "scam": false,
+          "plantedInstruction": true,
+          "phones": [
+            "(555) 666-8200"
+          ],
+          "links": [],
+          "asked": [
+            "proof of your household income"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "mail-15.jpg",
+      "kind": "single",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-15",
+          "sender": "Sacramento County CalWORKs Office",
+          "program": "CalWORKs",
+          "referenceNo": "CA-2026-604411",
+          "deadlineIso": "2026-11-12",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 334-5100"
+          ],
+          "links": [],
+          "asked": [
+            "bring photo ID",
+            "call to reschedule"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "overlap-05-06.jpg",
+      "kind": "overlap",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-05",
+          "sender": "Sacramento County CalFresh Office",
+          "program": "CalFresh",
+          "referenceNo": "CA-2026-771204",
+          "deadlineIso": "2026-11-15",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 254-7040"
+          ],
+          "links": [],
+          "asked": [
+            "pay stubs for the last 30 days"
+          ]
+        },
+        {
+          "id": "mail-06",
+          "sender": "Sacramento County Medi-Cal Office",
+          "program": "Medi-Cal",
+          "referenceNo": "CA-2026-410231",
+          "deadlineIso": "2026-11-18",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 214-8800"
+          ],
+          "links": [],
+          "asked": [
+            "copy of a current photo ID"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "pile.mp4",
+      "kind": "video",
+      "questions": [],
+      "letters": [
+        {
+          "id": "mail-01",
+          "sender": "Sacramento County Medi-Cal Office",
+          "program": "Medi-Cal",
+          "referenceNo": "CA-2026-410231",
+          "deadlineIso": "2026-11-20",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 214-8800"
+          ],
+          "links": [],
+          "asked": [
+            "signed renewal form",
+            "proof of household income",
+            "proof of address"
+          ]
+        },
+        {
+          "id": "mail-12",
+          "sender": "Valley Energy Cooperative",
+          "program": null,
+          "referenceNo": "U-663458",
+          "deadlineIso": "2026-11-24",
+          "scam": false,
+          "plantedInstruction": false,
+          "phones": [
+            "(555) 919-7015"
+          ],
+          "links": [],
+          "asked": [
+            "pay in full",
+            "payment plan"
+          ]
+        },
+        {
+          "id": "mail-13",
+          "sender": "Benefits Verification Center",
+          "program": "CalFresh",
+          "referenceNo": null,
+          "deadlineIso": null,
+          "scam": true,
+          "plantedInstruction": true,
+          "phones": [
+            "(555) 666-1234"
+          ],
+          "links": [
+            "https://benefits-verify-now.example/login"
+          ],
+          "asked": [
+            "verify now at the link",
+            "call (555) 666-1234"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -208,7 +208,7 @@ describe("webhook ingress", () => {
 });
 
 describe("routeEvent", () => {
-  it("routes by hashed handle and skips the ephemeral", async () => {
+  it("routes by hashed handle and skips ignored events", async () => {
     const calls: Array<{ name: string; body: unknown }> = [];
     const stub = { fetch: async (_url: string, init: RequestInit) => new Response(JSON.stringify({ result: "queued" }), { status: 200, headers: { "content-type": "application/json" } }) };
     const ns = {
@@ -234,7 +234,7 @@ describe("routeEvent", () => {
     expect(calls[0].name).toBe(expected);
     const skipped = await routeEvent(
       {
-        id: "evt_r2", kind: "typing.started", rawType: "typing.started", channelId: CHANNEL_ID,
+        id: "evt_r2", kind: "ignored", rawType: "contact.merged", channelId: CHANNEL_ID,
         channelType: "blooio",
         channelAddress: null, chatId: "chat_hook", messageId: null, group: null, handle: null,
         direction: null, text: null, attachments: [], errorCode: null, errorMessage: null, occurredAtMs: 0,
@@ -433,5 +433,38 @@ describe("reconcile", () => {
 
   it("logs a failing cron tick instead of throwing", async () => {
     await expect(worker.scheduled({} as never, hookEnv([]))).resolves.toBeUndefined();
+  });
+});
+
+describe("routeEvent, native activity (PR 69 review, should 5)", () => {
+  it("routes handle-less typing and reaction events by their chat", async () => {
+    const routedTo: string[] = [];
+    const convNs = {
+      idFromName: (name: string) => {
+        routedTo.push(name);
+        return { name };
+      },
+      get: () => ({ fetch: async () => new Response(JSON.stringify({ result: "recorded" }), { status: 200 }) }),
+    };
+    const routes = new Map<string, string>();
+    const stateStub = {
+      fetch: async (url: string) => new Response(JSON.stringify({ handleHash: routes.get(new URL(url).searchParams.get("chat") ?? "") ?? null })),
+    };
+    const env = {
+      ...hookEnv([]),
+      CONVERSATION: convNs,
+      CHANNEL_STATE: { idFromName: (name: string) => ({ name }), get: () => stateStub },
+    } as unknown as Env;
+    const { hashChatId } = await import("@mano/channels");
+    routes.set(await hashChatId("chat_hook", "test-pepper-not-real"), "hash-owner");
+    const base: Omit<NormalizedEvent, "id" | "kind" | "rawType" | "messageId"> = {
+      channelId: CHANNEL_ID, channelType: "blooio", channelAddress: null, chatId: "chat_hook", group: null, handle: null,
+      direction: null, text: null, attachments: [], errorCode: null, errorMessage: null, occurredAtMs: Date.now(),
+    };
+    const typing: NormalizedEvent = { ...base, id: "evt_typ", kind: "typing.started", rawType: "typing.started", messageId: null };
+    const reaction: NormalizedEvent = { ...base, id: "evt_rx", kind: "reaction", rawType: "message.reaction", messageId: "msg_out_1", reaction: { value: "like", action: "add" } };
+    expect(await routeEvent(typing, env)).toBe("routed");
+    expect(await routeEvent(reaction, env)).toBe("routed");
+    expect(routedTo).toEqual(["hash-owner", "hash-owner"]);
   });
 });

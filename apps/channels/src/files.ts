@@ -1,13 +1,15 @@
-// Attachment storage: downloaded with a size guard, encrypted per handle
-// with the same envelope the engine uses for files, stored in R2.
-import {
-  MAX_ATTACHMENT_BYTES,
-  documentAad,
-  encryptForPerson,
-  sha256Hex,
-  type EventAttachment,
-  type LinkChecker,
-} from "@mano/channels";
+// Attachments: downloaded with a size guard and stored in the person's
+// Engine documents (DocumentStore), encrypted per person there. FileStore
+// is Channels' own bucket, which older turns wrote to; the retention
+// sweep and a conversation delete still clear it.
+import { MAX_ATTACHMENT_BYTES, sha256Hex, type EventAttachment, type LinkChecker } from "@mano/channels";
+
+export interface DocumentStore {
+  // Stores one photo under its ID for the conversation's person. True
+  // once stored (again for a retried upload of the same bytes); false
+  // when refused, as after a delete moved past the generation.
+  put(doc: { id: string; name: string; bytes: Uint8Array; generation: number }): Promise<boolean>;
+}
 
 export interface FileStore {
   put(key: string, data: Uint8Array): Promise<void>;
@@ -21,11 +23,11 @@ export function conversationFilePrefix(handleHash: string): string {
   return `persons/${handleHash}/docs/`;
 }
 
-// Slug-safe document ID, deterministic per turn and position so a replayed
-// turn writes the same keys.
-export async function attachmentDocumentId(turn: number, index: number, url: string): Promise<string> {
+// Slug-safe document ID, deterministic per generation, turn and position
+// so a replayed turn stores the same document.
+export async function attachmentDocumentId(generation: number, turn: number, index: number, url: string): Promise<string> {
   const digest = await sha256Hex(url);
-  return `t${turn}i${index}-${digest.slice(0, 12)}`;
+  return `g${generation}t${turn}i${index}-${digest.slice(0, 12)}`;
 }
 
 export interface AttachmentFetchOptions {
@@ -34,6 +36,8 @@ export interface AttachmentFetchOptions {
   mediaHosts: string[];
   maxBytes?: number;
   maxHops?: number;
+  // Cancels the download (STOP, a delete, a decoration timeout).
+  signal?: AbortSignal;
 }
 
 // Downloads one attachment. Every URL must be https on the provider's
@@ -42,7 +46,7 @@ export interface AttachmentFetchOptions {
 export async function fetchAttachment(
   attachment: EventAttachment,
   opts: AttachmentFetchOptions,
-): Promise<{ bytes: Uint8Array } | { bytes: null; reason: "oversize" | "host" | "blocked" | "fetch" }> {
+): Promise<{ bytes: Uint8Array; contentType: string } | { bytes: null; reason: "oversize" | "host" | "blocked" | "fetch" }> {
   const maxBytes = opts.maxBytes ?? MAX_ATTACHMENT_BYTES;
   const maxHops = opts.maxHops ?? 5;
   if (typeof attachment.size === "number" && attachment.size > maxBytes) return { bytes: null, reason: "oversize" };
@@ -60,7 +64,8 @@ export async function fetchAttachment(
     if (!allowed.has(host)) return { bytes: null, reason: "host" };
     const check = await opts.checker.checkHost(host, false);
     if (!check.ok) return { bytes: null, reason: "blocked" };
-    const res = await opts.fetchFn(url, { signal: AbortSignal.timeout(30000), redirect: "manual" });
+    const timeout = AbortSignal.timeout(30000);
+    const res = await opts.fetchFn(url, { signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout, redirect: "manual" });
     if (res.status >= 300 && res.status < 400) {
       const next = res.headers.get("location");
       if (!next || hop === maxHops) return { bytes: null, reason: "fetch" };
@@ -87,22 +92,9 @@ export async function fetchAttachment(
       out.set(c, at);
       at += c.byteLength;
     }
-    return { bytes: out };
+    return { bytes: out, contentType: (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() };
   }
   return { bytes: null, reason: "fetch" };
-}
-
-export async function saveAttachment(
-  files: FileStore,
-  kekB64: string,
-  handleHash: string,
-  documentId: string,
-  content: Uint8Array,
-): Promise<{ hash: string; r2Key: string }> {
-  const blob = await encryptForPerson(content, kekB64, documentAad(handleHash, documentId));
-  const r2Key = `${conversationFilePrefix(handleHash)}${documentId}`;
-  await files.put(r2Key, new TextEncoder().encode(JSON.stringify(blob)));
-  return { hash: await sha256Hex(content), r2Key };
 }
 
 export class R2FileStore implements FileStore {

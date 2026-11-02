@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { env } from "cloudflare:test";
+import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { hashHandle, parseBlooioEvent } from "@mano/channels";
 import type { Env } from "../src/env.js";
 
@@ -70,6 +70,33 @@ describe("ConversationDO on SQLite", () => {
     expect(recorded.sends.length).toBeGreaterThan(0);
     expect(recorded.sends.every((s) => s.state === "sent" && !!s.message)).toBe(true);
   });
+
+  it("runs a second turn with the first turn read back from SQLite as history", async () => {
+    const stub = stubFor(`do-history-${Date.now()}`);
+    const runTurn = async (): Promise<string> => {
+      await new Promise((r) => setTimeout(r, 3000));
+      const res = await stub.fetch("https://conversation/internal/turn", {
+        method: "POST",
+        body: JSON.stringify({ handleHash: "hash-history" }),
+      });
+      expect(res.status).toBe(200);
+      return ((await res.json()) as { result: string }).result;
+    };
+    expect(await postEvent(stub, "hash-history", inbound("evt_hist_1", "my food stamps are ending"))).toBe("queued");
+    // The DO's own alarm may run the turn first; either way it ran.
+    expect(["ran", "idle"]).toContain(await runTurn());
+    expect(await postEvent(stub, "hash-history", inbound("evt_hist_2", "march 3"))).toBe("queued");
+    expect(["ran", "idle"]).toContain(await runTurn());
+    const recorded = (await (await stub.fetch("https://conversation/internal/standin")).json()) as {
+      sends: Array<{ key: string; state: string }>;
+      turn: number;
+      pending: number;
+    };
+    expect(recorded.turn).toBe(2);
+    expect(recorded.pending).toBe(0);
+    expect(recorded.sends.length).toBe(3);
+    expect(recorded.sends.every((s) => s.state === "sent")).toBe(true);
+  }, 15000);
 
   it("answers a 2026-10-01 event with no id or channel_id", async () => {
     // Exact docs payload shape, parsed by the real parser, then run on
@@ -164,7 +191,9 @@ describe("ConversationDO on SQLite", () => {
       method: "POST",
       body: JSON.stringify({ handleHash: "hash-wipe" }),
     });
-    expect(res.status).toBe(200);
+    // Engine is unreachable in this env, so the delete reports pending;
+    // Channels' own store is wiped either way.
+    expect(res.status).toBe(202);
     const after = (await (await stub.fetch("https://conversation/internal/standin")).json()) as {
       sends: unknown[];
       pending: number;
@@ -173,16 +202,81 @@ describe("ConversationDO on SQLite", () => {
     expect(after).toMatchObject({ sends: [], pending: 0, approvals: 0 });
   });
 
-  it("deletes the conversation and its files", async () => {
+  it("deletes the conversation, and fails closed while Engine has not confirmed it", async () => {
+    // The worker test env points MANO_ENGINE_URL at a closed port, so the
+    // Engine delete cannot be confirmed.
+    const handleHash = "a".repeat(64);
     const stub = stubFor(`do-del-${Date.now()}`);
-    await postEvent(stub, "hash-del", inbound("evt_do_del", "Hello."));
+    await postEvent(stub, handleHash, inbound("evt_do_del", "Hello."));
     const res = await stub.fetch("https://conversation/internal/delete", {
       method: "POST",
-      body: JSON.stringify({ handleHash: "hash-del" }),
+      body: JSON.stringify({ handleHash }),
     });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, filesDeleted: 0 });
-    expect(await postEvent(stub, "hash-del", inbound("evt_do_del", "Hello."))).toBe("queued");
+    expect(res.status).toBe(202);
+    expect(await res.json()).toMatchObject({ ok: false, pending: true, engineConfirmed: false });
+    const state = (await (await stub.fetch("https://conversation/internal/standin")).json()) as { engineDeletePending: unknown };
+    expect(state.engineDeletePending).toMatchObject({ generation: 1, engineDone: false, attempts: 1 });
+    // An alarm before the retry is due leaves it pending and re-armed.
+    await runDurableObjectAlarm(stub);
+    const later = (await (await stub.fetch("https://conversation/internal/standin")).json()) as { engineDeletePending: unknown };
+    expect(later.engineDeletePending).toMatchObject({ generation: 1, engineDone: false, attempts: 1 });
+    expect(await postEvent(stub, handleHash, inbound("evt_do_del", "Hello."))).toBe("queued");
+  });
+
+  it("a delete that throws midway keeps its intent: the agent stays off and the alarm retries", async () => {
+    const handleHash = "b".repeat(64);
+    const stub = stubFor(`do-del-throw-${Date.now()}`);
+    await postEvent(stub, handleHash, inbound("evt_do_del_throw", "Hello."));
+    const outcome = await runInDurableObject<{ env: Env; fetch: (r: Request) => Promise<Response> }, { status: number | "threw"; alarm: number | null }>(
+      stub,
+      async (instance, state) => {
+        // Files storage fails while the delete runs.
+        instance.env = {
+          ...instance.env,
+          FILES: {
+            list: async () => {
+              throw new Error("R2 unavailable");
+            },
+            delete: async () => {
+              throw new Error("R2 unavailable");
+            },
+          } as unknown as Env["FILES"],
+        };
+        let status: number | "threw";
+        try {
+          status = (await instance.fetch(new Request("https://conversation/internal/delete", { method: "POST", body: JSON.stringify({ handleHash }) }))).status;
+        } catch {
+          status = "threw";
+        }
+        return { status, alarm: await state.storage.getAlarm() };
+      },
+    );
+    expect(outcome.status).not.toBe(200);
+    expect(outcome.alarm).not.toBeNull();
+    const state = (await (await stub.fetch("https://conversation/internal/standin")).json()) as { engineDeletePending: unknown };
+    expect(state.engineDeletePending).toMatchObject({ handleHash, generation: 1, engineDone: false });
+  });
+
+  it("delivers an agent-started text and dedupes its key", async () => {
+    const stub = stubFor(`do-agent-${Date.now()}`);
+    await postEvent(stub, "hash-agent", inbound("evt_do_agent", "Hello."));
+    const send = { handleHash: "hash-agent", key: "rem_worker_1", text: "Reminder: call the office", generation: 0 };
+    const first = await stub.fetch("https://conversation/internal/agent-send", {
+      method: "POST",
+      body: JSON.stringify(send),
+    });
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ sent: true });
+    const retry = await stub.fetch("https://conversation/internal/agent-send", {
+      method: "POST",
+      body: JSON.stringify(send),
+    });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ sent: true, duplicate: true });
+    const standin = await stub.fetch("https://conversation/internal/standin");
+    const recorded = (await standin.json()) as { sends: Array<{ state: string; message: string | null }> };
+    expect(recorded.sends).toHaveLength(1);
+    expect(recorded.sends[0].state).toBe("sent");
   });
 });
 
@@ -220,4 +314,21 @@ describe("ChannelStateDO", () => {
     await stub.fetch("https://state/internal/cursor", { method: "POST", body: JSON.stringify({ cursor: "c1" }) });
     expect(await (await stub.fetch("https://state/internal/cursor")).json()).toEqual({ cursor: "c1" });
   });
+});
+
+describe("typing routed from the queue to the DO (PR 69 review, should 5)", () => {
+  it("holds a turn while the person types, through routeEvent and the DO", async () => {
+    const { routeEvent } = await import("../src/index.js");
+    const chatId = `chat_typing_${Date.now()}`;
+    const handle = "+15550001777";
+    const handleHash = await hashHandle(handle, workerEnv.MANO_HANDLE_PEPPER);
+    const message = { ...inbound(`evt_typing_msg_${Date.now()}`, "so the letter says"), chatId, handle };
+    expect(await routeEvent(message as never, workerEnv)).toBe("routed");
+    const typing = { ...message, id: `evt_typing_start_${Date.now()}`, kind: "typing.started", rawType: "typing.started", messageId: null, handle: null, text: null, direction: null };
+    expect(await routeEvent(typing as never, workerEnv)).toBe("routed");
+    await new Promise((r) => setTimeout(r, 3000));
+    const stub = workerEnv.CONVERSATION.get(workerEnv.CONVERSATION.idFromName(handleHash));
+    const res = await stub.fetch("https://conversation/internal/turn", { method: "POST", body: JSON.stringify({ handleHash }) });
+    expect(((await res.json()) as { result: string }).result).toBe("waiting");
+  }, 15000);
 });
