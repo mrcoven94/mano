@@ -20,6 +20,9 @@
  * the service token to open a session, and the per-session secret the
  * service returns on every control call.
  *
+ * recordFrames wraps any computer and keeps the screens a run showed,
+ * one after each typed value, so a person can see each step of a fill.
+ *
  * Run it: set COMPUTER_BACKEND (playwright by default). For modal, set
  * MODAL_COMPUTER_URL, MODAL_COMPUTER_TOKEN and COMPUTER_PERSON_ID (see
  * .env.example), then call runLoop with a ModelClient. Test it:
@@ -36,6 +39,7 @@ export { LOOP_INSTRUCTIONS, runLoop, type LoopOptions, type LoopOutcome } from "
 export { FakeModelClient, FetchModelClient, type ModelClient, type ResponsePayload, type ResponseRequest } from "./model";
 export { ModalComputer, type ModalComputerOptions } from "./modal";
 export { PlaywrightComputer, type BrowserLauncher, type LaunchedPage, type PageLike, type PlaywrightComputerOptions } from "./playwright";
+export { recordFrames, type Frame } from "./recorder";
 
 /** Open the backend named by COMPUTER_BACKEND (playwright by default). */
 export function computerFromEnv(env: Record<string, string | undefined>, options: ComputerOptions = {}): Computer {
