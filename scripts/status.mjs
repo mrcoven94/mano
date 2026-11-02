@@ -9,8 +9,9 @@
 //
 // Run: node scripts/status.mjs [--check]
 //   --check exits 1 when README.md would change, without writing.
-// The scheduled status workflow runs --check and posts the table to its job
-// summary; refresh README.md by running this locally and committing it.
+// The scheduled status workflow runs this, posts the table to its job
+// summary and warns when README.md is stale; refresh README.md by running this
+// locally and committing it.
 //
 // Env: GITHUB_TOKEN (or GH_TOKEN) reads deployments; without it the deploy
 // column says "unknown". STATUS_<KEY>_URL overrides a piece's URL.
