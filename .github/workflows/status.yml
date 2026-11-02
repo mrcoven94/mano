@@ -23,7 +23,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           STATUS_SANDBOX_PORTAL_URL: ${{ vars.SANDBOX_PORTAL_URL }}
-      - uses: peter-evans/create-pull-request@v7
+      - uses: peter-evans/create-pull-request@v8
         with:
           branch: status/refresh-table
           delete-branch: true
