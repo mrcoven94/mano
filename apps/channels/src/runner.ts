@@ -1017,7 +1017,13 @@ export class ConversationRunner {
     const crisisBubbles = crisis ? await this.finalize(turn, "", true, turnTextOf(texts)) : [];
     const replyTo = inlineReplyTarget(items);
     if (replyTo && crisisBubbles[0]) crisisBubbles[0] = { ...crisisBubbles[0], replyTo };
-    if (crisisBubbles.length > 0) await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation, epoch);
+    if (crisisBubbles.length > 0) {
+      await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation, epoch);
+      // Nothing else goes out until the crisis line is known to have gone
+      // out: an uncertain send ends this run, and the next one reconciles
+      // it before any model, interim or other bubble.
+      this.checkSendsResolved(turn, generation);
+    }
 
     const approval = texts.length === 1 && attachments.length === 0 ? parseApprovalReply(texts[0]) : null;
     if (approval && store.pendingApprovals(nowMs()).length > 0) {

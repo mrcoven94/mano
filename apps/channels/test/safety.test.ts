@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { HANDLE_HOURLY_LIMIT, hourKeyFor, type Responder } from "@mano/channels";
+import { HANDLE_HOURLY_LIMIT, hourKeyFor, idempotencyKeyFor, type Responder } from "@mano/channels";
 import { CRISIS_LINE } from "@mano/persona";
 import { BUSY_BUBBLE, FAILURE_BUBBLE } from "../src/text.js";
-import { inboundEvent, makeHarness, runTurnAfterBatch } from "./helpers.js";
+import { TEST_HANDLE_HASH, inboundEvent, makeHarness, runTurnAfterBatch } from "./helpers.js";
 
 // A disclosure no detector is promised to catch: the safety net must
 // not depend on detection.
@@ -74,5 +74,39 @@ describe("a crisis text gets 988 and 911 before any model answers (PR 102 review
     answer("I'm here with you. What is happening tonight?");
     await turn;
     expect(h.channel.sends.map((s) => s.text)).toEqual([CRISIS_LINE, "I'm here with you. What is happening tonight?"]);
+  });
+
+  it("holds the turn while the crisis line's send is uncertain, so no model or interim goes first", async () => {
+    let asked = 0;
+    const counting: Responder = {
+      name: "counting",
+      maxAttempts: 1,
+      respond: async () => {
+        asked += 1;
+        return { text: "I'm here with you.", bubbles: ["I'm here with you."], inputChars: 1, outputChars: 18, model: "counting", attempts: 1 };
+      },
+    };
+    const h = makeHarness({ responder: counting });
+    const crisisKey = idempotencyKeyFor(TEST_HANDLE_HASH, 0, 1, 1);
+    // The provider times out on the crisis line and on every replay of it
+    // until it recovers.
+    let down = true;
+    const send = h.channel.send.bind(h.channel);
+    h.channel.send = async (input) => {
+      if (down && input.idempotencyKey === crisisKey) h.channel.scriptFailure(crisisKey, { kind: "uncertain", attempts: 3 });
+      return send(input);
+    };
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "I want to end my life", occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h).catch(() => undefined);
+    expect(asked).toBe(0);
+    expect(h.channel.sends.map((s) => s.text)).toEqual([]);
+
+    // The provider recovers: the next run reconciles the crisis send
+    // first, then answers.
+    down = false;
+    await runTurnAfterBatch(h).catch(() => undefined);
+    const texts = h.channel.sends.map((s) => s.text);
+    expect(texts[0]).toBe(CRISIS_LINE);
+    expect(texts.filter((t) => t === CRISIS_LINE)).toHaveLength(1);
   });
 });
