@@ -1,3 +1,4 @@
+import { decideCrisis } from "@mano/persona";
 import { describe, expect, it, vi } from "vitest";
 import { AgentResponder } from "../src/agent.js";
 import { ModelCrisisCheck } from "../src/crisis-check.js";
@@ -306,6 +307,18 @@ describe("the crisis check uses the same fallback", () => {
       const t = check([status(402)], [handler]);
       expect(await t.check.ask("is it safe to take two advil", AbortSignal.timeout(3000))).toBe(expected);
     }
+  });
+
+  it("asks the fallback when the connection resets after the primary's 200 headers (PR 102 review, round 2)", async () => {
+    const t = check([resetAfterHeaders], [open("no")]);
+    expect(await t.check.ask("is it safe to take two advil", AbortSignal.timeout(3000))).toBe("no");
+    expect(t.to(PRIMARY_URL)).toHaveLength(1);
+    expect(t.to(OPEN_URL)).toHaveLength(1);
+  });
+
+  it("is still a crisis when the primary's body is cut off and the fallback is down too", async () => {
+    const t = check([resetAfterHeaders], [status(500)]);
+    expect(await decideCrisis("Should I stop taking my blood pressure pills?", t.check)).toMatchObject({ crisis: true });
   });
 
   it("fails, so the turn stays a crisis, when both are down", async () => {
