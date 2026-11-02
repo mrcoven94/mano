@@ -246,7 +246,8 @@ export class GlobalLedger {
   }
 
   // The day's spend, and what each model cost of it. Spend settled with
-  // no model breakdown (agent sends, a resumed turn) is in the total only.
+  // no model breakdown (agent sends, a turn saved before the breakdown
+  // was) is in the total only.
   spent(): { spentUsd: number; budgetUsd: number; byModel: ModelCosts } {
     const today = dayKeyFor(this.nowMs());
     this.rollDay(today);

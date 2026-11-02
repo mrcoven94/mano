@@ -725,6 +725,7 @@ export class ConversationRunner {
                 to,
                 answerJson: null,
                 costUsd: null,
+                costByModel: null,
                 costSettled: false,
                 attempts: 0,
                 state: "started",
@@ -1158,12 +1159,12 @@ export class ConversationRunner {
           }
           // Persisted with the answer, so a resumed send reports it too.
           if (answer.presentation) store.savePresentation({ turn, generation, state: "pending", ...answer.presentation });
-          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
+          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs(), answer.byModel);
           await this.deps.spend.settle(reserveKey, answer.costUsd, answer.byModel);
           store.markTurnSettled(turn, nowMs());
         } else {
           bubbles.push(...(await this.finalize(turn, crisis ? "" : FAILURE_BUBBLE, crisis, turnText)));
-          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
+          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs(), answer.byModel);
           await this.deps.spend.settle(reserveKey, answer.costUsd, answer.byModel);
           store.markTurnSettled(turn, nowMs());
         }
@@ -1228,7 +1229,7 @@ export class ConversationRunner {
 
   private async settleResumedCost(turn: number, resumed: import("./store.js").PersistedTurn): Promise<void> {
     if (resumed.costSettled || resumed.costUsd === null) return;
-    await this.deps.spend.settle(`${this.deps.config.handleHash}:${turn}`, resumed.costUsd);
+    await this.deps.spend.settle(`${this.deps.config.handleHash}:${turn}`, resumed.costUsd, resumed.costByModel ?? undefined);
     this.store.markTurnSettled(turn, this.deps.nowMs());
   }
 
