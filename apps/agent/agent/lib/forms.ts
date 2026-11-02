@@ -4,6 +4,7 @@
 // is checked. Only forms on our own sandbox portal are listed (hard rule
 // 2): a resident's real portal is never a target.
 import type { Frequency, Profile } from "./engine.js";
+import { confirmedByPerson } from "./profile.js";
 
 export interface FormField {
   // The form's own input name, which the filing carries.
@@ -133,8 +134,10 @@ const FOOD_RENEWAL: FormSpec = {
       name: "householdSize",
       label: "People in household",
       question: "How many people live in your household, counting you?",
-      // An empty household list cannot tell "lives alone" from "not asked yet".
-      fromProfile: (p) => (p.household.length > 0 ? String(p.household.length + 1) : null),
+      // Only the person's own confirmation says the list is everyone: one
+      // child mentioned in passing is not a household, and a confirmed
+      // empty list means they live alone.
+      fromProfile: (p) => (confirmedByPerson(p) ? String(p.household.length + 1) : null),
       parse: wholeNumber(1, 30),
     },
     {
