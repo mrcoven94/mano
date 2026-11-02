@@ -71,9 +71,9 @@ jobs:
           check "$MANO_ENGINE_SEND_SECRET" MANO_ENGINE_SEND_SECRET
           check "$EXECUTOR_MODE" EXECUTOR_MODE
           if [ "$EXECUTOR_MODE" = "sandbox" ]; then check "$SANDBOX_BASE_URL" SANDBOX_BASE_URL; check "$SANDBOX_PORTAL_TOKEN" SANDBOX_PORTAL_TOKEN; fi
-          # Guardian is optional; once its URL is set, the token and the
-          # Modal proxy key pair must be set too.
-          if [ -n "$MANO_GUARDIAN_URL" ]; then check "$MANO_GUARDIAN_TOKEN" MANO_GUARDIAN_TOKEN; check "$MANO_GUARDIAN_KEY_ID" MANO_GUARDIAN_KEY_ID; check "$MANO_GUARDIAN_KEY_SECRET" MANO_GUARDIAN_KEY_SECRET; fi
+          # Guardian is optional; once any of its four names is set, all
+          # four must be.
+          if [ -n "$MANO_GUARDIAN_URL$MANO_GUARDIAN_TOKEN$MANO_GUARDIAN_KEY_ID$MANO_GUARDIAN_KEY_SECRET" ]; then check "$MANO_GUARDIAN_URL" MANO_GUARDIAN_URL; check "$MANO_GUARDIAN_TOKEN" MANO_GUARDIAN_TOKEN; check "$MANO_GUARDIAN_KEY_ID" MANO_GUARDIAN_KEY_ID; check "$MANO_GUARDIAN_KEY_SECRET" MANO_GUARDIAN_KEY_SECRET; fi
           exit $missing
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

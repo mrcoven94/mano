@@ -36,7 +36,8 @@ EXECUTOR_MODE=
 SANDBOX_BASE_URL=
 SANDBOX_PORTAL_TOKEN=
 # Guardian checks every action after the local rules when its URL is set;
-# without one the checker is local rules only. The key pair is Modal's
+# with none of these four set the checker is local rules only, and a
+# partial set blocks every action. The key pair is Modal's
 # proxy auth, needed for the hosted endpoint and not for the local
 # stand-in (packages/guardian/standin/server.mjs).
 MANO_GUARDIAN_URL=

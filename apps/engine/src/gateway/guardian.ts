@@ -22,15 +22,16 @@ export type CheckerSetting =
   | { kind: "guardian"; url: string; token: string; proxyAuth?: { keyId: string; secret: string } }
   | { kind: "guardian-misconfigured" };
 
-// No URL keeps the local rules. A URL needs its token, and the Modal key
-// pair comes as both or neither. Anything else is misconfigured: every
-// action blocks and /health reports ok:false.
+// None of the four set keeps the local rules. A URL needs its token, and
+// the Modal key pair comes as both or neither. Anything else, a token
+// with no URL included, is misconfigured: every action blocks and /health
+// reports ok:false.
 export function checkerSetting(env: GuardianEnv): CheckerSetting {
   const url = env.MANO_GUARDIAN_URL?.trim() ?? "";
-  if (url === "") return { kind: "local-rules" };
   const token = env.MANO_GUARDIAN_TOKEN?.trim() ?? "";
   const keyId = env.MANO_GUARDIAN_KEY_ID?.trim() ?? "";
   const secret = env.MANO_GUARDIAN_KEY_SECRET?.trim() ?? "";
+  if (url === "" && token === "" && keyId === "" && secret === "") return { kind: "local-rules" };
   if (!/^https?:\/\//i.test(url) || token === "" || (keyId === "") !== (secret === "")) {
     return { kind: "guardian-misconfigured" };
   }

@@ -85,8 +85,8 @@
 // (plus MANO_GUARDIAN_KEY_ID and MANO_GUARDIAN_KEY_SECRET for Modal's
 // proxy), every action gets the local rules and then Guardian before the
 // person is asked, and again at their yes (src/gateway/guardian.ts).
-// Without a URL the checker is local rules only. /health says which
-// (live.checker), and a half-set Guardian config reports ok:false.
+// With none of them set the checker is local rules only. /health says
+// which (live.checker), and a half-set Guardian config reports ok:false.
 //
 // Executors: EXECUTOR_MODE=simulated (explicit, or the default in
 // development) records calls and labels receipts simulated, except share

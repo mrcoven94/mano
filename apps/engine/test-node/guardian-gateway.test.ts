@@ -242,11 +242,15 @@ describe("Guardian on the live path", () => {
   });
 
   it("blocks everything when Guardian is half set up", async () => {
-    for (const env of [
+    const { MANO_GUARDIAN_URL: _url, ...credentialsOnly } = GUARDIAN_ENV();
+    const halfSet: Record<string, string>[] = [
       { MANO_GUARDIAN_URL: url },
+      credentialsOnly,
+      { MANO_GUARDIAN_TOKEN: "guardian-token-not-real" },
       { ...GUARDIAN_ENV(), MANO_GUARDIAN_KEY_SECRET: "" },
       { ...GUARDIAN_ENV(), MANO_GUARDIAN_URL: "guardian.example" },
-    ]) {
+    ];
+    for (const env of halfSet) {
       expect(checkerSetting(env).kind).toBe("guardian-misconfigured");
       const result = await setup(env).gateway.requestAction(renewal());
       expect(result.status).toBe("blocked");
