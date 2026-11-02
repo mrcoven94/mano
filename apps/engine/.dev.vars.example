@@ -16,6 +16,9 @@ MANO_ENGINE_CHANNELS_TOKEN= # gitleaks:allow (empty example value)
 # Engine-to-Channels secret, which Channels holds too (never the agent).
 MANO_CHANNELS_URL=
 MANO_ENGINE_SEND_SECRET= # gitleaks:allow (empty example value)
+# Local time deadline nudges go out, HH:MM between 09:00 and 20:00
+# (default 10:00).
+MANO_NUDGE_TIME=
 # Environment name. development allows the dev session secret and the
 # simulated executor and stand-in model without explicit choice.
 MANO_ENV=development

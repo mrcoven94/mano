@@ -14,9 +14,10 @@
 // says it is unavailable without them; the model then prepares the
 // renewal with start_form_draft from the person's answers.
 //
-// Engine also holds the agent's own state for each person (reminders,
-// which its alarm delivers through Channels, the turn ledger and the
-// approval pointer), so the agent keeps no store of its own.
+// Engine also holds the agent's own state for each person (reminders
+// and tracked deadlines, whose texts its alarm delivers through Channels,
+// the turn ledger and the approval pointer), so the agent keeps no store
+// of its own.
 //
 // Run: pnpm --filter @mano/agent dev, with Engine running (locally,
 // pnpm --filter @mano/engine dev). Without META_MODEL_API_KEY a stand-in
