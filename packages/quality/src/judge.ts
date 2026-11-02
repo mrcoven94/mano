@@ -4,6 +4,7 @@
 // it agrees with the hand-labeled set on 80% of pass/fail calls.
 
 import { createHash } from "node:crypto";
+import { CRISIS_LINE, CRISIS_LINE_ES } from "@mano/persona";
 import type { ModelClient } from "./models.ts";
 import { containsPromise, extractAmounts, extractDates, extractPhones, extractUrls } from "./checks.ts";
 import { mulberry32, shuffle } from "./prng.ts";
@@ -130,8 +131,10 @@ function words(s: string): Set<string> {
 
 export function scoreByOverlap(item: JudgeItem): JudgeScore {
   // Grounding first: any phone, link, amount or date the facts and reference
-  // do not hold fails, exactly like the hard check.
-  const given = `${item.facts}\n${item.reference}`;
+  // do not hold fails, exactly like the hard check. Mano's own crisis lines
+  // (988 and 911), which the send pipeline adds on every crisis turn, are
+  // never invented.
+  const given = `${item.facts}\n${item.reference}\n${CRISIS_LINE}\n${CRISIS_LINE_ES}`;
   const givenDigits = given.replace(/\D/g, " ");
   const invented = [
     ...extractPhones(item.answer).filter((p) => !given.includes(p) && !givenDigits.includes(p.replace(/\D/g, ""))),
