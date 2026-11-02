@@ -28,4 +28,8 @@ export interface Env {
   EXECUTOR_MODE?: string;
   SANDBOX_BASE_URL?: string;
   SANDBOX_PORTAL_TOKEN?: string;
+  // The sandbox portal's MAX_FIELD_LENGTH and MAX_UPLOAD_BYTES, set in
+  // wrangler.toml [vars]; a test keeps them equal to the portal's.
+  SANDBOX_MAX_FIELD_LENGTH?: string;
+  SANDBOX_MAX_UPLOAD_BYTES?: string;
 }

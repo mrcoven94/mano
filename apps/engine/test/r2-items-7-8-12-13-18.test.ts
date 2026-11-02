@@ -60,7 +60,15 @@ describe("r2 items 7, 8, 12, 13, 18: gateway rework confirmations", () => {
       policyOverrides: { submit: "allow" },
       documents: new MapDocumentStore(new Map([["doc-8", "%PDF-1.4 exact bytes v1"]])),
     });
-    const result = await gw.requestAction(baseReq({ idempotencyKey: "r2i8-key", documentId: "doc-8" }));
+    const payload = {
+      fullName: "Maria Testcase",
+      dateOfBirth: "1988-04-12",
+      address: "42 Test Street, Fresno, CA 93701",
+      phone: "555-010-2030",
+      householdSize: "3",
+      monthlyIncome: "2400",
+    };
+    const result = await gw.requestAction(baseReq({ idempotencyKey: "r2i8-key", documentId: "doc-8", payload }));
     expect(result.status).toBe("completed");
     const files = posted[0].files as { name: string; type: string; data: string }[];
     expect(files).toHaveLength(1);

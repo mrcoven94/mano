@@ -93,7 +93,11 @@
 // and { key, household, files } (the key is the SHA-256 of
 // "<personId>:<idempotencyKey>", the file is the document the gateway
 // verified) returns { confirmationNumber }; GET {base}/submissions/{key}
-// returns it again, or 404.
+// returns it again, or 404. The portal files submits only, and only with
+// every household field and a PDF, PNG or JPG document within its field
+// and upload limits (SANDBOX_MAX_FIELD_LENGTH and SANDBOX_MAX_UPLOAD_BYTES in
+// wrangler.toml, kept equal to the portal's), so in sandbox mode the
+// gateway refuses anything else before it drafts an approval.
 //
 // Secrets: never put a key on a command line. Set secrets from stdin:
 //
