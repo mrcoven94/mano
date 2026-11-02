@@ -146,12 +146,22 @@ export interface EngineDeadline {
   program: string | null;
   kind: DeadlineKind | null;
   status: "open" | "done" | "cancelled";
-  // Where it came from: a letter names the texted photo it was read from.
-  source: { kind: "letter" | "case" | "person"; documentId?: string };
   timeZone: string;
   previousDueDate: string | null;
-  createdAt: string;
   nudges: { reminderId: string; at: string; daysBefore: number; status: ReminderStatus | "claimed"; text: string }[];
+}
+
+// A document Engine holds for the person, as GET /documents lists it:
+// this conversation's, newest first. mediaType is read from the bytes;
+// kind is what Mail found it to be; label names it to the person, such
+// as "the letter you sent on November 2".
+export interface EngineDocument {
+  id: string;
+  kind: "letter" | null;
+  mediaType: string | null;
+  receivedAt: string;
+  label: string;
+  generation: number;
 }
 
 export interface EngineDeadlineResult {
@@ -521,6 +531,16 @@ export class PersonEngine {
       throw new EngineError(res.status);
     }
     return new Uint8Array(await res.arrayBuffer());
+  }
+
+  async listDocuments(): Promise<EngineDocument[]> {
+    const out = (await this.json("GET", "/documents")) as { documents?: unknown };
+    return Array.isArray(out.documents) ? (out.documents as EngineDocument[]) : [];
+  }
+
+  // Records what Mail found a stored photo to be.
+  async markDocument(documentId: string, kind: "letter", timeoutMs?: number): Promise<void> {
+    await this.json("PATCH", `/documents/${encodeURIComponent(documentId)}`, { kind, generation: this.generation }, timeoutMs);
   }
 
   // Holds a deadline. "unavailable" when Engine has no deadlines route

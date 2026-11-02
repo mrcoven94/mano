@@ -2,11 +2,13 @@
 // its service authentication (agent token plus handle grant), its action
 // gateway over its SQL approval store, its agent-state SQL (generation
 // fence, reminders, turn ledger, approval pointer, conversation delete),
-// its deadlines with their nudges and its profile store, all on one
+// its deadlines with their nudges, its document list and its profile
+// store, all on one
 // node:sqlite database per person, the way each PersonAgent keeps them in
 // its own SQLite. Only the Durable Object shell and its alarm are
 // replaced: deliverDue() claims and hands off due reminders the way the
 // alarm does.
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 import { mintHandleGrant } from "@mano/protocol";
@@ -49,6 +51,14 @@ import {
   updateDeadline,
   type DeadlineCalls,
 } from "../../engine/src/deadlines.js";
+import {
+  ensureDocumentTables,
+  listDocuments,
+  markDocument,
+  mediaTypeOf,
+  parseDocumentMark,
+  recordDocument,
+} from "../../engine/src/documents.js";
 import { ActionGateway } from "../../engine/src/gateway/gateway.js";
 import { InMemoryExecutor } from "../../engine/src/gateway/executors.js";
 import type { Executor } from "../../engine/src/gateway/types.js";
@@ -105,6 +115,7 @@ function sqlite() {
   ensureGatewayTables(sql as never);
   ensureAgentStateTables(sql);
   ensureDeadlineTables(sql);
+  ensureDocumentTables(sql);
   sql.exec(
     "CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 0)",
   );
@@ -154,8 +165,20 @@ export class EngineDouble {
   // How long POST /deadlines takes to answer; the caller's abort ends it.
   deadlinesDelayMs = 0;
 
-  // A texted photo Channels stored for this person.
+  // A texted photo Channels stored for this person (POST /documents):
+  // Engine records it under the current generation, received now.
   putDocument(personId: string, documentId: string, bytes: Uint8Array): void {
+    const { sql } = this.person(personId);
+    const recorded = recordDocument(sql, {
+      id: documentId,
+      name: documentId,
+      hash: createHash("sha256").update(bytes).digest("hex"),
+      r2Key: `persons/${personId}/docs/g${currentGeneration(sql)}/${documentId}`,
+      mediaType: mediaTypeOf(bytes),
+      receivedAt: new Date(this.now()).toISOString(),
+      generation: currentGeneration(sql),
+    });
+    if (!recorded) throw new Error(`Engine refused document ${documentId}.`);
     this.documentOwners.set(documentId, personId);
     this.documents.set(documentId, bytes);
   }
@@ -379,7 +402,17 @@ export class EngineDouble {
         const input = parsePointerInput(body);
         return Response.json({ cleared: clearPendingPointer(sql, input.approvalId, input.generation) });
       }
+      if (rest === "/documents" && method === "GET") {
+        return Response.json({ documents: listDocuments(sql, DEFAULT_TIME_ZONE) });
+      }
       const documentGet = rest.match(/^\/documents\/([^/]+)$/);
+      if (documentGet && method === "PATCH") {
+        const mark = parseDocumentMark(body);
+        const out = markDocument(sql, decodeURIComponent(documentGet[1]), mark);
+        if (out === "stale") return Response.json(STALE, { status: 409 });
+        if (out === "missing") return Response.json({ error: "Document not found." }, { status: 404 });
+        return Response.json({ id: decodeURIComponent(documentGet[1]), kind: mark.kind });
+      }
       if (documentGet && method === "GET") {
         const id = decodeURIComponent(documentGet[1]);
         const bytes = this.documentOwners.get(id) === personId ? this.documentBytes.get(id) : undefined;

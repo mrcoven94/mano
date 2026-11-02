@@ -11,7 +11,7 @@
 // invented: a failed or slow reading says so and offers to try again.
 import { createHash } from "node:crypto";
 
-import { answerReading, readMail, type HeldDeadline, type ModelClient } from "@mano/mail";
+import { answerReading, readMail, type HeldDeadline, type MailReading, type ModelClient } from "@mano/mail";
 
 import { EngineError, type PersonEngine } from "./engine.js";
 import { rememberFact, timeLeft } from "./memory.js";
@@ -97,6 +97,24 @@ async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt:
   return lines;
 }
 
+// Marks each photo Mail found a letter in, deadline or not, so Mano can
+// name it ("the letter you sent on November 2") when it attaches it. A
+// photo left unmarked is still on file, named as a photo.
+async function markLetters(engine: PersonEngine, reading: MailReading, deadlineAt: number): Promise<void> {
+  const ids = new Set(reading.letters.flatMap((l) => l.pages.map((p) => p.file)));
+  await Promise.all(
+    [...ids].map(async (id) => {
+      const time = timeLeft(deadlineAt);
+      if (time === null) return;
+      try {
+        await engine.markDocument(id, "letter", time);
+      } catch (err) {
+        console.warn(JSON.stringify({ type: "mano_document_mark_failed", status: err instanceof EngineError ? err.status : null }));
+      }
+    }),
+  );
+}
+
 // The fixed system rule for a photo turn. It never carries letter text:
 // that reaches the model only inside the person's own turn, as the
 // letter_reading data block.
@@ -146,7 +164,8 @@ export async function readTextedPhotos(
     if (!reading) throw new Error("Reading timed out.");
     const answer = answerReading(reading);
     read = answer.outcome === "read";
-    text = [answer.text, ...(await hold(engine, answer.deadlines, receivedAt, deadlineAt))].join(" ");
+    const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt), markLetters(engine, reading, deadlineAt)]);
+    text = [answer.text, ...held].join(" ");
     if (read) {
       await rememberFact(engine, `From a letter photo: ${text}`, deadlineAt).catch((err: unknown) =>
         console.warn(JSON.stringify({ type: "mano_letters_remember_failed", status: err instanceof EngineError ? err.status : null })),

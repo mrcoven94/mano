@@ -6,12 +6,15 @@
 // answerable. Nothing leaves Mano until the person texts YES to it.
 //
 // The portal takes a renewal only with one document attached, so without
-// a proof document on file this asks for a photo and drafts nothing.
+// a document on file that the portal takes, this asks for one and drafts
+// nothing. The question names the attached document by its label, which
+// the draft freezes, so the person sees what their yes sends.
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import type { PersonEngine } from "../lib/engine.js";
+import type { EngineDocument, PersonEngine } from "../lib/engine.js";
 import { FORMS } from "../lib/forms.js";
+import { ATTACHMENT } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { holdForYes } from "../lib/propose.js";
 
@@ -26,22 +29,21 @@ const inputSchema = z.object({
 
 const RENEWAL = FORMS["food-renewal"];
 
-const PROOF_QUESTION = "Can you send me a photo of the letter about your renewal? It has to be attached to the renewal.";
+// What the sandbox portal takes as the renewal's document.
+const PORTAL_TAKES = new Set(["application/pdf", "image/png", "image/jpeg"]);
 
-// The renewal's proof: the document fill_form would attach (the one a
-// profile value was read from), else the newest letter Mano read a
-// deadline from. A texted photo is on file as a letter only once its
-// deadline is saved; nothing else records which photo is which.
-async function proofOnFile(engine: PersonEngine): Promise<string | null> {
-  const [profile, deadlines] = await Promise.all([engine.getProfile(), engine.listDeadlines()]);
+const PROOF_QUESTION = "Can you send me a photo of the letter about your renewal? It has to be attached to the renewal.";
+const FORMAT_QUESTION =
+  "The renewal portal only takes PDF, PNG or JPG files, and what you sent is another kind. Can you send a screenshot of the letter instead?";
+
+// The renewal's proof among the person's documents, which Engine lists
+// newest first: the one fill_form would attach (a profile value was read
+// from it), else the newest the portal takes.
+async function proofOnFile(engine: PersonEngine): Promise<{ proof: EngineDocument | null; onFile: boolean }> {
+  const [profile, documents] = await Promise.all([engine.getProfile(), engine.listDocuments()]);
+  const takes = documents.filter((d) => d.mediaType !== null && PORTAL_TAKES.has(d.mediaType));
   const fromProfile = profile ? RENEWAL.proof.fromProfile(profile) : null;
-  if (fromProfile) return fromProfile;
-  let newest: { documentId: string; createdAt: string } | null = null;
-  for (const d of deadlines ?? []) {
-    const documentId = d.source.kind === "letter" ? d.source.documentId : undefined;
-    if (documentId && (!newest || d.createdAt > newest.createdAt)) newest = { documentId, createdAt: d.createdAt };
-  }
-  return newest?.documentId ?? null;
+  return { proof: takes.find((d) => d.id === fromProfile) ?? takes[0] ?? null, onFile: documents.length > 0 };
 }
 
 export default defineTool({
@@ -55,29 +57,29 @@ export default defineTool({
     const turn = requireTurn(ctx);
     const engine = personEngine(ctx);
     if (!engine) throw new Error("Preparing forms is not available right now. Say so and offer to collect the answers.");
-    const documentId = await proofOnFile(engine);
-    if (!documentId) {
+    const { proof, onFile } = await proofOnFile(engine);
+    if (!proof) {
       return {
         status: "needs_answer",
         field: "proof",
-        question: PROOF_QUESTION,
+        question: onFile ? FORMAT_QUESTION : PROOF_QUESTION,
         sent: false,
-        note: "The renewal needs one document attached and Mano has none on file yet, so nothing was prepared. Ask this one question, and nothing else. Once Mano has read their photo, call start_form_draft again with the same details.",
+        note: "The renewal needs one document attached and Mano has none on file the portal takes, so nothing was prepared. Ask this one question, and nothing else. Once they send it, call start_form_draft again with the same details.",
       };
     }
     const held = await holdForYes(engine, ctx, turn, {
       type: "submit",
       recipient: RENEWAL.recipient,
       purpose: RENEWAL.purpose,
-      payload: { ...input },
-      documentId,
+      payload: { ...input, [ATTACHMENT]: proof.label },
+      documentId: proof.id,
     });
     if (!held.held) return { status: held.status, note: held.note, reason: held.reason, sent: false };
     return {
       approvalId: held.approval.id,
       status: "waiting_for_yes",
       sent: false,
-      note: "The exact approval question goes to the person with your reply. Do not ask it yourself; say in one short sentence that it is ready for their yes, with their document attached.",
+      note: `The exact approval question goes to the person with your reply. Do not ask it yourself; say in one short sentence that it is ready for their yes, with ${proof.label} attached.`,
     };
   },
 });
