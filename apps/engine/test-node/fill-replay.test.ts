@@ -51,6 +51,9 @@ class MemoryStorage implements ReplayStorage {
   failImageAt: number | null = null;
   failLink = false;
   failDeletes = 0;
+  // Holds the next link write until released, so another bind runs
+  // while this one waits on R2.
+  holdLink: { reached: () => void; released: Promise<void> } | null = null;
   // Runs while an image is read, the way another request to the same
   // person can run while the Durable Object waits on R2.
   duringRead: (() => void) | null = null;
@@ -74,6 +77,12 @@ class MemoryStorage implements ReplayStorage {
   }
   async putLink(key: string, entry: ReplayLinkEntry) {
     if (this.failLink) throw new Error("R2 put failed");
+    const hold = this.holdLink;
+    this.holdLink = null;
+    if (hold) {
+      hold.reached();
+      await hold.released;
+    }
     this.objects.set(key, entry);
   }
 }
@@ -157,6 +166,28 @@ describe("storage that fails partway", () => {
     await expect(bindFillReplay(deps, approvalId, INPUT, 0)).rejects.toThrow("R2 put failed");
     expect(storage.objects.size).toBe(0);
     expect(getFillReplay(sql, approvalId)).toBeNull();
+  });
+
+  it("a bind that fails partway leaves the screens of a bind of the same approval running beside it", async () => {
+    const { gateway, storage, deps, approvalId } = await setup();
+    let reached!: () => void;
+    let release!: () => void;
+    const atLink = new Promise<void>((r) => (reached = r));
+    storage.holdLink = { reached, released: new Promise<void>((r) => (release = r)) };
+    const first = bindFillReplay(deps, approvalId, INPUT, 0);
+    await atLink;
+
+    // A retry with the same screens fails at its third image and cleans up.
+    storage.failImageAt = 2;
+    await expect(bindFillReplay(deps, approvalId, INPUT, 0)).rejects.toThrow("R2 put failed");
+    storage.failImageAt = null;
+    release();
+    const bound = await first;
+    if (bound.status !== "created") throw new Error(bound.status);
+    const page = await replayPage({ ...deps, exact: (a) => gateway.stillExact(a) }, approvalId, bound.token);
+    expect(page, "the bound replay opens with every screenshot").not.toBeNull();
+    expect(page).toContain("This is exactly what Mano will send");
+    expect(page?.match(/<img/g)).toHaveLength(3);
   });
 
   it("a delete whose link cleanup fails finishes it on the next call", async () => {
