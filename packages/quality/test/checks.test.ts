@@ -383,3 +383,13 @@ test("a date's year, order and negation count when reading the deadline", async 
   }
   assert.equal((await deadline("letters-19", "Your renewal is due 11/30."))?.pass, false, "a date with no year");
 });
+
+test("a written year is never dropped and a day-first date needs no year", async () => {
+  const deadline = async (id: string, text: string) => (await readerCheck(id, text)).find((r) => r.id === "deadline");
+  for (const text of ["It is due November 15,2027.", "It is due November 15 27.", "Vence el 15 de noviembre de 27.", "It is due November 15, 2026, not 16/11."]) {
+    assert.equal((await deadline("letters-01", text))?.pass, false, text);
+  }
+  assert.equal((await deadline("letters-01", "It is due 15/11."))?.pass, true);
+  assert.equal((await deadline("letters-19", "Your renewal is due 16/11."))?.pass, false);
+  assert.equal((await deadline("letters-01", "It is due November 15, 2026. The help line is open 24/7."))?.pass, true, "24/7 is not a date");
+});
