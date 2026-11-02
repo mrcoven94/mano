@@ -54,6 +54,7 @@ import {
   REPLAY_LINK_PATH,
   bindFillReplay,
   ensureFillReplayTables,
+  finishLinkCleanup,
   linkKey,
   parseReplayInput,
   removeFillReplays,
@@ -457,8 +458,9 @@ export class EngineDouble {
         const removed = removeConversationState(sql, this.now(), parseGenerationInput(body).generation);
         if (removed.generation > before) {
           removeDeadlines(sql, this.now());
-          for (const token of removeFillReplays(sql)) this.replayLinks.delete(await linkKey(token));
+          removeFillReplays(sql);
         }
+        await finishLinkCleanup(sql, async (keys) => keys.forEach((k) => this.replayLinks.delete(k)));
         return Response.json({ removed });
       }
     } catch (err) {

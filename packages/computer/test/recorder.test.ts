@@ -52,6 +52,37 @@ describe("recording a run", () => {
     expect(screen.actions.flat()).toEqual(batch);
   });
 
+  test("a key that changes a field ends a frame too, and Enter, Tab and select-all do not", async () => {
+    const screen = new FormScreen();
+    const { computer, frames } = recordFrames(screen);
+    await computer.goto("http://portal.test/apply");
+    await computer.screenshot();
+    const selectAll = { type: "keypress", keys: ["ctrl", "a"] } as ComputerAction;
+    const backspace = { type: "keypress", keys: ["backspace"] } as ComputerAction;
+    const tab = { type: "keypress", keys: ["Tab"] } as ComputerAction;
+    await computer.act([click(100), selectAll, type("23290"), backspace, tab, { type: "keypress", keys: ["Enter"] } as ComputerAction]);
+
+    expect(frames().map((f) => f.actions)).toEqual([[], [click(100), selectAll, type("23290")], [backspace]]);
+    expect(screen.actions).toHaveLength(3);
+  });
+
+  test("a screenshot that fails while only recording ends the recording, never the run", async () => {
+    const screen = new FormScreen();
+    const { computer, frames } = recordFrames(screen);
+    await computer.goto("http://portal.test/apply");
+    await computer.screenshot();
+    const real = screen.screenshot.bind(screen);
+    screen.screenshot = async () => {
+      screen.screenshot = real;
+      throw new Error("screenshot failed");
+    };
+
+    await computer.act([click(100), type("Rosa"), CONTINUE]);
+    expect(screen.actions.flat()).toEqual([click(100), type("Rosa"), CONTINUE]);
+    expect(shown(await computer.screenshot())).toBe("next|Rosa");
+    expect(frames()).toEqual([]);
+  });
+
   test("a screenshot with nothing new since the last frame keeps no second frame", async () => {
     const screen = new FormScreen();
     const { computer, frames } = recordFrames(screen);

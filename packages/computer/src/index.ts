@@ -39,7 +39,7 @@ export { LOOP_INSTRUCTIONS, runLoop, type LoopOptions, type LoopOutcome } from "
 export { FakeModelClient, FetchModelClient, type ModelClient, type ResponsePayload, type ResponseRequest } from "./model";
 export { ModalComputer, type ModalComputerOptions } from "./modal";
 export { PlaywrightComputer, type BrowserLauncher, type LaunchedPage, type PageLike, type PlaywrightComputerOptions } from "./playwright";
-export { recordFrames, type Frame } from "./recorder";
+export { editsForm, recordFrames, type Frame } from "./recorder";
 
 /** Open the backend named by COMPUTER_BACKEND (playwright by default). */
 export function computerFromEnv(env: Record<string, string | undefined>, options: ComputerOptions = {}): Computer {

@@ -15,6 +15,7 @@ import { randomBytes } from "node:crypto";
 import {
   FetchModelClient,
   computerFromEnv,
+  editsForm,
   recordFrames,
   runLoop,
   type Computer,
@@ -103,33 +104,27 @@ function taskText(form: FormSpec, values: Record<string, string>): string {
 // Engine keeps at most this many steps of one fill.
 const MAX_REPLAY_STEPS = 24;
 
-// The screens up to the last one that shows a value typed, which is the
-// whole form filled. Captions name the field, never its value: the value
-// is on the screen, and the page lists what Engine will send.
+// The screens up to the last edit, which shows the whole form as it was
+// saved, corrections included. Captions name the field, never its value:
+// the value is on the screen, and the page lists what Engine will send.
+// focus: the last click before the frame's last edit, carried over from
+// earlier frames, since a value is often typed in a piece of its own.
 export function replayOf(frames: Frame[], form: FormSpec, values: Record<string, string>): ReplayStep[] {
   const labelOf = new Map(form.fields.map((f) => [typedValue(f.name, values[f.name] ?? "").trim(), f.label]));
+  let lastClick: { x: number; y: number } | null = null;
   let end = frames.length;
-  for (let i = frames.length - 1; i >= 0; i--) {
-    if (frames[i]!.actions.some((a) => a.type === "type")) {
-      end = i + 1;
-      break;
+  const steps = frames.map((frame, i) => {
+    let focus: { x: number; y: number } | null = null;
+    for (const a of frame.actions) {
+      if (a.type === "click" || a.type === "double_click") lastClick = { x: Math.round(a.x), y: Math.round(a.y) };
+      if (editsForm(a)) {
+        focus = lastClick;
+        end = i + 1;
+      }
     }
-  }
-  return frames
-    .slice(0, end)
-    .map((frame) => ({ caption: captionFor(frame.actions, labelOf), png: frame.png, focus: focusOf(frame.actions) }))
-    .slice(-MAX_REPLAY_STEPS);
-}
-
-// The last click before the last value typed: the field that value went into.
-function focusOf(actions: ComputerAction[]): { x: number; y: number } | null {
-  let i = actions.length - 1;
-  while (i >= 0 && actions[i]!.type !== "type") i--;
-  for (i--; i >= 0; i--) {
-    const a = actions[i]!;
-    if (a.type === "click" || a.type === "double_click") return { x: Math.round(a.x), y: Math.round(a.y) };
-  }
-  return null;
+    return { caption: captionFor(frame.actions, labelOf), png: frame.png, focus };
+  });
+  return steps.slice(0, end).slice(-MAX_REPLAY_STEPS);
 }
 
 function captionFor(actions: ComputerAction[], labelOf: Map<string, string>): string {
@@ -139,6 +134,7 @@ function captionFor(actions: ComputerAction[], labelOf: Map<string, string>): st
     const label = labelOf.get(typed.text.trim());
     return label ? `Mano filled in "${label}".` : "Mano typed into the form.";
   }
+  if (actions.some(editsForm)) return "Mano corrected the field.";
   if (actions.some((a) => a.type === "scroll")) return "Mano scrolled the form.";
   if (actions.some((a) => a.type === "click" || a.type === "double_click")) return "Mano clicked on the form.";
   return "Mano waited for the form.";

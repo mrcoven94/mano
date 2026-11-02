@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeModelClient, type Computer, type ComputerAction } from "@mano/computer";
 
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
-import { fillDepsFromEnv } from "../agent/lib/computer-fill.js";
+import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
 import { engineFrom, type Profile } from "../agent/lib/engine.js";
 import { FORMS } from "../agent/lib/forms.js";
 import { renderQuestion } from "../agent/lib/pending.js";
@@ -220,17 +220,34 @@ describe("fill_form", () => {
     const page = (await engine.replayPageAt(url!))!;
     const captions = [...page.matchAll(/<li><p>([^<]*)<\/p>/g)].map((m) => m[1]);
     expect(captions).toEqual([
-      "Mano opened the form.",
-      ...FORMS["food-renewal"]!.fields.map((f) => `Mano filled in &quot;${f.label}&quot;.`),
+      "1. Mano opened the form.",
+      ...FORMS["food-renewal"]!.fields.map((f, i) => `${i + 2}. Mano filled in &quot;${f.label}&quot;.`),
     ]);
     // Each typed step shows its field up close, centered where Mano
     // clicked it; the replay ends on the form with all six values.
     const shown = [...page.matchAll(/data:image\/png;base64,([^"]+)"/g)].map((m) => Buffer.from(m[1]!, "base64")[33]);
     expect(shown).toEqual([0, 1, 2, 3, 4, 5, 6, 6]);
     expect(page.match(/<div class="zoom">/g)).toHaveLength(6);
-    expect(page).toContain('style="width:250%;left:-47.19%;top:-43.75%"');
+    expect(page).toContain('style="width:200%;left:-23.75%;top:-25.00%"');
     expect(page).toContain("<dt>People in household</dt><dd>3</dd>");
     expect(page).toContain("This is exactly what Mano will send when you reply YES.");
+  });
+
+  it("a value corrected with a key after it was typed ends the replay on the corrected screen", () => {
+    const form = FORMS["food-renewal"]!;
+    const income = { type: "click", button: "left", x: 600, y: 430 } as ComputerAction;
+    const frames = [
+      { png: screen(0), actions: [] },
+      { png: screen(1), actions: [income, { type: "type", text: "23290" } as ComputerAction] },
+      { png: screen(2), actions: [{ type: "keypress", keys: ["Backspace"] } as ComputerAction] },
+      { png: screen(3), actions: [CONTINUE] },
+    ];
+    const steps = replayOf(frames, form, VALUES);
+    expect(steps.map((s) => [s.caption, s.png[33], s.focus])).toEqual([
+      ["Mano opened the form.", 0, null],
+      ["Mano typed into the form.", 1, { x: 600, y: 430 }],
+      ["Mano corrected the field.", 2, { x: 600, y: 430 }],
+    ]);
   });
 
   it("a replay Engine cannot store leaves the question waiting, and the log carries no personal data", async () => {

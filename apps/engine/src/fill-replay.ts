@@ -113,11 +113,15 @@ export class ReplayInputError extends Error {
   override name = "ReplayInputError";
 }
 
+// fill_link_cleanup holds the R2 keys of link entries whose replays a
+// conversation delete removed, until R2 confirms they are gone, so a
+// delete that fails halfway finishes on its retry.
 export function ensureFillReplayTables(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS fill_replays(
     approval_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, generation INTEGER NOT NULL,
-    labels_json TEXT NOT NULL, steps_json TEXT NOT NULL, link_token TEXT NOT NULL,
+    labels_json TEXT NOT NULL, steps_json TEXT NOT NULL, link_token TEXT NOT NULL, link_key TEXT NOT NULL,
     link_expires_at_ms INTEGER NOT NULL, created_at TEXT NOT NULL)`);
+  sql.exec("CREATE TABLE IF NOT EXISTS fill_link_cleanup(link_key TEXT PRIMARY KEY)");
 }
 
 // Width and height from a PNG's header, or null when it has none.
@@ -198,12 +202,21 @@ export function getFillReplay(sql: SqlExec, approvalId: string): StoredReplay | 
   };
 }
 
-// Deletes every replay row and returns their link tokens, so the caller
-// can delete the link entries too. The images go with the documents.
-export function removeFillReplays(sql: SqlExec): string[] {
-  const tokens = (sql.exec("SELECT link_token FROM fill_replays").toArray() as { link_token: string }[]).map((r) => r.link_token);
+// Deletes every replay row and queues its link entry for deletion; call
+// it inside the conversation delete's transaction. The images go with
+// the documents.
+export function removeFillReplays(sql: SqlExec): void {
+  sql.exec("INSERT OR IGNORE INTO fill_link_cleanup(link_key) SELECT link_key FROM fill_replays");
   sql.exec("DELETE FROM fill_replays");
-  return tokens;
+}
+
+// Deletes the queued link entries from storage, then the queue. Safe to
+// repeat: a failure leaves the queue for the next call.
+export async function finishLinkCleanup(sql: SqlExec, deleteObjects: (keys: string[]) => Promise<void>): Promise<void> {
+  const keys = (sql.exec("SELECT link_key FROM fill_link_cleanup").toArray() as { link_key: string }[]).map((r) => r.link_key);
+  if (keys.length === 0) return;
+  await deleteObjects(keys);
+  for (const key of keys) sql.exec("DELETE FROM fill_link_cleanup WHERE link_key = ?", key);
 }
 
 // The link's token while it still opens, or null.
@@ -245,8 +258,26 @@ export async function bindFillReplay(
   const token = mintToken();
   const expiresAtMs = deps.nowMs + REPLAY_LINK_TTL_MS;
   const key = await linkKey(token);
-  const images = await Promise.all(input.steps.map((step, i) => storage.putImage(imageId(approvalId, i), step.png, generation)));
-  await storage.putLink(key, { personId: deps.personId, approvalId, expiresAtMs });
+  // Removes what this bind wrote and no row holds: after it loses, or
+  // after a write failed partway.
+  const discard = async (written: string[]) => {
+    const kept = new Set(getFillReplay(sql, approvalId)?.steps.map((s) => s.r2Key) ?? []);
+    await storage.deleteObjects(written.filter((k) => !kept.has(k)));
+  };
+  const puts = await Promise.allSettled(input.steps.map((step, i) => storage.putImage(imageId(approvalId, i), step.png, generation)));
+  const stored = puts.flatMap((p) => (p.status === "fulfilled" ? [p.value.r2Key] : []));
+  const failed = puts.find((p): p is PromiseRejectedResult => p.status === "rejected");
+  if (failed) {
+    await discard(stored);
+    throw failed.reason;
+  }
+  try {
+    await storage.putLink(key, { personId: deps.personId, approvalId, expiresAtMs });
+  } catch (err) {
+    await discard([key, ...stored]);
+    throw err;
+  }
+  const images = puts.map((p) => (p as PromiseFulfilledResult<{ hash: string; r2Key: string }>).value);
   const steps: StoredStep[] = input.steps.map((step, i) => ({
     caption: step.caption,
     hash: images[i]!.hash,
@@ -255,36 +286,42 @@ export async function bindFillReplay(
     focus: step.focus,
   }));
   const written = sql.exec(
-    `INSERT OR IGNORE INTO fill_replays(approval_id, request_hash, generation, labels_json, steps_json, link_token, link_expires_at_ms, created_at)
-     SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?
+    `INSERT OR IGNORE INTO fill_replays(approval_id, request_hash, generation, labels_json, steps_json, link_token, link_key, link_expires_at_ms, created_at)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${CURRENT_GENERATION} = ?
        AND EXISTS (SELECT 1 FROM approvals WHERE id = ? AND status = 'pending' AND request_hash = ? AND generation = ?)`,
-    approvalId, approval.requestHash, generation, JSON.stringify(input.labels), JSON.stringify(steps), token, expiresAtMs,
+    approvalId, approval.requestHash, generation, JSON.stringify(input.labels), JSON.stringify(steps), token, key, expiresAtMs,
     new Date(deps.nowMs).toISOString(), generation, approvalId, approval.requestHash, generation,
   ).rowsWritten;
   if (written > 0) return { status: "created", token };
 
+  await discard([key, ...stored]);
   const raced = getFillReplay(sql, approvalId);
-  const kept = new Set(raced?.steps.map((s) => s.r2Key) ?? []);
-  await storage.deleteObjects([key, ...steps.map((s) => s.r2Key).filter((k) => !kept.has(k))]);
   if (raced) return { status: "existing", token: raced.linkToken };
   return generation !== currentGeneration(sql) ? { status: "stale" } : { status: "closed" };
 }
 
-export async function replayState(facts: {
+interface ReplayFacts {
   status: Approval["status"];
   boundHash: string;
   requestHash: string;
   current: boolean;
   latest: boolean;
   expired: boolean;
-  exact: () => Promise<boolean>;
-}): Promise<ReplayState> {
+}
+
+// The state the approval's own row decides, or null while it still waits
+// for a yes: then only the document check can say whether it is current.
+function settledState(facts: ReplayFacts): ReplayState | null {
   if (!facts.current) return "closed";
   if (facts.boundHash !== facts.requestHash) return "changed";
   if (facts.status === "approved") return "approved";
   if (facts.status === "stale" || !facts.latest) return "changed";
   if (facts.status !== "pending" || facts.expired) return "closed";
-  return (await facts.exact()) ? "current" : "changed";
+  return null;
+}
+
+export async function replayState(facts: ReplayFacts & { exact: () => Promise<boolean> }): Promise<ReplayState> {
+  return settledState(facts) ?? ((await facts.exact()) ? "current" : "changed");
 }
 
 // The page for one approval's replay, or null when there is none for
@@ -295,25 +332,40 @@ export async function replayPage(
   approvalId: string,
   token: string,
 ): Promise<string | null> {
-  const replay = getFillReplay(deps.sql, approvalId);
-  if (!replay || !timingSafeEqual(replay.linkToken, token) || replay.linkExpiresAtMs <= deps.nowMs) return null;
-  const approval = deps.approvals.getApproval(approvalId);
-  if (!approval) return null;
-  const state = await replayState({
-    status: approval.status,
-    boundHash: replay.requestHash,
-    requestHash: approval.requestHash,
-    current: deps.approvals.approvalCurrent(approvalId),
-    latest: deps.approvals.proposalCurrent(approvalId),
-    expired: Date.parse(approval.expiresAt) <= deps.nowMs,
-    exact: () => deps.exact(approval),
-  });
+  // Read again after every wait: other requests to this person run while
+  // the document and the images are read, and may decline, replace or
+  // delete this version in between.
+  const read = () => {
+    const replay = getFillReplay(deps.sql, approvalId);
+    if (!replay || !timingSafeEqual(replay.linkToken, token) || replay.linkExpiresAtMs <= deps.nowMs) return null;
+    const approval = deps.approvals.getApproval(approvalId);
+    if (!approval) return null;
+    const facts: ReplayFacts = {
+      status: approval.status,
+      boundHash: replay.requestHash,
+      requestHash: approval.requestHash,
+      current: deps.approvals.approvalCurrent(approvalId),
+      latest: deps.approvals.proposalCurrent(approvalId),
+      expired: Date.parse(approval.expiresAt) <= deps.nowMs,
+    };
+    return { replay, approval, facts };
+  };
+  const first = read();
+  if (!first) return null;
+  const checked = await replayState({ ...first.facts, exact: () => deps.exact(first.approval) });
+  if (checked === "changed" || checked === "closed") return renderReplayPage({ state: checked });
+  const images = await Promise.all(first.replay.steps.map((s, i) => deps.storage.getImage(imageId(approvalId, i), s.r2Key)));
+  const now = read();
+  if (!now) return null;
+  // The document matched above; whatever the row says now decides.
+  const state = settledState(now.facts) ?? checked;
   if (state === "changed" || state === "closed") return renderReplayPage({ state });
-  const images = await Promise.all(replay.steps.map((s, i) => deps.storage.getImage(imageId(approvalId, i), s.r2Key)));
   if (images.some((png) => png === null)) return null;
+  const { replay, approval } = now;
   return renderReplayPage({
     state,
     purpose: approval.purpose,
+    recipient: approval.recipient,
     steps: replay.steps.map((s, i) => ({ ...s, png: images[i]! })),
     ...frozenFields(approval.requestJson, replay.labels),
   });
@@ -344,6 +396,7 @@ export type ReplayView =
   | {
       state: "current" | "approved";
       purpose: string;
+      recipient: string;
       steps: (Pick<StoredStep, "caption" | "width" | "height" | "focus"> & { png: Uint8Array })[];
       fields: { label: string; value: string }[];
       attached: boolean;
@@ -362,12 +415,12 @@ main{max-width:44rem;margin:0 auto;padding:24px 16px 48px}
 h1{font-size:1.4rem;line-height:1.25;margin:0 0 8px}
 h2{font-size:1.1rem;margin:40px 0 12px}
 p{margin:0 0 12px}
-ol{margin:24px 0 0;padding-left:1.4rem}
+ol{margin:24px 0 0;padding:0;list-style:none}
 li{margin:0 0 28px}
 li p{margin:0 0 8px}
-img{display:block;width:100%;height:auto;border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.18)}
-.zoom{position:relative;aspect-ratio:16/9;overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.18)}
-.zoom img{position:absolute;max-width:none;border-radius:0;box-shadow:none}
+img{display:block;width:100%;height:auto;background:#fff}
+.zoom{position:relative;aspect-ratio:16/9;overflow:hidden;background:#fff}
+.zoom img{position:absolute;max-width:none}
 dl{margin:0}
 dl div{padding:10px 0}
 dt{color:#5f5f5a;font-size:.9rem}
@@ -382,7 +435,7 @@ function page(title: string, body: string): string {
 const NOTICES: Record<"changed" | "closed" | "missing", { title: string; text: string }> = {
   changed: {
     title: "This form changed",
-    text: "This version changed after Mano shared this link, so Mano will not send it. Text Mano to see the latest one.",
+    text: "This version changed after Mano shared this link. Nothing was sent, and this version never will be. Text Mano to see the latest one.",
   },
   closed: { title: "This form is closed", text: "This version will not be sent. Text Mano if you want to start it again." },
   missing: { title: "This page is not available", text: "The link may have expired. Text Mano to see your form again." },
@@ -397,23 +450,24 @@ export function renderReplayPage(view: ReplayView): string {
 // A step that typed shows the field up close: the screenshot at ZOOM
 // times the page's width in a 16:9 window, with where Mano clicked 70%
 // across (a form's labels sit left of its fields) and halfway down, kept
-// inside the screenshot's edges.
-const ZOOM = 2.5;
+// inside the screenshot's edges. At 2x a 1280-pixel screen shows the
+// field's label and value whole on a phone.
+const ZOOM = 2;
 const WINDOW = 16 / 9;
 const ACROSS = 70;
 
 type ViewStep = Extract<ReplayView, { steps: unknown }>["steps"][number];
 
-function image(step: ViewStep, caption: string, style = ""): string {
-  return `<img src="data:image/png;base64,${bytesToBase64(step.png)}" alt="${caption}"${style ? ` style="${style}"` : ""}>`;
+function image(step: ViewStep, alt: string, style = ""): string {
+  return `<img src="data:image/png;base64,${bytesToBase64(step.png)}" alt="${alt}"${style ? ` style="${style}"` : ""}>`;
 }
 
-function stepView(step: ViewStep, caption: string): string {
-  if (!step.focus) return image(step, caption);
+function stepView(step: ViewStep): string {
+  if (!step.focus) return image(step, "The form after this step");
   const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
   const left = clamp(ACROSS - (100 * ZOOM * step.focus.x) / step.width, 100 - 100 * ZOOM, 0);
   const top = clamp(50 - (100 * ZOOM * step.focus.y * WINDOW) / step.width, 100 - (100 * ZOOM * step.height * WINDOW) / step.width, 0);
-  return `<div class="zoom">${image(step, caption, `width:${100 * ZOOM}%;left:${left.toFixed(2)}%;top:${top.toFixed(2)}%`)}</div>`;
+  return `<div class="zoom">${image(step, "Close-up of the form after this step", `width:${100 * ZOOM}%;left:${left.toFixed(2)}%;top:${top.toFixed(2)}%`)}</div>`;
 }
 
 function stepsPage(view: Extract<ReplayView, { steps: unknown }>): string {
@@ -421,15 +475,17 @@ function stepsPage(view: Extract<ReplayView, { steps: unknown }>): string {
     view.state === "current"
       ? "This is exactly what Mano will send when you reply YES. Nothing is sent before that."
       : "You said yes to this version.";
-  const steps = view.steps.map((s) => `<li><p>${escapeHtml(s.caption)}</p>${stepView(s, escapeHtml(s.caption))}</li>`).join("");
+  const steps = view.steps.map((s, i) => `<li><p>${i + 1}. ${escapeHtml(s.caption)}</p>${stepView(s)}</li>`).join("");
   // The replay ends on the whole form as Mano left it.
   const last = view.steps[view.steps.length - 1]!;
-  const whole = last.focus ? `<h2>The filled form</h2>${image(last, "The filled form")}` : "";
-  const fields = view.fields.map((f) => `<div><dt>${escapeHtml(f.label)}</dt><dd>${escapeHtml(f.value)}</dd></div>`).join("");
+  const whole = last.focus ? `<h2>The filled form</h2>${image(last, "The whole form, filled")}` : "";
+  const rows = [{ label: "Goes to", value: view.recipient }, ...view.fields];
+  const fields = rows.map((f) => `<div><dt>${escapeHtml(f.label)}</dt><dd>${escapeHtml(f.value)}</dd></div>`).join("");
   const sends = view.state === "current" ? "What Mano will send" : "What you said yes to";
+  const close = view.state === "current" ? "<p>Reply YES to Mano's text to send exactly this, or NO to stop.</p>" : "";
   return page(
     "Your form, step by step",
-    `<h1>${escapeHtml(view.purpose)}</h1><p>${status}</p><ol>${steps}</ol>${whole}<h2>${sends}</h2><dl>${fields}</dl>${view.attached ? "<p>With your document attached.</p>" : ""}`,
+    `<h1>${escapeHtml(view.purpose)}</h1><p>${status}</p><ol>${steps}</ol>${whole}<h2>${sends}</h2><dl>${fields}</dl>${view.attached ? "<p>With your document attached.</p>" : ""}${close}`,
   );
 }
 

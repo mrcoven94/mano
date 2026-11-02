@@ -55,7 +55,7 @@ import { CURRENT_GENERATION } from "../gateway/sql-store.js";
 import {
   bindFillReplay,
   ensureFillReplayTables,
-  linkKey,
+  finishLinkCleanup,
   removeFillReplays,
   replayLinkToken,
   replayPage,
@@ -809,7 +809,6 @@ export class PersonAgent extends Agent<Env, PersonState> {
     // no upload prepared before can commit after it. Then the files of
     // older generations go by prefix, including one that landed during
     // the delete. A failed sweep throws, and Channels' retry sweeps again.
-    let replayLinks: string[] = [];
     const removed = this.ctx.storage.transactionSync(() => {
       const before = currentGeneration(this.db());
       const out = removeConversationState(this.db(), Date.now(), toGeneration);
@@ -818,13 +817,13 @@ export class PersonAgent extends Agent<Env, PersonState> {
       // after it.
       if (out.generation > before) {
         removeDeadlines(this.db(), Date.now());
-        replayLinks = removeFillReplays(this.db());
+        removeFillReplays(this.db());
       }
       return out;
     });
     // Replay images live with the documents and go with them.
     await sweepDocuments(this.env.FILES, this.personId, currentGeneration(this.db()));
-    if (replayLinks.length > 0) await this.env.FILES.delete(await Promise.all(replayLinks.map(linkKey)));
+    await finishLinkCleanup(this.db(), (keys) => this.env.FILES.delete(keys));
     this.store.audit({ event: "conversation.deleted", ...removed });
     await this.armReminderWakeup();
     this.syncState();

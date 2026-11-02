@@ -35,13 +35,17 @@ export function setFillDepsForTests(factory: typeof depsForTests): void {
   depsForTests = factory;
 }
 
+// The approval already waits when the screens go up, so storing them
+// never holds the turn's reply long.
+const REPLAY_BIND_MS = 8_000;
+
 // Binds the fill's screens to the approval it produced. The question
 // works without them, so a failure is logged and nothing else changes.
 async function shareReplay(engine: PersonEngine, approvalId: string, form: FormSpec, steps: ReplayStep[]): Promise<void> {
   if (steps.length === 0) return;
   try {
     const labels = Object.fromEntries(form.fields.map((f) => [f.name, f.label]));
-    if (!(await engine.bindReplay(approvalId, { labels, steps }))) console.warn(JSON.stringify({ type: "mano_replay_refused" }));
+    if (!(await engine.bindReplay(approvalId, { labels, steps }, REPLAY_BIND_MS))) console.warn(JSON.stringify({ type: "mano_replay_refused" }));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_replay_failed", status: err instanceof EngineError ? err.status : null }));
   }

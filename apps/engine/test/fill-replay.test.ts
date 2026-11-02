@@ -45,7 +45,7 @@ const replayBody = (markers = [1, 2, 3], generation = 0) => ({
   steps: markers.map((m, i) => ({
     caption: i === 0 ? "Mano opened the form." : `Mano filled in step ${i}.`,
     pngB64: b64(png(m)),
-    ...(i === 0 ? {} : { focus: { x: 640, y: 100 + 40 * i } }),
+    ...(i === 0 ? {} : { focus: { x: 640, y: i % 2 ? 40 : 500 } }),
   })),
 });
 
@@ -170,11 +170,13 @@ describe("binding a replay to its approval", () => {
     expect(images(page.html)).toBe(4);
     expect(page.html.match(/<div class="zoom">/g)).toHaveLength(2);
     // Near the top edge the close-up stops at the edge instead of past it.
-    expect(page.html).toContain('style="width:250%;left:-55.00%;top:0.00%"');
-    expect(page.html).toContain('style="width:250%;left:-55.00%;top:-12.50%"');
+    expect(page.html).toContain('style="width:200%;left:-30.00%;top:0.00%"');
+    expect(page.html).toContain('style="width:200%;left:-30.00%;top:-88.89%"');
     expect(page.html).toContain('<h2>The filled form</h2><img src="data:image/png;base64,');
     expect(page.html).toContain("This is exactly what Mano will send when you reply YES.");
+    expect(page.html).toContain("<dt>Goes to</dt><dd>sandbox-agency-portal</dd><");
     expect(page.html).toContain("<dt>Full legal name</dt><dd>Rosa Testcase</dd>");
+    expect(page.html).toContain("Reply YES to Mano's text to send exactly this, or NO to stop.");
     expect(page.html).toContain("<dt>People in household</dt><dd>3</dd>");
     expect(page.html).toContain("With your document attached.");
     expect(page.headers.get("cache-control")).toBe("no-store");

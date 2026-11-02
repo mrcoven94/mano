@@ -512,12 +512,14 @@ export class PersonEngine {
   async bindReplay(
     approvalId: string,
     replay: { labels: Record<string, string>; steps: { caption: string; png: Uint8Array; focus: { x: number; y: number } | null }[] },
+    timeoutMs?: number,
   ): Promise<string | null> {
-    const res = await this.call("PUT", `/approvals/${encodeURIComponent(approvalId)}/replay`, {
+    const body = {
       generation: this.generation,
       labels: replay.labels,
       steps: replay.steps.map((s) => ({ caption: s.caption, pngB64: Buffer.from(s.png).toString("base64"), focus: s.focus })),
-    });
+    };
+    const res = await this.call("PUT", `/approvals/${encodeURIComponent(approvalId)}/replay`, body, timeoutMs);
     if ([400, 404, 409].includes(res.status)) {
       await res.body?.cancel().catch(() => undefined);
       return null;
