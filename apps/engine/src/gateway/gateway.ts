@@ -523,6 +523,21 @@ export class ActionGateway {
     return Promise.all([this.findBlockedLink(req), this.readDocumentBytes(req.documentId)]);
   }
 
+  // True while a YES would send exactly what this approval froze: its
+  // stored request, frozen again with the document's bytes as they are
+  // now, still has the approval's hash. It reads only.
+  async stillExact(approval: Approval): Promise<boolean> {
+    let stored: ActionRequest;
+    try {
+      stored = parseActionRequest(JSON.parse(approval.requestJson));
+    } catch {
+      return false;
+    }
+    const docRead = await this.readDocumentBytes(stored.documentId);
+    if (!docRead.ok) return false;
+    return (await freezeActionRequest(stored, docRead.bytes)).requestHash === approval.requestHash;
+  }
+
   private async readDocumentBytes(documentId: string | undefined): Promise<
     | { ok: true; bytes: Uint8Array | string | null }
     | { ok: false; result: GatewayResult }

@@ -52,6 +52,16 @@ import {
   type DeliveryOutcome,
 } from "./agent-state.js";
 import { CURRENT_GENERATION } from "../gateway/sql-store.js";
+import {
+  bindFillReplay,
+  ensureFillReplayTables,
+  linkKey,
+  removeFillReplays,
+  replayLinkToken,
+  replayPage,
+  type ReplayInput,
+  type ReplayStorage,
+} from "../fill-replay.js";
 import { ProfileStore, forgetMemoryNote, type PatchAnswer, type Profile, type Suggestion } from "../profile.js";
 import { profileCipher } from "../crypto.js";
 import {
@@ -154,6 +164,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       }
       sql.exec(`CREATE TABLE IF NOT EXISTS conversation(id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)`);
       ensureDeadlineTables(sql);
+      ensureFillReplayTables(sql);
       sql.exec(`CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL, r2_key TEXT NOT NULL)`);
       // One consent row per recipient and case, so revocation deletes the
       // exact row the grant created.
@@ -798,15 +809,22 @@ export class PersonAgent extends Agent<Env, PersonState> {
     // no upload prepared before can commit after it. Then the files of
     // older generations go by prefix, including one that landed during
     // the delete. A failed sweep throws, and Channels' retry sweeps again.
+    let replayLinks: string[] = [];
     const removed = this.ctx.storage.transactionSync(() => {
       const before = currentGeneration(this.db());
       const out = removeConversationState(this.db(), Date.now(), toGeneration);
-      // Only a delete that moved the generation removes deadlines: a
-      // retried old one never touches the conversation after it.
-      if (out.generation > before) removeDeadlines(this.db(), Date.now());
+      // Only a delete that moved the generation removes deadlines and
+      // fill replays: a retried old one never touches the conversation
+      // after it.
+      if (out.generation > before) {
+        removeDeadlines(this.db(), Date.now());
+        replayLinks = removeFillReplays(this.db());
+      }
       return out;
     });
+    // Replay images live with the documents and go with them.
     await sweepDocuments(this.env.FILES, this.personId, currentGeneration(this.db()));
+    if (replayLinks.length > 0) await this.env.FILES.delete(await Promise.all(replayLinks.map(linkKey)));
     this.store.audit({ event: "conversation.deleted", ...removed });
     await this.armReminderWakeup();
     this.syncState();
@@ -1254,6 +1272,51 @@ export class PersonAgent extends Agent<Env, PersonState> {
     }
     this.store.audit({ event: "document.registered", documentHash: await auditDigest(id) });
     return { id, hash };
+  }
+
+  // The person's replay images and link entries, in R2. Images are
+  // encrypted like documents, under their own IDs.
+  private replayStorage(): ReplayStorage {
+    const files = this.env.FILES;
+    return {
+      putImage: (id, png, generation) => putDocument(files, this.env.ENCRYPTION_KEK_B64, this.personId, id, png, generation),
+      getImage: (id, r2Key) => getDocumentBytes(files, this.env.ENCRYPTION_KEK_B64, this.personId, id, r2Key),
+      deleteObjects: (keys) => files.delete(keys),
+      putLink: async (key, entry) => {
+        await files.put(key, JSON.stringify(entry));
+      },
+    };
+  }
+
+  // Binds the screens of the fill that produced this approval. The first
+  // bind wins; the answer carries the link's token.
+  async bindFillReplay(verified: string, approvalId: string, input: ReplayInput, generation?: number) {
+    await this.assertSubject(verified);
+    const out = await bindFillReplay(
+      { sql: this.db(), approvals: this.store, storage: this.replayStorage(), personId: this.personId, nowMs: Date.now() },
+      approvalId,
+      input,
+      generation ?? currentGeneration(this.db()),
+    );
+    if (out.status === "created") this.store.audit({ event: "replay.bound", approvalHash: await auditDigest(approvalId), steps: input.steps.length });
+    return out;
+  }
+
+  // The token of this approval's replay link while it still opens.
+  async fillReplayLink(verified: string, approvalId: string): Promise<string | null> {
+    await this.assertSubject(verified);
+    return replayLinkToken(this.db(), approvalId, Date.now());
+  }
+
+  // The replay page a link opens. The worker found the person and the
+  // approval under the token's hash; the row must hold the same token.
+  async fillReplayPage(personId: string, approvalId: string, token: string): Promise<string | null> {
+    if (!this.personId || this.personId !== personId) return null;
+    return replayPage(
+      { sql: this.db(), approvals: this.store, storage: this.replayStorage(), nowMs: Date.now(), exact: (approval) => this.gateway.stillExact(approval) },
+      approvalId,
+      token,
+    );
   }
 
   private documentRow(id: string): { hash: string; r2_key: string; name: string } | undefined {
