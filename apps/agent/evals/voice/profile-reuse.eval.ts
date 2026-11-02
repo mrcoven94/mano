@@ -11,7 +11,7 @@ export default defineEval({
     t.check(await person.text("Hi, my name is Rosa Testcase and I was born 1990-02-03."), satisfies(answered, "the agent answered"));
     t.check(await person.text("I live at 12 Sample Street, Testville, UT 84101. My phone is 555-0100."), satisfies(answered, "the agent answered"));
     t.check(await person.text("It's me and my son Leo. I make $1,800 a month at the diner."), satisfies(answered, "the agent answered"));
-    const profile = await (await person.engine()).getProfile();
+    const { profile } = await (await person.engine()).getProfileView();
     t.check(profile.person.address.zip?.value ?? "", includes("84101"));
     t.check(profile.person.address.zip?.source ?? "", includes("person"));
     const summary = await person.text("What do you have on me?");

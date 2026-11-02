@@ -41,6 +41,11 @@
 //   DELETE /api/persons/:id/memory/:memoryId  forget: deletes the row
 //   GET  /api/persons/:id/profile              the person's structured record (src/profile.ts)
 //   PATCH /api/persons/:id/profile             { idempotencyKey, source, documentId?, fields }
+//   POST /api/persons/:id/deadlines           { title, dueDate, program?, source, idempotencyKey, generation }
+//                                              (generation required, 409 when stale)
+//   GET  /api/persons/:id/deadlines           (session or agent; nudges per deadline, see src/deadlines.ts)
+//   PATCH /api/persons/:id/deadlines/:did     { dueDate?, title?, status?: "done" }
+//   DELETE /api/persons/:id/deadlines/:did    stop tracking it
 //
 //   Service routes (agent token or Channels token, plus a handle grant;
 //   the person must be handle-<hash> from the grant). Every write carries
@@ -80,11 +85,12 @@
 // Executors: EXECUTOR_MODE=simulated (explicit, or the default in
 // development) records calls and labels receipts simulated, except share
 // receipts, which are real deliveries. EXECUTOR_MODE=sandbox with
-// SANDBOX_BASE_URL files into the sandbox agency portal:
-// POST {base}/v1/actions with the action JSON (idempotencyKey scoped as
-// "<personId>:<key>", plus document {hash, contentB64} when the gateway
-// verified one) returns { externalId }; GET
-// {base}/v1/actions/by-key/{key} returns {externalId} or 404.
+// SANDBOX_BASE_URL and SANDBOX_PORTAL_TOKEN files into the sandbox agency
+// portal over its JSON API: POST {base}/submissions with the bearer token
+// and { key, household, files } (the key is the SHA-256 of
+// "<personId>:<idempotencyKey>", the file is the document the gateway
+// verified) returns { confirmationNumber }; GET {base}/submissions/{key}
+// returns it again, or 404.
 //
 // Secrets: never put a key on a command line. Set secrets from stdin:
 //
@@ -93,7 +99,7 @@
 // Same for ENCRYPTION_KEK_B64 (32 bytes, base64), SESSION_SECRET and
 // OPERATOR_SECRET, and the optional CF_ACCOUNT_ID, AI_GATEWAY_ID,
 // AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA, MANO_ENV, EXECUTOR_MODE,
-// SANDBOX_BASE_URL.
+// SANDBOX_BASE_URL, SANDBOX_PORTAL_TOKEN.
 //
 // Deploy: ask David before the first deploy. After that, deploys go
 // through GitHub by pushing. Never run a production deploy from a laptop.
@@ -122,6 +128,7 @@ import { createExecutor } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
 import { profilePatchResponse } from "./profile.js";
+import { routeDeadlines } from "./deadlines.js";
 
 export { PersonAgent, OrgAgent };
 export { ActionGateway, MemoryApprovalStore, InMemoryExecutor } from "./gateway/index.js";
@@ -496,6 +503,22 @@ export default {
         const stateResponse = await handleAgentState(agent, subject, request, rest, url);
         if (stateResponse) return stateResponse;
       }
+      const deadlines = await routeDeadlines(
+        {
+          track: (input) => agent.trackDeadline(subject, input),
+          list: () => agent.listDeadlines(subject),
+          update: (id, patch) => agent.updateDeadline(subject, id, patch),
+          cancel: (id) => agent.cancelDeadline(subject, id),
+        },
+        request.method,
+        rest,
+        async () => {
+          const read = await readCappedJson(request, MAX_ACTION_BODY);
+          if (!read.ok) throw read.response;
+          return read.value;
+        },
+      );
+      if (deadlines) return deadlines;
       if (rest === "/ws-ticket" && request.method === "POST") {
         const configured = getSessionSecret(env);
         if (!configured || sessionExp === null) return Response.json({ error: "Sessions are not configured." }, { status: 503 });
