@@ -49,6 +49,7 @@ import {
   updateDeadline,
   type DeadlineCalls,
 } from "../../engine/src/deadlines.js";
+import { LocalRulesChecker, type Checker } from "../../engine/src/gateway/checker.js";
 import { ActionGateway } from "../../engine/src/gateway/gateway.js";
 import { InMemoryExecutor } from "../../engine/src/gateway/executors.js";
 import { MapDocumentStore } from "../../engine/src/gateway/gateway.js";
@@ -129,6 +130,9 @@ export interface DeadlineCall {
 
 export class EngineDouble {
   executor = new InMemoryExecutor();
+  // The gateway's checker, read at every check, so a test can swap it
+  // between the draft and the yes.
+  checker: Checker = new LocalRulesChecker();
   // The person's stored documents: the gateway reads them as Engine reads
   // R2, a profile fact with source document must name one of them, and the
   // agent reads a texted photo back (GET /documents/:docId).
@@ -172,7 +176,11 @@ export class EngineDouble {
       p = {
         sql,
         store,
-        gateway: new ActionGateway(store, this.executor, { linkCheck: async () => ({ allowed: true }), documents: this.documents }),
+        gateway: new ActionGateway(store, this.executor, {
+          linkCheck: async () => ({ allowed: true }),
+          documents: this.documents,
+          checker: { check: (input) => this.checker.check(input) },
+        }),
         profile: new ProfileStore({
           sql,
           transaction: (fn) => sql.transaction(fn),

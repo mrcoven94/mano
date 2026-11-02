@@ -162,6 +162,11 @@ function defaultMailModel(): ModelClient {
 const CHECKING =
   "I'm checking whether it went through. It will not be sent twice. Reply YES in a few minutes and I will check again.";
 
+// Engine keeps the approval waiting when the safety check could not
+// answer, so the question stays open for the next YES.
+const CHECK_STARTING =
+  "The safety check is taking a moment, so nothing was sent yet. Reply YES again in a few minutes and I will send it.";
+
 function doneText(purpose: string, receipt: { externalId: string; simulated: boolean } | null | undefined): string {
   const label = receipt?.simulated ? " This was a simulated filing." : "";
   const confirmation = receipt ? ` Confirmation ${receipt.externalId}.` : "";
@@ -183,6 +188,7 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
     case "in_progress":
       return CHECKING;
     default: {
+      if (result.retryable) return CHECK_STARTING;
       if (result.superseded) {
         await engine.clearPointer(approvalId);
         return `${UPDATED} Ask me to show the latest.`;
