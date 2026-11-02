@@ -44,7 +44,14 @@ function serviceUrl(service) {
 async function checkHealth(url) {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(15000), redirect: "follow" });
-    return res.ok ? "live" : "down";
+    if (!res.ok) return "down";
+    // A health route can answer 200 with { ok: false } when a required live
+    // part is missing (the engine does); that is not live.
+    if ((res.headers.get("content-type") ?? "").includes("application/json")) {
+      const body = await res.json().catch(() => null);
+      if (body && body.ok === false) return "down";
+    }
+    return "live";
   } catch {
     return "down";
   }
