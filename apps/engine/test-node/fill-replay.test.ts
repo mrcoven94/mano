@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { ensureAgentStateTables, removeConversationState } from "../src/agents/agent-state.js";
+import { decryptForPerson, documentAad, encryptForPerson, type EncryptedBlob } from "../src/crypto.js";
 import {
   bindFillReplay,
   ensureFillReplayTables,
@@ -44,6 +45,7 @@ function openDb() {
 
 const png = (marker: number) =>
   new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 5, 0, 0, 0, 3, 32, 8, 6, 0, 0, 0, 0, 0, 0, 0, marker]);
+const KEK = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const INPUT = { labels: { fullName: "Full legal name" }, steps: [1, 2, 3].map((m) => ({ caption: `Step ${m}.`, png: png(m), focus: null })) };
 
 class MemoryStorage implements ReplayStorage {
@@ -74,6 +76,13 @@ class MemoryStorage implements ReplayStorage {
       throw new Error("R2 delete failed");
     }
     for (const k of keys) this.objects.delete(k);
+  }
+  // The link's token under the person's key, as Engine seals it.
+  async sealToken(approvalId: string, token: string) {
+    return JSON.stringify(await encryptForPerson(new TextEncoder().encode(token), KEK, documentAad("p", `fill-link-${approvalId}`)));
+  }
+  async openToken(approvalId: string, sealed: string) {
+    return new TextDecoder().decode(await decryptForPerson(JSON.parse(sealed) as EncryptedBlob, KEK, documentAad("p", `fill-link-${approvalId}`)));
   }
   async putLink(key: string, entry: ReplayLinkEntry) {
     if (this.failLink) throw new Error("R2 put failed");
@@ -148,6 +157,24 @@ describe("a replay while other requests run", () => {
       removeFillReplays(sql);
     };
     expect(await replayPage({ ...deps, exact: (a) => gateway.stillExact(a) }, approvalId, bound.token)).toBeNull();
+  });
+});
+
+describe("the link's token", () => {
+  it("is nowhere in the person's database, and a retry still gets the same link", async () => {
+    const { sql, gateway, deps, approvalId } = await setup();
+    const bound = await bindFillReplay(deps, approvalId, INPUT, 0);
+    if (bound.status !== "created") throw new Error(bound.status);
+
+    const tables = sql.exec("SELECT name FROM sqlite_master WHERE type = 'table'").toArray() as { name: string }[];
+    const exported = JSON.stringify(tables.map(({ name }) => sql.exec(`SELECT * FROM ${name}`).toArray()));
+    expect(exported).toContain(approvalId);
+    expect(exported).not.toContain(bound.token);
+
+    expect(await bindFillReplay(deps, approvalId, INPUT, 0)).toEqual({ status: "existing", token: bound.token });
+    expect(await replayPage({ ...deps, exact: (a) => gateway.stillExact(a) }, approvalId, bound.token)).toContain(
+      "This is exactly what Mano will send",
+    );
   });
 });
 
