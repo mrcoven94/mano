@@ -35,7 +35,7 @@ flowchart LR
 <!-- status:start -->
 | Piece | Status | URL | Last deploy |
 | --- | --- | --- | --- |
-| Site | live | https://withmano.com | 7d5a58f failure 2026-11-02 |
+| Site | live | https://withmano.com | f846c8d success 2026-11-02 |
 | Sandbox portal | live | https://sandbox.withmano.com/ | 5d854a0 success 2026-11-02 |
 | Engine | live | https://engine.withmano.com/health | 80767ac success 2026-11-02 |
 | Channels | live | https://text.withmano.com/health | 789eaf4 success 2026-11-02 |
