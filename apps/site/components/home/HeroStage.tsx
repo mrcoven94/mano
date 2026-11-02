@@ -6,11 +6,11 @@ import Mascot from "@/components/Mascot";
 
 /* The hero: one headline whose highlighted outcome follows the demo below it. Each tab names the outcome and the work behind it.
    Scenes advance on their own while the stage is on screen; choosing a tab stops that. The first scene is the spine
-   (a text thread that ends with a renewal filed), shown for one full loop; chosen, it keeps looping. */
+   (a text thread that ends with a renewal filed); it moves on when its loop ends, and chosen, it keeps looping. */
 
 const SECONDS = 8;
 
-type SceneDef = { key: string; tab: string; how: string; phrase: string; Scene: () => React.ReactNode; seconds?: number; flush?: boolean };
+type SceneDef = { key: string; tab: string; how: string; phrase: string; Scene: (props: { onLoop?: () => void }) => React.ReactNode; seconds?: number; flush?: boolean };
 
 const SCENES: SceneDef[] = [
   { key: "spine", tab: "Keep your benefits", how: "Renews by text", phrase: "keeps food coming", Scene: SpineDemo, seconds: SPINE_SECONDS, flush: true },
@@ -36,6 +36,7 @@ export default function HeroStage() {
   }, []);
 
   const pick = (n: number) => { setAuto(false); setI(n); };
+  const next = () => setI((x) => (x + 1) % SCENES.length);
   const onKey = (e: React.KeyboardEvent) => {
     const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
     if (!d) return;
@@ -89,7 +90,7 @@ export default function HeroStage() {
                   key={`p-${i}`}
                   className="h-tab-bar"
                   style={{ animationDuration: `${s.seconds ?? SECONDS}s`, animationPlayState: playing ? "running" : "paused" }}
-                  onAnimationEnd={() => setI((x) => (x + 1) % SCENES.length)}
+                  onAnimationEnd={s.seconds ? undefined : next}
                   aria-hidden="true"
                 />
               )}
@@ -97,7 +98,7 @@ export default function HeroStage() {
           ))}
         </div>
         <div className="h-stage" id="h-panel" role="tabpanel" aria-labelledby={`tab-${SCENES[i].key}`} data-paused={(auto && !visible) || undefined} data-flush={flush || undefined}>
-          <Scene key={SCENES[i].key} />
+          <Scene key={SCENES[i].key} onLoop={auto ? next : undefined} />
         </div>
       </div>
     </div>

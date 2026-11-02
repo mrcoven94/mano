@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Stage, Phone, Thread, Bubble, Stamp, type Act } from "@/components/stageshow";
 import Mascot from "@/components/Mascot";
 import "./spine.css";
@@ -15,10 +15,10 @@ type S = { photo: boolean; thinking: boolean; deadline: boolean; ask: boolean; y
 const initial: S = { photo: false, thinking: false, deadline: false, ask: false, yes: false, filing: false, filed: false, leaving: false };
 const poster: S = { ...initial, photo: true, deadline: true, ask: true, yes: true, filed: true };
 
-/* One loop (14.6s) plus a little of the next opening, so the hero carousel moves on during a calm frame. */
-export const SPINE_SECONDS = 15.4;
+/* One loop, for the hero tab's progress bar. The carousel itself moves on when the loop reports its end. */
+export const SPINE_SECONDS = 14.6;
 
-async function script(a: Act<S>) {
+async function script(a: Act<S>, onLoop: () => void) {
   await a.wait(1400);
   a.mark("photo");
   await a.set({ photo: true });
@@ -46,6 +46,7 @@ async function script(a: Act<S>) {
   await a.wait(60);
   await a.set({ leaving: false });
   await a.wait(900);
+  onLoop();
 }
 
 function Letter({ marked }: { marked: boolean }) {
@@ -81,7 +82,10 @@ function Photo() {
   );
 }
 
-export default function SpineDemo() {
+export default function SpineDemo({ onLoop }: { onLoop?: () => void }) {
+  const loopRef = useRef(onLoop);
+  loopRef.current = onLoop;
+  const [play] = useState(() => (a: Act<S>) => script(a, () => loopRef.current?.()));
   /* The stage picks its wide or compact design from its measured width, so it mounts on the client only;
      the reserved height in spine.css keeps the page from shifting while it does. */
   const [mounted, setMounted] = useState(false);
@@ -100,7 +104,7 @@ export default function SpineDemo() {
           compact={{ below: 720, width: 358, height: 420 }}
           initial={initial}
           poster={poster}
-          script={script}
+          script={play}
           play="loop"
           accent="#1E7BF6"
           tokens={{ "--ss-font": "var(--font-sans), system-ui, sans-serif" }}
@@ -121,7 +125,7 @@ export default function SpineDemo() {
                     <Bubble from="them">Text me a photo of any letter or form.</Bubble>
                     <Bubble from="me">Ok, thank you</Bubble>
                     <Stamp><b>Today</b> 9:41 PM</Stamp>
-                    <Bubble from="me">Got a letter. My food benefits are ending?</Bubble>
+                    <Bubble from="me" tail={!s.photo}>Got a letter. My food benefits are ending?</Bubble>
                     {s.photo && <Photo />}
                     {(s.thinking || s.deadline) && (
                       <Bubble from="them" typing={s.thinking}>
