@@ -1,0 +1,43 @@
+/* The spine demo in the hero (SpineDemo.tsx). The hero panel is the ground: the stage is transparent over it. */
+.sp{height:min(500px,calc(100cqw * 500 / 1100))}
+@container (max-width:719.98px){.sp{height:420px}}
+.sp-stage .ss-stage{overflow:hidden;background:transparent}
+
+/* The phone, pinned a gutter from the top and running off the bottom. In the compact
+   design it takes the column, a gutter from the left. */
+.sp-stage .sp-phone{position:absolute;top:36px;left:600px;box-shadow:var(--shadow-lg);border-radius:60px}
+.sp-stage .ss-stage[data-layout="compact"] .sp-phone{top:16px;left:16px}
+
+/* The app column, in iOS points. Its foot sits a gutter above the stage's bottom edge,
+   so the thread's newest message is always in view; the rest of the screen runs off. */
+.sp-stage .sp-app{display:flex;flex-direction:column;height:416px}
+.sp-stage .ss-stage[data-layout="compact"] .sp-app{height:424px}
+.sp-stage .sp-head{display:grid;justify-items:center;gap:4px;padding:10px 0;background:#f7f7f8;border-bottom:.5px solid #d8d8dc;flex:none;position:relative;z-index:1}
+.sp-stage .sp-name{font-size:14px;font-weight:500;color:#000;line-height:18px}
+.sp-stage .sp-thread{flex:1;padding:0 16px 0 16px}
+.sp-stage .sp-thread .ss-stamp{margin:12px 0 6px}
+.sp-stage .sp-thread .ss-stamp b{font-weight:600}
+
+/* The reset: the thread dissolves, returns to its opening while hidden, and fades back; the header stays */
+.sp-stage .sp-thread{transition:opacity .3s ease}
+.sp-stage .sp-thread.sp-leaving{opacity:0}
+
+/* The photo Maria sends: a picture of the letter, sent as an image, not a bubble */
+.sp-stage .sp-photo-row{position:relative;top:0;transition:top var(--ss-scroll);will-change:transform;display:flex;justify-content:flex-end;flex:none;margin-top:3px;animation:spPhotoIn .45s cubic-bezier(.22,1,.36,1) .12s both;transform-origin:100% 100%}
+@keyframes spPhotoIn{from{opacity:0;transform:translateY(10px) scale(.94)}to{opacity:1;transform:none}}
+.sp-stage .ss-stage[data-still] .sp-photo-row{animation:none}
+.sp-stage .sp-photo{width:150px;height:112px;border-radius:18px;background:#d9d2c4;overflow:hidden;position:relative}
+.sp-stage .sp-photo-paper{position:absolute;left:22px;top:14px;width:118px;height:120px;background:#fff;border-radius:2px;transform:rotate(-4deg);padding:12px 12px;display:grid;align-content:start;gap:6px;box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.sp-stage .sp-photo-paper i{display:block;height:4px;border-radius:2px;background:#e3e0d9}
+.sp-stage .sp-photo-paper b{display:block;height:7px;width:80%;border-radius:2px;background:#9a978f}
+.sp-stage .sp-photo-paper i.hl{background:#cfc9bd}
+
+/* The letter she photographed, flat on the ground beside the phone, off the bottom */
+.sp-stage .sp-letter{position:absolute;left:180px;top:76px;width:450px;height:560px;background:#fff;border-radius:4px;box-shadow:var(--shadow);padding:40px 44px;display:flex;flex-direction:column;gap:12px;font-family:var(--font-sans),system-ui,sans-serif}
+.sp-stage .sp-letter-from{font-family:var(--font-mono),ui-monospace,monospace;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+.sp-stage .sp-letter-title{font-size:21px;font-weight:600;letter-spacing:-.015em;color:var(--text);line-height:1.25;margin-bottom:10px;max-width:300px}
+.sp-stage .sp-line{display:block;height:7px;border-radius:3px;background:var(--bg3)}
+.sp-stage .sp-letter-due{margin:8px 0;font-size:16px;font-weight:500;color:var(--text);line-height:1.4}
+.sp-stage .sp-letter-note{margin:6px 0;font-size:14px;color:var(--muted);line-height:1.4}
+.sp-stage .sp-letter-due mark{background-color:transparent;color:inherit;background-image:linear-gradient(var(--hl),var(--hl));background-repeat:no-repeat;background-size:0 100%;padding:1px .1em;margin:0 -.1em;transition:background-size .55s cubic-bezier(.6,0,.2,1)}
+.sp-stage .sp-letter-due mark[data-on]{background-size:100% 100%}
