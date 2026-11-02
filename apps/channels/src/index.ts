@@ -250,6 +250,40 @@ async function noteSeenIds(env: Env, ids: string[]): Promise<void> {
 
 // Dead letters record the event ID and reason, then drop the body. The
 // full event, with its message text, never sits in the DLQ.
+// One chat's events run in batch order (STOP before a later message,
+// typing started before stopped); different chats run at once. Each
+// message is acked or retried on its own.
+export async function routeInLanes(
+  messages: readonly Pick<Message<unknown>, "id" | "body" | "ack" | "retry">[],
+  route: (event: NormalizedEvent) => Promise<unknown>,
+): Promise<void> {
+  const lanes = new Map<string, (typeof messages)[number][]>();
+  for (const message of messages) {
+    const event = message.body as Partial<NormalizedEvent> | null;
+    const lane = event?.chatId ?? event?.handle ?? message.id;
+    const queued = lanes.get(lane);
+    if (queued) queued.push(message);
+    else lanes.set(lane, [message]);
+  }
+  await Promise.all(
+    [...lanes.values()].map(async (lane) => {
+      for (const message of lane) {
+        const event = message.body as NormalizedEvent;
+        try {
+          await route(event);
+          message.ack();
+        } catch (err) {
+          createLogger().warn("event_route_failed", {
+            eventId: String((event as { id?: unknown })?.id ?? "unknown"),
+            err: errName(err),
+          });
+          message.retry();
+        }
+      }
+    }),
+  );
+}
+
 export function handleDeadLetters(batch: MessageBatch<unknown>): void {
   const logger = createLogger();
   for (const message of batch.messages) {
@@ -371,19 +405,7 @@ export default {
       handleDeadLetters(batch);
       return;
     }
-    for (const message of batch.messages) {
-      const event = message.body as NormalizedEvent;
-      try {
-        await routeEvent(event, env);
-        message.ack();
-      } catch (err) {
-        createLogger().warn("event_route_failed", {
-          eventId: String((event as { id?: unknown })?.id ?? "unknown"),
-          err: errName(err),
-        });
-        message.retry();
-      }
-    }
+    await routeInLanes(batch.messages, (event) => routeEvent(event, env));
   },
 
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
