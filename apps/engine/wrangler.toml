@@ -22,6 +22,14 @@ new_sqlite_classes = ["PersonAgent", "OrgAgent"]
 binding = "FILES"
 bucket_name = "mano-files"
 
+# The sandbox portal's MAX_FIELD_LENGTH and MAX_UPLOAD_BYTES
+# (apps/sandbox-portal/wrangler.toml). In sandbox mode the gateway refuses
+# a filing over these before the approval question. Change both files
+# together: test-node/sandbox-portal-limits.test.ts fails when they differ.
+[vars]
+SANDBOX_MAX_FIELD_LENGTH = "500"
+SANDBOX_MAX_UPLOAD_BYTES = "5242880"
+
 # Secrets (never commit values):
 #   wrangler secret put META_MODEL_API_KEY  (reads from stdin)
 #   wrangler secret put ENCRYPTION_KEK_B64

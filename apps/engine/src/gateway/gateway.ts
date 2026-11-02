@@ -33,6 +33,9 @@ export interface ApprovalStore {
   // More than one approval can share a key; recovery wants the one that
   // claimed the attempt.
   getApprovalByKey(key: string): Approval | null;
+  // Whether any approval still holds key (pending, approved, rejected or
+  // revoked): exactly when createApprovalForKey would not draft a new one.
+  keyHeld(key: string): boolean;
   putApproval(a: Approval): void;
   // The person's conversation generation. A conversation delete advances
   // it; anything prepared under an older one is stale and never written.
@@ -136,6 +139,10 @@ export class MemoryApprovalStore implements ApprovalStore {
   getApproval(id: string) {
     return this.approvals.get(id) ?? null;
   }
+  keyHeld(key: string): boolean {
+    return [...this.approvals.values()].some((a) => a.idempotencyKey === key && KEY_HOLDING.includes(a.status));
+  }
+
   getApprovalByKey(key: string): Approval | null {
     const matches = [...this.approvals.values()].filter((a) => a.idempotencyKey === key);
     if (matches.length === 0) return null;
@@ -615,8 +622,23 @@ export class ActionGateway {
     if (!docRead.ok) return docRead.result;
     if (blockedLink) return this.linkBlocked(blockedLink);
 
+    const frozen = await freezeActionRequest(req, docRead.bytes);
+    const withDocument = this.enrichWithDocument(req, docRead.bytes, frozen.documentHash);
+    // Asked whenever a new approval would be drafted, so a person never
+    // says yes to an action the executor already knows it cannot carry
+    // out: a key with no attempt whose approvals, if any, no longer hold
+    // it (stale or expired ones are replaced below). A key with an attempt
+    // or a holding approval must reconcile or answer that approval rather
+    // than claim nothing was sent; the content hash leaves out the
+    // document bytes, so a replay after the document changed keeps its key.
+    const drafting = !this.store.getAttempt(req.idempotencyKey) && !this.store.keyHeld(req.idempotencyKey);
+    const refusal = drafting ? this.executor.refuse?.(withDocument) : null;
+    if (refusal) {
+      this.store.audit({ event: "gateway.block", type: req.type, reason: "executor" });
+      return { status: "blocked", reason: `${refusal} Nothing was sent.` };
+    }
+
     if (decision === "ask") {
-      const frozen = await freezeActionRequest(req, docRead.bytes);
       const check = await this.runChecker(req, frozen.documentHash);
       if (!check.ok) {
         this.store.audit({ event: "gateway.block", type: req.type, reason: "checker" });
@@ -656,14 +678,13 @@ export class ActionGateway {
       return { status: "blocked", reason: "This action was already approved. Approve it again to retry it." };
     }
 
-    const frozen = await freezeActionRequest(req, docRead.bytes);
     const check = await this.runChecker(req, frozen.documentHash);
     if (!check.ok) return { status: "blocked", reason: check.reason };
     if (check.problems.length > 0) {
       // A fix verdict needs a person to review; the allow path has none.
       return { status: "blocked", reason: `Blocked by review: ${check.problems.join("; ")}` };
     }
-    return this.execute(this.enrichWithDocument(req, docRead.bytes, frozen.documentHash), now, generation);
+    return this.execute(withDocument, now, generation);
   }
 
   // A person's NO. Ends the action at once: every pending approval under

@@ -35,6 +35,11 @@ export class ConsentDeliveringExecutor implements Executor {
     return this.inner.execute(req);
   }
 
+  refuse(req: ActionRequest): string | null {
+    if (req.type === "share") return null;
+    return this.inner.refuse?.(req) ?? null;
+  }
+
   async check(idempotencyKey: string, personId: string): Promise<CheckOutcome> {
     // Shares never touch the inner executor, so they reconcile by asking
     // the org whether it recorded the key, not by asking the inner check.

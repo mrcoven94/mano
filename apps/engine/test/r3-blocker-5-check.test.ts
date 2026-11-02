@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ActionGateway,
+  MapDocumentStore,
   MemoryApprovalStore,
   SandboxExecutor,
   TimeoutError,
@@ -11,12 +12,22 @@ import type { ActionRequest } from "../src/gateway/index.js";
 // contract's explicit absent response (404) means absent. A 200 without
 // an external ID is malformed, so the lookup is unavailable.
 
+const PORTAL_HOUSEHOLD = {
+  fullName: "Maria Testcase",
+  dateOfBirth: "1988-04-12",
+  address: "42 Test Street, Fresno, CA 93701",
+  phone: "555-010-2030",
+  householdSize: "3",
+  monthlyIncome: "2400",
+};
+
 function baseReq(over: Partial<ActionRequest> = {}): ActionRequest {
   return {
     type: "submit",
     recipient: "sandbox-agency",
     purpose: "renewal",
-    payload: {},
+    payload: { ...PORTAL_HOUSEHOLD },
+    documentId: "proof",
     idempotencyKey: `r3b5-${crypto.randomUUID()}`,
     actor: "foreground",
     personId: "maria",
@@ -42,7 +53,10 @@ describe("r3 blocker 5: malformed lookups are unavailable, never absent", () => 
     }) as typeof fetch;
     const store = new MemoryApprovalStore();
     const exec = new SandboxExecutor("https://portal.test", 1000, fetchFn);
-    const gw = new ActionGateway(store, exec, { policyOverrides: { submit: "allow" } });
+    const gw = new ActionGateway(store, exec, {
+      policyOverrides: { submit: "allow" },
+      documents: new MapDocumentStore(new Map([["proof", "%PDF-1.4 synthetic proof"]])),
+    });
     const key = "r3b5-malformed";
 
     const first = await gw.requestAction(baseReq({ idempotencyKey: key }));
