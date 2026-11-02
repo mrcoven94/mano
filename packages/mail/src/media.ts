@@ -136,17 +136,14 @@ async function decodeHeic(bytes: Uint8Array): Promise<NormalizedImage> {
   }
 }
 
-let ffmpegChecked: boolean | null = null;
-
+// For tests and scripts that skip when ffmpeg is absent. The video path
+// does not probe: a missing binary surfaces as ENOENT from the spawn.
 export function ffmpegAvailable(): boolean {
-  if (ffmpegChecked !== null) return ffmpegChecked;
   try {
-    const res = spawnSync("ffmpeg", ["-version"], { stdio: "ignore", timeout: 5000 });
-    ffmpegChecked = res.status === 0;
+    return spawnSync("ffmpeg", ["-version"], { stdio: "ignore", timeout: 5000 }).status === 0;
   } catch {
-    ffmpegChecked = false;
+    return false;
   }
-  return ffmpegChecked;
 }
 
 // Extract frames from a short video of a mail pile. Returns JPEG buffers
@@ -157,9 +154,6 @@ export async function extractVideoFrames(
   opts: { fps?: number; maxFrames?: number; timeoutMs?: number; maxOutputBytes?: number } = {},
 ): Promise<{ frames: Buffer[]; truncated: boolean }> {
   const { fps = 1, maxFrames = 30, timeoutMs = 60000, maxOutputBytes = MAX_FFMPEG_BYTES } = opts;
-  if (!ffmpegAvailable()) {
-    throw new MediaError("ffmpeg_missing", "Video needs ffmpeg, which is not installed.");
-  }
   // Via a temp file, not a pipe: phone MP4s often store the moov atom
   // at the end, which ffmpeg cannot seek to on stdin.
   const dir = makePrivateTmpDir();
@@ -202,9 +196,10 @@ export async function extractVideoFrames(
         child.kill("SIGKILL");
         reject(new MediaError("video_decode_failed", "Video decoding timed out."));
       }, timeoutMs);
-      child.on("error", (err) => {
+      child.on("error", (err: NodeJS.ErrnoException) => {
         clearTimeout(timer);
-        reject(new MediaError("video_decode_failed", `Video decoding failed: ${err.message}`));
+        if (err.code === "ENOENT") reject(new MediaError("ffmpeg_missing", "Video needs ffmpeg, which is not installed."));
+        else reject(new MediaError("video_decode_failed", `Video decoding failed: ${err.message}`));
       });
       child.on("close", (code) => {
         clearTimeout(timer);
