@@ -52,24 +52,17 @@ const MODEL_ID_PATTERN =
   uw(/\b(?:muse|spark|glimmer|gpt|claude|gemini|mistral|grok)(?:[-_. ]?(?:spark|glimmer|instruct|chat|pro|mini|nano|turbo|flash|sonnet|opus|haiku))?[-_. ]?\d[\w.-]*/i);
 const ORDINARY_PHRASES = uw(/\b(?:spark of hope|glimmer of hope|muse (?:on|about))\b/gi);
 // The hosts that serve open-weight models, the fallback's own provider
-// and hosts among them. Fireworks, Together and Modal are also ordinary
-// words, and Together Rx Access is a drug discount card, so those three
-// count only as the company: with AI, Labs or a domain, or next to words
-// that make it the provider ("Together hosts my replies", "the model
-// provider is Fireworks", "built on Modal"). After "the" it is the
-// ordinary word: "the messages on the modal".
+// and hosts among them. The names that only ever mean a company count
+// anywhere. Fireworks, Together and Modal are also ordinary words (and
+// Together Rx Access is a drug discount card), so they count only as the
+// company's own name: with AI, Labs or a domain. Matching the sentences
+// around them ("Together hosts my replies") kept removing ordinary portal
+// guidance ("the modal hosting the form"), while a model does not know
+// which host serves it, so a bare mention is left alone on purpose.
 const HOST_PATTERN = uw(/\b(?:open[- ]?router|baseten|nebius|deepinfra|sambanova|cerebras|groq|makora)\b/i);
-const AMBIGUOUS_HOST = String.raw`(?:fireworks|together(?! rx\b)|modal)`;
-const SERVED_THING = String.raw`(?:models?|replies|answers|responses|messages|texts|assistant|ai|llms?|bot|servers?|inference)`;
 const HOST_CONTEXT = [
-  String.raw`\b${AMBIGUOUS_HOST}(?:\.(?:ai|com|run|xyz|io|dev)| ai| labs)\b`,
-  String.raw`\b${AMBIGUOUS_HOST} (?:models?|llms?|inference|api|endpoints?|gpus?|servers?|hosting)\b`,
-  String.raw`\b${AMBIGUOUS_HOST} (?:hosts?|hosted|serves?|served|runs?|ran|powers?|powered) (?:(?:my|the|our|these|this|mano's|mano’s) (?:[\w-]+ )?${SERVED_THING}|me|mano)\b`,
-  String.raw`\b${AMBIGUOUS_HOST} (?:is|was|are) (?:my|our|the|mano's|mano’s) (?:[\w-]+ ){0,2}?(?:provider|host|server|backend|platform)\b`,
-  String.raw`\b(?:runs?|running|ran|hosted|served|powered|routed|deployed|built|provided) (?:on|by|at|via|through|with) ${AMBIGUOUS_HOST}\b`,
-  String.raw`\b(?:provider|host|server|backend|platform)s? (?:is|are|was|:) ${AMBIGUOUS_HOST}\b`,
-  String.raw`\b${SERVED_THING} (?:[\w-]+ )?(?:on|from|at|via|through|by) ${AMBIGUOUS_HOST}\b`,
-].map((source) => uw(new RegExp(source, "i")));
+  uw(/\b(?:fireworks|together(?! rx\b)|modal)(?:\.(?:ai|com|run|xyz|io|dev)|[ -]ai|[ -]labs)\b/i),
+];
 
 // "llama" is also Spanish for "call" ("se llama DSHS", "llama al 911"), so
 // it is the one stack word that does not count anywhere. It counts only

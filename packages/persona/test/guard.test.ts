@@ -79,8 +79,6 @@ describe("guardReply model and provider names", () => {
       "Fireworks AI hosts the model.",
       "The model runs at fireworks.ai.",
       "Together AI serves my answers.",
-      "I run on Together.",
-      "My replies are served by Modal.",
       "Modal Labs keeps the server up.",
       "Baseten runs the model.",
       "My answers come from Nebius.",
@@ -91,27 +89,25 @@ describe("guardReply model and provider names", () => {
     }
   });
 
-  it("drops an ambiguous host named as the provider, before or after the provider words (PR 102 review, round 2)", () => {
+  it("drops the names that only mean a provider anywhere, and the ambiguous ones only as the company's own name (PR 102 review, round 3)", () => {
     const hostNames = /fireworks|together|modal|makora/i;
     for (const text of [
-      "Together hosts my replies.",
-      "Fireworks is my model provider.",
       "Modal AI serves my replies.",
-      "Fireworks runs the model.",
-      "Modal powers me.",
-      "The Together API answers for me.",
       "Fireworks Labs and modal.run keep it up.",
-      "The model provider is Fireworks.",
-      "My host is Modal.",
-      "I'm powered by Together.",
-      "Mano is built on Modal.",
-      "My answers come from Together.",
-      "The model runs through Fireworks.",
+      "Ask Together-AI for nothing.",
       "Makora serves the model.",
       "This came through makora today.",
     ]) {
       expect(containsProviderName(text), text).toBe(true);
       expect(guardReply(`${text} Bring the letter.`).text).not.toMatch(hostNames);
+    }
+  });
+
+  it("leaves a bare Fireworks, Together or Modal alone even in provider phrasing, on purpose", () => {
+    // A model does not know which host serves it, while matching the
+    // sentence around these ordinary words kept removing portal guidance.
+    for (const text of ["Together hosts my replies.", "My host is Modal.", "The model runs through Fireworks."]) {
+      expect(containsProviderName(text), text).toBe(false);
     }
   });
 
@@ -126,6 +122,7 @@ describe("guardReply model and provider names", () => {
       "Close the pop-up modal and press Renew.",
       "The pop-up modal runs the payment step, so finish it first.",
       "Read the messages on the modal, then press Next.",
+      "Read the text on the modal hosting the form.",
       "The form was built with the modal open.",
       "The Together Rx Access card can lower what you pay for medicine.",
       "Write the amount in base ten.",
