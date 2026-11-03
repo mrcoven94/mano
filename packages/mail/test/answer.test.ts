@@ -233,6 +233,10 @@ describe("answerReading builds the reply from closed fields only", () => {
     ["Your request for a hearing must be postmarked by November 14, 2026.", "appeal", "hearing"],
     ["Send your pay stubs for a hearing by November 14, 2026.", null, null],
     ["Send your documents for a hearing by November 14, 2026.", null, null],
+    ["Your SNAP hearing form must be received by November 14, 2026.", null, null],
+    ["Your appeal form must be received by November 14, 2026.", null, null],
+    ["Your SNAP recertification must be received by November 14, 2026.", "renew", "recertification"],
+    ["Your renewal must be received by November 14, 2026.", "renew", "renewal"],
   ])("%s holds obligation %s and kind %s", async (sentence, obligation, kind) => {
     const verdict = gateSentence(sentence, "2026-11-02");
     const answer = await answerFor([

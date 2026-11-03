@@ -96,12 +96,28 @@ describe("gateSentence reads a program name before the duty", () => {
     expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "ask" });
   });
 
+  // A hearing or appeal form may be the request itself or a paper for
+  // it, so the gate cannot tell which duty it states.
+  it.each([
+    "Your SNAP hearing form must be received by November 14, 2026.",
+    "Your hearing form must be received by November 14, 2026.",
+    "Your appeal form must be received by November 14, 2026.",
+    "Send your hearing form by November 14, 2026.",
+  ])("asks when a form is for a hearing or an appeal: %s", (sentence) => {
+    expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "ask" });
+  });
+
   it.each([
     ["You must request a hearing by November 14, 2026.", "appeal"],
     ["Your appeal must be received by November 14, 2026.", "appeal"],
     ["Your request for a hearing must be postmarked by November 14, 2026.", "appeal"],
     ["Your hearing request must be postmarked by November 14, 2026.", "appeal"],
     ["Return your renewal by November 14, 2026.", "renew"],
+    ["Your SNAP recertification must be received by November 14, 2026.", "renew"],
+    ["Your recertification must be returned by November 14, 2026.", "renew"],
+    ["Your redetermination form must be received by November 14, 2026.", "renew"],
+    ["Your renewal must be received by November 14, 2026.", "renew"],
+    ["Your renewal form must be submitted by November 14, 2026.", "renew"],
   ])("publishes what the person owes: %s", (sentence, obligation) => {
     expect(gateSentence(sentence, NOTICE)).toEqual({ kind: "deadline", iso: "2026-11-14", form: "by", obligation });
   });
