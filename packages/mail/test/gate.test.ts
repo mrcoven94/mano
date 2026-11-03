@@ -79,6 +79,33 @@ describe("gateSentence reads a program name before the duty", () => {
     expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "ask" });
   });
 
+  // The office holds the hearing, decides the case and does the review.
+  // A date for that is the office's duty, not the person's deadline.
+  it.each([
+    "Your hearing must be completed by November 14, 2026.",
+    "Your hearing must be held by November 14, 2026.",
+    "Your appeal hearing must be completed by November 14, 2026.",
+    "Your hearing is due November 14, 2026.",
+    "Your case must be filed by November 14, 2026.",
+    "Your case must be decided by November 14, 2026.",
+    "Your case must be reviewed by November 14, 2026.",
+    "Your review must be completed by November 14, 2026.",
+    "Your determination must be completed by November 14, 2026.",
+    "Your reconsideration must be completed by November 14, 2026.",
+  ])("asks when the office owes it: %s", (sentence) => {
+    expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "ask" });
+  });
+
+  it.each([
+    ["You must request a hearing by November 14, 2026.", "appeal"],
+    ["Your appeal must be received by November 14, 2026.", "appeal"],
+    ["Your request for a hearing must be postmarked by November 14, 2026.", "appeal"],
+    ["Your hearing request must be postmarked by November 14, 2026.", "appeal"],
+    ["Return your renewal by November 14, 2026.", "renew"],
+  ])("publishes what the person owes: %s", (sentence, obligation) => {
+    expect(gateSentence(sentence, NOTICE)).toEqual({ kind: "deadline", iso: "2026-11-14", form: "by", obligation });
+  });
+
   it.each([
     "Su renovación de SNAP vence el 14 de noviembre de 2026.",
     "Debe enviar su renovación de Medicaid antes del 14 de noviembre de 2026.",
