@@ -6,6 +6,7 @@ import {
   SandboxExecutor,
   TimeoutError,
 } from "../src/gateway/index.js";
+import { PORTAL_DECLARATION } from "../src/gateway/executors.js";
 import type { ActionRequest } from "../src/gateway/index.js";
 
 // Round 3, blocker 5 through the real SandboxExecutor parser: only the
@@ -13,12 +14,14 @@ import type { ActionRequest } from "../src/gateway/index.js";
 // an external ID is malformed, so the lookup is unavailable.
 
 const PORTAL_HOUSEHOLD = {
+  caseNumber: "CA-SNAP-0042117",
   fullName: "Maria Testcase",
   dateOfBirth: "1988-04-12",
   address: "42 Test Street, Fresno, CA 93701",
   phone: "555-010-2030",
   householdSize: "3",
   monthlyIncome: "2400",
+  declaration: PORTAL_DECLARATION,
 };
 
 function baseReq(over: Partial<ActionRequest> = {}): ActionRequest {
@@ -54,16 +57,16 @@ describe("r3 blocker 5: malformed lookups are unavailable, never absent", () => 
     const store = new MemoryApprovalStore();
     const exec = new SandboxExecutor("https://portal.test", 1000, fetchFn);
     const gw = new ActionGateway(store, exec, {
-      policyOverrides: { submit: "allow" },
       documents: new MapDocumentStore(new Map([["proof", "%PDF-1.4 synthetic proof"]])),
     });
     const key = "r3b5-malformed";
 
-    const first = await gw.requestAction(baseReq({ idempotencyKey: key }));
+    const held = await gw.requestAction(baseReq({ idempotencyKey: key }));
+    const first = await gw.approveAndExecute(held.approval!.id, "maria");
     expect(first.status).toBe("blocked");
     expect(store.getAttempt(key)?.status).toBe("unknown");
 
-    const retry = await gw.requestAction(baseReq({ idempotencyKey: key }));
+    const retry = await gw.approveAndExecute(held.approval!.id, "maria");
     expect(retry.status).toBe("blocked");
     expect(retry.reason).toMatch(/reconcile|cannot reach|try again/i);
     expect(store.getAttempt(key)?.status).toBe("unknown");

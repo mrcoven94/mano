@@ -7,6 +7,7 @@ import {
   MapDocumentStore,
   MemoryApprovalStore,
 } from "../src/gateway/index.js";
+import { PORTAL_DECLARATION } from "../src/gateway/executors.js";
 import type { ActionRequest, Executor } from "../src/gateway/index.js";
 import type { PersonAgent } from "../src/agents/person-agent.js";
 
@@ -57,18 +58,20 @@ describe("r2 items 7, 8, 12, 13, 18: gateway rework confirmations", () => {
     const { SandboxExecutor } = await import("../src/gateway/index.js");
     const exec = new SandboxExecutor("https://portal.test", 1000, fetchFn);
     const gw = new ActionGateway(new MemoryApprovalStore(), exec, {
-      policyOverrides: { submit: "allow" },
       documents: new MapDocumentStore(new Map([["doc-8", "%PDF-1.4 exact bytes v1"]])),
     });
     const payload = {
+      caseNumber: "CA-SNAP-0042117",
       fullName: "Maria Testcase",
       dateOfBirth: "1988-04-12",
       address: "42 Test Street, Fresno, CA 93701",
       phone: "555-010-2030",
       householdSize: "3",
       monthlyIncome: "2400",
+      declaration: PORTAL_DECLARATION,
     };
-    const result = await gw.requestAction(baseReq({ idempotencyKey: "r2i8-key", documentId: "doc-8", payload }));
+    const held = await gw.requestAction(baseReq({ idempotencyKey: "r2i8-key", documentId: "doc-8", payload }));
+    const result = await gw.approveAndExecute(held.approval!.id, baseReq().personId);
     expect(result.status).toBe("completed");
     const files = posted[0].files as { name: string; type: string; data: string }[];
     expect(files).toHaveLength(1);

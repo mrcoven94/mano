@@ -3,23 +3,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import startFormDraft from "../agent/tools/start_form_draft.js";
 import { engineFrom, personIdFor } from "../agent/lib/engine.js";
 import { readTextedPhotos } from "../agent/lib/letters.js";
-import { renderQuestion } from "../agent/lib/pending.js";
+import { FORMS, fillFrom } from "../agent/lib/forms.js";
+import type { Profile } from "../agent/lib/engine.js";
+import { presentsExactly, renderQuestion } from "../agent/lib/pending.js";
 import { SandboxExecutor, createExecutor } from "../../engine/src/gateway/executors.js";
 import { DOUBTFUL_PAGE, RENEWAL_PAGE, letterPhoto, recordedReader } from "../../../packages/mail/test/letter-fixture.js";
 import { DEFAULT_CONFIG, handleRequest } from "../../sandbox-portal/src/app";
+import { DECLARATION } from "../../sandbox-portal/src/store";
 import { MemoryFileStore, MemoryStore } from "../../sandbox-portal/test/memory-store";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
 const HANDLE = "d".repeat(64);
 const PERSON = personIdFor(HANDLE);
-const fields = {
+// Her answers, as the model passes them on: every field, by name.
+const fields: Record<string, string> = {
+  caseNumber: "WA-SNAP-0042117",
   fullName: "Rosa Testcase",
   dateOfBirth: "1990-02-03",
   address: "12 Sample Street, Testville",
-  phone: "555-0100",
-  householdSize: 3,
-  monthlyIncome: 1800,
+  phone: "253-555-0100",
+  householdSize: "3",
+  monthlyIncome: "1800",
 };
 
 // A one-pixel PNG: the photo of her renewal letter Channels stored.
@@ -51,7 +56,7 @@ async function ctx(turnId: string, turnAtMs = Date.now(), generation = 0) {
 }
 
 async function draft(turnId: string, input = fields, turnAtMs?: number, generation?: number) {
-  return (await startFormDraft.execute(input, await ctx(turnId, turnAtMs, generation))) as Record<string, unknown>;
+  return (await startFormDraft.execute({ answers: input }, await ctx(turnId, turnAtMs, generation))) as Record<string, unknown>;
 }
 
 const frozenDocument = () => JSON.parse(engine.approvals().at(-1)!.requestJson).documentId as string;
@@ -99,12 +104,12 @@ function realPortal() {
   const store = new MemoryStore();
   const files = new MemoryFileStore();
   const config = { ...DEFAULT_CONFIG, portalToken: PORTAL_TOKEN };
-  const posts: { household: Record<string, string>; files: { name: string; type: string; data: string }[] }[] = [];
+  const posts: { household: Record<string, string>; declaration?: unknown; files: { name: string; type: string; data: string }[] }[] = [];
   const fetchFn = (async (url: string, init?: RequestInit) => {
     if (init?.method === "POST") posts.push(JSON.parse(init.body as string));
     return handleRequest(new Request(url, init), store, files, config);
   }) as typeof fetch;
-  return { posts, executor: new SandboxExecutor("https://portal.test", 1000, fetchFn, PORTAL_TOKEN) };
+  return { store, posts, executor: new SandboxExecutor("https://portal.test", 1000, fetchFn, PORTAL_TOKEN) };
 }
 
 beforeEach(async () => {
@@ -335,14 +340,135 @@ describe("starting a form draft", () => {
   it("a newer draft closes the one before it", async () => {
     await letterOnFile("doc-letter", LETTER_BYTES);
     await draft("turn_form000003");
-    await draft("turn_form000004", { ...fields, householdSize: 4 }, Date.now() + 10);
+    await draft("turn_form000004", { ...fields, householdSize: "4" }, Date.now() + 10);
     expect(engine.approvals().map((a) => a.status).sort()).toEqual(["pending", "rejected"]);
   });
 
   it("refuses when Engine is not configured, and still sends nothing", async () => {
     const c = await ctx("turn_form000002");
     vi.stubEnv("ENGINE_URL", "");
-    await expect(startFormDraft.execute(fields, c)).rejects.toThrow(/not available/i);
+    await expect(startFormDraft.execute({ answers: fields }, c)).rejects.toThrow(/not available/i);
     expect(outside).toEqual([]);
+  });
+});
+
+// LAP-747. Propel tested general AI agents on real SNAP applications
+// (April 2026): they guessed missing fields, cut a mistyped phone number
+// to 10 digits instead of asking, and ticked the legal attestation
+// themselves. Mano asks one plain question instead of guessing, carries
+// every value exactly as given, and leaves the declaration to her YES.
+describe("LAP-747: Mano asks instead of guessing", () => {
+  const RENEWAL = FORMS["food-renewal"]!;
+  const at = "2026-11-02T18:00:00.000Z";
+  const leaf = <T>(value: T) => ({ value, source: "person" as const, updatedAt: at });
+  const empty = (): Profile => ({ person: { address: {} }, household: [], income: [], programs: [] });
+
+  it("with nothing on file, asks one plain question at a time, most important first, and fills nothing in", () => {
+    const answers: Record<string, string> = {};
+    const asked: string[] = [];
+    for (;;) {
+      const filled = fillFrom(RENEWAL, empty(), answers);
+      expect(filled.invalid).toEqual([]);
+      if (!filled.missing || filled.missing.name === "proof") break;
+      asked.push(filled.missing.name);
+      // Only what she answered is on the form; nothing else is defaulted.
+      expect(Object.keys(filled.values).sort()).toEqual(Object.keys(answers).sort());
+      answers[filled.missing.name] = fields[filled.missing.name]!;
+    }
+    expect(asked).toEqual(["caseNumber", "fullName", "dateOfBirth", "householdSize", "monthlyIncome", "address", "phone"]);
+  });
+
+  it("a mistyped phone number on file is asked about, never cut to 10 digits", () => {
+    const p = empty();
+    p.person.phone = leaf("253-555-01422");
+    const typo = fillFrom(RENEWAL, p, Object.fromEntries(Object.entries(fields).filter(([k]) => k !== "phone")));
+    expect(typo.values.phone).toBeUndefined();
+    expect(typo.missing).toEqual({
+      name: "phone",
+      label: "Phone number",
+      question: "I have 253-555-01422 as your phone number, but it does not fit the form. What phone number should the office use to reach you?",
+    });
+    // A mistyped answer is asked again, not shortened either.
+    const answered = fillFrom(RENEWAL, p, { ...fields, phone: "253-555-01422" });
+    expect(answered.invalid.map((i) => i.name)).toEqual(["phone"]);
+    expect(answered.values.phone).toBeUndefined();
+  });
+
+  it("two different food case numbers on file are asked about, never chosen between", () => {
+    const p = empty();
+    p.programs = [
+      { id: "snap", program: leaf("SNAP"), caseNumber: leaf("WA-SNAP-0042117") },
+      { id: "calfresh", program: leaf("CalFresh"), caseNumber: leaf("CF-778812") },
+      { id: "medicaid", program: leaf("Medicaid"), caseNumber: leaf("MC-1") },
+    ];
+    expect(fillFrom(RENEWAL, p, {}).missing?.name).toBe("caseNumber");
+    p.programs.splice(1, 1);
+    expect(fillFrom(RENEWAL, p, {}).values.caseNumber).toBe("WA-SNAP-0042117");
+  });
+
+  it("a renewal draft with a field missing asks for it and prepares nothing, even with her letter on file", async () => {
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    const { phone: _phone, ...withoutPhone } = fields;
+    const out = await draft("turn_ask000001", withoutPhone);
+    expect(out).toMatchObject({ status: "needs_answer", field: "phone", question: "What phone number should the office use to reach you?", sent: false });
+    expect(engine.approvals()).toEqual([]);
+    const typo = await draft("turn_ask000002", { ...fields, phone: "253-555-01422" });
+    expect(typo).toMatchObject({ status: "needs_answer", field: "phone" });
+    expect(engine.approvals()).toEqual([]);
+  });
+
+  it("the question shows the declaration word for word, and only her YES makes it: the filing then carries it as hers", async () => {
+    const portal = realPortal();
+    engine.filer = portal.executor;
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES, "2026-12-01", NOV_2);
+    // Nothing she or the model passes can make the declaration for her.
+    const out = await draft("turn_ask000003", { ...fields, declaration: "yes", attestation: "checked" });
+    expect(out.status).toBe("waiting_for_yes");
+    const [approval] = await client().listApprovals();
+    expect(JSON.parse(approval!.requestJson).payload.declaration).toBe(DECLARATION);
+    const question = renderQuestion(approval!);
+    expect(question).toContain(`It ends with a declaration only you can make: ${DECLARATION} Reply YES to make this declaration yourself and send exactly this, or NO to stop.`);
+    expect(presentsExactly(question)).toBe(true);
+    expect(portal.posts).toEqual([]);
+
+    const done = await client().approve(approval!.id);
+    expect(done.status).toBe("completed");
+    expect(portal.posts[0]!.declaration).toEqual({ statement: DECLARATION, madeBy: "applicant" });
+    expect((await portal.store.getSubmissionByConfirmation(done.receipt!.externalId))?.declaration).toEqual({ statement: DECLARATION, madeBy: "applicant" });
+  });
+
+  it("files her phone number, name, case number and address byte for byte, from her answers and from her letter", async () => {
+    const portal = realPortal();
+    engine.filer = portal.executor;
+    photoOnFile("doc-letter", LETTER_BYTES, NOV_2);
+    // The case number and address as Mail read them off her letter.
+    await client().patchProfile({
+      idempotencyKey: "letter-facts",
+      source: "document",
+      documentId: "doc-letter",
+      fields: {
+        "programs.snap.program": "SNAP",
+        "programs.snap.caseNumber": "WA-SNAP 0042117/B",
+        "person.address.line1": "12 Calle Ñandú, Apt #3 & 4",
+        "person.address.city": "Tacoma",
+        "person.address.state": "WA",
+        "person.address.zip": "98402",
+      },
+    });
+    // Her name and phone exactly as she texted them.
+    const said = { fullName: "María José Núñez-O'Brien", phone: "+1 (253) 555-0142" };
+    const { caseNumber: _c, address: _a, ...rest } = fields;
+    const out = await draft("turn_ask000004", { ...rest, ...said });
+    expect(out.status).toBe("waiting_for_yes");
+    const done = await client().approve(String(out.approvalId));
+    expect(done.status).toBe("completed");
+    const filed = (await portal.store.getSubmissionByConfirmation(done.receipt!.externalId))!.household;
+    const bytes = (v: string) => [...new TextEncoder().encode(v)];
+    expect(bytes(filed.phone)).toEqual(bytes("+1 (253) 555-0142"));
+    expect(bytes(filed.fullName)).toEqual(bytes("María José Núñez-O'Brien"));
+    expect(bytes(filed.caseNumber)).toEqual(bytes("WA-SNAP 0042117/B"));
+    expect(bytes(filed.address)).toEqual(bytes("12 Calle Ñandú, Apt #3 & 4, Tacoma, WA 98402"));
   });
 });

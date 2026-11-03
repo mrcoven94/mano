@@ -13,8 +13,8 @@ const HANDLE = "c3".repeat(32);
 const PERSON = personIdForHandle(HANDLE);
 
 let verdict: { verdict: string; problems: string[] } = { verdict: "pass", problems: [] };
-// False: Guardian answers every check with an error status, as it can
-// while it starts.
+// False: Guardian answers every check with Modal's 503, as it does while
+// no container is up.
 let guardianUp = true;
 let checks: { auth: string | null; body: Record<string, unknown> }[] = [];
 
@@ -167,7 +167,7 @@ describe("Guardian on Engine's action route", () => {
     guardianUp = false;
     const down = await approve(drafted.approval!.id);
     expect(down).toMatchObject({ status: "blocked", retryable: true });
-    expect(down.reason).toMatch(/safety check returned an error/);
+    expect(down.reason).toMatch(/try again in a few minutes/);
 
     guardianUp = true;
     const up = await approve(drafted.approval!.id);

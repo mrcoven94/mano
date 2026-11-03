@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MetaModelClient } from "../src/model-client.js";
 import { checkLinkSafety } from "../src/link-safety.js";
-import { SandboxExecutor } from "../src/gateway/executors.js";
+import { PORTAL_DECLARATION, SandboxExecutor } from "../src/gateway/executors.js";
 import type { ActionRequest } from "../src/gateway/index.js";
 
 // Production workerd throws "Illegal invocation" when the global fetch is
@@ -53,12 +53,14 @@ describe("bound fetch defaults", () => {
       recipient: "sandbox-agency",
       purpose: "renewal",
       payload: {
+        caseNumber: "CA-SNAP-0042117",
         fullName: "Maria Testcase",
         dateOfBirth: "1988-04-12",
         address: "42 Test Street, Fresno, CA 93701",
         phone: "555-010-2030",
         householdSize: "3",
         monthlyIncome: "2400",
+        declaration: PORTAL_DECLARATION,
       },
       idempotencyKey: "key-bound-1",
       actor: "foreground",
@@ -66,6 +68,7 @@ describe("bound fetch defaults", () => {
       sources: [],
       origin: "person",
       document: { bytesB64: btoa("%PDF-1.4 synthetic"), hash: "h" },
+      answeredBy: "maria",
     };
     const done = await exec.execute(req);
     expect(done.externalId).toBe("ext-9");

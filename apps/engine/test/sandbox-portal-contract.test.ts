@@ -10,20 +10,22 @@ import {
   SandboxExecutor,
   TimeoutError,
 } from "../src/gateway/index.js";
-import { DEFAULT_PORTAL_LIMITS } from "../src/gateway/executors.js";
+import { DEFAULT_PORTAL_LIMITS, PORTAL_DECLARATION } from "../src/gateway/executors.js";
 import type { ActionRequest, Executor } from "../src/gateway/index.js";
 import { ConsentDeliveringExecutor } from "../src/agents/person-executor.js";
 import { sha256Hex } from "../src/hash.js";
 import { DEFAULT_CONFIG, handleRequest } from "../../sandbox-portal/src/app";
+import { DECLARATION } from "../../sandbox-portal/src/store";
 import { MemoryFileStore, MemoryStore } from "../../sandbox-portal/test/memory-store";
 
 // The sandbox portal's real JSON API (apps/sandbox-portal): POST
-// /submissions with a bearer token, { key, household, files }, answers
+// /submissions with a bearer token, { key, household, declaration, files }, answers
 // { confirmationNumber }; GET /submissions/:key answers it or 404.
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 const PNG_BYTES = Uint8Array.from(atob(PNG), (c) => c.charCodeAt(0));
 const HOUSEHOLD = {
+  caseNumber: "WA-SNAP-0042117",
   fullName: "Rosa Testcase",
   dateOfBirth: "1984-03-12",
   address: "100 Sample St, Tacoma, WA 98402",
@@ -31,17 +33,22 @@ const HOUSEHOLD = {
   householdSize: "3",
   monthlyIncome: "2150",
 };
+// What the approval the person answers carries: the form, and the
+// declaration word for word for their YES to make.
+const FORM = { ...HOUSEHOLD, declaration: PORTAL_DECLARATION };
+const DECLARED = { statement: PORTAL_DECLARATION, madeBy: "applicant" };
 
 function req(over: Partial<ActionRequest> = {}): ActionRequest {
   return {
     type: "submit",
     recipient: "sandbox-agency-portal",
     purpose: "Food benefits renewal in the sandbox agency portal",
-    payload: { ...HOUSEHOLD },
+    payload: { ...FORM },
     idempotencyKey: "agent:g1:turn-1:d0",
     actor: "foreground",
     personId: "person-rosa",
     document: { bytesB64: PNG, hash: "h" },
+    answeredBy: "person-rosa",
     ...over,
   };
 }
@@ -79,6 +86,7 @@ describe("SandboxExecutor speaks the sandbox portal's JSON API", () => {
     expect(seen[0].method).toBe("POST");
     expect(seen[0].auth).toBe("Bearer portal-token");
     expect(seen[0].body?.household).toEqual(HOUSEHOLD);
+    expect(seen[0].body?.declaration).toEqual(DECLARED);
     expect(seen[0].body?.files).toEqual([{ name: "document-1.png", type: "image/png", data: PNG }]);
     // The downstream key is scoped to the person and fits the portal's 128-character limit.
     const key = seen[0].body?.key as string;
@@ -127,15 +135,16 @@ describe("SandboxExecutor speaks the sandbox portal's JSON API", () => {
     });
     const store = new MemoryApprovalStore();
     const gw = new ActionGateway(store, new SandboxExecutor("https://portal.test", 1000, fetchFn, "portal-token"), {
-      policyOverrides: { submit: "allow" },
       documents: new MapDocumentStore(new Map([["letter-png", PNG_BYTES]])),
     });
     // The post timed out after the portal stored it: the gateway asks the
     // portal before calling anything failed, and finds the filing.
-    const first = await gw.requestAction(req({ document: undefined, documentId: "letter-png" }));
+    const held = await gw.requestAction(req({ document: undefined, answeredBy: undefined, documentId: "letter-png" }));
+    expect(held.status).toBe("needs_approval");
+    const first = await gw.approveAndExecute(held.approval!.id, "person-rosa");
     expect(first.status).toBe("reconciled");
     expect(first.receipt?.externalId).toBe("WA-2026-000777");
-    const again = await gw.requestAction(req({ document: undefined, documentId: "letter-png" }));
+    const again = await gw.requestAction(req({ document: undefined, answeredBy: undefined, documentId: "letter-png" }));
     expect(again.receipt?.externalId).toBe("WA-2026-000777");
     expect(posts).toBe(1);
   });
@@ -169,7 +178,7 @@ function realPortal() {
       files,
       config,
     );
-  return { posts, fileRaw, executor: new SandboxExecutor("https://portal.test", 1000, fetchFn, PORTAL_TOKEN) };
+  return { store, posts, fileRaw, executor: new SandboxExecutor("https://portal.test", 1000, fetchFn, PORTAL_TOKEN) };
 }
 
 function sandboxGateway(executor: Executor = realPortal().executor) {
@@ -189,7 +198,7 @@ function proposal(over: Record<string, unknown> = {}) {
     type: "submit",
     recipient: "sandbox-agency-portal",
     purpose: "Food benefits renewal in the sandbox agency portal",
-    payload: { ...HOUSEHOLD },
+    payload: { ...FORM },
     idempotencyKey: `agent:g1:${crypto.randomUUID()}:d0`,
     actor: "foreground",
     personId: "person-rosa",
@@ -258,7 +267,7 @@ describe("LAP-739: a sandbox submit the portal cannot file is refused before the
 });
 
 describe("LAP-739: the executor and the real portal agree on what can be filed", () => {
-  const cases: { name: string; payload: Record<string, unknown>; documentId?: string; portalFiles?: unknown[] }[] = [
+  const cases: { name: string; payload: Record<string, unknown>; documentId?: string; portalFiles?: unknown[]; declaration?: unknown }[] = [
     { name: "complete with a PNG", payload: HOUSEHOLD, documentId: "letter-png" },
     { name: "complete with a PDF", payload: HOUSEHOLD, documentId: "proof-pdf" },
     { name: "numbers for size and income", payload: { ...HOUSEHOLD, householdSize: 3, monthlyIncome: 0 }, documentId: "letter-png" },
@@ -275,13 +284,22 @@ describe("LAP-739: the executor and the real portal agree on what can be filed",
     { name: "household size 2.5", payload: { ...HOUSEHOLD, householdSize: "2.5" }, documentId: "letter-png" },
     { name: "negative income", payload: { ...HOUSEHOLD, monthlyIncome: "-1" }, documentId: "letter-png" },
     { name: "an address over 500 characters", payload: { ...HOUSEHOLD, address: "x".repeat(501) }, documentId: "letter-png" },
+    { name: "no case number", payload: { ...HOUSEHOLD, caseNumber: undefined }, documentId: "letter-png" },
+    { name: "no declaration", payload: HOUSEHOLD, documentId: "letter-png", declaration: null },
+    {
+      name: "a declaration one word off",
+      payload: HOUSEHOLD,
+      documentId: "letter-png",
+      declaration: PORTAL_DECLARATION.replace("true, correct", "true"),
+    },
   ];
 
-  it.each(cases)("$name", async ({ payload, documentId, portalFiles }) => {
+  it.each(cases)("$name", async ({ payload, documentId, portalFiles, declaration = PORTAL_DECLARATION }) => {
     const portal = realPortal();
     const { gateway } = sandboxGateway(portal.executor);
     const clean = Object.fromEntries(Object.entries(payload).filter(([, v]) => v !== undefined));
-    const held = await gateway.requestAction(proposal({ payload: clean, ...(documentId ? { documentId } : {}) }));
+    const form = declaration === null ? clean : { ...clean, declaration };
+    const held = await gateway.requestAction(proposal({ payload: form, ...(documentId ? { documentId } : {}) }));
     if (held.status === "needs_approval") {
       // Admitted: the real portal must file it once the person says yes.
       const done = await gateway.approveAndExecute(held.approval!.id, "person-rosa");
@@ -292,7 +310,8 @@ describe("LAP-739: the executor and the real portal agree on what can be filed",
     expect(held.status).toBe("blocked");
     const household = Object.fromEntries(Object.entries(clean).map(([k, v]) => [k, String(v)]));
     const files = portalFiles ?? [{ name: "document-1.png", type: "image/png", data: PNG }];
-    const raw = await portal.fileRaw({ household, files });
+    const statement = declaration === null ? {} : { declaration: { statement: declaration, madeBy: "applicant" } };
+    const raw = await portal.fileRaw({ household, ...statement, files });
     expect(raw.status).toBe(400);
   });
 });
@@ -320,28 +339,6 @@ function timingOutPortal() {
 }
 
 describe("LAP-739: a replay of a key with history is never refused up front", () => {
-  it("allow policy: a timed-out filing replayed after the document became plain text reconciles to its receipt", async () => {
-    const portal = timingOutPortal();
-    const documents = new MapDocumentStore(new Map<string, Uint8Array | string>([["letter", PNG_BYTES]]));
-    const gateway = new ActionGateway(new MemoryApprovalStore(), portal.executor, {
-      policyOverrides: { submit: "allow" },
-      documents,
-    });
-    const action = proposal({ documentId: "letter" });
-    const first = await gateway.requestAction(action);
-    expect(first.status).toBe("blocked");
-    expect(first.reason).toMatch(/stays unknown/);
-    expect(portal.state.posts).toBe(1);
-
-    documents.set("letter", "plain text notes, not a document the portal takes");
-    portal.state.checkDown = false;
-    const replay = await gateway.requestAction(action);
-    expect(replay.reason ?? "").not.toMatch(/Nothing was sent/);
-    expect(replay.status).toBe("reconciled");
-    expect(replay.receipt?.externalId).toMatch(/\S/);
-    expect(portal.state.posts).toBe(1);
-  });
-
   it("ask policy: an approved filing whose outcome is unknown, repeated after the document became plain text", async () => {
     const portal = timingOutPortal();
     const documents = new MapDocumentStore(new Map<string, Uint8Array | string>([["letter", PNG_BYTES]]));
@@ -438,7 +435,7 @@ describe("LAP-739: the executor applies the portal's configured limits", () => {
     const fetchFn = ((url: string, init?: RequestInit) => handleRequest(new Request(url, init), store, files, config)) as typeof fetch;
     const { gateway } = sandboxGateway(new SandboxExecutor("https://portal.test", 1000, fetchFn, PORTAL_TOKEN, limits));
 
-    const longAddress = { ...HOUSEHOLD, address: "x".repeat(550) };
+    const longAddress = { ...FORM, address: "x".repeat(550) };
     const held = await gateway.requestAction(proposal({ payload: longAddress, documentId: "proof-pdf" }));
     expect(held.status).toBe("needs_approval");
     expect((await gateway.approveAndExecute(held.approval!.id, "person-rosa")).status).toBe("completed");
@@ -470,5 +467,103 @@ describe("LAP-739: Engine's SQL store holds a key exactly when it would not draf
       store.putApproval({ ...base, id: "only", idempotencyKey: "k2", status: "expired", createdAt: "2026-11-02T10:00:00.000Z" } as never);
       expect(store.keyHeld("k2")).toBe(false);
     });
+  });
+});
+
+// LAP-747. In Propel's test of general AI agents on real SNAP applications
+// (April 2026), the agents ticked the legal attestation themselves and
+// changed values on the way in (a phone number cut to 10 digits). Here
+// the renewal's declaration is made only by the person's own YES to the
+// question that showed it, and every value reaches the portal exactly as
+// the approval froze it.
+describe("LAP-747: only the person's YES makes the declaration, and values are filed byte for byte", () => {
+  it("the declaration in the executor is the portal's own, word for word", () => {
+    expect(PORTAL_DECLARATION).toBe(DECLARATION);
+  });
+
+  it("refuses before the approval question a renewal that does not show the declaration word for word", async () => {
+    const portal = realPortal();
+    const { store, gateway } = sandboxGateway(portal.executor);
+    for (const payload of [{ ...HOUSEHOLD }, { ...HOUSEHOLD, declaration: true }, { ...HOUSEHOLD, declaration: PORTAL_DECLARATION.toLowerCase() }]) {
+      const result = await gateway.requestAction(proposal({ payload, documentId: "letter-png" }));
+      expect(result.status).toBe("blocked");
+      expect(result.reason).toMatch(/declaration word for word/);
+    }
+    expect(store.approvals.size).toBe(0);
+    expect(portal.posts).toHaveLength(0);
+  });
+
+  it("files nothing when no one answered: the allow path, and a caller that claims an answer, never reach the portal", async () => {
+    const portal = realPortal();
+    const documents = new MapDocumentStore(new Map<string, Uint8Array | string>([["letter-png", PNG_BYTES]]));
+    const gateway = new ActionGateway(new MemoryApprovalStore(), portal.executor, { policyOverrides: { submit: "allow" }, documents });
+    const result = await gateway.requestAction(proposal({ documentId: "letter-png", answeredBy: "person-rosa" }));
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toMatch(/Only the applicant can make the renewal's declaration/);
+    expect(portal.posts).toHaveLength(0);
+    await expect(portal.executor.execute(req({ answeredBy: undefined }))).rejects.toBeInstanceOf(DefiniteFailureError);
+    await expect(portal.executor.execute(req({ answeredBy: "person-someone-else" }))).rejects.toBeInstanceOf(DefiniteFailureError);
+    expect(portal.posts).toHaveLength(0);
+    expect(await portal.store.countSubmissions()).toBe(0);
+  });
+
+  it("after her YES, the filing carries the declaration as the applicant's", async () => {
+    const portal = realPortal();
+    const { gateway } = sandboxGateway(portal.executor);
+    const held = await gateway.requestAction(proposal({ documentId: "letter-png" }));
+    expect(held.status).toBe("needs_approval");
+    const done = await gateway.approveAndExecute(held.approval!.id, "person-rosa");
+    expect(done.status).toBe("completed");
+    expect(portal.posts[0]!.declaration).toEqual(DECLARED);
+    const filed = await portal.store.getSubmissionByConfirmation(done.receipt!.externalId);
+    expect(filed?.declaration).toEqual({ statement: DECLARATION, madeBy: "applicant" });
+  });
+
+  it("a filing recovered after a dropped connection still carries her answer, from the approval she answered", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = { ...DEFAULT_CONFIG, portalToken: PORTAL_TOKEN };
+    let dropped = false;
+    const fetchFn = (async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && !dropped) {
+        dropped = true;
+        throw new Error("connection reset");
+      }
+      return handleRequest(new Request(url, init), store, files, config);
+    }) as typeof fetch;
+    const approvals = new MemoryApprovalStore();
+    const documents = new MapDocumentStore(new Map<string, Uint8Array | string>([["letter", PNG_BYTES]]));
+    const gateway = new ActionGateway(approvals, new SandboxExecutor("https://portal.test", 1000, fetchFn, PORTAL_TOKEN), { documents });
+    const held = await gateway.requestAction(proposal({ documentId: "letter" }));
+    const first = await gateway.approveAndExecute(held.approval!.id, "person-rosa");
+    expect(first.status).toBe("blocked");
+    expect(await store.countSubmissions()).toBe(0);
+    const recovered = await gateway.recoverAttempt(held.approval!.idempotencyKey, new Date(), new Date(Date.now() + 60_000).toISOString());
+    expect(recovered?.status).toBe("completed");
+    const filed = await store.getSubmissionByConfirmation(recovered!.receipt!.externalId);
+    expect(filed?.declaration).toEqual({ statement: DECLARATION, madeBy: "applicant" });
+  });
+
+  it("files her phone number, name, case number and address byte for byte as she and her letter gave them", async () => {
+    const portal = realPortal();
+    const { gateway } = sandboxGateway(portal.executor);
+    const exact = {
+      ...HOUSEHOLD,
+      // Eleven digits with a leading 1, spaced the way she typed it: never cut to ten.
+      phone: "+1 (253) 555-0142",
+      // Accents, an apostrophe, a hyphen and two spaces, none of them normalized.
+      fullName: "María José  Núñez-O'Brien",
+      // Letters, a slash and a space, as the letter prints it.
+      caseNumber: "WA-SNAP 0042117/B",
+      address: "12 Calle Ñandú, Apt #3 & 4, Tacoma, WA 98402",
+    };
+    const held = await gateway.requestAction(proposal({ payload: { ...exact, declaration: PORTAL_DECLARATION }, documentId: "letter-png" }));
+    const done = await gateway.approveAndExecute(held.approval!.id, "person-rosa");
+    expect(done.status).toBe("completed");
+    const filed = await portal.store.getSubmissionByConfirmation(done.receipt!.externalId);
+    for (const field of ["phone", "fullName", "caseNumber", "address"] as const) {
+      expect(new TextEncoder().encode(filed!.household[field])).toEqual(new TextEncoder().encode(exact[field]));
+    }
+    expect(filed!.household).toEqual(exact);
   });
 });

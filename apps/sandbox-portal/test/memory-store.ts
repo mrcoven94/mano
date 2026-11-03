@@ -230,6 +230,7 @@ export class MemoryStore implements Store {
       scope: input.scope,
       confirmationNumber,
       household: structuredClone(input.household),
+      declaration: structuredClone(input.declaration),
       files: structuredClone(input.files),
       digest: input.digest,
       status: "received",

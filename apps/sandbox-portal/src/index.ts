@@ -9,7 +9,9 @@
  * saving the household step and pressing Submit write that draft, and
  * GET /drafts/<id> returns { id, household, savedAt } so the agent can compare
  * every field with what the person approves. Only the JSON POST /submissions
- * with the filing token creates a submission and a confirmation number. Every
+ * with the filing token creates a submission and a confirmation number, and
+ * only with the applicant's own declaration ({ statement, madeBy: "applicant" },
+ * the statement word for word); no browser page can make it. Every
  * submission carries an idempotency key scoped to the caller; GET
  * /submissions/:key reports received (with the packet digest) or not_found,
  * so the action gateway reconciles after a timeout instead of filing twice.

@@ -60,10 +60,10 @@ async function turn(h: string, turnId: string) {
   expect((await call(h, "POST", "/turns", { turnId, receivedAt: new Date().toISOString(), generation: 0 })).status).toBeLessThan(300);
 }
 
-async function propose(h: string, opts: { turnId?: string; documentId?: string; size?: string } = {}): Promise<string> {
+async function propose(h: string, opts: { turnId?: string; documentId?: string; size?: string; recipient?: string } = {}): Promise<string> {
   const res = await call(h, "POST", "/action", {
     type: "submit",
-    recipient: "sandbox-agency-portal",
+    recipient: opts.recipient ?? "sandbox-agency-portal",
     purpose: "Food benefits renewal in the sandbox agency portal",
     payload: { fullName: "Rosa Testcase", householdSize: opts.size ?? "3" },
     idempotencyKey: `replay-${crypto.randomUUID()}`,
@@ -174,7 +174,8 @@ describe("binding a replay to its approval", () => {
     expect(page.html).toContain('style="width:200%;left:-30.00%;top:-88.89%"');
     expect(page.html).toContain('<h2>The filled form</h2><img src="data:image/png;base64,');
     expect(page.html).toContain("This is exactly what Mano will send when you reply YES.");
-    expect(page.html).toContain("<dt>Goes to</dt><dd>sandbox-agency-portal</dd><");
+    expect(page.html).toContain("<dt>Goes to</dt><dd>the State Benefits Renewal Office test portal</dd><");
+    expect(page.html).not.toContain("sandbox-agency-portal");
     expect(page.html).toContain("<dt>Full legal name</dt><dd>Rosa Testcase</dd>");
     expect(page.html).toContain("Reply YES to Mano's text to send exactly this, or NO to stop.");
     expect(page.html).toContain("<dt>People in household</dt><dd>3</dd>");
@@ -182,6 +183,15 @@ describe("binding a replay to its approval", () => {
     expect(page.headers.get("cache-control")).toBe("no-store");
     expect(page.headers.get("referrer-policy")).toBe("no-referrer");
     expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
+  });
+
+  it("a recipient with no display name shows as unnamed, never as its ID", async () => {
+    const h = handle("replay-unnamed");
+    const approvalId = await propose(h, { recipient: "sandbox:county-portal" });
+    const page = await open(await bound(h, approvalId));
+    expect(page.status).toBe(200);
+    expect(page.html).toContain("<dt>Goes to</dt><dd>an office Mano has no name for</dd><");
+    expect(page.html).not.toContain("county-portal");
   });
 
   it("a focus off the screenshot shows the whole screenshot", async () => {

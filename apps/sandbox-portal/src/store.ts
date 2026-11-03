@@ -1,4 +1,5 @@
 export interface Household {
+  caseNumber: string;
   fullName: string;
   dateOfBirth: string;
   address: string;
@@ -40,6 +41,19 @@ export interface Draft {
   expiresAt: number;
 }
 
+/**
+ * The declaration a renewal ends with, word for word. Only the applicant
+ * makes it: a filing carries it as theirs, and the office takes no filing
+ * without it. The browser never makes it, since the browser only saves drafts.
+ */
+export const DECLARATION =
+  "I declare under penalty of perjury that the information in this renewal is true, correct and complete to the best of my knowledge.";
+
+export interface Declaration {
+  statement: typeof DECLARATION;
+  madeBy: "applicant";
+}
+
 /** Every submission scope starts with this; only token holders file. */
 export const API_SCOPE_PREFIX = "api-";
 
@@ -51,6 +65,8 @@ export interface Submission {
   scope: string;
   confirmationNumber: string;
   household: Household;
+  /** Absent only on rows filed before the office required it. */
+  declaration?: Declaration;
   files: FileMeta[];
   /** SHA-256 of the canonical packet: household fields plus each file's bytes */
   digest: string;
@@ -72,6 +88,7 @@ export interface SubmitInput {
   key: string;
   scope: string;
   household: Household;
+  declaration: Declaration;
   files: FileMeta[];
   digest: string;
   slowMs: number;
@@ -235,6 +252,7 @@ export function canonicalPacket(household: Household, files: FileDigest[]): stri
   return JSON.stringify({
     household: {
       address: household.address,
+      caseNumber: household.caseNumber,
       dateOfBirth: household.dateOfBirth,
       fullName: household.fullName,
       householdSize: household.householdSize,
@@ -613,6 +631,7 @@ export class PortalStoreSql implements Store {
         scope: input.scope,
         confirmationNumber: newConfirmationNumber(),
         household: input.household,
+        declaration: input.declaration,
         files: input.files,
         digest: input.digest,
         status: "received",

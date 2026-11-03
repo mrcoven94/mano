@@ -14,6 +14,7 @@ import { FakeModelClient, PlaywrightComputer, type ComputerAction } from "@mano/
 
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { engineFrom } from "../agent/lib/engine.js";
+import { FORMS } from "../agent/lib/forms.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
@@ -24,8 +25,8 @@ const HANDLE = "c".repeat(64);
 const DRAFT_TOKEN = "chromium-test-draft-token";
 const at = "2026-10-30T12:00:00.000Z";
 const leaf = <T>(value: T, extra: Record<string, unknown> = {}) => ({ value, source: "person", updatedAt: at, ...extra });
-const FIELDS = ["fullName", "dateOfBirth", "address", "phone", "householdSize", "monthlyIncome"] as const;
-const TYPED = ["Rosa Testcase", "03/12/1984", "100 Sample St, Tacoma, WA 98402", "253-555-0142", "3", "2329"];
+const FIELDS = ["caseNumber", "fullName", "dateOfBirth", "address", "phone", "householdSize", "monthlyIncome"] as const;
+const TYPED = ["WA-SNAP-0042117", "Rosa Testcase", "03/12/1984", "100 Sample St, Tacoma, WA 98402", "253-555-0142", "3", "2329"];
 
 function body(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
@@ -39,12 +40,12 @@ const listen = (server: Server) => new Promise<void>((resolve) => server.listen(
 const origin = (server: Server) => `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
 // Each input sits at a fixed place on the 1280x800 screen, so the scripted
-// model can click it: field i at (300, 115 + 50i), Continue at (300, 435).
+// model can click it: field i at (300, 115 + 50i), Continue at (300, 485).
 function formPage(draft: string, action: string): string {
   const inputs = FIELDS.map(
     (name, i) => `<input name="${name}" type="${name === "dateOfBirth" ? "date" : "text"}" style="position:absolute;left:100px;top:${100 + 50 * i}px;width:400px;height:30px">`,
   ).join("");
-  return `<form method="post" action="${action}"><input type="hidden" name="draft" value="${draft}">${inputs}<button style="position:absolute;left:100px;top:420px;width:400px;height:30px">Continue</button></form>`;
+  return `<form method="post" action="${action}"><input type="hidden" name="draft" value="${draft}">${inputs}<button style="position:absolute;left:100px;top:470px;width:400px;height:30px">Continue</button></form>`;
 }
 
 const portal = {
@@ -105,7 +106,7 @@ async function handle(req: IncomingMessage, res: import("node:http").ServerRespo
 function typing(): ComputerAction[] {
   return [
     ...TYPED.flatMap((text, i) => [{ type: "click", button: "left", x: 300, y: 115 + 50 * i } as ComputerAction, { type: "type", text } as ComputerAction]),
-    { type: "click", button: "left", x: 300, y: 435 } as ComputerAction,
+    { type: "click", button: "left", x: 300, y: 485 } as ComputerAction,
     // A screenshot taken the moment a form post commits can stall headless
     // Chromium, so each batch that navigates ends by waiting.
     { type: "wait" } as ComputerAction,
@@ -162,7 +163,7 @@ describe.skipIf(!installed)("fill_form in real Chromium", () => {
       },
       household: [{ id: "m1" }, { id: "m2" }],
       income: [{ id: "i1", amount: { value: 1075, source: "document", documentId: "doc-stub", updatedAt: at }, frequency: leaf("biweekly") }],
-      programs: [],
+      programs: [{ id: "snap", program: leaf("SNAP"), caseNumber: leaf("WA-SNAP-0042117") }],
     };
     Object.assign(portal, { hits: [], offsiteHits: [], authorizedFromBrowser: 0, submissions: [], mode: "sealed" });
     portal.drafts.clear();
@@ -195,25 +196,27 @@ describe.skipIf(!installed)("fill_form in real Chromium", () => {
     const [approval] = engine.approvals();
     expect(approval.status).toBe("pending");
     expect(JSON.parse(approval.requestJson).payload).toEqual({
+      caseNumber: "WA-SNAP-0042117",
       fullName: "Rosa Testcase",
       dateOfBirth: "1984-03-12",
       address: "100 Sample St, Tacoma, WA 98402",
       phone: "253-555-0142",
       householdSize: "3",
       monthlyIncome: "2329",
+      declaration: FORMS["food-renewal"]!.declaration,
     });
 
     // The replay holds real screenshots: the empty form, then one screen
     // per typed value, ending on the whole form before Continue.
     const page = (await engine.replayPageAt((await client().replayLink(approval.id))!))!;
     const shots = [...page.matchAll(/data:image\/png;base64,([^"]+)"/g)].map((m) => Buffer.from(m[1]!, "base64"));
-    expect(shots).toHaveLength(8);
+    expect(shots).toHaveLength(9);
     for (const png of shots) {
       expect(png.subarray(1, 4).toString()).toBe("PNG");
       expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1280, 800]);
     }
-    expect(new Set(shots.map((png) => png.toString("base64"))).size).toBe(7);
-    expect(shots[7]!.equals(shots[6]!)).toBe(true);
+    expect(new Set(shots.map((png) => png.toString("base64"))).size).toBe(8);
+    expect(shots[8]!.equals(shots[7]!)).toBe(true);
   }, 60_000);
 
   it("a form that sends the values off the portal sends nothing there, and the fill fails without preparing an approval", async () => {

@@ -1,9 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { canonicalPacket, packetDigest, sha256Hex, type FileMeta, type Household, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
+import { DECLARATION, canonicalPacket, packetDigest, sha256Hex, type FileMeta, type Household, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
 import { MemoryStore } from "./memory-store";
 import { makeSqlStore } from "./sql-store";
 
 const HOUSEHOLD: Household = {
+  caseNumber: "CA-SNAP-0042117",
   fullName: "Maria Santos",
   dateOfBirth: "1988-04-12",
   address: "42 Test Street, Fresno, CA 93701",
@@ -17,7 +18,7 @@ const FILES: FileMeta[] = [
 ];
 
 function input(key: string, digest = "digest-a", household: Household = HOUSEHOLD, scope = "api-test"): SubmitInput {
-  return { key, scope, household, files: FILES, digest, slowMs: 0, receivedAt: Date.now() };
+  return { key, scope, household, declaration: { statement: DECLARATION, madeBy: "applicant" as const }, files: FILES, digest, slowMs: 0, receivedAt: Date.now() };
 }
 
 function filed(result: SubmitResult): Submission {
