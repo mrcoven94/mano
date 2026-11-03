@@ -267,6 +267,14 @@ export function judgeFacts(c: BenchCase, knowsCatalog: boolean): string {
   return knowsCatalog ? calibrationFacts(c) : `${NO_CATALOG_FACTS}\nThe person wrote:\n${c.input.turns.join("\n")}`;
 }
 
+// What a mail case's letter says, from the text the suite built it from: the
+// ground truth, not the mail reader's own reading, which could be wrong.
+// Undefined for a case with no letter or photo.
+export function judgeLetter(c: BenchCase): string | undefined {
+  const images = c.input.images ?? [];
+  return images.length > 0 ? images.map((img) => img.transcript).join("\n\n") : undefined;
+}
+
 // Runs fn over items with at most `limit` in flight, keeping input order.
 export async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -375,7 +383,8 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
       ...(answer.firstTextMs !== undefined ? { firstTextMs: answer.firstTextMs } : {}),
       inputTokens: answer.inputTokens, outputTokens: answer.outputTokens,
     };
-    const judged: JudgeItem = { answer: sentText(answer), facts: judgeFacts(c, path.knowsCatalog), reference: c.reference };
+    const letter = judgeLetter(c);
+    const judged: JudgeItem = { answer: sentText(answer), facts: judgeFacts(c, path.knowsCatalog), reference: c.reference, ...(letter ? { letter } : {}) };
     return { c, result, judged, detail: loaded.detail };
   });
 
