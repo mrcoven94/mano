@@ -23,6 +23,27 @@ export const APPROVE_FOLLOWUP =
 // The text line's answer to a NO, word for word (apps/agent turn.ts).
 export const DECLINE_REPLY = "Okay, I did not send it. Nothing left Mano.";
 
+// The answer to "Ask Mano to change something": the approval stays
+// waiting and unsent. The stand-in cannot redo the form, so it does not
+// promise a new version.
+export const CHANGE_REPLY =
+  "Got it. Nothing was sent. I noted your change; the version in Approvals stays unsent until you say yes or no to it.";
+export const CHANGE_REPLY_ES =
+  "Entendido. No se envió nada. Anoté su cambio; la versión en Aprobaciones sigue sin enviarse hasta que usted diga sí o no.";
+
+// The renewal's answers as the agent's food-renewal form carries them
+// (apps/agent/agent/lib/forms.ts), so the stand-in approval has the same
+// shape a live one does.
+export const RENEWAL_DECLARATION =
+  "I declare under penalty of perjury that the information in this renewal is true, correct and complete to the best of my knowledge.";
+export const RENEWAL_ANSWERS = {
+  caseNumber: "R-1042",
+  fullName: "Maria Torres",
+  householdSize: "2",
+  monthlyIncome: "1940",
+  address: "418 Alder St Apt 3, Springfield",
+} as const;
+
 export const CASEWORKER_REQUEST =
   "Springfield County wrote back. They are missing one thing: a pay stub from the last 30 days. They need it by November 12. Photograph it and I will send it with your case number.";
 
@@ -67,6 +88,7 @@ export function renewalPacketText(): string {
     "3. New address: no\n" +
     "4. All members still in the home: yes\n" +
     "\n" +
+    "Declaration: I declare under penalty of perjury that the information in this renewal is true, correct and complete to the best of my knowledge.\n" +
     "Signature: Maria Torres (signed in the app on approval)\n" +
     "Date: at approval time\n"
   );
