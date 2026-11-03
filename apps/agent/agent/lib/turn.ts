@@ -26,7 +26,7 @@ import { profileContext } from "./profile.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
 import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
-import { closeReplaced, heldBack, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, replayLine, waitingProposals } from "./pending.js";
+import { closeReplaced, presentable, presentationHash, proposalsOf, proposedIn, renderQuestion, replayLine, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 
 const MAX_TEXTS = 10;
@@ -193,10 +193,6 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       return CHECKING;
     default: {
       if (result.retryable) return CHECK_STARTING;
-      if (result.withdrawn) {
-        await engine.clearPointer(approvalId);
-        return "That earlier version did not go through, and it will not be sent. Want me to prepare it again with your changes?";
-      }
       if (result.superseded) {
         await engine.clearPointer(approvalId);
         return `${UPDATED} Ask me to show the latest.`;
@@ -256,8 +252,8 @@ const UPDATED = "I just updated that, so nothing was approved and nothing was se
 // with the line linking to its replay as when it was first shown.
 function updated(engine: PersonEngine, approvals: EngineApproval[], latest: { approvalId: string } | null, link: string | null): TurnResponse {
   const waiting = latest ? waitingProposals(approvals, engine.generation).find((a) => a.id === latest.approvalId) : undefined;
-  const question = waiting ? renderQuestion(waiting) : null;
-  if (!waiting || !question || !presentsExactly(question)) return reply(`${UPDATED} Ask me to show the latest.`);
+  const question = waiting ? presentable(waiting) : null;
+  if (!waiting || !question) return reply(`${UPDATED} Ask me to show the latest.`);
   const text = [`${UPDATED} Here's the latest.`, question, link ? replayLine(link) : ""].filter(Boolean).join("\n\n");
   return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: waiting.id } };
 }
@@ -412,15 +408,13 @@ async function runTurn(
     throw err;
   }
   const after = await engine.listApprovals();
-  const proposedHere = proposedIn(after, body.generation, body.turnId);
-  // A draft the person corrected in this turn that Engine could not close is never shown.
-  const own = proposedHere && !heldBack(body.turnId, proposedHere.id) ? proposedHere : null;
+  const own = proposedIn(after, body.generation, body.turnId);
   // Only Engine's latest proposal is ever shown: never a draft a newer
   // turn replaced, whether this turn is a replay or just slow.
   const [pending, link] = own ? await Promise.all([engine.getPending(), replayLinkOf(engine, own.id)]) : [null, null];
   const latest = pending?.latest ?? null;
-  const proposed = own && latest?.approvalId === own.id && presentsExactly(renderQuestion(own)) ? own : null;
-  const question = proposed ? renderQuestion(proposed) : null;
+  const question = own && latest?.approvalId === own.id ? presentable(own) : null;
+  const proposed = question ? own : null;
   const text = [letter?.text ?? "", settled.status === "failed" ? "" : settled.text, question ?? "", question && link ? replayLine(link) : ""]
     .filter(Boolean)
     .join("\n\n");
@@ -565,6 +559,12 @@ export async function handlePresented(request: Request, deps: { secret: string |
   if (!approval || presentationHash(renderQuestion(approval)) !== textHash) {
     console.warn(JSON.stringify({ type: "mano_presented_mismatch", handle: handleHash }));
     return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
+  }
+  // A draft held back after a correction is never made answerable, even
+  // when Channels reports it from before: it is closed like a replaced one.
+  if (!presentable(approval)) {
+    await engine.reject(approval.id).catch(() => console.warn(JSON.stringify({ type: "mano_close_failed", count: 1 })));
+    return Response.json({ ok: true, superseded: true });
   }
   const set = await engine.setPointer(approvalId);
   if (!set) return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });

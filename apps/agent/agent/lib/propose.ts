@@ -130,7 +130,7 @@ export async function closeEarlier(engine: PersonEngine, turnId: string, recipie
     if (place(latest.receivedAt, latest.turnId) >= place(mine.firstReceivedAt, turnId)) return true;
     const approval = await engine.approval(latest.approvalId);
     if (approval?.status !== "pending" || approval.recipient !== recipient) return true;
-    return (await engine.reject(approval.id)).status === "rejected";
+    return await rejected(engine, approval.id);
   } catch {
     console.warn(JSON.stringify({ type: "mano_close_failed" }));
     return false;
@@ -186,7 +186,18 @@ async function closeDrafts(engine: PersonEngine, turnId: string, ids: string[] |
 // the whole turn's drafts are held back. A throw still throws. Null: a
 // draft could not be confirmed closed, so the caller says nothing will be
 // sent.
+// Calls within one turn run one at a time, so a slower earlier call never
+// holds its draft after a later correction has closed the turn's drafts.
 export async function correcting<T extends { status: string }>(
+  engine: PersonEngine,
+  turnId: string,
+  recipient: string,
+  run: () => Promise<T>,
+): Promise<T | null> {
+  return oneAtATime(turnId, () => correctingNow(engine, turnId, recipient, run));
+}
+
+async function correctingNow<T extends { status: string }>(
   engine: PersonEngine,
   turnId: string,
   recipient: string,
@@ -204,6 +215,23 @@ export async function correcting<T extends { status: string }>(
   return (await closeThisTurn(engine, turnId, recipient)) ? out : null;
 }
 
+// The form calls of each turn still running in this process, chained.
+const TURN_QUEUES = new Map<string, Promise<unknown>>();
+
+async function oneAtATime<T>(turnId: string, run: () => Promise<T>): Promise<T> {
+  const mine = (TURN_QUEUES.get(turnId) ?? Promise.resolve()).then(run, run);
+  const tail = mine.then(
+    () => undefined,
+    () => undefined,
+  );
+  TURN_QUEUES.set(turnId, tail);
+  try {
+    return await mine;
+  } finally {
+    if (TURN_QUEUES.get(turnId) === tail) TURN_QUEUES.delete(turnId);
+  }
+}
+
 async function rejected(engine: PersonEngine, approvalId: string): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -219,43 +247,35 @@ async function rejected(engine: PersonEngine, approvalId: string): Promise<boole
 export const NOT_CLOSED_NOTE =
   "Mano could not set aside the version it prepared earlier in this message, so it will not show it and nothing will be sent. Tell the person plainly that you could not update the renewal just now, that nothing was sent, and to ask again in a moment.";
 
+// What the model is told when the version the person was shown in an
+// earlier message could not be closed. It still waits, so a YES to it
+// would send it unchanged; the next form call tries to close it again.
+export const SHOWN_NOT_CLOSED_NOTE =
+  "Mano could not set aside the version the person was already shown, so nothing new was prepared. Tell them plainly that the earlier version is still waiting, that a YES would send it as it was, and that they should send their correction again in a moment.";
+
 // What the model is told while an earlier approved filing is unresolved.
 export const EARLIER_UNRESOLVED_NOTE =
-  "Mano is still checking whether the form the person already approved went through, so nothing new was prepared. Tell them plainly that you are still checking that one, that Mano will not send it again with the old details, and that you can prepare the corrected one once you know. Do not ask for anything else now.";
+  "The renewal the person already approved is still being checked with the office, so nothing new was prepared. Tell them plainly that their earlier renewal is still being checked with the office, that it will not be sent twice, and that they can change it once it settles. Do not ask for anything else now.";
 
-// Before a new version of a form is prepared, the person's earlier
-// approved filings to the same recipient that have no outcome yet are
-// withdrawn: Engine then only reconciles them, so a later YES or recovery
-// never files their old values. "checking" while any of them may still
-// have gone through, "clear" once each went through or definitely did
-// not, "failed" when Engine could not be asked. A failed attempt is proof:
-// Engine writes failed only for a filing the portal refused or, guarded by
-// the version read before its lookup, one confirmed absent.
-export async function settleEarlierFilings(engine: PersonEngine, recipient: string): Promise<"clear" | "checking" | "failed"> {
+// While a filing the person approved for this form has no outcome yet (no
+// receipt, and not failed), nothing new is prepared: "checking". Engine
+// marks a filing failed only when the portal refused it or, guarded by
+// the version read before its lookup, confirmed it absent, so a failed one
+// is settled; its question no longer waits on a YES, so a pointer to it is
+// cleared and a YES never retries the old values after a correction.
+// "clear" once every such filing settled, "failed" when Engine could not
+// be asked.
+export async function earlierFiling(engine: PersonEngine, recipient: string): Promise<"clear" | "checking" | "failed"> {
   try {
     const open = proposalsOf(await engine.listApprovals(), engine.generation).filter(
       (a) => a.recipient === recipient && a.status === "approved" && a.outcome?.attempt !== "done",
     );
-    let checking = false;
-    for (const a of open) {
-      let withdrawn = a.outcome?.withdrawn === true;
-      if (!withdrawn) {
-        const out = await engine.withdraw(a.id);
-        // It went through after all: nothing is left to settle.
-        if (out.status === "completed") continue;
-        withdrawn = out.withdrawn === true;
-      }
-      if (!withdrawn || a.outcome?.attempt !== "failed") {
-        checking = true;
-        continue;
-      }
-      // Ended for good: the question it answered no longer waits on it.
-      const { pointer } = await engine.getPending();
-      if (pointer?.approvalId === a.id) await engine.clearPointer(a.id);
-    }
-    return checking ? "checking" : "clear";
+    if (open.some((a) => a.outcome?.attempt !== "failed")) return "checking";
+    const { pointer } = await engine.getPending();
+    if (pointer && open.some((a) => a.id === pointer.approvalId)) await engine.clearPointer(pointer.approvalId);
+    return "clear";
   } catch {
-    console.warn(JSON.stringify({ type: "mano_withdraw_failed" }));
+    console.warn(JSON.stringify({ type: "mano_earlier_filing_unknown" }));
     return "failed";
   }
 }

@@ -9,10 +9,11 @@
 // checked the way fill_form checks it. One that is missing or does not
 // fit becomes one question, the most important first; nothing is guessed.
 // A YES never files what the person has since corrected: a call from a
-// later turn first closes the version already shown; a call that holds no
-// new version closes this turn's earlier drafts too; and while an earlier
-// approved renewal is still unresolved, nothing new is prepared and that
-// one is withdrawn, so Engine only reconciles it and never retries it.
+// later turn first closes the version already shown (or says plainly it
+// still waits, when Engine will not close it); calls in one turn run one
+// at a time, and one that holds no new version closes this turn's earlier
+// drafts too. While a renewal the person already approved has no outcome
+// yet, nothing new is prepared.
 //
 // The portal takes a renewal only with one document attached, so without
 // a document on file that Engine says its executor could file (by kind
@@ -26,7 +27,7 @@ import type { EngineDocument, PersonEngine, Profile } from "../lib/engine.js";
 import { FORMS, fillFrom } from "../lib/forms.js";
 import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn, type TurnIdentity } from "../lib/person.js";
-import { EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, settleEarlierFilings } from "../lib/propose.js";
+import { EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, earlierFiling } from "../lib/propose.js";
 
 const inputSchema = z.object({
   answers: z
@@ -65,10 +66,10 @@ async function proofOnFile(engine: PersonEngine): Promise<{ proof: EngineDocumen
 }
 
 async function prepare(engine: PersonEngine, turn: TurnIdentity, ctx: ToolContext, answers: Record<string, string>) {
-  const earlier = await settleEarlierFilings(engine, RENEWAL.recipient);
+  const earlier = await earlierFiling(engine, RENEWAL.recipient);
   if (earlier !== "clear") return { status: "earlier_filing_unresolved", sent: false, note: EARLIER_UNRESOLVED_NOTE };
   if (!(await closeEarlier(engine, turn.turnId, RENEWAL.recipient))) {
-    return { status: "draft_failed", sent: false, note: "Mano could not set aside the earlier version of the renewal, so nothing new was prepared or sent. Say so and offer to try again." };
+    return { status: "draft_failed", sent: false, note: SHOWN_NOT_CLOSED_NOTE };
   }
   const { proof, newest, profile } = await proofOnFile(engine);
   const filled = fillFrom(RENEWAL, profile ?? NO_PROFILE, answers);

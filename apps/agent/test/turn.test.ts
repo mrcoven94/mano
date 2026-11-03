@@ -12,7 +12,7 @@ import { toolCtx } from "./ctx.js";
 import { getPendingPointer } from "../../engine/src/agents/agent-state.js";
 import { LocalRulesChecker } from "../../engine/src/gateway/checker.js";
 import { GuardianChecker } from "../../engine/src/gateway/guardian.js";
-import { TimeoutError, type ActionRequest, type CheckOutcome, type Executor } from "../../engine/src/gateway/index.js";
+import { DefiniteFailureError, TimeoutError, type ActionRequest, type CheckOutcome, type Executor } from "../../engine/src/gateway/index.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_CHANNELS_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 import { installFillDouble, screen, uninstallFillDouble } from "./fill-double.js";
 
@@ -117,9 +117,12 @@ class FlakyPortal implements Executor {
   posts: ActionRequest[] = [];
   filed = new Map<string, string>();
   checkDown = true;
+  // The office refuses every post after the first.
+  refuseRetries = false;
   async execute(req: ActionRequest) {
     this.posts.push(req);
     if (this.posts.length === 1) throw new TimeoutError();
+    if (this.refuseRetries) throw new DefiniteFailureError("The office refused it.");
     this.filed.set(req.idempotencyKey, `sim-${this.posts.length}`);
     return { externalId: `sim-${this.posts.length}` };
   }
@@ -274,7 +277,7 @@ describe("approval by text", () => {
     expect(engine.executor.calls).toHaveLength(0);
   });
 
-  it("a correction after an approved filing went unresolved prepares nothing until it settles, and never files the old phone", async () => {
+  it("while an approved filing is unresolved a correction prepares nothing, and once it settles the correction goes through", async () => {
     const portal = new FlakyPortal();
     engine.filer = portal;
     await send(turn("turn_late_000001", "Please file my renewal"));
@@ -286,15 +289,16 @@ describe("approval by text", () => {
     expect(engine.approvals()).toHaveLength(1);
     expect(portal.posts).toHaveLength(1);
 
-    // The portal answers: the first filing never arrived. Her YES ends it.
+    // The portal answers: the first post never arrived, so her YES sends the
+    // version she approved, once, under the same key.
     portal.checkDown = false;
-    expect((await send(turn("turn_late_0000Y2", "YES"))).body.text).toMatch(/did not go through/);
-    expect(portal.posts).toHaveLength(1);
+    expect((await send(turn("turn_late_0000Y2", "YES"))).body.text).toMatch(/^Done/);
+    expect(portal.posts.map((p) => p.idempotencyKey)).toEqual([portal.posts[0]!.idempotencyKey, portal.posts[0]!.idempotencyKey]);
 
     const fixed = await send(turn("turn_late_000003", "Fix my renewal, my phone is 253-555-0199"));
     expect(fixed.body.status).toBe("waiting_approval");
     expect((await send(turn("turn_late_0000Y3", "YES"))).body.text).toMatch(/^Done/);
-    expect(portal.posts.map((p) => p.payload.phone)).toEqual(["253-555-0100", "253-555-0199"]);
+    expect(portal.posts.map((p) => p.payload.phone)).toEqual(["253-555-0100", "253-555-0100", "253-555-0199"]);
   });
 
   it("when Engine cannot close the corrected draft of the same turn, its question is never shown and a YES files nothing", async () => {
@@ -323,22 +327,54 @@ describe("approval by text", () => {
     expect(engine.executor.calls).toHaveLength(0);
   });
 
-  it("once recovery confirms the withdrawn filing never arrived, the correction is prepared without another YES", async () => {
+  it("once recovery settles the approved filing as failed, the correction is prepared without another YES", async () => {
     const portal = new FlakyPortal();
+    portal.refuseRetries = true;
     engine.filer = portal;
     await send(turn("turn_rec_0000001", "Please file my renewal"));
     const [old] = engine.approvals();
     await send(turn("turn_rec_000000Y", "YES"));
     expect((await send(turn("turn_rec_0000002", "Fix my renewal, my phone is 253-555-0199"))).body.status).not.toBe("waiting_approval");
 
+    // Recovery finds the first post never arrived, and the office refuses the retry.
     portal.checkDown = false;
     const recovered = await engine.gatewayFor(personIdFor(HANDLE)).recoverAttempt(old!.idempotencyKey, new Date(), new Date(Date.now() + 60_000).toISOString());
-    expect(recovered).toMatchObject({ status: "blocked", withdrawn: true });
+    expect(recovered?.status).toBe("blocked");
 
     const fixed = await send(turn("turn_rec_0000003", "Fix my renewal, my phone is 253-555-0199"));
     expect(fixed.body.status).toBe("waiting_approval");
+    portal.refuseRetries = false;
     expect((await send(turn("turn_rec_00000Y2", "YES"))).body.text).toMatch(/^Done/);
-    expect(portal.posts.map((p) => p.payload.phone)).toEqual(["253-555-0100", "253-555-0199"]);
+    expect(portal.posts.map((p) => p.payload.phone)).toEqual(["253-555-0100", "253-555-0100", "253-555-0199"]);
+  });
+
+  // Review round 3: A shown, B persisted while clearing the pointer to A
+  // failed, a correction in B's turn that Engine would not let close B,
+  // then a YES aimed at A. The answer must not show B.
+  it("a draft held back after a correction is never shown, even as the latest after a YES to a replaced question", async () => {
+    await send(turn("turn_held_00000A", "Please file my renewal"));
+    const turnB = "turn_held_00000B";
+    const ctx = toolCtx({ handleHash: HANDLE, turnId: turnB, grant: grants.get(HANDLE), turnAtMs: Date.now() });
+    await engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).putTurn(turnB, new Date().toISOString());
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      /\/pending-approval$/.test(new URL(String(input)).pathname) && init?.method === "DELETE"
+        ? new Response("unavailable", { status: 503 })
+        : engine.fetch(input, init),
+    );
+    await Promise.resolve(fillForm.execute(draft({ householdSize: "4" }), ctx)).catch(() => undefined);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      /\/reject$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init),
+    );
+    await fillForm.execute(draft({ householdSize: "4", phone: "253-555-01422" }), ctx);
+    vi.stubGlobal("fetch", engine.fetch);
+    // B's turn closed A before filling; B itself could not be closed.
+    expect(sizes()).toEqual(["3:rejected", "4:pending"]);
+
+    const yes = await send(turn("turn_held_0000Y1", "YES"));
+    expect(yes.body.status).not.toBe("waiting_approval");
+    expect(yes.body.text).not.toContain("People in household: 4");
+    expect(engine.executor.calls).toHaveLength(0);
   });
 
   it("question, NO: Engine rejects it, nothing is sent, and a later YES approves nothing", async () => {

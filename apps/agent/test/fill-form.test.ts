@@ -444,6 +444,26 @@ describe("fill_form", () => {
     expect(engine.executor.calls).toHaveLength(0);
   });
 
+  // Review round 4: a slow fill and a correction in the same turn. The
+  // correction runs after the fill holds its draft, so it closes it; the
+  // fill can never publish after the correction cleaned up.
+  it("form calls in one turn run one at a time: a slower fill never holds its draft after the correction closed the turn's drafts", async () => {
+    engine.profile = profile();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const typist = new FakeModelClient([[call(typing(VALUES))], [say("ACCEPTED")]]);
+    model = { createResponse: async (request) => (await gate, typist.createResponse(request)) } as FakeModelClient;
+    const c = await ctx("turn_lock00001");
+    const slow = fillForm.execute({ form: "food-renewal" }, c);
+    await new Promise((r) => setTimeout(r, 5));
+    const correction = fillForm.execute({ form: "food-renewal", answers: { phone: "253-555-01422" } }, c);
+    await new Promise((r) => setTimeout(r, 5));
+    release();
+    expect(((await slow) as { status: string }).status).toBe("waiting_for_yes");
+    expect((await correction) as Record<string, unknown>).toMatchObject({ status: "needs_answer", field: "phone" });
+    expect(engine.approvals().map((a) => a.status)).toEqual(["rejected"]);
+  });
+
   it("files on YES through the gateway with exactly the approved values and document", async () => {
     engine.profile = profile();
     const out = await run("turn_fill0009", { form: "food-renewal" });

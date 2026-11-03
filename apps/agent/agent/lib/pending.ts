@@ -83,6 +83,20 @@ export function heldBack(turnId: string, approvalId: string): boolean {
   return HELD_BACK.has(`a:${approvalId}`) || HELD_BACK.has(`t:${turnId}`);
 }
 
+// The turn a drafted approval came from, read from its key (see proposalKey).
+function turnOf(idempotencyKey: string): string {
+  return idempotencyKey.replace(/^agent:g\d+:/, "").replace(/:d\d+$/, "");
+}
+
+// The one check before an approval question is shown or counted as shown:
+// the question to show, or null for a draft held back after a correction
+// or one the text line would not carry word for word.
+export function presentable(approval: Pick<EngineApproval, "id" | "idempotencyKey" | "purpose" | "recipient" | "requestJson">): string | null {
+  if (heldBack(turnOf(approval.idempotencyKey), approval.id)) return null;
+  const question = renderQuestion(approval);
+  return presentsExactly(question) ? question : null;
+}
+
 // The drafts one turn proposed that still wait, newest first.
 export function waitingFrom(approvals: EngineApproval[], generation: number, turnId: string): EngineApproval[] {
   return proposalsOf(approvals, generation).filter((a) => a.status === "pending" && a.idempotencyKey.startsWith(`${prefix(generation)}${turnId}:`));
@@ -164,8 +178,9 @@ export function presentationHash(text: string): string {
 // this it would say a filed draft is still waiting.
 export function requestStatus(approvals: EngineApproval[], generation: number, answerableId: string | null): string | null {
   const answerable = answerableId ? approvals.find((a) => a.id === answerableId) : undefined;
-  if (answerable && answerable.status === "pending") {
-    return `A yes-or-no approval question is waiting for this person:\n${renderQuestion(answerable)}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`;
+  const question = answerable && answerable.status === "pending" ? presentable(answerable) : null;
+  if (question) {
+    return `A yes-or-no approval question is waiting for this person:\n${question}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`;
   }
   const latest = proposalsOf(approvals, generation)[0];
   if (!latest) return null;

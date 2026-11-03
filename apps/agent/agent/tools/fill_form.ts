@@ -16,7 +16,7 @@ import { EngineError, type PersonEngine } from "../lib/engine.js";
 import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
 import { DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
-import { EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, sameDraft, settleEarlierFilings, type Draft } from "../lib/propose.js";
+import { EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, sameDraft, earlierFiling, type Draft } from "../lib/propose.js";
 
 const inputSchema = z.object({
   form: z
@@ -66,11 +66,11 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
   }
   // A new version replaces the one shown, even when it only asks a
   // question first: a YES to the old one must not file what was corrected.
-  if ((await settleEarlierFilings(engine, form.recipient)) !== "clear") {
+  if ((await earlierFiling(engine, form.recipient)) !== "clear") {
     return { status: "earlier_filing_unresolved", sent: false, note: EARLIER_UNRESOLVED_NOTE };
   }
   if (!(await closeEarlier(engine, turn.turnId, form.recipient))) {
-    return { status: "fill_failed", sent: false, note: "Mano could not set aside the earlier version of this form, so nothing new was filled or sent. Say so and offer to try again." };
+    return { status: "fill_failed", sent: false, note: SHOWN_NOT_CLOSED_NOTE };
   }
   // The proof document comes only from the profile, so without one the
   // form cannot be completed here.

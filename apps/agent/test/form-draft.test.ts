@@ -531,6 +531,28 @@ describe("LAP-747: corrections and spacing", () => {
     expect(heldBack(turnId, approval!.id)).toBe(held);
   });
 
+  // Review round 1: a correction in a later turn when Engine will not
+  // close the version she was shown. She is told it still waits and a YES
+  // would send it as it was; her next form call closes it.
+  it("a later correction that cannot close the shown draft says so plainly, and the next call closes it", async () => {
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    const shown = await draft("turn_late000001");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      /\/reject$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fix = await draft("turn_late000002", { ...fields, phone: "253-555-0199" }, Date.now() + 10);
+    vi.stubGlobal("fetch", engine.fetch);
+    expect(fix.status).toBe("draft_failed");
+    expect(String(fix.note)).toMatch(/still waiting, that a YES would send it as it was, and that they should send their correction again/);
+    expect((await client().approval(String(shown.approvalId)))?.status).toBe("pending");
+
+    const again = await draft("turn_late000003", { ...fields, phone: "253-555-0199" }, Date.now() + 20);
+    expect(again.status).toBe("waiting_for_yes");
+    expect((await client().approval(String(shown.approvalId)))?.status).toBe("rejected");
+  });
+
   it("a name typed with two spaces is shown and filed with one, so it can still be put to her YES", async () => {
     const portal = realPortal();
     engine.filer = portal.executor;
