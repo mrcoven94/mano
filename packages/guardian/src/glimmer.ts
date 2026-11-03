@@ -12,7 +12,7 @@ export interface ProxyAuth {
 
 export interface GlimmerCheckerOptions {
   // URL of the guardian check endpoint, posted to as given, for example
-  // https://workspace--mano-guardian-check.modal.run.
+  // https://workspace--mano-guardian-server-check.us-east.modal.direct.
   url: string;
   // Bearer token checked inside the container.
   token: string;
@@ -59,6 +59,16 @@ function isServerInfo(value: unknown): value is ServerInfo {
 function blocked(problem: string): CheckResult {
   return { verdict: "block", problems: [problem] };
 }
+
+// Guardian scales to zero, and a cold start takes minutes. Modal answers
+// 503 while no container is up, and a check can also time out while one
+// starts. An immediate retry would find it cold again.
+const STARTING = 503;
+const RETRY_DELAY_MS = 1_000;
+// A warm check measured 4.4 to 6.3 seconds.
+const RETRY_MIN_MS = 7_000;
+const COLD =
+  "The safety check is taking longer than usual, so this action is on hold. Please try again in a few minutes.";
 
 const UNREADABLE =
   "The safety check answered in a way Mano could not understand, so this action is on hold.";
@@ -147,20 +157,26 @@ export class GlimmerModelChecker implements Checker {
     return headers;
   }
 
+  private post(body: string, timeoutMs: number): Promise<Response> {
+    return this.fetchImpl(this.url, {
+      method: "POST",
+      headers: this.headers(),
+      body,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  }
+
   // Asks the endpoint to start the model and keep it up for about ten
   // minutes, so a check soon after finds it ready. Call it when a
   // conversation starts. "ready" means the model is loaded now, "starting"
   // that it is on its way (a cold start takes minutes), "failed" that the
   // endpoint refused or could not be reached. A failure changes nothing,
-  // since a cold check still blocks.
+  // since a cold check still blocks. With no container up, Modal's proxy
+  // answers 503 and starts one.
   async warm(): Promise<WarmState> {
     try {
-      const response = await this.fetchImpl(this.url, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify({ warm: true }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
+      const response = await this.post(JSON.stringify({ warm: true }), this.timeoutMs);
+      if (response.status === STARTING) return "starting";
       if (!response.ok) return "failed";
       const body = (await response.json()) as unknown;
       const ready =
@@ -178,27 +194,27 @@ export class GlimmerModelChecker implements Checker {
     const malformed = formProblems(input);
     if (malformed.length > 0) return { verdict: "block", problems: malformed };
 
+    const body = JSON.stringify(modelRequest(input));
+    const deadline = Date.now() + this.timeoutMs;
     let response: Response;
     try {
-      response = await this.fetchImpl(this.url, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(modelRequest(input)),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (error) {
-      // Guardian scales to zero, so a timeout is most often a cold start
-      // that takes minutes. An immediate retry would time out again.
-      if (error instanceof DOMException && error.name === "TimeoutError") {
-        return blocked(
-          "The safety check is taking longer than usual, so this action is on hold. Please try again in a few minutes.",
-        );
+      response = await this.post(body, this.timeoutMs);
+      // Modal's proxy can still answer 503 for about a second after a
+      // container is ready. Retry once if a full check still fits the budget.
+      const left = deadline - Date.now() - RETRY_DELAY_MS;
+      if (response.status === STARTING && left >= RETRY_MIN_MS) {
+        await response.body?.cancel();
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        response = await this.post(body, left);
       }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "TimeoutError") return blocked(COLD);
       return blocked(
         "The safety check could not be reached, so this action is on hold. Please try again.",
       );
     }
 
+    if (response.status === STARTING) return blocked(COLD);
     if (!response.ok) {
       return blocked(
         "The safety check returned an error, so this action is on hold. Please try again.",
