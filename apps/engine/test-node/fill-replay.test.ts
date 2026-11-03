@@ -10,6 +10,7 @@ import {
   getFillReplay,
   linkKey,
   removeFillReplays,
+  replayLinkToken,
   replayPage,
   type ReplayLinkEntry,
   type ReplayStorage,
@@ -59,6 +60,8 @@ class MemoryStorage implements ReplayStorage {
   // Runs while an image is read, the way another request to the same
   // person can run while the Durable Object waits on R2.
   duringRead: (() => void) | null = null;
+  // Runs while the link's token is opened, for the same reason.
+  duringOpen: (() => Promise<void>) | null = null;
   async putImage(id: string, bytes: Uint8Array, generation: number) {
     if (this.failImageAt !== null && id.endsWith(`-${this.failImageAt}`)) throw new Error("R2 put failed");
     const r2Key = `persons/p/docs/g${generation}/${id}.${bytes[bytes.length - 1]}`;
@@ -82,6 +85,9 @@ class MemoryStorage implements ReplayStorage {
     return JSON.stringify(await encryptForPerson(new TextEncoder().encode(token), KEK, documentAad("p", `fill-link-${approvalId}`)));
   }
   async openToken(approvalId: string, sealed: string) {
+    const during = this.duringOpen;
+    this.duringOpen = null;
+    await during?.();
     return new TextDecoder().decode(await decryptForPerson(JSON.parse(sealed) as EncryptedBlob, KEK, documentAad("p", `fill-link-${approvalId}`)));
   }
   async putLink(key: string, entry: ReplayLinkEntry) {
@@ -96,24 +102,32 @@ class MemoryStorage implements ReplayStorage {
   }
 }
 
-async function setup(opts: { documentId?: string } = {}) {
+const PROPOSAL = {
+  type: "submit",
+  recipient: "sandbox-agency-portal",
+  purpose: "Food benefits renewal in the sandbox agency portal",
+  actor: "foreground",
+  personId: "p",
+  sources: [],
+  origin: "person",
+};
+
+async function setup(opts: { documentId?: string; turnId?: string } = {}) {
   const sql = openDb();
   const store = new SqlApprovalStore(sql as never);
   const documents = new MapDocumentStore();
   if (opts.documentId) documents.set(opts.documentId, "synthetic pay stub v1");
   const gateway = new ActionGateway(store, new InMemoryExecutor(), { linkCheck: async () => ({ allowed: true }), documents });
-  const proposed = await gateway.requestAction({
-    type: "submit",
-    recipient: "sandbox-agency-portal",
-    purpose: "Food benefits renewal in the sandbox agency portal",
-    payload: { fullName: "Rosa Testcase" },
-    idempotencyKey: "replay-node-1",
-    actor: "foreground",
-    personId: "p",
-    sources: [],
-    origin: "person",
-    ...(opts.documentId ? { documentId: opts.documentId } : {}),
-  });
+  const proposed = await gateway.requestAction(
+    {
+      ...PROPOSAL,
+      payload: { fullName: "Rosa Testcase" },
+      idempotencyKey: "replay-node-1",
+      ...(opts.documentId ? { documentId: opts.documentId } : {}),
+    },
+    new Date(),
+    opts.turnId ? { proposal: { turnId: opts.turnId, receivedAt: new Date().toISOString() } } : {},
+  );
   const storage = new MemoryStorage();
   const deps = { sql, approvals: store, storage, personId: "p", nowMs: Date.now() };
   return { sql, store, gateway, documents, storage, deps, approvalId: proposed.approval!.id };
@@ -157,6 +171,35 @@ describe("a replay while other requests run", () => {
       removeFillReplays(sql);
     };
     expect(await replayPage({ ...deps, exact: (a) => gateway.stillExact(a) }, approvalId, bound.token)).toBeNull();
+  });
+});
+
+describe("the link a question carries, while other requests run", () => {
+  it("is not answered when a newer draft replaces the approval while its token opens", async () => {
+    const { gateway, storage, deps, approvalId } = await setup({ turnId: "turn-1" });
+    if ((await bindFillReplay(deps, approvalId, INPUT, 0)).status !== "created") throw new Error("not bound");
+    const link = () => replayLinkToken(deps, approvalId, Date.now());
+    expect(await link()).not.toBeNull();
+
+    storage.duringOpen = async () => {
+      const newer = await gateway.requestAction(
+        { ...PROPOSAL, payload: { fullName: "Rosa Testcase", householdSize: "4" }, idempotencyKey: "replay-node-2" },
+        new Date(),
+        { proposal: { turnId: "turn-2", receivedAt: new Date(Date.now() + 1000).toISOString() } },
+      );
+      expect(newer.status).toBe("needs_approval");
+    };
+    expect(await link()).toBeNull();
+    expect(deps.approvals.getApproval(approvalId)?.status).toBe("pending");
+  });
+
+  it("is not answered when the person says no while its token opens", async () => {
+    const { gateway, storage, deps, approvalId } = await setup({ turnId: "turn-1" });
+    if ((await bindFillReplay(deps, approvalId, INPUT, 0)).status !== "created") throw new Error("not bound");
+    storage.duringOpen = async () => {
+      expect((await gateway.rejectApproval(approvalId, "p")).status).toBe("rejected");
+    };
+    expect(await replayLinkToken(deps, approvalId, Date.now())).toBeNull();
   });
 });
 

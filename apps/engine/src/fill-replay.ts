@@ -236,16 +236,23 @@ export async function finishLinkCleanup(sql: SqlExec, deleteObjects: (keys: stri
 // the latest proposal, under the version the fill was bound to. Anything
 // else gets no link, so no question shown later points at steps of a
 // version the person can no longer say yes to.
+// The rows are read again after the token opens: another request may
+// replace or decide the approval while it does.
 export async function replayLinkToken(
   deps: { sql: SqlExec; approvals: ReplayApprovals; storage: ReplayStorage },
   approvalId: string,
   nowMs: number,
 ): Promise<string | null> {
-  const replay = getFillReplay(deps.sql, approvalId);
-  const approval = deps.approvals.getApproval(approvalId);
-  if (!replay || !approval || replay.linkExpiresAtMs <= nowMs) return null;
-  if (settledState(replayFacts(deps.approvals, replay, approval, nowMs)) !== null) return null;
-  return deps.storage.openToken(approvalId, replay.sealedToken);
+  const linkable = () => {
+    const replay = getFillReplay(deps.sql, approvalId);
+    const approval = deps.approvals.getApproval(approvalId);
+    if (!replay || !approval || replay.linkExpiresAtMs <= nowMs) return null;
+    return settledState(replayFacts(deps.approvals, replay, approval, nowMs)) === null ? replay : null;
+  };
+  const replay = linkable();
+  if (!replay) return null;
+  const token = await deps.storage.openToken(approvalId, replay.sealedToken);
+  return linkable() ? token : null;
 }
 
 export async function linkKey(token: string): Promise<string> {
