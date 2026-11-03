@@ -3,12 +3,12 @@
 // LAP-850: Mano never sets a chat background, and removes one an earlier
 // version set, once.
 import { describe, expect, it } from "vitest";
-import type { Responder, RespondHooks, TurnInput } from "@mano/channels";
+import { ChannelFailed, type Responder, type RespondHooks, type TurnInput } from "@mano/channels";
 import { CRISIS_LINE, EYES } from "@mano/persona";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { SqlConversationStore } from "../src/store-sql.js";
 import { backgroundKey } from "../src/runner.js";
-import { TEST_CHAT, inboundEvent, makeHarness, runTurnAfterBatch, seedBackground, type Harness } from "./helpers.js";
+import { TEST_CHAT, inboundEvent, lifecycleEvent, makeHarness, runTurnAfterBatch, seedBackground, type Harness } from "./helpers.js";
 
 function sqliteStorage(db: DatabaseSync): SqlStorage {
   return {
@@ -233,6 +233,50 @@ describe("an old chat background, removed once and never set (LAP-850)", () => {
     await say(h, "evt_3", "three");
     expect(h.channel.backgroundClears).toEqual([TEST_CHAT, TEST_CHAT]);
     expect(await record(h)).toMatchObject({ state: "cleared", attempts: 2 });
+  });
+
+  it("removes it when a receipt reached the reply before the send response did", async () => {
+    const h = introduced(makeHarness({ replies: ["Short answer."] }));
+    await seedBackground(h, "set");
+    await h.runner.handleEvent(lifecycleEvent("message.delivered", "evt_early", "msg_test_1"), "webhook");
+    await say(h, "evt_1", "hi");
+    expect(h.store.outboundByMessageId("msg_test_1")?.state).toBe("delivered");
+    expect(h.channel.backgroundClears).toEqual([TEST_CHAT]);
+  });
+
+  it("does not remove it when the eyes went on but every reply text was refused", async () => {
+    const h = introduced(makeHarness({ responder: slow("here's the answer", 60), config: { eyesAfterMs: 10 } }));
+    await seedBackground(h, "set");
+    h.channel.send = async () => {
+      throw new ChannelFailed(400, "bad_request", "refused in test");
+    };
+    await say(h, "evt_1", "how does CalFresh count income");
+    expect(h.channel.reactions.map((r) => r.reaction)).toEqual([EYES]);
+    expect(h.channel.backgroundClears).toEqual([]);
+  });
+
+  it("removes it when a resumed turn sends the persisted reply", async () => {
+    const h = introduced(makeHarness({ replies: ["Answer."] }));
+    await seedBackground(h, "set");
+    const settle = h.ledger.settle.bind(h.ledger);
+    let down = true;
+    h.ledger.settle = (...args: Parameters<typeof settle>) => {
+      if (down) {
+        down = false;
+        throw new Error("ledger down in test");
+      }
+      return settle(...args);
+    };
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "hi", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    await h.runner.runDueTurn().catch(() => null);
+    expect(h.channel.sends).toEqual([]);
+    expect(h.store.unfinishedTurn()?.answerJson).toBeTruthy();
+    h.advance(60_000);
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    await h.decorations.idle();
+    expect(h.channel.sends.map((s) => s.text)).toEqual(["Answer."]);
+    expect(h.channel.backgroundClears).toEqual([TEST_CHAT]);
   });
 
   it("keeps the record across a delete, so it is removed at most once", async () => {

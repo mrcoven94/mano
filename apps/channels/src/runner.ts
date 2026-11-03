@@ -974,17 +974,6 @@ export class ConversationRunner {
       logger.warn("turn_unroutable", { handle: this.logHandle(), turn });
       return;
     }
-    // A resumed turn with a persisted answer skips straight to sending
-    // it: same keys, same text, no second model call.
-    if (resumed?.answerJson) {
-      await this.settleResumedCost(turn, resumed);
-      await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation, epoch);
-      this.checkSendsResolved(turn, generation);
-      return;
-    }
-    const texts = items.map((i) => i.text).filter((t): t is string => !!t && t.length > 0);
-    const attachments = items.flatMap((i) => i.attachments);
-
     // One crisis detector for every path, classified before approvals,
     // admission and any model work, on the whole message even when the
     // buffer split it. It is broad on purpose: a match makes the reply
@@ -993,6 +982,18 @@ export class ConversationRunner {
     // split, and every chunk carries it. An item with no decision (a turn
     // persisted before decisions were stored) is a crisis, always.
     const crisis = items.some((i) => i.crisis !== false);
+    // A resumed turn with a persisted answer skips straight to sending
+    // it: same keys, same text, no second model call.
+    if (resumed?.answerJson) {
+      await this.settleResumedCost(turn, resumed);
+      const accepted = await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation, epoch);
+      this.checkSendsResolved(turn, generation);
+      if (accepted && chatId && !crisis) await this.startBackgroundClear(chatId, generation, epoch);
+      return;
+    }
+    const texts = items.map((i) => i.text).filter((t): t is string => !!t && t.length > 0);
+    const attachments = items.flatMap((i) => i.attachments);
+
     // A crisis turn never sends the friendly intro, and later turns do not
     // send it either.
     if (crisis && !meta.introduced) store.patchMeta({ introduced: true });
@@ -1084,7 +1085,7 @@ export class ConversationRunner {
     let typingTimer: ReturnType<typeof setInterval> | undefined;
     let refreshing: Promise<void> = Promise.resolve();
     let typingDone = false;
-    let replied = false;
+    let accepted = false;
     if (chatId) {
       // Read and typing start the refresh chain instead of holding the
       // turn: the answer is asked for at once, and the stop below still
@@ -1159,9 +1160,8 @@ export class ConversationRunner {
       }
       stopEyesTimer();
       this.checkGeneration(generation);
-      await this.sendBubbles(turn, bubbles, chatId, to, saved.length, generation, epoch);
+      accepted = await this.sendBubbles(turn, bubbles, chatId, to, saved.length, generation, epoch);
       this.checkSendsResolved(turn, generation);
-      replied = true;
     } finally {
       stopEyesTimer();
       typingDone = true;
@@ -1169,16 +1169,18 @@ export class ConversationRunner {
       await refreshing;
       if (chatId) await this.bestEffort("typing_stopped", () => this.deps.channel.setTyping(chatId, "stopped"));
     }
-    // Removing an old background is decoration too: started outside the
-    // turn once a reply reached the person, so it can never hold the next
-    // message. Chats with nothing to remove start nothing.
-    if (replied && chatId && !crisis && this.deps.channel.clearBackground) {
-      const chatKey = await backgroundKey(chatId);
-      const sent = () => this.store.outbounds().some((r) => r.turn === turn && r.state === "sent" && r.tag !== "react");
-      if (backgroundToClear(this.store.chatBackground(chatKey), this.deps.nowMs()) && sent()) {
-        this.decorations.run("background", (signal) => this.clearBackgroundOnce(chatId, chatKey, generation, epoch, signal));
-      }
-    }
+    if (accepted && chatId && !crisis) await this.startBackgroundClear(chatId, generation, epoch);
+  }
+
+  // Called once the provider accepted a text of the turn's reply, on the
+  // first run or a resumed one. Removing an old background is decoration:
+  // started outside the turn, so it can never hold the next message.
+  // Chats with nothing to remove start nothing.
+  private async startBackgroundClear(chatId: string, generation: number, epoch: number): Promise<void> {
+    if (!this.deps.channel.clearBackground) return;
+    const chatKey = await backgroundKey(chatId);
+    if (!backgroundToClear(this.store.chatBackground(chatKey), this.deps.nowMs())) return;
+    this.decorations.run("background", (signal) => this.clearBackgroundOnce(chatId, chatKey, generation, epoch, signal));
   }
 
   // Every reply, model or fixed, becomes its bubbles through
@@ -1225,7 +1227,7 @@ export class ConversationRunner {
     saved: number,
     generation: number,
     epoch: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { store, logger } = this.deps;
     // Bubbles arrive final: model text was sanitized before splitting
     // and capped by the splitter, and the static texts carry no links
@@ -1262,6 +1264,7 @@ export class ConversationRunner {
     }
     // Limits count inside the one send path; the turn only reports.
     logger.info("turn_ran", { handle: this.logHandle(), turn, bubbles: bubbles.length, sent: fresh, saved });
+    return accepted;
   }
 
   // Runs the responder. A deep turn's heads-up goes out the moment the
