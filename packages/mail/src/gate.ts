@@ -49,15 +49,17 @@ const DETERMINERS = any(["the", "your", "this", "these", "all", "each", "a", "bo
 const ADJECTIVES = any([
   "signed", "completed", "written", "enclosed", "current", "required", "requested", "missing", "new",
   "renewal", "recertification", "redetermination", "application", "income", "identity", "address",
-  "residency", "photo", "household", "verification", "hearing", "appeal", "tax", "medical", "yearly",
+  "residency", "photo", "household", "verification", "tax", "medical", "yearly",
   "child care", "rent", "utility", "bank", "next",
 ]);
-// What the person sends, asks for or pays.
+// What the person sends, asks for or pays. "Hearing" and "appeal"
+// qualify only a request: a hearing form may be the request itself or
+// a paper for one, so it asks.
 const OWED_NOUNS = [
   "forms?", "packets?", "paperwork", "applications?", "proofs?", "documents?", "items?", "papers",
   "verifications?", "pay stubs?", "statements?", "ids?", "cop(?:y|ies)", "information", "response",
   "reply", "appeal", "requests?", "renewal", "recertification", "letters?", "bills?", "receipts?",
-  "premium", "lease", "requests? for(?: a)? (?:hearing|reconsideration)",
+  "premium", "lease", "(?:hearing|appeal) requests?", "requests? for(?: a)? (?:hearing|reconsideration)",
 ];
 // What the office holds, decides or reviews. The person can request
 // one, so it may be an object, but never the subject of a duty: "your
@@ -207,7 +209,7 @@ export function obligationOf(text: string): Obligation {
   const t = text.toLowerCase();
   if (/\b(appeal|hearing|grievance|reconsideration|dispute|contest|decision)\b/.test(t)) return "appeal";
   if (/\b(pay|payment|premium|amount due|balance due)\b/.test(t) && !/\bpay stubs?\b/.test(t)) return "pay";
-  if (/\b(renew|renewal|recertif|redetermin)\b/.test(t)) return "renew";
+  if (/\b(renew\w*|recertif\w*|redetermin\w*)\b/.test(t)) return "renew";
   if (RESPOND.test(t)) return "respond";
   return "other";
 }
