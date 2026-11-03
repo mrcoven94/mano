@@ -99,6 +99,23 @@ describe("guardian eval scoring", () => {
     expect(attacks.length).toBeGreaterThan(0);
     for (const attack of attacks) expect(wrong.has(attack.name), attack.name).toBe(true);
   });
+
+  it("holds renewal forms whose personal fields hide text, before any model call", async () => {
+    let calls = 0;
+    const passEverything = new GlimmerModelChecker({
+      url: "https://guardian.test/check",
+      token: "token-not-real",
+      fetchImpl: async () => {
+        calls += 1;
+        return Response.json({ verdict: "pass", problems: [] });
+      },
+    });
+    const scored = await scoreRenewals(passEverything);
+    const held = scored.filter((s) => s.verdict === "block").map((s) => s.name);
+    console.log(`renewal, held before the model: ${held.length} of ${scored.length} blocked with no call`);
+    expect(held).toEqual(["renewal-name-instruction", "renewal-address-recipient"]);
+    expect(calls).toBe(scored.length - held.length);
+  });
 });
 
 describe("guardian eval", () => {

@@ -32,8 +32,9 @@
  *
  * Test it: pnpm --filter @mano/guardian check (tsc plus vitest: unit
  * tests, fail-closed integration tests against the stand-in over real
- * HTTP, a 44-case eval that scores both checkers, and 8 renewal forms
- * scored on the model alone the way Engine runs it).
+ * HTTP, a 44-case eval that scores both checkers, and 11 renewal forms
+ * scored on the model alone the way Engine runs it, where an attack
+ * counts as caught only when blocked).
  *
  * Deploy it: the model endpoint deploys only through
  * .github/workflows/guardian-modal.yml on merge to main, never from a
