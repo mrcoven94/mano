@@ -9,8 +9,8 @@
 import { useCallback, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import * as Linking from "expo-linking";
-import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { Badge, Body, Btn, Card, ErrorView, GhostBtn, LoadingView, Muted, Screen, Title } from "../../components/ui";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
+import { Badge, Body, Btn, Card, ErrorView, GhostBtn, LoadingView, Muted, Screen, Title, useGoBack } from "../../components/ui";
 import { DocPreview, currentPlatform } from "../../components/doc";
 import { parseActionView, type ParsedAction } from "../../lib/action-view";
 import { approvalGate } from "../../lib/approve-gate";
@@ -52,7 +52,7 @@ export default function ApprovalDetail() {
   const s = useStrings();
   const { language } = useLanguage();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const router = useRouter();
+  const goBack = useGoBack("/(tabs)/approvals");
   const { client, session, mode, personStore, generation: sessionGeneration, isCurrentGeneration, signOut } = useAuth();
   const [approval, setApproval] = useState<Approval | null>(null);
   // Other approvals under the same idempotency key, as of the last load.
@@ -240,7 +240,7 @@ export default function ApprovalDetail() {
   );
 
   return (
-    <Screen>
+    <Screen back="/(tabs)/approvals">
       <Title>{s.approvalsTitle}</Title>
       {failed && !approval ? (
         <ErrorView title={s.errorTitle} body={s.errorBody} retry={() => void load()} retryTitle={s.retry} />
@@ -369,14 +369,14 @@ export default function ApprovalDetail() {
                 <Muted style={styles.match}>{s.receiptSimulated}</Muted>
               ) : null}
               <View style={styles.back}>
-                <Btn title={s.tabsApprovals} onPress={() => router.back()} />
+                <Btn title={s.tabsApprovals} onPress={goBack} />
               </View>
             </Card>
           ) : no.phase === "answered" ? (
             <Card>
               <Body>{s[noLine(no.answer)]}</Body>
               <View style={styles.back}>
-                <Btn title={s.tabsApprovals} onPress={() => router.back()} />
+                <Btn title={s.tabsApprovals} onPress={goBack} />
               </View>
             </Card>
           ) : approval.status === "pending" ? (
