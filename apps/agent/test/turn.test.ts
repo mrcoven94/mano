@@ -20,6 +20,7 @@ const SECRET = "turn-test-secret";
 const HANDLE = "e".repeat(64);
 const OTHER = "f".repeat(64);
 const fields = {
+  caseNumber: "WA-SNAP-0042117",
   fullName: "Rosa Testcase",
   dateOfBirth: "1990-02-03",
   address: "12 Sample Street, Testville",
@@ -162,7 +163,7 @@ describe("approval by text", () => {
     const ask = await send(turn("turn_ask_000001", "Please file my renewal"));
     expect(ask.status).toBe(200);
     expect(ask.body.text).toContain("Reply YES");
-    expect(ask.body.text).toContain("Full legal name: Rosa Testcase; Date of birth: 1990-02-03; Mailing address: 12 Sample Street, Testville;");
+    expect(ask.body.text).toContain("Case number: WA-SNAP-0042117; Full legal name: Rosa Testcase; Date of birth: 1990-02-03; People in household: 3; Monthly income ($): 1800; Mailing address: 12 Sample Street, Testville;");
     expect(engine.approvals()[0].status).toBe("pending");
     expect(engine.executor.calls).toHaveLength(0);
 
@@ -664,7 +665,7 @@ describe("the question links to the replay of the fill behind it", () => {
     expect(guardReply(line).text).toBe(line);
 
     const page = (await engine.replayPageAt(url!))!;
-    expect(page.match(/<img /g)).toHaveLength(7);
+    expect(page.match(/<img /g)).toHaveLength(8);
     expect(page).toContain("This is exactly what Mano will send when you reply YES.");
     // The question still answers with a plain YES.
     expect((await send(turn("turn_link00000Y", "YES"))).body.text).toMatch(/^Done/);

@@ -382,7 +382,7 @@ export function collectActionUrls(req: ActionRequest): string[] {
 // bytes. Attempts and receipts carry it so reuse of a key with different
 // content is rejected.
 export async function contentHashOf(req: ActionRequest): Promise<string> {
-  const { document: _attached, ...rest } = req;
+  const { document: _attached, answeredBy: _answered, ...rest } = req;
   return sha256Hex(canonicalJson(rest));
 }
 
@@ -828,7 +828,7 @@ export class ActionGateway {
       }
       return { status: "blocked", reason: approvalGoneReason(fresh?.status ?? approval.status) };
     }
-    return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now, hashes.key);
+    return this.runExecution(this.enrichWithDocument({ ...stored, answeredBy: humanId }, docRead.bytes, frozen.documentHash), now, hashes.key);
   }
 
   // Retries a consumed approval without asking the person again. Failed
@@ -893,7 +893,7 @@ export class ActionGateway {
         return { status: "in_progress", reason: "Another request with this idempotency key is running." };
       }
       this.store.audit({ event: "gateway.retry_consumed", keyHash: hashes.key, from: attempt.status });
-      return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now, hashes.key);
+      return this.runExecution(this.enrichWithDocument({ ...stored, answeredBy: humanId }, docRead.bytes, frozen.documentHash), now, hashes.key);
     }
     if (attempt.status === "in_flight") {
       return { status: "in_progress", reason: "Another request with this idempotency key is running." };
@@ -1095,7 +1095,8 @@ export class ActionGateway {
       this.store.audit({ event: "gateway.recover_expired", keyHash });
       return { status: "blocked", reason: "Approval expired before the stranded attempt could be recovered." };
     }
-    return this.runExecution(this.enrichWithDocument(stored, docRead.bytes, frozen.documentHash), now, keyHash);
+    const answered = approval.approvedByHumanId ? { answeredBy: approval.approvedByHumanId } : {};
+    return this.runExecution(this.enrichWithDocument({ ...stored, ...answered }, docRead.bytes, frozen.documentHash), now, keyHash);
   }
 
   private async recoverAllowAttempt(key: string, attempt: Attempt, now: Date, keyHash: AuditDigest): Promise<GatewayResult> {

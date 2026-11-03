@@ -14,6 +14,7 @@ import { z } from "zod";
 import { fillDepsFromEnv, fillOnComputer, type FillDeps, type ReplayStep } from "../lib/computer-fill.js";
 import { EngineError, type PersonEngine } from "../lib/engine.js";
 import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
+import { DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { closeEarlier, holdForYes, sameDraft, type Draft } from "../lib/propose.js";
 
@@ -44,7 +45,7 @@ const REPLAY_BIND_MS = 8_000;
 async function shareReplay(engine: PersonEngine, approvalId: string, form: FormSpec, steps: ReplayStep[]): Promise<void> {
   if (steps.length === 0) return;
   try {
-    const labels = Object.fromEntries(form.fields.map((f) => [f.name, f.label]));
+    const labels = { ...Object.fromEntries(form.fields.map((f) => [f.name, f.label])), [DECLARATION]: "Declaration only you can make" };
     if (!(await engine.bindReplay(approvalId, { labels, steps }, REPLAY_BIND_MS))) console.warn(JSON.stringify({ type: "mano_replay_refused" }));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_replay_failed", status: err instanceof EngineError ? err.status : null }));
@@ -126,7 +127,7 @@ export default defineTool({
       type: "submit",
       recipient: form.recipient,
       purpose: form.purpose,
-      payload: fill.saved,
+      payload: { ...fill.saved, [DECLARATION]: form.declaration },
       ...(filled.documentId ? { documentId: filled.documentId } : {}),
     };
     const held = await holdForYes(engine, ctx, turn, draft);
