@@ -26,8 +26,8 @@ name: guardian-modal
 # which catches accidental edits on main and in reviewed pull requests. None
 # of this stops a hostile branch: its own run uses its own copy of this file
 # and of guardian-check. Only the guardian-production environment's
-# deployment branch policy, limited to main as computer-production is,
-# closes that.
+# deployment branch policy, limited to main since November 3, 2026, as
+# computer-production is, closes that.
 #
 # Needs two secrets in the guardian-production environment, set by a maintainer:
 #   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
