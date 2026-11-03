@@ -68,10 +68,6 @@ export interface ApprovalStore {
   // person's own, becomes rejected in one step.
   rejectApprovalsForKey(key: string, personId: string): void;
   keyDeclined(key: string): boolean;
-  // Withdraws an approved approval, for good: it may still be reconciled
-  // to a receipt, but never executes again. False unless it is approved.
-  withdrawApproval(id: string): boolean;
-  approvalWithdrawn(id: string): boolean;
   // Atomically moves a pending approval to approved and records the
   // execution attempt. Returns null when the approval is not pending, the
   // owner, hash or expiry no longer match, or the key is already claimed
@@ -217,15 +213,6 @@ export class MemoryApprovalStore implements ApprovalStore {
   }
   keyDeclined(key: string) {
     return [...this.approvals.values()].some((a) => a.idempotencyKey === key && a.status === "rejected");
-  }
-  private withdrawn = new Set<string>();
-  withdrawApproval(id: string) {
-    if (this.approvals.get(id)?.status !== "approved") return false;
-    this.withdrawn.add(id);
-    return true;
-  }
-  approvalWithdrawn(id: string) {
-    return this.withdrawn.has(id);
   }
   private generationOf(id: string) {
     return this.approvalGenerations.get(id) ?? 0;
@@ -735,26 +722,6 @@ export class ActionGateway {
     return { status: "rejected", approval: fresh };
   }
 
-  // The person asked for a new version after approving this one, while
-  // its filing is still unresolved. From now on it is only ever
-  // reconciled, never executed again: a later YES or recovery that finds
-  // it never happened ends it instead of retrying the old values. Answers
-  // completed when it already went through. An execution already in flight
-  // is not stopped: its outcome stands, and a receipt it records wins over
-  // the withdrawal.
-  async withdrawApproval(approvalId: string, humanId: string): Promise<GatewayResult> {
-    const approval = this.store.getApproval(approvalId);
-    if (!approval) return { status: "blocked", reason: "Approval not found." };
-    if (!humanId || humanId !== approval.personId) {
-      return { status: "blocked", reason: "This approval belongs to a different person." };
-    }
-    const receipt = this.store.getReceiptByKey(approval.idempotencyKey);
-    if (receipt) return { status: "completed", receipt };
-    if (!this.store.withdrawApproval(approvalId)) return { status: "blocked", reason: approvalGoneReason(approval.status) };
-    this.store.audit({ event: "gateway.withdraw", approvalHash: await auditDigest(approval.id) });
-    return { status: "rejected", withdrawn: true, approval: this.store.getApproval(approvalId) ?? approval };
-  }
-
   async approveAndExecute(
     approvalId: string,
     humanId: string,
@@ -911,9 +878,6 @@ export class ActionGateway {
     if (!attempt) {
       return { status: "blocked", reason: "This approval has no recorded attempt. Refusing to execute." };
     }
-    // Read before the reconcile awaits: a withdrawal ends the attempt only
-    // if nothing claimed or ran it since.
-    const seen = attempt.version ?? 0;
     // Reconcile before any expiry decision: if the action happened, the
     // person gets the receipt even after the window passed.
     if (attempt.status === "unknown") {
@@ -933,9 +897,6 @@ export class ActionGateway {
     if (!this.store.approvalAuthorized(approval.id)) return { status: "blocked", reason: approvalGoneReason("revoked") };
     if (check.problems.length > 0) this.store.setApprovalProblems(approval.id, check.problems);
     if (attempt.status === "failed" || attempt.status === "unknown") {
-      // Reconciled above to confirmed absent, or definitely failed: a
-      // withdrawn approval ends here and its old values never go out.
-      if (this.store.approvalWithdrawn(approval.id)) return this.endWithdrawn(approval.idempotencyKey, seen, hashes.key);
       const adopt =
         attempt.status === "failed"
           ? this.store.adoptFailedAttempt(approval.idempotencyKey, now)
@@ -1138,7 +1099,6 @@ export class ActionGateway {
     if (this.store.keyDeclined(key)) {
       return this.failAt(key, seen, () => ({ status: "blocked", reason: approvalGoneReason("rejected") }));
     }
-    if (this.store.approvalWithdrawn(approval.id)) return this.endWithdrawn(key, seen, keyHash);
     if (!this.store.adoptForRecoveryIfApprovalLive(key, new Date())) {
       return this.failAt(key, seen, () => {
         this.store.audit({ event: "gateway.recover_expired", keyHash });
@@ -1147,18 +1107,6 @@ export class ActionGateway {
     }
     const answered = approval.approvedByHumanId ? { answeredBy: approval.approvedByHumanId } : {};
     return this.runExecution(this.enrichWithDocument({ ...stored, ...answered }, docRead.bytes, frozen.documentHash), now, keyHash);
-  }
-
-  // A withdrawn approval whose attempt was confirmed not to have happened
-  // when it read version seen: the attempt is failed for good and nothing
-  // runs. When anything claimed or ran it since (another retry that found
-  // it absent and filed), that outcome stands: a receipt answers
-  // completed, and anything else is still being worked out.
-  private endWithdrawn(key: string, seen: number, keyHash: AuditDigest): GatewayResult {
-    return this.failAt(key, seen, () => {
-      this.store.audit({ event: "gateway.withdrawn_ended", keyHash });
-      return { status: "blocked", withdrawn: true, reason: "The person asked for a new version, so this one was not sent." };
-    });
   }
 
   // Fails the attempt only if it is still at the version read before the

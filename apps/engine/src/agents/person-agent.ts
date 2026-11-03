@@ -972,7 +972,6 @@ export class PersonAgent extends Agent<Env, PersonState> {
         outcome: {
           attempt: attempt?.status ?? null,
           receipt: receipt ? { externalId: receipt.externalId, simulated: receipt.simulated } : null,
-          withdrawn: this.store.approvalWithdrawn(approval.id),
         },
       };
     });
@@ -993,13 +992,6 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async reject(approvalId: string, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.rejectApproval(approvalId, verified);
-    this.syncState();
-    return result;
-  }
-
-  async withdraw(approvalId: string, verified: string) {
-    await this.assertSubject(verified);
-    const result = await this.gateway.withdrawApproval(approvalId, verified);
     this.syncState();
     return result;
   }
