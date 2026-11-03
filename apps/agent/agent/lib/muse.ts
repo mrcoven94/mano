@@ -110,7 +110,7 @@ function meteringMiddleware(opts: {
       latencyMs,
       status,
     });
-  const logUsage = (finishReason: unknown, usage: unknown, latencyMs: number) => {
+  const logUsage = (finishReason: unknown, usage: unknown, latencyMs: number, ttftMs?: number) => {
     const u = (usage ?? {}) as { inputTokens?: { total?: number }; outputTokens?: { total?: number; reasoning?: number } };
     const inputTokens = tokenCount(u.inputTokens?.total);
     const outputTokens = tokenCount(u.outputTokens?.total);
@@ -123,6 +123,7 @@ function meteringMiddleware(opts: {
         outputTokens,
         reasoningTokens: tokenCount(u.outputTokens?.reasoning),
         latencyMs,
+        ...(ttftMs === undefined ? {} : { ttftMs }),
       }),
     );
     return { inputTokens, outputTokens };
@@ -168,6 +169,7 @@ function meteringMiddleware(opts: {
       // forwards a source rejection untouched, and that error carries
       // the request body. Every chunk and every failure passes here.
       const reader = result.stream.getReader();
+      let ttftMs: number | undefined;
       const stream = new ReadableStream<(typeof result.stream extends ReadableStream<infer C> ? C : never)>({
         async pull(controller) {
           let next: Awaited<ReturnType<typeof reader.read>>;
@@ -189,9 +191,10 @@ function meteringMiddleware(opts: {
             controller.enqueue({ ...chunk, error: sanitizeModelError(part.error) } as typeof chunk);
             return;
           }
+          if (ttftMs === undefined && typeof part?.type === "string" && part.type.endsWith("-delta")) ttftMs = elapsed();
           if (part?.type === "finish") {
             const latencyMs = elapsed();
-            const { inputTokens, outputTokens } = logUsage(part.finishReason, part.usage, latencyMs);
+            const { inputTokens, outputTokens } = logUsage(part.finishReason, part.usage, latencyMs, ttftMs);
             void record("ok", inputTokens, outputTokens, latencyMs);
           }
           controller.enqueue(chunk);
