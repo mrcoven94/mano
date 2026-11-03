@@ -159,13 +159,8 @@ describe("an old chat background, removed once and never set (LAP-850)", () => {
     expect(h.channel.backgroundClears).toHaveLength(1);
   });
 
-  it("removes one an uncertain upload may have left, and leaves other chats alone", async () => {
-    const uncertain = makeHarness({ replies: ["hello"] });
-    await seedBackground(uncertain, "uncertain");
-    await say(uncertain, "evt_1", "hi");
-    expect(uncertain.channel.backgroundClears).toEqual([TEST_CHAT]);
-
-    for (const state of [null, "failed", "cleared"] as const) {
+  it("removes only a background Mano confirmed it set", async () => {
+    for (const state of [null, "uncertain", "failed", "cleared"] as const) {
       const h = makeHarness({ replies: ["hello"] });
       if (state) await seedBackground(h, state);
       await say(h, "evt_1", "hi");

@@ -137,11 +137,12 @@ export async function backgroundKey(chatId: string): Promise<string> {
   return sha256Hex(new TextEncoder().encode(`chat-background:${chatId}`));
 }
 // Whether a chat still needs its background removed: an earlier version
-// set one ("set") or may have ("uncertain"), and the removal has not
-// finished, is not running and has tries left.
+// confirmed it set one, and the removal has not finished, is not running
+// and has tries left. An "uncertain" upload is left alone: it may have
+// failed, and the person may have set their own background since.
 export function backgroundToClear(row: ChatBackground | null, nowMs: number): row is ChatBackground {
   if (!row || row.lockedUntilMs > nowMs) return false;
-  if (row.state === "set" || row.state === "uncertain") return true;
+  if (row.state === "set") return true;
   return row.state === "clearing" && row.attempts < CLEAR_BACKGROUND_MAX_ATTEMPTS;
 }
 
