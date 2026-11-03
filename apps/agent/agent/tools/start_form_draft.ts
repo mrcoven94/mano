@@ -8,6 +8,8 @@
 // Every value comes from the person's own answers or their profile,
 // checked the way fill_form checks it. One that is missing or does not
 // fit becomes one question, the most important first; nothing is guessed.
+// A call from a later turn first closes the version already shown, so a
+// YES to it never files what the person has since corrected.
 //
 // The portal takes a renewal only with one document attached, so without
 // a document on file that Engine says its executor could file (by kind
@@ -21,7 +23,7 @@ import type { EngineDocument, PersonEngine, Profile } from "../lib/engine.js";
 import { FORMS, fillFrom } from "../lib/forms.js";
 import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
-import { holdForYes } from "../lib/propose.js";
+import { closeEarlier, holdForYes } from "../lib/propose.js";
 
 const inputSchema = z.object({
   answers: z
@@ -70,6 +72,9 @@ export default defineTool({
     const turn = requireTurn(ctx);
     const engine = personEngine(ctx);
     if (!engine) throw new Error("Preparing forms is not available right now. Say so and offer to collect the answers.");
+    if (!(await closeEarlier(engine, turn.turnId, RENEWAL.recipient))) {
+      return { status: "draft_failed", sent: false, note: "Mano could not set aside the earlier version of the renewal, so nothing new was prepared or sent. Say so and offer to try again." };
+    }
     const { proof, newest, profile } = await proofOnFile(engine);
     const filled = fillFrom(RENEWAL, profile ?? NO_PROFILE, input.answers ?? {});
     const unfit = filled.invalid[0];

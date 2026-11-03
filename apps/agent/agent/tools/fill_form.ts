@@ -71,6 +71,11 @@ export default defineTool({
     if (!portalUrl) {
       return { status: "unavailable", sent: false, note: "Filling forms on Mano's computer is not set up here. Prepare the renewal with start_form_draft from the person's answers instead." };
     }
+    // A new version replaces the one shown, even when it only asks a
+    // question first: a YES to the old one must not file what was corrected.
+    if (!(await closeEarlier(engine, turn.turnId, form.recipient))) {
+      return { status: "fill_failed", sent: false, note: "Mano could not set aside the earlier version of this form, so nothing new was filled or sent. Say so and offer to try again." };
+    }
     // The proof document comes only from the profile, so without one the
     // form cannot be completed here.
     const profile = await engine.getProfile();
@@ -90,9 +95,6 @@ export default defineTool({
       return { status: "needs_answer", field: filled.missing.name, question: filled.missing.question, sent: false, note };
     }
 
-    if (!(await closeEarlier(engine, turn.turnId, form.recipient))) {
-      return { status: "fill_failed", sent: false, note: "Mano could not set aside the earlier version of this form, so nothing new was filled or sent. Say so and offer to try again." };
-    }
     const deps = depsForTests ? depsForTests(engine.personId) : fillDepsFromEnv(engine.personId);
     if ("unavailable" in deps) {
       console.warn(JSON.stringify({ type: "mano_fill_unavailable", reason: deps.unavailable }));

@@ -71,7 +71,8 @@ async function fakeAgent(input: AgentTurnInput) {
     const householdSize = /household of 4/.test(input.message) ? "4" : fields.householdSize;
     // The voice guard rewrites dashes, so this address cannot be shown word for word.
     const address = /with a dash/.test(input.message) ? "12 Sample Street \u2014 Unit 4, Testville" : fields.address;
-    await fillForm.execute(draft({ fullName: name, address, householdSize }), ctx);
+    const phone = /my phone is (\S+)/.exec(input.message)?.[1] ?? fields.phone;
+    await fillForm.execute(draft({ fullName: name, address, householdSize, phone }), ctx);
     return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop" };
   }
   return { status: "replied" as const, text: `Answer ${agentCalls.length}`, reason: "stop" };
@@ -174,6 +175,27 @@ describe("approval by text", () => {
     expect(engine.executor.calls).toHaveLength(1);
     expect(engine.executor.calls[0].payload).toMatchObject(fields);
     expect(yes.body.text).toMatch(/simulated/i);
+  });
+
+  // LAP-747 follow-up: a correction that does not fit the form is asked
+  // again, and the version shown before it can no longer be filed.
+  it("a correction that does not fit closes the question shown: YES files nothing until the new version is shown and answered", async () => {
+    await send(turn("turn_fix_000001", "Please file my renewal"));
+    const [shown] = engine.approvals();
+    const fix = await send(turn("turn_fix_000002", "Fix my renewal, my phone is 253-555-01422"));
+    expect(fix.body.status).not.toBe("waiting_approval");
+    expect(engine.approvals().find((a) => a.id === shown!.id)?.status).toBe("rejected");
+
+    const yes = await send(turn("turn_fixy_00001", "YES"));
+    expect(yes.body.text).not.toMatch(/^Done/);
+    expect(engine.executor.calls).toHaveLength(0);
+
+    const fixed = await send(turn("turn_fix_000003", "Fix my renewal, my phone is 253-555-0199"));
+    expect(fixed.body.status).toBe("waiting_approval");
+    expect(fixed.body.approval).toContain("Phone number: 253-555-0199");
+    await send(turn("turn_fixy_00002", "YES"));
+    expect(engine.executor.calls).toHaveLength(1);
+    expect(engine.executor.calls[0]!.payload.phone).toBe("253-555-0199");
   });
 
   it("question, NO: Engine rejects it, nothing is sent, and a later YES approves nothing", async () => {
