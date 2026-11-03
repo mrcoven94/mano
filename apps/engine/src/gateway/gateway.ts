@@ -897,6 +897,11 @@ export class ActionGateway {
     if (!this.store.approvalAuthorized(approval.id)) return { status: "blocked", reason: approvalGoneReason("revoked") };
     if (check.problems.length > 0) this.store.setApprovalProblems(approval.id, check.problems);
     if (attempt.status === "failed" || attempt.status === "unknown") {
+      // A newer proposal replaced this one (the person corrected it): it is
+      // never executed again. Checked here, with no await before the adopt,
+      // so a replayed YES or one that waited on the safety check cannot
+      // file the old values after the correction.
+      if (!this.store.proposalCurrent(approval.id)) return SUPERSEDED;
       const adopt =
         attempt.status === "failed"
           ? this.store.adoptFailedAttempt(approval.idempotencyKey, now)
@@ -1099,6 +1104,9 @@ export class ActionGateway {
     if (this.store.keyDeclined(key)) {
       return this.failAt(key, seen, () => ({ status: "blocked", reason: approvalGoneReason("rejected") }));
     }
+    // Confirmed absent and replaced by a newer proposal: it ends here,
+    // never executed again with the values the person corrected.
+    if (!this.store.proposalCurrent(approval.id)) return this.failAt(key, seen, () => SUPERSEDED);
     if (!this.store.adoptForRecoveryIfApprovalLive(key, new Date())) {
       return this.failAt(key, seen, () => {
         this.store.audit({ event: "gateway.recover_expired", keyHash });

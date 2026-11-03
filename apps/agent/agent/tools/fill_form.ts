@@ -61,16 +61,17 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
   if (!form) {
     return { status: "unknown_form", sent: false, note: "Mano cannot fill that form yet. Say so plainly and offer to help another way." };
   }
-  if (!portalUrl) {
-    return { status: "unavailable", sent: false, note: "Filling forms on Mano's computer is not set up here. Prepare the renewal with start_form_draft from the person's answers instead." };
-  }
   // A new version replaces the one shown, even when it only asks a
-  // question first: a YES to the old one must not file what was corrected.
+  // question first or cannot be filled here: a YES to the old one must not
+  // file what was corrected.
   if ((await earlierFiling(engine, form.recipient)) !== "clear") {
     return { status: "earlier_filing_unresolved", sent: false, note: EARLIER_UNRESOLVED_NOTE };
   }
   if (!(await closeEarlier(engine, turn.turnId, form.recipient))) {
     return { status: "fill_failed", sent: false, note: SHOWN_NOT_CLOSED_NOTE };
+  }
+  if (!portalUrl) {
+    return { status: "unavailable", sent: false, note: "Filling forms on Mano's computer is not set up here. Prepare the renewal with start_form_draft from the person's answers instead." };
   }
   // The proof document comes only from the profile, so without one the
   // form cannot be completed here.

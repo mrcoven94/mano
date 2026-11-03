@@ -1,6 +1,6 @@
 import { env as testEnv, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { ActionGateway, MemoryApprovalStore, TimeoutError } from "../src/gateway/index.js";
+import { ActionGateway, DefiniteFailureError, MemoryApprovalStore, TimeoutError } from "../src/gateway/index.js";
 import type { ActionRequest, CheckOutcome, Executor } from "../src/gateway/index.js";
 import { SqlApprovalStore, ensureGatewayTables } from "../src/gateway/sql-store.js";
 
@@ -139,5 +139,98 @@ describe("LAP-747: recovery never fails an attempt another request moved", () =>
       });
       expect(store.failAttemptAt("k2", store.getAttempt("k2")!.version!)).toBe(false);
     });
+  });
+});
+
+// LAP-747 follow-up. A proposal the person corrected is never executed
+// again: a replayed YES, a YES that waited on the safety check, and
+// recovery all refuse it once a newer proposal replaced it. A filing that
+// went through still answers its receipt first.
+class Office implements Executor {
+  readonly simulated = true;
+  posts: ActionRequest[] = [];
+  filed = new Map<string, string>();
+  // What the next post does: refuse it, time out without filing, or file it.
+  next: "refuse" | "timeout" | "file" = "refuse";
+  async execute(req: ActionRequest) {
+    this.posts.push(req);
+    const mode = this.next;
+    this.next = "file";
+    if (mode === "refuse") throw new DefiniteFailureError("The office refused it.");
+    if (mode === "timeout") throw new TimeoutError();
+    this.filed.set(req.idempotencyKey, `WA-${this.posts.length}`);
+    return { externalId: `WA-${this.posts.length}` };
+  }
+  async check(key: string): Promise<CheckOutcome> {
+    const id = this.filed.get(key);
+    return id ? { found: true, externalId: id } : { found: false };
+  }
+}
+
+describe("LAP-747: a replaced proposal is never retried", () => {
+  async function correctedAfter(first: "refuse" | "timeout", checker?: { check(): Promise<{ verdict: "pass"; problems: string[] }> }) {
+    const office = new Office();
+    office.next = first;
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, office, checker ? { checker } : {});
+    const order = (turnId: string, ms: number) => ({ proposal: { receivedAt: new Date(ms).toISOString(), turnId } });
+    const a = await gateway.requestAction(proposal(), new Date(), order("turn-a", Date.now() - 60_000));
+    expect((await gateway.approveAndExecute(a.approval!.id, "person-maria")).status).toBe("blocked");
+    const b = await gateway.requestAction({ ...proposal(), payload: { phone: "253-555-0199" } }, new Date(), order("turn-b", Date.now()));
+    expect(b.status).toBe("needs_approval");
+    return { office, store, gateway, a: a.approval!, b: b.approval! };
+  }
+
+  it("a replayed YES on the refused original answers superseded and files nothing", async () => {
+    const { office, store, gateway, a } = await correctedAfter("refuse");
+    expect(store.getAttempt(a.idempotencyKey)?.status).toBe("failed");
+    expect(await gateway.approveAndExecute(a.id, "person-maria")).toMatchObject({ status: "blocked", superseded: true });
+    expect(office.posts).toHaveLength(1);
+  });
+
+  it("a YES retry that waited on the safety check while the correction was prepared files nothing", async () => {
+    let pause: Promise<void> | null = null;
+    const checker = { check: async () => { if (pause) await pause; return { verdict: "pass" as const, problems: [] }; } };
+    const office = new Office();
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, office, { checker });
+    const order = (turnId: string, ms: number) => ({ proposal: { receivedAt: new Date(ms).toISOString(), turnId } });
+    const a = (await gateway.requestAction(proposal(), new Date(), order("turn-a", Date.now() - 60_000))).approval!;
+    await gateway.approveAndExecute(a.id, "person-maria");
+    let resume!: () => void;
+    pause = new Promise<void>((r) => (resume = r));
+    const retry = gateway.approveAndExecute(a.id, "person-maria");
+    await new Promise((r) => setTimeout(r, 0));
+    pause = null;
+    await gateway.requestAction({ ...proposal(), payload: { phone: "253-555-0199" } }, new Date(), order("turn-b", Date.now()));
+    resume();
+    expect(await retry).toMatchObject({ status: "blocked", superseded: true });
+    expect(office.posts).toHaveLength(1);
+  });
+
+  it("recovery reconciles the replaced original first: absent ends it, never re-executed", async () => {
+    const { office, store, gateway, a } = await correctedAfter("timeout");
+    expect(store.getAttempt(a.idempotencyKey)?.status).toBe("unknown");
+    const swept = await gateway.recoverAttempt(a.idempotencyKey, new Date(), later());
+    expect(swept).toMatchObject({ status: "blocked", superseded: true });
+    expect(store.getAttempt(a.idempotencyKey)?.status).toBe("failed");
+    expect(office.posts).toHaveLength(1);
+  });
+
+  it("recovery of a replaced original that did go through still answers its receipt", async () => {
+    const office = new Office();
+    office.next = "timeout";
+    const { store, gateway, a } = await (async () => {
+      const store = new MemoryApprovalStore();
+      const gateway = new ActionGateway(store, office);
+      const order = (turnId: string, ms: number) => ({ proposal: { receivedAt: new Date(ms).toISOString(), turnId } });
+      const a = (await gateway.requestAction(proposal(), new Date(), order("turn-a", Date.now() - 60_000))).approval!;
+      await gateway.approveAndExecute(a.id, "person-maria");
+      await gateway.requestAction({ ...proposal(), payload: { phone: "253-555-0199" } }, new Date(), order("turn-b", Date.now()));
+      return { store, gateway, a };
+    })();
+    office.filed.set(a.idempotencyKey, "WA-1");
+    expect(await gateway.recoverAttempt(a.idempotencyKey, new Date(), later())).toMatchObject({ status: "reconciled", receipt: { externalId: "WA-1" } });
+    expect(store.getAttempt(a.idempotencyKey)?.status).toBe("done");
   });
 });

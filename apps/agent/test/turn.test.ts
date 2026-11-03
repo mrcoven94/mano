@@ -119,8 +119,11 @@ class FlakyPortal implements Executor {
   checkDown = true;
   // The office refuses every post after the first.
   refuseRetries = false;
+  // The office refuses the first post instead of timing out.
+  refuseFirst = false;
   async execute(req: ActionRequest) {
     this.posts.push(req);
+    if (this.posts.length === 1 && this.refuseFirst) throw new DefiniteFailureError("The office refused it.");
     if (this.posts.length === 1) throw new TimeoutError();
     if (this.refuseRetries) throw new DefiniteFailureError("The office refused it.");
     this.filed.set(req.idempotencyKey, `sim-${this.posts.length}`);
@@ -325,6 +328,59 @@ describe("approval by text", () => {
     expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
     await send(turn("turn_stum_00000Y", "YES"));
     expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  // Review round 6: the hold-back lives only in process memory. After a
+  // restart (a fresh module, so nothing is held back), a YES aimed at the
+  // question she saw still shows and files nothing it never showed.
+  it("after a restart forgets what was held back, a YES aimed at a replaced question still shows and files nothing", async () => {
+    await send(turn("turn_rst_00000A", "Please file my renewal"));
+    const turnB = "turn_rst_00000B";
+    const ctx = toolCtx({ handleHash: HANDLE, turnId: turnB, grant: grants.get(HANDLE), turnAtMs: Date.now() });
+    await engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).putTurn(turnB, new Date().toISOString());
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      /\/pending-approval$/.test(new URL(String(input)).pathname) && init?.method === "DELETE"
+        ? new Response("unavailable", { status: 503 })
+        : engine.fetch(input, init),
+    );
+    await Promise.resolve(fillForm.execute(draft({ householdSize: "4" }), ctx)).catch(() => undefined);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      /\/reject$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init),
+    );
+    await fillForm.execute(draft({ householdSize: "4", phone: "253-555-01422" }), ctx);
+    vi.stubGlobal("fetch", engine.fetch);
+    expect(sizes()).toEqual(["3:rejected", "4:pending"]);
+
+    vi.resetModules();
+    const restarted = (await import("../agent/lib/turn.js")) as typeof import("../agent/lib/turn.js");
+    const res = await restarted.handleTurn(turn("turn_rst_0000Y1", "YES"), deps());
+    const body = (await res.json()) as Body;
+    expect(body.status).not.toBe("waiting_approval");
+    expect(body.text).toBe("The question you answered changed since you saw it, so nothing was sent. Tell me what you want to send.");
+    expect(engine.executor.calls).toHaveLength(0);
+    expect(sizes()).toEqual(["3:rejected", "4:pending"]);
+  });
+
+  it("a replayed YES on a filing the office refused, after the correction was prepared, files nothing", async () => {
+    // The office refuses the first post outright.
+    const portal = new FlakyPortal();
+    portal.refuseFirst = true;
+    engine.filer = portal;
+    await send(turn("turn_rpl_0000001", "Please file my renewal"));
+    const yes = turn("turn_rpl_000000Y", "YES");
+    await send(yes.clone());
+    expect(portal.posts).toHaveLength(1);
+
+    const fixed = await send(turn("turn_rpl_0000002", "Fix my renewal, my phone is 253-555-0199"));
+    expect(fixed.body.status).toBe("waiting_approval");
+    // Channels delivers the original YES again.
+    const replay = await send(yes);
+    expect(replay.body.text).not.toMatch(/^Done/);
+    expect(portal.posts).toHaveLength(1);
+
+    expect((await send(turn("turn_rpl_00000Y2", "YES"))).body.text).toMatch(/^Done/);
+    expect(portal.posts.map((p) => p.payload.phone)).toEqual(["253-555-0100", "253-555-0199"]);
   });
 
   it("once recovery settles the approved filing as failed, the correction is prepared without another YES", async () => {
@@ -787,12 +843,11 @@ describe("a slow draft against a newer one", () => {
     expect(engine.executor.calls).toHaveLength(0);
   });
 
-  it("a YES aimed at a replaced question approves nothing and shows the latest one", async () => {
+  it("a YES aimed at a replaced question approves nothing and shows no draft that was never shown", async () => {
     await replacedQuestion("turn_r7E0000001", "turn_r7F0000001");
     const yes = await send(turn("turn_r7G0000001", "YES"), deps(), { present: false });
-    expect(yes.body.text).toMatch(/^I just updated that/);
-    expect(yes.body.text).toContain("People in household: 4");
-    expect(yes.body.status).toBe("waiting_approval");
+    expect(yes.body.text).toBe("The question you answered changed since you saw it, so nothing was sent. Tell me what you want to send.");
+    expect(yes.body.status).not.toBe("waiting_approval");
     expect(engine.executor.calls).toHaveLength(0);
   });
 
@@ -898,72 +953,7 @@ describe("the question links to the replay of the fill behind it", () => {
   });
 });
 
-describe("a question shown again links to the replay of its own version", () => {
-  const LINK = /\n\nSee each step Mano took on the form: (http:\/\/engine\.test\/fill\/[0-9a-f]{32})$/;
-
-  it("carries the latest draft's link after the question, never the old one, and Channels' report of it still counts", async () => {
-    const { shown, newer } = await replacedQuestion("turn_rsh_A00001", "turn_rsh_B00001", { screens: true });
-    const oldUrl = LINK.exec(shown.text)![1]!;
-    const yes = await send(turn("turn_rsh_Y00001", "YES"));
-    expect(yes.body.status).toBe("waiting_approval");
-    const question = yes.body.approval!;
-    expect(question).toBe(renderQuestion(newer));
-    expect(question).toContain("People in household: 4");
-    expect(question).toContain("It ends with a declaration only you can make: ");
-    expect(question).not.toMatch(/https?:/);
-    const url = LINK.exec(yes.body.text)?.[1];
-    expect(url).toBeDefined();
-    expect(url).not.toBe(oldUrl);
-    expect(yes.body.text).toBe(`I just updated that, so nothing was approved and nothing was sent. Here's the latest.\n\n${question}\n\nSee each step Mano took on the form: ${url}`);
-    expect(await engine.replayPageAt(url!)).toContain("<dt>People in household</dt><dd>4</dd>");
-    expect(engine.executor.calls).toHaveLength(0);
-
-    // send reported the question by its hash, as Channels does: the report
-    // matched, so the next YES files the version shown again.
-    expect(pointerOf()?.approvalId).toBe(newer.id);
-    expect((await send(turn("turn_rsh_Y00002", "YES"))).body.text).toMatch(/^Done/);
-    expect(engine.executor.calls).toHaveLength(1);
-    expect(sizes()).toEqual(["3:rejected", "4:approved"]);
-  });
-
-  it("a version the screens were not bound to gets the question alone, and Channels' report of it still counts", async () => {
-    const { newer } = await replacedQuestion("turn_rsh_C00001", "turn_rsh_D00001", { screens: true });
-    const { sql } = engine.person(personIdFor(HANDLE));
-    expect(sql.exec("UPDATE fill_replays SET request_hash = 'another-version' WHERE approval_id = ?", newer.id).rowsWritten).toBe(1);
-    const yes = await send(turn("turn_rsh_Y00003", "YES"));
-    expect(yes.body.status).toBe("waiting_approval");
-    expect(yes.body.text.endsWith(`\n\n${yes.body.approval!}`)).toBe(true);
-    expect(yes.body.text).not.toContain("See each step");
-    expect(pointerOf()?.approvalId).toBe(newer.id);
-    expect((await send(turn("turn_rsh_Y00004", "YES"))).body.text).toMatch(/^Done/);
-  });
-
-  it("a draft replaced while the turn binds its decision is never shown with its question or link", async () => {
-    const { newer } = await replacedQuestion("turn_rsh_G00001", "turn_rsh_H00001", { screens: true });
-    // Holds the turn's binding write until a newer draft has replaced B.
-    let release: () => void = () => undefined;
-    let reached: () => void = () => undefined;
-    const held = new Promise<void>((r) => (reached = r));
-    const gated: typeof fetch = async (input, init) => {
-      if (new URL(String(input)).pathname.endsWith("/turns") && String(init?.body).includes('"turnId":"d-')) {
-        reached();
-        await new Promise<void>((r) => (release = r));
-      }
-      return engine.fetch(input, init);
-    };
-    const answering = send(turn("turn_rsh_Y00007", "YES"), deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: gated }) }), { present: false });
-    await held;
-    const newest = await unshownDraft("turn_rsh_I00001", "5");
-    release();
-    const yes = await answering;
-    expect(yes.body.status).toBe("waiting_approval");
-    expect(yes.body.approvalId).toBe(newest.id);
-    expect(yes.body.approval).toBe(renderQuestion(newest));
-    expect(yes.body.text).not.toContain(renderQuestion(newer));
-    expect(yes.body.text).not.toContain("See each step");
-    expect(engine.executor.calls).toHaveLength(0);
-  });
-
+describe("the replay link of a replaced question", () => {
   it("Engine answers no link once the approval was replaced, decided, or expired", async () => {
     const link = (id: string) => engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).replayLink(id);
     const { newer } = await replacedQuestion("turn_rsh_E00001", "turn_rsh_F00001", { screens: true });
@@ -977,8 +967,7 @@ describe("a question shown again links to the replay of its own version", () => 
     expect(await link(newer.id)).toBeNull();
     engine.now = realNow;
 
-    await send(turn("turn_rsh_Y00005", "YES"));
-    expect((await send(turn("turn_rsh_Y00006", "YES"))).body.text).toMatch(/^Done/);
+    expect((await engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).approve(newer.id)).status).toBe("completed");
     expect(await link(newer.id)).toBeNull();
   });
 });

@@ -464,6 +464,16 @@ describe("fill_form", () => {
     expect(engine.approvals().map((a) => a.status)).toEqual(["rejected"]);
   });
 
+  it("a correction when the computer is not set up still closes the version she was shown", async () => {
+    engine.profile = profile();
+    const shown = await run("turn_nourl0001", { form: "food-renewal" });
+    expect(shown.status).toBe("waiting_for_yes");
+    vi.stubEnv("MANO_PORTAL_URL", "");
+    const fix = await run("turn_nourl0002", { form: "food-renewal", answers: { phone: "253-555-0199" } });
+    expect(fix.status).toBe("unavailable");
+    expect(engine.approvals().find((a) => a.id === shown.approvalId)?.status).toBe("rejected");
+  });
+
   it("files on YES through the gateway with exactly the approved values and document", async () => {
     engine.profile = profile();
     const out = await run("turn_fill0009", { form: "food-renewal" });

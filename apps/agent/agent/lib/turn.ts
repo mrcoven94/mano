@@ -250,16 +250,12 @@ const UNSHOWN = reply("I haven't shown you that one yet, so nothing was approved
 
 const UPDATED = "I just updated that, so nothing was approved and nothing was sent.";
 
-// The answer to a YES or NO that was aimed at a replaced question: the
-// latest one, shown now as a question of its own, when it still waits,
-// with the line linking to its replay as when it was first shown.
-function updated(engine: PersonEngine, approvals: EngineApproval[], latest: { approvalId: string } | null, link: string | null): TurnResponse {
-  const waiting = latest ? waitingProposals(approvals, engine.generation).find((a) => a.id === latest.approvalId) : undefined;
-  const question = waiting ? presentable(waiting) : null;
-  if (!waiting || !question) return reply(`${UPDATED} Ask me to show the latest.`);
-  const text = [`${UPDATED} Here's the latest.`, question, link ? replayLine(link) : ""].filter(Boolean).join("\n\n");
-  return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: waiting.id } };
-}
+// The answer to a YES or NO aimed at a question that has since been
+// replaced. The newer draft is never shown here: only a question that went
+// out with the reply of the turn that prepared it, and that Channels then
+// reported, can be answered, so a draft that was corrected away (and held
+// back only in some process's memory) can never surface on its own.
+const CHANGED = reply("The question you answered changed since you saw it, so nothing was sent. Tell me what you want to send.");
 
 // A YES or NO turn is bound, in Engine's turn ledger, to what its first
 // attempt decided: one ledger row per approval it acted on, or one row
@@ -319,20 +315,12 @@ async function decideTurn(
   // Engine's latest proposal can be answered, and only once its question
   // was shown strictly before Channels received this message. A pointer to
   // anything older means the person last saw a question that has since
-  // been replaced: nothing is approved, and they get the latest one.
+  // been replaced: nothing is approved, and nothing new is shown.
   const arrived = Date.parse(turn.firstReceivedAt);
   const { pointer, latest } = await engine.getPending();
   if (pointer && pointer.approvalId !== latest?.approvalId) {
     await bind(engine, body.turnId, turn.firstReceivedAt, ["unshown"]);
-    // Read again after the binding write: a newer draft may have replaced
-    // the latest one while it ran. The link counts only for the draft that
-    // is still the latest.
-    const [now, current, link] = await Promise.all([
-      engine.getPending(),
-      engine.listApprovals(),
-      latest ? replayLinkOf(engine, latest.approvalId) : null,
-    ]);
-    return updated(engine, current, now.latest, now.latest && now.latest.approvalId === latest?.approvalId ? link : null);
+    return CHANGED;
   }
   const answerable = pointer && Date.parse(pointer.setAt) < arrived ? pointer : null;
   if (pointer && !answerable) {
