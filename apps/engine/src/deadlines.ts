@@ -23,11 +23,12 @@
 // count like "in 7 days" is never sent on the wrong day.
 //
 // A nudge never carries a letter's own words. It names the action only
-// from the explicit kind (renewal, recertification, interview, hearing,
-// appeal, payment, documents) and the program only when it is a known
-// one: "Your CalFresh renewal is due in 12 days". With no kind it names
-// no action: "Your CalFresh deadline is in 12 days", or "The deadline
-// from the letter you sent on October 27" by the day the letter arrived.
+// from the explicit kind (renewal, recertification, redetermination,
+// interview, hearing, appeal, payment, documents) and the program only
+// when it is a known one: "Your CalFresh renewal is due in 12 days".
+// With no kind it names no action: "Your CalFresh deadline is in 12
+// days", or "The deadline from the letter you sent on October 27" by
+// the day the letter arrived.
 // The title is kept only for the agent, quoted as data. A nudge for
 // paperwork asks ("Want me to start it?"); acting still needs the
 // person's yes on an approval. One for a date the person shows up for
@@ -78,7 +79,7 @@ const KNOWN_PROGRAMS = [
   "CalFresh", "SNAP", "Medi-Cal", "Medicaid", "Medicare", "WIC", "TANF", "CalWORKs", "SSI", "SSDI", "LIHEAP",
   "Section 8", "CHIP", "Covered California", "General Assistance",
 ];
-export const DEADLINE_KINDS = ["renewal", "recertification", "interview", "hearing", "appeal", "payment", "documents"] as const;
+export const DEADLINE_KINDS = ["renewal", "recertification", "redetermination", "interview", "hearing", "appeal", "payment", "documents"] as const;
 export type DeadlineKind = (typeof DEADLINE_KINDS)[number];
 
 // The days before the due date a nudge is planned for, by what the

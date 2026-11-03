@@ -332,7 +332,7 @@ describe("a date the person shows up for", () => {
   });
 
   it("paperwork keeps 2 days out and no day before", async () => {
-    for (const kind of ["renewal", "recertification", "appeal", "payment", "documents", undefined]) {
+    for (const kind of ["renewal", "recertification", "redetermination", "appeal", "payment", "documents", undefined]) {
       const sql = openDb();
       const out = await track(sql, letter({ kind }));
       if (!("deadline" in out)) throw new Error("no deadline");
