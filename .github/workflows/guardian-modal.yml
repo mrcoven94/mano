@@ -13,9 +13,17 @@ name: guardian-modal
 # keeps running and keeping its inputs until target stop-old stops it, which
 # David runs from main only after Engine has moved to the new URL.
 #
-# Run by hand with target staging, from any branch, to deploy that branch to
-# its own app, mano-guardian-staging, scaled to zero, and try it live before
-# merging. Run it with target stop-staging afterwards to stop that app.
+# Run by hand with target staging to deploy main's code to its own app,
+# mano-guardian-staging, scaled to zero, and check a merged change there
+# before Engine's URL moves to it. Run it with target stop-staging afterwards
+# to stop that app.
+#
+# Every job runs only on main, because each one holds production Modal
+# credentials: branch code run with them could deploy over production. The
+# guardian-check workflow fails if a job here can run on any other ref. A
+# branch can still edit this file in its own run, so the guardian-production
+# environment must also allow only main (Settings, Environments, Deployment
+# branches), as computer-production does.
 #
 # Needs two secrets in the guardian-production environment, set by a maintainer:
 #   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
@@ -31,7 +39,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "production deploys main to mano-guardian-server; staging deploys this branch to mano-guardian-staging; stop-staging stops it; stop-old stops the old mano-guardian app (main only, after the URL swap)"
+        description: "Run from main only. production deploys mano-guardian-server; staging deploys main to mano-guardian-staging; stop-staging stops it; stop-old stops the old mano-guardian app after the URL swap"
         type: choice
         options: ["production", "staging", "stop-staging", "stop-old"]
         default: "production"
@@ -77,7 +85,9 @@ jobs:
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
   staging:
-    if: github.event_name == 'workflow_dispatch' && inputs.target == 'staging'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'staging')
     runs-on: ubuntu-latest
     environment: guardian-production
     env:
@@ -101,7 +111,9 @@ jobs:
         run: python -c "import modal; print(modal.Server.from_name('mano-guardian-staging', 'check').get_url())"
 
   stop-staging:
-    if: github.event_name == 'workflow_dispatch' && inputs.target == 'stop-staging'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'stop-staging')
     runs-on: ubuntu-latest
     environment: guardian-production
     steps:
@@ -113,7 +125,9 @@ jobs:
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
   stop-old:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.target == 'stop-old'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'stop-old')
     runs-on: ubuntu-latest
     environment: guardian-production
     steps:

@@ -4,16 +4,20 @@ name: guardian-check
 # SDK, serve its one authenticated route as a Modal Server (whose requests
 # Modal does not store) with no Function taking a check as input, refuse
 # blank tokens, strictly parse verdicts, and match its pinned model and image.
+# Also fails if any guardian-modal job, each of which holds production Modal
+# credentials, can run on a ref other than main.
 on:
   pull_request:
     paths:
       - "packages/guardian/**"
       - ".github/workflows/guardian-check.yml"
+      - ".github/workflows/guardian-modal.yml"
   push:
     branches: [main]
     paths:
       - "packages/guardian/**"
       - ".github/workflows/guardian-check.yml"
+      - ".github/workflows/guardian-modal.yml"
 
 permissions:
   contents: read
@@ -29,6 +33,58 @@ jobs:
       - run: pip install "modal==1.6.2" "fastapi==0.162.0" "httpx==0.28.1" "uvicorn==0.54.0"
       - name: Test the app
         run: python -m unittest discover -s packages/guardian/modal -v
+      - name: Every guardian-modal job runs only on main
+        run: |
+          pip install "pyyaml==6.0.2"
+          python - <<'EOF'
+          import yaml
+
+          MAIN = "github.ref == 'refs/heads/main'"
+
+
+          def main_only(condition):
+              # Either the main check alone, or the main check AND one
+              # parenthesized group, so no `||` can reach around it.
+              if not isinstance(condition, str):
+                  return False
+              text = " ".join(condition.split())
+              if text == MAIN:
+                  return True
+              prefix = MAIN + " && ("
+              if not (text.startswith(prefix) and text.endswith(")")):
+                  return False
+              depth = 0
+              for index in range(len(prefix) - 1, len(text)):
+                  if text[index] == "(":
+                      depth += 1
+                  elif text[index] == ")":
+                      depth -= 1
+                      if depth == 0 and index != len(text) - 1:
+                          return False
+              return depth == 0
+
+
+          for bad in (
+              None,
+              "github.event_name == 'workflow_dispatch'",
+              MAIN + " || inputs.target == 'staging'",
+              MAIN + " && inputs.target == 'staging' || github.event_name == 'push'",
+              MAIN + " && (inputs.target == 'a') || (inputs.target == 'b')",
+              "github.ref != 'refs/heads/main' && (true)",
+          ):
+              assert not main_only(bad), bad
+          assert main_only(MAIN)
+          assert main_only(MAIN + " && (github.event_name == 'push' || inputs.target == 'production')")
+
+          with open(".github/workflows/guardian-modal.yml") as handle:
+              workflow = yaml.safe_load(handle)
+          triggers = workflow.get("on", workflow.get(True))
+          assert set(triggers) <= {"push", "workflow_dispatch"}, sorted(triggers)
+          assert triggers.get("push", {}).get("branches") in (None, ["main"]), triggers["push"]
+          for name, job in workflow["jobs"].items():
+              assert main_only(job.get("if")), f"job {name} can run off main: {job.get('if')!r}"
+          print(f"guardian-modal: all {len(workflow['jobs'])} jobs run only on main")
+          EOF
       - name: Import the app and check its shape
         run: |
           python - <<'EOF'
