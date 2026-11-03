@@ -59,7 +59,8 @@ describe("gateSentence reads a program name before the duty", () => {
   );
 
   // A program alone names what the person gets, not what they owe:
-  // "your SNAP is due" can mean the benefits arrive that day.
+  // "your SNAP is due" can mean the benefits arrive that day. Before a
+  // hearing or a case it names what the office does.
   it.each([
     "Your SNAP is due November 14, 2026.",
     "SNAP is due November 14, 2026.",
@@ -69,6 +70,11 @@ describe("gateSentence reads a program name before the duty", () => {
     "The CalFresh office must review your renewal by November 14, 2026.",
     "Your SNAP caseworker must send the form by November 14, 2026.",
     "Medicaid must receive your renewal by November 14, 2026.",
+    "Your Medicaid hearing must be completed by November 14, 2026.",
+    "Your Medicaid hearing is due November 14, 2026.",
+    "Your SNAP case must be reviewed by November 14, 2026.",
+    "Your SNAP case must be completed by November 14, 2026.",
+    "Your Medicaid application must be decided by November 14, 2026.",
   ])("asks: %s", (sentence) => {
     expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "ask" });
   });
