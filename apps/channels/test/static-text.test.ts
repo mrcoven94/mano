@@ -8,7 +8,7 @@ import {
   INTRO_BUBBLE,
   OPT_OUT_BUBBLE,
 } from "../src/text.js";
-import { PHOTO_UNREAD_TEXT, PHOTO_UNSAVED_TEXT } from "@mano/channels";
+import { PHOTO_FORMAT_TEXT, PHOTO_UNREAD_TEXT, PHOTO_UNSAVED_TEXT } from "@mano/channels";
 
 describe("static reply texts", () => {
   it("carry no links, so the send path needs no second sanitize", () => {
@@ -21,6 +21,7 @@ describe("static reply texts", () => {
       APPROVAL_RECORDED_BUBBLE,
       PHOTO_UNREAD_TEXT,
       PHOTO_UNSAVED_TEXT,
+      PHOTO_FORMAT_TEXT,
     ];
     for (const text of texts) {
       expect(extractLinks(text)).toEqual([]);

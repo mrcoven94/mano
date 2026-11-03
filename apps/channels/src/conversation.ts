@@ -32,7 +32,7 @@ export function parseMediaHosts(raw: string | undefined): string[] {
   const hosts = (raw ?? "").split(",").map((h) => h.trim().toLowerCase()).filter((h) => h.length > 0);
   return hosts.length > 0 ? hosts : [...DEFAULT_MEDIA_HOSTS];
 }
-import { R2FileStore, conversationFilePrefix, type DocumentStore } from "./files.js";
+import { R2FileStore, conversationFilePrefix, imagesConverter, type DocumentStore } from "./files.js";
 import { SqlConversationStore } from "./store-sql.js";
 import {
   advanceDelete,
@@ -275,6 +275,7 @@ export class ConversationDO implements DurableObject {
       channel,
       responder,
       documents: engineDocuments(this.env, handleHash),
+      photoConverter: this.env.IMAGES ? imagesConverter(this.env.IMAGES) : null,
       spend: new StateSpendLedger(globalStateStub(this.env)),
       logger: this.logger,
       nowMs: () => Date.now(),
