@@ -48,7 +48,14 @@ test("with no key every step finishes, model steps say they used recordings, and
   assert.match(replay, /Mano filled in &quot;Case number&quot;/);
   assert.match(replay, /<dt>Goes to<\/dt><dd>the State Benefits Renewal Office test portal<\/dd>/);
   assert.match(replay, /Judge run on synthetic data\./);
+  assert.match(out, /simulated  Maria's text: the text line is not used; the photo kept in the repo is handed to Mano directly\n {6}real {7}Keeps the photo in Engine's in-memory document store/);
   for (const simulated of [
+    "Maria&#39;s text: the text line is not used; the photo kept in the repo is handed to Mano directly.",
+    "Texting Maria: the text line (iMessage and SMS) is not used; Mano&#39;s words are printed here.",
+    "Mano&#39;s agent turn: not run;",
+    "The deployed sandbox portal: the same portal code runs in this process on an in-memory store",
+    "Engine as deployed (a Durable Object per person, its SQLite and encrypted R2 storage)",
+    "Maria&#39;s private link: the replay page is saved as a file",
     "Segments the photo into pages: recorded response; no META_MODEL_API_KEY is set",
     "Reads the page into cited fields: recorded response; no META_MODEL_API_KEY is set",
     "Computer use: a stand-in.",

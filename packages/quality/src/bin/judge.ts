@@ -27,7 +27,7 @@ print(
     ? "META_MODEL_API_KEY is set: SAM 3.1 and Muse Spark 1.3 run live on Meta's API. A failed call says why and its step uses the recorded response."
     : "No META_MODEL_API_KEY is set: every Meta model step uses its recorded response and is labeled simulated.",
 );
-print("real: ran in this run, as a live Meta model call or Mano's own code. simulated: a recorded model response, or a local stand-in for a service that needs Mano's accounts.");
+print("real: ran in this run, as a live Meta model call or Mano's own code. simulated: a recorded model response, a local stand-in for a service that needs Mano's accounts, or a part of Mano this run leaves out; each says which.");
 print("");
 
 const run = await runSpine({ env: process.env, outDir, print, ...(photoPath ? { photoPath } : {}) });

@@ -20,10 +20,14 @@
 // runs on Mano's own GPU, so its verdict is recorded), Mano's computer
 // (Muse Spark 1.3 driving a hosted desktop on Mano's Modal account; the
 // stand-in posts the same values to the portal's form and draws each
-// screen), and Maria's YES (she is synthetic). With a key, SAM 3.1 and
-// Muse Spark 1.3 run live on Meta's API; a call that fails says why and
-// the step falls back to its recording in spine-replay.json, written for
-// this letter. Without a key every model step uses its recording.
+// screen), and Maria's YES (she is synthetic). Left out, and labeled
+// simulated where they would be: the text line (the photo is handed to
+// Mano and Mano's words are printed), Mano's agent turn, and Engine and the
+// portal as deployed (their code runs here on in-memory stores). With a
+// key, SAM 3.1 and Muse Spark 1.3 run live on Meta's API; a call that
+// fails says why and the step falls back to its recording in
+// spine-replay.json, written for this letter. Without a key every model
+// step uses its recording.
 //
 // A recording answers only the input it was made for, so it never covers
 // for a different one: SAM 3.1's for the letter photo (spine-letter.jpg,
@@ -323,6 +327,16 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
   const files: SpineRun["files"] = { letter: `${opts.outDir}/letter.jpg`, replay: null, filing: null };
   const form = FORMS["food-renewal"]!;
   const plain = (what: string): Part => ({ ran: "real", what: `${what} (Mano's code, no model)`, model: null });
+  const simulated = (what: string, model: string | null = null): Part => ({ ran: "simulated", what, model });
+  // Parts this run leaves out of Mano as deployed. The same words in two
+  // steps make one line in the replay page's banner.
+  const textLine = simulated("Texting Maria: the text line (iMessage and SMS) is not used; Mano's words are printed here");
+  const engineHost = simulated(
+    "Engine as deployed (a Durable Object per person, its SQLite and encrypted R2 storage): the gateway runs in this process on in-memory approval and document stores",
+  );
+  const portalHost = simulated(
+    "The deployed sandbox portal: the same portal code runs in this process on an in-memory store, since the deployed one takes requests only with Mano's token",
+  );
   const guardianPart = (): Part => ({
     ran: "simulated",
     what: guardianMiss
@@ -344,7 +358,14 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
       run: async () => {
         writeFileSync(files.letter, photo);
         documents.set(LETTER_ID, new Uint8Array(photo));
-        return { parts: [plain("Sends the synthetic letter photo kept in the repo")], lines: [`Photo: ${files.letter}`], failure: null };
+        return {
+          parts: [
+            simulated("Maria's text: the text line is not used; the photo kept in the repo is handed to Mano directly"),
+            plain("Keeps the photo in Engine's in-memory document store, where the gateway reads it from"),
+          ],
+          lines: [`Photo: ${files.letter}`],
+          failure: null,
+        };
       },
     },
     {
@@ -387,7 +408,7 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
         answer = answerReading(reading!);
         const held = answer.deadlines[0];
         return {
-          parts: [plain("Builds the reply from the cited fields and the deadline gate")],
+          parts: [plain("Builds the reply from the cited fields and the deadline gate"), textLine],
           lines: [`Mano: ${answer.text}`, ...(held ? [`Deadline held: ${held.dueDate}`] : [])],
           failure: answer.deadlines.length === 1 ? null : "the reading did not publish exactly one deadline",
         };
@@ -416,7 +437,10 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
           origin: "person",
         };
         return {
-          parts: [plain("Fills the agent's food-renewal form from the profile, freezes the office's declaration, attaches the letter and cites its deadline")],
+          parts: [
+            simulated("Mano's agent turn: not run; this run calls the form table its renewal tool uses, with the profile Maria's agent would hold", "muse-spark-1.3"),
+            plain("Fills the agent's food-renewal form from the profile, freezes the office's declaration, attaches the letter and cites its deadline"),
+          ],
           lines: [
             ...form.fields.map((f) => `${f.label}: ${filled.values[f.name]}`),
             `Declaration, for Maria alone to make: ${form.declaration}`,
@@ -453,7 +477,8 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
               what: "Computer use: a stand-in. Muse Spark 1.3 drives a desktop on Mano's Modal account; the stand-in posts the same values to the portal's form and draws each screen",
               model: "muse-spark-1.3",
             },
-            plain("The sandbox portal saves the draft with its own checks, in this process"),
+            plain("The sandbox portal's own request handler saves the draft with its checks"),
+            portalHost,
           ],
           lines: [`Portal answered the form with ${post.status}; draft read back with ${read.status}`, `Screens kept for the replay page: ${replaySteps.length}`],
           failure: !draft ? "the portal saved no draft" : differs.length > 0 ? `the portal saved different values for ${differs.join(", ")}` : null,
@@ -467,7 +492,7 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
         approval = result.approval ?? null;
         if (result.status !== "needs_approval" || !approval) {
           return {
-            parts: [plain("Engine's action gateway: policy, local rules, document hash, one approval per key, in this process"), guardianPart()],
+            parts: [plain("Engine's action gateway: policy, local rules, document hash, one approval per key"), engineHost, guardianPart()],
             lines: [`Gateway: ${result.status}`],
             failure: guardianMiss ?? `the gateway answered ${result.status}: ${result.reason ?? "no reason"}`,
           };
@@ -485,9 +510,11 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
         const early = await executor.check(frozen.idempotencyKey, PERSON_ID);
         return {
           parts: [
-            plain("Engine's action gateway: policy, local rules, document hash, one approval per key, in this process"),
+            plain("Engine's action gateway: policy, local rules, document hash, one approval per key"),
+            engineHost,
             guardianPart(),
             plain("Engine's sandbox executor, asked to file before Maria answers"),
+            textLine,
           ],
           lines: [
             `Gateway: ${result.status}, approval ${approval.id}`,
@@ -505,8 +532,9 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
         confirmation = result.receipt?.externalId ?? null;
         return {
           parts: [
-            { ran: "simulated", what: "Maria's YES: scripted, since Maria is synthetic", model: null },
-            plain("Engine checks the exact version again, then its sandbox executor files it"),
+            simulated("Maria's YES: scripted, since Maria is synthetic"),
+            plain("Engine checks the exact version again, then its sandbox executor files it with the portal's own handler"),
+            portalHost,
             guardianPart(),
           ],
           lines: [
@@ -533,8 +561,13 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
         files.replay = `${opts.outDir}/replay.html`;
         // Engine's page as Maria would see it, with this run's simulated
         // parts labeled on it, since judges open the saved file.
-        const simulated = [
-          ...new Set(reports.flatMap((r) => r.parts).filter((part) => part.ran === "simulated").map((part) => `${part.what}${part.model ? ` [${modelName(part.model)}]` : ""}.`)),
+        const link = simulated("Maria's private link: the replay page is saved as a file, with this run's simulated parts labeled on it, instead of served at her link");
+        const banner = [
+          ...new Set(
+            [...reports.flatMap((r) => r.parts), link]
+              .filter((part) => part.ran === "simulated")
+              .map((part) => `${part.what}${part.model ? ` [${modelName(part.model)}]` : ""}.`),
+          ),
         ];
         const page = renderReplayPage({
           state: "approved",
@@ -544,10 +577,13 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
           fields: form.fields.map((f) => ({ label: f.label, value: saved[f.name] ?? "" })),
           attached: true,
         });
-        const labeled = labelReplayPage(page, simulated);
+        const labeled = labelReplayPage(page, banner);
         writeFileSync(files.replay, labeled);
         return {
-          parts: [plain("The portal's caseworker view and Engine's replay page, rendered by their own code, with this run's simulated parts labeled on the saved copy")],
+          parts: [
+            plain("The portal's caseworker view and Engine's replay page, rendered by their own code"),
+            link,
+          ],
           lines: [
             `Portal lookup: ${found.found ? `received, ${found.externalId}` : "not found"}`,
             `On file at the portal: case ${filed?.household.caseNumber ?? "none"}, declaration made by ${filed?.declaration?.madeBy ?? "nobody"}`,
