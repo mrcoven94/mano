@@ -579,10 +579,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const { id, text, dueAtMs, generation } = parseReminderInput(input);
     const out = createReminder(this.db(), { id, text, dueAtMs, generation }, Date.now());
     if ("stale" in out) return STALE_STATE;
-    if ("conflict" in out) return { status: "conflict" as const, reminder: out.conflict };
-    if (out.created) this.store.audit({ event: "reminder.created", reminderHash: await auditDigest(id) });
-    // An existing reminder re-arms too: a retry repairs a lost wake-up.
+    if ("reminder" in out && out.created) this.store.audit({ event: "reminder.created", reminderHash: await auditDigest(id) });
+    // An existing reminder re-arms too, one stored with other content
+    // included: a retry repairs a lost wake-up.
     await this.armReminderWakeup();
+    if ("conflict" in out) return { status: "conflict" as const, reminder: out.conflict };
     return { status: out.created ? ("created" as const) : ("existing" as const), reminder: out.reminder };
   }
 
