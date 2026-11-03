@@ -35,6 +35,19 @@ section{padding:128px 0}
 .btn-lg{min-height:54px;padding:0 28px;font-size:1.02rem}
 .btn-sm{min-height:40px;padding:0 16px;font-size:.92rem;border-radius:999px}
 .btn-row{display:flex;gap:10px;flex-wrap:wrap}
+/* Text Mano: an sms: link on phones, a QR panel on computers (components/TextMano.tsx) */
+.tm{position:relative;display:inline-flex;flex-direction:column}
+.tm-pop{position:absolute;z-index:60;top:calc(100% + 12px);left:50%;translate:-50% 0;display:flex;align-items:center;gap:18px;width:max-content;padding:14px 22px 14px 14px;border-radius:22px;background:var(--card);box-shadow:var(--shadow-lg),0 0 0 1px var(--border);text-align:left;white-space:normal;animation:tmIn .22s cubic-bezier(.16,1,.3,1) both}
+.tm-pop[hidden]{display:none}
+.tm-pop[data-align="end"]{left:auto;right:0;translate:none}
+.tm-qr{flex:none;padding:8px;border-radius:14px;background:#fff;box-shadow:0 0 0 1px var(--border)}
+.tm-qr svg{display:block;width:136px;height:136px}
+.tm-copy{display:flex;flex-direction:column;max-width:22ch;color:var(--muted);font-size:.95rem;line-height:1.45}
+.tm-copy b{color:var(--text);font-weight:600;margin-bottom:2px}
+.tm-num{margin-top:6px;font-family:var(--font-display),sans-serif;font-weight:700;font-size:1.45rem;letter-spacing:-.02em;color:var(--text);text-decoration:none;font-variant-numeric:tabular-nums}
+.tm-num:hover{text-decoration:underline;text-underline-offset:.18em}
+.tm-copy small{margin-top:6px;font-size:.8rem;color:var(--faint)}
+@keyframes tmIn{from{opacity:0;transform:translateY(-6px) scale(.98)}}
 .note{font-size:.8rem;color:var(--faint)}
 
 /* header */
@@ -60,6 +73,8 @@ section{padding:128px 0}
 .menu-panel a{display:flex;justify-content:space-between;align-items:center;padding:13px 14px;border-radius:12px;text-decoration:none;font-size:1rem}
 .menu-panel a[aria-current="page"]{background:var(--fill2)}
 .menu-panel a small{color:var(--faint);font-size:.78rem}
+.menu-panel .tm{display:flex;margin-top:6px}
+.menu-panel .tm .btn{justify-content:center;padding:0 22px;font-size:.98rem;color:var(--ink)}
 
 /* mascot */
 .mascot-wave{animation:handWave 5s ease-in-out infinite;transform-origin:50% 100%;transform-box:fill-box}
@@ -104,7 +119,7 @@ details.faq p{padding:0 0 22px;max-width:640px;font-size:.98rem}
   .mainnav{display:none}
   .header-cta .quiet{display:none}
   .menu{display:block}
-  .header-cta .btn{display:none}
+  .header-cta > .tm{display:none}
 }
 @media (max-width:720px){
   section{padding:88px 0}

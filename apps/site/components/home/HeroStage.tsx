@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { ApplyScene, FormScene, RenewScene, HoldScene } from "./Scenes";
 import SpineDemo, { SPINE_SECONDS } from "./SpineDemo";
 import Mascot from "@/components/Mascot";
+import TextMano from "@/components/TextMano";
+import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
 
 /* The hero: one headline whose highlighted outcome follows the demo below it. Each tab names the outcome and the work behind it.
    Scenes advance on their own while the stage is on screen; choosing a tab stops that. The first scene is the spine
@@ -61,10 +63,10 @@ export default function HeroStage() {
         </h1>
         <p className="h-lede">Rent, food, medicine, child care, light and water bills. Text Mano what is going on and it finds the help, fills out the forms and keeps the help coming.</p>
         <div className="btn-row h-ctas">
-          <a className="btn btn-primary btn-lg" href="#get-mano">Text Mano</a>
+          <TextMano className="btn btn-primary btn-lg" />
           <a className="btn btn-ghost btn-lg" href="#nd-h">What Mano helps with</a>
         </div>
-        <p className="h-note">Free to start, and keeping your help is always free.</p>
+        <p className="h-note">Text <a className="h-num" href={SMS_HREF}>{SMS_NUMBER}</a>. Free to start, and keeping your help is always free.</p>
       </div>
 
       <div className="wrap h-stage-wrap" ref={stage}>

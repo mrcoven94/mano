@@ -2,7 +2,8 @@ import Link from "next/link";
 import PlusPrice from "./PlusPrice";
 import { NeedIcon } from "./NeedIcons";
 import Mascot, { Wave } from "@/components/Mascot";
-import { SMS_HREF } from "@/lib/site";
+import TextMano from "@/components/TextMano";
+import { SMS_HREF, smsHref } from "@/lib/site";
 
 /* Two plans, the full side by side folded under them, then the support that comes with Plus. Keeping help is free for everyone; Plus adds unlimited applications, a Mano that
    works every day without being asked, and a support team. Faxes and mail cost real money, so they are at cost on both. */
@@ -101,7 +102,7 @@ export default function Pricing() {
             <li>Everything in Free</li>
             {PLUS.map(([b, t]) => <li key={b}><span><b>{b}</b> {t}</span></li>)}
           </ul>
-          <a className="btn btn-primary price-cta" href="#get-mano">Start Plus</a>
+          <TextMano className="btn btn-primary price-cta" href={smsHref("I want Mano Plus")} label="Start Plus" />
           <p className="price-fine">Cancel any time with one text.</p>
         </article>
       </div>
