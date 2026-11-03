@@ -76,6 +76,23 @@ export interface StoredForm {
   unconverted?: "no_converter" | "failed" | "too_large";
 }
 
+// The type without parameters: a label can carry the file's name.
+function bareType(label: string): string {
+  return label.split(";")[0]!.trim().toLowerCase();
+}
+
+const LOGGED_TYPES = new Set([
+  "image/jpeg", "image/png", "image/heic", "image/heif", "image/webp", "image/gif", "application/pdf",
+  "video/mp4", "video/quicktime", "video/3gpp", "video/webm", "audio/mp4", "audio/x-m4a", "audio/mpeg", "application/octet-stream",
+]);
+
+// A media type fit for a log line: one of a fixed set, else "other".
+export function loggableType(label: string | null | undefined): string {
+  if (!label) return "none";
+  const bare = bareType(label);
+  return LOGGED_TYPES.has(bare) ? bare : "other";
+}
+
 // What to store for one downloaded file, and as what media type.
 export async function storedForm(
   bytes: Uint8Array,
@@ -83,7 +100,7 @@ export async function storedForm(
   converter: PhotoConverter | null,
   maxBytes = MAX_ATTACHMENT_BYTES,
 ): Promise<StoredForm> {
-  const mimeType = sniffMediaType(bytes) ?? (label || "application/octet-stream");
+  const mimeType = sniffMediaType(bytes) ?? (bareType(label) || "application/octet-stream");
   if (!TO_JPEG.has(mimeType)) return { bytes, mimeType, converted: false };
   if (!converter) return { bytes, mimeType, converted: false, unconverted: "no_converter" };
   let jpeg: Uint8Array;
@@ -95,6 +112,16 @@ export async function storedForm(
   if (sniffMediaType(jpeg) !== "image/jpeg") return { bytes, mimeType, converted: false, unconverted: "failed" };
   if (jpeg.byteLength > maxBytes) return { bytes, mimeType, converted: false, unconverted: "too_large" };
   return { bytes: jpeg, mimeType: "image/jpeg", converted: true };
+}
+
+// The bytes for the form a replayed turn chose before: the file as sent,
+// or its JPEG copy made again (Images returns the same bytes for the same
+// file). Null when the copy cannot be made again: storing the original
+// instead would leave one file as two documents.
+export async function storedAgain(bytes: Uint8Array, choice: { converted: boolean }, converter: PhotoConverter | null): Promise<Uint8Array | null> {
+  if (!choice.converted) return bytes;
+  const again = await storedForm(bytes, "", converter);
+  return again.converted ? again.bytes : null;
 }
 
 export interface AttachmentFetchOptions {

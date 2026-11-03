@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { PHOTO_FORMAT_TEXT, StandInResponder } from "@mano/channels";
 import { sniffMediaType, storedForm, type PhotoConverter } from "../src/files.js";
@@ -6,7 +7,10 @@ import { SandboxExecutor, PORTAL_DECLARATION } from "../../engine/src/gateway/ex
 import type { ActionRequest } from "../../engine/src/gateway/types.js";
 import { DEFAULT_CONFIG, handleRequest } from "../../sandbox-portal/src/app";
 import { MemoryFileStore, MemoryStore } from "../../sandbox-portal/test/memory-store";
-import { inboundEvent, makeHarness, runTurnAfterBatch } from "./helpers.js";
+import { CRISIS_LINE } from "@mano/persona";
+import { MemoryStore as ConversationMemoryStore, type AttachmentChoice } from "../src/store.js";
+import { SqlConversationStore } from "../src/store-sql.js";
+import { inboundEvent, makeHarness, runTurnAfterBatch, sqliteStorage, type Harness } from "./helpers.js";
 
 // letter.heic: a synthetic letter drawn in code and saved as HEIC by
 // macOS sips, the encoder an iPhone uses. letter-images.jpg: what the
@@ -170,10 +174,158 @@ describe("a HEIC letter texted from an iPhone", () => {
     expect(stored.bytes).toEqual(HEIC);
     expect(reply).toContain("please send a screenshot of the photo instead");
   });
+});
 
-  it("stores a JPEG copy under its own ID, so a replay that converted differently cannot collide", async () => {
-    const converted = await text(recordedImages);
-    const kept = await text(null);
-    expect(converted.id).not.toBe(kept.id);
+// The turn dies after the photo is stored and before its answer is saved,
+// as when a Worker is evicted, and the next alarm replays it.
+class DiesOnceBeforeAnswer extends ConversationMemoryStore {
+  dies = true;
+  override updateTurnAnswer(...args: Parameters<ConversationMemoryStore["updateTurnAnswer"]>): void {
+    if (this.dies) {
+      this.dies = false;
+      throw new Error("evicted");
+    }
+    super.updateTurnAnswer(...args);
+  }
+}
+
+describe("a replayed turn stores each photo once, in the form it chose first", () => {
+  const CLEAN_DOH = JSON.stringify({ Status: 0, Answer: [{ name: "cdn.example.test.", type: 1, data: "203.0.113.7" }] });
+  const heicFetch = (async (url: unknown) =>
+    String(url).includes("dns-query")
+      ? new Response(CLEAN_DOH, { status: 200, headers: { "content-type": "application/dns-json" } })
+      : new Response(HEIC, { status: 200, headers: { "content-type": "image/heic" } })) as typeof fetch;
+
+  // A converter that answers each call from the list, counting calls.
+  function scripted(...answers: ("jpeg" | "error")[]): PhotoConverter & { calls: number } {
+    const c = {
+      calls: 0,
+      toJpeg: async () => {
+        const answer = answers[c.calls++] ?? "error";
+        if (answer === "error") throw new Error("IMAGES_TRANSFORM_ERROR 9516");
+        return IMAGES_JPEG;
+      },
+    };
+    return c;
+  }
+
+  async function replayed(converter: PhotoConverter, store = new DiesOnceBeforeAnswer()) {
+    const responder = Object.assign(new StandInResponder(["This is your renewal letter."]), { readsPhotos: true as const });
+    const h: Harness = makeHarness({ fetchFn: heicFetch, responder, config: { mediaHosts: ["cdn.example.test"] }, photoConverter: converter, store });
+    await h.runner.handleEvent(
+      inboundEvent({ id: "evt_heic", occurredAtMs: h.now, text: "", attachments: [{ url: "https://cdn.example.test/IMG_0002.HEIC", mediaType: "image/heic" }] }),
+      "webhook",
+    );
+    h.advance(h.batchMs + 100);
+    const first = await h.runner.runDueTurn();
+    h.advance(60_000);
+    const second = await h.runner.runDueTurn();
+    return { h, responder, first, second, reply: h.channel.sends.map((s) => s.text).join("\n") };
+  }
+
+  it("kept as sent, then the copy would work on replay: still one HEIC, the same ask, no second conversion", async () => {
+    const converter = scripted("error", "jpeg");
+    const { h, responder, first, second, reply } = await replayed(converter);
+    expect([first, second]).toEqual(["retry", "ran"]);
+    expect(converter.calls).toBe(1);
+    expect([...h.documents.docs.values()].map((d) => d.bytes)).toEqual([HEIC]);
+    expect(responder.prompts.at(-1)?.documents?.map((d) => d.mimeType)).toEqual(["image/heic"]);
+    expect(reply).toContain(PHOTO_FORMAT_TEXT);
+  });
+
+  it("copied, then Images fails on replay: still one JPEG, no original beside it, no ask", async () => {
+    const converter = scripted("jpeg", "error");
+    const { h, responder, first, second, reply } = await replayed(converter);
+    expect([first, second]).toEqual(["retry", "ran"]);
+    expect(converter.calls).toBe(1);
+    expect([...h.documents.docs.values()].map((d) => d.bytes)).toEqual([IMAGES_JPEG]);
+    expect(responder.prompts.at(-1)?.documents?.map((d) => d.mimeType)).toEqual(["image/jpeg"]);
+    expect(reply).not.toContain(PHOTO_FORMAT_TEXT);
+  });
+
+  it("chose the copy but died during the upload: the replay makes the copy again, or stores nothing, never the original", async () => {
+    const seeded = () => {
+      const store = new ConversationMemoryStore();
+      store.saveAttachmentChoice({
+        turn: 1, index: 0, generation: 0, documentId: "g0t1i0-chosen", mimeType: "image/jpeg", converted: true, unfileable: false, state: "chosen",
+      });
+      return store;
+    };
+    const works = await replayed(scripted("jpeg"), seeded() as DiesOnceBeforeAnswer);
+    expect([...works.h.documents.docs.entries()].map(([id, d]) => [id, d.bytes])).toEqual([["g0t1i0-chosen", IMAGES_JPEG]]);
+    const fails = await replayed(scripted("error"), seeded() as DiesOnceBeforeAnswer);
+    expect(fails.h.documents.docs.size).toBe(0);
+    expect(fails.h.lines.join("\n")).toContain('"reason":"copy_again"');
   });
 });
+
+describe("the screenshot ask", () => {
+  const CLEAN_DOH = JSON.stringify({ Status: 0, Answer: [{ name: "cdn.example.test.", type: 1, data: "203.0.113.7" }] });
+  const heicFetch = (async (url: unknown) =>
+    String(url).includes("dns-query")
+      ? new Response(CLEAN_DOH, { status: 200, headers: { "content-type": "application/dns-json" } })
+      : new Response(HEIC, { status: 200, headers: { "content-type": 'image/heic; name="Maria Testcase renewal letter.heic"' } })) as typeof fetch;
+  const failing: PhotoConverter = { toJpeg: async () => Promise.reject(new Error("IMAGES_TRANSFORM_ERROR 9516")) };
+  const LONG = Array.from({ length: 4 }, (_, i) => `Line ${i + 1} about the synthetic letter. ${"It explains the renewal in plain words. ".repeat(14)}`.trim()).join("\n");
+
+  async function texted(text: string, reply: string) {
+    const responder = Object.assign(new StandInResponder([reply]), { readsPhotos: true as const });
+    const h = makeHarness({ fetchFn: heicFetch, responder, config: { mediaHosts: ["cdn.example.test"] }, photoConverter: failing });
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_heic_long",
+        occurredAtMs: h.now,
+        text,
+        attachments: [{ url: "https://cdn.example.test/IMG_0003.HEIC", mediaType: 'image/heic; name="Maria Testcase renewal letter.heic"' }],
+      }),
+      "webhook",
+    );
+    await runTurnAfterBatch(h);
+    return h;
+  }
+
+  it("survives an answer long enough to fill every bubble", async () => {
+    expect(LONG.split("\n").every((line) => line.length > 550)).toBe(true);
+    const h = await texted("What does this say?", LONG);
+    const sent = h.channel.sends.map((s) => s.text);
+    expect(sent.at(-1)).toBe(PHOTO_FORMAT_TEXT);
+    expect(sent.join(" ")).toContain("Line 4 about the synthetic letter.");
+  });
+
+  it("never rides on a crisis reply", async () => {
+    const h = await texted("I am in immediate danger. My landlord is outside.", LONG);
+    const sent = h.channel.sends.map((s) => s.text);
+    expect(sent).toContain(CRISIS_LINE);
+    expect(sent.join("\n")).not.toContain(PHOTO_FORMAT_TEXT);
+  });
+
+  it("logs only bare, known media types, never the file name the label carries", async () => {
+    const h = await texted("What does this say?", "This is your renewal letter.");
+    const logs = h.lines.join("\n");
+    expect(logs).toContain('"declared":"image/heic"');
+    expect(logs).not.toContain("Maria");
+    expect(logs).not.toContain("renewal letter.heic");
+    expect(JSON.stringify((h.responder as StandInResponder).prompts)).not.toContain("Maria Testcase");
+  });
+});
+
+describe("attachment choices in the conversation's SQLite", () => {
+  const choice: AttachmentChoice = {
+    turn: 3, index: 1, generation: 0, documentId: "g0t3i1-abc", mimeType: "image/heic", converted: false, unfileable: true, state: "chosen",
+  };
+
+  it("survives a restart, and is dropped when its turn finishes or the conversation is deleted", () => {
+    const db = new DatabaseSync(":memory:");
+    new SqlConversationStore(sqliteStorage(db)).saveAttachmentChoice(choice);
+    const reopened = new SqlConversationStore(sqliteStorage(db));
+    expect(reopened.attachmentChoice(3, 1)).toEqual(choice);
+    reopened.saveAttachmentChoice({ ...choice, state: "stored" });
+    expect(reopened.attachmentChoice(3, 1)?.state).toBe("stored");
+    reopened.finishTurn(3, 0);
+    expect(reopened.attachmentChoice(3, 1)).toBeNull();
+    reopened.saveAttachmentChoice(choice);
+    reopened.wipe(0);
+    expect(reopened.attachmentChoice(3, 1)).toBeNull();
+  });
+});
+

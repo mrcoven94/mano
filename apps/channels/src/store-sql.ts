@@ -6,6 +6,7 @@ import type { ModelCosts } from "./runner.js";
 import {
   defaultMeta,
   type ApprovalRow,
+  type AttachmentChoice,
   type ChatBackground,
   type ConversationMeta,
   type ConversationStore,
@@ -114,6 +115,17 @@ CREATE TABLE IF NOT EXISTS chat_backgrounds (
   attempts INTEGER NOT NULL,
   locked_until_ms INTEGER NOT NULL DEFAULT 0,
   updated_at_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS attachment_choices (
+  turn INTEGER NOT NULL,
+  idx INTEGER NOT NULL,
+  generation INTEGER NOT NULL,
+  document_id TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  converted INTEGER NOT NULL,
+  unfileable INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  PRIMARY KEY (turn, idx)
 );
 CREATE TABLE IF NOT EXISTS presentations (
   turn INTEGER PRIMARY KEY,
@@ -650,6 +662,45 @@ export class SqlConversationStore implements ConversationStore {
 
   finishTurn(turn: number, atMs: number): void {
     this.sql.exec("UPDATE turns SET state = 'finished', updated_at_ms = ? WHERE turn = ?", atMs, turn);
+    this.sql.exec("DELETE FROM attachment_choices WHERE turn = ?", turn);
+  }
+
+  attachmentChoice(turn: number, index: number): AttachmentChoice | null {
+    const row = firstRow<{
+      turn: number;
+      idx: number;
+      generation: number;
+      document_id: string;
+      mime_type: string;
+      converted: number;
+      unfileable: number;
+      state: AttachmentChoice["state"];
+    }>(this.sql.exec("SELECT * FROM attachment_choices WHERE turn = ? AND idx = ?", turn, index));
+    if (!row) return null;
+    return {
+      turn: row.turn,
+      index: row.idx,
+      generation: row.generation,
+      documentId: row.document_id,
+      mimeType: row.mime_type,
+      converted: row.converted === 1,
+      unfileable: row.unfileable === 1,
+      state: row.state,
+    };
+  }
+
+  saveAttachmentChoice(row: AttachmentChoice): void {
+    this.sql.exec(
+      "INSERT OR REPLACE INTO attachment_choices (turn, idx, generation, document_id, mime_type, converted, unfileable, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      row.turn,
+      row.index,
+      row.generation,
+      row.documentId,
+      row.mimeType,
+      row.converted ? 1 : 0,
+      row.unfileable ? 1 : 0,
+      row.state,
+    );
   }
 
   savePresentation(row: import("./store.js").PresentationRow): void {
@@ -743,7 +794,7 @@ export class SqlConversationStore implements ConversationStore {
   wipe(deletedAtMs: number): void {
     const meta = this.meta();
     this.sql.exec(
-      "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns; DELETE FROM inbound_messages; DELETE FROM agent_sends; DELETE FROM presentations;",
+      "DELETE FROM events; DELETE FROM pending; DELETE FROM outbounds; DELETE FROM held_receipts; DELETE FROM approvals; DELETE FROM turns; DELETE FROM inbound_messages; DELETE FROM agent_sends; DELETE FROM presentations; DELETE FROM attachment_choices;",
     );
     this.saveMeta({ ...defaultMeta(), generation: meta.generation + 1, turn: meta.turn, deletedAtMs, decorationEpoch: meta.decorationEpoch + 1 });
   }

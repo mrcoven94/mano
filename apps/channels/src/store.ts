@@ -130,6 +130,23 @@ export interface PresentationRow {
   state: "pending" | "reported" | "not_shown";
 }
 
+// How one texted file of a turn is stored, chosen once before it is
+// stored. A replay of the turn stores the same form under the same ID,
+// so one file never becomes two documents. "stored" once Engine took it.
+export interface AttachmentChoice {
+  turn: number;
+  // The file's position in the turn's attachments.
+  index: number;
+  generation: number;
+  documentId: string;
+  mimeType: string;
+  // Stored as its JPEG copy.
+  converted: boolean;
+  // Kept as sent though no office takes it: the reply asks for a screenshot.
+  unfileable: boolean;
+  state: "chosen" | "stored";
+}
+
 export interface ConversationMeta {
   turn: number;
   introduced: boolean;
@@ -253,7 +270,10 @@ export interface ConversationStore {
   bumpTurnAttempt(turn: number, atMs: number): void;
   updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number, costByModel?: ModelCosts): void;
   markTurnSettled(turn: number, atMs: number): void;
+  // A finished turn's attachment choices are dropped with it.
   finishTurn(turn: number, atMs: number): void;
+  attachmentChoice(turn: number, index: number): AttachmentChoice | null;
+  saveAttachmentChoice(row: AttachmentChoice): void;
   // Finished turns, newest first.
   recentTurns(limit: number): PersistedTurn[];
   savePresentation(row: PresentationRow): void;
@@ -408,6 +428,18 @@ export class MemoryStore implements ConversationStore {
   finishTurn(turn: number, atMs: number): void {
     const row = this.turnRows.get(turn);
     if (row) this.turnRows.set(turn, { ...row, state: "finished", updatedAtMs: atMs });
+    for (const key of this.attachmentChoices.keys()) if (key.startsWith(`${turn}:`)) this.attachmentChoices.delete(key);
+  }
+
+  private attachmentChoices = new Map<string, AttachmentChoice>();
+
+  attachmentChoice(turn: number, index: number): AttachmentChoice | null {
+    const row = this.attachmentChoices.get(`${turn}:${index}`);
+    return row ? { ...row } : null;
+  }
+
+  saveAttachmentChoice(row: AttachmentChoice): void {
+    this.attachmentChoices.set(`${row.turn}:${row.index}`, { ...row });
   }
 
   recentTurns(limit: number): PersistedTurn[] {
@@ -472,6 +504,7 @@ export class MemoryStore implements ConversationStore {
     this.turnRows.clear();
     this.agentSendRows.clear();
     this.presentationRows.clear();
+    this.attachmentChoices.clear();
   }
 }
 

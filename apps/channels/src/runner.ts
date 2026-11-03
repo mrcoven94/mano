@@ -3,7 +3,7 @@
 // channel, the responder, files and the spend ledger. Nothing here names
 // a provider or a runtime.
 import { Decorations } from "./decorations.js";
-import type { ChatBackground } from "./store.js";
+import type { AttachmentChoice, ChatBackground } from "./store.js";
 import {
   ChannelFailed,
   ChannelRefused,
@@ -50,7 +50,7 @@ import {
   INTRO_BUBBLE,
   OPT_OUT_BUBBLE,
 } from "./text.js";
-import { attachmentDocumentId, fetchAttachment, storedForm, type DocumentStore, type PhotoConverter } from "./files.js";
+import { attachmentDocumentId, fetchAttachment, loggableType, storedAgain, storedForm, type DocumentStore, type PhotoConverter } from "./files.js";
 
 // Cost per model ID for one turn, recorded in the ledger beside the total.
 export type ModelCosts = Record<string, number>;
@@ -1144,8 +1144,13 @@ export class ConversationRunner {
     try {
       const { photos: saved, unfileable } = await this.saveAttachments(turn, attachments, generation);
       // A photo kept as sent (no JPEG copy) can be read but not filed, so
-      // the reply says so now instead of at filing time.
-      const withFormat = (text: string): string => (unfileable && !crisis ? `${text} ${PHOTO_FORMAT_TEXT}` : text);
+      // the reply says so now instead of at filing time, in a bubble of
+      // its own after the capped reply, so the cap never cuts it. Never on
+      // a crisis turn.
+      const withFormat = (answered: import("./store.js").AnswerBubble[]): import("./store.js").AnswerBubble[] =>
+        unfileable && !crisis
+          ? [...answered, { part: Math.max(0, ...answered.map((b) => b.part)) + 1, tag: "", text: PHOTO_FORMAT_TEXT }]
+          : answered;
       const bubbles: import("./store.js").AnswerBubble[] = [];
       // A crisis turn opens with the crisis line, never the friendly intro.
       if (!meta.introduced && !crisis) bubbles.push({ part: 0, tag: "", text: INTRO_BUBBLE });
@@ -1169,9 +1174,9 @@ export class ConversationRunner {
           // by the model from what the target message allows, never on a
           // message that has the eyes, and sent outside the turn.
           const tapback = config.reactionsEnabled && target && !eyes.placed ? allowedTapback(answer.tapback, target.text, crisis) : null;
-          const answered = await this.finalize(turn, withFormat(answer.text), crisis, turnText);
+          const answered = await this.finalize(turn, answer.text, crisis, turnText);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
-          bubbles.push(...answered);
+          bubbles.push(...withFormat(answered));
           if (tapback && target && chatId && answered.length > 0) {
             bubbles.push({ part: 0, tag: "react", text: tapback, messageId: target.messageId, epoch });
           }
@@ -1181,7 +1186,7 @@ export class ConversationRunner {
           await this.deps.spend.settle(reserveKey, answer.costUsd, answer.byModel);
           store.markTurnSettled(turn, nowMs());
         } else {
-          bubbles.push(...(await this.finalize(turn, crisis ? "" : withFormat(FAILURE_BUBBLE), crisis, turnText)));
+          bubbles.push(...withFormat(await this.finalize(turn, crisis ? "" : FAILURE_BUBBLE, crisis, turnText)));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs(), answer.byModel);
           await this.deps.spend.settle(reserveKey, answer.costUsd, answer.byModel);
           store.markTurnSettled(turn, nowMs());
@@ -1189,7 +1194,7 @@ export class ConversationRunner {
       } else {
         // A textless turn costs nothing: settle zero to release the hold
         // instead of holding the whole budget.
-        if (photoLine) bubbles.push(...(await this.finalize(turn, withFormat(photoLine), crisis, turnText)));
+        if (photoLine) bubbles.push(...withFormat(await this.finalize(turn, photoLine, crisis, turnText)));
         await this.deps.spend.settle(reserveKey, 0);
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
@@ -1498,7 +1503,9 @@ export class ConversationRunner {
   // the per-handle and global daily byte budgets. Each file reserves the
   // worst case up front and settles its actual size after. Each one is
   // stored in the person's Engine documents under an ID derived from the
-  // generation, turn and position, so a replayed turn stores the same one.
+  // generation, turn and position, in a form chosen once and saved before
+  // the upload (AttachmentChoice), so a replayed turn stores the same one
+  // and one file never becomes two documents.
   private async saveAttachments(
     turn: number,
     attachments: import("@mano/channels").EventAttachment[],
@@ -1512,7 +1519,14 @@ export class ConversationRunner {
     }
     const saved: StoredPhoto[] = [];
     let unfileable = false;
-    for (const attachment of attachments.slice(0, MAX_ATTACHMENTS_PER_TURN)) {
+    for (const [index, attachment] of attachments.slice(0, MAX_ATTACHMENTS_PER_TURN).entries()) {
+      // A replay keeps what an earlier attempt chose for this file.
+      const chosen = store.attachmentChoice(turn, index);
+      if (chosen?.state === "stored" && chosen.generation === generation) {
+        saved.push({ id: chosen.documentId, mimeType: chosen.mimeType });
+        if (chosen.unfileable) unfileable = true;
+        continue;
+      }
       const meta = store.meta();
       const byteDay = dayKeyFor(nowMs());
       const usedToday = meta.byteDayKey === byteDay ? meta.byteDayCount : 0;
@@ -1537,33 +1551,56 @@ export class ConversationRunner {
           logger.warn("attachment_refused", { handle: this.logHandle(), turn, reason: fetched.reason });
           continue;
         }
-        const stored = await storedForm(fetched.bytes, fetched.contentType || attachment.mediaType || "", photoConverter ?? null);
-        const { bytes, mimeType } = stored;
-        logger.info("attachment_media", {
-          handle: this.logHandle(),
-          turn,
-          declared: attachment.mediaType ?? null,
-          served: fetched.contentType || null,
-          stored: mimeType,
-          unconverted: stored.unconverted ?? null,
-        });
-        // A JPEG copy gets its own ID: a replay whose conversion went the
-        // other way must not collide with what the first attempt stored.
-        const id = await attachmentDocumentId(generation, turn, saved.length, stored.converted ? `${attachment.url}#jpeg` : attachment.url);
+        let choice: AttachmentChoice;
+        let bytes: Uint8Array;
+        if (chosen && chosen.generation === generation) {
+          const again = await storedAgain(fetched.bytes, chosen, photoConverter ?? null);
+          if (!again) {
+            await spend.byteRelease(byteKey);
+            logger.warn("attachment_refused", { handle: this.logHandle(), turn, reason: "copy_again" });
+            continue;
+          }
+          choice = chosen;
+          bytes = again;
+        } else {
+          const stored = await storedForm(fetched.bytes, fetched.contentType || attachment.mediaType || "", photoConverter ?? null);
+          logger.info("attachment_media", {
+            handle: this.logHandle(),
+            turn,
+            declared: loggableType(attachment.mediaType),
+            served: loggableType(fetched.contentType),
+            stored: loggableType(stored.mimeType),
+            unconverted: stored.unconverted ?? null,
+          });
+          bytes = stored.bytes;
+          choice = {
+            turn,
+            index,
+            generation,
+            documentId: await attachmentDocumentId(generation, turn, saved.length, attachment.url),
+            mimeType: stored.mimeType,
+            converted: stored.converted,
+            unfileable: stored.unconverted !== undefined,
+            state: "chosen",
+          };
+        }
         this.checkGeneration(generation);
+        store.saveAttachmentChoice(choice);
+        const id = choice.documentId;
         if (!(await documents.put({ id, name: id, bytes, generation }))) {
           await spend.byteRelease(byteKey);
           logger.warn("attachment_refused", { handle: this.logHandle(), turn, reason: "store" });
           continue;
         }
+        store.saveAttachmentChoice({ ...choice, state: "stored" });
         await spend.byteSettle(byteKey, bytes.byteLength);
         const counted = store.meta();
         store.patchMeta({
           byteDayCount: (counted.byteDayKey === byteDay ? counted.byteDayCount : 0) + bytes.byteLength,
           byteDayKey: byteDay,
         });
-        saved.push({ id, mimeType });
-        if (stored.unconverted) unfileable = true;
+        saved.push({ id, mimeType: choice.mimeType });
+        if (choice.unfileable) unfileable = true;
       } catch (err) {
         if (err instanceof GenerationStopped) throw err;
         await spend.byteRelease(byteKey);
