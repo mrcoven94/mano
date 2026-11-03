@@ -1,6 +1,7 @@
 import { DEFAULT_CHECK_TIMEOUT_MS, GlimmerModelChecker, MisconfiguredChecker } from "@mano/guardian";
 import { LocalRulesChecker, type Checker, type CheckInput, type CheckResult } from "./checker.js";
 import type { GatewayOptions } from "./gateway.js";
+import { boundFetch } from "../fetch.js";
 
 // Guardian (Muse Glimmer on Mano's own GPU) as the gateway's checker.
 // Engine's local rules run first, and a rules block never spends a
@@ -53,20 +54,39 @@ function isLocalHost(url: string): boolean {
 
 const SEVERITY: Record<CheckResult["verdict"], number> = { pass: 0, fix: 1, block: 2 };
 
+type GuardianOptions = ConstructorParameters<typeof GlimmerModelChecker>[0];
+
+// Guardian's verdict always arrives in a success response. A block with no
+// success response behind it is Guardian being unavailable, not Guardian
+// refusing, so it is marked unavailable. Each check gets its own model
+// client, so concurrent checks never share what they observed.
 export class GuardianChecker implements Checker {
+  private readonly warmer: GlimmerModelChecker;
+
   constructor(
     private readonly rules: Checker,
-    private readonly guardian: GlimmerModelChecker,
-  ) {}
+    private readonly options: GuardianOptions,
+  ) {
+    this.warmer = new GlimmerModelChecker(options);
+  }
 
   async check(input: CheckInput): Promise<CheckResult> {
     const local = await this.rules.check(input);
     if (local.verdict === "block") return local;
-    const [model] = await Promise.all([this.guardian.check(input), this.guardian.warm()]);
-    return {
-      verdict: SEVERITY[model.verdict] > SEVERITY[local.verdict] ? model.verdict : local.verdict,
-      problems: [...local.problems, ...model.problems],
-    };
+    const send = this.options.fetchImpl ?? boundFetch;
+    let answered = false;
+    const guardian = new GlimmerModelChecker({
+      ...this.options,
+      fetchImpl: async (...args) => {
+        const response = await send(...args);
+        answered = response.ok;
+        return response;
+      },
+    });
+    const [model] = await Promise.all([guardian.check(input), this.warmer.warm()]);
+    const problems = [...local.problems, ...model.problems];
+    if (model.verdict === "block") return answered ? { verdict: "block", problems } : { verdict: "block", problems, unavailable: true };
+    return { verdict: SEVERITY[model.verdict] > SEVERITY[local.verdict] ? model.verdict : local.verdict, problems };
   }
 }
 
@@ -85,12 +105,12 @@ export function gatewayChecker(
       return { checker: new MisconfiguredChecker() };
     case "guardian": {
       const timeoutMs = opts.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
-      const guardian = new GlimmerModelChecker({
+      const guardian: GuardianOptions = {
         url: setting.url,
         token: setting.token,
         timeoutMs,
         ...(setting.proxyAuth ? { proxyAuth: setting.proxyAuth } : {}),
-      });
+      };
       return { checker: new GuardianChecker(new LocalRulesChecker(), guardian), checkerTimeoutMs: timeoutMs + 1000 };
     }
   }

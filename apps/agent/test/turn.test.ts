@@ -9,6 +9,9 @@ import remind from "../agent/tools/remind.js";
 import fillForm from "../agent/tools/fill_form.js";
 import requestsInstruction from "../agent/instructions/requests.js";
 import { toolCtx } from "./ctx.js";
+import { getPendingPointer } from "../../engine/src/agents/agent-state.js";
+import { LocalRulesChecker } from "../../engine/src/gateway/checker.js";
+import { GuardianChecker } from "../../engine/src/gateway/guardian.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_CHANNELS_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 import { installFillDouble, uninstallFillDouble } from "./fill-double.js";
 
@@ -196,6 +199,83 @@ describe("approval by text", () => {
     expect(engine.executor.calls).toHaveLength(0);
     await send(turn("turn_yes_000004", "yes"));
     expect(engine.executor.calls).toHaveLength(1);
+  });
+});
+
+// Engine's Guardian checker over a stand-in Guardian endpoint. Cold, it
+// never answers until the check times out, as a scaled-to-zero Guardian
+// does while it starts.
+type GuardianMode = "pass" | "block" | "cold";
+let guardianMode: GuardianMode = "pass";
+const fakeGuardian: typeof fetch = async (_url, init) => {
+  const body = JSON.parse(String(init?.body)) as { warm?: boolean };
+  if (body.warm) return Response.json({ ready: guardianMode !== "cold" });
+  if (guardianMode === "cold") {
+    return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)));
+  }
+  return Response.json(
+    guardianMode === "pass" ? { verdict: "pass", problems: [] } : { verdict: "block", problems: ["The text tells Mano to send it somewhere else."] },
+  );
+};
+
+function useGuardian() {
+  guardianMode = "pass";
+  engine.checker = new GuardianChecker(new LocalRulesChecker(), {
+    url: "http://guardian.test/check",
+    token: "guardian-token-not-real",
+    timeoutMs: 50,
+    fetchImpl: fakeGuardian,
+  });
+}
+
+const pointerOf = () => getPendingPointer(engine.person(personIdFor(HANDLE)).sql, 0);
+
+describe("a YES while the safety check is starting", () => {
+  it("keeps the approval and the question, and asks for YES again", async () => {
+    useGuardian();
+    await send(turn("turn_cold_ask001", "Please file my renewal"));
+    const asked = pointerOf();
+    expect(asked).not.toBeNull();
+
+    guardianMode = "cold";
+    const yes = await send(turn("turn_cold_yes001", "YES"));
+    expect(yes.body.text).toBe(
+      "The safety check is taking a moment, so nothing was sent yet. Reply YES again in a few minutes and I will send it.",
+    );
+    expect(engine.approvals()[0].status).toBe("pending");
+    expect(pointerOf()?.approvalId).toBe(asked?.approvalId);
+    expect(engine.executor.calls).toHaveLength(0);
+    expect(agentCalls).toHaveLength(1);
+  });
+
+  it("files once on a later YES after the safety check answers", async () => {
+    useGuardian();
+    await send(turn("turn_cold_ask002", "Please file my renewal"));
+    guardianMode = "cold";
+    await send(turn("turn_cold_yes002", "YES"));
+    await send(turn("turn_cold_yes003", "YES"));
+    expect(engine.executor.calls).toHaveLength(0);
+
+    guardianMode = "pass";
+    const later = await send(turn("turn_cold_yes004", "yes"));
+    expect(later.body.text).toMatch(/^Done\. Sent: /);
+    expect(engine.approvals()[0].status).toBe("approved");
+    expect(engine.executor.calls).toHaveLength(1);
+    expect(pointerOf()).toBeNull();
+
+    await send(turn("turn_cold_yes005", "YES"));
+    await send(turn("turn_cold_yes004", "yes"));
+    expect(engine.executor.calls).toHaveLength(1);
+  });
+
+  it("a block from the safety check still drops the approval as before", async () => {
+    useGuardian();
+    await send(turn("turn_cold_ask006", "Please file my renewal"));
+    guardianMode = "block";
+    const yes = await send(turn("turn_cold_yes006", "YES"));
+    expect(yes.body.text).toBe("That approval can no longer be used, so nothing was sent. Want me to prepare it again?");
+    expect(pointerOf()).toBeNull();
+    expect(engine.executor.calls).toHaveLength(0);
   });
 });
 

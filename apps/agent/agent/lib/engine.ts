@@ -195,6 +195,9 @@ export interface EngineResult {
   reason?: string;
   // A refused approve: a newer proposal replaced this one.
   superseded?: true;
+  // A refused approve: the safety check could not answer. The approval
+  // still waits and nothing ran, so the same yes can be tried again.
+  retryable?: true;
 }
 
 // The person's newest drafted approval. Engine moves it only forward, in

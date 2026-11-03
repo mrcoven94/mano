@@ -13,10 +13,14 @@ const HANDLE = "c3".repeat(32);
 const PERSON = personIdForHandle(HANDLE);
 
 let verdict: { verdict: string; problems: string[] } = { verdict: "pass", problems: [] };
+// False: Guardian answers every check with an error status, as it can
+// while it starts.
+let guardianUp = true;
 let checks: { auth: string | null; body: Record<string, unknown> }[] = [];
 
 beforeEach(() => {
   checks = [];
+  guardianUp = true;
   const real = globalThis.fetch;
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -24,6 +28,7 @@ beforeEach(() => {
     const body = (await request.json()) as Record<string, unknown>;
     if (body.warm === true) return Response.json({ warming: true, ready: true }, { status: 202 });
     checks.push({ auth: request.headers.get("authorization"), body });
+    if (!guardianUp) return Response.json({ error: "starting" }, { status: 503 });
     return Response.json(verdict);
   });
 });
@@ -31,6 +36,22 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+async function headers() {
+  return {
+    authorization: `Bearer ${AGENT_TOKEN}`,
+    "x-mano-handle-grant": await mintHandleGrant(HANDLE, GRANT_SECRET),
+    "content-type": "application/json",
+  };
+}
+
+async function approve(approvalId: string): Promise<{ status: string; reason?: string; retryable?: boolean }> {
+  const res = await SELF.fetch(`https://engine.test/api/persons/${PERSON}/approvals/${approvalId}/approve`, {
+    method: "POST",
+    headers: await headers(),
+  });
+  return res.json();
+}
 
 async function asAgent(method: string, path: string, body: unknown): Promise<Response> {
   return SELF.fetch(`https://engine.test/api/persons/${PERSON}${path}`, {
@@ -46,7 +67,7 @@ async function asAgent(method: string, path: string, body: unknown): Promise<Res
 
 async function propose(
   over: Record<string, unknown> = {},
-): Promise<{ status: string; reason?: string; approval?: { problems: string[] } }> {
+): Promise<{ status: string; reason?: string; approval?: { id: string; problems: string[] } }> {
   const res = await asAgent("POST", "/action", {
     type: "submit",
     recipient: "sandbox-agency-portal",
@@ -136,5 +157,21 @@ describe("Guardian on Engine's action route", () => {
     verdict = { verdict: "block", problems: ["The recipient looks wrong."] };
     const blocked = await propose();
     expect(blocked).toMatchObject({ status: "blocked", reason: "Blocked by review: The recipient looks wrong." });
+  });
+
+  it("answers a yes that finds Guardian unavailable as retryable, and a later yes goes through", async () => {
+    verdict = { verdict: "pass", problems: [] };
+    const drafted = await propose();
+    expect(drafted.status).toBe("needs_approval");
+
+    guardianUp = false;
+    const down = await approve(drafted.approval!.id);
+    expect(down).toMatchObject({ status: "blocked", retryable: true });
+    expect(down.reason).toMatch(/safety check returned an error/);
+
+    guardianUp = true;
+    const up = await approve(drafted.approval!.id);
+    expect(up.status).toBe("completed");
+    expect(up.retryable).toBeUndefined();
   });
 });

@@ -1,4 +1,5 @@
 /// <reference types="node" />
+import { MapDocumentStore } from "../src/gateway/index.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
@@ -11,9 +12,10 @@ import {
   ensureGatewayTables,
   gatewayChecker,
   type ActionRequest,
+  type Checker,
   type GatewayOptions,
 } from "../src/gateway/index.js";
-import { GlimmerModelChecker } from "@mano/guardian";
+import { DefiniteFailureError } from "../src/gateway/types.js";
 
 // Guardian on the gateway's live path, against a fake Guardian over real
 // HTTP: the same route, headers and answers as the Modal endpoint
@@ -269,7 +271,7 @@ describe("Guardian on the live path", () => {
         return { verdict: "block" as const, problems: ["Rules say no."] };
       },
     };
-    const checker = new GuardianChecker(blockingRules, new GlimmerModelChecker({ url, token: "guardian-token-not-real" }));
+    const checker = new GuardianChecker(blockingRules, { url, token: "guardian-token-not-real" });
     const viaChecker = setup(GUARDIAN_ENV(), { checker });
     expect((await viaChecker.gateway.requestAction(renewal())).reason).toBe("Blocked by review: Rules say no.");
 
@@ -328,5 +330,156 @@ describe("Guardian on the live path", () => {
       expect(result.reason).toMatch(/safety check is not set up/);
     }
     expect(checks).toHaveLength(0);
+  });
+});
+
+// Guardian scales to zero. A yes that finds it cold must not cost the
+// person their approval: the approval keeps waiting, Engine says the
+// refusal can be retried, and a later yes files it exactly once.
+describe("a yes that finds the safety check unavailable", () => {
+  async function drafted(extra: GatewayOptions = {}, timeoutMs?: number) {
+    const env = setup(GUARDIAN_ENV(), extra, timeoutMs);
+    const result = await env.gateway.requestAction(renewal());
+    expect(result.status).toBe("needs_approval");
+    return { ...env, approvalId: result.approval!.id };
+  }
+
+  it("keeps a yes that finds Guardian cold waiting, and a later yes files it once", async () => {
+    const { gateway, store, executor, approvalId } = await drafted({}, 300);
+    mode = "hang";
+    const cold = await gateway.approveAndExecute(approvalId, "maria");
+    expect(cold).toEqual({
+      status: "blocked",
+      retryable: true,
+      reason:
+        "Blocked by review: The safety check is taking longer than usual, so this action is on hold. Please try again in a few minutes.",
+    });
+    expect(store.getApproval(approvalId)?.status).toBe("pending");
+    expect(executor.calls).toHaveLength(0);
+
+    mode = "pass";
+    const warm = await gateway.approveAndExecute(approvalId, "maria");
+    expect(warm.status).toBe("completed");
+    expect(executor.calls).toHaveLength(1);
+
+    const again = await gateway.approveAndExecute(approvalId, "maria");
+    expect(again.status).not.toBe("completed");
+    expect(again.retryable).toBeUndefined();
+    expect(executor.calls).toHaveLength(1);
+  });
+
+  it("a late unavailable check never says retryable after another yes filed it", async () => {
+    let calls = 0;
+    const checker = {
+      async check() {
+        calls += 1;
+        if (calls === 2) {
+          await new Promise((r) => setTimeout(r, 50));
+          return { verdict: "block", problems: ["The safety check is taking longer than usual."], unavailable: true };
+        }
+        return { verdict: "pass", problems: [] };
+      },
+    } as unknown as GatewayOptions["checker"];
+    const { gateway, executor, approvalId } = await drafted({ checker });
+    const [late, first] = await Promise.all([
+      gateway.approveAndExecute(approvalId, "maria"),
+      gateway.approveAndExecute(approvalId, "maria"),
+    ]);
+    expect(first.status).toBe("completed");
+    expect(late.status).toBe("blocked");
+    expect(late.retryable).toBeUndefined();
+    expect(executor.calls).toHaveLength(1);
+  });
+
+  it("a changed document is stale at the yes even when Guardian cannot answer", async () => {
+    const documents = new MapDocumentStore(new Map<string, Uint8Array | string>([["letter", "%PDF-1.4 renewal v1"]]));
+    const env = setup(GUARDIAN_ENV(), { documents }, 300);
+    const drafted1 = await env.gateway.requestAction(renewal({ documentId: "letter" }));
+    expect(drafted1.status).toBe("needs_approval");
+    documents.set("letter", "%PDF-1.4 renewal v2, changed");
+    mode = "hang";
+    const yes = await env.gateway.approveAndExecute(drafted1.approval!.id, "maria");
+    expect(yes.status).toBe("stale");
+    expect(yes.retryable).toBeUndefined();
+    expect(env.executor.calls).toHaveLength(0);
+  });
+
+  it("marks a Guardian error or an unreachable Guardian at the yes as retryable", async () => {
+    const { gateway, store, executor, approvalId } = await drafted();
+    mode = "error";
+    const failed = await gateway.approveAndExecute(approvalId, "maria");
+    expect(failed).toMatchObject({ status: "blocked", retryable: true });
+    expect(failed.reason).toMatch(/safety check returned an error/);
+    expect(store.getApproval(approvalId)?.status).toBe("pending");
+
+    const offline = new ActionGateway(store, executor, {
+      ...gatewayChecker(checkerSetting({ ...GUARDIAN_ENV(), MANO_GUARDIAN_URL: "http://127.0.0.1:9/check" })),
+      linkCheck: async () => ({ allowed: true }),
+    });
+    const down = await offline.approveAndExecute(approvalId, "maria");
+    expect(down).toMatchObject({ status: "blocked", retryable: true });
+    expect(down.reason).toMatch(/could not be reached/);
+    expect(store.getApproval(approvalId)?.status).toBe("pending");
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  it("marks the gateway's own checker timeout at the yes as retryable", async () => {
+    let hang = false;
+    const checker: Checker = {
+      check: () => (hang ? new Promise(() => {}) : Promise.resolve({ verdict: "pass" as const, problems: [] })),
+    };
+    const { gateway, store, approvalId } = await drafted({ checker, checkerTimeoutMs: 50 });
+    hang = true;
+    const result = await gateway.approveAndExecute(approvalId, "maria");
+    expect(result).toMatchObject({ status: "blocked", retryable: true });
+    expect(store.getApproval(approvalId)?.status).toBe("pending");
+  });
+
+  it("never marks Guardian's own block at the yes as retryable", async () => {
+    const { gateway, approvalId } = await drafted();
+    mode = "block";
+    const result = await gateway.approveAndExecute(approvalId, "maria");
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toBe("Blocked by review: The text tells Mano to send it somewhere else.");
+    expect(result.retryable).toBeUndefined();
+  });
+
+  it("never marks a policy, link or executor refusal at the yes as retryable", async () => {
+    const policy = await drafted();
+    const blockingPolicy = new ActionGateway(policy.store, policy.executor, {
+      ...gatewayChecker(checkerSetting(GUARDIAN_ENV())),
+      linkCheck: async () => ({ allowed: true }),
+      policyOverrides: { submit: "block" },
+    });
+    const byPolicy = await blockingPolicy.approveAndExecute(policy.approvalId, "maria");
+    expect(byPolicy.status).toBe("blocked");
+    expect(byPolicy.retryable).toBeUndefined();
+
+    let linkAllowed = true;
+    const link = setup(GUARDIAN_ENV(), { linkCheck: async () => (linkAllowed ? { allowed: true } : { allowed: false, reason: "Blocked domain." as const }) });
+    const linked = await link.gateway.requestAction(renewal({ payload: { text: "Finish at https://renew-benefits.example/now" } }));
+    expect(linked.status).toBe("needs_approval");
+    linkAllowed = false;
+    const byLink = await link.gateway.approveAndExecute(linked.approval!.id, "maria");
+    expect(byLink.reason).toMatch(/link check failed/);
+    expect(byLink.retryable).toBeUndefined();
+
+    const refusing = {
+      simulated: true,
+      async execute(): Promise<{ externalId: string }> {
+        throw new DefiniteFailureError("The portal turned it down.");
+      },
+      async check() {
+        return { found: false as const };
+      },
+    };
+    const exec = await drafted({});
+    const byExecutor = await new ActionGateway(exec.store, refusing, {
+      ...gatewayChecker(checkerSetting(GUARDIAN_ENV())),
+      linkCheck: async () => ({ allowed: true }),
+    }).approveAndExecute(exec.approvalId, "maria");
+    expect(byExecutor.status).toBe("blocked");
+    expect(byExecutor.reason).toMatch(/failed before anything happened/);
+    expect(byExecutor.retryable).toBeUndefined();
   });
 });

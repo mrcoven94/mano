@@ -51,6 +51,7 @@ import {
   updateDeadline,
   type DeadlineCalls,
 } from "../../engine/src/deadlines.js";
+import { LocalRulesChecker, type Checker } from "../../engine/src/gateway/checker.js";
 import {
   REPLAY_LINK_PATH,
   bindFillReplay,
@@ -156,6 +157,9 @@ export interface DeadlineCall {
 
 export class EngineDouble {
   executor = new InMemoryExecutor();
+  // The gateway's checker, read at every check, so a test can swap it
+  // between the draft and the yes.
+  checker: Checker = new LocalRulesChecker();
   // What gateways file through in place of executor, such as the real
   // sandbox portal. Set it before the person's first request.
   filer: Executor | null = null;
@@ -221,7 +225,11 @@ export class EngineDouble {
       p = {
         sql,
         store,
-        gateway: new ActionGateway(store, this.filer ?? this.executor, { linkCheck: async () => ({ allowed: true }), documents: this.documents }),
+        gateway: new ActionGateway(store, this.filer ?? this.executor, {
+          linkCheck: async () => ({ allowed: true }),
+          documents: this.documents,
+          checker: { check: (input) => this.checker.check(input) },
+        }),
         profile: new ProfileStore({
           sql,
           transaction: (fn) => sql.transaction(fn),
