@@ -1,4 +1,4 @@
-import type { FileMeta, Household, Submission, SubmissionSummary } from "./store";
+import { DECLARATION, type FileMeta, type Household, type Submission, type SubmissionSummary } from "./store";
 
 export const TEST_BANNER = "TEST SYSTEM: this is a fake benefits portal for demos. No real benefits. No real data.";
 
@@ -74,6 +74,7 @@ ${err}
 <form method="post" action="/apply/household">
 ${draftId ? `<input type="hidden" name="draft" value="${escapeHtml(draftId)}">` : ""}
 <table class="form">
+<tr><td class="label">Case number</td><td><input type="text" name="caseNumber" value="${v("caseNumber")}"></td></tr>
 <tr><td class="label">Full legal name</td><td><input type="text" name="fullName" value="${v("fullName")}"></td></tr>
 <tr><td class="label">Date of birth</td><td><input type="date" name="dateOfBirth" value="${v("dateOfBirth")}"></td></tr>
 <tr><td class="label">Mailing address</td><td><input type="text" name="address" value="${v("address")}"></td></tr>
@@ -113,6 +114,7 @@ export function reviewPage(household: Household, files: FileMeta[]): string {
     `<div class="steps">Step 1: Household &gt; Step 2: Documents &gt; <b>Step 3: Review</b></div>
 <div class="notice"><b>Check every field.</b> Pressing Submit saves this application as a draft. Nothing is filed from this page. The office files it and sends the confirmation number.</div>
 <table class="form">
+<tr><td class="label">Case number</td><td>${escapeHtml(household.caseNumber)}</td></tr>
 <tr><td class="label">Full legal name</td><td>${escapeHtml(household.fullName)}</td></tr>
 <tr><td class="label">Date of birth</td><td>${escapeHtml(household.dateOfBirth)}</td></tr>
 <tr><td class="label">Mailing address</td><td>${escapeHtml(household.address)}</td></tr>
@@ -120,6 +122,7 @@ export function reviewPage(household: Household, files: FileMeta[]): string {
 <tr><td class="label">People in household</td><td>${escapeHtml(household.householdSize)}</td></tr>
 <tr><td class="label">Monthly income ($)</td><td>${escapeHtml(household.monthlyIncome)}</td></tr>
 ${rows}
+<tr><td class="label">Declaration</td><td>${escapeHtml(DECLARATION)} Only the applicant can make this declaration. The office records it when the renewal is filed, never from this page.</td></tr>
 </table>
 <form method="post" action="/apply/submit">
 <p><button class="btn" type="submit">Submit application</button></p>
@@ -191,12 +194,14 @@ export function caseworkerDetailPage(sub: Submission): string {
     `Case ${sub.confirmationNumber}`,
     `<table class="form">
 <tr><td class="label">Confirmation</td><td><span class="conf">${escapeHtml(sub.confirmationNumber)}</span></td></tr>
+<tr><td class="label">Case number</td><td>${escapeHtml(sub.household.caseNumber ?? "")}</td></tr>
 <tr><td class="label">Applicant</td><td>${escapeHtml(sub.household.fullName)}</td></tr>
 <tr><td class="label">Date of birth</td><td>${escapeHtml(sub.household.dateOfBirth)}</td></tr>
 <tr><td class="label">Address</td><td>${escapeHtml(sub.household.address)}</td></tr>
 <tr><td class="label">Phone</td><td>${escapeHtml(sub.household.phone)}</td></tr>
 <tr><td class="label">Household size</td><td>${escapeHtml(sub.household.householdSize)}</td></tr>
 <tr><td class="label">Monthly income</td><td>$${escapeHtml(sub.household.monthlyIncome)}</td></tr>
+<tr><td class="label">Declaration</td><td>${sub.declaration ? `Made by the applicant: ${escapeHtml(sub.declaration.statement)}` : "Not recorded"}</td></tr>
 <tr><td class="label">Received</td><td>${escapeHtml(new Date(sub.receivedAt).toUTCString())}</td></tr>
 <tr><td class="label">Submission key</td><td><span class="key">${escapeHtml(sub.key)}</span></td></tr>
 ${files}

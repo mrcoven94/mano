@@ -9,7 +9,7 @@ import {
   type PortalConfig,
 } from "../src/app";
 import { submissionFileKey, trackedOwner } from "../src/files";
-import { packetDigest, sha256Hex, type StagedEntry, type Store, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
+import { DECLARATION, packetDigest, sha256Hex, type StagedEntry, type Store, type Submission, type SubmitInput, type SubmitResult } from "../src/store";
 import { TEST_BANNER } from "../src/pages";
 import type { Household } from "../src/store";
 import { MemoryFileStore, MemoryStore } from "./memory-store";
@@ -18,6 +18,7 @@ import { makeSqlStore } from "./sql-store";
 const BASE = "https://portal.test";
 
 const HOUSEHOLD: Household = {
+  caseNumber: "CA-SNAP-0042117",
   fullName: "Maria Santos",
   dateOfBirth: "1988-04-12",
   address: "42 Test Street, Fresno, CA 93701",
@@ -25,6 +26,9 @@ const HOUSEHOLD: Household = {
   householdSize: "3",
   monthlyIncome: "2400",
 };
+
+// The applicant's own declaration, as Engine files it after their yes.
+const DECLARED = { statement: DECLARATION, madeBy: "applicant" } as const;
 
 const TOKEN = "portal-test-token";
 const AUTH = `Bearer ${TOKEN}`;
@@ -58,7 +62,7 @@ async function saveFromReview(store: Store, files: MemoryFileStore, config: Port
 
 /** File through the JSON API with the filing token, the only way a submission exists. */
 async function fileApplication(store: Store, files: MemoryFileStore, config: PortalConfig, key: string, bytes = "%PDF-fake-bytes"): Promise<string> {
-  const res = await postJson(store, files, config, { key, household: HOUSEHOLD, files: [pdfUpload(bytes)] });
+  const res = await postJson(store, files, config, { key, household: HOUSEHOLD, declaration: DECLARED, files: [pdfUpload(bytes)] });
   expect(res.status).toBe(200);
   return ((await res.json()) as Record<string, string>)["confirmationNumber"] ?? "";
 }
@@ -158,7 +162,7 @@ describe("idempotency", () => {
     const config = testConfig();
     const packet = {
       key: "resubmit-key",
-      household: HOUSEHOLD,
+      household: HOUSEHOLD, declaration: DECLARED,
       files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
     };
     const post = () =>
@@ -186,7 +190,7 @@ describe("idempotency", () => {
     const config = testConfig();
     const packet = {
       key: "race-key",
-      household: HOUSEHOLD,
+      household: HOUSEHOLD, declaration: DECLARED,
       files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
     };
     const responses = await Promise.all(
@@ -235,7 +239,7 @@ describe("idempotency", () => {
         new Request(`${BASE}/submissions`, {
           method: "POST",
           headers: { "content-type": "application/json", authorization: AUTH },
-          body: JSON.stringify({ key: "conflict-key", household, files: [file] }),
+          body: JSON.stringify({ key: "conflict-key", household, declaration: DECLARED, files: [file] }),
         }),
         store,
         files,
@@ -269,7 +273,7 @@ describe("idempotency", () => {
         headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key: "digest-key",
-          household: HOUSEHOLD,
+          household: HOUSEHOLD, declaration: DECLARED,
           files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
         }),
       }),
@@ -302,11 +306,11 @@ describe("idempotency", () => {
         config,
       );
     const cases: Array<[string, unknown, string]> = [
-      ["number field", { key: "k", household: { ...HOUSEHOLD, fullName: 42 }, files: [] }, "must be a string"],
+      ["number field", { key: "k", household: { ...HOUSEHOLD, fullName: 42 }, declaration: DECLARED, files: [] }, "must be a string"],
       ["string household", { key: "k", household: "x", files: [] }, "must be an object"],
       ["array household", { key: "k", household: [], files: [] }, "must be an object"],
-      ["null file", { key: "k", household: HOUSEHOLD, files: [null] }, "name, type and base64 data"],
-      ["string file", { key: "k", household: HOUSEHOLD, files: ["x"] }, "name, type and base64 data"],
+      ["null file", { key: "k", household: HOUSEHOLD, declaration: DECLARED, files: [null] }, "name, type and base64 data"],
+      ["string file", { key: "k", household: HOUSEHOLD, declaration: DECLARED, files: ["x"] }, "name, type and base64 data"],
       ["non-object body", [1, 2], "must be an object"],
     ];
     for (const [name, body, message] of cases) {
@@ -325,7 +329,7 @@ describe("idempotency", () => {
       new Request(`${BASE}/submissions`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: AUTH },
-        body: JSON.stringify({ household: HOUSEHOLD }),
+        body: JSON.stringify({ household: HOUSEHOLD, declaration: DECLARED }),
       }),
       store,
       files,
@@ -348,7 +352,7 @@ describe("slow mode", () => {
         headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key,
-          household: HOUSEHOLD,
+          household: HOUSEHOLD, declaration: DECLARED,
           files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
         }),
       }),
@@ -484,7 +488,7 @@ describe("validation", () => {
         headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key: "k",
-          household: HOUSEHOLD,
+          household: HOUSEHOLD, declaration: DECLARED,
           files: [{ name: "fake.pdf", type: "application/pdf", data: Buffer.from("plain text, no signature").toString("base64") }],
         }),
       }),
@@ -517,7 +521,7 @@ describe("validation", () => {
         headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key: "k",
-          household: HOUSEHOLD,
+          household: HOUSEHOLD, declaration: DECLARED,
           files: [{ name: "empty.pdf", type: "application/pdf", data: "" }],
         }),
       }),
@@ -541,7 +545,7 @@ describe("validation", () => {
         headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key: "images-key",
-          household: HOUSEHOLD,
+          household: HOUSEHOLD, declaration: DECLARED,
           files: [
             { name: "scan.png", type: "image/png", data: png },
             { name: "photo.jpg", type: "image/jpeg", data: jpg },
@@ -589,7 +593,7 @@ describe("blocker 5: file bytes in the file store", () => {
     await postDocuments(store, files, config, cookie, [new File([big], "big.pdf", { type: "application/pdf" })]);
     const submit = await postJson(store, files, config, {
       key: "big-key",
-      household: HOUSEHOLD,
+      household: HOUSEHOLD, declaration: DECLARED,
       files: [{ name: "big.pdf", type: "application/pdf", data: Buffer.from(big).toString("base64") }],
     });
     expect(submit.status).toBe(200);
@@ -651,7 +655,7 @@ describe("blocker 5: file bytes in the file store", () => {
           headers: { "content-type": "application/json", authorization: AUTH },
           body: JSON.stringify({
             key: "prefix-key",
-            household: HOUSEHOLD,
+            household: HOUSEHOLD, declaration: DECLARED,
             files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from(packetBytes).toString("base64") }],
           }),
         }),
@@ -690,7 +694,7 @@ describe("blocker 5: file bytes in the file store", () => {
         new Request(`${BASE}/submissions`, {
           method: "POST",
           headers: { "content-type": "application/json", authorization: AUTH },
-          body: JSON.stringify({ key: "fight-key", household: { ...HOUSEHOLD, fullName: name }, files: [file(bytes)] }),
+          body: JSON.stringify({ key: "fight-key", household: { ...HOUSEHOLD, fullName: name }, declaration: DECLARED, files: [file(bytes)] }),
         }),
         store,
         files,
@@ -750,7 +754,7 @@ describe("blocker 8: scheduled cleanup", () => {
         headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key: "aging-key",
-          household: HOUSEHOLD,
+          household: HOUSEHOLD, declaration: DECLARED,
           files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
         }),
       }),
@@ -844,7 +848,7 @@ describe("blocker 7: size limits run first", () => {
         headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key: "k",
-          household: HOUSEHOLD,
+          household: HOUSEHOLD, declaration: DECLARED,
           files: [{ name: "big.pdf", type: "application/pdf", data: "A".repeat(1000) }],
         }),
       }),
@@ -864,7 +868,7 @@ describe("blocker 7: size limits run first", () => {
       new Request(`${BASE}/submissions`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: AUTH },
-        body: JSON.stringify({ key: "k", household: HOUSEHOLD, files: [null, null, null, null] }),
+        body: JSON.stringify({ key: "k", household: HOUSEHOLD, declaration: DECLARED, files: [null, null, null, null] }),
       }),
       store,
       files,
@@ -892,7 +896,7 @@ describe("blocker 7: size limits run first", () => {
         headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key: "k",
-          household: HOUSEHOLD,
+          household: HOUSEHOLD, declaration: DECLARED,
           files: [{ name: `${"n".repeat(201)}.pdf`, type: "application/pdf", data: "eA==" }],
         }),
       }),
@@ -1000,7 +1004,7 @@ describe("blocker 6: access control", () => {
         new Request(`${BASE}/submissions?slowMs=${slowMs}`, {
           method: "POST",
           headers: { "content-type": "application/json", authorization: AUTH },
-          body: JSON.stringify({ key, household: HOUSEHOLD, files: [file] }),
+          body: JSON.stringify({ key, household: HOUSEHOLD, declaration: DECLARED, files: [file] }),
         }),
         store,
         files,
@@ -1034,7 +1038,7 @@ describe("blocker 6: access control", () => {
     const config = testConfig({ slowMaxConcurrent: 1 });
     const packet = (key: string) => ({
       key,
-      household: HOUSEHOLD,
+      household: HOUSEHOLD, declaration: DECLARED,
       files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
     });
     const post = (key: string) =>
@@ -1121,7 +1125,7 @@ describe("caseworker view", () => {
         headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key: "hostile-name",
-          household: HOUSEHOLD,
+          household: HOUSEHOLD, declaration: DECLARED,
           files: [{ name, type: "application/pdf", data: Buffer.from("%PDF-x").toString("base64") }],
         }),
       }),
@@ -1157,7 +1161,7 @@ describe("caseworker view", () => {
         new Request(`${BASE}/submissions`, {
           method: "POST",
           headers: { "content-type": "application/json", authorization: AUTH },
-          body: JSON.stringify({ key: `page-key-${i}`, household: { ...HOUSEHOLD, fullName: `Person ${i}` }, files: [file] }),
+          body: JSON.stringify({ key: `page-key-${i}`, household: { ...HOUSEHOLD, fullName: `Person ${i}` }, declaration: DECLARED, files: [file] }),
         }),
         store,
         files,
@@ -1314,7 +1318,7 @@ describe("review round 2 item 3: staged bytes are tracked and deletes are ordere
     const config = testConfig({ now: () => filedAt });
     const packet = {
       key: "copy-fail-key",
-      household: HOUSEHOLD,
+      household: HOUSEHOLD, declaration: DECLARED,
       files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
     };
     const post = () =>
@@ -1353,7 +1357,7 @@ describe("review round 2 item 3: staged bytes are tracked and deletes are ordere
         headers: { "content-type": "application/json", authorization: AUTH },
         body: JSON.stringify({
           key: "aging-key",
-          household: HOUSEHOLD,
+          household: HOUSEHOLD, declaration: DECLARED,
           files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
         }),
       }),
@@ -1396,7 +1400,7 @@ describe("review round 2 item 3: staged bytes are tracked and deletes are ordere
 describe("review round 2 item 4: idempotency survives retirement", () => {
   const packet = {
     key: "retire-key",
-    household: HOUSEHOLD,
+    household: HOUSEHOLD, declaration: DECLARED,
     files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from("%PDF-bytes").toString("base64") }],
   };
 
@@ -1434,7 +1438,7 @@ describe("review round 2 item 4: idempotency survives retirement", () => {
     const config = testConfig({ now: () => filedAt });
     const original = ((await (await post(store, files, config)).json()) as Record<string, string>)["confirmationNumber"] ?? "";
     await runCleanup(store, files, filedAt + SUBMISSION_RETENTION_MS + 1000);
-    const changed = await post(store, files, config, { ...packet, household: { ...HOUSEHOLD, fullName: "Someone Else" } });
+    const changed = await post(store, files, config, { ...packet, household: { ...HOUSEHOLD, fullName: "Someone Else" }, declaration: DECLARED });
     expect(changed.status).toBe(409);
     const body = (await changed.json()) as Record<string, { confirmationNumber: string }>;
     expect(body["received"]?.confirmationNumber).toBe(original);
@@ -1543,7 +1547,7 @@ describe("follow-up: losers keep their copies tracked for the guarded sweep", ()
     const digest = await packetDigest(HOUSEHOLD, [{ name: "paystub.pdf", type: "application/pdf", size: raw.length, sha256: fileSha }]);
     const packet = {
       key: "race-retire-key",
-      household: HOUSEHOLD,
+      household: HOUSEHOLD, declaration: DECLARED,
       files: [{ name: "paystub.pdf", type: "application/pdf", data: Buffer.from(raw).toString("base64") }],
     };
     const post = () =>
@@ -1562,7 +1566,7 @@ describe("follow-up: losers keep their copies tracked for the guarded sweep", ()
       key: "race-retire-key",
       scope,
       confirmationNumber: "SR-TWINROW1",
-      household: HOUSEHOLD,
+      household: HOUSEHOLD, declaration: DECLARED,
       files: [{ name: "paystub.pdf", type: "application/pdf", size: raw.length, sha256: fileSha, r2key: filedKey }],
       digest,
       status: "received",
@@ -1761,7 +1765,7 @@ describe("review round 5 item 1: an in-flight filing keeps its attachments", () 
           await runCleanup(inner, files, now);
         },
       });
-      const res = await postJson(store, files, config, { key: "inflight-key", household: HOUSEHOLD, files: [pdfUpload("%PDF-inflight")] });
+      const res = await postJson(store, files, config, { key: "inflight-key", household: HOUSEHOLD, declaration: DECLARED, files: [pdfUpload("%PDF-inflight")] });
       expect(res.status).toBe(200);
       expect(sweeps).toBe(1);
       const confirmation = ((await res.json()) as Record<string, string>)["confirmationNumber"] ?? "";
@@ -1821,7 +1825,7 @@ describe("review round 5 item 2: a deletion record outlives a failed R2 delete",
       const files = new FaultyFileStore();
       const now = Date.now();
       const config = testConfig({ now: () => now });
-      const packet = { key: "pending-key", household: HOUSEHOLD, files: [pdfUpload("%PDF-pending")] };
+      const packet = { key: "pending-key", household: HOUSEHOLD, declaration: DECLARED, files: [pdfUpload("%PDF-pending")] };
       files.failPutsAfter = 1;
       expect((await postJson(store, files, config, packet)).status).toBe(500);
       files.failPutsAfter = Number.POSITIVE_INFINITY;
@@ -1877,7 +1881,7 @@ describe("review round 5 item 3: filing is impossible from a browser", () => {
     const listAfter = await (await handleRequest(new Request(`${BASE}/caseworker`, { headers: { authorization: AUTH } }), store, files, config)).text();
     expect(listAfter).toBe(listBefore);
     // The JSON path with the filing token still files.
-    const filed = await postJson(store, files, config, { key: "after-draft", household: HOUSEHOLD, files: [pdfUpload("%PDF-x")] });
+    const filed = await postJson(store, files, config, { key: "after-draft", household: HOUSEHOLD, declaration: DECLARED, files: [pdfUpload("%PDF-x")] });
     expect(filed.status).toBe(200);
     expect(await store.countSubmissions()).toBe(1);
   });
@@ -1934,6 +1938,7 @@ function readDraft(store: Store, files: MemoryFileStore, config: PortalConfig, i
 
 describe("review round 5 item 4: a saved draft reads back exactly", () => {
   const EXACT: Household = {
+    caseNumber: "FR-0042 117/B",
     fullName: "María José Núñez-O'Brien",
     dateOfBirth: "1990-02-28",
     address: "12 Calle Ñandú, Apt #3 & 4, Fresno, CA 93701",
@@ -1999,7 +2004,7 @@ describe("review round 5 item 4: a saved draft reads back exactly", () => {
     const store = new MemoryStore();
     const files = new MemoryFileStore();
     const config = draftConfig();
-    const filing = await postJson(store, files, config, { key: "draft-token-key", household: HOUSEHOLD, files: [pdfUpload("%PDF-x")] }, DRAFT_AUTH);
+    const filing = await postJson(store, files, config, { key: "draft-token-key", household: HOUSEHOLD, declaration: DECLARED, files: [pdfUpload("%PDF-x")] }, DRAFT_AUTH);
     expect(filing.status).toBe(401);
     expect(await store.countSubmissions()).toBe(0);
     const reconcile = await handleRequest(new Request(`${BASE}/submissions/draft-token-key`, { headers: { authorization: DRAFT_AUTH } }), store, files, config);
@@ -2049,5 +2054,69 @@ describe("review round 5 item 4: a saved draft reads back exactly", () => {
     const report = await runCleanup(store, files, lapsed);
     expect(report.expiredDrafts).toBe(1);
     expect((await readDraft(store, files, config, DRAFT_ID, DRAFT_AUTH)).status).toBe(404);
+  });
+});
+
+// LAP-747. In Propel's test of general AI agents on real SNAP applications
+// (April 2026), the agents ticked the legal attestation themselves. The
+// office takes a renewal only with the applicant's own declaration, and
+// the browser, where Mano's computer works, never makes it.
+describe("LAP-747: only the applicant makes the declaration", () => {
+  const packet = (over: Record<string, unknown> = {}) => ({ key: `declare-${crypto.randomUUID()}`, household: HOUSEHOLD, files: [pdfUpload("%PDF-declare")], ...over });
+
+  test("a renewal with no declaration, a changed statement, or one made by someone else is refused and nothing is filed", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cases: Array<[string, unknown, string]> = [
+      ["no declaration", undefined, "has not made the declaration"],
+      ["a statement one word off", { ...DECLARED, statement: DECLARATION.replace("true, correct", "true") }, "word for word"],
+      ["made by a helper", { ...DECLARED, madeBy: "helper" }, "Only the applicant"],
+      ["a ticked box", true, "must be an object"],
+    ];
+    for (const [name, declaration, message] of cases) {
+      const res = await postJson(store, files, config, packet(declaration === undefined ? {} : { declaration }));
+      expect(res.status, name).toBe(400);
+      expect(((await res.json()) as Record<string, string>)["error"], name).toContain(message);
+    }
+    expect(await store.countSubmissions()).toBe(0);
+  });
+
+  test("a filed renewal carries the declaration as the applicant's, and the caseworker sees it", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const res = await postJson(store, files, config, packet({ declaration: DECLARED }));
+    expect(res.status).toBe(200);
+    const { confirmationNumber, key } = (await res.json()) as Record<string, string>;
+    const stored = await store.getSubmissionByConfirmation(confirmationNumber!);
+    expect(stored?.key).toBe(key);
+    expect(stored?.declaration).toEqual({ statement: DECLARATION, madeBy: "applicant" });
+    const page = await (await handleRequest(new Request(`${BASE}/caseworker/${confirmationNumber}`, { headers: { authorization: AUTH } }), store, files, config)).text();
+    expect(page).toContain(`Made by the applicant: ${DECLARATION}`);
+    expect(page).toContain(HOUSEHOLD.caseNumber);
+  });
+
+  test("the browser's form shows the declaration but has no box to tick, and a saved draft carries none", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie, [pdfFile()]);
+    const review = await (await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config)).text();
+    expect(review).toContain(DECLARATION);
+    expect(review).not.toMatch(/type="checkbox"/);
+    const household = await (await handleRequest(new Request(`${BASE}/apply`), store, files, config)).text();
+    expect(household).not.toMatch(/type="checkbox"/);
+    expect(await store.countSubmissions()).toBe(0);
+  });
+
+  test("the household step asks for the case number from the renewal letter", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const res = await handleRequest(new Request(`${BASE}/apply/household`, { method: "POST", body: householdForm({ caseNumber: "" }) }), store, files, config);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("case number from the renewal letter");
   });
 });
