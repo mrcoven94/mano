@@ -411,6 +411,7 @@ const HELD_DATE_RE = new RegExp(
   String.raw`\bi(?:\s+have|'ve)?${ADVERBS}\s+(?:saved|set|added|recorded|scheduled)\b|\bi(?:\s+will|'ll)${ADVERBS}\s+remind\b|\breminder\s+(?:is\s+)?(?:now\s+)?set\b|\bis\s+(?:now\s+)?(?:saved|on\s+file|in\s+your\s+reminders)\b`,
   "i",
 );
+const SENTENCE_GAP_RE = /(?<=[.!?])\s+/;
 const ABOUT_THE_DATE_RE = /\b(?:that|this|which)\s+(?:(?:is\s+)?the\s+)?(?:date|deadline|due date)\b/i;
 
 function deadlineCheck(deadline: LetterDeadline, text: string, actions: BenchAnswer["actions"]): CheckResult {
@@ -425,7 +426,7 @@ function deadlineCheck(deadline: LetterDeadline, text: string, actions: BenchAns
     const recorded = actions.find((a) => a.kind === "deadline");
     if (recorded) return { id: "deadline", pass: false, detail: `records a deadline (${recorded.detail ?? "no date"}) the letter only hedges` };
     if (HELD_DATE_RE.test(plain)) return { id: "deadline", pass: false, detail: "says it saved or set a date the letter only hedges" };
-    const questions = plain.split(/(?<=[.!?])\s+/).filter((q) => q.trim().endsWith("?"));
+    const questions = plain.split(SENTENCE_GAP_RE).filter((q) => q.trim().endsWith("?"));
     const pass = questions.some((q) => said.some((d) => d.at >= plain.indexOf(q) && d.at < plain.indexOf(q) + q.length) || ABOUT_THE_DATE_RE.test(q));
     return { id: "deadline", pass, detail: pass ? "asks the person to confirm the date" : "does not ask the person to confirm the hedged date" };
   }

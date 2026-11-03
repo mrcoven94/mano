@@ -64,12 +64,14 @@ const FONT = "Helvetica, Arial, 'DejaVu Sans', sans-serif";
 export const LETTER_FOOTER = "SYNTHETIC TEST LETTER. Every name, office, number and address on this page is made up.";
 
 // A written date never breaks across lines: its spaces become no-break spaces.
+const SPACES_RE = / +/;
+const WHITESPACE_RE = /\s+/;
 const DATE_RE = /\b(January|February|March|April|May|June|July|August|September|October|November|December) (\d{1,2}), (\d{4})\b/g;
 
 function wrap(text: string, max: number): string[] {
   const lines: string[] = [];
   let line = "";
-  for (const word of text.replace(DATE_RE, "$1\u00a0$2,\u00a0$3").split(/ +/)) {
+  for (const word of text.replace(DATE_RE, "$1\u00a0$2,\u00a0$3").split(SPACES_RE)) {
     if (line && line.length + 1 + word.length > max) {
       lines.push(line);
       line = word;
@@ -120,7 +122,7 @@ function pageSvg(p: LetterPage): string {
     }
     y += 20;
   } else {
-    const initials = p.letterhead[0]!.split(/\s+/).slice(0, 2).map((w) => w[0]).join("");
+    const initials = p.letterhead[0]!.split(WHITESPACE_RE).slice(0, 2).map((w) => w[0]).join("");
     out.push(`<circle cx="${MARGIN + 30}" cy="86" r="32" fill="none" stroke="${ink}" stroke-width="3"/>`);
     out.push(textAt(MARGIN + 30, 94, initials, `font-size="22" font-weight="bold" fill="${ink}" text-anchor="middle"`));
     out.push(textAt(MARGIN + 80, 76, p.letterhead[0]!, `font-size="22" font-weight="bold" fill="${ink}"`));
