@@ -78,7 +78,16 @@ describe("Maria spine run", () => {
     const [approval] = await client.listApprovals(session);
     const parsed = parseActionView(approval?.requestJson ?? "");
     if (parsed.kind === "unknown") throw new Error(parsed.reason);
-    expect(parsed.answers.map((f) => f.key)).toEqual(["caseNumber", "fullName", "householdSize", "monthlyIncome", "address"]);
+    // Every field the agent's food-renewal form fills (apps/agent/agent/lib/forms.ts).
+    expect(parsed.answers.map((f) => f.key)).toEqual([
+      "caseNumber",
+      "fullName",
+      "dateOfBirth",
+      "householdSize",
+      "monthlyIncome",
+      "address",
+      "phone",
+    ]);
     expect(parsed.answers.every((f) => f.label !== null)).toBe(true);
     expect(parsed.declaration).toContain("penalty of perjury");
     expect(parsed.attachment).toBe("SNAP renewal packet");

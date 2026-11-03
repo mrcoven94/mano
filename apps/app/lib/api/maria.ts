@@ -39,9 +39,11 @@ export const RENEWAL_DECLARATION =
 export const RENEWAL_ANSWERS = {
   caseNumber: "R-1042",
   fullName: "Maria Torres",
+  dateOfBirth: "1988-03-14",
   householdSize: "2",
   monthlyIncome: "1940",
   address: "418 Alder St Apt 3, Springfield",
+  phone: "(217) 555-0142",
 } as const;
 
 export const CASEWORKER_REQUEST =
@@ -76,7 +78,8 @@ export function renewalPacketText(): string {
     "Springfield County SNAP Office\n" +
     "Prepared by Mano for Maria Torres, for her approval.\n" +
     "\n" +
-    "Applicant: Maria Torres\n" +
+    "Applicant: Maria Torres, born 1988-03-14\n" +
+    "Phone: (217) 555-0142\n" +
     "Address: 418 Alder St Apt 3, Springfield\n" +
     "Household: 2 (Maria Torres, Sofia Torres)\n" +
     "Income: $1,940/mo, Greenline Grocers, pay stub attached\n" +

@@ -352,7 +352,7 @@ export default function ApprovalDetail() {
             <Body style={styles.purpose}>{action && action.kind !== "unknown" ? action.purpose : approval.purpose}</Body>
             <View style={styles.dates}>
               {dueAt ? <Row label={s.dueAtOffice} value={formatDate(dueAt, language)} /> : null}
-              {approval.status === "pending" ? (
+              {approval.status === "pending" && !receipt && no.phase !== "answered" ? (
                 <View>
                   <Row label={s.answerBy} value={formatDate(approval.expiresAt, language)} />
                   <Muted>{s.answerByNote}</Muted>
