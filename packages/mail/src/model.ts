@@ -129,10 +129,21 @@ export interface MetaClientOptions {
 class RetryableStatus extends Error {
   readonly status: number;
   constructor(status: number) {
-    super(`Model request failed: ${status}`);
+    super(failed(status));
     this.name = "RetryableStatus";
     this.status = status;
   }
+}
+
+// An error whose words this client chose. Anything else (a transport or
+// runtime error) may quote what it was given, so it is replaced.
+class ModelFailure extends Error {}
+
+function safeError(err: unknown): Error {
+  if (err instanceof ModelFailure || err instanceof RetryableStatus) return err;
+  if (err instanceof Error && err.name === "AbortError") return new ModelFailure("Model request timed out.");
+  if (err instanceof TypeError) return new ModelFailure("Model request failed: no connection.");
+  return new ModelFailure("Model request failed.");
 }
 
 function isRetryable(err: unknown): boolean {
@@ -140,6 +151,26 @@ function isRetryable(err: unknown): boolean {
   if (err instanceof TypeError) return true;
   if (err instanceof Error && err.name === "AbortError") return true;
   return false;
+}
+
+// Why a call failed, in fixed words chosen by its status. The provider's
+// own text can carry a key, a person's name or a case number, and errors
+// reach warnings, so it is never repeated.
+const FAILED_BECAUSE: Record<number, string> = {
+  400: "the request was not valid",
+  401: "the API key was not accepted",
+  402: "billing is not set up for this account",
+  403: "the API key may not use this model",
+  404: "the model was not found",
+  413: "the request was too large",
+  422: "the request was not valid",
+  429: "rate limited",
+};
+const RUN_STATES = new Set(["failed", "incomplete", "cancelled", "queued", "in_progress"]);
+
+function failed(status: number): string {
+  const why = FAILED_BECAUSE[status];
+  return `Model request failed: ${status}${why ? ` (${why})` : ""}`;
 }
 
 export class MetaModelClient implements ModelClient {
@@ -188,17 +219,24 @@ export class MetaModelClient implements ModelClient {
           },
           body: JSON.stringify(body),
         });
-        if (res.status !== 429 && res.status < 500 && !res.ok) {
+        if (!res.ok) {
           clearTimeout(timer);
-          throw new Error(`Model request failed: ${res.status}`);
+          await res.body?.cancel().catch(() => undefined);
+          if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
+          throw new ModelFailure(failed(res.status));
         }
-        const data: unknown = await res.json();
-        clearTimeout(timer);
-        if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
+        let data: unknown;
+        try {
+          data = await res.json();
+        } catch {
+          // A parse error quotes the body it could not read.
+          throw new ModelFailure(`Model response was not readable: ${res.status}`);
+        } finally {
+          clearTimeout(timer);
+        }
         const status = (data as { status?: unknown })?.status;
         if (typeof status === "string" && status !== "completed") {
-          const detail = (data as { error?: { message?: unknown } })?.error?.message;
-          throw new Error(`Model run ${status}: ${typeof detail === "string" ? detail : "no detail"}`);
+          throw new ModelFailure(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`);
         }
         return { text: extractOutputText(data), model: req.model, usage: extractUsage(data), raw: data };
       } catch (err) {
@@ -209,10 +247,10 @@ export class MetaModelClient implements ModelClient {
           await new Promise((r) => setTimeout(r, backoff));
           continue;
         }
-        throw err instanceof Error ? err : new Error("Model request failed.");
+        throw safeError(err);
       }
     }
-    throw lastErr instanceof Error ? lastErr : new Error("Model request failed.");
+    throw safeError(lastErr);
   }
 }
 
@@ -255,13 +293,37 @@ export function createModelClient(
 // Stand-in that replays recorded responses. Matchers pair a predicate on
 // the request with the response to return, so tests stay deterministic
 // with no key. Unmatched requests fail loudly: a test that needs a new
-// response must record it explicitly.
+// response must record it explicitly. A strict schema the API would
+// reject fails the same way the API does.
 export interface RecordedEntry {
   match: (req: ResponsesRequest) => boolean;
   result: Omit<ResponsesResult, "model"> & { model?: string };
   // When true, the entry is removed after one use, so a list of entries
   // replays in order like a queue.
   consume?: boolean;
+}
+
+// The API's rule for a strict JSON schema: every object sets
+// additionalProperties false and lists each of its properties in
+// required (an optional field is a required one that allows null). A
+// schema that breaks it gets HTTP 400 before any model runs, such as
+// "Missing 'score'". Returns every break, empty when the schema is valid.
+export function strictSchemaErrors(schema: unknown, path = "schema"): string[] {
+  if (typeof schema !== "object" || schema === null) return [];
+  const node = schema as Record<string, unknown>;
+  const errors: string[] = [];
+  const properties = node["properties"];
+  if (typeof properties === "object" && properties !== null) {
+    const required = new Set(Array.isArray(node["required"]) ? node["required"] : []);
+    for (const key of Object.keys(properties)) {
+      if (!required.has(key)) errors.push(`${path}: Missing '${key}' in required`);
+    }
+    if (node["additionalProperties"] !== false) errors.push(`${path}: additionalProperties must be false`);
+    for (const [key, child] of Object.entries(properties)) errors.push(...strictSchemaErrors(child, `${path}.${key}`));
+  }
+  errors.push(...strictSchemaErrors(node["items"], `${path}[]`));
+  if (Array.isArray(node["anyOf"])) node["anyOf"].forEach((child, i) => errors.push(...strictSchemaErrors(child, `${path}.anyOf[${i}]`)));
+  return errors;
 }
 
 export class RecordedModelClient implements ModelClient {
@@ -277,6 +339,11 @@ export class RecordedModelClient implements ModelClient {
   async responses(req: ResponsesRequest, opts?: CallOptions): Promise<ResponsesResult> {
     this.calls.push(req);
     this.callOptions.push(opts);
+    // Refuse what the API refuses, so a schema it would reject fails
+    // here too instead of replaying a recorded answer.
+    const format = req.text?.format;
+    const schemaErrors = format?.strict ? strictSchemaErrors(format.schema) : [];
+    if (schemaErrors.length > 0) throw new Error(`Model request failed: 400 (${schemaErrors.join("; ")})`);
     for (let i = 0; i < this.entries.length; i++) {
       const entry = this.entries[i]!;
       if (entry.match(req)) {

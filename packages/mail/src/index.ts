@@ -275,6 +275,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     // Segment every frame.
     const frameDets: Detection[][] = [];
     const methods = new Set<SegmentMethod>();
+    const whys = new Set<string>();
     for (const frame of frames) {
       if (overBudget(file.name)) {
         askBudget(file.name);
@@ -290,6 +291,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       });
       addUsage(file.name, seg.usage);
       methods.add(seg.method);
+      if (seg.method !== "sam") whys.add(seg.why);
       frameDets.push(seg.detections);
     }
     if (methods.has("local") || methods.has("full-frame")) {
@@ -303,6 +305,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
           (parts.length === 2 ? "some frames were split on-device and some read as one page." : `${parts[0]} instead.`),
         letterId: null,
         citation: null,
+        detail: [...whys].join("; "),
       });
     }
 
