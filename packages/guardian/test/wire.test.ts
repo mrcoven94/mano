@@ -223,6 +223,23 @@ describe("Guardian reads the words of anything the person did not give", () => {
   });
 });
 
+describe("the person's address never erases the task's words", () => {
+  it("keeps a purpose that shares words with the person's street", async () => {
+    const input = renewal();
+    input.sources = [{ kind: "document", id: "letter-1", quote: "Mail to 123 Food Benefits Renewal Road, Springfield." }];
+    const sent = await send(input, { addresses: ["123 Food Benefits Renewal Road, Springfield, IL 62701"] });
+    expect(sent.values).toContain("Food benefits renewal in the sandbox agency portal");
+    expect(sent.values).toContain("Mail to [ADDRESS].");
+  });
+
+  it("keeps a common word that names the person's city, and removes the address it sits in", async () => {
+    const input = renewal({ text: "Renewal, IL 62701 is on the letter." });
+    const sent = await send(input, { addresses: ["40 Orchard Road, Renewal, IL 62701"] });
+    expect(sent.values).toContain("Food benefits renewal in the sandbox agency portal");
+    expect(sent.values).toContain("[ADDRESS] is on the letter.");
+  });
+});
+
 // Property: however a known value is written and wherever it sits in the
 // request, it does not reach Guardian. Variants come from a seeded
 // generator, so a failure names a variant that reproduces.
