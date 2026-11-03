@@ -54,6 +54,8 @@ interface StoredDoc {
 
 const RENEWAL_ID = "doc-renewal-packet";
 const APPROVAL_ID = "appr-renewal-001";
+const SIX_DIGITS = /^\d{6}$/;
+const HTTPS_LINK = /^https:\/\/[^/\s]+/i;
 
 function stamp(id: string): string {
   return `standin-${id}`;
@@ -186,7 +188,7 @@ export class StandInClient implements ManoClient {
 
   async verifyCode(email: string, challengeId: string, code: string): Promise<Session> {
     await this.wait();
-    if (!/^\d{6}$/.test(code)) throw new AuthError("Enter the 6-digit code.");
+    if (!SIX_DIGITS.test(code)) throw new AuthError("Enter the 6-digit code.");
     if (!challengeId.startsWith("standin-")) throw new AuthError();
     void email;
     this.seed();
@@ -483,7 +485,7 @@ export class StandInClient implements ManoClient {
     await this.wait();
     this.checkSession(session);
     // Recorded verdicts: encrypted pages load, everything else stays shut.
-    if (/^https:\/\/[^/\s]+/i.test(url)) return { allowed: true, reason: null };
+    if (HTTPS_LINK.test(url)) return { allowed: true, reason: null };
     return { allowed: false, reason: "Blocked in the demo." };
   }
 }

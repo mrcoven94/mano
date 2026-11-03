@@ -6,9 +6,10 @@ import type { PersonEngine } from "./engine.js";
 
 export const MAX_RECALLED_FACTS = 50;
 export const MAX_FACT_CHARS = 500;
+const WHITESPACE_RUN = /\s+/g;
 
 export function normalizeFact(fact: string): string {
-  return fact.trim().replace(/\s+/g, " ").slice(0, MAX_FACT_CHARS);
+  return fact.trim().replace(WHITESPACE_RUN, " ").slice(0, MAX_FACT_CHARS);
 }
 
 function sameFact(a: string, b: string): boolean {

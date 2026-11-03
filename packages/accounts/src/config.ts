@@ -9,6 +9,8 @@
 // MANO_CHANNELS_KEY: credential for the Channels code route.
 // MANO_ACCOUNTS_DEMO=1: explicit demo mode, labeled in the UI.
 
+const TRAILING_SLASH_RE = /\/$/;
+
 export interface AccountsEnv {
   NODE_ENV?: string;
   MANO_ENGINE_URL?: string;
@@ -39,7 +41,7 @@ export function resolveAccountsMode(env: AccountsEnv): AccountsMode {
   const engineReady = Boolean(env.MANO_ENGINE_URL && env.MANO_ENGINE_SERVICE_KEY);
   const channelsReady = Boolean(env.MANO_CHANNELS_URL && env.MANO_CHANNELS_KEY);
   if (engineReady && channelsReady) {
-    return { mode: "live", engineUrl: (env.MANO_ENGINE_URL as string).replace(/\/$/, "") };
+    return { mode: "live", engineUrl: (env.MANO_ENGINE_URL as string).replace(TRAILING_SLASH_RE, "") };
   }
   if (isDemoMode(env)) return { mode: "demo" };
   if (env.NODE_ENV !== "production") return { mode: "stand-in" };

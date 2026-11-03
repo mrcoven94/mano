@@ -38,6 +38,8 @@ export const REPLAY_LINK_PATH = /^\/fill\/([0-9a-f]{32})$/;
 
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const LABEL_KEY = /^[A-Za-z0-9_]{1,64}$/;
+const CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
+const HTML_SPECIAL = /[&<>"']/g;
 const MAX_LABELS = 50;
 const MAX_TEXT = 200;
 
@@ -153,7 +155,7 @@ function focusOn(raw: unknown, size: { width: number; height: number }): Point |
 }
 
 function plainText(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_TEXT && !/[\u0000-\u001f\u007f]/.test(value);
+  return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_TEXT && !CONTROL_CHAR.test(value);
 }
 
 export function parseReplayInput(raw: unknown): ReplayInput {
@@ -428,7 +430,7 @@ export type ReplayView =
   | { state: "changed" | "closed" | "missing" };
 
 function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+  return text.replace(HTML_SPECIAL, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
 const STYLE = `

@@ -59,9 +59,15 @@ const WEEKDAYS: Record<string, number> = {
   saturday: 6,
 };
 
+const CLOCK = /^\s*(\d{1,2})(?::(\d{2}))?(?:\s*([ap])\.?m?\.?)?\s*$/i;
+const RELATIVE_WHEN = /^in\s+(a|an|\d+)\s+(minute|minutes|hour|hours|day|days|week|weeks)\s*$/;
+const AT_SPLIT = /^(.*?)\s+at\s+(.+)$/;
+const WHITESPACE_RUN = /\s+/;
+const NEXT_PREFIX = /^next\s+/;
+
 // "9", "9:30", "9am", "9:30pm", "21:15" -> [hour24, minute] or null.
 export function parseClock(text: string): [number, number] | null {
-  const match = /^\s*(\d{1,2})(?::(\d{2}))?(?:\s*([ap])\.?m?\.?)?\s*$/i.exec(text.trim());
+  const match = CLOCK.exec(text.trim());
   if (!match) return null;
   let hour = Number(match[1]);
   const minute = Number(match[2] ?? "0");
@@ -86,7 +92,7 @@ export function parseWhen(raw: string, nowMs: number, tz: string = timeZone()): 
   if (!text) return null;
 
   // "in 20 minutes", "in 2 hours", "in 3 days", "in a week"
-  const relative = /^in\s+(a|an|\d+)\s+(minute|minutes|hour|hours|day|days|week|weeks)\s*$/.exec(text);
+  const relative = RELATIVE_WHEN.exec(text);
   if (relative) {
     const n = relative[1] === "a" || relative[1] === "an" ? 1 : Number(relative[1]);
     const unit = relative[2].startsWith("minute") ? 60_000 : relative[2].startsWith("hour") ? 3_600_000 : relative[2].startsWith("week") ? 7 * 86_400_000 : 86_400_000;
@@ -96,7 +102,7 @@ export function parseWhen(raw: string, nowMs: number, tz: string = timeZone()): 
   // Split "tomorrow at 9", "friday 9am", "at 9" into day + clock parts.
   let dayPart = "";
   let clockPart = "";
-  const atSplit = /^(.*?)\s+at\s+(.+)$/.exec(text);
+  const atSplit = AT_SPLIT.exec(text);
   if (atSplit) {
     dayPart = atSplit[1].trim();
     clockPart = atSplit[2].trim();
@@ -105,7 +111,7 @@ export function parseWhen(raw: string, nowMs: number, tz: string = timeZone()): 
     clockPart = text.slice(3).trim();
   } else {
     // "tomorrow 9am", "friday 9", "tomorrow morning"
-    const chunks = text.split(/\s+/);
+    const chunks = text.split(WHITESPACE_RUN);
     const lastClock = parseClock(chunks[chunks.length - 1]);
     if (lastClock && chunks.length > 1) {
       clockPart = chunks[chunks.length - 1];
@@ -152,7 +158,7 @@ function resolveDay(dayPart: string, nowMs: number, tz: string): { y: number; m:
   if (dayPart === "" || dayPart === "today") return { y: now.y, m: now.m, d: now.d };
   if (dayPart === "tomorrow") return addDaysMs(nowMs, 1, tz);
   const next = dayPart.startsWith("next ");
-  const weekday = WEEKDAYS[dayPart] ?? (next ? WEEKDAYS[dayPart.replace(/^next\s+/, "")] : undefined);
+  const weekday = WEEKDAYS[dayPart] ?? (next ? WEEKDAYS[dayPart.replace(NEXT_PREFIX, "")] : undefined);
   if (weekday !== undefined) {
     let delta = (weekday - now.weekday + 7) % 7;
     if (delta === 0) delta = 7;

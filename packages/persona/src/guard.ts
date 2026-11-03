@@ -131,17 +131,31 @@ const UNLISTED_SELF = [
   uw(/\b[Ii](?:'m|’m| am) (?:(?:an?|the) (?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version|virtual) )+|(?:(?:[Aa][Ii]|AI|assistant|model|bot|chatbot|version) )*)(?:called |named )?(?!Mano\b)[A-Z]/),
 ];
 
+const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/g;
+const CONTRIBUTOR_SUFFIX = /-contributor$/;
+const ID_SEPARATORS = /[-_.\s]+/;
+
 function escapePattern(word: string): string {
-  return word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return word.replace(REGEX_SPECIAL, "\\$&");
 }
 
 // A configured ID also matches without its -contributor suffix, and
 // with any separators between its parts ("muse spark 1.3").
-function idPattern(modelIds: readonly string[]): RegExp | null {
-  const ids = [...new Set(modelIds.flatMap((id) => [id, id.replace(/-contributor$/, "")]).filter((id) => id.length > 0))];
+function buildIdPattern(modelIds: readonly string[]): RegExp | null {
+  const ids = [...new Set(modelIds.flatMap((id) => [id, id.replace(CONTRIBUTOR_SUFFIX, "")]).filter((id) => id.length > 0))];
   if (ids.length === 0) return null;
-  const loose = ids.map((id) => id.split(/[-_.\s]+/).map(escapePattern).join("[-_.\\s\\u2010-\\u2015]*"));
+  const loose = ids.map((id) => id.split(ID_SEPARATORS).map(escapePattern).join("[-_.\\s\\u2010-\\u2015]*"));
   return new RegExp(`(?<![\\w.-])(?:${loose.join("|")})(?![\\w-])`, "i");
+}
+
+// The ID list comes from deployment config, so each distinct list is
+// built once.
+const ID_PATTERNS = new Map<string, RegExp | null>();
+
+function idPattern(modelIds: readonly string[]): RegExp | null {
+  const key = JSON.stringify(modelIds);
+  if (!ID_PATTERNS.has(key)) ID_PATTERNS.set(key, buildIdPattern(modelIds));
+  return ID_PATTERNS.get(key) ?? null;
 }
 
 function selfIdentifiesAsOther(sentence: string): boolean {
@@ -152,8 +166,11 @@ function selfIdentifiesAsOther(sentence: string): boolean {
 // Underscores, zero-width characters and similar join words for a
 // regex but not for a reader: "Meta_AI" and "_muse_spark_1.3_" name the
 // stack. Matching runs on a copy with them turned into spaces.
+const INVISIBLE_JOINERS = /[​-‍⁠﻿]/g;
+const UNDERSCORES = /_+/g;
+
 function separated(text: string): string {
-  return text.replace(/[​-‍⁠﻿]/g, "").replace(/_+/g, " ");
+  return text.replace(INVISIBLE_JOINERS, "").replace(UNDERSCORES, " ");
 }
 
 // Quoted text is what the person should write or what a document says,
@@ -223,40 +240,62 @@ const DASHES = "‒–—―";
 
 const LIST_MARK = /^[ \t]*(?:[-*+•◦▪‣○●]|\d{1,2}[.)])[ \t]+/;
 const LIST_BLOCK = /(?:^[ \t]*(?:[-*+•◦▪‣○●]|\d{1,2}[.)])[ \t]+.+(?:\n|$)){2,}/gm;
+const CODE_FENCE_LINE = /^[ \t]*```.*$/gm;
+const INLINE_CODE = /`([^`\n]+)`/g;
+const MARKDOWN_LINK = /!?\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+const HEADING_LINE = /^[ \t]*#{1,6}[ \t]+(.+?)[ \t#]*$/gm;
+const BLOCKQUOTE_MARK = /^[ \t]*>[ \t]?/gm;
+const HORIZONTAL_RULE = /^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm;
+const BULLET_LINE = /^[ \t]*[-*+•◦▪‣○●][ \t]+(.+)$/gm;
+const NUMBERED_LINE = /^[ \t]*\d{1,2}[.)][ \t]+(.+)$/gm;
+const STRIKETHROUGH = /~~(?=\S)(.+?)(?<=\S)~~/g;
+const BOLD = /(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g;
+const STAR_ITALIC = /(^|[^\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?!\w)/g;
+const UNDERSCORE_ITALIC = /(^|[^\w])_(?=\S)([^_\n]+?)(?<=\S)_(?!\w)/g;
+const STRAY_DOUBLE_STAR = /\*\*/g;
 
 export function stripMarkdown(text: string): string {
   return text
-    .replace(/^[ \t]*```.*$/gm, "")
-    .replace(/`([^`\n]+)`/g, "$1")
-    .replace(/!?\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_m, label: string, url: string) => (url.includes(label) ? url : `${label} (${url})`))
-    .replace(/^[ \t]*#{1,6}[ \t]+(.+?)[ \t#]*$/gm, (_m, line: string) => endSentence(line))
-    .replace(/^[ \t]*>[ \t]?/gm, "")
-    .replace(/^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm, "")
+    .replace(CODE_FENCE_LINE, "")
+    .replace(INLINE_CODE, "$1")
+    .replace(MARKDOWN_LINK, (_m, label: string, url: string) => (url.includes(label) ? url : `${label} (${url})`))
+    .replace(HEADING_LINE, (_m, line: string) => endSentence(line))
+    .replace(BLOCKQUOTE_MARK, "")
+    .replace(HORIZONTAL_RULE, "")
     // A checklist stays in one bubble: two or more list lines join into one.
     .replace(LIST_BLOCK, (block) => `${block.trim().split("\n").map((line) => endSentence(line.replace(LIST_MARK, "").trim())).join(" ")}\n`)
-    .replace(/^[ \t]*[-*+•◦▪‣○●][ \t]+(.+)$/gm, (_m, line: string) => endSentence(line))
-    .replace(/^[ \t]*\d{1,2}[.)][ \t]+(.+)$/gm, (_m, line: string) => endSentence(line))
-    .replace(/~~(?=\S)(.+?)(?<=\S)~~/g, "$1")
-    .replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, "$2")
-    .replace(/(^|[^\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?!\w)/g, "$1$2")
-    .replace(/(^|[^\w])_(?=\S)([^_\n]+?)(?<=\S)_(?!\w)/g, "$1$2")
-    .replace(/\*\*/g, "");
+    .replace(BULLET_LINE, (_m, line: string) => endSentence(line))
+    .replace(NUMBERED_LINE, (_m, line: string) => endSentence(line))
+    .replace(STRIKETHROUGH, "$1")
+    .replace(BOLD, "$2")
+    .replace(STAR_ITALIC, "$1$2")
+    .replace(UNDERSCORE_ITALIC, "$1$2")
+    .replace(STRAY_DOUBLE_STAR, "");
 }
 
 // A bullet or header loses its line break once bubbles are joined, so
 // it keeps its own sentence end.
+const ENDS_SENTENCE = /[.!?:;,…]["”’)]?$/;
+
 function endSentence(line: string): string {
-  return /[.!?:;,…]["”’)]?$/.test(line) ? line : `${line}.`;
+  return ENDS_SENTENCE.test(line) ? line : `${line}.`;
 }
+
+const NUMBER_RANGE_DASH = new RegExp(`(\\d)[ \\t]*(?:[${DASHES}−]|[ \\t]-[ \\t])[ \\t]*(\\d)`, "g");
+const DASH = new RegExp(`[ \\t]*(?:[${DASHES}]|--+)[ \\t]*`, "g");
+const SPACED_HYPHEN = /(\S)[ \t]+-[ \t]+(?=\S)/g;
+const COMMA_BEFORE_PUNCTUATION = /,[ \t]*([,.!?;:])/g;
+const LEADING_COMMA = /^[ \t]*,[ \t]*/gm;
+const TRAILING_COMMA = /[ \t]*,[ \t]*$/gm;
 
 export function removeDashes(text: string): string {
   return text
-    .replace(new RegExp(`(\\d)[ \\t]*(?:[${DASHES}−]|[ \\t]-[ \\t])[ \\t]*(\\d)`, "g"), "$1 to $2")
-    .replace(new RegExp(`[ \\t]*(?:[${DASHES}]|--+)[ \\t]*`, "g"), ", ")
-    .replace(/(\S)[ \t]+-[ \t]+(?=\S)/g, "$1, ")
-    .replace(/,[ \t]*([,.!?;:])/g, "$1")
-    .replace(/^[ \t]*,[ \t]*/gm, "")
-    .replace(/[ \t]*,[ \t]*$/gm, "");
+    .replace(NUMBER_RANGE_DASH, "$1 to $2")
+    .replace(DASH, ", ")
+    .replace(SPACED_HYPHEN, "$1, ")
+    .replace(COMMA_BEFORE_PUNCTUATION, "$1")
+    .replace(LEADING_COMMA, "")
+    .replace(TRAILING_COMMA, "");
 }
 
 // Rewrites or drops every sentence that names a model or provider. The
@@ -284,12 +323,19 @@ function removeProviderNames(text: string, ids: RegExp | null, quotes: readonly 
   return { text: restoreQuotes(out, quotes), selfDescribed };
 }
 
+const SPACE_RUN = /[ \t]{2,}/g;
+const BLANK_LINE_RUN = /\n{3,}/g;
+const REACT_MARKER = /(^|[^A-Za-z])REACT:[ \t]*(?:[a-z]+|[\p{Extended_Pictographic}\u{FE0F}\u{1F3FB}-\u{1F3FF}\u{200D}]+)?/giu;
+const DEEP_MARKER = /(^|[^A-Za-z])DEEP:[ \t]*/g;
+const MANO_LABEL = /^[ \t]*Mano:[ \t]*/gm;
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+
 function tidy(text: string): string {
   return text
     .split("\n")
-    .map((line) => line.replace(/[ \t]{2,}/g, " ").trim())
+    .map((line) => line.replace(SPACE_RUN, " ").trim())
     .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(BLANK_LINE_RUN, "\n\n")
     .trim();
 }
 
@@ -297,12 +343,12 @@ export function guardReply(raw: string, opts: GuardOptions = {}): GuardResult {
   const ids = idPattern(opts.modelIds ?? []);
   const changes: GuardChange[] = [];
   let text = raw;
-  const unrouted = text.replace(/(^|[^A-Za-z])REACT:[ \t]*(?:[a-z]+|[\p{Extended_Pictographic}\u{FE0F}\u{1F3FB}-\u{1F3FF}\u{200D}]+)?/giu, "$1 ").replace(/(^|[^A-Za-z])DEEP:[ \t]*/g, "$1 ");
+  const unrouted = text.replace(REACT_MARKER, "$1 ").replace(DEEP_MARKER, "$1 ");
   if (unrouted !== text) changes.push("route-marker");
   text = unrouted;
   // The soul's examples are written as "Mano: ..." lines, and a reply
   // sometimes copies the label onto a bubble.
-  const unlabeled = text.replace(/^[ \t]*Mano:[ \t]*/gm, "");
+  const unlabeled = text.replace(MANO_LABEL, "");
   if (unlabeled !== text) changes.push("speaker-label");
   text = unlabeled;
   const unmarked = stripMarkdown(text);
@@ -318,7 +364,7 @@ export function guardReply(raw: string, opts: GuardOptions = {}): GuardResult {
     text = named.text;
   }
   text = tidy(text);
-  if (!/[\p{L}\p{N}]/u.test(text)) {
+  if (!LETTER_OR_DIGIT.test(text)) {
     changes.push("empty");
     text = SAFE_REPLY;
   }

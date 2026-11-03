@@ -29,9 +29,10 @@ const STREET_ADDRESS =
   /\b\d{1,5}\s+[A-Z][a-zA-Z']+(?:\s+[A-Z][a-zA-Z']+){0,3}\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ln|Lane|Dr|Drive|Way|Ct|Court|Pl|Place|Ter|Terrace)\b(?:\s+(?:Apt|Unit|#)\s*[\w-]+)?/gi;
 const ZIP_CODE = /\b\d{5}(?:-\d{4})?\b/g;
 const URL = /https?:\/\/[^\s"']+/gi;
+const REGEXP_SPECIAL_CHARS = /[.*+?^${}()|[\]\\]/g;
 
 function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(REGEXP_SPECIAL_CHARS, "\\$&");
 }
 
 export function redact(text: string, known?: KnownEntities): string {

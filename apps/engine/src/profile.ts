@@ -78,27 +78,34 @@ const MAX_TEXT = 200;
 const ENTRY_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const KEY = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
 const MAX_FIELDS = 60;
+const WHITESPACE_RUN = /\s+/g;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const NON_DIGITS = /\D/g;
+const PHONE_CHARS = /^[0-9+().\s-]+$/;
+const EMAIL_SHAPE = /^[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}$/;
+const STATE_CODE = /^[A-Za-z]{2}$/;
+const ZIP_CODE = /^\d{5}(-\d{4})?$/;
 
 // What each kind of value must look like, normalized. null: not valid.
 const NORMALIZE: Record<Kind, (raw: unknown) => Value | null> = {
   text: (raw) => {
     if (typeof raw !== "string") return null;
-    const clean = raw.trim().replace(/\s+/g, " ");
+    const clean = raw.trim().replace(WHITESPACE_RUN, " ");
     return clean && clean.length <= MAX_TEXT ? clean : null;
   },
   date: (raw) => {
-    if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+    if (typeof raw !== "string" || !ISO_DATE.test(raw)) return null;
     const d = new Date(`${raw}T00:00:00Z`);
     return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === raw ? raw : null;
   },
   phone: (raw) => {
     if (typeof raw !== "string") return null;
-    const digits = raw.replace(/\D/g, "");
-    return /^[0-9+().\s-]+$/.test(raw.trim()) && digits.length >= 7 && digits.length <= 15 ? raw.trim() : null;
+    const digits = raw.replace(NON_DIGITS, "");
+    return PHONE_CHARS.test(raw.trim()) && digits.length >= 7 && digits.length <= 15 ? raw.trim() : null;
   },
-  email: (raw) => (typeof raw === "string" && /^[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}$/.test(raw.trim()) ? raw.trim().toLowerCase() : null),
-  state: (raw) => (typeof raw === "string" && /^[A-Za-z]{2}$/.test(raw.trim()) ? raw.trim().toUpperCase() : null),
-  zip: (raw) => (typeof raw === "string" && /^\d{5}(-\d{4})?$/.test(raw.trim()) ? raw.trim() : null),
+  email: (raw) => (typeof raw === "string" && EMAIL_SHAPE.test(raw.trim()) ? raw.trim().toLowerCase() : null),
+  state: (raw) => (typeof raw === "string" && STATE_CODE.test(raw.trim()) ? raw.trim().toUpperCase() : null),
+  zip: (raw) => (typeof raw === "string" && ZIP_CODE.test(raw.trim()) ? raw.trim() : null),
   amount: (raw) =>
     typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 10_000_000 ? Math.round(raw * 100) / 100 : null,
   frequency: (raw) => (typeof raw === "string" && (FREQUENCIES as readonly string[]).includes(raw) ? raw : null),

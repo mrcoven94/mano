@@ -240,14 +240,18 @@ export function partitionByChat(
   return [...groups.values()];
 }
 
+const ENDS_WITH_QUESTION = /\?\s*$/;
+const SPLIT_PIECE_SUFFIX = /#\d+$/;
+const BUSY_NOTICE_KEY = /^busy:([^:]+):(\d+)$/;
+
 // In a burst of two or more texts, the reply answers the one question
 // that is not the latest message, shown inline under it. With no such
 // question, or more than one, the reply is not threaded.
 export function inlineReplyTarget(items: import("./store.js").PendingInbound[]): string | null {
   const texts = items.filter((i) => (i.text ?? "").trim().length > 0 && i.messageId);
   if (texts.length < 2) return null;
-  const earlier = texts.slice(0, -1).filter((i) => /\?\s*$/.test(i.text ?? ""));
-  return earlier.length === 1 && !/\?\s*$/.test(texts[texts.length - 1].text ?? "") ? (earlier[0].messageId ?? null) : null;
+  const earlier = texts.slice(0, -1).filter((i) => ENDS_WITH_QUESTION.test(i.text ?? ""));
+  return earlier.length === 1 && !ENDS_WITH_QUESTION.test(texts[texts.length - 1].text ?? "") ? (earlier[0].messageId ?? null) : null;
 }
 
 function turnTextOf(texts: string[]): string {
@@ -260,7 +264,7 @@ function turnTextOf(texts: string[]): string {
 export function rejoinPieces(items: import("./store.js").PendingInbound[]): string {
   let out = "";
   items.forEach((item, i) => {
-    if (i > 0) out += /#\d+$/.test(item.eventId) ? "" : "\n";
+    if (i > 0) out += SPLIT_PIECE_SUFFIX.test(item.eventId) ? "" : "\n";
     out += item.text ?? "";
   });
   return out;
@@ -1476,7 +1480,7 @@ export class ConversationRunner {
   private async sendBusy(turn: number, chatId: string | null, to: string | null, nowMs: number): Promise<boolean> {
     const meta = this.store.meta();
     const day = dayKeyFor(nowMs);
-    const match = /^busy:([^:]+):(\d+)$/.exec(meta.busyNoticeKey ?? "");
+    const match = BUSY_NOTICE_KEY.exec(meta.busyNoticeKey ?? "");
     const count = match && match[1] === day ? Number(match[2]) : 0;
     if (count >= BUSY_DAILY_CAP) return false;
     this.store.patchMeta({ busyNoticeKey: `busy:${day}:${count + 1}` });

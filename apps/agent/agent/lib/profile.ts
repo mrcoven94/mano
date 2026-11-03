@@ -69,8 +69,11 @@ const FORGET_TARGETS: Record<string, string> = {
 };
 export const FORGET_NAMES = Object.keys(FORGET_TARGETS);
 
+const WHITESPACE_RUN = /\s+/g;
+const SELF_WORD = /^(self|me|myself)$/i;
+
 const same = (a: string | undefined, b: string | undefined) =>
-  (a ?? "").trim().toLowerCase().replace(/\s+/g, " ") === (b ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  (a ?? "").trim().toLowerCase().replace(WHITESPACE_RUN, " ") === (b ?? "").trim().toLowerCase().replace(WHITESPACE_RUN, " ");
 
 function newRef(turnId: string, collection: string, index: number, key: string): string {
   return `${collection.slice(0, 1)}${createHash("sha256").update(`${turnId}\n${collection}\n${index}\n${key}`).digest("hex").slice(0, 10)}`;
@@ -167,7 +170,7 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
     if (inc.member) {
       const who = inc.member.trim();
       const byName = members.filter((m) => same(m.name?.value, who));
-      if (/^(self|me|myself)$/i.test(who)) memberId = "self";
+      if (SELF_WORD.test(who)) memberId = "self";
       else if (members.some((m) => m.id === who)) memberId = who;
       else if (byName.length === 1) memberId = byName[0].id;
       else if (byName.length > 1) throw new ProfileInputProblem(`More than one household member is named ${who}. Pass the member's ref instead.`);

@@ -522,8 +522,11 @@ export interface StagingOptions {
   priorLog?: BaselineLogEntry[];
 }
 
+const BRANCH_REF_PREFIX_RE = /^refs\/heads\//;
+const UNSAFE_PATH_CHARS_RE = /[^A-Za-z0-9._-]/g;
+
 export function branchPrefix(ref: string): string {
-  return ref === MAIN_REF ? "" : `branches/${ref.replace(/^refs\/heads\//, "").replace(/[^A-Za-z0-9._-]/g, "-")}/`;
+  return ref === MAIN_REF ? "" : `branches/${ref.replace(BRANCH_REF_PREFIX_RE, "").replace(UNSAFE_PATH_CHARS_RE, "-")}/`;
 }
 
 // One id per run. The date alone let a second main run on the same day

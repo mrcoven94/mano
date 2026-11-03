@@ -71,6 +71,15 @@ const RETIRE_BATCH_LIMIT = 500;
 const RATE_WINDOW_MS = 60_000;
 const SLOW_LEASE_TTL_MS = 65_000;
 
+const NON_PRINTABLE_ASCII = /[^\x20-\x7E]/g;
+const QUOTE_OR_BACKSLASH = /["\\]/g;
+const LINE_BREAK = /[\r\n]/g;
+const BEARER = /^Bearer (.+)$/;
+const DRAFT_PATH = /^\/drafts\/([^/]+)$/;
+const SUBMISSION_PATH = /^\/submissions\/([^/]+)$/;
+const CASEWORKER_FILE_PATH = /^\/caseworker\/([^/]+)\/file\/(\d+)$/;
+const CASEWORKER_CASE_PATH = /^\/caseworker\/([^/]+)$/;
+
 type CappedBody = { ok: true; bytes: Uint8Array } | { ok: false };
 
 async function readCappedBody(request: Request, maxBytes: number): Promise<CappedBody> {
@@ -155,7 +164,7 @@ async function releaseStaged(fileStore: FileStore, store: Store, keys: string[])
 
 /** Attachment header that cannot break out of the filename parameter. */
 function contentDisposition(name: string): string {
-  const ascii = name.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_").replace(/[\r\n]/g, "_").trim() || "download";
+  const ascii = name.replace(NON_PRINTABLE_ASCII, "_").replace(QUOTE_OR_BACKSLASH, "_").replace(LINE_BREAK, "_").trim() || "download";
   return `attachment; filename="${ascii.slice(0, 100)}"; filename*=UTF-8''${encodeURIComponent(name.slice(0, 200))}`;
 }
 
@@ -233,7 +242,7 @@ function readSessionId(request: Request): string | null {
 
 function bearerToken(request: Request): string | null {
   const header = request.headers.get("authorization") ?? "";
-  const match = /^Bearer (.+)$/.exec(header.trim());
+  const match = BEARER.exec(header.trim());
   return match?.[1] ?? null;
 }
 
@@ -879,7 +888,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     return html(savedPage(session.draftId));
   }
 
-  const draftMatch = /^\/drafts\/([^/]+)$/.exec(path);
+  const draftMatch = DRAFT_PATH.exec(path);
   if (method === "GET" && draftMatch?.[1]) {
     const id = draftMatch[1];
     if (!DRAFT_ID.test(id)) return json({ error: DRAFT_ID_RULE }, 400);
@@ -904,7 +913,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     return handleSubmit(request, url, store, fileStore, config);
   }
 
-  const submissionMatch = /^\/submissions\/([^/]+)$/.exec(path);
+  const submissionMatch = SUBMISSION_PATH.exec(path);
   if (method === "GET" && submissionMatch?.[1]) {
     const key = decodeURIComponent(submissionMatch[1]);
     const scope = await callerScope(request);
@@ -945,7 +954,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     return html(caseworkerListPage(subs, page, totalPages));
   }
 
-  const fileMatch = /^\/caseworker\/([^/]+)\/file\/(\d+)$/.exec(path);
+  const fileMatch = CASEWORKER_FILE_PATH.exec(path);
   if (method === "GET" && fileMatch?.[1] && fileMatch[2] !== undefined) {
     const sub = await store.getSubmissionByConfirmation(decodeURIComponent(fileMatch[1]));
     const file = sub?.files[Number(fileMatch[2])];
@@ -964,7 +973,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     });
   }
 
-  const caseMatch = /^\/caseworker\/([^/]+)$/.exec(path);
+  const caseMatch = CASEWORKER_CASE_PATH.exec(path);
   if (method === "GET" && caseMatch?.[1]) {
     const sub = await store.getSubmissionByConfirmation(decodeURIComponent(caseMatch[1]));
     if (!sub) {

@@ -6,6 +6,7 @@ import { boundFetch } from "./fetch.js";
 
 export const STANDARD_MODEL_IDS = ["muse-spark-1.3"];
 export const CONTRIBUTOR_MODEL_IDS = ["muse-spark-1.3-contributor"];
+const TRAILING_SLASH = /\/$/;
 
 export interface ModelRequest {
   input: string;
@@ -46,7 +47,7 @@ export function buildModelBaseUrl(opts: ModelEndpointOptions): { url: string; vi
       via: "ai-gateway",
     };
   }
-  return { url: (opts.directBaseUrl ?? "https://api.meta.ai/v1").replace(/\/$/, ""), via: "direct" };
+  return { url: (opts.directBaseUrl ?? "https://api.meta.ai/v1").replace(TRAILING_SLASH, ""), via: "direct" };
 }
 
 export function defaultModelFor(synthetic: boolean): string {

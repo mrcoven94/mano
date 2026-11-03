@@ -10,6 +10,13 @@ import type { EngineDeadline } from "./engine.js";
 import { DEFAULT_TIMEZONE } from "./when.js";
 
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+const ORDINAL_SUFFIX = /(\d)(st|nd|rd|th)\b/g;
+const COMMAS = /,/g;
+const WHITESPACE_RUN = /\s+/g;
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const SLASH_DATE = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?$/;
+const MONTH_NAME_DATE = /^([a-z]+)\.? (\d{1,2})(?: (\d{4}))?$/;
+const NON_WORD_RUN = /[^\p{L}\p{N}]+/gu;
 
 function zone(): string {
   return process.env.MANO_TIMEZONE || DEFAULT_TIMEZONE;
@@ -29,7 +36,7 @@ function iso(y: number, m: number, d: number): string | null {
 // "November 12", "Nov 12, 2026", "11/12" or "11/12/2026". Without a year
 // it is the next such date from today. null when it is not one of these.
 export function parseDueDate(words: string, nowMs: number): string | null {
-  const text = words.trim().toLowerCase().replace(/(\d)(st|nd|rd|th)\b/g, "$1").replace(/,/g, " ").replace(/\s+/g, " ");
+  const text = words.trim().toLowerCase().replace(ORDINAL_SUFFIX, "$1").replace(COMMAS, " ").replace(WHITESPACE_RUN, " ");
   const today = localDate(nowMs);
   const withYear = (m: number, d: number, y?: number) => {
     if (y !== undefined) return iso(y < 100 ? 2000 + y : y, m, d);
@@ -38,11 +45,11 @@ export function parseDueDate(words: string, nowMs: number): string | null {
     if (!candidate) return null;
     return candidate >= today ? candidate : iso(thisYear + 1, m, d);
   };
-  let match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  let match = ISO_DATE.exec(text);
   if (match) return iso(Number(match[1]), Number(match[2]), Number(match[3]));
-  match = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?$/.exec(text);
+  match = SLASH_DATE.exec(text);
   if (match) return withYear(Number(match[1]), Number(match[2]), match[3] ? Number(match[3]) : undefined);
-  match = /^([a-z]+)\.? (\d{1,2})(?: (\d{4}))?$/.exec(text);
+  match = MONTH_NAME_DATE.exec(text);
   if (match) {
     const month = MONTHS.findIndex((name) => name.startsWith(match![1]) && match![1].length >= 3);
     if (month < 0) return null;
@@ -59,7 +66,7 @@ const FILLER = new Set(["a", "an", "the", "upcoming", "next"]);
 export function taskWords(title: string): string {
   return title
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(NON_WORD_RUN, " ")
     .split(" ")
     .filter((w) => w && !FILLER.has(w))
     .join(" ");

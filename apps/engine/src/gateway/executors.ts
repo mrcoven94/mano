@@ -54,6 +54,7 @@ export class InMemoryExecutor implements Executor {
 // portalFiling is the one place the executor applies it, both when the
 // gateway asks before drafting an approval and again right before filing.
 // The contract test runs these rules against the real portal code.
+const TRAILING_SLASH = /\/$/;
 const PORTAL_HOUSEHOLD = {
   fullName: "full legal name",
   dateOfBirth: "date of birth",
@@ -299,7 +300,7 @@ export function createExecutor(env: {
     if (!env.SANDBOX_PORTAL_TOKEN) {
       throw new Error("EXECUTOR_MODE is sandbox but SANDBOX_PORTAL_TOKEN is not set.");
     }
-    return new SandboxExecutor(env.SANDBOX_BASE_URL.replace(/\/$/, ""), undefined, undefined, env.SANDBOX_PORTAL_TOKEN, limits);
+    return new SandboxExecutor(env.SANDBOX_BASE_URL.replace(TRAILING_SLASH, ""), undefined, undefined, env.SANDBOX_PORTAL_TOKEN, limits);
   }
   throw new Error(`Unknown EXECUTOR_MODE: ${mode}.`);
 }

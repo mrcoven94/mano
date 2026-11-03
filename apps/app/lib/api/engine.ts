@@ -52,13 +52,16 @@ interface GatewayResultJson {
   reason?: string;
 }
 
+const TRAILING_SLASHES = /\/+$/;
+const DISPOSITION_FILENAME = /filename="([^"]+)"/;
+
 function join(base: string, path: string): string {
-  return `${base.replace(/\/+$/, "")}${path}`;
+  return `${base.replace(TRAILING_SLASHES, "")}${path}`;
 }
 
 function filenameFromDisposition(header: string | null): string | null {
   if (!header) return null;
-  const match = /filename="([^"]+)"/.exec(header);
+  const match = DISPOSITION_FILENAME.exec(header);
   return match?.[1] ?? null;
 }
 

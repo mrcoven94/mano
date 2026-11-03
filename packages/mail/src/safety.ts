@@ -43,6 +43,8 @@ const BARE_DOMAIN_RE =
 // NANP-ish numbers: (555) 123-4567, 555-123-4567, 555.123.4567,
 // 5551234567 with separators, optional leading 1.
 const PHONE_RE = /(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}\b/g;
+const TRAILING_URL_PUNCTUATION = /[.,;:!?]+$/;
+const NON_DIGIT = /\D/g;
 
 const URGENCY_WORDS = [
   "urgent",
@@ -70,7 +72,7 @@ export function findLinks(text: string): ContentFlag[] {
   const seen = new Set<string>();
   const collect = (re: RegExp, source = text) => {
     for (const m of source.matchAll(re)) {
-      const url = m[0].replace(/[.,;:!?]+$/, "");
+      const url = m[0].replace(TRAILING_URL_PUNCTUATION, "");
       if (!seen.has(url)) {
         seen.add(url);
         flags.push({ kind: "link", label: "link needs a safety check before use", match: url });
@@ -88,7 +90,7 @@ export function findPhones(text: string): ContentFlag[] {
   const flags: ContentFlag[] = [];
   const seen = new Set<string>();
   for (const m of text.matchAll(PHONE_RE)) {
-    const digits = m[0].replace(/\D/g, "");
+    const digits = m[0].replace(NON_DIGIT, "");
     // Skip dates and short runs that are not dialable numbers.
     if (digits.length < 10 || digits.length > 11) continue;
     if (!seen.has(m[0])) {
@@ -135,9 +137,10 @@ const NEVER_ASKS = new RegExp(
     String.raw`(?:(?!\b(?:so|but|instead|then)\b)[^.!?,;:]){0,60}?\b${METHOD}(?:\s*,?\s*(?:(?:and|or)\s+)?${METHOD})*`,
   "gi",
 );
+const SENTENCE_BREAK = /(?<=[.!?])\s+|\n\s*\n/;
 
 function paymentDemand(text: string): string | null {
-  const sentences = text.split(/(?<=[.!?])\s+|\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  const sentences = text.split(SENTENCE_BREAK).map((s) => s.trim()).filter(Boolean);
   const counted = sentences.map((s) => s.replace(NEVER_ASKS, " "));
   const find = (test: (s: string) => boolean): string | null => {
     const k = counted.findIndex(test);
@@ -158,6 +161,10 @@ function paymentDemand(text: string): string | null {
 // whose host is not a .gov host. A printed sender name never exempts a
 // link: it is unverified evidence. A real agency letter with a plain
 // phone number never matches.
+const ASKS_PAYMENT = /pay\b|payment|verify|confirm\s+your|update\s+your\s+(account|information|benefits)/i;
+const CUT_OFF_FROM_OFFICE =
+  /\b(?:do\s+not|don't|never)\s+(?:call|contact|phone|visit)\s+(?:the\s+|your\s+)?(?:county|office|agency|state|caseworker|benefits\s+office)\b[^.!?\n]*/i;
+
 export function screenScam(text: string): ContentFlag[] {
   const demand = paymentDemand(text);
   if (demand) {
@@ -166,10 +173,10 @@ export function screenScam(text: string): ContentFlag[] {
   const lower = text.toLowerCase();
   const urgency = URGENCY_WORDS.filter((w) => lower.includes(w));
   if (urgency.length === 0) return [];
-  const asksPayment = /pay\b|payment|verify|confirm\s+your|update\s+your\s+(account|information|benefits)/i.test(text);
+  const asksPayment = ASKS_PAYMENT.test(text);
   if (!asksPayment) return [];
   // A real office never tells the person not to contact it.
-  const cutOff = text.match(/\b(?:do\s+not|don't|never)\s+(?:call|contact|phone|visit)\s+(?:the\s+|your\s+)?(?:county|office|agency|state|caseworker|benefits\s+office)\b[^.!?\n]*/i);
+  const cutOff = text.match(CUT_OFF_FROM_OFFICE);
   if (cutOff) {
     return [{ kind: "scam", label: "urgent verification ask that tells the person not to contact their office", match: cutOff[0], detail: `urgency words: ${urgency.slice(0, 3).join(", ")}` }];
   }

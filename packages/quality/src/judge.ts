@@ -125,8 +125,13 @@ export class FakeJudge implements JudgeClient {
   }
 }
 
+const NON_WORD_CHARS_RE = /[^a-z0-9áéíóúñü\s]/g;
+const WHITESPACE_RE = /\s+/;
+const NON_DIGIT_RE = /\D/g;
+const LETTER_CITATION_RE = /\[letter\s+\d+\]/i;
+
 function words(s: string): Set<string> {
-  return new Set(s.toLowerCase().replace(/[^a-z0-9áéíóúñü\s]/g, " ").split(/\s+/).filter((w) => w.length > 3));
+  return new Set(s.toLowerCase().replace(NON_WORD_CHARS_RE, " ").split(WHITESPACE_RE).filter((w) => w.length > 3));
 }
 
 export function scoreByOverlap(item: JudgeItem): JudgeScore {
@@ -136,10 +141,10 @@ export function scoreByOverlap(item: JudgeItem): JudgeScore {
   // invented, so only that exact text is left out; 988 or 911 anywhere else
   // must be grounded like any other number.
   const given = `${item.facts}\n${item.reference}`;
-  const givenDigits = given.replace(/\D/g, " ");
+  const givenDigits = given.replace(NON_DIGIT_RE, " ");
   const grounded = item.answer.split(CRISIS_LINE).join("\n").split(CRISIS_LINE_ES).join("\n");
   const invented = [
-    ...extractPhones(grounded).filter((p) => !given.includes(p) && !givenDigits.includes(p.replace(/\D/g, ""))),
+    ...extractPhones(grounded).filter((p) => !given.includes(p) && !givenDigits.includes(p.replace(NON_DIGIT_RE, ""))),
     ...extractUrls(grounded).filter((u) => !given.includes(u)),
     ...extractAmounts(grounded).filter((a) => !given.includes(a)),
     ...extractDates(grounded).filter((d) => !given.toLowerCase().includes(d.toLowerCase())),
@@ -150,7 +155,7 @@ export function scoreByOverlap(item: JudgeItem): JudgeScore {
   if (containsPromise(item.answer) && !containsPromise(item.reference)) {
     return { helpful: 2, accurate: 1, plain: 3, warm: 3, pass: false, reason: "promises eligibility the reference does not promise" };
   }
-  if (/\[letter\s+\d+\]/i.test(item.reference) && !/\[letter\s+\d+\]/i.test(item.answer)) {
+  if (LETTER_CITATION_RE.test(item.reference) && !LETTER_CITATION_RE.test(item.answer)) {
     return { helpful: 3, accurate: 2, plain: 4, warm: 4, pass: false, reason: "drops the letter citation" };
   }
   const a = words(item.answer);

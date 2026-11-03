@@ -14,8 +14,12 @@ function svgDoc(lines: string[], banner: string): string {
   );
 }
 
+const AMPERSAND_RE = /&/g;
+const LESS_THAN_RE = /</g;
+const GREATER_THAN_RE = />/g;
+
 function escapeXml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s.replace(AMPERSAND_RE, "&amp;").replace(LESS_THAN_RE, "&lt;").replace(GREATER_THAN_RE, "&gt;");
 }
 
 export function syntheticLetter(id: string, lines: string[], transcript: string): LetterImage {

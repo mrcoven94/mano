@@ -41,7 +41,8 @@ export type GateVerdict =
   | { kind: "ask"; reason: AskReason; count?: DayCount }
   | { kind: "no-date" };
 
-const any = (words: string[]): string => `(?:${words.map((w) => w.replace(/ /g, String.raw`\s+`)).join("|")})`;
+const SPACE = / /g;
+const any = (words: string[]): string => `(?:${words.map((w) => w.replace(SPACE, String.raw`\s+`)).join("|")})`;
 
 // The grammar's vocabulary. Adding a word widens what publishes, so
 // each addition needs a test that it states a duty the person owes.
@@ -157,7 +158,7 @@ const QUALIFIER = new RegExp(
     "cancelled", "canceled", "disregard", "void", "no longer", "ignore", "optional",
     "withdrawn", "rescinded", "no action", "not needed", "provided that", "providers",
   ]
-    .map((w) => w.replace(/ /g, String.raw`\s+`))
+    .map((w) => w.replace(SPACE, String.raw`\s+`))
     .join("|")})\b`,
   "i",
 );
@@ -179,16 +180,19 @@ const DUTY_WORDS = new RegExp(
 
 // The duty a deadline states, read from its own words. Dates within
 // one duty are compared with each other.
+const APPEAL_WORDS = /\b(appeal|hearing|grievance|reconsideration|dispute|contest|decision)\b/;
+const PAY_WORDS = /\b(pay|payment|premium|amount due|balance due)\b/;
+const PAY_STUBS = /\bpay stubs?\b/;
+const RENEW_WORDS = /\b(renew|renewal|recertif|redetermin)\b/;
+const RESPOND_WORDS =
+  /\b(respond|response|return|send|submit|provide|arrive|receive|paperwork|complete|deliver|mail|bring|due|deadline|no later than)\b/;
+
 export function obligationOf(text: string): Obligation {
   const t = text.toLowerCase();
-  if (/\b(appeal|hearing|grievance|reconsideration|dispute|contest|decision)\b/.test(t)) return "appeal";
-  if (/\b(pay|payment|premium|amount due|balance due)\b/.test(t) && !/\bpay stubs?\b/.test(t)) return "pay";
-  if (/\b(renew|renewal|recertif|redetermin)\b/.test(t)) return "renew";
-  if (
-    /\b(respond|response|return|send|submit|provide|arrive|receive|paperwork|complete|deliver|mail|bring|due|deadline|no later than)\b/.test(
-      t,
-    )
-  ) {
+  if (APPEAL_WORDS.test(t)) return "appeal";
+  if (PAY_WORDS.test(t) && !PAY_STUBS.test(t)) return "pay";
+  if (RENEW_WORDS.test(t)) return "renew";
+  if (RESPOND_WORDS.test(t)) {
     return "respond";
   }
   return "other";
@@ -224,9 +228,12 @@ function matchForm(s: string): { form: DeadlineForm; groups: Record<string, stri
   return null;
 }
 
+const WHITESPACE_RUN = /\s+/g;
+const TRAILING_PUNCTUATION = /[\s.!;:,]+$/;
+
 // Gates one sentence as splitSentences returns it.
 export function gateSentence(sentence: string, noticeIso: string | null): GateVerdict {
-  const s = sentence.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "");
+  const s = sentence.replace(WHITESPACE_RUN, " ").trim().replace(TRAILING_PUNCTUATION, "");
   if (findAmbiguousDate(s)) return { kind: "ask", reason: "ambiguous-date" };
   const match = matchForm(s);
   if (match) {

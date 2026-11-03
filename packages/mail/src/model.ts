@@ -167,6 +167,7 @@ const FAILED_BECAUSE: Record<number, string> = {
   429: "rate limited",
 };
 const RUN_STATES = new Set(["failed", "incomplete", "cancelled", "queued", "in_progress"]);
+const TRAILING_SLASH = /\/$/;
 
 function failed(status: number): string {
   const why = FAILED_BECAUSE[status];
@@ -186,7 +187,7 @@ export class MetaModelClient implements ModelClient {
   constructor(opts: MetaClientOptions) {
     if (!opts.apiKey) throw new Error("A model API key is required.");
     this.apiKey = opts.apiKey;
-    this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
+    this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(TRAILING_SLASH, "");
     this.allowExtra = new Set(opts.allowExtra ?? []);
     this.timeoutMs = opts.timeoutMs ?? 60000;
     this.maxRetries = opts.maxRetries ?? 2;

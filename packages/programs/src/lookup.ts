@@ -21,7 +21,13 @@ const PROGRAM_NAMES: Record<ProgramId, string[]> = {
   liheap: ["liheap", "heap", "ceap", "energy assistance", "energy help", "utility help", "help with utility bills", "home energy assistance"],
 };
 
-const norm = (s: string) => s.toLowerCase().normalize("NFC").replace(/[^a-z0-9ñ]+/g, " ").trim();
+const NON_WORD_RUN_RE = /[^a-z0-9ñ]+/g;
+const PARENTHESIZED_RE = /\(([^)]+)\)/;
+const PARENTHESIZED_SUFFIX_RE = /\s*\([^)]*\)/;
+const NEW_YORK_SUFFIX_RE = / (ny|new york)$/;
+const BOROUGH_COUNTY_SUFFIX_RE = / (borough|county)$/;
+
+const norm = (s: string) => s.toLowerCase().normalize("NFC").replace(NON_WORD_RUN_RE, " ").trim();
 
 export function parseState(input: string): StateCode | null {
   const s = norm(input);
@@ -32,8 +38,8 @@ function aliasesOf(entry: ProgramEntry): string[] {
   const name = entry.name?.value ?? "";
   // "Comprehensive Energy Assistance Program (CEAP)" answers to both its
   // long name and the short one in parentheses.
-  const short = name.match(/\(([^)]+)\)/)?.[1];
-  return [name, name.replace(/\s*\([^)]*\)/, ""), ...(short ? [short] : [])].map(norm).filter(Boolean);
+  const short = name.match(PARENTHESIZED_RE)?.[1];
+  return [name, name.replace(PARENTHESIZED_SUFFIX_RE, ""), ...(short ? [short] : [])].map(norm).filter(Boolean);
 }
 
 export function parseProgram(input: string, state: StateCode): ProgramId | null {
@@ -47,8 +53,8 @@ export type LookedUp = ProgramEntry & { area?: string };
 
 function inPlace(entry: ProgramEntry, place?: string): LookedUp {
   // "Brooklyn, NY" and "Kings County" name the same place as "brooklyn".
-  const p = place ? norm(place).replace(/ (ny|new york)$/, "") : "";
-  const route = p ? entry.areas?.find((a) => a.places.includes(p) || a.places.includes(p.replace(/ (borough|county)$/, ""))) : undefined;
+  const p = place ? norm(place).replace(NEW_YORK_SUFFIX_RE, "") : "";
+  const route = p ? entry.areas?.find((a) => a.places.includes(p) || a.places.includes(p.replace(BOROUGH_COUNTY_SUFFIX_RE, ""))) : undefined;
   return route ? { ...entry, ...route.facts, area: route.area } : entry;
 }
 

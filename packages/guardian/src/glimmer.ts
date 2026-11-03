@@ -36,6 +36,9 @@ export interface ServerInfo {
 
 // workerd throws "Illegal invocation" when fetch is called with any
 // receiver but the global object, as a stored method call would.
+const TRAILING_SLASHES_RE = /\/+$/;
+const VERDICT_KEY_RE = /"verdict"\s*:/g;
+
 const boundFetch: typeof fetch = (...args) => globalThis.fetch(...args);
 
 function isVerdict(value: unknown): value is Verdict {
@@ -83,7 +86,7 @@ export class GlimmerChecker implements Checker {
   private lastServer: ServerInfo | null = null;
 
   constructor(options: GlimmerCheckerOptions) {
-    this.url = options.url.replace(/\/+$/, "");
+    this.url = options.url.replace(TRAILING_SLASHES_RE, "");
     this.token = options.token;
     this.proxyAuth = options.proxyAuth ?? null;
     this.model = options.model ?? DEFAULT_GUARDIAN_MODEL;
@@ -180,7 +183,7 @@ export class GlimmerChecker implements Checker {
 
     // A duplicated verdict key means the answer is not trustworthy, however
     // JSON parsing would resolve it.
-    const verdictKeys = raw.match(/"verdict"\s*:/g) ?? [];
+    const verdictKeys = raw.match(VERDICT_KEY_RE) ?? [];
     if (verdictKeys.length !== 1) {
       return blocked(UNREADABLE);
     }

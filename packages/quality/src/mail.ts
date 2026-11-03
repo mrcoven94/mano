@@ -32,6 +32,8 @@ export function expectedDeadline(c: BenchCase): string | null {
   return deadline?.kind === "one" ? deadline.date : null;
 }
 
+const SCAM_MARKER_RE = /\b(?:URGENT|verify now)\b/i;
+
 // Reads the transcript the letter was drawn from: one date publishes, two or
 // more dates or a scam marker publish none.
 export class TranscriptDeadlineReader implements DeadlineReader {
@@ -39,7 +41,7 @@ export class TranscriptDeadlineReader implements DeadlineReader {
   readonly live = false;
 
   async readDeadline(letter: LetterImage): Promise<string | null> {
-    if (/\b(?:URGENT|verify now)\b/i.test(letter.transcript)) return null;
+    if (SCAM_MARKER_RE.test(letter.transcript)) return null;
     const dates = [...new Set(extractDates(letter.transcript))];
     return dates.length === 1 ? dates[0]! : null;
   }
