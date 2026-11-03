@@ -30,6 +30,9 @@ describe("approval card text", () => {
     expect(fieldValue(whole!, en, "en")).toBe("$1,940");
     expect(fieldValue(cents!, en, "en")).toBe("$1,940.50");
     expect(fieldValue(text!, en, "en")).toBe("about 1900");
+    const [birth] = known("submit", { dateOfBirth: "1988-03-14" }).answers;
+    expect(fieldValue(birth!, en, "en")).toBe("March 14, 1988");
+    expect(fieldValue(birth!, es, "es")).toBe("14 de marzo de 1988");
     const [grant] = known("share", { consent: "grant", caseId: "R-1" }).answers;
     expect(fieldValue(grant!, es, "es")).toBe(es.consentGrant);
   });

@@ -98,6 +98,12 @@ describe("parseActionView", () => {
     expect(field(known(request({ payload: { monthlyIncome: "12345678901234567890" } })), "monthlyIncome")?.format).toBe("text");
   });
 
+  it("formats only a real calendar day as a date", () => {
+    expect(field(known(request({ payload: { dateOfBirth: "1988-03-14" } })), "dateOfBirth")?.format).toBe("date");
+    expect(field(known(request({ payload: { dateOfBirth: "1988-02-30" } })), "dateOfBirth")).toMatchObject({ format: "text", value: "1988-02-30" });
+    expect(field(known(request({ payload: { dateOfBirth: "March 14" } })), "dateOfBirth")?.format).toBe("text");
+  });
+
   it("keeps a statement or attachment that is not plain text as a row", () => {
     const parsed = known(request({ payload: { declaration: { signed: true }, attachment: "" } }));
     expect(parsed.declaration).toBeNull();

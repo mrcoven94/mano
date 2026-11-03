@@ -13,7 +13,7 @@ export type KnownKind = "submit" | "send" | "share" | "call" | "fax";
 
 // How the screen writes a value. Only the label and the number format
 // change; the words and digits are the request's own.
-export type FieldFormat = "text" | "money" | "consent";
+export type FieldFormat = "text" | "money" | "date" | "consent";
 
 export interface ActionField {
   key: string;
@@ -46,7 +46,7 @@ const LABELS: Record<string, { label: StringKey; format?: FieldFormat }> = {
   caseNumber: { label: "fieldCase" },
   caseId: { label: "fieldCase" },
   fullName: { label: "fieldName" },
-  dateOfBirth: { label: "fieldBirth" },
+  dateOfBirth: { label: "fieldBirth", format: "date" },
   householdSize: { label: "fieldHousehold" },
   monthlyIncome: { label: "fieldIncome", format: "money" },
   address: { label: "fieldAddress" },
@@ -80,13 +80,26 @@ function formatValue(value: unknown): string {
   }
 }
 
+// YYYY-MM-DD naming a day that exists, so 1988-02-30 stays as written.
+function isCalendarDay(text: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  const date = new Date(`${text}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === text;
+}
+
 function fieldFor(key: string, value: unknown): ActionField {
   // hasOwnProperty, not lookup: LABELS["__proto__"] is the prototype.
   const known = Object.prototype.hasOwnProperty.call(LABELS, key) ? LABELS[key] : undefined;
   const text = formatValue(value);
   const format = known?.format ?? "text";
-  // A money label only fits a plain amount; anything else shows as text.
-  const fits = format !== "money" || /^(0|[1-9]\d{0,8})(\.\d{1,2})?$/.test(text);
+  // A money label only fits a plain amount and a date label only a real
+  // calendar day; anything else shows as text.
+  const fits =
+    format === "money"
+      ? /^(0|[1-9]\d{0,8})(\.\d{1,2})?$/.test(text)
+      : format === "date"
+        ? isCalendarDay(text)
+        : true;
   return { key, label: known?.label ?? null, value: text, format: fits ? format : "text" };
 }
 

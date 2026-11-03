@@ -1,7 +1,8 @@
-// One approval, led by what the person is saying: what Mano will do,
-// for which office, by when, then the answers and statement the request
-// carries. The exact document follows in full, and the ids and binding
-// hashes sit under "Details for checking". Approve stays disabled until the
+// One approval, read in the order the person decides: what Mano will
+// send (the form and its answers), to which office, the attached
+// document, by when, and the statement she signs. The exact document
+// follows in full, then Approve and No; the ids and binding hashes sit
+// last, under "Details for checking". Approve stays disabled until the
 // gate in lib/approve-gate says yes: pending, current, loaded,
 // hash-matched, actually rendered and a known request shape. No needs
 // none of that: declining sends nothing, so it stays open whenever the
@@ -15,14 +16,14 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import * as Linking from "expo-linking";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { Badge, Body, Btn, Card, ErrorView, GhostBtn, LinkBtn, LoadingView, Muted, Screen, Title, useGoBack } from "../../components/ui";
+import { Body, Btn, Card, ErrorView, GhostBtn, LinkBtn, LoadingView, Muted, Screen, Title, useGoBack } from "../../components/ui";
 import { DocPreview, currentPlatform } from "../../components/doc";
 import { parseActionView, type ParsedAction } from "../../lib/action-view";
 import { fieldValue, leadLine } from "../../lib/approval-text";
 import { changeDraft, holdChatDraft } from "../../lib/chat-draft";
 import { approvalGate } from "../../lib/approve-gate";
 import { approveOutcome } from "../../lib/approve-result";
-import type { ActionType, Approval, ApprovalDocument, ApproveResult, DeclineAnswer } from "../../lib/api/types";
+import type { ActionType, Approval, ApprovalStatus, ApprovalDocument, ApproveResult, DeclineAnswer } from "../../lib/api/types";
 import { provenNotSent } from "../../lib/sent-proof";
 import { AuthError, StaleApprovalError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
@@ -45,6 +46,17 @@ function whatLabel(action: ActionType, s: Strings): string {
 // to compare piece by piece.
 function grouped(hash: string): string {
   return hash.match(/.{1,8}/g)?.join(" ") ?? hash;
+}
+
+// Shown above the lead line once the request is no longer waiting; while
+// it waits, the lead line and the actions already say so.
+function statusLabel(status: Exclude<ApprovalStatus, "pending">, s: Strings): string {
+  if (status === "approved") return s.approved;
+  if (status === "rejected") return s.declined;
+  if (status === "revoked") return s.approvalRevoked;
+  if (status === "expired") return s.expired;
+  if (status === "stale") return s.stale;
+  return s.blocked;
 }
 
 type DocState = "loading" | "ready" | "failed";
@@ -288,41 +300,13 @@ export default function ApprovalDetail() {
       ) : (
         <View>
           <Card>
-            <Badge
-              tone={
-                approval.status === "pending" ? "hl" : approval.status === "approved" ? "green" : approval.status === "rejected" ? "blue" : "alert"
-              }
-            >
-              {approval.status === "pending"
-                ? s.approvalsPending
-                : approval.status === "approved"
-                  ? s.approved
-                  : approval.status === "rejected"
-                    ? s.declined
-                    : approval.status === "revoked"
-                      ? s.approvalRevoked
-                      : approval.status === "expired"
-                    ? s.expired
-                    : approval.status === "stale"
-                      ? s.stale
-                      : s.blocked}
-            </Badge>
+            {approval.status !== "pending" ? <Muted style={styles.status}>{statusLabel(approval.status, s)}</Muted> : null}
             <Text style={[type.section, styles.lead]}>
               {action && action.kind !== "unknown" && approval.status === "pending" && !receipt && no.phase !== "answered"
                 ? leadLine(action, s)
                 : whatLabel(approval.actionType, s)}
             </Text>
             <Body style={styles.purpose}>{action && action.kind !== "unknown" ? action.purpose : approval.purpose}</Body>
-            <View style={styles.dates}>
-              <Row label={s.toLabel} value={approval.recipientName} />
-              {dueAt ? <Row label={s.dueAtOffice} value={formatDate(dueAt, language)} /> : null}
-              {approval.status === "pending" && !receipt && no.phase !== "answered" ? (
-                <View>
-                  <Row label={s.answerBy} value={formatDate(approval.expiresAt, language)} />
-                  <Muted>{s.answerByNote}</Muted>
-                </View>
-              ) : null}
-            </View>
             {approval.problems.map((p) => (
               <Text key={p} style={styles.problem}>
                 {p}
@@ -340,17 +324,27 @@ export default function ApprovalDetail() {
                     value={fieldValue(field, s, language)}
                   />
                 ))}
-                {action.attachment ? <Row label={s.attached} value={action.attachment} /> : null}
-                {action.declaration ? (
-                  <View style={styles.declaration}>
-                    <Text style={styles.declarationLabel}>{s.youSign}</Text>
-                    <Text style={[type.body, styles.declarationText]}>{action.declaration}</Text>
-                  </View>
-                ) : null}
               </View>
             ) : (
               <Body style={styles.purpose}>{s.requestUnknown}</Body>
             )}
+            <View style={styles.dates}>
+              <Row label={s.toLabel} value={approval.recipientName} />
+              {action && action.kind !== "unknown" && action.attachment ? <Row label={s.attached} value={action.attachment} /> : null}
+              {dueAt ? <Row label={s.dueAtOffice} value={formatDate(dueAt, language)} /> : null}
+              {approval.status === "pending" && !receipt && no.phase !== "answered" ? (
+                <View>
+                  <Row label={s.answerBy} value={formatDate(approval.expiresAt, language)} />
+                  <Muted>{s.answerByNote}</Muted>
+                </View>
+              ) : null}
+            </View>
+            {action && action.kind !== "unknown" && action.declaration ? (
+              <View style={styles.declaration}>
+                <Text style={styles.declarationLabel}>{s.youSign}</Text>
+                <Text style={[type.body, styles.declarationText]}>{action.declaration}</Text>
+              </View>
+            ) : null}
           </Card>
 
           {approval.documentId ? (
@@ -383,34 +377,6 @@ export default function ApprovalDetail() {
               )}
             </Card>
           ) : null}
-
-          <View style={styles.details}>
-            <Pressable
-              onPress={() => setDetailsOpen((open) => !open)}
-              accessibilityRole="button"
-              accessibilityLabel={s.detailsTitle}
-              accessibilityState={{ expanded: detailsOpen }}
-              aria-expanded={detailsOpen}
-              style={({ pressed }) => [styles.detailsToggle, pressed && styles.pressed]}
-            >
-              <Text style={[type.body, styles.detailsTitle]}>{s.detailsTitle}</Text>
-              <Ionicons name={detailsOpen ? "chevron-up" : "chevron-down"} size={20} color={colors.text} />
-            </Pressable>
-            {detailsOpen ? (
-              <View style={styles.detailsBody}>
-                <Row label={s.whatLabel} value={whatLabel(approval.actionType, s)} />
-                {action && action.kind !== "unknown" ? (
-                  <View>
-                    <Row label={s.detailsRecipient} value={action.recipient} mono />
-                    <Row label={s.detailsReference} value={action.reference} mono />
-                    {action.documentId ? <Row label={s.detailsDocument} value={action.documentId} mono /> : null}
-                  </View>
-                ) : null}
-                {doc && hashMatches ? <Row label={s.docHash} value={grouped(doc.hash)} mono /> : null}
-                <Row label={s.requestCheck} value={grouped(approval.requestHash)} mono />
-              </View>
-            ) : null}
-          </View>
 
           {approval.status === "blocked" && !receipt && nothingSent ? (
             <Card>
@@ -482,6 +448,34 @@ export default function ApprovalDetail() {
               </View>
             </View>
           ) : null}
+          <View style={styles.details}>
+            <Pressable
+              onPress={() => setDetailsOpen((open) => !open)}
+              accessibilityRole="button"
+              accessibilityLabel={s.detailsTitle}
+              accessibilityState={{ expanded: detailsOpen }}
+              aria-expanded={detailsOpen}
+              style={({ pressed }) => [styles.detailsToggle, pressed && styles.pressed]}
+            >
+              <Text style={[type.body, styles.detailsTitle]}>{s.detailsTitle}</Text>
+              <Ionicons name={detailsOpen ? "chevron-up" : "chevron-down"} size={20} color={colors.text} />
+            </Pressable>
+            {detailsOpen ? (
+              <View style={styles.detailsBody}>
+                <Row label={s.whatLabel} value={whatLabel(approval.actionType, s)} />
+                {action && action.kind !== "unknown" ? (
+                  <View>
+                    <Row label={s.detailsRecipient} value={action.recipient} mono />
+                    <Row label={s.detailsReference} value={action.reference} mono />
+                    {action.documentId ? <Row label={s.detailsDocument} value={action.documentId} mono /> : null}
+                  </View>
+                ) : null}
+                {doc && hashMatches ? <Row label={s.docHash} value={grouped(doc.hash)} mono /> : null}
+                <Row label={s.requestCheck} value={grouped(approval.requestHash)} mono />
+              </View>
+            ) : null}
+          </View>
+
           <View style={styles.pad} />
         </View>
       )}
@@ -504,11 +498,12 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
 
 const styles = StyleSheet.create({
   line: { color: colors.text, marginTop: 8, marginBottom: 8 },
-  lead: { color: colors.text, marginTop: 12 },
+  status: { marginBottom: 8 },
+  lead: { color: colors.text },
   purpose: { color: colors.muted, marginTop: 4 },
-  dates: { marginTop: 12 },
-  says: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: colors.border },
+  says: { marginTop: 20 },
   saysTitle: { color: colors.text, marginBottom: 8 },
+  dates: { marginTop: 16 },
   row: { flexDirection: "row", flexWrap: "wrap", columnGap: 12, paddingVertical: 4 },
   rowLabel: { fontFamily: type.small.fontFamily, fontSize: 14, lineHeight: 20, paddingTop: 2, color: colors.muted, flexBasis: 140, flexGrow: 1 },
   rowValue: { color: colors.text, flexBasis: 160, flexGrow: 2, flexShrink: 1 },
@@ -520,7 +515,7 @@ const styles = StyleSheet.create({
   previewTitle: { color: colors.text, marginBottom: 12 },
   match: { color: colors.green, marginTop: 8 },
   warn: { color: colors.alert, marginTop: 4 },
-  details: { marginBottom: 16 },
+  details: { marginTop: 8 },
   detailsToggle: { minHeight: tapTarget, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 },
   detailsTitle: { color: colors.text, fontFamily: type.cardTitle.fontFamily },
   detailsBody: { paddingHorizontal: 4, paddingTop: 4 },
