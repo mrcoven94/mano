@@ -472,3 +472,44 @@ describe("LAP-747: Mano asks instead of guessing", () => {
     expect(bytes(filed.address)).toEqual(bytes("12 Calle Ñandú, Apt #3 & 4, Tacoma, WA 98402"));
   });
 });
+
+// LAP-747 follow-up, from review of the merged PR.
+describe("LAP-747: corrections and spacing", () => {
+  it("a correction that does not fit closes the draft shown, so a YES to it files nothing until the new one is answered", async () => {
+    const portal = realPortal();
+    engine.filer = portal.executor;
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    const shown = await draft("turn_fix000001");
+    expect(shown.status).toBe("waiting_for_yes");
+
+    const fix = await draft("turn_fix000002", { ...fields, phone: "253-555-01422" }, Date.now() + 10);
+    expect(fix).toMatchObject({ status: "needs_answer", field: "phone" });
+    expect((await client().approval(String(shown.approvalId)))?.status).toBe("rejected");
+    expect((await client().approve(String(shown.approvalId))).status).not.toBe("completed");
+    expect(portal.posts).toEqual([]);
+
+    const fixed = await draft("turn_fix000003", { ...fields, phone: "253-555-0199" }, Date.now() + 20);
+    expect(fixed.status).toBe("waiting_for_yes");
+    expect((await client().approve(String(fixed.approvalId))).status).toBe("completed");
+    expect(portal.posts).toHaveLength(1);
+    expect(portal.posts[0]!.household.phone).toBe("253-555-0199");
+  });
+
+  it("a name typed with two spaces is shown and filed with one, so it can still be put to her YES", async () => {
+    const portal = realPortal();
+    engine.filer = portal.executor;
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    // A draft is held for her YES only when the text line shows its question word for word.
+    const out = await draft("turn_space00001", { ...fields, fullName: "Maria  Santos", phone: "253  555 0100" });
+    expect(out.status).toBe("waiting_for_yes");
+    const [approval] = await client().listApprovals();
+    const question = renderQuestion(approval!);
+    expect(question).toContain("Full legal name: Maria Santos;");
+    expect(presentsExactly(question)).toBe(true);
+    expect((await client().approve(approval!.id)).status).toBe("completed");
+    expect(portal.posts[0]!.household.fullName).toBe("Maria Santos");
+    expect(portal.posts[0]!.household.phone).toBe("253 555 0100");
+  });
+});
