@@ -439,11 +439,11 @@ export class SqlApprovalStore implements ApprovalStore {
     this.sql.exec("UPDATE attempts SET status = ?, updated_at = ?, version = version + 1 WHERE idempotency_key = ?", status, new Date().toISOString(), key);
   }
 
-  failWithdrawnAttempt(key: string, version: number): boolean {
+  failAttemptAt(key: string, version: number): boolean {
     return (
       this.sql.exec(
         "UPDATE attempts SET status = 'failed', updated_at = ?, version = version + 1 WHERE idempotency_key = ? AND version = ?" +
-          " AND status IN ('unknown', 'failed') AND NOT EXISTS(SELECT 1 FROM receipts WHERE idempotency_key = ?)",
+          " AND status IN ('in_flight', 'unknown', 'failed') AND NOT EXISTS(SELECT 1 FROM receipts WHERE idempotency_key = ?)",
         new Date().toISOString(), key, version, key,
       ).rowsWritten === 1
     );

@@ -254,3 +254,75 @@ describe("LAP-747: ending a withdrawal never overrides a filing that went throug
     expect(store.getAttempt(approval.idempotencyKey)?.status).toBe("done");
   });
 });
+
+// Recovery's own failure writes are guarded by the version its claim
+// left: a YES that adopts and files the key while recovery waits on its
+// lookup or checks keeps its outcome, and recovery changes nothing.
+describe("LAP-747: recovery never fails an attempt another request moved", () => {
+  async function setup(checker?: { check(): Promise<{ verdict: "pass" | "block"; problems: string[] }> }) {
+    const portal = new ScriptedPortal();
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, portal, checker ? { checker } : {});
+    const held = await gateway.requestAction(proposal());
+    const first = gateway.approveAndExecute(held.approval!.id, "person-maria");
+    await tick();
+    portal.filings[0]!.reject(new TimeoutError());
+    await tick();
+    portal.lookups[0]!.reject(new Error("portal unreachable"));
+    await first;
+    return { portal, store, gateway, approval: held.approval! };
+  }
+  const later = () => new Date(Date.now() + 60_000).toISOString();
+
+  it("recovery looks up, a YES finds it absent and files, Maria withdraws, then recovery's stale absent: RECEIVED-1 stands", async () => {
+    const { portal, store, gateway, approval } = await setup();
+    const recovery = gateway.recoverAttempt(approval.idempotencyKey, new Date(), later());
+    await tick();
+    const yes = gateway.approveAndExecute(approval.id, "person-maria");
+    await tick();
+    portal.lookups[2]!.resolve({ found: false });
+    await tick();
+    expect(portal.posts).toHaveLength(2);
+    await gateway.withdrawApproval(approval.id, "person-maria");
+    portal.lookups[1]!.resolve({ found: false });
+    const swept = await recovery;
+    expect(swept?.status).toBe("in_progress");
+    expect(store.getAttempt(approval.idempotencyKey)?.status).toBe("in_flight");
+    portal.filings[1]!.resolve({ externalId: "RECEIVED-1" });
+    expect(await yes).toMatchObject({ status: "completed", receipt: { externalId: "RECEIVED-1" } });
+    expect(store.getAttempt(approval.idempotencyKey)?.status).toBe("done");
+  });
+
+  it("recovery's checker blocks after a YES started filing: the attempt is left to the YES", async () => {
+    let block = false;
+    const checker = { check: async () => (block ? { verdict: "block" as const, problems: ["held"] } : { verdict: "pass" as const, problems: [] }) };
+    const { portal, store, gateway, approval } = await setup(checker);
+    const recovery = gateway.recoverAttempt(approval.idempotencyKey, new Date(), later());
+    await tick();
+    const yes = gateway.approveAndExecute(approval.id, "person-maria");
+    await tick();
+    portal.lookups[2]!.resolve({ found: false });
+    await tick();
+    expect(portal.posts).toHaveLength(2);
+    block = true;
+    portal.lookups[1]!.resolve({ found: false });
+    expect((await recovery)?.status).toBe("in_progress");
+    expect(store.getAttempt(approval.idempotencyKey)?.status).toBe("in_flight");
+    portal.filings[1]!.resolve({ externalId: "RECEIVED-1" });
+    expect((await yes).status).toBe("completed");
+    expect(store.getAttempt(approval.idempotencyKey)?.status).toBe("done");
+  });
+
+  it("a stranded in_flight attempt (a Worker restart) is settled by recovery once confirmed absent", async () => {
+    const { portal, store, gateway, approval } = await setup();
+    // As a restart leaves it: claimed for execution, nothing running.
+    store.updateAttempt(approval.idempotencyKey, "in_flight");
+    await gateway.withdrawApproval(approval.id, "person-maria");
+    const recovery = gateway.recoverAttempt(approval.idempotencyKey, new Date(), later());
+    await tick();
+    portal.lookups.at(-1)!.resolve({ found: false });
+    expect(await recovery).toMatchObject({ status: "blocked", withdrawn: true });
+    expect(store.getAttempt(approval.idempotencyKey)?.status).toBe("failed");
+    expect(portal.posts).toHaveLength(1);
+  });
+});
