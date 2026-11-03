@@ -195,19 +195,20 @@ export interface ConversationMeta {
   decorationEpoch: number;
 }
 
-// Mano's chat background on one chat, keyed by a hash of the chat ID (so
-// no raw chat ID outlives a delete). "uncertain" means an upload may have
-// landed and is read back before any retry. Kept across a delete, so the
-// background is never sent twice.
-export type ChatBackgroundState = "uncertain" | "set" | "failed";
+// A chat background an earlier version of Mano set, keyed by a hash of
+// the chat ID (so no raw chat ID outlives a delete). Mano no longer sets
+// one. "set", "uncertain" (an upload that may have landed) and "failed"
+// are what the uploads left; "clearing" is a removal tried and not yet
+// confirmed, "cleared" a confirmed one. Kept across a delete, so the
+// removal runs at most once per chat.
+export type ChatBackgroundState = "uncertain" | "set" | "failed" | "clearing" | "cleared";
 export interface ChatBackground {
   chatKey: string;
   state: ChatBackgroundState;
-  // Uploads tried.
+  // Uploads tried, then removals tried once "clearing".
   attempts: number;
-  // A single-flight lock, written before an upload starts: while it holds,
-  // no other upload starts for this chat. Past it, an "uncertain" record
-  // is read back before anything else.
+  // A single-flight lock, written before a removal starts: while it
+  // holds, no other removal starts for this chat.
   lockedUntilMs: number;
   updatedAtMs: number;
 }

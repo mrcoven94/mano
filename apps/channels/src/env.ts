@@ -31,10 +31,6 @@ export interface Env {
   BLOOIO_MEDIA_HOSTS?: string;
   // How long a turn runs before the eyes go on the person's message.
   TURN_EYES_AFTER_MS?: string;
-  // Mano's chat background image (an https URL we host), set once per
-  // chat, only when MANO_CHAT_BACKGROUND_ENABLED is "true".
-  MANO_CHAT_BACKGROUND_URL?: string;
-  MANO_CHAT_BACKGROUND_ENABLED?: string;
   // "false" turns off every reaction and the eyes.
   MANO_REACTIONS_ENABLED?: string;
   // Our line's own number or alias, checked against the channel_address
