@@ -9,6 +9,9 @@
 // form's field stores it. Nothing is invented, defaulted, shortened or
 // changed to fit: a value that is missing, or does not fit its field,
 // becomes one plain question, asked in the form's order of importance.
+
+import type { RecipientId } from "@mano/protocol";
+
 import type { Frequency, Profile } from "./engine.js";
 import { confirmedByPerson } from "./profile.js";
 
@@ -28,7 +31,7 @@ export interface FormSpec {
   id: string;
   // The form's address on the sandbox portal.
   path: string;
-  recipient: string;
+  recipient: RecipientId;
   purpose: string;
   // In the order Mano asks for them, most important first.
   fields: FormField[];
@@ -123,7 +126,7 @@ const FOOD_RENEWAL: FormSpec = {
   id: "food-renewal",
   path: "/apply",
   recipient: "sandbox-agency-portal",
-  purpose: "Food benefits renewal in the sandbox agency portal",
+  purpose: "Food benefits renewal",
   fields: [
     // Which case this is and whose: the office cannot match a renewal without them.
     {

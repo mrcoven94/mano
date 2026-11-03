@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 
 import { guardReply } from "@mano/persona";
+import { recipientName } from "@mano/protocol";
 
 import type { EngineApproval } from "./engine.js";
 import { FORMS } from "./forms.js";
@@ -104,7 +105,7 @@ export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recip
   // One paragraph: the text line flattens line breaks, so fields are
   // separated in the sentence itself.
   return [
-    `Ready to send: ${approval.purpose} (to ${approval.recipient}).`,
+    `Ready to send: ${approval.purpose} (to ${recipientName(approval.recipient)}).`,
     lines.length > 0 ? `${lines.join("; ")}.` : "",
     attached ? `With ${attached} attached.` : "",
     declaration ? `It ends with a declaration only you can make: ${declaration}` : "",

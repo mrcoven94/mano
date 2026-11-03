@@ -6,7 +6,7 @@ import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
 import { engineFrom, type Profile } from "../agent/lib/engine.js";
 import { FORMS } from "../agent/lib/forms.js";
-import { renderQuestion } from "../agent/lib/pending.js";
+import { presentsExactly, renderQuestion } from "../agent/lib/pending.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 import { screen } from "./fill-double.js";
@@ -210,11 +210,19 @@ describe("fill_form", () => {
     expect(frozen.documentId).toBe("doc-stub");
     expect(approval.documentHash).toMatch(/^[0-9a-f]{64}$/);
     const question = renderQuestion((await client().listApprovals())[0]);
+    expect(question).toContain("Ready to send: Food benefits renewal (to the State Benefits Renewal Office test portal).");
+    expect(question).not.toContain("sandbox-agency-portal");
     expect(question).toContain(
       "Case number: WA-SNAP-0042117; Full legal name: Rosa Testcase; Date of birth: 1984-03-12; People in household: 3; Monthly income ($): 2329; Mailing address: 100 Sample St, Tacoma, WA 98402; Phone number: 253-555-0142.",
     );
     expect(question).toContain("With your document attached.");
     expect(model.requests.every((r) => r.store === false)).toBe(true);
+  });
+
+  it("a recipient with no display name is asked about as unnamed, never by its ID, and still reads word for word", () => {
+    const question = renderQuestion({ purpose: "Food benefits renewal", recipient: "sandbox:county-portal", requestJson: "{}" });
+    expect(question).toBe("Ready to send: Food benefits renewal (to an office Mano has no name for). Reply YES to send exactly this, or NO to stop.");
+    expect(presentsExactly(question)).toBe(true);
   });
 
   it("binds each screen up to the whole form filled to the approval it holds, captioned by field and never by value", async () => {

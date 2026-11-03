@@ -21,7 +21,7 @@ a request leaves. The origin is service configuration, never request data.
 
 Configure. The mano-computer Modal secret holds MANO_COMPUTER_TOKEN,
 MANO_PROFILE_KEY and MANO_PORTAL_ORIGIN (set in the Modal dashboard, never
-on a command line). Deploy with `modal deploy app.py` from this directory;
+on a command line). The computer-modal workflow deploys it from main;
 the printed web URL is MODAL_COMPUTER_URL and the token is
 MODAL_COMPUTER_TOKEN for the TypeScript client. Sandboxes stop when the
 session is deleted, or after one hour; there is no idle timeout because

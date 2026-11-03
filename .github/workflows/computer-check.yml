@@ -2,7 +2,7 @@ name: computer-check
 
 # Gates the hosted desktop service: the Modal app must import under the
 # pinned SDK and pass its tests (session secrets, per-person storage, the
-# portal-only network, cleanup). Deploying it stays a maintainer step.
+# portal-only network, cleanup). computer-modal.yml deploys it from main.
 on:
   pull_request:
     paths:

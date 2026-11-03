@@ -75,10 +75,41 @@ export function extractOutputText(data: unknown): string {
 class RetryableStatus extends Error {
   readonly status: number;
   constructor(status: number) {
-    super(`Model request failed: ${status}`);
+    super(failed(status));
     this.name = "RetryableStatus";
     this.status = status;
   }
+}
+
+// An error whose words this client chose. Anything else (a transport or
+// runtime error) may quote what it was given, so it is replaced.
+class ModelFailure extends Error {}
+
+function safeError(err: unknown): Error {
+  if (err instanceof ModelFailure || err instanceof RetryableStatus) return err;
+  if (err instanceof Error && err.name === "AbortError") return new ModelFailure("Model request timed out.");
+  if (err instanceof TypeError) return new ModelFailure("Model request failed: no connection.");
+  return new ModelFailure("Model request failed.");
+}
+
+// Why a call failed, in fixed words chosen by its status. The provider's
+// own text can carry a key, a person's name or a case number, and errors
+// reach audits and logs, so it is never repeated.
+const FAILED_BECAUSE: Record<number, string> = {
+  400: "the request was not valid",
+  401: "the API key was not accepted",
+  402: "billing is not set up for this account",
+  403: "the API key may not use this model",
+  404: "the model was not found",
+  413: "the request was too large",
+  422: "the request was not valid",
+  429: "rate limited",
+};
+const RUN_STATES = new Set(["failed", "incomplete", "cancelled", "queued", "in_progress"]);
+
+function failed(status: number): string {
+  const why = FAILED_BECAUSE[status];
+  return `Model request failed: ${status}${why ? ` (${why})` : ""}`;
 }
 
 export class MetaModelClient {
@@ -135,18 +166,27 @@ export class MetaModelClient {
           },
           body: JSON.stringify({ model, input: req.input, store: false }),
         });
-        if (res.status !== 429 && res.status < 500 && !res.ok) {
+        if (!res.ok) {
           clearTimeout(timer);
-          throw new Error(`Model request failed: ${res.status}`);
+          await res.body?.cancel().catch(() => undefined);
+          if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
+          throw new ModelFailure(failed(res.status));
         }
         // The timeout stays armed while the body is read.
-        const data: unknown = await res.json();
-        clearTimeout(timer);
-        if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
+        let data: unknown;
+        try {
+          data = await res.json();
+        } catch (err) {
+          // A timeout mid-body is retried. A parse error quotes the body it
+          // could not read, so it is replaced.
+          if (isRetryable(err)) throw err;
+          throw new ModelFailure(`Model response was not readable: ${res.status}`);
+        } finally {
+          clearTimeout(timer);
+        }
         const status = (data as { status?: unknown })?.status;
         if (typeof status === "string" && status !== "completed") {
-          const detail = (data as { error?: { message?: unknown } })?.error?.message;
-          throw new Error(`Model run ${status}: ${typeof detail === "string" ? detail : "no detail"}`);
+          throw new ModelFailure(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`);
         }
         return { text: extractOutputText(data), model };
       } catch (err) {
@@ -156,10 +196,10 @@ export class MetaModelClient {
           await new Promise((r) => setTimeout(r, 100 * 2 ** attempt));
           continue;
         }
-        throw err instanceof Error ? err : new Error("Model request failed.");
+        throw safeError(err);
       }
     }
-    throw lastErr instanceof Error ? lastErr : new Error("Model request failed.");
+    throw safeError(lastErr);
   }
 }
 

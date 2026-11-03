@@ -21,6 +21,8 @@
 // Every view asks the approval again. Only a version a YES would still
 // send exactly, or the one the person already said yes to, shows its
 // steps; a draft that changed or was replaced says so and shows none.
+import { recipientName } from "@mano/protocol";
+
 import { currentGeneration } from "./agents/agent-state.js";
 import type { Approval } from "./gateway/types.js";
 import { CURRENT_GENERATION } from "./gateway/sql-store.js";
@@ -367,7 +369,7 @@ export async function replayPage(
   return renderReplayPage({
     state,
     purpose: approval.purpose,
-    recipient: approval.recipient,
+    recipient: recipientName(approval.recipient),
     steps: replay.steps.map((s, i) => ({ ...s, png: images[i]! })),
     ...frozenFields(approval.requestJson, replay.labels),
   });
