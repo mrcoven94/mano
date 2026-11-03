@@ -236,14 +236,16 @@ export async function finishLinkCleanup(sql: SqlExec, deleteObjects: (keys: stri
 // the latest proposal, under the version the fill was bound to. Anything
 // else gets no link, so no question shown later points at steps of a
 // version the person can no longer say yes to.
-// The rows are read again after the token opens: another request may
-// replace or decide the approval while it does.
+// The rows and the clock are read again after the token opens: another
+// request may replace or decide the approval while it does, and it or
+// the link may expire.
 export async function replayLinkToken(
   deps: { sql: SqlExec; approvals: ReplayApprovals; storage: ReplayStorage },
   approvalId: string,
-  nowMs: number,
+  now: () => number,
 ): Promise<string | null> {
   const linkable = () => {
+    const nowMs = now();
     const replay = getFillReplay(deps.sql, approvalId);
     const approval = deps.approvals.getApproval(approvalId);
     if (!replay || !approval || replay.linkExpiresAtMs <= nowMs) return null;

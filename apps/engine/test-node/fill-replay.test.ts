@@ -178,7 +178,7 @@ describe("the link a question carries, while other requests run", () => {
   it("is not answered when a newer draft replaces the approval while its token opens", async () => {
     const { gateway, storage, deps, approvalId } = await setup({ turnId: "turn-1" });
     if ((await bindFillReplay(deps, approvalId, INPUT, 0)).status !== "created") throw new Error("not bound");
-    const link = () => replayLinkToken(deps, approvalId, Date.now());
+    const link = () => replayLinkToken(deps, approvalId, Date.now);
     expect(await link()).not.toBeNull();
 
     storage.duringOpen = async () => {
@@ -199,7 +199,39 @@ describe("the link a question carries, while other requests run", () => {
     storage.duringOpen = async () => {
       expect((await gateway.rejectApproval(approvalId, "p")).status).toBe("rejected");
     };
-    expect(await replayLinkToken(deps, approvalId, Date.now())).toBeNull();
+    expect(await replayLinkToken(deps, approvalId, Date.now)).toBeNull();
+  });
+});
+
+describe("the link a question carries, as time passes", () => {
+  it("is not answered when the approval expires while its token opens", async () => {
+    const { storage, deps, approvalId } = await setup({ turnId: "turn-1" });
+    if ((await bindFillReplay(deps, approvalId, INPUT, 0)).status !== "created") throw new Error("not bound");
+    const expiresAtMs = Date.parse(deps.approvals.getApproval(approvalId)!.expiresAt);
+    let clock = expiresAtMs - 1;
+    const link = () => replayLinkToken(deps, approvalId, () => clock);
+    expect(await link()).not.toBeNull();
+
+    storage.duringOpen = async () => {
+      clock = expiresAtMs + 1;
+    };
+    expect(await link()).toBeNull();
+  });
+
+  it("is not answered when the link expires while its token opens", async () => {
+    const { sql, storage, deps, approvalId } = await setup({ turnId: "turn-1" });
+    if ((await bindFillReplay(deps, approvalId, INPUT, 0)).status !== "created") throw new Error("not bound");
+    const linkExpiresAtMs = getFillReplay(sql, approvalId)!.linkExpiresAtMs;
+    // The approval itself outlives the link here, so only the link's expiry decides.
+    sql.exec("UPDATE approvals SET expires_at = ? WHERE id = ?", new Date(linkExpiresAtMs + 60_000).toISOString(), approvalId);
+    let clock = linkExpiresAtMs - 1;
+    const link = () => replayLinkToken(deps, approvalId, () => clock);
+    expect(await link()).not.toBeNull();
+
+    storage.duringOpen = async () => {
+      clock = linkExpiresAtMs + 1;
+    };
+    expect(await link()).toBeNull();
   });
 });
 
