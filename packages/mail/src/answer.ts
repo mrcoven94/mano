@@ -103,23 +103,70 @@ function letterText(letter: Letter): string {
     .toLowerCase();
 }
 
-// First match wins: the narrowest types come first. An approval names
-// what was approved, so its next renewal or hearing rights never make it
-// a renewal or hearing letter.
-const TYPES: [RegExp, LetterType][] = [
-  [/\b(?:case|application|benefits?|coverage)\s+(?:is\s+|was\s+|has\s+been\s+|have\s+been\s+)?approved\b|\bwe\s+(?:have\s+)?approved\b|\bapproval\s+(?:notice|letter)\b|\bnotice\s+of\s+approval\b/, "approval"],
-  [/\bhearing\b|\bappeal/, "hearing"],
-  [/overpa(id|yment)/, "overpayment"],
-  [/\bden(ied|ial)\b|not eligible|ineligible/, "denial"],
-  [/\binterview\b/, "interview"],
-  [/\brenew|recertif|redetermin/, "renewal"],
-  [/\bmissing\b|\bverif(y|ication)\b|need(ed)? (more )?(information|documents|proof)|documents? needed|send (us )?(proof|copies)/, "documents needed"],
-  [/\bchang(e|ed|es)\b|\breduc|\bincreas|new amount|will (stop|end)/, "change notice"],
+// A sentence that approves this person now: "Your case is approved",
+// "You are approved for", "We have approved your", or a heading such as
+// "Case approved". "Was approved" is history and never counts.
+const APPROVES = [
+  /\byour\s+(?:\S+\s+){0,4}?(?:is|are|has\s+been|have\s+been)\s+approved\b/,
+  /\byou\s+(?:are|have\s+been)\s+approved\b|\byou're\s+approved\b/,
+  /\bwe\s+(?:have\s+approved|approve)\s+your\b/,
+  /^(?:\S+\s+)?(?:case|application|benefits?|coverage)\s+approved$|^(?:approval\s+(?:notice|letter)|notice\s+of\s+approval)$/,
+  /\bsus?\s+(?:\S+\s+){0,4}?(?:est[áa]n?|ha\s+sido|han\s+sido)\s+aprobad[oa]s?\b/,
+  /\busted\s+(?:est[áa]|ha\s+sido)\s+aprobad[oa]\b/,
+  /\bhemos\s+aprobado\s+su\b/,
+  /^(?:caso|solicitud|beneficios?|cobertura)\s+aprobad[oa]s?$|^aviso\s+de\s+aprobaci[óo]n$/,
+];
+// Words that make approval wording something other than a decision made
+// now: a condition, a hypothesis, a negation or the past.
+const HEDGED =
+  /\b(?:if|once|when|whenever|after|unless|whether|may|might|can|could|would|should|pending|not|never|previously|originally|earlier|last\s+(?:year|month|time)|since|prior|in\s+(?:19|20)\d\d|si|una\s+vez|cuando|despu[ée]s|hasta\s+que|a\s+menos\s+que|puede|pueden|podr[íi]an?|pendiente|ser[íi]a|no|nunca|anteriormente|previamente|el\s+a[ñn]o\s+pasado)\b/;
+// An adverse outcome: anything denied, ended, closed, cut or clawed back.
+const ADVERSE =
+  /\bden(?:y|ies|ied|ial)\b|\bnot\s+(?:be\s+|been\s+)?(?:eligible|approved)\b|\bineligible\b|\bno\s+longer\s+(?:eligible|approved)\b|\bin\s+error\b|\bby\s+mistake\b|\bterminat|\bclos(?:e|ed|es|ing|ure)\b|\breduc|\boverpa(?:id|yment)|\bwill\s+(?:end|stop)\b|\b(?:ended|ending)\b|\bstop(?:s|ped|ping)?\b|\bsuspen(?:d|si)|\bdiscontinu|\bcancel|\brevok|\bneg(?:ad[oa]s?|aci[óo]n)|\bdeneg|\brechaz|\bno\s+(?:es|son|est[áa]|fue|ha\s+sido|sea)\s+(?:elegible|aprobad)|\bno\s+califica|\binelegible|\bya\s+no\b|\bpor\s+(?:error|equivocaci)|\btermin(?:ar|ad|aci)|\bcerr(?:ar|ad|ó)|\bcierre\b|\bsobrepago|\bpago\s+en\s+exceso|\bdescontinu|\bdejar[áa]n?\s+de\b|\bse\s+detendr/;
+
+// What the decision reads from a letter.
+interface Evidence {
+  text: string;
+  // A sentence approves this person, now and without condition.
+  approves: boolean;
+  // The letter denies, ends, closes, cuts or claws back anything.
+  adverse: boolean;
+  // The letter carries an instruction aimed at Mano.
+  planted: boolean;
+}
+
+const has = (re: RegExp) => (e: Evidence) => re.test(e.text);
+
+// One ordered decision: the first row that holds names the letter. An
+// adverse outcome always wins over an approval, and a planted
+// instruction makes one untrustworthy: either beside a real approval is
+// mixed evidence, so Mano gives the plain reading and claims no type.
+// Approval comes before the topics, so its next renewal or hearing
+// rights never make it a renewal or hearing letter. Approval wording
+// that does not count (a condition, the past, someone else's case)
+// leaves the letter to its topics, which run narrowest first.
+const DECISION: [(e: Evidence) => boolean, LetterType][] = [
+  [(e) => e.approves && (e.adverse || e.planted), "other"],
+  [(e) => e.approves, "approval"],
+  [has(/\bhearing\b|\bappeal/), "hearing"],
+  [has(/overpa(id|yment)|\bsobrepago|\bpago en exceso/), "overpayment"],
+  [has(/\bden(ied|ial)\b|not eligible|ineligible|\bnegad[oa]|\bnegaci[óo]n|\bdenegad[oa]|no es elegible/), "denial"],
+  [has(/\binterview\b/), "interview"],
+  [has(/\brenew|recertif|redetermin/), "renewal"],
+  [has(/\bmissing\b|\bverif(y|ication)\b|need(ed)? (more )?(information|documents|proof)|documents? needed|send (us )?(proof|copies)/), "documents needed"],
+  [has(/\bchang(e|ed|es)\b|\breduc|\bincreas|new amount|will (stop|end)/), "change notice"],
 ];
 
-function typeOf(letter: Letter): LetterType {
+function typeOf(letter: Letter, planted: boolean): LetterType {
   const text = letterText(letter);
-  return TYPES.find(([re]) => re.test(text))?.[1] ?? "other";
+  const sentences = text.split(/\n+|(?<=[.!?;])\s+/).map((s) => s.trim().replace(/[.!?;:]+$/, ""));
+  const evidence: Evidence = {
+    text,
+    approves: sentences.some((s) => APPROVES.some((re) => re.test(s)) && !HEDGED.test(s)),
+    adverse: ADVERSE.test(text),
+    planted,
+  };
+  return DECISION.find(([holds]) => holds(evidence))?.[1] ?? "other";
 }
 
 const TYPE_WORDS: Record<LetterType, (program: string) => string> = {
@@ -204,7 +251,7 @@ function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; 
   const warnings = reading.warnings.filter((w) => w.letterId === letter.id);
   if (warnings.some((w) => w.kind === "scam_suspect")) return { lines: [SCAM], held: null };
   const program = programOf(letter.fields);
-  const type = typeOf(letter);
+  const type = typeOf(letter, warnings.some((w) => w.kind === "instruction_in_content"));
   const lines = [TYPE_WORDS[type](program?.name ?? "benefits")];
   const question = reading.questions.find((q) => q.letterId === letter.id && q.kind === "confirm_deadline");
   const proposal = question?.proposal;
