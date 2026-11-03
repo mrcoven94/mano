@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { EngineReminder } from "../lib/engine.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { profileTimeZone } from "../lib/profile.js";
-import { REMINDER_PREFIX, legacyReminderId, placeClaimId, reminderBase, reminderIdAt, sameWords } from "../lib/reminders.js";
+import { REMINDER_PREFIX, placeClaimId, reminderBase, reminderIdAt, sameWords } from "../lib/reminders.js";
 import { parseWhen, validateDue } from "../lib/when.js";
 
 // Different reminders for the same time from one message.
@@ -29,15 +29,17 @@ export default defineTool({
     const base = reminderBase(turnId, parsed.asked);
     const text = `${REMINDER_PREFIX}${input.text.trim()}`;
     const invalid = validateDue(parsed.dueAtMs, turnAtMs);
-    const legacy = legacyReminderId(turnId, when, turnAtMs);
-    if (invalid || legacy) {
+    if (invalid) {
       // A retry finds what an earlier attempt saved before it judges the
       // time again: one that reads a later zone can work out a time that
-      // has passed for a reminder already set.
-      const stored = (await engine.listReminders()).filter((r) => r.id === legacy || (invalid && (r.id === base || r.id.startsWith(`${base}-`))));
-      const kept = stored.find((r) => r.id === legacy) ?? stored.find((r) => sameWords(r.text, text)) ?? stored.find((r) => r.id === base);
-      if (kept) return { reminderId: kept.id, dueAt: kept.dueAt, text: kept.text.replace(REMINDER_PREFIX, "") };
-      if (invalid) throw new Error(invalid);
+      // has passed for a reminder already set. Creating it again with its
+      // stored content returns it and re-arms a wake-up the first attempt
+      // may have lost.
+      const stored = (await engine.listReminders()).filter((r) => r.id === base || r.id.startsWith(`${base}-`));
+      const kept = stored.find((r) => sameWords(r.text, text)) ?? stored.find((r) => r.id === base);
+      if (!kept) throw new Error(invalid);
+      const again = await engine.createReminder({ id: kept.id, text: kept.text, dueAt: kept.dueAt });
+      return { reminderId: again.id, dueAt: again.dueAt, text: again.text.replace(REMINDER_PREFIX, "") };
     }
     const attempt = ctx.session.turn?.id ?? "attempt";
     const receivedAt = new Date(turnAtMs).toISOString();

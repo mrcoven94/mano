@@ -6,8 +6,6 @@
 // cancelled.
 import { createHash } from "node:crypto";
 
-import { parseWhen } from "./when.js";
-
 export const REMINDER_PREFIX = "Reminder: ";
 
 // A reminder's identity comes from the signed turn, the time the person
@@ -23,18 +21,6 @@ export const REMINDER_PREFIX = "Reminder: ";
 // calls run in parallel, and a retry claims them again from 0.
 export function reminderBase(turnId: string, asked: string): string {
   return `rem-${createHash("sha256").update(`${turnId}\n${asked}`).digest("hex").slice(0, 32)}`;
-}
-
-// Before LAP-813 a reminder was named by its due time, read in
-// MANO_TIMEZONE (Denver by default). A turn received before that change
-// shipped and retried after it finds its reminder under the old name.
-// Turns received after LEGACY_IDS_UNTIL_MS skip the check; remove it then.
-export const LEGACY_IDS_UNTIL_MS = Date.UTC(2026, 10, 12);
-
-export function legacyReminderId(turnId: string, when: string, turnAtMs: number): string | null {
-  if (turnAtMs >= LEGACY_IDS_UNTIL_MS) return null;
-  const old = parseWhen(when, turnAtMs, process.env.MANO_TIMEZONE || "America/Denver");
-  return old ? `rem-${createHash("sha256").update(`${turnId}\n${old.dueAtMs}`).digest("hex").slice(0, 32)}` : null;
 }
 
 export function reminderIdAt(base: string, place: number): string {
