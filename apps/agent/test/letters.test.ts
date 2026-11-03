@@ -1,3 +1,5 @@
+import { setTimeout as realSleep } from "node:timers/promises";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signBody } from "../agent/lib/auth.js";
@@ -250,4 +252,121 @@ describe("a texted letter", () => {
     const { status } = await send(photoTurn("turn_letter0009", { documents: [{ id: "../x", mimeType: "image/jpeg" }] }), deps([RENEWAL_PAGE]));
     expect(status).toBe(400);
   });
+});
+
+// Fake clock: the letter read and the profile read take fake seconds, and
+// Engine's per-call limit (AbortSignal.timeout, which fake timers do not
+// drive) runs on the same fake setTimeout. Each step waits a real
+// millisecond so Engine's in-process work lands before the clock moves.
+describe("the profile read on a photo turn", () => {
+  const STEP_MS = 25;
+  let profileGets: number;
+
+  function slowLetter(delayMs: number) {
+    const recorded = recordedReader([RENEWAL_PAGE]);
+    let first = true;
+    return {
+      live: false,
+      responses: async (req: never, opts: never) => {
+        if (first) {
+          first = false;
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
+        return recorded.responses(req, opts);
+      },
+    } as never;
+  }
+
+  // GET /profile answers after delayMs, or never (null), until the caller aborts.
+  function profileAfter(delayMs: number | null): typeof fetch {
+    return async (input, init) => {
+      if (!(new URL(String(input)).pathname.endsWith("/profile") && (init?.method ?? "GET") === "GET")) return engine.fetch(input, init);
+      profileGets++;
+      const signal = init?.signal;
+      await new Promise<void>((resolve, reject) => {
+        const timer = delayMs === null ? undefined : setTimeout(resolve, delayMs);
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        });
+      });
+      return engine.fetch(input, init);
+    };
+  }
+
+  async function timedTurn(request: Request, d: TurnDeps) {
+    const started = Date.now();
+    let modelLeftMs: number | null = null;
+    const run = d.runAgent;
+    d.runAgent = async (input) => {
+      modelLeftMs = input.deadlineMs - Date.now();
+      return run(input);
+    };
+    let done = false;
+    const turn = send(request, d).finally(() => (done = true));
+    while (!done) {
+      await realSleep(1);
+      await vi.advanceTimersByTimeAsync(STEP_MS);
+    }
+    return { ...(await turn), totalMs: Date.now() - started, modelLeftMs: modelLeftMs as number | null };
+  }
+
+  beforeEach(() => {
+    profileGets = 0;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("The operation timed out.", "TimeoutError")), ms);
+      return controller.signal;
+    });
+    engine.profile = {
+      person: { fullName: { value: "Maria Lopez", source: "person", updatedAt: "2026-11-01T00:00:00Z" }, address: {} },
+      household: [],
+      income: [],
+      programs: [],
+    };
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("a profile read that never answers neither holds the reply nor cuts into the model's time", async () => {
+    const d = deps([], { mailModel: slowLetter(75_000) });
+    d.engine = engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: profileAfter(null) });
+    const { body, totalMs, modelLeftMs } = await timedTurn(photoTurn("turn_letter0017", { texts: ["Can you help me renew?"] }), d);
+    expect(body.text).toMatch(/^This is a Medi-Cal renewal letter\./);
+    expect(body.text).toMatch(/Want a reminder a week before\?$/);
+    // The reply goes out when the letter is read, not 15 seconds later.
+    expect(totalMs).toBeLessThan(78_000);
+    expect(modelLeftMs).toBeGreaterThanOrEqual(15_000);
+    // What the reply loses: only the profile block.
+    expect(calls[0]!.context.join("\n")).not.toContain("<profile_data>");
+  }, 30_000);
+
+  it("on a short budget, a profile read that never answers stops before the model's minimum", async () => {
+    const d = deps([], { mailModel: slowLetter(1_000), turnBudgetMs: 25_000 });
+    d.engine = engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: profileAfter(null) });
+    const { totalMs, modelLeftMs } = await timedTurn(photoTurn("turn_letter0018", { texts: ["Can you help me renew?"] }), d);
+    expect(calls).toHaveLength(1);
+    expect(totalMs).toBeLessThan(11_000);
+    expect(modelLeftMs).toBeGreaterThanOrEqual(14_000);
+  }, 30_000);
+
+  it("a profile read that answers while the letter is read is used, and adds no time", async () => {
+    const d = deps([], { mailModel: slowLetter(5_000) });
+    d.engine = engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: profileAfter(3_000) });
+    const { totalMs } = await timedTurn(photoTurn("turn_letter0019", { texts: ["Can you help me renew?"] }), d);
+    expect(calls[0]!.context.join("\n")).toContain("Maria Lopez");
+    expect(totalMs).toBeLessThan(6_500);
+  }, 30_000);
+
+  it("a photo with no words does not read the profile", async () => {
+    const d = deps([], { mailModel: slowLetter(1_000) });
+    d.engine = engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: profileAfter(0) });
+    const { body } = await timedTurn(photoTurn("turn_letter0020"), d);
+    expect(body.text).toMatch(/^This is a Medi-Cal renewal letter\./);
+    expect(profileGets).toBe(0);
+  }, 30_000);
 });
