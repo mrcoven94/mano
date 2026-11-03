@@ -120,6 +120,43 @@ describe("EngineClient", () => {
     await expect(client.approve(session, "appr-1", { documentHash: "abc123", requestHash: "req-1" })).rejects.toBeInstanceOf(StaleApprovalError);
   });
 
+  it("declines through the reject route with no body and no pre-read", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ status: "rejected", approval: { ...approvalRow, status: "rejected" } }));
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    expect(await client.decline(session, "appr-1")).toBe("rejected");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://engine.test/api/persons/maria-001/approvals/appr-1/reject");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+  });
+
+  it("answers a NO on a decided approval with its real status", async () => {
+    for (const status of ["approved", "expired", "stale", "blocked"] as const) {
+      const fetchImpl = vi.fn(async (input: unknown) => {
+        if (String(input).endsWith("/reject")) return jsonResponse({ status: "blocked", reason: "This approval was already used." });
+        return jsonResponse({ approvals: [{ ...approvalRow, status }] });
+      });
+      const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+      expect(await client.decline(session, "appr-1")).toBe(status);
+    }
+  });
+
+  it("fails a NO the engine refused while the approval still waits", async () => {
+    const fetchImpl = vi.fn(async (input: unknown) => {
+      if (String(input).endsWith("/reject")) return jsonResponse({ status: "blocked", reason: "Approval not found." });
+      return jsonResponse({ approvals: [approvalRow] });
+    });
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    await expect(client.decline(session, "appr-1")).rejects.toThrow("Approval not found.");
+  });
+
+  it("signs out on a NO the engine refuses for the session", async () => {
+    const fetchImpl = vi.fn(async () => new Response("forbidden", { status: 403 }));
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    await expect(client.decline(session, "appr-1")).rejects.toBeInstanceOf(AuthError);
+  });
+
   it("reads the document filename from content-disposition", async () => {
     const fetchImpl = vi.fn(async () => new Response(new Uint8Array([104, 105]), {
       status: 200,

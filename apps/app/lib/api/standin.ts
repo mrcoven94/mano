@@ -10,6 +10,7 @@ import {
   APPROVED_NOTICE,
   APPROVE_FOLLOWUP,
   CASEWORKER_REQUEST,
+  DECLINE_REPLY,
   FALLBACK_REPLY,
   GREETING,
   MAIL_REPLY,
@@ -25,6 +26,7 @@ import {
 import type {
   Approval,
   ApprovalDocument,
+  ApprovalStatus,
   ApproveResult,
   ChatMessage,
   Deadline,
@@ -68,6 +70,7 @@ export class StandInClient implements ManoClient {
   private seeded = false;
   private mailReceived = false;
   private renewalApproved: ApproveResult | null = null;
+  private renewalDeclined = false;
   private paystubReceived = false;
   private grants: Grant[] = [];
   private docs: StoredDoc[] = [];
@@ -166,7 +169,7 @@ export class StandInClient implements ManoClient {
       requestJson,
       requestHash,
       idempotencyKey: "spine:renewal:maria-001",
-      status: this.renewalApproved ? "approved" : "pending",
+      status: this.renewalApproved ? "approved" : this.renewalDeclined ? "rejected" : "pending",
       problems: [],
       createdAt: "2026-10-28T09:20:00.000Z",
       remindAt: "2026-11-03T09:00:00.000Z",
@@ -327,7 +330,7 @@ export class StandInClient implements ManoClient {
       return { text: deadlinesReply(open), followUps: [] };
     }
     if (lower.includes("approv")) {
-      return { text: approvalsReply(this.mailReceived && !this.renewalApproved ? 1 : 0), followUps: [] };
+      return { text: approvalsReply(this.mailReceived && !this.renewalApproved && !this.renewalDeclined ? 1 : 0), followUps: [] };
     }
     if (lower.includes("hola") || lower.includes("espa")) {
       return { text: "Claro, hablamos español. Fotografíe su correo para empezar, o pregúnteme por sus fechas límite.", followUps: [] };
@@ -399,6 +402,26 @@ export class StandInClient implements ManoClient {
       done: false,
     });
     return this.renewalApproved;
+  }
+
+  // A NO ends only a pending renewal and says so in chat once; a repeat,
+  // or a NO after a YES, answers with the status already on file.
+  async decline(session: Session, approvalId: string): Promise<ApprovalStatus> {
+    await this.wait();
+    this.checkSession(session);
+    const current = await this.currentApproval();
+    if (approvalId !== current.id) throw new Error("Approval not found.");
+    if (current.status !== "pending") return current.status;
+    this.renewalDeclined = true;
+    this.messages.push({
+      id: this.nextId("msg"),
+      role: "agent",
+      text: DECLINE_REPLY,
+      createdAt: this.iso(),
+      attachments: [],
+      status: "sent",
+    });
+    return "rejected";
   }
 
   // --- deadlines ---

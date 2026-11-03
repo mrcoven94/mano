@@ -8,6 +8,7 @@ import type { Hasher } from "./standin";
 import type {
   Approval,
   ApprovalDocument,
+  ApprovalStatus,
   ApproveResult,
   ChatMessage,
   Deadline,
@@ -205,6 +206,21 @@ export class EngineClient implements ManoClient {
       simulated: out.receipt?.simulated ?? false,
       reason: out.reason ?? null,
     };
+  }
+
+  async decline(session: Session, approvalId: string): Promise<ApprovalStatus> {
+    const res = await this.call(
+      session,
+      `/api/persons/${encodeURIComponent(session.personId)}/approvals/${encodeURIComponent(approvalId)}/reject`,
+      { method: "POST" },
+    );
+    const out = await this.json<{ status: string; reason?: string }>(res);
+    if (out.status === "rejected") return "rejected";
+    // The engine ends only a pending approval. Anything else it refuses,
+    // and its own record says what the approval already became.
+    const current = (await this.listApprovals(session)).find((a) => a.id === approvalId);
+    if (!current || current.status === "pending") throw new Error(out.reason ?? "The engine did not decline this approval.");
+    return current.status;
   }
 
   async listDeadlines(_session: Session): Promise<Deadline[]> {

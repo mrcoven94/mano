@@ -50,7 +50,7 @@ export interface ChatMessage {
 }
 
 export type ActionType = "send" | "submit" | "call" | "fax" | "share";
-export type ApprovalStatus = "pending" | "approved" | "expired" | "stale" | "blocked";
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired" | "stale" | "blocked";
 
 // Mirrors the engine's Approval row (apps/engine/src/gateway/types.ts)
 // plus the document name, so cards render without a second fetch.
@@ -142,6 +142,11 @@ export interface ManoClient {
     approvalId: string,
     expected: { documentHash: string | null; requestHash: string },
   ): Promise<ApproveResult>;
+  // A NO, through the engine's reject route: nothing is sent, and a
+  // repeat answers the same. Resolves to the approval's status on file
+  // afterward: "rejected" when it is declined, otherwise the state it had
+  // already reached (approved, expired, stale, blocked). Never "pending".
+  decline(session: Session, approvalId: string): Promise<ApprovalStatus>;
   listDeadlines(session: Session): Promise<Deadline[]>;
   listDocuments(session: Session): Promise<DocMeta[]>;
   uploadDocument(session: Session, name: string, mimeType: string, bytesB64: string): Promise<DocMeta>;

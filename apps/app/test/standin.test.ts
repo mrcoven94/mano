@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { DECLINE_REPLY } from "../lib/api/maria";
 import { StandInClient } from "../lib/api/standin";
 import { AuthError, StaleApprovalError, type Session } from "../lib/api/types";
 import { b64encode, utf8ToBytes } from "../lib/base64";
@@ -97,6 +98,38 @@ describe("Maria spine run", () => {
     expect(result.simulated).toBe(true);
     expect(result.receiptId).toBeTruthy();
     await expect(client.approve(session, approval.id, good)).rejects.toBeInstanceOf(StaleApprovalError);
+  });
+
+  it("declines in demo mode: nothing is sent, Mano says so once, and a YES after it is refused", async () => {
+    const client = makeClient();
+    const session = await signIn(client);
+    const photo = b64encode(utf8ToBytes("fake-photo-bytes"));
+    await client.sendMessage(session, "mail", [{ kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
+    const [approval] = await client.listApprovals(session);
+    if (!approval?.documentHash) throw new Error("expected a bound approval");
+    expect(await client.decline(session, approval.id)).toBe("rejected");
+    expect(await client.decline(session, approval.id)).toBe("rejected");
+    const [after] = await client.listApprovals(session);
+    expect(after?.status).toBe("rejected");
+    const messages = await client.listMessages(session);
+    expect(messages.filter((m) => m.text === DECLINE_REPLY)).toHaveLength(1);
+    expect(messages.some((m) => m.text.includes("pay stub"))).toBe(false);
+    await expect(
+      client.approve(session, approval.id, { documentHash: approval.documentHash, requestHash: approval.requestHash }),
+    ).rejects.toBeInstanceOf(StaleApprovalError);
+    expect((await client.sendMessage(session, "any approvals?", [])).text).toContain("Nothing is waiting");
+  });
+
+  it("answers a NO after a YES with the approval's real status", async () => {
+    const client = makeClient();
+    const session = await signIn(client);
+    const photo = b64encode(utf8ToBytes("fake-photo-bytes"));
+    await client.sendMessage(session, "mail", [{ kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
+    const [approval] = await client.listApprovals(session);
+    if (!approval?.documentHash) throw new Error("expected a bound approval");
+    await client.approve(session, approval.id, { documentHash: approval.documentHash, requestHash: approval.requestHash });
+    expect(await client.decline(session, approval.id)).toBe("approved");
+    expect((await client.listMessages(session)).some((m) => m.text === DECLINE_REPLY)).toBe(false);
   });
 
   it("brings the caseworker request after approval and closes on the pay stub", async () => {

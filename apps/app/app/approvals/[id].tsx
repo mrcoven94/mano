@@ -1,19 +1,21 @@
 // One approval in full: everything the executor will use, the exact
 // document, and both binding hashes. Approve stays disabled until the
 // gate in lib/approve-gate says yes: pending, current, loaded,
-// hash-matched, actually rendered and a known request shape. Every
-// load clears the last state, and stale loads cannot overwrite it.
+// hash-matched, actually rendered and a known request shape. No needs
+// none of that: declining sends nothing, so it is open whenever the
+// approval waits. Every load clears the last state, and stale loads
+// cannot overwrite it.
 
 import { useCallback, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import * as Linking from "expo-linking";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { Badge, Body, Btn, Card, ErrorView, LoadingView, Muted, Screen, Title } from "../../components/ui";
+import { Badge, Body, Btn, Card, ErrorView, GhostBtn, LoadingView, Muted, Screen, Title } from "../../components/ui";
 import { DocPreview, currentPlatform } from "../../components/doc";
 import { parseActionView, type ParsedAction } from "../../lib/action-view";
 import { approvalGate } from "../../lib/approve-gate";
 import { approveOutcome } from "../../lib/approve-result";
-import type { ActionType, Approval, ApprovalDocument, ApproveResult } from "../../lib/api/types";
+import type { ActionType, Approval, ApprovalDocument, ApprovalStatus, ApproveResult } from "../../lib/api/types";
 import { AuthError, StaleApprovalError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { formatDate } from "../../lib/dates";
@@ -32,6 +34,17 @@ function whatLabel(action: ActionType, s: ReturnType<typeof useStrings>): string
 
 type DocState = "loading" | "ready" | "failed";
 
+// A NO: in flight, failed (safe to repeat), or answered with the
+// approval's status on file afterward.
+type NoState = { phase: "idle" } | { phase: "sending" } | { phase: "failed" } | { phase: "answered"; status: ApprovalStatus };
+const NO_IDLE: NoState = { phase: "idle" };
+
+function noLine(status: ApprovalStatus, s: ReturnType<typeof useStrings>): string {
+  if (status === "rejected") return s.declinedNote;
+  if (status === "approved") return s.declineTooLate;
+  return s.declineClosed;
+}
+
 export default function ApprovalDetail() {
   const s = useStrings();
   const { language } = useLanguage();
@@ -48,6 +61,7 @@ export default function ApprovalDetail() {
   const [failed, setFailed] = useState(false);
   const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [no, setNo] = useState<NoState>(NO_IDLE);
   const generation = useRef(0);
 
   const load = useCallback(async () => {
@@ -63,6 +77,7 @@ export default function ApprovalDetail() {
     setDocShown(false);
     setLinkBlocked(false);
     setReceipt(null);
+    setNo(NO_IDLE);
     try {
       const all = await client.listApprovals(session);
       if (generation.current !== mine) return;
@@ -112,6 +127,7 @@ export default function ApprovalDetail() {
     setDocShown(false);
     setLinkBlocked(false);
     setReceipt(null);
+    setNo(NO_IDLE);
     setStale(false);
     setFailed(false);
   });
@@ -151,6 +167,24 @@ export default function ApprovalDetail() {
     }
   };
 
+  const decline = async (): Promise<void> => {
+    if (!session || !approval) return;
+    setNo({ phase: "sending" });
+    try {
+      const status = await client.decline(session, approval.id);
+      setApproval({ ...approval, status });
+      setNo({ phase: "answered", status });
+      const gen = sessionGeneration;
+      await syncReminders(language, client, session, () => isCurrentGeneration(gen)).catch(() => {});
+    } catch (err) {
+      if (err instanceof AuthError) {
+        await signOut();
+        return;
+      }
+      setNo({ phase: "failed" });
+    }
+  };
+
   const hashMatches = Boolean(
     approval && (!approval.documentHash || (doc && doc.id === approval.documentId && doc.hash === approval.documentHash)),
   );
@@ -160,8 +194,8 @@ export default function ApprovalDetail() {
     ? approvalGate({
         status: approval.status,
         stale,
-        decided: receipt !== null,
-        busy,
+        decided: receipt !== null || no.phase === "answered",
+        busy: busy || no.phase === "sending",
         docState,
         hasDocument: approval.documentId !== null,
         hashMatches,
@@ -200,12 +234,18 @@ export default function ApprovalDetail() {
       ) : (
         <View>
           <Card>
-            <Badge tone={approval.status === "pending" ? "hl" : approval.status === "approved" ? "green" : "alert"}>
+            <Badge
+              tone={
+                approval.status === "pending" ? "hl" : approval.status === "approved" ? "green" : approval.status === "rejected" ? "blue" : "alert"
+              }
+            >
               {approval.status === "pending"
                 ? s.approvalsPending
                 : approval.status === "approved"
                   ? s.approved
-                  : approval.status === "expired"
+                  : approval.status === "rejected"
+                    ? s.declined
+                    : approval.status === "expired"
                     ? s.expired
                     : approval.status === "stale"
                       ? s.stale
@@ -312,6 +352,13 @@ export default function ApprovalDetail() {
                 <Btn title={s.tabsApprovals} onPress={() => router.back()} />
               </View>
             </Card>
+          ) : no.phase === "answered" ? (
+            <Card>
+              <Body>{noLine(no.status, s)}</Body>
+              <View style={styles.back}>
+                <Btn title={s.tabsApprovals} onPress={() => router.back()} />
+              </View>
+            </Card>
           ) : approval.status === "pending" && !stale ? (
             <View>
               {gate.reason === "loading-doc" ? <Muted style={styles.note}>{s.loadingDocument}</Muted> : null}
@@ -319,7 +366,16 @@ export default function ApprovalDetail() {
               {gate.reason === "not-shown" && viewable ? <Muted style={styles.note}>{s.loadingDocument}</Muted> : null}
               {gate.reason === "unknown-action" ? <Muted style={styles.note}>{s.requestUnknown}</Muted> : null}
               {gate.reason === "ready" ? <Muted style={styles.note}>{s.approveNote}</Muted> : null}
-              <Btn title={busy ? s.approving : s.approve} onPress={() => void approve()} busy={busy} disabled={!canApprove} />
+              {no.phase === "failed" ? <Muted style={[styles.warn, styles.note]}>{s.declineFailed}</Muted> : null}
+              <View style={styles.actions}>
+                <Btn title={busy ? s.approving : s.approve} onPress={() => void approve()} busy={busy} disabled={!canApprove} />
+                <GhostBtn
+                  title={no.phase === "sending" ? s.declining : s.decline}
+                  onPress={() => void decline()}
+                  busy={no.phase === "sending"}
+                  disabled={busy}
+                />
+              </View>
             </View>
           ) : null}
           <View style={styles.pad} />
@@ -349,6 +405,7 @@ const styles = StyleSheet.create({
   match: { color: colors.green, marginTop: 4 },
   warn: { color: colors.alert, marginTop: 4 },
   note: { marginBottom: 12 },
+  actions: { gap: 8 },
   back: { marginTop: 16 },
   pad: { height: 24 },
 });
