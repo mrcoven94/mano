@@ -234,3 +234,104 @@ describe("LAP-747: a replaced proposal is never retried", () => {
     expect(store.getAttempt(a.idempotencyKey)?.status).toBe("done");
   });
 });
+
+// LAP-747 follow-up. A correction retires an approved filing that failed
+// or went unanswered, even when it only asks a question and no newer
+// proposal exists yet. Retired, it is still reconciled but never run again.
+describe("LAP-747: a retired approval is never run again", () => {
+  async function failedFiling(first: "refuse" | "timeout") {
+    const office = new Office();
+    office.next = first;
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, office);
+    const a = (await gateway.requestAction(proposal())).approval!;
+    await gateway.approveAndExecute(a.id, "person-maria");
+    return { office, store, gateway, a };
+  }
+
+  it("a replayed YES on a retired approval files nothing", async () => {
+    const { office, store, gateway, a } = await failedFiling("refuse");
+    expect(await gateway.retireApproval(a.id, "person-maria")).toMatchObject({ status: "rejected" });
+    expect(store.getApproval(a.id)?.status).toBe("retired");
+    expect((await gateway.approveAndExecute(a.id, "person-maria")).status).toBe("blocked");
+    expect(office.posts).toHaveLength(1);
+  });
+
+  it("a YES retry that waited on the safety check while the approval was retired files nothing", async () => {
+    let pause: Promise<void> | null = null;
+    const checker = { check: async () => { if (pause) await pause; return { verdict: "pass" as const, problems: [] }; } };
+    const office = new Office();
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, office, { checker });
+    const a = (await gateway.requestAction(proposal())).approval!;
+    await gateway.approveAndExecute(a.id, "person-maria");
+    let resume!: () => void;
+    pause = new Promise<void>((r) => (resume = r));
+    const retry = gateway.approveAndExecute(a.id, "person-maria");
+    await new Promise((r) => setTimeout(r, 0));
+    expect((await gateway.retireApproval(a.id, "person-maria")).status).toBe("rejected");
+    resume();
+    expect((await retry).status).toBe("blocked");
+    expect(office.posts).toHaveLength(1);
+  });
+
+  it("recovery of a retired approval reconciles: absent ends it, a filing found answers its receipt", async () => {
+    const absent = await failedFiling("timeout");
+    await absent.gateway.retireApproval(absent.a.id, "person-maria");
+    expect((await absent.gateway.recoverAttempt(absent.a.idempotencyKey, new Date(), later()))?.status).toBe("blocked");
+    expect(absent.store.getAttempt(absent.a.idempotencyKey)?.status).toBe("failed");
+    expect(absent.office.posts).toHaveLength(1);
+
+    const found = await failedFiling("timeout");
+    await found.gateway.retireApproval(found.a.id, "person-maria");
+    found.office.filed.set(found.a.idempotencyKey, "WA-1");
+    expect(await found.gateway.recoverAttempt(found.a.idempotencyKey, new Date(), later())).toMatchObject({ status: "reconciled", receipt: { externalId: "WA-1" } });
+  });
+
+  it("retiring answers completed once a receipt exists and in_progress while a filing is in flight, and changes nothing", async () => {
+    const filed = await failedFiling("timeout");
+    filed.store.putReceipt({
+      id: "r1", idempotencyKey: filed.a.idempotencyKey, actionType: "submit", recipient: "sandbox-agency-portal",
+      status: "reconciled", externalId: "WA-1", simulated: true, requestHash: "", createdAt: new Date().toISOString(),
+    });
+    expect(await filed.gateway.retireApproval(filed.a.id, "person-maria")).toMatchObject({ status: "completed" });
+    expect(filed.store.getApproval(filed.a.id)?.status).toBe("approved");
+
+    const flying = await failedFiling("timeout");
+    flying.store.updateAttempt(flying.a.idempotencyKey, "in_flight");
+    expect((await flying.gateway.retireApproval(flying.a.id, "person-maria")).status).toBe("in_progress");
+    expect(flying.store.getApproval(flying.a.id)?.status).toBe("approved");
+    expect((await flying.gateway.retireApproval(flying.a.id, "person-someone-else")).status).toBe("blocked");
+  });
+});
+
+// Two retries of an unanswered filing: retry 2 files it and stores
+// RECEIVED-1, then a correction is prepared, then retry 1's late absent
+// lookup returns. The receipt wins over superseded.
+describe("LAP-747: a receipt is answered before superseded", () => {
+  it("retry 1's late absent after retry 2 filed and a correction was prepared answers RECEIVED-1", async () => {
+    const portal = new ScriptedPortal();
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, portal);
+    const order = (turnId: string, ms: number) => ({ proposal: { receivedAt: new Date(ms).toISOString(), turnId } });
+    const a = (await gateway.requestAction(proposal(), new Date(), order("turn-a", Date.now() - 60_000))).approval!;
+    const first = gateway.approveAndExecute(a.id, "person-maria");
+    await tick();
+    portal.filings[0]!.reject(new TimeoutError());
+    await tick();
+    portal.lookups[0]!.reject(new Error("portal unreachable"));
+    await first;
+
+    const retry1 = gateway.approveAndExecute(a.id, "person-maria");
+    const retry2 = gateway.approveAndExecute(a.id, "person-maria");
+    await tick();
+    portal.lookups[2]!.resolve({ found: false });
+    await tick();
+    portal.filings[1]!.resolve({ externalId: "RECEIVED-1" });
+    expect(await retry2).toMatchObject({ status: "completed", receipt: { externalId: "RECEIVED-1" } });
+    await gateway.requestAction({ ...proposal(), payload: { phone: "253-555-0199" } }, new Date(), order("turn-b", Date.now()));
+    portal.lookups[1]!.resolve({ found: false });
+    expect(await retry1).toMatchObject({ status: "completed", receipt: { externalId: "RECEIVED-1" } });
+    expect(portal.posts).toHaveLength(2);
+  });
+});

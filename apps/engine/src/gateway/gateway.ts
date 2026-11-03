@@ -109,6 +109,10 @@ export interface ApprovalStore {
   // a durable recovery run while this holds.
   hasUnresolvedAttempts(): boolean;
   updateAttempt(key: string, status: Attempt["status"]): void;
+  // Retires an approved approval, in one guarded step: only while no
+  // receipt exists for its key and no attempt under it is in flight.
+  // False otherwise, or when it is not approved.
+  retireApproval(id: string): boolean;
   // Moves an attempt to failed only while it is still at version (nothing
   // claimed, ran or settled it since the caller read it before its lookup
   // or checks) and no receipt exists. A receipt always wins. Every failed
@@ -128,7 +132,7 @@ export const SUPERSEDED_REASON = "A newer request replaced this one, so it can n
 // Statuses that hold an action key, in the order a lookup prefers them:
 // a NO first, then a revocation, then the consumed approval, then the
 // live one.
-export const KEY_HOLDING: readonly Approval["status"][] = ["rejected", "revoked", "approved", "pending"];
+export const KEY_HOLDING: readonly Approval["status"][] = ["rejected", "revoked", "retired", "approved", "pending"];
 
 function transition(store: Map<string, Approval>, id: string, to: Approval["status"]): boolean {
   const current = store.get(id);
@@ -153,7 +157,7 @@ export class MemoryApprovalStore implements ApprovalStore {
     const matches = [...this.approvals.values()].filter((a) => a.idempotencyKey === key);
     if (matches.length === 0) return null;
     matches.sort((a, b) => {
-      const rank = (s: string) => (s === "approved" ? 0 : 1);
+      const rank = (s: string) => (s === "approved" || s === "retired" ? 0 : 1);
       return rank(a.status) - rank(b.status) || (a.createdAt < b.createdAt ? 1 : -1);
     });
     return matches[0];
@@ -213,6 +217,13 @@ export class MemoryApprovalStore implements ApprovalStore {
   }
   keyDeclined(key: string) {
     return [...this.approvals.values()].some((a) => a.idempotencyKey === key && a.status === "rejected");
+  }
+  retireApproval(id: string) {
+    const current = this.approvals.get(id);
+    if (!current || current.status !== "approved") return false;
+    if (this.receipts.has(current.idempotencyKey) || this.attempts.get(current.idempotencyKey)?.status === "in_flight") return false;
+    this.approvals.set(id, { ...current, status: "retired" });
+    return true;
   }
   private generationOf(id: string) {
     return this.approvalGenerations.get(id) ?? 0;
@@ -444,6 +455,7 @@ function approvalGoneReason(status: Approval["status"]): string {
   const reasons: Record<Approval["status"], string> = {
     pending: "This approval is still pending.",
     approved: "This approval was already used.",
+    retired: "This approval was replaced by a correction, so it will not be sent.",
     rejected: "This approval was declined.",
     revoked: "This approval was revoked when the conversation was deleted.",
     stale: "This approval is stale: the request changed after it was created.",
@@ -722,6 +734,31 @@ export class ActionGateway {
     return { status: "rejected", approval: fresh };
   }
 
+  // The person corrected the form after approving this filing, and its
+  // filing failed or went unanswered. Retired, it is still reconciled (a
+  // receipt found later stands) but never executed again: every retry and
+  // adopt path requires an approved approval. Answers completed when a
+  // receipt exists and in_progress while a filing is in flight, and then
+  // changes nothing.
+  async retireApproval(approvalId: string, humanId: string): Promise<GatewayResult> {
+    const approval = this.store.getApproval(approvalId);
+    if (!approval) return { status: "blocked", reason: "Approval not found." };
+    if (!humanId || humanId !== approval.personId) {
+      return { status: "blocked", reason: "This approval belongs to a different person." };
+    }
+    if (approval.status === "retired") return { status: "rejected", approval };
+    if (!this.store.retireApproval(approvalId)) {
+      const receipt = this.store.getReceiptByKey(approval.idempotencyKey);
+      if (receipt) return { status: "completed", receipt };
+      if (this.store.getAttempt(approval.idempotencyKey)?.status === "in_flight") {
+        return { status: "in_progress", reason: "Another request with this idempotency key is running." };
+      }
+      return { status: "blocked", reason: approvalGoneReason(this.store.getApproval(approvalId)?.status ?? approval.status) };
+    }
+    this.store.audit({ event: "gateway.retire", approvalHash: await auditDigest(approval.id) });
+    return { status: "rejected", approval: this.store.getApproval(approvalId) ?? approval };
+  }
+
   async approveAndExecute(
     approvalId: string,
     humanId: string,
@@ -894,14 +931,17 @@ export class ActionGateway {
     }
     // Synchronous with the adopt below: a delete during the awaits above
     // revoked this approval or moved the generation, and it cannot run.
-    if (!this.store.approvalAuthorized(approval.id)) return { status: "blocked", reason: approvalGoneReason("revoked") };
+    if (!this.store.approvalAuthorized(approval.id)) {
+      return { status: "blocked", reason: approvalGoneReason(this.store.getApproval(approval.id)?.status ?? "revoked") };
+    }
     if (check.problems.length > 0) this.store.setApprovalProblems(approval.id, check.problems);
     if (attempt.status === "failed" || attempt.status === "unknown") {
       // A newer proposal replaced this one (the person corrected it): it is
       // never executed again. Checked here, with no await before the adopt,
       // so a replayed YES or one that waited on the safety check cannot
       // file the old values after the correction.
-      if (!this.store.proposalCurrent(approval.id)) return SUPERSEDED;
+      // A filing that went through meanwhile answers its receipt first.
+      if (!this.store.proposalCurrent(approval.id)) return this.store.getReceiptByKey(approval.idempotencyKey) ? this.movedOn(approval.idempotencyKey) : SUPERSEDED;
       const adopt =
         attempt.status === "failed"
           ? this.store.adoptFailedAttempt(approval.idempotencyKey, now)
@@ -1107,6 +1147,9 @@ export class ActionGateway {
     // Confirmed absent and replaced by a newer proposal: it ends here,
     // never executed again with the values the person corrected.
     if (!this.store.proposalCurrent(approval.id)) return this.failAt(key, seen, () => SUPERSEDED);
+    if (approval.status === "retired") {
+      return this.failAt(key, seen, () => ({ status: "blocked", reason: approvalGoneReason("retired") }));
+    }
     if (!this.store.adoptForRecoveryIfApprovalLive(key, new Date())) {
       return this.failAt(key, seen, () => {
         this.store.audit({ event: "gateway.recover_expired", keyHash });

@@ -133,7 +133,7 @@ export class SqlApprovalStore implements ApprovalStore {
   keyHeld(key: string): boolean {
     return (
       this.sql
-        .exec("SELECT 1 FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected', 'revoked') LIMIT 1", key)
+        .exec("SELECT 1 FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'retired', 'rejected', 'revoked') LIMIT 1", key)
         .toArray().length > 0
     );
   }
@@ -141,7 +141,7 @@ export class SqlApprovalStore implements ApprovalStore {
   getApprovalByKey(key: string): Approval | null {
     const rows = this.sql.exec(
       `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE idempotency_key = ?` +
-        ` ORDER BY CASE status WHEN 'approved' THEN 0 ELSE 1 END, created_at DESC LIMIT 1`,
+        ` ORDER BY CASE status WHEN 'approved' THEN 0 WHEN 'retired' THEN 0 ELSE 1 END, created_at DESC LIMIT 1`,
       key,
     ).toArray();
     if (rows.length === 0) return null;
@@ -167,7 +167,7 @@ export class SqlApprovalStore implements ApprovalStore {
   createApprovalForKey(a: Approval, generation: number, order?: ProposalOrder): Approval | null {
     const inserted = this.sql.exec(
       `INSERT INTO approvals(${APPROVAL_COLUMNS}, generation) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?` +
-        " WHERE NOT EXISTS (SELECT 1 FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected', 'revoked'))" +
+        " WHERE NOT EXISTS (SELECT 1 FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'retired', 'rejected', 'revoked'))" +
         ` AND ${CURRENT_GENERATION} = ?`,
       a.id, a.actionType, a.recipient, a.purpose, a.documentHash, a.documentId,
       a.idempotencyKey, a.status, a.approvedByHumanId, a.createdAt, a.remindAt, a.expiresAt,
@@ -191,8 +191,8 @@ export class SqlApprovalStore implements ApprovalStore {
     }
     if (this.generation() !== generation) return null;
     const rows = this.sql.exec(
-      `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'rejected', 'revoked')` +
-        " ORDER BY CASE status WHEN 'rejected' THEN 0 WHEN 'revoked' THEN 1 WHEN 'approved' THEN 2 ELSE 3 END, created_at LIMIT 1",
+      `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE idempotency_key = ? AND status IN ('pending', 'approved', 'retired', 'rejected', 'revoked')` +
+        " ORDER BY CASE status WHEN 'rejected' THEN 0 WHEN 'revoked' THEN 1 WHEN 'retired' THEN 2 WHEN 'approved' THEN 3 ELSE 4 END, created_at LIMIT 1",
       a.idempotencyKey,
     ).toArray();
     return rows.length > 0 ? approvalFromRow(rows[0] as Record<string, unknown>) : null;
@@ -425,6 +425,17 @@ export class SqlApprovalStore implements ApprovalStore {
 
   updateAttempt(key: string, status: Attempt["status"]): void {
     this.sql.exec("UPDATE attempts SET status = ?, updated_at = ?, version = version + 1 WHERE idempotency_key = ?", status, new Date().toISOString(), key);
+  }
+
+  retireApproval(id: string): boolean {
+    return (
+      this.sql.exec(
+        "UPDATE approvals SET status = 'retired' WHERE id = ? AND status = 'approved'" +
+          " AND NOT EXISTS(SELECT 1 FROM receipts WHERE idempotency_key = approvals.idempotency_key)" +
+          " AND NOT EXISTS(SELECT 1 FROM attempts WHERE idempotency_key = approvals.idempotency_key AND status = 'in_flight')",
+        id,
+      ).rowsWritten === 1
+    );
   }
 
   failAttemptAt(key: string, version: number): boolean {

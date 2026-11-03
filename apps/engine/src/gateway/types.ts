@@ -40,7 +40,9 @@ export interface Approval {
   documentHash: string | null;
   documentId: string | null;
   idempotencyKey: string;
-  status: "pending" | "approved" | "rejected" | "revoked" | "expired" | "stale" | "blocked";
+  // retired: was approved, then the person corrected the form after its
+  // filing failed or went unanswered; it is reconciled but never run again.
+  status: "pending" | "approved" | "retired" | "rejected" | "revoked" | "expired" | "stale" | "blocked";
   approvedByHumanId: string | null;
   // The person this approval belongs to, the frozen request it authorizes
   // (canonical JSON, executed verbatim), and the hash binding type,

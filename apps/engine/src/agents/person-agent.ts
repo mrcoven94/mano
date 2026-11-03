@@ -996,6 +996,13 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return result;
   }
 
+  async retire(approvalId: string, verified: string) {
+    await this.assertSubject(verified);
+    const result = await this.gateway.retireApproval(approvalId, verified);
+    this.syncState();
+    return result;
+  }
+
   async approve(approvalId: string, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.approveAndExecute(approvalId, verified);
