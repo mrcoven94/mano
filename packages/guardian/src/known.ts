@@ -10,6 +10,8 @@
 // a birth date matches wherever text names the same day in a common US or
 // Spanish format.
 
+import { COMMON_WORDS } from "./common-words.js";
+
 export interface KnownEntities {
   names?: string[];
   employers?: string[];
@@ -286,14 +288,24 @@ const STREET_SUFFIXES = new Set([
   "way", "ct", "court", "pl", "place", "ter", "terrace", "cir", "circle", "hwy", "highway", "pkwy", "parkway",
   "sq", "square", "trl", "trail", "loop", "row", "path", "pike", "aly", "alley", "plz", "plaza", "rte", "route",
 ]);
+const UNIT_WORDS = new Set(["apt", "apartment", "unit", "ste", "suite"]);
 // Words in an address that identify no one on their own, so they never
 // match alone.
 const ADDRESS_WORDS = new Set([
   ...STREET_SUFFIXES,
-  "apt", "apartment", "unit", "ste", "suite", "floor", "room", "bldg", "building", "lot", "box",
+  ...UNIT_WORDS,
+  "floor", "room", "bldg", "building", "lot", "box",
   "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest",
   "county", "parish", "city", "town", "village", "township", "borough", "the", "and", "usa",
 ]);
+
+const isDigits = (word: string): boolean => /^\d+$/.test(word);
+
+// A word that names a place on its own, such as a city: not a street
+// word, not a number, and not a word the action's meaning depends on.
+function placeWord(word: string): boolean {
+  return word.length >= 3 && !isDigits(word) && !ADDRESS_WORDS.has(word) && !COMMON_WORDS.has(word);
+}
 
 function digitsOf(value: string): string {
   return tokenize(value)
@@ -331,16 +343,38 @@ const NEEDLES: Record<EntityKind, (value: string) => Partial<Needles>> = {
     const trimmed = all.slice(0, core);
     return { sequences: [all, trimmed, [all.join("")], [trimmed.join("")]] };
   },
+  // An address matches whole, by any run of its parts between commas,
+  // semicolons or line breaks, and by its street line with or without the
+  // house number. A street's own words never match alone, so a street
+  // named Food Benefits Renewal Road leaves the purpose alone. Only a word
+  // that names a place (placeWord) also matches by itself.
   addresses: (value) => {
-    const all = words(value);
-    const streetEnd = all.findIndex((word, index) => index > 0 && STREET_SUFFIXES.has(word));
-    const street = streetEnd > 0 ? [all.slice(0, streetEnd + 1), all.slice(1, streetEnd + 1)] : [];
-    const identifying = (word: string): boolean =>
-      /^\d+$/.test(word) ? word.length >= 5 : word.length >= 3 && !ADDRESS_WORDS.has(word);
-    const parts = [...value.split(/[,;\n]/).map(words), ...street, ...all.filter(identifying).map((word) => [word])];
+    const parts = value.split(/[,;\n]/).map(words).filter((part) => part.length > 0);
+    const sequences: string[][] = [];
+    for (let from = 0; from < parts.length; from += 1) {
+      for (let to = from + 1; to <= parts.length; to += 1) {
+        const run = parts.slice(from, to).flat();
+        if (run.length > 1 || run.some(placeWord) || run.some((word) => /^\d{5,}$/.test(word))) sequences.push(run);
+      }
+    }
+    const places: string[] = [];
+    for (const part of parts) {
+      const suffix = part.findIndex((word, k) => k > 0 && STREET_SUFFIXES.has(word));
+      const street = suffix > 0 || isDigits(part[0] ?? "") || part.some((word) => UNIT_WORDS.has(word) || word === "box");
+      if (!street) {
+        places.push(...part.filter(placeWord));
+        continue;
+      }
+      if (suffix > 0) {
+        const line = part.slice(0, suffix + 1);
+        sequences.push(line, isDigits(line[0] ?? "") ? line.slice(1) : line);
+        // In an address written on one line, the place follows the street.
+        places.push(...part.slice(suffix + 1).filter(placeWord));
+      }
+    }
     return {
-      sequences: [all, ...parts.filter((sequence) => sequence.some(identifying))],
-      digits: all.filter((word) => /^\d{5,}$/.test(word)),
+      sequences: [...sequences, ...places.map((word) => [word])],
+      digits: parts.flat().filter((word) => /^\d{5,}$/.test(word)),
     };
   },
   phones: (value) => {
