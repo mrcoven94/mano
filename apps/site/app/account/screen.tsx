@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
 
 interface MaskedIdentity {
   id: string;
@@ -278,7 +279,7 @@ export default function AccountScreen() {
         <h2>Thread</h2>
         <p>The same conversation on text, the web and the app.</p>
         {thread.length === 0 ? (
-          <p className="note">No messages yet. Text Mano to start.</p>
+          <p className="note">No messages yet. Text Mano at <a className="sms-num" href={SMS_HREF}>{SMS_NUMBER}</a> to start.</p>
         ) : (
           <ul className="acct-thread">
             {thread.map((item) => (

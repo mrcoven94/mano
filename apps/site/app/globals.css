@@ -34,11 +34,13 @@ section{padding:128px 0}
 .btn-ghost:hover{background:var(--bg3)}
 .btn-lg{min-height:54px;padding:0 28px;font-size:1.02rem}
 .btn-sm{min-height:40px;padding:0 16px;font-size:.92rem;border-radius:999px}
-.btn-row{display:flex;gap:10px;flex-wrap:wrap}
+.btn-row{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
 /* Text Mano: an sms: link on phones, a QR panel on computers (components/TextMano.tsx) */
-.tm{position:relative;display:inline-flex;flex-direction:column}
-.tm-pop{position:absolute;z-index:60;top:calc(100% + 12px);left:50%;translate:-50% 0;display:flex;align-items:center;gap:18px;width:max-content;padding:14px 22px 14px 14px;border-radius:22px;background:var(--card);box-shadow:var(--shadow-lg),0 0 0 1px var(--border);text-align:left;white-space:normal;animation:tmIn .22s cubic-bezier(.16,1,.3,1) both}
+.text-mano{position:relative;display:inline-flex;flex-direction:column}
+.text-mano-note{margin-top:8px;font-size:.8rem;color:var(--faint)}
+.tm-pop{position:absolute;z-index:60;top:calc(100% + 12px);left:50%;translate:-50% 0;display:flex;align-items:center;gap:18px;width:max-content;max-width:calc(100vw - 32px);padding:14px 22px 14px 14px;border-radius:22px;background:var(--card);box-shadow:var(--shadow-lg),0 0 0 1px var(--border);text-align:left;white-space:normal;animation:tmIn .22s cubic-bezier(.16,1,.3,1) both}
 .tm-pop[hidden]{display:none}
+.tm-pop[data-align="start"]{left:0;translate:none}
 .tm-pop[data-align="end"]{left:auto;right:0;translate:none}
 .tm-qr{flex:none;padding:8px;border-radius:14px;background:#fff;box-shadow:0 0 0 1px var(--border)}
 .tm-qr svg{display:block;width:136px;height:136px}
@@ -48,7 +50,11 @@ section{padding:128px 0}
 .tm-num:hover{text-decoration:underline;text-underline-offset:.18em}
 .tm-copy small{margin-top:6px;font-size:.8rem;color:var(--faint)}
 @keyframes tmIn{from{opacity:0;transform:translateY(-6px) scale(.98)}}
+@media (max-width:560px){.tm-pop{flex-direction:column;gap:12px;padding:16px;text-align:center}.tm-copy{max-width:none;align-items:center}}
 .note{font-size:.8rem;color:var(--faint)}
+/* Mano's number inside a sentence, as an sms: link */
+.sms-num{color:var(--text);font-weight:600;text-decoration:underline;text-decoration-color:var(--border2);text-underline-offset:.2em;white-space:nowrap;font-variant-numeric:tabular-nums}
+.sms-num:hover{text-decoration-color:currentColor}
 
 /* header */
 .site-header{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.88);backdrop-filter:saturate(1.6) blur(14px);-webkit-backdrop-filter:saturate(1.6) blur(14px)}
@@ -62,6 +68,7 @@ section{padding:128px 0}
 .header-cta{margin-left:auto;display:flex;gap:8px;align-items:center}
 .header-cta .quiet{font-size:.95rem;color:var(--muted);text-decoration:none;padding:8px 12px}
 .header-cta .quiet:hover{color:var(--text)}
+.header-cta > .text-mano .text-mano-note{position:absolute;top:calc(100% + 4px);right:0;white-space:nowrap}
 .menu{display:none;position:relative}
 .menu summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:10px;border:1px solid var(--border2);background:#fff}
 .menu summary::-webkit-details-marker{display:none}
@@ -73,8 +80,8 @@ section{padding:128px 0}
 .menu-panel a{display:flex;justify-content:space-between;align-items:center;padding:13px 14px;border-radius:12px;text-decoration:none;font-size:1rem}
 .menu-panel a[aria-current="page"]{background:var(--fill2)}
 .menu-panel a small{color:var(--faint);font-size:.78rem}
-.menu-panel .tm{display:flex;margin-top:6px}
-.menu-panel .tm .btn{justify-content:center;padding:0 22px;font-size:.98rem;color:var(--ink)}
+.menu-panel .text-mano{display:flex;margin-top:6px}
+.menu-panel .text-mano .btn{justify-content:center;padding:0 22px;font-size:.98rem;color:var(--ink)}
 
 /* mascot */
 .mascot-wave{animation:handWave 5s ease-in-out infinite;transform-origin:50% 100%;transform-box:fill-box}
@@ -110,6 +117,8 @@ details.faq p{padding:0 0 22px;max-width:640px;font-size:.98rem}
 
 /* responsive */
 @media (max-width:1080px){
+  .site-header .bar{gap:24px}
+  .header-cta .quiet{display:none}
   .faq-grid{grid-template-columns:1fr;gap:40px}
   .foot{grid-template-columns:1fr 1fr}
   .foot-card{padding:48px 28px 24px;border-radius:28px}
@@ -117,9 +126,8 @@ details.faq p{padding:0 0 22px;max-width:640px;font-size:.98rem}
 }
 @media (max-width:860px){
   .mainnav{display:none}
-  .header-cta .quiet{display:none}
   .menu{display:block}
-  .header-cta > .tm{display:none}
+  .header-cta > .text-mano{display:none}
 }
 @media (max-width:720px){
   section{padding:88px 0}

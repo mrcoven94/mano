@@ -1,5 +1,9 @@
 import Mascot from "./Mascot";
-import { SMS_HREF } from "@/lib/site";
+import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
+
+/* Answers are plain text so the FAQPage data stays plain; Mano's number inside one becomes an sms: link on the page. */
+const linkNumber = (text: string) =>
+  text.split(SMS_NUMBER).flatMap((part, i) => (i ? [<a key={i} className="sms-num" href={SMS_HREF}>{SMS_NUMBER}</a>, part] : [part]));
 
 export default function Faq({ id = "questions", title = "Questions", intro, items }: { id?: string; title?: string; intro?: string; items: [string, string][] }) {
   return (
@@ -18,14 +22,14 @@ export default function Faq({ id = "questions", title = "Questions", intro, item
           {intro && <p className="lede" style={{ marginTop: 16, maxWidth: 380 }}>{intro}</p>}
           <a className="faq-ask" href={SMS_HREF}>
             <Mascot tile wave tone="orange" size={56} />
-            <span><b>Still wondering?</b><small>Text Mano your question, any time of day.</small></span>
+            <span><b>Still wondering?</b><small>Text Mano your question at <span className="sms-num">{SMS_NUMBER}</span>, any time of day.</small></span>
           </a>
         </div>
         <div className="faq-list">
           {items.map(([q, a], i) => (
             <details key={q} className="faq" open={i === 0}>
               <summary>{q}</summary>
-              <p>{a}</p>
+              <p>{linkNumber(a)}</p>
             </details>
           ))}
         </div>

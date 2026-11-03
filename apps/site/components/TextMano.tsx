@@ -3,20 +3,20 @@ import { useEffect, useId, useRef, useState } from "react";
 import QRCode from "react-qr-code";
 import { PLACEHOLDER_NOTE, SMS_HREF, SMS_IS_PLACEHOLDER, SMS_NUMBER } from "@/lib/site";
 
-/* The Text Mano button. It renders as an sms: link, which opens Messages with the number and a first line filled in on
-   a phone and still works with no script. On a computer with a mouse, where an sms: link goes nowhere useful, it
-   becomes a button that opens a small panel with a QR code to scan and the number to type. Escape, a click outside or
-   the button again closes it. */
+/* The Text Mano button, labeled with the number. It renders as an sms: link, which opens Messages with the number and a
+   first line filled in on a phone and still works with no script. On a computer with a mouse, where an sms: link goes
+   nowhere useful, it becomes a button that opens a small panel with a QR code to scan and the number to type. Escape,
+   a click outside or the button again closes it. Until the real number is configured, a note under it says so. */
 export default function TextMano({
   href = SMS_HREF,
-  label = "Text Mano",
+  label = `Text Mano at ${SMS_NUMBER}`,
   className = "btn btn-primary",
   align = "center",
 }: {
   href?: string;
   label?: string;
   className?: string;
-  align?: "center" | "end";
+  align?: "start" | "center" | "end";
 }) {
   const [desktop, setDesktop] = useState(false);
   const [open, setOpen] = useState(false);
@@ -45,10 +45,12 @@ export default function TextMano({
     return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
   }, [open]);
 
-  if (!desktop) return <span className="tm"><a className={className} href={href}>{label}</a></span>;
+  const note = SMS_IS_PLACEHOLDER && <small className="text-mano-note">{PLACEHOLDER_NOTE}</small>;
+
+  if (!desktop) return <span className="text-mano"><a className={className} href={href}>{label}</a>{note}</span>;
 
   return (
-    <span className="tm" ref={wrap}>
+    <span className="text-mano" ref={wrap}>
       <button ref={button} type="button" className={className} aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)}>
         {label}
       </button>
@@ -58,9 +60,9 @@ export default function TextMano({
           <b>Scan with your phone camera</b>
           or text Mano at
           <a className="tm-num" href={href}>{SMS_NUMBER}</a>
-          {SMS_IS_PLACEHOLDER && <small>{PLACEHOLDER_NOTE}</small>}
         </span>
       </span>
+      {note}
     </span>
   );
 }

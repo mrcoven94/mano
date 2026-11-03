@@ -29,8 +29,6 @@ mark{background:none;color:inherit}
 .h-lede{max-width:600px;margin-top:28px;font-size:clamp(1.08rem,1.6vw,1.28rem);line-height:1.55;color:var(--muted);text-wrap:pretty}
 .h-ctas{margin-top:32px;justify-content:center}
 .h-note{margin-top:16px;font-size:.9rem;color:var(--faint)}
-.h-num{color:var(--text);font-weight:600;text-decoration:underline;text-decoration-color:var(--border2);text-underline-offset:.2em;font-variant-numeric:tabular-nums}
-.h-num:hover{text-decoration-color:currentColor}
 
 .h-tabs{display:flex;margin-top:72px;overflow-x:auto;scrollbar-width:none}
 .h-tabs::-webkit-scrollbar{display:none}

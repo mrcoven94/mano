@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
 
 export default function SignInForm() {
   const [phone, setPhone] = useState("");
@@ -125,7 +126,7 @@ export default function SignInForm() {
           </button>
         </div>
       </div>
-      <p className="note">New here? Text Mano first. That creates your account, then sign in here with the same number.</p>
+      <p className="note">New here? Text Mano at <a className="sms-num" href={SMS_HREF}>{SMS_NUMBER}</a> first. That creates your account, then sign in here with the same number.</p>
     </div>
   );
 }

@@ -4,7 +4,6 @@ import { ApplyScene, FormScene, RenewScene, HoldScene } from "./Scenes";
 import SpineDemo, { SPINE_SECONDS } from "./SpineDemo";
 import Mascot from "@/components/Mascot";
 import TextMano from "@/components/TextMano";
-import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
 
 /* The hero: one headline whose highlighted outcome follows the demo below it. Each tab names the outcome and the work behind it.
    Scenes advance on their own while the stage is on screen; choosing a tab stops that. The first scene is the spine
@@ -66,7 +65,7 @@ export default function HeroStage() {
           <TextMano className="btn btn-primary btn-lg" />
           <a className="btn btn-ghost btn-lg" href="#nd-h">What Mano helps with</a>
         </div>
-        <p className="h-note">Text <a className="h-num" href={SMS_HREF}>{SMS_NUMBER}</a>. Free to start, and keeping your help is always free.</p>
+        <p className="h-note">Free to start, and keeping your help is always free.</p>
       </div>
 
       <div className="wrap h-stage-wrap" ref={stage}>
