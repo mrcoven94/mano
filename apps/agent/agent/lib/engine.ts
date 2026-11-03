@@ -135,7 +135,7 @@ export interface EngineReminder {
 
 // The kinds of deadline Engine names in a nudge. With no kind, a nudge
 // names no action.
-export const DEADLINE_KINDS = ["renewal", "recertification", "interview", "hearing", "appeal", "payment", "documents"] as const;
+export const DEADLINE_KINDS = ["renewal", "recertification", "redetermination", "interview", "hearing", "appeal", "payment", "documents"] as const;
 export type DeadlineKind = (typeof DEADLINE_KINDS)[number];
 
 // A deadline Engine tracks, as its /deadlines routes return it.
