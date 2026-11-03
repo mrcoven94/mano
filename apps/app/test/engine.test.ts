@@ -31,6 +31,7 @@ const approvalRow = {
   remindAt: "2026-11-01T00:00:00.000Z",
   expiresAt: "2026-11-10T00:00:00.000Z",
   escalated: false,
+  outcome: { attempt: null, receipt: null },
 };
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
@@ -118,6 +119,90 @@ describe("EngineClient", () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ approvals: [{ ...approvalRow, status: "expired" }] }));
     const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
     await expect(client.approve(session, "appr-1", { documentHash: "abc123", requestHash: "req-1" })).rejects.toBeInstanceOf(StaleApprovalError);
+  });
+
+  it("declines through the reject route with no body, then reads the key's outcome", async () => {
+    const fetchImpl = vi.fn(async (input: unknown) => {
+      if (String(input).endsWith("/reject")) return jsonResponse({ status: "rejected", approval: { ...approvalRow, status: "rejected" } });
+      return jsonResponse({ approvals: [{ ...approvalRow, status: "rejected" }] });
+    });
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    expect(await client.decline(session, "appr-1")).toEqual({ status: "rejected", notSent: true });
+    const calls = fetchImpl.mock.calls as unknown as [string, RequestInit | undefined][];
+    expect(calls.map(([url]) => url)).toEqual([
+      "https://engine.test/api/persons/maria-001/approvals/appr-1/reject",
+      "https://engine.test/api/persons/maria-001/approvals",
+    ]);
+    expect(calls[0]?.[1]?.method).toBe("POST");
+    expect(calls[0]?.[1]?.body).toBeUndefined();
+  });
+
+  it("answers a NO on a decided approval with its real status, and claims nothing went only when proven", async () => {
+    const cases = [
+      { status: "approved", notSent: false },
+      { status: "revoked", notSent: false },
+      { status: "expired", notSent: true },
+      { status: "stale", notSent: true },
+      { status: "blocked", notSent: true },
+    ] as const;
+    for (const expected of cases) {
+      const fetchImpl = vi.fn(async (input: unknown) => {
+        if (String(input).endsWith("/reject")) return jsonResponse({ status: "blocked", reason: "This approval was already used." });
+        return jsonResponse({ approvals: [{ ...approvalRow, status: expected.status }] });
+      });
+      const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+      expect(await client.decline(session, "appr-1")).toEqual(expected);
+    }
+  });
+
+  it("does not claim nothing went when a reproposal under the same key was sent", async () => {
+    const fetchImpl = vi.fn(async (input: unknown) => {
+      if (String(input).endsWith("/reject")) return jsonResponse({ status: "blocked", reason: "Approval expired." });
+      return jsonResponse({
+        approvals: [
+          { ...approvalRow, id: "appr-2", status: "approved", outcome: { attempt: "done", receipt: { externalId: "x-1", simulated: true } } },
+          { ...approvalRow, status: "expired", outcome: { attempt: "done", receipt: { externalId: "x-1", simulated: true } } },
+          { ...approvalRow, id: "appr-other", idempotencyKey: "k-other", status: "approved" },
+        ],
+      });
+    });
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    expect(await client.decline(session, "appr-1")).toEqual({ status: "expired", notSent: false });
+  });
+
+  it("names the recipient in words and never shows its raw ID as the name", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ approvals: [{ ...approvalRow, recipient: "sandbox-agency-portal" }, { ...approvalRow, id: "appr-2" }] }),
+    );
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    const [named, unnamed] = await client.listApprovals(session);
+    expect(named?.recipientName).toBe("the State Benefits Renewal Office test portal");
+    expect(named?.recipient).toBe("sandbox-agency-portal");
+    expect(unnamed?.recipientName).toBe("an office Mano has no name for");
+  });
+
+  it("treats a row with no outcome on file as possibly sent", async () => {
+    const { outcome: _outcome, ...bare } = approvalRow;
+    void _outcome;
+    const fetchImpl = vi.fn(async () => jsonResponse({ approvals: [{ ...bare, status: "expired" }] }));
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    const [approval] = await client.listApprovals(session);
+    expect(approval?.attempted).toBe(true);
+  });
+
+  it("fails a NO the engine refused while the approval still waits", async () => {
+    const fetchImpl = vi.fn(async (input: unknown) => {
+      if (String(input).endsWith("/reject")) return jsonResponse({ status: "blocked", reason: "Approval not found." });
+      return jsonResponse({ approvals: [approvalRow] });
+    });
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    await expect(client.decline(session, "appr-1")).rejects.toThrow("Approval not found.");
+  });
+
+  it("signs out on a NO the engine refuses for the session", async () => {
+    const fetchImpl = vi.fn(async () => new Response("forbidden", { status: 403 }));
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    await expect(client.decline(session, "appr-1")).rejects.toBeInstanceOf(AuthError);
   });
 
   it("reads the document filename from content-disposition", async () => {

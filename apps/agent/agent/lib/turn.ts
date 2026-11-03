@@ -11,7 +11,7 @@
 // rendered from the request Engine froze, and the question travels on its
 // own too so Channels can check it goes out word for word and report it.
 // When the draft came from a fill, a line after the question links to the
-// page that replays it.
+// page that replays it, whenever the question is shown.
 //
 // A retried turn runs again: every mutation it makes is keyed by the turn
 // (reminders, memory) or held by Engine (approvals), so a rerun converges
@@ -248,15 +248,14 @@ const UNSHOWN = reply("I haven't shown you that one yet, so nothing was approved
 const UPDATED = "I just updated that, so nothing was approved and nothing was sent.";
 
 // The answer to a YES or NO that was aimed at a replaced question: the
-// latest one, shown now as a question of its own, when it still waits.
-function updated(engine: PersonEngine, approvals: EngineApproval[], latest: { approvalId: string } | null): TurnResponse {
+// latest one, shown now as a question of its own, when it still waits,
+// with the line linking to its replay as when it was first shown.
+function updated(engine: PersonEngine, approvals: EngineApproval[], latest: { approvalId: string } | null, link: string | null): TurnResponse {
   const waiting = latest ? waitingProposals(approvals, engine.generation).find((a) => a.id === latest.approvalId) : undefined;
   const question = waiting ? renderQuestion(waiting) : null;
   if (!waiting || !question || !presentsExactly(question)) return reply(`${UPDATED} Ask me to show the latest.`);
-  return {
-    httpStatus: 200,
-    body: { status: "waiting_approval", text: `${UPDATED} Here's the latest.\n\n${question}`, approval: question, approvalId: waiting.id },
-  };
+  const text = [`${UPDATED} Here's the latest.`, question, link ? replayLine(link) : ""].filter(Boolean).join("\n\n");
+  return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: waiting.id } };
 }
 
 // A YES or NO turn is bound, in Engine's turn ledger, to what its first
@@ -322,7 +321,15 @@ async function decideTurn(
   const { pointer, latest } = await engine.getPending();
   if (pointer && pointer.approvalId !== latest?.approvalId) {
     await bind(engine, body.turnId, turn.firstReceivedAt, ["unshown"]);
-    return updated(engine, approvals, latest);
+    // Read again after the binding write: a newer draft may have replaced
+    // the latest one while it ran. The link counts only for the draft that
+    // is still the latest.
+    const [now, current, link] = await Promise.all([
+      engine.getPending(),
+      engine.listApprovals(),
+      latest ? replayLinkOf(engine, latest.approvalId) : null,
+    ]);
+    return updated(engine, current, now.latest, now.latest && now.latest.approvalId === latest?.approvalId ? link : null);
   }
   const answerable = pointer && Date.parse(pointer.setAt) < arrived ? pointer : null;
   if (pointer && !answerable) {
@@ -369,6 +376,9 @@ async function runTurn(
   // words that answer is the whole reply; the crisis line still leads
   // through Channels' finalize when the turn is a crisis.
   // The reading reaches the model only as data in the person's own turn.
+  // The profile, as data and never instructions (lib/profile.ts), is read
+  // beside it and given up before it could cut into the model's minimum.
+  const profileRead = body.attachmentCount > 0 && body.texts.length === 0 ? null : profileContext(engine, deadlineMs - MODEL_MIN_MS - Date.now());
   let letter: LetterReply | null = null;
   if (body.attachmentCount > 0) {
     letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), turn.firstReceivedAt, deadlineMs - READ_MARGIN_MS);
@@ -376,8 +386,7 @@ async function runTurn(
     context.push(LETTER_RULES);
     message = `${message}\n\n${letterBlock(letter)}`;
   }
-  // The profile as data, never instructions (lib/profile.ts).
-  const profile = await profileContext(engine);
+  const profile = await profileRead;
   if (profile) context.push(profile);
   // Where earlier requests stand (instructions/requests.ts) reaches the
   // model as a system instruction, never as part of the person's message.

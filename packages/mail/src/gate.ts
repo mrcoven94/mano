@@ -49,18 +49,38 @@ const DETERMINERS = any(["the", "your", "this", "these", "all", "each", "a", "bo
 const ADJECTIVES = any([
   "signed", "completed", "written", "enclosed", "current", "required", "requested", "missing", "new",
   "renewal", "recertification", "redetermination", "application", "income", "identity", "address",
-  "residency", "photo", "household", "verification", "hearing", "appeal", "tax", "medical", "yearly",
+  "residency", "photo", "household", "verification", "tax", "medical", "yearly",
   "child care", "rent", "utility", "bank", "next",
 ]);
-const NOUNS = any([
+// What the person sends, asks for or pays. "Hearing" and "appeal"
+// qualify only a request: a hearing form may be the request itself or
+// a paper for one, so it asks.
+const OWED_NOUNS = [
   "forms?", "packets?", "paperwork", "applications?", "proofs?", "documents?", "items?", "papers",
   "verifications?", "pay stubs?", "statements?", "ids?", "cop(?:y|ies)", "information", "response",
   "reply", "appeal", "requests?", "renewal", "recertification", "letters?", "bills?", "receipts?",
-  "premium", "case", "hearing", "reconsideration", "lease",
+  "premium", "lease", "(?:hearing|appeal) requests?", "requests? for(?: a)? (?:hearing|reconsideration)",
+];
+// What the office holds, decides or reviews. The person can request
+// one, so it may be an object, but never the subject of a duty: "your
+// hearing must be completed by" is the office's date, not the person's.
+const OFFICE_NOUNS = ["case", "hearing", "reconsideration"];
+// A program a duty belongs to, as in "your SNAP renewal". It only
+// comes before a paper or a duty the person owes, never a hearing or a
+// case, which the office holds or reviews. A program alone names what
+// the person gets, not what they owe. Basic Food and CalFresh are the
+// names Washington and California print on SNAP letters.
+const PROGRAMS = any([
+  "SNAP", "food benefits", "Basic Food", "CalFresh", "WIC", "Medicaid", "CHIP", "health coverage", "TANF",
+  "cash assistance",
 ]);
+const PROGRAM_NOUNS = any(["forms?", "packets?", "paperwork", "applications?", "renewal", "recertification"]);
 const OF_PHRASE = String.raw`of\s+(?:your\s+)?(?:household\s+)?(?:income|address|identity|residency)`;
-const NOUN_PHRASE = String.raw`(?:${DETERMINERS}\s+)?(?:${ADJECTIVES}\s+){0,3}${NOUNS}(?:\s+${OF_PHRASE})?(?:\s+(?:listed\s+)?(?:below|above)|\s+enclosed)?`;
-const ITEM = String.raw`(?:${ADJECTIVES}\s+){0,3}${NOUNS}(?:\s+${OF_PHRASE})?`;
+const item = (nouns: string[]): string =>
+  String.raw`(?:${PROGRAMS}\s+(?:${ADJECTIVES}\s+){0,3}${PROGRAM_NOUNS}|(?:${ADJECTIVES}\s+){0,3}${any(nouns)}(?:\s+${OF_PHRASE})?)`;
+const ITEM = item([...OWED_NOUNS, ...OFFICE_NOUNS]);
+const OWED_ITEM = item(OWED_NOUNS);
+const NOUN_PHRASE = String.raw`(?:${DETERMINERS}\s+)?${ITEM}(?:\s+(?:listed\s+)?(?:below|above)|\s+enclosed)?`;
 const MONEY = String.raw`\$\d{1,3}(?:,\d{3})*(?:\.\d{2})?`;
 const OBJECT = String.raw`(?:${NOUN_PHRASE}(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)${NOUN_PHRASE})*|it|them|${MONEY})`;
 
@@ -75,11 +95,11 @@ const MODIFIER = any([
 ]);
 const PARTICIPLES = any([
   "returned", "submitted", "sent", "completed", "mailed", "postmarked", "signed", "filed",
-  "turned in", "uploaded", "faxed", "delivered",
+  "turned in", "uploaded", "faxed", "delivered", "received",
 ]);
 
 const VERB_PHRASE = String.raw`(?:${TRANSITIVE}\s+${OBJECT}|${INTRANSITIVE}|ask\s+for\s+${NOUN_PHRASE})(?:\s+${MODIFIER})*`;
-const DUTY = String.raw`(?:(?:please\s+)?${VERB_PHRASE}|you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+${VERB_PHRASE}|your\s+${ITEM}\s+must\s+(?:arrive|be\s+${PARTICIPLES})(?:\s+${MODIFIER})*|your\s+${ITEM}\s+(?:is|are)\s+due)`;
+const DUTY = String.raw`(?:(?:please\s+)?${VERB_PHRASE}|you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+${VERB_PHRASE}|your\s+${OWED_ITEM}\s+must\s+(?:arrive|be\s+${PARTICIPLES})(?:\s+${MODIFIER})*|your\s+${OWED_ITEM}\s+(?:is|are)\s+due)`;
 
 const DATE = `(?<date>${DATE_PATTERN})`;
 // Calendar days only. Business-day counts ask: holidays would make a
@@ -95,7 +115,7 @@ const FORMS: { form: DeadlineForm; re: RegExp }[] = [
 ].map(({ form, tail }) => ({ form: form as DeadlineForm, re: new RegExp(`^(?<duty>${DUTY})\\s+${tail}$`, "i") }));
 FORMS.push({
   form: "due",
-  re: new RegExp(String.raw`^(?<duty>your\s+${ITEM}\s+(?:is|are)\s+due)\s+(?:on\s+)?${DATE}$`, "i"),
+  re: new RegExp(String.raw`^(?<duty>your\s+${OWED_ITEM}\s+(?:is|are)\s+due)\s+(?:on\s+)?${DATE}$`, "i"),
 });
 
 // Wording that reads like a deadline. A sentence that has any of it
@@ -177,20 +197,20 @@ const DUTY_WORDS = new RegExp(
   "i",
 );
 
+// A participle the grammar publishes ("must be received") states the
+// same response as its verb.
+const RESPOND = new RegExp(
+  String.raw`\b(?:respond|response|return|send|submit|provide|arrive|receive|paperwork|complete|deliver|mail|bring|due|deadline|no\s+later\s+than|${PARTICIPLES})\b`,
+);
+
 // The duty a deadline states, read from its own words. Dates within
 // one duty are compared with each other.
 export function obligationOf(text: string): Obligation {
   const t = text.toLowerCase();
   if (/\b(appeal|hearing|grievance|reconsideration|dispute|contest|decision)\b/.test(t)) return "appeal";
   if (/\b(pay|payment|premium|amount due|balance due)\b/.test(t) && !/\bpay stubs?\b/.test(t)) return "pay";
-  if (/\b(renew|renewal|recertif|redetermin)\b/.test(t)) return "renew";
-  if (
-    /\b(respond|response|return|send|submit|provide|arrive|receive|paperwork|complete|deliver|mail|bring|due|deadline|no later than)\b/.test(
-      t,
-    )
-  ) {
-    return "respond";
-  }
+  if (/\b(renew\w*|recertif\w*|redetermin\w*)\b/.test(t)) return "renew";
+  if (RESPOND.test(t)) return "respond";
   return "other";
 }
 

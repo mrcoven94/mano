@@ -8,7 +8,7 @@ export default function About() {
   const s = useStrings();
   const { mode } = useAuth();
   return (
-    <Screen>
+    <Screen back="/(tabs)/more">
       <Title>{s.aboutTitle}</Title>
       {mode === "stand-in" ? <DemoBanner text={s.demoMode} /> : null}
       <Card>

@@ -2,17 +2,18 @@
 
 [![check](https://github.com/mrcoven94/mano/actions/workflows/check.yml/badge.svg)](https://github.com/mrcoven94/mano/actions/workflows/check.yml) [![license](https://img.shields.io/github/license/mrcoven94/mano)](LICENSE) [![latest release](https://img.shields.io/github/v/release/mrcoven94/mano)](https://github.com/mrcoven94/mano/releases)
 
-Mano gives every person an agent that applies for help, fills out any form, reads their mail, renews on time and waits on hold. Agencies and nonprofits claim agents for their staff, and the agents work a shared case together only with the resident's consent. A person approves every decision.
+Mano gives every person an agent that applies for help, fills out any form, reads their mail and renews on time. Agencies and nonprofits claim agents for their staff, and the agents work a shared case together only with the resident's consent. A person approves every decision.
 
 Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026) on Meta's Muse models. Everything in this repository was written from October 26, 2026 onward.
 
 ## Try it now
 
+- Judges: run `pnpm install` and then `pnpm judge` from a fresh clone to watch Maria's renewal end to end on synthetic data (see [Judges](#judges-run-marias-renewal-in-one-command)).
 - Text Mano at (801) 920-3370. The current number is always on the site.
 - Visit the site: [withmano.com](https://withmano.com).
 - The resident app (iOS, Android, web) is in progress.
 
-Demo submissions go to our own sandbox agency portal, our own phone lines and our own fax number. Synthetic people only, never real resident data.
+Demo submissions go only to our own sandbox agency portal, never to a real office. Synthetic people only, never real resident data.
 
 ## How it works
 
@@ -25,7 +26,7 @@ flowchart LR
     agent --> forms[Forms and renewals]
     agent --> gateway[Action gateway: decide, approve, act]
     gateway --> portal[Sandbox agency portal]
-    gateway --> phone[Phone and fax, in progress]
+    gateway --> fax[Fax, not built yet]
     agent <--> protocol[Open protocol]
     protocol <--> staff[Staff agent: shared cases only]
 ```
@@ -96,13 +97,14 @@ Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. To
 
 ## The text line
 
-Texts to Mano land on `apps/channels`, a Cloudflare Worker. Each reply is a Meta model call to Muse Spark 1.3 (a Standard model ID with `store: false`, set as `MANO_REPLY_MODEL` in `apps/channels/wrangler.toml`). Mano's voice lives in `packages/persona` and goes to the model as its instructions, with the conversation as role messages.
+Texts to Mano land on `apps/channels`, a Cloudflare Worker. When the agent is configured (`AGENT_URL`, `MANO_AGENT_SECRET` and `MANO_HANDLE_GRANT_SECRET`), every text goes to an agent turn in `apps/agent`, where Muse Spark 1.3 answers with the agent's tools and Engine (Meta's open-weight Muse Spark Open through OpenRouter instead when `MANO_MODEL_PROVIDER=openrouter`, for testing while the Meta Model API is down). If the agent times out, fails or sends a reply Channels cannot use, or the person has asked to delete their conversation, the text line answers with its plain responder instead, which is also the only responder when the agent is not configured. The plain responder is a Meta model call to Muse Spark 1.3 (a Standard model ID with `store: false`, set as `MANO_REPLY_MODEL` in `apps/channels/wrangler.toml`). Mano's voice lives in `packages/persona` and goes to that model as its instructions, with the conversation as role messages.
 
-- Simple questions take the fast path: one call at minimal reasoning effort, sent a second time 300 ms later, and the first answer wins. Replies arrive in about 2 to 4 seconds.
-- Questions that need real digging take the deep path: the fast call returns a short heads-up, which is texted at once, then a second call at medium effort writes the full answer.
+- In the plain responder, simple questions take the fast path: one call at minimal reasoning effort, sent a second time 300 ms later, and the first answer wins. Replies arrive in about 2 to 4 seconds.
+- In the plain responder, questions that need real digging take the deep path: the fast call returns a short heads-up, which is texted at once, then a second call at medium effort writes the full answer.
 - Every outgoing text passes a deterministic voice guard (plain code, not a model call). It rewrites dashes and markdown, replaces any model or provider name with "I'm Mano, an automated assistant", and sends a short safe line instead of an empty text.
 - A message about self-harm or danger never waits on a heads-up, and its reply always names 988 and 911.
-- When the Meta Model API cannot answer (HTTP 402, a 5xx or a timeout), the same call goes once to Meta's open-weight Muse Spark Open through OpenRouter, on zero-retention endpoints only (`zdr: true`, `data_collection: "deny"` on every request), and later texts skip the failing API for 5 minutes. The crisis check uses the same fallback. If both fail, Mano sends its short safe line, and a crisis message still gets 988 and 911 with no model at all. The fallback is off unless `OPENROUTER_API_KEY` is set for `apps/channels`.
+- A photo texted as HEIC, HEIF or WebP is stored as a JPEG copy, so it can be attached to a form. Cloudflare Images makes the copy (an image service, not a model call) through the `IMAGES` binding in `apps/channels/wrangler.toml`. Without the binding the photo is stored as sent, Mano can still read it, and the reply asks for a screenshot.
+- When the Meta Model API cannot answer the plain responder (HTTP 402, a 5xx or a timeout), the same call goes once to Meta's open-weight Muse Spark Open through OpenRouter, on zero-retention endpoints only (`zdr: true`, `data_collection: "deny"` on every request), and later texts skip the failing API for 5 minutes. The crisis check uses the same fallback. If both fail, Mano sends its short safe line, and a crisis message still gets 988 and 911 with no model at all. The fallback is off unless `OPENROUTER_API_KEY` is set for `apps/channels`.
 
 Check the voice against the real model with your own key (synthetic messages only, sent to a `-contributor` model ID). Without a key, the probes are skipped:
 
@@ -119,7 +121,7 @@ With `OPENROUTER_API_KEY` set, the same command also sends one synthetic text to
 | `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel | live |
 | `apps/sandbox-portal` | The fake state benefits portal every demo submits to, on Cloudflare Workers | live |
 | `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway | landing during the hackathon |
-| `apps/agent` | The agent brain on Eve by Vercel: reads each text, remembers and proposes actions through the engine, fills out forms on the person's computer, keeps reminders and the deadlines Mano texts about on its own | landing during the hackathon |
+| `apps/agent` | The agent brain on Eve by Vercel: reads each text, remembers and proposes actions through the engine, fills out forms on Mano's computer, keeps reminders and the deadlines Mano texts about on its own | landing during the hackathon |
 | `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text | live |
 | `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits | live |
 | `packages/persona` | Mano's voice: the soul, the fast and deep paths, the voice guard, the crisis floor and the persona probes | live |
@@ -135,11 +137,11 @@ With `OPENROUTER_API_KEY` set, the same command also sends one synthetic text to
 
 ### Guardian
 
-Guardian runs on one GPU on Modal and scales to zero when idle. A cold start takes about three minutes, and a check fails closed after 10 seconds, so Mano calls `warm()` when a conversation starts. Once Engine has `MANO_GUARDIAN_URL`, its action gateway runs Engine's local rules and then Guardian on every action, before the person is asked and again at their yes, and sends a warm-up with each check. A check that finds Guardian cold blocks with "try again in a few minutes" and leaves it starting. At the yes, a check that could not get Guardian's answer keeps the approval waiting and Engine marks the refusal `retryable`, so Mano asks the person to reply YES again in a few minutes and files it once. Guardian sees each action as Mano would send it, every value as written: the recipient, the purpose, every form field, text and claim, the cited sources with their quotes, and the consents on record. Nothing is removed first, so nothing can hide an attack from it. Guardian runs on our own GPU as a Modal Server in the app `mano-guardian-server`. Its code stores and logs no request or answer, and Modal passes a Server's requests and responses straight to the container without storing them. The earlier app, `mano-guardian`, is a web Function, and Modal keeps each input it receives for up to 7 days, so no copy is kept only once Engine has moved off it and it is stopped. The order: merge, which deploys the Server and prints its URL; copy that URL into the `MANO_GUARDIAN_URL` GitHub secret, its vault copy, and the agent's and quality nightly's copies; redeploy Engine; check that Engine's `/health` shows `checker: guardian` and run one live check; then run the `guardian-modal` workflow from `main` with `target` set to `stop-old`. A check that gets Modal's 503 retries once after a second when a full check still fits its 10 seconds, since the proxy can answer 503 for a moment after a container is ready. A personal form field that holds an email address or a link blocks the action before Guardian is asked. Engine's `/health` shows `checker: guardian`, or `local-rules` when none of the four `MANO_GUARDIAN_*` names is set. To keep one GPU warm (about $1.95 an hour), run the `guardian-modal` workflow from `main` under Actions with `min_containers` set to 1. To turn it off, run it again with 0. Any merge that touches the guardian also deploys 0. To try a branch live first, run the workflow from that branch with `target` set to `staging`, which deploys `mano-guardian-staging` scaled to zero and prints its URL, then run it with `stop-staging`.
+Guardian runs on one GPU on Modal and scales to zero when idle. A cold start takes about three minutes, and a check fails closed after 10 seconds, so Mano calls `warm()` when a conversation starts. Once Engine has `MANO_GUARDIAN_URL`, its action gateway runs Engine's local rules and then Guardian on every action, before the person is asked and again at their yes, and sends a warm-up with each check. A check that finds Guardian cold blocks with "try again in a few minutes" and leaves it starting. At the yes, a check that could not get Guardian's answer keeps the approval waiting and Engine marks the refusal `retryable`, so Mano asks the person to reply YES again in a few minutes and files it once. Guardian sees each action as Mano would send it, every value as written: the recipient, the purpose, every form field, text and claim, the cited sources with their quotes, and the consents on record. Nothing is removed first, so nothing can hide an attack from it. Guardian runs on our own GPU as a Modal Server in the app `mano-guardian-server`. Its code stores and logs no request or answer, and Modal passes a Server's requests and responses straight to the container without storing them. The earlier app, `mano-guardian`, is a web Function, and Modal keeps each input it receives for up to 7 days, so no copy is kept only once Engine has moved off it and it is stopped. The order: merge, which deploys the Server and prints its URL; copy that URL into the `MANO_GUARDIAN_URL` GitHub secret, its vault copy, and the agent's and quality nightly's copies; redeploy Engine; check that Engine's `/health` shows `checker: guardian` and run one live check; then run the `guardian-modal` workflow from `main` with `target` set to `stop-old`. A check that gets Modal's 503 retries once after a second when a full check still fits its 10 seconds, since the proxy can answer 503 for a moment after a container is ready. A personal form field that holds an email address or a link blocks the action before Guardian is asked. Engine's `/health` shows `checker: guardian`, or `local-rules` when none of the four `MANO_GUARDIAN_*` names is set. To keep one GPU warm (about $1.95 an hour), run the `guardian-modal` workflow from `main` under Actions with `min_containers` set to 1. To turn it off, run it again with 0. Any merge that touches the guardian also deploys 0. Every target is written to run only from `main`, since each holds production Modal credentials: each job's condition checks the ref, and its first step checks it again case-sensitively, because GitHub's `==` ignores case. Jobs carry no services, container or env that would see a secret before that step. The `guardian-check` workflow fails if the triggers, the guards or the keys a job may have change, which catches accidental edits on `main` and in reviewed pull requests. It cannot stop a hostile branch, which runs its own copy of both workflows; only the `guardian-production` environment's deployment branch policy, limited to `main` since November 3, 2026, closes that. To check a merged change on its own app before Engine's URL moves to it, run the workflow from `main` with `target` set to `staging`, which deploys `mano-guardian-staging` scaled to zero and prints its URL, then run it with `stop-staging`.
 
 ### Quality
 
-Pull requests that can change what Mano says run the quality smoke: 28 synthetic cases through the real text line on a Meta model, gated against main's last nightly run. When the model provider refuses calls for billing (HTTP 402), the smoke and the nightly score nothing and report "model provider unavailable" in the job summary instead of failing. Any other error still fails. The `smoke-replay` job runs the same text line and safety checks on recorded synthetic replies with no key, so the code path stays covered while the provider is down: `pnpm --filter @mano/quality smoke-replay`.
+Pull requests that can change what Mano says run the quality smoke: 28 synthetic cases through the real text line on a Meta model, gated against main's last nightly run. When the model provider refuses calls for billing (HTTP 402), the smoke and the nightly score nothing and report "model provider unavailable" in the job summary instead of failing. Any other error still fails. The `smoke-replay` job runs the same text line and safety checks on recorded synthetic replies with no key, so the code path stays covered while the provider is down: `pnpm --filter @mano/quality smoke-replay`. The letters suite is version 2: 26 full one-page notices from made-up county offices, drawn in code, three of them with a hedged date Mano should ask about instead of holding. Results from version 1 (three short lines per letter) compare only with a version 1 run: `pnpm --filter @mano/quality bench --suite letters --letters-version 1`.
 
 ### Computer
 
@@ -168,7 +170,7 @@ David Coven decides what gets built and owns the accounts. The code is written w
 
 ## Prior work
 
-Program, office and form data come from Front Door, an earlier product by the same author, through its partner API. Front Door's code is not part of this repository.
+The site's state-by-state counts of offices and services come from Front Door, an earlier product by the same author, through its open data API, as a static snapshot in `apps/site/lib/coverage.ts`. Program facts come from official sources in `packages/programs`, and renewal forms are defined in `apps/agent/agent/lib/forms.ts`. Front Door's code is not part of this repository.
 
 ## License
 

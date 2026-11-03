@@ -8,10 +8,16 @@
 // The agent answers a public number, so it always uses the Standard
 // model ID. Nothing here reads a data-class setting: no environment
 // value, request, or caller can select a cheaper contributor ID.
+//
+// MANO_MODEL_PROVIDER=openrouter (with OPENROUTER_API_KEY) switches the
+// agent to Meta's open-weight model through OpenRouter, pinned to
+// zero-retention endpoints that collect no data, the same pin as the text
+// line's fallback. It is for testing while the Meta Model API is down.
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   APICallError,
   wrapLanguageModel,
+  type JSONValue,
   type LanguageModel,
   type LanguageModelMiddleware,
 } from "ai";
@@ -19,6 +25,11 @@ import { UsageRecorder, startCall, type UsageSink } from "./usage.js";
 
 export const STANDARD_MODEL_ID = "muse-spark-1.3";
 export const DEFAULT_BASE_URL = "https://api.meta.ai/v1";
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const OPEN_WEIGHT_MODEL_ID = "meta/muse-spark-open";
+// OpenRouter provider routing: only endpoints with zero data retention,
+// and no provider that stores or trains on what it is sent.
+const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" } as const);
 // Reasoning alone burns ~600-1100 tokens on a greeting; 4096 leaves
 // room for reasoning plus tool calls plus a short reply.
 export const MAX_OUTPUT_TOKENS = 4096;
@@ -81,15 +92,17 @@ export function sanitizeModelError(err: unknown): Error {
 
 function meteringMiddleware(opts: {
   modelId: string;
+  provider: string;
+  bodyExtra: Record<string, JSONValue>;
   recorder: UsageRecorder;
   now: () => number;
 }): LanguageModelMiddleware {
-  const { modelId, recorder, now } = opts;
+  const { modelId, provider, bodyExtra, recorder, now } = opts;
   const record = (status: "ok" | "error", inputTokens: number, outputTokens: number, latencyMs: number) =>
     recorder.record({
       package: "agent",
       purpose: "agent-turn",
-      provider: "meta",
+      provider,
       model: modelId,
       dataClass: "real",
       inputTokens,
@@ -127,7 +140,7 @@ function meteringMiddleware(opts: {
       maxOutputTokens: params.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
       providerOptions: {
         ...(params.providerOptions ?? {}),
-        meta: { ...((params.providerOptions as Record<string, Record<string, unknown>> | undefined)?.meta ?? {}), store: false },
+        [provider]: { ...(params.providerOptions?.[provider] ?? {}), ...bodyExtra },
       },
     }),
     wrapGenerate: async ({ doGenerate }) => {
@@ -192,19 +205,36 @@ function meteringMiddleware(opts: {
   };
 }
 
+interface ModelRoute {
+  name: string;
+  baseURL: string;
+  apiKey: string;
+  modelId: string;
+  bodyExtra: Record<string, JSONValue>;
+}
+
 export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageModel; modelId: string } {
   const env = process.env;
-  const modelId = STANDARD_MODEL_ID;
+  const route: ModelRoute =
+    env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY
+      ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: { provider: ZERO_RETENTION } }
+      : {
+          name: "meta",
+          baseURL: opts.baseUrl ?? env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL,
+          apiKey: opts.apiKey ?? env.META_MODEL_API_KEY ?? "missing-key",
+          modelId: STANDARD_MODEL_ID,
+          bodyExtra: { store: false },
+        };
   const provider = createOpenAICompatible({
-    name: "meta",
-    baseURL: opts.baseUrl ?? env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL,
-    apiKey: opts.apiKey ?? env.META_MODEL_API_KEY ?? "missing-key",
+    name: route.name,
+    baseURL: route.baseURL,
+    apiKey: route.apiKey,
     includeUsage: true,
   });
   const recorder = new UsageRecorder(opts.usageSink ? [opts.usageSink] : undefined);
   const model = wrapLanguageModel({
-    model: provider(modelId),
-    middleware: meteringMiddleware({ modelId, recorder, now: opts.now ?? Date.now }),
+    model: provider(route.modelId),
+    middleware: meteringMiddleware({ modelId: route.modelId, provider: route.name, bodyExtra: route.bodyExtra, recorder, now: opts.now ?? Date.now }),
   });
-  return { model, modelId };
+  return { model, modelId: route.modelId };
 }

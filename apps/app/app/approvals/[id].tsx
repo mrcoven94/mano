@@ -1,28 +1,39 @@
-// One approval in full: everything the executor will use, the exact
-// document, and both binding hashes. Approve stays disabled until the
+// One approval, led by what the person is saying: what Mano will do,
+// for which office, by when, then the answers and statement the request
+// carries. The exact document follows in full, and the ids and binding
+// hashes sit under "Details for checking". Approve stays disabled until the
 // gate in lib/approve-gate says yes: pending, current, loaded,
-// hash-matched, actually rendered and a known request shape. Every
-// load clears the last state, and stale loads cannot overwrite it.
+// hash-matched, actually rendered and a known request shape. No needs
+// none of that: declining sends nothing, so it stays open whenever the
+// approval waits, a stale document included. "Ask Mano to change
+// something" sends nothing either: it opens the chat with the approval
+// quoted for the person to finish. Every load clears the last state, and
+// stale loads cannot overwrite it.
 
 import { useCallback, useRef, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import * as Linking from "expo-linking";
+import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { Badge, Body, Btn, Card, ErrorView, LoadingView, Muted, Screen, Title } from "../../components/ui";
+import { Badge, Body, Btn, Card, ErrorView, GhostBtn, LinkBtn, LoadingView, Muted, Screen, Title, useGoBack } from "../../components/ui";
 import { DocPreview, currentPlatform } from "../../components/doc";
 import { parseActionView, type ParsedAction } from "../../lib/action-view";
+import { fieldValue, leadLine } from "../../lib/approval-text";
+import { changeDraft, holdChatDraft } from "../../lib/chat-draft";
 import { approvalGate } from "../../lib/approve-gate";
 import { approveOutcome } from "../../lib/approve-result";
-import type { ActionType, Approval, ApprovalDocument, ApproveResult } from "../../lib/api/types";
+import type { ActionType, Approval, ApprovalDocument, ApproveResult, DeclineAnswer } from "../../lib/api/types";
+import { provenNotSent } from "../../lib/sent-proof";
 import { AuthError, StaleApprovalError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { formatDate } from "../../lib/dates";
-import { canShowBytes, shortHash } from "../../lib/doc-show";
+import { canShowBytes } from "../../lib/doc-show";
 import { useLanguage, useStrings } from "../../lib/i18n";
 import { syncReminders } from "../../lib/notify";
-import { colors, type } from "../../lib/theme";
+import type { Strings } from "../../lib/strings";
+import { colors, radius, tapTarget, type } from "../../lib/theme";
 
-function whatLabel(action: ActionType, s: ReturnType<typeof useStrings>): string {
+function whatLabel(action: ActionType, s: Strings): string {
   if (action === "submit") return s.whatSubmit;
   if (action === "send") return s.whatSend;
   if (action === "share") return s.whatShare;
@@ -30,15 +41,36 @@ function whatLabel(action: ActionType, s: ReturnType<typeof useStrings>): string
   return s.whatFax;
 }
 
+// A full hash in groups of eight, so it wraps on a phone and is easy
+// to compare piece by piece.
+function grouped(hash: string): string {
+  return hash.match(/.{1,8}/g)?.join(" ") ?? hash;
+}
+
 type DocState = "loading" | "ready" | "failed";
+
+// A NO: in flight, failed (safe to repeat), or answered with the
+// approval's status on file afterward.
+type NoState = { phase: "idle" } | { phase: "sending" } | { phase: "failed" } | { phase: "answered"; answer: DeclineAnswer };
+const NO_IDLE: NoState = { phase: "idle" };
+
+// "Nothing was sent" only when proven for the whole idempotency key
+// (lib/sent-proof.ts); otherwise the honest line is that it may have gone.
+function noLine(answer: DeclineAnswer): "declinedNote" | "declineTooLate" | "unconfirmedSend" | "declineClosed" {
+  if (answer.status === "approved") return "declineTooLate";
+  if (!answer.notSent) return "unconfirmedSend";
+  return answer.status === "rejected" ? "declinedNote" : "declineClosed";
+}
 
 export default function ApprovalDetail() {
   const s = useStrings();
   const { language } = useLanguage();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const router = useRouter();
+  const goBack = useGoBack("/(tabs)/approvals");
   const { client, session, mode, personStore, generation: sessionGeneration, isCurrentGeneration, signOut } = useAuth();
   const [approval, setApproval] = useState<Approval | null>(null);
+  // Other approvals under the same idempotency key, as of the last load.
+  const [keyMates, setKeyMates] = useState<Approval[]>([]);
   const [action, setAction] = useState<ParsedAction | null>(null);
   const [doc, setDoc] = useState<ApprovalDocument | null>(null);
   const [docState, setDocState] = useState<DocState>("loading");
@@ -48,6 +80,11 @@ export default function ApprovalDetail() {
   const [failed, setFailed] = useState(false);
   const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [no, setNo] = useState<NoState>(NO_IDLE);
+  // The office's due date from the deadline this approval serves, if any.
+  const [dueAt, setDueAt] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const router = useRouter();
   const generation = useRef(0);
 
   const load = useCallback(async () => {
@@ -57,18 +94,31 @@ export default function ApprovalDetail() {
     setFailed(false);
     setStale(false);
     setApproval(null);
+    setKeyMates([]);
     setAction(null);
     setDoc(null);
     setDocState("loading");
     setDocShown(false);
     setLinkBlocked(false);
     setReceipt(null);
+    setNo(NO_IDLE);
+    setDueAt(null);
     try {
       const all = await client.listApprovals(session);
       if (generation.current !== mine) return;
       const found = all.find((a) => a.id === id) ?? null;
       setApproval(found);
       if (!found) return;
+      // The due date is context, never a condition: if deadlines cannot
+      // load, the card simply leaves it out.
+      void client
+        .listDeadlines(session)
+        .then((deadlines) => {
+          if (generation.current !== mine) return;
+          setDueAt(deadlines.find((d) => d.relatedApprovalId === found.id && !d.done)?.dueAt ?? null);
+        })
+        .catch(() => undefined);
+      setKeyMates(all.filter((a) => a.idempotencyKey === found.idempotencyKey && a.id !== found.id));
       setAction(parseActionView(found.requestJson));
       if (!found.documentId) {
         setDocState("ready");
@@ -106,12 +156,15 @@ export default function ApprovalDetail() {
   useClearOnSignOut(() => {
     generation.current += 1;
     setApproval(null);
+    setKeyMates([]);
     setAction(null);
     setDoc(null);
     setDocState("loading");
     setDocShown(false);
     setLinkBlocked(false);
     setReceipt(null);
+    setNo(NO_IDLE);
+    setDueAt(null);
     setStale(false);
     setFailed(false);
   });
@@ -151,6 +204,34 @@ export default function ApprovalDetail() {
     }
   };
 
+  const decline = async (): Promise<void> => {
+    if (!session || !approval) return;
+    setNo({ phase: "sending" });
+    try {
+      const answer = await client.decline(session, approval.id);
+      setApproval({ ...approval, status: answer.status });
+      setNo({ phase: "answered", answer });
+      const gen = sessionGeneration;
+      await syncReminders(language, client, session, () => isCurrentGeneration(gen)).catch(() => {});
+    } catch (err) {
+      if (err instanceof AuthError) {
+        await signOut();
+        return;
+      }
+      setNo({ phase: "failed" });
+    }
+  };
+
+  // Sends nothing and decides nothing: the approval stays waiting while
+  // the person tells Mano in chat what to change.
+  const askChange = (): void => {
+    if (!session || !approval) return;
+    const purpose = action && action.kind !== "unknown" ? action.purpose : approval.purpose;
+    holdChatDraft(session.token, changeDraft(s.changeAbout, purpose, s.changeAsk));
+    // Back to the chat tab under this screen, not a second copy on top.
+    router.dismissTo("/(tabs)");
+  };
+
   const hashMatches = Boolean(
     approval && (!approval.documentHash || (doc && doc.id === approval.documentId && doc.hash === approval.documentHash)),
   );
@@ -160,8 +241,8 @@ export default function ApprovalDetail() {
     ? approvalGate({
         status: approval.status,
         stale,
-        decided: receipt !== null,
-        busy,
+        decided: receipt !== null || no.phase === "answered",
+        busy: busy || no.phase === "sending",
         docState,
         hasDocument: approval.documentId !== null,
         hashMatches,
@@ -170,6 +251,13 @@ export default function ApprovalDetail() {
       })
     : { canApprove: false as const, reason: "not-pending" as const };
   const canApprove = gate.canApprove;
+  // Every "nothing was sent" on this screen hangs on this. A NO's answer
+  // is the freshest read of the key; before one, the last load's.
+  const nothingSent = approval
+    ? no.phase === "answered"
+      ? no.answer.notSent
+      : provenNotSent([approval, ...keyMates])
+    : false;
   const outcome = receipt ? approveOutcome(receipt) : null;
 
   const handleLink = useCallback(
@@ -191,7 +279,7 @@ export default function ApprovalDetail() {
   );
 
   return (
-    <Screen>
+    <Screen back="/(tabs)/approvals">
       <Title>{s.approvalsTitle}</Title>
       {failed && !approval ? (
         <ErrorView title={s.errorTitle} body={s.errorBody} retry={() => void load()} retryTitle={s.retry} />
@@ -200,42 +288,68 @@ export default function ApprovalDetail() {
       ) : (
         <View>
           <Card>
-            <Badge tone={approval.status === "pending" ? "hl" : approval.status === "approved" ? "green" : "alert"}>
+            <Badge
+              tone={
+                approval.status === "pending" ? "hl" : approval.status === "approved" ? "green" : approval.status === "rejected" ? "blue" : "alert"
+              }
+            >
               {approval.status === "pending"
                 ? s.approvalsPending
                 : approval.status === "approved"
                   ? s.approved
-                  : approval.status === "expired"
+                  : approval.status === "rejected"
+                    ? s.declined
+                    : approval.status === "revoked"
+                      ? s.approvalRevoked
+                      : approval.status === "expired"
                     ? s.expired
                     : approval.status === "stale"
                       ? s.stale
                       : s.blocked}
             </Badge>
-            <Text style={[type.cardTitle, styles.line]}>{approval.purpose}</Text>
-            <Labeled label={s.whatLabel} value={whatLabel(approval.actionType, s)} />
-            <Labeled label={s.toLabel} value={approval.recipientName} />
-            <Labeled label={s.whyLabel} value={approval.purpose} />
-            <Labeled label={s.expiresOn} value={formatDate(approval.expiresAt, language)} />
+            <Text style={[type.section, styles.lead]}>
+              {action && action.kind !== "unknown" && approval.status === "pending" && !receipt && no.phase !== "answered"
+                ? leadLine(action, s)
+                : whatLabel(approval.actionType, s)}
+            </Text>
+            <Body style={styles.purpose}>{action && action.kind !== "unknown" ? action.purpose : approval.purpose}</Body>
+            <View style={styles.dates}>
+              <Row label={s.toLabel} value={approval.recipientName} />
+              {dueAt ? <Row label={s.dueAtOffice} value={formatDate(dueAt, language)} /> : null}
+              {approval.status === "pending" && !receipt && no.phase !== "answered" ? (
+                <View>
+                  <Row label={s.answerBy} value={formatDate(approval.expiresAt, language)} />
+                  <Muted>{s.answerByNote}</Muted>
+                </View>
+              ) : null}
+            </View>
             {approval.problems.map((p) => (
               <Text key={p} style={styles.problem}>
                 {p}
               </Text>
             ))}
-          </Card>
-
-          <Card>
-            <Text style={[type.cardTitle, styles.previewTitle]}>{s.requestTitle}</Text>
             {action && action.kind !== "unknown" ? (
-              <View>
-                {action.rows.map((row, index) => (
-                  <Labeled key={`${row.label}-${index}`} label={row.label} value={row.value} />
+              <View style={styles.says}>
+                <Text style={[type.cardTitle, styles.saysTitle]}>
+                  {action.kind === "submit" || action.kind === "fax" ? s.saysForm : s.saysOther}
+                </Text>
+                {action.answers.map((field, index) => (
+                  <Row
+                    key={`${field.key}-${index}`}
+                    label={field.label ? s[field.label] : field.key}
+                    value={fieldValue(field, s, language)}
+                  />
                 ))}
-                <Muted>
-                  {s.requestCheck}: {shortHash(approval.requestHash)}
-                </Muted>
+                {action.attachment ? <Row label={s.attached} value={action.attachment} /> : null}
+                {action.declaration ? (
+                  <View style={styles.declaration}>
+                    <Text style={styles.declarationLabel}>{s.youSign}</Text>
+                    <Text style={[type.body, styles.declarationText]}>{action.declaration}</Text>
+                  </View>
+                ) : null}
               </View>
             ) : (
-              <Body>{s.requestUnknown}</Body>
+              <Body style={styles.purpose}>{s.requestUnknown}</Body>
             )}
           </Card>
 
@@ -251,15 +365,11 @@ export default function ApprovalDetail() {
                 <View>
                   <DocPreview
                     doc={doc}
+                    full
                     cacheStore={personStore ?? undefined}
                     onShown={(shown) => setDocShown(shown)}
                     onLink={(url) => void handleLink(url)}
                   />
-                  <View style={styles.hashRow}>
-                    <Muted>
-                      {s.docHash}: {shortHash(doc.hash)}
-                    </Muted>
-                  </View>
                   {viewable ? (
                     <Muted style={styles.match}>{s.docHashMatch}</Muted>
                   ) : (
@@ -268,17 +378,46 @@ export default function ApprovalDetail() {
                   {linkBlocked ? <Muted style={styles.warn}>{s.linkBlocked}</Muted> : null}
                 </View>
               ) : (
-                <Body>{s.staleNote}</Body>
+                // A failed load says nothing about whether it was sent.
+                <Body>{s.docUnavailable}</Body>
               )}
             </Card>
           ) : null}
 
-          {approval.status === "blocked" && !receipt ? (
+          <View style={styles.details}>
+            <Pressable
+              onPress={() => setDetailsOpen((open) => !open)}
+              accessibilityRole="button"
+              accessibilityLabel={s.detailsTitle}
+              accessibilityState={{ expanded: detailsOpen }}
+              aria-expanded={detailsOpen}
+              style={({ pressed }) => [styles.detailsToggle, pressed && styles.pressed]}
+            >
+              <Text style={[type.body, styles.detailsTitle]}>{s.detailsTitle}</Text>
+              <Ionicons name={detailsOpen ? "chevron-up" : "chevron-down"} size={20} color={colors.text} />
+            </Pressable>
+            {detailsOpen ? (
+              <View style={styles.detailsBody}>
+                <Row label={s.whatLabel} value={whatLabel(approval.actionType, s)} />
+                {action && action.kind !== "unknown" ? (
+                  <View>
+                    <Row label={s.detailsRecipient} value={action.recipient} mono />
+                    <Row label={s.detailsReference} value={action.reference} mono />
+                    {action.documentId ? <Row label={s.detailsDocument} value={action.documentId} mono /> : null}
+                  </View>
+                ) : null}
+                {doc && hashMatches ? <Row label={s.docHash} value={grouped(doc.hash)} mono /> : null}
+                <Row label={s.requestCheck} value={grouped(approval.requestHash)} mono />
+              </View>
+            ) : null}
+          </View>
+
+          {approval.status === "blocked" && !receipt && nothingSent ? (
             <Card>
               <Body>{s.blockedNote}</Body>
             </Card>
           ) : null}
-          {stale && approval.status === "pending" ? (
+          {stale && approval.status === "pending" && nothingSent ? (
             <Card>
               <Body>{s.staleNote}</Body>
             </Card>
@@ -292,13 +431,15 @@ export default function ApprovalDetail() {
               <Body>
                 {outcome === "sent"
                   ? s.receiptBody
-                  : outcome === "blocked"
-                    ? (receipt.reason ?? s.blockedNote)
-                    : outcome === "stale"
-                      ? s.staleNote
-                      : outcome === "needs-approval"
-                        ? s.resultNeedsApproval
-                        : s.resultSending}
+                  : outcome !== "sending" && !nothingSent
+                    ? s.unconfirmedSend
+                    : outcome === "blocked"
+                      ? (receipt.reason ?? s.blockedNote)
+                      : outcome === "stale"
+                        ? s.staleNote
+                        : outcome === "needs-approval"
+                          ? s.resultNeedsApproval
+                          : s.resultSending}
               </Body>
               {outcome === "sent" && receipt.receiptId ? (
                 <Muted>
@@ -309,17 +450,36 @@ export default function ApprovalDetail() {
                 <Muted style={styles.match}>{s.receiptSimulated}</Muted>
               ) : null}
               <View style={styles.back}>
-                <Btn title={s.tabsApprovals} onPress={() => router.back()} />
+                <Btn title={s.tabsApprovals} onPress={goBack} />
               </View>
             </Card>
-          ) : approval.status === "pending" && !stale ? (
+          ) : no.phase === "answered" ? (
+            <Card>
+              <Body>{s[noLine(no.answer)]}</Body>
+              <View style={styles.back}>
+                <Btn title={s.tabsApprovals} onPress={goBack} />
+              </View>
+            </Card>
+          ) : approval.status === "pending" ? (
             <View>
               {gate.reason === "loading-doc" ? <Muted style={styles.note}>{s.loadingDocument}</Muted> : null}
               {gate.reason === "not-shown" && !viewable ? <Muted style={styles.note}>{s.docCannotShow}</Muted> : null}
               {gate.reason === "not-shown" && viewable ? <Muted style={styles.note}>{s.loadingDocument}</Muted> : null}
               {gate.reason === "unknown-action" ? <Muted style={styles.note}>{s.requestUnknown}</Muted> : null}
               {gate.reason === "ready" ? <Muted style={styles.note}>{s.approveNote}</Muted> : null}
-              <Btn title={busy ? s.approving : s.approve} onPress={() => void approve()} busy={busy} disabled={!canApprove} />
+              {no.phase === "failed" ? <Muted style={[styles.warn, styles.note]}>{s.declineFailed}</Muted> : null}
+              <View style={styles.actions}>
+                {stale ? null : (
+                  <Btn title={busy ? s.approving : s.approve} onPress={() => void approve()} busy={busy} disabled={!canApprove} />
+                )}
+                <GhostBtn
+                  title={no.phase === "sending" ? s.declining : s.decline}
+                  onPress={() => void decline()}
+                  busy={no.phase === "sending"}
+                  disabled={busy}
+                />
+                <LinkBtn title={s.askChange} onPress={askChange} disabled={busy || no.phase === "sending"} />
+              </View>
             </View>
           ) : null}
           <View style={styles.pad} />
@@ -329,26 +489,44 @@ export default function ApprovalDetail() {
   );
 }
 
-function Labeled({ label, value }: { label: string; value: string }) {
+// One label and its value on a line, wrapping under each other when the
+// value is long. mono is for ids and hashes, which read better fixed-width.
+function Row({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <View style={styles.labeled}>
-      <Text style={styles.label}>{label}</Text>
-      <Text style={[type.body, styles.value]}>{value}</Text>
+    <View style={styles.row}>
+      <Text style={styles.rowLabel}>{label}</Text>
+      <Text selectable style={[type.body, styles.rowValue, mono && styles.mono]}>
+        {value}
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   line: { color: colors.text, marginTop: 8, marginBottom: 8 },
-  labeled: { marginBottom: 8 },
-  label: { fontSize: 12, fontWeight: "600", color: colors.faint, textTransform: "uppercase", letterSpacing: 0.5 },
-  value: { color: colors.text },
+  lead: { color: colors.text, marginTop: 12 },
+  purpose: { color: colors.muted, marginTop: 4 },
+  dates: { marginTop: 12 },
+  says: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: colors.border },
+  saysTitle: { color: colors.text, marginBottom: 8 },
+  row: { flexDirection: "row", flexWrap: "wrap", columnGap: 12, paddingVertical: 4 },
+  rowLabel: { fontFamily: type.small.fontFamily, fontSize: 14, lineHeight: 20, paddingTop: 2, color: colors.muted, flexBasis: 140, flexGrow: 1 },
+  rowValue: { color: colors.text, flexBasis: 160, flexGrow: 2, flexShrink: 1 },
+  mono: { fontFamily: "Menlo, Consolas, monospace", fontSize: 13, lineHeight: 20 },
+  declaration: { marginTop: 12, backgroundColor: colors.bg2, borderRadius: radius.sm, padding: 12 },
+  declarationLabel: { fontFamily: type.small.fontFamily, fontSize: 14, lineHeight: 20, color: colors.muted },
+  declarationText: { color: colors.text, marginTop: 4 },
   problem: { marginTop: 6, fontSize: 14, color: colors.alert },
   previewTitle: { color: colors.text, marginBottom: 12 },
-  hashRow: { marginTop: 12 },
-  match: { color: colors.green, marginTop: 4 },
+  match: { color: colors.green, marginTop: 8 },
   warn: { color: colors.alert, marginTop: 4 },
+  details: { marginBottom: 16 },
+  detailsToggle: { minHeight: tapTarget, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 },
+  detailsTitle: { color: colors.text, fontFamily: type.cardTitle.fontFamily },
+  detailsBody: { paddingHorizontal: 4, paddingTop: 4 },
+  pressed: { opacity: 0.85 },
   note: { marginBottom: 12 },
+  actions: { gap: 8 },
   back: { marginTop: 16 },
   pad: { height: 24 },
 });

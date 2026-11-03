@@ -118,7 +118,8 @@ def app_name_from_env(value: str | None) -> str:
 
 
 # The guardian-modal workflow sets MANO_GUARDIAN_APP=mano-guardian-staging to
-# try a change on its own app before production. All apps share the weights.
+# check main's code on its own app before Engine moves to it. All apps share
+# the weights.
 app = modal.App(app_name_from_env(os.environ.get("MANO_GUARDIAN_APP")))
 
 cache = modal.Volume.from_name("mano-guardian-cache", create_if_missing=True)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { answerReading, readMail } from "../src/index.js";
+import { answerReading, gateSentence, readMail } from "../src/index.js";
 import {
   DOUBTFUL_PAGE,
   PLANTED_DEADLINE,
@@ -219,6 +219,55 @@ describe("answerReading builds the reply from closed fields only", () => {
     const plain = await answerFor([withSentence("Respond by November 20, 2026.", "County Help Fund")]);
     expect(plain.deadlines).toEqual([expect.objectContaining({ kind: null, program: null, federalProgram: null, title: "Letter deadline" })]);
     expect(plain.text).toMatch(/^This is a benefits letter\./);
+  });
+
+  // LAP-814: the obligation and the reminder kind both come from what
+  // the person owes, never from a hearing the paper is for.
+  const PARTICIPLES = [
+    "returned", "submitted", "sent", "completed", "mailed", "postmarked", "signed", "filed",
+    "turned in", "uploaded", "faxed", "delivered", "received",
+  ];
+  it.each<[string, string | null, string | null]>([
+    ...PARTICIPLES.map((p): [string, string, string] => [`Your documents must be ${p} by November 14, 2026.`, "respond", "documents"]),
+    ["Your appeal must be received by November 14, 2026.", "appeal", "appeal"],
+    ["Your request for a hearing must be postmarked by November 14, 2026.", "appeal", "hearing"],
+    ["Send your pay stubs for a hearing by November 14, 2026.", null, null],
+    ["Send your documents for a hearing by November 14, 2026.", null, null],
+    ["Your SNAP hearing form must be received by November 14, 2026.", null, null],
+    ["Your appeal form must be received by November 14, 2026.", null, null],
+    ["Your SNAP recertification must be received by November 14, 2026.", "renew", "recertification"],
+    ["Your renewal must be received by November 14, 2026.", "renew", "renewal"],
+    // LAP-816: the kind follows the obligation, then the duty's head noun.
+    ["Your recertification appeal must be received by November 14, 2026.", "appeal", "appeal"],
+    ["You must request a hearing by November 14, 2026.", "appeal", "hearing"],
+    ["Return your redetermination form by November 14, 2026.", "renew", "redetermination"],
+    ["Your Medicaid redetermination packet must be returned by November 14, 2026.", "renew", "redetermination"],
+    ["Return your recertification form by November 14, 2026.", "renew", "recertification"],
+    ["Renew by November 14, 2026.", "renew", "renewal"],
+    ["Pay your premium by November 14, 2026.", "pay", "payment"],
+    ["Return the form by November 14, 2026.", "respond", "documents"],
+    ["You must respond by November 14, 2026.", "respond", null],
+  ])("%s holds obligation %s and kind %s", async (sentence, obligation, kind) => {
+    const verdict = gateSentence(sentence, "2026-11-02");
+    const answer = await answerFor([
+      pageJson({
+        full_text: `County Office\nNotice date November 2, 2026\n\n${sentence}`,
+        program: { text: null, box_2d: null },
+        subject: { text: null, box_2d: null },
+        asked: [],
+        consequence: { text: null, box_2d: null },
+        reference_no: { text: null, box_2d: null },
+        phones: [],
+        deadlines: [{ text: sentence, box_2d: [200, 60, 220, 300] }],
+      }),
+    ]);
+    if (obligation === null) {
+      expect(verdict.kind).toBe("ask");
+      expect(answer.deadlines).toEqual([]);
+      return;
+    }
+    expect(verdict).toMatchObject({ kind: "deadline", iso: "2026-11-14", obligation });
+    expect(answer.deadlines).toEqual([expect.objectContaining({ kind, dueDate: "2026-11-14" })]);
   });
 
   // LAP-756: Mano never names a letter an approval. Two review rounds
