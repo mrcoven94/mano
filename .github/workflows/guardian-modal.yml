@@ -6,14 +6,16 @@ name: guardian-modal
 # (min_containers 1, about $1.95 an hour); the next merge returns it to 0.
 # Never run `modal deploy` from a laptop for production.
 #
+# Production is the app mano-guardian-server: one Modal Server, so Modal does
+# not store the actions it checks or its answers (see the header of
+# packages/guardian/modal/app.py). The deploy prints its URL, which Engine's
+# MANO_GUARDIAN_URL must match. The old web Function app, mano-guardian,
+# keeps running and keeping its inputs until target stop-old stops it, which
+# David runs from main only after Engine has moved to the new URL.
+#
 # Run by hand with target staging, from any branch, to deploy that branch to
 # its own app, mano-guardian-staging, scaled to zero, and try it live before
 # merging. Run it with target stop-staging afterwards to stop that app.
-#
-# The app is one Modal Server, so Modal does not store the actions it
-# checks or its answers (see the header of packages/guardian/modal/app.py).
-# The deploy prints the Server's URL: Engine's MANO_GUARDIAN_URL must match
-# production's.
 #
 # Needs two secrets in the guardian-production environment, set by a maintainer:
 #   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
@@ -29,9 +31,9 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "production deploys main; staging deploys this branch to mano-guardian-staging; stop-staging stops it"
+        description: "production deploys main to mano-guardian-server; staging deploys this branch to mano-guardian-staging; stop-staging stops it; stop-old stops the old mano-guardian app (main only, after the URL swap)"
         type: choice
-        options: ["production", "staging", "stop-staging"]
+        options: ["production", "staging", "stop-staging", "stop-old"]
         default: "production"
       min_containers:
         description: "Production only. GPU containers kept up: 0 scales to zero, 1 keeps one warm"
@@ -69,7 +71,7 @@ jobs:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
       - name: Print the URL Engine must use as MANO_GUARDIAN_URL
-        run: python -c "import modal; print(modal.Server.from_name('mano-guardian', 'check').get_url())"
+        run: python -c "import modal; print(modal.Server.from_name('mano-guardian-server', 'check').get_url())"
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -106,6 +108,18 @@ jobs:
       - run: pip install "modal==1.6.2"
       - name: Stop the staging app and its containers
         run: modal app stop mano-guardian-staging --yes
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+
+  stop-old:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.target == 'stop-old'
+    runs-on: ubuntu-latest
+    environment: guardian-production
+    steps:
+      - run: pip install "modal==1.6.2"
+      - name: Stop the old web Function app and its containers
+        run: modal app stop mano-guardian --yes
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}

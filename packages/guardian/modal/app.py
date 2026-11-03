@@ -102,7 +102,9 @@ SYSTEM_PROMPT = "\n".join(
     ]
 )
 
-APP_NAMES = ("mano-guardian", "mano-guardian-staging")
+# Production is a new app, so deploying it never touches the old
+# `mano-guardian` web Function app that Engine may still be calling.
+APP_NAMES = ("mano-guardian-server", "mano-guardian-staging")
 
 
 def app_name_from_env(value: str | None) -> str:
@@ -116,7 +118,7 @@ def app_name_from_env(value: str | None) -> str:
 
 
 # The guardian-modal workflow sets MANO_GUARDIAN_APP=mano-guardian-staging to
-# try a change on its own app before production. Both share the weights.
+# try a change on its own app before production. All apps share the weights.
 app = modal.App(app_name_from_env(os.environ.get("MANO_GUARDIAN_APP")))
 
 cache = modal.Volume.from_name("mano-guardian-cache", create_if_missing=True)
@@ -313,11 +315,10 @@ def download():
     cache.commit()
 
 
-# Named check, as the web Function it replaces was, so the URL keeps the
-# label mano-guardian-check. Servers answer on modal.direct, not modal.run,
-# so the host still changes; the deploy prints the URL Engine must use. No
-# target_concurrency means one container, which Modal's guide prefers to
-# max_containers=1, since that would block the replacement during a redeploy.
+# Its URL is <workspace>--<app>-check.<region>.modal.direct, which the deploy
+# prints for MANO_GUARDIAN_URL. No target_concurrency means one container,
+# which Modal's guide prefers to max_containers=1, since that would block the
+# replacement during a redeploy.
 @app.server(
     name="check",
     image=gpu_image,

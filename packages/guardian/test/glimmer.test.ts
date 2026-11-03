@@ -339,16 +339,82 @@ describe("GlimmerChecker", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks a check that finds no container up as a cold start", async () => {
-    const fetchImpl = vi.fn(async () => new Response("no ready containers", { status: 503 }));
-    const checker = new GlimmerChecker({
-      url: "https://guardian.example.com",
-      token: "token",
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+  describe("a 503 from Modal's proxy", () => {
+    const unavailable = () => new Response('{"error":"no upstreams available"}', { status: 503 });
+
+    function answering(...responses: (() => Response)[]) {
+      const fetchImpl = vi.fn(async () => (responses.shift() ?? unavailable)());
+      const checker = new GlimmerModelChecker({
+        url: "https://guardian.example.com",
+        token: "token",
+        timeoutMs: 10_000,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      return { fetchImpl, checker };
+    }
+
+    async function checkWithRetryDelay(checker: GlimmerModelChecker) {
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+      try {
+        const pending = checker.check(passInput());
+        await vi.advanceTimersByTimeAsync(1_000);
+        return await pending;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    it("is retried once after a second, and the real verdict counts", async () => {
+      const { fetchImpl, checker } = answering(unavailable, () =>
+        jsonResponse({ verdict: "fix", problems: ["Say which month."], ...SERVER }),
+      );
+      const result = await checkWithRetryDelay(checker);
+      expect(result).toEqual({ verdict: "fix", problems: ["Say which month."] });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      const bodies = fetchImpl.mock.calls.map((call) => (call as unknown as [string, RequestInit])[1].body);
+      expect(bodies[0]).toBe(bodies[1]);
     });
-    const result = await checker.check(passInput());
-    expect(result.verdict).toBe("block");
-    expect(result.problems.join(" ")).toMatch(/try again in a few minutes/);
+
+    it("blocks as a cold start when the retry gets 503 too", async () => {
+      const { fetchImpl, checker } = answering(unavailable, unavailable);
+      const result = await checkWithRetryDelay(checker);
+      expect(result.verdict).toBe("block");
+      expect(result.problems.join(" ")).toMatch(/try again in a few minutes/);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it("never passes on a retry that brings no real verdict", async () => {
+      for (const second of [
+        () => new Response("ok", { status: 200 }),
+        () => jsonResponse({ problems: [] }),
+        () => jsonResponse({ verdict: "pass", problems: ["x"] }),
+        () => jsonResponse({}, 500),
+      ]) {
+        const { checker } = answering(unavailable, second);
+        const result = await checkWithRetryDelay(checker);
+        expect(result.verdict).toBe("block");
+      }
+    });
+
+    it("is not retried when a full check no longer fits the budget", async () => {
+      const fetchImpl = vi.fn(async () => unavailable());
+      const checker = new GlimmerModelChecker({
+        url: "https://guardian.example.com",
+        token: "token",
+        timeoutMs: 7_500,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      const result = await checker.check(passInput());
+      expect(result.verdict).toBe("block");
+      expect(result.problems.join(" ")).toMatch(/try again in a few minutes/);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("is not retried on a warm-up", async () => {
+      const { fetchImpl, checker } = answering(unavailable, unavailable);
+      await expect(checker.warm()).resolves.toBe("starting");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("blocks on an error status", async () => {
