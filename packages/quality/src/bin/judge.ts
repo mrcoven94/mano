@@ -1,7 +1,9 @@
 // judge: runs Maria's renewal end to end on this machine (spine.ts) and
 // labels every step real or simulated, with the Meta model behind it.
-// Usage: pnpm judge [--out <dir>], with META_MODEL_API_KEY set to run SAM 3.1
-// and Muse Spark 1.3 live; without it every model step uses its recording.
+// Usage: pnpm judge [--out <dir>] [--photo <jpeg>], with META_MODEL_API_KEY
+// set to run SAM 3.1 and Muse Spark 1.3 live; without it every model step
+// uses its recording. --photo sends another letter photo, which only a live
+// run can read: the recordings answer only spine-letter.jpg.
 // Writes the letter photo, the portal's view of the filing and Maria's
 // replay page to --out (a new temporary folder by default). Exits 1 when a
 // step fails or a live model call failed and fell back to its recording.
@@ -14,6 +16,8 @@ import { runSpine } from "../spine.ts";
 const i = process.argv.indexOf("--out");
 const outDir = i === -1 ? mkdtempSync(join(tmpdir(), "mano-judge-")) : resolve(process.argv[i + 1]!);
 mkdirSync(outDir, { recursive: true });
+const p = process.argv.indexOf("--photo");
+const photoPath = p === -1 ? undefined : resolve(process.argv[p + 1]!);
 
 const print = (line: string) => console.log(line);
 const keyed = Boolean(process.env.META_MODEL_API_KEY);
@@ -26,7 +30,7 @@ print(
 print("real: ran in this run, as a live Meta model call or Mano's own code. simulated: a recorded model response, or a local stand-in for a service that needs Mano's accounts.");
 print("");
 
-const run = await runSpine({ env: process.env, outDir, print });
+const run = await runSpine({ env: process.env, outDir, print, ...(photoPath ? { photoPath } : {}) });
 
 const finished = run.steps.filter((s) => !s.failure).length;
 const allParts = run.steps.flatMap((s) => s.parts);

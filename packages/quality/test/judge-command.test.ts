@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -13,14 +13,14 @@ import { join } from "node:path";
 import test from "node:test";
 
 const QUALITY_DIR = import.meta.dirname;
-const recorded = JSON.parse(readFileSync(join(QUALITY_DIR, "..", "src", "spine-replay.json"), "utf8")) as { read: { answer: unknown } };
+const recorded = JSON.parse(readFileSync(join(QUALITY_DIR, "..", "src", "spine-replay.json"), "utf8")) as { segment: { answer: unknown }; read: { answer: unknown } };
 
 const QUALITY = join(QUALITY_DIR, "..");
 
-function judge(env: NodeJS.ProcessEnv): Promise<{ code: number | null; out: string; dir: string }> {
+function judge(env: NodeJS.ProcessEnv, args: string[] = []): Promise<{ code: number | null; out: string; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), "judge-test-"));
   const { META_MODEL_API_KEY: _key, MANO_MODEL_BASE_URL: _base, ...rest } = process.env;
-  const child = spawn(join(QUALITY, "node_modules", ".bin", "tsx"), ["src/bin/judge.ts", "--out", dir], { cwd: QUALITY, env: { ...rest, ...env } });
+  const child = spawn(join(QUALITY, "node_modules", ".bin", "tsx"), ["src/bin/judge.ts", "--out", dir, ...args], { cwd: QUALITY, env: { ...rest, ...env } });
   let out = "";
   child.stdout.on("data", (b) => (out += b));
   child.stderr.on("data", (b) => (out += b));
@@ -104,6 +104,23 @@ test("the recorded reading never answers for a page SAM 3.1 found somewhere else
     assert.match(out, /\[not run\] Mano answers with the deadline/);
     assert.doesNotMatch(out, /November 14, 2026/);
     assert.doesNotMatch(out, /Finished 9 of 9/);
+  });
+});
+
+test("the recorded reading never answers for another photo, even when SAM 3.1 boxes the same page", async () => {
+  // The committed photo with one byte after its end: it still decodes, but
+  // its bytes, and so its hash, are not the photo the reading was made for.
+  const dir = mkdtempSync(join(tmpdir(), "judge-photo-"));
+  const other = join(dir, "other-letter.jpg");
+  writeFileSync(other, Buffer.concat([readFileSync(join(QUALITY, "src", "spine-letter.jpg")), Buffer.from([0])]));
+  const sameBoxes = JSON.stringify(recorded.segment.answer);
+  await withModelApi({ "sam-3.1": { status: 200, text: sameBoxes }, [READER]: { status: 402 } }, async (baseUrl) => {
+    const { code, out } = await judge({ META_MODEL_API_KEY: "test-key", MANO_MODEL_BASE_URL: baseUrl }, ["--photo", other]);
+    assert.equal(code, 1, out);
+    assert.match(out, /real {7}Segments the photo into pages, live on Meta's API/);
+    assert.match(out, /FAILED: the recorded reading was made for another photo/);
+    assert.match(out, /\[not run\] Mano answers with the deadline/);
+    assert.doesNotMatch(out, /November 14, 2026/);
   });
 });
 

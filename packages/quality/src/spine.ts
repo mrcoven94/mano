@@ -181,9 +181,9 @@ class LiveOrRecorded implements ModelClient {
   }
 
   private mismatch(model: string): string | null {
-    if (model === SEGMENT_MODEL) {
-      return this.photoSha256 === this.recordings.segment.photoSha256 ? null : "the recorded SAM 3.1 answer was made for another photo";
-    }
+    const samePhoto = this.photoSha256 === this.recordings.segment.photoSha256;
+    if (model === SEGMENT_MODEL) return samePhoto ? null : "the recorded SAM 3.1 answer was made for another photo";
+    if (!samePhoto) return "the recorded reading was made for another photo";
     return this.segmentText === this.recordedSegment
       ? null
       : "the recorded reading was made for the page in SAM 3.1's recorded answer, and the reader was given a different page";
@@ -267,6 +267,9 @@ interface SpineOptions {
   env: NodeJS.ProcessEnv;
   outDir: string;
   print: (line: string) => void;
+  // Another letter photo in place of spine-letter.jpg. The recordings
+  // answer only spine-letter.jpg, so this is for a live run or a test.
+  photoPath?: string;
 }
 
 export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
@@ -276,7 +279,7 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
   // Straight to Meta's API, never through an AI Gateway account.
   // MANO_MODEL_BASE_URL points it at another endpoint, for tests.
   const live = key ? new MetaModelClient({ apiKey: key, baseUrl: opts.env.MANO_MODEL_BASE_URL || DEFAULT_BASE_URL, synthetic: true }) : null;
-  const photo = readFileSync(new URL("./spine-letter.jpg", import.meta.url));
+  const photo = readFileSync(opts.photoPath ?? new URL("./spine-letter.jpg", import.meta.url));
   const model = new LiveOrRecorded(live, recordings, sha256(photo));
   const readingModel = readingModelFor(true);
 
