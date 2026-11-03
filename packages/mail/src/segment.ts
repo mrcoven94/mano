@@ -38,7 +38,7 @@ const SEGMENT_SCHEMA = {
           label: { type: "string" },
           score: { type: "number" },
         },
-        required: ["box_2d", "label"],
+        required: ["box_2d", "label", "score"],
       },
     },
   },
