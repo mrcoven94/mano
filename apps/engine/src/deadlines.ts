@@ -2,7 +2,10 @@
 // person becomes a tracked deadline in the person's own SQLite, and Mano
 // schedules its own nudges: 14, 7 and 2 days out and the day of, at the
 // nudge time (MANO_NUDGE_TIME, default 10:00) in the zone of the
-// person's state, Pacific when it is unknown. A deadline learned after its
+// person's state, Pacific when it is unknown. An interview or a hearing,
+// a date the person shows up for, gets the day before in place of 2 days
+// out: that is when a reminder helps them get there, and three texts on
+// three days running would be noise. A deadline learned after its
 // first nudge day gets one nudge at the next nudge time instead, unless a
 // planned one is less than 3 days away. A correction rebuilds only the
 // nudges not yet sent, and a moved date plans the new days; either way a
@@ -25,9 +28,10 @@
 // one: "Your CalFresh renewal is due in 12 days". With no kind it names
 // no action: "Your CalFresh deadline is in 12 days", or "The deadline
 // from the letter you sent on October 27" by the day the letter arrived.
-// The title is kept only for the agent, quoted as data. A nudge with a
-// kind asks ("Want me to start it?"); acting still needs the person's
-// yes on an approval.
+// The title is kept only for the agent, quoted as data. A nudge for
+// paperwork asks ("Want me to start it?"); acting still needs the
+// person's yes on an approval. One for a date the person shows up for
+// only says when: "Your Medi-Cal interview is tomorrow."
 //
 // Routes, for the person's session or the agent service (contract shared
 // with Mail):
@@ -56,7 +60,6 @@ interface SqlExec {
   exec(query: string, ...bindings: unknown[]): { toArray(): unknown[]; rowsWritten: number };
 }
 
-export const NUDGE_DAYS = [14, 7, 2, 0] as const;
 const CATCH_UP_GAP_DAYS = 3;
 const WINDOW_OPENS_HOUR = 9;
 const WINDOW_CLOSES_HOUR = 20;
@@ -77,6 +80,20 @@ const KNOWN_PROGRAMS = [
 ];
 export const DEADLINE_KINDS = ["renewal", "recertification", "interview", "hearing", "appeal", "payment", "documents"] as const;
 export type DeadlineKind = (typeof DEADLINE_KINDS)[number];
+
+// The days before the due date a nudge is planned for, by what the
+// deadline asks of the person: paperwork to send, or a date to show up.
+const ATTENDED_KINDS: readonly DeadlineKind[] = ["interview", "hearing"];
+const PAPERWORK_DAYS = [14, 7, 2, 0] as const;
+const ATTENDED_DAYS = [14, 7, 1, 0] as const;
+
+function isAttended(kind: DeadlineKind | null): boolean {
+  return kind !== null && ATTENDED_KINDS.includes(kind);
+}
+
+export function nudgeDays(kind: DeadlineKind | null): readonly number[] {
+  return isAttended(kind) ? ATTENDED_DAYS : PAPERWORK_DAYS;
+}
 
 export type DeadlineStatus = "open" | "done" | "cancelled";
 export type SourceKind = "letter" | "case" | "person";
@@ -227,8 +244,15 @@ export interface PlannedNudge {
 // first: a deadline Mano just learned, with one catch-up when it came in
 // after its first nudge day. rebuild: a deadline whose date moved; every
 // slot whose day's window is still open, at the earliest allowed time
-// from now, and no catch-up.
-export function planNudges(dueDate: string, timeZone: string, nowMs: number, time: NudgeTime, mode: "first" | "rebuild" = "first"): PlannedNudge[] {
+// from now, and no catch-up. days: the slots, from nudgeDays.
+export function planNudges(
+  dueDate: string,
+  timeZone: string,
+  nowMs: number,
+  time: NudgeTime,
+  mode: "first" | "rebuild" = "first",
+  days: readonly number[] = PAPERWORK_DAYS,
+): PlannedNudge[] {
   const plan = (localDate: string): PlannedNudge => ({
     daysBefore: daysBetween(localDate, dueDate),
     localDate,
@@ -236,7 +260,7 @@ export function planNudges(dueDate: string, timeZone: string, nowMs: number, tim
     windowStartMs: zonedInstant(localDate, WINDOW_OPENS_HOUR, 0, timeZone),
     windowEndMs: zonedInstant(localDate, WINDOW_CLOSES_HOUR, 0, timeZone),
   });
-  const planned = NUDGE_DAYS.map((days) => plan(addDays(dueDate, -days)));
+  const planned = days.map((d) => plan(addDays(dueDate, -d)));
   if (mode === "rebuild") return planned.filter((n) => n.windowEndMs > nowMs).map((n) => ({ ...n, atMs: Math.max(n.atMs, nowMs) }));
   const ahead = planned.filter((n) => n.atMs > nowMs);
   if (ahead.length < planned.length) {
@@ -273,6 +297,7 @@ export interface NudgeNaming {
 export function nudgeText(d: NudgeNaming, daysBefore: number, dueDate: string): string {
   const program = knownProgram(d.program);
   const when = daysBefore === 0 ? "today" : daysBefore === 1 ? "tomorrow" : `in ${daysBefore} days, on ${monthDay(dueDate)}`;
+  if (d.kind && isAttended(d.kind)) return `Your ${program ? `${program} ` : ""}${d.kind} is ${when}.`;
   if (d.kind) {
     const verb = d.kind === "documents" ? "are" : "is";
     return `Your ${program ? `${program} ` : ""}${d.kind} ${verb} due ${when}. Want me to start it?`;
@@ -525,7 +550,9 @@ function apply(sql: SqlExec, r: Row, next: Next, nowMs: number, time: NudgeTime)
   }
   const moved = next.dueDate !== r.due_date;
   // The same date: the slots not yet sent, kept while their day's window
-  // is open, at the earliest allowed time from now. Nothing is added.
+  // is open, at the earliest allowed time from now. Nothing is added
+  // unless a new kind plans a different day: then the old kind's day goes
+  // and the new one is planned like a moved date's.
   const unsent = moved
     ? []
     : (sql
@@ -543,15 +570,23 @@ function apply(sql: SqlExec, r: Row, next: Next, nowMs: number, time: NudgeTime)
     next.title, next.dueDate, next.program, next.kind, next.sourceJson, moved ? r.due_date : r.previous_due_date, next.timeZone, nowMs, r.id,
   );
   const updated = row(sql, r.id)!;
+  const days = nudgeDays(updated.kind);
+  const dropped = nudgeDays(r.kind).filter((d) => !days.includes(d));
+  const added = days.filter((d) => !nudgeDays(r.kind).includes(d));
   const plan: PlannedNudge[] = moved
-    ? planNudges(updated.due_date, updated.time_zone, nowMs, time, "rebuild")
-    : unsent.map((n) => ({
-        daysBefore: Number(n.days_before),
-        localDate: addDays(updated.due_date, -Number(n.days_before)),
-        atMs: Math.max(Number(n.due_at_ms), nowMs),
-        windowStartMs: Number(n.window_start_ms),
-        windowEndMs: Number(n.window_end_ms),
-      }));
+    ? planNudges(updated.due_date, updated.time_zone, nowMs, time, "rebuild", days)
+    : [
+        ...unsent
+          .filter((n) => !dropped.includes(Number(n.days_before)))
+          .map((n) => ({
+            daysBefore: Number(n.days_before),
+            localDate: addDays(updated.due_date, -Number(n.days_before)),
+            atMs: Math.max(Number(n.due_at_ms), nowMs),
+            windowStartMs: Number(n.window_start_ms),
+            windowEndMs: Number(n.window_end_ms),
+          })),
+        ...planNudges(updated.due_date, updated.time_zone, nowMs, time, "rebuild", added),
+      ];
   scheduleNudges(sql, updated, plan, nowMs);
   return moved
     ? { status: "moved", deadline: view(sql, updated), moved: { from: r.due_date, to: next.dueDate }, nudgesInFlight }
@@ -574,7 +609,7 @@ export function trackDeadline(
       JSON.stringify(input.source), input.timeZone, nowMs, nowMs,
     );
     const created = row(sql, input.id)!;
-    scheduleNudges(sql, created, planNudges(created.due_date, created.time_zone, nowMs, time), nowMs);
+    scheduleNudges(sql, created, planNudges(created.due_date, created.time_zone, nowMs, time, "first", nudgeDays(created.kind)), nowMs);
     return { status: "created", deadline: view(sql, created) };
   }
   if (existing.status !== "open") return { status: "closed", deadline: view(sql, existing) };
