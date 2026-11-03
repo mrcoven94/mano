@@ -208,7 +208,7 @@ describe("fill_form", () => {
     expect(frozen.documentId).toBe("doc-stub");
     expect(approval.documentHash).toMatch(/^[0-9a-f]{64}$/);
     const question = renderQuestion((await client().listApprovals())[0]);
-    expect(question).toContain("Ready to send: Food benefits renewal in the sandbox agency portal (to the State Benefits Renewal Office test portal).");
+    expect(question).toContain("Ready to send: Food benefits renewal (to the State Benefits Renewal Office test portal).");
     expect(question).not.toContain("sandbox-agency-portal");
     expect(question).toContain(
       "Full legal name: Rosa Testcase; Date of birth: 1984-03-12; Mailing address: 100 Sample St, Tacoma, WA 98402; Phone number: 253-555-0142; People in household: 3; Monthly income ($): 2329.",

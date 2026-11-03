@@ -102,7 +102,7 @@ const FOOD_RENEWAL: FormSpec = {
   id: "food-renewal",
   path: "/apply",
   recipient: "sandbox-agency-portal",
-  purpose: "Food benefits renewal in the sandbox agency portal",
+  purpose: "Food benefits renewal",
   fields: [
     {
       name: "fullName",
