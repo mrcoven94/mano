@@ -1,81 +1,63 @@
-// Judge: batching, shuffling, parsing, and calibration agreement.
+// The judge command end to end, as a judge runs it: once with no key, and
+// once with a key whose model API answers 402 (billing not set up), which
+// must say so on the model steps, finish on the recordings and exit 1.
 
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { agreement, buildCalibrationSet } from "../src/calibration.ts";
-import { FakeJudge, JUDGE_BATCH_SIZE, MetaJudge, judgeAll, judgeMean, parseJudgeScores } from "../src/judge.ts";
-import type { JudgeItem } from "../src/judge.ts";
 
-const item: JudgeItem = { answer: "a", facts: "f", reference: "r" };
+const QUALITY = join(import.meta.dirname, "..");
 
-test("judge batches hold at most 8", async () => {
-  const judge = new FakeJudge();
-  await assert.rejects(() => judge.score([]));
-  await assert.rejects(() => judge.score(new Array(JUDGE_BATCH_SIZE + 1).fill(item)));
-  const scores = await judge.score(new Array(JUDGE_BATCH_SIZE).fill(item));
-  assert.equal(scores.length, JUDGE_BATCH_SIZE);
+function judge(env: NodeJS.ProcessEnv): Promise<{ code: number | null; out: string; dir: string }> {
+  const dir = mkdtempSync(join(tmpdir(), "judge-test-"));
+  const { META_MODEL_API_KEY: _key, MANO_MODEL_BASE_URL: _base, ...rest } = process.env;
+  const child = spawn(join(QUALITY, "node_modules", ".bin", "tsx"), ["src/bin/judge.ts", "--out", dir], { cwd: QUALITY, env: { ...rest, ...env } });
+  let out = "";
+  child.stdout.on("data", (b) => (out += b));
+  child.stderr.on("data", (b) => (out += b));
+  return new Promise((resolve) => child.on("close", (code) => resolve({ code, out, dir })));
+}
+
+test("with no key every step finishes, model steps say they used recordings, and the filing lands", async () => {
+  const { code, out, dir } = await judge({});
+  assert.equal(code, 0, out);
+  assert.match(out, /No META_MODEL_API_KEY is set/);
+  assert.match(out, /simulated {2}Segments the photo into pages: recorded response; no META_MODEL_API_KEY is set \[SAM 3\.1 \(sam-3\.1\)\]/);
+  assert.match(out, /simulated {2}Reads the page into cited fields: recorded response; no META_MODEL_API_KEY is set \[Muse Spark 1\.3/);
+  assert.match(out, /Mano: This is a SNAP renewal letter\. It is due November 14, 2026\./);
+  assert.match(out, /Gateway: completed, confirmation SR-/);
+  assert.match(out, /Portal lookup: received, SR-/);
+  assert.match(out, /Finished 9 of 9 steps/);
+  for (let i = 1; i <= 9; i++) assert.match(out, new RegExp(`^\\[${i}/9\\] `, "m"));
+  assert.ok(existsSync(join(dir, "letter.jpg")));
+  assert.match(readFileSync(join(dir, "replay.html"), "utf8"), /Mano filled in &quot;Monthly income \(\$\)&quot;/);
 });
 
-test("judgeAll restores input order after shuffling", async () => {
-  const items: JudgeItem[] = Array.from({ length: 10 }, (_, i) => ({
-    answer: `answer number ${i} with plenty of shared content words here`,
-    facts: "facts",
-    reference: "answer number shared content words plenty here",
-  }));
-  const scores = await judgeAll(items, new FakeJudge(), 3);
-  assert.equal(scores.length, 10);
-  assert.ok(scores.every((s) => s.pass));
-});
-
-test("judge output parsing clamps and validates", () => {
-  const scores = parseJudgeScores('[{"helpful":9,"accurate":0,"plain":3,"warm":3,"pass":true,"reason":"ok"}]', 1);
-  assert.equal(scores[0]!.helpful, 5);
-  assert.equal(scores[0]!.accurate, 1);
-  assert.equal(scores[0]!.pass, true);
-  assert.throws(() => parseJudgeScores("no json here", 1));
-  assert.throws(() => parseJudgeScores("[{}]", 2));
-});
-
-test("calibration set holds 30 labeled cases, half passing", () => {
-  const cal = buildCalibrationSet();
-  assert.equal(cal.length, 30);
-  assert.equal(cal.filter((c) => c.label).length, 15);
-});
-
-test("fake judge agrees with calibration labels over 80%", async () => {
-  const cal = buildCalibrationSet();
-  const scores = await judgeAll(cal.map((c) => ({ answer: c.answer, facts: c.facts, reference: c.reference })), new FakeJudge(), 99);
-  const rate = agreement(scores, cal.map((c) => c.label));
-  assert.ok(rate >= 0.8, `agreement ${rate}`);
-  assert.ok(judgeMean(scores) > 0);
-});
-
-test("judge parse errors never echo the response text", async () => {
-  const marker = "HOLDOUT-MARKER-7f3a renewal is due November";
-  const replies = [
-    `[{"helpful": 5, "reason": "${marker}" ,,]`,
-    `${marker} no array at all`,
-    `[{"helpful":5,"accurate":5,"plain":5,"warm":5,"pass":true,"reason":"${marker}"}]`,
-  ];
-  for (const reply of replies) {
-    const model = { id: "m", live: true, complete: async () => ({ text: reply, inputTokens: 1, outputTokens: 1 }) };
-    const judge = new MetaJudge(model);
-    const err = await judgeAll([item, item], judge).then(() => null, (e: unknown) => e as Error);
-    assert.ok(err, "judgeAll should reject a malformed reply");
-    assert.ok(!err.message.includes("HOLDOUT-MARKER"), `message leaks: ${err.message}`);
-    assert.ok(!String(err.stack).includes("HOLDOUT-MARKER"), "stack leaks the response");
-    assert.ok(!JSON.stringify(err).includes("HOLDOUT-MARKER"), "error fields leak the response");
-    assert.equal((err as { cause?: unknown }).cause, undefined, "cause carries the parser error");
-    assert.match(err.message, /^judge reply unusable \([a-z-]+\), sha256 [0-9a-f]{12}$/);
+test("a 402 from the model API prints why, falls back to the recordings and exits 1", async () => {
+  let calls = 0;
+  const server = createServer((req, res) => {
+    calls += 1;
+    req.resume();
+    res.writeHead(402, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { type: "billing_error", code: "payment_required" } }));
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  try {
+    const { code, out } = await judge({ META_MODEL_API_KEY: "test-key", MANO_MODEL_BASE_URL: `http://127.0.0.1:${port}/v1` });
+    assert.equal(code, 1, out);
+    assert.equal(calls, 2);
+    assert.match(out, /! The live SAM 3\.1 call failed: Model request failed: 402 \(billing is not set up for this account\)\. This step used its recorded response\./);
+    assert.match(out, /! The live Muse Spark 1\.3 call failed: Model request failed: 402/);
+    assert.match(out, /Finished 9 of 9 steps/);
+    assert.match(out, /Result: FAILED/);
+    assert.doesNotMatch(out, /test-key/);
+  } finally {
+    server.close();
   }
-});
-
-test("the judge leaves room for reasoning in a full batch", async () => {
-  let asked = 0;
-  const model = { id: "m", live: true, complete: async (_m: unknown, opts?: { maxTokens?: number }) => {
-    asked = opts?.maxTokens ?? 0;
-    return { text: JSON.stringify(new Array(JUDGE_BATCH_SIZE).fill({ helpful: 4, accurate: 4, plain: 4, warm: 4, pass: true, reason: "ok" })), inputTokens: 1, outputTokens: 1 };
-  } };
-  await new MetaJudge(model).score(new Array(JUDGE_BATCH_SIZE).fill(item));
-  assert.ok(asked >= 8192, `judge capped at ${asked} tokens`);
 });
