@@ -5,7 +5,7 @@ import Mascot, { Wave } from "@/components/Mascot";
 import { SMS_HREF } from "@/lib/site";
 
 /* Two plans, the full side by side folded under them, then the support that comes with Plus. Applying and keeping help are free for everyone; Plus adds a support team, and daily
-   checks for new help are coming. Faxes and mail cost real money, so they are at cost on both. */
+   checks for new help are coming. Faxes and mail, once ready, cost real money, so they are at cost on both. */
 
 const FREE = [
   "Unlimited applications",
@@ -49,7 +49,7 @@ const ROWS: [string, [string, Cell, Cell][]][] = [
     ["Its own computer for websites", true, true],
     ["Calls and waiting on hold, coming soon", false, true],
     ["Credit disputes", "Written for you", "Written and followed up"],
-    ["Faxes and mailed letters", "At cost", "At cost"],
+    ["Faxes and mailed letters, coming soon", "At cost", "At cost"],
   ]],
   ["Support", [
     ["Same-day answers from a person", false, true],
@@ -141,7 +141,7 @@ export default function Pricing() {
           ))}
         </ul>
       </div>
-      <p className="price-note">Faxes and mailed letters cost what the post office and phone company charge. Mano tries the free way first and tells you the price before anything costs money. Organizations pay per staff seat. <Link href="/organizations">See plans for teams</Link></p>
+      <p className="price-note">Faxes and mailed letters are coming soon. They will cost what the post office and phone company charge, and Mano will tell you the price first. Organizations pay per staff seat. <Link href="/organizations">See plans for teams</Link></p>
     </>
   );
 }

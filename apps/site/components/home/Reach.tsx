@@ -34,8 +34,8 @@ export default function Reach() {
   return (
     <div className="rc">
       <div className="h-head">
-        <h2 id="rc-h">Mano knows every office, in every county.</h2>
-        <p className="lede">What each office offers, when it is open and how to reach it, for every county in the country. Powered by <a href={FRONT_DOOR}>Front Door</a>.</p>
+        <h2 id="rc-h">Mano knows the programs in eight states.</h2>
+        <p className="lede">Food, health coverage and energy bill help in eight states, each fact sourced to the official page. Pick a state to see the offices and organizations in our data. Powered by <a href={FRONT_DOOR}>Front Door</a>.</p>
       </div>
 
       <div className="rc-stage" ref={ref} data-in={seen || undefined}>

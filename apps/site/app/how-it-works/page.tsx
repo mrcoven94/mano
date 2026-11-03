@@ -32,7 +32,7 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
   {
     short: "Find help",
     title: "Mano finds the help",
-    text: "It checks the programs you might qualify for. It knows what each office offers, when it is open and how to reach it, in every county.",
+    text: "It checks the programs you might qualify for. It looks up food, health coverage and energy bill help in eight states, each fact sourced to the official page.",
     icon: "programs",
     tint: "#FDE3DA",
     see: (
