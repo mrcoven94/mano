@@ -545,6 +545,40 @@ describe("a correction plans from what is stored, never from the old kind", () =
     expect(scheduled(moved).map(([d]) => d)).toEqual([7, 0]);
   });
 
+  it("a day the person cancelled on old rows stays cancelled after the date moved away and back and the kind changes", async () => {
+    // What the code before this change left: the person cancelled the
+    // 7-day nudge for December 15, the date moved to December 22 and back,
+    // each move cancelling the waiting rows and planning all four days
+    // again, and no row has a due date of its own.
+    const sql = openDb();
+    await track(sql);
+    const id = await deadlineIdFor(letter().idempotencyKey);
+    sql.exec("DELETE FROM reminders WHERE id IN (SELECT reminder_id FROM deadline_nudges)");
+    sql.exec("DELETE FROM deadline_nudges");
+    sql.exec("UPDATE deadlines SET revision = 2, previous_due_date = '2026-12-22'");
+    for (const [revision, due, status] of [[0, "2026-12-15", "cancelled"], [1, "2026-12-22", "cancelled"], [2, "2026-12-15", "scheduled"]] as const) {
+      for (const days of [14, 7, 2, 0]) {
+        const start = Date.parse(`${due}T17:00:00Z`) - days * 86_400_000;
+        const reminderId = `nudge:${id}:g0:${revision}:${days}`;
+        sql.exec(
+          "INSERT INTO reminders(id, text, due_at_ms, next_at_ms, generation, status, attempts, created_at_ms) VALUES (?, 'old', ?, ?, 0, ?, 0, ?)",
+          reminderId, start + 3_600_000, start + 3_600_000, status, NOW,
+        );
+        sql.exec(
+          "INSERT INTO deadline_nudges(reminder_id, deadline_id, revision, days_before, window_start_ms, window_end_ms) VALUES (?, ?, ?, ?, ?, ?)",
+          reminderId, id, revision, days, start, start + 11 * 3_600_000,
+        );
+      }
+    }
+    sql.exec("ALTER TABLE deadline_nudges DROP COLUMN due_date");
+    ensureDeadlineTables(sql);
+    const fixed = await retrack(sql, { kind: "interview" }, NOW);
+    // Old cancelled rows settle every day count they had; only the
+    // interview's day before is new. It may skip a nudge, never repeat one.
+    expect(scheduled(fixed)).toEqual([[1, "Your CalFresh interview is tomorrow."]]);
+    expect(deliver(sql, Date.parse("2026-12-08T18:00:00Z"))).toEqual([]);
+  });
+
   it("a date moved away and back after its 7-day nudge went does not send that nudge again", async () => {
     const sql = openDb();
     await track(sql);

@@ -553,8 +553,7 @@ interface Next {
 // The nudges a deadline should have, from its kind and what is stored,
 // never from what an earlier kind or version planned. A day handed off
 // or cancelled by the person for this date is never planned again, at
-// any revision, and a stored nudge for a day already handed off is not
-// kept. A row stored before nudges kept their due date settles its day
+// any revision, and a stored nudge for a settled day is not kept. A row stored before nudges kept their due date settles its day
 // for every date: it may skip a nudge, never repeat one. The
 // same date: the stored nudges not yet sent are kept while their day's
 // window is open, at their time or the earliest allowed time from now,
@@ -589,7 +588,7 @@ function reconcile(sql: SqlExec, r: Row, next: Next, nowMs: number, time: NudgeT
       )
       .toArray() as { days_before: number; window_start_ms: number; window_end_ms: number; due_at_ms: number; text: string }[]
   ).map((n) => ({ ...n, days_before: Number(n.days_before) }));
-  const kept = live.filter((n) => !handedOff.has(n.days_before) && (days.includes(n.days_before) || !SCHEDULE_DAYS.has(n.days_before)));
+  const kept = live.filter((n) => !blocked.has(n.days_before) && (days.includes(n.days_before) || !SCHEDULE_DAYS.has(n.days_before)));
   const missing = days.filter((d) => !blocked.has(d) && !live.some((n) => n.days_before === d));
   const added = planNudges(next.dueDate, next.timeZone, nowMs, time, "ahead", missing);
   const naming = namingOf({ ...r, program: next.program, kind: next.kind, source_json: next.sourceJson });
