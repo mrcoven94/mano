@@ -22,15 +22,15 @@ export const metadata: Metadata = {
 };
 
 const faqs: [string, string][] = [
-  ["Is Mano really free?", "Keeping your help is always free: notices, renewals, reminders, benefit tracking, mail scans and Mano's own email inbox have no limits, and you can make 5 applications a month. Plus is $8 a month or $60 a year for unlimited applications, a Mano that works every day without being asked, calls and waiting on hold, and a support team that answers the same day and helps with appeals. Faxes and mailed letters are at cost, and Mano tells you the price first."],
+  ["Is Mano really free?", "Keeping your help is always free: applications, notices, renewals, reminders, benefit tracking and mail scans have no limits. Plus is $8 a month or $60 a year for a Mano that works every day without being asked, calls and waiting on hold once they are ready, and a support team that answers the same day and helps with appeals. Faxes and mailed letters are at cost, and Mano tells you the price first."],
   ["Does Mano decide if I get help?", "No. The office that runs the program decides. Mano prepares your application, sends it, follows up and tells you what the office said."],
   ["Who can see my information?", "Only the people and offices you choose, for the reason you choose. You can see who has access and take it back at any time. Mano cannot pull back copies that were already sent, and it tells you which ones those are."],
   ["Does Mano pretend to be me?", "No. Mano says it is an automated assistant whenever that could be in doubt. Anything it sends for you says \"Prepared with Mano, sent with (your name)'s approval.\" Mano never pretends to be you or to be a person."],
   ["What if a letter tells Mano to do something?", "Mano treats letters, forms and web pages as information, never as orders. It checks every link before opening it and will not open one that fails the check."],
-  ["What do I need to start?", "A phone that can text. Text or iMessage Mano, or open it on the web. The Android app is in early access, and iPhone is coming soon. It is the same Mano, with the same memory, everywhere you use it."],
+  ["What do I need to start?", "A phone that can text. Text or iMessage Mano. The Android app is in early access, and iPhone and the web are coming soon. It is the same Mano, with the same memory, everywhere you use it."],
   ["Is Mano part of the government?", "No. Mano is independent. It deals with the offices that run programs for you, so you spend less time on the phone and in line."],
-  ["What can Mano help me get?", "Help paying rent, food benefits on an EBT card, help with light and water bills, health coverage and prescriptions, child care, housing waitlists, credit repair and emergency help. If there is a program for it, Mano can find it and apply for you."],
-  ["Can nonprofits and government offices use Mano?", "Yes. Each caseworker gets their own Mano for case management: it collects documents, prepares applications and tracks renewals for the people they serve, with each person's permission."],
+  ["What can Mano help me get?", "Help paying rent, food benefits on an EBT card, help with light and water bills, health coverage and prescriptions, child care, housing waitlists, credit repair and emergency help. Today Mano renews food benefits and answers questions about food, health coverage and energy bill help in eight states. The rest is coming soon."],
+  ["Can nonprofits and government offices use Mano?", "Soon. Each caseworker will get their own Mano for case management: it collects documents, prepares applications and tracks renewals for the people they serve, with each person's permission."],
 ];
 
 export default function Home() {

@@ -32,7 +32,7 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
   {
     short: "Find help",
     title: "Mano finds the help",
-    text: "It checks every program you might qualify for. It knows what each office offers, when it is open and how to reach it, in every county.",
+    text: "It checks the programs you might qualify for. It knows what each office offers, when it is open and how to reach it, in every county.",
     icon: "programs",
     tint: "#FDE3DA",
     see: (
@@ -84,15 +84,14 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
   {
     short: "Keep it",
     title: "It keeps your help coming",
-    text: "Renewals start early, every deadline is tracked, and Mano tells you when new help you qualify for opens up.",
+    text: "Every deadline is tracked, and Mano texts you 14, 7 and 2 days before each one.",
     icon: "calendar",
     tint: "#E4F1E8",
     see: (
       <div className="hw-card">
         <p className="hw-card-h">Maria&rsquo;s next few months</p>
         <ul className="hw-cal">
-          <li><span className="hw-day"><small>Mar</small>1</span><div><b>Food benefits renewal</b><small>Mano starts it a month early</small></div></li>
-          <li><span className="hw-day"><small>May</small>15</span><div><b>Summer meals for Leo and Ana</b><small>New, and they qualify</small></div></li>
+          <li><span className="hw-day"><small>Mar</small>1</span><div><b>Food benefits renewal</b><small>Mano texts you 14 days before</small></div></li>
           <li><span className="hw-day"><small>Jun</small>2</span><div><b>Light bill help</b><small>Reapply, already filled in</small></div></li>
         </ul>
       </div>
@@ -163,14 +162,14 @@ export default function HowItWorks() {
           <article className="hw-duo-card share">
             <NeedIcon k="chat" size={52} />
             <h2>Bring your caseworker in.</h2>
-            <p>Share a case with a caseworker or a nonprofit for one purpose, like a renewal. Their Mano works on it with yours, they see only what you shared, and you can stop sharing at any time.</p>
+            <p>Share a case with a caseworker or a nonprofit for one purpose, like a renewal. Their Mano works on it with yours, they see only what you shared, and you can stop sharing at any time. Sharing is coming soon.</p>
             <div className="hw-chip"><NeedIcon k="clipboard" size={28} /><span><b>Pay stub, Oct 24</b> Shared with Northside until Dec 31</span></div>
             <Link className="btn btn-ghost" href="/organizations">How teams use Mano</Link>
           </article>
           <article className="hw-duo-card repo">
             <NeedIcon k="code" size={52} />
             <h2>Anyone can check the work.</h2>
-            <p>The code is public. Mano is tested on paperwork it has never seen, next to a reminder app and a general AI agent, and the results will be published, including what it gets wrong.</p>
+            <p>The code is public. Mano will be tested on paperwork it has never seen, next to a reminder app and a general AI agent, and the results published, including what it gets wrong.</p>
             <a className="btn btn-ghost" href={REPO_URL}>Read the code</a>
           </article>
         </div>

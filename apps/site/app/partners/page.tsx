@@ -39,7 +39,7 @@ export default function Partners() {
         before="Reach the people your service was "
         phrase="made for"
         after="."
-        lede="You help people with rent, bills, credit, food, care or work. When someone asks Mano for that kind of help, Mano offers your service, explains it in plain words and they decide. No ads, and no paying to rank higher."
+        lede="You help people with rent, bills, credit, food, care or work. When someone asks Mano for that kind of help, Mano offers your service, explains it in plain words and they decide. No ads, and no paying to rank higher. Partner services are coming soon."
         stage={<Stage id="offer" label="Sample rent reporting service" hint="Point at a line of the offer to see where it comes from"><PartnerOffer /></Stage>}
       >
         <a className="btn btn-primary btn-lg" href={MAIL}>Offer your service</a>

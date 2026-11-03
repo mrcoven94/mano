@@ -10,9 +10,9 @@ const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
 
 const STEPS = [
   { key: "correct", icon: "pencil", title: "You correct it once", text: "Tell Mano something changed and it fixes every open application, then remembers for next time." },
-  { key: "learn", icon: "clipboard", title: "It learns the form and you", text: "Each form Mano fills makes the next one faster. What it learns about your life stays private to you, and it uses that to see what you need next and start early." },
-  { key: "review", icon: "chat", title: "A caseworker checks the work", text: "A real caseworker reviews sample packets. What they flag goes back into how Mano prepares the next one." },
-  { key: "test", icon: "check", title: "Every mistake becomes a test", text: "Mano is graded on paperwork it has never seen, next to a reminder app and a general AI agent with the same tools." },
+  { key: "learn", icon: "clipboard", title: "It remembers you", text: "What Mano learns about your life stays private to you. It fills each form from what you already told it." },
+  { key: "review", icon: "chat", title: "A caseworker checks the work", text: "A real caseworker will review sample packets. What they flag goes back into how Mano prepares the next one." },
+  { key: "test", icon: "check", title: "Every mistake becomes a test", text: "Mano will be graded on paperwork it has never seen, next to a reminder app and a general AI agent with the same tools." },
 ] as const;
 
 type Key = (typeof STEPS)[number]["key"];
@@ -37,7 +37,7 @@ export default function Improve() {
     <div className="im">
       <div className="h-head">
         <h2 id="im-h">Mano is always improving.</h2>
-        <p className="lede">Mano learns from every form it fills and from you, so it adjusts, sees what you will need next and starts before you ask. Every correction and every caseworker review makes it better. It is graded on paperwork it has never seen, and the results will be published.</p>
+        <p className="lede">Mano remembers what you tell it, so you never answer the same question twice. A caseworker will review sample packets, and Mano will be graded on paperwork it has never seen, with the results published.</p>
       </div>
 
       <div className="im-grid">
@@ -111,7 +111,7 @@ export default function Improve() {
                   <div className="rv" style={d(0)}><span className="sc-label">Given</span><p>{CASES[c].given}</p></div>
                   <div className="rv" style={d(0.25)}><span className="sc-label">Pass only if</span><p><mark>{CASES[c].expect}</mark></p></div>
                 </div>
-                <p className="im-foot">Each run reports correct packets, missed deadlines, unsafe actions blocked, failures, cost and time. Results are published with the final run, including the cases Mano gets wrong. <a href={REPO_URL}>See the test</a></p>
+                <p className="im-foot">Each run reports correct packets, missed deadlines, unsafe actions blocked, failures, cost and time. Results will be published after the final run, including the cases Mano gets wrong. <a href={REPO_URL}>See the test</a></p>
               </div>
             )}
           </div>

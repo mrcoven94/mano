@@ -21,7 +21,7 @@ export default function ShareFlow() {
     <div className="share">
       <div className="h-head">
         <h2 id="share-h">Case management made easy for nonprofits and government offices.</h2>
-        <p className="lede">Give every caseworker their own Mano. It gathers documents, fills out applications and tracks every renewal for the people they serve, so staff spend their time with people instead of paperwork. Residents pick what to share and can stop sharing at any time.</p>
+        <p className="lede">Give every caseworker their own Mano. It gathers documents, fills out applications and tracks every renewal for the people they serve, so staff spend their time with people instead of paperwork. Residents pick what to share and can stop sharing at any time. Case management is coming soon.</p>
       </div>
 
       <InView as="ol" className="share-flow" threshold={0.3}>

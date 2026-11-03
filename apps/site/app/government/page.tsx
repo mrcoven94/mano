@@ -30,7 +30,7 @@ export default function Government() {
         before="Residents "
         phrase="stay covered"
         after=" and the backlog shrinks."
-        lede="Many people lose benefits over a missed form, not because they stopped qualifying. Mano keeps renewals on time and brings your caseworkers complete cases, with every finding cited to your rule. Your staff decide, and Mano enters the result into the system you already run."
+        lede="Many people lose benefits over a missed form, not because they stopped qualifying. Mano keeps renewals on time and brings your caseworkers complete cases, with every finding cited to your rule. Your staff decide, and Mano enters the result into the system you already run. Mano for government offices is coming soon."
         stage={<Stage id="desk" label="Sample County Human Services" hint="Approve the case, or ask for more"><GovDesk /></Stage>}
       >
         <a className="btn btn-primary btn-lg" href={MAIL}>Talk to us</a>
@@ -70,9 +70,9 @@ export default function Government() {
           lines: [
             { at: "10:41", who: "J. Park", role: "Eligibility worker", text: "Approved the renewal." },
             { at: "10:41", who: "Mano", mano: true, text: "Recorded the approval for this exact copy, before doing anything." },
-            { at: "10:42", who: "Mano", mano: true, text: "Entered the case in the county system." },
+            { at: "10:42", who: "Mano", mano: true, text: "Filled the case in the county system and stopped before saving." },
             { at: "10:42", who: "Mano", mano: true, text: "Read the screen back. Everything matches." },
-            { at: "10:43", who: "Mano", mano: true, text: "Sent Maria her approval notice, in Spanish." },
+            { at: "10:43", who: "Mano", mano: true, text: "Drafted Maria's approval notice, in Spanish, for J. Park to review." },
           ],
         }}
       />

@@ -82,7 +82,7 @@ export default function Needs() {
     <div className="nd">
       <div className="h-head">
         <h2 id="nd-h">What do you need help with?</h2>
-        <p className="lede">Tell Mano what is going on in your own words. It finds the help you qualify for, applies and keeps it coming, so the bills get paid and you stay in your home. Pick one to see how.</p>
+        <p className="lede">Tell Mano what is going on in your own words. It finds the help you qualify for, applies and keeps it coming, so the bills get paid and you stay in your home. Pick one to see where Mano is headed. Today it reads your letters, tracks your deadlines and renews food benefits.</p>
       </div>
 
       <div className="nd-grid">

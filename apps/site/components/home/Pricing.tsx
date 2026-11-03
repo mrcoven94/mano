@@ -4,11 +4,11 @@ import { NeedIcon } from "./NeedIcons";
 import Mascot, { Wave } from "@/components/Mascot";
 import { SMS_HREF } from "@/lib/site";
 
-/* Two plans, the full side by side folded under them, then the support that comes with Plus. Keeping help is free for everyone; Plus adds unlimited applications, a Mano that
+/* Two plans, the full side by side folded under them, then the support that comes with Plus. Applying and keeping help are free for everyone; Plus adds a Mano that
    works every day without being asked, and a support team. Faxes and mail cost real money, so they are at cost on both. */
 
 const FREE = [
-  "5 applications a month",
+  "Unlimited applications",
   "Unlimited notices, read and explained",
   "Unlimited renewals, deadlines and reminders",
   "Unlimited benefit tracking",
@@ -18,7 +18,6 @@ const FREE = [
 ];
 
 const PLUS: [string, string][] = [
-  ["Unlimited applications.", "Every program you qualify for, as many as you need, every month."],
   ["Always on.", "Mano checks every day for new help you qualify for and starts renewals early, without being asked."],
   ["Its own computer.", "Mano fills out forms on websites for you. It never signs in to your accounts."],
   ["Calls and waiting on hold, coming soon.", "Mano waits on hold for you and hands you the phone when a person picks up."],
@@ -37,7 +36,7 @@ const SUPPORT: [string, string, string][] = [
 type Cell = string | boolean;
 const ROWS: [string, [string, Cell, Cell][]][] = [
   ["Getting help", [
-    ["Applications", "5 a month", "Unlimited"],
+    ["Applications", "Unlimited", "Unlimited"],
     ["Programs checked for you", "Every one", "Every one"],
     ["Notices read and explained", "Unlimited", "Unlimited"],
     ["Renewals, deadlines and reminders", "Unlimited", "Unlimited"],
@@ -75,7 +74,7 @@ export default function Pricing() {
     <>
       <div className="h-head">
         <h2 id="pricing-h">Keeping your help is free, always.</h2>
-        <p className="lede">Notices, renewals, tracking and mail are free for everyone, with 5 applications a month. Plus is $8 a month for unlimited applications, a Mano that works every day without being asked and a support team that knows your case.</p>
+        <p className="lede">Applications, notices, renewals, tracking and mail are free for everyone. Plus is $8 a month for a Mano that works every day without being asked and a support team that knows your case.</p>
       </div>
 
       <div className="price-grid">

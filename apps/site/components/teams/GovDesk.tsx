@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Check, ManoHead, d } from "./Parts";
 
 /* A caseworker reviews a complete case and approves it by hand; the agent then types it into the office's older
-   case system and reads the screen back. Everyone and every office here is made up. */
+   case system, reads the screen back and stops before saving. Everyone and every office here is made up. */
 
 type Phase = "review" | "approved" | "asked";
 
@@ -31,8 +31,8 @@ const approvedLog: [string, string, string?][] = [
   ["10:42:05", "Opened case 0418 on screen 14"],
   ["10:42:11", "Entered household, income and dates"],
   ["10:42:14", "Attached 4 documents"],
-  ["10:42:16", "Saved. Read the screen back: it matches the approved copy.", "ok"],
-  ["10:42:17", "Approval notice drafted for J. Park to review"],
+  ["10:42:16", "Read the screen back: it matches the approved copy.", "ok"],
+  ["10:42:17", "Stopped before saving. J. Park checks the screen and saves it."],
 ];
 const askedLog: [string, string, string?][] = [
   ["10:42:03", "J. Park asked for a current proof of address"],
@@ -86,7 +86,7 @@ export default function GovDesk() {
 
       <div className="gd-right">
         <p className="t-who">The office&rsquo;s own case system</p>
-        <div className="gd-sys" role="img" aria-label={phase === "approved" ? "The office's older case system, filled in by the agent and saved" : "The office's older case system, waiting"}>
+        <div className="gd-sys" role="img" aria-label={phase === "approved" ? "The office's older case system, filled in by the agent and not saved yet" : "The office's older case system, waiting"}>
           <p className="gd-sys-head"><span>CASE MAINTENANCE · SCREEN 14</span><span>SAMPLE COUNTY</span></p>
           <div className="gd-sys-body" key={phase}>
             {fields.map(([label, value], n) => (
@@ -97,12 +97,12 @@ export default function GovDesk() {
             ))}
             {phase === "review" && <p className="gd-wait">Waiting for a caseworker&rsquo;s approval. Nothing is entered before that.</p>}
             {phase === "asked" && <p className="gd-wait rv" style={d(1.2)}>Nothing entered. Case 0418 stays pending.</p>}
-            {phase === "approved" && <p className="gd-saved rv" style={d(1.9 + fields.length * step)}>RECORD SAVED  0418  10:42:16</p>}
+            {phase === "approved" && <p className="gd-saved rv" style={d(1.9 + fields.length * step)}>READY TO SAVE  0418  10:42:16</p>}
           </div>
           <p className="gd-sys-foot">F3 EXIT   F5 SAVE   F7 ATTACH</p>
         </div>
         <div className="sc-card gd-log">
-          <div className="sc-card-head"><ManoHead>What the agent did</ManoHead><span className="sc-label">Staff can stop it at any keystroke</span></div>
+          <div className="sc-card-head"><ManoHead>What the agent did</ManoHead><span className="sc-label">It stops before saving</span></div>
           {phase === "review" ? (
             <p className="gd-empty">Nothing entered yet.</p>
           ) : (
