@@ -13,6 +13,7 @@ import {
   holdsConfirmed,
   knownMatcher,
   mergeEntities,
+  plainDigits,
   plausibleOnly,
   replaceKnown,
   type KnownEntities,
@@ -50,7 +51,7 @@ function escapeRegExp(text: string): string {
 
 function redactWith(text: string, matcher: KnownMatcher): string {
   // Emails first, so a known name inside one never splits it.
-  let out = text.replace(EMAIL, "[EMAIL]");
+  let out = plainDigits(text).replace(EMAIL, "[EMAIL]");
   out = replaceKnown(out, matcher);
   // Case and receipt numbers before phones so digit runs keep their label.
   out = out.replace(CASE_NUMBER, (match, id: string) => (hasCommonWord(id) ? match : "[CASE NUMBER]"));
@@ -177,7 +178,7 @@ export function buildModelRequest(
     ...input.consents.map((consent) => consent.recipient),
   ].sort((a, b) => b.length - a.length);
   const scrub = (text: string): string => {
-    let out = text;
+    let out = plainDigits(text);
     for (const destination of destinations) {
       out = replaceDestination(out, destination, otherLabel(destination));
     }

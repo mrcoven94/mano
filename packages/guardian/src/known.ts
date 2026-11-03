@@ -2,13 +2,17 @@
 //
 // Text and values are read the same way. Each character is folded
 // (compatibility decomposition, accents and invisible format characters
-// dropped, lower case), runs of letters or of digits become tokens, and
-// anything else separates them. A value matches where its tokens appear in
-// order, so spacing, punctuation, case and Unicode form never matter. A
-// name also matches by each of its words, so a first name alone is caught.
-// Phones, ZIP codes and case numbers also match on their digits alone, and
-// a birth date matches wherever text names the same day in a common US or
-// Spanish format.
+// dropped, lower case, Cyrillic and Greek letters that look Latin read as
+// Latin, any script's digits read as 0 to 9), runs of letters or of digits
+// become tokens, and anything else separates them. A value matches where
+// text spells its letters and digits in order across whole tokens, so
+// spacing, punctuation inside a word (M.a.r.i.a), case and Unicode form
+// never matter, and an address word matches however it is abbreviated (Ln
+// for Lane, Apt for Unit). A name also matches by each of its words, so a
+// first name alone is caught. Phones, ZIP codes and case numbers also match
+// on their digits alone, a phone's last four digits match after words like
+// "ending in", and a birth date matches wherever text names the same day
+// in a common US or Spanish format, ordinal words included.
 
 import { COMMON_WORDS } from "./common-words.js";
 
@@ -73,8 +77,33 @@ export interface Token {
 const LABEL =
   /\[(?:NAME|EMPLOYER|ADDRESS|PHONE|EMAIL|DATE OF BIRTH|DATE|CASE NUMBER|ID|RECIPIENT|DOCUMENT)\]|\[(?:EMAIL|PHONE|URL|OTHER)-\d+\]/g;
 
+// Letters from other scripts that read as Latin ones, after lower case.
+const LOOKALIKES: Record<string, string> = {
+  "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o", "р": "p", "с": "c", "т": "t", "у": "y",
+  "х": "x", "ѕ": "s", "і": "i", "ј": "j", "ԁ": "d", "ԛ": "q", "ԝ": "w", "һ": "h", "ӏ": "l",
+  "α": "a", "β": "b", "ε": "e", "η": "n", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p", "τ": "t", "υ": "u",
+  "χ": "x", "ω": "w", "ı": "i", "ȷ": "j", "ɡ": "g", "ɑ": "a",
+};
+
+// A digit from any script as 0 to 9. Unicode lays out every script's
+// digits as runs from 0 to 9, so the value is the count of digits below
+// it in its run.
+function digitValue(ch: string): string {
+  const code = ch.codePointAt(0) ?? 0;
+  let below = 0;
+  while (below < 100 && /\p{Nd}/u.test(String.fromCodePoint(code - below - 1))) below += 1;
+  return String(below % 10);
+}
+
+// Text with every digit written as 0 to 9, so the shape patterns catch a
+// phone or a date in any script.
+export function plainDigits(text: string): string {
+  return text.replace(/\p{Nd}/gu, (ch) => (ch >= "0" && ch <= "9" ? ch : digitValue(ch)));
+}
+
 function fold(ch: string): string {
-  return ch.normalize("NFKD").replace(/[\p{M}\p{Cf}]/gu, "").toLowerCase();
+  const base = ch.normalize("NFKD").replace(/[\p{M}\p{Cf}]/gu, "").toLowerCase();
+  return [...base].map((c) => LOOKALIKES[c] ?? (/\p{Nd}/u.test(c) ? digitValue(c) : c)).join("");
 }
 
 export function tokenize(text: string): Token[] {
@@ -115,8 +144,20 @@ export function tokenize(text: string): Token[] {
   return tokens;
 }
 
+// Ways of writing one address word, so Ln matches Lane and Apartment,
+// Unit and Suite match Apt. Text and values are both read this way.
+const ALIASES: Record<string, string> = {
+  street: "st", str: "st", avenue: "ave", av: "ave", road: "rd", boulevard: "blvd", lane: "ln", drive: "dr",
+  court: "ct", place: "pl", terrace: "ter", circle: "cir", highway: "hwy", parkway: "pkwy", square: "sq",
+  trail: "trl", alley: "aly", plaza: "plz", route: "rte", apartment: "apt", unit: "apt", suite: "apt", ste: "apt",
+};
+
+function canonical(word: string): string {
+  return ALIASES[word] ?? word;
+}
+
 function words(value: string): string[] {
-  return tokenize(value).map((token) => token.text);
+  return tokenize(value).map((token) => canonical(token.text));
 }
 
 // Dates. readDates lists every date that can start at token i, with the
@@ -137,7 +178,14 @@ const MONTHS: Record<string, number> = {
   november: 11, nov: 11, noviembre: 11,
   december: 12, dec: 12, diciembre: 12,
 };
-const ORDINALS = new Set(["st", "nd", "rd", "th"]);
+// 1st, 2nd; 1.º, 1.er, 2do in Spanish.
+const ORDINAL_SUFFIXES = new Set(["st", "nd", "rd", "th", "o", "a", "er", "ro", "do", "to", "vo", "mo", "no"]);
+const DAY_WORDS: Record<string, number> = {
+  first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10,
+  eleventh: 11, twelfth: 12, thirteenth: 13, fourteenth: 14, fifteenth: 15, sixteenth: 16, seventeenth: 17,
+  eighteenth: 18, nineteenth: 19, twentieth: 20, thirtieth: 30, primero: 1, primer: 1,
+};
+const DAY_TENS: Record<string, number> = { twenty: 20, thirty: 30 };
 const OF = new Set(["of", "de", "del"]);
 
 interface DateReading {
@@ -169,6 +217,22 @@ function readDates(tokens: readonly Token[], i: number): DateReading[] {
   };
   const small = (token: Token | undefined): number | null =>
     token !== undefined && token.digits && token.text.length <= 2 ? Number(token.text) : null;
+  // The day of the month at token k (1, 1st, 1.º, first, twenty-first,
+  // primero), and the token after it.
+  const dayAt = (k: number): { day: number; next: number } | null => {
+    const token = at(k);
+    if (token === undefined) return null;
+    if (token.digits) {
+      const suffix = at(k + 1);
+      if (token.text.length > 2) return null;
+      return { day: Number(token.text), next: suffix !== undefined && !suffix.digits && ORDINAL_SUFFIXES.has(suffix.text) ? k + 2 : k + 1 };
+    }
+    const tens = DAY_TENS[token.text];
+    const ones = DAY_WORDS[at(k + 1)?.text ?? ""];
+    if (tens !== undefined) return ones !== undefined && ones < 10 ? { day: tens + ones, next: k + 2 } : null;
+    const day = DAY_WORDS[token.text];
+    return day === undefined ? null : { day, next: k + 1 };
+  };
   const monthOf = (token: Token | undefined): number | undefined =>
     token !== undefined && !token.digits ? MONTHS[token.text] : undefined;
   const skip = (k: number, set: ReadonlySet<string>): number => {
@@ -216,24 +280,26 @@ function readDates(tokens: readonly Token[], i: number): DateReading[] {
     }
   }
 
-  // Month first: January 1, 1990; Jan. 1st 1990; enero 1 de 1990.
+  // Month first: January 1, 1990; Jan. 1st 1990; January first, 1990;
+  // enero 1 de 1990.
   const leading = monthOf(first);
-  const leadingDay = small(at(1));
+  const leadingDay = leading === undefined ? null : dayAt(1);
   if (leading !== undefined && leadingDay !== null) {
-    const k = skip(skip(2, ORDINALS), OF);
+    const k = skip(leadingDay.next, OF);
     const year = at(k);
-    if (year?.digits === true) add(k + 1, yearsOf(year.text).map((y) => isoDate(y, leading, leadingDay)));
+    if (year?.digits === true) add(k + 1, yearsOf(year.text).map((y) => isoDate(y, leading, leadingDay.day)));
   }
 
-  // Day first: 1 January 1990; 1st of January, 1990; 1 de enero de 1990.
-  const day = small(first);
+  // Day first: 1 January 1990; 1st of January, 1990; first of January
+  // 1990; 1 de enero de 1990; 1.º de enero de 1990; primero de enero.
+  const day = dayAt(0);
   if (day !== null) {
-    let k = skip(skip(1, ORDINALS), OF);
+    let k = skip(day.next, OF);
     const month = monthOf(at(k));
     if (month !== undefined) {
       k = skip(k + 1, OF);
       const year = at(k);
-      if (year?.digits === true) add(k + 1, yearsOf(year.text).map((y) => isoDate(y, month, day)));
+      if (year?.digits === true) add(k + 1, yearsOf(year.text).map((y) => isoDate(y, month, day.day)));
     }
   }
   return found;
@@ -282,10 +348,12 @@ export function digitRuns(tokens: readonly Token[]): DigitRun[] {
 }
 
 // What each kind of value is matched by: token sequences, digit strings
-// found inside runs of digits, and birth dates by the day they name.
+// found inside runs of digits, a phone's last four digits, and birth dates
+// by the day they name.
 interface Needles {
   sequences: string[][];
   digits: string[];
+  lastFour: string;
   dates: string[];
 }
 
@@ -296,17 +364,17 @@ const NAME_PARTICLES = new Set([
 const BUSINESS_SUFFIXES = new Set([
   "inc", "incorporated", "llc", "ltd", "limited", "co", "corp", "corporation", "company", "lp", "llp", "pllc", "plc",
 ]);
+// Address words as words() writes them (ALIASES).
 const STREET_SUFFIXES = new Set([
-  "st", "str", "street", "ave", "av", "avenue", "rd", "road", "blvd", "boulevard", "ln", "lane", "dr", "drive",
-  "way", "ct", "court", "pl", "place", "ter", "terrace", "cir", "circle", "hwy", "highway", "pkwy", "parkway",
-  "sq", "square", "trl", "trail", "loop", "row", "path", "pike", "aly", "alley", "plz", "plaza", "rte", "route",
+  "st", "ave", "rd", "blvd", "ln", "dr", "way", "ct", "pl", "ter", "cir", "hwy", "pkwy", "sq", "trl", "loop", "row",
+  "path", "pike", "aly", "plz", "rte",
 ]);
-const UNIT_WORDS = new Set(["apt", "apartment", "unit", "ste", "suite"]);
+const UNIT = "apt";
 // Words in an address that identify no one on their own, so they never
 // match alone.
 const ADDRESS_WORDS = new Set([
   ...STREET_SUFFIXES,
-  ...UNIT_WORDS,
+  UNIT,
   "floor", "room", "bldg", "building", "lot", "box",
   "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest",
   "county", "parish", "city", "town", "village", "township", "borough", "the", "and", "usa",
@@ -327,6 +395,13 @@ function digitsOf(value: string): string {
     .join("");
 }
 
+// A unit at the start of words: Apt and its number, which may be two
+// tokens (7C reads as 7 and c).
+function unitAt(part: readonly string[]): string[] {
+  if (part[0] !== UNIT || part[1] === undefined) return [];
+  return part[2]?.length === 1 ? part.slice(0, 3) : part.slice(0, 2);
+}
+
 function phoneDigits(value: string): string[] {
   const all = digitsOf(value);
   const national = all.length === 11 && all.startsWith("1") ? all.slice(1) : all;
@@ -342,11 +417,7 @@ const NEEDLES: Record<EntityKind, (value: string) => Partial<Needles>> = {
   names: (value) => {
     const all = words(value);
     return {
-      sequences: [
-        all,
-        [all.join("")],
-        ...all.filter((word) => word.length >= 2 && !NAME_PARTICLES.has(word)).map((word) => [word]),
-      ],
+      sequences: [all, ...all.filter((word) => word.length >= 2 && !NAME_PARTICLES.has(word)).map((word) => [word])],
     };
   },
   employers: (value) => {
@@ -354,13 +425,15 @@ const NEEDLES: Record<EntityKind, (value: string) => Partial<Needles>> = {
     let core = all.length;
     while (core > 1 && BUSINESS_SUFFIXES.has(all[core - 1] ?? "")) core -= 1;
     const trimmed = all.slice(0, core);
-    return { sequences: [all, trimmed, [all.join("")], [trimmed.join("")]] };
+    return { sequences: [all, trimmed] };
   },
   // An address matches whole, by any run of its parts between commas,
-  // semicolons or line breaks, and by its street line with or without the
-  // house number. A street's own words never match alone, so a street
-  // named Food Benefits Renewal Road leaves the purpose alone. Only a word
-  // that names a place (placeWord) also matches by itself.
+  // semicolons or line breaks, by its street line with or without the
+  // house number, by the street and its unit (with or without Apt, for
+  // "#7C"), by the unit alone (Apt 7C), and by Box and its number. A
+  // street's own words never match alone, so a street named Food Benefits
+  // Renewal Road leaves the purpose alone. Only a word that names a place
+  // (placeWord) also matches by itself.
   addresses: (value) => {
     const parts = value.split(/[,;\n]/).map(words).filter((part) => part.length > 0);
     const sequences: string[][] = [];
@@ -371,20 +444,26 @@ const NEEDLES: Record<EntityKind, (value: string) => Partial<Needles>> = {
       }
     }
     const places: string[] = [];
-    for (const part of parts) {
+    parts.forEach((part, p) => {
+      const box = part.indexOf("box");
+      if (box >= 0 && isDigits(part[box + 1] ?? "")) sequences.push(["box", part[box + 1] ?? ""]);
       const suffix = part.findIndex((word, k) => k > 0 && STREET_SUFFIXES.has(word));
-      const street = suffix > 0 || isDigits(part[0] ?? "") || part.some((word) => UNIT_WORDS.has(word) || word === "box");
+      const street = suffix > 0 || isDigits(part[0] ?? "") || part.includes(UNIT) || box >= 0;
       if (!street) {
         places.push(...part.filter(placeWord));
-        continue;
+        return;
       }
       if (suffix > 0) {
         const line = part.slice(0, suffix + 1);
-        sequences.push(line, isDigits(line[0] ?? "") ? line.slice(1) : line);
+        const named = isDigits(line[0] ?? "") ? line.slice(1) : line;
+        sequences.push(line, named);
+        const rest = part.slice(suffix + 1);
+        const unit = unitAt(rest.length > 0 ? rest : (parts[p + 1] ?? []));
+        if (unit.length > 0) sequences.push([...line, ...unit], [...line, ...unit.slice(1)], [...named, ...unit.slice(1)]);
         // In an address written on one line, the place follows the street.
-        places.push(...part.slice(suffix + 1).filter(placeWord));
+        places.push(...rest.slice(rest.length > 0 ? unit.length : 0).filter(placeWord));
       }
-    }
+    });
     return {
       sequences: [...sequences, ...places.map((word) => [word])],
       digits: parts.flat().filter((word) => /^\d{5,}$/.test(word)),
@@ -392,7 +471,7 @@ const NEEDLES: Record<EntityKind, (value: string) => Partial<Needles>> = {
   },
   phones: (value) => {
     const digits = phoneDigits(value);
-    return digits.length > 0 ? { digits } : { sequences: [words(value)] };
+    return digits.length > 0 ? { digits, lastFour: digitsOf(value).slice(-4) } : { sequences: [words(value)] };
   },
   emails: (value) => ({ sequences: [words(value)] }),
   datesOfBirth: (value) => {
@@ -406,28 +485,42 @@ const NEEDLES: Record<EntityKind, (value: string) => Partial<Needles>> = {
 };
 
 export interface KnownMatcher {
-  sequences: Map<string, { words: string[]; label: string }[]>;
+  // Each sequence by the letters and digits it spells, with its labels.
+  spelled: Map<string, string[]>;
+  // Every start of a spelling, so a scan stops once no sequence can match.
+  prefixes: Set<string>;
   digits: { digits: string; label: string }[];
+  lastFours: Map<string, string>;
   birthDates: Set<string>;
   empty: boolean;
 }
 
 export function knownMatcher(known: KnownEntities | undefined): KnownMatcher {
-  const matcher: KnownMatcher = { sequences: new Map(), digits: [], birthDates: new Set(), empty: true };
+  const matcher: KnownMatcher = {
+    spelled: new Map(),
+    prefixes: new Set(),
+    digits: [],
+    lastFours: new Map(),
+    birthDates: new Set(),
+    empty: true,
+  };
   for (const kind of Object.keys(KNOWN_LABELS) as EntityKind[]) {
     const label = KNOWN_LABELS[kind];
     for (const value of known?.[kind] ?? []) {
       const needles = NEEDLES[kind](value);
       for (const sequence of needles.sequences ?? []) {
-        const first = sequence[0];
-        if (first === undefined || sequence.join("").length < 2) continue;
-        const bucket = matcher.sequences.get(first) ?? [];
-        bucket.push({ words: sequence, label });
-        matcher.sequences.set(first, bucket);
+        const spelling = sequence.join("");
+        if (spelling.length < 2) continue;
+        matcher.spelled.set(spelling, [...(matcher.spelled.get(spelling) ?? []), label]);
+        for (let n = 1; n <= spelling.length; n += 1) matcher.prefixes.add(spelling.slice(0, n));
         matcher.empty = false;
       }
       for (const digits of needles.digits ?? []) {
         matcher.digits.push({ digits, label });
+        matcher.empty = false;
+      }
+      if (needles.lastFour !== undefined && needles.lastFour.length === 4) {
+        matcher.lastFours.set(needles.lastFour, label);
         matcher.empty = false;
       }
       for (const date of needles.dates ?? []) {
@@ -445,15 +538,31 @@ interface Span {
   label: string;
 }
 
-function findSpans(tokens: readonly Token[], matcher: KnownMatcher): Span[] {
+// Words that say the four digits after them end a phone number, and the
+// marks that stand in for the digits before them (XXX-XXX-0142).
+const LAST_FOUR_WORDS = new Set([
+  "ending", "ends", "end", "last", "four", "digits", "phone", "number", "cell", "mobile", "tel", "telephone",
+  "x", "xx", "xxx", "terminado", "terminando", "termina", "ultimos", "numero", "telefono", "celular",
+]);
+const MASK = /[*•●]/;
+
+function findSpans(tokens: readonly Token[], matcher: KnownMatcher, text: string): Span[] {
   const spans: Span[] = [];
   tokens.forEach((token, i) => {
-    for (const needle of matcher.sequences.get(token.text) ?? []) {
-      const fits = needle.words.every((word, k) => {
-        const other = tokens[i + k];
-        return other !== undefined && other.text === word && other.segment === token.segment;
-      });
-      if (fits) spans.push({ from: i, to: i + needle.words.length, label: needle.label });
+    let spelling = "";
+    for (let j = i; j < tokens.length && tokens[j]?.segment === token.segment; j += 1) {
+      spelling += canonical(tokens[j]?.text ?? "");
+      if (!matcher.prefixes.has(spelling)) break;
+      for (const label of matcher.spelled.get(spelling) ?? []) spans.push({ from: i, to: j + 1, label });
+    }
+    const lastFour = token.digits ? matcher.lastFours.get(token.text) : undefined;
+    if (lastFour !== undefined) {
+      const said = tokens
+        .slice(Math.max(0, i - 3), i)
+        .some((before) => before.segment === token.segment && LAST_FOUR_WORDS.has(before.text));
+      if (said || MASK.test(text.slice(Math.max(0, token.start - 12), token.start))) {
+        spans.push({ from: i, to: i + 1, label: lastFour });
+      }
     }
     if (matcher.birthDates.size > 0) {
       for (const reading of readDates(tokens, i)) {
@@ -517,7 +626,7 @@ export function replaceKnown(text: string, matcher: KnownMatcher): string {
   const tokens = tokenize(text);
   let out = "";
   let at = 0;
-  for (const region of regions(findSpans(tokens, matcher), tokens, text)) {
+  for (const region of regions(findSpans(tokens, matcher, text), tokens, text)) {
     const first = tokens[region.from];
     const last = tokens[region.to - 1];
     if (first === undefined || last === undefined) continue;
