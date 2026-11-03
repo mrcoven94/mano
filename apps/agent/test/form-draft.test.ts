@@ -5,7 +5,7 @@ import { engineFrom, personIdFor } from "../agent/lib/engine.js";
 import { readTextedPhotos } from "../agent/lib/letters.js";
 import { FORMS, fillFrom } from "../agent/lib/forms.js";
 import type { Profile } from "../agent/lib/engine.js";
-import { presentsExactly, renderQuestion } from "../agent/lib/pending.js";
+import { presentsExactly, proposedIn, renderQuestion } from "../agent/lib/pending.js";
 import { SandboxExecutor, createExecutor } from "../../engine/src/gateway/executors.js";
 import { DOUBTFUL_PAGE, RENEWAL_PAGE, letterPhoto, recordedReader } from "../../../packages/mail/test/letter-fixture.js";
 import { DEFAULT_CONFIG, handleRequest } from "../../sandbox-portal/src/app";
@@ -494,6 +494,18 @@ describe("LAP-747: corrections and spacing", () => {
     expect((await client().approve(String(fixed.approvalId))).status).toBe("completed");
     expect(portal.posts).toHaveLength(1);
     expect(portal.posts[0]!.household.phone).toBe("253-555-0199");
+  });
+
+  it("a correction later in the same turn closes that turn's draft, so the reply carries no question for it", async () => {
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    const at = Date.now();
+    expect((await draft("turn_same000001", fields, at)).status).toBe("waiting_for_yes");
+    const fix = await draft("turn_same000001", { ...fields, phone: "253-555-01422" }, at);
+    expect(fix).toMatchObject({ status: "needs_answer", field: "phone" });
+    const approvals = await client().listApprovals();
+    expect(approvals.map((a) => a.status)).toEqual(["rejected"]);
+    expect(proposedIn(approvals, 0, "turn_same000001")).toBeNull();
   });
 
   it("a name typed with two spaces is shown and filed with one, so it can still be put to her YES", async () => {

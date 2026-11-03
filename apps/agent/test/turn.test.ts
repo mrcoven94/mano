@@ -12,6 +12,7 @@ import { toolCtx } from "./ctx.js";
 import { getPendingPointer } from "../../engine/src/agents/agent-state.js";
 import { LocalRulesChecker } from "../../engine/src/gateway/checker.js";
 import { GuardianChecker } from "../../engine/src/gateway/guardian.js";
+import { TimeoutError, type ActionRequest, type CheckOutcome, type Executor } from "../../engine/src/gateway/index.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_CHANNELS_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 import { installFillDouble, uninstallFillDouble } from "./fill-double.js";
 
@@ -73,6 +74,9 @@ async function fakeAgent(input: AgentTurnInput) {
     const address = /with a dash/.test(input.message) ? "12 Sample Street \u2014 Unit 4, Testville" : fields.address;
     const phone = /my phone is (\S+)/.exec(input.message)?.[1] ?? fields.phone;
     await fillForm.execute(draft({ fullName: name, address, householdSize, phone }), ctx);
+    // A correction in the same message: a second call in the same turn.
+    const then = /then change the phone to (\S+)/.exec(input.message)?.[1];
+    if (then) await fillForm.execute(draft({ fullName: name, address, householdSize, phone: then }), ctx);
     return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop" };
   }
   return { status: "replied" as const, text: `Answer ${agentCalls.length}`, reason: "stop" };
@@ -196,6 +200,55 @@ describe("approval by text", () => {
     await send(turn("turn_fixy_00002", "YES"));
     expect(engine.executor.calls).toHaveLength(1);
     expect(engine.executor.calls[0]!.payload.phone).toBe("253-555-0199");
+  });
+
+  it("a correction later in the same turn closes that turn's draft: no question goes out, and a YES files nothing", async () => {
+    const ask = await send(turn("turn_same_000001", "File my renewal, then change the phone to 253-555-01422"));
+    expect(ask.body.status).not.toBe("waiting_approval");
+    expect(ask.body.text).not.toContain("Reply YES");
+    expect(engine.approvals().map((a) => a.status)).toEqual(["rejected"]);
+    await send(turn("turn_same_00000Y", "YES"));
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  it("a correction after an approved filing went unresolved prepares nothing until it settles, and never files the old phone", async () => {
+    // Times out before filing; the portal cannot be asked until checkDown is cleared.
+    const portal = new (class implements Executor {
+      readonly simulated = true;
+      posts: ActionRequest[] = [];
+      filed = new Map<string, string>();
+      checkDown = true;
+      async execute(req: ActionRequest) {
+        this.posts.push(req);
+        if (this.posts.length === 1) throw new TimeoutError();
+        this.filed.set(req.idempotencyKey, `sim-${this.posts.length}`);
+        return { externalId: `sim-${this.posts.length}` };
+      }
+      async check(key: string): Promise<CheckOutcome> {
+        if (this.checkDown) throw new Error("portal unreachable");
+        const id = this.filed.get(key);
+        return id ? { found: true, externalId: id } : { found: false };
+      }
+    })();
+    engine.filer = portal;
+    await send(turn("turn_late_000001", "Please file my renewal"));
+    expect((await send(turn("turn_late_00000Y", "YES"))).body.text).toMatch(/checking/i);
+    expect(portal.posts).toHaveLength(1);
+
+    const fix = await send(turn("turn_late_000002", "Fix my renewal, my phone is 253-555-0199"));
+    expect(fix.body.status).not.toBe("waiting_approval");
+    expect(engine.approvals()).toHaveLength(1);
+    expect(portal.posts).toHaveLength(1);
+
+    // The portal answers: the first filing never arrived. Her YES ends it.
+    portal.checkDown = false;
+    expect((await send(turn("turn_late_0000Y2", "YES"))).body.text).toMatch(/did not go through/);
+    expect(portal.posts).toHaveLength(1);
+
+    const fixed = await send(turn("turn_late_000003", "Fix my renewal, my phone is 253-555-0199"));
+    expect(fixed.body.status).toBe("waiting_approval");
+    expect((await send(turn("turn_late_0000Y3", "YES"))).body.text).toMatch(/^Done/);
+    expect(portal.posts.map((p) => p.payload.phone)).toEqual(["253-555-0100", "253-555-0199"]);
   });
 
   it("question, NO: Engine rejects it, nothing is sent, and a later YES approves nothing", async () => {

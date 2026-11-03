@@ -8,7 +8,7 @@
 // links to a page that replays each step. It files nothing: on YES,
 // Engine files it through the action gateway and the reply carries the
 // confirmation number.
-import { defineTool } from "eve/tools";
+import { defineTool, type ToolContext } from "eve/tools";
 import { z } from "zod";
 
 import { fillDepsFromEnv, fillOnComputer, type FillDeps, type ReplayStep } from "../lib/computer-fill.js";
@@ -16,7 +16,7 @@ import { EngineError, type PersonEngine } from "../lib/engine.js";
 import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
 import { DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
-import { closeEarlier, holdForYes, sameDraft, type Draft } from "../lib/propose.js";
+import { EARLIER_UNRESOLVED_NOTE, closeEarlier, closeThisTurn, holdForYes, sameDraft, settleEarlierFilings, type Draft } from "../lib/propose.js";
 
 const inputSchema = z.object({
   form: z
@@ -52,6 +52,96 @@ async function shareReplay(engine: PersonEngine, approvalId: string, form: FormS
   }
 }
 
+async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext) {
+  const turn = requireTurn(ctx);
+  const engine = personEngine(ctx);
+  if (!engine) throw new Error("Filling forms is not available right now. Say so and offer to collect the answers.");
+  const portalUrl = process.env.MANO_PORTAL_URL ?? null;
+  const form = resolveForm(input.form, portalUrl);
+  if (!form) {
+    return { status: "unknown_form", sent: false, note: "Mano cannot fill that form yet. Say so plainly and offer to help another way." };
+  }
+  if (!portalUrl) {
+    return { status: "unavailable", sent: false, note: "Filling forms on Mano's computer is not set up here. Prepare the renewal with start_form_draft from the person's answers instead." };
+  }
+  // A new version replaces the one shown, even when it only asks a
+  // question first: a YES to the old one must not file what was corrected.
+  if ((await settleEarlierFilings(engine, form.recipient)) !== "clear") {
+    return { status: "earlier_filing_unresolved", sent: false, note: EARLIER_UNRESOLVED_NOTE };
+  }
+  if (!(await closeEarlier(engine, turn.turnId, form.recipient))) {
+    return { status: "fill_failed", sent: false, note: "Mano could not set aside the earlier version of this form, so nothing new was filled or sent. Say so and offer to try again." };
+  }
+  // The proof document comes only from the profile, so without one the
+  // form cannot be completed here.
+  const profile = await engine.getProfile();
+  if (!profile) {
+    return { status: "unavailable", sent: false, note: "Mano cannot read this person's saved details yet. Prepare the renewal with start_form_draft from the person's answers instead." };
+  }
+  const filled = fillFrom(form, profile, input.answers ?? {});
+  const bad = filled.invalid[0];
+  if (bad) {
+    return { status: "needs_answer", field: bad.name, question: bad.question, sent: false, note: `That answer does not fit "${bad.label}". Ask this one question again, and nothing else.` };
+  }
+  if (filled.missing) {
+    const note =
+      filled.missing.name === "proof"
+        ? "The form needs a proof of income document and Mano has none on file yet. Ask this one question, and nothing else."
+        : "Ask this one question, and nothing else. Then call fill_form again with the answer added under this field name.";
+    return { status: "needs_answer", field: filled.missing.name, question: filled.missing.question, sent: false, note };
+  }
+
+  const deps = depsForTests ? depsForTests(engine.personId) : fillDepsFromEnv(engine.personId);
+  if ("unavailable" in deps) {
+    console.warn(JSON.stringify({ type: "mano_fill_unavailable", reason: deps.unavailable }));
+    return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Prepare the renewal with start_form_draft from the person's answers instead." };
+  }
+  const fill = await fillOnComputer(form, filled.values, portalUrl, deps);
+  console.log(
+    JSON.stringify({
+      type: "mano_fill",
+      status: fill.status,
+      reason: "reason" in fill ? fill.reason : null,
+      codes: "codes" in fill ? fill.codes : null,
+      ms: fill.ms,
+      steps: "steps" in fill ? fill.steps : 0,
+    }),
+  );
+  if (fill.status === "rejected") {
+    return { status: "form_refused", sent: false, formSays: fill.message, note: "The form refused these values. Tell the person what the form said in one sentence and ask the one question that fixes it." };
+  }
+  if (fill.status === "safety_check") {
+    return {
+      status: "needs_go_ahead",
+      sent: false,
+      note: "Mano's computer stopped before filling the form because it needs the person's go-ahead, so nothing was filled or sent. Say so in one short sentence. Do not ask them to reply YES: a yes cannot continue this fill yet.",
+    };
+  }
+  if (fill.status !== "filled") {
+    return { status: "fill_failed", sent: false, note: "Mano could not finish filling the form on its computer, so nothing was prepared or sent. Say so and offer to try again." };
+  }
+
+  const draft: Draft = {
+    type: "submit",
+    recipient: form.recipient,
+    purpose: form.purpose,
+    payload: { ...fill.saved, [DECLARATION]: form.declaration },
+    ...(filled.documentId ? { documentId: filled.documentId } : {}),
+  };
+  const held = await holdForYes(engine, ctx, turn, draft);
+  if (!held.held) return { status: held.status, note: held.note, reason: held.reason, sent: false };
+  // A retried turn gets back the approval its first attempt froze. Only
+  // screens of those same values may stand beside its question.
+  if (sameDraft(held.approval, draft)) await shareReplay(engine, held.approval.id, form, fill.replay);
+  return {
+    status: "waiting_for_yes",
+    approvalId: held.approval.id,
+    filled: form.fields.map((f) => ({ field: f.label, value: fill.saved[f.name] })),
+    sent: false,
+    note: "The form is filled out on Mano's computer and the exact version goes to the person with your reply. In one short sentence, say you filled it out and it is ready for their yes. Do not repeat the fields or ask the question yourself.",
+  };
+}
+
 export default defineTool({
   description:
     "Fill out a form for the person: their food benefits renewal (form food-renewal) or a form on the sandbox portal. Call it as soon as they ask. It returns either one question to ask (ask exactly that, then call again with their answer added to answers) or the filled form, which it holds for their YES. It sends nothing.",
@@ -60,89 +150,12 @@ export default defineTool({
     start: () => "Fill out the form",
   },
   async execute(input, ctx) {
-    const turn = requireTurn(ctx);
+    const out = await fillAndHold(input, ctx);
+    // A call that holds no new version leaves none of this turn's earlier
+    // drafts for the reply to show.
+    const form = resolveForm(input.form, process.env.MANO_PORTAL_URL ?? null);
     const engine = personEngine(ctx);
-    if (!engine) throw new Error("Filling forms is not available right now. Say so and offer to collect the answers.");
-    const portalUrl = process.env.MANO_PORTAL_URL ?? null;
-    const form = resolveForm(input.form, portalUrl);
-    if (!form) {
-      return { status: "unknown_form", sent: false, note: "Mano cannot fill that form yet. Say so plainly and offer to help another way." };
-    }
-    if (!portalUrl) {
-      return { status: "unavailable", sent: false, note: "Filling forms on Mano's computer is not set up here. Prepare the renewal with start_form_draft from the person's answers instead." };
-    }
-    // A new version replaces the one shown, even when it only asks a
-    // question first: a YES to the old one must not file what was corrected.
-    if (!(await closeEarlier(engine, turn.turnId, form.recipient))) {
-      return { status: "fill_failed", sent: false, note: "Mano could not set aside the earlier version of this form, so nothing new was filled or sent. Say so and offer to try again." };
-    }
-    // The proof document comes only from the profile, so without one the
-    // form cannot be completed here.
-    const profile = await engine.getProfile();
-    if (!profile) {
-      return { status: "unavailable", sent: false, note: "Mano cannot read this person's saved details yet. Prepare the renewal with start_form_draft from the person's answers instead." };
-    }
-    const filled = fillFrom(form, profile, input.answers ?? {});
-    const bad = filled.invalid[0];
-    if (bad) {
-      return { status: "needs_answer", field: bad.name, question: bad.question, sent: false, note: `That answer does not fit "${bad.label}". Ask this one question again, and nothing else.` };
-    }
-    if (filled.missing) {
-      const note =
-        filled.missing.name === "proof"
-          ? "The form needs a proof of income document and Mano has none on file yet. Ask this one question, and nothing else."
-          : "Ask this one question, and nothing else. Then call fill_form again with the answer added under this field name.";
-      return { status: "needs_answer", field: filled.missing.name, question: filled.missing.question, sent: false, note };
-    }
-
-    const deps = depsForTests ? depsForTests(engine.personId) : fillDepsFromEnv(engine.personId);
-    if ("unavailable" in deps) {
-      console.warn(JSON.stringify({ type: "mano_fill_unavailable", reason: deps.unavailable }));
-      return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Prepare the renewal with start_form_draft from the person's answers instead." };
-    }
-    const fill = await fillOnComputer(form, filled.values, portalUrl, deps);
-    console.log(
-      JSON.stringify({
-        type: "mano_fill",
-        status: fill.status,
-        reason: "reason" in fill ? fill.reason : null,
-        codes: "codes" in fill ? fill.codes : null,
-        ms: fill.ms,
-        steps: "steps" in fill ? fill.steps : 0,
-      }),
-    );
-    if (fill.status === "rejected") {
-      return { status: "form_refused", sent: false, formSays: fill.message, note: "The form refused these values. Tell the person what the form said in one sentence and ask the one question that fixes it." };
-    }
-    if (fill.status === "safety_check") {
-      return {
-        status: "needs_go_ahead",
-        sent: false,
-        note: "Mano's computer stopped before filling the form because it needs the person's go-ahead, so nothing was filled or sent. Say so in one short sentence. Do not ask them to reply YES: a yes cannot continue this fill yet.",
-      };
-    }
-    if (fill.status !== "filled") {
-      return { status: "fill_failed", sent: false, note: "Mano could not finish filling the form on its computer, so nothing was prepared or sent. Say so and offer to try again." };
-    }
-
-    const draft: Draft = {
-      type: "submit",
-      recipient: form.recipient,
-      purpose: form.purpose,
-      payload: { ...fill.saved, [DECLARATION]: form.declaration },
-      ...(filled.documentId ? { documentId: filled.documentId } : {}),
-    };
-    const held = await holdForYes(engine, ctx, turn, draft);
-    if (!held.held) return { status: held.status, note: held.note, reason: held.reason, sent: false };
-    // A retried turn gets back the approval its first attempt froze. Only
-    // screens of those same values may stand beside its question.
-    if (sameDraft(held.approval, draft)) await shareReplay(engine, held.approval.id, form, fill.replay);
-    return {
-      status: "waiting_for_yes",
-      approvalId: held.approval.id,
-      filled: form.fields.map((f) => ({ field: f.label, value: fill.saved[f.name] })),
-      sent: false,
-      note: "The form is filled out on Mano's computer and the exact version goes to the person with your reply. In one short sentence, say you filled it out and it is ready for their yes. Do not repeat the fields or ask the question yourself.",
-    };
+    if (out.status !== "waiting_for_yes" && form && engine) await closeThisTurn(engine, requireTurn(ctx).turnId, form.recipient);
+    return out;
   },
 });

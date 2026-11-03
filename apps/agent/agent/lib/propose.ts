@@ -7,7 +7,7 @@
 import type { ToolContext } from "eve/tools";
 
 import type { ActionProposal, EngineApproval, PersonEngine } from "./engine.js";
-import { closeReplaced, presentsExactly, proposalKey, renderQuestion } from "./pending.js";
+import { closeReplaced, presentsExactly, proposalKey, proposalsOf, renderQuestion, waitingFrom } from "./pending.js";
 import { placeClaimId } from "./reminders.js";
 
 // Drafts from one message.
@@ -134,5 +134,48 @@ export async function closeEarlier(engine: PersonEngine, turnId: string, recipie
   } catch {
     console.warn(JSON.stringify({ type: "mano_close_failed" }));
     return false;
+  }
+}
+
+// Closes this turn's own drafts to the recipient that still wait. A later
+// call in the same turn that asks a question instead of holding a new
+// version leaves none of them for the reply to show, so a YES never files
+// what the person just corrected. closeEarlier leaves this turn's drafts
+// alone, since a replayed call must find its own.
+export async function closeThisTurn(engine: PersonEngine, turnId: string, recipient: string): Promise<void> {
+  try {
+    const waiting = waitingFrom(await engine.listApprovals(), engine.generation, turnId).filter((a) => a.recipient === recipient);
+    for (const a of waiting) {
+      if ((await engine.reject(a.id)).status !== "rejected") console.warn(JSON.stringify({ type: "mano_close_failed", count: 1 }));
+    }
+  } catch {
+    console.warn(JSON.stringify({ type: "mano_close_failed" }));
+  }
+}
+
+// What the model is told while an earlier approved filing is unresolved.
+export const EARLIER_UNRESOLVED_NOTE =
+  "Mano is still checking whether the form the person already approved went through, so nothing new was prepared. Tell them plainly that you are still checking that one, that Mano will not send it again with the old details, and that you can prepare the corrected one once you know. Do not ask for anything else now.";
+
+// Before a new version of a form is prepared, the person's earlier
+// approved filings to the same recipient that have no outcome yet are
+// withdrawn: Engine then only reconciles them, so a later YES or recovery
+// never files their old values. "checking" while any of them may still
+// have gone through, "clear" once each went through or definitely did
+// not, "failed" when Engine could not be asked.
+export async function settleEarlierFilings(engine: PersonEngine, recipient: string): Promise<"clear" | "checking" | "failed"> {
+  try {
+    const open = proposalsOf(await engine.listApprovals(), engine.generation).filter(
+      (a) => a.recipient === recipient && a.status === "approved" && a.outcome?.attempt !== "done",
+    );
+    let checking = false;
+    for (const a of open) {
+      if (!a.outcome?.withdrawn && (await engine.withdraw(a.id)).status !== "rejected") continue;
+      if (a.outcome?.attempt !== "failed") checking = true;
+    }
+    return checking ? "checking" : "clear";
+  } catch {
+    console.warn(JSON.stringify({ type: "mano_withdraw_failed" }));
+    return "failed";
   }
 }

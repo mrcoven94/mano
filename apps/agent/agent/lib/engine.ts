@@ -117,6 +117,9 @@ export interface EngineApproval {
   outcome?: {
     attempt: "in_flight" | "unknown" | "failed" | "done" | null;
     receipt: { externalId: string; simulated: boolean } | null;
+    // The person asked for a new version after approving it: Engine only
+    // reconciles it from now on and never runs it again.
+    withdrawn?: boolean;
   };
 }
 
@@ -198,6 +201,9 @@ export interface EngineResult {
   // A refused approve: the safety check could not answer. The approval
   // still waits and nothing ran, so the same yes can be tried again.
   retryable?: true;
+  // The approval was withdrawn. On an approve: confirmed never to have
+  // happened, so nothing was or will be sent.
+  withdrawn?: true;
 }
 
 // The person's newest drafted approval. Engine moves it only forward, in
@@ -520,6 +526,13 @@ export class PersonEngine {
   // anything it read earlier may be out of date by then.
   async supersede(): Promise<number> {
     return ((await this.json("POST", "/approvals/supersede", { generation: this.generation })) as { closed: number }).closed;
+  }
+
+  // Withdraws an approved filing whose outcome is still unresolved, after
+  // the person asked for a new version: Engine only reconciles it from
+  // now on. Completed when it already went through.
+  async withdraw(approvalId: string): Promise<EngineResult> {
+    return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/withdraw`));
   }
 
   async reject(approvalId: string): Promise<EngineResult> {

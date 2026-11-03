@@ -193,6 +193,10 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       return CHECKING;
     default: {
       if (result.retryable) return CHECK_STARTING;
+      if (result.withdrawn) {
+        await engine.clearPointer(approvalId);
+        return "That earlier version did not go through, and it will not be sent. Want me to prepare it again with your changes?";
+      }
       if (result.superseded) {
         await engine.clearPointer(approvalId);
         return `${UPDATED} Ask me to show the latest.`;

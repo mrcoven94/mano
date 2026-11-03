@@ -65,13 +65,14 @@ export function proposalsOf(approvals: EngineApproval[], generation: number): En
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+// The drafts one turn proposed that still wait, newest first.
+export function waitingFrom(approvals: EngineApproval[], generation: number, turnId: string): EngineApproval[] {
+  return proposalsOf(approvals, generation).filter((a) => a.status === "pending" && a.idempotencyKey.startsWith(`${prefix(generation)}${turnId}:`));
+}
+
 // The approval this turn proposed and Engine still holds.
 export function proposedIn(approvals: EngineApproval[], generation: number, turnId: string): EngineApproval | null {
-  return (
-    proposalsOf(approvals, generation).find(
-      (a) => a.status === "pending" && a.idempotencyKey.startsWith(`${prefix(generation)}${turnId}:`),
-    ) ?? null
-  );
+  return waitingFrom(approvals, generation, turnId)[0] ?? null;
 }
 
 // Proposals of this conversation still waiting that are not the answerable one.
