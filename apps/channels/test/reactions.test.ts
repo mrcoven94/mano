@@ -1,13 +1,14 @@
 /// <reference types="node" />
-// LAP-508: dynamic reactions, the eyes while a slow turn runs, and the
-// chat background set once.
+// LAP-508: dynamic reactions and the eyes while a slow turn runs.
+// LAP-850: Mano never sets a chat background, and removes one an earlier
+// version set, once.
 import { describe, expect, it } from "vitest";
-import type { Responder, RespondHooks, TurnInput } from "@mano/channels";
+import { ChannelFailed, type Responder, type RespondHooks, type TurnInput } from "@mano/channels";
 import { CRISIS_LINE, EYES } from "@mano/persona";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { SqlConversationStore } from "../src/store-sql.js";
 import { backgroundKey } from "../src/runner.js";
-import { TEST_CHAT, inboundEvent, makeHarness, runTurnAfterBatch, type Harness } from "./helpers.js";
+import { TEST_CHAT, inboundEvent, lifecycleEvent, makeHarness, runTurnAfterBatch, seedBackground, type Harness } from "./helpers.js";
 
 function sqliteStorage(db: DatabaseSync): SqlStorage {
   return {
@@ -25,9 +26,6 @@ function sqliteStorage(db: DatabaseSync): SqlStorage {
     },
   } as unknown as SqlStorage;
 }
-
-const BACKGROUND_URL = "https://withmano.example/chat-background.png";
-const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 
 function introduced(h: Harness): Harness {
   const meta = h.store.meta();
@@ -49,7 +47,7 @@ async function say(h: Harness, id: string, text: string, extra: Partial<Paramete
 function trace(h: Harness): string[] {
   const order: string[] = [];
   const c = h.channel;
-  const wrap = <K extends "react" | "setTyping" | "send" | "setBackground">(name: K, label: (...a: never[]) => string) => {
+  const wrap = <K extends "react" | "setTyping" | "send" | "clearBackground">(name: K, label: (...a: never[]) => string) => {
     const original = (c[name] as unknown as (...a: unknown[]) => Promise<unknown>).bind(c);
     (c as unknown as Record<string, unknown>)[name] = async (...args: unknown[]) => {
       order.push((label as (...a: unknown[]) => string)(...args));
@@ -59,7 +57,7 @@ function trace(h: Harness): string[] {
   wrap("react", (_c: string, _m: string, r: string) => `+${r}`);
   wrap("setTyping", (_c: string, s: string) => `typing:${s}`);
   wrap("send", (i: { text: string }) => `send:${i.text}`);
-  wrap("setBackground", () => "background");
+  wrap("clearBackground", () => "clear background");
   return order;
 }
 
@@ -142,39 +140,52 @@ describe("eyes while a slow turn runs", () => {
   });
 });
 
-describe("the chat background, set once", () => {
-  function withImage(): typeof fetch {
-    return (async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("dns-query")) return Response.json({ Status: 0, Answer: [{ type: 1, data: "93.184.216.34" }] });
-      if (url === BACKGROUND_URL) return new Response(PNG, { status: 200, headers: { "content-type": "image/png" } });
-      return new Response("missing", { status: 404 });
-    }) as typeof fetch;
+describe("an old chat background, removed once and never set (LAP-850)", () => {
+  async function record(h: Harness) {
+    return h.store.chatBackground(await backgroundKey(TEST_CHAT));
   }
 
-  it("sets it after the first reply is sent, and never again", async () => {
-    const h = makeHarness({ replies: ["first answer", "second answer"], fetchFn: withImage(), config: { backgroundUrl: BACKGROUND_URL } });
+  it("removes it after the first reply is sent, and never again", async () => {
+    const h = makeHarness({ replies: ["first answer", "second answer"] });
+    await seedBackground(h, "set");
     const order = trace(h);
     await say(h, "evt_1", "hi the food bank said to text this");
-    expect(h.channel.backgrounds).toEqual([{ chatId: TEST_CHAT, type: "image/png", size: PNG.length }]);
+    expect(h.channel.backgroundClears).toEqual([TEST_CHAT]);
     const lastSend = order.map((o) => o.startsWith("send:")).lastIndexOf(true);
-    expect(order.indexOf("background")).toBeGreaterThan(lastSend);
-    // The upload never holds the typing indicator up.
-    expect(order.indexOf("background")).toBeGreaterThan(order.lastIndexOf("typing:stopped"));
-    expect(h.store.chatBackground(await backgroundKey(TEST_CHAT))?.state).toBe("set");
+    expect(order.indexOf("clear background")).toBeGreaterThan(lastSend);
+    expect(order.indexOf("clear background")).toBeGreaterThan(order.lastIndexOf("typing:stopped"));
+    expect(await record(h)).toMatchObject({ state: "cleared", attempts: 1 });
     await say(h, "evt_2", "ok thanks");
-    expect(h.channel.backgrounds).toHaveLength(1);
+    expect(h.channel.backgroundClears).toHaveLength(1);
   });
 
-  it("is not set without a configured image, after STOP, or on a closed chat", async () => {
-    const none = makeHarness({ replies: ["hello"], fetchFn: withImage() });
-    await say(none, "evt_1", "hi");
-    expect(none.channel.backgrounds).toEqual([]);
+  it("removes only a background Mano confirmed it set", async () => {
+    for (const state of [null, "uncertain", "failed", "cleared"] as const) {
+      const h = makeHarness({ replies: ["hello"] });
+      if (state) await seedBackground(h, state);
+      await say(h, "evt_1", "hi");
+      expect(h.channel.backgroundClears, String(state)).toEqual([]);
+    }
+  });
 
-    const stopped = makeHarness({ replies: ["hello"], fetchFn: withImage(), config: { backgroundUrl: BACKGROUND_URL } });
+  it("never sets a background, whatever the chat's record says", async () => {
+    for (const state of [null, "set", "uncertain", "failed", "clearing", "cleared"] as const) {
+      const h = makeHarness({ replies: ["a", "b"] });
+      if (state) await seedBackground(h, state);
+      const setCalls: unknown[] = [];
+      Object.assign(h.channel, { setBackground: async (...args: unknown[]) => void setCalls.push(args) });
+      await say(h, "evt_1", "hi");
+      await say(h, "evt_2", "ok");
+      expect(setCalls, String(state)).toEqual([]);
+    }
+  });
+
+  it("is not removed after STOP, on a closed chat, or on a crisis turn", async () => {
+    const stopped = makeHarness({ replies: ["hello"] });
+    await seedBackground(stopped, "set");
     stopped.store.patchMeta({ optedOut: true, optOutAtMs: stopped.now - 10_000, optOutReceivedAtMs: stopped.now - 10_000 });
     await stopped.runner.handleEvent(inboundEvent({ id: "evt_1", text: "hi", occurredAtMs: stopped.now - 20_000 }), "webhook");
-    expect(stopped.channel.backgrounds).toEqual([]);
+    expect(stopped.channel.backgroundClears).toEqual([]);
 
     // The chat closes while Mano is answering.
     let closedStore: Harness["store"] | null = null;
@@ -186,56 +197,104 @@ describe("the chat background, set once", () => {
         return { text: "hello", bubbles: ["hello"], inputChars: 5, outputChars: 5, model: "stand-in", attempts: 1 };
       },
     };
-    const closed = makeHarness({ responder: closing, fetchFn: withImage(), config: { backgroundUrl: BACKGROUND_URL } });
+    const closed = makeHarness({ responder: closing });
+    await seedBackground(closed, "set");
     closedStore = closed.store;
     await closed.runner.handleEvent(inboundEvent({ id: "evt_1", text: "hi", occurredAtMs: closed.now }), "webhook");
     closed.advance(closed.batchMs + 100);
     await closed.runner.runDueTurn();
-    expect(closed.channel.backgrounds).toEqual([]);
+    await closed.decorations.idle();
+    expect(closed.channel.backgroundClears).toEqual([]);
+
+    const crisis = makeHarness({ replies: ["I'm here."] });
+    await seedBackground(crisis, "set");
+    await say(crisis, "evt_c", "I want to die");
+    expect(crisis.channel.backgroundClears).toEqual([]);
   });
 
-  it("waits past a crisis turn", async () => {
-    const h = makeHarness({ replies: ["I'm here."], fetchFn: withImage(), config: { backgroundUrl: BACKGROUND_URL } });
-    await say(h, "evt_c", "I want to die");
-    expect(h.channel.backgrounds).toEqual([]);
-  });
-
-  it("stops after three known failures, and a failure never touches the reply", async () => {
-    const h = makeHarness({ replies: ["a", "b", "c", "d"], fetchFn: withImage(), config: { backgroundUrl: BACKGROUND_URL } });
-    h.channel.backgroundOutcome = "failed";
+  it("stops after three failed removals, and a failure never touches the reply", async () => {
+    const h = makeHarness({ replies: ["a", "b", "c", "d"] });
+    await seedBackground(h, "set");
+    h.channel.clearOutcome = "failed";
     for (const [i, text] of ["one", "two", "three", "four"].entries()) {
       expect(await say(h, `evt_${i}`, text)).toContain(["a", "b", "c", "d"][i]);
     }
-    expect(h.channel.backgrounds).toHaveLength(3);
-    expect(h.store.chatBackground(await backgroundKey(TEST_CHAT))).toMatchObject({ state: "failed", attempts: 3 });
+    expect(h.channel.backgroundClears).toHaveLength(3);
+    expect(await record(h)).toMatchObject({ state: "clearing", attempts: 3 });
   });
 
-  it("refuses an image that is not an image", async () => {
-    const html = (async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("dns-query")) return Response.json({ Status: 0, Answer: [{ type: 1, data: "93.184.216.34" }] });
-      return new Response("<html>", { status: 200, headers: { "content-type": "text/html" } });
-    }) as typeof fetch;
-    const h = makeHarness({ replies: ["hello"], fetchFn: html, config: { backgroundUrl: BACKGROUND_URL } });
+  it("tries again after a failed removal and then stops", async () => {
+    const h = makeHarness({ replies: ["a", "b", "c"] });
+    await seedBackground(h, "set");
+    h.channel.clearOutcome = "failed";
+    await say(h, "evt_1", "one");
+    h.channel.clearOutcome = "cleared";
+    await say(h, "evt_2", "two");
+    await say(h, "evt_3", "three");
+    expect(h.channel.backgroundClears).toEqual([TEST_CHAT, TEST_CHAT]);
+    expect(await record(h)).toMatchObject({ state: "cleared", attempts: 2 });
+  });
+
+  it("removes it when a receipt reached the reply before the send response did", async () => {
+    const h = introduced(makeHarness({ replies: ["Short answer."] }));
+    await seedBackground(h, "set");
+    await h.runner.handleEvent(lifecycleEvent("message.delivered", "evt_early", "msg_test_1"), "webhook");
     await say(h, "evt_1", "hi");
-    expect(h.channel.backgrounds).toEqual([]);
+    expect(h.store.outboundByMessageId("msg_test_1")?.state).toBe("delivered");
+    expect(h.channel.backgroundClears).toEqual([TEST_CHAT]);
   });
 
-  it("keeps the flag across a delete, so it is never sent again", async () => {
-    const h = makeHarness({ replies: ["hello"], fetchFn: withImage(), config: { backgroundUrl: BACKGROUND_URL } });
+  it("does not remove it when the eyes went on but every reply text was refused", async () => {
+    const h = introduced(makeHarness({ responder: slow("here's the answer", 60), config: { eyesAfterMs: 10 } }));
+    await seedBackground(h, "set");
+    h.channel.send = async () => {
+      throw new ChannelFailed(400, "bad_request", "refused in test");
+    };
+    await say(h, "evt_1", "how does CalFresh count income");
+    expect(h.channel.reactions.map((r) => r.reaction)).toEqual([EYES]);
+    expect(h.channel.backgroundClears).toEqual([]);
+  });
+
+  it("removes it when a resumed turn sends the persisted reply", async () => {
+    const h = introduced(makeHarness({ replies: ["Answer."] }));
+    await seedBackground(h, "set");
+    const settle = h.ledger.settle.bind(h.ledger);
+    let down = true;
+    h.ledger.settle = (...args: Parameters<typeof settle>) => {
+      if (down) {
+        down = false;
+        throw new Error("ledger down in test");
+      }
+      return settle(...args);
+    };
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "hi", occurredAtMs: h.now }), "webhook");
+    h.advance(h.batchMs + 100);
+    await h.runner.runDueTurn().catch(() => null);
+    expect(h.channel.sends).toEqual([]);
+    expect(h.store.unfinishedTurn()?.answerJson).toBeTruthy();
+    h.advance(60_000);
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    await h.decorations.idle();
+    expect(h.channel.sends.map((s) => s.text)).toEqual(["Answer."]);
+    expect(h.channel.backgroundClears).toEqual([TEST_CHAT]);
+  });
+
+  it("keeps the record across a delete, so it is removed at most once", async () => {
+    const h = makeHarness({ replies: ["hello"] });
+    await seedBackground(h, "set");
     await say(h, "evt_1", "hi");
     h.store.wipe(h.now);
-    expect(h.store.chatBackground(await backgroundKey(TEST_CHAT))?.state).toBe("set");
+    expect((await record(h))?.state).toBe("cleared");
   });
 });
 
 describe("the SQL store keeps the background record", () => {
   it("round-trips it per chat and keeps it across a wipe", () => {
     const store = new SqlConversationStore(sqliteStorage(new DatabaseSync(":memory:")));
-    store.saveChatBackground({ chatKey: "k1", state: "uncertain", attempts: 1, lockedUntilMs: 9999, updatedAtMs: 1234 });
-    expect(store.chatBackground("k1")).toEqual({ chatKey: "k1", state: "uncertain", attempts: 1, lockedUntilMs: 9999, updatedAtMs: 1234 });
+    store.saveChatBackground({ chatKey: "k1", state: "clearing", attempts: 1, lockedUntilMs: 9999, updatedAtMs: 1234 });
+    expect(store.chatBackground("k1")).toEqual({ chatKey: "k1", state: "clearing", attempts: 1, lockedUntilMs: 9999, updatedAtMs: 1234 });
     expect(store.chatBackground("k2")).toBeNull();
     store.wipe(5678);
-    expect(store.chatBackground("k1")?.state).toBe("uncertain");
+    expect(store.chatBackground("k1")?.state).toBe("clearing");
   });
 });
