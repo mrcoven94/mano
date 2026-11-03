@@ -331,10 +331,11 @@ export function profileDataBlock(view: ProfileView): string | null {
 }
 
 // The block for this turn, or null when there is nothing on file or the
-// profile cannot be read (the turn goes on without it).
-export async function profileContext(engine: PersonEngine): Promise<string | null> {
+// profile cannot be read within timeoutMs (the turn goes on without it).
+export async function profileContext(engine: PersonEngine, timeoutMs?: number): Promise<string | null> {
+  if (timeoutMs !== undefined && timeoutMs <= 0) return null;
   try {
-    return profileDataBlock(await engine.getProfileView());
+    return profileDataBlock(await engine.getProfileView(timeoutMs));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_profile_read_failed", err: err instanceof Error ? err.name : "unknown" }));
     return null;
