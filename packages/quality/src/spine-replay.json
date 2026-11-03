@@ -1,26 +1,43 @@
 {
   "segment": {
-    "detections": [{ "box_2d": [62, 120, 938, 880], "label": "letter", "score": 0.93 }]
+    "photoSha256": "adb95127cdade736433e421ce8a9a0c3d0f75c6e267deab197389c9716378d8c",
+    "answer": {
+      "detections": [
+        {
+          "box_2d": [62, 120, 938, 880],
+          "label": "letter",
+          "score": 0.93
+        }
+      ]
+    }
   },
   "read": {
-    "readable": true,
-    "readability_note": null,
-    "full_text": "Springfield County Food Assistance Office\nNotice date November 2, 2026\n\nMaria Torres\n418 Alder St Apt 3\nSpringfield, IL 62701\n\nRe: SNAP renewal\nCase R-1042\n\nYour renewal is due November 14, 2026. Send the signed renewal form and proof of income. Late forms stop benefits. Questions? Call (555) 010-0142.\n\nThis is a synthetic letter made for the Mano demo.",
-    "sender": { "text": "Springfield County Food Assistance Office", "box_2d": [40, 60, 70, 700] },
-    "program": { "text": "SNAP", "box_2d": [330, 100, 350, 160] },
-    "subject": { "text": "SNAP renewal", "box_2d": [330, 60, 350, 300] },
-    "asked": [{ "text": "Send the signed renewal form and proof of income", "box_2d": [450, 60, 475, 900] }],
-    "deadlines": [{ "text": "Your renewal is due November 14, 2026.", "box_2d": [420, 60, 445, 800] }],
-    "consequence": { "text": "Late forms stop benefits", "box_2d": [480, 60, 505, 500] },
-    "reference_no": { "text": "R-1042", "box_2d": [360, 120, 380, 260] },
-    "notice_date": { "text": "November 2, 2026", "box_2d": [80, 200, 100, 480] },
-    "phones": [{ "text": "(555) 010-0142", "box_2d": [510, 300, 535, 560] }],
-    "links": [],
-    "addresses": [],
-    "page_marker": { "text": null, "box_2d": null }
+    "crop": {
+      "ymin": 62,
+      "xmin": 120,
+      "ymax": 938,
+      "xmax": 880
+    },
+    "answer": {
+      "readable": true,
+      "readability_note": null,
+      "full_text": "Springfield County Food Assistance Office\nNotice date November 2, 2026\n\nMaria Torres\n418 Alder St Apt 3\nSpringfield, IL 62701\n\nRe: SNAP renewal\nCase R-1042\n\nYour renewal is due November 14, 2026. Send the signed renewal form and proof of income. Late forms stop benefits. Questions? Call (555) 010-0142.\n\nThis is a synthetic letter made for the Mano demo.",
+      "sender": { "text": "Springfield County Food Assistance Office", "box_2d": [40, 60, 70, 700] },
+      "program": { "text": "SNAP", "box_2d": [330, 100, 350, 160] },
+      "subject": { "text": "SNAP renewal", "box_2d": [330, 60, 350, 300] },
+      "asked": [{ "text": "Send the signed renewal form and proof of income", "box_2d": [450, 60, 475, 900] }],
+      "deadlines": [{ "text": "Your renewal is due November 14, 2026.", "box_2d": [420, 60, 445, 800] }],
+      "consequence": { "text": "Late forms stop benefits", "box_2d": [480, 60, 505, 500] },
+      "reference_no": { "text": "R-1042", "box_2d": [360, 120, 380, 260] },
+      "notice_date": { "text": "November 2, 2026", "box_2d": [80, 200, 100, 480] },
+      "phones": [{ "text": "(555) 010-0142", "box_2d": [510, 300, 535, 560] }],
+      "links": [],
+      "addresses": [],
+      "page_marker": { "text": null, "box_2d": null }
+    }
   },
   "guardian": {
-    "recipient": "sandbox-agency-portal",
+    "checkSha256": "d5153fd74772284539938580dba9b7c6ec7cfa2e537570c5a76b2690735f1c74",
     "verdict": "pass",
     "problems": []
   }

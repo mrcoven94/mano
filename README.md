@@ -61,7 +61,7 @@ Every step prints a label and says which parts ran for real and which were simul
 - Real: SAM 3.1 and Muse Spark 1.3 on Meta's API with your key, and Mano's own code: the mail reader and its deadline gate, the agent's form table and approval question, Engine's action gateway and sandbox executor, the sandbox portal (its own code, running in the same process) and Engine's replay page.
 - Simulated: Guardian's verdict (Muse Glimmer runs on our own GPU, so the run uses its recorded verdict), Mano's computer (Muse Spark 1.3 drives a hosted desktop on our Modal account, so a stand-in posts the same values to the portal's form and draws each screen), and Maria's yes (she is synthetic).
 
-Without a key, every model step uses its recorded response and says so. If a live model call fails (for example HTTP 402), the step prints why, finishes on its recorded response, and the command exits 1. `pnpm --filter @mano/quality check` runs the same command both ways.
+Without a key, every model step uses its recorded response and says so. A recording answers only the input it was made for: the reading only the page SAM 3.1's recording found, and Guardian's verdict only the exact action it checked. A different input gets no recorded answer, and its step fails. If a live model call fails (for example HTTP 402), the step prints why, finishes on its recorded response, and the command exits 1. `pnpm --filter @mano/quality check` runs the same command both ways.
 
 ## Run it locally
 

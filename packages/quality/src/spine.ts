@@ -22,9 +22,17 @@
 // Muse Spark 1.3 run live on Meta's API; a call that fails says why and
 // the step falls back to its recording in spine-replay.json, written for
 // this letter. Without a key every model step uses its recording.
+//
+// A recording answers only the input it was made for, so it never covers
+// for a different one: SAM 3.1's for the letter photo (spine-letter.jpg,
+// drawn once with sharp and kept as a file so its bytes are the same on
+// every machine), the reading for the page in SAM 3.1's recorded answer,
+// and Guardian's verdict for the exact action it was given (the SHA-256 of
+// its canonical check request, with the document hash, payload and cited
+// sources). Anything else gets no recorded answer and its step fails.
 // Run: pnpm judge (pnpm --filter @mano/quality judge [--out <dir>]).
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import sharp from "sharp";
 import {
@@ -44,6 +52,7 @@ import {
   type ResponsesResult,
 } from "@mano/mail";
 import { DEFAULT_GUARDIAN_MODEL } from "@mano/guardian";
+import { canonicalJson } from "../../protocol/src/canonical.ts";
 import { ActionGateway, MapDocumentStore, MemoryApprovalStore } from "../../../apps/engine/src/gateway/gateway.ts";
 import { LocalRulesChecker } from "../../../apps/engine/src/gateway/checker.ts";
 import { GuardianChecker } from "../../../apps/engine/src/gateway/guardian.ts";
@@ -94,11 +103,21 @@ function modelName(id: string): string {
   return `${MODEL_NAMES[id] ?? id} (${id})`;
 }
 
-interface Recordings {
-  segment: unknown;
-  read: unknown;
-  guardian: { recipient: string; verdict: "pass" | "fix" | "block"; problems: string[] };
+interface Box {
+  ymin: number;
+  xmin: number;
+  ymax: number;
+  xmax: number;
 }
+
+interface Recordings {
+  segment: { photoSha256: string; answer: unknown };
+  // crop: where the recorded page sits in the photo, as readMail reports it.
+  read: { crop: Box; answer: unknown };
+  guardian: { checkSha256: string; verdict: "pass" | "fix" | "block"; problems: string[] };
+}
+
+const sha256 = (data: string | Uint8Array) => createHash("sha256").update(data).digest("hex");
 
 function loadRecordings(): Recordings {
   return JSON.parse(readFileSync(new URL("./spine-replay.json", import.meta.url), "utf8")) as Recordings;
@@ -106,21 +125,29 @@ function loadRecordings(): Recordings {
 
 // Answers each Meta model call live when a key is set, else from its
 // recording. A live call that fails is kept with why, and that model stays
-// on its recording for the rest of the run. Each recording answers once, so
-// a call the run did not expect fails instead of replaying a wrong answer.
+// on its recording for the rest of the run. Each recording answers once,
+// and only for the input it was made for: otherwise the call fails, so the
+// step fails instead of replaying an answer about something else.
 class LiveOrRecorded implements ModelClient {
   readonly live: boolean;
   // Per model ID: null when it answered live, else why its recording answered.
   private outcome = new Map<string, string | null>();
   // Per model ID: why its live call failed.
   private failed = new Map<string, string>();
+  // Per model ID: why no recording matched its input.
+  private unmatched = new Map<string, string>();
+  // SAM 3.1's answer the pipeline got, live or recorded: the reader's crop
+  // comes from it.
+  private segmentText: string | null = null;
+  private recordedSegment: string;
   private recorded: RecordedModelClient;
 
-  constructor(private liveClient: ModelClient | null, recordings: Recordings) {
+  constructor(private liveClient: ModelClient | null, private recordings: Recordings, private photoSha256: string) {
     this.live = liveClient !== null;
+    this.recordedSegment = JSON.stringify(recordings.segment.answer);
     this.recorded = new RecordedModelClient([
-      { match: (req) => req.model === SEGMENT_MODEL, consume: true, result: recordedText(JSON.stringify(recordings.segment)) },
-      { match: (req) => req.model !== SEGMENT_MODEL, consume: true, result: recordedText(JSON.stringify(recordings.read)) },
+      { match: (req) => req.model === SEGMENT_MODEL, consume: true, result: recordedText(this.recordedSegment) },
+      { match: (req) => req.model !== SEGMENT_MODEL, consume: true, result: recordedText(JSON.stringify(recordings.read.answer)) },
     ]);
   }
 
@@ -129,6 +156,7 @@ class LiveOrRecorded implements ModelClient {
       try {
         const out = await this.liveClient.responses(req, opts);
         this.outcome.set(req.model, null);
+        if (req.model === SEGMENT_MODEL) this.segmentText = out.text;
         return out;
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err);
@@ -138,7 +166,34 @@ class LiveOrRecorded implements ModelClient {
     } else if (!this.outcome.has(req.model)) {
       this.outcome.set(req.model, "recorded response; no META_MODEL_API_KEY is set");
     }
-    return this.recorded.responses(req, opts);
+    const mismatch = this.mismatch(req.model);
+    if (mismatch) {
+      this.unmatched.set(req.model, mismatch);
+      this.outcome.set(req.model, "no recording matches its input");
+      throw new Error(mismatch);
+    }
+    const out = await this.recorded.responses(req, opts);
+    if (req.model === SEGMENT_MODEL) this.segmentText = out.text;
+    return out;
+  }
+
+  private mismatch(model: string): string | null {
+    if (model === SEGMENT_MODEL) {
+      return this.photoSha256 === this.recordings.segment.photoSha256 ? null : "the recorded SAM 3.1 answer was made for another photo";
+    }
+    return this.segmentText === this.recordedSegment
+      ? null
+      : "the recorded reading was made for the page in SAM 3.1's recorded answer, and the reader was given a different page";
+  }
+
+  // Why no recording could answer this model, or null.
+  unmatchedReason(model: string): string | null {
+    return this.unmatched.get(model) ?? null;
+  }
+
+  // True when this model's answer came from its recording.
+  answeredFromRecording(model: string): boolean {
+    return this.outcome.has(model) && this.outcome.get(model) !== null && !this.unmatched.has(model);
   }
 
   get failures(): string[] {
@@ -154,6 +209,7 @@ class LiveOrRecorded implements ModelClient {
   part(model: string, what: string): Part {
     const why = this.outcome.get(model);
     if (why === null) return { ran: "real", what: `${what}, live on Meta's API`, model };
+    if (this.unmatched.has(model)) return { ran: "simulated", what: `${what}: ${why}, so nothing answered`, model };
     return { ran: "simulated", what: `${what}: ${why ?? "not called"}`, model };
   }
 }
@@ -178,37 +234,8 @@ const MARIA_PROFILE: Profile = {
   programs: [{ id: "program-1", program: said("SNAP"), state: said("IL"), caseNumber: said("R-1042") }],
 };
 
-const LETTER_LINES = [
-  "Springfield County Food Assistance Office",
-  "Notice date November 2, 2026",
-  "",
-  "Maria Torres",
-  "418 Alder St Apt 3",
-  "Springfield, IL 62701",
-  "",
-  "Re: SNAP renewal",
-  "Case R-1042",
-  "",
-  "Your renewal is due November 14, 2026.",
-  "Send the signed renewal form and proof of income.",
-  "Late forms stop benefits.",
-  "Questions? Call (555) 010-0142.",
-  "",
-  "This is a synthetic letter made for the Mano demo.",
-];
-
 function escapeXml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]!);
-}
-
-// A phone photo of the letter: the page on a table, slightly turned.
-async function letterPhoto(): Promise<Buffer> {
-  const text = LETTER_LINES.map((line, i) => `<text x="160" y="${190 + i * 48}">${escapeXml(line)}</text>`).join("");
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1300"><rect width="1000" height="1300" fill="#8a8272"/>` +
-    `<g transform="rotate(-1.5 500 650)"><rect x="120" y="80" width="760" height="1140" fill="#fffdf5"/>` +
-    `<g font-family="Helvetica, Arial, sans-serif" font-size="27" fill="#1a1a1a">${text}</g></g></svg>`;
-  return sharp(Buffer.from(svg)).jpeg({ quality: 88 }).toBuffer();
 }
 
 // One screen of the stand-in fill: the portal's household step with the
@@ -246,7 +273,8 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
   // Straight to Meta's API, never through an AI Gateway account.
   // MANO_MODEL_BASE_URL points it at another endpoint, for tests.
   const live = key ? new MetaModelClient({ apiKey: key, baseUrl: opts.env.MANO_MODEL_BASE_URL || DEFAULT_BASE_URL, synthetic: true }) : null;
-  const model = new LiveOrRecorded(live, recordings);
+  const photo = readFileSync(new URL("./spine-letter.jpg", import.meta.url));
+  const model = new LiveOrRecorded(live, recordings, sha256(photo));
   const readingModel = readingModelFor(true);
 
   // The sandbox portal's own code, in this process, with tokens made up
@@ -262,12 +290,17 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
 
   const documents = new MapDocumentStore();
   const executor = new SandboxExecutor(portalOrigin, 15_000, portal, portalToken);
-  // Guardian's recorded verdict, for the one action it was recorded for.
+  // Guardian's recorded verdict, for the exact action it was recorded for.
   // Any other action gets an error status, which Guardian treats as a block.
+  let guardianMiss: string | null = null;
   const guardianFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body)) as { warm?: boolean; action?: { recipient?: string } };
+    const body = JSON.parse(String(init?.body)) as { warm?: boolean };
     if (body.warm === true) return Response.json({ warming: true, ready: true }, { status: 202 });
-    if (body.action?.recipient !== recordings.guardian.recipient) return Response.json({ error: "no recorded verdict for this action" }, { status: 500 });
+    const checkSha256 = sha256(canonicalJson(body));
+    if (checkSha256 !== recordings.guardian.checkSha256) {
+      guardianMiss = `Guardian has no recorded verdict for this action: its check request hashes to ${checkSha256.slice(0, 12)}, and the recording is for ${recordings.guardian.checkSha256.slice(0, 12)}`;
+      return Response.json({ error: "no recorded verdict for this action" }, { status: 500 });
+    }
     return Response.json({
       verdict: recordings.guardian.verdict,
       problems: recordings.guardian.problems,
@@ -283,13 +316,13 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
   const files: SpineRun["files"] = { letter: `${opts.outDir}/letter.jpg`, replay: null, filing: null };
   const form = FORMS["food-renewal"]!;
   const plain = (what: string): Part => ({ ran: "real", what: `${what} (Mano's code, no model)`, model: null });
-  const guardianPart: Part = {
+  const guardianPart = (): Part => ({
     ran: "simulated",
-    what: "Guardian's verdict: recorded. Guardian runs Muse Glimmer on Mano's own GPU, which a judge cannot reach",
+    what: guardianMiss
+      ? "Guardian's verdict: none, because no recording matches this action. Guardian runs Muse Glimmer on Mano's own GPU, which a judge cannot reach"
+      : "Guardian's verdict: recorded. Guardian runs Muse Glimmer on Mano's own GPU, which a judge cannot reach",
     model: DEFAULT_GUARDIAN_MODEL,
-  };
-
-  let photo: Buffer | null = null;
+  });
   let reading: MailReading | null = null;
   let answer: MailAnswer | null = null;
   let request: ActionRequest | null = null;
@@ -302,21 +335,20 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
     {
       label: "Maria texts Mano a photo of her renewal letter",
       run: async () => {
-        photo = await letterPhoto();
         writeFileSync(files.letter, photo);
         documents.set(LETTER_ID, new Uint8Array(photo));
-        return { parts: [plain("Draws the synthetic letter as a phone photo")], lines: [`Photo: ${files.letter}`], failure: null };
+        return { parts: [plain("Sends the synthetic letter photo kept in the repo")], lines: [`Photo: ${files.letter}`], failure: null };
       },
     },
     {
       label: "Mail finds the letter in the photo",
       run: async () => {
-        reading = await readMail([{ bytes: new Uint8Array(photo!), mimeType: "image/jpeg", name: "letter.jpg" }], { personId: PERSON_ID, synthetic: true, model });
+        reading = await readMail([{ bytes: new Uint8Array(photo), mimeType: "image/jpeg", name: "letter.jpg" }], { personId: PERSON_ID, synthetic: true, model });
         const fallback = reading.warnings.find((w) => w.kind === "segmentation_fallback");
         return {
           parts: [model.part(SEGMENT_MODEL, "Segments the photo into pages")],
           lines: [...model.failureLine(SEGMENT_MODEL), `Pages found: ${reading.stats.pages}${fallback ? ` (SAM 3.1 boxes not used: ${fallback.message})` : ", from SAM 3.1's boxes"}`],
-          failure: reading.stats.pages === 0 ? "no page was found in the photo" : null,
+          failure: model.unmatchedReason(SEGMENT_MODEL) ?? (reading.stats.pages === 0 ? "no page was found in the photo" : null),
         };
       },
     },
@@ -325,12 +357,20 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
       run: async () => {
         const letter = reading!.letters[0];
         const f = letter?.fields;
+        const crop = letter?.pages[0]?.crop;
+        const expected = recordings.read.crop;
+        // The recorded reading is about the recorded page: a reading of any
+        // other crop of the photo would be answered with the wrong letter.
+        const wrongCrop =
+          model.answeredFromRecording(readingModel) && crop && (["ymin", "xmin", "ymax", "xmax"] as const).some((k) => crop[k] !== expected[k])
+            ? `the recorded reading is for the page at ${JSON.stringify(expected)}, and the reader was given ${JSON.stringify(crop)}`
+            : null;
         return {
           parts: [model.part(readingModel, "Reads the page into cited fields"), plain("Checks every field against the page's own text")],
           lines: f
             ? [...model.failureLine(readingModel), `From: ${f.sender?.value ?? "unknown"}`, `Case: ${f.referenceNo?.value ?? "none"}`, `Deadline sentence: ${f.deadlineText?.value ?? "none"}`]
             : [],
-          failure: f ? null : "no letter was read from the page",
+          failure: model.unmatchedReason(readingModel) ?? wrongCrop ?? (f ? null : "no letter was read from the page"),
         };
       },
     },
@@ -415,9 +455,9 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
         const result = await gateway.requestAction(request!);
         approval = result.approval ?? null;
         return {
-          parts: [plain("Engine's action gateway: policy, local rules, document hash, one approval per key, in this process"), guardianPart],
+          parts: [plain("Engine's action gateway: policy, local rules, document hash, one approval per key, in this process"), guardianPart()],
           lines: approval ? [`Gateway: ${result.status}, approval ${approval.id}`, `Mano asks Maria: ${renderQuestion(approval)}`] : [`Gateway: ${result.status}`],
-          failure: result.status === "needs_approval" && approval ? null : `the gateway answered ${result.status}: ${result.reason ?? "no reason"}`,
+          failure: result.status === "needs_approval" && approval ? null : (guardianMiss ?? `the gateway answered ${result.status}: ${result.reason ?? "no reason"}`),
         };
       },
     },
@@ -430,10 +470,10 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
           parts: [
             { ran: "simulated", what: "Maria's YES: scripted, since Maria is synthetic", model: null },
             plain("Engine checks the exact version again, then its sandbox executor files it"),
-            guardianPart,
+            guardianPart(),
           ],
           lines: [`Gateway: ${result.status}${confirmation ? `, confirmation ${confirmation}` : ""}${result.reason ? `: ${result.reason}` : ""}`],
-          failure: result.status === "completed" && confirmation ? null : `the filing did not complete (${result.status})`,
+          failure: result.status === "completed" && confirmation ? null : (guardianMiss ?? `the filing did not complete (${result.status})`),
         };
       },
     },
