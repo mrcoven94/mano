@@ -58,9 +58,17 @@ const NOUNS = any([
   "reply", "appeal", "requests?", "renewal", "recertification", "letters?", "bills?", "receipts?",
   "premium", "case", "hearing", "reconsideration", "lease",
 ]);
+// A program a duty belongs to, as in "your SNAP renewal". It only ever
+// comes before a noun: a program alone names what the person gets, not
+// what they owe. Basic Food and CalFresh are the names Washington and
+// California print on SNAP letters.
+const PROGRAMS = any([
+  "SNAP", "food benefits", "Basic Food", "CalFresh", "WIC", "Medicaid", "CHIP", "health coverage", "TANF",
+  "cash assistance",
+]);
 const OF_PHRASE = String.raw`of\s+(?:your\s+)?(?:household\s+)?(?:income|address|identity|residency)`;
-const NOUN_PHRASE = String.raw`(?:${DETERMINERS}\s+)?(?:${ADJECTIVES}\s+){0,3}${NOUNS}(?:\s+${OF_PHRASE})?(?:\s+(?:listed\s+)?(?:below|above)|\s+enclosed)?`;
-const ITEM = String.raw`(?:${ADJECTIVES}\s+){0,3}${NOUNS}(?:\s+${OF_PHRASE})?`;
+const NOUN_PHRASE = String.raw`(?:${DETERMINERS}\s+)?(?:${PROGRAMS}\s+)?(?:${ADJECTIVES}\s+){0,3}${NOUNS}(?:\s+${OF_PHRASE})?(?:\s+(?:listed\s+)?(?:below|above)|\s+enclosed)?`;
+const ITEM = String.raw`(?:${PROGRAMS}\s+)?(?:${ADJECTIVES}\s+){0,3}${NOUNS}(?:\s+${OF_PHRASE})?`;
 const MONEY = String.raw`\$\d{1,3}(?:,\d{3})*(?:\.\d{2})?`;
 const OBJECT = String.raw`(?:${NOUN_PHRASE}(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)${NOUN_PHRASE})*|it|them|${MONEY})`;
 
