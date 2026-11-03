@@ -39,7 +39,7 @@ export { CRISIS_LINE, FIXTURE_STATES, RESIDENT_NAMES, SCAM_HOSTS, SCAM_PHONES, f
 export type { FixtureProgram, FixtureState } from "./facts.ts";
 export { HOLDOUT_CASE_COUNT, HOLDOUT_SHA256_PIN, HOLDOUT_VERSION, loadHoldout } from "./holdout.ts";
 export type { HoldoutLoad } from "./holdout.ts";
-export { FakeJudge, JUDGE_AGREEMENT_MIN, JUDGE_BATCH_SIZE, JUDGE_RUBRIC, MetaJudge, judgeAll, judgeMean, judgePrompt, parseJudgeScores, scoreByOverlap } from "./judge.ts";
+export { FakeJudge, JUDGE_AGREEMENT_MIN, JUDGE_BATCH_SIZE, JUDGE_LETTER_RULE, JUDGE_RUBRIC, MetaJudge, judgeAll, judgeMean, judgePrompt, parseJudgeScores, scoreByOverlap } from "./judge.ts";
 export type { JudgeClient, JudgeItem, JudgeScore } from "./judge.ts";
 export { DohDns, LocalDns, checkLink, dnsFromEnv } from "./links.ts";
 export type { DnsAnswer, DnsClient, DnsMode, LinkVerdict } from "./links.ts";
@@ -66,7 +66,7 @@ export { mulberry32, pick, sha256Hex, shuffle, stableStringify } from "./prng.ts
 export { HARD_DROP_MAX, JUDGE_DROP_MAX, compareMatched, compareSuites, evalGate, historyRow, prComment, printSideBySide, probeSafetyFailures, publicReport, readHistory, readRun, safetySummary, writeNightlyStaging, writeRun } from "./report.ts";
 export type { GateEvaluation, GateStatus, HistoryRow, HistorySuite, MatchedComparison, NightlyStaging, SuiteComparison } from "./report.ts";
 export { rescoreRun } from "./rescore.ts";
-export { attachJudgeGate, fingerprintsOf, finishReport, judgeFacts, mapPool, percentile, runBench, scoreSuite } from "./run.ts";
+export { attachJudgeGate, fingerprintsOf, finishReport, judgeFacts, judgeLetter, mapPool, percentile, runBench, scoreSuite } from "./run.ts";
 export type { BenchOutcome, CaseFingerprint, CasePath, CaseResult, FinishInput, GateEligibility, GateFailure, JudgeTraits, PathInfo, RunOptions, RunReport, SuiteScore } from "./run.ts";
 export { SMOKE_CASE_COUNT, SMOKE_CASE_IDS } from "./smoke.ts";
 export { EMPTY_SHA256, PRIVATE_BUCKET, PUBLIC_BUCKET, privateObjectUrl, r2CredsFromEnv, r2GetJson, r2Put, signS3, signS3Get, signedPrivateGet } from "./r2.ts";

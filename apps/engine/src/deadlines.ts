@@ -39,7 +39,8 @@
 //   GET    /deadlines       open ones first, each with its nudges
 //   PATCH  /deadlines/:id   { dueDate?, title?, status?: "done" } change it, or mark it done
 //   DELETE /deadlines/:id   stop tracking it
-// Tests: test-node/deadlines.test.ts (SQLite) and test/deadlines-routes.test.ts (worker, alarm).
+// Tests: test-node/deadlines.test.ts (SQLite), test/deadlines-routes.test.ts (worker, alarm) and
+// test/deadline-zones.test.ts (the zone from the profile's state, through the worker).
 import {
   AgentStateInputError,
   createReminder,

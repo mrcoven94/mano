@@ -19,6 +19,10 @@ describe("gateSentence publishes only the closed forms", () => {
     ["due", "Your renewal is due November 20, 2026.", "2026-11-20"],
     ["due", "Your premium is due on December 1, 2026.", "2026-12-01"],
     ["due", "Your next renewal is due November 22, 2026.", "2026-11-22"],
+    ["due", "Your SNAP renewal is due November 14, 2026.", "2026-11-14"],
+    ["by", "Your Medicaid recertification must be returned by November 30, 2026.", "2026-11-30"],
+    ["by", "Return the SNAP application by November 20, 2026.", "2026-11-20"],
+    ["by", "Send your Basic Food renewal form by November 20, 2026.", "2026-11-20"],
   ])("%s: %s", (form, sentence, iso) => {
     expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "deadline", form, iso });
   });
@@ -38,6 +42,49 @@ describe("gateSentence publishes only the closed forms", () => {
       reason: "counted",
       count: { days: 30, fromIso: NOTICE, resultIso: "2026-12-02" },
     });
+  });
+});
+
+describe("gateSentence reads a program name before the duty", () => {
+  it.each(["SNAP", "food benefits", "Basic Food", "CalFresh", "WIC", "Medicaid", "CHIP", "health coverage", "TANF", "cash assistance"])(
+    "%s names whose renewal the person owes",
+    (program) => {
+      expect(gateSentence(`Your ${program} renewal is due November 14, 2026.`, NOTICE)).toEqual({
+        kind: "deadline",
+        iso: "2026-11-14",
+        form: "due",
+        obligation: "renew",
+      });
+    },
+  );
+
+  // A program alone names what the person gets, not what they owe:
+  // "your SNAP is due" can mean the benefits arrive that day. Before a
+  // hearing or a case it names what the office does.
+  it.each([
+    "Your SNAP is due November 14, 2026.",
+    "SNAP is due November 14, 2026.",
+    "Your food benefits are due November 14, 2026.",
+    "Your WIC appointment is due November 14, 2026.",
+    "The SNAP office must send the form by November 14, 2026.",
+    "The CalFresh office must review your renewal by November 14, 2026.",
+    "Your SNAP caseworker must send the form by November 14, 2026.",
+    "Medicaid must receive your renewal by November 14, 2026.",
+    "Your Medicaid hearing must be completed by November 14, 2026.",
+    "Your Medicaid hearing is due November 14, 2026.",
+    "Your SNAP case must be reviewed by November 14, 2026.",
+    "Your SNAP case must be completed by November 14, 2026.",
+    "Your Medicaid application must be decided by November 14, 2026.",
+  ])("asks: %s", (sentence) => {
+    expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "ask" });
+  });
+
+  it.each([
+    "Su renovación de SNAP vence el 14 de noviembre de 2026.",
+    "Debe enviar su renovación de Medicaid antes del 14 de noviembre de 2026.",
+    "Envíe su solicitud de CalFresh a más tardar el 14 de noviembre de 2026.",
+  ])("leaves Spanish as it was: %s", (sentence) => {
+    expect(gateSentence(sentence, NOTICE)).toEqual({ kind: "no-date" });
   });
 });
 
