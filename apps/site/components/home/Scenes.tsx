@@ -91,8 +91,8 @@ export function RenewScene() {
   const rows: [string, string, string, boolean][] = [
     ["Power bill help", "Renewed Oct 12", "Approved Oct 19", true],
     ["Food benefits", "Due Nov 14", "Ready to send", false],
-    ["Water bill help", "Due Jan 31", "Mano starts Jan 6", false],
-    ["Child care", "Due Mar 15", "Mano starts Feb 20", false],
+    ["Water bill help", "Due Jan 31", "Reminder Jan 17", false],
+    ["Child care", "Due Mar 15", "Reminder Mar 1", false],
   ];
   return (
     <div className="sc sc-renew">
@@ -107,7 +107,7 @@ export function RenewScene() {
             </li>
           ))}
         </ul>
-        <p className="sc-foot rv" style={d(2.2)}>Mano starts every renewal three weeks early, so the help never stops.</p>
+        <p className="sc-foot rv" style={d(2.2)}>Mano texts you 14, 7 and 2 days before each renewal is due and offers to start it.</p>
       </div>
     </div>
   );

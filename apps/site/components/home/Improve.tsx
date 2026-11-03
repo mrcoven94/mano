@@ -82,7 +82,7 @@ export default function Improve() {
                   <ul>
                     {["Works 24 hours a week", "Leo starts kindergarten in August", "Lease ends March 31"].map((f) => <li key={f}><span>{f}</span></li>)}
                   </ul>
-                  <p className="im-foot">So Mano moves child care to after school in July and starts housing waitlists in January, before she asks.</p>
+                  <p className="im-foot">So Mano fills her next form from these and never asks her twice.</p>
                 </div>
               </div>
             )}

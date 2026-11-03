@@ -129,7 +129,7 @@ export default function Everywhere() {
           {k === "app" && (
             <Phone title="Good evening, Maria" input="Ask Mano anything">
               <div className="dv-card hot rv" style={d(0.1)}><small>Ready to send</small><b>Food benefits renewal</b><span className="dv-pill">Review</span></div>
-              <div className="dv-card rv" style={d(0.35)}><small>Due next</small><b>Health coverage, Jan 31</b><span className="dv-meta">Mano starts Jan 6</span></div>
+              <div className="dv-card rv" style={d(0.35)}><small>Due next</small><b>Health coverage, Jan 31</b><span className="dv-meta">Reminder Jan 17</span></div>
               <div className="dv-card rv" style={d(0.6)}><small>Mail</small><b>3 letters read this week</b><span className="dv-meta">1 scam blocked</span></div>
               <div className="dv-card rv" style={d(0.85)}><small>Shared</small><b>Northside Family Center</b><span className="dv-meta">Renewal only</span></div>
             </Phone>

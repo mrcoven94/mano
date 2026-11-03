@@ -4,23 +4,23 @@ import { NeedIcon } from "./NeedIcons";
 import Mascot, { Wave } from "@/components/Mascot";
 import { SMS_HREF } from "@/lib/site";
 
-/* Two plans, the full side by side folded under them, then the support that comes with Plus. Applying and keeping help are free for everyone; Plus adds a Mano that
-   works every day without being asked, and a support team. Faxes and mail cost real money, so they are at cost on both. */
+/* Two plans, the full side by side folded under them, then the support that comes with Plus. Applying and keeping help are free for everyone; Plus adds a support team, and daily
+   checks for new help are coming. Faxes and mail cost real money, so they are at cost on both. */
 
 const FREE = [
   "Unlimited applications",
+  "Forms filled on websites by its own computer",
   "Unlimited notices, read and explained",
   "Unlimited renewals, deadlines and reminders",
   "Unlimited benefit tracking",
   "Its own email inbox, so offices write to Mano directly, coming soon",
   "Unlimited mail scans and documents",
-  "Text, iMessage, the app and the web",
+  "Text and iMessage, with the app and the web coming soon",
 ];
 
 const PLUS: [string, string][] = [
-  ["Always on.", "Mano checks every day for new help you qualify for and starts renewals early, without being asked."],
-  ["Its own computer.", "Mano fills out forms on websites for you. It never signs in to your accounts."],
-  ["Calls and waiting on hold, coming soon.", "Mano waits on hold for you and hands you the phone when a person picks up."],
+  ["Always on, coming soon.", "Mano will check every day for new help you qualify for."],
+  ["Calls and waiting on hold, coming soon.", "Mano will wait on hold for you and hand you the phone when a person picks up."],
   ["A support team that knows your case.", "Real people, ready when you need more than Mano."],
 ];
 
@@ -45,8 +45,8 @@ const ROWS: [string, [string, Cell, Cell][]][] = [
     ["Mail scans and documents", "Unlimited", "Unlimited"],
   ]],
   ["Mano does it for you", [
-    ["Always on, checks every day", false, true],
-    ["Its own computer for websites", false, true],
+    ["Always on, checks every day, coming soon", false, true],
+    ["Its own computer for websites", true, true],
     ["Calls and waiting on hold, coming soon", false, true],
     ["Credit disputes", "Written for you", "Written and followed up"],
     ["Faxes and mailed letters", "At cost", "At cost"],
@@ -74,7 +74,7 @@ export default function Pricing() {
     <>
       <div className="h-head">
         <h2 id="pricing-h">Keeping your help is free, always.</h2>
-        <p className="lede">Applications, notices, renewals, tracking and mail are free for everyone. Plus is $8 a month for a Mano that works every day without being asked and a support team that knows your case.</p>
+        <p className="lede">Applications, notices, renewals, tracking and mail are free for everyone. Plus is $8 a month for a support team that knows your case. Daily checks for new help are coming soon.</p>
       </div>
 
       <div className="price-grid">
@@ -94,7 +94,7 @@ export default function Pricing() {
           <div className="price-top">
             <h3>Plus</h3>
             <PlusPrice />
-            <p>Mano works every day, and people back it up.</p>
+            <p>People who know your case back Mano up.</p>
           </div>
           <ul className="price-rich">
             <li>Everything in Free</li>
