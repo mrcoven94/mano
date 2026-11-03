@@ -129,7 +129,7 @@ export interface MetaClientOptions {
 class RetryableStatus extends Error {
   readonly status: number;
   constructor(status: number) {
-    super(`Model request failed: ${status}`);
+    super(failed(status));
     this.name = "RetryableStatus";
     this.status = status;
   }
@@ -142,16 +142,24 @@ function isRetryable(err: unknown): boolean {
   return false;
 }
 
-// The API's own reason for refusing a call, such as "Missing 'score'"
-// or "Billing is not configured for this account.", cut short. Null when
-// the body carries none.
-async function refusalOf(res: Response): Promise<string | null> {
-  try {
-    const message = ((await res.json()) as { error?: { message?: unknown } } | null)?.error?.message;
-    return typeof message === "string" ? message.slice(0, 200) : null;
-  } catch {
-    return null;
-  }
+// Why a call failed, in fixed words chosen by its status. The provider's
+// own text can carry a key, a person's name or a case number, and errors
+// reach warnings, so it is never repeated.
+const FAILED_BECAUSE: Record<number, string> = {
+  400: "the request was not valid",
+  401: "the API key was not accepted",
+  402: "billing is not set up for this account",
+  403: "the API key may not use this model",
+  404: "the model was not found",
+  413: "the request was too large",
+  422: "the request was not valid",
+  429: "rate limited",
+};
+const RUN_STATES = new Set(["failed", "incomplete", "cancelled", "queued", "in_progress"]);
+
+function failed(status: number): string {
+  const why = FAILED_BECAUSE[status];
+  return `Model request failed: ${status}${why ? ` (${why})` : ""}`;
 }
 
 export class MetaModelClient implements ModelClient {
@@ -201,17 +209,15 @@ export class MetaModelClient implements ModelClient {
           body: JSON.stringify(body),
         });
         if (res.status !== 429 && res.status < 500 && !res.ok) {
-          const reason = await refusalOf(res);
           clearTimeout(timer);
-          throw new Error(`Model request failed: ${res.status}${reason ? ` (${reason})` : ""}`);
+          throw new Error(failed(res.status));
         }
         const data: unknown = await res.json();
         clearTimeout(timer);
         if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
         const status = (data as { status?: unknown })?.status;
         if (typeof status === "string" && status !== "completed") {
-          const detail = (data as { error?: { message?: unknown } })?.error?.message;
-          throw new Error(`Model run ${status}: ${typeof detail === "string" ? detail : "no detail"}`);
+          throw new Error(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`);
         }
         return { text: extractOutputText(data), model: req.model, usage: extractUsage(data), raw: data };
       } catch (err) {
