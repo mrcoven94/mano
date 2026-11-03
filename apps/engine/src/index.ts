@@ -40,6 +40,9 @@
 //   POST /api/persons/:id/approvals/:aid/approve  a YES; retryable:true when the safety check could not
 //                                              answer and the approval still waits for another YES
 //   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
+//   POST /api/persons/:id/approvals/:aid/withdraw  the person asked for a new version of an approved
+//                                              filing still unresolved: it is only reconciled from now
+//                                              on, never run again (completed when it already went through)
 //   PUT  /api/persons/:id/approvals/:aid/replay   { generation, labels, steps: [{ caption, pngB64 }] } (agent):
 //                                              the screens of the fill behind a waiting approval; first bind wins.
 //                                              201 or 200 with { path } of the page, 404 no approval,
@@ -745,11 +748,15 @@ export default {
         if (isStale(out)) return STALE();
         return Response.json(out);
       }
-      const decisionMatch = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
+      const decisionMatch = rest.match(/^\/approvals\/([^/]+)\/(approve|reject|withdraw)$/);
       if (decisionMatch && request.method === "POST") {
         const approvalId = decodeURIComponent(decisionMatch[1]);
         const result =
-          decisionMatch[2] === "approve" ? await agent.approve(approvalId, subject) : await agent.reject(approvalId, subject);
+          decisionMatch[2] === "approve"
+            ? await agent.approve(approvalId, subject)
+            : decisionMatch[2] === "reject"
+              ? await agent.reject(approvalId, subject)
+              : await agent.withdraw(approvalId, subject);
         return Response.json(result);
       }
       // No model route: the agent calls the model client itself with the

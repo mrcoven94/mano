@@ -16,22 +16,22 @@ const GRANT_SECRET = "test-handle-grant-secret-not-real";
 const HANDLE = "0f".repeat(32);
 const PERSON = personIdForHandle(HANDLE);
 
-async function call(method: string, path: string, body?: unknown) {
-  return SELF.fetch(`https://engine.test/api/persons/${PERSON}${path}`, {
+async function call(method: string, path: string, body?: unknown, handle = HANDLE) {
+  return SELF.fetch(`https://engine.test/api/persons/${personIdForHandle(handle)}${path}`, {
     method,
     headers: {
       authorization: `Bearer ${AGENT_TOKEN}`,
-      "x-mano-handle-grant": await mintHandleGrant(HANDLE, GRANT_SECRET),
+      "x-mano-handle-grant": await mintHandleGrant(handle, GRANT_SECRET),
       "content-type": "application/json",
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 }
 
-type Row = { id: string; outcome: { attempt: string | null; receipt: { externalId: string; simulated: boolean } | null } };
+type Row = { id: string; outcome: { attempt: string | null; receipt: { externalId: string; simulated: boolean } | null; withdrawn?: boolean } };
 
-async function row(id: string): Promise<Row | undefined> {
-  const list = (await (await call("GET", "/approvals")).json()) as { approvals: Row[] };
+async function row(id: string, handle = HANDLE): Promise<Row | undefined> {
+  const list = (await (await call("GET", "/approvals", undefined, handle)).json()) as { approvals: Row[] };
   return list.approvals.find((a) => a.id === id);
 }
 
@@ -72,11 +72,11 @@ describe("approval outcome", () => {
       })
     ).json()) as { status: string; approval: { id: string } };
     expect(action.status).toBe("needs_approval");
-    expect((await row(action.approval.id))?.outcome).toEqual({ attempt: null, receipt: null });
+    expect((await row(action.approval.id))?.outcome).toEqual({ attempt: null, receipt: null, withdrawn: false });
 
     const approved = (await (await call("POST", `/approvals/${action.approval.id}/approve`)).json()) as { status: string };
     expect(approved.status).toBe("blocked");
-    expect((await row(action.approval.id))?.outcome).toEqual({ attempt: "unknown", receipt: null });
+    expect((await row(action.approval.id))?.outcome).toEqual({ attempt: "unknown", receipt: null, withdrawn: false });
 
     await new Promise((r) => setTimeout(r, 5));
     const ns = testEnv.PERSON_AGENT as DurableObjectNamespace;
@@ -86,6 +86,53 @@ describe("approval outcome", () => {
     expect((await row(action.approval.id))?.outcome).toEqual({
       attempt: "done",
       receipt: { externalId: "portal-77", simulated: true },
+      withdrawn: false,
     });
+  });
+
+  // LAP-747 follow-up: the person corrected the form after approving it
+  // while its filing was unresolved, so the agent withdrew it. The sweep
+  // still reconciles first, finds nothing, and ends it without filing.
+  it("a withdrawn filing is reconciled by the recovery sweep and never executed again", async () => {
+    let posts = 0;
+    const portal: Executor = {
+      simulated: true,
+      async execute() {
+        posts += 1;
+        throw new TimeoutError();
+      },
+      async check() {
+        return { found: false as const };
+      },
+    };
+    setExecutorFactoryForTests(() => portal);
+    // A person of their own, so their agent builds this test's portal.
+    const handle = "1e".repeat(32);
+    const action = (await (
+      await call("POST", "/action", {
+        type: "submit",
+        recipient: "sandbox-agency",
+        purpose: "renewal",
+        payload: {},
+        idempotencyKey: "outcome-withdrawn",
+        actor: "foreground",
+        sources: [],
+        origin: "person",
+        generation: 0,
+      }, handle)
+    ).json()) as { approval: { id: string } };
+    await call("POST", `/approvals/${action.approval.id}/approve`, undefined, handle);
+    expect((await row(action.approval.id, handle))?.outcome).toEqual({ attempt: "unknown", receipt: null, withdrawn: false });
+
+    const withdrawn = (await (await call("POST", `/approvals/${action.approval.id}/withdraw`, undefined, handle)).json()) as { status: string; withdrawn?: boolean };
+    expect(withdrawn).toMatchObject({ status: "rejected", withdrawn: true });
+
+    await new Promise((r) => setTimeout(r, 5));
+    const ns = testEnv.PERSON_AGENT as DurableObjectNamespace;
+    const agent = ns.get(ns.idFromName(personIdForHandle(handle))) as unknown as PersonAgent;
+    const swept = await agent.recoverStrandedAttempts(0);
+    expect(swept.recovered).toEqual([{ key: "outcome-withdrawn", status: "blocked" }]);
+    expect((await row(action.approval.id, handle))?.outcome).toEqual({ attempt: "failed", receipt: null, withdrawn: true });
+    expect(posts).toBe(1);
   });
 });

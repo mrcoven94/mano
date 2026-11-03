@@ -41,6 +41,8 @@ export function ensureGatewayTables(sql: SqlStorage): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS latest_proposal(
     slot INTEGER PRIMARY KEY CHECK (slot = 1), generation INTEGER NOT NULL, approval_id TEXT NOT NULL,
     received_at TEXT NOT NULL, turn_id TEXT NOT NULL)`);
+  // Approvals withdrawn after they were approved: reconciled, never run again.
+  sql.exec("CREATE TABLE IF NOT EXISTS withdrawn_approvals(approval_id TEXT PRIMARY KEY)");
   sql.exec(`CREATE TABLE IF NOT EXISTS attempts(
     idempotency_key TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at TEXT NOT NULL)`);
   addColumn(sql, "attempts", "request_hash", "TEXT");
@@ -240,6 +242,16 @@ export class SqlApprovalStore implements ApprovalStore {
       this.sql.exec("SELECT 1 FROM approvals WHERE idempotency_key = ? AND status = 'rejected' LIMIT 1", key).toArray()
         .length > 0
     );
+  }
+
+  withdrawApproval(id: string): boolean {
+    if (this.sql.exec("SELECT 1 FROM approvals WHERE id = ? AND status = 'approved'", id).toArray().length === 0) return false;
+    this.sql.exec("INSERT OR IGNORE INTO withdrawn_approvals(approval_id) VALUES (?)", id);
+    return true;
+  }
+
+  approvalWithdrawn(id: string): boolean {
+    return this.sql.exec("SELECT 1 FROM withdrawn_approvals WHERE approval_id = ?", id).toArray().length > 0;
   }
 
   consumeApprovalAndClaim(id: string, humanId: string, attempt: Attempt, guard: ConsumeGuard): Approval | null {

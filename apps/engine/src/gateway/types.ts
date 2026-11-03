@@ -100,6 +100,10 @@ export interface GatewayResult {
   // approval still waits, nothing ran, and the same approve may be sent
   // again later.
   retryable?: true;
+  // Set when the approval was withdrawn: the person asked for a new
+  // version after approving it, so it never runs again. On an approve it
+  // means the outside system confirmed it never happened.
+  withdrawn?: true;
 }
 
 // Where a drafted approval sits among the person's proposals: when the
