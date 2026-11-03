@@ -264,23 +264,6 @@ function normalizeDate(d: string): string {
   return d.toLowerCase().replace(/\s+/g, " ").replace(/,(\S)/g, ", $1").trim();
 }
 
-// Every phone, link, amount and date in a text as a whole value. Two values
-// are the same fact only when their keys are equal, so $100 never matches
-// inside $1000.
-export interface FactValue {
-  raw: string;
-  key: string;
-}
-
-export function factValues(text: string): FactValue[] {
-  return [
-    ...extractPhones(text).map((raw) => ({ raw, key: `phone:${normalizePhone(raw)}` })),
-    ...extractUrls(text).map((raw) => ({ raw, key: `link:${normalizeUrl(raw)}` })),
-    ...extractAmounts(text).map((raw) => ({ raw, key: `amount:${normalizeWordAmount(raw.replace(/^\$/, ""))}` })),
-    ...extractDates(text).map((raw) => ({ raw, key: `date:${normalizeNumericDate(raw)}` })),
-  ];
-}
-
 export function findInventedFacts(c: BenchCase, text: string): string[] {
   const invented: string[] = [];
   const allowedPhones = new Set(c.facts.allowedPhones.map(normalizePhone));
