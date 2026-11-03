@@ -240,7 +240,7 @@ export default function ApprovalDetail() {
   );
 
   return (
-    <Screen>
+    <Screen back="/(tabs)/approvals">
       <Title>{s.approvalsTitle}</Title>
       {failed && !approval ? (
         <ErrorView title={s.errorTitle} body={s.errorBody} retry={() => void load()} retryTitle={s.retry} />

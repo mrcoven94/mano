@@ -49,7 +49,7 @@ export default function Documents() {
   );
 
   return (
-    <Screen>
+    <Screen back="/(tabs)/more">
       <Title>{s.documentsTitle}</Title>
       {mode === "stand-in" ? <DemoBanner text={s.demoMode} /> : null}
       <Body>{s.documentsBody}</Body>

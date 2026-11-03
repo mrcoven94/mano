@@ -9,6 +9,7 @@ export const en = {
   tabsApprovals: "Approvals",
   tabsDeadlines: "Deadlines",
   tabsMore: "More",
+  back: "Back",
 
   signInTitle: "Welcome to Mano",
   signInBody: "Mano applies for help, fills out forms, reads mail and keeps track of deadlines. Sign in with your email to meet your agent.",
@@ -174,6 +175,7 @@ export const es: Strings = {
   tabsApprovals: "Aprobaciones",
   tabsDeadlines: "Fechas límite",
   tabsMore: "Más",
+  back: "Atrás",
 
   signInTitle: "Bienvenido a Mano",
   signInBody: "Mano solicita ayuda, llena formularios, lee el correo y lleva las fechas límite. Inicie sesión con su correo para conocer a su agente.",
