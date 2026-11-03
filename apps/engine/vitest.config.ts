@@ -12,6 +12,7 @@ export const TEST_BINDINGS = {
   MANO_ENGINE_CHANNELS_TOKEN: "test-channels-token-not-real",
   MANO_CHANNELS_URL: "https://channels.test",
   MANO_ENGINE_SEND_SECRET: "test-engine-send-secret-not-real",
+  MANO_NUDGE_TIME: "09:30",
 };
 
 export default defineConfig({
