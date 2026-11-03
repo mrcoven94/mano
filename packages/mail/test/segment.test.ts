@@ -55,10 +55,10 @@ describe("segmentFrame", () => {
     expect(seg.method !== "sam" && seg.why).toMatch(/box_2d/);
   });
 
-  it("says the API's own error when the call fails", async () => {
+  it("says why the call failed, in fixed words chosen by its status", async () => {
     const seg = await segmentFrame(await normalizeImage(await letterPhoto(), "image/jpeg"), billingOff());
     expect(seg.method).not.toBe("sam");
-    expect(seg.method !== "sam" && seg.why).toMatch(/402.*Billing is not configured for this account\./);
+    expect(seg.method !== "sam" && seg.why).toMatch(/402 \(billing is not set up for this account\)/);
   });
 });
 
@@ -82,9 +82,30 @@ describe("the segmentation warning", () => {
     expect(warning?.detail).toMatch(/box_2d/);
   });
 
-  it("carries the API's error message when the call failed", async () => {
+  it("says why the call failed, in fixed words chosen by its status", async () => {
     const warning = await fallbackOf(billingOff());
-    expect(warning?.detail).toMatch(/402.*Billing is not configured for this account\./);
+    expect(warning?.detail).toMatch(/402 \(billing is not set up for this account\)/);
+  });
+
+  // Review of PR 109: a stubbed 401 put its body's key, person and case
+  // number into warnings[].detail.
+  it("keeps a refused call's body out of every warning and question", async () => {
+    const SECRETS = ["mk-synthetic-7f3a91", "Maria Santos", "CA-2026-1"];
+    const body = JSON.stringify({ error: { message: `Key ${SECRETS[0]} is not valid for ${SECRETS[1]} on case ${SECRETS[2]}.`, code: SECRETS[0] } });
+    const model = new MetaModelClient({
+      apiKey: "test-key",
+      synthetic: true,
+      fetchFn: (async () => new Response(body, { status: 401 })) as typeof fetch,
+    });
+    const reading = await readMail([{ bytes: await letterPhoto(), mimeType: "image/jpeg", name: "doc-1" }], {
+      personId: "p1",
+      synthetic: true,
+      model,
+    });
+    expect(reading.warnings.find((w) => w.kind === "segmentation_fallback")?.detail).toMatch(/401 \(the API key was not accepted\)/);
+    expect(reading.questions.length).toBeGreaterThan(0);
+    const said = JSON.stringify({ warnings: reading.warnings, questions: reading.questions });
+    for (const secret of SECRETS) expect(said).not.toContain(secret);
   });
 });
 

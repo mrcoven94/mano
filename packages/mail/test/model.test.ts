@@ -100,14 +100,34 @@ describe("MetaModelClient", () => {
     expect(res.text).toBe("ok");
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
-  it("names the API's own error message when it refuses a call, without retrying", async () => {
+  it("names a refusal by its status in fixed words, without retrying", async () => {
     const billing = { error: { message: "Billing is not configured for this account.", type: "billing_error", code: "billing_not_configured" } };
     const fetchFn = vi.fn(async () => okJson(billing, 402));
     const client = new MetaModelClient({ apiKey: "k", fetchFn: fetchFn as unknown as typeof fetch });
     await expect(client.responses({ model: "muse-spark-1.3", input: "hi" })).rejects.toThrow(
-      "Model request failed: 402 (Billing is not configured for this account.)",
+      "Model request failed: 402 (billing is not set up for this account)",
     );
     expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  // Review of PR 109: a 401 body's message reached warnings[].detail
+  // word for word. Whatever the provider writes stays out of the error.
+  const LEAK = "Key mk-synthetic-7f3a91 is not valid for Maria Santos on case CA-2026-1.";
+  const SECRETS = ["mk-synthetic-7f3a91", "Maria Santos", "CA-2026-1"];
+  it.each([
+    ["a 401", okJson({ error: { message: LEAK, type: "auth_error", code: LEAK } }, 401)],
+    ["a 400", okJson({ error: { message: LEAK } }, 400)],
+    ["an unlisted 418", okJson({ error: { message: LEAK } }, 418)],
+    ["a failed run", okJson({ status: "failed", error: { message: LEAK } })],
+    ["a run in an unknown state", okJson({ status: LEAK })],
+  ])("never repeats the provider's text from %s", async (_what, response) => {
+    const client = new MetaModelClient({ apiKey: "k", maxRetries: 0, fetchFn: (async () => response) as typeof fetch });
+    const message = await client.responses({ model: "muse-spark-1.3", input: "hi" }).then(
+      () => "resolved",
+      (err: Error) => err.message,
+    );
+    expect(message).toMatch(/^Model (request failed|run)/);
+    for (const secret of SECRETS) expect(message).not.toContain(secret);
   });
 });
 
