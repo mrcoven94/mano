@@ -93,7 +93,7 @@ export default function DocumentViewer() {
   };
 
   return (
-    <Screen>
+    <Screen back="/documents">
       <Title>{s.documentsTitle}</Title>
       {failed ? (
         <ErrorView title={s.errorTitle} body={s.errorBody} retry={() => void load()} retryTitle={s.retry} />

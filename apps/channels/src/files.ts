@@ -30,6 +30,107 @@ export async function attachmentDocumentId(generation: number, turn: number, ind
   return `g${generation}t${turn}i${index}-${digest.slice(0, 12)}`;
 }
 
+// Read from the bytes' own signature, never from what the provider
+// claims. Null for anything else (video, audio), which keeps its label.
+export function sniffMediaType(bytes: Uint8Array): string | null {
+  const ascii = (from: number, to: number): string => String.fromCharCode(...bytes.subarray(from, to));
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (ascii(0, 8) === "\x89PNG\r\n\x1a\n") return "image/png";
+  if (ascii(0, 5) === "%PDF-") return "application/pdf";
+  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+  if (ascii(4, 8) === "ftyp") {
+    const brand = ascii(8, 12);
+    if (["heic", "heix", "heim", "heis", "hevc", "hevx", "hevm", "hevs"].includes(brand)) return "image/heic";
+    if (brand === "mif1" || brand === "msf1") return "image/heif";
+  }
+  return null;
+}
+
+// The sandbox portal takes only PDF, PNG and JPEG. A photo in one of these
+// formats is stored as a JPEG copy instead of the original.
+const TO_JPEG = new Set(["image/heic", "image/heif", "image/webp"]);
+
+export interface PhotoConverter {
+  toJpeg(bytes: Uint8Array): Promise<Uint8Array>;
+}
+
+// Cloudflare Images, so the decode runs outside the Worker: a 12 MP
+// HEIC decoded in the isolate needs more than its 128 MB.
+export function imagesConverter(images: ImagesBinding): PhotoConverter {
+  return {
+    async toJpeg(bytes) {
+      const out = await images
+        .input(new Blob([bytes as BufferSource]).stream())
+        .transform({ width: 4096, height: 4096, fit: "scale-down" })
+        .output({ format: "image/jpeg", quality: 85 });
+      return new Uint8Array(await out.response().arrayBuffer());
+    },
+  };
+}
+
+export interface StoredForm {
+  bytes: Uint8Array;
+  mimeType: string;
+  converted: boolean;
+  // Why a photo no office takes was kept as sent. Mail can still read it.
+  unconverted?: "no_converter" | "failed" | "too_large";
+}
+
+// The type without parameters: a label can carry the file's name.
+function bareType(label: string): string {
+  return label.split(";")[0]!.trim().toLowerCase();
+}
+
+// The only media types Channels passes on, stores or logs. It holds every
+// type Mail reads (packages/mail/src/media.ts); a test fails when Mail
+// accepts a type this set does not.
+export const KNOWN_TYPES: ReadonlySet<string> = new Set([
+  "image/jpeg", "image/png", "image/heic", "image/heif", "image/webp", "image/gif", "application/pdf",
+  "video/mp4", "video/quicktime", "video/3gpp", "video/webm", "video/mpeg", "audio/mp4", "audio/x-m4a", "audio/mpeg",
+  "application/octet-stream",
+]);
+
+// A media type fit for a log line: one of a fixed set, else "other".
+export function loggableType(label: string | null | undefined): string {
+  if (!label) return "none";
+  const bare = bareType(label);
+  return KNOWN_TYPES.has(bare) ? bare : "other";
+}
+
+// What to store for one downloaded file, and as what media type.
+export async function storedForm(
+  bytes: Uint8Array,
+  label: string,
+  converter: PhotoConverter | null,
+  maxBytes = MAX_ATTACHMENT_BYTES,
+): Promise<StoredForm> {
+  // A label outside the known set (it can carry anything, a name
+  // included) becomes the generic type before it is stored or passed on.
+  const labeled = bareType(label);
+  const mimeType = sniffMediaType(bytes) ?? (KNOWN_TYPES.has(labeled) ? labeled : "application/octet-stream");
+  if (!TO_JPEG.has(mimeType)) return { bytes, mimeType, converted: false };
+  if (!converter) return { bytes, mimeType, converted: false, unconverted: "no_converter" };
+  let jpeg: Uint8Array;
+  try {
+    jpeg = await converter.toJpeg(bytes);
+  } catch {
+    return { bytes, mimeType, converted: false, unconverted: "failed" };
+  }
+  if (sniffMediaType(jpeg) !== "image/jpeg") return { bytes, mimeType, converted: false, unconverted: "failed" };
+  if (jpeg.byteLength > maxBytes) return { bytes, mimeType, converted: false, unconverted: "too_large" };
+  return { bytes: jpeg, mimeType: "image/jpeg", converted: true };
+}
+
+// The bytes for the form a replayed turn chose before: the file as sent,
+// or its JPEG copy made again (Images returns the same bytes for the same
+// file). Null when the copy cannot be made again: storing the original
+// instead would leave one file as two documents.
+export async function storedAgain(bytes: Uint8Array, choice: { converted: boolean }, converter: PhotoConverter | null): Promise<Uint8Array | null> {
+  if (!choice.converted) return bytes;
+  const again = await storedForm(bytes, "", converter);
+  return again.converted ? again.bytes : null;
+}
+
 export interface AttachmentFetchOptions {
   fetchFn: typeof fetch;
   checker: LinkChecker;

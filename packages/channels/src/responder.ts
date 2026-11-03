@@ -166,6 +166,9 @@ export function attachmentNote(count: number): string {
 // (no reader answered) or not stored.
 export const PHOTO_UNREAD_TEXT = `I could not read your photo just now. Send it again in a few minutes and I will try once more. ${SAFETY_LINE}`;
 export const PHOTO_UNSAVED_TEXT = `I could not save your photo, so I have not read it. Please send it again. ${SAFETY_LINE}`;
+// Added to the reply when a photo could not be turned into a file an
+// office takes (PDF, PNG or JPEG). It can still be read.
+export const PHOTO_FORMAT_TEXT = "I could not make a copy of this photo that an office will take, so I cannot attach it to a form. If you want me to send it with one, please send a screenshot of the photo instead.";
 
 export function extractOutputText(data: unknown): string {
   const output = (data as { output?: unknown } | null)?.output;

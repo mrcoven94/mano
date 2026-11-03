@@ -4,7 +4,7 @@
 
 import { sha256Hex, stableStringify } from "../prng.ts";
 import { buildChatCases, CHAT_SUITE_VERSION } from "./chat.ts";
-import { buildLettersCases, LETTERS_SUITE_VERSION } from "./letters.ts";
+import { buildLettersCases, LETTERS_SUITE_VERSION, type LettersVersion } from "./letters.ts";
 import { buildPersonasCases, PERSONAS_SUITE_VERSION } from "./personas.ts";
 import { buildSafetyCases, SAFETY_SUITE_VERSION } from "./safety.ts";
 import { buildTextCases, TEXT_SUITE_VERSION } from "./text.ts";
@@ -21,16 +21,23 @@ export const SUITE_VERSIONS: Record<SuiteName, number> = {
   personas: PERSONAS_SUITE_VERSION,
 };
 
-export function buildSuite(suite: SuiteName): SuiteBuild {
+// An older version of a suite that is kept runnable, for comparing against
+// results recorded at that version.
+export interface SuiteOptions {
+  lettersVersion?: LettersVersion;
+}
+
+export function buildSuite(suite: SuiteName, opts: SuiteOptions = {}): SuiteBuild {
   const cases: BenchCase[] =
     suite === "chat" ? buildChatCases()
     : suite === "text" ? buildTextCases()
-    : suite === "letters" ? buildLettersCases()
+    : suite === "letters" ? buildLettersCases(opts.lettersVersion)
     : suite === "personas" ? buildPersonasCases()
     : buildSafetyCases();
-  return { suite, version: SUITE_VERSIONS[suite]!, cases, sha256: sha256Hex(stableStringify(cases)) };
+  const version = suite === "letters" ? (opts.lettersVersion ?? LETTERS_SUITE_VERSION) : SUITE_VERSIONS[suite]!;
+  return { suite, version, cases, sha256: sha256Hex(stableStringify(cases)) };
 }
 
-export function buildAllSuites(): SuiteBuild[] {
-  return SUITE_NAMES.map(buildSuite);
+export function buildAllSuites(opts: SuiteOptions = {}): SuiteBuild[] {
+  return SUITE_NAMES.map((s) => buildSuite(s, opts));
 }

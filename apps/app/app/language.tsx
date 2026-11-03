@@ -29,7 +29,7 @@ export default function LanguageScreen() {
   ];
 
   return (
-    <Screen>
+    <Screen back="/(tabs)/more">
       <Title>{s.languageTitle}</Title>
       <View style={styles.list}>
         {options.map((o) => (

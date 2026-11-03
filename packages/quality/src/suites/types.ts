@@ -40,8 +40,8 @@ export interface CaseExpect {
   maxBubbles?: number;
   maxBubbleChars?: number;
   // Read by no check: a reply sent as a text carries no [letter N] marker,
-  // and the deadline check reads the letter's date instead. Kept so the
-  // pinned letters v1 cases stay unchanged.
+  // and the deadline check reads the letter's date instead. Only letters
+  // version 1 sets it, kept so its pinned cases stay unchanged.
   citationRequired?: boolean;
   noAction?: boolean;
   stopReply?: boolean;
