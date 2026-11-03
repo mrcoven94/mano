@@ -325,7 +325,8 @@ export default function ApprovalDetail() {
                   {linkBlocked ? <Muted style={styles.warn}>{s.linkBlocked}</Muted> : null}
                 </View>
               ) : (
-                <Body>{nothingSent ? s.staleNote : s.docUnavailable}</Body>
+                // A failed load says nothing about whether it was sent.
+                <Body>{s.docUnavailable}</Body>
               )}
             </Card>
           ) : null}
