@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { REPO_URL } from "@/lib/site";
 import Mascot from "./Mascot";
+import TextMano from "./TextMano";
 
 const links = [
   { href: "/", label: "For people", sub: "Free to start" },
@@ -29,7 +30,7 @@ export default function Header() {
         </nav>
         <div className="header-cta">
           <a className="quiet" href={REPO_URL}>Open source</a>
-          <a className="btn btn-primary btn-sm" href="/#get-mano">Text Mano</a>
+          <TextMano className="btn btn-primary btn-sm" align="end" />
           <details className="menu" ref={menu}>
             <summary aria-label="Menu"><span /></summary>
             <nav aria-label="Main" className="menu-panel">
@@ -39,7 +40,7 @@ export default function Header() {
                 </Link>
               ))}
               <a href={REPO_URL}>Open source <small>GitHub</small></a>
-              <a className="btn btn-primary" href="/#get-mano" style={{ width: "100%", marginTop: 6 }}>Text Mano</a>
+              <TextMano align="end" />
             </nav>
           </details>
         </div>

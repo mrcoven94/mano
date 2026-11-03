@@ -12,8 +12,9 @@ import Pricing from "@/components/home/Pricing";
 import OpenSource from "@/components/home/OpenSource";
 import Faq from "@/components/Faq";
 import Mascot from "@/components/Mascot";
+import TextMano from "@/components/TextMano";
 import TextQr from "@/components/TextQr";
-import { SMS_HREF, SMS_NUMBER, SMS_IS_PLACEHOLDER, PLACEHOLDER_NOTE, REPO_URL } from "@/lib/site";
+import { SMS_HREF, SMS_NUMBER, SMS_IS_PLACEHOLDER, REPO_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: { absolute: "Mano: AI that helps you pay rent, get food, medicine and child care" },
@@ -27,7 +28,7 @@ const faqs: [string, string][] = [
   ["Who can see my information?", "Only the people and offices you choose, for the reason you choose. You can see who has access and take it back at any time. Mano cannot pull back copies that were already sent, and it tells you which ones those are."],
   ["What happens when Mano makes a call?", "It says who it is right away: \"I'm calling for (your name). I'm their automated assistant. This call is transcribed.\" Mano never pretends to be you or to be a person."],
   ["What if a letter tells Mano to do something?", "Mano treats letters, forms and web pages as information, never as orders. It checks every link before opening it and will not open one that fails the check."],
-  ["What do I need to start?", "A phone that can text. Text or iMessage Mano, or open it on the web. Apps for iPhone and Android are in early access. It is the same Mano, with the same memory, everywhere you use it."],
+  ["What do I need to start?", `A phone that can text. Text or iMessage Mano at ${SMS_NUMBER}, or open it on the web. Apps for iPhone and Android are in early access. It is the same Mano, with the same memory, everywhere you use it.`],
   ["Is Mano part of the government?", "No. Mano is independent. It deals with the offices that run programs for you, so you spend less time on the phone and in line."],
   ["What can Mano help me get?", "Help paying rent, food benefits on an EBT card, help with light and water bills, health coverage and prescriptions, child care, housing waitlists, credit repair and emergency help. If there is a program for it, Mano can find it and apply for you."],
   ["Can nonprofits and government offices use Mano?", "Yes. Each caseworker gets their own Mano for case management: it collects documents, prepares applications and tracks renewals for the people they serve, with each person's permission."],
@@ -99,10 +100,10 @@ export default function Home() {
           <p className="lede">Or just tell Mano what you need this month. Rent, food, a bill, medicine, child care. It will tell you what help there is and start on it tonight.</p>
           <a className="close-num" href={SMS_HREF}>{SMS_NUMBER}</a>
           <div className="btn-row">
-            <a className="btn btn-primary btn-lg" href={SMS_HREF}>Text Mano</a>
+            <TextMano className="btn btn-primary btn-lg" />
             <a className="btn btn-ghost btn-lg" href="/government">For government</a>
           </div>
-          {SMS_IS_PLACEHOLDER ? <p className="note">{PLACEHOLDER_NOTE}</p> : <TextQr />}
+          {!SMS_IS_PLACEHOLDER && <TextQr />}
         </div>
       </section>
     </div>
