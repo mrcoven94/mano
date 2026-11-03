@@ -38,10 +38,10 @@ section{padding:128px 0}
 /* Text Mano: an sms: link on phones, a QR panel on computers (components/TextMano.tsx) */
 .text-mano{position:relative;display:inline-flex;flex-direction:column}
 .text-mano-note{margin-top:8px;font-size:.8rem;color:var(--faint)}
-.tm-pop{position:absolute;z-index:60;top:calc(100% + 12px);left:50%;translate:-50% 0;display:flex;align-items:center;gap:18px;width:max-content;max-width:calc(100vw - 32px);padding:14px 22px 14px 14px;border-radius:22px;background:var(--card);box-shadow:var(--shadow-lg),0 0 0 1px var(--border);text-align:left;white-space:normal;animation:tmIn .22s cubic-bezier(.16,1,.3,1) both}
+.tm-pop{position:absolute;z-index:60;top:calc(100% + 12px);left:50%;translate:calc(-50% + var(--tm-dx,0px)) 0;display:flex;align-items:center;gap:18px;width:max-content;max-width:calc(100vw - 32px);padding:14px 22px 14px 14px;border-radius:22px;background:var(--card);box-shadow:var(--shadow-lg),0 0 0 1px var(--border);text-align:left;white-space:normal;animation:tmIn .22s cubic-bezier(.16,1,.3,1) both}
 .tm-pop[hidden]{display:none}
-.tm-pop[data-align="start"]{left:0;translate:none}
-.tm-pop[data-align="end"]{left:auto;right:0;translate:none}
+.tm-pop[data-align="start"]{left:0;translate:var(--tm-dx,0px) 0}
+.tm-pop[data-align="end"]{left:auto;right:0;translate:var(--tm-dx,0px) 0}
 .tm-qr{flex:none;padding:8px;border-radius:14px;background:#fff;box-shadow:0 0 0 1px var(--border)}
 .tm-qr svg{display:block;width:136px;height:136px}
 .tm-copy{display:flex;flex-direction:column;max-width:22ch;color:var(--muted);font-size:.95rem;line-height:1.45}

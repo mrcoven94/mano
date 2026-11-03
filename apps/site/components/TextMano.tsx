@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import QRCode from "react-qr-code";
 import { PLACEHOLDER_NOTE, SMS_HREF, SMS_IS_PLACEHOLDER, SMS_NUMBER } from "@/lib/site";
 
@@ -22,6 +22,7 @@ export default function TextMano({
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLSpanElement>(null);
   const button = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLSpanElement>(null);
   const id = useId();
 
   useEffect(() => {
@@ -45,6 +46,22 @@ export default function TextMano({
     return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
   }, [open]);
 
+  /* Keep the open panel 16px inside the viewport wherever its button sits: measure its untransformed box and shift it
+     by --tm-dx. Layout boxes, not getBoundingClientRect, so the entrance animation's scale does not skew the numbers. */
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const p = pop.current;
+      if (!p || !wrap.current) return;
+      const left = wrap.current.getBoundingClientRect().left + p.offsetLeft - (align === "center" ? p.offsetWidth / 2 : 0);
+      const room = document.documentElement.clientWidth - 16;
+      p.style.setProperty("--tm-dx", `${Math.max(16 - left, Math.min(0, room - left - p.offsetWidth))}px`);
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open, align]);
+
   const note = SMS_IS_PLACEHOLDER && <small className="text-mano-note">{PLACEHOLDER_NOTE}</small>;
 
   if (!desktop) return <span className="text-mano"><a className={className} href={href}>{label}</a>{note}</span>;
@@ -54,7 +71,7 @@ export default function TextMano({
       <button ref={button} type="button" className={className} aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)}>
         {label}
       </button>
-      <span id={id} className="tm-pop" data-align={align} hidden={!open}>
+      <span ref={pop} id={id} className="tm-pop" data-align={align} hidden={!open}>
         <span className="tm-qr"><QRCode value={href} size={136} aria-label="QR code that opens a text to Mano" /></span>
         <span className="tm-copy">
           <b>Scan with your phone camera</b>
