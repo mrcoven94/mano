@@ -85,7 +85,7 @@ export default function Access() {
   };
 
   return (
-    <Screen>
+    <Screen back="/(tabs)/more">
       <Title>{s.accessTitle}</Title>
       {mode === "stand-in" ? <DemoBanner text={s.demoMode} /> : null}
       <Body>{s.accessBody}</Body>

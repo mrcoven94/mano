@@ -7,8 +7,8 @@
 import { createHash } from "node:crypto";
 
 import type { EngineDeadline } from "./engine.js";
-import { DEFAULT_TIMEZONE } from "./when.js";
 
+const DEFAULT_TIMEZONE = "America/Denver";
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 const ORDINAL_SUFFIX = /(\d)(st|nd|rd|th)\b/g;
 const COMMAS = /,/g;

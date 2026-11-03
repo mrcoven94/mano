@@ -7,10 +7,10 @@
 // not publish becomes one question that names a date only when the letter
 // gives exactly one with no doubt around it. A scam letter gets a plain
 // warning and nothing else from it.
-import type { Letter, LetterFields, MailReading, Question } from "./types.js";
+import type { Letter, LetterFields, MailReading, Obligation, Question } from "./types.js";
 
 // What a held deadline is for, when the published sentence says.
-export type DeadlineKind = "renewal" | "recertification" | "interview" | "hearing" | "appeal" | "payment" | "documents";
+export type DeadlineKind = "renewal" | "recertification" | "redetermination" | "interview" | "hearing" | "appeal" | "payment" | "documents";
 
 export type LetterType =
   | "renewal"
@@ -159,22 +159,29 @@ function categoriesOf(letter: Letter): SendCategory[] {
   return ORDER.filter((c) => found.has(c));
 }
 
-// Only what the published sentence says; no kind when it says none.
 const RECERTIFICATION_WORD = /\brecertif/;
 const INTERVIEW_WORD = /\binterview\b/;
 const HEARING_WORD = /\bhearing\b/;
 const APPEAL_WORD = /\bappeal\b/;
-const RENEWAL_WORD = /\b(renew|renewal)\b/;
+const RENEWAL_HEADS = /\b(?:renew|recertif|redetermin)/g;
 const DOCUMENT_WORDS = /\b(proofs?|documents?|forms?|pay stubs?|paperwork|records?|statements?|receipts?)\b/;
 
-function kindOf(sentence: string, obligation: string): DeadlineKind | null {
+// The kind follows the duty the gate read, so a word that only
+// qualifies it ("your recertification appeal") never names it. Within a
+// renewal, the last renewal word is the head noun. Only what the
+// published sentence says; no kind when it says none.
+function kindOf(sentence: string, obligation: Obligation): DeadlineKind | null {
   const t = sentence.toLowerCase();
+  if (obligation === "appeal") return HEARING_WORD.test(t) ? "hearing" : "appeal";
+  if (obligation === "pay") return "payment";
+  if (obligation === "renew") {
+    const head = t.match(RENEWAL_HEADS)?.at(-1);
+    return head === "recertif" ? "recertification" : head === "redetermin" ? "redetermination" : "renewal";
+  }
   if (RECERTIFICATION_WORD.test(t)) return "recertification";
   if (INTERVIEW_WORD.test(t)) return "interview";
   if (HEARING_WORD.test(t)) return "hearing";
   if (APPEAL_WORD.test(t)) return "appeal";
-  if (obligation === "renew" && RENEWAL_WORD.test(t)) return "renewal";
-  if (obligation === "pay") return "payment";
   if (obligation === "respond" && DOCUMENT_WORDS.test(t)) return "documents";
   return null;
 }

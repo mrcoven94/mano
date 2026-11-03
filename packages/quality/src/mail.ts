@@ -33,17 +33,33 @@ export function expectedDeadline(c: BenchCase): string | null {
 }
 
 const SCAM_MARKER_RE = /\b(?:URGENT|verify now)\b/i;
+const GREETING_RE = /^\s*dear\b/i;
+const SENTENCE_BREAK_RE = /\n|(?<=\.)\s+/;
+const CONDITION_RE = /\b(?:if|unless)\b/i;
 
-// Reads the transcript the letter was drawn from: one date publishes, two or
-// more dates or a scam marker publish none.
+// The date a letter was printed, alone on its line above the greeting, says
+// when it was sent, not when to act; the mail reader sets it aside too.
+function withoutPrintedDate(transcript: string): string {
+  const lines = transcript.split("\n");
+  const greeting = lines.findIndex((l) => GREETING_RE.test(l));
+  return lines.filter((l, i) => !(i < greeting && extractDates(l)[0] === l.trim())).join("\n");
+}
+
+// Reads the transcript the letter was drawn from: one date publishes when a
+// plain sentence states it. Two or more dates, a scam marker, a date set by
+// a condition ("if", "unless") or a date outside a sentence (a table row)
+// publish none.
 export class TranscriptDeadlineReader implements DeadlineReader {
   readonly name = "transcript-standin";
   readonly live = false;
 
   async readDeadline(letter: LetterImage): Promise<string | null> {
     if (SCAM_MARKER_RE.test(letter.transcript)) return null;
-    const dates = [...new Set(extractDates(letter.transcript))];
-    return dates.length === 1 ? dates[0]! : null;
+    const text = withoutPrintedDate(letter.transcript);
+    const dates = [...new Set(extractDates(text))];
+    if (dates.length !== 1) return null;
+    const sentence = text.split(SENTENCE_BREAK_RE).find((s) => s.includes(dates[0]!))!;
+    return sentence.trim().endsWith(".") && !CONDITION_RE.test(sentence) ? dates[0]! : null;
   }
 }
 

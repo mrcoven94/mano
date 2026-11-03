@@ -6,7 +6,7 @@ import {
   type ConsentRevokePayload,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
-import { APPROVAL_COLUMNS, ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, contentHashOf, createExecutor, ensureGatewayTables } from "../gateway/index.js";
+import { APPROVAL_COLUMNS, ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureGatewayTables, gatewayChecker } from "../gateway/index.js";
 import type { ActionRequest, Approval, CheckOutcome, ProposalOrder } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
@@ -148,6 +148,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       this.store,
       this.executor,
       {
+        ...gatewayChecker(checkerSetting(env)),
         listConsents: () => this.listStoredConsents(),
         documents: {
           getBytes: (documentId) => this.documentBytes(documentId),
@@ -578,10 +579,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const { id, text, dueAtMs, generation } = parseReminderInput(input);
     const out = createReminder(this.db(), { id, text, dueAtMs, generation }, Date.now());
     if ("stale" in out) return STALE_STATE;
-    if ("conflict" in out) return { status: "conflict" as const, reminder: out.conflict };
-    if (out.created) this.store.audit({ event: "reminder.created", reminderHash: await auditDigest(id) });
-    // An existing reminder re-arms too: a retry repairs a lost wake-up.
+    if ("reminder" in out && out.created) this.store.audit({ event: "reminder.created", reminderHash: await auditDigest(id) });
+    // An existing reminder re-arms too, one stored with other content
+    // included: a retry repairs a lost wake-up.
     await this.armReminderWakeup();
+    if ("conflict" in out) return { status: "conflict" as const, reminder: out.conflict };
     return { status: out.created ? ("created" as const) : ("existing" as const), reminder: out.reminder };
   }
 
@@ -1327,10 +1329,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return out;
   }
 
-  // The token of this approval's replay link while it still opens.
+  // The token of this approval's replay link while the approval still
+  // waits for a yes under the version the fill was bound to.
   async fillReplayLink(verified: string, approvalId: string): Promise<string | null> {
     await this.assertSubject(verified);
-    return replayLinkToken({ sql: this.db(), storage: this.replayStorage() }, approvalId, Date.now());
+    return replayLinkToken({ sql: this.db(), approvals: this.store, storage: this.replayStorage() }, approvalId, Date.now);
   }
 
   // The replay page a link opens. The worker found the person and the

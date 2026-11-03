@@ -1,11 +1,13 @@
 import { draftFileKey, stagingAttemptKey, submissionFileKey, trackedOwner, type FileStore } from "./files";
 import {
   API_SCOPE_PREFIX,
+  DECLARATION,
   fromBase64,
   metasToDigests,
   newId,
   packetDigest,
   sha256Hex,
+  type Declaration,
   type FileMeta,
   type Household,
   type SessionData,
@@ -350,6 +352,7 @@ function timedOut(): Response {
 }
 
 const HOUSEHOLD_LABELS: Record<keyof Household, string> = {
+  caseNumber: "Case number",
   fullName: "Full legal name",
   dateOfBirth: "Date of birth",
   address: "Mailing address",
@@ -366,6 +369,7 @@ function validateHousehold(
     if ((data[field] ?? "").length > maxFieldLength) return { error: `${label} is too long.` };
   }
   const household: Household = {
+    caseNumber: (data["caseNumber"] ?? "").trim(),
     fullName: (data["fullName"] ?? "").trim(),
     dateOfBirth: (data["dateOfBirth"] ?? "").trim(),
     address: (data["address"] ?? "").trim(),
@@ -373,6 +377,7 @@ function validateHousehold(
     householdSize: (data["householdSize"] ?? "").trim(),
     monthlyIncome: (data["monthlyIncome"] ?? "").trim(),
   };
+  if (!household.caseNumber) return { error: "Enter the case number from the renewal letter." };
   if (!household.fullName) return { error: "Enter the applicant's full legal name." };
   if (!household.dateOfBirth) return { error: "Enter the applicant's date of birth." };
   if (!household.address) return { error: "Enter the applicant's mailing address." };
@@ -514,6 +519,7 @@ async function handleSubmit(
   }
   const fields: Record<string, string> = {};
   let household: Household | null = null;
+  let declaration: Declaration | null = null;
   const uploads: JsonUpload[] = [];
 
   const capped = await readCappedBody(request, config.maxBodyBytes);
@@ -546,6 +552,17 @@ async function handleSubmit(
     const parsed = validateHousehold(strings, config.maxFieldLength);
     if (!parsed.household) return json({ error: parsed.error }, 400);
     household = parsed.household;
+  }
+  if (record["declaration"] !== undefined) {
+    const raw = record["declaration"] as Record<string, unknown> | null;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return json({ error: "declaration must be an object." }, 400);
+    }
+    if (raw["statement"] !== DECLARATION) {
+      return json({ error: "The declaration must be the office's statement, word for word." }, 400);
+    }
+    if (raw["madeBy"] !== "applicant") return json({ error: "Only the applicant can make the declaration." }, 400);
+    declaration = { statement: DECLARATION, madeBy: "applicant" };
   }
   if (record["files"] !== undefined) {
     if (!Array.isArray(record["files"])) return json({ error: "files must be an array." }, 400);
@@ -591,6 +608,7 @@ async function handleSubmit(
   if (!key) return json({ error: "A submission key is required." }, 400);
   if (key.length > MAX_KEY_LENGTH) return json({ error: "The submission key is too long." }, 400);
   if (!household) return json({ error: "A JSON submission needs a household object." }, 400);
+  if (!declaration) return json({ error: "The applicant has not made the declaration, so the office cannot take this renewal." }, 400);
   if (uploads.length === 0) return json({ error: "Attach at least one document." }, 400);
 
   // A key belongs to the scope that created it: callers see only their token's scope.
@@ -659,7 +677,7 @@ async function handleSubmit(
   if (!held) return fail(503, "The office is still clearing an earlier copy of these attachments. Try again in a minute.");
 
   try {
-    const result = await store.submit({ key, scope, household, files, digest, slowMs, receivedAt: nowMs(config) });
+    const result = await store.submit({ key, scope, household, declaration, files, digest, slowMs, receivedAt: nowMs(config) });
     if (result.outcome === "conflict" || result.outcome === "conflict-retired") {
       // A losing attempt never deletes its filed copies itself: a re-read then
       // delete still races a new winner filing under this key. The copies stay
@@ -898,6 +916,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     return json({
       id: draft.id,
       household: {
+        caseNumber: h.caseNumber,
         fullName: h.fullName,
         dateOfBirth: h.dateOfBirth,
         address: h.address,

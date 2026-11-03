@@ -25,6 +25,11 @@ export interface ActionRequest {
   // from server storage. Never accepted from caller input: validation
   // drops it, and hashes exclude it.
   document?: { bytesB64: string; hash: string };
+  // The person who answered YES to this exact request, attached by the
+  // gateway from the approval they answered. Never accepted from caller
+  // input, excluded from hashes, and absent on the allow path, where no
+  // person answered.
+  answeredBy?: string;
 }
 
 export interface Approval {
@@ -91,6 +96,10 @@ export interface GatewayResult {
   reason?: string;
   // Set on a refused approve: a newer proposal replaced this one.
   superseded?: true;
+  // Set on a refused approve when the safety check could not answer. The
+  // approval still waits, nothing ran, and the same approve may be sent
+  // again later.
+  retryable?: true;
 }
 
 // Where a drafted approval sits among the person's proposals: when the

@@ -21,6 +21,12 @@ export interface Env {
   // Local time of day deadline nudges go out, "HH:MM" between 09:00 and
   // 20:00. Default 10:00.
   MANO_NUDGE_TIME?: string;
+  // Guardian's check endpoint, its bearer token and the Modal proxy key
+  // pair. With none of the four set the gateway runs local rules only.
+  MANO_GUARDIAN_URL?: string;
+  MANO_GUARDIAN_TOKEN?: string;
+  MANO_GUARDIAN_KEY_ID?: string;
+  MANO_GUARDIAN_KEY_SECRET?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;

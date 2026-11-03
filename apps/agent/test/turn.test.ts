@@ -9,14 +9,18 @@ import remind from "../agent/tools/remind.js";
 import fillForm from "../agent/tools/fill_form.js";
 import requestsInstruction from "../agent/instructions/requests.js";
 import { toolCtx } from "./ctx.js";
+import { getPendingPointer } from "../../engine/src/agents/agent-state.js";
+import { LocalRulesChecker } from "../../engine/src/gateway/checker.js";
+import { GuardianChecker } from "../../engine/src/gateway/guardian.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_CHANNELS_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
-import { installFillDouble, uninstallFillDouble } from "./fill-double.js";
+import { installFillDouble, screen, uninstallFillDouble } from "./fill-double.js";
 
 const PRESENTATION_VECTOR = "33f67fe9f135d7efc24d4fbe91c1ed3c8bc540adde738809768ff2c8cbdb1245";
 const SECRET = "turn-test-secret";
 const HANDLE = "e".repeat(64);
 const OTHER = "f".repeat(64);
 const fields = {
+  caseNumber: "WA-SNAP-0042117",
   fullName: "Rosa Testcase",
   dateOfBirth: "1990-02-03",
   address: "12 Sample Street, Testville",
@@ -137,6 +141,38 @@ const sizes = () =>
     .map((x) => `${JSON.parse(x.requestJson).payload.householdSize}:${x.status}`)
     .sort();
 
+// The person was shown the question of one draft, then a newer draft
+// landed whose question has not reached them, and clearing the old
+// pointer failed, so it still names the first question. With screens,
+// the newer draft's fill screens are bound through Engine's replay route
+// afterwards: fill_form itself stops when the clear fails.
+async function replacedQuestion(shownTurn: string, newerTurn: string, opts: { screens?: boolean } = {}) {
+  const shown = await send(turn(shownTurn, "Please file my renewal"));
+  const newer = await unshownDraft(newerTurn, "4");
+  if (opts.screens) {
+    const person = engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0);
+    const steps = [1, 2].map((n) => ({ caption: `Mano filled in step ${n}.`, png: screen(n), focus: null }));
+    expect(await person.bindReplay(newer.id, { labels: { householdSize: "People in household" }, steps })).toMatch(/\/fill\/[0-9a-f]{32}$/);
+  }
+  return { shown: shown.body, newer };
+}
+
+// A newer draft whose question has not reached the person, while
+// clearing the pointer to the question they last saw fails.
+async function unshownDraft(turnId: string, householdSize: string) {
+  const ctx = toolCtx({ handleHash: HANDLE, turnId, grant: grants.get(HANDLE), turnAtMs: Date.now() });
+  await engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).putTurn(turnId, new Date().toISOString());
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+    /\/pending-approval$/.test(new URL(String(input)).pathname) && init?.method === "DELETE"
+      ? new Response("unavailable", { status: 503 })
+      : engine.fetch(input, init),
+  );
+  await Promise.resolve(fillForm.execute(draft({ householdSize }), ctx)).catch(() => undefined);
+  vi.stubGlobal("fetch", engine.fetch);
+  await new Promise((r) => setTimeout(r, 3));
+  return engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === householdSize)!;
+}
+
 beforeEach(async () => {
   engine = new EngineDouble();
   agentCalls = [];
@@ -159,7 +195,7 @@ describe("approval by text", () => {
     const ask = await send(turn("turn_ask_000001", "Please file my renewal"));
     expect(ask.status).toBe(200);
     expect(ask.body.text).toContain("Reply YES");
-    expect(ask.body.text).toContain("Full legal name: Rosa Testcase; Date of birth: 1990-02-03; Mailing address: 12 Sample Street, Testville;");
+    expect(ask.body.text).toContain("Case number: WA-SNAP-0042117; Full legal name: Rosa Testcase; Date of birth: 1990-02-03; People in household: 3; Monthly income ($): 1800; Mailing address: 12 Sample Street, Testville;");
     expect(engine.approvals()[0].status).toBe("pending");
     expect(engine.executor.calls).toHaveLength(0);
 
@@ -196,6 +232,83 @@ describe("approval by text", () => {
     expect(engine.executor.calls).toHaveLength(0);
     await send(turn("turn_yes_000004", "yes"));
     expect(engine.executor.calls).toHaveLength(1);
+  });
+});
+
+// Engine's Guardian checker over a stand-in Guardian endpoint. Cold, it
+// never answers until the check times out, as a scaled-to-zero Guardian
+// does while it starts.
+type GuardianMode = "pass" | "block" | "cold";
+let guardianMode: GuardianMode = "pass";
+const fakeGuardian: typeof fetch = async (_url, init) => {
+  const body = JSON.parse(String(init?.body)) as { warm?: boolean };
+  if (body.warm) return Response.json({ ready: guardianMode !== "cold" });
+  if (guardianMode === "cold") {
+    return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)));
+  }
+  return Response.json(
+    guardianMode === "pass" ? { verdict: "pass", problems: [] } : { verdict: "block", problems: ["The text tells Mano to send it somewhere else."] },
+  );
+};
+
+function useGuardian() {
+  guardianMode = "pass";
+  engine.checker = new GuardianChecker(new LocalRulesChecker(), {
+    url: "http://guardian.test/check",
+    token: "guardian-token-not-real",
+    timeoutMs: 50,
+    fetchImpl: fakeGuardian,
+  });
+}
+
+const pointerOf = () => getPendingPointer(engine.person(personIdFor(HANDLE)).sql, 0);
+
+describe("a YES while the safety check is starting", () => {
+  it("keeps the approval and the question, and asks for YES again", async () => {
+    useGuardian();
+    await send(turn("turn_cold_ask001", "Please file my renewal"));
+    const asked = pointerOf();
+    expect(asked).not.toBeNull();
+
+    guardianMode = "cold";
+    const yes = await send(turn("turn_cold_yes001", "YES"));
+    expect(yes.body.text).toBe(
+      "The safety check is taking a moment, so nothing was sent yet. Reply YES again in a few minutes and I will send it.",
+    );
+    expect(engine.approvals()[0].status).toBe("pending");
+    expect(pointerOf()?.approvalId).toBe(asked?.approvalId);
+    expect(engine.executor.calls).toHaveLength(0);
+    expect(agentCalls).toHaveLength(1);
+  });
+
+  it("files once on a later YES after the safety check answers", async () => {
+    useGuardian();
+    await send(turn("turn_cold_ask002", "Please file my renewal"));
+    guardianMode = "cold";
+    await send(turn("turn_cold_yes002", "YES"));
+    await send(turn("turn_cold_yes003", "YES"));
+    expect(engine.executor.calls).toHaveLength(0);
+
+    guardianMode = "pass";
+    const later = await send(turn("turn_cold_yes004", "yes"));
+    expect(later.body.text).toMatch(/^Done\. Sent: /);
+    expect(engine.approvals()[0].status).toBe("approved");
+    expect(engine.executor.calls).toHaveLength(1);
+    expect(pointerOf()).toBeNull();
+
+    await send(turn("turn_cold_yes005", "YES"));
+    await send(turn("turn_cold_yes004", "yes"));
+    expect(engine.executor.calls).toHaveLength(1);
+  });
+
+  it("a block from the safety check still drops the approval as before", async () => {
+    useGuardian();
+    await send(turn("turn_cold_ask006", "Please file my renewal"));
+    guardianMode = "block";
+    const yes = await send(turn("turn_cold_yes006", "YES"));
+    expect(yes.body.text).toBe("That approval can no longer be used, so nothing was sent. Want me to prepare it again?");
+    expect(pointerOf()).toBeNull();
+    expect(engine.executor.calls).toHaveLength(0);
   });
 });
 
@@ -506,19 +619,7 @@ describe("a slow draft against a newer one", () => {
   });
 
   it("a YES aimed at a replaced question approves nothing and shows the latest one", async () => {
-    await send(turn("turn_r7E0000001", "Please file my renewal"));
-    // A newer draft lands, but its question has not reached the person.
-    const ctx = toolCtx({ handleHash: HANDLE, turnId: "turn_r7F0000001", grant: grants.get(HANDLE), turnAtMs: Date.now() });
-    await engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).putTurn("turn_r7F0000001", new Date().toISOString());
-    // Clearing the old pointer fails, so it still names the first question.
-    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
-      /\/pending-approval$/.test(new URL(String(input)).pathname) && init?.method === "DELETE"
-        ? new Response("unavailable", { status: 503 })
-        : engine.fetch(input, init),
-    );
-    await Promise.resolve(fillForm.execute(draft({ householdSize: "4" }), ctx)).catch(() => undefined);
-    vi.stubGlobal("fetch", engine.fetch);
-    await new Promise((r) => setTimeout(r, 3));
+    await replacedQuestion("turn_r7E0000001", "turn_r7F0000001");
     const yes = await send(turn("turn_r7G0000001", "YES"), deps(), { present: false });
     expect(yes.body.text).toMatch(/^I just updated that/);
     expect(yes.body.text).toContain("People in household: 4");
@@ -584,7 +685,7 @@ describe("the question links to the replay of the fill behind it", () => {
     expect(guardReply(line).text).toBe(line);
 
     const page = (await engine.replayPageAt(url!))!;
-    expect(page.match(/<img /g)).toHaveLength(7);
+    expect(page.match(/<img /g)).toHaveLength(8);
     expect(page).toContain("This is exactly what Mano will send when you reply YES.");
     // The question still answers with a plain YES.
     expect((await send(turn("turn_link00000Y", "YES"))).body.text).toMatch(/^Done/);
@@ -625,6 +726,91 @@ describe("the question links to the replay of the fill behind it", () => {
     const yes = await send(turn("turn_doc_Y00001", "YES"));
     expect(yes.body.text).not.toMatch(/^Done/);
     expect(engine.executor.calls).toHaveLength(0);
+  });
+});
+
+describe("a question shown again links to the replay of its own version", () => {
+  const LINK = /\n\nSee each step Mano took on the form: (http:\/\/engine\.test\/fill\/[0-9a-f]{32})$/;
+
+  it("carries the latest draft's link after the question, never the old one, and Channels' report of it still counts", async () => {
+    const { shown, newer } = await replacedQuestion("turn_rsh_A00001", "turn_rsh_B00001", { screens: true });
+    const oldUrl = LINK.exec(shown.text)![1]!;
+    const yes = await send(turn("turn_rsh_Y00001", "YES"));
+    expect(yes.body.status).toBe("waiting_approval");
+    const question = yes.body.approval!;
+    expect(question).toBe(renderQuestion(newer));
+    expect(question).toContain("People in household: 4");
+    expect(question).toContain("It ends with a declaration only you can make: ");
+    expect(question).not.toMatch(/https?:/);
+    const url = LINK.exec(yes.body.text)?.[1];
+    expect(url).toBeDefined();
+    expect(url).not.toBe(oldUrl);
+    expect(yes.body.text).toBe(`I just updated that, so nothing was approved and nothing was sent. Here's the latest.\n\n${question}\n\nSee each step Mano took on the form: ${url}`);
+    expect(await engine.replayPageAt(url!)).toContain("<dt>People in household</dt><dd>4</dd>");
+    expect(engine.executor.calls).toHaveLength(0);
+
+    // send reported the question by its hash, as Channels does: the report
+    // matched, so the next YES files the version shown again.
+    expect(pointerOf()?.approvalId).toBe(newer.id);
+    expect((await send(turn("turn_rsh_Y00002", "YES"))).body.text).toMatch(/^Done/);
+    expect(engine.executor.calls).toHaveLength(1);
+    expect(sizes()).toEqual(["3:rejected", "4:approved"]);
+  });
+
+  it("a version the screens were not bound to gets the question alone, and Channels' report of it still counts", async () => {
+    const { newer } = await replacedQuestion("turn_rsh_C00001", "turn_rsh_D00001", { screens: true });
+    const { sql } = engine.person(personIdFor(HANDLE));
+    expect(sql.exec("UPDATE fill_replays SET request_hash = 'another-version' WHERE approval_id = ?", newer.id).rowsWritten).toBe(1);
+    const yes = await send(turn("turn_rsh_Y00003", "YES"));
+    expect(yes.body.status).toBe("waiting_approval");
+    expect(yes.body.text.endsWith(`\n\n${yes.body.approval!}`)).toBe(true);
+    expect(yes.body.text).not.toContain("See each step");
+    expect(pointerOf()?.approvalId).toBe(newer.id);
+    expect((await send(turn("turn_rsh_Y00004", "YES"))).body.text).toMatch(/^Done/);
+  });
+
+  it("a draft replaced while the turn binds its decision is never shown with its question or link", async () => {
+    const { newer } = await replacedQuestion("turn_rsh_G00001", "turn_rsh_H00001", { screens: true });
+    // Holds the turn's binding write until a newer draft has replaced B.
+    let release: () => void = () => undefined;
+    let reached: () => void = () => undefined;
+    const held = new Promise<void>((r) => (reached = r));
+    const gated: typeof fetch = async (input, init) => {
+      if (new URL(String(input)).pathname.endsWith("/turns") && String(init?.body).includes('"turnId":"d-')) {
+        reached();
+        await new Promise<void>((r) => (release = r));
+      }
+      return engine.fetch(input, init);
+    };
+    const answering = send(turn("turn_rsh_Y00007", "YES"), deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: gated }) }), { present: false });
+    await held;
+    const newest = await unshownDraft("turn_rsh_I00001", "5");
+    release();
+    const yes = await answering;
+    expect(yes.body.status).toBe("waiting_approval");
+    expect(yes.body.approvalId).toBe(newest.id);
+    expect(yes.body.approval).toBe(renderQuestion(newest));
+    expect(yes.body.text).not.toContain(renderQuestion(newer));
+    expect(yes.body.text).not.toContain("See each step");
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  it("Engine answers no link once the approval was replaced, decided, or expired", async () => {
+    const link = (id: string) => engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).replayLink(id);
+    const { newer } = await replacedQuestion("turn_rsh_E00001", "turn_rsh_F00001", { screens: true });
+    const older = engine.approvals().find((x) => x.id !== newer.id)!;
+    expect(older.status).toBe("rejected");
+    expect(await link(older.id)).toBeNull();
+    expect(await link(newer.id)).toMatch(/\/fill\/[0-9a-f]{32}$/);
+
+    const realNow = engine.now;
+    engine.now = () => Date.parse(newer.expiresAt) + 1;
+    expect(await link(newer.id)).toBeNull();
+    engine.now = realNow;
+
+    await send(turn("turn_rsh_Y00005", "YES"));
+    expect((await send(turn("turn_rsh_Y00006", "YES"))).body.text).toMatch(/^Done/);
+    expect(await link(newer.id)).toBeNull();
   });
 });
 

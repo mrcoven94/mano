@@ -23,6 +23,7 @@ function approval(overrides: Partial<Approval> = {}): Approval {
     remindAt: "2026-11-03T09:00:00.000Z",
     expiresAt: "2026-11-10T09:00:00.000Z",
     escalated: false,
+    attempted: false,
     ...overrides,
   };
 }

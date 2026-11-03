@@ -137,7 +137,7 @@ export interface EngineReminder {
 
 // The kinds of deadline Engine names in a nudge. With no kind, a nudge
 // names no action.
-export const DEADLINE_KINDS = ["renewal", "recertification", "interview", "hearing", "appeal", "payment", "documents"] as const;
+export const DEADLINE_KINDS = ["renewal", "recertification", "redetermination", "interview", "hearing", "appeal", "payment", "documents"] as const;
 export type DeadlineKind = (typeof DEADLINE_KINDS)[number];
 
 // A deadline Engine tracks, as its /deadlines routes return it.
@@ -197,6 +197,9 @@ export interface EngineResult {
   reason?: string;
   // A refused approve: a newer proposal replaced this one.
   superseded?: true;
+  // A refused approve: the safety check could not answer. The approval
+  // still waits and nothing ran, so the same yes can be tried again.
+  retryable?: true;
 }
 
 // The person's newest drafted approval. Engine moves it only forward, in
@@ -276,8 +279,7 @@ export class PersonEngine {
 
   // Creates the reminder, or returns the one this ID already names. A
   // conflict (same ID, different stored content) also returns the stored
-  // reminder: the ID is derived from the turn, the due time and the
-  // wording, so it is the same reminder said differently.
+  // reminder; the caller compares its words with the ones it asked for.
   async createReminder(input: { id: string; text: string; dueAt: string }): Promise<EngineReminder> {
     const res = await this.call("POST", "/reminders", { ...input, generation: this.generation });
     const body = (await res.json().catch(() => null)) as { reminder?: EngineReminder } | null;

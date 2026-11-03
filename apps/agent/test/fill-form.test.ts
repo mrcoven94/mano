@@ -6,7 +6,7 @@ import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
 import { engineFrom, type Profile } from "../agent/lib/engine.js";
 import { FORMS } from "../agent/lib/forms.js";
-import { renderQuestion } from "../agent/lib/pending.js";
+import { presentsExactly, renderQuestion } from "../agent/lib/pending.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 import { screen } from "./fill-double.js";
@@ -35,17 +35,19 @@ function profile() {
     income: [
       { id: "i1", memberId: leaf("self"), source: leaf("job"), amount: { value: 1075, source: "document", documentId: "doc-stub", updatedAt: at }, frequency: leaf("biweekly") },
     ],
-    programs: [],
+    programs: [{ id: "snap", program: leaf("SNAP"), caseNumber: leaf("WA-SNAP-0042117") }],
   };
 }
 
+// In the form's order, most important first.
 const VALUES = {
+  caseNumber: "WA-SNAP-0042117",
   fullName: "Rosa Testcase",
   dateOfBirth: "1984-03-12",
-  address: "100 Sample St, Tacoma, WA 98402",
-  phone: "253-555-0142",
   householdSize: "3",
   monthlyIncome: "2329",
+  address: "100 Sample St, Tacoma, WA 98402",
+  phone: "253-555-0142",
 };
 const FIELDS = Object.keys(VALUES);
 // The form's Continue button on this fake screen.
@@ -204,15 +206,23 @@ describe("fill_form", () => {
     const [approval] = engine.approvals();
     expect(approval.status).toBe("pending");
     const frozen = JSON.parse(approval.requestJson);
-    expect(frozen.payload).toEqual(VALUES);
+    expect(frozen.payload).toEqual({ ...VALUES, declaration: FORMS["food-renewal"]!.declaration });
     expect(frozen.documentId).toBe("doc-stub");
     expect(approval.documentHash).toMatch(/^[0-9a-f]{64}$/);
     const question = renderQuestion((await client().listApprovals())[0]);
+    expect(question).toContain("Ready to send: Food benefits renewal (to the State Benefits Renewal Office test portal).");
+    expect(question).not.toContain("sandbox-agency-portal");
     expect(question).toContain(
-      "Full legal name: Rosa Testcase; Date of birth: 1984-03-12; Mailing address: 100 Sample St, Tacoma, WA 98402; Phone number: 253-555-0142; People in household: 3; Monthly income ($): 2329.",
+      "Case number: WA-SNAP-0042117; Full legal name: Rosa Testcase; Date of birth: 1984-03-12; People in household: 3; Monthly income ($): 2329; Mailing address: 100 Sample St, Tacoma, WA 98402; Phone number: 253-555-0142.",
     );
     expect(question).toContain("With your document attached.");
     expect(model.requests.every((r) => r.store === false)).toBe(true);
+  });
+
+  it("a recipient with no display name is asked about as unnamed, never by its ID, and still reads word for word", () => {
+    const question = renderQuestion({ purpose: "Food benefits renewal", recipient: "sandbox:county-portal", requestJson: "{}" });
+    expect(question).toBe("Ready to send: Food benefits renewal (to an office Mano has no name for). Reply YES to send exactly this, or NO to stop.");
+    expect(presentsExactly(question)).toBe(true);
   });
 
   it("binds each screen up to the whole form filled to the approval it holds, captioned by field and never by value", async () => {
@@ -231,8 +241,8 @@ describe("fill_form", () => {
     // Each typed step shows its field up close, centered where Mano
     // clicked it; the replay ends on the form with all six values.
     const shown = [...page.matchAll(/data:image\/png;base64,([^"]+)"/g)].map((m) => Buffer.from(m[1]!, "base64")[33]);
-    expect(shown).toEqual([0, 1, 2, 3, 4, 5, 6, 6]);
-    expect(page.match(/<div class="zoom">/g)).toHaveLength(6);
+    expect(shown).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 7]);
+    expect(page.match(/<div class="zoom">/g)).toHaveLength(7);
     expect(page).toContain('style="width:200%;left:-23.75%;top:-25.00%"');
     expect(page).toContain("<dt>People in household</dt><dd>3</dd>");
     expect(page).toContain("This is exactly what Mano will send when you reply YES.");
@@ -415,7 +425,7 @@ describe("fill_form", () => {
     const result = await client().approve(out.approvalId as string);
     expect(result.status).toBe("completed");
     expect(engine.executor.calls).toHaveLength(1);
-    expect(engine.executor.calls[0].payload).toEqual(VALUES);
+    expect(engine.executor.calls[0].payload).toEqual({ ...VALUES, declaration: FORMS["food-renewal"]!.declaration });
     expect(engine.executor.calls[0].document?.bytesB64).toBe(btoa(PAY_STUB));
   });
 

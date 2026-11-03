@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   GlimmerChecker,
+  GlimmerModelChecker,
   MisconfiguredChecker,
   glimmerCheckerFromEnv,
 } from "../src/glimmer.js";
@@ -51,7 +52,7 @@ const SERVER = {
 };
 
 describe("GlimmerChecker", () => {
-  it("posts redacted input to the single route", async () => {
+  it("posts the action as it will be sent to the single route", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
     );
@@ -76,11 +77,7 @@ describe("GlimmerChecker", () => {
       "Modal-Key": "key",
       "Modal-Secret": "secret",
     });
-    const sent = init.body as string;
-    expect(sent).not.toContain("ana.ruiz@example.com");
-    expect(sent).not.toContain("Sunset Clinic");
-    expect(sent).toContain("[EMAIL-1]");
-    expect(sent).toContain("[RECIPIENT]");
+    expect(JSON.parse(init.body as string)).toEqual(passInput());
   });
 
   it("sends a warm-up with the same auth headers", async () => {
@@ -119,6 +116,26 @@ describe("GlimmerChecker", () => {
     await expect(checker.warm()).resolves.toBe("ready");
   });
 
+  it("reports starting when no container is up yet", async () => {
+    const fetchImpl = vi.fn(async () => new Response("no ready containers", { status: 503 }));
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(checker.warm()).resolves.toBe("starting");
+  });
+
+  it("reports a refused warm-up as failed", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ error: "unauthorized" }, 401));
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(checker.warm()).resolves.toBe("failed");
+  });
+
   it("reports a failed warm-up without throwing", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new TypeError("network down");
@@ -131,96 +148,15 @@ describe("GlimmerChecker", () => {
     await expect(checker.warm()).resolves.toBe("failed");
   });
 
-  it("sends no personal detail of any kind", async () => {
+  it("sends the action's own fields and nothing else on the input", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
     );
-    const checker = new GlimmerChecker({
-      url: "https://guardian.example.com",
-      token: "token",
-      knownEntities: { names: ["Ana Ruiz"], employers: ["Sunset Bakery"] },
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-    const body =
-      "Call (415) 555-0132 about SSN 123-45-6789. " +
-      "Ana Ruiz works at Sunset Bakery and lives at 4821 Clement Street. " +
-      "See https://example.com/Claim/9. " +
-      'File says {"dob": "03/14/1988"}.';
-    const input: CheckInput = {
-      action: {
-        type: "send",
-        recipient: "ana.ruiz@example.com",
-        purpose: "Income check DOB: 1988-03-14 case SN-2026-0417",
-        payload: {
-          to: "ana.ruiz@example.com",
-          body,
-          claims: ["Born 1988-03-14."],
-        },
-        documentHash: null,
-      },
-      sources: [
-        { kind: "message", id: "msg-files-backup@example.net", quote: body },
-        { kind: "document", id: "d1", quote: "Born 1988-03-14." },
-      ],
-      consents: [
-        {
-          recipient: "ana.ruiz@example.com",
-          purpose: "Income check DOB: 1988-03-14 case SN-2026-0417",
-        },
-        { recipient: "(415) 555-0100", purpose: "SSN check 123-45-6788" },
-      ],
-      origin: "person",
-    };
-    const result = await checker.check(input);
-    expect(result).toEqual({ verdict: "pass", problems: [] });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    const sent = init.body as string;
-    for (const secret of [
-      "ana.ruiz@example.com",
-      "files-backup@example.net",
-      "(415) 555-0132",
-      "(415) 555-0100",
-      "123-45-6789",
-      "123-45-6788",
-      "Ana Ruiz",
-      "Sunset Bakery",
-      "4821 Clement Street",
-      "https://example.com/Claim/9",
-      "03/14/1988",
-      "1988-03-14",
-      "SN-2026-0417",
-      "Claim/9",
-    ]) {
-      expect(sent).not.toContain(secret);
-    }
-    for (const label of [
-      "[RECIPIENT]",
-      "[OTHER-1]",
-      "[PHONE-1]",
-      "[URL-1]",
-      "[EMAIL-1]",
-      "[ID]",
-      "[NAME]",
-      "[EMPLOYER]",
-      "[ADDRESS]",
-      "[DATE OF BIRTH]",
-      "[CASE NUMBER]",
-    ]) {
-      expect(sent).toContain(label);
-    }
-  });
-
-  it("sends known fields only, with distinct labels for distinct paths", async () => {
-    const fetchImpl = vi.fn(async () =>
-      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
-    );
-    const checker = new GlimmerChecker({
+    const checker = new GlimmerModelChecker({
       url: "https://guardian.example.com",
       token: "token",
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    const body = "See https://example.com/Claim and https://example.com/claim.";
     const input: CheckInput = {
       action: {
         type: "send",
@@ -228,69 +164,23 @@ describe("GlimmerChecker", () => {
         purpose: "Renewal notice",
         payload: {
           to: "https://example.com/Claim",
-          body,
+          body: "See https://example.com/Claim and https://example.com/claim.",
+          cc: "attacker@example.com",
         },
         documentHash: "abc123",
       },
-      sources: [{ kind: "message", id: "1975-06-30", quote: body }],
+      sources: [{ kind: "message", id: "1975-06-30" }],
       consents: [
         { recipient: "https://example.com/Claim", purpose: "Renewal notice" },
       ],
       origin: "person",
     };
-    (input.action as unknown as Record<string, unknown>)["cc"] =
-      "attacker@example.com";
-    (input as unknown as Record<string, unknown>)["note"] = "SSN 999-99-9999";
-    const result = await checker.check(input);
-    expect(result).toEqual({ verdict: "pass", problems: [] });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const expected = structuredClone(input);
+    (input.action as unknown as Record<string, unknown>)["internal"] = "not part of the action";
+    (input as unknown as Record<string, unknown>)["note"] = "not part of the action";
+    await checker.check(input);
     const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    const sent = init.body as string;
-    for (const secret of [
-      "attacker@example.com",
-      "999-99-9999",
-      "1975-06-30",
-      "https://example.com/Claim",
-      "https://example.com/claim",
-    ]) {
-      expect(sent).not.toContain(secret);
-    }
-    const wire = JSON.parse(sent) as Record<string, unknown>;
-    expect(Object.keys(wire).sort()).toEqual([
-      "action",
-      "consents",
-      "origin",
-      "sources",
-    ]);
-    const action = wire["action"] as Record<string, unknown>;
-    expect(Object.keys(action).sort()).toEqual([
-      "payload",
-      "purpose",
-      "recipient",
-      "type",
-    ]);
-    expect(action["recipient"]).toBe("[RECIPIENT]");
-    const payload = action["payload"] as Record<string, unknown>;
-    expect(Object.keys(payload).sort()).toEqual(["body", "to"]);
-    expect(payload["body"]).toBe("See [RECIPIENT] and [URL-1]");
-    const sources = wire["sources"] as Record<string, unknown>[];
-    expect(Object.keys(sources[0] ?? {}).sort()).toEqual(["id", "kind", "quote"]);
-    expect(sources[0]?.["id"]).toBe("[DATE]");
-  });
-
-  it("redacts known names before sending", async () => {
-    const fetchImpl = vi.fn(async () =>
-      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
-    );
-    const checker = new GlimmerChecker({
-      url: "https://guardian.example.com",
-      token: "token",
-      knownEntities: { names: ["Ana Ruiz"] },
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-    await checker.check(passInput());
-    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(init.body as string).not.toContain("Ana Ruiz");
+    expect(JSON.parse(init.body as string)).toEqual(expected);
   });
 
   it("passes fix and block verdicts through", async () => {
@@ -432,11 +322,103 @@ describe("GlimmerChecker", () => {
     });
     const result = await checker.check(passInput());
     expect(result.verdict).toBe("block");
-    expect(result.problems.join(" ")).toMatch(/timed out after 10 seconds/);
+    expect(result.problems.join(" ")).toMatch(/try again in a few minutes/);
+  });
+
+  it("asks the model without Guardian's rules when used alone", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
+    );
+    const checker = new GlimmerModelChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await checker.check(blockInput());
+    expect(result).toEqual({ verdict: "pass", problems: [] });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a 503 from Modal's proxy", () => {
+    const unavailable = () => new Response('{"error":"no upstreams available"}', { status: 503 });
+
+    function answering(...responses: (() => Response)[]) {
+      const fetchImpl = vi.fn(async () => (responses.shift() ?? unavailable)());
+      const checker = new GlimmerModelChecker({
+        url: "https://guardian.example.com",
+        token: "token",
+        timeoutMs: 10_000,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      return { fetchImpl, checker };
+    }
+
+    async function checkWithRetryDelay(checker: GlimmerModelChecker) {
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+      try {
+        const pending = checker.check(passInput());
+        await vi.advanceTimersByTimeAsync(1_000);
+        return await pending;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    it("is retried once after a second, and the real verdict counts", async () => {
+      const { fetchImpl, checker } = answering(unavailable, () =>
+        jsonResponse({ verdict: "fix", problems: ["Say which month."], ...SERVER }),
+      );
+      const result = await checkWithRetryDelay(checker);
+      expect(result).toEqual({ verdict: "fix", problems: ["Say which month."] });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      const bodies = fetchImpl.mock.calls.map((call) => (call as unknown as [string, RequestInit])[1].body);
+      expect(bodies[0]).toBe(bodies[1]);
+    });
+
+    it("blocks as a cold start when the retry gets 503 too", async () => {
+      const { fetchImpl, checker } = answering(unavailable, unavailable);
+      const result = await checkWithRetryDelay(checker);
+      expect(result.verdict).toBe("block");
+      expect(result.problems.join(" ")).toMatch(/try again in a few minutes/);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it("never passes on a retry that brings no real verdict", async () => {
+      for (const second of [
+        () => new Response("ok", { status: 200 }),
+        () => jsonResponse({ problems: [] }),
+        () => jsonResponse({ verdict: "pass", problems: ["x"] }),
+        () => jsonResponse({}, 500),
+      ]) {
+        const { checker } = answering(unavailable, second);
+        const result = await checkWithRetryDelay(checker);
+        expect(result.verdict).toBe("block");
+      }
+    });
+
+    it("is not retried when a full check no longer fits the budget", async () => {
+      const fetchImpl = vi.fn(async () => unavailable());
+      const checker = new GlimmerModelChecker({
+        url: "https://guardian.example.com",
+        token: "token",
+        timeoutMs: 7_500,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      const result = await checker.check(passInput());
+      expect(result.verdict).toBe("block");
+      expect(result.problems.join(" ")).toMatch(/try again in a few minutes/);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("is not retried on a warm-up", async () => {
+      const { fetchImpl, checker } = answering(unavailable, unavailable);
+      await expect(checker.warm()).resolves.toBe("starting");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("blocks on an error status", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({}, 503));
+    const fetchImpl = vi.fn(async () => jsonResponse({}, 500));
     const checker = new GlimmerChecker({
       url: "https://guardian.example.com",
       token: "token",

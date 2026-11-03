@@ -120,6 +120,47 @@ describe("creating a deadline", () => {
     ]);
   });
 
+  it("a November 14 deadline across the November 1 change: 10:00 local in California, New York and Hawaii", async () => {
+    // Learned October 15. The 14-day nudge (October 31) is in daylight
+    // time; the rest are after the change. Hawaii keeps UTC-10 all year.
+    const atFor = async (state: string) => {
+      const out = await track(openDb(), letter({ dueDate: "2026-11-14" }), Date.parse("2026-10-15T19:00:00Z"), timeZoneForState(state));
+      if (!("deadline" in out)) throw new Error("no deadline");
+      return out.deadline.nudges.map((n) => [n.daysBefore, n.at]);
+    };
+    expect(await atFor("CA")).toEqual([
+      [14, "2026-10-31T17:00:00.000Z"],
+      [7, "2026-11-07T18:00:00.000Z"],
+      [2, "2026-11-12T18:00:00.000Z"],
+      [0, "2026-11-14T18:00:00.000Z"],
+    ]);
+    expect(await atFor("NY")).toEqual([
+      [14, "2026-10-31T14:00:00.000Z"],
+      [7, "2026-11-07T15:00:00.000Z"],
+      [2, "2026-11-12T15:00:00.000Z"],
+      [0, "2026-11-14T15:00:00.000Z"],
+    ]);
+    expect(await atFor("HI")).toEqual([
+      [14, "2026-10-31T20:00:00.000Z"],
+      [7, "2026-11-07T20:00:00.000Z"],
+      [2, "2026-11-12T20:00:00.000Z"],
+      [0, "2026-11-14T20:00:00.000Z"],
+    ]);
+  });
+
+  it("MANO_NUDGE_TIME is a local wall time; outside 9:00 to 20:00 it is ignored", () => {
+    expect(nudgeTimeOf({ MANO_NUDGE_TIME: "09:30" })).toEqual({ hour: 9, minute: 30 });
+    for (const bad of ["03:00", "20:00", "9:30", "noon"]) expect(nudgeTimeOf({ MANO_NUDGE_TIME: bad })).toEqual(TEN);
+    const plan = planNudges("2026-11-14", "America/New_York", Date.parse("2026-10-15T19:00:00Z"), nudgeTimeOf({ MANO_NUDGE_TIME: "18:45" }));
+    // 18:45 Eastern: 22:45 UTC in daylight time, 23:45 UTC after the change.
+    expect(plan.map((p) => new Date(p.atMs).toISOString())).toEqual([
+      "2026-10-31T22:45:00.000Z",
+      "2026-11-07T23:45:00.000Z",
+      "2026-11-12T23:45:00.000Z",
+      "2026-11-14T23:45:00.000Z",
+    ]);
+  });
+
   it("learned 12 days out, Mano starts with one nudge at the next 10:00 and then follows the schedule", () => {
     // Noon on October 29, due November 10: 14 days out already passed.
     const plan = planNudges("2026-11-10", PACIFIC, NOW, TEN);

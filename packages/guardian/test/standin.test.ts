@@ -114,6 +114,6 @@ describe("GlimmerChecker against the local stand-in", () => {
     const checker = new GlimmerChecker({ url, token: TOKEN, timeoutMs: 200 });
     const result = await checker.check(passInput());
     expect(result.verdict).toBe("block");
-    expect(result.problems.join(" ")).toMatch(/timed out/);
+    expect(result.problems.join(" ")).toMatch(/try again in a few minutes/);
   });
 });

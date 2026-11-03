@@ -21,6 +21,8 @@
 // Every view asks the approval again. Only a version a YES would still
 // send exactly, or the one the person already said yes to, shows its
 // steps; a draft that changed or was replaced says so and shows none.
+import { recipientName } from "@mano/protocol";
+
 import { currentGeneration } from "./agents/agent-state.js";
 import type { Approval } from "./gateway/types.js";
 import { CURRENT_GENERATION } from "./gateway/sql-store.js";
@@ -252,10 +254,30 @@ export async function finishLinkCleanup(sql: SqlExec, deleteObjects: (keys: stri
   for (const key of keys) sql.exec("DELETE FROM fill_link_cleanup WHERE link_key = ?", key);
 }
 
-// The link's token while it still opens, or null.
-export async function replayLinkToken(deps: { sql: SqlExec; storage: ReplayStorage }, approvalId: string, nowMs: number): Promise<string | null> {
-  const replay = getFillReplayLink(deps.sql, approvalId);
-  return replay && replay.linkExpiresAtMs > nowMs ? deps.storage.openToken(approvalId, replay.sealedToken) : null;
+// The link's token while the question it goes with can still be
+// answered: the link opens and the approval still waits, unexpired, as
+// the latest proposal, under the version the fill was bound to. Anything
+// else gets no link, so no question shown later points at steps of a
+// version the person can no longer say yes to.
+// The rows and the clock are read again after the token opens: another
+// request may replace or decide the approval while it does, and it or
+// the link may expire.
+export async function replayLinkToken(
+  deps: { sql: SqlExec; approvals: ReplayApprovals; storage: ReplayStorage },
+  approvalId: string,
+  now: () => number,
+): Promise<string | null> {
+  const linkable = () => {
+    const nowMs = now();
+    const replay = getFillReplayLink(deps.sql, approvalId);
+    const approval = deps.approvals.getApproval(approvalId);
+    if (!replay || !approval || replay.linkExpiresAtMs <= nowMs) return null;
+    return settledState(replayFacts(deps.approvals, replay, approval, nowMs)) === null ? replay : null;
+  };
+  const replay = linkable();
+  if (!replay) return null;
+  const token = await deps.storage.openToken(approvalId, replay.sealedToken);
+  return linkable() ? token : null;
 }
 
 export async function linkKey(token: string): Promise<string> {
@@ -335,6 +357,17 @@ interface ReplayFacts {
   expired: boolean;
 }
 
+function replayFacts(approvals: ReplayApprovals, replay: Pick<StoredReplay, "requestHash">, approval: Approval, nowMs: number): ReplayFacts {
+  return {
+    status: approval.status,
+    boundHash: replay.requestHash,
+    requestHash: approval.requestHash,
+    current: approvals.approvalCurrent(approval.id),
+    latest: approvals.proposalCurrent(approval.id),
+    expired: Date.parse(approval.expiresAt) <= nowMs,
+  };
+}
+
 // The state the approval's own row decides, or null while it still waits
 // for a yes: then only the document check can say whether it is current.
 function settledState(facts: ReplayFacts): ReplayState | null {
@@ -363,15 +396,7 @@ export async function replayPage(
     if (!replay || !timingSafeEqual(replay.linkKey, key) || replay.linkExpiresAtMs <= deps.nowMs) return null;
     const approval = deps.approvals.getApproval(approvalId);
     if (!approval) return null;
-    const facts: ReplayFacts = {
-      status: approval.status,
-      boundHash: replay.requestHash,
-      requestHash: approval.requestHash,
-      current: deps.approvals.approvalCurrent(approvalId),
-      latest: deps.approvals.proposalCurrent(approvalId),
-      expired: Date.parse(approval.expiresAt) <= deps.nowMs,
-    };
-    return { replay, approval, facts };
+    return { replay, approval, facts: replayFacts(deps.approvals, replay, approval, deps.nowMs) };
   };
   const first = read(getFillReplay(deps.sql, approvalId));
   if (!first) return null;
@@ -391,7 +416,7 @@ export async function replayPage(
   return renderReplayPage({
     state,
     purpose: approval.purpose,
-    recipient: approval.recipient,
+    recipient: recipientName(approval.recipient),
     steps: replay.steps.map((s, i) => ({ ...s, png: images[i]! })),
     ...frozenFields(approval.requestJson, replay.labels),
   });

@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { createExecutor } from "../src/gateway/executors.js";
+import { PORTAL_DECLARATION, createExecutor } from "../src/gateway/executors.js";
 import type { ActionRequest } from "../src/gateway/types.js";
 
 // The engine refuses a sandbox filing before the approval question by the
@@ -24,12 +24,14 @@ function submit(address: string, documentBytes: number): ActionRequest {
     recipient: "sandbox-agency-portal",
     purpose: "Food benefits renewal in the sandbox agency portal",
     payload: {
+      caseNumber: "WA-SNAP-0042117",
       fullName: "Rosa Testcase",
       dateOfBirth: "1984-03-12",
       address,
       phone: "253-555-0142",
       householdSize: "3",
       monthlyIncome: "2150",
+      declaration: PORTAL_DECLARATION,
     },
     idempotencyKey: "agent:g1:turn-1:d0",
     actor: "foreground",

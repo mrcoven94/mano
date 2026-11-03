@@ -1,4 +1,3 @@
-import { buildModelRequest, type KnownEntities } from "./redact.js";
 import { RulesChecker } from "./rules.js";
 import type { CheckInput, CheckResult, Checker, Verdict, WarmState } from "./types.js";
 
@@ -13,7 +12,7 @@ export interface ProxyAuth {
 
 export interface GlimmerCheckerOptions {
   // URL of the guardian check endpoint, posted to as given, for example
-  // https://workspace--mano-guardian-check.modal.run.
+  // https://workspace--mano-guardian-server-check.us-east.modal.direct.
   url: string;
   // Bearer token checked inside the container.
   token: string;
@@ -24,8 +23,6 @@ export interface GlimmerCheckerOptions {
   model?: string;
   // Per-check timeout in milliseconds. A timeout is a block.
   timeoutMs?: number;
-  // Names and employers to redact before sending.
-  knownEntities?: KnownEntities;
   fetchImpl?: typeof fetch;
 }
 
@@ -66,22 +63,68 @@ function blocked(problem: string): CheckResult {
   return { verdict: "block", problems: [problem] };
 }
 
+// Guardian scales to zero, and a cold start takes minutes. Modal answers
+// 503 while no container is up, and a check can also time out while one
+// starts. An immediate retry would find it cold again.
+const STARTING = 503;
+const RETRY_DELAY_MS = 1_000;
+// A warm check measured 4.4 to 6.3 seconds.
+const RETRY_MIN_MS = 7_000;
+const COLD =
+  "The safety check is taking longer than usual, so this action is on hold. Please try again in a few minutes.";
+
 const UNREADABLE =
   "The safety check answered in a way Mano could not understand, so this action is on hold.";
 
-// Model-backed checker. Runs the local rules first and only asks the model
-// when the rules pass. The request carries a redacted copy of the input to
-// the check endpoint. Any failure (network, timeout, error status,
-// unparsable or invalid answer, contradictory verdict) is a block with a
-// message a person can read.
-export class GlimmerChecker implements Checker {
-  private readonly rules = new RulesChecker();
+// What Guardian receives: the action as Mano would send it, every value as
+// written, with the sources it cites, the consents on record and who
+// asked for it. Nothing is removed or relabeled, so nothing can hide an
+// attack from Guardian (docs/decisions.md, November 3, 2026).
+function modelRequest(input: CheckInput): CheckInput {
+  const { type, recipient, purpose, payload, documentHash } = input.action;
+  return {
+    action: { type, recipient, purpose, payload, documentHash },
+    sources: input.sources.map(({ kind, id, quote }) => (quote === undefined ? { kind, id } : { kind, id, quote })),
+    consents: input.consents.map(({ recipient, purpose }) => ({ recipient, purpose })),
+    origin: input.origin,
+  };
+}
+
+// The renewal form's personal fields (PORTAL_HOUSEHOLD in Engine's
+// executors). None of them ever holds an email address or a link, so one
+// that does is held with a plain reason before Guardian is asked. Guardian
+// reads every field anyway; this only makes the plainest case certain.
+const PERSONAL_FIELDS: Record<string, string> = {
+  fullName: "full name",
+  dateOfBirth: "date of birth",
+  address: "mailing address",
+  phone: "phone number",
+};
+const EMAIL_OR_LINK = /@|:\/\//;
+
+function formProblems(input: CheckInput): string[] {
+  const form = input.action.payload;
+  if (input.action.type !== "submit" || typeof form !== "object" || form === null || Array.isArray(form)) return [];
+  const fields = form as Record<string, unknown>;
+  return Object.entries(PERSONAL_FIELDS).flatMap(([name, what]) => {
+    const value = fields[name];
+    return typeof value === "string" && EMAIL_OR_LINK.test(value)
+      ? [`The ${what} on the form holds an email address or a link, so this action is on hold.`]
+      : [];
+  });
+}
+
+// The guardian model alone, with no local rules in front. The request
+// carries the action to the check endpoint. Any failure
+// (network, timeout, error status, unparsable or invalid answer,
+// contradictory verdict) is a block with a message a person can read.
+// Engine runs its own rules first and then this.
+export class GlimmerModelChecker implements Checker {
   private readonly url: string;
   private readonly token: string;
   private readonly proxyAuth: ProxyAuth | null;
   private readonly model: string;
   private readonly timeoutMs: number;
-  private readonly knownEntities: KnownEntities | undefined;
   private readonly fetchImpl: typeof fetch;
   private lastServer: ServerInfo | null = null;
 
@@ -91,7 +134,6 @@ export class GlimmerChecker implements Checker {
     this.proxyAuth = options.proxyAuth ?? null;
     this.model = options.model ?? DEFAULT_GUARDIAN_MODEL;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
-    this.knownEntities = options.knownEntities;
     this.fetchImpl = options.fetchImpl ?? boundFetch;
   }
 
@@ -118,20 +160,26 @@ export class GlimmerChecker implements Checker {
     return headers;
   }
 
+  private post(body: string, timeoutMs: number): Promise<Response> {
+    return this.fetchImpl(this.url, {
+      method: "POST",
+      headers: this.headers(),
+      body,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  }
+
   // Asks the endpoint to start the model and keep it up for about ten
   // minutes, so a check soon after finds it ready. Call it when a
   // conversation starts. "ready" means the model is loaded now, "starting"
   // that it is on its way (a cold start takes minutes), "failed" that the
   // endpoint refused or could not be reached. A failure changes nothing,
-  // since a cold check still blocks.
+  // since a cold check still blocks. With no container up, Modal's proxy
+  // answers 503 and starts one.
   async warm(): Promise<WarmState> {
     try {
-      const response = await this.fetchImpl(this.url, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify({ warm: true }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
+      const response = await this.post(JSON.stringify({ warm: true }), this.timeoutMs);
+      if (response.status === STARTING) return "starting";
       if (!response.ok) return "failed";
       const body = (await response.json()) as unknown;
       const ready =
@@ -145,29 +193,31 @@ export class GlimmerChecker implements Checker {
   }
 
   async check(input: CheckInput): Promise<CheckResult> {
-    const rules = await this.rules.check(input);
-    if (rules.verdict === "block") return rules;
     this.lastServer = null;
+    const malformed = formProblems(input);
+    if (malformed.length > 0) return { verdict: "block", problems: malformed };
 
+    const body = JSON.stringify(modelRequest(input));
+    const deadline = Date.now() + this.timeoutMs;
     let response: Response;
     try {
-      response = await this.fetchImpl(this.url, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(buildModelRequest(input, this.knownEntities)),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "TimeoutError") {
-        return blocked(
-          `The safety check timed out after ${Math.round(this.timeoutMs / 1000)} seconds, so this action is on hold. Please try again.`,
-        );
+      response = await this.post(body, this.timeoutMs);
+      // Modal's proxy can still answer 503 for about a second after a
+      // container is ready. Retry once if a full check still fits the budget.
+      const left = deadline - Date.now() - RETRY_DELAY_MS;
+      if (response.status === STARTING && left >= RETRY_MIN_MS) {
+        await response.body?.cancel();
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        response = await this.post(body, left);
       }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "TimeoutError") return blocked(COLD);
       return blocked(
         "The safety check could not be reached, so this action is on hold. Please try again.",
       );
     }
 
+    if (response.status === STARTING) return blocked(COLD);
     if (!response.ok) {
       return blocked(
         "The safety check returned an error, so this action is on hold. Please try again.",
@@ -226,6 +276,18 @@ export class GlimmerChecker implements Checker {
       };
     }
     return { verdict, problems: [...problems] };
+  }
+}
+
+// Model-backed checker. Runs Guardian's local rules first and only asks
+// the model when the rules pass.
+export class GlimmerChecker extends GlimmerModelChecker {
+  private readonly rules = new RulesChecker();
+
+  override async check(input: CheckInput): Promise<CheckResult> {
+    const rules = await this.rules.check(input);
+    if (rules.verdict === "block") return rules;
+    return super.check(input);
   }
 }
 

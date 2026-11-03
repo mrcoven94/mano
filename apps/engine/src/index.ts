@@ -37,7 +37,8 @@
 //                                              proposalTurn names the turn an agent draft belongs to
 //   GET  /api/persons/:id/approvals
 //   POST /api/persons/:id/approvals/supersede     { generation } closes every waiting draft but the latest
-//   POST /api/persons/:id/approvals/:aid/approve
+//   POST /api/persons/:id/approvals/:aid/approve  a YES; retryable:true when the safety check could not
+//                                              answer and the approval still waits for another YES
 //   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
 //   PUT  /api/persons/:id/approvals/:aid/replay   { generation, labels, steps: [{ caption, pngB64 }] } (agent):
 //                                              the screens of the fill behind a waiting approval; first bind wins.
@@ -45,7 +46,9 @@
 //                                              409 no longer waiting. The caller joins the path to the
 //                                              Engine address it uses: under wrangler dev a request's own
 //                                              URL names the production route, not the local worker.
-//   GET  /api/persons/:id/approvals/:aid/replay   { path } of the replay page while its link opens, else 404
+//   GET  /api/persons/:id/approvals/:aid/replay   { path } of the replay page while its link opens and the
+//                                              approval still waits, unexpired and latest, under the
+//                                              version the fill was bound to; else 404
 //   GET  /fill/:token                          the replay page (src/fill-replay.ts): the token is the only key,
 //                                              and the page asks the approval again on every view
 //   GET  /api/persons/:id/memory
@@ -93,9 +96,12 @@
 //
 // Gateway and checker: src/gateway holds request validation, policy, link
 // checks, the Checker hook, hash-bound approvals, single-flight attempts
-// and timeout reconcile. The checker shape (CheckInput, CheckResult,
-// Checker) is the Guardian session's contract; LocalRulesChecker is the
-// default until it lands.
+// and timeout reconcile. With MANO_GUARDIAN_URL and MANO_GUARDIAN_TOKEN
+// (plus MANO_GUARDIAN_KEY_ID and MANO_GUARDIAN_KEY_SECRET for Modal's
+// proxy), every action gets the local rules and then Guardian before the
+// person is asked, and again at their yes (src/gateway/guardian.ts).
+// With none of them set the checker is local rules only. /health says
+// which (live.checker), and a half-set Guardian config reports ok:false.
 //
 // Executors: EXECUTOR_MODE=simulated (explicit, or the default in
 // development) records calls and labels receipts simulated, except share
@@ -118,7 +124,8 @@
 // Same for ENCRYPTION_KEK_B64 (32 bytes, base64), SESSION_SECRET and
 // OPERATOR_SECRET, and the optional CF_ACCOUNT_ID, AI_GATEWAY_ID,
 // AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA, MANO_ENV, EXECUTOR_MODE,
-// SANDBOX_BASE_URL, SANDBOX_PORTAL_TOKEN.
+// SANDBOX_BASE_URL, SANDBOX_PORTAL_TOKEN, MANO_GUARDIAN_URL,
+// MANO_GUARDIAN_TOKEN, MANO_GUARDIAN_KEY_ID and MANO_GUARDIAN_KEY_SECRET.
 //
 // Deploy: ask David before the first deploy. After that, deploys go
 // through GitHub by pushing. Never run a production deploy from a laptop.
@@ -143,7 +150,7 @@ import {
   mintWsTicket,
   sessionConfigured,
 } from "./auth.js";
-import { createExecutor } from "./gateway/index.js";
+import { checkerSetting, createExecutor, type CheckerSetting } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
 import { profilePatchResponse } from "./profile.js";
@@ -301,6 +308,7 @@ export interface LiveStatus {
   executor: string;
   files: "bound" | "missing";
   kek: boolean;
+  checker: CheckerSetting["kind"];
 }
 
 export function liveStatus(env: Env): LiveStatus {
@@ -311,6 +319,7 @@ export function liveStatus(env: Env): LiveStatus {
     executor: env.EXECUTOR_MODE ?? "simulated",
     files: env.FILES ? "bound" : "missing",
     kek: Boolean(env.ENCRYPTION_KEK_B64),
+    checker: checkerSetting(env).kind,
   };
 }
 
@@ -331,6 +340,7 @@ export function healthOk(env: Env): boolean {
   ) {
     return false;
   }
+  if (checkerSetting(env).kind === "guardian-misconfigured") return false;
   try {
     createExecutor(env);
   } catch {

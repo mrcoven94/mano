@@ -1,11 +1,14 @@
 // bench: run suites through their answer paths and write a run folder.
 // Usage: node src/bin/bench.ts [--suite chat] [--broken] [--out runs/local]
+// [--letters-version 1] (the letters suite as version 1 drew it, to compare
+// with results recorded before version 2)
 
 import { execFileSync } from "node:child_process";
 import { dnsFromEnv } from "../links.ts";
 import { finishReport, runBench } from "../run.ts";
 import { writeRun } from "../report.ts";
 import { SUITE_NAMES } from "../suites/build.ts";
+import { isLettersVersion } from "../suites/letters.ts";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -24,6 +27,12 @@ const startedAt = new Date().toISOString();
 const suiteArg = arg("--suite");
 const out = arg("--out") ?? `runs/${startedAt.slice(0, 10)}-local`;
 const broken = process.argv.includes("--broken");
+const lettersArg = arg("--letters-version");
+const lettersVersion = lettersArg === undefined ? undefined : Number(lettersArg);
+if (lettersVersion !== undefined && !isLettersVersion(lettersVersion)) {
+  console.error(`--letters-version must be 1 or 2, not ${lettersArg}`);
+  process.exit(2);
+}
 
 if (process.argv.includes("--list")) {
   console.log(SUITE_NAMES.join("\n"));
@@ -33,6 +42,7 @@ if (process.argv.includes("--list")) {
 const { report, results, paths, judge, skippedSuites, expectedCaseIds } = await runBench({
   suites: suiteArg ? [suiteArg] : undefined,
   broken,
+  lettersVersion,
 });
 if (skippedSuites.length > 0) {
   console.error(`requested suites skipped: ${skippedSuites.join(", ")}`);

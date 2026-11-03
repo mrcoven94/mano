@@ -6,10 +6,12 @@
 // the document bytes they carry, computed through the injected hasher.
 
 import { b64encode, utf8ToBytes } from "../base64";
+import { provenNotSent } from "../sent-proof";
 import {
   APPROVED_NOTICE,
   APPROVE_FOLLOWUP,
   CASEWORKER_REQUEST,
+  DECLINE_REPLY,
   FALLBACK_REPLY,
   GREETING,
   MAIL_REPLY,
@@ -25,6 +27,7 @@ import {
 import type {
   Approval,
   ApprovalDocument,
+  DeclineAnswer,
   ApproveResult,
   ChatMessage,
   Deadline,
@@ -70,6 +73,7 @@ export class StandInClient implements ManoClient {
   private seeded = false;
   private mailReceived = false;
   private renewalApproved: ApproveResult | null = null;
+  private renewalDeclined = false;
   private paystubReceived = false;
   private grants: Grant[] = [];
   private docs: StoredDoc[] = [];
@@ -143,6 +147,15 @@ export class StandInClient implements ManoClient {
     return stored;
   }
 
+  // The one decision read. A YES or NO checks it after its last await
+  // and writes in the same synchronous step, so of two racing decisions
+  // exactly one finds the renewal pending.
+  private renewalStatus(): DeclineAnswer["status"] | "pending" {
+    if (this.renewalApproved) return "approved";
+    if (this.renewalDeclined) return "rejected";
+    return "pending";
+  }
+
   private async currentApproval(): Promise<Approval> {
     const doc = await this.renewalDoc();
     const requestJson = JSON.stringify({
@@ -168,12 +181,13 @@ export class StandInClient implements ManoClient {
       requestJson,
       requestHash,
       idempotencyKey: "spine:renewal:maria-001",
-      status: this.renewalApproved ? "approved" : "pending",
+      status: this.renewalStatus(),
       problems: [],
       createdAt: "2026-10-28T09:20:00.000Z",
       remindAt: "2026-11-03T09:00:00.000Z",
       expiresAt: "2026-11-10T09:00:00.000Z",
       escalated: false,
+      attempted: this.renewalApproved !== null,
     };
   }
 
@@ -329,7 +343,7 @@ export class StandInClient implements ManoClient {
       return { text: deadlinesReply(open), followUps: [] };
     }
     if (lower.includes("approv")) {
-      return { text: approvalsReply(this.mailReceived && !this.renewalApproved ? 1 : 0), followUps: [] };
+      return { text: approvalsReply(this.mailReceived && this.renewalStatus() === "pending" ? 1 : 0), followUps: [] };
     }
     if (lower.includes("hola") || lower.includes("espa")) {
       return { text: "Claro, hablamos español. Fotografíe su correo para empezar, o pregúnteme por sus fechas límite.", followUps: [] };
@@ -363,7 +377,8 @@ export class StandInClient implements ManoClient {
     this.checkSession(session);
     const current = await this.currentApproval();
     if (approvalId !== current.id) throw new StaleApprovalError("stale");
-    if (current.status !== "pending") throw new StaleApprovalError(current.status);
+    const status = this.renewalStatus();
+    if (status !== "pending") throw new StaleApprovalError(status);
     if (expected.documentHash !== current.documentHash || expected.requestHash !== current.requestHash) {
       throw new StaleApprovalError("stale");
     }
@@ -401,6 +416,32 @@ export class StandInClient implements ManoClient {
       done: false,
     });
     return this.renewalApproved;
+  }
+
+  // A NO ends only a pending renewal and says so in chat once; a repeat,
+  // or a NO after a YES, answers with the status already on file.
+  async decline(session: Session, approvalId: string): Promise<DeclineAnswer> {
+    await this.wait();
+    this.checkSession(session);
+    const current = await this.currentApproval();
+    if (approvalId !== current.id) throw new Error("Approval not found.");
+    const status = this.renewalStatus();
+    if (status !== "pending") return this.answerNo(current, status);
+    this.renewalDeclined = true;
+    this.messages.push({
+      id: this.nextId("msg"),
+      role: "agent",
+      text: DECLINE_REPLY,
+      createdAt: this.iso(),
+      attachments: [],
+      status: "sent",
+    });
+    return this.answerNo(current, "rejected");
+  }
+
+  // Judged from the live decision, not the snapshot read before it.
+  private answerNo(current: Approval, status: DeclineAnswer["status"]): DeclineAnswer {
+    return { status, notSent: provenNotSent([{ ...current, status, attempted: this.renewalApproved !== null }]) };
   }
 
   // --- deadlines ---

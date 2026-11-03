@@ -7,6 +7,7 @@
   },
   "scripts": {
     "check": "node scripts/check-markdown.mjs && node --check scripts/status.mjs && pnpm -r --if-present run check",
-    "eval:baselines": "pnpm --filter ./eval run baselines"
+    "eval:baselines": "pnpm --filter ./eval run baselines",
+    "judge": "pnpm --filter @mano/quality judge"
   }
 }

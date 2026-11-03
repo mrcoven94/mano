@@ -445,6 +445,24 @@ describe("the delivery wake-up", () => {
     expect((await deliverySchedules(h)).length).toBe(1);
   });
 
+  it("a retry whose ID names a reminder stored with other content repairs a lost wake-up too", async () => {
+    const h = handle("conflict-wakeup");
+    recordChannels();
+    const r = { id: "con:0", text: "Repair me.", dueAt: "2026-12-01T15:00:00.000Z", generation: 0 };
+    await call(h, "POST", "/reminders", r);
+    await runInDurableObject(stubFor(h), async (instance) => {
+      const agent = instance as PersonAgent;
+      for (const x of await agent.listSchedules()) {
+        if (x.callback === "deliverDueReminders") await agent.cancelSchedule(x.id);
+      }
+    });
+    const retry = await call(h, "POST", "/reminders", { ...r, dueAt: "2026-12-01T12:00:00.000Z" });
+    expect(((await retry.json()) as { reminder: { dueAt: string } }).reminder.dueAt).toBe(r.dueAt);
+    const wakeups = await deliverySchedules(h);
+    expect(wakeups.length).toBe(1);
+    expect(wakeups[0].time).toBe(Date.parse(r.dueAt) / 1000);
+  });
+
   it("restart recovery keeps exactly one wake-up when a crash left extra schedules", async () => {
     const h = handle("crash-wakeup");
     recordChannels();

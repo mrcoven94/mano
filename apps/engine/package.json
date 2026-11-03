@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit && vitest run && vitest run --config vitest.node.config.ts",
+    "check": "tsc --noEmit && vitest run && vitest run --config vitest.node.config.ts && vitest run --config vitest.guardian.config.ts",
     "test": "vitest run",
     "test:node": "vitest run --config vitest.node.config.ts",
     "smoke": "node scripts/smoke.mjs",
@@ -13,6 +13,7 @@
     "types": "wrangler types"
   },
   "dependencies": {
+    "@mano/guardian": "workspace:*",
     "@mano/protocol": "workspace:*",
     "agents": "^0.30.1"
   },

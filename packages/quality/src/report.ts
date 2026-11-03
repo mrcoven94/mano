@@ -25,12 +25,16 @@ export interface SuiteComparison {
   suite: string;
   hardBefore: number;
   hardAfter: number;
-  hardDelta: number;
+  // Null when the two runs answered different versions of the suite.
+  hardDelta: number | null;
   judgeBefore: number;
   judgeAfter: number;
-  judgeDelta: number;
+  judgeDelta: number | null;
   gateBefore: boolean;
   gateAfter: boolean;
+  // Set when the runs answered different suite versions, as in
+  // "not comparable (v1 vs v2)": their scores measure different cases.
+  notComparable?: string;
 }
 
 export type GateStatus = "pass" | "fail" | "neutral";
@@ -95,12 +99,14 @@ export function compareSuites(before: RunReport, after: RunReport): SuiteCompari
     const hardAfter = a?.hardCheckPassRate ?? 0;
     const judgeBefore = b?.judgeMean ?? 0;
     const judgeAfter = a?.judgeMean ?? 0;
+    const notComparable = b && a && b.version !== a.version ? `not comparable (v${b.version} vs v${a.version})` : undefined;
     return {
       suite,
-      hardBefore, hardAfter, hardDelta: hardAfter - hardBefore,
-      judgeBefore, judgeAfter, judgeDelta: judgeAfter - judgeBefore,
+      hardBefore, hardAfter, hardDelta: notComparable ? null : hardAfter - hardBefore,
+      judgeBefore, judgeAfter, judgeDelta: notComparable ? null : judgeAfter - judgeBefore,
       gateBefore: b?.gateFailed ?? false,
       gateAfter: a?.gateFailed ?? false,
+      ...(notComparable ? { notComparable } : {}),
     };
   });
 }
@@ -148,6 +154,10 @@ export function printSideBySide(before: RunReport, after: RunReport, beforeLabel
   const lines = [`suite | hard ${beforeLabel} | hard ${afterLabel} | judge ${beforeLabel} | judge ${afterLabel} | gate`];
   for (const c of compareSuites(before, after)) {
     const fmt = (n: number) => (n * 100).toFixed(1);
+    if (c.notComparable) {
+      lines.push(`${c.suite} | ${c.notComparable}`);
+      continue;
+    }
     lines.push(
       `${c.suite} | ${fmt(c.hardBefore)} | ${fmt(c.hardAfter)} | ${c.judgeBefore.toFixed(2)} | ${c.judgeAfter.toFixed(2)} | ${c.gateAfter ? "FAIL" : "pass"}`,
     );

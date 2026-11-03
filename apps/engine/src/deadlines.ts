@@ -20,11 +20,12 @@
 // count like "in 7 days" is never sent on the wrong day.
 //
 // A nudge never carries a letter's own words. It names the action only
-// from the explicit kind (renewal, recertification, interview, hearing,
-// appeal, payment, documents) and the program only when it is a known
-// one: "Your CalFresh renewal is due in 12 days". With no kind it names
-// no action: "Your CalFresh deadline is in 12 days", or "The deadline
-// from the letter you sent on October 27" by the day the letter arrived.
+// from the explicit kind (renewal, recertification, redetermination,
+// interview, hearing, appeal, payment, documents) and the program only
+// when it is a known one: "Your CalFresh renewal is due in 12 days".
+// With no kind it names no action: "Your CalFresh deadline is in 12
+// days", or "The deadline from the letter you sent on October 27" by
+// the day the letter arrived.
 // The title is kept only for the agent, quoted as data. A nudge with a
 // kind asks ("Want me to start it?"); acting still needs the person's
 // yes on an approval.
@@ -39,7 +40,8 @@
 //   GET    /deadlines       open ones first, each with its nudges
 //   PATCH  /deadlines/:id   { dueDate?, title?, status?: "done" } change it, or mark it done
 //   DELETE /deadlines/:id   stop tracking it
-// Tests: test-node/deadlines.test.ts (SQLite) and test/deadlines-routes.test.ts (worker, alarm).
+// Tests: test-node/deadlines.test.ts (SQLite), test/deadlines-routes.test.ts (worker, alarm) and
+// test/deadline-zones.test.ts (the zone from the profile's state, through the worker).
 import {
   AgentStateInputError,
   createReminder,
@@ -49,6 +51,8 @@ import {
 } from "./agents/agent-state.js";
 import { sha256Hex } from "./hash.js";
 
+export { DEFAULT_TIME_ZONE, timeZoneForState } from "@mano/protocol";
+
 interface SqlExec {
   exec(query: string, ...bindings: unknown[]): { toArray(): unknown[]; rowsWritten: number };
 }
@@ -57,7 +61,6 @@ export const NUDGE_DAYS = [14, 7, 2, 0] as const;
 const CATCH_UP_GAP_DAYS = 3;
 const WINDOW_OPENS_HOUR = 9;
 const WINDOW_CLOSES_HOUR = 20;
-export const DEFAULT_TIME_ZONE = "America/Los_Angeles";
 const NUDGE_PREFIX = "nudge:";
 const MAX_TITLE = 120;
 const MAX_PROGRAM = 80;
@@ -79,7 +82,7 @@ const KNOWN_PROGRAMS = [
   "CalFresh", "SNAP", "Medi-Cal", "Medicaid", "Medicare", "WIC", "TANF", "CalWORKs", "SSI", "SSDI", "LIHEAP",
   "Section 8", "CHIP", "Covered California", "General Assistance",
 ];
-export const DEADLINE_KINDS = ["renewal", "recertification", "interview", "hearing", "appeal", "payment", "documents"] as const;
+export const DEADLINE_KINDS = ["renewal", "recertification", "redetermination", "interview", "hearing", "appeal", "payment", "documents"] as const;
 export type DeadlineKind = (typeof DEADLINE_KINDS)[number];
 
 export type DeadlineStatus = "open" | "done" | "cancelled";
@@ -200,27 +203,6 @@ export function zonedInstant(date: string, hour: number, minute: number, timeZon
   const offset = (ms: number) => wall(ms, timeZone).asUtcMs - Math.floor(ms / 1000) * 1000;
   const first = target - offset(target);
   return target - offset(first);
-}
-
-// The person's zone, from the two-letter state on their profile. A state
-// split across zones takes the zone most of its people live in.
-const STATE_ZONES: Record<string, string> = {
-  AL: "America/Chicago", AK: "America/Anchorage", AZ: "America/Phoenix", AR: "America/Chicago", CA: "America/Los_Angeles",
-  CO: "America/Denver", CT: "America/New_York", DE: "America/New_York", DC: "America/New_York", FL: "America/New_York",
-  GA: "America/New_York", HI: "Pacific/Honolulu", ID: "America/Boise", IL: "America/Chicago", IN: "America/Indiana/Indianapolis",
-  IA: "America/Chicago", KS: "America/Chicago", KY: "America/New_York", LA: "America/Chicago", ME: "America/New_York",
-  MD: "America/New_York", MA: "America/New_York", MI: "America/Detroit", MN: "America/Chicago", MS: "America/Chicago",
-  MO: "America/Chicago", MT: "America/Denver", NE: "America/Chicago", NV: "America/Los_Angeles", NH: "America/New_York",
-  NJ: "America/New_York", NM: "America/Denver", NY: "America/New_York", NC: "America/New_York", ND: "America/Chicago",
-  OH: "America/New_York", OK: "America/Chicago", OR: "America/Los_Angeles", PA: "America/New_York", RI: "America/New_York",
-  SC: "America/New_York", SD: "America/Chicago", TN: "America/Chicago", TX: "America/Chicago", UT: "America/Denver",
-  VT: "America/New_York", VA: "America/New_York", WA: "America/Los_Angeles", WV: "America/New_York", WI: "America/Chicago",
-  WY: "America/Denver", PR: "America/Puerto_Rico", GU: "Pacific/Guam", VI: "America/St_Thomas", AS: "Pacific/Pago_Pago",
-  MP: "Pacific/Saipan",
-};
-
-export function timeZoneForState(state: string | null | undefined): string {
-  return (state && STATE_ZONES[state.trim().toUpperCase()]) || DEFAULT_TIME_ZONE;
 }
 
 // MANO_NUDGE_TIME, "HH:MM" inside the 9:00 to 20:00 window; anything
