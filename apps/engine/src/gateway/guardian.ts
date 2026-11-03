@@ -8,7 +8,8 @@ import type { GatewayOptions } from "./gateway.js";
 // so every Guardian check also sends a warm-up: a check that finds it
 // cold blocks with "try again in a few minutes" and leaves it starting,
 // and a check that finds it warm keeps it up for the person's yes, when
-// the gateway checks again.
+// the gateway checks again. Guardian receives the action as proposed,
+// every value as written (docs/decisions.md, November 3, 2026).
 
 export interface GuardianEnv {
   MANO_GUARDIAN_URL?: string;

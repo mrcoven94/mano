@@ -26,7 +26,7 @@ class CollectAllEngine:
         self._pending = []
 
     def chat(self, messages, sampling_params, use_tqdm):
-        unsafe = "[OTHER-1]" in messages[-1]["content"]
+        unsafe = "outsider@example.net" in messages[-1]["content"]
         with self._lock:
             request_id = self._next_id
             self._next_id += 1
@@ -53,7 +53,7 @@ def check_body(recipient):
             "payload": {"claims": ["Dana Whitfield renewed her SNAP case."]},
         },
         "sources": [],
-        "consents": [{"recipient": "[RECIPIENT]", "purpose": "SNAP renewal"}],
+        "consents": [{"recipient": "caseworker@agency.example", "purpose": "SNAP renewal"}],
         "origin": "person",
     }
 
@@ -72,8 +72,8 @@ class OverlappingChecks(unittest.TestCase):
                 results[name] = f"error: {error}"
 
         threads = [
-            threading.Thread(target=run, args=("safe", "[RECIPIENT]", 0.0)),
-            threading.Thread(target=run, args=("unsafe", "[OTHER-1]", 0.02)),
+            threading.Thread(target=run, args=("safe", "caseworker@agency.example", 0.0)),
+            threading.Thread(target=run, args=("unsafe", "outsider@example.net", 0.02)),
         ]
         for thread in threads:
             thread.start()
@@ -149,10 +149,19 @@ class WarmUps(unittest.TestCase):
 
 class Verdicts(unittest.TestCase):
     def test_the_review_never_leaves_the_server(self):
-        text = '{"review":"The payload sends to [EMAIL-1].","verdict":"block","problems":["Wrong address."]}'
+        text = '{"review":"The payload sends to outsider@example.net.","verdict":"block","problems":["Wrong address."]}'
         self.assertEqual(
             app.parse_verdict(text), {"verdict": "block", "problems": ["Wrong address."]}
         )
+
+    def test_a_refused_answer_never_repeats_its_text_in_the_error(self):
+        for text in (
+            '{"review":"x","verdict":"Maria Synthetic, 12 Example Lane","problems":[]}',
+            '{"review":"x","Maria Synthetic":1,"Maria Synthetic":2}',
+        ):
+            with self.assertRaises(ValueError) as caught:
+                app.parse_verdict(text)
+            self.assertNotIn("Maria", str(caught.exception))
 
 
 class StrictAnswers(unittest.TestCase):

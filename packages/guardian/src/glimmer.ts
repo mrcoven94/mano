@@ -1,4 +1,3 @@
-import { buildModelRequest, type KnownEntities } from "./redact.js";
 import { RulesChecker } from "./rules.js";
 import type { CheckInput, CheckResult, Checker, Verdict, WarmState } from "./types.js";
 
@@ -24,8 +23,6 @@ export interface GlimmerCheckerOptions {
   model?: string;
   // Per-check timeout in milliseconds. A timeout is a block.
   timeoutMs?: number;
-  // Names and employers to redact before sending.
-  knownEntities?: KnownEntities;
   fetchImpl?: typeof fetch;
 }
 
@@ -66,8 +63,46 @@ function blocked(problem: string): CheckResult {
 const UNREADABLE =
   "The safety check answered in a way Mano could not understand, so this action is on hold.";
 
+// What Guardian receives: the action as Mano would send it, every value as
+// written, with the sources it cites, the consents on record and who
+// asked for it. Nothing is removed or relabeled, so nothing can hide an
+// attack from Guardian (docs/decisions.md, November 3, 2026).
+function modelRequest(input: CheckInput): CheckInput {
+  const { type, recipient, purpose, payload, documentHash } = input.action;
+  return {
+    action: { type, recipient, purpose, payload, documentHash },
+    sources: input.sources.map(({ kind, id, quote }) => (quote === undefined ? { kind, id } : { kind, id, quote })),
+    consents: input.consents.map(({ recipient, purpose }) => ({ recipient, purpose })),
+    origin: input.origin,
+  };
+}
+
+// The renewal form's personal fields (PORTAL_HOUSEHOLD in Engine's
+// executors). None of them ever holds an email address or a link, so one
+// that does is held with a plain reason before Guardian is asked. Guardian
+// reads every field anyway; this only makes the plainest case certain.
+const PERSONAL_FIELDS: Record<string, string> = {
+  fullName: "full name",
+  dateOfBirth: "date of birth",
+  address: "mailing address",
+  phone: "phone number",
+};
+const EMAIL_OR_LINK = /@|:\/\//;
+
+function formProblems(input: CheckInput): string[] {
+  const form = input.action.payload;
+  if (input.action.type !== "submit" || typeof form !== "object" || form === null || Array.isArray(form)) return [];
+  const fields = form as Record<string, unknown>;
+  return Object.entries(PERSONAL_FIELDS).flatMap(([name, what]) => {
+    const value = fields[name];
+    return typeof value === "string" && EMAIL_OR_LINK.test(value)
+      ? [`The ${what} on the form holds an email address or a link, so this action is on hold.`]
+      : [];
+  });
+}
+
 // The guardian model alone, with no local rules in front. The request
-// carries a redacted copy of the input to the check endpoint. Any failure
+// carries the action to the check endpoint. Any failure
 // (network, timeout, error status, unparsable or invalid answer,
 // contradictory verdict) is a block with a message a person can read.
 // Engine runs its own rules first and then this.
@@ -77,7 +112,6 @@ export class GlimmerModelChecker implements Checker {
   private readonly proxyAuth: ProxyAuth | null;
   private readonly model: string;
   private readonly timeoutMs: number;
-  private readonly knownEntities: KnownEntities | undefined;
   private readonly fetchImpl: typeof fetch;
   private lastServer: ServerInfo | null = null;
 
@@ -87,7 +121,6 @@ export class GlimmerModelChecker implements Checker {
     this.proxyAuth = options.proxyAuth ?? null;
     this.model = options.model ?? DEFAULT_GUARDIAN_MODEL;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
-    this.knownEntities = options.knownEntities;
     this.fetchImpl = options.fetchImpl ?? boundFetch;
   }
 
@@ -142,13 +175,15 @@ export class GlimmerModelChecker implements Checker {
 
   async check(input: CheckInput): Promise<CheckResult> {
     this.lastServer = null;
+    const malformed = formProblems(input);
+    if (malformed.length > 0) return { verdict: "block", problems: malformed };
 
     let response: Response;
     try {
       response = await this.fetchImpl(this.url, {
         method: "POST",
         headers: this.headers(),
-        body: JSON.stringify(buildModelRequest(input, this.knownEntities)),
+        body: JSON.stringify(modelRequest(input)),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
