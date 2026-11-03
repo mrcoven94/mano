@@ -237,6 +237,16 @@ describe("answerReading builds the reply from closed fields only", () => {
     ["Your appeal form must be received by November 14, 2026.", null, null],
     ["Your SNAP recertification must be received by November 14, 2026.", "renew", "recertification"],
     ["Your renewal must be received by November 14, 2026.", "renew", "renewal"],
+    // LAP-816: the kind follows the obligation, then the duty's head noun.
+    ["Your recertification appeal must be received by November 14, 2026.", "appeal", "appeal"],
+    ["You must request a hearing by November 14, 2026.", "appeal", "hearing"],
+    ["Return your redetermination form by November 14, 2026.", "renew", "redetermination"],
+    ["Your Medicaid redetermination packet must be returned by November 14, 2026.", "renew", "redetermination"],
+    ["Return your recertification form by November 14, 2026.", "renew", "recertification"],
+    ["Renew by November 14, 2026.", "renew", "renewal"],
+    ["Pay your premium by November 14, 2026.", "pay", "payment"],
+    ["Return the form by November 14, 2026.", "respond", "documents"],
+    ["You must respond by November 14, 2026.", "respond", null],
   ])("%s holds obligation %s and kind %s", async (sentence, obligation, kind) => {
     const verdict = gateSentence(sentence, "2026-11-02");
     const answer = await answerFor([
