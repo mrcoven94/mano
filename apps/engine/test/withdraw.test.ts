@@ -140,3 +140,117 @@ describe("LAP-747: a withdrawn approval is reconciled, never run again", () => {
     });
   });
 });
+
+// Two retries reconcile the same unknown attempt at once. Each lookup and
+// post waits until the test releases it, so the exact interleaving runs.
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+class ScriptedPortal implements Executor {
+  readonly simulated = true;
+  posts: ActionRequest[] = [];
+  lookups: ReturnType<typeof deferred<CheckOutcome>>[] = [];
+  filings: ReturnType<typeof deferred<{ externalId: string }>>[] = [];
+  execute(req: ActionRequest) {
+    this.posts.push(req);
+    const d = deferred<{ externalId: string }>();
+    this.filings.push(d);
+    return d.promise;
+  }
+  check() {
+    const d = deferred<CheckOutcome>();
+    this.lookups.push(d);
+    return d.promise;
+  }
+}
+
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+async function unknownWithScriptedPortal() {
+  const portal = new ScriptedPortal();
+  const store = new MemoryApprovalStore();
+  const gateway = new ActionGateway(store, portal);
+  const held = await gateway.requestAction(proposal());
+  const first = gateway.approveAndExecute(held.approval!.id, "person-maria");
+  await tick();
+  portal.filings[0]!.reject(new TimeoutError());
+  await tick();
+  portal.lookups[0]!.reject(new Error("portal unreachable"));
+  expect((await first).status).toBe("blocked");
+  expect(store.getAttempt(held.approval!.idempotencyKey)?.status).toBe("unknown");
+  return { portal, store, gateway, approval: held.approval! };
+}
+
+describe("LAP-747: ending a withdrawal never overrides a filing that went through", () => {
+  it("A finds it absent and files, Maria withdraws, A records its receipt, then B's late absent: the receipt wins", async () => {
+    const { portal, store, gateway, approval } = await unknownWithScriptedPortal();
+    const a = gateway.approveAndExecute(approval.id, "person-maria");
+    const b = gateway.approveAndExecute(approval.id, "person-maria");
+    await tick();
+    expect(portal.lookups).toHaveLength(3);
+    portal.lookups[1]!.resolve({ found: false });
+    await tick();
+    expect(portal.posts).toHaveLength(2);
+    expect((await gateway.withdrawApproval(approval.id, "person-maria")).withdrawn).toBe(true);
+    portal.filings[1]!.resolve({ externalId: "RECEIVED-1" });
+    expect(await a).toMatchObject({ status: "completed", receipt: { externalId: "RECEIVED-1" } });
+    portal.lookups[2]!.resolve({ found: false });
+    const late = await b;
+    expect(late).toMatchObject({ status: "completed", receipt: { externalId: "RECEIVED-1" } });
+    expect(late.withdrawn).toBeUndefined();
+    expect(store.getAttempt(approval.idempotencyKey)?.status).toBe("done");
+    expect(portal.posts).toHaveLength(2);
+  });
+
+  it("A's filing times out again before B's late absent: B ends nothing, and only a fresh lookup ends it", async () => {
+    const { portal, store, gateway, approval } = await unknownWithScriptedPortal();
+    const a = gateway.approveAndExecute(approval.id, "person-maria");
+    const b = gateway.approveAndExecute(approval.id, "person-maria");
+    await tick();
+    portal.lookups[1]!.resolve({ found: false });
+    await tick();
+    await gateway.withdrawApproval(approval.id, "person-maria");
+    portal.filings[1]!.reject(new TimeoutError());
+    await tick();
+    portal.lookups[3]!.reject(new Error("portal unreachable"));
+    expect((await a).status).toBe("blocked");
+    expect(store.getAttempt(approval.idempotencyKey)?.status).toBe("unknown");
+
+    // B's lookup began before A's second post, so its absent says nothing about it.
+    portal.lookups[2]!.resolve({ found: false });
+    const late = await b;
+    expect(late.status).toBe("in_progress");
+    expect(late.withdrawn).toBeUndefined();
+    expect(store.getAttempt(approval.idempotencyKey)?.status).toBe("unknown");
+
+    const fresh = gateway.approveAndExecute(approval.id, "person-maria");
+    await tick();
+    portal.lookups[4]!.resolve({ found: false });
+    expect(await fresh).toMatchObject({ status: "blocked", withdrawn: true });
+    expect(store.getAttempt(approval.idempotencyKey)?.status).toBe("failed");
+    expect(portal.posts).toHaveLength(2);
+  });
+
+  it("recovery's late absent after a retry filed answers the receipt, never failed", async () => {
+    const { portal, store, gateway, approval } = await unknownWithScriptedPortal();
+    await gateway.withdrawApproval(approval.id, "person-maria");
+    const recovery = gateway.recoverAttempt(approval.idempotencyKey, new Date(), new Date(Date.now() + 60_000).toISOString());
+    await tick();
+    // While recovery waits on its lookup, the receipt lands (a filing that was already in flight).
+    store.putReceipt({
+      id: "r1", idempotencyKey: approval.idempotencyKey, actionType: "submit", recipient: "sandbox-agency-portal",
+      status: "completed", externalId: "RECEIVED-1", simulated: true, requestHash: "", createdAt: new Date().toISOString(),
+    });
+    store.updateAttempt(approval.idempotencyKey, "done");
+    portal.lookups.at(-1)!.resolve({ found: false });
+    expect(await recovery).toMatchObject({ status: "completed", receipt: { externalId: "RECEIVED-1" } });
+    expect(store.getAttempt(approval.idempotencyKey)?.status).toBe("done");
+  });
+});

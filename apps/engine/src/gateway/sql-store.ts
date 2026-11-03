@@ -49,6 +49,7 @@ export function ensureGatewayTables(sql: SqlStorage): void {
   addColumn(sql, "attempts", "action_type", "TEXT");
   addColumn(sql, "attempts", "recipient", "TEXT");
   addColumn(sql, "attempts", "person_id", "TEXT");
+  addColumn(sql, "attempts", "version", "INTEGER NOT NULL DEFAULT 0");
   sql.exec(`CREATE TABLE IF NOT EXISTS receipts(
     id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE NOT NULL, action_type TEXT NOT NULL,
     recipient TEXT NOT NULL, status TEXT NOT NULL, external_id TEXT NOT NULL,
@@ -118,6 +119,7 @@ function attemptFromRow(r: Record<string, unknown>): Attempt {
     actionType: (r.action_type as ActionType | null) ?? "submit",
     recipient: (r.recipient as string | null) ?? "",
     personId: (r.person_id as string | null) ?? "",
+    version: Number(r.version ?? 0),
   };
 }
 
@@ -295,7 +297,7 @@ export class SqlApprovalStore implements ApprovalStore {
     if (updated.rowsWritten !== 1) {
       if (inserted) this.sql.exec("DELETE FROM attempts WHERE idempotency_key = ?", attempt.key);
       else if (adoptedFrom) {
-        this.sql.exec("UPDATE attempts SET status = ? WHERE idempotency_key = ?", adoptedFrom, attempt.key);
+        this.sql.exec("UPDATE attempts SET status = ?, version = version + 1 WHERE idempotency_key = ?", adoptedFrom, attempt.key);
       }
       return null;
     }
@@ -353,7 +355,7 @@ export class SqlApprovalStore implements ApprovalStore {
 
   getAttempt(key: string): Attempt | null {
     const rows = this.sql.exec(
-      `SELECT ${ATTEMPT_COLUMNS} FROM attempts WHERE idempotency_key = ?`,
+      `SELECT ${ATTEMPT_COLUMNS}, version FROM attempts WHERE idempotency_key = ?`,
       key,
     ).toArray() as unknown as Record<string, unknown>[];
     if (rows.length === 0) return null;
@@ -390,7 +392,7 @@ export class SqlApprovalStore implements ApprovalStore {
 
   private adoptFrom(key: string, from: Attempt["status"], now: Date): boolean {
     const updated = this.sql.exec(
-      "UPDATE attempts SET status = 'in_flight', updated_at = ? WHERE idempotency_key = ? AND status = ?",
+      "UPDATE attempts SET status = 'in_flight', updated_at = ?, version = version + 1 WHERE idempotency_key = ? AND status = ?",
       now.toISOString(), key, from,
     );
     return updated.rowsWritten === 1;
@@ -401,7 +403,7 @@ export class SqlApprovalStore implements ApprovalStore {
     // consumed and unexpired. Both timestamps are server-written UTC ISO,
     // so the lexical comparison is exact.
     const updated = this.sql.exec(
-      "UPDATE attempts SET status = 'in_flight', updated_at = ? WHERE idempotency_key = ?" +
+      "UPDATE attempts SET status = 'in_flight', updated_at = ?, version = version + 1 WHERE idempotency_key = ?" +
         " AND status IN ('in_flight', 'unknown')" +
         " AND EXISTS(SELECT 1 FROM approvals WHERE idempotency_key = ? AND status = 'approved' AND expires_at > ?" +
         ` AND generation = ${CURRENT_GENERATION})`,
@@ -412,7 +414,7 @@ export class SqlApprovalStore implements ApprovalStore {
 
   claimRecoverableAttempt(key: string, olderThanIso: string, now: Date): boolean {
     const updated = this.sql.exec(
-      "UPDATE attempts SET updated_at = ? WHERE idempotency_key = ? AND status IN ('in_flight', 'unknown') AND updated_at < ?",
+      "UPDATE attempts SET updated_at = ?, version = version + 1 WHERE idempotency_key = ? AND status IN ('in_flight', 'unknown') AND updated_at < ?",
       now.toISOString(), key, olderThanIso,
     );
     return updated.rowsWritten === 1;
@@ -420,7 +422,7 @@ export class SqlApprovalStore implements ApprovalStore {
 
   listRecoverableAttempts(olderThanIso: string): Attempt[] {
     const rows = this.sql.exec(
-      `SELECT ${ATTEMPT_COLUMNS} FROM attempts WHERE status IN ('in_flight', 'unknown') AND updated_at < ?`,
+      `SELECT ${ATTEMPT_COLUMNS}, version FROM attempts WHERE status IN ('in_flight', 'unknown') AND updated_at < ?`,
       olderThanIso,
     ).toArray() as unknown as Record<string, unknown>[];
     return rows.map(attemptFromRow);
@@ -434,7 +436,17 @@ export class SqlApprovalStore implements ApprovalStore {
   }
 
   updateAttempt(key: string, status: Attempt["status"]): void {
-    this.sql.exec("UPDATE attempts SET status = ?, updated_at = ? WHERE idempotency_key = ?", status, new Date().toISOString(), key);
+    this.sql.exec("UPDATE attempts SET status = ?, updated_at = ?, version = version + 1 WHERE idempotency_key = ?", status, new Date().toISOString(), key);
+  }
+
+  failWithdrawnAttempt(key: string, version: number): boolean {
+    return (
+      this.sql.exec(
+        "UPDATE attempts SET status = 'failed', updated_at = ?, version = version + 1 WHERE idempotency_key = ? AND version = ?" +
+          " AND status IN ('unknown', 'failed') AND NOT EXISTS(SELECT 1 FROM receipts WHERE idempotency_key = ?)",
+        new Date().toISOString(), key, version, key,
+      ).rowsWritten === 1
+    );
   }
 
   audit<const T extends { event: string }>(entry: T & AuditEntry<T>): void {

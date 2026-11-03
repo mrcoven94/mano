@@ -113,6 +113,10 @@ export interface ApprovalStore {
   // a durable recovery run while this holds.
   hasUnresolvedAttempts(): boolean;
   updateAttempt(key: string, status: Attempt["status"]): void;
+  // Ends a withdrawn approval's attempt: moves it to failed only while it
+  // is still unknown or failed at version, so nothing claimed or ran it
+  // after the caller read it, and no receipt exists. A receipt always wins.
+  failWithdrawnAttempt(key: string, version: number): boolean;
   audit<const T extends { event: string }>(entry: T & AuditEntry<T>): void;
 }
 
@@ -247,7 +251,7 @@ export class MemoryApprovalStore implements ApprovalStore {
       if (prior.status !== "unknown" && prior.status !== "failed") return null;
       if (prior.requestHash && attempt.requestHash && prior.requestHash !== attempt.requestHash) return null;
     }
-    this.attempts.set(attempt.key, attempt);
+    this.attempts.set(attempt.key, { ...attempt, version: (prior?.version ?? 0) + 1 });
     const approved: Approval = { ...current, status: "approved", approvedByHumanId: humanId };
     this.approvals.set(id, approved);
     return approved;
@@ -295,7 +299,7 @@ export class MemoryApprovalStore implements ApprovalStore {
   private adoptFrom(key: string, from: Attempt["status"], now: Date) {
     const current = this.attempts.get(key);
     if (!current || current.status !== from) return false;
-    this.attempts.set(key, { ...current, status: "in_flight", updatedAt: now.toISOString() });
+    this.attempts.set(key, { ...current, status: "in_flight", updatedAt: now.toISOString(), version: (current.version ?? 0) + 1 });
     return true;
   }
   adoptForRecoveryIfApprovalLive(key: string, now: Date) {
@@ -309,7 +313,7 @@ export class MemoryApprovalStore implements ApprovalStore {
         new Date(a.expiresAt).getTime() > now.getTime(),
     );
     if (!live) return false;
-    this.attempts.set(key, { ...current, status: "in_flight", updatedAt: now.toISOString() });
+    this.attempts.set(key, { ...current, status: "in_flight", updatedAt: now.toISOString(), version: (current.version ?? 0) + 1 });
     return true;
   }
   claimRecoverableAttempt(key: string, olderThanIso: string, now: Date) {
@@ -317,7 +321,7 @@ export class MemoryApprovalStore implements ApprovalStore {
     if (!current) return false;
     if (current.status !== "in_flight" && current.status !== "unknown") return false;
     if (current.updatedAt >= olderThanIso) return false;
-    this.attempts.set(key, { ...current, updatedAt: now.toISOString() });
+    this.attempts.set(key, { ...current, updatedAt: now.toISOString(), version: (current.version ?? 0) + 1 });
     return true;
   }
   listRecoverableAttempts(olderThanIso: string) {
@@ -330,7 +334,15 @@ export class MemoryApprovalStore implements ApprovalStore {
   }
   updateAttempt(key: string, status: Attempt["status"]) {
     const current = this.attempts.get(key);
-    if (current) this.attempts.set(key, { ...current, status, updatedAt: new Date().toISOString() });
+    if (current) this.attempts.set(key, { ...current, status, updatedAt: new Date().toISOString(), version: (current.version ?? 0) + 1 });
+  }
+  failWithdrawnAttempt(key: string, version: number) {
+    const current = this.attempts.get(key);
+    if (!current || (current.version ?? 0) !== version) return false;
+    if (current.status !== "unknown" && current.status !== "failed") return false;
+    if (this.receipts.has(key)) return false;
+    this.attempts.set(key, { ...current, status: "failed", updatedAt: new Date().toISOString(), version: version + 1 });
+    return true;
   }
   audit<const T extends { event: string }>(entry: T & AuditEntry<T>) {
     this.auditLog.push(entry);
@@ -725,7 +737,9 @@ export class ActionGateway {
   // its filing is still unresolved. From now on it is only ever
   // reconciled, never executed again: a later YES or recovery that finds
   // it never happened ends it instead of retrying the old values. Answers
-  // completed when it already went through.
+  // completed when it already went through. An execution already in flight
+  // is not stopped: its outcome stands, and a receipt it records wins over
+  // the withdrawal.
   async withdrawApproval(approvalId: string, humanId: string): Promise<GatewayResult> {
     const approval = this.store.getApproval(approvalId);
     if (!approval) return { status: "blocked", reason: "Approval not found." };
@@ -895,6 +909,9 @@ export class ActionGateway {
     if (!attempt) {
       return { status: "blocked", reason: "This approval has no recorded attempt. Refusing to execute." };
     }
+    // Read before the reconcile awaits: a withdrawal ends the attempt only
+    // if nothing claimed or ran it since.
+    const seen = attempt.version ?? 0;
     // Reconcile before any expiry decision: if the action happened, the
     // person gets the receipt even after the window passed.
     if (attempt.status === "unknown") {
@@ -916,7 +933,7 @@ export class ActionGateway {
     if (attempt.status === "failed" || attempt.status === "unknown") {
       // Reconciled above to confirmed absent, or definitely failed: a
       // withdrawn approval ends here and its old values never go out.
-      if (this.store.approvalWithdrawn(approval.id)) return this.endWithdrawn(approval.idempotencyKey, hashes.key);
+      if (this.store.approvalWithdrawn(approval.id)) return this.endWithdrawn(approval.idempotencyKey, seen, hashes.key);
       const adopt =
         attempt.status === "failed"
           ? this.store.adoptFailedAttempt(approval.idempotencyKey, now)
@@ -1069,6 +1086,7 @@ export class ActionGateway {
     const keyHash = await auditDigest(key);
     if (!this.store.claimRecoverableAttempt(key, olderThanIso, now)) return null;
     this.store.audit({ event: "gateway.recover_claimed", keyHash });
+    const seen = this.store.getAttempt(key)?.version ?? 0;
     const approval = this.store.getApprovalByKey(key);
     if (!approval) return this.recoverAllowAttempt(key, attempt, now, keyHash);
     const approvalHash = await auditDigest(approval.id);
@@ -1122,7 +1140,7 @@ export class ActionGateway {
       this.store.updateAttempt(key, "failed");
       return { status: "blocked", reason: approvalGoneReason("rejected") };
     }
-    if (this.store.approvalWithdrawn(approval.id)) return this.endWithdrawn(key, keyHash);
+    if (this.store.approvalWithdrawn(approval.id)) return this.endWithdrawn(key, seen, keyHash);
     if (!this.store.adoptForRecoveryIfApprovalLive(key, new Date())) {
       const receipt = this.store.getReceiptByKey(key);
       if (receipt) return { status: "completed", receipt };
@@ -1134,10 +1152,17 @@ export class ActionGateway {
     return this.runExecution(this.enrichWithDocument({ ...stored, ...answered }, docRead.bytes, frozen.documentHash), now, keyHash);
   }
 
-  // A withdrawn approval whose attempt is confirmed not to have happened:
-  // the attempt is failed for good and nothing runs.
-  private endWithdrawn(key: string, keyHash: AuditDigest): GatewayResult {
-    this.store.updateAttempt(key, "failed");
+  // A withdrawn approval whose attempt was confirmed not to have happened
+  // when it read version seen: the attempt is failed for good and nothing
+  // runs. When anything claimed or ran it since (another retry that found
+  // it absent and filed), that outcome stands: a receipt answers
+  // completed, and anything else is still being worked out.
+  private endWithdrawn(key: string, seen: number, keyHash: AuditDigest): GatewayResult {
+    if (!this.store.failWithdrawnAttempt(key, seen)) {
+      const receipt = this.store.getReceiptByKey(key);
+      if (receipt) return { status: "completed", receipt };
+      return { status: "in_progress", reason: "Another request with this idempotency key is running." };
+    }
     this.store.audit({ event: "gateway.withdrawn_ended", keyHash });
     return { status: "blocked", withdrawn: true, reason: "The person asked for a new version, so this one was not sent." };
   }

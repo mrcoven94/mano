@@ -87,6 +87,9 @@ export interface Attempt {
   actionType: ActionType;
   recipient: string;
   personId: string;
+  // Bumped by every write to the attempt, so a step that read it before an
+  // await can tell whether anything claimed or ran it since.
+  version?: number;
 }
 
 export interface GatewayResult {
