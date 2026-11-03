@@ -100,6 +100,15 @@ describe("MetaModelClient", () => {
     expect(res.text).toBe("ok");
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
+  it("names the API's own error message when it refuses a call, without retrying", async () => {
+    const billing = { error: { message: "Billing is not configured for this account.", type: "billing_error", code: "billing_not_configured" } };
+    const fetchFn = vi.fn(async () => okJson(billing, 402));
+    const client = new MetaModelClient({ apiKey: "k", fetchFn: fetchFn as unknown as typeof fetch });
+    await expect(client.responses({ model: "muse-spark-1.3", input: "hi" })).rejects.toThrow(
+      "Model request failed: 402 (Billing is not configured for this account.)",
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("RecordedModelClient", () => {
