@@ -80,11 +80,15 @@ function formatValue(value: unknown): string {
   }
 }
 
-// YYYY-MM-DD naming a day that exists, so 1988-02-30 stays as written.
+// YYYY-MM-DD naming a day that exists, in a year from 1900 to this one,
+// so 1988-02-30 stays as written, and so does 0000-01-01, which would
+// otherwise read the same as 0001-01-01.
 function isCalendarDay(text: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
   const date = new Date(`${text}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === text;
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) return false;
+  const year = date.getUTCFullYear();
+  return year >= 1900 && year <= new Date().getUTCFullYear();
 }
 
 function fieldFor(key: string, value: unknown): ActionField {

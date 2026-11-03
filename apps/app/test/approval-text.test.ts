@@ -33,6 +33,10 @@ describe("approval card text", () => {
     const [birth] = known("submit", { dateOfBirth: "1988-03-14" }).answers;
     expect(fieldValue(birth!, en, "en")).toBe("March 14, 1988");
     expect(fieldValue(birth!, es, "es")).toBe("14 de marzo de 1988");
+    const [zero] = known("submit", { dateOfBirth: "0000-01-01" }).answers;
+    const [one] = known("submit", { dateOfBirth: "0001-01-01" }).answers;
+    expect(fieldValue(zero!, en, "en")).toBe("0000-01-01");
+    expect(fieldValue(one!, en, "en")).toBe("0001-01-01");
     const [grant] = known("share", { consent: "grant", caseId: "R-1" }).answers;
     expect(fieldValue(grant!, es, "es")).toBe(es.consentGrant);
   });
