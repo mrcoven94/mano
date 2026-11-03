@@ -26,6 +26,11 @@ const LABELS: Record<string, string> = Object.fromEntries(
 // form's own fields, so it never receives it.
 export const ATTACHMENT = "attachment";
 
+// The payload key a draft freezes its form's declaration under, word for
+// word. The question shows it, so the person's YES is what makes it, and
+// Engine files it as theirs only after that YES.
+export const DECLARATION = "declaration";
+
 // The key names the conversation generation and the turn that proposed
 // it, so the agent only ever reads proposals of the current conversation.
 function prefix(generation: number): string {
@@ -76,9 +81,11 @@ export function waitingProposals(approvals: EngineApproval[], generation: number
 export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">): string {
   let payload: Record<string, unknown> = {};
   let attached: string | null = null;
+  let declaration: string | null = null;
   try {
     const frozen = JSON.parse(approval.requestJson) as { payload?: Record<string, unknown>; documentId?: unknown };
     payload = frozen.payload ?? {};
+    if (typeof payload[DECLARATION] === "string") declaration = payload[DECLARATION];
     const label = payload[ATTACHMENT];
     if (typeof frozen.documentId === "string" && frozen.documentId !== "") {
       attached = typeof label === "string" && label !== "" ? label : "your document";
@@ -91,7 +98,7 @@ export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recip
     return i === -1 ? Number.MAX_SAFE_INTEGER : i;
   };
   const lines = Object.entries(payload)
-    .filter(([k, v]) => k !== ATTACHMENT && (typeof v === "string" || typeof v === "number"))
+    .filter(([k, v]) => k !== ATTACHMENT && k !== DECLARATION && (typeof v === "string" || typeof v === "number"))
     .sort(([a], [b]) => order(a) - order(b))
     .map(([k, v]) => `${LABELS[k] ?? k}: ${v}`);
   // One paragraph: the text line flattens line breaks, so fields are
@@ -100,7 +107,8 @@ export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recip
     `Ready to send: ${approval.purpose} (to ${approval.recipient}).`,
     lines.length > 0 ? `${lines.join("; ")}.` : "",
     attached ? `With ${attached} attached.` : "",
-    "Reply YES to send exactly this, or NO to stop.",
+    declaration ? `It ends with a declaration only you can make: ${declaration}` : "",
+    declaration ? "Reply YES to make this declaration yourself and send exactly this, or NO to stop." : "Reply YES to send exactly this, or NO to stop.",
   ]
     .filter(Boolean)
     .join(" ");

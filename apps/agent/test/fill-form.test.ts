@@ -35,17 +35,19 @@ function profile() {
     income: [
       { id: "i1", memberId: leaf("self"), source: leaf("job"), amount: { value: 1075, source: "document", documentId: "doc-stub", updatedAt: at }, frequency: leaf("biweekly") },
     ],
-    programs: [],
+    programs: [{ id: "snap", program: leaf("SNAP"), caseNumber: leaf("WA-SNAP-0042117") }],
   };
 }
 
+// In the form's order, most important first.
 const VALUES = {
+  caseNumber: "WA-SNAP-0042117",
   fullName: "Rosa Testcase",
   dateOfBirth: "1984-03-12",
-  address: "100 Sample St, Tacoma, WA 98402",
-  phone: "253-555-0142",
   householdSize: "3",
   monthlyIncome: "2329",
+  address: "100 Sample St, Tacoma, WA 98402",
+  phone: "253-555-0142",
 };
 const FIELDS = Object.keys(VALUES);
 // The form's Continue button on this fake screen.
@@ -204,12 +206,12 @@ describe("fill_form", () => {
     const [approval] = engine.approvals();
     expect(approval.status).toBe("pending");
     const frozen = JSON.parse(approval.requestJson);
-    expect(frozen.payload).toEqual(VALUES);
+    expect(frozen.payload).toEqual({ ...VALUES, declaration: FORMS["food-renewal"]!.declaration });
     expect(frozen.documentId).toBe("doc-stub");
     expect(approval.documentHash).toMatch(/^[0-9a-f]{64}$/);
     const question = renderQuestion((await client().listApprovals())[0]);
     expect(question).toContain(
-      "Full legal name: Rosa Testcase; Date of birth: 1984-03-12; Mailing address: 100 Sample St, Tacoma, WA 98402; Phone number: 253-555-0142; People in household: 3; Monthly income ($): 2329.",
+      "Case number: WA-SNAP-0042117; Full legal name: Rosa Testcase; Date of birth: 1984-03-12; People in household: 3; Monthly income ($): 2329; Mailing address: 100 Sample St, Tacoma, WA 98402; Phone number: 253-555-0142.",
     );
     expect(question).toContain("With your document attached.");
     expect(model.requests.every((r) => r.store === false)).toBe(true);
@@ -231,8 +233,8 @@ describe("fill_form", () => {
     // Each typed step shows its field up close, centered where Mano
     // clicked it; the replay ends on the form with all six values.
     const shown = [...page.matchAll(/data:image\/png;base64,([^"]+)"/g)].map((m) => Buffer.from(m[1]!, "base64")[33]);
-    expect(shown).toEqual([0, 1, 2, 3, 4, 5, 6, 6]);
-    expect(page.match(/<div class="zoom">/g)).toHaveLength(6);
+    expect(shown).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 7]);
+    expect(page.match(/<div class="zoom">/g)).toHaveLength(7);
     expect(page).toContain('style="width:200%;left:-23.75%;top:-25.00%"');
     expect(page).toContain("<dt>People in household</dt><dd>3</dd>");
     expect(page).toContain("This is exactly what Mano will send when you reply YES.");
@@ -415,7 +417,7 @@ describe("fill_form", () => {
     const result = await client().approve(out.approvalId as string);
     expect(result.status).toBe("completed");
     expect(engine.executor.calls).toHaveLength(1);
-    expect(engine.executor.calls[0].payload).toEqual(VALUES);
+    expect(engine.executor.calls[0].payload).toEqual({ ...VALUES, declaration: FORMS["food-renewal"]!.declaration });
     expect(engine.executor.calls[0].document?.bytesB64).toBe(btoa(PAY_STUB));
   });
 
