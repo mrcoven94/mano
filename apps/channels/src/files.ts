@@ -30,6 +30,73 @@ export async function attachmentDocumentId(generation: number, turn: number, ind
   return `g${generation}t${turn}i${index}-${digest.slice(0, 12)}`;
 }
 
+// Read from the bytes' own signature, never from what the provider
+// claims. Null for anything else (video, audio), which keeps its label.
+export function sniffMediaType(bytes: Uint8Array): string | null {
+  const ascii = (from: number, to: number): string => String.fromCharCode(...bytes.subarray(from, to));
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (ascii(0, 8) === "\x89PNG\r\n\x1a\n") return "image/png";
+  if (ascii(0, 5) === "%PDF-") return "application/pdf";
+  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+  if (ascii(4, 8) === "ftyp") {
+    const brand = ascii(8, 12);
+    if (["heic", "heix", "heim", "heis", "hevc", "hevx", "hevm", "hevs"].includes(brand)) return "image/heic";
+    if (brand === "mif1" || brand === "msf1") return "image/heif";
+  }
+  return null;
+}
+
+// The sandbox portal takes only PDF, PNG and JPEG. A photo in one of these
+// formats is stored as a JPEG copy instead of the original.
+const TO_JPEG = new Set(["image/heic", "image/heif", "image/webp"]);
+
+export interface PhotoConverter {
+  toJpeg(bytes: Uint8Array): Promise<Uint8Array>;
+}
+
+// Cloudflare Images, so the decode runs outside the Worker: a 12 MP
+// HEIC decoded in the isolate needs more than its 128 MB.
+export function imagesConverter(images: ImagesBinding): PhotoConverter {
+  return {
+    async toJpeg(bytes) {
+      const out = await images
+        .input(new Blob([bytes as BufferSource]).stream())
+        .transform({ width: 4096, height: 4096, fit: "scale-down" })
+        .output({ format: "image/jpeg", quality: 85 });
+      return new Uint8Array(await out.response().arrayBuffer());
+    },
+  };
+}
+
+export interface StoredForm {
+  bytes: Uint8Array;
+  mimeType: string;
+  converted: boolean;
+  // Why a photo no office takes was kept as sent. Mail can still read it.
+  unconverted?: "no_converter" | "failed" | "too_large";
+}
+
+// What to store for one downloaded file, and as what media type.
+export async function storedForm(
+  bytes: Uint8Array,
+  label: string,
+  converter: PhotoConverter | null,
+  maxBytes = MAX_ATTACHMENT_BYTES,
+): Promise<StoredForm> {
+  const mimeType = sniffMediaType(bytes) ?? (label || "application/octet-stream");
+  if (!TO_JPEG.has(mimeType)) return { bytes, mimeType, converted: false };
+  if (!converter) return { bytes, mimeType, converted: false, unconverted: "no_converter" };
+  let jpeg: Uint8Array;
+  try {
+    jpeg = await converter.toJpeg(bytes);
+  } catch {
+    return { bytes, mimeType, converted: false, unconverted: "failed" };
+  }
+  if (sniffMediaType(jpeg) !== "image/jpeg") return { bytes, mimeType, converted: false, unconverted: "failed" };
+  if (jpeg.byteLength > maxBytes) return { bytes, mimeType, converted: false, unconverted: "too_large" };
+  return { bytes: jpeg, mimeType: "image/jpeg", converted: true };
+}
+
 export interface AttachmentFetchOptions {
   fetchFn: typeof fetch;
   checker: LinkChecker;
