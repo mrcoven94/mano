@@ -21,15 +21,20 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useStrings } from "../lib/i18n";
 import { colors, fonts, radius, tapTarget, type } from "../lib/theme";
 
-// A pushed screen names its parent in `back`. With no history, as after
-// a reload into a deep link on the web, back opens the parent instead.
+// A pushed screen names its parent. With no history, as after a reload
+// into a deep link on the web, going back opens the parent instead.
+export function useGoBack(parent: Href): () => void {
+  const router = useRouter();
+  return () => (router.canGoBack() ? router.back() : router.replace(parent));
+}
+
 function BackBar({ parent }: { parent: Href }) {
   const s = useStrings();
-  const router = useRouter();
+  const goBack = useGoBack(parent);
   return (
     <View style={styles.backBar}>
       <Pressable
-        onPress={() => (router.canGoBack() ? router.back() : router.replace(parent))}
+        onPress={goBack}
         accessibilityRole="button"
         accessibilityLabel={s.back}
         style={({ pressed }) => [styles.back, pressed && styles.pressed]}
