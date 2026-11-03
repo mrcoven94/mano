@@ -17,6 +17,8 @@ import {
   PHOTO_UNSAVED_TEXT,
   ResponderFailed,
   TURN_TEXT_CAP,
+  failedUsageOf,
+  usageOf,
   finalizeReply,
   dayKeyFor,
   errName,
@@ -37,7 +39,7 @@ import {
   type NormalizedEvent,
   type OutboundState,
 } from "@mano/channels";
-import type { HistoryMessage, Responder, StoredPhoto } from "@mano/channels";
+import type { HistoryMessage, ModelUsage, Responder, StoredPhoto } from "@mano/channels";
 import { EYES, allowedTapback, crisisGate, crisisLineFor, decideCrisis, eyesAllowed, guardReply, type CrisisCheck } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
@@ -49,9 +51,12 @@ import {
 } from "./text.js";
 import { attachmentDocumentId, fetchAttachment, type DocumentStore } from "./files.js";
 
+// Cost per model ID for one turn, recorded in the ledger beside the total.
+export type ModelCosts = Record<string, number>;
+
 export interface SpendLedger {
   reserve(key: string, worstUsd: number): Promise<{ allowed: boolean; spentUsd: number }>;
-  settle(key: string, actualUsd: number): Promise<void>;
+  settle(key: string, actualUsd: number, byModel?: ModelCosts): Promise<void>;
   release(key: string): Promise<void>;
   byteReserve(key: string, bytes: number): Promise<{ allowed: boolean; bytesUsed: number }>;
   byteSettle(key: string, actualBytes: number): Promise<void>;
@@ -80,6 +85,19 @@ export interface RunnerConfig {
 }
 
 export const DEFAULT_MEDIA_HOSTS = ["bucket.blooio.com"];
+
+// A turn's cost, in total and per model, at one rate per 1,000
+// characters. The stand-in calls no model and costs nothing.
+export function costByModel(usage: ModelUsage[], usdPer1kChars: number): { costUsd: number; byModel: ModelCosts } {
+  const byModel: ModelCosts = {};
+  let costUsd = 0;
+  for (const u of usage) {
+    const usd = u.model === "stand-in" ? 0 : estimateCostUsd(u.inputChars * u.requests, u.outputChars, usdPer1kChars);
+    byModel[u.model] = (byModel[u.model] ?? 0) + usd;
+    costUsd += usd;
+  }
+  return { costUsd, byModel };
+}
 
 // How much of the conversation the model sees: the last few finished
 // turns, oldest dropped first past the character cap.
@@ -707,6 +725,7 @@ export class ConversationRunner {
                 to,
                 answerJson: null,
                 costUsd: null,
+                costByModel: null,
                 costSettled: false,
                 attempts: 0,
                 state: "started",
@@ -1151,13 +1170,13 @@ export class ConversationRunner {
           }
           // Persisted with the answer, so a resumed send reports it too.
           if (answer.presentation) store.savePresentation({ turn, generation, state: "pending", ...answer.presentation });
-          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
-          await this.deps.spend.settle(reserveKey, answer.costUsd);
+          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs(), answer.byModel);
+          await this.deps.spend.settle(reserveKey, answer.costUsd, answer.byModel);
           store.markTurnSettled(turn, nowMs());
         } else {
           bubbles.push(...(await this.finalize(turn, crisis ? "" : FAILURE_BUBBLE, crisis, turnText)));
-          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
-          await this.deps.spend.settle(reserveKey, answer.costUsd);
+          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs(), answer.byModel);
+          await this.deps.spend.settle(reserveKey, answer.costUsd, answer.byModel);
           store.markTurnSettled(turn, nowMs());
         }
       } else {
@@ -1220,7 +1239,7 @@ export class ConversationRunner {
 
   private async settleResumedCost(turn: number, resumed: import("./store.js").PersistedTurn): Promise<void> {
     if (resumed.costSettled || resumed.costUsd === null) return;
-    await this.deps.spend.settle(`${this.deps.config.handleHash}:${turn}`, resumed.costUsd);
+    await this.deps.spend.settle(`${this.deps.config.handleHash}:${turn}`, resumed.costUsd, resumed.costByModel ?? undefined);
     this.store.markTurnSettled(turn, this.deps.nowMs());
   }
 
@@ -1338,10 +1357,11 @@ export class ConversationRunner {
         ok: true;
         text: string;
         costUsd: number;
+        byModel: ModelCosts;
         tapback: import("@mano/channels").Tapback | null;
         presentation?: { approvalId: string; approval: string };
       }
-    | { ok: false; costUsd: number }
+    | { ok: false; costUsd: number; byModel: ModelCosts }
   > {
     const { responder, config, logger } = this.deps;
     let done = false;
@@ -1358,8 +1378,6 @@ export class ConversationRunner {
         .sendBubble({ turn, part: 0, tag: "interim", text: INTERIM_BUBBLE, chatId, to, generation })
         .catch((err: unknown) => logger.warn("interim_failed", { handle: this.logHandle(), turn, err: errName(err) }));
     }, config.interimMs);
-    const attemptCost = (inputChars: number, attempts: number): number =>
-      estimateCostUsd(inputChars * attempts, 0, config.usdPer1kChars);
     try {
       const onHeadsUp = async (text: string): Promise<void> => {
         if (!crisis) onDeep();
@@ -1375,19 +1393,21 @@ export class ConversationRunner {
         { texts: turnText ? [turnText] : [], attachmentCount, documents, history, turnKey: { generation, turn }, receivedAtMs, crisis },
         { onHeadsUp },
       );
-      const costUsd =
-        result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
-      logger.info("turn_answered", { handle: this.logHandle(), turn, model: result.model, attempts: result.attempts });
-      return { ok: true, text: result.text, costUsd, tapback: result.tapback ?? null, presentation: result.presentation };
+      const { costUsd, byModel } = costByModel(usageOf(result), config.usdPer1kChars);
+      logger.info("turn_answered", { handle: this.logHandle(), turn, model: result.model, attempts: result.attempts, models: Object.keys(byModel).join(","), costUsd });
+      return { ok: true, text: result.text, costUsd, byModel, tapback: result.tapback ?? null, presentation: result.presentation };
     } catch (err) {
+      const usage = err instanceof ResponderFailed ? failedUsageOf(err, responder.model ?? responder.name) : [];
+      const { costUsd, byModel } = costByModel(usage, config.usdPer1kChars);
       logger.warn("responder_failed", {
         handle: this.logHandle(),
         turn,
         err: errName(err),
         reason: err instanceof ResponderFailed ? err.reason : null,
+        models: Object.keys(byModel).join(","),
+        costUsd,
       });
-      const costUsd = err instanceof ResponderFailed ? attemptCost(err.inputChars, err.attempts) : 0;
-      return { ok: false, costUsd };
+      return { ok: false, costUsd, byModel };
     } finally {
       done = true;
       clearTimeout(timer);

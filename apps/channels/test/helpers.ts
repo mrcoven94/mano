@@ -1,3 +1,4 @@
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { Decorations } from "../src/decorations.js";
 import {
   RecordingChannel,
@@ -137,8 +138,8 @@ export function makeHarness(
   h.ledger = new GlobalLedger(new MemoryGlobalStore(), () => h.now, opts.budgetUsd ?? 5, opts.byteBudget);
   const spend: SpendLedger = {
     reserve: async (key: string, worstUsd: number) => h.ledger.reserve(key, worstUsd),
-    settle: async (key: string, actualUsd: number) => {
-      h.ledger.settle(key, actualUsd);
+    settle: async (key: string, actualUsd: number, byModel?: Record<string, number>) => {
+      h.ledger.settle(key, actualUsd, byModel);
     },
     release: async (key: string) => {
       h.ledger.release(key);
@@ -172,4 +173,23 @@ export async function runTurnAfterBatch(h: Harness): Promise<void> {
   h.advance(h.batchMs + 100);
   const result = await h.runner.runDueTurn();
   if (result !== "ran") throw new Error(`Expected a turn to run, got ${result}.`);
+}
+
+// A Durable Object's SqlStorage over node:sqlite, so a test can run the
+// real SQL store and open it again as a restarted worker would.
+export function sqliteStorage(db: DatabaseSync): SqlStorage {
+  return {
+    exec(sql: string, ...params: unknown[]) {
+      const select = /^\s*(SELECT|WITH)\b/i.test(sql);
+      if (!select && params.length === 0 && sql.includes(";")) {
+        db.exec(sql);
+        return { toArray: () => [] };
+      }
+      const stmt = db.prepare(sql);
+      const args = params as SQLInputValue[];
+      if (select) return { toArray: () => stmt.all(...args) };
+      stmt.run(...args);
+      return { toArray: () => [] };
+    },
+  } as unknown as SqlStorage;
 }
