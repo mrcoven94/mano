@@ -120,13 +120,16 @@ describe("MetaModelClient", () => {
     ["an unlisted 418", okJson({ error: { message: LEAK } }, 418)],
     ["a failed run", okJson({ status: "failed", error: { message: LEAK } })],
     ["a run in an unknown state", okJson({ status: LEAK })],
+    ["an unreadable 200", new Response(`<html>${LEAK}</html>`, { status: 200 })],
+    ["an unreadable 429", new Response(`<html>${LEAK}</html>`, { status: 429 })],
+    ["an unreadable 503", new Response(`<html>${LEAK}</html>`, { status: 503 })],
   ])("never repeats the provider's text from %s", async (_what, response) => {
     const client = new MetaModelClient({ apiKey: "k", maxRetries: 0, fetchFn: (async () => response) as typeof fetch });
     const message = await client.responses({ model: "muse-spark-1.3", input: "hi" }).then(
       () => "resolved",
       (err: Error) => err.message,
     );
-    expect(message).toMatch(/^Model (request failed|run)/);
+    expect(message).toMatch(/^Model (request failed|run|response)/);
     for (const secret of SECRETS) expect(message).not.toContain(secret);
   });
 });

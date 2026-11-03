@@ -110,7 +110,7 @@ const TYPES: [RegExp, LetterType][] = [
   [/\binterview\b/, "interview"],
   // A next renewal is a date the letter states, not what it is about:
   // "Next renewal November 22, 2026" on an approval is not a renewal letter.
-  [/(?<!\bnext\s+)(?:\brenew|recertif|redetermin)/, "renewal"],
+  [/(?<!\bnext[ \t]+)(?:\brenew|recertif|redetermin)/, "renewal"],
   [/\bmissing\b|\bverif(y|ication)\b|need(ed)? (more )?(information|documents|proof)|documents? needed|send (us )?(proof|copies)/, "documents needed"],
   [/\bchang(e|ed|es)\b|\breduc|\bincreas|new amount|will (stop|end)/, "change notice"],
 ];

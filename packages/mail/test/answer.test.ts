@@ -326,6 +326,11 @@ describe("answerReading builds the reply from closed fields only", () => {
     expect(answer.deadlines).toEqual([expect.objectContaining({ title: "SNAP renewal", kind: "renewal", sentence })]);
   });
 
+  it("a renewal whose \"next\" ends the line above still reads as a renewal", async () => {
+    const answer = await answerFor([snapPage(["What happens next", "Renew by November 20, 2026."])]);
+    expect(answer.text).toMatch(/^This is a \w+ renewal letter\./);
+  });
+
   it("the standard renewal letter still reads as a renewal with its deadline", async () => {
     const answer = await answerFor([RENEWAL_PAGE]);
     expect(answer.text).toMatch(/^This is a Medi-Cal renewal letter\. It is due November 20, 2026\./);

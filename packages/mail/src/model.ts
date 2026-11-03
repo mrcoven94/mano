@@ -135,6 +135,17 @@ class RetryableStatus extends Error {
   }
 }
 
+// An error whose words this client chose. Anything else (a transport or
+// runtime error) may quote what it was given, so it is replaced.
+class ModelFailure extends Error {}
+
+function safeError(err: unknown): Error {
+  if (err instanceof ModelFailure || err instanceof RetryableStatus) return err;
+  if (err instanceof Error && err.name === "AbortError") return new ModelFailure("Model request timed out.");
+  if (err instanceof TypeError) return new ModelFailure("Model request failed: no connection.");
+  return new ModelFailure("Model request failed.");
+}
+
 function isRetryable(err: unknown): boolean {
   if (err instanceof RetryableStatus) return true;
   if (err instanceof TypeError) return true;
@@ -208,16 +219,24 @@ export class MetaModelClient implements ModelClient {
           },
           body: JSON.stringify(body),
         });
-        if (res.status !== 429 && res.status < 500 && !res.ok) {
+        if (!res.ok) {
           clearTimeout(timer);
-          throw new Error(failed(res.status));
+          await res.body?.cancel().catch(() => undefined);
+          if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
+          throw new ModelFailure(failed(res.status));
         }
-        const data: unknown = await res.json();
-        clearTimeout(timer);
-        if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
+        let data: unknown;
+        try {
+          data = await res.json();
+        } catch {
+          // A parse error quotes the body it could not read.
+          throw new ModelFailure(`Model response was not readable: ${res.status}`);
+        } finally {
+          clearTimeout(timer);
+        }
         const status = (data as { status?: unknown })?.status;
         if (typeof status === "string" && status !== "completed") {
-          throw new Error(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`);
+          throw new ModelFailure(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`);
         }
         return { text: extractOutputText(data), model: req.model, usage: extractUsage(data), raw: data };
       } catch (err) {
@@ -228,10 +247,10 @@ export class MetaModelClient implements ModelClient {
           await new Promise((r) => setTimeout(r, backoff));
           continue;
         }
-        throw err instanceof Error ? err : new Error("Model request failed.");
+        throw safeError(err);
       }
     }
-    throw lastErr instanceof Error ? lastErr : new Error("Model request failed.");
+    throw safeError(lastErr);
   }
 }
 
