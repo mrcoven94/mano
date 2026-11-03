@@ -12,9 +12,14 @@
  * starts the model ahead of a check, for example when a conversation
  * starts, since a cold start takes minutes. check() takes the person's
  * own names and details to redact by value (Engine reads them from the
- * profile), and a submit carries its form fields with personal values as
- * labels. redact() strips personal details from text going to logs or
- * outside graders.
+ * profile and its suggestions). Each is found however it is written:
+ * text and values are folded to letters and digits first, so spacing,
+ * case, accents and punctuation never matter, a first name alone still
+ * matches, and phones and birth dates match on the number or day they
+ * name. A submit carries its form fields with personal values as labels,
+ * and a personal field that holds more than its value (an instruction, an
+ * extra destination) blocks the check before anything is sent. redact()
+ * strips personal details from text going to logs or outside graders.
  *
  * Run it: set MANO_GUARDIAN_RULES_ONLY=1 for explicit local rules-only,
  * or set MANO_GUARDIAN_URL and MANO_GUARDIAN_TOKEN (see .env.example)
@@ -60,5 +65,5 @@ export {
 } from "./glimmer.js";
 export type { ProxyAuth, ServerInfo } from "./glimmer.js";
 export { buildModelRequest, redact } from "./redact.js";
-export type { KnownEntities } from "./redact.js";
+export type { KnownEntities } from "./known.js";
 export { canonicalRecipient } from "./rules.js";

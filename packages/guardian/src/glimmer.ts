@@ -1,4 +1,6 @@
-import { buildModelRequest, mergeEntities, type KnownEntities } from "./redact.js";
+import { formProblems } from "./form.js";
+import { mergeEntities, type KnownEntities } from "./known.js";
+import { buildModelRequest } from "./redact.js";
 import { RulesChecker } from "./rules.js";
 import type { CheckInput, CheckResult, Checker, Verdict, WarmState } from "./types.js";
 
@@ -145,6 +147,10 @@ export class GlimmerModelChecker implements Checker {
   // check time (Engine reads them from the person's profile).
   async check(input: CheckInput, known?: KnownEntities): Promise<CheckResult> {
     this.lastServer = null;
+    // A personal form field that holds more than its value would reach
+    // the model as a bare label, hiding the rest, so it is held here.
+    const malformed = formProblems(input);
+    if (malformed.length > 0) return { verdict: "block", problems: malformed };
 
     let response: Response;
     try {

@@ -2,45 +2,19 @@
 // patterns (emails, phones, ID numbers, case numbers, birth dates, street
 // addresses) are caught by shape. Names, employers and many other details
 // have no reliable shape, so the caller passes the values it knows about
-// and each is matched literally, before any pattern can split it.
+// and known.ts finds each however it is written, before any pattern can
+// split it.
+import { fieldText, submitForm, SUBMIT_FORM_FIELDS, type FormField } from "./form.js";
+import {
+  KNOWN_LABELS,
+  knownMatcher,
+  mergeEntities,
+  replaceKnown,
+  type KnownEntities,
+  type KnownMatcher,
+} from "./known.js";
 import { PAYLOAD_SCHEMAS, canonicalRecipient } from "./rules.js";
 import type { CheckInput, ModelRequest } from "./types.js";
-
-export interface KnownEntities {
-  names?: string[];
-  employers?: string[];
-  addresses?: string[];
-  phones?: string[];
-  emails?: string[];
-  datesOfBirth?: string[];
-  caseNumbers?: string[];
-}
-
-type EntityKind = keyof KnownEntities;
-
-const KNOWN_LABELS: Record<EntityKind, string> = {
-  names: "[NAME]",
-  employers: "[EMPLOYER]",
-  addresses: "[ADDRESS]",
-  phones: "[PHONE]",
-  emails: "[EMAIL]",
-  datesOfBirth: "[DATE OF BIRTH]",
-  caseNumbers: "[CASE NUMBER]",
-};
-
-// The sandbox portal's renewal fields (PORTAL_HOUSEHOLD in Engine's
-// executors). A personal field reaches the model only as its kind's label
-// and its value joins the known entities, so it is caught anywhere else in
-// the request too. Number fields reach the model as numbers, so it can
-// judge whether a household size or income makes sense.
-const SUBMIT_FORM_FIELDS: Record<string, EntityKind | "number"> = {
-  fullName: "names",
-  dateOfBirth: "datesOfBirth",
-  address: "addresses",
-  phone: "phones",
-  householdSize: "number",
-  monthlyIncome: "number",
-};
 
 const PLAIN_NUMBER = /^-?\d{1,7}(?:\.\d{1,2})?$/;
 
@@ -68,29 +42,10 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// One pass over every known value, longest first, so a longer value wins
-// where two overlap and a label already written is never matched again.
-function replaceKnown(text: string, known: KnownEntities | undefined): string {
-  const needles = (Object.keys(KNOWN_LABELS) as EntityKind[])
-    .flatMap((kind) =>
-      (known?.[kind] ?? [])
-        .map((value) => value.trim())
-        .filter((value) => value !== "")
-        .map((value) => ({ value, label: KNOWN_LABELS[kind] })),
-    )
-    .sort((a, b) => b.value.length - a.value.length);
-  if (needles.length === 0) return text;
-  // One capture group per value, so the group that matched names its label.
-  const pattern = needles.map(({ value }) => `(${escapeRegExp(value)})`).join("|");
-  return text.replace(new RegExp(pattern, "gi"), (...args: unknown[]) => {
-    const index = args.slice(1, needles.length + 1).findIndex((group) => group !== undefined);
-    return needles[index]?.label ?? "[REDACTED]";
-  });
-}
-
-export function redact(text: string, known?: KnownEntities): string {
-  let out = replaceKnown(text, known);
-  out = out.replace(EMAIL, "[EMAIL]");
+function redactWith(text: string, matcher: KnownMatcher): string {
+  // Emails first, so a known name inside one never splits it.
+  let out = text.replace(EMAIL, "[EMAIL]");
+  out = replaceKnown(out, matcher);
   // Case and receipt numbers before phones so digit runs keep their label.
   out = out.replace(CASE_NUMBER, "[CASE NUMBER]");
   out = out.replace(RECEIPT_NUMBER, "[CASE NUMBER]");
@@ -104,6 +59,10 @@ export function redact(text: string, known?: KnownEntities): string {
   out = out.replace(STREET_ADDRESS, "[ADDRESS]");
   out = out.replace(ZIP_CODE, "[ADDRESS]");
   return out;
+}
+
+export function redact(text: string, known?: KnownEntities): string {
+  return redactWith(text, knownMatcher(known));
 }
 
 function replaceDestination(haystack: string, needle: string, label: string): string {
@@ -148,52 +107,32 @@ class DestinationLabels {
   }
 }
 
-export function mergeEntities(
-  ...sets: (KnownEntities | undefined)[]
-): KnownEntities {
-  const merged: KnownEntities = {};
-  for (const set of sets) {
-    for (const kind of Object.keys(KNOWN_LABELS) as EntityKind[]) {
-      const values = set?.[kind] ?? [];
-      if (values.length > 0) merged[kind] = [...(merged[kind] ?? []), ...values];
-    }
-  }
-  return merged;
-}
-
+// The form's personal values, so each is removed wherever else it
+// appears in the request.
 function formEntities(form: Record<string, unknown>): KnownEntities {
   const found: KnownEntities = {};
-  for (const [field, kind] of Object.entries(SUBMIT_FORM_FIELDS)) {
-    if (kind === "number") continue;
-    const value = form[field];
-    if (typeof value !== "string" && typeof value !== "number") continue;
-    const text = String(value);
-    // A mailing address is one line of comma-separated parts, and a city
-    // or street alone still identifies the person.
-    const parts =
-      kind === "addresses"
-        ? text.split(",").map((part) => part.trim()).filter((part) => part.length >= 3)
-        : [];
-    found[kind] = [...(found[kind] ?? []), text, ...parts];
+  for (const [name, field] of Object.entries(SUBMIT_FORM_FIELDS)) {
+    const text = fieldText(form[name]);
+    if (field.kind === "personal" && text !== null) found[field.entity] = [...(found[field.entity] ?? []), text];
   }
   return found;
 }
 
 // A personal field becomes its label, or stays empty so a missing value
 // still shows. A number field stays a number only when it is a plain one
-// no longer than an income; anything else is scrubbed text, so a phone
-// number typed into it is still caught.
+// no longer than an income and holds none of the person's known values;
+// anything else is scrubbed text, so a phone or ZIP typed there is still
+// caught.
 function formValue(
   value: unknown,
-  kind: EntityKind | "number",
+  field: FormField,
+  matcher: KnownMatcher,
   scrub: (text: string) => string,
 ): unknown {
   if (typeof value !== "string" && typeof value !== "number") return undefined;
-  if (kind !== "number") {
-    return String(value).trim() === "" ? "" : KNOWN_LABELS[kind];
-  }
   const text = String(value).trim();
-  return PLAIN_NUMBER.test(text) ? Number(text) : scrub(text);
+  if (field.kind === "personal") return text === "" ? "" : KNOWN_LABELS[field.entity];
+  return PLAIN_NUMBER.test(text) && replaceKnown(text, matcher) === text ? Number(text) : scrub(text);
 }
 
 // Build the request that leaves Mano for the guardian model, explicitly from
@@ -205,22 +144,17 @@ function formValue(
 // compare destinations without seeing their values. Labels match by exact
 // canonical value, so case-distinct paths stay distinct. Everything else
 // structural goes through redact(). A submit also carries its form fields
-// (SUBMIT_FORM_FIELDS) and says when a document is attached. Only the
-// action type, source kinds, the origin and form numbers pass through
-// untouched.
+// (form.ts) and says when a document is attached. Only the action type,
+// source kinds, the origin and form numbers pass through untouched. The
+// caller holds a form whose personal fields fail formProblems before it
+// builds anything.
 export function buildModelRequest(
   input: CheckInput,
   known?: KnownEntities,
 ): ModelRequest {
   const raw = input.action.payload;
-  const form =
-    input.action.type === "submit" &&
-    typeof raw === "object" &&
-    raw !== null &&
-    !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : null;
-  const entities = form === null ? known : mergeEntities(known, formEntities(form));
+  const form = submitForm(input);
+  const matcher = knownMatcher(form === null ? known : mergeEntities(known, formEntities(form)));
   const labels = new DestinationLabels();
   const recipient = canonicalRecipient(input.action.recipient);
   const others = new Map<string, string>();
@@ -243,7 +177,7 @@ export function buildModelRequest(
       out = replaceDestination(out, destination, otherLabel(destination));
     }
     out = labels.labelAll(out);
-    return redact(out, entities);
+    return redactWith(out, matcher);
   };
   const scrubStrings = (value: unknown): string[] =>
     Array.isArray(value)
@@ -279,9 +213,9 @@ export function buildModelRequest(
     }
   }
   if (form !== null) {
-    for (const [field, kind] of Object.entries(SUBMIT_FORM_FIELDS)) {
-      const value = formValue(form[field], kind, scrub);
-      if (value !== undefined) payload[field] = value;
+    for (const [name, field] of Object.entries(SUBMIT_FORM_FIELDS)) {
+      const value = formValue(form[name], field, matcher, scrub);
+      if (value !== undefined) payload[name] = value;
     }
   }
   if (input.action.type === "submit" && input.action.documentHash !== null) {

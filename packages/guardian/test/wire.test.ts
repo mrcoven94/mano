@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GlimmerModelChecker } from "../src/glimmer.js";
-import type { KnownEntities } from "../src/redact.js";
+import type { KnownEntities } from "../src/known.js";
 import type { CheckInput, CheckResult } from "../src/types.js";
 
 // What leaves Mano for Guardian, read off the request body a fake endpoint
@@ -218,13 +218,15 @@ function fullWidth(text: string): string {
 }
 
 function reform(random: Random, text: string): string {
-  switch (pick(random, ["as-is", "nfc", "nfd", "full-width"] as const)) {
+  switch (pick(random, ["as-is", "nfc", "nfd", "full-width", "zero-width"] as const)) {
     case "nfc":
       return text.normalize("NFC");
     case "nfd":
       return text.normalize("NFD");
     case "full-width":
       return fullWidth(text);
+    case "zero-width":
+      return [...text].map((ch) => (random() < 0.3 ? `${ch}\u200b` : ch)).join("");
     default:
       return text;
   }

@@ -350,6 +350,13 @@ describe("known entities", () => {
     expect(out).toBe("[EMPLOYER] pays [NAME]. Write to [ADDRESS], [ADDRESS]. Case [CASE NUMBER]. mail [EMAIL].");
   });
 
+  it("removes a street's name but never a bare street word", () => {
+    const out = redact("Example Lane floods, so take the lane by the park.", {
+      addresses: ["Example Lane"],
+    });
+    expect(out).toBe("[ADDRESS] floods, so take the lane by the park.");
+  });
+
   it("removes a known address whole before a pattern can split it", () => {
     const out = redact("Send it to 12 Example Lane, Springfield, IL 62701 today.", {
       addresses: ["12 Example Lane, Springfield, IL 62701"],
