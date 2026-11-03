@@ -4,6 +4,7 @@
 // stand-in keeps those screens working.
 
 import { b64encode } from "../base64";
+import { provenNotSent } from "../sent-proof";
 import type { Hasher } from "./standin";
 import type {
   Approval,
@@ -11,6 +12,7 @@ import type {
   ApproveResult,
   ChatMessage,
   Deadline,
+  DeclineAnswer,
   DocMeta,
   EngineMode,
   Grant,
@@ -43,6 +45,7 @@ interface EngineApprovalRow {
   remindAt: string;
   expiresAt: string;
   escalated: boolean;
+  outcome?: { attempt: string | null; receipt: unknown };
 }
 
 interface GatewayResultJson {
@@ -162,6 +165,8 @@ export class EngineClient implements ManoClient {
       remindAt: a.remindAt,
       expiresAt: a.expiresAt,
       escalated: a.escalated,
+      // No outcome on file is not proof of no attempt.
+      attempted: a.outcome ? a.outcome.attempt !== null || a.outcome.receipt !== null : true,
     }));
   }
 
@@ -205,6 +210,23 @@ export class EngineClient implements ManoClient {
       simulated: out.receipt?.simulated ?? false,
       reason: out.reason ?? null,
     };
+  }
+
+  async decline(session: Session, approvalId: string): Promise<DeclineAnswer> {
+    const res = await this.call(
+      session,
+      `/api/persons/${encodeURIComponent(session.personId)}/approvals/${encodeURIComponent(approvalId)}/reject`,
+      { method: "POST" },
+    );
+    const out = await this.json<{ status: string; reason?: string }>(res);
+    // The engine ends only a pending approval and refuses anything else.
+    // Its record then says what this approval became and whether any
+    // approval under the same key went out.
+    const all = await this.listApprovals(session);
+    const current = all.find((a) => a.id === approvalId);
+    const status = out.status === "rejected" ? "rejected" : current?.status;
+    if (!current || !status || status === "pending") throw new Error(out.reason ?? "The engine did not decline this approval.");
+    return { status, notSent: provenNotSent(all.filter((a) => a.idempotencyKey === current.idempotencyKey)) };
   }
 
   async listDeadlines(_session: Session): Promise<Deadline[]> {

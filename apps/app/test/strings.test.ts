@@ -23,6 +23,11 @@ describe("strings", () => {
     }
   });
 
+  it("keeps the unavailable-document line free of any claim about sending", () => {
+    expect(en.docUnavailable.toLowerCase()).not.toMatch(/sent|send/);
+    expect(es.docUnavailable.toLowerCase()).not.toMatch(/envi/);
+  });
+
   it("resolves both languages", () => {
     expect(stringsFor("en").send).toBe("Send");
     expect(stringsFor("es").send).toBe("Enviar");

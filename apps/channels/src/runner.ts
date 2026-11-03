@@ -3,7 +3,7 @@
 // channel, the responder, files and the spend ledger. Nothing here names
 // a provider or a runtime.
 import { Decorations } from "./decorations.js";
-import type { ChatBackground } from "./store.js";
+import type { AttachmentChoice, ChatBackground } from "./store.js";
 import {
   ChannelFailed,
   ChannelRefused,
@@ -13,6 +13,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_OUTPUT_CHARS,
   OUTBOUND_RANK,
+  PHOTO_FORMAT_TEXT,
   PHOTO_UNREAD_TEXT,
   PHOTO_UNSAVED_TEXT,
   ResponderFailed,
@@ -49,7 +50,7 @@ import {
   INTRO_BUBBLE,
   OPT_OUT_BUBBLE,
 } from "./text.js";
-import { attachmentDocumentId, fetchAttachment, type DocumentStore } from "./files.js";
+import { attachmentDocumentId, fetchAttachment, loggableType, storedAgain, storedForm, type DocumentStore, type PhotoConverter } from "./files.js";
 
 // Cost per model ID for one turn, recorded in the ledger beside the total.
 export type ModelCosts = Record<string, number>;
@@ -147,6 +148,9 @@ export interface RunnerDeps {
   responder: Responder;
   // The person's Engine documents, where texted photos are stored.
   documents: DocumentStore | null;
+  // Makes a JPEG copy of a HEIC, HEIF or WebP photo. Null keeps the
+  // original, and the reply asks for a screenshot instead.
+  photoConverter?: PhotoConverter | null;
   spend: SpendLedger;
   logger: Logger;
   nowMs: () => number;
@@ -1138,7 +1142,15 @@ export class ConversationRunner {
       }, config.typingRefreshMs);
     }
     try {
-      const saved = await this.saveAttachments(turn, attachments, generation);
+      const { photos: saved, unfileable } = await this.saveAttachments(turn, attachments, generation);
+      // A photo kept as sent (no JPEG copy) can be read but not filed, so
+      // the reply says so now instead of at filing time, in a bubble of
+      // its own after the capped reply, so the cap never cuts it. Never on
+      // a crisis turn.
+      const withFormat = (answered: import("./store.js").AnswerBubble[]): import("./store.js").AnswerBubble[] =>
+        unfileable && !crisis
+          ? [...answered, { part: Math.max(0, ...answered.map((b) => b.part)) + 1, tag: "", text: PHOTO_FORMAT_TEXT }]
+          : answered;
       const bubbles: import("./store.js").AnswerBubble[] = [];
       // A crisis turn opens with the crisis line, never the friendly intro.
       if (!meta.introduced && !crisis) bubbles.push({ part: 0, tag: "", text: INTRO_BUBBLE });
@@ -1164,7 +1176,7 @@ export class ConversationRunner {
           const tapback = config.reactionsEnabled && target && !eyes.placed ? allowedTapback(answer.tapback, target.text, crisis) : null;
           const answered = await this.finalize(turn, answer.text, crisis, turnText);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
-          bubbles.push(...answered);
+          bubbles.push(...withFormat(answered));
           if (tapback && target && chatId && answered.length > 0) {
             bubbles.push({ part: 0, tag: "react", text: tapback, messageId: target.messageId, epoch });
           }
@@ -1174,7 +1186,7 @@ export class ConversationRunner {
           await this.deps.spend.settle(reserveKey, answer.costUsd, answer.byModel);
           store.markTurnSettled(turn, nowMs());
         } else {
-          bubbles.push(...(await this.finalize(turn, crisis ? "" : FAILURE_BUBBLE, crisis, turnText)));
+          bubbles.push(...withFormat(await this.finalize(turn, crisis ? "" : FAILURE_BUBBLE, crisis, turnText)));
           store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs(), answer.byModel);
           await this.deps.spend.settle(reserveKey, answer.costUsd, answer.byModel);
           store.markTurnSettled(turn, nowMs());
@@ -1182,7 +1194,7 @@ export class ConversationRunner {
       } else {
         // A textless turn costs nothing: settle zero to release the hold
         // instead of holding the whole budget.
-        if (photoLine) bubbles.push(...(await this.finalize(turn, photoLine, crisis, turnText)));
+        if (photoLine) bubbles.push(...withFormat(await this.finalize(turn, photoLine, crisis, turnText)));
         await this.deps.spend.settle(reserveKey, 0);
         store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
@@ -1491,20 +1503,36 @@ export class ConversationRunner {
   // the per-handle and global daily byte budgets. Each file reserves the
   // worst case up front and settles its actual size after. Each one is
   // stored in the person's Engine documents under an ID derived from the
-  // generation, turn and position, so a replayed turn stores the same one.
+  // generation, turn and position, in a form chosen once and saved before
+  // the upload (AttachmentChoice), so a replayed turn stores the same one
+  // and one file never becomes two documents.
   private async saveAttachments(
     turn: number,
     attachments: import("@mano/channels").EventAttachment[],
     generation: number,
-  ): Promise<StoredPhoto[]> {
-    const { store, documents, fetchFn, config, logger, nowMs, spend } = this.deps;
-    if (attachments.length === 0) return [];
+  ): Promise<{ photos: StoredPhoto[]; unfileable: boolean }> {
+    const { store, documents, photoConverter, fetchFn, config, logger, nowMs, spend } = this.deps;
+    if (attachments.length === 0) return { photos: [], unfileable: false };
     if (!documents) {
       logger.warn("attachments_unsaved", { handle: this.logHandle(), turn, reason: "no_storage" });
-      return [];
+      return { photos: [], unfileable: false };
     }
     const saved: StoredPhoto[] = [];
-    for (const attachment of attachments.slice(0, MAX_ATTACHMENTS_PER_TURN)) {
+    let unfileable = false;
+    for (const [index, attachment] of attachments.slice(0, MAX_ATTACHMENTS_PER_TURN).entries()) {
+      // A replay keeps what an earlier attempt chose for this file.
+      const chosen = store.attachmentChoice(turn, index);
+      if (chosen?.state === "stored" && chosen.generation === generation) {
+        // Counted on this conversation's day when it was stored. The global
+        // settle is idempotent per key, so settling again counts it once
+        // even if the attempt that stored it died before settling.
+        await spend.byteSettle(chosen.byteKey, chosen.sizeBytes).catch((err: unknown) =>
+          logger.warn("attachment_settle_failed", { handle: this.logHandle(), turn, err: errName(err) }),
+        );
+        saved.push({ id: chosen.documentId, mimeType: chosen.mimeType });
+        if (chosen.unfileable) unfileable = true;
+        continue;
+      }
       const meta = store.meta();
       const byteDay = dayKeyFor(nowMs());
       const usedToday = meta.byteDayKey === byteDay ? meta.byteDayCount : 0;
@@ -1512,7 +1540,10 @@ export class ConversationRunner {
         logger.warn("attachment_capped", { handle: this.logHandle(), turn, scope: "handle" });
         continue;
       }
-      const byteKey = `${config.handleHash}:${turn}:${saved.length}`;
+      // Keyed by the file's place in the message, not by how many were
+      // saved before it: a file that failed once and replays later must
+      // never share a key with one stored after it.
+      const byteKey = `${config.handleHash}:${turn}:${index}`;
       const reservation = await spend.byteReserve(byteKey, MAX_ATTACHMENT_BYTES);
       if (!reservation.allowed) {
         logger.warn("attachment_capped", { handle: this.logHandle(), turn, scope: "global" });
@@ -1529,29 +1560,75 @@ export class ConversationRunner {
           logger.warn("attachment_refused", { handle: this.logHandle(), turn, reason: fetched.reason });
           continue;
         }
-        const bytes = fetched.bytes;
-        const mimeType = fetched.contentType || attachment.mediaType || "application/octet-stream";
-        const id = await attachmentDocumentId(generation, turn, saved.length, attachment.url);
+        let choice: AttachmentChoice;
+        let bytes: Uint8Array;
+        if (chosen && chosen.generation === generation) {
+          const again = await storedAgain(fetched.bytes, chosen, photoConverter ?? null);
+          if (!again) {
+            await spend.byteRelease(byteKey);
+            logger.warn("attachment_refused", { handle: this.logHandle(), turn, reason: "copy_again" });
+            continue;
+          }
+          choice = chosen;
+          bytes = again;
+        } else {
+          const stored = await storedForm(fetched.bytes, fetched.contentType || attachment.mediaType || "", photoConverter ?? null);
+          logger.info("attachment_media", {
+            handle: this.logHandle(),
+            turn,
+            declared: loggableType(attachment.mediaType),
+            served: loggableType(fetched.contentType),
+            stored: loggableType(stored.mimeType),
+            unconverted: stored.unconverted ?? null,
+          });
+          bytes = stored.bytes;
+          choice = {
+            turn,
+            index,
+            generation,
+            documentId: await attachmentDocumentId(generation, turn, saved.length, attachment.url),
+            mimeType: stored.mimeType,
+            converted: stored.converted,
+            unfileable: stored.unconverted !== undefined,
+            byteKey,
+            sizeBytes: stored.bytes.byteLength,
+            state: "chosen",
+          };
+        }
         this.checkGeneration(generation);
+        store.saveAttachmentChoice(choice);
+        const id = choice.documentId;
         if (!(await documents.put({ id, name: id, bytes, generation }))) {
           await spend.byteRelease(byteKey);
           logger.warn("attachment_refused", { handle: this.logHandle(), turn, reason: "store" });
           continue;
         }
-        await spend.byteSettle(byteKey, bytes.byteLength);
+        // A delete that landed during the upload wins: nothing of the old
+        // generation is written after the wipe.
+        this.checkGeneration(generation);
+        // The day's count and the stored mark are written together, with no
+        // await between them, so the Durable Object commits them as one: a
+        // replay of a stored choice never skips the count or counts twice.
         const counted = store.meta();
         store.patchMeta({
           byteDayCount: (counted.byteDayKey === byteDay ? counted.byteDayCount : 0) + bytes.byteLength,
           byteDayKey: byteDay,
         });
-        saved.push({ id, mimeType });
+        store.saveAttachmentChoice({ ...choice, state: "stored" });
+        saved.push({ id, mimeType: choice.mimeType });
+        if (choice.unfileable) unfileable = true;
+        // The file is stored and counted here; a settle that fails leaves
+        // the worst-case hold in place until a replay settles it.
+        await spend.byteSettle(byteKey, bytes.byteLength).catch((err: unknown) =>
+          logger.warn("attachment_settle_failed", { handle: this.logHandle(), turn, err: errName(err) }),
+        );
       } catch (err) {
         if (err instanceof GenerationStopped) throw err;
         await spend.byteRelease(byteKey);
         logger.warn("attachment_failed", { handle: this.logHandle(), turn, err: errName(err) });
       }
     }
-    return saved;
+    return { photos: saved, unfileable };
   }
 
   // The one send path. Every bubble goes through here with its
