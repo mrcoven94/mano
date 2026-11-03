@@ -110,6 +110,18 @@ describe("Maria spine run", () => {
     expect(approval?.attempted).toBe(false);
   });
 
+  it("never says a decided renewal is unsent when asked to change it", async () => {
+    const client = makeClient();
+    const session = await signIn(client);
+    const photo = b64encode(utf8ToBytes("fake-photo-bytes"));
+    await client.sendMessage(session, "I photographed my mail", [{ kind: "photo", name: "mail.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
+    const [approval] = await client.listApprovals(session);
+    await client.approve(session, approval!.id, { documentHash: approval!.documentHash, requestHash: approval!.requestHash });
+    const reply = await client.sendMessage(session, 'About "File your SNAP renewal for case R-1042": please change my address', []);
+    expect(reply.text).not.toBe(CHANGE_REPLY);
+    expect(reply.text).not.toContain("Nothing was sent");
+  });
+
   it("binds the approval to the real hash of the document bytes", async () => {
     const client = makeClient();
     const session = await signIn(client);

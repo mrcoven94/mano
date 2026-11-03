@@ -17,7 +17,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Badge, Body, Btn, Card, ErrorView, GhostBtn, LinkBtn, LoadingView, Muted, Screen, Title, useGoBack } from "../../components/ui";
 import { DocPreview, currentPlatform } from "../../components/doc";
-import { parseActionView, type ActionField, type KnownAction, type ParsedAction } from "../../lib/action-view";
+import { parseActionView, type ParsedAction } from "../../lib/action-view";
+import { fieldValue, leadLine } from "../../lib/approval-text";
 import { changeDraft, holdChatDraft } from "../../lib/chat-draft";
 import { approvalGate } from "../../lib/approve-gate";
 import { approveOutcome } from "../../lib/approve-result";
@@ -29,7 +30,7 @@ import { formatDate } from "../../lib/dates";
 import { canShowBytes } from "../../lib/doc-show";
 import { useLanguage, useStrings } from "../../lib/i18n";
 import { syncReminders } from "../../lib/notify";
-import type { Language, Strings } from "../../lib/strings";
+import type { Strings } from "../../lib/strings";
 import { colors, radius, tapTarget, type } from "../../lib/theme";
 
 function whatLabel(action: ActionType, s: Strings): string {
@@ -40,48 +41,10 @@ function whatLabel(action: ActionType, s: Strings): string {
   return s.whatFax;
 }
 
-// The card's first line while it waits: what Mano will do and for
-// whom, in the person's language. A share says which way access goes.
-// Once decided the line drops the future tense.
-function leadLine(action: KnownAction, recipientName: string, s: Strings): string {
-  const consent = action.answers.find((f) => f.format === "consent")?.value;
-  const lead =
-    action.kind === "submit"
-      ? s.leadSubmit
-      : action.kind === "send"
-        ? s.leadSend
-        : action.kind === "share"
-          ? consent === "revoke"
-            ? s.leadShareRevoke
-            : s.leadShareGrant
-          : action.kind === "call"
-            ? s.leadCall
-            : s.leadFax;
-  return `${lead} ${recipientName}.`;
-}
-
 // A full hash in groups of eight, so it wraps on a phone and is easy
 // to compare piece by piece.
 function grouped(hash: string): string {
   return hash.match(/.{1,8}/g)?.join(" ") ?? hash;
-}
-
-// Only the presentation changes: a plain amount gets its dollar sign
-// and grouping, a share's grant or revoke its words.
-function fieldValue(field: ActionField, s: Strings, language: Language): string {
-  if (field.format === "money") {
-    const amount = Number(field.value);
-    return new Intl.NumberFormat(language === "es" ? "es-US" : "en-US", {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
-    }).format(amount);
-  }
-  if (field.format === "consent") {
-    if (field.value === "grant") return s.consentGrant;
-    if (field.value === "revoke") return s.consentRevoke;
-  }
-  return field.value;
 }
 
 type DocState = "loading" | "ready" | "failed";
@@ -346,11 +309,12 @@ export default function ApprovalDetail() {
             </Badge>
             <Text style={[type.section, styles.lead]}>
               {action && action.kind !== "unknown" && approval.status === "pending" && !receipt && no.phase !== "answered"
-                ? leadLine(action, approval.recipientName, s)
-                : `${whatLabel(approval.actionType, s)}: ${approval.recipientName}`}
+                ? leadLine(action, s)
+                : whatLabel(approval.actionType, s)}
             </Text>
             <Body style={styles.purpose}>{action && action.kind !== "unknown" ? action.purpose : approval.purpose}</Body>
             <View style={styles.dates}>
+              <Row label={s.toLabel} value={approval.recipientName} />
               {dueAt ? <Row label={s.dueAtOffice} value={formatDate(dueAt, language)} /> : null}
               {approval.status === "pending" && !receipt && no.phase !== "answered" ? (
                 <View>

@@ -340,8 +340,10 @@ export class StandInClient implements ManoClient {
     }
     const lower = text.toLowerCase();
     // "Ask Mano to change something" opens the chat with these words.
-    if (lower.includes("please change")) return { text: CHANGE_REPLY, followUps: [] };
-    if (lower.includes("por favor cambie")) return { text: CHANGE_REPLY_ES, followUps: [] };
+    // Only while the renewal waits: once decided, "nothing was sent" may be false.
+    const waiting = this.mailReceived && this.renewalStatus() === "pending";
+    if (waiting && lower.includes("please change")) return { text: CHANGE_REPLY, followUps: [] };
+    if (waiting && lower.includes("por favor cambie")) return { text: CHANGE_REPLY_ES, followUps: [] };
     if (lower.includes("deadline")) {
       const base = !this.mailReceived ? 0 : this.renewalApproved ? 1 : 2;
       const open = base + this.extraDeadlines.filter((d) => !d.done).length;

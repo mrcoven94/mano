@@ -93,6 +93,9 @@ describe("parseActionView", () => {
       format: "text",
       value: "about 1900",
     });
+    // Leading zeros or more digits than an amount has stay exactly as filed.
+    expect(field(known(request({ payload: { monthlyIncome: "0019" } })), "monthlyIncome")?.format).toBe("text");
+    expect(field(known(request({ payload: { monthlyIncome: "12345678901234567890" } })), "monthlyIncome")?.format).toBe("text");
   });
 
   it("keeps a statement or attachment that is not plain text as a row", () => {

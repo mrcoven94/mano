@@ -86,7 +86,7 @@ function fieldFor(key: string, value: unknown): ActionField {
   const text = formatValue(value);
   const format = known?.format ?? "text";
   // A money label only fits a plain amount; anything else shows as text.
-  const fits = format !== "money" || /^\d+(\.\d{1,2})?$/.test(text);
+  const fits = format !== "money" || /^(0|[1-9]\d{0,8})(\.\d{1,2})?$/.test(text);
   return { key, label: known?.label ?? null, value: text, format: fits ? format : "text" };
 }
 
