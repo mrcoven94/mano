@@ -6,13 +6,19 @@ import { runHardChecks } from "./checks.ts";
 import { LocalDns } from "./links.ts";
 import { attachJudgeGate, fingerprintsOf, scoreSuite, type CaseResult, type RunReport } from "./run.ts";
 import { buildAllSuites } from "./suites/build.ts";
+import { isLettersVersion } from "./suites/letters.ts";
 import type { BenchCase } from "./suites/types.ts";
 import { readRun, writeRun } from "./report.ts";
 
 export async function rescoreRun(inDir: string, outDir: string): Promise<RunReport> {
   const { report, results } = readRun(inDir);
+  // Re-grade against the letters the run answered. A run that stored no
+  // letters version predates version 2.
+  const lettersVersion = report.suites.letters?.version ?? 1;
+  if (!isLettersVersion(lettersVersion)) throw new Error(`run ${report.runId} holds unknown letters version ${lettersVersion}`);
+  const builds = buildAllSuites({ lettersVersion });
   const byId = new Map<string, BenchCase>();
-  for (const suite of buildAllSuites()) {
+  for (const suite of builds) {
     for (const c of suite.cases) byId.set(c.id, c);
   }
   const dns = new LocalDns();
@@ -42,7 +48,7 @@ export async function rescoreRun(inDir: string, outDir: string): Promise<RunRepo
   }
   attachJudgeGate(rescored);
   const suites: RunReport["suites"] = {};
-  for (const build of buildAllSuites()) {
+  for (const build of builds) {
     const subset = rescored.filter((r) => r.suite === build.suite);
     if (subset.length > 0) suites[build.suite] = scoreSuite(build, subset, report.prices);
   }

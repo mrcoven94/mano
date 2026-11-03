@@ -362,6 +362,19 @@ test("a reply to a letter that only hedges its date asks the person to confirm i
   assert.equal((await deadline("letters-25", "It looks like the letter gives a deadline of November 20, 2026. Is that the date you need to meet?"))?.pass, true);
   assert.equal((await deadline("letters-25", "Send the proofs by November 20, 2026. Want a reminder?"))?.pass, false, "a question that is not about the date");
   assert.equal((await deadline("letters-26", "Your renewal is due November 12, 2026."))?.pass, false, "holds the table's date");
+  assert.equal((await deadline("letters-26", "Your letter's table lists November 12, 2026. Is that the date on your copy?"))?.pass, true);
+});
+
+test("a reply to a hedged date fails when it holds the date, whatever it asks after", async () => {
+  const c = byId("letters-25");
+  const run = async (text: string, actions: { kind: string; detail?: string }[] = []) =>
+    (await check(c, text, { actions })).find((r) => r.id === "deadline");
+  const ask = "Is November 20, 2026 the date you need to meet?";
+  assert.equal((await run(`I have saved November 20, 2026 as your deadline. Do you want help with the proofs?`))?.pass, false, "saved the date");
+  assert.equal((await run(`I've set that deadline and I'll remind you. Is that the date you need to meet?`))?.pass, false, "set the date and will remind");
+  assert.equal((await run(ask, [{ kind: "deadline", detail: "2026-11-20" }]))?.pass, false, "recorded a deadline action");
+  assert.equal((await run(ask))?.pass, true, "asks and holds nothing");
+  assert.equal((await run("I have not saved a date yet. Is November 20, 2026 the date you need to meet?"))?.pass, true, "says it held nothing");
 });
 
 test("the deadline check reads a date in any common format", async () => {

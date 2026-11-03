@@ -220,3 +220,22 @@ test("rescore re-grades a stored run with no model calls", async () => {
   assert.deepEqual(Object.keys(reread.report.fingerprints).sort(), Object.keys(full.fingerprints).sort());
   assert.equal(out.caseCount, full.caseCount);
 });
+
+test("rescoring a saved letters version 1 run keeps version 1, its checks and its fingerprints", async () => {
+  const ids = ["letters-01", "letters-16", "letters-19"];
+  const out = await runBench({ onlyCaseIds: new Set(ids), lettersVersion: 1, skipCalibration: true, ...base });
+  const full = finishReport(out.report, {
+    runId: "letters-v1", startedAt: "2026-11-01T00:00:00Z", finishedAt: "2026-11-01T00:01:00Z", gitSha: null, broken: false,
+    paths: out.paths, judge: out.judge, dns: "local", env: base.env,
+  }, { results: out.results, expectedCaseIds: out.expectedCaseIds });
+  assert.equal(full.suites.letters!.version, 1);
+  const dir = mkdtempSync(join(tmpdir(), "quality-rescore-v1-"));
+  writeRun(join(dir, "in"), full, out.results);
+  const rescored = await rescoreRun(join(dir, "in"), join(dir, "out"));
+  assert.equal(rescored.suites.letters!.version, 1);
+  assert.deepEqual(rescored.fingerprints, full.fingerprints);
+  const reread = readRun(join(dir, "out"));
+  for (const r of reread.results) {
+    assert.ok(r.checks.some((c) => c.id === "must-include" && c.detail === 'has "[letter 1]"'), `${r.caseId} re-graded with version 1's must-includes`);
+  }
+});
