@@ -102,7 +102,22 @@ SYSTEM_PROMPT = "\n".join(
     ]
 )
 
-app = modal.App("mano-guardian")
+APP_NAMES = ("mano-guardian", "mano-guardian-staging")
+
+
+def app_name_from_env(value: str | None) -> str:
+    """Parse MANO_GUARDIAN_APP: unset or blank is production, else one of
+    APP_NAMES."""
+    if value is None or value.strip() == "":
+        return APP_NAMES[0]
+    if value.strip() not in APP_NAMES:
+        raise RuntimeError(f"MANO_GUARDIAN_APP must be one of {APP_NAMES}, not {value!r}.")
+    return value.strip()
+
+
+# The guardian-modal workflow sets MANO_GUARDIAN_APP=mano-guardian-staging to
+# try a change on its own app before production. Both share the weights.
+app = modal.App(app_name_from_env(os.environ.get("MANO_GUARDIAN_APP")))
 
 cache = modal.Volume.from_name("mano-guardian-cache", create_if_missing=True)
 

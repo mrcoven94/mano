@@ -6,15 +6,19 @@ name: guardian-modal
 # (min_containers 1, about $1.95 an hour); the next merge returns it to 0.
 # Never run `modal deploy` from a laptop for production.
 #
+# Run by hand with target staging, from any branch, to deploy that branch to
+# its own app, mano-guardian-staging, scaled to zero, and try it live before
+# merging. Run it with target stop-staging afterwards to stop that app.
+#
 # The app is one Modal Server, so Modal does not store the actions it
 # checks or its answers (see the header of packages/guardian/modal/app.py).
-# The last step prints the Server's URL: Engine's MANO_GUARDIAN_URL must
-# match it.
+# The deploy prints the Server's URL: Engine's MANO_GUARDIAN_URL must match
+# production's.
 #
 # Needs two secrets in the guardian-production environment, set by a maintainer:
 #   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
 # The `mano-guardian` Modal secret (holding MANO_GUARDIAN_TOKEN) is created
-# once by David and is not managed here.
+# once by David and is not managed here. Staging uses the same ones.
 
 on:
   push:
@@ -24,8 +28,13 @@ on:
       - ".github/workflows/guardian-modal.yml"
   workflow_dispatch:
     inputs:
+      target:
+        description: "production deploys main; staging deploys this branch to mano-guardian-staging; stop-staging stops it"
+        type: choice
+        options: ["production", "staging", "stop-staging"]
+        default: "production"
       min_containers:
-        description: "GPU containers kept up: 0 scales to zero, 1 keeps one warm"
+        description: "Production only. GPU containers kept up: 0 scales to zero, 1 keeps one warm"
         type: choice
         options: ["0", "1"]
         default: "0"
@@ -35,7 +44,9 @@ permissions:
 
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || inputs.target == 'production')
     runs-on: ubuntu-latest
     environment: guardian-production
     steps:
@@ -59,6 +70,42 @@ jobs:
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
       - name: Print the URL Engine must use as MANO_GUARDIAN_URL
         run: python -c "import modal; print(modal.Server.from_name('mano-guardian', 'check').get_url())"
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+
+  staging:
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'staging'
+    runs-on: ubuntu-latest
+    environment: guardian-production
+    env:
+      MANO_GUARDIAN_APP: mano-guardian-staging
+      MANO_GUARDIAN_MIN_CONTAINERS: "0"
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "modal==1.6.2" "fastapi==0.162.0" "httpx==0.28.1" "uvicorn==0.54.0"
+      - name: Test the app
+        run: python -m unittest discover -s packages/guardian/modal -v
+      - name: Cache model weights (CPU, no GPU billed)
+        run: modal run packages/guardian/modal/app.py::download
+      - name: Deploy the staging endpoint
+        run: modal deploy packages/guardian/modal/app.py
+      - name: Print the staging URL
+        run: python -c "import modal; print(modal.Server.from_name('mano-guardian-staging', 'check').get_url())"
+
+  stop-staging:
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'stop-staging'
+    runs-on: ubuntu-latest
+    environment: guardian-production
+    steps:
+      - run: pip install "modal==1.6.2"
+      - name: Stop the staging app and its containers
+        run: modal app stop mano-guardian-staging --yes
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}

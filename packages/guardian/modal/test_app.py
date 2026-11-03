@@ -275,5 +275,17 @@ class MinContainers(unittest.TestCase):
                 app.min_containers_from_env(bad)
 
 
+class AppName(unittest.TestCase):
+    def test_defaults_to_production(self):
+        self.assertEqual(app.app_name_from_env(None), "mano-guardian")
+        self.assertEqual(app.app_name_from_env(" "), "mano-guardian")
+        self.assertEqual(app.app_name_from_env("mano-guardian-staging"), "mano-guardian-staging")
+
+    def test_refuses_other_apps(self):
+        for bad in ("mano-guardian-dev", "other"):
+            with self.assertRaises(RuntimeError):
+                app.app_name_from_env(bad)
+
+
 if __name__ == "__main__":
     unittest.main()
