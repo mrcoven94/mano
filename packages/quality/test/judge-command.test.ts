@@ -34,12 +34,18 @@ test("with no key every step finishes, model steps say they used recordings, and
   assert.match(out, /simulated {2}Segments the photo into pages: recorded response; no META_MODEL_API_KEY is set \[SAM 3\.1 \(sam-3\.1\)\]/);
   assert.match(out, /simulated {2}Reads the page into cited fields: recorded response; no META_MODEL_API_KEY is set \[Muse Spark 1\.3/);
   assert.match(out, /Mano: This is a SNAP renewal letter\. It is due November 14, 2026\./);
+  assert.match(out, /Case number: R-1042/);
+  assert.match(out, /Mano asks Maria: Ready to send: Food benefits renewal \(to the State Benefits Renewal Office test portal\)\. Case number: R-1042;.*It ends with a declaration only you can make: I declare under penalty of perjury/);
+  assert.match(out, /Filing before her answer: refused \(Only the applicant can make the renewal's declaration, and they have not answered it\.\); the portal has nothing/);
   assert.match(out, /Gateway: completed, confirmation SR-/);
+  assert.match(out, /On file at the portal: case R-1042, declaration made by applicant/);
   assert.match(out, /Portal lookup: received, SR-/);
   assert.match(out, /Finished 9 of 9 steps/);
   for (let i = 1; i <= 9; i++) assert.match(out, new RegExp(`^\\[${i}/9\\] `, "m"));
   assert.ok(existsSync(join(dir, "letter.jpg")));
-  assert.match(readFileSync(join(dir, "replay.html"), "utf8"), /Mano filled in &quot;Monthly income \(\$\)&quot;/);
+  const replay = readFileSync(join(dir, "replay.html"), "utf8");
+  assert.match(replay, /Mano filled in &quot;Case number&quot;/);
+  assert.match(replay, /<dt>Goes to<\/dt><dd>the State Benefits Renewal Office test portal<\/dd>/);
 });
 
 // A stand-in model API: each model ID gets a status and, on 200, a reply.

@@ -3,9 +3,11 @@
 // renewal letter; Mail reads it (SAM 3.1 finds the letter, Muse Spark 1.3
 // reads it); Mano answers with the deadline and drafts the renewal from her
 // profile and the letter; Mano's computer fills the form on the sandbox
-// portal; Engine's action gateway checks the action with Guardian; Maria
-// says yes; the portal receives the filing; Engine's replay page shows
-// each step of the fill.
+// portal; Engine's action gateway checks the action with Guardian, and its
+// executor refuses to file before Maria answers; Maria says yes, which
+// makes the office's declaration hers; the portal receives the filing with
+// her case number and her declaration; Engine's replay page shows each
+// step of the fill.
 //
 // Each step is made of parts, and each part says whether it ran for real
 // (a live Meta model call, or Mano's own code) or was simulated (a recorded
@@ -53,6 +55,7 @@ import {
 } from "@mano/mail";
 import { DEFAULT_GUARDIAN_MODEL } from "@mano/guardian";
 import { canonicalJson } from "../../protocol/src/canonical.ts";
+import { recipientName } from "../../protocol/src/recipients.ts";
 import { ActionGateway, MapDocumentStore, MemoryApprovalStore } from "../../../apps/engine/src/gateway/gateway.ts";
 import { LocalRulesChecker } from "../../../apps/engine/src/gateway/checker.ts";
 import { GuardianChecker } from "../../../apps/engine/src/gateway/guardian.ts";
@@ -62,7 +65,7 @@ import { renderReplayPage } from "../../../apps/engine/src/fill-replay.ts";
 import { DEFAULT_CONFIG, handleRequest } from "../../../apps/sandbox-portal/src/app.ts";
 import { MemoryFileStore, MemoryStore } from "../../../apps/sandbox-portal/test/memory-store.ts";
 import { FORMS, fillFrom } from "../../../apps/agent/agent/lib/forms.ts";
-import { ATTACHMENT, renderQuestion } from "../../../apps/agent/agent/lib/pending.ts";
+import { ATTACHMENT, DECLARATION, renderQuestion } from "../../../apps/agent/agent/lib/pending.ts";
 import type { Profile } from "../../../apps/agent/agent/lib/engine.ts";
 
 // One piece of a step. real: it ran in this run, as a live Meta model call
@@ -254,7 +257,7 @@ async function fillScreen(fields: { label: string; value: string }[], filled: nu
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800"><rect width="1280" height="800" fill="#e9e6dc"/>` +
     `<rect width="1280" height="70" fill="#2f4a6d"/><g font-family="Helvetica, Arial, sans-serif">` +
-    `<text x="80" y="46" font-size="26" fill="#fff">Sandbox Agency Portal: renewal application (test system)</text>` +
+    `<text x="80" y="46" font-size="26" fill="#fff">State Benefits Renewal Office: renewal application (test portal)</text>` +
     `<text x="80" y="122" font-size="24" fill="#222">Step 1 of 3: household</text>${rows}</g></svg>`;
   const png = new Uint8Array(await sharp(Buffer.from(svg)).png().toBuffer());
   return { png, focus: filled === 0 ? null : { x: 760, y: 190 + (filled - 1) * 92 - 8 } };
@@ -399,7 +402,7 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
           type: "submit",
           recipient: form.recipient,
           purpose: form.purpose,
-          payload: { ...filled.values, [ATTACHMENT]: "the photo of your renewal letter" },
+          payload: { ...filled.values, [DECLARATION]: form.declaration, [ATTACHMENT]: "the photo of your renewal letter" },
           documentId: LETTER_ID,
           idempotencyKey: `judge-${randomBytes(8).toString("hex")}`,
           actor: "foreground",
@@ -409,8 +412,12 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
           origin: "person",
         };
         return {
-          parts: [plain("Fills the agent's food-renewal form from the profile, attaches the letter and cites its deadline")],
-          lines: [...form.fields.map((f) => `${f.label}: ${filled.values[f.name]}`), `Attached: the letter photo. Due: ${held.dueDate}`],
+          parts: [plain("Fills the agent's food-renewal form from the profile, freezes the office's declaration, attaches the letter and cites its deadline")],
+          lines: [
+            ...form.fields.map((f) => `${f.label}: ${filled.values[f.name]}`),
+            `Declaration, for Maria alone to make: ${form.declaration}`,
+            `Attached: the letter photo. Due: ${held.dueDate}`,
+          ],
           failure: null,
         };
       },
@@ -454,10 +461,36 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
       run: async () => {
         const result = await gateway.requestAction(request!);
         approval = result.approval ?? null;
+        if (result.status !== "needs_approval" || !approval) {
+          return {
+            parts: [plain("Engine's action gateway: policy, local rules, document hash, one approval per key, in this process"), guardianPart()],
+            lines: [`Gateway: ${result.status}`],
+            failure: guardianMiss ?? `the gateway answered ${result.status}: ${result.reason ?? "no reason"}`,
+          };
+        }
+        // The frozen request, filed straight to the executor before Maria
+        // answers: the executor must refuse it, since only her YES makes
+        // the declaration, and the portal must have nothing.
+        const frozen = JSON.parse(approval.requestJson) as ActionRequest;
+        let refused: string | null = null;
+        try {
+          await executor.execute({ ...frozen, document: { bytesB64: photo.toString("base64"), hash: approval.documentHash ?? "" } });
+        } catch (err) {
+          refused = err instanceof Error ? err.message : String(err);
+        }
+        const early = await executor.check(frozen.idempotencyKey, PERSON_ID);
         return {
-          parts: [plain("Engine's action gateway: policy, local rules, document hash, one approval per key, in this process"), guardianPart()],
-          lines: approval ? [`Gateway: ${result.status}, approval ${approval.id}`, `Mano asks Maria: ${renderQuestion(approval)}`] : [`Gateway: ${result.status}`],
-          failure: result.status === "needs_approval" && approval ? null : (guardianMiss ?? `the gateway answered ${result.status}: ${result.reason ?? "no reason"}`),
+          parts: [
+            plain("Engine's action gateway: policy, local rules, document hash, one approval per key, in this process"),
+            guardianPart(),
+            plain("Engine's sandbox executor, asked to file before Maria answers"),
+          ],
+          lines: [
+            `Gateway: ${result.status}, approval ${approval.id}`,
+            `Mano asks Maria: ${renderQuestion(approval)}`,
+            `Filing before her answer: ${refused ? `refused (${refused})` : "filed"}; the portal has ${early.found ? "a filing" : "nothing"}`,
+          ],
+          failure: refused && !early.found ? null : "the executor filed before Maria answered",
         };
       },
     },
@@ -472,7 +505,9 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
             plain("Engine checks the exact version again, then its sandbox executor files it"),
             guardianPart(),
           ],
-          lines: [`Gateway: ${result.status}${confirmation ? `, confirmation ${confirmation}` : ""}${result.reason ? `: ${result.reason}` : ""}`],
+          lines: [
+            `Gateway: ${result.status}${confirmation ? `, confirmation ${confirmation}` : ""}${result.reason ? `: ${result.reason}` : ""}`,
+          ],
           failure: result.status === "completed" && confirmation ? null : (guardianMiss ?? `the filing did not complete (${result.status})`),
         };
       },
@@ -481,6 +516,7 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
       label: "The sandbox portal has the filing, and Maria's replay page shows each step",
       run: async () => {
         const found = await executor.check(request!.idempotencyKey, PERSON_ID);
+        const filed = await portalStore.getSubmissionByConfirmation(confirmation!);
         const detail = await portal(`${portalOrigin}/caseworker/${encodeURIComponent(confirmation!)}`, { headers: { authorization: `Bearer ${portalToken}` } });
         files.filing = `${opts.outDir}/portal-filing.html`;
         writeFileSync(files.filing, await detail.text());
@@ -496,7 +532,7 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
           renderReplayPage({
             state: "approved",
             purpose: approval!.purpose,
-            recipient: approval!.recipient,
+            recipient: recipientName(approval!.recipient),
             steps,
             fields: form.fields.map((f) => ({ label: f.label, value: saved[f.name] ?? "" })),
             attached: true,
@@ -504,8 +540,20 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
         );
         return {
           parts: [plain("The portal's caseworker view and Engine's replay page, rendered by their own code")],
-          lines: [`Portal lookup: ${found.found ? `received, ${found.externalId}` : "not found"}`, `Caseworker view: ${files.filing}`, `Replay page: ${files.replay}`],
-          failure: found.found && found.externalId === confirmation && detail.ok ? null : "the portal does not show the filing",
+          lines: [
+            `Portal lookup: ${found.found ? `received, ${found.externalId}` : "not found"}`,
+            `On file at the portal: case ${filed?.household.caseNumber ?? "none"}, declaration made by ${filed?.declaration?.madeBy ?? "nobody"}`,
+            `Caseworker view: ${files.filing}`,
+            `Replay page: ${files.replay}`,
+          ],
+          failure:
+            !found.found || found.externalId !== confirmation || !detail.ok
+              ? "the portal does not show the filing"
+              : filed?.declaration?.madeBy !== "applicant"
+                ? "the filing does not carry the applicant's declaration"
+                : filed.household.caseNumber !== MARIA_PROFILE.programs[0]!.caseNumber!.value
+                  ? "the filing does not carry Maria's case number"
+                  : null,
         };
       },
     },
