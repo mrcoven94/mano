@@ -25,6 +25,11 @@ export interface ActionRequest {
   // from server storage. Never accepted from caller input: validation
   // drops it, and hashes exclude it.
   document?: { bytesB64: string; hash: string };
+  // The person who answered YES to this exact request, attached by the
+  // gateway from the approval they answered. Never accepted from caller
+  // input, excluded from hashes, and absent on the allow path, where no
+  // person answered.
+  answeredBy?: string;
 }
 
 export interface Approval {

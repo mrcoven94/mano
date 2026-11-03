@@ -41,7 +41,7 @@ export class InMemoryExecutor implements Executor {
 
 // Executor against the sandbox agency portal (apps/sandbox-portal), over
 // its JSON API with the portal's bearer token. POST {base}/submissions
-// with { key, household, files } answers { confirmationNumber }, which
+// with { key, household, declaration, files } answers { confirmationNumber }, which
 // becomes the receipt's external ID. GET {base}/submissions/{key} answers
 // it again, or 404 when the key never filed. The portal dedupes on the
 // key, which is the SHA-256 of "<personId>:<idempotencyKey>" so it is
@@ -55,6 +55,7 @@ export class InMemoryExecutor implements Executor {
 // gateway asks before drafting an approval and again right before filing.
 // The contract test runs these rules against the real portal code.
 const PORTAL_HOUSEHOLD = {
+  caseNumber: "case number",
   fullName: "full legal name",
   dateOfBirth: "date of birth",
   address: "mailing address",
@@ -63,6 +64,13 @@ const PORTAL_HOUSEHOLD = {
   monthlyIncome: "monthly income",
 } as const;
 type HouseholdField = keyof typeof PORTAL_HOUSEHOLD;
+// The declaration a renewal ends with (DECLARATION in
+// apps/sandbox-portal/src/store.ts). The approval the person answers
+// carries it word for word under this payload key, so their YES is what
+// makes it; the filing then carries it as the applicant's own.
+export const PORTAL_DECLARATION =
+  "I declare under penalty of perjury that the information in this renewal is true, correct and complete to the best of my knowledge.";
+const DECLARATION_KEY = "declaration";
 // The portal reads its limits from MAX_FIELD_LENGTH and MAX_UPLOAD_BYTES;
 // the engine names the same numbers as SANDBOX_MAX_FIELD_LENGTH and
 // SANDBOX_MAX_UPLOAD_BYTES, and a test fails when the two wrangler.toml
@@ -125,6 +133,9 @@ function portalFiling(req: ActionRequest, limits: PortalLimits): PortalFiling {
   if (Number.isNaN(income) || income < 0) {
     return { ok: false, problem: "The sandbox agency portal needs a monthly income that is a number, 0 or more." };
   }
+  if (req.payload[DECLARATION_KEY] !== PORTAL_DECLARATION) {
+    return { ok: false, problem: "The renewal must show the person the office's declaration word for word, for them to make themselves." };
+  }
   if (!req.document) {
     return { ok: false, problem: "The sandbox agency portal needs at least one document attached, such as a photo of the letter." };
   }
@@ -176,9 +187,15 @@ export class SandboxExecutor implements Executor {
     // approval drafted before that check existed or under another mode.
     const filing = portalFiling(req, this.limits);
     if (!filing.ok) throw new DefiniteFailureError(filing.problem);
+    // Mano never makes the declaration: only the person's own YES to the
+    // request that showed it does.
+    if (!req.answeredBy || req.answeredBy !== req.personId) {
+      throw new DefiniteFailureError("Only the applicant can make the renewal's declaration, and they have not answered it.");
+    }
     const body = {
       key: await this.downstreamKey(req.personId, req.idempotencyKey),
       household: filing.household,
+      declaration: { statement: PORTAL_DECLARATION, madeBy: "applicant" },
       files: [filing.file],
     };
     const controller = new AbortController();
