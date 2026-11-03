@@ -132,7 +132,7 @@ export interface PresentationRow {
 
 // How one texted file of a turn is stored, chosen once before it is
 // stored. A replay of the turn stores the same form under the same ID,
-// so one file never becomes two documents. "stored" once Engine took it.
+// so one file never becomes two documents.
 export interface AttachmentChoice {
   turn: number;
   // The file's position in the turn's attachments.
@@ -144,6 +144,10 @@ export interface AttachmentChoice {
   converted: boolean;
   // Kept as sent though no office takes it: the reply asks for a screenshot.
   unfileable: boolean;
+  // The global byte ledger's key for this file, and the bytes stored.
+  byteKey: string;
+  sizeBytes: number;
+  // "stored" is written with the day's byte count, after Engine took it.
   state: "chosen" | "stored";
 }
 

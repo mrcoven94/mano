@@ -81,7 +81,8 @@ function bareType(label: string): string {
   return label.split(";")[0]!.trim().toLowerCase();
 }
 
-const LOGGED_TYPES = new Set([
+// The only media types Channels passes on, stores or logs.
+const KNOWN_TYPES = new Set([
   "image/jpeg", "image/png", "image/heic", "image/heif", "image/webp", "image/gif", "application/pdf",
   "video/mp4", "video/quicktime", "video/3gpp", "video/webm", "audio/mp4", "audio/x-m4a", "audio/mpeg", "application/octet-stream",
 ]);
@@ -90,7 +91,7 @@ const LOGGED_TYPES = new Set([
 export function loggableType(label: string | null | undefined): string {
   if (!label) return "none";
   const bare = bareType(label);
-  return LOGGED_TYPES.has(bare) ? bare : "other";
+  return KNOWN_TYPES.has(bare) ? bare : "other";
 }
 
 // What to store for one downloaded file, and as what media type.
@@ -100,7 +101,10 @@ export async function storedForm(
   converter: PhotoConverter | null,
   maxBytes = MAX_ATTACHMENT_BYTES,
 ): Promise<StoredForm> {
-  const mimeType = sniffMediaType(bytes) ?? (bareType(label) || "application/octet-stream");
+  // A label outside the known set (it can carry anything, a name
+  // included) becomes the generic type before it is stored or passed on.
+  const labeled = bareType(label);
+  const mimeType = sniffMediaType(bytes) ?? (KNOWN_TYPES.has(labeled) ? labeled : "application/octet-stream");
   if (!TO_JPEG.has(mimeType)) return { bytes, mimeType, converted: false };
   if (!converter) return { bytes, mimeType, converted: false, unconverted: "no_converter" };
   let jpeg: Uint8Array;

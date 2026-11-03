@@ -66,6 +66,14 @@ describe("what is stored for a texted photo", () => {
     expect(await storedForm(clip, "video/mp4", recordedImages)).toEqual({ bytes: clip, mimeType: "video/mp4", converted: false });
   });
 
+  it.each(["image/x-maria-testcase", "application/maria-testcase", 'video/mp4x; name="Maria Testcase.mov"'])(
+    "stores unknown bytes labeled %s as the generic type",
+    async (label) => {
+      const gif = new TextEncoder().encode("GIF89a synthetic");
+      expect((await storedForm(gif, label, recordedImages)).mimeType).toBe("application/octet-stream");
+    },
+  );
+
   it.each([
     ["no converter", null, "no_converter"],
     ["the converter fails", { toJpeg: async () => Promise.reject(new Error("IMAGES_TRANSFORM_ERROR 9516")) }, "failed"],
@@ -247,7 +255,8 @@ describe("a replayed turn stores each photo once, in the form it chose first", (
     const seeded = () => {
       const store = new ConversationMemoryStore();
       store.saveAttachmentChoice({
-        turn: 1, index: 0, generation: 0, documentId: "g0t1i0-chosen", mimeType: "image/jpeg", converted: true, unfileable: false, state: "chosen",
+        turn: 1, index: 0, generation: 0, documentId: "g0t1i0-chosen", mimeType: "image/jpeg", converted: true, unfileable: false,
+        byteKey: "seeded:1:0", sizeBytes: IMAGES_JPEG.byteLength, state: "chosen",
       });
       return store;
     };
@@ -311,7 +320,8 @@ describe("the screenshot ask", () => {
 
 describe("attachment choices in the conversation's SQLite", () => {
   const choice: AttachmentChoice = {
-    turn: 3, index: 1, generation: 0, documentId: "g0t3i1-abc", mimeType: "image/heic", converted: false, unfileable: true, state: "chosen",
+    turn: 3, index: 1, generation: 0, documentId: "g0t3i1-abc", mimeType: "image/heic", converted: false, unfileable: true,
+    byteKey: "h:3:0", sizeBytes: 1234, state: "chosen",
   };
 
   it("survives a restart, and is dropped when its turn finishes or the conversation is deleted", () => {
@@ -326,6 +336,92 @@ describe("attachment choices in the conversation's SQLite", () => {
     reopened.saveAttachmentChoice(choice);
     reopened.wipe(0);
     expect(reopened.attachmentChoice(3, 1)).toBeNull();
+  });
+});
+
+describe("labels, deletes and byte counts around a stored photo", () => {
+  const CLEAN_DOH = JSON.stringify({ Status: 0, Answer: [{ name: "cdn.example.test.", type: 1, data: "203.0.113.7" }] });
+  const serve = (bytes: Uint8Array, type: string) =>
+    (async (url: unknown) =>
+      String(url).includes("dns-query")
+        ? new Response(CLEAN_DOH, { status: 200, headers: { "content-type": "application/dns-json" } })
+        : new Response(bytes, { status: 200, headers: { "content-type": type } })) as typeof fetch;
+
+  function harness(fetchFn: typeof fetch, store?: ConversationMemoryStore) {
+    const responder = Object.assign(new StandInResponder(["This is your renewal letter."]), { readsPhotos: true as const });
+    return makeHarness({ fetchFn, responder, config: { mediaHosts: ["cdn.example.test"] }, photoConverter: recordedImages, store });
+  }
+
+  async function sendPhoto(h: Harness, mediaType: string) {
+    await h.runner.handleEvent(
+      inboundEvent({ id: "evt_r3", occurredAtMs: h.now, text: "", attachments: [{ url: "https://cdn.example.test/IMG_0004", mediaType }] }),
+      "webhook",
+    );
+    h.advance(h.batchMs + 100);
+  }
+
+  it.each([
+    ["a GIF served as image/x-maria-testcase", "image/x-maria-testcase"],
+    ["unknown bytes served as application/maria-testcase", "application/maria-testcase"],
+  ])("%s reaches the agent as the generic type, with no name in it", async (_name, type) => {
+    const h = harness(serve(new TextEncoder().encode("GIF89a synthetic"), type));
+    await sendPhoto(h, type);
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    const prompts = JSON.stringify((h.responder as StandInResponder).prompts);
+    expect(prompts).toContain('"mimeType":"application/octet-stream"');
+    expect(prompts.toLowerCase()).not.toContain("maria");
+    expect(h.lines.join("\n").toLowerCase()).not.toContain("maria");
+  });
+
+  it("a delete that lands while the upload is in flight leaves no choice behind", async () => {
+    const h = harness(serve(HEIC, "image/heic"));
+    const put = h.documents.put.bind(h.documents);
+    h.documents.put = async (doc) => {
+      const ok = await put(doc);
+      h.store.wipe(h.now);
+      return ok;
+    };
+    await sendPhoto(h, "image/heic");
+    expect(await h.runner.runDueTurn()).toBe("stopped");
+    expect(h.store.attachmentChoice(1, 0)).toBeNull();
+    expect(h.store.meta().byteDayCount).toBe(0);
+  });
+
+  const usedGlobally = (h: Harness): number => h.ledger.byteReserve("probe", 0).bytesUsed;
+
+  it("evicted after the photo is stored and counted but before the global settle: the replay settles it once", async () => {
+    const store = new DiesOnceBeforeAnswer();
+    const h = harness(serve(HEIC, "image/heic"), store);
+    const settle = h.ledger.byteSettle.bind(h.ledger);
+    let failed = false;
+    h.ledger.byteSettle = (key, bytes) => {
+      if (!failed) {
+        failed = true;
+        throw new Error("evicted");
+      }
+      return settle(key, bytes);
+    };
+    await sendPhoto(h, "image/heic");
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(store.attachmentChoice(1, 0)?.state).toBe("stored");
+    expect(store.meta().byteDayCount).toBe(IMAGES_JPEG.byteLength);
+    expect(usedGlobally(h)).toBe(0);
+    h.advance(60_000);
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    expect(h.documents.docs.size).toBe(1);
+    expect(store.meta().byteDayCount).toBe(IMAGES_JPEG.byteLength);
+    expect(usedGlobally(h)).toBe(IMAGES_JPEG.byteLength);
+  });
+
+  it("a replay after a full count counts nothing again", async () => {
+    const store = new DiesOnceBeforeAnswer();
+    const h = harness(serve(HEIC, "image/heic"), store);
+    await sendPhoto(h, "image/heic");
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    h.advance(60_000);
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    expect(store.meta().byteDayCount).toBe(IMAGES_JPEG.byteLength);
+    expect(usedGlobally(h)).toBe(IMAGES_JPEG.byteLength);
   });
 });
 

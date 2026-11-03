@@ -124,6 +124,8 @@ CREATE TABLE IF NOT EXISTS attachment_choices (
   mime_type TEXT NOT NULL,
   converted INTEGER NOT NULL,
   unfileable INTEGER NOT NULL,
+  byte_key TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
   state TEXT NOT NULL,
   PRIMARY KEY (turn, idx)
 );
@@ -674,6 +676,8 @@ export class SqlConversationStore implements ConversationStore {
       mime_type: string;
       converted: number;
       unfileable: number;
+      byte_key: string;
+      size_bytes: number;
       state: AttachmentChoice["state"];
     }>(this.sql.exec("SELECT * FROM attachment_choices WHERE turn = ? AND idx = ?", turn, index));
     if (!row) return null;
@@ -685,13 +689,15 @@ export class SqlConversationStore implements ConversationStore {
       mimeType: row.mime_type,
       converted: row.converted === 1,
       unfileable: row.unfileable === 1,
+      byteKey: row.byte_key,
+      sizeBytes: row.size_bytes,
       state: row.state,
     };
   }
 
   saveAttachmentChoice(row: AttachmentChoice): void {
     this.sql.exec(
-      "INSERT OR REPLACE INTO attachment_choices (turn, idx, generation, document_id, mime_type, converted, unfileable, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO attachment_choices (turn, idx, generation, document_id, mime_type, converted, unfileable, byte_key, size_bytes, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       row.turn,
       row.index,
       row.generation,
@@ -699,6 +705,8 @@ export class SqlConversationStore implements ConversationStore {
       row.mimeType,
       row.converted ? 1 : 0,
       row.unfileable ? 1 : 0,
+      row.byteKey,
+      row.sizeBytes,
       row.state,
     );
   }

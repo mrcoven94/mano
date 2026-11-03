@@ -1523,6 +1523,12 @@ export class ConversationRunner {
       // A replay keeps what an earlier attempt chose for this file.
       const chosen = store.attachmentChoice(turn, index);
       if (chosen?.state === "stored" && chosen.generation === generation) {
+        // Counted on this conversation's day when it was stored. The global
+        // settle is idempotent per key, so settling again counts it once
+        // even if the attempt that stored it died before settling.
+        await spend.byteSettle(chosen.byteKey, chosen.sizeBytes).catch((err: unknown) =>
+          logger.warn("attachment_settle_failed", { handle: this.logHandle(), turn, err: errName(err) }),
+        );
         saved.push({ id: chosen.documentId, mimeType: chosen.mimeType });
         if (chosen.unfileable) unfileable = true;
         continue;
@@ -1534,7 +1540,7 @@ export class ConversationRunner {
         logger.warn("attachment_capped", { handle: this.logHandle(), turn, scope: "handle" });
         continue;
       }
-      const byteKey = `${config.handleHash}:${turn}:${saved.length}`;
+      const byteKey = chosen?.generation === generation ? chosen.byteKey : `${config.handleHash}:${turn}:${saved.length}`;
       const reservation = await spend.byteReserve(byteKey, MAX_ATTACHMENT_BYTES);
       if (!reservation.allowed) {
         logger.warn("attachment_capped", { handle: this.logHandle(), turn, scope: "global" });
@@ -1581,6 +1587,8 @@ export class ConversationRunner {
             mimeType: stored.mimeType,
             converted: stored.converted,
             unfileable: stored.unconverted !== undefined,
+            byteKey,
+            sizeBytes: stored.bytes.byteLength,
             state: "chosen",
           };
         }
@@ -1592,15 +1600,25 @@ export class ConversationRunner {
           logger.warn("attachment_refused", { handle: this.logHandle(), turn, reason: "store" });
           continue;
         }
-        store.saveAttachmentChoice({ ...choice, state: "stored" });
-        await spend.byteSettle(byteKey, bytes.byteLength);
+        // A delete that landed during the upload wins: nothing of the old
+        // generation is written after the wipe.
+        this.checkGeneration(generation);
+        // The day's count and the stored mark are written together, with no
+        // await between them, so the Durable Object commits them as one: a
+        // replay of a stored choice never skips the count or counts twice.
         const counted = store.meta();
         store.patchMeta({
           byteDayCount: (counted.byteDayKey === byteDay ? counted.byteDayCount : 0) + bytes.byteLength,
           byteDayKey: byteDay,
         });
+        store.saveAttachmentChoice({ ...choice, state: "stored" });
         saved.push({ id, mimeType: choice.mimeType });
         if (choice.unfileable) unfileable = true;
+        // The file is stored and counted here; a settle that fails leaves
+        // the worst-case hold in place until a replay settles it.
+        await spend.byteSettle(byteKey, bytes.byteLength).catch((err: unknown) =>
+          logger.warn("attachment_settle_failed", { handle: this.logHandle(), turn, err: errName(err) }),
+        );
       } catch (err) {
         if (err instanceof GenerationStopped) throw err;
         await spend.byteRelease(byteKey);
