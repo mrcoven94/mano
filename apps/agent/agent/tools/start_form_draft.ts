@@ -26,7 +26,7 @@ import type { EngineDocument, PersonEngine, Profile } from "../lib/engine.js";
 import { FORMS, fillFrom } from "../lib/forms.js";
 import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn, type TurnIdentity } from "../lib/person.js";
-import { EARLIER_UNRESOLVED_NOTE, closeEarlier, closeThisTurn, holdForYes, settleEarlierFilings } from "../lib/propose.js";
+import { EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, closeEarlier, closeThisTurn, holdForYes, settleEarlierFilings } from "../lib/propose.js";
 
 const inputSchema = z.object({
   answers: z
@@ -122,7 +122,9 @@ export default defineTool({
     const engine = personEngine(ctx);
     if (!engine) throw new Error("Preparing forms is not available right now. Say so and offer to collect the answers.");
     const out = await prepare(engine, turn, ctx, input.answers ?? {});
-    if (out.status !== "waiting_for_yes") await closeThisTurn(engine, turn.turnId, RENEWAL.recipient);
+    if (out.status !== "waiting_for_yes" && !(await closeThisTurn(engine, turn.turnId, RENEWAL.recipient))) {
+      return { status: "draft_failed", sent: false, note: NOT_CLOSED_NOTE };
+    }
     return out;
   },
 });

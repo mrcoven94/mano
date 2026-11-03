@@ -7,7 +7,7 @@
 import type { ToolContext } from "eve/tools";
 
 import type { ActionProposal, EngineApproval, PersonEngine } from "./engine.js";
-import { closeReplaced, presentsExactly, proposalKey, proposalsOf, renderQuestion, waitingFrom } from "./pending.js";
+import { closeReplaced, holdBack, presentsExactly, proposalKey, proposalsOf, renderQuestion, waitingFrom } from "./pending.js";
 import { placeClaimId } from "./reminders.js";
 
 // Drafts from one message.
@@ -141,17 +141,43 @@ export async function closeEarlier(engine: PersonEngine, turnId: string, recipie
 // call in the same turn that asks a question instead of holding a new
 // version leaves none of them for the reply to show, so a YES never files
 // what the person just corrected. closeEarlier leaves this turn's drafts
-// alone, since a replayed call must find its own.
-export async function closeThisTurn(engine: PersonEngine, turnId: string, recipient: string): Promise<void> {
+// alone, since a replayed call must find its own. Fails closed: a draft
+// Engine does not confirm closed, after one retry, is held back so the
+// reply never shows it, and when Engine cannot list them at all the whole
+// turn's drafts are. False tells the tool to say nothing will be sent.
+export async function closeThisTurn(engine: PersonEngine, turnId: string, recipient: string): Promise<boolean> {
+  let waiting: EngineApproval[];
   try {
-    const waiting = waitingFrom(await engine.listApprovals(), engine.generation, turnId).filter((a) => a.recipient === recipient);
-    for (const a of waiting) {
-      if ((await engine.reject(a.id)).status !== "rejected") console.warn(JSON.stringify({ type: "mano_close_failed", count: 1 }));
-    }
+    waiting = waitingFrom(await engine.listApprovals(), engine.generation, turnId).filter((a) => a.recipient === recipient);
   } catch {
+    holdBack({ turnId });
     console.warn(JSON.stringify({ type: "mano_close_failed" }));
+    return false;
   }
+  let closed = true;
+  for (const a of waiting) {
+    if (await rejected(engine, a.id)) continue;
+    holdBack({ approvalId: a.id });
+    console.warn(JSON.stringify({ type: "mano_close_failed", count: 1 }));
+    closed = false;
+  }
+  return closed;
 }
+
+async function rejected(engine: PersonEngine, approvalId: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      if ((await engine.reject(approvalId)).status === "rejected") return true;
+    } catch {
+      // Answered below by the retry, or by holding the draft back.
+    }
+  }
+  return false;
+}
+
+// What the model is told when a corrected draft could not be closed.
+export const NOT_CLOSED_NOTE =
+  "Mano could not set aside the version it prepared earlier in this message, so it will not show it and nothing will be sent. Tell the person plainly that you could not update the renewal just now, that nothing was sent, and to ask again in a moment.";
 
 // What the model is told while an earlier approved filing is unresolved.
 export const EARLIER_UNRESOLVED_NOTE =
@@ -170,8 +196,20 @@ export async function settleEarlierFilings(engine: PersonEngine, recipient: stri
     );
     let checking = false;
     for (const a of open) {
-      if (!a.outcome?.withdrawn && (await engine.withdraw(a.id)).status !== "rejected") continue;
-      if (a.outcome?.attempt !== "failed") checking = true;
+      let withdrawn = a.outcome?.withdrawn === true;
+      if (!withdrawn) {
+        const out = await engine.withdraw(a.id);
+        // It went through after all: nothing is left to settle.
+        if (out.status === "completed") continue;
+        withdrawn = out.withdrawn === true;
+      }
+      if (!withdrawn || a.outcome?.attempt !== "failed") {
+        checking = true;
+        continue;
+      }
+      // Ended for good: the question it answered no longer waits on it.
+      const { pointer } = await engine.getPending();
+      if (pointer?.approvalId === a.id) await engine.clearPointer(a.id);
     }
     return checking ? "checking" : "clear";
   } catch {

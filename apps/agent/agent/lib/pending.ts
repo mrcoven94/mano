@@ -65,6 +65,24 @@ export function proposalsOf(approvals: EngineApproval[], generation: number): En
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+// Drafts this process could not close after the person corrected them in
+// the same turn: one draft by its ID, or every draft of a turn when Engine
+// could not even list them. Engine still holds them pending, so the turn's
+// reply must not show their question; never shown, they have no pointer,
+// and a YES approves none of them. Kept for the life of the process,
+// oldest dropped first, since the reply goes out within the same turn.
+const HELD_BACK = new Set<string>();
+const HELD_BACK_MAX = 1000;
+
+export function holdBack(target: { approvalId: string } | { turnId: string }): void {
+  HELD_BACK.add("approvalId" in target ? `a:${target.approvalId}` : `t:${target.turnId}`);
+  if (HELD_BACK.size > HELD_BACK_MAX) HELD_BACK.delete(HELD_BACK.values().next().value!);
+}
+
+export function heldBack(turnId: string, approvalId: string): boolean {
+  return HELD_BACK.has(`a:${approvalId}`) || HELD_BACK.has(`t:${turnId}`);
+}
+
 // The drafts one turn proposed that still wait, newest first.
 export function waitingFrom(approvals: EngineApproval[], generation: number, turnId: string): EngineApproval[] {
   return proposalsOf(approvals, generation).filter((a) => a.status === "pending" && a.idempotencyKey.startsWith(`${prefix(generation)}${turnId}:`));

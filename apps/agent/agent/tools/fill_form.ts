@@ -16,7 +16,7 @@ import { EngineError, type PersonEngine } from "../lib/engine.js";
 import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
 import { DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
-import { EARLIER_UNRESOLVED_NOTE, closeEarlier, closeThisTurn, holdForYes, sameDraft, settleEarlierFilings, type Draft } from "../lib/propose.js";
+import { EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, closeEarlier, closeThisTurn, holdForYes, sameDraft, settleEarlierFilings, type Draft } from "../lib/propose.js";
 
 const inputSchema = z.object({
   form: z
@@ -155,7 +155,9 @@ export default defineTool({
     // drafts for the reply to show.
     const form = resolveForm(input.form, process.env.MANO_PORTAL_URL ?? null);
     const engine = personEngine(ctx);
-    if (out.status !== "waiting_for_yes" && form && engine) await closeThisTurn(engine, requireTurn(ctx).turnId, form.recipient);
+    if (out.status !== "waiting_for_yes" && form && engine && !(await closeThisTurn(engine, requireTurn(ctx).turnId, form.recipient))) {
+      return { status: "fill_failed", sent: false, note: NOT_CLOSED_NOTE };
+    }
     return out;
   },
 });

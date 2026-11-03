@@ -26,7 +26,7 @@ import { profileContext } from "./profile.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
 import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
-import { closeReplaced, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, replayLine, waitingProposals } from "./pending.js";
+import { closeReplaced, heldBack, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, replayLine, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 
 const MAX_TEXTS = 10;
@@ -403,7 +403,9 @@ async function runTurn(
     throw err;
   }
   const after = await engine.listApprovals();
-  const own = proposedIn(after, body.generation, body.turnId);
+  const proposedHere = proposedIn(after, body.generation, body.turnId);
+  // A draft the person corrected in this turn that Engine could not close is never shown.
+  const own = proposedHere && !heldBack(body.turnId, proposedHere.id) ? proposedHere : null;
   // Only Engine's latest proposal is ever shown: never a draft a newer
   // turn replaced, whether this turn is a replay or just slow.
   const [pending, link] = own ? await Promise.all([engine.getPending(), replayLinkOf(engine, own.id)]) : [null, null];

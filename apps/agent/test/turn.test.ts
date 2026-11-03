@@ -99,6 +99,26 @@ async function told(generation = 0): Promise<string> {
 
 type Body = { status: string; text: string; approval?: string; approvalId?: string };
 
+// Times out before filing its first post; the portal cannot be asked
+// until checkDown is cleared.
+class FlakyPortal implements Executor {
+  readonly simulated = true;
+  posts: ActionRequest[] = [];
+  filed = new Map<string, string>();
+  checkDown = true;
+  async execute(req: ActionRequest) {
+    this.posts.push(req);
+    if (this.posts.length === 1) throw new TimeoutError();
+    this.filed.set(req.idempotencyKey, `sim-${this.posts.length}`);
+    return { externalId: `sim-${this.posts.length}` };
+  }
+  async check(key: string): Promise<CheckOutcome> {
+    if (this.checkDown) throw new Error("portal unreachable");
+    const id = this.filed.get(key);
+    return id ? { found: true, externalId: id } : { found: false };
+  }
+}
+
 // Plays Channels: after a reply carrying an approval question goes out,
 // Channels reports the approval ID and the hash of the question it sent.
 async function send(request: Request, d = deps(), opts: { present?: boolean } = {}) {
@@ -212,24 +232,7 @@ describe("approval by text", () => {
   });
 
   it("a correction after an approved filing went unresolved prepares nothing until it settles, and never files the old phone", async () => {
-    // Times out before filing; the portal cannot be asked until checkDown is cleared.
-    const portal = new (class implements Executor {
-      readonly simulated = true;
-      posts: ActionRequest[] = [];
-      filed = new Map<string, string>();
-      checkDown = true;
-      async execute(req: ActionRequest) {
-        this.posts.push(req);
-        if (this.posts.length === 1) throw new TimeoutError();
-        this.filed.set(req.idempotencyKey, `sim-${this.posts.length}`);
-        return { externalId: `sim-${this.posts.length}` };
-      }
-      async check(key: string): Promise<CheckOutcome> {
-        if (this.checkDown) throw new Error("portal unreachable");
-        const id = this.filed.get(key);
-        return id ? { found: true, externalId: id } : { found: false };
-      }
-    })();
+    const portal = new FlakyPortal();
     engine.filer = portal;
     await send(turn("turn_late_000001", "Please file my renewal"));
     expect((await send(turn("turn_late_00000Y", "YES"))).body.text).toMatch(/checking/i);
@@ -248,6 +251,40 @@ describe("approval by text", () => {
     const fixed = await send(turn("turn_late_000003", "Fix my renewal, my phone is 253-555-0199"));
     expect(fixed.body.status).toBe("waiting_approval");
     expect((await send(turn("turn_late_0000Y3", "YES"))).body.text).toMatch(/^Done/);
+    expect(portal.posts.map((p) => p.payload.phone)).toEqual(["253-555-0100", "253-555-0199"]);
+  });
+
+  it("when Engine cannot close the corrected draft of the same turn, its question is never shown and a YES files nothing", async () => {
+    const reachable = engine.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      /\/approvals\/[^/]+\/reject$/.test(String(input)) ? new Response("unavailable", { status: 503 }) : reachable(input, init),
+    );
+    const ask = await send(turn("turn_same_000003", "File my renewal, then change the phone to 253-555-01422"));
+    expect(ask.body.status).not.toBe("waiting_approval");
+    expect(ask.body.text).not.toContain("Reply YES");
+    // Engine still holds it, so only Mano's own refusal to show it stands between it and a YES.
+    expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
+    vi.stubGlobal("fetch", reachable);
+    await send(turn("turn_same_00000Z", "YES"));
+    expect(engine.executor.calls).toHaveLength(0);
+    expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
+  });
+
+  it("once recovery confirms the withdrawn filing never arrived, the correction is prepared without another YES", async () => {
+    const portal = new FlakyPortal();
+    engine.filer = portal;
+    await send(turn("turn_rec_0000001", "Please file my renewal"));
+    const [old] = engine.approvals();
+    await send(turn("turn_rec_000000Y", "YES"));
+    expect((await send(turn("turn_rec_0000002", "Fix my renewal, my phone is 253-555-0199"))).body.status).not.toBe("waiting_approval");
+
+    portal.checkDown = false;
+    const recovered = await engine.gatewayFor(personIdFor(HANDLE)).recoverAttempt(old!.idempotencyKey, new Date(), new Date(Date.now() + 60_000).toISOString());
+    expect(recovered).toMatchObject({ status: "blocked", withdrawn: true });
+
+    const fixed = await send(turn("turn_rec_0000003", "Fix my renewal, my phone is 253-555-0199"));
+    expect(fixed.body.status).toBe("waiting_approval");
+    expect((await send(turn("turn_rec_00000Y2", "YES"))).body.text).toMatch(/^Done/);
     expect(portal.posts.map((p) => p.payload.phone)).toEqual(["253-555-0100", "253-555-0199"]);
   });
 
