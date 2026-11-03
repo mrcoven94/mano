@@ -184,11 +184,12 @@ export function requestStatus(approvals: EngineApproval[], generation: number, a
   }
   const latest = proposalsOf(approvals, generation)[0];
   if (!latest) return null;
-  const state =
-    latest.status === "approved"
-      ? latest.outcome?.attempt === "done"
-        ? "the person approved it and it was filed"
-        : "the person approved it and Mano is checking whether it went through"
+  // A receipt is read first, whatever the status: it was filed.
+  const receipt = latest.outcome?.receipt;
+  const state = receipt
+    ? `the person approved it and it was filed, confirmation ${receipt.externalId}${receipt.simulated ? " (a simulated filing)" : ""}`
+    : latest.status === "approved"
+      ? "the person approved it and Mano is checking whether it went through"
       : latest.status === "rejected"
         ? "the person declined it, or it was closed; nothing was sent"
         : latest.status === "pending"

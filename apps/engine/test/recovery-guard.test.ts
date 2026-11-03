@@ -335,3 +335,45 @@ describe("LAP-747: a receipt is answered before superseded", () => {
     expect(portal.posts).toHaveLength(2);
   });
 });
+
+// LAP-747 follow-up: a receipt under the key is answered before any
+// refusal (superseded, retired, declined, already used).
+describe("LAP-747: a receipt wins on every answer", () => {
+  it("YES 1 paused in the safety check, YES 2 files RECEIVED-1, a correction is prepared, then YES 1 resumes: RECEIVED-1", async () => {
+    let pause: Promise<void> | null = null;
+    const checker = { check: async () => { if (pause) await pause; return { verdict: "pass" as const, problems: [] }; } };
+    const office = new Office();
+    office.next = "file";
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, office, { checker });
+    const order = (turnId: string, ms: number) => ({ proposal: { receivedAt: new Date(ms).toISOString(), turnId } });
+    const a = (await gateway.requestAction(proposal(), new Date(), order("turn-a", Date.now() - 60_000))).approval!;
+    let resume!: () => void;
+    pause = new Promise<void>((r) => (resume = r));
+    const yes1 = gateway.approveAndExecute(a.id, "person-maria");
+    await new Promise((r) => setTimeout(r, 0));
+    pause = null;
+    const yes2 = await gateway.approveAndExecute(a.id, "person-maria");
+    expect(yes2).toMatchObject({ status: "completed", receipt: { externalId: "WA-1" } });
+    await gateway.requestAction({ ...proposal(), payload: { phone: "253-555-0199" } }, new Date(), order("turn-b", Date.now()));
+    resume();
+    expect(await yes1).toMatchObject({ status: "completed", receipt: { externalId: "WA-1" } });
+    expect(office.posts).toHaveLength(1);
+  });
+
+  it("a retired filing that recovery then finds filed answers RECEIVED-1 to a repeated retire and to a replayed YES", async () => {
+    const office = new Office();
+    office.next = "timeout";
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, office);
+    const a = (await gateway.requestAction(proposal())).approval!;
+    await gateway.approveAndExecute(a.id, "person-maria");
+    expect((await gateway.retireApproval(a.id, "person-maria")).status).toBe("rejected");
+    office.filed.set(a.idempotencyKey, "RECEIVED-1");
+    expect(await gateway.recoverAttempt(a.idempotencyKey, new Date(), later())).toMatchObject({ status: "reconciled", receipt: { externalId: "RECEIVED-1" } });
+    expect(await gateway.retireApproval(a.id, "person-maria")).toMatchObject({ status: "completed", receipt: { externalId: "RECEIVED-1" } });
+    expect(await gateway.approveAndExecute(a.id, "person-maria")).toMatchObject({ status: "completed", receipt: { externalId: "RECEIVED-1" } });
+    expect((await gateway.approveAndExecute(a.id, "person-someone-else")).status).toBe("blocked");
+    expect(office.posts).toHaveLength(1);
+  });
+});

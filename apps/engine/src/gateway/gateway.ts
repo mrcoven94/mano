@@ -741,6 +741,10 @@ export class ActionGateway {
   // receipt exists and in_progress while a filing is in flight, and then
   // changes nothing.
   async retireApproval(approvalId: string, humanId: string): Promise<GatewayResult> {
+    return this.receiptFirst(approvalId, humanId, await this.retireNow(approvalId, humanId));
+  }
+
+  private async retireNow(approvalId: string, humanId: string): Promise<GatewayResult> {
     const approval = this.store.getApproval(approvalId);
     if (!approval) return { status: "blocked", reason: "Approval not found." };
     if (!humanId || humanId !== approval.personId) {
@@ -764,6 +768,23 @@ export class ActionGateway {
     humanId: string,
     now = new Date(),
   ): Promise<GatewayResult> {
+    return this.receiptFirst(approvalId, humanId, await this.approveNow(approvalId, humanId, now));
+  }
+
+  // One rule for every answer about an approval: a receipt under its key
+  // means it went through, so that answer wins over superseded, retired,
+  // declined, stale or any other refusal, for the person's own approval.
+  // A second approve of a filed approval runs nothing and answers the same
+  // receipt.
+  private receiptFirst(approvalId: string, humanId: string, answer: GatewayResult): GatewayResult {
+    if (answer.status === "completed" || answer.status === "reconciled") return answer;
+    const approval = this.store.getApproval(approvalId);
+    if (!approval || approval.status === "pending" || !humanId || humanId !== approval.personId) return answer;
+    const receipt = this.store.getReceiptByKey(approval.idempotencyKey);
+    return receipt ? { status: "completed", receipt } : answer;
+  }
+
+  private async approveNow(approvalId: string, humanId: string, now: Date): Promise<GatewayResult> {
     const approval = this.store.getApproval(approvalId);
     if (!approval) return { status: "blocked", reason: "Approval not found." };
     if (this.store.keyDeclined(approval.idempotencyKey)) return { status: "blocked", reason: approvalGoneReason("rejected") };

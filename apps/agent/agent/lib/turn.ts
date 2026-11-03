@@ -204,13 +204,12 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       // approval whose attempt settled carries its receipt; one still
       // unknown keeps the pointer until Engine reconciles it.
       const approval = await engine.approval(approvalId);
-      if (approval?.status === "approved") {
-        if (approval.outcome?.attempt === "done" && approval.outcome.receipt) {
-          await engine.clearPointer(approvalId);
-          return doneText(approval.purpose, approval.outcome.receipt);
-        }
-        return CHECKING;
+      // A receipt is read first, whatever the status: it went through.
+      if (approval?.outcome?.receipt) {
+        await engine.clearPointer(approvalId);
+        return doneText(approval.purpose, approval.outcome.receipt);
       }
+      if (approval?.status === "approved") return CHECKING;
       await engine.clearPointer(approvalId);
       return "That approval can no longer be used, so nothing was sent. Want me to prepare it again?";
     }
@@ -218,6 +217,10 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
 }
 
 async function answerNo(engine: PersonEngine, approval: EngineApproval | null, approvalId: string): Promise<string> {
+  if (approval?.outcome?.receipt) {
+    await engine.clearPointer(approvalId);
+    return `That one was already sent, so I cannot cancel it. Confirmation ${approval.outcome.receipt.externalId}.`;
+  }
   if (approval?.status === "approved") {
     return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
   }
