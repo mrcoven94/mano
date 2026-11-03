@@ -66,6 +66,8 @@ jobs:
     steps:
       # GitHub's == ignores case, so the job's if also admits a branch named
       # MAIN. The shell compares exactly, before any step touches a secret.
+      # Jobs carry no services, container or env, which would see secrets
+      # before this step.
       - name: Run only on main
         run: test "$GITHUB_REF" = "refs/heads/main"
       - uses: actions/checkout@v7
@@ -98,14 +100,11 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.target == 'staging')
     runs-on: ubuntu-latest
     environment: guardian-production
-    env:
-      MANO_GUARDIAN_APP: mano-guardian-staging
-      MANO_GUARDIAN_MIN_CONTAINERS: "0"
-      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
     steps:
       # GitHub's == ignores case, so the job's if also admits a branch named
       # MAIN. The shell compares exactly, before any step touches a secret.
+      # Jobs carry no services, container or env, which would see secrets
+      # before this step.
       - name: Run only on main
         run: test "$GITHUB_REF" = "refs/heads/main"
       - uses: actions/checkout@v7
@@ -117,10 +116,22 @@ jobs:
         run: python -m unittest discover -s packages/guardian/modal -v
       - name: Cache model weights (CPU, no GPU billed)
         run: modal run packages/guardian/modal/app.py::download
+        env:
+          MANO_GUARDIAN_APP: mano-guardian-staging
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
       - name: Deploy the staging endpoint
         run: modal deploy packages/guardian/modal/app.py
+        env:
+          MANO_GUARDIAN_APP: mano-guardian-staging
+          MANO_GUARDIAN_MIN_CONTAINERS: "0"
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
       - name: Print the staging URL
         run: python -c "import modal; print(modal.Server.from_name('mano-guardian-staging', 'check').get_url())"
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
   stop-staging:
     if: >-
@@ -131,6 +142,8 @@ jobs:
     steps:
       # GitHub's == ignores case, so the job's if also admits a branch named
       # MAIN. The shell compares exactly, before any step touches a secret.
+      # Jobs carry no services, container or env, which would see secrets
+      # before this step.
       - name: Run only on main
         run: test "$GITHUB_REF" = "refs/heads/main"
       - run: pip install "modal==1.6.2"
@@ -149,6 +162,8 @@ jobs:
     steps:
       # GitHub's == ignores case, so the job's if also admits a branch named
       # MAIN. The shell compares exactly, before any step touches a secret.
+      # Jobs carry no services, container or env, which would see secrets
+      # before this step.
       - name: Run only on main
         run: test "$GITHUB_REF" = "refs/heads/main"
       - run: pip install "modal==1.6.2"

@@ -4,8 +4,9 @@ name: guardian-check
 # SDK, serve its one authenticated route as a Modal Server (whose requests
 # Modal does not store) with no Function taking a check as input, refuse
 # blank tokens, strictly parse verdicts, and match its pinned model and image.
-# Also fails if guardian-modal's triggers, any job's if, or any job's first
-# step (a case-sensitive main-only check) differ from an exact allowlist.
+# Also fails if guardian-modal's keys, permissions, triggers, or any job's
+# keys, if, runner, environment or first step (a case-sensitive main-only
+# check) differ from an exact allowlist.
 # That catches accidental edits on main and in reviewed pull requests; it
 # cannot stop a hostile branch, which runs its own copy of both files.
 on:
@@ -42,10 +43,11 @@ jobs:
           import copy
           import yaml
 
-          # An exact allowlist, not a parser: any change to the triggers, a
-          # job's if, or a job's first step fails until it is copied here in
-          # a reviewed pull request. This catches accidental edits only. A
-          # hostile branch runs its own copy of both files; the
+          # An exact allowlist, not a parser: any change to the workflow's
+          # keys, permissions or triggers, a job's keys, if, runner,
+          # environment or first step fails until it is copied here in a
+          # reviewed pull request. This catches accidental edits only. A
+          # hostile branch runs its own copy of both files; only the
           # guardian-production environment's branch policy stops that.
           MAIN = "github.ref == 'refs/heads/main'"
           EXPECTED_IF = {
@@ -87,17 +89,33 @@ jobs:
           }
 
 
+          # Only these keys, so nothing the runner sets up before the first
+          # step (services, container, env, defaults, strategy, needs, a
+          # reusable workflow's uses or secrets) can be handed a secret.
+          WORKFLOW_KEYS = {"name", True, "permissions", "jobs"}
+          JOB_KEYS = {"if", "runs-on", "environment", "steps"}
+
+
           def problems(workflow):
               found = []
-              triggers = workflow.get("on", workflow.get(True))
-              if triggers != EXPECTED_ON:
+              if set(workflow) != WORKFLOW_KEYS:
+                  found.append(f"workflow keys are {sorted(map(str, workflow))}")
+              if workflow.get("permissions") != {"contents": "read"}:
+                  found.append(f"permissions are {workflow.get('permissions')!r}")
+              if workflow.get(True) != EXPECTED_ON:
                   found.append("triggers differ from the allowlist")
               jobs = workflow.get("jobs") or {}
               if set(jobs) != set(EXPECTED_IF):
                   found.append(f"jobs are {sorted(jobs)}, not {sorted(EXPECTED_IF)}")
               for name, job in jobs.items():
+                  if set(job) != JOB_KEYS:
+                      found.append(f"job {name} has keys {sorted(job)}, not {sorted(JOB_KEYS)}")
                   if job.get("if") != EXPECTED_IF.get(name):
                       found.append(f"job {name} has if {job.get('if')!r}")
+                  if job.get("runs-on") != "ubuntu-latest":
+                      found.append(f"job {name} runs on {job.get('runs-on')!r}")
+                  if job.get("environment") != "guardian-production":
+                      found.append(f"job {name} uses environment {job.get('environment')!r}")
                   steps = job.get("steps") or [None]
                   if steps[0] != EXPECTED_FIRST_STEP:
                       found.append(f"job {name} does not start with the main-only step")
@@ -113,6 +131,8 @@ jobs:
               change(workflow)
               return workflow
 
+          # Built in two parts so Actions does not expand it in this script.
+          SECRET = "$" + "{{ secrets.MODAL_TOKEN_SECRET }}"
           bypasses = {
               "quoted parentheses": lambda w: w["jobs"]["staging"].update(
                   {"if": MAIN + " && ('(' == '(') || true || (')' == ')')"}
@@ -127,6 +147,30 @@ jobs:
               "no if": lambda w: w["jobs"]["stop-old"].pop("if"),
               "extra job": lambda w: w["jobs"].update({"other": {"steps": []}}),
               "pull_request trigger": lambda w: w[True].update({"pull_request": None}),
+              "services": lambda w: w["jobs"]["deploy"].update(
+                  {"services": {"probe": {"image": "redis:7", "env": {"TOKEN": SECRET}}}}
+              ),
+              "container credentials": lambda w: w["jobs"]["staging"].update(
+                  {"container": {"image": "ghcr.io/x/y", "credentials": {"username": SECRET, "password": SECRET}}}
+              ),
+              "job env": lambda w: w["jobs"]["stop-old"].update(
+                  {"env": {"TOKEN": SECRET}}
+              ),
+              "workflow env": lambda w: w.update({"env": {"TOKEN": SECRET}}),
+              "needs": lambda w: w["jobs"]["deploy"].update({"needs": ["staging"]}),
+              "strategy": lambda w: w["jobs"]["deploy"].update({"strategy": {"matrix": {"x": [1]}}}),
+              "defaults": lambda w: w["jobs"]["deploy"].update({"defaults": {"run": {"shell": "bash"}}}),
+              "reusable workflow": lambda w: w["jobs"].update(
+                  {"deploy": {"if": EXPECTED_IF["deploy"], "uses": "./.github/workflows/x.yml", "secrets": "inherit"}}
+              ),
+              "step before the guard": lambda w: w["jobs"]["deploy"]["steps"].insert(
+                  0, {"run": "echo " + SECRET}
+              ),
+              "guard with env": lambda w: w["jobs"]["deploy"]["steps"][0].update(
+                  {"env": {"TOKEN": SECRET}}
+              ),
+              "self-hosted runner": lambda w: w["jobs"]["deploy"].update({"runs-on": "self-hosted"}),
+              "wider permissions": lambda w: w.update({"permissions": "write-all"}),
           }
           for name, change in bypasses.items():
               assert problems(edited(change)), f"allowlist accepted: {name}"
