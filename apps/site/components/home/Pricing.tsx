@@ -59,7 +59,7 @@ const ROWS: [string, [string, Cell, Cell][]][] = [
     ["Yearly checkup", false, true],
   ]],
   ["Always included", [
-    ["Share a case with your caseworker", true, true],
+    ["Share a case with your caseworker, coming soon", true, true],
   ]],
 ];
 

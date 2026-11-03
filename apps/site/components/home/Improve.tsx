@@ -9,7 +9,7 @@ import { REPO_URL } from "@/lib/site";
 const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
 
 const STEPS = [
-  { key: "correct", icon: "pencil", title: "You correct it once", text: "Tell Mano something changed and it fixes every open application, then remembers for next time." },
+  { key: "correct", icon: "pencil", title: "You correct it once", text: "Tell Mano something changed. It remembers for your next form and asks before using it." },
   { key: "learn", icon: "clipboard", title: "It remembers you", text: "What Mano learns about your life stays private to you. It fills each form from what you already told it." },
   { key: "review", icon: "chat", title: "A caseworker checks the work", text: "A real caseworker will review sample packets. What they flag goes back into how Mano prepares the next one." },
   { key: "test", icon: "check", title: "Every mistake becomes a test", text: "Mano will be graded on paperwork it has never seen, next to a reminder app and a general AI agent with the same tools." },
@@ -57,11 +57,10 @@ export default function Improve() {
             {k === "correct" && (
               <div className="im-chat">
                 <p className="bub me rv" style={d(0.1)}>I work 24 hours a week now, not 20.</p>
-                <div className="bub-row rv" style={d(0.8)}><Avatar /><p className="bub mano">Got it. I updated both open applications and I&rsquo;ll use 24 hours from now on.</p></div>
+                <div className="bub-row rv" style={d(0.8)}><Avatar /><p className="bub mano">Got it. I&rsquo;ll remember 24 hours a week and check with you before I use it on your next form.</p></div>
                 <div className="im-diff rv" style={d(1.5)}>
-                  <p className="sc-label">Changed in 2 applications</p>
+                  <p className="sc-label">Saved for your next form</p>
                   <div><span>Hours per week</span><span><s>20</s> 24</span></div>
-                  <div><span>Monthly income</span><span><s>$2,140</s> $2,570</span></div>
                 </div>
               </div>
             )}

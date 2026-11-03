@@ -7,7 +7,7 @@ import Reach from "@/components/home/Reach";
 import { TeamHero, Stage, Steps, Rules, Seat, Close } from "@/components/teams/Parts";
 
 const title = "Case management for government offices";
-const description = "Mano helps government offices keep residents covered. It keeps renewals on time, brings caseworkers complete cases with every finding cited to the rule, and enters approved cases into the system you already run.";
+const description = "Mano helps government offices keep residents covered. It keeps renewals on time, brings caseworkers complete cases with every finding cited to the rule, and fills approved cases into the system you already run for staff to save. Mano for government offices is coming soon.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/government" }, openGraph: { title, description } };
 

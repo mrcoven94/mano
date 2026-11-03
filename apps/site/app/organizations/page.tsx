@@ -7,7 +7,7 @@ import Rotating from "@/components/teams/Rotating";
 import { TeamHero, Stage, Steps, Rules, Seat, Close } from "@/components/teams/Parts";
 
 const title = "Case management for nonprofits";
-const description = "Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications and tracks every renewal, so families keep their help and your team spends its time with people.";
+const description = "Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications and tracks every renewal, so families keep their help and your team spends its time with people. Mano for nonprofits is coming soon.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/organizations" }, openGraph: { title, description } };
 

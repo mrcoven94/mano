@@ -6,7 +6,7 @@ import { TeamHero, Stage, Steps, Rules, Seat, Close } from "@/components/teams/P
 import { NeedIcon, NEED_TINT } from "@/components/home/NeedIcons";
 
 const title = "Mano for partners";
-const description = "For services that help people with rent, bills, credit, food, care or work. When someone asks Mano for that kind of help, Mano offers your service in plain words and the person decides. No ads and no paid placement.";
+const description = "For services that help people with rent, bills, credit, food, care or work. When someone asks Mano for that kind of help, Mano offers your service in plain words and the person decides. No ads and no paid placement. Partner services are coming soon.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/partners" }, openGraph: { title, description } };
 
