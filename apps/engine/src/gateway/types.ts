@@ -101,6 +101,10 @@ export interface GatewayResult {
   reason?: string;
   // Set on a refused approve: a newer proposal replaced this one.
   superseded?: true;
+  // Set on a completed answer that only reports a receipt another request
+  // already recorded. Nothing ran in this call, so a caller applies no
+  // effects for it (a consent grant is never re-recorded).
+  replayed?: true;
   // Set on a refused approve when the safety check could not answer. The
   // approval still waits, nothing ran, and the same approve may be sent
   // again later.

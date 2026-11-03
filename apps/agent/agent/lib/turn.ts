@@ -217,10 +217,8 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
 }
 
 async function answerNo(engine: PersonEngine, approval: EngineApproval | null, approvalId: string): Promise<string> {
-  if (approval?.outcome?.receipt) {
-    await engine.clearPointer(approvalId);
-    return `That one was already sent, so I cannot cancel it. Confirmation ${approval.outcome.receipt.externalId}.`;
-  }
+  const sent = await alreadySent(engine, approval, approvalId);
+  if (sent) return sent;
   if (approval?.status === "approved") {
     return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
   }
@@ -229,11 +227,24 @@ async function answerNo(engine: PersonEngine, approval: EngineApproval | null, a
     await engine.clearPointer(approvalId);
     return "Okay, I did not send it. Nothing left Mano.";
   }
-  if ((await engine.approval(approvalId))?.status === "approved") {
+  // Read again: the filing may have been recorded since the first read.
+  const fresh = await engine.approval(approvalId);
+  const sentSince = await alreadySent(engine, fresh, approvalId);
+  if (sentSince) return sentSince;
+  if (fresh?.status === "approved") {
     return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
   }
   await engine.clearPointer(approvalId);
   return "That request had already expired or changed, so nothing was sent.";
+}
+
+// A receipt is read before any status: the filing went through, so a NO
+// cannot cancel it and Mano never says nothing was sent.
+async function alreadySent(engine: PersonEngine, approval: EngineApproval | null, approvalId: string): Promise<string | null> {
+  const receipt = approval?.outcome?.receipt;
+  if (!receipt) return null;
+  await engine.clearPointer(approvalId);
+  return `That one was already sent, so I cannot cancel it. Confirmation ${receipt.externalId}.`;
 }
 
 async function decide(engine: PersonEngine, approvalId: string, decision: "yes" | "no"): Promise<TurnResponse> {

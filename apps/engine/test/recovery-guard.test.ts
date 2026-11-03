@@ -275,21 +275,21 @@ describe("LAP-747: a retired approval is never run again", () => {
     expect(office.posts).toHaveLength(1);
   });
 
-  it("recovery of a retired approval reconciles: absent ends it, a filing found answers its receipt", async () => {
-    const absent = await failedFiling("timeout");
-    await absent.gateway.retireApproval(absent.a.id, "person-maria");
-    expect((await absent.gateway.recoverAttempt(absent.a.idempotencyKey, new Date(), later()))?.status).toBe("blocked");
-    expect(absent.store.getAttempt(absent.a.idempotencyKey)?.status).toBe("failed");
-    expect(absent.office.posts).toHaveLength(1);
-
-    const found = await failedFiling("timeout");
-    await found.gateway.retireApproval(found.a.id, "person-maria");
-    found.office.filed.set(found.a.idempotencyKey, "WA-1");
-    expect(await found.gateway.recoverAttempt(found.a.idempotencyKey, new Date(), later())).toMatchObject({ status: "reconciled", receipt: { externalId: "WA-1" } });
+  // Review round 10: the correction read A as failed, then a concurrent
+  // YES retried it and lost the response, so A is unknown when the retire
+  // lands. It must not be retired: the filing may have arrived.
+  it("an attempt a concurrent YES left unknown after it was read as failed is not retired", async () => {
+    const { office, store, gateway, a } = await failedFiling("refuse");
+    expect(store.getAttempt(a.idempotencyKey)?.status).toBe("failed");
+    office.next = "timeout";
+    expect((await gateway.approveAndExecute(a.id, "person-maria")).status).toBe("blocked");
+    expect(store.getAttempt(a.idempotencyKey)?.status).toBe("unknown");
+    expect((await gateway.retireApproval(a.id, "person-maria")).status).toBe("in_progress");
+    expect(store.getApproval(a.id)?.status).toBe("approved");
   });
 
   it("retiring answers completed once a receipt exists and in_progress while a filing is in flight, and changes nothing", async () => {
-    const filed = await failedFiling("timeout");
+    const filed = await failedFiling("refuse");
     filed.store.putReceipt({
       id: "r1", idempotencyKey: filed.a.idempotencyKey, actionType: "submit", recipient: "sandbox-agency-portal",
       status: "reconciled", externalId: "WA-1", simulated: true, requestHash: "", createdAt: new Date().toISOString(),
@@ -297,7 +297,7 @@ describe("LAP-747: a retired approval is never run again", () => {
     expect(await filed.gateway.retireApproval(filed.a.id, "person-maria")).toMatchObject({ status: "completed" });
     expect(filed.store.getApproval(filed.a.id)?.status).toBe("approved");
 
-    const flying = await failedFiling("timeout");
+    const flying = await failedFiling("refuse");
     flying.store.updateAttempt(flying.a.idempotencyKey, "in_flight");
     expect((await flying.gateway.retireApproval(flying.a.id, "person-maria")).status).toBe("in_progress");
     expect(flying.store.getApproval(flying.a.id)?.status).toBe("approved");
@@ -361,18 +361,19 @@ describe("LAP-747: a receipt wins on every answer", () => {
     expect(office.posts).toHaveLength(1);
   });
 
-  it("a retired filing that recovery then finds filed answers RECEIVED-1 to a repeated retire and to a replayed YES", async () => {
+  it("a retired filing whose receipt is later recorded answers RECEIVED-1 to a repeated retire and to a replayed YES", async () => {
     const office = new Office();
-    office.next = "timeout";
     const store = new MemoryApprovalStore();
     const gateway = new ActionGateway(store, office);
     const a = (await gateway.requestAction(proposal())).approval!;
     await gateway.approveAndExecute(a.id, "person-maria");
     expect((await gateway.retireApproval(a.id, "person-maria")).status).toBe("rejected");
-    office.filed.set(a.idempotencyKey, "RECEIVED-1");
-    expect(await gateway.recoverAttempt(a.idempotencyKey, new Date(), later())).toMatchObject({ status: "reconciled", receipt: { externalId: "RECEIVED-1" } });
-    expect(await gateway.retireApproval(a.id, "person-maria")).toMatchObject({ status: "completed", receipt: { externalId: "RECEIVED-1" } });
-    expect(await gateway.approveAndExecute(a.id, "person-maria")).toMatchObject({ status: "completed", receipt: { externalId: "RECEIVED-1" } });
+    store.putReceipt({
+      id: "r1", idempotencyKey: a.idempotencyKey, actionType: "submit", recipient: "sandbox-agency-portal",
+      status: "reconciled", externalId: "RECEIVED-1", simulated: true, requestHash: "", createdAt: new Date().toISOString(),
+    });
+    expect(await gateway.retireApproval(a.id, "person-maria")).toMatchObject({ status: "completed", replayed: true, receipt: { externalId: "RECEIVED-1" } });
+    expect(await gateway.approveAndExecute(a.id, "person-maria")).toMatchObject({ status: "completed", replayed: true, receipt: { externalId: "RECEIVED-1" } });
     expect((await gateway.approveAndExecute(a.id, "person-someone-else")).status).toBe("blocked");
     expect(office.posts).toHaveLength(1);
   });

@@ -427,13 +427,13 @@ export class SqlApprovalStore implements ApprovalStore {
     this.sql.exec("UPDATE attempts SET status = ?, updated_at = ?, version = version + 1 WHERE idempotency_key = ?", status, new Date().toISOString(), key);
   }
 
-  retireApproval(id: string): boolean {
+  retireApproval(id: string, version: number): boolean {
     return (
       this.sql.exec(
         "UPDATE approvals SET status = 'retired' WHERE id = ? AND status = 'approved'" +
           " AND NOT EXISTS(SELECT 1 FROM receipts WHERE idempotency_key = approvals.idempotency_key)" +
-          " AND NOT EXISTS(SELECT 1 FROM attempts WHERE idempotency_key = approvals.idempotency_key AND status = 'in_flight')",
-        id,
+          " AND EXISTS(SELECT 1 FROM attempts WHERE idempotency_key = approvals.idempotency_key AND status = 'failed' AND version = ?)",
+        id, version,
       ).rowsWritten === 1
     );
   }

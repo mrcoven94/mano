@@ -874,7 +874,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       recovered.push({ key: attempt.key, status: result.status });
       // Recovery executes shares outside approve(), so their consent
       // effects apply here, from the persisted original approval.
-      if ((result.status === "completed" || result.status === "reconciled") && result.receipt) {
+      if ((result.status === "completed" || result.status === "reconciled") && result.receipt && !result.replayed) {
         await this.applyShareOutcome(result.receipt.idempotencyKey);
       }
     }
@@ -1006,7 +1006,10 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async approve(approvalId: string, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.approveAndExecute(approvalId, verified);
-    if (result.status === "completed" || result.status === "reconciled") {
+    // A replayed answer only reports a receipt another request recorded:
+    // its effects were applied then, and are never applied again (a
+    // revoked consent stays revoked).
+    if ((result.status === "completed" || result.status === "reconciled") && !result.replayed) {
       // Consent effects come from the persisted original approval behind
       // the key, never from whichever approval triggered the outcome.
       const key = result.receipt?.idempotencyKey;

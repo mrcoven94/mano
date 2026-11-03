@@ -1,0 +1,39 @@
+import { env as testEnv, runInDurableObject } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+import type { PersonAgent } from "../src/agents/person-agent.js";
+
+// LAP-747 follow-up. Engine answers a repeated approve with the receipt it
+// already has. That answer is marked replayed, and the person's agent
+// applies no effects for it, so replaying the approval of a consent grant
+// after its revocation never restores the revoked consent.
+function personStub(name: string): PersonAgent {
+  const ns = testEnv.PERSON_AGENT as DurableObjectNamespace;
+  return ns.get(ns.idFromName(name)) as unknown as PersonAgent;
+}
+
+async function consents(name: string) {
+  const ns = testEnv.PERSON_AGENT as DurableObjectNamespace;
+  return runInDurableObject(ns.get(ns.idFromName(name)), (_i, state) =>
+    state.storage.sql.exec("SELECT recipient, case_id FROM consents").toArray() as { recipient: string; case_id: string }[],
+  );
+}
+
+describe("LAP-747: a replayed approval never re-applies its effects", () => {
+  it("replaying the approval of a revoked consent grant answers its receipt and leaves the consent revoked", async () => {
+    const name = "lap747-replay-consent";
+    const person = personStub(name);
+    const orgAgentId = "org:lap747-replay-county";
+    const grant = await person.grantConsent(name, { orgAgentId, purpose: "renewal", scope: ["documents"], caseId: "case-lap747" });
+    const granted = await person.approve(grant.approval!.id, name);
+    expect(granted.status, granted.reason).toBe("completed");
+    expect(await consents(name)).toHaveLength(1);
+
+    const revoke = await person.revokeConsent(name, { orgAgentId, caseId: "case-lap747" });
+    expect((await person.approve(revoke.approval!.id, name)).status).toBe("completed");
+    expect(await consents(name)).toHaveLength(0);
+
+    const replay = await person.approve(grant.approval!.id, name);
+    expect(replay).toMatchObject({ status: "completed", replayed: true, receipt: { externalId: granted.receipt!.externalId } });
+    expect(await consents(name)).toHaveLength(0);
+  });
+});

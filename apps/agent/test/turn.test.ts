@@ -449,29 +449,48 @@ describe("approval by text", () => {
     expect(engine.executor.calls).toHaveLength(0);
   });
 
-  // Review round 9: a filing retired while unanswered that recovery then
-  // finds filed. Mano reports it as sent, with its confirmation, to the
-  // model and to a replayed YES, never "nothing was sent".
-  it("a retired filing that recovery finds filed is reported as sent, with its confirmation", async () => {
+  // Review round 9: a retired filing whose receipt is recorded later is
+  // reported as sent, with its confirmation, to the model and to a
+  // replayed YES, never "nothing was sent".
+  async function retiredFiling(prefix: string) {
     const portal = new FlakyPortal();
+    portal.refuseFirst = true;
     engine.filer = portal;
-    await send(turn("turn_rcp_0000001", "Please file my renewal"));
-    const yes = turn("turn_rcp_000000Y", "YES");
+    await send(turn(`turn_${prefix}_0000001`, "Please file my renewal"));
+    const yes = turn(`turn_${prefix}_000000Y`, "YES");
     await send(yes.clone());
     const [old] = engine.approvals();
     const person = personIdFor(HANDLE);
     expect((await engine.gatewayFor(person).retireApproval(old!.id, person)).status).toBe("rejected");
+    const record = () =>
+      engine.person(person).store.putReceipt({
+        id: `r-${prefix}`, idempotencyKey: old!.idempotencyKey, actionType: "submit", recipient: old!.recipient,
+        status: "reconciled", externalId: "RECEIVED-1", simulated: true, requestHash: "", createdAt: new Date().toISOString(),
+      });
+    return { portal, yes, record };
+  }
 
-    portal.checkDown = false;
-    portal.filed.set(old!.idempotencyKey, "RECEIVED-1");
-    expect(await engine.gatewayFor(person).recoverAttempt(old!.idempotencyKey, new Date(), new Date(Date.now() + 60_000).toISOString())).toMatchObject({ status: "reconciled" });
+  it("a retired filing whose receipt is later recorded is reported as sent, with its confirmation", async () => {
+    const { portal, yes, record } = await retiredFiling("rcp");
+    record();
     expect(engine.approvals()[0]!.status).toBe("retired");
-
     const status = await told();
     expect(status).toContain("it was filed, confirmation RECEIVED-1");
     expect(status).not.toContain("nothing was sent");
     expect((await send(yes)).body.text).toBe("Done. Sent: Food benefits renewal. Confirmation RECEIVED-1. This was a simulated filing.");
     expect(portal.posts).toHaveLength(1);
+  });
+
+  // Review round 10: the receipt is recorded between the NO's first read
+  // and its reject. The refreshed read wins: it was sent.
+  it("a NO whose filing is recorded between its first read and its reject says it was already sent", async () => {
+    const { record } = await retiredFiling("rno");
+    const racing: typeof fetch = async (input, init) => {
+      if (/\/approvals\/[^/]+\/reject$/.test(new URL(String(input)).pathname)) record();
+      return engine.fetch(input, init);
+    };
+    const no = await send(turn("turn_rno_000000N", "NO"), deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: racing }) }));
+    expect(no.body.text).toBe("That one was already sent, so I cannot cancel it. Confirmation RECEIVED-1.");
   });
 
   it("once recovery settles the approved filing as failed, the correction is prepared without another YES", async () => {

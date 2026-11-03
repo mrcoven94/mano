@@ -109,10 +109,10 @@ export interface ApprovalStore {
   // a durable recovery run while this holds.
   hasUnresolvedAttempts(): boolean;
   updateAttempt(key: string, status: Attempt["status"]): void;
-  // Retires an approved approval, in one guarded step: only while no
-  // receipt exists for its key and no attempt under it is in flight.
+  // Retires an approved approval, in one guarded step: only while its
+  // attempt is still failed at version and no receipt exists for its key.
   // False otherwise, or when it is not approved.
-  retireApproval(id: string): boolean;
+  retireApproval(id: string, version: number): boolean;
   // Moves an attempt to failed only while it is still at version (nothing
   // claimed, ran or settled it since the caller read it before its lookup
   // or checks) and no receipt exists. A receipt always wins. Every failed
@@ -218,10 +218,11 @@ export class MemoryApprovalStore implements ApprovalStore {
   keyDeclined(key: string) {
     return [...this.approvals.values()].some((a) => a.idempotencyKey === key && a.status === "rejected");
   }
-  retireApproval(id: string) {
+  retireApproval(id: string, version: number) {
     const current = this.approvals.get(id);
     if (!current || current.status !== "approved") return false;
-    if (this.receipts.has(current.idempotencyKey) || this.attempts.get(current.idempotencyKey)?.status === "in_flight") return false;
+    const attempt = this.attempts.get(current.idempotencyKey);
+    if (this.receipts.has(current.idempotencyKey) || attempt?.status !== "failed" || (attempt.version ?? 0) !== version) return false;
     this.approvals.set(id, { ...current, status: "retired" });
     return true;
   }
@@ -735,11 +736,12 @@ export class ActionGateway {
   }
 
   // The person corrected the form after approving this filing, and its
-  // filing failed or went unanswered. Retired, it is still reconciled (a
-  // receipt found later stands) but never executed again: every retry and
-  // adopt path requires an approved approval. Answers completed when a
-  // receipt exists and in_progress while a filing is in flight, and then
-  // changes nothing.
+  // filing definitely failed. Retired, it is still reconciled (a receipt
+  // found later stands) but never executed again: every retry and adopt
+  // path requires an approved approval. Only an attempt still failed at
+  // the version read here is retired; one a concurrent YES moved (in
+  // flight, or unknown after a lost response) answers in_progress and
+  // changes nothing, and a receipt answers completed.
   async retireApproval(approvalId: string, humanId: string): Promise<GatewayResult> {
     return this.receiptFirst(approvalId, humanId, await this.retireNow(approvalId, humanId));
   }
@@ -751,10 +753,11 @@ export class ActionGateway {
       return { status: "blocked", reason: "This approval belongs to a different person." };
     }
     if (approval.status === "retired") return { status: "rejected", approval };
-    if (!this.store.retireApproval(approvalId)) {
+    const attempt = this.store.getAttempt(approval.idempotencyKey);
+    if (!this.store.retireApproval(approvalId, attempt?.version ?? 0)) {
       const receipt = this.store.getReceiptByKey(approval.idempotencyKey);
-      if (receipt) return { status: "completed", receipt };
-      if (this.store.getAttempt(approval.idempotencyKey)?.status === "in_flight") {
+      if (receipt) return { status: "completed", receipt, replayed: true };
+      if (approval.status === "approved" && attempt && attempt.status !== "failed" && attempt.status !== "done") {
         return { status: "in_progress", reason: "Another request with this idempotency key is running." };
       }
       return { status: "blocked", reason: approvalGoneReason(this.store.getApproval(approvalId)?.status ?? approval.status) };
@@ -781,7 +784,7 @@ export class ActionGateway {
     const approval = this.store.getApproval(approvalId);
     if (!approval || approval.status === "pending" || !humanId || humanId !== approval.personId) return answer;
     const receipt = this.store.getReceiptByKey(approval.idempotencyKey);
-    return receipt ? { status: "completed", receipt } : answer;
+    return receipt ? { status: "completed", receipt, replayed: true } : answer;
   }
 
   private async approveNow(approvalId: string, humanId: string, now: Date): Promise<GatewayResult> {
@@ -1191,7 +1194,7 @@ export class ActionGateway {
 
   private movedOn(key: string): GatewayResult {
     const receipt = this.store.getReceiptByKey(key);
-    if (receipt) return { status: "completed", receipt };
+    if (receipt) return { status: "completed", receipt, replayed: true };
     return { status: "in_progress", reason: "Another request with this idempotency key is running." };
   }
 
