@@ -37,6 +37,11 @@ max_retries = 0
 binding = "FILES"
 bucket_name = "mano-channel-files"
 
+# Makes a JPEG copy of a texted HEIC, HEIF or WebP photo, since the
+# portal takes only PDF, PNG and JPEG (files.ts imagesConverter).
+[images]
+binding = "IMAGES"
+
 [triggers]
 crons = ["* * * * *"]
 

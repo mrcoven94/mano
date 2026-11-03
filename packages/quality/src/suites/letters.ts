@@ -1,26 +1,51 @@
-// Letters suite: synthetic letter images read through the mail path. 20 cases:
-// renewal notices, missing documents, approvals, scam letters, conflicting
-// dates. Every letter is generated markup for a made-up person. Suite version 1.
-// Mail's fixtures will be reused once packages/mail is merged; until then the
-// bench generates its own and the report says so.
+// Letters suite: synthetic letters read through the mail path. Version 2
+// (letters-v2.ts) draws full one-page notices and is what the bench runs.
+// Version 1, below, is frozen as it was pinned: three short lines per image
+// and a [letter N] marker in every reference. It stays buildable so results
+// from before version 2 can be rerun and compared at the same version:
+// node --import ./src/register.ts src/bin/bench.ts --suite letters --letters-version 1
 
-import { FIXTURE_STATES, SCAM_HOSTS, factsForState, stateByCode, type FixtureState } from "../facts.ts";
+import { CONFLICTING_DATE, COUNTED_DATE, FIXTURE_STATES, PRINTED_DATE, SCAM_HOSTS, factsForState, stateByCode, type FixtureState } from "../facts.ts";
 import { syntheticLetter } from "./art.ts";
+import { buildLettersV2Cases } from "./letters-v2.ts";
 import type { BenchCase, CaseFacts } from "./types.ts";
 
-export const LETTERS_SUITE_VERSION = 1;
+export type LettersVersion = 1 | 2;
+export const LETTERS_SUITE_VERSION: LettersVersion = 2;
 
-// The date on the second page of the two-date letters.
-const SECOND_PAGE_DATE = "November 1, 2026";
+const BUILDERS: Record<LettersVersion, () => BenchCase[]> = { 1: buildLettersV1Cases, 2: buildLettersV2Cases };
 
-// When a letter says the person must act: one date, or two dates that
-// disagree, which Mano must not pick between. A scam sets none (null).
-export type LetterDeadline = { kind: "one"; date: string } | { kind: "contested"; dates: string[] };
+export function isLettersVersion(n: number): n is LettersVersion {
+  return n in BUILDERS;
+}
+
+export function buildLettersCases(version: LettersVersion = LETTERS_SUITE_VERSION): BenchCase[] {
+  return BUILDERS[version]();
+}
+
+// When a letter says the person must act: one date; two dates that
+// disagree, which Mano must not pick between; or a date the letter only
+// hedges (counted from the notice, set by a condition, or printed in a table
+// with no sentence), which Mano asks the person to confirm instead of
+// holding. A scam sets none (null). In every case but "one" the mail reader
+// should hold no date.
+export type LetterDeadline =
+  | { kind: "one"; date: string }
+  | { kind: "contested"; dates: string[] }
+  | { kind: "confirm"; dates: string[] };
+
+const HEDGED: Record<string, (due: string) => string[]> = {
+  "counted-deadline": () => [PRINTED_DATE, COUNTED_DATE],
+  "conditional-deadline": (due) => [due],
+  "table-deadline": (due) => [due],
+};
 
 export function letterDeadline(c: BenchCase): LetterDeadline | null {
   if (c.suite !== "letters" || c.category === "scam") return null;
   const due = stateByCode(c.state).renewalDate;
-  return c.category === "conflict" ? { kind: "contested", dates: [due, SECOND_PAGE_DATE] } : { kind: "one", date: due };
+  const hedged = HEDGED[c.category];
+  if (hedged) return { kind: "confirm", dates: hedged(due) };
+  return c.category === "conflict" ? { kind: "contested", dates: [due, CONFLICTING_DATE] } : { kind: "one", date: due };
 }
 
 interface LetterSeed {
@@ -114,20 +139,20 @@ function conflictLetter(s: FixtureState): { lines: string[]; transcript: string;
   const [a] = s.programs;
   const transcript =
     `${s.name} Benefits Office. ${a!.name} renewal notice. Your renewal is due ${s.renewalDate}. ` +
-    `A second page says: final deadline ${SECOND_PAGE_DATE}. Questions: ${a!.phone}.`;
+    `A second page says: final deadline ${CONFLICTING_DATE}. Questions: ${a!.phone}.`;
   return {
-    lines: ["Renewal notice", `Due ${s.renewalDate}`, `Second page says: final deadline ${SECOND_PAGE_DATE}`],
+    lines: ["Renewal notice", `Due ${s.renewalDate}`, `Second page says: final deadline ${CONFLICTING_DATE}`],
     transcript,
     ask: "When is my renewal due? The letter says two dates.",
     answer:
       `Your letter lists two different dates [letter 1], so I will not guess. One page says ${s.renewalDate} ` +
-      `and the other says ${SECOND_PAGE_DATE}. The safe move is the earlier date. ` +
+      `and the other says ${CONFLICTING_DATE}. The safe move is the earlier date. ` +
       `I can call the office at ${a!.phone} with you to confirm which date controls your ${a!.name} case.`,
-    include: ["[letter 1]", s.renewalDate, SECOND_PAGE_DATE],
+    include: ["[letter 1]", s.renewalDate, CONFLICTING_DATE],
   };
 }
 
-export function buildLettersCases(): BenchCase[] {
+function buildLettersV1Cases(): BenchCase[] {
   return seeds().map((seed, i) => {
     const s = stateByCode(seed.state);
     const id = `letters-${String(i + 1).padStart(2, "0")}`;
@@ -149,7 +174,7 @@ export function buildLettersCases(): BenchCase[] {
     }
     if (seed.kind === "conflict") {
       const L = conflictLetter(s);
-      facts.allowedDates = [...facts.allowedDates, SECOND_PAGE_DATE];
+      facts.allowedDates = [...facts.allowedDates, CONFLICTING_DATE];
       facts.citations = ["two different dates"];
       return makeCase(id, s.code, "conflict", L, facts, i);
     }
@@ -157,7 +182,7 @@ export function buildLettersCases(): BenchCase[] {
     facts.citations = ["URGENT BENEFITS ALERT"];
     const img = syntheticLetter(`${id}-img`, L.lines, L.transcript);
     return {
-      id, suite: "letters" as const, version: LETTERS_SUITE_VERSION, locale: "en" as const, state: s.code,
+      id, suite: "letters" as const, version: 1, locale: "en" as const, state: s.code,
       category: "scam",
       input: { turns: [L.ask], images: [img] },
       facts, reference: L.answer,
@@ -174,7 +199,7 @@ function makeCase(
 ): BenchCase {
   const img = syntheticLetter(`${id}-img`, L.lines, L.transcript);
   return {
-    id, suite: "letters", version: LETTERS_SUITE_VERSION, locale: "en", state,
+    id, suite: "letters", version: 1, locale: "en", state,
     category,
     input: { turns: [L.ask], images: [img] },
     facts, reference: L.answer,

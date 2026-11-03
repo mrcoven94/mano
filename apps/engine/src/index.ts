@@ -49,7 +49,9 @@
 //                                              409 no longer waiting. The caller joins the path to the
 //                                              Engine address it uses: under wrangler dev a request's own
 //                                              URL names the production route, not the local worker.
-//   GET  /api/persons/:id/approvals/:aid/replay   { path } of the replay page while its link opens, else 404
+//   GET  /api/persons/:id/approvals/:aid/replay   { path } of the replay page while its link opens and the
+//                                              approval still waits, unexpired and latest, under the
+//                                              version the fill was bound to; else 404
 //   GET  /fill/:token                          the replay page (src/fill-replay.ts): the token is the only key,
 //                                              and the page asks the approval again on every view
 //   GET  /api/persons/:id/memory

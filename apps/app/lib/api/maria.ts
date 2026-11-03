@@ -20,6 +20,9 @@ export const MAIL_REPLY =
 export const APPROVE_FOLLOWUP =
   "Your renewal is on its way to the Springfield County SNAP office. I will watch for their answer.";
 
+// The text line's answer to a NO, word for word (apps/agent turn.ts).
+export const DECLINE_REPLY = "Okay, I did not send it. Nothing left Mano.";
+
 export const CASEWORKER_REQUEST =
   "Springfield County wrote back. They are missing one thing: a pay stub from the last 30 days. They need it by November 12. Photograph it and I will send it with your case number.";
 

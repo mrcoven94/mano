@@ -82,7 +82,7 @@ Backlog, started only while the spine is solid: Orgs (LAP-505), Spine (LAP-506),
 
 ## The judge path
 
-The target, owned by Ship: a judge clones the repo, adds only their own Meta key, and within ten minutes watches the spine run on synthetic data with no login and no account of ours. Every step is labeled real or simulated. A hosted version is optional and never required. Until Ship lands the single smoke command that runs this path (named here and in the README), each workstream keeps its own package runnable locally with stand-ins; once the command exists, a change that breaks it is not done.
+The target, owned by Ship: a judge clones the repo, adds only their own Meta key, and within ten minutes watches the spine run on synthetic data with no login and no account of ours. Every step is labeled real or simulated. A hosted version is optional and never required. The single smoke command that runs this path is `pnpm judge` (see the README), and a change that breaks it is not done.
 
 ## Open source, from the first commit
 

@@ -17,12 +17,15 @@ import { colors, tapTarget, type } from "../../lib/theme";
 function statusTone(status: Approval["status"]): "hl" | "alert" | "green" | "blue" {
   if (status === "pending") return "hl";
   if (status === "approved") return "green";
+  if (status === "rejected") return "blue";
   return "alert";
 }
 
 function statusLabel(status: Approval["status"], s: ReturnType<typeof useStrings>): string {
   if (status === "pending") return s.approvalsPending;
   if (status === "approved") return s.approved;
+  if (status === "rejected") return s.declined;
+  if (status === "revoked") return s.approvalRevoked;
   if (status === "expired") return s.expired;
   if (status === "stale") return s.stale;
   return s.blocked;

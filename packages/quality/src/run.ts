@@ -11,6 +11,7 @@ import { buildHoldoutSuite } from "./suites/holdout-suite.ts";
 import { loadHoldout } from "./holdout.ts";
 import { loadPaths, sentText, type BenchAnswer, type LoadedPath, type PathSet } from "./paths.ts";
 import { buildAllSuites } from "./suites/build.ts";
+import type { LettersVersion } from "./suites/letters.ts";
 import type { BenchCase, SuiteBuild, SuiteName } from "./suites/types.ts";
 import type { AgentSummary } from "./agent-types.ts";
 import type { GuardianSummary } from "./guardian.ts";
@@ -165,6 +166,8 @@ export interface RunOptions {
   pathSet?: PathSet;
   // Reruns skip the 30-case calibration; the first pass already ran it.
   skipCalibration?: boolean;
+  // Runs an older letters version (1) to compare with results recorded at it.
+  lettersVersion?: LettersVersion;
 }
 
 export function percentile(values: number[], p: number): number {
@@ -267,6 +270,14 @@ export function judgeFacts(c: BenchCase, knowsCatalog: boolean): string {
   return knowsCatalog ? calibrationFacts(c) : `${NO_CATALOG_FACTS}\nThe person wrote:\n${c.input.turns.join("\n")}`;
 }
 
+// What a mail case's letter says, from the text the suite built it from: the
+// ground truth, not the mail reader's own reading, which could be wrong.
+// Undefined for a case with no letter or photo.
+export function judgeLetter(c: BenchCase): string | undefined {
+  const images = c.input.images ?? [];
+  return images.length > 0 ? images.map((img) => img.transcript).join("\n\n") : undefined;
+}
+
 // Runs fn over items with at most `limit` in flight, keeping input order.
 export async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -329,7 +340,7 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
   const broken = opts.broken ?? env.MANO_QUALITY_BROKEN === "1";
   const wanted = new Set(opts.suites ?? ["chat", "text", "letters", "safety", "personas"]);
 
-  const builds: SuiteBuild[] = buildAllSuites().filter((s) => wanted.has(s.suite));
+  const builds: SuiteBuild[] = buildAllSuites({ lettersVersion: opts.lettersVersion }).filter((s) => wanted.has(s.suite));
   const holdout = loadHoldout(env.MANO_QUALITY_HOLDOUT_PATH, env.MANO_QUALITY_HOLDOUT_SHA256);
   if (wanted.has("safety-holdout") && holdout.configured && holdout.cases) {
     builds.push(buildHoldoutSuite(holdout.cases, holdout.version ?? 1));
@@ -375,7 +386,8 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
       ...(answer.firstTextMs !== undefined ? { firstTextMs: answer.firstTextMs } : {}),
       inputTokens: answer.inputTokens, outputTokens: answer.outputTokens,
     };
-    const judged: JudgeItem = { answer: sentText(answer), facts: judgeFacts(c, path.knowsCatalog), reference: c.reference };
+    const letter = judgeLetter(c);
+    const judged: JudgeItem = { answer: sentText(answer), facts: judgeFacts(c, path.knowsCatalog), reference: c.reference, ...(letter ? { letter } : {}) };
     return { c, result, judged, detail: loaded.detail };
   });
 
@@ -582,7 +594,7 @@ export async function rerunNewlyFailing(
   });
 
   const prices = pricesFromEnv(opts.env ?? process.env);
-  const builds = new Map(buildAllSuites().map((b) => [b.suite as string, b]));
+  const builds = new Map(buildAllSuites({ lettersVersion: opts.lettersVersion }).map((b) => [b.suite as string, b]));
   const suites = { ...first.report.suites };
   for (const name of new Set(cleared.map((id) => results.find((r) => r.caseId === id)!.suite as string))) {
     const build = builds.get(name);
