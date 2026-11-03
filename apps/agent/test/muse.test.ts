@@ -195,3 +195,38 @@ describe("model errors", () => {
     expect(logs.join("\n")).not.toContain(MARKER);
   });
 });
+
+describe("OpenRouter switch", () => {
+  function stubWithUrls(urls: string[]) {
+    vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
+      urls.push(String(url));
+      bodies.push(JSON.parse(String(init?.body ?? "{}")));
+      return completion();
+    });
+  }
+
+  it("sends Meta's open-weight model to OpenRouter pinned to zero retention", async () => {
+    vi.stubEnv("MANO_MODEL_PROVIDER", "openrouter");
+    vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
+    const urls: string[] = [];
+    stubWithUrls(urls);
+    const { model, modelId } = createMuseModel({ apiKey: "test-key" });
+    await generateText({ model, prompt: "hello" });
+    expect(modelId).toBe("meta/muse-spark-open");
+    expect(urls[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(bodies[0].model).toBe("meta/muse-spark-open");
+    expect(bodies[0].provider).toEqual({ zdr: true, data_collection: "deny" });
+  });
+
+  it("stays on the Meta Model API without an OpenRouter key", async () => {
+    vi.stubEnv("MANO_MODEL_PROVIDER", "openrouter");
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    const urls: string[] = [];
+    stubWithUrls(urls);
+    const { model } = createMuseModel({ apiKey: "test-key" });
+    await generateText({ model, prompt: "hello" });
+    expect(urls[0]).toBe("https://api.meta.ai/v1/chat/completions");
+    expect(bodies[0].model).toBe("muse-spark-1.3");
+    expect(bodies[0].store).toBe(false);
+  });
+});
