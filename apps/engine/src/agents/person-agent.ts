@@ -1316,10 +1316,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return out;
   }
 
-  // The token of this approval's replay link while it still opens.
+  // The token of this approval's replay link while the approval still
+  // waits for a yes under the version the fill was bound to.
   async fillReplayLink(verified: string, approvalId: string): Promise<string | null> {
     await this.assertSubject(verified);
-    return replayLinkToken({ sql: this.db(), storage: this.replayStorage() }, approvalId, Date.now());
+    return replayLinkToken({ sql: this.db(), approvals: this.store, storage: this.replayStorage() }, approvalId, Date.now);
   }
 
   // The replay page a link opens. The worker found the person and the

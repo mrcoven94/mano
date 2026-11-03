@@ -13,9 +13,21 @@ name: guardian-modal
 # keeps running and keeping its inputs until target stop-old stops it, which
 # David runs from main only after Engine has moved to the new URL.
 #
-# Run by hand with target staging, from any branch, to deploy that branch to
-# its own app, mano-guardian-staging, scaled to zero, and try it live before
-# merging. Run it with target stop-staging afterwards to stop that app.
+# Run by hand with target staging to deploy main's code to its own app,
+# mano-guardian-staging, scaled to zero, and check a merged change there
+# before Engine's URL moves to it. Run it with target stop-staging afterwards
+# to stop that app.
+#
+# Every job runs only on main, because each one holds production Modal
+# credentials: branch code run with them could deploy over production. Each
+# job's if checks the ref, and its first step checks it again with a
+# case-sensitive shell test, since GitHub's == ignores case. guardian-check
+# fails if the triggers, an if, or that first step differ from what is here,
+# which catches accidental edits on main and in reviewed pull requests. None
+# of this stops a hostile branch: its own run uses its own copy of this file
+# and of guardian-check. Only the guardian-production environment's
+# deployment branch policy, limited to main since November 3, 2026, as
+# computer-production is, closes that.
 #
 # Needs two secrets in the guardian-production environment, set by a maintainer:
 #   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
@@ -31,7 +43,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "production deploys main to mano-guardian-server; staging deploys this branch to mano-guardian-staging; stop-staging stops it; stop-old stops the old mano-guardian app (main only, after the URL swap)"
+        description: "Run from main only. production deploys mano-guardian-server; staging deploys main to mano-guardian-staging; stop-staging stops it; stop-old stops the old mano-guardian app after the URL swap"
         type: choice
         options: ["production", "staging", "stop-staging", "stop-old"]
         default: "production"
@@ -52,6 +64,12 @@ jobs:
     runs-on: ubuntu-latest
     environment: guardian-production
     steps:
+      # GitHub's == ignores case, so the job's if also admits a branch named
+      # MAIN. The shell compares exactly, before any step touches a secret.
+      # Jobs carry no services, container or env, which would see secrets
+      # before this step.
+      - name: Run only on main
+        run: test "$GITHUB_REF" = "refs/heads/main"
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
@@ -77,15 +95,18 @@ jobs:
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
   staging:
-    if: github.event_name == 'workflow_dispatch' && inputs.target == 'staging'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'staging')
     runs-on: ubuntu-latest
     environment: guardian-production
-    env:
-      MANO_GUARDIAN_APP: mano-guardian-staging
-      MANO_GUARDIAN_MIN_CONTAINERS: "0"
-      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
     steps:
+      # GitHub's == ignores case, so the job's if also admits a branch named
+      # MAIN. The shell compares exactly, before any step touches a secret.
+      # Jobs carry no services, container or env, which would see secrets
+      # before this step.
+      - name: Run only on main
+        run: test "$GITHUB_REF" = "refs/heads/main"
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
@@ -95,16 +116,36 @@ jobs:
         run: python -m unittest discover -s packages/guardian/modal -v
       - name: Cache model weights (CPU, no GPU billed)
         run: modal run packages/guardian/modal/app.py::download
+        env:
+          MANO_GUARDIAN_APP: mano-guardian-staging
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
       - name: Deploy the staging endpoint
         run: modal deploy packages/guardian/modal/app.py
+        env:
+          MANO_GUARDIAN_APP: mano-guardian-staging
+          MANO_GUARDIAN_MIN_CONTAINERS: "0"
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
       - name: Print the staging URL
         run: python -c "import modal; print(modal.Server.from_name('mano-guardian-staging', 'check').get_url())"
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
   stop-staging:
-    if: github.event_name == 'workflow_dispatch' && inputs.target == 'stop-staging'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'stop-staging')
     runs-on: ubuntu-latest
     environment: guardian-production
     steps:
+      # GitHub's == ignores case, so the job's if also admits a branch named
+      # MAIN. The shell compares exactly, before any step touches a secret.
+      # Jobs carry no services, container or env, which would see secrets
+      # before this step.
+      - name: Run only on main
+        run: test "$GITHUB_REF" = "refs/heads/main"
       - run: pip install "modal==1.6.2"
       - name: Stop the staging app and its containers
         run: modal app stop mano-guardian-staging --yes
@@ -113,10 +154,18 @@ jobs:
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
   stop-old:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.target == 'stop-old'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'stop-old')
     runs-on: ubuntu-latest
     environment: guardian-production
     steps:
+      # GitHub's == ignores case, so the job's if also admits a branch named
+      # MAIN. The shell compares exactly, before any step touches a secret.
+      # Jobs carry no services, container or env, which would see secrets
+      # before this step.
+      - name: Run only on main
+        run: test "$GITHUB_REF" = "refs/heads/main"
       - run: pip install "modal==1.6.2"
       - name: Stop the old web Function app and its containers
         run: modal app stop mano-guardian --yes
