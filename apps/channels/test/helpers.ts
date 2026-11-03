@@ -8,9 +8,9 @@ import {
   type NormalizedEvent,
   type Responder,
 } from "@mano/channels";
-import { ConversationRunner, DEFAULT_RUNNER_CONFIG, type RunnerConfig, type SpendLedger } from "../src/runner.js";
+import { backgroundKey, ConversationRunner, DEFAULT_RUNNER_CONFIG, type RunnerConfig, type SpendLedger } from "../src/runner.js";
 import { GlobalLedger, MemoryGlobalStore } from "../src/global.js";
-import { MemoryStore, type ConversationStore } from "../src/store.js";
+import { MemoryStore, type ChatBackgroundState, type ConversationStore } from "../src/store.js";
 import type { DocumentStore } from "../src/files.js";
 
 // The person's Engine documents, in memory: what Channels stored, by ID.
@@ -36,7 +36,7 @@ export interface Harness {
   store: MemoryStore;
   channel: RecordingChannel;
   responder: Responder;
-  // Eyes and background work, run outside the turn.
+  // Eyes and background removal, run outside the turn.
   decorations: Decorations;
   documents: MemoryDocumentStore;
   ledger: GlobalLedger;
@@ -169,6 +169,11 @@ export function makeHarness(
     crisisCheck: opts.crisisCheck ?? null,
   });
   return h;
+}
+
+// The record an earlier version's background upload left on a chat.
+export async function seedBackground(h: Harness, state: ChatBackgroundState, chatId = TEST_CHAT): Promise<void> {
+  h.store.saveChatBackground({ chatKey: await backgroundKey(chatId), state, attempts: 1, lockedUntilMs: 0, updatedAtMs: h.now - 60_000 });
 }
 
 export async function runTurnAfterBatch(h: Harness): Promise<void> {

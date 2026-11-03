@@ -1,5 +1,5 @@
 import QRCode from "react-qr-code";
-import { SMS_HREF } from "@/lib/site";
+import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
 
 /* For people reading on a computer: scan with a phone to start a text. Hidden on phones, where the button works. */
 export default function TextQr({ size = 112 }: { size?: number }) {
@@ -10,7 +10,7 @@ export default function TextQr({ size = 112 }: { size?: number }) {
       </span>
       <p>
         <b>On a computer?</b>
-        Scan it with your phone camera to text Mano.
+        Scan it with your phone camera, or text Mano at <a className="sms-num" href={SMS_HREF}>{SMS_NUMBER}</a>.
       </p>
     </div>
   );

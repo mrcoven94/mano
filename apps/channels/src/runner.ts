@@ -80,9 +80,6 @@ export interface RunnerConfig {
   eyesAfterMs: number;
   // One switch for every reaction Mano adds, the eyes included.
   reactionsEnabled: boolean;
-  // Mano's chat background image, set once per chat after the first
-  // reply. Null leaves chats as they are.
-  backgroundUrl: string | null;
 }
 
 export const DEFAULT_MEDIA_HOSTS = ["bucket.blooio.com"];
@@ -125,22 +122,29 @@ export const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "handleHash"> = {
   mediaHosts: DEFAULT_MEDIA_HOSTS,
   eyesAfterMs: 5000,
   reactionsEnabled: true,
-  backgroundUrl: null,
 };
 
-// Tries at setting the chat background before Channels gives up on it.
-export const BACKGROUND_MAX_ATTEMPTS = 3;
-// Blooio takes a background image of at most 10 MB.
-export const BACKGROUND_MAX_BYTES = 10 * 1024 * 1024;
-// How long one upload holds the per-chat lock: longer than any
-// decoration may run, so a live upload always finishes first.
-export const BACKGROUND_LOCK_MS = 2 * 60 * 1000;
+// Mano never sets a chat background (docs/decisions.md). A chat where an
+// earlier version set one gets it removed once, with at most this many
+// tries, the same cap the uploads had.
+export const CLEAR_BACKGROUND_MAX_ATTEMPTS = 3;
+// How long one removal holds the per-chat lock: longer than any
+// decoration may run, so a live removal always finishes first.
+export const CLEAR_BACKGROUND_LOCK_MS = 2 * 60 * 1000;
 // The background record's key: a hash of the chat ID, so no raw chat ID
 // outlives a delete.
 export async function backgroundKey(chatId: string): Promise<string> {
   return sha256Hex(new TextEncoder().encode(`chat-background:${chatId}`));
 }
-const BACKGROUND_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/heic", "image/heif"]);
+// Whether a chat still needs its background removed: an earlier version
+// confirmed it set one, and the removal has not finished, is not running
+// and has tries left. An "uncertain" upload is left alone: it may have
+// failed, and the person may have set their own background since.
+export function backgroundToClear(row: ChatBackground | null, nowMs: number): row is ChatBackground {
+  if (!row || row.lockedUntilMs > nowMs) return false;
+  if (row.state === "set") return true;
+  return row.state === "clearing" && row.attempts < CLEAR_BACKGROUND_MAX_ATTEMPTS;
+}
 
 export interface RunnerDeps {
   store: import("./store.js").ConversationStore;
@@ -156,7 +160,7 @@ export interface RunnerDeps {
   nowMs: () => number;
   fetchFn: typeof fetch;
   config: RunnerConfig;
-  // Eyes and background work, run outside the turn. The Durable Object
+  // Eyes and background removal, run outside the turn. The Durable Object
   // passes one that lives across requests, so STOP and a delete can
   // cancel work a previous request started.
   decorations?: Decorations;
@@ -910,75 +914,29 @@ export class ConversationRunner {
     return eyes;
   }
 
-  // Mano's chat background goes on once per chat, after a reply reached
-  // the person, never on a crisis turn, after STOP or on a closed chat.
-  // It runs outside the turn. An upload that may have landed is read back
-  // before any retry; only a known failure is retried, at most
-  // BACKGROUND_MAX_ATTEMPTS uploads per chat.
-  private async setBackgroundOnce(chatId: string, generation: number, epoch: number, signal: AbortSignal): Promise<void> {
-    const { store, channel, config, logger, nowMs } = this.deps;
-    const url = config.backgroundUrl;
-    if (!url || !channel.setBackground || this.decorationBlock(generation, epoch)) return;
-    const chatKey = await backgroundKey(chatId);
-    const busy = (row: ChatBackground | null): boolean => row?.state === "set" || (row !== null && row.lockedUntilMs > nowMs());
-    let row = store.chatBackground(chatKey);
-    if (busy(row)) return;
-    if (row?.state === "uncertain") {
-      // A lock that ran out with no outcome: read the chat back first.
-      if (!channel.hasBackground) return;
-      const landed = await channel.hasBackground(chatId, signal);
-      row = store.chatBackground(chatKey);
-      if (busy(row) || row?.state !== "uncertain") return;
-      row = { ...row, state: landed ? "set" : "failed", updatedAtMs: nowMs() };
-      store.saveChatBackground(row);
-      logger.info("background_reconciled", { handle: this.logHandle(), landed });
-      if (landed) return;
-    }
-    const attempts = row?.attempts ?? 0;
-    if (attempts >= BACKGROUND_MAX_ATTEMPTS || this.decorationBlock(generation, epoch)) return;
-    // Check and lock with no await between them: the single-flight lock is
-    // persisted before anything is fetched or uploaded.
-    store.saveChatBackground({ chatKey, state: "uncertain", attempts: attempts + 1, lockedUntilMs: nowMs() + BACKGROUND_LOCK_MS, updatedAtMs: nowMs() });
-    const finish = (state: ChatBackground["state"], counted: boolean): void =>
-      store.saveChatBackground({ chatKey, state, attempts: counted ? attempts + 1 : attempts, lockedUntilMs: 0, updatedAtMs: nowMs() });
-    let image: Blob;
+  // A chat where an earlier version of Mano set a background gets it
+  // removed once, after a reply reached the person, never on a crisis
+  // turn, after STOP or on a closed chat. It runs outside the turn.
+  // Removing is idempotent, so a failed try is repeated on a later reply,
+  // up to CLEAR_BACKGROUND_MAX_ATTEMPTS per chat. Nothing sets one.
+  private async clearBackgroundOnce(chatId: string, chatKey: string, generation: number, epoch: number, signal: AbortSignal): Promise<void> {
+    const { store, channel, logger, nowMs } = this.deps;
+    if (!channel.clearBackground || this.decorationBlock(generation, epoch)) return;
+    // Read fresh, then count and lock with no await in between, so a crash
+    // during the call still counts and two replies never remove it at once.
+    const row = store.chatBackground(chatKey);
+    if (!backgroundToClear(row, nowMs())) return;
+    const attempts = (row.state === "clearing" ? row.attempts : 0) + 1;
+    store.saveChatBackground({ chatKey, state: "clearing", attempts, lockedUntilMs: nowMs() + CLEAR_BACKGROUND_LOCK_MS, updatedAtMs: nowMs() });
     try {
-      image = await this.fetchBackground(url, signal);
+      await channel.clearBackground(chatId, signal);
+      store.saveChatBackground({ chatKey, state: "cleared", attempts, lockedUntilMs: 0, updatedAtMs: nowMs() });
+      logger.info("background_cleared", { handle: this.logHandle(), attempts });
     } catch (err) {
-      // Nothing was uploaded: a known failure that does not count.
-      finish("failed", false);
-      logger.warn("background_failed", { handle: this.logHandle(), err: errName(err), stage: "fetch" });
-      return;
-    }
-    if (signal.aborted || this.decorationBlock(generation, epoch)) {
-      finish("failed", false);
-      return;
-    }
-    try {
-      await channel.setBackground(chatId, image, signal);
-      finish("set", true);
-      logger.info("background_set", { handle: this.logHandle() });
-    } catch (err) {
-      // A known failure is retried later; an uncertain one is read back.
-      finish(err instanceof ChannelFailed ? "failed" : "uncertain", true);
-      logger.warn("background_failed", { handle: this.logHandle(), err: errName(err), known: err instanceof ChannelFailed });
+      store.saveChatBackground({ chatKey, state: "clearing", attempts, lockedUntilMs: 0, updatedAtMs: nowMs() });
+      logger.warn("background_clear_failed", { handle: this.logHandle(), attempts, err: errName(err) });
     }
   }
-
-  // Our own image, from config, through the same capped, streamed and
-  // host-checked download as an attachment, cancelled past 10 MB.
-  private async fetchBackground(url: string, signal: AbortSignal): Promise<Blob> {
-    const host = new URL(url).hostname;
-    const fetched = await fetchAttachment(
-      { url },
-      { fetchFn: this.deps.fetchFn, checker: new LinkChecker({ fetchFn: this.deps.fetchFn }), mediaHosts: [host], maxBytes: BACKGROUND_MAX_BYTES, signal },
-    );
-    if (fetched.bytes === null) throw new Error(`background fetch failed: ${fetched.reason}`);
-    if (!BACKGROUND_TYPES.has(fetched.contentType)) throw new Error("background is not an image");
-    if (fetched.bytes.byteLength === 0) throw new Error("background is empty");
-    return new Blob([fetched.bytes], { type: fetched.contentType });
-  }
-
 
   private async runGuarded(fn: () => Promise<void>): Promise<void> {
     const { store } = this.deps;
@@ -1016,17 +974,6 @@ export class ConversationRunner {
       logger.warn("turn_unroutable", { handle: this.logHandle(), turn });
       return;
     }
-    // A resumed turn with a persisted answer skips straight to sending
-    // it: same keys, same text, no second model call.
-    if (resumed?.answerJson) {
-      await this.settleResumedCost(turn, resumed);
-      await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation, epoch);
-      this.checkSendsResolved(turn, generation);
-      return;
-    }
-    const texts = items.map((i) => i.text).filter((t): t is string => !!t && t.length > 0);
-    const attachments = items.flatMap((i) => i.attachments);
-
     // One crisis detector for every path, classified before approvals,
     // admission and any model work, on the whole message even when the
     // buffer split it. It is broad on purpose: a match makes the reply
@@ -1035,6 +982,18 @@ export class ConversationRunner {
     // split, and every chunk carries it. An item with no decision (a turn
     // persisted before decisions were stored) is a crisis, always.
     const crisis = items.some((i) => i.crisis !== false);
+    // A resumed turn with a persisted answer skips straight to sending
+    // it: same keys, same text, no second model call.
+    if (resumed?.answerJson) {
+      await this.settleResumedCost(turn, resumed);
+      const accepted = await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation, epoch);
+      this.checkSendsResolved(turn, generation);
+      if (accepted && chatId && !crisis) await this.startBackgroundClear(chatId, generation, epoch);
+      return;
+    }
+    const texts = items.map((i) => i.text).filter((t): t is string => !!t && t.length > 0);
+    const attachments = items.flatMap((i) => i.attachments);
+
     // A crisis turn never sends the friendly intro, and later turns do not
     // send it either.
     if (crisis && !meta.introduced) store.patchMeta({ introduced: true });
@@ -1126,7 +1085,7 @@ export class ConversationRunner {
     let typingTimer: ReturnType<typeof setInterval> | undefined;
     let refreshing: Promise<void> = Promise.resolve();
     let typingDone = false;
-    let replied = false;
+    let accepted = false;
     if (chatId) {
       // Read and typing start the refresh chain instead of holding the
       // turn: the answer is asked for at once, and the stop below still
@@ -1201,9 +1160,8 @@ export class ConversationRunner {
       }
       stopEyesTimer();
       this.checkGeneration(generation);
-      await this.sendBubbles(turn, bubbles, chatId, to, saved.length, generation, epoch);
+      accepted = await this.sendBubbles(turn, bubbles, chatId, to, saved.length, generation, epoch);
       this.checkSendsResolved(turn, generation);
-      replied = true;
     } finally {
       stopEyesTimer();
       typingDone = true;
@@ -1211,12 +1169,18 @@ export class ConversationRunner {
       await refreshing;
       if (chatId) await this.bestEffort("typing_stopped", () => this.deps.channel.setTyping(chatId, "stopped"));
     }
-    // The background is decoration too: started outside the turn once a
-    // reply reached the person, so it can never hold the next message.
-    if (replied && chatId && !crisis && this.deps.config.backgroundUrl) {
-      const sent = this.store.outbounds().some((r) => r.turn === turn && r.state === "sent" && r.tag !== "react");
-      if (sent) this.decorations.run("background", (signal) => this.setBackgroundOnce(chatId, generation, epoch, signal));
-    }
+    if (accepted && chatId && !crisis) await this.startBackgroundClear(chatId, generation, epoch);
+  }
+
+  // Called once the provider accepted a text of the turn's reply, on the
+  // first run or a resumed one. Removing an old background is decoration:
+  // started outside the turn, so it can never hold the next message.
+  // Chats with nothing to remove start nothing.
+  private async startBackgroundClear(chatId: string, generation: number, epoch: number): Promise<void> {
+    if (!this.deps.channel.clearBackground) return;
+    const chatKey = await backgroundKey(chatId);
+    if (!backgroundToClear(this.store.chatBackground(chatKey), this.deps.nowMs())) return;
+    this.decorations.run("background", (signal) => this.clearBackgroundOnce(chatId, chatKey, generation, epoch, signal));
   }
 
   // Every reply, model or fixed, becomes its bubbles through
@@ -1263,7 +1227,7 @@ export class ConversationRunner {
     saved: number,
     generation: number,
     epoch: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { store, logger } = this.deps;
     // Bubbles arrive final: model text was sanitized before splitting
     // and capped by the splitter, and the static texts carry no links
@@ -1300,6 +1264,7 @@ export class ConversationRunner {
     }
     // Limits count inside the one send path; the turn only reports.
     logger.info("turn_ran", { handle: this.logHandle(), turn, bubbles: bubbles.length, sent: fresh, saved });
+    return accepted;
   }
 
   // Runs the responder. A deep turn's heads-up goes out the moment the

@@ -2,7 +2,8 @@ import Link from "next/link";
 import PlusPrice from "./PlusPrice";
 import { NeedIcon } from "./NeedIcons";
 import Mascot, { Wave } from "@/components/Mascot";
-import { SMS_HREF } from "@/lib/site";
+import TextMano from "@/components/TextMano";
+import { smsHref } from "@/lib/site";
 
 /* Two plans, the full side by side folded under them, then the support that comes with Plus. Applying and keeping help are free for everyone; Plus adds a support team, and daily
    checks for new help are coming. Faxes and mail, once ready, cost real money, so they are at cost on both. */
@@ -86,7 +87,7 @@ export default function Pricing() {
             <p>Mano works whenever you text it.</p>
           </div>
           <ul>{FREE.map((x) => <li key={x}>{x}</li>)}</ul>
-          <a className="btn btn-ghost price-cta" href={SMS_HREF}>Text Mano</a>
+          <TextMano className="btn btn-ghost price-cta" align="start" />
           <p className="price-fine">No card, no sign up. Just text.</p>
         </article>
         <article className="price plus">
@@ -100,7 +101,7 @@ export default function Pricing() {
             <li>Everything in Free</li>
             {PLUS.map(([b, t]) => <li key={b}><span><b>{b}</b> {t}</span></li>)}
           </ul>
-          <a className="btn btn-primary price-cta" href="#get-mano">Start Plus</a>
+          <TextMano className="btn btn-primary price-cta" href={smsHref("I want Mano Plus")} label="Start Plus" align="end" />
           <p className="price-fine">Cancel any time with one text.</p>
         </article>
       </div>

@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import Mascot from "@/components/Mascot";
+import TextMano from "@/components/TextMano";
 import TextQr from "@/components/TextQr";
 import { NeedIcon } from "@/components/home/NeedIcons";
-import { REPO_URL, SMS_HREF, SMS_IS_PLACEHOLDER } from "@/lib/site";
+import { REPO_URL, SMS_IS_PLACEHOLDER } from "@/lib/site";
 
 const title = "How Mano works";
 const description = "How Mano goes from one text to help that keeps coming: it finds what you qualify for, fills out the forms from your private vault, tracks every deadline and renews on time.";
@@ -181,7 +182,7 @@ export default function HowItWorks() {
           <h2 id="hw-cta-h">Start with one text.</h2>
           <p className="lede">Tell Mano what you need this month. It will tell you what help there is and start on it tonight.</p>
           <div className="btn-row">
-            <a className="btn btn-primary btn-lg" href={SMS_HREF}>Text Mano</a>
+            <TextMano className="btn btn-primary btn-lg" />
             <Link className="btn btn-ghost btn-lg" href="/#pricing">See pricing</Link>
           </div>
           {!SMS_IS_PLACEHOLDER && <TextQr />}
