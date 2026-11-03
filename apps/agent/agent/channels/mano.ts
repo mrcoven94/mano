@@ -12,6 +12,7 @@ import { glimmerCheckerFromEnv } from "@mano/guardian";
 import { handleDeleted } from "../lib/deletion.js";
 import { engineFromEnv } from "../lib/engine.js";
 import { settleStream, startIndexFor, type StreamEventLike } from "../lib/settle.js";
+import { AgentMarks } from "../lib/timings.js";
 import { handlePresented, handleTurn } from "../lib/turn.js";
 
 export const TURN_PATH = "/channels/mano/turn";
@@ -27,8 +28,9 @@ export const SETTLE_TIMEOUT_MS = 90_000;
 async function warmGuardian(): Promise<void> {
   const checker = glimmerCheckerFromEnv(process.env);
   if (!checker.warm || !process.env.MANO_GUARDIAN_URL) return;
+  const started = Date.now();
   const state = await checker.warm();
-  console.log(JSON.stringify({ type: "mano_guardian_warm", state }));
+  console.log(JSON.stringify({ type: "mano_guardian_warm", state, latencyMs: Date.now() - started }));
 }
 
 export default defineChannel({
@@ -39,7 +41,7 @@ export default defineChannel({
         engine: engineFromEnv(),
         warmGuardian: () => warmGuardian(),
         background: (work) => waitUntil(work),
-        async runAgent({ handleHash, turnId, turnAtMs, generation, grant, message, context, deadlineMs }) {
+        async runAgent({ handleHash, turnId, turnAtMs, generation, grant, message, context, deadlineMs, timings }) {
           // The grant reaches tools as an attribute. It is only good with
           // the agent's own Engine token, for this one handle, for minutes.
           const auth = {
@@ -51,6 +53,7 @@ export default defineChannel({
           // The tail index bounds the stream read to this turn's events. A
           // send that replaces a stranded session owns a fresh stream, so
           // the old tail is discarded and the read starts at zero.
+          const resolving = Date.now();
           let tailBefore = -1;
           let existingId: string | null = null;
           try {
@@ -62,10 +65,18 @@ export default defineChannel({
           } catch {
             // Stranded or gone: the send below starts fresh.
           }
+          const sending = Date.now();
+          timings.resolve = sending - resolving;
           const session = await from(handleHash).send(message, { auth, context });
           const startIndex = startIndexFor(existingId, tailBefore, session.id);
           const stream = (await session.getEventStream({ startIndex })) as unknown as ReadableStream<StreamEventLike>;
-          return settleStream(stream, { timeoutMs: Math.max(1_000, Math.min(SETTLE_TIMEOUT_MS, deadlineMs - Date.now())) });
+          timings.send = Date.now() - sending;
+          const marks = new AgentMarks(sending);
+          try {
+            return await settleStream(stream, { timeoutMs: Math.max(1_000, Math.min(SETTLE_TIMEOUT_MS, deadlineMs - Date.now())), marks });
+          } finally {
+            marks.write(timings);
+          }
         },
       }),
     ),
