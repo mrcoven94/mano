@@ -52,12 +52,17 @@ const ADJECTIVES = any([
   "residency", "photo", "household", "verification", "hearing", "appeal", "tax", "medical", "yearly",
   "child care", "rent", "utility", "bank", "next",
 ]);
-const NOUNS = any([
+// What the person sends, asks for or pays.
+const OWED_NOUNS = [
   "forms?", "packets?", "paperwork", "applications?", "proofs?", "documents?", "items?", "papers",
   "verifications?", "pay stubs?", "statements?", "ids?", "cop(?:y|ies)", "information", "response",
   "reply", "appeal", "requests?", "renewal", "recertification", "letters?", "bills?", "receipts?",
-  "premium", "case", "hearing", "reconsideration", "lease",
-]);
+  "premium", "lease",
+];
+// What the office holds, decides or reviews. The person can request
+// one, so it may be an object, but never the subject of a duty: "your
+// hearing must be completed by" is the office's date, not the person's.
+const OFFICE_NOUNS = ["case", "hearing", "reconsideration"];
 // A program a duty belongs to, as in "your SNAP renewal". It only
 // comes before a paper or a duty the person owes, never a hearing or a
 // case, which the office holds or reviews. A program alone names what
@@ -69,7 +74,11 @@ const PROGRAMS = any([
 ]);
 const PROGRAM_NOUNS = any(["forms?", "packets?", "paperwork", "applications?", "renewal", "recertification"]);
 const OF_PHRASE = String.raw`of\s+(?:your\s+)?(?:household\s+)?(?:income|address|identity|residency)`;
-const ITEM = String.raw`(?:${PROGRAMS}\s+(?:${ADJECTIVES}\s+){0,3}${PROGRAM_NOUNS}|(?:${ADJECTIVES}\s+){0,3}${NOUNS}(?:\s+${OF_PHRASE})?)`;
+const FOR_PHRASE = String.raw`for\s+(?:a\s+)?(?:hearing|reconsideration)`;
+const item = (nouns: string[]): string =>
+  String.raw`(?:${PROGRAMS}\s+(?:${ADJECTIVES}\s+){0,3}${PROGRAM_NOUNS}|(?:${ADJECTIVES}\s+){0,3}${any(nouns)}(?:\s+(?:${OF_PHRASE}|${FOR_PHRASE}))?)`;
+const ITEM = item([...OWED_NOUNS, ...OFFICE_NOUNS]);
+const OWED_ITEM = item(OWED_NOUNS);
 const NOUN_PHRASE = String.raw`(?:${DETERMINERS}\s+)?${ITEM}(?:\s+(?:listed\s+)?(?:below|above)|\s+enclosed)?`;
 const MONEY = String.raw`\$\d{1,3}(?:,\d{3})*(?:\.\d{2})?`;
 const OBJECT = String.raw`(?:${NOUN_PHRASE}(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)${NOUN_PHRASE})*|it|them|${MONEY})`;
@@ -85,11 +94,11 @@ const MODIFIER = any([
 ]);
 const PARTICIPLES = any([
   "returned", "submitted", "sent", "completed", "mailed", "postmarked", "signed", "filed",
-  "turned in", "uploaded", "faxed", "delivered",
+  "turned in", "uploaded", "faxed", "delivered", "received",
 ]);
 
 const VERB_PHRASE = String.raw`(?:${TRANSITIVE}\s+${OBJECT}|${INTRANSITIVE}|ask\s+for\s+${NOUN_PHRASE})(?:\s+${MODIFIER})*`;
-const DUTY = String.raw`(?:(?:please\s+)?${VERB_PHRASE}|you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+${VERB_PHRASE}|your\s+${ITEM}\s+must\s+(?:arrive|be\s+${PARTICIPLES})(?:\s+${MODIFIER})*|your\s+${ITEM}\s+(?:is|are)\s+due)`;
+const DUTY = String.raw`(?:(?:please\s+)?${VERB_PHRASE}|you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+${VERB_PHRASE}|your\s+${OWED_ITEM}\s+must\s+(?:arrive|be\s+${PARTICIPLES})(?:\s+${MODIFIER})*|your\s+${OWED_ITEM}\s+(?:is|are)\s+due)`;
 
 const DATE = `(?<date>${DATE_PATTERN})`;
 // Calendar days only. Business-day counts ask: holidays would make a
@@ -105,7 +114,7 @@ const FORMS: { form: DeadlineForm; re: RegExp }[] = [
 ].map(({ form, tail }) => ({ form: form as DeadlineForm, re: new RegExp(`^(?<duty>${DUTY})\\s+${tail}$`, "i") }));
 FORMS.push({
   form: "due",
-  re: new RegExp(String.raw`^(?<duty>your\s+${ITEM}\s+(?:is|are)\s+due)\s+(?:on\s+)?${DATE}$`, "i"),
+  re: new RegExp(String.raw`^(?<duty>your\s+${OWED_ITEM}\s+(?:is|are)\s+due)\s+(?:on\s+)?${DATE}$`, "i"),
 });
 
 // Wording that reads like a deadline. A sentence that has any of it
