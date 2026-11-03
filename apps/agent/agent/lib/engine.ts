@@ -457,8 +457,8 @@ export class PersonEngine {
     await this.json("DELETE", `/memory/${encodeURIComponent(memoryId)}`);
   }
 
-  async getProfileView(): Promise<ProfileView> {
-    const out = (await this.json("GET", "/profile")) as { profile?: Profile; suggestions?: Suggestion[] };
+  async getProfileView(timeoutMs?: number): Promise<ProfileView> {
+    const out = (await this.json("GET", "/profile", undefined, timeoutMs)) as { profile?: Profile; suggestions?: Suggestion[] };
     if (!out.profile || typeof out.profile !== "object") throw new EngineError(502);
     return { profile: out.profile, suggestions: Array.isArray(out.suggestions) ? out.suggestions : [] };
   }
