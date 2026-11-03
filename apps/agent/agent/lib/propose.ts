@@ -146,22 +146,62 @@ export async function closeEarlier(engine: PersonEngine, turnId: string, recipie
 // reply never shows it, and when Engine cannot list them at all the whole
 // turn's drafts are. False tells the tool to say nothing will be sent.
 export async function closeThisTurn(engine: PersonEngine, turnId: string, recipient: string): Promise<boolean> {
-  let waiting: EngineApproval[];
+  return closeDrafts(engine, turnId, await waitingIds(engine, turnId, recipient));
+}
+
+// This turn's drafts to the recipient that still wait, or null when
+// Engine could not list them.
+async function waitingIds(engine: PersonEngine, turnId: string, recipient: string): Promise<string[] | null> {
   try {
-    waiting = waitingFrom(await engine.listApprovals(), engine.generation, turnId).filter((a) => a.recipient === recipient);
+    return waitingFrom(await engine.listApprovals(), engine.generation, turnId)
+      .filter((a) => a.recipient === recipient)
+      .map((a) => a.id);
   } catch {
+    return null;
+  }
+}
+
+async function closeDrafts(engine: PersonEngine, turnId: string, ids: string[] | null): Promise<boolean> {
+  if (ids === null) {
     holdBack({ turnId });
     console.warn(JSON.stringify({ type: "mano_close_failed" }));
     return false;
   }
   let closed = true;
-  for (const a of waiting) {
-    if (await rejected(engine, a.id)) continue;
-    holdBack({ approvalId: a.id });
+  for (const id of ids) {
+    if (await rejected(engine, id)) continue;
+    holdBack({ approvalId: id });
     console.warn(JSON.stringify({ type: "mano_close_failed", count: 1 }));
     closed = false;
   }
   return closed;
+}
+
+// Runs one call that may prepare a new version of a form. However it ends
+// without holding one (a question, an error result, or a throw), this
+// turn's earlier drafts for the form are closed or held back before it
+// returns, so the reply never shows the version it was correcting. On a
+// throw that is the drafts waiting when the call began, since one it held
+// before failing is its own new version; when they could not be listed,
+// the whole turn's drafts are held back. A throw still throws. Null: a
+// draft could not be confirmed closed, so the caller says nothing will be
+// sent.
+export async function correcting<T extends { status: string }>(
+  engine: PersonEngine,
+  turnId: string,
+  recipient: string,
+  run: () => Promise<T>,
+): Promise<T | null> {
+  const earlier = await waitingIds(engine, turnId, recipient);
+  let out: T;
+  try {
+    out = await run();
+  } catch (err) {
+    await closeDrafts(engine, turnId, earlier);
+    throw err;
+  }
+  if (out.status === "waiting_for_yes") return out;
+  return (await closeThisTurn(engine, turnId, recipient)) ? out : null;
 }
 
 async function rejected(engine: PersonEngine, approvalId: string): Promise<boolean> {
@@ -188,7 +228,9 @@ export const EARLIER_UNRESOLVED_NOTE =
 // withdrawn: Engine then only reconciles them, so a later YES or recovery
 // never files their old values. "checking" while any of them may still
 // have gone through, "clear" once each went through or definitely did
-// not, "failed" when Engine could not be asked.
+// not, "failed" when Engine could not be asked. A failed attempt is proof:
+// Engine writes failed only for a filing the portal refused or, guarded by
+// the version read before its lookup, one confirmed absent.
 export async function settleEarlierFilings(engine: PersonEngine, recipient: string): Promise<"clear" | "checking" | "failed"> {
   try {
     const open = proposalsOf(await engine.listApprovals(), engine.generation).filter(

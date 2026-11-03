@@ -5,7 +5,7 @@ import { engineFrom, personIdFor } from "../agent/lib/engine.js";
 import { readTextedPhotos } from "../agent/lib/letters.js";
 import { FORMS, fillFrom } from "../agent/lib/forms.js";
 import type { Profile } from "../agent/lib/engine.js";
-import { presentsExactly, proposedIn, renderQuestion } from "../agent/lib/pending.js";
+import { heldBack, presentsExactly, proposedIn, renderQuestion } from "../agent/lib/pending.js";
 import { SandboxExecutor, createExecutor } from "../../engine/src/gateway/executors.js";
 import { DOUBTFUL_PAGE, RENEWAL_PAGE, letterPhoto, recordedReader } from "../../../packages/mail/test/letter-fixture.js";
 import { DEFAULT_CONFIG, handleRequest } from "../../sandbox-portal/src/app";
@@ -506,6 +506,29 @@ describe("LAP-747: corrections and spacing", () => {
     const approvals = await client().listApprovals();
     expect(approvals.map((a) => a.status)).toEqual(["rejected"]);
     expect(proposedIn(approvals, 0, "turn_same000001")).toBeNull();
+  });
+
+  // A same-turn correction that throws partway (Engine's document list
+  // answers 503) still closes the draft it was correcting, or holds it back
+  // when Engine will not close it either.
+  it.each([
+    { name: "closes", down: /\/documents$/, after: "rejected", held: false },
+    { name: "holds back", down: /\/(documents|reject)$/, after: "pending", held: true },
+  ])("a correction that throws in the same turn $name the draft it was correcting", async ({ down, after, held }) => {
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    const at = Date.now();
+    const turnId = held ? "turn_thr000002" : "turn_thr000001";
+    expect((await draft(turnId, fields, at)).status).toBe("waiting_for_yes");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      down.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await expect(draft(turnId, { ...fields, phone: "253-555-0199" }, at)).rejects.toThrow();
+    vi.stubGlobal("fetch", engine.fetch);
+    const [approval] = await client().listApprovals();
+    expect(approval!.status).toBe(after);
+    expect(heldBack(turnId, approval!.id)).toBe(held);
   });
 
   it("a name typed with two spaces is shown and filed with one, so it can still be put to her YES", async () => {

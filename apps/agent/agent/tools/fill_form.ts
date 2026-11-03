@@ -16,7 +16,7 @@ import { EngineError, type PersonEngine } from "../lib/engine.js";
 import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
 import { DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
-import { EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, closeEarlier, closeThisTurn, holdForYes, sameDraft, settleEarlierFilings, type Draft } from "../lib/propose.js";
+import { EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, sameDraft, settleEarlierFilings, type Draft } from "../lib/propose.js";
 
 const inputSchema = z.object({
   form: z
@@ -150,14 +150,10 @@ export default defineTool({
     start: () => "Fill out the form",
   },
   async execute(input, ctx) {
-    const out = await fillAndHold(input, ctx);
-    // A call that holds no new version leaves none of this turn's earlier
-    // drafts for the reply to show.
     const form = resolveForm(input.form, process.env.MANO_PORTAL_URL ?? null);
     const engine = personEngine(ctx);
-    if (out.status !== "waiting_for_yes" && form && engine && !(await closeThisTurn(engine, requireTurn(ctx).turnId, form.recipient))) {
-      return { status: "fill_failed", sent: false, note: NOT_CLOSED_NOTE };
-    }
-    return out;
+    if (!form || !engine) return fillAndHold(input, ctx);
+    const out = await correcting(engine, requireTurn(ctx).turnId, form.recipient, () => fillAndHold(input, ctx));
+    return out ?? { status: "fill_failed", sent: false, note: NOT_CLOSED_NOTE };
   },
 });

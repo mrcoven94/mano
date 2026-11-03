@@ -77,6 +77,17 @@ async function fakeAgent(input: AgentTurnInput) {
     // A correction in the same message: a second call in the same turn.
     const then = /then change the phone to (\S+)/.exec(input.message)?.[1];
     if (then) await fillForm.execute(draft({ fullName: name, address, householdSize, phone: then }), ctx);
+    // Engine stumbles during a same-turn correction and the model's turn then fails.
+    const stumble = /then Engine stumbles on (\S+)/.exec(input.message)?.[1];
+    if (stumble) {
+      const reachable = engine.fetch;
+      vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) =>
+        /\/(turns|reject)$/.test(new URL(String(url)).pathname) ? new Response("unavailable", { status: 503 }) : reachable(url, init),
+      );
+      await Promise.resolve(fillForm.execute(draft({ fullName: name, address, householdSize, phone: stumble }), ctx)).catch(() => undefined);
+      vi.stubGlobal("fetch", reachable);
+      return { status: "failed" as const, text: "", reason: "failed" };
+    }
     return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop" };
   }
   return { status: "replied" as const, text: `Answer ${agentCalls.length}`, reason: "stop" };
@@ -300,6 +311,16 @@ describe("approval by text", () => {
     await send(turn("turn_same_00000Z", "YES"));
     expect(engine.executor.calls).toHaveLength(0);
     expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
+  });
+
+  it("a correction that throws in a turn that then fails never shows the draft it was correcting, and a YES files nothing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const ask = await send(turn("turn_stum_000001", "File my renewal, then Engine stumbles on 253-555-0199"));
+    expect(ask.body.status).not.toBe("waiting_approval");
+    expect(ask.body.text).not.toContain("Reply YES");
+    expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
+    await send(turn("turn_stum_00000Y", "YES"));
+    expect(engine.executor.calls).toHaveLength(0);
   });
 
   it("once recovery confirms the withdrawn filing never arrived, the correction is prepared without another YES", async () => {

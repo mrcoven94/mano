@@ -6,7 +6,7 @@ import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
 import { engineFrom, type Profile } from "../agent/lib/engine.js";
 import { FORMS } from "../agent/lib/forms.js";
-import { presentsExactly, renderQuestion } from "../agent/lib/pending.js";
+import { heldBack, presentsExactly, renderQuestion } from "../agent/lib/pending.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 import { screen } from "./fill-double.js";
@@ -417,6 +417,31 @@ describe("fill_form", () => {
     model = new FakeModelClient([[call(typing({ ...VALUES, monthlyIncome: "2392" }))], [say("ACCEPTED")]]);
     expect((await run("turn_fill0008", { form: "food-renewal" })).status).toBe("fill_failed");
     expect(engine.approvals()).toHaveLength(0);
+  });
+
+  // LAP-747: a same-turn correction that throws partway (Engine's turn
+  // ledger answers 503 as the new draft is held) still closes the draft it
+  // was correcting, or holds it back when Engine will not close it either.
+  it.each([
+    { name: "closes", down: /\/turns$/, after: "rejected", held: false },
+    { name: "holds back", down: /\/(turns|reject)$/, after: "pending", held: true },
+  ])("a correction that throws in the same turn $name the draft it was correcting", async ({ down, after, held }) => {
+    engine.profile = profile();
+    const turnId = held ? "turn_fillthr02" : "turn_fillthr01";
+    const c = await ctx(turnId);
+    expect(((await fillForm.execute({ form: "food-renewal" }, c)) as { status: string }).status).toBe("waiting_for_yes");
+    model = new FakeModelClient([[call(typing({ ...VALUES, phone: "253-555-0199" }))], [say("ACCEPTED")]]);
+    const reachable = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).startsWith(ENGINE_URL) && down.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : reachable(input, init),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await expect(fillForm.execute({ form: "food-renewal", answers: { phone: "253-555-0199" } }, c)).rejects.toThrow();
+    vi.stubGlobal("fetch", reachable);
+    const [approval] = engine.approvals();
+    expect(approval!.status).toBe(after);
+    expect(heldBack(turnId, approval!.id)).toBe(held);
+    expect(engine.executor.calls).toHaveLength(0);
   });
 
   it("files on YES through the gateway with exactly the approved values and document", async () => {
