@@ -531,6 +531,13 @@ export class PersonEngine {
     return ((await this.json("POST", "/approvals/supersede", { generation: this.generation })) as { closed: number }).closed;
   }
 
+  // Retires an approved filing that failed or went unanswered, after the
+  // person corrected the form: Engine never runs it again. Completed when
+  // it went through, in_progress while a filing is in flight.
+  async retire(approvalId: string): Promise<EngineResult> {
+    return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/retire`));
+  }
+
   async reject(approvalId: string): Promise<EngineResult> {
     return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/reject`));
   }

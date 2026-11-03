@@ -33,7 +33,25 @@ describe("settle reducer", () => {
       ]),
       { timeoutMs: 1000 },
     );
-    expect(result).toEqual({ status: "replied", text: "Your renewal is due Nov 15.", reason: "stop" });
+    expect(result).toEqual({ status: "replied", text: "Your renewal is due Nov 15.", reason: "stop", held: [] });
+  });
+
+  // LAP-747: the reply shows a question only for an approval a form tool
+  // held during this run, read from the run's own tool results.
+  it("collects the approvals form tools held for a YES in this run, and nothing else", async () => {
+    const result = (output: unknown, status = "completed") => event("action.result", { status, result: { kind: "tool-result", callId: "c", toolName: "fill_form", output } });
+    const settled = await settleStream(
+      streamOf([
+        result({ status: "waiting_for_yes", approvalId: "ap-1", sent: false }),
+        result({ status: "needs_answer", field: "phone", sent: false }),
+        result({ status: "waiting_for_yes", approvalId: "ap-2" }, "failed"),
+        result({ status: "waiting_for_yes", approvalId: "ap-3" }),
+        event("message.completed", { message: "It is ready for your yes.", finishReason: "stop" }),
+        event("turn.completed", {}),
+      ]),
+      { timeoutMs: 1000 },
+    );
+    expect(settled.held).toEqual(["ap-1", "ap-3"]);
   });
 
   it("falls back to the last text when no step stopped", async () => {

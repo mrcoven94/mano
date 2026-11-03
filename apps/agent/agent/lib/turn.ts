@@ -26,7 +26,7 @@ import { profileContext } from "./profile.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
 import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
-import { closeReplaced, presentable, presentationHash, proposalsOf, proposedIn, renderQuestion, replayLine, waitingProposals } from "./pending.js";
+import { closeReplaced, presentable, presentationHash, proposalsOf, renderQuestion, replayLine, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 import { TurnClock } from "./timings.js";
 
@@ -403,7 +403,10 @@ async function runTurn(
     throw err;
   }
   const after = await engine.listApprovals();
-  const own = proposedIn(after, body.generation, body.turnId);
+  // Only a draft a form tool held during this run of the turn is shown, the
+  // last one still waiting; Engine's listing only confirms it still waits.
+  const heldNow = new Set(settled.held ?? []);
+  const own = proposalsOf(after, body.generation).find((a) => a.status === "pending" && heldNow.has(a.id)) ?? null;
   // Only Engine's latest proposal is ever shown: never a draft a newer
   // turn replaced, whether this turn is a replay or just slow.
   const [pending, link] = own ? await Promise.all([engine.getPending(), replayLinkOf(engine, own.id)]) : [null, null];

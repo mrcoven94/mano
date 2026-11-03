@@ -431,9 +431,10 @@ export class EngineDouble {
         const token = await replayLinkToken({ sql, approvals: store, storage: this.replayStorage(personId) }, decodeURIComponent(replay[1]), this.now);
         return token ? Response.json({ path: `/fill/${token}` }) : Response.json({ error: "No replay." }, { status: 404 });
       }
-      const decision = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
+      const decision = rest.match(/^\/approvals\/([^/]+)\/(approve|reject|retire)$/);
       if (decision && method === "POST") {
         const id = decodeURIComponent(decision[1]);
+        if (decision[2] === "retire") return Response.json(await gateway.retireApproval(id, personId));
         return Response.json(decision[2] === "approve" ? await gateway.approveAndExecute(id, personId) : await gateway.rejectApproval(id, personId));
       }
       if (rest === "/reminders" && method === "POST") {

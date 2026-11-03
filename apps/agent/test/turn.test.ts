@@ -73,10 +73,17 @@ async function fakeAgent(input: AgentTurnInput) {
     // The voice guard rewrites dashes, so this address cannot be shown word for word.
     const address = /with a dash/.test(input.message) ? "12 Sample Street \u2014 Unit 4, Testville" : fields.address;
     const phone = /my phone is (\S+)/.exec(input.message)?.[1] ?? fields.phone;
-    await fillForm.execute(draft({ fullName: name, address, householdSize, phone }), ctx);
+    // As settleStream reads it from the turn's tool results: each approval
+    // a form call held for a YES during this run.
+    const held: string[] = [];
+    const call = async (answers: ReturnType<typeof draft>) => {
+      const out = (await fillForm.execute(answers, ctx)) as { status?: string; approvalId?: string };
+      if (out.status === "waiting_for_yes" && out.approvalId) held.push(out.approvalId);
+    };
+    await call(draft({ fullName: name, address, householdSize, phone }));
     // A correction in the same message: a second call in the same turn.
     const then = /then change the phone to (\S+)/.exec(input.message)?.[1];
-    if (then) await fillForm.execute(draft({ fullName: name, address, householdSize, phone: then }), ctx);
+    if (then) await call(draft({ fullName: name, address, householdSize, phone: then }));
     // Engine stumbles during a same-turn correction and the model's turn then fails.
     const stumble = /then Engine stumbles on (\S+)/.exec(input.message)?.[1];
     if (stumble) {
@@ -84,11 +91,11 @@ async function fakeAgent(input: AgentTurnInput) {
       vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) =>
         /\/(turns|reject)$/.test(new URL(String(url)).pathname) ? new Response("unavailable", { status: 503 }) : reachable(url, init),
       );
-      await Promise.resolve(fillForm.execute(draft({ fullName: name, address, householdSize, phone: stumble }), ctx)).catch(() => undefined);
+      await call(draft({ fullName: name, address, householdSize, phone: stumble })).catch(() => undefined);
       vi.stubGlobal("fetch", reachable);
-      return { status: "failed" as const, text: "", reason: "failed" };
+      return { status: "failed" as const, text: "", reason: "failed", held };
     }
-    return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop" };
+    return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop", held };
   }
   return { status: "replied" as const, text: `Answer ${agentCalls.length}`, reason: "stop" };
 }
@@ -381,6 +388,65 @@ describe("approval by text", () => {
 
     expect((await send(turn("turn_rpl_00000Y2", "YES"))).body.text).toMatch(/^Done/);
     expect(portal.posts.map((p) => p.payload.phone)).toEqual(["253-555-0100", "253-555-0199"]);
+  });
+
+  // Review round 8: a correction that only asks a question (no newer
+  // proposal exists yet) still retires the failed filing, so a replayed
+  // YES cannot follow its ledger binding back to the old values.
+  it("a correction that comes back as a question retires the failed filing, and a replayed YES files nothing", async () => {
+    const portal = new FlakyPortal();
+    portal.refuseFirst = true;
+    engine.filer = portal;
+    await send(turn("turn_ret_0000001", "Please file my renewal"));
+    const yes = turn("turn_ret_000000Y", "YES");
+    await send(yes.clone());
+    expect(portal.posts).toHaveLength(1);
+
+    const fix = await send(turn("turn_ret_0000002", "Fix my renewal, my phone is 253-555-01422"));
+    expect(fix.body.status).not.toBe("waiting_approval");
+    expect(engine.approvals().map((a) => a.status)).toEqual(["retired"]);
+    const replay = await send(yes);
+    expect(replay.body.text).not.toMatch(/^Done/);
+    expect(portal.posts).toHaveLength(1);
+  });
+
+  it("when Engine will not retire the failed filing, nothing new is prepared and Maria is told plainly", async () => {
+    const portal = new FlakyPortal();
+    portal.refuseFirst = true;
+    engine.filer = portal;
+    await send(turn("turn_ret_0000003", "Please file my renewal"));
+    await send(turn("turn_ret_00000Y2", "YES"));
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      /\/retire$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init),
+    );
+    const ctx = toolCtx({ handleHash: HANDLE, turnId: "turn_ret_0000004", grant: grants.get(HANDLE), turnAtMs: Date.now() });
+    await engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).putTurn("turn_ret_0000004", new Date().toISOString());
+    const out = (await fillForm.execute(draft({ phone: "253-555-0199" }), ctx)) as { status: string; note: string };
+    vi.stubGlobal("fetch", engine.fetch);
+    expect(out.status).toBe("fill_failed");
+    expect(out.note).toMatch(/earlier renewal could not be updated yet, that nothing new was prepared/);
+    expect(engine.approvals().map((a) => a.status)).toEqual(["approved"]);
+    expect(portal.posts).toHaveLength(1);
+  });
+
+  // Review round 8: after a restart, a replay of the preparing turn in
+  // which the model answers without calling a tool shows no question,
+  // though Engine still lists the draft the first run held.
+  it("a replay of the preparing turn with no tool calls after a restart shows nothing, and a YES files nothing", async () => {
+    const preparing = turn("turn_rpt_0000001", "Please file my renewal");
+    await send(preparing.clone(), deps(), { present: false });
+    expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
+
+    vi.resetModules();
+    const restarted = (await import("../agent/lib/turn.js")) as typeof import("../agent/lib/turn.js");
+    const quiet = deps({ runAgent: async () => ({ status: "replied" as const, text: "I am looking into your renewal.", reason: "stop" }) });
+    const body = (await (await restarted.handleTurn(preparing, quiet)).json()) as Body;
+    expect(body.status).not.toBe("waiting_approval");
+    expect(body.text).not.toContain("Reply YES");
+
+    await send(turn("turn_rpt_000000Y", "YES"));
+    expect(engine.executor.calls).toHaveLength(0);
   });
 
   it("once recovery settles the approved filing as failed, the correction is prepared without another YES", async () => {

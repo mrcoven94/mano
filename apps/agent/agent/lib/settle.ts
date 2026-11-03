@@ -21,21 +21,39 @@ export interface SettleResult {
   text: string;
   // Machine-safe reason for logs: stop, tool_fallback, input, failed.
   reason: string;
+  // The approvals a form tool held for the person's YES during this run of
+  // the turn, in order, read from its own tool results. Only these can be
+  // shown: a proposal Engine lists for the turn from an earlier run is not.
+  held?: string[];
 }
 
 export interface SettleState {
   stopTexts: string[];
   lastText: string | null;
+  held: string[];
 }
 
 export function initialSettleState(): SettleState {
-  return { stopTexts: [], lastText: null };
+  return { stopTexts: [], lastText: null, held: [] };
+}
+
+// A form tool's result that held an approval for the person's YES.
+function heldBy(data: Record<string, unknown>): string | null {
+  const result = data.result as { kind?: unknown; output?: unknown } | undefined;
+  if (data.status !== "completed" || result?.kind !== "tool-result") return null;
+  const output = result.output as { status?: unknown; approvalId?: unknown } | null;
+  return output?.status === "waiting_for_yes" && typeof output.approvalId === "string" ? output.approvalId : null;
 }
 
 // Returns a terminal result when the event ends the turn, else null.
 export function reduceSettleEvent(state: SettleState, event: StreamEventLike): SettleResult | null {
   const data = event.data ?? {};
   switch (event.type) {
+    case "action.result": {
+      const held = heldBy(data);
+      if (held) state.held.push(held);
+      return null;
+    }
     case "message.completed": {
       const message = typeof data.message === "string" ? data.message : "";
       if (message) {
@@ -53,16 +71,16 @@ export function reduceSettleEvent(state: SettleState, event: StreamEventLike): S
     case "turn.completed":
     case "session.waiting": {
       if (state.stopTexts.length > 0) {
-        return { status: "replied", text: state.stopTexts.join("\n"), reason: "stop" };
+        return { status: "replied", text: state.stopTexts.join("\n"), reason: "stop", held: state.held };
       }
       if (state.lastText) {
-        return { status: "replied", text: state.lastText, reason: "tool_fallback" };
+        return { status: "replied", text: state.lastText, reason: "tool_fallback", held: state.held };
       }
-      return { status: "failed", text: "", reason: "empty" };
+      return { status: "failed", text: "", reason: "empty", held: state.held };
     }
     case "turn.failed":
     case "session.failed": {
-      return { status: "failed", text: "", reason: "failed" };
+      return { status: "failed", text: "", reason: "failed", held: state.held };
     }
     default:
       return null;
@@ -99,8 +117,8 @@ export async function settleStream(
       const { done, value } = await reader.read();
       if (done) {
         return state.stopTexts.length > 0
-          ? { status: "replied", text: state.stopTexts.join("\n"), reason: "stop" }
-          : { status: "failed", text: "", reason: "closed" };
+          ? { status: "replied", text: state.stopTexts.join("\n"), reason: "stop", held: state.held }
+          : { status: "failed", text: "", reason: "closed", held: state.held };
       }
       opts.marks?.observe(value);
       const terminal = reduceSettleEvent(state, value);

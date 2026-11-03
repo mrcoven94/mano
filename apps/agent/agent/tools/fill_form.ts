@@ -16,7 +16,7 @@ import { EngineError, type PersonEngine } from "../lib/engine.js";
 import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
 import { DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
-import { EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, sameDraft, earlierFiling, type Draft } from "../lib/propose.js";
+import { EARLIER_NOT_UPDATED_NOTE, EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, sameDraft, earlierFiling, type Draft } from "../lib/propose.js";
 
 const inputSchema = z.object({
   form: z
@@ -64,9 +64,9 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
   // A new version replaces the one shown, even when it only asks a
   // question first or cannot be filled here: a YES to the old one must not
   // file what was corrected.
-  if ((await earlierFiling(engine, form.recipient)) !== "clear") {
-    return { status: "earlier_filing_unresolved", sent: false, note: EARLIER_UNRESOLVED_NOTE };
-  }
+  const earlier = await earlierFiling(engine, form.recipient);
+  if (earlier === "checking") return { status: "earlier_filing_unresolved", sent: false, note: EARLIER_UNRESOLVED_NOTE };
+  if (earlier === "failed") return { status: "fill_failed", sent: false, note: EARLIER_NOT_UPDATED_NOTE };
   if (!(await closeEarlier(engine, turn.turnId, form.recipient))) {
     return { status: "fill_failed", sent: false, note: SHOWN_NOT_CLOSED_NOTE };
   }

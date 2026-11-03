@@ -257,20 +257,30 @@ export const SHOWN_NOT_CLOSED_NOTE =
 export const EARLIER_UNRESOLVED_NOTE =
   "The renewal the person already approved is still being checked with the office, so nothing new was prepared. Tell them plainly that their earlier renewal is still being checked with the office, that it will not be sent twice, and that they can change it once it settles. Do not ask for anything else now.";
 
-// While a filing the person approved for this form has no outcome yet (no
-// receipt, and not failed), nothing new is prepared: "checking". Engine
-// marks a filing failed only when the portal refused it or, guarded by
-// the version read before its lookup, confirmed it absent, so a failed one
-// is settled; its question no longer waits on a YES, so a pointer to it is
-// cleared and a YES never retries the old values after a correction.
-// "clear" once every such filing settled, "failed" when Engine could not
-// be asked.
+// What the model is told when an earlier approved filing could not be retired.
+export const EARLIER_NOT_UPDATED_NOTE =
+  "Mano could not update the renewal the person approved earlier, so nothing new was prepared. Tell them plainly that their earlier renewal could not be updated yet, that nothing new was prepared, and to try again in a moment.";
+
+// Before any new version of a form, the person's approved filings to the
+// same recipient that have no receipt are settled:
+// - one still unanswered or in flight: "checking", nothing new is prepared;
+// - one that failed: retired in Engine, so it is never run again, however
+//   the person's correction then ends (even as a question), and a pointer
+//   to its question is cleared;
+// - "failed" when Engine could not be asked or would not retire it; the
+//   caller prepares nothing.
 export async function earlierFiling(engine: PersonEngine, recipient: string): Promise<"clear" | "checking" | "failed"> {
   try {
     const open = proposalsOf(await engine.listApprovals(), engine.generation).filter(
       (a) => a.recipient === recipient && a.status === "approved" && a.outcome?.attempt !== "done",
     );
     if (open.some((a) => a.outcome?.attempt !== "failed")) return "checking";
+    for (const a of open) {
+      const out = await engine.retire(a.id);
+      if (out.status === "in_progress") return "checking";
+      // Completed: it went through after all, and stands.
+      if (out.status !== "rejected" && out.status !== "completed") return "failed";
+    }
     const { pointer } = await engine.getPending();
     if (pointer && open.some((a) => a.id === pointer.approvalId)) await engine.clearPointer(pointer.approvalId);
     return "clear";

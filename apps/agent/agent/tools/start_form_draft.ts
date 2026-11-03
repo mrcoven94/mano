@@ -27,7 +27,7 @@ import type { EngineDocument, PersonEngine, Profile } from "../lib/engine.js";
 import { FORMS, fillFrom } from "../lib/forms.js";
 import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn, type TurnIdentity } from "../lib/person.js";
-import { EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, earlierFiling } from "../lib/propose.js";
+import { EARLIER_NOT_UPDATED_NOTE, EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, earlierFiling } from "../lib/propose.js";
 
 const inputSchema = z.object({
   answers: z
@@ -67,7 +67,8 @@ async function proofOnFile(engine: PersonEngine): Promise<{ proof: EngineDocumen
 
 async function prepare(engine: PersonEngine, turn: TurnIdentity, ctx: ToolContext, answers: Record<string, string>) {
   const earlier = await earlierFiling(engine, RENEWAL.recipient);
-  if (earlier !== "clear") return { status: "earlier_filing_unresolved", sent: false, note: EARLIER_UNRESOLVED_NOTE };
+  if (earlier === "checking") return { status: "earlier_filing_unresolved", sent: false, note: EARLIER_UNRESOLVED_NOTE };
+  if (earlier === "failed") return { status: "draft_failed", sent: false, note: EARLIER_NOT_UPDATED_NOTE };
   if (!(await closeEarlier(engine, turn.turnId, RENEWAL.recipient))) {
     return { status: "draft_failed", sent: false, note: SHOWN_NOT_CLOSED_NOTE };
   }
