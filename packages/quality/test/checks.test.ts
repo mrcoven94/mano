@@ -373,6 +373,19 @@ test("a reply to a hedged date fails when it holds the date, whatever it asks af
   assert.equal((await run(`I have saved November 20, 2026 as your deadline. Do you want help with the proofs?`))?.pass, false, "saved the date");
   assert.equal((await run(`I've set that deadline and I'll remind you. Is that the date you need to meet?`))?.pass, false, "set the date and will remind");
   assert.equal((await run(ask, [{ kind: "deadline", detail: "2026-11-20" }]))?.pass, false, "recorded a deadline action");
+  for (const held of [
+    "I have already saved November 20, 2026 as your deadline.",
+    "I've just set November 20, 2026 as your deadline.",
+    "I have now added November 20, 2026 to your deadlines.",
+    "I have also recorded November 20, 2026.",
+    "I will already remind you on November 20, 2026.",
+    "November 20, 2026 is saved as your deadline.",
+    "November 20, 2026 is now saved.",
+    "November 20, 2026 is on file as your deadline.",
+    "November 20, 2026 is in your reminders.",
+  ]) {
+    assert.equal((await run(`${held} ${ask}`))?.pass, false, held);
+  }
   assert.equal((await run(ask))?.pass, true, "asks and holds nothing");
   assert.equal((await run("I have not saved a date yet. Is November 20, 2026 the date you need to meet?"))?.pass, true, "says it held nothing");
 });

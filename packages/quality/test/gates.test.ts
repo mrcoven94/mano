@@ -10,7 +10,7 @@ import test from "node:test";
 import { LocalDns } from "../src/links.ts";
 import { FakeJudge } from "../src/judge.ts";
 import { rescoreRun } from "../src/rescore.ts";
-import { compareMatched, decidePromotion, evalGate, prComment, publicReport, readHistory, readRun, writeNightlyStaging, writeRun } from "../src/report.ts";
+import { compareMatched, compareSuites, decidePromotion, evalGate, prComment, printSideBySide, publicReport, readHistory, readRun, writeNightlyStaging, writeRun } from "../src/report.ts";
 import type { AgentSummary } from "../src/agent-types.ts";
 import { attachJudgeGate, finishReport, runBench, scoreSuite, type CaseResult, type RunReport } from "../src/run.ts";
 import { buildSuite } from "../src/suites/build.ts";
@@ -238,4 +238,20 @@ test("rescoring a saved letters version 1 run keeps version 1, its checks and it
   for (const r of reread.results) {
     assert.ok(r.checks.some((c) => c.id === "must-include" && c.detail === 'has "[letter 1]"'), `${r.caseId} re-graded with version 1's must-includes`);
   }
+});
+
+test("stored runs of different letters versions are not comparable and show no delta", () => {
+  const score = (version: number, hard: number, judge: number) => ({
+    suite: "letters", version, cases: 20, hardCheckPassRate: hard, checkPassRate: hard, judgeMean: judge,
+    gateFailed: false, gateFailures: [], p50Ms: 0, p95Ms: 0, inputTokens: 0, outputTokens: 0, usdPer1kAnswers: 0,
+  });
+  const run = (version: number, hard: number, judge: number) => ({ suites: { letters: score(version, hard, judge) } }) as unknown as RunReport;
+  const [mixed] = compareSuites(run(1, 0.45, 3.1), run(2, 0.9, 4.2));
+  assert.equal(mixed!.notComparable, "not comparable (v1 vs v2)");
+  assert.equal(mixed!.hardDelta, null);
+  assert.equal(mixed!.judgeDelta, null);
+  assert.match(printSideBySide(run(1, 0.45, 3.1), run(2, 0.9, 4.2), "before", "after"), /^letters \| not comparable \(v1 vs v2\)$/m);
+  const [same] = compareSuites(run(2, 0.8, 4), run(2, 0.9, 4.2));
+  assert.equal(same!.notComparable, undefined);
+  assert.ok(Math.abs(same!.hardDelta! - 0.1) < 1e-9);
 });

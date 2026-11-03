@@ -374,7 +374,11 @@ function calendarDates(text: string): CalendarDate[] {
 // that asks the person to confirm that date. Like every hard check this reads
 // which dates appear and what the reply says it did, not what a sentence
 // means; the judge reads that.
-const HELD_DATE_RE = /\bi(?:\s+have|'ve)?\s+(?:saved|set|added|recorded|scheduled)\b|\bi(?:\s+will|'ll)\s+remind\b|\breminder\s+(?:is\s+)?set\b/i;
+const ADVERBS = String.raw`(?:\s+(?:already|just|now|also))*`;
+const HELD_DATE_RE = new RegExp(
+  String.raw`\bi(?:\s+have|'ve)?${ADVERBS}\s+(?:saved|set|added|recorded|scheduled)\b|\bi(?:\s+will|'ll)${ADVERBS}\s+remind\b|\breminder\s+(?:is\s+)?(?:now\s+)?set\b|\bis\s+(?:now\s+)?(?:saved|on\s+file|in\s+your\s+reminders)\b`,
+  "i",
+);
 const ABOUT_THE_DATE_RE = /\b(?:that|this|which)\s+(?:(?:is\s+)?the\s+)?(?:date|deadline|due date)\b/i;
 
 function deadlineCheck(deadline: LetterDeadline, text: string, actions: BenchAnswer["actions"]): CheckResult {
