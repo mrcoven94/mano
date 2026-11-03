@@ -2,6 +2,7 @@
 // own SQLite; node tests use the in-memory version. All calls are sync:
 // Durable Object SQLite is synchronous, and nothing here needs to wait.
 import type { EventAttachment, NormalizedEvent, OutboundState } from "@mano/channels";
+import type { ModelCosts } from "./runner.js";
 
 export interface PendingInbound {
   eventId: string;
@@ -92,6 +93,9 @@ export interface PersistedTurn {
   to: string | null;
   answerJson: string | null;
   costUsd: number | null;
+  // What each model cost of costUsd, saved with the answer so a resumed
+  // turn settles the same breakdown. Null when the turn has none.
+  costByModel: ModelCosts | null;
   costSettled: boolean;
   // Infrastructure failures while running this turn. Drives retry
   // backoff; the turn retries until it reaches a final outcome.
@@ -247,7 +251,7 @@ export interface ConversationStore {
   startTurn(row: PersistedTurn): void;
   unfinishedTurn(): PersistedTurn | null;
   bumpTurnAttempt(turn: number, atMs: number): void;
-  updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number): void;
+  updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number, costByModel?: ModelCosts): void;
   markTurnSettled(turn: number, atMs: number): void;
   finishTurn(turn: number, atMs: number): void;
   // Finished turns, newest first.
@@ -386,9 +390,9 @@ export class MemoryStore implements ConversationStore {
     return oldest ? { ...oldest } : null;
   }
 
-  updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number): void {
+  updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number, costByModel?: ModelCosts): void {
     const row = this.turnRows.get(turn);
-    if (row) this.turnRows.set(turn, { ...row, answerJson, costUsd, updatedAtMs: atMs });
+    if (row) this.turnRows.set(turn, { ...row, answerJson, costUsd, costByModel: costByModel ? { ...costByModel } : null, updatedAtMs: atMs });
   }
 
   markTurnSettled(turn: number, atMs: number): void {

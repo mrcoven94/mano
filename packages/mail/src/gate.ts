@@ -50,7 +50,7 @@ const ADJECTIVES = any([
   "signed", "completed", "written", "enclosed", "current", "required", "requested", "missing", "new",
   "renewal", "recertification", "redetermination", "application", "income", "identity", "address",
   "residency", "photo", "household", "verification", "hearing", "appeal", "tax", "medical", "yearly",
-  "child care", "rent", "utility", "bank",
+  "child care", "rent", "utility", "bank", "next",
 ]);
 const NOUNS = any([
   "forms?", "packets?", "paperwork", "applications?", "proofs?", "documents?", "items?", "papers",
@@ -125,11 +125,17 @@ export function isDeadlineLike(sentence: string): boolean {
   return DEADLINE_LIKE.some((re) => re.test(sentence)) || findAmbiguousDate(sentence) !== null;
 }
 
+// An approval letter's "next renewal" is the renewal the person owes,
+// so it is deadline wording, never a date to know.
+const NEXT_RENEWAL = String.raw`next\s+(?:renewal|recertification|redetermination)`;
+
 // A deadline sentence: deadline wording near a date or a count, or any
 // of the wording above. A letter publishes only when its whole
 // transcription holds exactly one.
-const DEADLINE_WORD =
-  /\b(?:by|before|until|no\s+later\s+than|due|within|deadline|last\s+day|close[sd]?|closing|expires?|expired|expiration|must|return(?:s|ed)?|submit(?:s|ted)?|respond(?:s|ed)?|renew(?:s|ed)?|recertify|upload(?:s|ed)?|sends?|sent|mail(?:s|ed)?)\b/i;
+const DEADLINE_WORD = new RegExp(
+  String.raw`\b(?:by|before|until|no\s+later\s+than|due|within|deadline|last\s+day|close[sd]?|closing|expires?|expired|expiration|must|return(?:s|ed)?|submit(?:s|ted)?|respond(?:s|ed)?|renew(?:s|ed)?|recertify|upload(?:s|ed)?|sends?|sent|mail(?:s|ed)?|${NEXT_RENEWAL})\b`,
+  "i",
+);
 const DATE_OR_COUNT = new RegExp(
   String.raw`\b(?:${ANY_COUNT}|today|tonight|tomorrow|next\s+(?:week|month))\b|\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b|\b${MONTH_WORD}\s+\d{1,2}\b`,
   "i",
@@ -166,8 +172,10 @@ const TO_KNOW_LEFTOVER =
   /\b(?:not|no|never|cannot|nor|none|without|if|unless|when|whenever|whether|provided|otherwise|or|either|instead|alternatively)\b|n['’]t\b/i;
 // Duty or deadline wording keeps a sentence out of dates to know; it
 // becomes a deadline candidate instead.
-const DUTY_WORDS =
-  /\b(?:must|respond|send|submit|provide|complete|deliver|mail|bring|renew|appeal|pay|last\s+day|close[sd]?|closing|expire[sd]?|expiration|due|deadline|by|before|until|no\s+later\s+than)\b/i;
+const DUTY_WORDS = new RegExp(
+  String.raw`\b(?:must|respond|send|submit|provide|complete|deliver|mail|bring|renew|appeal|pay|last\s+day|close[sd]?|closing|expire[sd]?|expiration|due|deadline|by|before|until|no\s+later\s+than|${NEXT_RENEWAL})\b`,
+  "i",
+);
 
 // The duty a deadline states, read from its own words. Dates within
 // one duty are compared with each other.

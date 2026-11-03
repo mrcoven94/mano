@@ -308,6 +308,21 @@ describe("ChannelStateDO", () => {
     expect(await freed.json()).toEqual({ allowed: true, spentUsd: 1.5 });
   });
 
+  it("records cost per model once per key, and reports it with the day's spend", async () => {
+    const stub = stateStub();
+    const settle = (key: string, actualUsd: number, byModel?: unknown) =>
+      stub.fetch("https://state/internal/spend-settle", { method: "POST", body: JSON.stringify({ key, actualUsd, byModel }) });
+    await settle("a:1", 0.3, { "muse-spark-1.3": 0.1, "meta/muse-spark-open": 0.2 });
+    await settle("a:1", 0.3, { "muse-spark-1.3": 0.1, "meta/muse-spark-open": 0.2 });
+    await settle("b:1", 0.05, { "muse-spark-1.3": 0.05, bad: -1 });
+    await settle("agent:k", 0.01);
+    const state = (await (await stub.fetch("https://state/internal/state")).json()) as { spentUsd: number; byModel: Record<string, number> };
+    expect(state.spentUsd).toBeCloseTo(0.36);
+    expect(Object.keys(state.byModel).sort()).toEqual(["meta/muse-spark-open", "muse-spark-1.3"]);
+    expect(state.byModel["muse-spark-1.3"]).toBeCloseTo(0.15);
+    expect(state.byModel["meta/muse-spark-open"]).toBeCloseTo(0.2);
+  });
+
   it("holds the reconcile cursor", async () => {
     const stub = stateStub();
     expect(await (await stub.fetch("https://state/internal/cursor")).json()).toEqual({ cursor: null });

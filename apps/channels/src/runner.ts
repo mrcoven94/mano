@@ -17,6 +17,8 @@ import {
   PHOTO_UNSAVED_TEXT,
   ResponderFailed,
   TURN_TEXT_CAP,
+  failedUsageOf,
+  usageOf,
   finalizeReply,
   dayKeyFor,
   errName,
@@ -37,7 +39,7 @@ import {
   type NormalizedEvent,
   type OutboundState,
 } from "@mano/channels";
-import type { HistoryMessage, Responder, StoredPhoto } from "@mano/channels";
+import type { HistoryMessage, ModelUsage, Responder, StoredPhoto } from "@mano/channels";
 import { EYES, allowedTapback, crisisGate, crisisLineFor, decideCrisis, eyesAllowed, guardReply, type CrisisCheck } from "@mano/persona";
 import {
   APPROVAL_RECORDED_BUBBLE,
@@ -49,9 +51,12 @@ import {
 } from "./text.js";
 import { attachmentDocumentId, fetchAttachment, type DocumentStore } from "./files.js";
 
+// Cost per model ID for one turn, recorded in the ledger beside the total.
+export type ModelCosts = Record<string, number>;
+
 export interface SpendLedger {
   reserve(key: string, worstUsd: number): Promise<{ allowed: boolean; spentUsd: number }>;
-  settle(key: string, actualUsd: number): Promise<void>;
+  settle(key: string, actualUsd: number, byModel?: ModelCosts): Promise<void>;
   release(key: string): Promise<void>;
   byteReserve(key: string, bytes: number): Promise<{ allowed: boolean; bytesUsed: number }>;
   byteSettle(key: string, actualBytes: number): Promise<void>;
@@ -80,6 +85,19 @@ export interface RunnerConfig {
 }
 
 export const DEFAULT_MEDIA_HOSTS = ["bucket.blooio.com"];
+
+// A turn's cost, in total and per model, at one rate per 1,000
+// characters. The stand-in calls no model and costs nothing.
+export function costByModel(usage: ModelUsage[], usdPer1kChars: number): { costUsd: number; byModel: ModelCosts } {
+  const byModel: ModelCosts = {};
+  let costUsd = 0;
+  for (const u of usage) {
+    const usd = u.model === "stand-in" ? 0 : estimateCostUsd(u.inputChars * u.requests, u.outputChars, usdPer1kChars);
+    byModel[u.model] = (byModel[u.model] ?? 0) + usd;
+    costUsd += usd;
+  }
+  return { costUsd, byModel };
+}
 
 // How much of the conversation the model sees: the last few finished
 // turns, oldest dropped first past the character cap.
@@ -707,6 +725,7 @@ export class ConversationRunner {
                 to,
                 answerJson: null,
                 costUsd: null,
+                costByModel: null,
                 costSettled: false,
                 attempts: 0,
                 state: "started",
@@ -784,24 +803,30 @@ export class ConversationRunner {
   }
 
   // Reports each approval question whose turn's sends are all resolved.
-  // A report that fails stays pending; needsRetry re-arms the alarm, and
-  // the next run sends it again. The person's YES counts only once the
-  // agent has the report.
-  private async reportPresentations(): Promise<void> {
+  // For the turn still sending, a question is reported as soon as the
+  // bubbles that went out carry it whole, so a bubble after it (a replay
+  // link) never holds it back; "not shown" waits until every send of that
+  // turn resolved. A report that fails stays pending; needsRetry re-arms
+  // the alarm, and the next run sends it again. The person's YES counts
+  // only once the agent has the report.
+  private async reportPresentations(sendingTurn: number | null = null): Promise<void> {
     const { store, logger } = this.deps;
     const report = this.deps.reportPresentation;
-    if (!report) return;
+    const pending = report ? store.pendingPresentations() : [];
+    if (!report || pending.length === 0) return;
     const outbounds = store.outbounds();
-    for (const p of store.pendingPresentations()) {
+    for (const p of pending) {
+      const sending = p.turn === sendingTurn;
       const rows = outbounds.filter((r) => r.turn === p.turn && !DECORATION_TAGS.has(r.tag));
-      if (rows.length === 0 || rows.some((r) => openSend(r))) continue;
+      if (rows.length === 0 || (!sending && rows.some((r) => openSend(r)))) continue;
       const sent = rows
         .filter((r) => r.state === "sent" || r.state === "delivered" || r.state === "read")
         .sort((a, b) => a.part - b.part)
         .map((r) => r.text);
       try {
         const shown = await report({ approvalId: p.approvalId, approval: p.approval, generation: p.generation }, sent);
-        store.finishPresentation(p.turn, shown ? "reported" : "not_shown");
+        if (shown) store.finishPresentation(p.turn, "reported");
+        else if (!sending) store.finishPresentation(p.turn, "not_shown");
       } catch (err) {
         logger.warn("presentation_report_failed", { handle: this.logHandle(), turn: p.turn, err: errName(err) });
       }
@@ -993,7 +1018,6 @@ export class ConversationRunner {
       await this.settleResumedCost(turn, resumed);
       await this.sendBubbles(turn, JSON.parse(resumed.answerJson) as import("./store.js").AnswerBubble[], chatId, to, 0, generation, epoch);
       this.checkSendsResolved(turn, generation);
-      await this.reportPresentations();
       return;
     }
     const texts = items.map((i) => i.text).filter((t): t is string => !!t && t.length > 0);
@@ -1010,12 +1034,24 @@ export class ConversationRunner {
     // A crisis turn never sends the friendly intro, and later turns do not
     // send it either.
     if (crisis && !meta.introduced) store.patchMeta({ introduced: true });
+    // The crisis line goes out before anything the turn waits on (the
+    // ledger, attachments, any model), so 988 and 911 never wait on them.
+    // Every path below opens its saved answer with this same bubble under
+    // the same key, so it is sent once.
+    const crisisBubbles = crisis ? await this.finalize(turn, "", true, turnTextOf(texts)) : [];
+    const replyTo = inlineReplyTarget(items);
+    if (replyTo && crisisBubbles[0]) crisisBubbles[0] = { ...crisisBubbles[0], replyTo };
+    if (crisisBubbles.length > 0) {
+      await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation, epoch);
+      // Nothing else goes out until the crisis line is known to have gone
+      // out: an uncertain send ends this run, and the next one reconciles
+      // it before any model, interim or other bubble.
+      this.checkSendsResolved(turn, generation);
+    }
 
     const approval = texts.length === 1 && attachments.length === 0 ? parseApprovalReply(texts[0]) : null;
     if (approval && store.pendingApprovals(nowMs()).length > 0) {
-      // A crisis reply goes first; the decision is still recorded.
-      const crisisBubbles = crisis ? await this.finalize(turn, "", true, turnTextOf(texts)) : [];
-      if (crisisBubbles.length > 0) await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation, epoch);
+      // The decision is recorded after the crisis line.
       const recordedPart = crisisBubbles.length + 1;
       const answered = await this.answerApproval(approval.code, approval.decision, turn, chatId, to, recordedPart);
       if (answered) {
@@ -1052,11 +1088,9 @@ export class ConversationRunner {
         crisis,
       });
       if (crisis) {
-        // No model and no cost: the deterministic crisis reply, past any limit.
-        const bubbles = await this.finalize(turn, "", true, turnText);
-        store.updateTurnAnswer(turn, JSON.stringify(bubbles), 0, nowMs());
+        // No model and no cost: the crisis line, already sent past any limit.
+        store.updateTurnAnswer(turn, JSON.stringify(crisisBubbles), 0, nowMs());
         store.markTurnSettled(turn, nowMs());
-        await this.sendBubbles(turn, bubbles, chatId, to, 0, generation, epoch);
         this.checkSendsResolved(turn, generation);
       } else {
         const noticed = await this.sendBusy(turn, chatId, to, nowMs());
@@ -1129,7 +1163,6 @@ export class ConversationRunner {
           // message that has the eyes, and sent outside the turn.
           const tapback = config.reactionsEnabled && target && !eyes.placed ? allowedTapback(answer.tapback, target.text, crisis) : null;
           const answered = await this.finalize(turn, answer.text, crisis, turnText);
-          const replyTo = inlineReplyTarget(items);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
           bubbles.push(...answered);
           if (tapback && target && chatId && answered.length > 0) {
@@ -1137,13 +1170,13 @@ export class ConversationRunner {
           }
           // Persisted with the answer, so a resumed send reports it too.
           if (answer.presentation) store.savePresentation({ turn, generation, state: "pending", ...answer.presentation });
-          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
-          await this.deps.spend.settle(reserveKey, answer.costUsd);
+          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs(), answer.byModel);
+          await this.deps.spend.settle(reserveKey, answer.costUsd, answer.byModel);
           store.markTurnSettled(turn, nowMs());
         } else {
           bubbles.push(...(await this.finalize(turn, crisis ? "" : FAILURE_BUBBLE, crisis, turnText)));
-          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs());
-          await this.deps.spend.settle(reserveKey, answer.costUsd);
+          store.updateTurnAnswer(turn, JSON.stringify(bubbles), answer.costUsd, nowMs(), answer.byModel);
+          await this.deps.spend.settle(reserveKey, answer.costUsd, answer.byModel);
           store.markTurnSettled(turn, nowMs());
         }
       } else {
@@ -1158,7 +1191,6 @@ export class ConversationRunner {
       this.checkGeneration(generation);
       await this.sendBubbles(turn, bubbles, chatId, to, saved.length, generation, epoch);
       this.checkSendsResolved(turn, generation);
-      await this.reportPresentations();
       replied = true;
     } finally {
       stopEyesTimer();
@@ -1207,7 +1239,7 @@ export class ConversationRunner {
 
   private async settleResumedCost(turn: number, resumed: import("./store.js").PersistedTurn): Promise<void> {
     if (resumed.costSettled || resumed.costUsd === null) return;
-    await this.deps.spend.settle(`${this.deps.config.handleHash}:${turn}`, resumed.costUsd);
+    await this.deps.spend.settle(`${this.deps.config.handleHash}:${turn}`, resumed.costUsd, resumed.costByModel ?? undefined);
     this.store.markTurnSettled(turn, this.deps.nowMs());
   }
 
@@ -1244,7 +1276,12 @@ export class ConversationRunner {
       }
       const row = await this.sendBubble({ turn, part: bubble.part, tag: bubble.tag, text: bubble.text, chatId, to, generation, replyTo: bubble.replyTo ?? null });
       if (row.fresh) fresh += 1;
-      if (bubble.tag === "" && bubble.part >= 1 && (row.state === "sent" || row.state === "delivered" || row.state === "read")) accepted = true;
+      if (bubble.tag === "" && bubble.part >= 1 && (row.state === "sent" || row.state === "delivered" || row.state === "read")) {
+        accepted = true;
+        // Before the next bubble goes: a YES sent while it is still going
+        // must find the question already reported.
+        await this.reportPresentations(turn);
+      }
       if (bubble.tag === "" && bubble.part === 0 && row.state === "sent") {
         store.patchMeta({ introduced: true });
       }
@@ -1320,10 +1357,11 @@ export class ConversationRunner {
         ok: true;
         text: string;
         costUsd: number;
+        byModel: ModelCosts;
         tapback: import("@mano/channels").Tapback | null;
         presentation?: { approvalId: string; approval: string };
       }
-    | { ok: false; costUsd: number }
+    | { ok: false; costUsd: number; byModel: ModelCosts }
   > {
     const { responder, config, logger } = this.deps;
     let done = false;
@@ -1340,8 +1378,6 @@ export class ConversationRunner {
         .sendBubble({ turn, part: 0, tag: "interim", text: INTERIM_BUBBLE, chatId, to, generation })
         .catch((err: unknown) => logger.warn("interim_failed", { handle: this.logHandle(), turn, err: errName(err) }));
     }, config.interimMs);
-    const attemptCost = (inputChars: number, attempts: number): number =>
-      estimateCostUsd(inputChars * attempts, 0, config.usdPer1kChars);
     try {
       const onHeadsUp = async (text: string): Promise<void> => {
         if (!crisis) onDeep();
@@ -1357,19 +1393,21 @@ export class ConversationRunner {
         { texts: turnText ? [turnText] : [], attachmentCount, documents, history, turnKey: { generation, turn }, receivedAtMs, crisis },
         { onHeadsUp },
       );
-      const costUsd =
-        result.model === "stand-in" ? 0 : estimateCostUsd(result.inputChars * result.attempts, result.outputChars, config.usdPer1kChars);
-      logger.info("turn_answered", { handle: this.logHandle(), turn, model: result.model, attempts: result.attempts });
-      return { ok: true, text: result.text, costUsd, tapback: result.tapback ?? null, presentation: result.presentation };
+      const { costUsd, byModel } = costByModel(usageOf(result), config.usdPer1kChars);
+      logger.info("turn_answered", { handle: this.logHandle(), turn, model: result.model, attempts: result.attempts, models: Object.keys(byModel).join(","), costUsd });
+      return { ok: true, text: result.text, costUsd, byModel, tapback: result.tapback ?? null, presentation: result.presentation };
     } catch (err) {
+      const usage = err instanceof ResponderFailed ? failedUsageOf(err, responder.model ?? responder.name) : [];
+      const { costUsd, byModel } = costByModel(usage, config.usdPer1kChars);
       logger.warn("responder_failed", {
         handle: this.logHandle(),
         turn,
         err: errName(err),
         reason: err instanceof ResponderFailed ? err.reason : null,
+        models: Object.keys(byModel).join(","),
+        costUsd,
       });
-      const costUsd = err instanceof ResponderFailed ? attemptCost(err.inputChars, err.attempts) : 0;
-      return { ok: false, costUsd };
+      return { ok: false, costUsd, byModel };
     } finally {
       done = true;
       clearTimeout(timer);

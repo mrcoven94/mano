@@ -161,6 +161,7 @@ describe("interrupted turns", () => {
       to: TEST_HANDLE,
       answerJson: opts.answerJson ?? null,
       costUsd: opts.costUsd ?? null,
+      costByModel: null,
       costSettled: opts.costSettled ?? false,
       attempts: 0,
       state: "started",

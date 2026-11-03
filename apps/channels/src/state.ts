@@ -4,9 +4,11 @@
 import { DEFAULT_DAILY_BUDGET_USD, createLogger } from "@mano/channels";
 import { SEEN_IDS_CAP } from "./global.js";
 import type { Env } from "./env.js";
+import type { ModelCosts } from "./runner.js";
 import {
   GlobalLedger,
   defaultGlobalState,
+  parseModelCosts,
   type ByteReservation,
   type GlobalStateRow,
   type GlobalStore,
@@ -30,6 +32,9 @@ class SqlGlobalStore implements GlobalStore {
     this.sql.exec("CREATE TABLE IF NOT EXISTS chat_routes (chat_hash TEXT PRIMARY KEY, handle_hash TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS seen_ids (event_id TEXT PRIMARY KEY, seen_at_ms INTEGER NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS settled_spend (res_key TEXT PRIMARY KEY, day TEXT NOT NULL, amount_usd REAL NOT NULL)");
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS settled_spend_models (res_key TEXT NOT NULL, model TEXT NOT NULL, day TEXT NOT NULL, amount_usd REAL NOT NULL, PRIMARY KEY (res_key, model))",
+    );
     this.sql.exec("CREATE TABLE IF NOT EXISTS settled_bytes (res_key TEXT PRIMARY KEY, day TEXT NOT NULL, amount_bytes INTEGER NOT NULL)");
     if (this.sql.exec("SELECT id FROM global_state WHERE id = 1").toArray().length === 0) {
       this.sql.exec("INSERT INTO global_state (id, cursor, spend_day, spent_usd) VALUES (1, NULL, '', 0)");
@@ -78,11 +83,14 @@ class SqlGlobalStore implements GlobalStore {
     this.sql.exec("INSERT OR REPLACE INTO spend_reservations (res_key, worst_usd, day) VALUES (?, ?, ?)", reservation.key, reservation.worstUsd, reservation.day);
   }
 
-  settleSpend(key: string, day: string, actualUsd: number): void {
+  settleSpend(key: string, day: string, actualUsd: number, byModel?: ModelCosts): void {
     this.sql.exec("DELETE FROM spend_reservations WHERE res_key = ?", key);
     const known = this.sql.exec("SELECT res_key FROM settled_spend WHERE res_key = ?", key).toArray().length > 0;
     if (known) return;
     this.sql.exec("INSERT INTO settled_spend (res_key, day, amount_usd) VALUES (?, ?, ?)", key, day, actualUsd);
+    for (const [model, usd] of Object.entries(byModel ?? {})) {
+      this.sql.exec("INSERT OR IGNORE INTO settled_spend_models (res_key, model, day, amount_usd) VALUES (?, ?, ?, ?)", key, model, day, usd);
+    }
     const state = this.state();
     if (state.spendDay === day) {
       state.spentUsd += actualUsd;
@@ -93,6 +101,14 @@ class SqlGlobalStore implements GlobalStore {
     this.save(state);
   }
 
+  spendByModel(day: string): ModelCosts {
+    const rows = this.sql.exec("SELECT model, SUM(amount_usd) AS usd FROM settled_spend_models WHERE day = ? GROUP BY model", day).toArray() as unknown as Array<{
+      model: string;
+      usd: number;
+    }>;
+    return Object.fromEntries(rows.map((r) => [r.model, r.usd]));
+  }
+
   releaseSpend(key: string): void {
     this.sql.exec("DELETE FROM spend_reservations WHERE res_key = ?", key);
   }
@@ -100,6 +116,7 @@ class SqlGlobalStore implements GlobalStore {
   pruneSpendReservations(day: string): void {
     this.sql.exec("DELETE FROM spend_reservations WHERE day != ?", day);
     this.sql.exec("DELETE FROM settled_spend WHERE day != ?", day);
+    this.sql.exec("DELETE FROM settled_spend_models WHERE day != ?", day);
   }
 
   byteReservations(day: string): ByteReservation[] {
@@ -204,11 +221,11 @@ export class ChannelStateDO implements DurableObject {
       return Response.json(this.ledger().reserve(body.key, body.worstUsd));
     }
     if (request.method === "POST" && url.pathname === "/internal/spend-settle") {
-      const body = (await request.json().catch(() => ({}))) as { key?: unknown; actualUsd?: unknown };
+      const body = (await request.json().catch(() => ({}))) as { key?: unknown; actualUsd?: unknown; byModel?: unknown };
       if (typeof body.key !== "string" || typeof body.actualUsd !== "number") {
         return new Response("Bad settlement.", { status: 400 });
       }
-      const result = this.ledger().settle(body.key, body.actualUsd);
+      const result = this.ledger().settle(body.key, body.actualUsd, parseModelCosts(body.byModel));
       logger.info("spend_recorded", { spentUsd: result.spentUsd });
       return Response.json(result);
     }

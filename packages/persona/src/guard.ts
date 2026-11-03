@@ -33,9 +33,10 @@ export interface GuardResult {
 }
 
 // What counts as naming the model or its maker, in two tiers:
-// A. Our own stack (meta, spark, muse, glimmer, llama, any model ID and
-//    the configured IDs) counts anywhere, in any case, except four
-//    idioms: "spark of hope", "glimmer of hope", "muse on", "muse about".
+// A. Our own stack (meta, spark, muse, glimmer, llama, any model ID, the
+//    configured IDs and the hosts that serve open-weight models) counts
+//    anywhere, in any case, except four idioms: "spark of hope",
+//    "glimmer of hope", "muse on", "muse about".
 // B. Every other company or product counts only in a direct first-person
 //    "I'm X" or "my name is X" outside quotation marks, or a maker or
 //    power clause about the assistant ("I was made by X", "X made me").
@@ -50,6 +51,18 @@ const STACK_PATTERN = uw(/\b(?:meta|spark|muse|glimmer)\b/i);
 const MODEL_ID_PATTERN =
   uw(/\b(?:muse|spark|glimmer|gpt|claude|gemini|mistral|grok)(?:[-_. ]?(?:spark|glimmer|instruct|chat|pro|mini|nano|turbo|flash|sonnet|opus|haiku))?[-_. ]?\d[\w.-]*/i);
 const ORDINARY_PHRASES = uw(/\b(?:spark of hope|glimmer of hope|muse (?:on|about))\b/gi);
+// The hosts that serve open-weight models, the fallback's own provider
+// and hosts among them. The names that only ever mean a company count
+// anywhere. Fireworks, Together and Modal are also ordinary words (and
+// Together Rx Access is a drug discount card), so they count only as the
+// company's own name: with AI, Labs or a domain. Matching the sentences
+// around them ("Together hosts my replies") kept removing ordinary portal
+// guidance ("the modal hosting the form"), while a model does not know
+// which host serves it, so a bare mention is left alone on purpose.
+const HOST_PATTERN = uw(/\b(?:open[- ]?router|baseten|nebius|deepinfra|sambanova|cerebras|groq|makora)\b/i);
+const HOST_CONTEXT = [
+  uw(/\b(?:fireworks|together(?! rx\b)|modal)(?:\.(?:ai|com|run|xyz|io|dev)|[ -]ai|[ -]labs)\b/i),
+];
 
 // "llama" is also Spanish for "call" ("se llama DSHS", "llama al 911"), so
 // it is the one stack word that does not count anywhere. It counts only
@@ -174,6 +187,7 @@ function restoreQuotes(text: string, quotes: readonly string[]): string {
 function namesOurStack(sentence: string, ids: RegExp | null): boolean {
   sentence = separated(sentence);
   if (MODEL_ID_PATTERN.test(sentence) || namesLlama(sentence) || ids?.test(sentence)) return true;
+  if (HOST_PATTERN.test(sentence) || HOST_CONTEXT.some((pattern) => pattern.test(sentence))) return true;
   if (!STACK_PATTERN.test(sentence)) return false;
   return IDENTITY_STATEMENT.test(sentence) || STACK_PATTERN.test(sentence.replace(ORDINARY_PHRASES, " "));
 }

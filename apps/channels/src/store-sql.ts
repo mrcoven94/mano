@@ -1,6 +1,8 @@
 // SQLite backing for one conversation. Each ConversationDO owns these
 // tables in its own storage; nothing is shared across handles.
 import type { EventAttachment } from "@mano/channels";
+import { parseModelCosts } from "./global.js";
+import type { ModelCosts } from "./runner.js";
 import {
   defaultMeta,
   type ApprovalRow,
@@ -91,6 +93,7 @@ CREATE TABLE IF NOT EXISTS turns (
   handle_to TEXT,
   answer_json TEXT,
   cost_usd REAL,
+  cost_by_model TEXT,
   cost_settled INTEGER NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL,
@@ -159,12 +162,22 @@ type TurnRow = {
   handle_to: string | null;
   answer_json: string | null;
   cost_usd: number | null;
+  cost_by_model: string | null;
   cost_settled: number;
   attempts: number;
   state: PersistedTurn["state"];
   created_at_ms: number;
   updated_at_ms: number;
 };
+
+function modelCostsFrom(json: string | null): ModelCosts | null {
+  if (!json) return null;
+  try {
+    return parseModelCosts(JSON.parse(json)) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 function turnFromRow(row: TurnRow): PersistedTurn {
   return {
@@ -174,6 +187,7 @@ function turnFromRow(row: TurnRow): PersistedTurn {
     to: row.handle_to,
     answerJson: row.answer_json,
     costUsd: row.cost_usd,
+    costByModel: modelCostsFrom(row.cost_by_model),
     costSettled: row.cost_settled === 1,
     attempts: row.attempts,
     state: row.state,
@@ -236,6 +250,8 @@ export class SqlConversationStore implements ConversationStore {
       "ALTER TABLE meta ADD COLUMN opt_out_received_at_ms INTEGER NOT NULL DEFAULT 0",
       // The decoration epoch (PR 74 review 4).
       "ALTER TABLE meta ADD COLUMN decoration_epoch INTEGER NOT NULL DEFAULT 0",
+      // What each model cost, saved with the answer (PR 102 review).
+      "ALTER TABLE turns ADD COLUMN cost_by_model TEXT",
     ]) {
       try {
         this.sql.exec(ddl);
@@ -587,13 +603,14 @@ export class SqlConversationStore implements ConversationStore {
 
   startTurn(row: PersistedTurn): void {
     this.sql.exec(
-      "INSERT OR REPLACE INTO turns (turn, items_json, chat_id, handle_to, answer_json, cost_usd, cost_settled, attempts, state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO turns (turn, items_json, chat_id, handle_to, answer_json, cost_usd, cost_by_model, cost_settled, attempts, state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       row.turn,
       row.itemsJson,
       row.chatId,
       row.to,
       row.answerJson,
       row.costUsd,
+      row.costByModel ? JSON.stringify(row.costByModel) : null,
       row.costSettled ? 1 : 0,
       row.attempts,
       row.state,
@@ -612,8 +629,15 @@ export class SqlConversationStore implements ConversationStore {
     return rows.map(turnFromRow);
   }
 
-  updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number): void {
-    this.sql.exec("UPDATE turns SET answer_json = ?, cost_usd = ?, updated_at_ms = ? WHERE turn = ?", answerJson, costUsd, atMs, turn);
+  updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number, costByModel?: ModelCosts): void {
+    this.sql.exec(
+      "UPDATE turns SET answer_json = ?, cost_usd = ?, cost_by_model = ?, updated_at_ms = ? WHERE turn = ?",
+      answerJson,
+      costUsd,
+      costByModel ? JSON.stringify(costByModel) : null,
+      atMs,
+      turn,
+    );
   }
 
   markTurnSettled(turn: number, atMs: number): void {

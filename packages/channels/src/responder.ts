@@ -8,6 +8,7 @@
 import { DEEP_INSTRUCTIONS, MANO_SOUL, PACING, SAFETY_LINE, crisisLineFor, crisisNote, crisisTurn, routeReply, splitTapback, type Tapback } from "@mano/persona";
 import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
+import { OpenWeightFailed, primaryDownStatus, type OpenWeightAnswer, type OpenWeightFallback } from "./open-weight.js";
 
 // The API accepts minimal, low, medium, high, xhigh and max ("none" is
 // rejected). Minimal answers a greeting in about 3 s; uncapped
@@ -53,6 +54,15 @@ export interface TurnInput {
   crisis?: boolean;
 }
 
+// What one model was sent for a turn: requests, the largest request in
+// characters (cost multiplies it by requests) and the output it wrote.
+export interface ModelUsage {
+  model: string;
+  requests: number;
+  inputChars: number;
+  outputChars: number;
+}
+
 export interface ResponderResult {
   // The raw answer. The worker guards and sanitizes it before splitting,
   // so the bubbles it persists and sends are final.
@@ -72,6 +82,10 @@ export interface ResponderResult {
   // the answer and reports it once the bubbles the provider accepted show
   // it whole, retrying the report until it lands.
   presentation?: { approvalId: string; approval: string };
+  // Per model, when the turn could use more than one (an open-weight
+  // fallback is configured). Without it the turn was one model, and
+  // model, attempts, inputChars and outputChars describe it.
+  usage?: ModelUsage[];
 }
 
 export interface RespondHooks {
@@ -106,13 +120,25 @@ export class ResponderFailed extends Error {
   readonly attempts: number;
   readonly inputChars: number;
   readonly reason: string;
-  constructor(message: string, attempts: number, inputChars: number, reason = "request_error") {
+  readonly usage?: ModelUsage[];
+  constructor(message: string, attempts: number, inputChars: number, reason = "request_error", usage?: ModelUsage[]) {
     super(message);
     this.name = "ResponderFailed";
     this.attempts = attempts;
     this.inputChars = inputChars;
     this.reason = reason;
+    this.usage = usage;
   }
+}
+
+// What a turn spent, per model: the responder's own breakdown, or one
+// entry for a turn that was one model.
+export function usageOf(result: ResponderResult): ModelUsage[] {
+  return result.usage ?? [{ model: result.model, requests: result.attempts, inputChars: result.inputChars, outputChars: result.outputChars }];
+}
+
+export function failedUsageOf(err: ResponderFailed, model: string): ModelUsage[] {
+  return err.usage ?? [{ model, requests: err.attempts, inputChars: err.inputChars, outputChars: 0 }];
 }
 
 export interface ModelMessage {
@@ -173,6 +199,10 @@ export interface SparkResponderOptions {
   // False when calling through AI Gateway, which would otherwise log
   // prompts and replies. Direct calls have nowhere to opt out of.
   collectLogs?: boolean;
+  // Asked once for a call the primary cannot answer (402, 5xx, timeout,
+  // no connection), and for every call while the breaker skips the
+  // primary. Without it a failed call fails the turn, as it always has.
+  openWeight?: OpenWeightFallback;
 }
 
 export function buildModelBaseUrl(opts: { accountId?: string; gatewayId?: string; provider?: string; directBaseUrl?: string }): {
@@ -197,22 +227,67 @@ export const HEDGE_AFTER_MS = 300;
 
 interface CallResult {
   text: string;
-  attempts: number;
-  inputChars: number;
+  model: string;
 }
 
-// A failure no retry can fix: a 4xx or a run that did not complete.
-class FatalCall extends Error {
+// Why one request failed: whether another try may help, and whether it
+// means the primary is down for this call.
+class CallFailed extends Error {
   readonly reason: string;
-  constructor(reason: string, message: string) {
+  readonly retry: boolean;
+  readonly down: boolean;
+  constructor(reason: string, message: string, retry: boolean, down: boolean) {
     super(message);
     this.reason = reason;
+    this.retry = retry;
+    this.down = down;
+  }
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
+}
+
+function callFailed(err: unknown): CallFailed {
+  return err instanceof CallFailed ? err : new CallFailed("request_error", err instanceof Error ? err.message : "Model request failed.", true, false);
+}
+
+// Requests per model across one turn, for cost per model.
+class UsageTally {
+  private byModel = new Map<string, ModelUsage>();
+
+  add(model: string, requests: number, inputChars: number): void {
+    if (requests === 0) return;
+    const u = this.byModel.get(model) ?? { model, requests: 0, inputChars: 0, outputChars: 0 };
+    this.byModel.set(model, { ...u, requests: u.requests + requests, inputChars: Math.max(u.inputChars, inputChars) });
+  }
+
+  wrote(model: string, outputChars: number): void {
+    const u = this.byModel.get(model);
+    if (u) this.byModel.set(model, { ...u, outputChars: u.outputChars + outputChars });
+  }
+
+  get requests(): number {
+    return [...this.byModel.values()].reduce((sum, u) => sum + u.requests, 0);
+  }
+
+  get inputChars(): number {
+    return Math.max(0, ...[...this.byModel.values()].map((u) => u.inputChars));
+  }
+
+  list(): ModelUsage[] {
+    return [...this.byModel.values()];
   }
 }
 
 export class SparkResponder implements Responder {
   readonly name = "spark";
-  // Worst case: the fast call's tries, each hedged, then the deep call's.
+  // Worst case: the fast call's tries, each hedged, then the deep call's,
+  // plus one fallback request per call when there is a fallback.
   readonly maxAttempts: number;
   readonly inputSlackChars = MANO_SOUL.length + PACING.length + DEEP_INSTRUCTIONS.length + 1000;
   readonly maxOutputChars = 2 * MAX_OUTPUT_CHARS;
@@ -226,6 +301,7 @@ export class SparkResponder implements Responder {
   private deepEffort: ReasoningEffort;
   private fetchFn: typeof fetch;
   private collectLogs: boolean;
+  private openWeight?: OpenWeightFallback;
 
   constructor(opts: SparkResponderOptions) {
     if (!opts.apiKey) throw new Error("A model API key is required.");
@@ -238,7 +314,8 @@ export class SparkResponder implements Responder {
     this.hedgeAfterMs = opts.hedgeAfterMs ?? HEDGE_AFTER_MS;
     this.fastEffort = opts.reasoningEffort ?? FAST_REASONING_EFFORT;
     this.deepEffort = opts.deepReasoningEffort ?? DEEP_REASONING_EFFORT;
-    this.maxAttempts = 3 * (this.maxRetries + 1);
+    this.openWeight = opts.openWeight;
+    this.maxAttempts = 3 * (this.maxRetries + 1) + (this.openWeight ? 2 : 0);
     this.fetchFn = opts.fetchFn ?? boundFetch;
     this.collectLogs = opts.collectLogs ?? true;
   }
@@ -246,6 +323,7 @@ export class SparkResponder implements Responder {
   async respond(turn: TurnInput, hooks: RespondHooks = {}): Promise<ResponderResult> {
     const messages = buildMessages(turn);
     const note = attachmentNote(turn.attachmentCount);
+    const tally = new UsageTally();
     // A crisis never waits on a heads-up: no router. finalizeReply sends
     // the crisis line first on every path, so the model is told it is
     // already there and writes the human part (safety-05).
@@ -255,57 +333,89 @@ export class SparkResponder implements Responder {
       `${MANO_SOUL}${note}${crisis ? `\n\n${crisisNote(crisisLineFor(text))}` : `\n\n${PACING}`}`,
       messages,
       this.fastEffort,
-      0,
+      tally,
       true,
     );
     const route = crisis ? ({ path: "fast", text: fast.text } as const) : routeReply(fast.text);
     if (route.path === "fast") {
-      return this.result(route.text, fast.attempts, fast.inputChars);
+      return this.result(route.text, fast.model, tally);
     }
     await hooks.onHeadsUp?.(route.headsUp);
     const deep = await this.call(
       `${MANO_SOUL}${note}\n\n${DEEP_INSTRUCTIONS}`,
       [...messages, { role: "assistant", content: route.headsUp }],
       this.deepEffort,
-      fast.attempts,
+      tally,
       false,
     );
-    return this.result(deep.text, fast.attempts + deep.attempts, Math.max(fast.inputChars, deep.inputChars));
+    return this.result(deep.text, deep.model, tally);
   }
 
-  private result(raw: string, attempts: number, inputChars: number): ResponderResult {
+  private result(raw: string, model: string, tally: UsageTally): ResponderResult {
+    tally.wrote(model, raw.length);
     const { tapback, text } = splitTapback(raw);
-    return { text, bubbles: splitBubbles(text), inputChars, outputChars: raw.length, model: this.model, attempts, tapback };
+    const result: ResponderResult = { text, bubbles: splitBubbles(text), inputChars: tally.inputChars, outputChars: raw.length, model, attempts: tally.requests, tapback };
+    if (this.openWeight) result.usage = tally.list();
+    return result;
   }
 
-  // One model call, retried on 429, 5xx, network errors and empty
-  // answers. Every request sent counts as an attempt, hedges included,
-  // and priorAttempts carries the fast call's count into a failed deep
-  // call, so a failure still settles everything it spent.
-  private async call(
-    instructions: string,
-    input: ModelMessage[],
-    effort: ReasoningEffort,
-    priorAttempts: number,
-    hedge: boolean,
-  ): Promise<CallResult> {
+  // One model call. The primary is retried on 429, 5xx, network errors
+  // and empty answers; with a fallback, a timeout is not waited on twice.
+  // When the primary is down (402, 5xx, timeout, no connection) the
+  // fallback is asked once and the breaker skips the primary for a while.
+  // Every request sent counts, hedges included, and the tally carries the
+  // fast call's requests into a failed deep call, so a failure still
+  // settles everything it spent.
+  private async call(instructions: string, input: ModelMessage[], effort: ReasoningEffort, tally: UsageTally, hedge: boolean): Promise<CallResult> {
     const inputChars = instructions.length + input.reduce((sum, m) => sum + m.content.length, 0);
+    const openWeight = this.openWeight;
+    if (openWeight?.breaker.skipPrimary()) return this.askOpenWeight(openWeight, instructions, input, effort, inputChars, tally, "skipped");
     const body = JSON.stringify({ model: this.model, instructions, input, store: false, max_output_tokens: MAX_OUTPUT_TOKENS, reasoning: { effort } });
     const sent = { requests: 0 };
     const tries = this.maxRetries + 1;
-    let lastErr: unknown = null;
-    for (let attempt = 1; attempt <= tries; attempt++) {
-      try {
-        const text = await this.attempt(body, sent, hedge);
-        return { text, attempts: sent.requests, inputChars };
-      } catch (err) {
-        if (err instanceof FatalCall) throw new ResponderFailed(err.message, priorAttempts + sent.requests, inputChars, err.reason);
-        lastErr = err;
-        if (attempt < tries) await new Promise((r) => setTimeout(r, 200 * 2 ** (attempt - 1)));
+    let failure = new CallFailed("request_error", "Model request failed.", true, false);
+    try {
+      for (let attempt = 1; attempt <= tries; attempt++) {
+        try {
+          return { text: await this.attempt(body, sent, hedge), model: this.model };
+        } catch (err) {
+          failure = callFailed(err);
+          if (!failure.retry || (failure.reason === "timeout" && openWeight)) break;
+          if (attempt < tries) await new Promise((r) => setTimeout(r, 200 * 2 ** (attempt - 1)));
+        }
       }
+    } finally {
+      tally.add(this.model, sent.requests, inputChars);
     }
-    const message = lastErr instanceof Error ? lastErr.message : "Model request failed.";
-    throw new ResponderFailed(message, priorAttempts + sent.requests, inputChars);
+    if (openWeight && failure.down) {
+      openWeight.breaker.trip();
+      return this.askOpenWeight(openWeight, instructions, input, effort, inputChars, tally, failure.reason);
+    }
+    throw new ResponderFailed(failure.message, tally.requests, inputChars, failure.reason, openWeight ? tally.list() : undefined);
+  }
+
+  private async askOpenWeight(
+    openWeight: OpenWeightFallback,
+    instructions: string,
+    input: ModelMessage[],
+    effort: ReasoningEffort,
+    inputChars: number,
+    tally: UsageTally,
+    primaryReason: string,
+  ): Promise<CallResult> {
+    const { client } = openWeight;
+    tally.add(client.model, 1, inputChars);
+    const fail = (reason: string) =>
+      new ResponderFailed("The model and its fallback failed.", tally.requests, inputChars, `primary_${primaryReason},fallback_${reason}`, tally.list());
+    let answer: OpenWeightAnswer;
+    try {
+      answer = await client.ask({ instructions, input, maxTokens: MAX_OUTPUT_TOKENS, effort });
+    } catch (err) {
+      throw fail(err instanceof OpenWeightFailed ? err.reason : "request_error");
+    }
+    if (!answer.complete) throw fail("incomplete");
+    if (!answer.text) throw fail("empty");
+    return { text: answer.text, model: client.model };
   }
 
   // One try: a request, plus an identical hedge when the first is slow.
@@ -315,9 +425,17 @@ export class SparkResponder implements Responder {
     const launch = (): Promise<string> => {
       const controller = new AbortController();
       controllers.push(controller);
-      const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+      let timedOut = false;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, this.timeoutMs);
       sent.requests += 1;
-      return this.request(body, controller.signal).finally(() => clearTimeout(timeout));
+      return this.request(body, controller.signal)
+        .catch((err: unknown) => {
+          throw timedOut ? new CallFailed("timeout", "Model request timed out.", true, true) : err;
+        })
+        .finally(() => clearTimeout(timeout));
     };
     let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -336,7 +454,7 @@ export class SparkResponder implements Responder {
       return await Promise.any(racers);
     } catch (err) {
       const errors = err instanceof AggregateError ? err.errors : [err];
-      throw errors.find((e) => e instanceof FatalCall) ?? errors[0];
+      throw errors.find((e) => e instanceof CallFailed && !e.retry) ?? errors[0];
     } finally {
       clearTimeout(hedgeTimer);
       for (const controller of controllers) controller.abort();
@@ -349,16 +467,30 @@ export class SparkResponder implements Responder {
       "content-type": "application/json",
     };
     if (!this.collectLogs) headers["cf-aig-collect-log"] = "false";
-    const res = await this.fetchFn(`${this.baseUrl}/responses`, { method: "POST", signal, headers, body });
-    if (res.status !== 429 && res.status < 500 && !res.ok) {
-      throw new FatalCall(`http_${res.status}`, `Model request failed: ${res.status}`);
+    let res: Response;
+    try {
+      res = await this.fetchFn(`${this.baseUrl}/responses`, { method: "POST", signal, headers, body });
+    } catch (err) {
+      throw new CallFailed("network", err instanceof Error ? err.message : "Model request failed.", true, true);
     }
-    const data: unknown = await res.json().catch(() => ({}));
-    if (res.status === 429 || res.status >= 500) throw new Error(`Model request failed: ${res.status}`);
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      const retry = res.status === 429 || res.status >= 500;
+      throw new CallFailed(`http_${res.status}`, `Model request failed: ${res.status}`, retry, primaryDownStatus(res.status));
+    }
+    // A connection lost while the body streams in is a failed connection,
+    // as if it never connected. A whole body that is not JSON is no answer.
+    let raw: string;
+    try {
+      raw = await res.text();
+    } catch (err) {
+      throw new CallFailed("network", err instanceof Error ? err.message : "Model response was cut off.", true, true);
+    }
+    const data = parseJson(raw);
     const status = (data as { status?: unknown })?.status;
-    if (typeof status === "string" && status !== "completed") throw new FatalCall(`run_${status}`, `Model run ${status}.`);
+    if (typeof status === "string" && status !== "completed") throw new CallFailed(`run_${status}`, `Model run ${status}.`, false, false);
     const text = extractOutputText(data).trim();
-    if (!text) throw new Error("Model returned no text.");
+    if (!text) throw new CallFailed("empty", "Model returned no text.", true, false);
     return text;
   }
 }

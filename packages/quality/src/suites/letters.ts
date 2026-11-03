@@ -10,6 +10,19 @@ import type { BenchCase, CaseFacts } from "./types.ts";
 
 export const LETTERS_SUITE_VERSION = 1;
 
+// The date on the second page of the two-date letters.
+const SECOND_PAGE_DATE = "November 1, 2026";
+
+// When a letter says the person must act: one date, or two dates that
+// disagree, which Mano must not pick between. A scam sets none (null).
+export type LetterDeadline = { kind: "one"; date: string } | { kind: "contested"; dates: string[] };
+
+export function letterDeadline(c: BenchCase): LetterDeadline | null {
+  if (c.suite !== "letters" || c.category === "scam") return null;
+  const due = stateByCode(c.state).renewalDate;
+  return c.category === "conflict" ? { kind: "contested", dates: [due, SECOND_PAGE_DATE] } : { kind: "one", date: due };
+}
+
 interface LetterSeed {
   kind: "renewal" | "missing-doc" | "approval" | "scam" | "conflict";
   state: string;
@@ -101,16 +114,16 @@ function conflictLetter(s: FixtureState): { lines: string[]; transcript: string;
   const [a] = s.programs;
   const transcript =
     `${s.name} Benefits Office. ${a!.name} renewal notice. Your renewal is due ${s.renewalDate}. ` +
-    `A second page says: final deadline November 1, 2026. Questions: ${a!.phone}.`;
+    `A second page says: final deadline ${SECOND_PAGE_DATE}. Questions: ${a!.phone}.`;
   return {
-    lines: ["Renewal notice", `Due ${s.renewalDate}`, "Second page says: final deadline November 1, 2026"],
+    lines: ["Renewal notice", `Due ${s.renewalDate}`, `Second page says: final deadline ${SECOND_PAGE_DATE}`],
     transcript,
     ask: "When is my renewal due? The letter says two dates.",
     answer:
       `Your letter lists two different dates [letter 1], so I will not guess. One page says ${s.renewalDate} ` +
-      `and the other says November 1, 2026. The safe move is the earlier date. ` +
+      `and the other says ${SECOND_PAGE_DATE}. The safe move is the earlier date. ` +
       `I can call the office at ${a!.phone} with you to confirm which date controls your ${a!.name} case.`,
-    include: ["[letter 1]", s.renewalDate, "November 1, 2026"],
+    include: ["[letter 1]", s.renewalDate, SECOND_PAGE_DATE],
   };
 }
 
@@ -136,7 +149,7 @@ export function buildLettersCases(): BenchCase[] {
     }
     if (seed.kind === "conflict") {
       const L = conflictLetter(s);
-      facts.allowedDates = [...facts.allowedDates, "November 1, 2026"];
+      facts.allowedDates = [...facts.allowedDates, SECOND_PAGE_DATE];
       facts.citations = ["two different dates"];
       return makeCase(id, s.code, "conflict", L, facts, i);
     }

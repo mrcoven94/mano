@@ -18,6 +18,7 @@ describe("gateSentence publishes only the closed forms", () => {
     ["no-later-than", "You must renew your case no later than December 15, 2026.", "2026-12-15"],
     ["due", "Your renewal is due November 20, 2026.", "2026-11-20"],
     ["due", "Your premium is due on December 1, 2026.", "2026-12-01"],
+    ["due", "Your next renewal is due November 22, 2026.", "2026-11-22"],
   ])("%s: %s", (form, sentence, iso) => {
     expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "deadline", form, iso });
   });
@@ -70,6 +71,8 @@ describe("gateSentence asks on everything else", () => {
     "Your refund is due on November 20, 2026.",
     "Your refund must be paid by November 20, 2026.",
     "Renewal due November 20, 2026.",
+    "Next renewal November 22, 2026.",
+    "Your next renewal is November 22, 2026.",
     "It must arrive by November 25, 2026.",
     "Dear Maria Santos, Return the form by November 20, 2026.",
     "Your renewal is due tomorrow.",
