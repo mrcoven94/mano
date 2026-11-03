@@ -57,7 +57,7 @@ const OWED_NOUNS = [
   "forms?", "packets?", "paperwork", "applications?", "proofs?", "documents?", "items?", "papers",
   "verifications?", "pay stubs?", "statements?", "ids?", "cop(?:y|ies)", "information", "response",
   "reply", "appeal", "requests?", "renewal", "recertification", "letters?", "bills?", "receipts?",
-  "premium", "lease",
+  "premium", "lease", "requests? for(?: a)? (?:hearing|reconsideration)",
 ];
 // What the office holds, decides or reviews. The person can request
 // one, so it may be an object, but never the subject of a duty: "your
@@ -74,9 +74,8 @@ const PROGRAMS = any([
 ]);
 const PROGRAM_NOUNS = any(["forms?", "packets?", "paperwork", "applications?", "renewal", "recertification"]);
 const OF_PHRASE = String.raw`of\s+(?:your\s+)?(?:household\s+)?(?:income|address|identity|residency)`;
-const FOR_PHRASE = String.raw`for\s+(?:a\s+)?(?:hearing|reconsideration)`;
 const item = (nouns: string[]): string =>
-  String.raw`(?:${PROGRAMS}\s+(?:${ADJECTIVES}\s+){0,3}${PROGRAM_NOUNS}|(?:${ADJECTIVES}\s+){0,3}${any(nouns)}(?:\s+(?:${OF_PHRASE}|${FOR_PHRASE}))?)`;
+  String.raw`(?:${PROGRAMS}\s+(?:${ADJECTIVES}\s+){0,3}${PROGRAM_NOUNS}|(?:${ADJECTIVES}\s+){0,3}${any(nouns)}(?:\s+${OF_PHRASE})?)`;
 const ITEM = item([...OWED_NOUNS, ...OFFICE_NOUNS]);
 const OWED_ITEM = item(OWED_NOUNS);
 const NOUN_PHRASE = String.raw`(?:${DETERMINERS}\s+)?${ITEM}(?:\s+(?:listed\s+)?(?:below|above)|\s+enclosed)?`;
@@ -196,6 +195,12 @@ const DUTY_WORDS = new RegExp(
   "i",
 );
 
+// A participle the grammar publishes ("must be received") states the
+// same response as its verb.
+const RESPOND = new RegExp(
+  String.raw`\b(?:respond|response|return|send|submit|provide|arrive|receive|paperwork|complete|deliver|mail|bring|due|deadline|no\s+later\s+than|${PARTICIPLES})\b`,
+);
+
 // The duty a deadline states, read from its own words. Dates within
 // one duty are compared with each other.
 export function obligationOf(text: string): Obligation {
@@ -203,13 +208,7 @@ export function obligationOf(text: string): Obligation {
   if (/\b(appeal|hearing|grievance|reconsideration|dispute|contest|decision)\b/.test(t)) return "appeal";
   if (/\b(pay|payment|premium|amount due|balance due)\b/.test(t) && !/\bpay stubs?\b/.test(t)) return "pay";
   if (/\b(renew|renewal|recertif|redetermin)\b/.test(t)) return "renew";
-  if (
-    /\b(respond|response|return|send|submit|provide|arrive|receive|paperwork|complete|deliver|mail|bring|due|deadline|no later than)\b/.test(
-      t,
-    )
-  ) {
-    return "respond";
-  }
+  if (RESPOND.test(t)) return "respond";
   return "other";
 }
 
