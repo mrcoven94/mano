@@ -401,3 +401,29 @@ test("an apostrophe year and a 24/7/year date are still read", async () => {
   }
   assert.equal((await deadline("letters-19", "Your renewal is due 24/7/2027."))?.pass, false);
 });
+
+test("a hyphen or dot date, a year after in, and a time or count after the day are read", async () => {
+  const deadline = async (id: string, text: string) => (await readerCheck(id, text)).find((r) => r.id === "deadline");
+  for (const text of [
+    "It is due 11-15-2026.",
+    "It is due 11.15.2026.",
+    "It is due 15.11.2026.",
+    "It is due November 15 in 2026.",
+    "It is due November 15, 10 AM.",
+    "It is due November 15, 10:30.",
+    "It is due November 15, 13 days from today.",
+    "It is due November 15, 16 days after the letter date.",
+  ]) {
+    assert.equal((await deadline("letters-01", text))?.pass, true, text);
+  }
+  for (const text of [
+    "Your renewal is due 11.16.2026.",
+    "It is due November 15, 2026. Your renewal is due 11.16.2026.",
+    "It is due November 15, 2026. Your renewal is due 11-16-26.",
+    "It is due November 15 in 2027.",
+    "It is due 15 November of 2027.",
+  ]) {
+    assert.equal((await deadline("letters-01", text))?.pass, false, text);
+  }
+  assert.equal((await deadline("letters-19", "Your deadline is 11-25-2026."))?.pass, false, "a hyphen date singles out one of two");
+});
