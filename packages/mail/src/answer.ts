@@ -13,6 +13,7 @@ import type { Letter, LetterFields, MailReading, Question } from "./types.js";
 export type DeadlineKind = "renewal" | "recertification" | "interview" | "hearing" | "appeal" | "payment" | "documents";
 
 export type LetterType =
+  | "approval"
   | "renewal"
   | "interview"
   | "documents needed"
@@ -102,8 +103,11 @@ function letterText(letter: Letter): string {
     .toLowerCase();
 }
 
-// First match wins: the narrowest types come first.
+// First match wins: the narrowest types come first. An approval names
+// what was approved, so its next renewal or hearing rights never make it
+// a renewal or hearing letter.
 const TYPES: [RegExp, LetterType][] = [
+  [/\b(?:case|application|benefits?|coverage)\s+(?:is\s+|was\s+|has\s+been\s+|have\s+been\s+)?approved\b|\bwe\s+(?:have\s+)?approved\b|\bapproval\s+(?:notice|letter)\b|\bnotice\s+of\s+approval\b/, "approval"],
   [/\bhearing\b|\bappeal/, "hearing"],
   [/overpa(id|yment)/, "overpayment"],
   [/\bden(ied|ial)\b|not eligible|ineligible/, "denial"],
@@ -119,6 +123,7 @@ function typeOf(letter: Letter): LetterType {
 }
 
 const TYPE_WORDS: Record<LetterType, (program: string) => string> = {
+  approval: (p) => `This is a ${p} approval letter.`,
   renewal: (p) => `This is a ${p} renewal letter.`,
   interview: (p) => `This is a ${p} letter about an interview.`,
   "documents needed": (p) => `This is a ${p} letter asking for documents.`,
@@ -217,7 +222,9 @@ function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; 
       federalProgram: program?.federal ?? null,
       sentence: proposal.quote,
     };
-    lines.push(`It is due ${spoken(proposal.dueDate)}.`);
+    // On an approval the deadline is the next renewal, not the letter's.
+    const next = type === "approval" && (kind === "renewal" || kind === "recertification");
+    lines.push(next ? `Your next ${kind} is due ${spoken(proposal.dueDate)}.` : `It is due ${spoken(proposal.dueDate)}.`);
   } else if (question) {
     ask = heldBackQuestion(question);
   }
