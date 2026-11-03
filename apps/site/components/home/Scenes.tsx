@@ -124,7 +124,6 @@ export function HoldScene() {
   const mm = String(Math.floor(t / 60)).padStart(2, "0");
   const ss = String(t % 60).padStart(2, "0");
   const lines: [string, string, string, number, string?][] = [
-    ["00:04", "Mano", "I'm calling for Maria Lopez about her prescription coverage. I'm her automated assistant, and this call is transcribed.", 0.3],
     ["00:09", "Recording", "All of our caseworkers are busy. Please stay on the line.", 1.2, "dim"],
     ["31:40", "Mano", "Texted Maria: still on hold, number 3 in line.", 2.4, "dim"],
     ["47:10", "Caseworker", "Thanks for holding, this is Dana.", 5.0],

@@ -35,7 +35,7 @@ export default function Reach() {
     <div className="rc">
       <div className="h-head">
         <h2 id="rc-h">Mano knows every office, in every county.</h2>
-        <p className="lede">What each office offers, when it is open and how to reach it, for every county in the country. Built by a team that has helped people get more than $740 million. Powered by <a href={FRONT_DOOR}>Front Door</a>.</p>
+        <p className="lede">What each office offers, when it is open and how to reach it, for every county in the country. Powered by <a href={FRONT_DOOR}>Front Door</a>.</p>
       </div>
 
       <div className="rc-stage" ref={ref} data-in={seen || undefined}>

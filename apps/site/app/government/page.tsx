@@ -18,7 +18,7 @@ const faqs: [string, string][] = [
   ["Do we have to replace our current system?", "No. Your agent types approved cases into the system you already run, the way a person would, and reads the screen back to check it. The old system stays and the retyping goes away."],
   ["Who decides a case?", "Your staff. Mano prepares the case, cites the rule behind each finding and flags what it cannot settle. A person approves, denies or asks for more."],
   ["What can a resident see about our office?", "Your profile, and the cases they chose to share with you. A resident shares a case for one purpose and can take that access back."],
-  ["Do agents call residents or other offices?", "Only when staff approve it. Every call starts by saying whose automated assistant is calling and that the call is transcribed."],
+  ["Do agents call residents or other offices?", "No. Mano does not speak on phone calls. Staff approve every message it sends, and each one says it was prepared with Mano."],
   ["How is it priced?", "Per staff seat. Residents never pay for anything your office asks Mano to do."],
   ["Is Mano a government system?", "No. Mano is independent. Your office keeps its own systems, seals and authority, and Mano never presents itself as your office."],
 ];
@@ -62,7 +62,7 @@ export default function Government() {
           ["A person approves", "every case and every notice."],
           ["Every finding cites", "the rule it rests on, with the evidence attached."],
           ["Nothing is entered twice.", "After a timeout, Mano checks whether the case was saved before it tries again."],
-          ["Agents say they are automated", "on every call, and that the call is transcribed."],
+          ["Agents say they are automated", "in every message they send."],
           ["Your systems, seal and authority", "stay yours."],
         ]}
         log={{

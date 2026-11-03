@@ -17,7 +17,7 @@ const SCENES: SceneDef[] = [
   { key: "apply", tab: "Pay rent", how: "Applies for help", phrase: "helps you pay rent", Scene: ApplyScene },
   { key: "forms", tab: "Find child care", how: "Fills out any form", phrase: "finds child care", Scene: FormScene },
   { key: "renew", tab: "Keep the lights on", how: "Renews on time", phrase: "keeps the lights on", Scene: RenewScene },
-  { key: "hold", tab: "Get your medicine", how: "Waits on hold", phrase: "gets your medicine", Scene: HoldScene },
+  { key: "hold", tab: "Get your medicine", how: "Waits on hold, coming soon", phrase: "gets your medicine", Scene: HoldScene },
 ];
 
 export default function HeroStage() {

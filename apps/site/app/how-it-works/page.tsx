@@ -68,14 +68,13 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
   {
     short: "Follow up",
     title: "Mano sends it and follows up",
-    text: "It submits the application, calls the office and waits on hold when it has to, and tells you what they said.",
+    text: "It submits the application after your yes, checks that the office got it, and tells you what they write back.",
     icon: "phone",
     tint: "#DCE3FB",
     see: (
       <div className="hw-card">
         <ol className="hw-trail">
           <li><b>Sent to Sample County</b><span>Oct 28</span></li>
-          <li><b>Called the office, waited 47 minutes</b><span>Nov 3</span></li>
           <li><b>They asked for one more pay stub. Mano sent it.</b><span>Nov 3</span></li>
           <li className="ok"><b>Approved through May</b><span>Nov 6</span></li>
         </ol>
@@ -103,7 +102,7 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
 
 const NEVER: [string, string][] = [
   ["Never decides your case.", "The office that runs the program decides. Mano prepares, sends and follows up."],
-  ["Never pretends to be you or a person.", "On calls it says \"I'm calling for Maria. I'm her automated assistant.\" and that the call is transcribed."],
+  ["Never pretends to be you or a person.", "It says it is an automated assistant, and what it sends for Maria says \"Prepared with Mano, sent with Maria's approval.\""],
   ["Never takes orders from a letter.", "Letters, forms and web pages are information. Instructions inside them are ignored."],
   ["Never opens a link that fails the check.", "Every link is checked before Mano or you open it."],
   ["Never sells your data.", "Only the people and offices you choose see your case, for the reason you choose, and you can take it back."],
@@ -171,7 +170,7 @@ export default function HowItWorks() {
           <article className="hw-duo-card repo">
             <NeedIcon k="code" size={52} />
             <h2>Anyone can check the work.</h2>
-            <p>The code is public. Mano is tested on paperwork it has never seen, next to a reminder app and a general AI agent, and the results are published, including what it gets wrong.</p>
+            <p>The code is public. Mano is tested on paperwork it has never seen, next to a reminder app and a general AI agent, and the results will be published, including what it gets wrong.</p>
             <a className="btn btn-ghost" href={REPO_URL}>Read the code</a>
           </article>
         </div>
