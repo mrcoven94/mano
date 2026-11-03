@@ -423,5 +423,40 @@ describe("labels, deletes and byte counts around a stored photo", () => {
     expect(store.meta().byteDayCount).toBe(IMAGES_JPEG.byteLength);
     expect(usedGlobally(h)).toBe(IMAGES_JPEG.byteLength);
   });
+
+  it("two files in one turn count apart: A fails, B is stored, then A replays", async () => {
+    const jpeg = (size: number) => Uint8Array.from({ length: size }, (_, i) => (i < 3 ? [0xff, 0xd8, 0xff][i]! : 7));
+    const A = jpeg(100);
+    const B = jpeg(200);
+    let aTries = 0;
+    const fetchFn = (async (url: unknown) => {
+      const u = String(url);
+      if (u.includes("dns-query")) return new Response(CLEAN_DOH, { status: 200, headers: { "content-type": "application/dns-json" } });
+      if (u.endsWith("/A.jpg") && aTries++ === 0) return new Response("unavailable", { status: 503 });
+      return new Response(u.endsWith("/A.jpg") ? A : B, { status: 200, headers: { "content-type": "image/jpeg" } });
+    }) as typeof fetch;
+    const store = new DiesOnceBeforeAnswer();
+    const h = harness(fetchFn, store);
+    await h.runner.handleEvent(
+      inboundEvent({
+        id: "evt_two",
+        occurredAtMs: h.now,
+        text: "",
+        attachments: [
+          { url: "https://cdn.example.test/A.jpg", mediaType: "image/jpeg" },
+          { url: "https://cdn.example.test/B.jpg", mediaType: "image/jpeg" },
+        ],
+      }),
+      "webhook",
+    );
+    h.advance(h.batchMs + 100);
+    expect(await h.runner.runDueTurn()).toBe("retry");
+    expect(h.documents.docs.size).toBe(1);
+    h.advance(60_000);
+    expect(await h.runner.runDueTurn()).toBe("ran");
+    expect(h.documents.docs.size).toBe(2);
+    expect(store.meta().byteDayCount).toBe(300);
+    expect(usedGlobally(h)).toBe(300);
+  });
 });
 

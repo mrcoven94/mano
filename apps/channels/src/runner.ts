@@ -1540,7 +1540,10 @@ export class ConversationRunner {
         logger.warn("attachment_capped", { handle: this.logHandle(), turn, scope: "handle" });
         continue;
       }
-      const byteKey = chosen?.generation === generation ? chosen.byteKey : `${config.handleHash}:${turn}:${saved.length}`;
+      // Keyed by the file's place in the message, not by how many were
+      // saved before it: a file that failed once and replays later must
+      // never share a key with one stored after it.
+      const byteKey = `${config.handleHash}:${turn}:${index}`;
       const reservation = await spend.byteReserve(byteKey, MAX_ATTACHMENT_BYTES);
       if (!reservation.allowed) {
         logger.warn("attachment_capped", { handle: this.logHandle(), turn, scope: "global" });
