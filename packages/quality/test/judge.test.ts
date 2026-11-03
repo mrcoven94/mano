@@ -1,10 +1,16 @@
-// Judge: batching, shuffling, parsing, and calibration agreement.
+// Judge: batching, shuffling, parsing, calibration agreement, and what the
+// judge is shown on mail cases.
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { agreement, buildCalibrationSet } from "../src/calibration.ts";
-import { FakeJudge, JUDGE_BATCH_SIZE, MetaJudge, judgeAll, judgeMean, parseJudgeScores } from "../src/judge.ts";
+import { FakeJudge, JUDGE_BATCH_SIZE, JUDGE_LETTER_RULE, JUDGE_RUBRIC, MetaJudge, judgeAll, judgeMean, judgePrompt, parseJudgeScores } from "../src/judge.ts";
 import type { JudgeItem } from "../src/judge.ts";
+import { LocalDns } from "../src/links.ts";
+import { ReferencePath, needsMailReader, type AnswerPath, type PathSet } from "../src/paths.ts";
+import { judgeFacts, runBench } from "../src/run.ts";
+import { buildAllSuites } from "../src/suites/build.ts";
+import type { BenchCase } from "../src/suites/types.ts";
 
 const item: JudgeItem = { answer: "a", facts: "f", reference: "r" };
 
@@ -78,4 +84,79 @@ test("the judge leaves room for reasoning in a full batch", async () => {
   } };
   await new MetaJudge(model).score(new Array(JUDGE_BATCH_SIZE).fill(item));
   assert.ok(asked >= 8192, `judge capped at ${asked} tokens`);
+});
+
+// The judge on the mail path used to see only the person's words, so it
+// called every fact read off the letter invented.
+function capturingModel(prompts: string[]) {
+  return {
+    id: "m", live: true,
+    complete: async (messages: { content: string }[]) => {
+      const prompt = messages[0]!.content;
+      prompts.push(prompt);
+      const count = prompt.split("--- answer ").length - 1;
+      return { text: JSON.stringify(new Array(count).fill({ helpful: 4, accurate: 4, plain: 4, warm: 4, pass: true, reason: "ok" })), inputTokens: 1, outputTokens: 1 };
+    },
+  };
+}
+
+// The mail reader answers without the program catalog, as the live mail path does.
+const mailStub: AnswerPath = { name: "mail-stub", live: false, knowsCatalog: false, answer: (c) => new ReferencePath().answer(c) };
+const benchPaths: PathSet = {
+  forCase: (c) => (needsMailReader(c) ? { path: mailStub, standin: true, detail: "mail stub" } : { path: new ReferencePath(), standin: true, detail: "reference" }),
+  textLineModel: null,
+};
+
+async function promptsFor(ids: string[]): Promise<string[]> {
+  const prompts: string[] = [];
+  await runBench({ onlyCaseIds: new Set(ids), judge: new MetaJudge(capturingModel(prompts)), dns: new LocalDns(), pathSet: benchPaths, env: {}, skipCalibration: true });
+  return prompts;
+}
+
+function benchCase(id: string): BenchCase {
+  const c = buildAllSuites().flatMap((s) => s.cases).find((x) => x.id === id);
+  assert.ok(c, `case ${id} exists`);
+  return c;
+}
+
+test("on a mail case the judge receives the letter, marked as the letter, and the rule that its facts are grounded", async () => {
+  const c = benchCase("letters-01");
+  const transcript = c.input.images![0]!.transcript;
+  const [prompt] = await promptsFor([c.id]);
+  assert.ok(prompt!.includes(`Letter the person sent:\n${transcript}\n`), "the letter's text is in the prompt under its label");
+  assert.ok(prompt!.includes(JUDGE_LETTER_RULE), "the rubric says letter facts are grounded");
+  assert.ok(prompt!.includes(`The person wrote:\n${c.input.turns.join("\n")}`), "the person's own words are still there");
+});
+
+test("a case with no letter gets the judge prompt it always got", async () => {
+  const c = benchCase("chat-ca-01");
+  const [prompt] = await promptsFor([c.id]);
+  assert.equal(
+    prompt,
+    `${JUDGE_RUBRIC}\n\n--- answer 1 ---\nFacts given to the writer:\n${judgeFacts(c, true)}\nReference answer:\n${c.reference}\nAnswer to score:\n${c.reference}`,
+  );
+  assert.ok(!prompt!.includes("Letter the person sent"), "no letter label");
+  assert.ok(!prompt!.includes(JUDGE_LETTER_RULE), "no letter rule");
+});
+
+test("in a mixed batch only the mail case carries a letter", () => {
+  const prompt = judgePrompt([
+    { answer: "text answer", facts: "text facts", reference: "text reference" },
+    { answer: "mail answer", facts: "mail facts", reference: "mail reference", letter: "the letter text" },
+  ]);
+  const [textBlock, mailBlock] = prompt.split(/--- answer \d ---/).slice(1);
+  assert.equal(textBlock, "\nFacts given to the writer:\ntext facts\nReference answer:\ntext reference\nAnswer to score:\ntext answer\n\n");
+  assert.ok(mailBlock!.includes("Letter the person sent:\nthe letter text\n"));
+});
+
+test("the stand-in judge counts a fact read off the letter as grounded", async () => {
+  const mail: JudgeItem = {
+    answer: "Your letter says to call (555) 010-0142 with questions.",
+    facts: "phones: none",
+    reference: "Your letter says to call the office with questions.",
+  };
+  const [without] = await new FakeJudge().score([mail]);
+  assert.equal(without!.pass, false, "without the letter the phone reads as invented");
+  const [withLetter] = await new FakeJudge().score([{ ...mail, letter: "Questions: (555) 010-0142." }]);
+  assert.equal(withLetter!.pass, true, withLetter!.reason);
 });
