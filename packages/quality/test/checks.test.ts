@@ -353,6 +353,17 @@ test("a reply to a letter with two dates names both or neither, never one", asyn
   assert.equal((await deadline("Your renewal is due November 1, 2026."))?.pass, false, "picks the earlier date");
 });
 
+test("a reply to a letter that only hedges its date asks the person to confirm it", async () => {
+  const deadline = async (id: string, text: string) => (await readerCheck(id, text)).find((r) => r.id === "deadline");
+  // letters-24 counts 10 days from the notice, letters-25 sets the date by a condition, letters-26 prints it only in a table.
+  assert.equal((await deadline("letters-24", "It says to return the form within 10 days of the notice. Is November 6, 2026 the date you need to meet?"))?.pass, true);
+  assert.equal((await deadline("letters-24", "Your form is due November 6, 2026."))?.pass, false, "holds the counted date");
+  assert.equal((await deadline("letters-24", "Is November 7, 2026 your deadline?"))?.pass, false, "a date the letter does not give");
+  assert.equal((await deadline("letters-25", "It looks like the letter gives a deadline of November 20, 2026. Is that the date you need to meet?"))?.pass, true);
+  assert.equal((await deadline("letters-25", "Send the proofs by November 20, 2026. Want a reminder?"))?.pass, false, "a question that is not about the date");
+  assert.equal((await deadline("letters-26", "Your renewal is due November 12, 2026."))?.pass, false, "holds the table's date");
+});
+
 test("the deadline check reads a date in any common format", async () => {
   const deadline = async (id: string, text: string) => (await readerCheck(id, text)).find((r) => r.id === "deadline");
   for (const text of ["It is due 2026-11-15.", "It is due November 15 2026.", "It is due Nov. 15.", "It is due 11/15/26.", "Vence el 15 de noviembre de 2026."]) {

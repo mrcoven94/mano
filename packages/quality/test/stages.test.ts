@@ -89,12 +89,12 @@ test("Guardian is scored the way its own eval scores it", async () => {
 
 test("mail deadline accuracy is labeled a stand-in until packages/mail merges", async () => {
   const letters = buildLettersCases();
-  assert.equal(letters.filter((c) => expectedDeadline(c) === null).length, 5, "3 scams and 2 two-date letters publish no deadline");
+  assert.equal(letters.filter((c) => expectedDeadline(c) === null).length, 8, "3 scams, 2 two-date letters and 3 hedged dates publish no deadline");
   const summary = await scoreMailDeadlines();
   assert.equal(summary.live, false);
   assert.match(summary.detail, /stand-in/);
-  assert.equal(summary.letters, 23);
-  assert.equal(summary.correct, 23, "the stand-in sets the printed date aside and reads the one deadline");
+  assert.equal(summary.letters, 26);
+  assert.equal(summary.correct, 26, "the stand-in sets the printed date aside, reads the one plain deadline and holds no hedged one");
   const wrong = await scoreMailDeadlines({ name: "always", live: true, readDeadline: async () => "November 15, 2026" }, "test reader");
   assert.ok(wrong.accuracy < 1);
   assert.ok(wrong.misses.some((m) => m.expected === null));

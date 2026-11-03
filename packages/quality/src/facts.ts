@@ -131,3 +131,8 @@ export const SCAM_PHONES = ["(555) 019-9001", "(555) 019-9002"] as const;
 
 // The second date on the letters that give two deadlines that disagree.
 export const CONFLICTING_DATE = "November 1, 2026";
+
+// The date letters version 2 are printed, and ten days after it, which a
+// letter that counts its deadline from the notice date lands on.
+export const PRINTED_DATE = "October 27, 2026";
+export const COUNTED_DATE = "November 6, 2026";

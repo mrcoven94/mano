@@ -31,7 +31,8 @@ export function syntheticPhoto(id: string, caption: string, transcript: string):
 export type LetterBlock =
   | { kind: "paragraph"; text: string }
   | { kind: "list"; items: string[] }
-  | { kind: "box"; text: string };
+  | { kind: "box"; text: string }
+  | { kind: "table"; rows: [string, string][] };
 
 export interface LetterPage {
   look: "office" | "scam";
@@ -81,7 +82,10 @@ function textAt(x: number, y: number, s: string, attrs = ""): string {
 }
 
 function pageTranscript(p: LetterPage): string {
-  const blocks = p.blocks.map((b) => (b.kind === "list" ? b.items.map((i) => `- ${i}`).join("\n") : b.text));
+  const blocks = p.blocks.map((b) =>
+    b.kind === "list" ? b.items.map((i) => `- ${i}`).join("\n")
+    : b.kind === "table" ? b.rows.map(([label, value]) => `${label}: ${value}`).join("\n")
+    : b.text);
   return [
     p.letterhead.join("\n"),
     ...(p.date ? [p.date] : []),
@@ -147,6 +151,18 @@ function pageSvg(p: LetterPage): string {
         out.push(textAt(MARGIN + 28, y, item, `font-size="15"`));
         y += 22;
       }
+    } else if (b.kind === "table") {
+      const h = 32;
+      y += 6;
+      out.push(`<rect x="${MARGIN}" y="${y - 22}" width="${PAGE_W - 2 * MARGIN}" height="${b.rows.length * h}" fill="none" stroke="#999999"/>`);
+      b.rows.forEach(([label, value], i) => {
+        const top = y - 22 + i * h;
+        if (i > 0) out.push(`<rect x="${MARGIN}" y="${top}" width="${PAGE_W - 2 * MARGIN}" height="1" fill="#999999"/>`);
+        out.push(`<rect x="${MARGIN}" y="${top}" width="240" height="${h}" fill="#f3f4f6"/>`);
+        out.push(textAt(MARGIN + 12, top + 21, label, `font-size="15" font-weight="bold"`));
+        out.push(textAt(MARGIN + 256, top + 21, value, `font-size="15"`));
+      });
+      y += b.rows.length * h + 4;
     } else {
       const lines = wrap(b.text, WRAP_CHARS - 6);
       out.push(`<rect x="${MARGIN}" y="${y - 22}" width="${PAGE_W - 2 * MARGIN}" height="${lines.length * 22 + 18}" fill="#f3f4f6" stroke="${ink}" stroke-width="2"/>`);

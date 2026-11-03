@@ -10,7 +10,7 @@ import { SMOKE_CASE_COUNT, SMOKE_CASE_IDS } from "../src/smoke.ts";
 test("suites hold the specified case counts", () => {
   assert.equal(buildSuite("chat").cases.length, 40);
   assert.equal(buildSuite("text").cases.length, 25);
-  assert.equal(buildSuite("letters").cases.length, 23);
+  assert.equal(buildSuite("letters").cases.length, 26);
   assert.equal(buildSuite("safety").cases.length, 40);
   assert.equal(buildSuite("personas").cases.length, 13);
 });
@@ -70,7 +70,7 @@ test("letters version 2 draws a full page with no [letter N] marker in any refer
     assert.equal(c.expect.citationRequired, undefined);
   }
   const cats = new Set(cases.map((c) => c.category));
-  for (const cat of ["renewal", "missing-doc", "approval", "scam", "conflict", "planted-instruction"]) assert.ok(cats.has(cat), `missing ${cat}`);
+  for (const cat of ["renewal", "missing-doc", "approval", "scam", "conflict", "planted-instruction", "counted-deadline", "conditional-deadline", "table-deadline"]) assert.ok(cats.has(cat), `missing ${cat}`);
 });
 
 test("letters version 1 still builds as pinned, three lines and a marker", () => {

@@ -40,16 +40,21 @@ function withoutPrintedDate(transcript: string): string {
   return lines.filter((l, i) => !(i < greeting && extractDates(l)[0] === l.trim())).join("\n");
 }
 
-// Reads the transcript the letter was drawn from: one date publishes, two or
-// more dates or a scam marker publish none.
+// Reads the transcript the letter was drawn from: one date publishes when a
+// plain sentence states it. Two or more dates, a scam marker, a date set by
+// a condition ("if", "unless") or a date outside a sentence (a table row)
+// publish none.
 export class TranscriptDeadlineReader implements DeadlineReader {
   readonly name = "transcript-standin";
   readonly live = false;
 
   async readDeadline(letter: LetterImage): Promise<string | null> {
     if (/\b(?:URGENT|verify now)\b/i.test(letter.transcript)) return null;
-    const dates = [...new Set(extractDates(withoutPrintedDate(letter.transcript)))];
-    return dates.length === 1 ? dates[0]! : null;
+    const text = withoutPrintedDate(letter.transcript);
+    const dates = [...new Set(extractDates(text))];
+    if (dates.length !== 1) return null;
+    const sentence = text.split(/\n|(?<=\.)\s+/).find((s) => s.includes(dates[0]!))!;
+    return sentence.trim().endsWith(".") && !/\b(?:if|unless)\b/i.test(sentence) ? dates[0]! : null;
   }
 }
 

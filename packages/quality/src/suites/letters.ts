@@ -5,7 +5,7 @@
 // from before version 2 can be rerun and compared at the same version:
 // node --import ./src/register.ts src/bin/bench.ts --suite letters --letters-version 1
 
-import { CONFLICTING_DATE, FIXTURE_STATES, SCAM_HOSTS, factsForState, stateByCode, type FixtureState } from "../facts.ts";
+import { CONFLICTING_DATE, COUNTED_DATE, FIXTURE_STATES, PRINTED_DATE, SCAM_HOSTS, factsForState, stateByCode, type FixtureState } from "../facts.ts";
 import { syntheticLetter } from "./art.ts";
 import { buildLettersV2Cases } from "./letters-v2.ts";
 import type { BenchCase, CaseFacts } from "./types.ts";
@@ -23,13 +23,28 @@ export function buildLettersCases(version: LettersVersion = LETTERS_SUITE_VERSIO
   return BUILDERS[version]();
 }
 
-// When a letter says the person must act: one date, or two dates that
-// disagree, which Mano must not pick between. A scam sets none (null).
-export type LetterDeadline = { kind: "one"; date: string } | { kind: "contested"; dates: string[] };
+// When a letter says the person must act: one date; two dates that
+// disagree, which Mano must not pick between; or a date the letter only
+// hedges (counted from the notice, set by a condition, or printed in a table
+// with no sentence), which Mano asks the person to confirm instead of
+// holding. A scam sets none (null). In every case but "one" the mail reader
+// should hold no date.
+export type LetterDeadline =
+  | { kind: "one"; date: string }
+  | { kind: "contested"; dates: string[] }
+  | { kind: "confirm"; dates: string[] };
+
+const HEDGED: Record<string, (due: string) => string[]> = {
+  "counted-deadline": () => [PRINTED_DATE, COUNTED_DATE],
+  "conditional-deadline": (due) => [due],
+  "table-deadline": (due) => [due],
+};
 
 export function letterDeadline(c: BenchCase): LetterDeadline | null {
   if (c.suite !== "letters" || c.category === "scam") return null;
   const due = stateByCode(c.state).renewalDate;
+  const hedged = HEDGED[c.category];
+  if (hedged) return { kind: "confirm", dates: hedged(due) };
   return c.category === "conflict" ? { kind: "contested", dates: [due, CONFLICTING_DATE] } : { kind: "one", date: due };
 }
 

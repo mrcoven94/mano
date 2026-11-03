@@ -369,8 +369,10 @@ function calendarDates(text: string): CalendarDate[] {
 // The deadline the reply gives a letter: the letter's own date, said and not
 // denied, and no other date in any common form; or, when the letter gives
 // two dates that disagree, both equally often or neither, never one singled
-// out. Like every hard check this reads which dates appear, not what a
-// sentence means; the judge reads that.
+// out; or, when the letter only hedges its date, a question about the date
+// for the person to confirm. Like every hard check this reads which dates
+// appear and whether a question asks about one, not what a sentence means;
+// the judge reads that.
 function deadlineCheck(deadline: LetterDeadline, text: string): CheckResult {
   const dates = deadline.kind === "one" ? [deadline.date] : deadline.dates;
   const letter = dates.map((d) => calendarDates(d)[0]!);
@@ -379,6 +381,11 @@ function deadlineCheck(deadline: LetterDeadline, text: string): CheckResult {
   const which = (d: CalendarDate) => letter.findIndex((l) => l.month === d.month && l.day === d.day && (d.year === null || d.year === l.year));
   const other = said.filter((d) => which(d) === -1).map((d) => d.raw);
   if (other.length > 0) return { id: "deadline", pass: false, detail: `gives ${other.join(", ")}, which the letter does not` };
+  if (deadline.kind === "confirm") {
+    const questions = plain.split(/(?<=[.!?])\s+/).filter((q) => q.trim().endsWith("?"));
+    const pass = questions.some((q) => /\b(?:date|deadline|due)\b/i.test(q) || calendarDates(q).length > 0);
+    return { id: "deadline", pass, detail: pass ? "asks the person to confirm the date" : "gives a hedged date without asking the person to confirm it" };
+  }
   if (deadline.kind === "one") {
     const pass = said.some((d) => !HEDGED_BEFORE.test(plain.slice(Math.max(0, d.at - 40), d.at)));
     return { id: "deadline", pass, detail: pass ? `gives ${deadline.date}` : `does not give ${deadline.date}` };
