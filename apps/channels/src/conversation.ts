@@ -456,7 +456,7 @@ export class ConversationDO implements DurableObject {
         turn: store.meta().turn,
         introduced: store.meta().introduced,
         pending: store.pending().length,
-        approvals: store.pendingApprovals(Date.now()).length,
+        approvals: store.pendingApprovalCount(Date.now()),
         engineDeletePending: loadPendingDelete(this.ctx.storage.sql),
       });
     }

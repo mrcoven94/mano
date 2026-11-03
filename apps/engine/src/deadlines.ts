@@ -420,8 +420,11 @@ interface Row {
   updated_at_ms: number;
 }
 
+const DEADLINE_COLUMNS =
+  "id, title, due_date, program, kind, source_json, status, revision, previous_due_date, time_zone, created_at_ms, updated_at_ms";
+
 function row(sql: SqlExec, id: string): Row | null {
-  return (sql.exec("SELECT * FROM deadlines WHERE id = ?", id).toArray()[0] as Row | undefined) ?? null;
+  return (sql.exec(`SELECT ${DEADLINE_COLUMNS} FROM deadlines WHERE id = ?`, id).toArray()[0] as Row | undefined) ?? null;
 }
 
 function view(sql: SqlExec, r: Row): Deadline {
@@ -455,7 +458,7 @@ function view(sql: SqlExec, r: Row): Deadline {
 }
 
 export function listDeadlines(sql: SqlExec): Deadline[] {
-  const rows = sql.exec("SELECT * FROM deadlines ORDER BY status != 'open', due_date, id").toArray() as Row[];
+  const rows = sql.exec(`SELECT ${DEADLINE_COLUMNS} FROM deadlines ORDER BY status != 'open', due_date, id`).toArray() as Row[];
   return rows.map((r) => view(sql, r));
 }
 

@@ -186,8 +186,29 @@ export function parseReplayInput(raw: unknown): ReplayInput {
   return { labels: Object.fromEntries(labelEntries) as Record<string, string>, steps: parsed };
 }
 
+// The link half of a replay, without the labels and steps.
+export type ReplayLink = Pick<StoredReplay, "requestHash" | "linkKey" | "sealedToken" | "linkExpiresAtMs">;
+
+export function getFillReplayLink(sql: SqlExec, approvalId: string): ReplayLink | null {
+  const row = sql
+    .exec("SELECT request_hash, link_key, link_token_sealed, link_expires_at_ms FROM fill_replays WHERE approval_id = ?", approvalId)
+    .toArray()[0] as { request_hash: string; link_key: string; link_token_sealed: string; link_expires_at_ms: number } | undefined;
+  if (!row) return null;
+  return {
+    requestHash: row.request_hash,
+    linkKey: row.link_key,
+    sealedToken: row.link_token_sealed,
+    linkExpiresAtMs: Number(row.link_expires_at_ms),
+  };
+}
+
 export function getFillReplay(sql: SqlExec, approvalId: string): StoredReplay | null {
-  const row = sql.exec("SELECT * FROM fill_replays WHERE approval_id = ?", approvalId).toArray()[0] as
+  const row = sql
+    .exec(
+      "SELECT approval_id, request_hash, generation, labels_json, steps_json, link_key, link_token_sealed, link_expires_at_ms FROM fill_replays WHERE approval_id = ?",
+      approvalId,
+    )
+    .toArray()[0] as
     | {
         approval_id: string;
         request_hash: string;
@@ -231,7 +252,7 @@ export async function finishLinkCleanup(sql: SqlExec, deleteObjects: (keys: stri
 
 // The link's token while it still opens, or null.
 export async function replayLinkToken(deps: { sql: SqlExec; storage: ReplayStorage }, approvalId: string, nowMs: number): Promise<string | null> {
-  const replay = getFillReplay(deps.sql, approvalId);
+  const replay = getFillReplayLink(deps.sql, approvalId);
   return replay && replay.linkExpiresAtMs > nowMs ? deps.storage.openToken(approvalId, replay.sealedToken) : null;
 }
 
@@ -254,7 +275,7 @@ export async function bindFillReplay(
   generation: number,
 ): Promise<BindOutcome> {
   const { sql, approvals, storage } = deps;
-  const existing = getFillReplay(sql, approvalId);
+  const existing = getFillReplayLink(sql, approvalId);
   if (existing) return { status: "existing", token: await storage.openToken(approvalId, existing.sealedToken) };
   const approval = approvals.getApproval(approvalId);
   if (!approval) return { status: "not_found" };
@@ -298,7 +319,7 @@ export async function bindFillReplay(
   if (written > 0) return { status: "created", token };
 
   await storage.deleteObjects([key, ...stored]);
-  const raced = getFillReplay(sql, approvalId);
+  const raced = getFillReplayLink(sql, approvalId);
   if (raced) return { status: "existing", token: await storage.openToken(approvalId, raced.sealedToken) };
   return generation !== currentGeneration(sql) ? { status: "stale" } : { status: "closed" };
 }
@@ -334,9 +355,9 @@ export async function replayPage(
   const key = await linkKey(token);
   // Read again after every wait: other requests to this person run while
   // the document and the images are read, and may decline, replace or
-  // delete this version in between.
-  const read = () => {
-    const replay = getFillReplay(deps.sql, approvalId);
+  // delete this version in between. Only the first read loads the steps
+  // and labels: a row whose link key still matches is the same row.
+  const read = <R extends ReplayLink>(replay: R | null) => {
     if (!replay || !timingSafeEqual(replay.linkKey, key) || replay.linkExpiresAtMs <= deps.nowMs) return null;
     const approval = deps.approvals.getApproval(approvalId);
     if (!approval) return null;
@@ -350,7 +371,7 @@ export async function replayPage(
     };
     return { replay, approval, facts };
   };
-  const first = read();
+  const first = read(getFillReplay(deps.sql, approvalId));
   if (!first) return null;
   const early = settledState(first.facts);
   if (early === "changed" || early === "closed") return renderReplayPage({ state: early });
@@ -358,12 +379,13 @@ export async function replayPage(
   // The document is checked after the images and the rows after both, so
   // nothing a page shows as current changed during an earlier wait.
   const exact = early === null ? await deps.exact(first.approval) : true;
-  const now = read();
+  const now = read(getFillReplayLink(deps.sql, approvalId));
   if (!now) return null;
   const state = settledState(now.facts) ?? (exact ? "current" : "changed");
   if (state === "changed" || state === "closed") return renderReplayPage({ state });
   if (images.some((png) => png === null)) return null;
-  const { replay, approval } = now;
+  const { replay } = first;
+  const { approval } = now;
   return renderReplayPage({
     state,
     purpose: approval.purpose,
