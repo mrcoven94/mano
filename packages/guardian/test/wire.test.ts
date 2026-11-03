@@ -156,6 +156,9 @@ describe("Guardian's request after review findings on PR 108", () => {
   it.each([
     ["a name with an accent and a hyphen", { fullName: "Inés Synthetic-Ruiz" }],
     ["a name written last name first", { fullName: "Synthetic, Maria" }],
+    ["a long name with particles", { fullName: "María de los Ángeles García Fernández Synthetic" }],
+    ["a long address with a unit and ZIP+4", { address: "12345 North Martin Luther King Jr Boulevard Apt 1205, Rancho Santa Margarita, CA 92688-1234" }],
+    ["an address in care of someone", { address: "c/o Leo Synthetic (rear), 12 Example Lane, Springfield, IL 62701" }],
     ["a US birth date", { dateOfBirth: "01/01/1990" }],
     ["a birth date in words", { dateOfBirth: "January 1, 1990" }],
     ["an address on two lines", { address: "12 Example Lane Apt 4\nSpringfield IL 62701-1234" }],

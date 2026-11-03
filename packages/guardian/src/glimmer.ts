@@ -144,7 +144,8 @@ export class GlimmerModelChecker implements Checker {
   }
 
   // known: this person's own values to redact, read by the caller at
-  // check time (Engine reads them from the person's profile).
+  // check time (Engine reads them from the person's profile and its
+  // suggestions).
   async check(input: CheckInput, known?: KnownEntities): Promise<CheckResult> {
     this.lastServer = null;
     // A personal form field that holds more than its value would reach

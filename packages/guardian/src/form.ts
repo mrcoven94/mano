@@ -29,12 +29,13 @@ function clean(value: string): string {
 
 // Words of letters joined by spaces, hyphens, apostrophes, periods or
 // commas: "Inés Synthetic-Ruiz", "Synthetic, Maria", "Leo Synthetic Jr."
+// The length matches what Mano's form filler accepts for a name.
 const NAME = /^[\p{L}\p{M}]+(?:[ '’.,-]+[\p{L}\p{M}]+)*\.?$/u;
-const MAX_NAME_WORDS = 6;
+const MAX_NAME_WORDS = 8;
 
 function isName(value: string): boolean {
   const text = clean(value);
-  return text.length <= 100 && NAME.test(text) && text.split(/[ ,]+/).length <= MAX_NAME_WORDS;
+  return text.length <= 200 && NAME.test(text) && text.split(/[ ,]+/).length <= MAX_NAME_WORDS;
 }
 
 // The same rule as a phone on the person's profile.
@@ -45,13 +46,14 @@ function isPhone(value: string): boolean {
 }
 
 // No @, colon or other mark a link or an email needs, and no number long
-// enough to be a phone except a ZIP+4.
-const ADDRESS = /^[\p{L}\p{M}\p{N}\s,.#'’/-]+$/u;
-const MAX_ADDRESS_TOKENS = 16;
+// enough to be a phone except a ZIP+4. The length matches what Mano's form
+// filler accepts for an address.
+const ADDRESS = /^[\p{L}\p{M}\p{N}\s,.#&()'’/-]+$/u;
+const MAX_ADDRESS_TOKENS = 20;
 
 function isAddress(value: string): boolean {
   const text = value.normalize("NFKC").trim();
-  if (text.length > 200 || !ADDRESS.test(text)) return false;
+  if (text.length > 300 || !ADDRESS.test(text)) return false;
   const tokens = tokenize(text);
   if (tokens.length > MAX_ADDRESS_TOKENS) return false;
   if (!tokens.some((token) => token.digits) || !tokens.some((token) => !token.digits)) return false;
