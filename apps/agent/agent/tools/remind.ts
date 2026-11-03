@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { EngineReminder } from "../lib/engine.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { profileTimeZone } from "../lib/profile.js";
-import { REMINDER_PREFIX, placeClaimId, reminderBase, reminderIdAt, sameWords } from "../lib/reminders.js";
+import { REMINDER_PREFIX, legacyReminderId, placeClaimId, reminderBase, reminderIdAt, sameWords } from "../lib/reminders.js";
 import { parseWhen, validateDue } from "../lib/when.js";
 
 // Different reminders for the same time from one message.
@@ -26,11 +26,20 @@ export default defineTool({
     if (!parsed) {
       throw new Error(`Could not understand "${when}". Ask for a time like "tomorrow at 9" or "Friday at 2pm".`);
     }
-    const invalid = validateDue(parsed.dueAtMs, turnAtMs);
-    if (invalid) throw new Error(invalid);
     const base = reminderBase(turnId, parsed.asked);
-    const attempt = ctx.session.turn?.id ?? "attempt";
     const text = `${REMINDER_PREFIX}${input.text.trim()}`;
+    const invalid = validateDue(parsed.dueAtMs, turnAtMs);
+    const legacy = legacyReminderId(turnId, when, turnAtMs);
+    if (invalid || legacy) {
+      // A retry finds what an earlier attempt saved before it judges the
+      // time again: one that reads a later zone can work out a time that
+      // has passed for a reminder already set.
+      const stored = (await engine.listReminders()).filter((r) => r.id === legacy || (invalid && (r.id === base || r.id.startsWith(`${base}-`))));
+      const kept = stored.find((r) => r.id === legacy) ?? stored.find((r) => sameWords(r.text, text)) ?? stored.find((r) => r.id === base);
+      if (kept) return { reminderId: kept.id, dueAt: kept.dueAt, text: kept.text.replace(REMINDER_PREFIX, "") };
+      if (invalid) throw new Error(invalid);
+    }
+    const attempt = ctx.session.turn?.id ?? "attempt";
     const receivedAt = new Date(turnAtMs).toISOString();
     let saved: EngineReminder | null = null;
     for (let place = 0; place < MAX_SAME_TIME && !saved; place++) {

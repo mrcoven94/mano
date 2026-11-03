@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { personIdFor } from "../agent/lib/engine.js";
+import { engineFromEnv, personIdFor } from "../agent/lib/engine.js";
 import cancelReminder from "../agent/tools/cancel_reminder.js";
 import listReminders from "../agent/tools/list_reminders.js";
 import remind from "../agent/tools/remind.js";
@@ -113,6 +115,33 @@ describe("the zone a reminder is read in", () => {
     expect(again).toEqual(first);
     expect(engine.remindersOf(PERSON)).toHaveLength(1);
     expect(engine.remindersOf(PERSON)[0]).toMatchObject({ dueAt: "2026-11-01T17:00:00.000Z" });
+  });
+
+  it("a retry whose zone puts the time in the past still returns the reminder already set", async () => {
+    // Tuesday, November 3, 2026, 8:30 Pacific, 11:30 in New York. "Today at
+    // 9" is 17:00 UTC in Pacific; read again in New York it is 14:00 UTC, past.
+    const turnAtMs = Date.UTC(2026, 10, 3, 16, 30, 0);
+    const todayAt9 = (eveTurn: string) =>
+      remind.execute({ text: "call the county", when: "today at 9" }, toolCtx({ handleHash: HANDLE, turnId: "turn_zonepast01", grant, turnAtMs, eveTurn }));
+    engine.profileKeySet = false;
+    const first = await todayAt9("eve-turn-1");
+    engine.profileKeySet = true;
+    engine.profile = livingIn("NY");
+    expect(await todayAt9("eve-turn-2")).toEqual(first);
+    expect(engine.remindersOf(PERSON)).toHaveLength(1);
+    expect(first).toMatchObject({ dueAt: "2026-11-03T17:00:00.000Z" });
+  });
+
+  it("a turn retried across the deploy finds the reminder saved under the old name", async () => {
+    // Before LAP-813 the name hashed the turn and the due time in Denver:
+    // tomorrow 9:00 MST, 16:00 UTC.
+    const turnAtMs = Date.UTC(2026, 10, 3, 16, 30, 0);
+    const oldDue = Date.UTC(2026, 10, 4, 16, 0, 0);
+    const oldId = `rem-${createHash("sha256").update(`turn_legacy0001\n${oldDue}`).digest("hex").slice(0, 32)}`;
+    await engineFromEnv()!.forHandle(HANDLE, grant, 0).createReminder({ id: oldId, text: "Reminder: call the county", dueAt: new Date(oldDue).toISOString() });
+    const out = await remind.execute({ text: "call the county", when: "tomorrow at 9" }, toolCtx({ handleHash: HANDLE, turnId: "turn_legacy0001", grant, turnAtMs }));
+    expect(out).toMatchObject({ reminderId: oldId });
+    expect(engine.remindersOf(PERSON)).toHaveLength(1);
   });
 });
 
