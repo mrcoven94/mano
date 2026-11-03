@@ -81,10 +81,13 @@ function bareType(label: string): string {
   return label.split(";")[0]!.trim().toLowerCase();
 }
 
-// The only media types Channels passes on, stores or logs.
-const KNOWN_TYPES = new Set([
+// The only media types Channels passes on, stores or logs. It holds every
+// type Mail reads (packages/mail/src/media.ts); a test fails when Mail
+// accepts a type this set does not.
+export const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "image/jpeg", "image/png", "image/heic", "image/heif", "image/webp", "image/gif", "application/pdf",
-  "video/mp4", "video/quicktime", "video/3gpp", "video/webm", "audio/mp4", "audio/x-m4a", "audio/mpeg", "application/octet-stream",
+  "video/mp4", "video/quicktime", "video/3gpp", "video/webm", "video/mpeg", "audio/mp4", "audio/x-m4a", "audio/mpeg",
+  "application/octet-stream",
 ]);
 
 // A media type fit for a log line: one of a fixed set, else "other".

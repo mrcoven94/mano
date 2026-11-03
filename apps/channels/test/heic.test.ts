@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { PHOTO_FORMAT_TEXT, StandInResponder } from "@mano/channels";
-import { sniffMediaType, storedForm, type PhotoConverter } from "../src/files.js";
+import { KNOWN_TYPES, loggableType, sniffMediaType, storedForm, type PhotoConverter } from "../src/files.js";
 import { SandboxExecutor, PORTAL_DECLARATION } from "../../engine/src/gateway/executors.js";
 import type { ActionRequest } from "../../engine/src/gateway/types.js";
 import { DEFAULT_CONFIG, handleRequest } from "../../sandbox-portal/src/app";
@@ -40,6 +40,24 @@ describe("the media type comes from the bytes", () => {
     ["anything else", new TextEncoder().encode("synthetic-photo-bytes"), null],
   ])("%s", (_name, bytes, type) => {
     expect(sniffMediaType(bytes)).toBe(type);
+  });
+});
+
+// Mail runs in Node with sharp, so Channels cannot import it; its type
+// sets are read from the source instead, so the two lists cannot drift.
+const MAIL_TYPES = [...readFileSync(new URL("../../../packages/mail/src/media.ts", import.meta.url), "utf8").matchAll(/const \w+_MIMES = new Set\(\[([^\]]*)\]\)/g)]
+  .flatMap((m) => [...m[1]!.matchAll(/"([^"]+)"/g)].map((t) => t[1]!));
+
+describe("every type Mail reads passes Channels' allowlist", () => {
+  it("reads Mail's lists", () => {
+    expect(MAIL_TYPES).toEqual(expect.arrayContaining(["image/jpeg", "image/heic", "video/mp4", "video/mpeg"]));
+  });
+
+  it.each(MAIL_TYPES)("%s", async (type) => {
+    expect(KNOWN_TYPES.has(type)).toBe(true);
+    expect(loggableType(type)).toBe(type);
+    const unsniffed = new TextEncoder().encode("synthetic clip bytes");
+    expect((await storedForm(unsniffed, type, null)).mimeType).toBe(type);
   });
 });
 
