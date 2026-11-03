@@ -17,7 +17,8 @@ export function leadLine(action: KnownAction, s: Strings): string {
 }
 
 // Only the presentation changes: a plain amount gets its dollar sign
-// and grouping, a share's grant or revoke its words.
+// and grouping, a calendar day its month in words, a share's grant or
+// revoke its words.
 export function fieldValue(field: ActionField, s: Strings, language: Language): string {
   if (field.format === "money") {
     const amount = Number(field.value);
@@ -26,6 +27,16 @@ export function fieldValue(field: ActionField, s: Strings, language: Language): 
       currency: "USD",
       minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
     }).format(amount);
+  }
+  if (field.format === "date") {
+    // A day, not an instant: read and written in UTC so no time zone
+    // moves it to the day before.
+    return new Intl.DateTimeFormat(language === "es" ? "es-US" : "en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(`${field.value}T00:00:00Z`));
   }
   if (field.format === "consent") {
     if (field.value === "grant") return s.consentGrant;
