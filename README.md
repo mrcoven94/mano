@@ -84,12 +84,15 @@ Texts to Mano land on `apps/channels`, a Cloudflare Worker. Each reply is a Meta
 - Questions that need real digging take the deep path: the fast call returns a short heads-up, which is texted at once, then a second call at medium effort writes the full answer.
 - Every outgoing text passes a deterministic voice guard (plain code, not a model call). It rewrites dashes and markdown, replaces any model or provider name with "I'm Mano, an automated assistant", and sends a short safe line instead of an empty text.
 - A message about self-harm or danger never waits on a heads-up, and its reply always names 988 and 911.
+- When the Meta Model API cannot answer (HTTP 402, a 5xx or a timeout), the same call goes once to Meta's open-weight Muse Spark Open through OpenRouter, on zero-retention endpoints only (`zdr: true`, `data_collection: "deny"` on every request), and later texts skip the failing API for 5 minutes. The crisis check uses the same fallback. If both fail, Mano sends its short safe line, and a crisis message still gets 988 and 911 with no model at all. The fallback is off unless `OPENROUTER_API_KEY` is set for `apps/channels`.
 
 Check the voice against the real model with your own key (synthetic messages only, sent to a `-contributor` model ID). Without a key, the probes are skipped:
 
 ```sh
 META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
 ```
+
+With `OPENROUTER_API_KEY` set, the same command also sends one synthetic text to the open-weight fallback, with the Meta Model API played as down.
 
 ## Packages and apps
 
@@ -114,7 +117,7 @@ META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
 
 ### Guardian
 
-Guardian runs on one GPU on Modal and scales to zero when idle. A cold start takes about three minutes, and a check fails closed after 10 seconds, so Mano calls `warm()` when a conversation starts. Once Engine has `MANO_GUARDIAN_URL`, its action gateway runs Engine's local rules and then Guardian on every action, before the person is asked and again at their yes, and sends a warm-up with each check. A check that finds Guardian cold blocks with "try again in a few minutes" and leaves it starting. At the yes, a check that could not get Guardian's answer keeps the approval waiting and Engine marks the refusal `retryable`, so Mano asks the person to reply YES again in a few minutes and files it once. Engine's `/health` shows `checker: guardian`, or `local-rules` when none of the four `MANO_GUARDIAN_*` names is set. To keep one GPU warm (about $1.95 an hour), run the `guardian-modal` workflow from `main` under Actions with `min_containers` set to 1. To turn it off, run it again with 0. Any merge that touches the guardian also deploys 0.
+Guardian runs on one GPU on Modal and scales to zero when idle. A cold start takes about three minutes, and a check fails closed after 10 seconds, so Mano calls `warm()` when a conversation starts. Once Engine has `MANO_GUARDIAN_URL`, its action gateway runs Engine's local rules and then Guardian on every action, before the person is asked and again at their yes, and sends a warm-up with each check. A check that finds Guardian cold blocks with "try again in a few minutes" and leaves it starting. At the yes, a check that could not get Guardian's answer keeps the approval waiting and Engine marks the refusal `retryable`, so Mano asks the person to reply YES again in a few minutes and files it once. Guardian sees each action as Mano would send it, every value as written: the recipient, the purpose, every form field, text and claim, the cited sources with their quotes, and the consents on record. Nothing is removed first, so nothing can hide an attack from it. Guardian runs on our own GPU, and its code stores and logs no request or answer. A personal form field that holds an email address or a link blocks the action before Guardian is asked. Engine's `/health` shows `checker: guardian`, or `local-rules` when none of the four `MANO_GUARDIAN_*` names is set. To keep one GPU warm (about $1.95 an hour), run the `guardian-modal` workflow from `main` under Actions with `min_containers` set to 1. To turn it off, run it again with 0. Any merge that touches the guardian also deploys 0.
 
 ### Quality
 
@@ -122,7 +125,7 @@ Pull requests that can change what Mano says run the quality smoke: 28 synthetic
 
 ### Computer
 
-`packages/computer` is the desktop Mano drives: a loop that shows the model a screenshot and executes the mouse and keyboard actions it returns. The hosted backend is a Modal Sandbox running a Linux desktop with Chromium (see `packages/computer/modal/`); the local stand-in drives Chromium through Playwright. The desktop fills forms and never files them: filing goes through Engine's action gateway after the person's yes. A pending safety check stops the run and goes back to the caller, and a login prompt ends it, because there is no live view and the agent never sees passwords. Each desktop opens only the portal origin, mounts only its own person's profile, and answers only the caller holding its per-session secret. Details in the header comment of its `src/index.ts` and the docstring of `modal/app.py`; `modal run modal/prove.py` checks those rules live on throwaway Modal resources.
+`packages/computer` is the desktop Mano drives: a loop that shows the model a screenshot and executes the mouse and keyboard actions it returns. The hosted backend is a Modal Sandbox running a Linux desktop with Chromium (see `packages/computer/modal/`); the local stand-in drives Chromium through Playwright. The desktop fills forms and never files them: filing goes through Engine's action gateway after the person's yes. Each fill keeps the screens it showed; Engine stores them encrypted for the person with the approval they produced, and the yes-or-no question links to a private page that replays each step, ends on the filled form and lists exactly what will be sent. A link opened after the draft changed says so and shows none of the old steps. A pending safety check stops the run and goes back to the caller, and a login prompt ends it, because there is no live view and the agent never sees passwords. Each desktop opens only the portal origin, mounts only its own person's profile, and answers only the caller holding its per-session secret. Details in the header comment of its `src/index.ts` and the docstring of `modal/app.py`; `modal run modal/prove.py` checks those rules live on throwaway Modal resources.
 
 ### Programs
 

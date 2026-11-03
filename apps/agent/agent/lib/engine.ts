@@ -151,6 +151,23 @@ export interface EngineDeadline {
   nudges: { reminderId: string; at: string; daysBefore: number; status: ReminderStatus | "claimed"; text: string }[];
 }
 
+// A document Engine holds for the person, as GET /documents lists it:
+// this conversation's, newest first. mediaType is read from the bytes;
+// kind is what Mail found it to be; label names it to the person, such
+// as "the letter you sent on November 2". filing is whether Engine's
+// executor could file it: too large, the wrong kind of file, or of
+// unknown size when stored before Engine recorded sizes.
+export interface EngineDocument {
+  id: string;
+  kind: "letter" | null;
+  mediaType: string | null;
+  receivedAt: string;
+  label: string;
+  generation: number;
+  sizeBytes: number | null;
+  filing: "fileable" | "too_large" | "wrong_type" | "size_unknown";
+}
+
 export interface EngineDeadlineResult {
   status: "created" | "existing" | "moved" | "updated" | "closed" | "done" | "cancelled";
   deadline: EngineDeadline;
@@ -509,6 +526,52 @@ export class PersonEngine {
     return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/reject`));
   }
 
+  // Binds the screens of the fill behind a waiting approval, so the
+  // question can link to them. The link, or null when Engine refused:
+  // the approval no longer waits, or this Engine has no replay route.
+  async bindReplay(
+    approvalId: string,
+    replay: { labels: Record<string, string>; steps: { caption: string; png: Uint8Array; focus: { x: number; y: number } | null }[] },
+    timeoutMs?: number,
+  ): Promise<string | null> {
+    const body = {
+      generation: this.generation,
+      labels: replay.labels,
+      steps: replay.steps.map((s) => ({ caption: s.caption, pngB64: Buffer.from(s.png).toString("base64"), focus: s.focus })),
+    };
+    const res = await this.call("PUT", `/approvals/${encodeURIComponent(approvalId)}/replay`, body, timeoutMs);
+    if ([400, 404, 409].includes(res.status)) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return this.linkFrom(await res.json());
+  }
+
+  // The link to this approval's replay page while it opens, or null.
+  async replayLink(approvalId: string, timeoutMs?: number): Promise<string | null> {
+    const res = await this.call("GET", `/approvals/${encodeURIComponent(approvalId)}/replay`, undefined, timeoutMs);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return this.linkFrom(await res.json());
+  }
+
+  // Engine answers the page's path; the link is that path on the Engine
+  // address this agent uses, which is the one the person can open too.
+  private linkFrom(body: unknown): string | null {
+    const path = (body as { path?: unknown } | null)?.path;
+    return typeof path === "string" && /^\/fill\/[0-9a-f]{32}$/.test(path) ? `${this.cfg.baseUrl}${path}` : null;
+  }
+
   // A photo Channels stored for this person, or null when Engine has none.
   async getDocument(documentId: string, timeoutMs?: number): Promise<Uint8Array | null> {
     const res = await this.call("GET", `/documents/${encodeURIComponent(documentId)}`, undefined, timeoutMs);
@@ -521,6 +584,16 @@ export class PersonEngine {
       throw new EngineError(res.status);
     }
     return new Uint8Array(await res.arrayBuffer());
+  }
+
+  async listDocuments(): Promise<EngineDocument[]> {
+    const out = (await this.json("GET", "/documents")) as { documents?: unknown };
+    return Array.isArray(out.documents) ? (out.documents as EngineDocument[]) : [];
+  }
+
+  // Records what Mail found a stored photo to be.
+  async markDocument(documentId: string, kind: "letter", timeoutMs?: number): Promise<void> {
+    await this.json("PATCH", `/documents/${encodeURIComponent(documentId)}`, { kind, generation: this.generation }, timeoutMs);
   }
 
   // Holds a deadline. "unavailable" when Engine has no deadlines route

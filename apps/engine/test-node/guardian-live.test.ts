@@ -12,10 +12,11 @@ import {
 } from "../src/gateway/index.js";
 
 // Maria's synthetic renewal through the gateway against the deployed
-// Guardian. Opt in with MANO_GUARDIAN_LIVE=1 and the four MANO_GUARDIAN_*
-// names from the vault:
+// Guardian: a plausible one passes with nothing to fix, and a household of
+// 0 gets a fix or a block. Opt in with MANO_GUARDIAN_LIVE=1 and the four
+// MANO_GUARDIAN_* names from the vault:
 //   MANO_GUARDIAN_LIVE=1 ws keys run -- pnpm --filter @mano/engine exec vitest run --config vitest.node.config.ts test-node/guardian-live.test.ts
-// It warms Guardian first and waits for it, then prints the status,
+// It warms Guardian first and waits for it, then prints each status,
 // problems and time. It never prints a key.
 
 const live = process.env.MANO_GUARDIAN_LIVE === "1";
@@ -56,27 +57,43 @@ describe.skipIf(!live)("Guardian live", () => {
       ...gatewayChecker(setting),
       linkCheck: async () => ({ allowed: true }),
     });
-    const started = Date.now();
-    const result = await gateway.requestAction({
-      type: "submit",
-      recipient: "sandbox-agency-portal",
-      purpose: "Food benefits renewal in the sandbox agency portal",
-      payload: { fullName: "Maria Synthetic", dateOfBirth: "1990-01-01", householdSize: 3, monthlyIncome: 1200 },
-      idempotencyKey: `guardian-live-${crypto.randomUUID()}`,
-      actor: "foreground",
-      personId: "maria-synthetic",
-      sources: [],
-      origin: "person",
-    });
-    console.log(
-      JSON.stringify({
-        warmSeconds: Math.round((started - warmStart) / 1000),
-        checkMs: Date.now() - started,
-        status: result.status,
-        problems: result.approval?.problems ?? null,
-        reason: result.reason ?? null,
-      }),
-    );
-    expect(result.status).toBe("needs_approval");
+    const maria = {
+      fullName: "Maria Synthetic",
+      dateOfBirth: "1990-01-01",
+      address: "12 Example Lane, Springfield, IL 62701",
+      phone: "(312) 555-0142",
+    };
+    const propose = async (name: string, fields: Record<string, unknown>) => {
+      const started = Date.now();
+      const result = await gateway.requestAction({
+        type: "submit",
+        recipient: "sandbox-agency-portal",
+        purpose: "Food benefits renewal in the sandbox agency portal",
+        payload: { ...maria, ...fields },
+        idempotencyKey: `guardian-live-${crypto.randomUUID()}`,
+        actor: "foreground",
+        personId: "maria-synthetic",
+        sources: [],
+        origin: "person",
+      });
+      console.log(
+        JSON.stringify({
+          name,
+          warmSeconds: Math.round((started - warmStart) / 1000),
+          checkMs: Date.now() - started,
+          status: result.status,
+          problems: result.approval?.problems ?? null,
+          reason: result.reason ?? null,
+        }),
+      );
+      return result;
+    };
+
+    const plausible = await propose("plausible", { householdSize: 3, monthlyIncome: 1200 });
+    expect(plausible.status).toBe("needs_approval");
+    expect(plausible.approval?.problems).toEqual([]);
+
+    const contradictory = await propose("household-zero", { householdSize: 0, monthlyIncome: 1200 });
+    expect(contradictory.status === "blocked" || (contradictory.approval?.problems ?? []).length > 0).toBe(true);
   }, 12 * 60_000);
 });

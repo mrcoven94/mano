@@ -14,7 +14,7 @@ import { guardReply } from "@mano/persona";
 import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
 
 import { boundFetch } from "./fetch.js";
-import { PHOTO_UNREAD_TEXT, ResponderFailed, type Responder, type ResponderResult, type TurnInput } from "./responder.js";
+import { PHOTO_UNREAD_TEXT, ResponderFailed, type ModelUsage, type Responder, type ResponderResult, type TurnInput } from "./responder.js";
 import { splitBubbles } from "./bubbles.js";
 import { computeSignatureHex, SIGNATURE_WINDOW_SECONDS, timingSafeEqualHex } from "./verify.js";
 
@@ -193,12 +193,15 @@ export class AgentResponder implements Responder {
         attempts: 1,
       };
     }
+    // The agent's own request joins the per-model usage when the plain
+    // answer reports one.
+    const agentRequest = (chars: number): ModelUsage => ({ model: "agent", requests: 1, inputChars: chars, outputChars: 0 });
     try {
       const result = await this.fallback.respond(turn);
-      return { ...result, attempts: 1 + result.attempts };
+      return { ...result, attempts: 1 + result.attempts, usage: result.usage && [...result.usage, agentRequest(result.inputChars)] };
     } catch (err) {
       if (err instanceof ResponderFailed) {
-        throw new ResponderFailed(err.message, 1 + err.attempts, inputChars, err.reason);
+        throw new ResponderFailed(err.message, 1 + err.attempts, inputChars, err.reason, err.usage && [...err.usage, agentRequest(inputChars)]);
       }
       if (err instanceof Error) throw new ResponderFailed(err.message, this.maxAttempts, inputChars);
       throw new ResponderFailed("Agent and fallback failed.", this.maxAttempts, inputChars);

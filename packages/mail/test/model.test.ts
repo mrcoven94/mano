@@ -8,6 +8,7 @@ import {
   isContributorId,
   readingModelFor,
   recordedText,
+  strictSchemaErrors,
 } from "../src/model.js";
 
 describe("readingModelFor", () => {
@@ -99,6 +100,38 @@ describe("MetaModelClient", () => {
     expect(res.text).toBe("ok");
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
+  it("names a refusal by its status in fixed words, without retrying", async () => {
+    const billing = { error: { message: "Billing is not configured for this account.", type: "billing_error", code: "billing_not_configured" } };
+    const fetchFn = vi.fn(async () => okJson(billing, 402));
+    const client = new MetaModelClient({ apiKey: "k", fetchFn: fetchFn as unknown as typeof fetch });
+    await expect(client.responses({ model: "muse-spark-1.3", input: "hi" })).rejects.toThrow(
+      "Model request failed: 402 (billing is not set up for this account)",
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  // Review of PR 109: a 401 body's message reached warnings[].detail
+  // word for word. Whatever the provider writes stays out of the error.
+  const LEAK = "Key mk-synthetic-7f3a91 is not valid for Maria Santos on case CA-2026-1.";
+  const SECRETS = ["mk-synthetic-7f3a91", "Maria Santos", "CA-2026-1"];
+  it.each([
+    ["a 401", okJson({ error: { message: LEAK, type: "auth_error", code: LEAK } }, 401)],
+    ["a 400", okJson({ error: { message: LEAK } }, 400)],
+    ["an unlisted 418", okJson({ error: { message: LEAK } }, 418)],
+    ["a failed run", okJson({ status: "failed", error: { message: LEAK } })],
+    ["a run in an unknown state", okJson({ status: LEAK })],
+    ["an unreadable 200", new Response(`<html>${LEAK}</html>`, { status: 200 })],
+    ["an unreadable 429", new Response(`<html>${LEAK}</html>`, { status: 429 })],
+    ["an unreadable 503", new Response(`<html>${LEAK}</html>`, { status: 503 })],
+  ])("never repeats the provider's text from %s", async (_what, response) => {
+    const client = new MetaModelClient({ apiKey: "k", maxRetries: 0, fetchFn: (async () => response) as typeof fetch });
+    const message = await client.responses({ model: "muse-spark-1.3", input: "hi" }).then(
+      () => "resolved",
+      (err: Error) => err.message,
+    );
+    expect(message).toMatch(/^Model (request failed|run|response)/);
+    for (const secret of SECRETS) expect(message).not.toContain(secret);
+  });
 });
 
 describe("RecordedModelClient", () => {
@@ -160,5 +193,47 @@ describe("MetaModelClient review 6", () => {
     const client = new MetaModelClient({ apiKey: "k", fetchFn });
     await expect(client.responses(req, { deadline: Date.now() - 1 })).rejects.toThrow(/budget/i);
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("strict schemas", () => {
+  const detection = (required: string[]) => ({
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      detections: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: { box_2d: { type: "array", items: { type: "number" } }, label: { type: "string" }, score: { type: "number" } },
+          required,
+        },
+      },
+    },
+    required: ["detections"],
+  });
+
+  it("flags a property left out of required, at any depth, as the API does", () => {
+    expect(strictSchemaErrors(detection(["box_2d", "label"]))).toEqual([
+      "schema.detections[]: Missing 'score' in required",
+    ]);
+    expect(strictSchemaErrors(detection(["box_2d", "label", "score"]))).toEqual([]);
+    expect(strictSchemaErrors({ type: "object", properties: { a: { type: "string" } }, required: ["a"] })).toEqual([
+      "schema: additionalProperties must be false",
+    ]);
+  });
+
+  it("the stand-in refuses a strict schema the API would refuse, and replays a valid one", async () => {
+    const entry = { match: () => true, result: recordedText("{}") };
+    const request = (required: string[]) => ({
+      model: "sam-3.1",
+      input: "x",
+      text: { format: { type: "json_schema" as const, name: "mail_detections", schema: detection(required), strict: true } },
+    });
+    await expect(new RecordedModelClient([entry]).responses(request(["box_2d", "label"]))).rejects.toThrow(
+      "Model request failed: 400 (schema.detections[]: Missing 'score' in required)",
+    );
+    await expect(new RecordedModelClient([entry]).responses(request(["box_2d", "label", "score"]))).resolves.toMatchObject({ text: "{}" });
   });
 });

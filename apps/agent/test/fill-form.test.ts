@@ -3,12 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeModelClient, type Computer, type ComputerAction } from "@mano/computer";
 
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
-import { fillDepsFromEnv } from "../agent/lib/computer-fill.js";
+import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
 import { engineFrom, type Profile } from "../agent/lib/engine.js";
 import { FORMS } from "../agent/lib/forms.js";
 import { renderQuestion } from "../agent/lib/pending.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
+import { screen } from "./fill-double.js";
 
 const HANDLE = "f".repeat(64);
 const PORTAL = "http://portal.test";
@@ -81,7 +82,7 @@ class FakeComputer implements Computer {
   private draft: string | null = null;
   constructor(private portal: FakePortal) {}
   async screenshot() {
-    return new Uint8Array([137, 80, 78, 71]);
+    return screen(this.typed.length);
   }
   async act(actions: ComputerAction[]) {
     for (const a of actions) {
@@ -151,6 +152,11 @@ async function ctx(turnId: string) {
   return toolCtx({ handleHash: HANDLE, turnId, grant, turnAtMs: clock });
 }
 
+// Another attempt of the same turn, as Eve runs it after a failure.
+function retryCtx(turnId: string, eveTurn: string) {
+  return toolCtx({ handleHash: HANDLE, turnId, grant, turnAtMs: clock, eveTurn });
+}
+
 async function run(turnId: string, input: { form: string; answers?: Record<string, string> }) {
   return (await fillForm.execute(input, await ctx(turnId))) as Record<string, unknown>;
 }
@@ -207,6 +213,96 @@ describe("fill_form", () => {
     );
     expect(question).toContain("With your document attached.");
     expect(model.requests.every((r) => r.store === false)).toBe(true);
+  });
+
+  it("binds each screen up to the whole form filled to the approval it holds, captioned by field and never by value", async () => {
+    engine.profile = profile();
+    const out = await run("turn_fill0030", { form: "food-renewal" });
+    expect(out.status).toBe("waiting_for_yes");
+    const url = await client().replayLink(String(out.approvalId));
+    expect(url).toMatch(/^http:\/\/engine\.test\/fill\/[0-9a-f]{32}$/);
+
+    const page = (await engine.replayPageAt(url!))!;
+    const captions = [...page.matchAll(/<li><p>([^<]*)<\/p>/g)].map((m) => m[1]);
+    expect(captions).toEqual([
+      "1. Mano opened the form.",
+      ...FORMS["food-renewal"]!.fields.map((f, i) => `${i + 2}. Mano filled in &quot;${f.label}&quot;.`),
+    ]);
+    // Each typed step shows its field up close, centered where Mano
+    // clicked it; the replay ends on the form with all six values.
+    const shown = [...page.matchAll(/data:image\/png;base64,([^"]+)"/g)].map((m) => Buffer.from(m[1]!, "base64")[33]);
+    expect(shown).toEqual([0, 1, 2, 3, 4, 5, 6, 6]);
+    expect(page.match(/<div class="zoom">/g)).toHaveLength(6);
+    expect(page).toContain('style="width:200%;left:-23.75%;top:-25.00%"');
+    expect(page).toContain("<dt>People in household</dt><dd>3</dd>");
+    expect(page).toContain("This is exactly what Mano will send when you reply YES.");
+  });
+
+  it("a value corrected with a key after it was typed ends the replay on the corrected screen", () => {
+    const form = FORMS["food-renewal"]!;
+    const income = { type: "click", button: "left", x: 600, y: 430 } as ComputerAction;
+    const frames = [
+      { png: screen(0), actions: [] },
+      { png: screen(1), actions: [income, { type: "type", text: "23290" } as ComputerAction] },
+      { png: screen(2), actions: [{ type: "keypress", keys: ["Backspace"] } as ComputerAction] },
+      { png: screen(3), actions: [CONTINUE] },
+    ];
+    const steps = replayOf(frames, form, VALUES);
+    expect(steps.map((s) => [s.caption, s.png[33], s.focus])).toEqual([
+      ["Mano opened the form.", 0, null],
+      ["Mano typed into the form.", 1, { x: 600, y: 430 }],
+      ["Mano corrected the field.", 2, { x: 600, y: 430 }],
+    ]);
+  });
+
+  it("a replay Engine cannot store leaves the question waiting, and the log carries no personal data", async () => {
+    engine.profile = profile();
+    engine.replayFailure = 500;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const out = await run("turn_fill0031", { form: "food-renewal" });
+    expect(out.status).toBe("waiting_for_yes");
+    expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
+    const lines = warn.mock.calls.map(([line]) => String(line));
+    expect(lines).toContain(JSON.stringify({ type: "mano_replay_failed", status: 500 }));
+    expect(lines.some((l) => l.includes("Rosa") || l.includes("253-555"))).toBe(false);
+  });
+
+  it("a retry that filled the same values binds its screens to the approval still waiting", async () => {
+    engine.profile = profile();
+    engine.replayFailure = 500;
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const first = await run("turn_fill0032", { form: "food-renewal" });
+    expect(await client().replayLink(String(first.approvalId)).catch(() => null)).toBeNull();
+
+    engine.replayFailure = null;
+    model = new FakeModelClient([[call(typing(VALUES))], [say("ACCEPTED")]]);
+    const retry = (await fillForm.execute({ form: "food-renewal" }, retryCtx("turn_fill0032", "eve-turn-2"))) as Record<string, unknown>;
+    expect(retry).toMatchObject({ status: "waiting_for_yes", approvalId: first.approvalId });
+    const page = (await engine.replayPageAt((await client().replayLink(String(first.approvalId)))!))!;
+    expect(page).toContain("<dt>People in household</dt><dd>3</dd>");
+  });
+
+  it("a retry that filled different values binds no screens to the approval the first attempt froze", async () => {
+    engine.profile = profile();
+    engine.replayFailure = 500;
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const first = await run("turn_fill0033", { form: "food-renewal" });
+
+    // The profile changed before the retry, so the retry types a different
+    // household size than the approval froze.
+    engine.replayFailure = null;
+    const grown = profile();
+    grown.household.push({ id: "m3", name: leaf("Eva Testcase"), relationship: leaf("child") });
+    engine.profile = grown;
+    model = new FakeModelClient([[call(typing({ ...VALUES, householdSize: "4" }))], [say("ACCEPTED")]]);
+    const retry = (await fillForm.execute({ form: "food-renewal" }, retryCtx("turn_fill0033", "eve-turn-2"))) as Record<string, unknown>;
+
+    // The question still asks about what the first attempt froze, and YES
+    // sends that, so no screen of the retry's values may stand beside it.
+    expect(retry).toMatchObject({ status: "waiting_for_yes", approvalId: first.approvalId });
+    const [approval] = engine.approvals();
+    expect(JSON.parse(approval.requestJson).payload.householdSize).toBe("3");
+    expect(await client().replayLink(String(first.approvalId))).toBeNull();
   });
 
   it("each fill opens its own fresh draft", async () => {

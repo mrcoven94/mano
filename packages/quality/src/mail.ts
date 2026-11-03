@@ -5,9 +5,8 @@
 // META_MODEL_API_KEY is set; without a key a stand-in reads the letter's
 // transcript and every report says so.
 
-import { stateByCode } from "./facts.ts";
 import { extractDates } from "./checks.ts";
-import { buildLettersCases } from "./suites/letters.ts";
+import { buildLettersCases, letterDeadline } from "./suites/letters.ts";
 import type { BenchCase, LetterImage } from "./suites/types.ts";
 
 export interface DeadlineReader {
@@ -29,8 +28,8 @@ export interface MailSummary {
 
 // The deadline a letter sets, from how the suite built it.
 export function expectedDeadline(c: BenchCase): string | null {
-  if (c.category === "scam" || c.category === "conflict") return null;
-  return stateByCode(c.state).renewalDate;
+  const deadline = letterDeadline(c);
+  return deadline?.kind === "one" ? deadline.date : null;
 }
 
 // Reads the transcript the letter was drawn from: one date publishes, two or

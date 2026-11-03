@@ -127,7 +127,21 @@ export interface Executor {
   // person is never asked to approve an action that would then be
   // refused. An executor without it takes every request.
   refuse?(req: ActionRequest): string | null;
+  // Whether this executor could file a stored document of this media type
+  // and size, without reading its bytes. The person's document list
+  // answers it for each document so Mano attaches one the filing takes.
+  // An executor without it takes any document.
+  documentFiling?(doc: StoredDocumentFacts): DocumentFiling;
 }
+
+// What Engine recorded about a document when it stored it: the media
+// type read from its bytes, and its size (null when stored before sizes
+// were recorded).
+export interface StoredDocumentFacts {
+  mediaType: string | null;
+  sizeBytes: number | null;
+}
+export type DocumentFiling = "fileable" | "too_large" | "wrong_type" | "size_unknown";
 
 // The recorded outcome for a key: found carries the outside ID, absent
 // means the executor confirms it never ran this key.

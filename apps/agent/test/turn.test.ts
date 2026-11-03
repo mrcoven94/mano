@@ -649,6 +649,65 @@ describe("a slow draft against a newer one", () => {
   });
 });
 
+describe("the question links to the replay of the fill behind it", () => {
+  const LINK = /\n\nSee each step Mano took on the form: (http:\/\/engine\.test\/fill\/[0-9a-f]{32})$/;
+
+  it("the link follows the whole question, survives the voice guard, and opens the steps", async () => {
+    const ask = await send(turn("turn_link000001", "Please file my renewal"));
+    expect(ask.body.status).toBe("waiting_approval");
+    const question = ask.body.approval!;
+    expect(question).not.toMatch(/https?:/);
+    expect(ask.body.text).toContain(`${question}\n\nSee each step`);
+    const url = LINK.exec(ask.body.text)?.[1];
+    expect(url).toBeDefined();
+    const line = `See each step Mano took on the form: ${url}`;
+    expect(guardReply(line).text).toBe(line);
+
+    const page = (await engine.replayPageAt(url!))!;
+    expect(page.match(/<img /g)).toHaveLength(7);
+    expect(page).toContain("This is exactly what Mano will send when you reply YES.");
+    // The question still answers with a plain YES.
+    expect((await send(turn("turn_link00000Y", "YES"))).body.text).toMatch(/^Done/);
+    expect(await engine.replayPageAt(url!)).toContain("You said yes to this version.");
+  });
+
+  it("when Engine cannot make the link, the question goes out alone and still works", async () => {
+    engine.replayFailure = 503;
+    const ask = await send(turn("turn_nolink00001", "Please file my renewal"));
+    expect(ask.body.status).toBe("waiting_approval");
+    expect(ask.body.text.endsWith(ask.body.approval!)).toBe(true);
+    expect(ask.body.text).not.toContain("See each step");
+    expect((await send(turn("turn_nolink0000Y", "YES"))).body.text).toMatch(/^Done/);
+    expect(engine.executor.calls).toHaveLength(1);
+  });
+
+  it("a link opened after the person changed an answer says the form changed and shows no old step", async () => {
+    const first = await send(turn("turn_chg_A00001", "Please file my renewal"));
+    const oldUrl = LINK.exec(first.body.text)![1]!;
+    const second = await send(turn("turn_chg_B00001", "Please file my renewal, household of 4"));
+    const newUrl = LINK.exec(second.body.text)![1]!;
+    expect(newUrl).not.toBe(oldUrl);
+
+    const old = (await engine.replayPageAt(oldUrl))!;
+    expect(old).toContain("This form changed");
+    expect(old).not.toContain("<img");
+    expect(old).not.toContain("Rosa Testcase");
+    expect(await engine.replayPageAt(newUrl)).toContain("<dt>People in household</dt><dd>4</dd>");
+  });
+
+  it("a link opened after the attached document changed says so, and the YES is refused as stale", async () => {
+    const ask = await send(turn("turn_doc_A00001", "Please file my renewal"));
+    const url = LINK.exec(ask.body.text)![1]!;
+    engine.documents.set("doc-proof", "%PDF-1.4 synthetic pay stub, edited");
+    const page = (await engine.replayPageAt(url))!;
+    expect(page).toContain("This form changed");
+    expect(page).not.toContain("<img");
+    const yes = await send(turn("turn_doc_Y00001", "YES"));
+    expect(yes.body.text).not.toMatch(/^Done/);
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+});
+
 describe("a decision that decided nothing, and a NO Engine refused", () => {
   it("a replayed NO that decided nothing never touches a draft created after it", async () => {
     const no = turn("turn_none000001", "NO");

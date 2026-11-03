@@ -1,10 +1,11 @@
 // @mano/channels: the messaging library behind the channels worker. One
 // Channel interface per provider (Blooio today; SMS and email later), a
 // recording stand-in for tests and local runs, the Responder interface
-// (plain Muse Spark today, the engine's person agent later), and the
-// pure pieces the worker builds on: handles, signatures, bubbles, limits,
-// approvals and per-person encryption. Run: pnpm --filter @mano/channels
-// check (tsc plus vitest, no keys needed).
+// (plain Muse Spark, Meta's open-weight model as its fallback when the
+// Meta Model API is down, and the agent), and the pure pieces the worker
+// builds on: handles, signatures, bubbles, limits, approvals and
+// per-person encryption. Run: pnpm --filter @mano/channels check (tsc
+// plus vitest, no keys needed).
 export * from "./types.js";
 export * from "./channel.js";
 export * from "./handles.js";
@@ -22,3 +23,4 @@ export * from "./links.js";
 export * from "./fetch.js";
 export * from "./finalize.js";
 export * from "./crisis-check.js";
+export * from "./open-weight.js";

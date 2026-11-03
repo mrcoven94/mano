@@ -13,6 +13,10 @@ export interface Env {
   META_MODEL_API_KEY?: string;
   // The Standard model ID that answers real texts, set in wrangler.toml.
   MANO_REPLY_MODEL?: string;
+  // Meta's open-weight model, asked when the Meta Model API is down. Off
+  // until OPENROUTER_API_KEY is set; the model ID is in wrangler.toml.
+  OPENROUTER_API_KEY?: string;
+  MANO_OPEN_WEIGHT_MODEL?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;

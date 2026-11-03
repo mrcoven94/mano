@@ -1,8 +1,11 @@
 // Global channel state: the reconcile cursor and the daily model spend.
 // One singleton row, in its own Durable Object in the worker and in
 // memory in tests. Spend is reserved before the model call and settled
-// after, so concurrent conversations cannot overshoot the budget.
+// after, so concurrent conversations cannot overshoot the budget. A
+// settlement can say what each model cost; the day's cost per model is
+// kept beside the total, for operators only.
 import { DEFAULT_DAILY_BUDGET_USD, GLOBAL_BYTES_DAILY, dayKeyFor } from "@mano/channels";
+import type { ModelCosts } from "./runner.js";
 
 export interface GlobalStateRow {
   cursor: string | null;
@@ -38,9 +41,11 @@ export interface GlobalStore {
   save(state: GlobalStateRow): void;
   spendReservations(day: string): SpendReservation[];
   reserveSpend(reservation: SpendReservation): void;
-  // Records actual spend exactly once per key: a repeated settlement
-  // (lost response, retried turn) does not double-count.
-  settleSpend(key: string, day: string, actualUsd: number): void;
+  // Records actual spend, and its cost per model when given, exactly
+  // once per key: a repeated settlement (lost response, retried turn)
+  // does not double-count.
+  settleSpend(key: string, day: string, actualUsd: number, byModel?: ModelCosts): void;
+  spendByModel(day: string): ModelCosts;
   // Drops a hold without recording spend, for turns that never ran.
   releaseSpend(key: string): void;
   pruneSpendReservations(day: string): void;
@@ -65,6 +70,7 @@ export class MemoryGlobalStore implements GlobalStore {
   private held = new Map<string, SpendReservation>();
   private heldBytes = new Map<string, ByteReservation>();
   private settledSpend = new Map<string, string>();
+  private settledModels = new Map<string, { day: string; byModel: ModelCosts }>();
   private settledBytes = new Map<string, string>();
 
   state(): GlobalStateRow {
@@ -83,10 +89,11 @@ export class MemoryGlobalStore implements GlobalStore {
     this.held.set(reservation.key, { ...reservation });
   }
 
-  settleSpend(key: string, day: string, actualUsd: number): void {
+  settleSpend(key: string, day: string, actualUsd: number, byModel?: ModelCosts): void {
     this.held.delete(key);
     if (this.settledSpend.has(key)) return;
     this.settledSpend.set(key, day);
+    if (byModel) this.settledModels.set(key, { day, byModel: { ...byModel } });
     const state = this.state();
     if (state.spendDay === day) {
       state.spentUsd += actualUsd;
@@ -96,6 +103,15 @@ export class MemoryGlobalStore implements GlobalStore {
       state.spentUsd = actualUsd;
       this.save(state);
     }
+  }
+
+  spendByModel(day: string): ModelCosts {
+    const totals: ModelCosts = {};
+    for (const settled of this.settledModels.values()) {
+      if (settled.day !== day) continue;
+      for (const [model, usd] of Object.entries(settled.byModel)) totals[model] = (totals[model] ?? 0) + usd;
+    }
+    return totals;
   }
 
   releaseSpend(key: string): void {
@@ -108,6 +124,9 @@ export class MemoryGlobalStore implements GlobalStore {
     }
     for (const [key, settledDay] of this.settledSpend) {
       if (settledDay !== day) this.settledSpend.delete(key);
+    }
+    for (const [key, settled] of this.settledModels) {
+      if (settled.day !== day) this.settledModels.delete(key);
     }
   }
 
@@ -212,10 +231,10 @@ export class GlobalLedger {
   // Settles actual spend against a reservation, releasing the hold.
   // Settling an unknown key still records the spend. Settling a key
   // twice records it once.
-  settle(key: string, actualUsd: number): { spentUsd: number } {
+  settle(key: string, actualUsd: number, byModel?: ModelCosts): { spentUsd: number } {
     const today = dayKeyFor(this.nowMs());
     this.rollDay(today);
-    this.store.settleSpend(key, today, actualUsd);
+    this.store.settleSpend(key, today, actualUsd, byModel);
     return { spentUsd: this.store.state().spentUsd };
   }
 
@@ -226,10 +245,13 @@ export class GlobalLedger {
     this.store.releaseSpend(key);
   }
 
-  spent(): { spentUsd: number; budgetUsd: number } {
+  // The day's spend, and what each model cost of it. Spend settled with
+  // no model breakdown (agent sends, a turn saved before the breakdown
+  // was) is in the total only.
+  spent(): { spentUsd: number; budgetUsd: number; byModel: ModelCosts } {
     const today = dayKeyFor(this.nowMs());
     this.rollDay(today);
-    return { spentUsd: this.store.state().spentUsd, budgetUsd: this.budgetUsd };
+    return { spentUsd: this.store.state().spentUsd, budgetUsd: this.budgetUsd, byModel: this.store.spendByModel(today) };
   }
 
   // Byte reservations work like spend reservations: hold the worst case
@@ -305,4 +327,18 @@ export class GlobalLedger {
       this.store.save(state);
     }
   }
+}
+
+// Reads a settlement's cost per model at the Durable Object boundary.
+// Malformed entries are dropped rather than failing the settlement: the
+// total keeps the budget right either way.
+export const MAX_SETTLED_MODELS = 8;
+
+export function parseModelCosts(raw: unknown): ModelCosts | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const costs: ModelCosts = {};
+  for (const [model, usd] of Object.entries(raw).slice(0, MAX_SETTLED_MODELS)) {
+    if (model.length > 0 && model.length <= 120 && typeof usd === "number" && Number.isFinite(usd) && usd >= 0) costs[model] = usd;
+  }
+  return Object.keys(costs).length > 0 ? costs : undefined;
 }

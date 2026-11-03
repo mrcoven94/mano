@@ -3,16 +3,19 @@
 // version still waiting for their YES, types the values into a fresh
 // draft of the real form on the person's own computer, reads the draft
 // back from the portal, and holds exactly what the portal saved in Engine
-// for their YES, bound to its content hash and the document's bytes. It
-// files nothing: on YES, Engine files it through the action gateway and
-// the reply carries the confirmation number.
+// for their YES, bound to its content hash and the document's bytes. The
+// screens of the fill go to Engine with that approval, so the question
+// links to a page that replays each step. It files nothing: on YES,
+// Engine files it through the action gateway and the reply carries the
+// confirmation number.
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { fillDepsFromEnv, fillOnComputer, type FillDeps } from "../lib/computer-fill.js";
-import { FORMS, fillFrom, resolveForm } from "../lib/forms.js";
+import { fillDepsFromEnv, fillOnComputer, type FillDeps, type ReplayStep } from "../lib/computer-fill.js";
+import { EngineError, type PersonEngine } from "../lib/engine.js";
+import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
 import { personEngine, requireTurn } from "../lib/person.js";
-import { closeEarlier, holdForYes } from "../lib/propose.js";
+import { closeEarlier, holdForYes, sameDraft, type Draft } from "../lib/propose.js";
 
 const inputSchema = z.object({
   form: z
@@ -30,6 +33,22 @@ const inputSchema = z.object({
 let depsForTests: ((personId: string) => FillDeps | { unavailable: string }) | null = null;
 export function setFillDepsForTests(factory: typeof depsForTests): void {
   depsForTests = factory;
+}
+
+// The approval already waits when the screens go up, so storing them
+// never holds the turn's reply long.
+const REPLAY_BIND_MS = 8_000;
+
+// Binds the fill's screens to the approval it produced. The question
+// works without them, so a failure is logged and nothing else changes.
+async function shareReplay(engine: PersonEngine, approvalId: string, form: FormSpec, steps: ReplayStep[]): Promise<void> {
+  if (steps.length === 0) return;
+  try {
+    const labels = Object.fromEntries(form.fields.map((f) => [f.name, f.label]));
+    if (!(await engine.bindReplay(approvalId, { labels, steps }, REPLAY_BIND_MS))) console.warn(JSON.stringify({ type: "mano_replay_refused" }));
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_replay_failed", status: err instanceof EngineError ? err.status : null }));
+  }
 }
 
 export default defineTool({
@@ -103,14 +122,18 @@ export default defineTool({
       return { status: "fill_failed", sent: false, note: "Mano could not finish filling the form on its computer, so nothing was prepared or sent. Say so and offer to try again." };
     }
 
-    const held = await holdForYes(engine, ctx, turn, {
+    const draft: Draft = {
       type: "submit",
       recipient: form.recipient,
       purpose: form.purpose,
       payload: fill.saved,
       ...(filled.documentId ? { documentId: filled.documentId } : {}),
-    });
+    };
+    const held = await holdForYes(engine, ctx, turn, draft);
     if (!held.held) return { status: held.status, note: held.note, reason: held.reason, sent: false };
+    // A retried turn gets back the approval its first attempt froze. Only
+    // screens of those same values may stand beside its question.
+    if (sameDraft(held.approval, draft)) await shareReplay(engine, held.approval.id, form, fill.replay);
     return {
       status: "waiting_for_yes",
       approvalId: held.approval.id,

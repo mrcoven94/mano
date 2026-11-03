@@ -108,7 +108,9 @@ const TYPES: [RegExp, LetterType][] = [
   [/overpa(id|yment)/, "overpayment"],
   [/\bden(ied|ial)\b|not eligible|ineligible/, "denial"],
   [/\binterview\b/, "interview"],
-  [/\brenew|recertif|redetermin/, "renewal"],
+  // A next renewal is a date the letter states, not what it is about:
+  // "Next renewal November 22, 2026" on an approval is not a renewal letter.
+  [/(?<!\bnext[ \t]+)(?:\brenew|recertif|redetermin)/, "renewal"],
   [/\bmissing\b|\bverif(y|ication)\b|need(ed)? (more )?(information|documents|proof)|documents? needed|send (us )?(proof|copies)/, "documents needed"],
   [/\bchang(e|ed|es)\b|\breduc|\bincreas|new amount|will (stop|end)/, "change notice"],
 ];
@@ -217,7 +219,9 @@ function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; 
       federalProgram: program?.federal ?? null,
       sentence: proposal.quote,
     };
-    lines.push(`It is due ${spoken(proposal.dueDate)}.`);
+    // A published "next renewal" is the renewal the person owes next.
+    const next = /\bnext\s+(?:renewal|recertification)\b/i.test(proposal.sentence) && (kind === "renewal" || kind === "recertification");
+    lines.push(next ? `Your next ${kind} is due ${spoken(proposal.dueDate)}.` : `It is due ${spoken(proposal.dueDate)}.`);
   } else if (question) {
     ask = heldBackQuestion(question);
   }
