@@ -62,6 +62,7 @@ import { GuardianChecker } from "../../../apps/engine/src/gateway/guardian.ts";
 import { SandboxExecutor } from "../../../apps/engine/src/gateway/executors.ts";
 import type { ActionRequest, Approval } from "../../../apps/engine/src/gateway/types.ts";
 import { renderReplayPage } from "../../../apps/engine/src/fill-replay.ts";
+import { labelReplayPage, withoutJudgeLabels } from "./judge-replay.ts";
 import { DEFAULT_CONFIG, handleRequest } from "../../../apps/sandbox-portal/src/app.ts";
 import { MemoryFileStore, MemoryStore } from "../../../apps/sandbox-portal/test/memory-store.ts";
 import { FORMS, fillFrom } from "../../../apps/agent/agent/lib/forms.ts";
@@ -530,19 +531,23 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
           }),
         );
         files.replay = `${opts.outDir}/replay.html`;
-        writeFileSync(
-          files.replay,
-          renderReplayPage({
-            state: "approved",
-            purpose: approval!.purpose,
-            recipient: recipientName(approval!.recipient),
-            steps,
-            fields: form.fields.map((f) => ({ label: f.label, value: saved[f.name] ?? "" })),
-            attached: true,
-          }),
-        );
+        // Engine's page as Maria would see it, with this run's simulated
+        // parts labeled on it, since judges open the saved file.
+        const simulated = [
+          ...new Set(reports.flatMap((r) => r.parts).filter((part) => part.ran === "simulated").map((part) => `${part.what}${part.model ? ` [${modelName(part.model)}]` : ""}.`)),
+        ];
+        const page = renderReplayPage({
+          state: "approved",
+          purpose: approval!.purpose,
+          recipient: recipientName(approval!.recipient),
+          steps,
+          fields: form.fields.map((f) => ({ label: f.label, value: saved[f.name] ?? "" })),
+          attached: true,
+        });
+        const labeled = labelReplayPage(page, simulated);
+        writeFileSync(files.replay, labeled);
         return {
-          parts: [plain("The portal's caseworker view and Engine's replay page, rendered by their own code")],
+          parts: [plain("The portal's caseworker view and Engine's replay page, rendered by their own code, with this run's simulated parts labeled on the saved copy")],
           lines: [
             `Portal lookup: ${found.found ? `received, ${found.externalId}` : "not found"}`,
             `On file at the portal: case ${filed?.household.caseNumber ?? "none"}, declaration made by ${filed?.declaration?.madeBy ?? "nobody"}`,
@@ -550,13 +555,12 @@ export async function runSpine(opts: SpineOptions): Promise<SpineRun> {
             `Replay page: ${files.replay}`,
           ],
           failure:
-            !found.found || found.externalId !== confirmation || !detail.ok
-              ? "the portal does not show the filing"
-              : filed?.declaration?.madeBy !== "applicant"
-                ? "the filing does not carry the applicant's declaration"
-                : filed.household.caseNumber !== MARIA_PROFILE.programs[0]!.caseNumber!.value
-                  ? "the filing does not carry Maria's case number"
-                  : null,
+            ([
+              [!found.found || found.externalId !== confirmation || !detail.ok, "the portal does not show the filing"],
+              [filed?.declaration?.madeBy !== "applicant", "the filing does not carry the applicant's declaration"],
+              [filed?.household.caseNumber !== MARIA_PROFILE.programs[0]!.caseNumber!.value, "the filing does not carry Maria's case number"],
+              [withoutJudgeLabels(labeled) !== page, "the saved replay page is not Engine's page plus the judge run's labels"],
+            ] as const).find(([failed]) => failed)?.[1] ?? null,
         };
       },
     },

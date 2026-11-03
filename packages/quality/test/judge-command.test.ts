@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { withoutJudgeLabels } from "../src/judge-replay.ts";
 
 const QUALITY_DIR = import.meta.dirname;
 const recorded = JSON.parse(readFileSync(join(QUALITY_DIR, "..", "src", "spine-replay.json"), "utf8")) as { segment: { answer: unknown }; read: { answer: unknown } };
@@ -46,6 +47,19 @@ test("with no key every step finishes, model steps say they used recordings, and
   const replay = readFileSync(join(dir, "replay.html"), "utf8");
   assert.match(replay, /Mano filled in &quot;Case number&quot;/);
   assert.match(replay, /<dt>Goes to<\/dt><dd>the State Benefits Renewal Office test portal<\/dd>/);
+  assert.match(replay, /Judge run on synthetic data\./);
+  for (const simulated of [
+    "Segments the photo into pages: recorded response; no META_MODEL_API_KEY is set",
+    "Reads the page into cited fields: recorded response; no META_MODEL_API_KEY is set",
+    "Computer use: a stand-in.",
+    "Guardian&#39;s verdict: recorded.",
+    "Maria&#39;s YES: scripted, since Maria is synthetic.",
+  ]) {
+    assert.ok(replay.includes(`<li>${simulated}`), simulated);
+  }
+  assert.match(replay, /<p>You said yes to this version\.<\/p><div class="judge-label"><p><strong>Simulated: Maria is synthetic, and this run scripted her YES\./);
+  assert.equal(replay.match(/Simulated: a screen drawn by the stand-in/g)?.length, 9);
+  assert.doesNotMatch(withoutJudgeLabels(replay), /judge-label|Simulated|Judge run/);
 });
 
 // A stand-in model API: each model ID gets a status and, on 200, a reply.
