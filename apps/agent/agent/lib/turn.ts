@@ -380,6 +380,9 @@ async function runTurn(
   // words that answer is the whole reply; the crisis line still leads
   // through Channels' finalize when the turn is a crisis.
   // The reading reaches the model only as data in the person's own turn.
+  // The profile, as data and never instructions (lib/profile.ts), is read
+  // beside it and given up before it could cut into the model's minimum.
+  const profileRead = body.attachmentCount > 0 && body.texts.length === 0 ? null : profileContext(engine, deadlineMs - MODEL_MIN_MS - Date.now());
   let letter: LetterReply | null = null;
   if (body.attachmentCount > 0) {
     letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), turn.firstReceivedAt, deadlineMs - READ_MARGIN_MS);
@@ -387,8 +390,7 @@ async function runTurn(
     context.push(LETTER_RULES);
     message = `${message}\n\n${letterBlock(letter)}`;
   }
-  // The profile as data, never instructions (lib/profile.ts).
-  const profile = await profileContext(engine);
+  const profile = await profileRead;
   if (profile) context.push(profile);
   // Where earlier requests stand (instructions/requests.ts) reaches the
   // model as a system instruction, never as part of the person's message.
