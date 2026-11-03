@@ -28,22 +28,27 @@ export default defineTool({
     }
     const base = reminderBase(turnId, parsed.asked);
     const text = `${REMINDER_PREFIX}${input.text.trim()}`;
+    const attempt = ctx.session.turn?.id ?? "attempt";
+    const receivedAt = new Date(turnAtMs).toISOString();
     const invalid = validateDue(parsed.dueAtMs, turnAtMs);
     if (invalid) {
       // A retry finds what an earlier attempt saved before it judges the
       // time again: one that reads a later zone can work out a time that
-      // has passed for a reminder already set. Creating it again with its
-      // stored content returns it and re-arms a wake-up the first attempt
-      // may have lost.
-      // Only this same reminder counts, its text exactly as Engine compares
-      // content; another reminder for the same time is never returned.
+      // has passed for a reminder already set. Only this same reminder
+      // counts, its text exactly as Engine compares content; another one
+      // for the same time is never returned. Its place is claimed for this
+      // attempt, so the next reminder for that time takes the next place,
+      // and creating it again with its stored content re-arms a wake-up
+      // the first attempt may have lost.
       const kept = (await engine.listReminders()).find((r) => (r.id === base || r.id.startsWith(`${base}-`)) && r.text === text);
-      if (!kept) throw new Error(invalid);
-      const again = await engine.createReminder({ id: kept.id, text: kept.text, dueAt: kept.dueAt });
+      const place = kept ? Array.from({ length: MAX_SAME_TIME }, (_, i) => i).find((i) => reminderIdAt(base, i) === kept.id) : undefined;
+      if (!kept || place === undefined) throw new Error(invalid);
+      const [, again] = await Promise.all([
+        engine.putTurn(placeClaimId(base, attempt, place), receivedAt),
+        engine.createReminder({ id: kept.id, text: kept.text, dueAt: kept.dueAt }),
+      ]);
       return { reminderId: again.id, dueAt: again.dueAt, text: again.text.replace(REMINDER_PREFIX, "") };
     }
-    const attempt = ctx.session.turn?.id ?? "attempt";
-    const receivedAt = new Date(turnAtMs).toISOString();
     let saved: EngineReminder | null = null;
     for (let place = 0; place < MAX_SAME_TIME && !saved; place++) {
       const id = reminderIdAt(base, place);

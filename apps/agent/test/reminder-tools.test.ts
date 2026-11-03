@@ -152,6 +152,20 @@ describe("the zone a reminder is read in", () => {
     await expect(todayAt9("bring the pay stub", "eve-turn-2")).rejects.toThrow(/already passed/);
     expect(engine.remindersOf(PERSON).map((r) => r.text)).toEqual(["Reminder: call the county"]);
   });
+
+  it("a recovered reminder holds its place, so the next one for that time is still set", async () => {
+    const turnAtMs = Date.UTC(2026, 10, 3, 16, 30, 0);
+    const todayAt9 = (text: string, eveTurn: string) =>
+      remind.execute({ text, when: "today at 9" }, toolCtx({ handleHash: HANDLE, turnId: "turn_zoneplace1", grant, turnAtMs, eveTurn }));
+    engine.profileKeySet = false;
+    await todayAt9("call the county", "eve-turn-1");
+    engine.profileKeySet = true;
+    engine.profile = livingIn("NY");
+    await todayAt9("call the county", "eve-turn-2");
+    engine.profileKeySet = false;
+    expect(await todayAt9("bring the pay stub", "eve-turn-2")).toMatchObject({ text: "bring the pay stub", dueAt: "2026-11-03T17:00:00.000Z" });
+    expect(engine.remindersOf(PERSON).map((r) => r.text).sort()).toEqual(["Reminder: bring the pay stub", "Reminder: call the county"]);
+  });
 });
 
 describe("reminder identity across attempts", () => {
