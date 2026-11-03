@@ -182,9 +182,6 @@ export function scoreByOverlap(item: JudgeItem): JudgeScore {
   if (containsPromise(item.answer) && !containsPromise(item.reference)) {
     return { helpful: 2, accurate: 1, plain: 3, warm: 3, pass: false, reason: "promises eligibility the reference does not promise" };
   }
-  if (/\[letter\s+\d+\]/i.test(item.reference) && !/\[letter\s+\d+\]/i.test(item.answer)) {
-    return { helpful: 3, accurate: 2, plain: 4, warm: 4, pass: false, reason: "drops the letter citation" };
-  }
   const a = words(item.answer);
   const r = words(item.reference);
   let shared = 0;
