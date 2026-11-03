@@ -93,7 +93,8 @@ test("mail deadline accuracy is labeled a stand-in until packages/mail merges", 
   const summary = await scoreMailDeadlines();
   assert.equal(summary.live, false);
   assert.match(summary.detail, /stand-in/);
-  assert.equal(summary.letters, 20);
+  assert.equal(summary.letters, 23);
+  assert.equal(summary.correct, 23, "the stand-in sets the printed date aside and reads the one deadline");
   const wrong = await scoreMailDeadlines({ name: "always", live: true, readDeadline: async () => "November 15, 2026" }, "test reader");
   assert.ok(wrong.accuracy < 1);
   assert.ok(wrong.misses.some((m) => m.expected === null));

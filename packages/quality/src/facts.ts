@@ -128,3 +128,6 @@ export const SCAM_HOSTS = [
 ] as const;
 
 export const SCAM_PHONES = ["(555) 019-9001", "(555) 019-9002"] as const;
+
+// The second date on the letters that give two deadlines that disagree.
+export const CONFLICTING_DATE = "November 1, 2026";

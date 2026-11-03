@@ -32,6 +32,14 @@ export function expectedDeadline(c: BenchCase): string | null {
   return deadline?.kind === "one" ? deadline.date : null;
 }
 
+// The date a letter was printed, alone on its line above the greeting, says
+// when it was sent, not when to act; the mail reader sets it aside too.
+function withoutPrintedDate(transcript: string): string {
+  const lines = transcript.split("\n");
+  const greeting = lines.findIndex((l) => /^\s*dear\b/i.test(l));
+  return lines.filter((l, i) => !(i < greeting && extractDates(l)[0] === l.trim())).join("\n");
+}
+
 // Reads the transcript the letter was drawn from: one date publishes, two or
 // more dates or a scam marker publish none.
 export class TranscriptDeadlineReader implements DeadlineReader {
@@ -40,7 +48,7 @@ export class TranscriptDeadlineReader implements DeadlineReader {
 
   async readDeadline(letter: LetterImage): Promise<string | null> {
     if (/\b(?:URGENT|verify now)\b/i.test(letter.transcript)) return null;
-    const dates = [...new Set(extractDates(letter.transcript))];
+    const dates = [...new Set(extractDates(withoutPrintedDate(letter.transcript)))];
     return dates.length === 1 ? dates[0]! : null;
   }
 }

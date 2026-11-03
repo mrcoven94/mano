@@ -4,13 +4,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildAllSuites, buildSuite } from "../src/suites/build.ts";
-import { SUITE_PINS } from "../src/suites/pins.ts";
+import { OLDER_PINS, SUITE_PINS } from "../src/suites/pins.ts";
 import { SMOKE_CASE_COUNT, SMOKE_CASE_IDS } from "../src/smoke.ts";
 
 test("suites hold the specified case counts", () => {
   assert.equal(buildSuite("chat").cases.length, 40);
   assert.equal(buildSuite("text").cases.length, 25);
-  assert.equal(buildSuite("letters").cases.length, 20);
+  assert.equal(buildSuite("letters").cases.length, 23);
   assert.equal(buildSuite("safety").cases.length, 40);
   assert.equal(buildSuite("personas").cases.length, 13);
 });
@@ -22,6 +22,12 @@ test("suite builds are deterministic and match the committed pins", () => {
     assert.equal(build.version, pin.version);
     assert.equal(build.cases.length, pin.cases);
     assert.equal(build.sha256, pin.sha256);
+  }
+  for (const pin of OLDER_PINS) {
+    const build = buildSuite(pin.suite, { lettersVersion: pin.version });
+    assert.equal(build.version, pin.version);
+    assert.equal(build.cases.length, pin.cases);
+    assert.equal(build.sha256, pin.sha256, `${pin.suite} version ${pin.version} changed`);
   }
   const again = buildAllSuites().map((s) => s.sha256).join(",");
   const first = buildAllSuites().map((s) => s.sha256).join(",");
@@ -52,11 +58,36 @@ test("safety covers every required category", () => {
   }
 });
 
-test("letters cases carry a synthetic image and a citation", () => {
-  for (const c of buildSuite("letters").cases) {
+test("letters version 2 draws a full page with no [letter N] marker in any reference", () => {
+  const cases = buildSuite("letters").cases;
+  for (const c of cases) {
     assert.equal(c.input.images?.length, 1);
+    const { svg, transcript } = c.input.images![0]!;
+    assert.ok(svg.includes("SYNTHETIC TEST LETTER"));
+    assert.ok(transcript.split("\n").length >= 12, `${c.id} reads as a full letter`);
+    assert.ok(!/\[letter\s+\d+\]/i.test(c.reference), `${c.id} reference carries a marker`);
+    assert.ok(!(c.expect.mustInclude ?? []).some((n) => /\[letter/i.test(n)), `${c.id} requires a marker`);
+    assert.equal(c.expect.citationRequired, undefined);
+  }
+  const cats = new Set(cases.map((c) => c.category));
+  for (const cat of ["renewal", "missing-doc", "approval", "scam", "conflict", "planted-instruction"]) assert.ok(cats.has(cat), `missing ${cat}`);
+});
+
+test("letters version 1 still builds as pinned, three lines and a marker", () => {
+  for (const c of buildSuite("letters", { lettersVersion: 1 }).cases) {
+    assert.equal(c.version, 1);
     assert.ok(c.input.images![0]!.svg.includes("SYNTHETIC TEST LETTER"));
     assert.ok(c.reference.includes("[letter 1]"));
+  }
+});
+
+test("letter pages name no real place: made-up offices, 555-01 numbers, .example links, unassigned ZIP codes", () => {
+  for (const c of buildSuite("letters").cases) {
+    const t = c.input.images![0]!.transcript;
+    for (const m of t.matchAll(/\(\d{3}\) \d{3}-\d{4}/g)) assert.ok(m[0].replace(/\D/g, "").startsWith("55501"), `${c.id}: ${m[0]}`);
+    for (const m of t.matchAll(/https?:\/\/([^/\s]+)/g)) assert.ok(m[1]!.endsWith(".example"), `${c.id}: ${m[1]}`);
+    for (const m of t.matchAll(/@([\w.-]+\w)/g)) assert.ok(m[1]!.endsWith(".example"), `${c.id}: ${m[1]}`);
+    for (const m of t.matchAll(/\b[A-Z]{2} (\d{5})\b/g)) assert.ok(Number(m[1]) < 500, `${c.id}: ZIP ${m[1]}`);
   }
 });
 
