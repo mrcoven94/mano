@@ -2,7 +2,7 @@
 // and voice notes. Offline messages wait in the outbox and send in order
 // when the engine is reachable again.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentRef } from "react";
 import {
   AppState,
   FlatList,
@@ -24,6 +24,7 @@ import { Btn, DemoBanner, EmptyView, LoadingView, Title } from "../../components
 import type { Attachment, ChatMessage, NewAttachment } from "../../lib/api/types";
 import { AuthError } from "../../lib/api/types";
 import { useAuth } from "../../lib/auth";
+import { takeChatDraft } from "../../lib/chat-draft";
 import { trackCacheFile } from "../../lib/cache-files";
 import { useStrings } from "../../lib/i18n";
 import { submitMessage } from "../../lib/send";
@@ -76,6 +77,7 @@ export default function Chat() {
   const recorder = useAudioRecorder(RecordingPresets.LOW_QUALITY);
   const playerRef = useRef<AudioPlayer | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
 
   const refresh = useCallback(async () => {
     if (!session || !outbox) return;
@@ -109,6 +111,18 @@ export default function Chat() {
     useCallback(() => {
       void refresh();
     }, [refresh]),
+  );
+
+  // A draft another screen handed over (an approval quoted for a change)
+  // lands in the composer for the person to finish; nothing sends itself.
+  useFocusEffect(
+    useCallback(() => {
+      if (!session) return;
+      const draft = takeChatDraft(session.token);
+      if (!draft) return;
+      setText((current) => (current.trim() ? `${current.trimEnd()}\n${draft}` : draft));
+      inputRef.current?.focus();
+    }, [session]),
   );
 
   useEffect(() => {
@@ -452,6 +466,7 @@ export default function Chat() {
             <Ionicons name={attachOpen ? "close-outline" : "add-outline"} size={24} color={colors.text} />
           </Pressable>
           <TextInput
+            ref={inputRef}
             value={text}
             onChangeText={setText}
             placeholder={s.composerHint}

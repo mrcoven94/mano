@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { DECLINE_REPLY } from "../lib/api/maria";
+import { CHANGE_REPLY, CHANGE_REPLY_ES, DECLINE_REPLY } from "../lib/api/maria";
+import { parseActionView } from "../lib/action-view";
 import { StandInClient } from "../lib/api/standin";
 import { AuthError, StaleApprovalError, type Session } from "../lib/api/types";
 import { b64encode, utf8ToBytes } from "../lib/base64";
@@ -67,6 +68,58 @@ describe("Maria spine run", () => {
     expect(approvals).toHaveLength(1);
     expect(approvals[0]?.status).toBe("pending");
     expect(approvals[0]?.recipientName).toBe("Springfield County SNAP office");
+  });
+
+  it("carries the renewal answers and statement the way a live renewal does", async () => {
+    const client = makeClient();
+    const session = await signIn(client);
+    const photo = b64encode(utf8ToBytes("fake-photo-bytes"));
+    await client.sendMessage(session, "I photographed my mail", [{ kind: "photo", name: "mail.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
+    const [approval] = await client.listApprovals(session);
+    const parsed = parseActionView(approval?.requestJson ?? "");
+    if (parsed.kind === "unknown") throw new Error(parsed.reason);
+    // Every field the agent's food-renewal form fills (apps/agent/agent/lib/forms.ts).
+    expect(parsed.answers.map((f) => f.key)).toEqual([
+      "caseNumber",
+      "fullName",
+      "dateOfBirth",
+      "householdSize",
+      "monthlyIncome",
+      "address",
+      "phone",
+    ]);
+    expect(parsed.answers.every((f) => f.label !== null)).toBe(true);
+    expect(parsed.declaration).toContain("penalty of perjury");
+    expect(parsed.attachment).toBe("SNAP renewal packet");
+    // The packet the approval binds says the same thing.
+    const doc = await client.getApprovalDocument(session, approval!);
+    expect(Buffer.from(doc.bytesB64, "base64").toString("utf8")).toContain(parsed.declaration ?? "missing");
+  });
+
+  it("answers a change request in chat and leaves the renewal waiting and unsent", async () => {
+    const client = makeClient();
+    const session = await signIn(client);
+    const photo = b64encode(utf8ToBytes("fake-photo-bytes"));
+    await client.sendMessage(session, "I photographed my mail", [{ kind: "photo", name: "mail.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
+    const en = await client.sendMessage(session, 'About "File your SNAP renewal for case R-1042": please change my phone number', []);
+    expect(en.text).toBe(CHANGE_REPLY);
+    const es = await client.sendMessage(session, 'Sobre "File your SNAP renewal for case R-1042": por favor cambie mi teléfono', []);
+    expect(es.text).toBe(CHANGE_REPLY_ES);
+    const [approval] = await client.listApprovals(session);
+    expect(approval?.status).toBe("pending");
+    expect(approval?.attempted).toBe(false);
+  });
+
+  it("never says a decided renewal is unsent when asked to change it", async () => {
+    const client = makeClient();
+    const session = await signIn(client);
+    const photo = b64encode(utf8ToBytes("fake-photo-bytes"));
+    await client.sendMessage(session, "I photographed my mail", [{ kind: "photo", name: "mail.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
+    const [approval] = await client.listApprovals(session);
+    await client.approve(session, approval!.id, { documentHash: approval!.documentHash, requestHash: approval!.requestHash });
+    const reply = await client.sendMessage(session, 'About "File your SNAP renewal for case R-1042": please change my address', []);
+    expect(reply.text).not.toBe(CHANGE_REPLY);
+    expect(reply.text).not.toContain("Nothing was sent");
   });
 
   it("binds the approval to the real hash of the document bytes", async () => {
