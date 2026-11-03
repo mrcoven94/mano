@@ -8,6 +8,7 @@ import {
   isContributorId,
   readingModelFor,
   recordedText,
+  strictSchemaErrors,
 } from "../src/model.js";
 
 describe("readingModelFor", () => {
@@ -160,5 +161,47 @@ describe("MetaModelClient review 6", () => {
     const client = new MetaModelClient({ apiKey: "k", fetchFn });
     await expect(client.responses(req, { deadline: Date.now() - 1 })).rejects.toThrow(/budget/i);
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("strict schemas", () => {
+  const detection = (required: string[]) => ({
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      detections: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: { box_2d: { type: "array", items: { type: "number" } }, label: { type: "string" }, score: { type: "number" } },
+          required,
+        },
+      },
+    },
+    required: ["detections"],
+  });
+
+  it("flags a property left out of required, at any depth, as the API does", () => {
+    expect(strictSchemaErrors(detection(["box_2d", "label"]))).toEqual([
+      "schema.detections[]: Missing 'score' in required",
+    ]);
+    expect(strictSchemaErrors(detection(["box_2d", "label", "score"]))).toEqual([]);
+    expect(strictSchemaErrors({ type: "object", properties: { a: { type: "string" } }, required: ["a"] })).toEqual([
+      "schema: additionalProperties must be false",
+    ]);
+  });
+
+  it("the stand-in refuses a strict schema the API would refuse, and replays a valid one", async () => {
+    const entry = { match: () => true, result: recordedText("{}") };
+    const request = (required: string[]) => ({
+      model: "sam-3.1",
+      input: "x",
+      text: { format: { type: "json_schema" as const, name: "mail_detections", schema: detection(required), strict: true } },
+    });
+    await expect(new RecordedModelClient([entry]).responses(request(["box_2d", "label"]))).rejects.toThrow(
+      "Model request failed: 400 (schema.detections[]: Missing 'score' in required)",
+    );
+    await expect(new RecordedModelClient([entry]).responses(request(["box_2d", "label", "score"]))).resolves.toMatchObject({ text: "{}" });
   });
 });

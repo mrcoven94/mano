@@ -221,6 +221,91 @@ describe("answerReading builds the reply from closed fields only", () => {
     expect(plain.text).toMatch(/^This is a benefits letter\./);
   });
 
+  // LAP-756: an approval letter was answered "This is a SNAP renewal
+  // letter." with no date. The bench letter (packages/quality letters-13
+  // to 15) prints these three lines under its banner.
+  const approvalPage = (fullText: string, deadline: string) =>
+    pageJson({
+      full_text: fullText,
+      sender: { text: "Illinois Benefits Office", box_2d: [40, 60, 70, 400] },
+      program: { text: "SNAP", box_2d: [80, 60, 100, 200] },
+      subject: { text: "Case approved", box_2d: [110, 60, 130, 300] },
+      asked: [],
+      deadlines: [{ text: deadline, box_2d: [200, 60, 220, 400] }],
+      consequence: { text: null, box_2d: null },
+      reference_no: { text: null, box_2d: null },
+      notice_date: { text: null, box_2d: null },
+      phones: [],
+    });
+
+  it("an approval letter says what was approved and holds the next renewal as its deadline", async () => {
+    const sentence = "Your next renewal is due November 22, 2026.";
+    const answer = await answerFor([
+      approvalPage(
+        `Illinois Benefits Office\nCase approved\n\nYour SNAP case is approved for $290 a month. ${sentence}`,
+        sentence,
+      ),
+    ]);
+    expect(answer.text).toBe(`This is a SNAP approval letter. Your next renewal is due November 22, 2026. ${OFFICIAL}`);
+    expect(answer.text).not.toMatch(/\$\d/);
+    expect(answer.deadlines).toEqual([
+      {
+        letterId: "L1",
+        file: "doc-1",
+        title: "SNAP renewal",
+        kind: "renewal",
+        dueDate: "2026-11-22",
+        program: "SNAP",
+        federalProgram: "SNAP",
+        sentence,
+      },
+    ]);
+  });
+
+  it("an approval letter that only labels its next renewal names that date and asks before holding it", async () => {
+    for (const fullText of [
+      "SYNTHETIC TEST LETTER\nCase approved\nSNAP $290 a month\nNext renewal November 22, 2026",
+      "SYNTHETIC TEST LETTER\n\nCase approved\n\nSNAP $290 a month\n\nNext renewal November 22, 2026",
+    ]) {
+      const model = recordedReader([approvalPage(fullText, "Next renewal November 22, 2026")]);
+      const reading = await readMail([{ bytes: await letterPhoto(), mimeType: "image/jpeg", name: "doc-1" }], {
+        personId: "p1",
+        synthetic: true,
+        model,
+      });
+      const answer = answerReading(reading);
+      expect(reading.datesToKnow).toEqual([]);
+      expect(answer.deadlines).toEqual([]);
+      expect(answer.text).toBe(
+        `This is a SNAP approval letter. ${OFFICIAL} ` +
+          "It looks like the letter gives a deadline of November 22, 2026. Is that the date you need to meet?",
+      );
+    }
+  });
+
+  it("an approval letter with a second deadline-like sentence still names its one date", async () => {
+    const sentence = "Your next renewal is due November 22, 2026.";
+    const answer = await answerFor([
+      approvalPage(
+        `Illinois Benefits Office\nCase approved\n\nYour SNAP case is approved for $290 a month. ${sentence} ` +
+          "Report income changes within 10 days.",
+        sentence,
+      ),
+    ]);
+    expect(answer.deadlines).toEqual([]);
+    expect(answer.text).toBe(
+      `This is a SNAP approval letter. ${OFFICIAL} ` +
+        "It looks like the letter gives a deadline of November 22, 2026. Is that the date you need to meet?",
+    );
+  });
+
+  it("a renewal letter that mentions approval stays a renewal letter", async () => {
+    const answer = await answerFor([
+      pageJson({ full_text: `${RENEWAL_TEXT} Once your renewal is approved, your coverage continues.` }),
+    ]);
+    expect(answer.text).toMatch(/^This is a Medi-Cal renewal letter\. It is due November 20, 2026\./);
+  });
+
   it("says honestly when nothing could be read, and offers to try again", async () => {
     const answer = await answerFor([pageJson({ readable: false, readability_note: "blurry", full_text: "" })]);
     expect(answer.outcome).toBe("unread");

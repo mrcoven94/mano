@@ -255,13 +255,37 @@ export function createModelClient(
 // Stand-in that replays recorded responses. Matchers pair a predicate on
 // the request with the response to return, so tests stay deterministic
 // with no key. Unmatched requests fail loudly: a test that needs a new
-// response must record it explicitly.
+// response must record it explicitly. A strict schema the API would
+// reject fails the same way the API does.
 export interface RecordedEntry {
   match: (req: ResponsesRequest) => boolean;
   result: Omit<ResponsesResult, "model"> & { model?: string };
   // When true, the entry is removed after one use, so a list of entries
   // replays in order like a queue.
   consume?: boolean;
+}
+
+// The API's rule for a strict JSON schema: every object sets
+// additionalProperties false and lists each of its properties in
+// required (an optional field is a required one that allows null). A
+// schema that breaks it gets HTTP 400 before any model runs, such as
+// "Missing 'score'". Returns every break, empty when the schema is valid.
+export function strictSchemaErrors(schema: unknown, path = "schema"): string[] {
+  if (typeof schema !== "object" || schema === null) return [];
+  const node = schema as Record<string, unknown>;
+  const errors: string[] = [];
+  const properties = node["properties"];
+  if (typeof properties === "object" && properties !== null) {
+    const required = new Set(Array.isArray(node["required"]) ? node["required"] : []);
+    for (const key of Object.keys(properties)) {
+      if (!required.has(key)) errors.push(`${path}: Missing '${key}' in required`);
+    }
+    if (node["additionalProperties"] !== false) errors.push(`${path}: additionalProperties must be false`);
+    for (const [key, child] of Object.entries(properties)) errors.push(...strictSchemaErrors(child, `${path}.${key}`));
+  }
+  errors.push(...strictSchemaErrors(node["items"], `${path}[]`));
+  if (Array.isArray(node["anyOf"])) node["anyOf"].forEach((child, i) => errors.push(...strictSchemaErrors(child, `${path}.anyOf[${i}]`)));
+  return errors;
 }
 
 export class RecordedModelClient implements ModelClient {
@@ -277,6 +301,11 @@ export class RecordedModelClient implements ModelClient {
   async responses(req: ResponsesRequest, opts?: CallOptions): Promise<ResponsesResult> {
     this.calls.push(req);
     this.callOptions.push(opts);
+    // Refuse what the API refuses, so a schema it would reject fails
+    // here too instead of replaying a recorded answer.
+    const format = req.text?.format;
+    const schemaErrors = format?.strict ? strictSchemaErrors(format.schema) : [];
+    if (schemaErrors.length > 0) throw new Error(`Model request failed: 400 (${schemaErrors.join("; ")})`);
     for (let i = 0; i < this.entries.length; i++) {
       const entry = this.entries[i]!;
       if (entry.match(req)) {

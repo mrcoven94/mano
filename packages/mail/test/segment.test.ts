@@ -1,5 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { parseDetections } from "../src/segment.js";
+import { normalizeImage } from "../src/media.js";
+import { RecordedModelClient, recordedText, strictSchemaErrors } from "../src/model.js";
+import { parseDetections, segmentFrame } from "../src/segment.js";
+import { letterPhoto } from "./letter-fixture.js";
+
+// LAP-755: SAM 3.1 answered every call with HTTP 400 "Missing 'score'"
+// because the detection schema left score out of required.
+describe("segmentFrame", () => {
+  const sam = (result: string) =>
+    new RecordedModelClient([{ match: (req) => req.model === "sam-3.1", result: recordedText(result) }]);
+
+  it("sends SAM 3.1 a strict schema that lists every property as required", async () => {
+    const model = sam('{"detections":[{"box_2d":[80,120,950,880],"label":"letter","score":0.9}]}');
+    await segmentFrame(await normalizeImage(await letterPhoto(), "image/jpeg"), model);
+    const format = model.calls[0]!.text!.format!;
+    expect(format).toMatchObject({ type: "json_schema", name: "mail_detections", strict: true });
+    expect(strictSchemaErrors(format.schema)).toEqual([]);
+  });
+
+  it("splits the photo with SAM's boxes when SAM answers", async () => {
+    const model = sam('{"detections":[{"box_2d":[80,120,950,880],"label":"letter","score":0.9}]}');
+    const seg = await segmentFrame(await normalizeImage(await letterPhoto(), "image/jpeg"), model);
+    expect(seg.method).toBe("sam");
+    expect(seg.detections).toEqual([{ box: { ymin: 80, xmin: 120, ymax: 950, xmax: 880 }, label: "letter", score: 0.9 }]);
+  });
+
+  it("falls back to on-device detection when SAM refuses the call", async () => {
+    const model = new RecordedModelClient([]);
+    const seg = await segmentFrame(await normalizeImage(await letterPhoto(), "image/jpeg"), model);
+    expect(seg.method).not.toBe("sam");
+    expect(seg.detections.length).toBeGreaterThan(0);
+  });
+});
 
 describe("parseDetections", () => {
   it("parses box_2d detections", () => {
