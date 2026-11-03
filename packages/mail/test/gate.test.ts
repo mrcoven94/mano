@@ -131,6 +131,25 @@ describe("gateSentence reads a program name before the duty", () => {
   });
 });
 
+describe("gateSentence reads which of the person's own papers", () => {
+  it.each([
+    "Send your most recent pay stub by November 14, 2026.",
+    "Send your two most recent pay stubs by November 14, 2026.",
+    "Send your latest bank statement by November 14, 2026.",
+    "Return your last pay stub by November 14, 2026.",
+    "Send your current lease by November 14, 2026.",
+    "Your most recent pay stub must be received by November 14, 2026.",
+  ])("publishes the paper the person owes: %s", (sentence) => {
+    expect(gateSentence(sentence, NOTICE)).toEqual({ kind: "deadline", iso: "2026-11-14", form: "by", obligation: "respond" });
+  });
+
+  it("never makes the person's benefits their duty", () => {
+    expect(gateSentence("Your last day of benefits is November 30, 2026.", NOTICE)).toEqual({ kind: "ask", reason: "unrecognized" });
+    expect(gateSentence("Your current benefits end on November 30, 2026.", NOTICE)).toEqual({ kind: "date-to-know", iso: "2026-11-30" });
+    expect(gateSentence("Your most recent hearing must be completed by November 14, 2026.", NOTICE)).toMatchObject({ kind: "ask" });
+  });
+});
+
 describe("gateSentence asks on everything else", () => {
   it.each([
     "You must not respond before November 20, 2026.",

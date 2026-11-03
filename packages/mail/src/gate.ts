@@ -75,9 +75,11 @@ const PROGRAMS = any([
   "cash assistance",
 ]);
 const PROGRAM_NOUNS = any(["forms?", "packets?", "paperwork", "applications?", "renewal", "recertification"]);
+// Which of the person's own papers, as in "your most recent pay stub".
+const RECENT = any(["most recent", "two most recent", "latest", "last"]);
 const OF_PHRASE = String.raw`of\s+(?:your\s+)?(?:household\s+)?(?:income|address|identity|residency)`;
 const item = (nouns: string[]): string =>
-  String.raw`(?:${PROGRAMS}\s+(?:${ADJECTIVES}\s+){0,3}${PROGRAM_NOUNS}|(?:${ADJECTIVES}\s+){0,3}${any(nouns)}(?:\s+${OF_PHRASE})?)`;
+  String.raw`(?:${PROGRAMS}\s+(?:${ADJECTIVES}\s+){0,3}${PROGRAM_NOUNS}|(?:${RECENT}\s+)?(?:${ADJECTIVES}\s+){0,3}${any(nouns)}(?:\s+${OF_PHRASE})?)`;
 const ITEM = item([...OWED_NOUNS, ...OFFICE_NOUNS]);
 const OWED_ITEM = item(OWED_NOUNS);
 const NOUN_PHRASE = String.raw`(?:${DETERMINERS}\s+)?${ITEM}(?:\s+(?:listed\s+)?(?:below|above)|\s+enclosed)?`;
