@@ -6,6 +6,8 @@
 // person who just texted; it never holds the secret that signs grants.
 import { personIdForHandle } from "@mano/protocol";
 
+import { engineRoute } from "./timings.js";
+
 const REQUEST_TIMEOUT_MS = 15_000;
 export const HANDLE_GRANT_HEADER = "x-mano-handle-grant";
 
@@ -233,6 +235,9 @@ function parseResult(value: unknown): EngineResult {
 export class PersonEngine {
   readonly personId: string;
   private fetchFn: typeof fetch;
+  // Told each call's route label and time to response, for the turn's
+  // timing log line.
+  onCall?: (route: string, ms: number) => void;
 
   // generation: the Channels deletion generation this turn runs under.
   // Every write carries it and Engine re-checks it at the write, so
@@ -249,16 +254,21 @@ export class PersonEngine {
 
   // timeoutMs: what is left of the caller's budget, when it has one.
   private async call(method: string, path: string, body?: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
-    return this.fetchFn(`${this.cfg.baseUrl}/api/persons/${encodeURIComponent(this.personId)}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${this.cfg.agentToken}`,
-        [HANDLE_GRANT_HEADER]: this.grant,
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, timeoutMs)),
-    });
+    const started = Date.now();
+    try {
+      return await this.fetchFn(`${this.cfg.baseUrl}/api/persons/${encodeURIComponent(this.personId)}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${this.cfg.agentToken}`,
+          [HANDLE_GRANT_HEADER]: this.grant,
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, timeoutMs)),
+      });
+    } finally {
+      this.onCall?.(engineRoute(method, path), Date.now() - started);
+    }
   }
 
   private async json(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<unknown> {

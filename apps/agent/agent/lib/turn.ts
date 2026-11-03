@@ -28,6 +28,7 @@ import { EngineError, type Engine, type EngineApproval, type EngineTurn, type Pe
 import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
 import { closeReplaced, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, replayLine, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
+import { TurnClock } from "./timings.js";
 
 const MAX_TEXTS = 10;
 const MAX_TEXT_CHARS = 4000;
@@ -58,6 +59,8 @@ export interface AgentTurnInput {
   // When the model must be done (epoch ms): the turn's one deadline,
   // under Channels' wait for the agent.
   deadlineMs: number;
+  // Where the run records its own step timings (lib/timings.ts).
+  timings: Record<string, number>;
 }
 
 export interface TurnDeps {
@@ -359,14 +362,20 @@ async function runTurn(
   body: TurnBody,
   turn: { firstReceivedAt: string; created: boolean },
   deadlineMs: number,
+  clock: TurnClock,
 ): Promise<TurnResponse> {
   let message = turnText(body);
   const turnAtMs = Date.parse(turn.firstReceivedAt);
   const decision = body.attachmentCount === 0 ? parseDecision(body.texts.join(" ")) : null;
+  // The profile, as data and never instructions (lib/profile.ts), is read
+  // while the turn closes drafts, decides and reads photos, and is given
+  // up before it could cut into the model's minimum. A decision answered
+  // without the model never uses it.
+  const profileRead = body.attachmentCount > 0 && body.texts.length === 0 ? null : profileContext(engine, deadlineMs - MODEL_MIN_MS - Date.now());
   // Closing replaced drafts is retried at every turn until it lands.
-  await closeReplaced(engine);
+  await clock.time("close", () => closeReplaced(engine));
   if (decision) {
-    const decided = await decideTurn(engine, body, turn, decision);
+    const decided = await clock.time("decide", () => decideTurn(engine, body, turn, decision));
     if (decided) return decided;
   }
 
@@ -376,9 +385,6 @@ async function runTurn(
   // words that answer is the whole reply; the crisis line still leads
   // through Channels' finalize when the turn is a crisis.
   // The reading reaches the model only as data in the person's own turn.
-  // The profile, as data and never instructions (lib/profile.ts), is read
-  // beside it and given up before it could cut into the model's minimum.
-  const profileRead = body.attachmentCount > 0 && body.texts.length === 0 ? null : profileContext(engine, deadlineMs - MODEL_MIN_MS - Date.now());
   let letter: LetterReply | null = null;
   if (body.attachmentCount > 0) {
     letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), turn.firstReceivedAt, deadlineMs - READ_MARGIN_MS);
@@ -386,13 +392,13 @@ async function runTurn(
     context.push(LETTER_RULES);
     message = `${message}\n\n${letterBlock(letter)}`;
   }
-  const profile = await profileRead;
+  const profile = await clock.time("profile", async () => profileRead);
   if (profile) context.push(profile);
   // Where earlier requests stand (instructions/requests.ts) reaches the
   // model as a system instruction, never as part of the person's message.
   let settled: SettleResult;
   try {
-    settled = await deps.runAgent({
+    settled = await clock.time("agent", () => deps.runAgent({
       handleHash: body.handleHash,
       turnId: body.turnId,
       turnAtMs,
@@ -401,7 +407,8 @@ async function runTurn(
       message,
       context,
       deadlineMs,
-    });
+      timings: clock.agent,
+    }));
   } catch (err) {
     // A reading already made is the answer even when the model is not.
     if (err instanceof SettleTimeout) return letter ? reply(letter.text) : failure(504, "timeout");
@@ -466,6 +473,7 @@ function conversationStarts(recorded: { turn: EngineTurn; created: boolean; prev
 export async function handleTurn(request: Request, deps: TurnDeps): Promise<Response> {
   const now = deps.now ?? Date.now;
   const receivedMs = now();
+  const clock = new TurnClock(now);
   const raw = new Uint8Array(await request.arrayBuffer());
   const check = verifyRequest(deps.secret, request.headers.get(TIMESTAMP_HEADER), request.headers.get(SIGNATURE_HEADER), raw);
   if (!check.ok) {
@@ -485,11 +493,12 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
     console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "engine" }));
     return Response.json({ status: "error", text: "", reason: "engine" }, { status: 503 });
   }
+  engine.onCall = clock.engineCall;
 
   let turn: { firstReceivedAt: string; created: boolean };
   let starts: boolean;
   try {
-    const recorded = await recordTurn(engine, body.turnId, new Date(body.receivedAtMs).toISOString());
+    const recorded = await clock.time("ledger", () => recordTurn(engine, body.turnId, new Date(body.receivedAtMs).toISOString()));
     if (!recorded) return Response.json({ status: "stale", text: "" }, { status: 409 });
     turn = { firstReceivedAt: recorded.turn.firstReceivedAt, created: recorded.created };
     starts = conversationStarts(recorded);
@@ -506,7 +515,7 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
 
   let response: TurnResponse;
   try {
-    response = await runTurn(deps, engine, body, turn, receivedMs + (deps.turnBudgetMs ?? TURN_BUDGET_MS));
+    response = await runTurn(deps, engine, body, turn, receivedMs + (deps.turnBudgetMs ?? TURN_BUDGET_MS), clock);
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_turn_error", handle: body.handleHash, err: err instanceof Error ? err.name : "unknown" }));
     response = failure(502, "error");
@@ -519,7 +528,15 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
     else await completing;
   }
   console.log(
-    JSON.stringify({ type: "mano_turn", handle: body.handleHash, status: response.body.status, latencyMs: now() - receivedMs }),
+    JSON.stringify({
+      type: "mano_turn",
+      handle: body.handleHash,
+      status: response.body.status,
+      latencyMs: now() - receivedMs,
+      steps: clock.steps,
+      agent: clock.agent,
+      engine: clock.engine,
+    }),
   );
   return Response.json(response.body, { status: response.httpStatus });
 }

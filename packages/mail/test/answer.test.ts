@@ -216,6 +216,8 @@ describe("answerReading builds the reply from closed fields only", () => {
       });
     const proof = await answerFor([withSentence("Submit proof of income by November 20, 2026.", "CalFresh")]);
     expect(proof.deadlines).toEqual([expect.objectContaining({ kind: "documents", program: "CalFresh", federalProgram: "SNAP", title: "CalFresh documents" })]);
+    const stub = await answerFor([withSentence("Send your most recent pay stub by November 20, 2026.", "CalFresh")]);
+    expect(stub.deadlines).toEqual([expect.objectContaining({ dueDate: "2026-11-20", kind: "documents" })]);
     const plain = await answerFor([withSentence("Respond by November 20, 2026.", "County Help Fund")]);
     expect(plain.deadlines).toEqual([expect.objectContaining({ kind: null, program: null, federalProgram: null, title: "Letter deadline" })]);
     expect(plain.text).toMatch(/^This is a benefits letter\./);
