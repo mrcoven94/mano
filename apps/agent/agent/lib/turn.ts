@@ -320,11 +320,16 @@ async function decideTurn(
   const arrived = Date.parse(turn.firstReceivedAt);
   const { pointer, latest } = await engine.getPending();
   if (pointer && pointer.approvalId !== latest?.approvalId) {
-    const [, link] = await Promise.all([
-      bind(engine, body.turnId, turn.firstReceivedAt, ["unshown"]),
+    await bind(engine, body.turnId, turn.firstReceivedAt, ["unshown"]);
+    // Read again after the binding write: a newer draft may have replaced
+    // the latest one while it ran. The link counts only for the draft that
+    // is still the latest.
+    const [now, current, link] = await Promise.all([
+      engine.getPending(),
+      engine.listApprovals(),
       latest ? replayLinkOf(engine, latest.approvalId) : null,
     ]);
-    return updated(engine, approvals, latest, link);
+    return updated(engine, current, now.latest, now.latest && now.latest.approvalId === latest?.approvalId ? link : null);
   }
   const answerable = pointer && Date.parse(pointer.setAt) < arrived ? pointer : null;
   if (pointer && !answerable) {

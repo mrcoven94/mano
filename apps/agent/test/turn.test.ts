@@ -148,23 +148,29 @@ const sizes = () =>
 // afterwards: fill_form itself stops when the clear fails.
 async function replacedQuestion(shownTurn: string, newerTurn: string, opts: { screens?: boolean } = {}) {
   const shown = await send(turn(shownTurn, "Please file my renewal"));
-  const ctx = toolCtx({ handleHash: HANDLE, turnId: newerTurn, grant: grants.get(HANDLE), turnAtMs: Date.now() });
-  await engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).putTurn(newerTurn, new Date().toISOString());
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
-    /\/pending-approval$/.test(new URL(String(input)).pathname) && init?.method === "DELETE"
-      ? new Response("unavailable", { status: 503 })
-      : engine.fetch(input, init),
-  );
-  await Promise.resolve(fillForm.execute(draft({ householdSize: "4" }), ctx)).catch(() => undefined);
-  vi.stubGlobal("fetch", engine.fetch);
-  await new Promise((r) => setTimeout(r, 3));
-  const newer = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === "4")!;
+  const newer = await unshownDraft(newerTurn, "4");
   if (opts.screens) {
     const person = engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0);
     const steps = [1, 2].map((n) => ({ caption: `Mano filled in step ${n}.`, png: screen(n), focus: null }));
     expect(await person.bindReplay(newer.id, { labels: { householdSize: "People in household" }, steps })).toMatch(/\/fill\/[0-9a-f]{32}$/);
   }
   return { shown: shown.body, newer };
+}
+
+// A newer draft whose question has not reached the person, while
+// clearing the pointer to the question they last saw fails.
+async function unshownDraft(turnId: string, householdSize: string) {
+  const ctx = toolCtx({ handleHash: HANDLE, turnId, grant: grants.get(HANDLE), turnAtMs: Date.now() });
+  await engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).putTurn(turnId, new Date().toISOString());
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+    /\/pending-approval$/.test(new URL(String(input)).pathname) && init?.method === "DELETE"
+      ? new Response("unavailable", { status: 503 })
+      : engine.fetch(input, init),
+  );
+  await Promise.resolve(fillForm.execute(draft({ householdSize }), ctx)).catch(() => undefined);
+  vi.stubGlobal("fetch", engine.fetch);
+  await new Promise((r) => setTimeout(r, 3));
+  return engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === householdSize)!;
 }
 
 beforeEach(async () => {
@@ -761,6 +767,32 @@ describe("a question shown again links to the replay of its own version", () => 
     expect(yes.body.text).not.toContain("See each step");
     expect(pointerOf()?.approvalId).toBe(newer.id);
     expect((await send(turn("turn_rsh_Y00004", "YES"))).body.text).toMatch(/^Done/);
+  });
+
+  it("a draft replaced while the turn binds its decision is never shown with its question or link", async () => {
+    const { newer } = await replacedQuestion("turn_rsh_G00001", "turn_rsh_H00001", { screens: true });
+    // Holds the turn's binding write until a newer draft has replaced B.
+    let release: () => void = () => undefined;
+    let reached: () => void = () => undefined;
+    const held = new Promise<void>((r) => (reached = r));
+    const gated: typeof fetch = async (input, init) => {
+      if (new URL(String(input)).pathname.endsWith("/turns") && String(init?.body).includes('"turnId":"d-')) {
+        reached();
+        await new Promise<void>((r) => (release = r));
+      }
+      return engine.fetch(input, init);
+    };
+    const answering = send(turn("turn_rsh_Y00007", "YES"), deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: gated }) }), { present: false });
+    await held;
+    const newest = await unshownDraft("turn_rsh_I00001", "5");
+    release();
+    const yes = await answering;
+    expect(yes.body.status).toBe("waiting_approval");
+    expect(yes.body.approvalId).toBe(newest.id);
+    expect(yes.body.approval).toBe(renderQuestion(newest));
+    expect(yes.body.text).not.toContain(renderQuestion(newer));
+    expect(yes.body.text).not.toContain("See each step");
+    expect(engine.executor.calls).toHaveLength(0);
   });
 
   it("Engine answers no link once the approval was replaced, decided, or expired", async () => {
