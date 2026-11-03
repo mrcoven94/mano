@@ -123,6 +123,29 @@ export interface PersonState {
 
 const ORG_AGENT_ID = /^org:([A-Za-z0-9_-]+)$/;
 
+// The action keys whose consent effect was applied: one row per key,
+// written in the same transaction as the effect, so an effect is applied
+// at most once however many answers carry its receipt. Before this table,
+// the effect of every share (a consent grant or revocation) was applied
+// when its receipt was recorded, so when the table is first created each
+// share receipt already on file is marked applied, in the same
+// transaction. Only then: later receipts are marked by the step that
+// applies their effect, and one whose effect has not run yet must stay
+// unmarked so the next answer applies it. Safe to run on every start.
+export function ensureAppliedEffects(storage: Pick<DurableObjectStorage, "sql" | "transactionSync">): void {
+  const sql = storage.sql;
+  storage.transactionSync(() => {
+    const existed = sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'applied_effects'").toArray().length > 0;
+    if (existed) return;
+    sql.exec(`CREATE TABLE applied_effects(idempotency_key TEXT PRIMARY KEY, external_id TEXT NOT NULL, applied_at TEXT NOT NULL)`);
+    sql.exec(
+      "INSERT INTO applied_effects(idempotency_key, external_id, applied_at)" +
+        " SELECT idempotency_key, external_id, created_at FROM receipts WHERE action_type = 'share'" +
+        " ON CONFLICT (idempotency_key) DO NOTHING",
+    );
+  });
+}
+
 export class PersonAgent extends Agent<Env, PersonState> {
   initialState: PersonState = { personId: "", approvals: [], consents: [], reminders: [] };
 
@@ -177,10 +200,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         sql.exec(`DROP TABLE consents`);
       }
       sql.exec(`CREATE TABLE IF NOT EXISTS consents(recipient TEXT NOT NULL, case_id TEXT NOT NULL, purpose TEXT NOT NULL, PRIMARY KEY (recipient, case_id))`);
-      // The action keys whose consent effect was applied: one row per key,
-      // written in the same transaction as the effect, so an effect is
-      // applied at most once however many answers carry its receipt.
-      sql.exec(`CREATE TABLE IF NOT EXISTS applied_effects(idempotency_key TEXT PRIMARY KEY, external_id TEXT NOT NULL, applied_at TEXT NOT NULL)`);
+      ensureAppliedEffects(ctx.storage);
       try {
         sql.exec(`ALTER TABLE consents ADD COLUMN expires_at TEXT`);
       } catch {

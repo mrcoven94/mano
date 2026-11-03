@@ -1,6 +1,6 @@
 import { env as testEnv, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import type { PersonAgent } from "../src/agents/person-agent.js";
+import { ensureAppliedEffects, type PersonAgent } from "../src/agents/person-agent.js";
 
 // LAP-747 follow-up. Engine answers a repeated approve with the receipt it
 // already has. That answer is marked replayed, and the person's agent
@@ -67,5 +67,38 @@ describe("LAP-747: a consent effect is applied at most once per filing", () => {
     // The recovery sweep's path applies nothing either.
     expect(await person.applyShareOutcome(key)).toEqual({ applied: false });
     expect(await consents(name)).toHaveLength(0);
+  });
+});
+
+// Review round 12: a Durable Object from before applied_effects existed.
+// Grant G and revoke R completed under the old code (their effects ran
+// when their receipts were recorded); the deploy creates the table; then
+// G's approval is replayed. The migration marks both as applied.
+describe("LAP-747: the applied-effects migration counts receipts already on file", () => {
+  it("after the migration, replaying a pre-deploy grant applies nothing", async () => {
+    const name = "lap747-migration";
+    const ns = testEnv.PERSON_AGENT as DurableObjectNamespace;
+    const person = personStub(name);
+    const orgAgentId = "org:lap747-migration-county";
+    const grant = await person.grantConsent(name, { orgAgentId, purpose: "renewal", scope: ["documents"], caseId: "case-lap747-mig" });
+    expect((await person.approve(grant.approval!.id, name)).status).toBe("completed");
+    const revoke = await person.revokeConsent(name, { orgAgentId, caseId: "case-lap747-mig" });
+    expect((await person.approve(revoke.approval!.id, name)).status).toBe("completed");
+    expect(await consents(name)).toHaveLength(0);
+
+    // As before the deploy: no applied_effects table at all. Then the
+    // migration runs, twice, as on every start.
+    const marked = await runInDurableObject(ns.get(ns.idFromName(name)), (_i, state) => {
+      state.storage.sql.exec("DROP TABLE applied_effects");
+      ensureAppliedEffects(state.storage);
+      ensureAppliedEffects(state.storage);
+      return state.storage.sql.exec("SELECT idempotency_key FROM applied_effects ORDER BY idempotency_key").toArray().map((r) => (r as { idempotency_key: string }).idempotency_key);
+    });
+    expect(marked.sort()).toEqual([grant.approval!.idempotencyKey, revoke.approval!.idempotencyKey].sort());
+
+    const replay = await person.approve(grant.approval!.id, name);
+    expect(replay.status).toBe("completed");
+    expect(await consents(name)).toHaveLength(0);
+    expect(await person.applyShareOutcome(grant.approval!.idempotencyKey)).toEqual({ applied: false });
   });
 });

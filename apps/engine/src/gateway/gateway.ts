@@ -720,6 +720,10 @@ export class ActionGateway {
   // with an approve: whichever reaches the row first wins. A second NO on
   // a declined approval answers the same.
   async rejectApproval(approvalId: string, humanId: string): Promise<GatewayResult> {
+    return this.receiptFirst(approvalId, humanId, await this.rejectNow(approvalId, humanId));
+  }
+
+  private async rejectNow(approvalId: string, humanId: string): Promise<GatewayResult> {
     const approval = this.store.getApproval(approvalId);
     if (!approval) return { status: "blocked", reason: "Approval not found." };
     if (!humanId || humanId !== approval.personId) {

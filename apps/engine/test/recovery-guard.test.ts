@@ -406,3 +406,18 @@ describe("LAP-747: Engine's SQL store retires only a failed attempt at the versi
     });
   });
 });
+
+describe("LAP-747: a NO on a filed approval answers its receipt", () => {
+  it("rejecting a completed approval rejects nothing and answers the receipt, for its own person only", async () => {
+    const office = new Office();
+    office.next = "file";
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, office);
+    const a = (await gateway.requestAction(proposal())).approval!;
+    const filed = await gateway.approveAndExecute(a.id, "person-maria");
+    expect(filed.status).toBe("completed");
+    expect(await gateway.rejectApproval(a.id, "person-maria")).toMatchObject({ status: "completed", receipt: { externalId: filed.receipt!.externalId } });
+    expect(store.getApproval(a.id)?.status).toBe("approved");
+    expect((await gateway.rejectApproval(a.id, "person-someone-else")).status).toBe("blocked");
+  });
+});
