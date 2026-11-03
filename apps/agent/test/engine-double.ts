@@ -428,7 +428,7 @@ export class EngineDouble {
         return Response.json({ path: `/fill/${out.token}` }, { status: out.status === "created" ? 201 : 200 });
       }
       if (replay && method === "GET") {
-        const token = await replayLinkToken({ sql, storage: this.replayStorage(personId) }, decodeURIComponent(replay[1]), this.now());
+        const token = await replayLinkToken({ sql, approvals: store, storage: this.replayStorage(personId) }, decodeURIComponent(replay[1]), this.now());
         return token ? Response.json({ path: `/fill/${token}` }) : Response.json({ error: "No replay." }, { status: 404 });
       }
       const decision = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
