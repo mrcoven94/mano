@@ -3,6 +3,8 @@
 // 48px tall.
 
 import type { ReactNode } from "react";
+import { useRouter, type Href } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import {
   ActivityIndicator,
   Pressable,
@@ -16,16 +18,44 @@ import {
   type ViewStyle,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { colors, radius, tapTarget, type } from "../lib/theme";
+import { useStrings } from "../lib/i18n";
+import { colors, fonts, radius, tapTarget, type } from "../lib/theme";
+
+// A pushed screen names its parent. With no history, as after a reload
+// into a deep link on the web, going back opens the parent instead.
+export function useGoBack(parent: Href): () => void {
+  const router = useRouter();
+  return () => (router.canGoBack() ? router.back() : router.replace(parent));
+}
+
+function BackBar({ parent }: { parent: Href }) {
+  const s = useStrings();
+  const goBack = useGoBack(parent);
+  return (
+    <View style={styles.backBar}>
+      <Pressable
+        onPress={goBack}
+        accessibilityRole="button"
+        accessibilityLabel={s.back}
+        style={({ pressed }) => [styles.back, pressed && styles.pressed]}
+      >
+        <Ionicons name="chevron-back" size={22} color={colors.text} />
+        <Text style={[type.body, styles.backText]}>{s.back}</Text>
+      </Pressable>
+    </View>
+  );
+}
 
 export function Screen({
   children,
   scroll = true,
   style,
+  back,
 }: {
   children: ReactNode;
   scroll?: boolean;
   style?: StyleProp<ViewStyle>;
+  back?: Href;
 }) {
   const body = (
     <View style={[styles.screenInner, style]}>
@@ -34,6 +64,7 @@ export function Screen({
   );
   return (
     <SafeAreaView style={styles.screen} edges={["top", "left", "right"]}>
+      {back ? <BackBar parent={back} /> : null}
       {scroll ? (
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           {body}
@@ -113,6 +144,23 @@ export function GhostBtn({
       style={({ pressed }) => [styles.btn, styles.ghost, (disabled || busy) && styles.btnDisabled, pressed && styles.pressed]}
     >
       {busy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.ghostText}>{title}</Text>}
+    </Pressable>
+  );
+}
+
+// A third, quieter action beside Btn and GhostBtn: plain underlined
+// text, still a full 48px target.
+export function LinkBtn({ title, onPress, disabled = false }: { title: string; onPress: () => void; disabled?: boolean }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityState={{ disabled }}
+      style={({ pressed }) => [styles.link, disabled && styles.btnDisabled, pressed && styles.pressed]}
+    >
+      <Text style={styles.linkText}>{title}</Text>
     </Pressable>
   );
 }
@@ -197,6 +245,9 @@ export function EmptyView({ body }: { body: string }) {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   scroll: { flexGrow: 1 },
+  backBar: { width: "100%", maxWidth: 640, alignSelf: "center", paddingHorizontal: 12, paddingTop: 4 },
+  back: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", minHeight: tapTarget, paddingHorizontal: 8, gap: 2 },
+  backText: { color: colors.text, fontFamily: fonts.sansMedium },
   screenInner: { flex: 1, paddingHorizontal: 20, paddingTop: 16, paddingBottom: 32, width: "100%", maxWidth: 640, alignSelf: "center" },
   title: { color: colors.text, marginBottom: 8 },
   sectionTitle: { color: colors.text, marginTop: 24, marginBottom: 12 },
@@ -216,6 +267,8 @@ const styles = StyleSheet.create({
   btnText: { color: colors.ink, fontSize: 16, fontWeight: "600" },
   ghost: { backgroundColor: colors.bg2 },
   ghostText: { color: colors.text, fontSize: 16, fontWeight: "500" },
+  link: { minHeight: tapTarget, paddingHorizontal: 12, alignItems: "center", justifyContent: "center" },
+  linkText: { color: colors.pen, fontSize: 16, fontWeight: "500", textDecorationLine: "underline" },
   fieldWrap: { marginBottom: 16 },
   fieldLabel: { fontSize: 14, fontWeight: "600", color: colors.text, marginBottom: 8 },
   field: {

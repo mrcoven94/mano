@@ -12,6 +12,8 @@
 // only which fields are on file or missing, never a value.
 import { createHash } from "node:crypto";
 
+import { timeZoneForState } from "@mano/protocol";
+
 import type { Frequency, Leaf, PersonEngine, Profile, ProfileView, Suggestion } from "./engine.js";
 
 type Value = string | number | boolean;
@@ -331,14 +333,23 @@ export function profileDataBlock(view: ProfileView): string | null {
 }
 
 // The block for this turn, or null when there is nothing on file or the
-// profile cannot be read (the turn goes on without it).
-export async function profileContext(engine: PersonEngine): Promise<string | null> {
+// profile cannot be read within timeoutMs (the turn goes on without it).
+export async function profileContext(engine: PersonEngine, timeoutMs?: number): Promise<string | null> {
+  if (timeoutMs !== undefined && timeoutMs <= 0) return null;
   try {
-    return profileDataBlock(await engine.getProfileView());
+    return profileDataBlock(await engine.getProfileView(timeoutMs));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_profile_read_failed", err: err instanceof Error ? err.name : "unknown" }));
     return null;
   }
+}
+
+// The zone the person's "tomorrow at 9" is read in: the one Engine times
+// their deadline nudges in, from the state on their profile, Pacific when
+// none is on file or Engine cannot serve profiles. Any other failed read
+// throws, so a reminder is never set for the wrong hour.
+export async function profileTimeZone(engine: PersonEngine): Promise<string> {
+  return timeZoneForState((await engine.getProfile())?.person?.address?.state?.value);
 }
 
 export const PROFILE_RULES =

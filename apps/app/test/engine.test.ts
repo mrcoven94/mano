@@ -170,6 +170,17 @@ describe("EngineClient", () => {
     expect(await client.decline(session, "appr-1")).toEqual({ status: "expired", notSent: false });
   });
 
+  it("names the recipient in words and never shows its raw ID as the name", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ approvals: [{ ...approvalRow, recipient: "sandbox-agency-portal" }, { ...approvalRow, id: "appr-2" }] }),
+    );
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    const [named, unnamed] = await client.listApprovals(session);
+    expect(named?.recipientName).toBe("the State Benefits Renewal Office test portal");
+    expect(named?.recipient).toBe("sandbox-agency-portal");
+    expect(unnamed?.recipientName).toBe("an office Mano has no name for");
+  });
+
   it("treats a row with no outcome on file as possibly sent", async () => {
     const { outcome: _outcome, ...bare } = approvalRow;
     void _outcome;

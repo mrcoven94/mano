@@ -1,14 +1,15 @@
 // Deadlines Mano tracks itself. Engine keeps each one on the person's
 // record (Mail adds the ones it reads in letters) and texts the nudges on
-// its own: 14, 7 and 2 days before and on the day. The agent adds the
-// ones the person tells it, changes, closes and lists them, and sees the
-// last nudge Mano sent, since an engine-started text is not in the
+// its own: 14, 7 and 2 days before and on the day, or the day before in
+// place of 2 days for an interview or hearing. The agent adds the ones
+// the person tells it, changes, closes and lists them, and sees the last
+// nudge Mano sent, since an engine-started text is not in the
 // conversation history a reply to it arrives with.
 import { createHash } from "node:crypto";
 
 import type { EngineDeadline } from "./engine.js";
-import { DEFAULT_TIMEZONE } from "./when.js";
 
+const DEFAULT_TIMEZONE = "America/Denver";
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 
 function zone(): string {

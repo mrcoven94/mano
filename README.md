@@ -103,6 +103,7 @@ Texts to Mano land on `apps/channels`, a Cloudflare Worker. When the agent is co
 - In the plain responder, questions that need real digging take the deep path: the fast call returns a short heads-up, which is texted at once, then a second call at medium effort writes the full answer.
 - Every outgoing text passes a deterministic voice guard (plain code, not a model call). It rewrites dashes and markdown, replaces any model or provider name with "I'm Mano, an automated assistant", and sends a short safe line instead of an empty text.
 - A message about self-harm or danger never waits on a heads-up, and its reply always names 988 and 911.
+- A photo texted as HEIC, HEIF or WebP is stored as a JPEG copy, so it can be attached to a form. Cloudflare Images makes the copy (an image service, not a model call) through the `IMAGES` binding in `apps/channels/wrangler.toml`. Without the binding the photo is stored as sent, Mano can still read it, and the reply asks for a screenshot.
 - When the Meta Model API cannot answer the plain responder (HTTP 402, a 5xx or a timeout), the same call goes once to Meta's open-weight Muse Spark Open through OpenRouter, on zero-retention endpoints only (`zdr: true`, `data_collection: "deny"` on every request), and later texts skip the failing API for 5 minutes. The crisis check uses the same fallback. If both fail, Mano sends its short safe line, and a crisis message still gets 988 and 911 with no model at all. The fallback is off unless `OPENROUTER_API_KEY` is set for `apps/channels`.
 
 Check the voice against the real model with your own key (synthetic messages only, sent to a `-contributor` model ID). Without a key, the probes are skipped:
@@ -140,7 +141,7 @@ Guardian runs on one GPU on Modal and scales to zero when idle. A cold start tak
 
 ### Quality
 
-Pull requests that can change what Mano says run the quality smoke: 28 synthetic cases through the real text line on a Meta model, gated against main's last nightly run. When the model provider refuses calls for billing (HTTP 402), the smoke and the nightly score nothing and report "model provider unavailable" in the job summary instead of failing. Any other error still fails. The `smoke-replay` job runs the same text line and safety checks on recorded synthetic replies with no key, so the code path stays covered while the provider is down: `pnpm --filter @mano/quality smoke-replay`.
+Pull requests that can change what Mano says run the quality smoke: 28 synthetic cases through the real text line on a Meta model, gated against main's last nightly run. When the model provider refuses calls for billing (HTTP 402), the smoke and the nightly score nothing and report "model provider unavailable" in the job summary instead of failing. Any other error still fails. The `smoke-replay` job runs the same text line and safety checks on recorded synthetic replies with no key, so the code path stays covered while the provider is down: `pnpm --filter @mano/quality smoke-replay`. The letters suite is version 2: 26 full one-page notices from made-up county offices, drawn in code, three of them with a hedged date Mano should ask about instead of holding. Results from version 1 (three short lines per letter) compare only with a version 1 run: `pnpm --filter @mano/quality bench --suite letters --letters-version 1`.
 
 ### Computer
 

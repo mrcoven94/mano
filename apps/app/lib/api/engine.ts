@@ -4,6 +4,7 @@
 // stand-in keeps those screens working.
 
 import { b64encode } from "../base64";
+import { recipientName } from "../recipients";
 import { provenNotSent } from "../sent-proof";
 import type { Hasher } from "./standin";
 import type {
@@ -151,7 +152,8 @@ export class EngineClient implements ManoClient {
       id: a.id,
       actionType: a.actionType,
       recipient: a.recipient,
-      recipientName: a.recipient,
+      // Never the raw ID: the protocol's name, or that it has none.
+      recipientName: recipientName(a.recipient),
       purpose: a.purpose,
       documentHash: a.documentHash,
       documentId: a.documentId,

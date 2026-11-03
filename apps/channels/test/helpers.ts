@@ -110,6 +110,7 @@ export function makeHarness(
     decorationTimeoutMs?: number;
     // The model check for one short health question; none fails closed.
     crisisCheck?: import("@mano/persona").CrisisCheck | null;
+    photoConverter?: import("../src/files.js").PhotoConverter | null;
   } = {},
 ): Harness {
   const lines: string[] = [];
@@ -157,6 +158,7 @@ export function makeHarness(
     channel,
     responder,
     documents,
+    photoConverter: opts.photoConverter ?? null,
     spend,
     logger,
     nowMs: () => h.now,

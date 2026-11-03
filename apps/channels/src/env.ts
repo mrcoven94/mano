@@ -5,6 +5,10 @@ export interface Env {
   CHANNEL_STATE: DurableObjectNamespace;
   EVENTS: Queue<unknown>;
   FILES: R2Bucket;
+  // Cloudflare Images, which makes the JPEG copy of a HEIC, HEIF or WebP
+  // photo. Without it the photo is stored as sent and Mano asks for a
+  // screenshot when it needs one to file.
+  IMAGES?: ImagesBinding;
   BLOOIO_API_KEY: string;
   BLOOIO_CHANNEL_ID: string;
   BLOOIO_WEBHOOK_SECRET: string;
