@@ -17,10 +17,12 @@
     "nightly": "node --import ./src/register.ts src/bin/nightly.ts",
     "rescore": "node --import ./src/register.ts src/bin/rescore.ts",
     "calibrate": "node --import ./src/register.ts src/bin/calibrate.ts",
-    "compare": "node --import ./src/register.ts src/bin/compare.ts"
+    "compare": "node --import ./src/register.ts src/bin/compare.ts",
+    "judge": "tsx src/bin/judge.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   },
   "dependencies": {
@@ -28,6 +30,7 @@
     "@mano/guardian": "workspace:*",
     "@mano/mail": "workspace:*",
     "@mano/persona": "workspace:*",
-    "@mano/programs": "workspace:*"
+    "@mano/programs": "workspace:*",
+    "sharp": "^0.34.3"
   }
 }
