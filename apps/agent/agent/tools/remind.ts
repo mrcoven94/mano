@@ -28,7 +28,7 @@ export default defineTool({
     }
     const invalid = validateDue(parsed.dueAtMs, turnAtMs);
     if (invalid) throw new Error(invalid);
-    const base = reminderBase(turnId, parsed.dueAtMs);
+    const base = reminderBase(turnId, parsed.asked);
     const attempt = ctx.session.turn?.id ?? "attempt";
     const text = `${REMINDER_PREFIX}${input.text.trim()}`;
     const receivedAt = new Date(turnAtMs).toISOString();

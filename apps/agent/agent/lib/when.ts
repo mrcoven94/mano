@@ -30,19 +30,31 @@ function partsInZone(atMs: number, tz: string): { y: number; m: number; d: numbe
   };
 }
 
-// Builds the unix-ms instant for a zoned wall time by round-tripping
-// through the timezone offset. Correct across DST for ordinary times.
-function zonedTimeToMs(y: number, m: number, d: number, hh: number, mm: number, tz: string): number {
-  const guess = Date.UTC(y, m - 1, d, hh, mm);
-  const probe = partsInZone(guess, tz);
-  const asUtc = Date.UTC(probe.y, probe.m - 1, probe.d, probe.hh, probe.mm);
-  const offset = asUtc - guess;
-  return guess - offset;
+// The UTC offset in force at an instant, in ms.
+function offsetAt(atMs: number, tz: string): number {
+  const p = partsInZone(atMs, tz);
+  return Date.UTC(p.y, p.m - 1, p.d, p.hh, p.mm) - Math.floor(atMs / 60_000) * 60_000;
 }
 
+// The instant a wall time happens in a zone. The second pass takes the
+// offset at the answer itself, so a day that changes clocks still lands
+// on the asked hour. A time skipped by the spring change does not exist;
+// it lands just after the gap instead. One that repeats in the fall takes
+// its first occurrence.
+function zonedTimeToMs(y: number, m: number, d: number, hh: number, mm: number, tz: string): number {
+  const wall = Date.UTC(y, m - 1, d, hh, mm);
+  const first = wall - offsetAt(wall, tz);
+  const second = wall - offsetAt(first, tz);
+  return second + offsetAt(second, tz) === wall ? second : first;
+}
+
+// The local calendar date some days after an instant's local date. It
+// moves the date, not elapsed hours, so a 23- or 25-hour day still lands
+// on the next date.
 function addDaysMs(atMs: number, days: number, tz: string): { y: number; m: number; d: number } {
-  const probe = partsInZone(atMs + days * 24 * 60 * 60 * 1000, tz);
-  return { y: probe.y, m: probe.m, d: probe.d };
+  const now = partsInZone(atMs, tz);
+  const date = new Date(Date.UTC(now.y, now.m - 1, now.d + days));
+  return { y: date.getUTCFullYear(), m: date.getUTCMonth() + 1, d: date.getUTCDate() };
 }
 
 const WEEKDAYS: Record<string, number> = {
@@ -75,7 +87,15 @@ export function parseClock(text: string): [number, number] | null {
 
 export interface ParsedWhen {
   dueAtMs: number;
+  // What the person asked for before any zone applies: the day as they
+  // said it and the clock time, or the span from now. Rewordings of one
+  // time ("tomorrow at 9", "tomorrow 9am") share it, and a retry that
+  // reads a different zone still gets the same one, so it names the
+  // reminder (lib/reminders.ts).
+  asked: string;
 }
+
+const asked = (day: string, [hour, minute]: [number, number]) => `${day}@${hour}:${minute}`;
 
 export function parseWhen(raw: string, nowMs: number, tz: string): ParsedWhen | null {
   const text = raw.trim().toLowerCase();
@@ -86,7 +106,7 @@ export function parseWhen(raw: string, nowMs: number, tz: string): ParsedWhen | 
   if (relative) {
     const n = relative[1] === "a" || relative[1] === "an" ? 1 : Number(relative[1]);
     const unit = relative[2].startsWith("minute") ? 60_000 : relative[2].startsWith("hour") ? 3_600_000 : relative[2].startsWith("week") ? 7 * 86_400_000 : 86_400_000;
-    return { dueAtMs: nowMs + n * unit };
+    return { dueAtMs: nowMs + n * unit, asked: `in ${n * unit}` };
   }
 
   // Split "tomorrow at 9", "friday 9am", "at 9" into day + clock parts.
@@ -122,7 +142,7 @@ export function parseWhen(raw: string, nowMs: number, tz: string): ParsedWhen | 
       const base = dayPart === word ? "" : dayPart.slice(0, -word.length).trim();
       const day = resolveDay(base, nowMs, tz);
       if (!day) return null;
-      return { dueAtMs: zonedTimeToMs(day.y, day.m, day.d, clock[0], clock[1], tz) };
+      return { dueAtMs: zonedTimeToMs(day.y, day.m, day.d, clock[0], clock[1], tz), asked: asked(base, clock) };
     }
   }
 
@@ -132,7 +152,7 @@ export function parseWhen(raw: string, nowMs: number, tz: string): ParsedWhen | 
   if (!day) return null;
   if (!clock) {
     // Bare "tomorrow" or "friday" means 9am that day.
-    return { dueAtMs: zonedTimeToMs(day.y, day.m, day.d, 9, 0, tz) };
+    return { dueAtMs: zonedTimeToMs(day.y, day.m, day.d, 9, 0, tz), asked: asked(dayPart, [9, 0]) };
   }
   let due = zonedTimeToMs(day.y, day.m, day.d, clock[0], clock[1], tz);
   if (!dayPart && due <= nowMs) {
@@ -140,7 +160,7 @@ export function parseWhen(raw: string, nowMs: number, tz: string): ParsedWhen | 
     const next = addDaysMs(nowMs, 1, tz);
     due = zonedTimeToMs(next.y, next.m, next.d, clock[0], clock[1], tz);
   }
-  return { dueAtMs: due };
+  return { dueAtMs: due, asked: asked(dayPart, clock) };
 }
 
 function resolveDay(dayPart: string, nowMs: number, tz: string): { y: number; m: number; d: number } | null {

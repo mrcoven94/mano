@@ -102,6 +102,18 @@ describe("the zone a reminder is read in", () => {
     engine.profileKeySet = false;
     expect(await tomorrowAt9("turn_zonenokey01")).toMatchObject({ dueAt: "2026-11-01T17:00:00.000Z" });
   });
+
+  it("a retry that reads a different zone keeps the one reminder the first attempt saved", async () => {
+    engine.profileKeySet = false;
+    const first = await tomorrowAt9("turn_zoneretry1");
+    engine.profileKeySet = true;
+    engine.profile = livingIn("NY");
+    const retry = toolCtx({ handleHash: HANDLE, turnId: "turn_zoneretry1", grant, turnAtMs: SATURDAY, eveTurn: "eve-turn-2" });
+    const again = await remind.execute({ text: "call the county", when: "tomorrow at 9" }, retry);
+    expect(again).toEqual(first);
+    expect(engine.remindersOf(PERSON)).toHaveLength(1);
+    expect(engine.remindersOf(PERSON)[0]).toMatchObject({ dueAt: "2026-11-01T17:00:00.000Z" });
+  });
 });
 
 describe("reminder identity across attempts", () => {
