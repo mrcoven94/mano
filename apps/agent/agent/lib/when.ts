@@ -1,13 +1,9 @@
 // Parses reminder times ("tomorrow at 9", "Friday", "in 2 hours") into
 // an exact unix-ms moment. All day-relative forms resolve in the
-// person's timezone (MANO_TIMEZONE, default America/Denver); the model
-// passes the person's words through untouched and this decides.
-export const DEFAULT_TIMEZONE = "America/Denver";
+// person's time zone, which the caller passes (lib/profile.ts,
+// profileTimeZone); the model passes the person's words through
+// untouched and this decides.
 export const MAX_REMINDER_AHEAD_MS = 366 * 24 * 60 * 60 * 1000;
-
-function timeZone(): string {
-  return process.env.MANO_TIMEZONE || DEFAULT_TIMEZONE;
-}
 
 // Calendar parts of an instant in a timezone, as numbers.
 function partsInZone(atMs: number, tz: string): { y: number; m: number; d: number; hh: number; mm: number; weekday: number } {
@@ -81,7 +77,7 @@ export interface ParsedWhen {
   dueAtMs: number;
 }
 
-export function parseWhen(raw: string, nowMs: number, tz: string = timeZone()): ParsedWhen | null {
+export function parseWhen(raw: string, nowMs: number, tz: string): ParsedWhen | null {
   const text = raw.trim().toLowerCase();
   if (!text) return null;
 

@@ -71,6 +71,39 @@ describe("reminders in Engine", () => {
   });
 });
 
+describe("the zone a reminder is read in", () => {
+  // Saturday, October 31, 2026, 20:00 UTC: 13:00 in California, 16:00 in
+  // New York, 10:00 in Hawaii. Daylight time ends on the mainland
+  // overnight, so "tomorrow at 9" is 9:00 standard time there.
+  const SATURDAY = Date.UTC(2026, 9, 31, 20, 0, 0);
+  const livingIn = (state: string) => ({
+    person: { address: { state: { value: state, source: "person", updatedAt: "2026-10-30T00:00:00.000Z" } } },
+    household: [],
+    income: [],
+    programs: [],
+  });
+  const tomorrowAt9 = (turnId: string) =>
+    remind.execute({ text: "call the county", when: "tomorrow at 9" }, toolCtx({ handleHash: HANDLE, turnId, grant, turnAtMs: SATURDAY }));
+
+  it.each([
+    ["CA", "2026-11-01T17:00:00.000Z"],
+    ["NY", "2026-11-01T14:00:00.000Z"],
+    ["HI", "2026-11-01T19:00:00.000Z"],
+  ])("a person in %s gets 9:00 their time on Sunday", async (state, dueAt) => {
+    engine.profile = livingIn(state);
+    expect(await tomorrowAt9(`turn_zone${state}0001`)).toMatchObject({ dueAt });
+  });
+
+  it("a person with no state on file gets 9:00 Pacific", async () => {
+    expect(await tomorrowAt9("turn_zonenone001")).toMatchObject({ dueAt: "2026-11-01T17:00:00.000Z" });
+  });
+
+  it("an Engine that cannot serve profiles still sets it, at 9:00 Pacific", async () => {
+    engine.profileKeySet = false;
+    expect(await tomorrowAt9("turn_zonenokey01")).toMatchObject({ dueAt: "2026-11-01T17:00:00.000Z" });
+  });
+});
+
 describe("reminder identity across attempts", () => {
   const user = (text: string) => ({ role: "user", content: text });
   const call = (items: unknown) => ({ role: "assistant", content: [{ type: "tool-call", toolName: "remind", toolCallId: "c1", input: items }] });
