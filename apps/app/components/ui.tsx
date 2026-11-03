@@ -148,6 +148,23 @@ export function GhostBtn({
   );
 }
 
+// A third, quieter action beside Btn and GhostBtn: plain underlined
+// text, still a full 48px target.
+export function LinkBtn({ title, onPress, disabled = false }: { title: string; onPress: () => void; disabled?: boolean }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityState={{ disabled }}
+      style={({ pressed }) => [styles.link, disabled && styles.btnDisabled, pressed && styles.pressed]}
+    >
+      <Text style={styles.linkText}>{title}</Text>
+    </Pressable>
+  );
+}
+
 export function Field({
   label,
   value,
@@ -250,6 +267,8 @@ const styles = StyleSheet.create({
   btnText: { color: colors.ink, fontSize: 16, fontWeight: "600" },
   ghost: { backgroundColor: colors.bg2 },
   ghostText: { color: colors.text, fontSize: 16, fontWeight: "500" },
+  link: { minHeight: tapTarget, paddingHorizontal: 12, alignItems: "center", justifyContent: "center" },
+  linkText: { color: colors.pen, fontSize: 16, fontWeight: "500", textDecorationLine: "underline" },
   fieldWrap: { marginBottom: 16 },
   fieldLabel: { fontSize: 14, fontWeight: "600", color: colors.text, marginBottom: 8 },
   field: {

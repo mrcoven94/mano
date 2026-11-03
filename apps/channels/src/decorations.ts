@@ -1,7 +1,7 @@
-// Decoration work (the eyes swap and settle, the chat background) runs
-// here, outside the turn: a turn finishes and settles first, so a slow or
-// hanging provider call can never hold the next message, a crisis
-// included. Every piece is tracked, bounded by a timeout and cancellable;
+// Decoration work (the eyes swap and settle, removing an old chat
+// background) runs here, outside the turn: a turn finishes and settles
+// first, so a slow or hanging provider call can never hold the next
+// message, a crisis included. Every piece is tracked, bounded by a timeout and cancellable;
 // STOP, a close and a delete cancel all of it, pending timers included. The work does its own STOP, closed
 // and generation checks right before each provider call.
 

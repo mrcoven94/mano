@@ -930,3 +930,18 @@ describe("Guardian warm-up", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("turn timing log", () => {
+  it("logs where the turn's time went as numbers, with no message text", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const res = await send(turn("turn_time_000001", "Hi there, I just heard about Mano"));
+    expect(res.status).toBe(200);
+    const line = log.mock.calls.map(([l]) => String(l)).find((l) => l.includes('"type":"mano_turn"'))!;
+    log.mockRestore();
+    const entry = JSON.parse(line) as { steps: Record<string, number>; engine: Record<string, [number, number]> };
+    expect(Object.keys(entry.steps)).toEqual(expect.arrayContaining(["ledger", "close", "profile", "agent"]));
+    expect(Object.keys(entry.engine)).toEqual(expect.arrayContaining(["POST /turns", "POST /approvals/supersede", "GET /profile", "GET /approvals"]));
+    expect(entry.engine["POST /turns"][0]).toBe(1);
+    expect(line).not.toMatch(/heard about|turn_time/);
+  });
+});

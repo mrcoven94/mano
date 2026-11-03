@@ -109,6 +109,8 @@ CREATE TABLE IF NOT EXISTS agent_sends (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 );
+-- What an earlier version's background uploads left, read only to
+-- remove that background once. Mano never sets one.
 CREATE TABLE IF NOT EXISTS chat_backgrounds (
   chat_key TEXT PRIMARY KEY,
   state TEXT NOT NULL,

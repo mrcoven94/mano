@@ -4,9 +4,13 @@
 // narration before a tool call is not a reply; only text from a step
 // that finished with "stop" counts, falling back to the last text when
 // no step did.
+import type { AgentMarks } from "./timings.js";
+
 export interface StreamEventLike {
   type: string;
   data?: Record<string, unknown>;
+  // Eve's emission time for the event (ISO 8601).
+  meta?: { at?: string };
 }
 
 export type SettleStatus = "replied" | "failed";
@@ -81,7 +85,7 @@ export class SettleTimeout extends Error {
 
 export async function settleStream(
   stream: ReadableStream<StreamEventLike>,
-  opts: { timeoutMs: number; signal?: AbortSignal },
+  opts: { timeoutMs: number; signal?: AbortSignal; marks?: AgentMarks },
 ): Promise<SettleResult> {
   const state = initialSettleState();
   const reader = stream.getReader();
@@ -98,6 +102,7 @@ export async function settleStream(
           ? { status: "replied", text: state.stopTexts.join("\n"), reason: "stop" }
           : { status: "failed", text: "", reason: "closed" };
       }
+      opts.marks?.observe(value);
       const terminal = reduceSettleEvent(state, value);
       if (terminal) {
         await reader.cancel().catch(() => undefined);
