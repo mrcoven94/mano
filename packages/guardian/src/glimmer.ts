@@ -66,13 +66,12 @@ function blocked(problem: string): CheckResult {
 const UNREADABLE =
   "The safety check answered in a way Mano could not understand, so this action is on hold.";
 
-// Model-backed checker. Runs the local rules first and only asks the model
-// when the rules pass. The request carries a redacted copy of the input to
-// the check endpoint. Any failure (network, timeout, error status,
-// unparsable or invalid answer, contradictory verdict) is a block with a
-// message a person can read.
-export class GlimmerChecker implements Checker {
-  private readonly rules = new RulesChecker();
+// The guardian model alone, with no local rules in front. The request
+// carries a redacted copy of the input to the check endpoint. Any failure
+// (network, timeout, error status, unparsable or invalid answer,
+// contradictory verdict) is a block with a message a person can read.
+// Engine runs its own rules first and then this.
+export class GlimmerModelChecker implements Checker {
   private readonly url: string;
   private readonly token: string;
   private readonly proxyAuth: ProxyAuth | null;
@@ -142,8 +141,6 @@ export class GlimmerChecker implements Checker {
   }
 
   async check(input: CheckInput): Promise<CheckResult> {
-    const rules = await this.rules.check(input);
-    if (rules.verdict === "block") return rules;
     this.lastServer = null;
 
     let response: Response;
@@ -155,9 +152,11 @@ export class GlimmerChecker implements Checker {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
+      // Guardian scales to zero, so a timeout is most often a cold start
+      // that takes minutes. An immediate retry would time out again.
       if (error instanceof DOMException && error.name === "TimeoutError") {
         return blocked(
-          `The safety check timed out after ${Math.round(this.timeoutMs / 1000)} seconds, so this action is on hold. Please try again.`,
+          "The safety check is taking longer than usual, so this action is on hold. Please try again in a few minutes.",
         );
       }
       return blocked(
@@ -223,6 +222,18 @@ export class GlimmerChecker implements Checker {
       };
     }
     return { verdict, problems: [...problems] };
+  }
+}
+
+// Model-backed checker. Runs Guardian's local rules first and only asks
+// the model when the rules pass.
+export class GlimmerChecker extends GlimmerModelChecker {
+  private readonly rules = new RulesChecker();
+
+  override async check(input: CheckInput): Promise<CheckResult> {
+    const rules = await this.rules.check(input);
+    if (rules.verdict === "block") return rules;
+    return super.check(input);
   }
 }
 

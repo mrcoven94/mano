@@ -43,6 +43,10 @@ SANDBOX_MAX_UPLOAD_BYTES = "5242880"
 #   MANO_NUDGE_TIME (optional, local HH:MM deadline nudges go out, default 10:00)
 #   EXECUTOR_MODE (simulated or sandbox), plus SANDBOX_BASE_URL and
 #   SANDBOX_PORTAL_TOKEN (the portal's own token) for sandbox
+#   MANO_GUARDIAN_URL, MANO_GUARDIAN_TOKEN (optional: Guardian's check
+#   endpoint and bearer token; with none of the four set the checker is
+#   local rules only), MANO_GUARDIAN_KEY_ID and MANO_GUARDIAN_KEY_SECRET
+#   (the Modal proxy key pair the endpoint requires)
 # Production sets all of these from the engine-production GitHub
 # environment in .github/workflows/deploy-engine.yml.
 # Optional model routing (see .dev.vars.example):

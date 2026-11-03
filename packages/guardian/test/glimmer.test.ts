@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   GlimmerChecker,
+  GlimmerModelChecker,
   MisconfiguredChecker,
   glimmerCheckerFromEnv,
 } from "../src/glimmer.js";
@@ -432,7 +433,21 @@ describe("GlimmerChecker", () => {
     });
     const result = await checker.check(passInput());
     expect(result.verdict).toBe("block");
-    expect(result.problems.join(" ")).toMatch(/timed out after 10 seconds/);
+    expect(result.problems.join(" ")).toMatch(/try again in a few minutes/);
+  });
+
+  it("asks the model without Guardian's rules when used alone", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ verdict: "pass", problems: [], ...SERVER }),
+    );
+    const checker = new GlimmerModelChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await checker.check(blockInput());
+    expect(result).toEqual({ verdict: "pass", problems: [] });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("blocks on an error status", async () => {
