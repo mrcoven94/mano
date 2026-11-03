@@ -250,6 +250,16 @@ describe("known values written the ways the second review found", () => {
     expect(leaks(sent, secrets)).toEqual([]);
   });
 
+  it("labels a phone in Arabic-Indic digits that is on no profile", async () => {
+    const sent = await send(renewal({ text: "Call ٧٧٣ ٥٥٥ ٠١٩٩ today." }));
+    expect(sent.values).toContain("Call [PHONE-1] today.");
+  });
+
+  it("finds a profile phone saved in Devanagari digits", async () => {
+    const sent = await send(renewal({ text: "Call 555 0142 today." }), { phones: ["(३१२) ५५५-०१४२"] });
+    expect(sent.values).toContain("Call [PHONE] today.");
+  });
+
   it("removes a post office box however it is written", async () => {
     const text = "Mail to PO Box 4417, P.O. Box 4417, P O Box 4417 or Post Office Box 4417.";
     const sent = await send(renewal({ text }), { addresses: ["P.O. Box 4417, Springfield, IL 62701"] });
