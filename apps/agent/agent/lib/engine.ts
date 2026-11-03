@@ -527,6 +527,13 @@ export class PersonEngine {
   // Engine closes every waiting draft that is not the latest proposal,
   // decided in one statement when it runs. The agent never names which:
   // anything it read earlier may be out of date by then.
+  // Records that this turn is correcting the recipient's form: Engine
+  // refuses drafts for it from turns received before this one, and closes
+  // the ones still waiting.
+  async fence(recipient: string, turnId: string): Promise<number> {
+    return ((await this.json("POST", "/approvals/fence", { generation: this.generation, recipient, turnId })) as { closed: number }).closed;
+  }
+
   async supersede(): Promise<number> {
     return ((await this.json("POST", "/approvals/supersede", { generation: this.generation })) as { closed: number }).closed;
   }

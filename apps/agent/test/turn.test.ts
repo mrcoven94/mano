@@ -904,16 +904,16 @@ describe("a slow draft against a newer one", () => {
     expect(b.body.status).toBe("waiting_approval");
     release();
     await preparingA;
-    const late = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === "3")!;
-    const retried = await present(late);
-    expect(retried.body.ok).toBe(false);
+    // B's form call fenced the form for its turn (LAP-747), so A's draft,
+    // from an older turn, was refused and never held.
+    expect(sizes()).toEqual(["4:pending"]);
     const yes = await send(turn("turn_slowY00001", "YES"));
     expect(yes.body.text).toMatch(/^Done/);
     expect(engine.executor.calls).toHaveLength(1);
-    expect(sizes()).toEqual(["3:rejected", "4:approved"]);
+    expect(sizes()).toEqual(["4:approved"]);
   });
 
-  it("an older draft's report after a newer question was shown is acknowledged, ignored and closes that draft", async () => {
+  it("an older draft that finishes after a newer question was shown is refused even while Engine refuses every close", async () => {
     const { d, release } = slowA();
     const preparingA = send(turn("turn_slowA00001", "Please file my renewal"), d, { present: false });
     await new Promise((r) => setTimeout(r, 3));
@@ -926,14 +926,10 @@ describe("a slow draft against a newer one", () => {
     release();
     await preparingA;
     vi.stubGlobal("fetch", engine.fetch);
-    expect(sizes()).toEqual(["3:pending", "4:pending"]);
-    const late = engine.approvals().find((x) => JSON.parse(x.requestJson).payload.householdSize === "3")!;
-    const retried = await present(late);
-    expect(retried).toEqual({ status: 200, body: { ok: true, superseded: true } });
-    expect(sizes()).toEqual(["3:rejected", "4:pending"]);
+    expect(sizes()).toEqual(["4:pending"]);
     const yes = await send(turn("turn_slowY00001", "YES"));
     expect(yes.body.text).toMatch(/^Done/);
-    expect(sizes()).toEqual(["3:rejected", "4:approved"]);
+    expect(sizes()).toEqual(["4:approved"]);
   });
 
   // Sol's review 7, after PR 81's review: A's report fails, then closing A
@@ -943,14 +939,14 @@ describe("a slow draft against a newer one", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await send(turn("turn_r7A0000001", "Please file my renewal"), deps(), { present: false });
     const refusing: typeof fetch = async (input, init) =>
-      /\/(reject|supersede)$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init);
+      /\/(reject|supersede|fence)$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init);
     vi.stubGlobal("fetch", refusing);
     const closing = deps({ engine: engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: refusing }) });
     const b = await send(turn("turn_r7B0000001", "Please file my renewal, household of 4"), closing, { present: false });
     expect(b.body.status).toBe("replied");
     vi.stubGlobal("fetch", engine.fetch);
     expect(sizes()).toEqual(["3:pending"]);
-    expect(warn.mock.calls.some(([line]) => String(line).includes("mano_close_failed"))).toBe(true);
+    expect(warn.mock.calls.some(([line]) => /mano_(close|fence)_failed/.test(String(line)))).toBe(true);
     const yes = await send(turn("turn_r7Y0000001", "YES"));
     expect(yes.body.text).toMatch(/haven't shown you/i);
     expect(engine.executor.calls).toHaveLength(0);

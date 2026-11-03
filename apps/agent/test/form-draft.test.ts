@@ -539,7 +539,7 @@ describe("LAP-747: corrections and spacing", () => {
     await letterOnFile("doc-letter", LETTER_BYTES);
     const shown = await draft("turn_late000001");
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
-      /\/reject$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init),
+      /\/(reject|fence)$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init),
     );
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const fix = await draft("turn_late000002", { ...fields, phone: "253-555-0199" }, Date.now() + 10);
@@ -551,6 +551,39 @@ describe("LAP-747: corrections and spacing", () => {
     const again = await draft("turn_late000003", { ...fields, phone: "253-555-0199" }, Date.now() + 20);
     expect(again.status).toBe("waiting_for_yes");
     expect((await client().approval(String(shown.approvalId)))?.status).toBe("rejected");
+  });
+
+  // Review round 13: turn A's valid draft is paused at /documents; a newer
+  // turn B corrects the phone to one that does not fit and only asks a
+  // question. When A resumes, its old phone must not become the latest
+  // version a YES would file.
+  it("a correction in a newer turn fences the form: an older turn's draft that resumes after it is refused", async () => {
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    let release!: () => void;
+    let reached!: () => void;
+    const atDocuments = new Promise<void>((r) => (reached = r));
+    const gate = new Promise<void>((r) => (release = r));
+    let paused = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!paused && new URL(String(input)).pathname.endsWith("/documents") && (init?.method ?? "GET") === "GET") {
+        paused = true;
+        reached();
+        await gate;
+      }
+      return engine.fetch(input, init);
+    });
+    const start = Date.now();
+    const a = draft("turn_fenceA0001", fields, start);
+    await atDocuments;
+    const b = await draft("turn_fenceB0001", { ...fields, phone: "253-555-01422" }, start + 10);
+    expect(b).toMatchObject({ status: "needs_answer", field: "phone" });
+    release();
+    const resumed = await a;
+    vi.stubGlobal("fetch", engine.fetch);
+    expect(resumed.status).not.toBe("waiting_for_yes");
+    expect((await client().listApprovals()).filter((x) => x.status === "pending")).toEqual([]);
+    expect(engine.executor.calls).toHaveLength(0);
   });
 
   it("a name typed with two spaces is shown and filed with one, so it can still be put to her YES", async () => {

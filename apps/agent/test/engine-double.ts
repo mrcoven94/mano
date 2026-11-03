@@ -407,6 +407,13 @@ export class EngineDouble {
           await gateway.requestAction({ ...(split.request as object), personId }, new Date(this.now()), { generation, proposal }),
         );
       }
+      if (rest === "/approvals/fence" && method === "POST") {
+        if (!isGeneration(body.generation)) return Response.json({ error: "generation is required." }, { status: 400 });
+        const order = typeof body.turnId === "string" ? proposalOrderFor(sql, body.turnId) : null;
+        if (!order || typeof body.recipient !== "string") return Response.json({ error: "Unknown turn." }, { status: 400 });
+        const out = await gateway.fenceProposals(body.recipient, order, body.generation);
+        return out ? Response.json(out) : Response.json(STALE, { status: 409 });
+      }
       if (rest === "/approvals/supersede" && method === "POST") {
         if (!isGeneration(body.generation)) return Response.json({ error: "generation is required." }, { status: 400 });
         if (body.generation !== currentGeneration(sql)) return Response.json(STALE, { status: 409 });

@@ -188,12 +188,16 @@ async function closeDrafts(engine: PersonEngine, turnId: string, ids: string[] |
 // sent.
 // Calls within one turn run one at a time, so a slower earlier call never
 // holds its draft after a later correction has closed the turn's drafts.
+// Each call first fences the form in Engine for its turn, durably, before
+// it asks anything: a draft from an older turn still running elsewhere is
+// then refused, so it can never become the latest after this correction.
+// "not_fenced" when Engine could not record that; nothing is prepared.
 export async function correcting<T extends { status: string }>(
   engine: PersonEngine,
   turnId: string,
   recipient: string,
   run: () => Promise<T>,
-): Promise<T | null> {
+): Promise<T | null | "not_fenced"> {
   return oneAtATime(turnId, () => correctingNow(engine, turnId, recipient, run));
 }
 
@@ -202,7 +206,13 @@ async function correctingNow<T extends { status: string }>(
   turnId: string,
   recipient: string,
   run: () => Promise<T>,
-): Promise<T | null> {
+): Promise<T | null | "not_fenced"> {
+  try {
+    await engine.fence(recipient, turnId);
+  } catch {
+    console.warn(JSON.stringify({ type: "mano_fence_failed" }));
+    return "not_fenced";
+  }
   const earlier = await waitingIds(engine, turnId, recipient);
   let out: T;
   try {

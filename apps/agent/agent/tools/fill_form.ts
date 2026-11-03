@@ -155,6 +155,7 @@ export default defineTool({
     const engine = personEngine(ctx);
     if (!form || !engine) return fillAndHold(input, ctx);
     const out = await correcting(engine, requireTurn(ctx).turnId, form.recipient, () => fillAndHold(input, ctx));
+    if (out === "not_fenced") return { status: "fill_failed", sent: false, note: SHOWN_NOT_CLOSED_NOTE };
     return out ?? { status: "fill_failed", sent: false, note: NOT_CLOSED_NOTE };
   },
 });
