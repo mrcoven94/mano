@@ -120,6 +120,44 @@ describe("Maria spine run", () => {
     expect((await client.sendMessage(session, "any approvals?", [])).text).toContain("Nothing is waiting");
   });
 
+  it("lets exactly one of a racing NO and YES win, with chat matching the winner", async () => {
+    for (const order of ["no-first", "yes-first"] as const) {
+      const client = makeClient();
+      const session = await signIn(client);
+      const photo = b64encode(utf8ToBytes("fake-photo-bytes"));
+      await client.sendMessage(session, "mail", [{ kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
+      const [approval] = await client.listApprovals(session);
+      if (!approval?.documentHash) throw new Error("expected a bound approval");
+      const no = () => client.decline(session, approval.id);
+      const yes = () => client.approve(session, approval.id, { documentHash: approval.documentHash, requestHash: approval.requestHash });
+      const [first, second] = await Promise.allSettled(order === "no-first" ? [no(), yes()] : [yes(), no()]);
+      const [noOutcome, yesOutcome] = order === "no-first" ? [first, second] : [second, first];
+      const [after] = await client.listApprovals(session);
+      const messages = await client.listMessages(session);
+      if (yesOutcome.status === "fulfilled") {
+        expect(noOutcome).toEqual({ status: "fulfilled", value: "approved" });
+        expect(after?.status).toBe("approved");
+        expect(messages.some((m) => m.text === DECLINE_REPLY)).toBe(false);
+      } else {
+        expect(noOutcome).toEqual({ status: "fulfilled", value: "rejected" });
+        expect(yesOutcome.reason).toBeInstanceOf(StaleApprovalError);
+        expect(after?.status).toBe("rejected");
+        expect(messages.filter((m) => m.text === DECLINE_REPLY)).toHaveLength(1);
+      }
+    }
+  });
+
+  it("posts one acknowledgment for two racing NOs", async () => {
+    const client = makeClient();
+    const session = await signIn(client);
+    const photo = b64encode(utf8ToBytes("fake-photo-bytes"));
+    await client.sendMessage(session, "mail", [{ kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
+    const [approval] = await client.listApprovals(session);
+    if (!approval) throw new Error("expected an approval");
+    expect(await Promise.all([client.decline(session, approval.id), client.decline(session, approval.id)])).toEqual(["rejected", "rejected"]);
+    expect((await client.listMessages(session)).filter((m) => m.text === DECLINE_REPLY)).toHaveLength(1);
+  });
+
   it("answers a NO after a YES with the approval's real status", async () => {
     const client = makeClient();
     const session = await signIn(client);

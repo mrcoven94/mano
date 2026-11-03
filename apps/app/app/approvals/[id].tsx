@@ -2,8 +2,8 @@
 // document, and both binding hashes. Approve stays disabled until the
 // gate in lib/approve-gate says yes: pending, current, loaded,
 // hash-matched, actually rendered and a known request shape. No needs
-// none of that: declining sends nothing, so it is open whenever the
-// approval waits. Every load clears the last state, and stale loads
+// none of that: declining sends nothing, so it stays open whenever the
+// approval waits, a stale document included. Every load clears the last state, and stale loads
 // cannot overwrite it.
 
 import { useCallback, useRef, useState } from "react";
@@ -15,7 +15,7 @@ import { DocPreview, currentPlatform } from "../../components/doc";
 import { parseActionView, type ParsedAction } from "../../lib/action-view";
 import { approvalGate } from "../../lib/approve-gate";
 import { approveOutcome } from "../../lib/approve-result";
-import type { ActionType, Approval, ApprovalDocument, ApprovalStatus, ApproveResult } from "../../lib/api/types";
+import type { ActionType, Approval, ApprovalDocument, ApproveResult, DeclineAnswer } from "../../lib/api/types";
 import { AuthError, StaleApprovalError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { formatDate } from "../../lib/dates";
@@ -36,14 +36,20 @@ type DocState = "loading" | "ready" | "failed";
 
 // A NO: in flight, failed (safe to repeat), or answered with the
 // approval's status on file afterward.
-type NoState = { phase: "idle" } | { phase: "sending" } | { phase: "failed" } | { phase: "answered"; status: ApprovalStatus };
+type NoState = { phase: "idle" } | { phase: "sending" } | { phase: "failed" } | { phase: "answered"; status: DeclineAnswer };
 const NO_IDLE: NoState = { phase: "idle" };
 
-function noLine(status: ApprovalStatus, s: ReturnType<typeof useStrings>): string {
-  if (status === "rejected") return s.declinedNote;
-  if (status === "approved") return s.declineTooLate;
-  return s.declineClosed;
-}
+// The line for each answer, one entry per status so a new one cannot
+// fall through to "nothing was sent". Only expired, stale and blocked
+// leave pending without a send; revoked was approved and may have gone.
+const NO_LINES: Record<DeclineAnswer, "declinedNote" | "declineTooLate" | "declineUnconfirmed" | "declineClosed"> = {
+  rejected: "declinedNote",
+  approved: "declineTooLate",
+  revoked: "declineUnconfirmed",
+  expired: "declineClosed",
+  stale: "declineClosed",
+  blocked: "declineClosed",
+};
 
 export default function ApprovalDetail() {
   const s = useStrings();
@@ -245,7 +251,9 @@ export default function ApprovalDetail() {
                   ? s.approved
                   : approval.status === "rejected"
                     ? s.declined
-                    : approval.status === "expired"
+                    : approval.status === "revoked"
+                      ? s.approvalRevoked
+                      : approval.status === "expired"
                     ? s.expired
                     : approval.status === "stale"
                       ? s.stale
@@ -354,12 +362,12 @@ export default function ApprovalDetail() {
             </Card>
           ) : no.phase === "answered" ? (
             <Card>
-              <Body>{noLine(no.status, s)}</Body>
+              <Body>{s[NO_LINES[no.status]]}</Body>
               <View style={styles.back}>
                 <Btn title={s.tabsApprovals} onPress={() => router.back()} />
               </View>
             </Card>
-          ) : approval.status === "pending" && !stale ? (
+          ) : approval.status === "pending" ? (
             <View>
               {gate.reason === "loading-doc" ? <Muted style={styles.note}>{s.loadingDocument}</Muted> : null}
               {gate.reason === "not-shown" && !viewable ? <Muted style={styles.note}>{s.docCannotShow}</Muted> : null}
@@ -368,7 +376,9 @@ export default function ApprovalDetail() {
               {gate.reason === "ready" ? <Muted style={styles.note}>{s.approveNote}</Muted> : null}
               {no.phase === "failed" ? <Muted style={[styles.warn, styles.note]}>{s.declineFailed}</Muted> : null}
               <View style={styles.actions}>
-                <Btn title={busy ? s.approving : s.approve} onPress={() => void approve()} busy={busy} disabled={!canApprove} />
+                {stale ? null : (
+                  <Btn title={busy ? s.approving : s.approve} onPress={() => void approve()} busy={busy} disabled={!canApprove} />
+                )}
                 <GhostBtn
                   title={no.phase === "sending" ? s.declining : s.decline}
                   onPress={() => void decline()}

@@ -132,7 +132,7 @@ describe("EngineClient", () => {
   });
 
   it("answers a NO on a decided approval with its real status", async () => {
-    for (const status of ["approved", "expired", "stale", "blocked"] as const) {
+    for (const status of ["approved", "revoked", "expired", "stale", "blocked"] as const) {
       const fetchImpl = vi.fn(async (input: unknown) => {
         if (String(input).endsWith("/reject")) return jsonResponse({ status: "blocked", reason: "This approval was already used." });
         return jsonResponse({ approvals: [{ ...approvalRow, status }] });

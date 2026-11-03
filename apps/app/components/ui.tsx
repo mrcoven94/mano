@@ -81,6 +81,9 @@ export function Btn({
       onPress={onPress}
       disabled={disabled || busy}
       accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityState={{ disabled: disabled || busy }}
+      aria-busy={busy}
       style={({ pressed }) => [styles.btn, (disabled || busy) && styles.btnDisabled, pressed && styles.pressed]}
     >
       {busy ? <ActivityIndicator color={colors.ink} /> : <Text style={styles.btnText}>{title}</Text>}
@@ -104,6 +107,9 @@ export function GhostBtn({
       onPress={onPress}
       disabled={disabled || busy}
       accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityState={{ disabled: disabled || busy }}
+      aria-busy={busy}
       style={({ pressed }) => [styles.btn, styles.ghost, (disabled || busy) && styles.btnDisabled, pressed && styles.pressed]}
     >
       {busy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.ghostText}>{title}</Text>}

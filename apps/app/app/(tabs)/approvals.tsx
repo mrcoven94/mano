@@ -25,6 +25,7 @@ function statusLabel(status: Approval["status"], s: ReturnType<typeof useStrings
   if (status === "pending") return s.approvalsPending;
   if (status === "approved") return s.approved;
   if (status === "rejected") return s.declined;
+  if (status === "revoked") return s.approvalRevoked;
   if (status === "expired") return s.expired;
   if (status === "stale") return s.stale;
   return s.blocked;

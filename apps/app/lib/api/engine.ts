@@ -8,10 +8,10 @@ import type { Hasher } from "./standin";
 import type {
   Approval,
   ApprovalDocument,
-  ApprovalStatus,
   ApproveResult,
   ChatMessage,
   Deadline,
+  DeclineAnswer,
   DocMeta,
   EngineMode,
   Grant,
@@ -208,7 +208,7 @@ export class EngineClient implements ManoClient {
     };
   }
 
-  async decline(session: Session, approvalId: string): Promise<ApprovalStatus> {
+  async decline(session: Session, approvalId: string): Promise<DeclineAnswer> {
     const res = await this.call(
       session,
       `/api/persons/${encodeURIComponent(session.personId)}/approvals/${encodeURIComponent(approvalId)}/reject`,

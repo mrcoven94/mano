@@ -26,7 +26,7 @@ import {
 import type {
   Approval,
   ApprovalDocument,
-  ApprovalStatus,
+  DeclineAnswer,
   ApproveResult,
   ChatMessage,
   Deadline,
@@ -144,6 +144,15 @@ export class StandInClient implements ManoClient {
     return stored;
   }
 
+  // The one decision read. A YES or NO checks it after its last await
+  // and writes in the same synchronous step, so of two racing decisions
+  // exactly one finds the renewal pending.
+  private renewalStatus(): DeclineAnswer | "pending" {
+    if (this.renewalApproved) return "approved";
+    if (this.renewalDeclined) return "rejected";
+    return "pending";
+  }
+
   private async currentApproval(): Promise<Approval> {
     const doc = await this.renewalDoc();
     const requestJson = JSON.stringify({
@@ -169,7 +178,7 @@ export class StandInClient implements ManoClient {
       requestJson,
       requestHash,
       idempotencyKey: "spine:renewal:maria-001",
-      status: this.renewalApproved ? "approved" : this.renewalDeclined ? "rejected" : "pending",
+      status: this.renewalStatus(),
       problems: [],
       createdAt: "2026-10-28T09:20:00.000Z",
       remindAt: "2026-11-03T09:00:00.000Z",
@@ -330,7 +339,7 @@ export class StandInClient implements ManoClient {
       return { text: deadlinesReply(open), followUps: [] };
     }
     if (lower.includes("approv")) {
-      return { text: approvalsReply(this.mailReceived && !this.renewalApproved && !this.renewalDeclined ? 1 : 0), followUps: [] };
+      return { text: approvalsReply(this.mailReceived && this.renewalStatus() === "pending" ? 1 : 0), followUps: [] };
     }
     if (lower.includes("hola") || lower.includes("espa")) {
       return { text: "Claro, hablamos español. Fotografíe su correo para empezar, o pregúnteme por sus fechas límite.", followUps: [] };
@@ -364,7 +373,8 @@ export class StandInClient implements ManoClient {
     this.checkSession(session);
     const current = await this.currentApproval();
     if (approvalId !== current.id) throw new StaleApprovalError("stale");
-    if (current.status !== "pending") throw new StaleApprovalError(current.status);
+    const status = this.renewalStatus();
+    if (status !== "pending") throw new StaleApprovalError(status);
     if (expected.documentHash !== current.documentHash || expected.requestHash !== current.requestHash) {
       throw new StaleApprovalError("stale");
     }
@@ -406,12 +416,13 @@ export class StandInClient implements ManoClient {
 
   // A NO ends only a pending renewal and says so in chat once; a repeat,
   // or a NO after a YES, answers with the status already on file.
-  async decline(session: Session, approvalId: string): Promise<ApprovalStatus> {
+  async decline(session: Session, approvalId: string): Promise<DeclineAnswer> {
     await this.wait();
     this.checkSession(session);
     const current = await this.currentApproval();
     if (approvalId !== current.id) throw new Error("Approval not found.");
-    if (current.status !== "pending") return current.status;
+    const status = this.renewalStatus();
+    if (status !== "pending") return status;
     this.renewalDeclined = true;
     this.messages.push({
       id: this.nextId("msg"),
