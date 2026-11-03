@@ -218,29 +218,35 @@ function meteringMiddleware(opts: {
 }
 
 interface ModelRoute {
-  name: string;
+  name: "meta" | "openrouter";
   baseURL: string;
+  // Empty when the chosen route has no key; the agent then runs a stand-in.
   apiKey: string;
   modelId: string;
   bodyExtra: Record<string, JSONValue>;
 }
 
-export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageModel; modelId: string } {
+// The one place that picks the model path, for both createMuseModel and
+// the agent's stand-in check.
+export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKey"> = {}): ModelRoute {
   const env = process.env;
-  const route: ModelRoute =
-    env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY
-      ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY }
-      : {
-          name: "meta",
-          baseURL: opts.baseUrl ?? env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL,
-          apiKey: opts.apiKey ?? env.META_MODEL_API_KEY ?? "missing-key",
-          modelId: STANDARD_MODEL_ID,
-          bodyExtra: { store: false },
-        };
+  return env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY
+    ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY }
+    : {
+        name: "meta",
+        baseURL: opts.baseUrl ?? env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL,
+        apiKey: opts.apiKey ?? env.META_MODEL_API_KEY ?? "",
+        modelId: STANDARD_MODEL_ID,
+        bodyExtra: { store: false },
+      };
+}
+
+export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageModel; modelId: string } {
+  const route = selectModelRoute(opts);
   const provider = createOpenAICompatible({
     name: route.name,
     baseURL: route.baseURL,
-    apiKey: route.apiKey,
+    apiKey: route.apiKey || "missing-key",
     includeUsage: true,
   });
   const recorder = new UsageRecorder(opts.usageSink ? [opts.usageSink] : undefined);
