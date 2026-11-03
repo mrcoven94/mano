@@ -142,7 +142,8 @@ export function currentGeneration(sql: SqlExec): number {
 // for Channels to dedupe. sent, dropped (Channels refused it for good, or
 // its conversation was deleted), failed (retries ran out), cancelled and
 // withdrawn (a deadline's nudge stopped after it was handed off, because
-// the deadline closed or moved: never handed off again) are final.
+// the deadline closed or moved, or replaced before it by a change to its
+// deadline: never handed off again) are final.
 export type ReminderStatus = "scheduled" | "claimed" | "sending" | "sent" | "dropped" | "failed" | "cancelled" | "withdrawn";
 
 export interface Reminder {
