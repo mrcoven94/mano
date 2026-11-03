@@ -307,7 +307,7 @@ describe("GlimmerChecker", () => {
     const input = passInput();
     input.action.purpose = "SNAP renewal for Ana Ruiz of Synthetic Bakery";
     input.action.payload = { text: "Ana Ruiz works at Synthetic Bakery." };
-    await checker.check(input, { employers: ["Synthetic Bakery"] });
+    await checker.check(input, { confirmed: { employers: ["Synthetic Bakery"] } });
     const sent = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body as string;
     expect(sent).not.toContain("Ana Ruiz");
     expect(sent).not.toContain("Synthetic Bakery");

@@ -3,15 +3,21 @@
 // addresses) are caught by shape. Names, employers and many other details
 // have no reliable shape, so the caller passes the values it knows about
 // and known.ts finds each however it is written, before any pattern can
-// split it.
-import { fieldText, submitForm, SUBMIT_FORM_FIELDS, type FormField } from "./form.js";
+// split it. A shape that can hold words (a street name, an ID after its
+// label) is removed only when none of its words is one an instruction or
+// the task is made of, so a pattern never hides what Guardian must read.
+import { SUBMIT_FORM_FIELDS, submitForm, type FormField } from "./form.js";
 import {
   KNOWN_LABELS,
+  hasCommonWord,
+  holdsConfirmed,
   knownMatcher,
   mergeEntities,
+  plausibleOnly,
   replaceKnown,
   type KnownEntities,
   type KnownMatcher,
+  type PersonValues,
 } from "./known.js";
 import { PAYLOAD_SCHEMAS, canonicalRecipient } from "./rules.js";
 import type { CheckInput, ModelRequest } from "./types.js";
@@ -23,18 +29,18 @@ const PHONE =
   /\(?(?:\+?1[-.\s]?)?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g;
 const SSN = /\b\d{3}-\d{2}-\d{4}\b/g;
 const LABELED_ID =
-  /\b(?:SSN|social security|ID|DL|driver(?:'s)? license|passport)\s*(?:number|no\.?|#)?\s*:?\s*[\w-]{4,}/gi;
+  /\b(?:SSN|social security|ID|DL|driver(?:'s)? license|passport)\s*(?:number|no\.?|#)?\s*:?\s*([\w-]{4,})/gi;
 const CASE_NUMBER =
-  /\bcase\s*(?:(?:number|no\.?|#)\s*:?\s*)?[\w-]*\d[\w-]*/gi;
+  /\bcase\s*(?:(?:number|no\.?|#)\s*:?\s*)?([\w-]*\d[\w-]*)/gi;
 const RECEIPT_NUMBER = /\b[A-Z]{3}\d{8,13}\b/g;
 const DATE_OF_BIRTH =
   /\b(?:DOB|date of birth|born)\s*:?\s*(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2})/gi;
 const JSON_DATE_OF_BIRTH =
-  /("(?:dob|date[_\s]?of[_\s]?birth|birth_?date|birthdate)"\s*:\s*")[^"]*(")/gi;
+  /("(?:dob|date[_\s]?of[_\s]?birth|birth_?date|birthdate)"\s*:\s*")([^"]*)(")/gi;
 const BARE_ISO_DATE = /\b\d{4}-\d{2}-\d{2}\b/g;
 const BARE_US_DATE = /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g;
 const STREET_ADDRESS =
-  /\b\d{1,5}\s+[A-Z][a-zA-Z']+(?:\s+[A-Z][a-zA-Z']+){0,3}\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ln|Lane|Dr|Drive|Way|Ct|Court|Pl|Place|Ter|Terrace)\b(?:\s+(?:Apt|Unit|#)\s*[\w-]+)?/gi;
+  /\b\d{1,5}\s+([A-Z][a-zA-Z']+(?:\s+[A-Z][a-zA-Z']+){0,3})\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ln|Lane|Dr|Drive|Way|Ct|Court|Pl|Place|Ter|Terrace)\b(?:\s+(?:Apt|Unit|#)\s*([\w-]+))?/gi;
 const ZIP_CODE = /\b\d{5}(?:-\d{4})?\b/g;
 const URL = /https?:\/\/[^\s"']+/gi;
 
@@ -47,16 +53,20 @@ function redactWith(text: string, matcher: KnownMatcher): string {
   let out = text.replace(EMAIL, "[EMAIL]");
   out = replaceKnown(out, matcher);
   // Case and receipt numbers before phones so digit runs keep their label.
-  out = out.replace(CASE_NUMBER, "[CASE NUMBER]");
+  out = out.replace(CASE_NUMBER, (match, id: string) => (hasCommonWord(id) ? match : "[CASE NUMBER]"));
   out = out.replace(RECEIPT_NUMBER, "[CASE NUMBER]");
   out = out.replace(SSN, "[ID]");
-  out = out.replace(LABELED_ID, "[ID]");
+  out = out.replace(LABELED_ID, (match, id: string) => (hasCommonWord(id) ? match : "[ID]"));
   out = out.replace(PHONE, "[PHONE]");
   out = out.replace(DATE_OF_BIRTH, "[DATE OF BIRTH]");
-  out = out.replace(JSON_DATE_OF_BIRTH, '$1[DATE OF BIRTH]$2');
+  out = out.replace(JSON_DATE_OF_BIRTH, (match, key: string, value: string, end: string) =>
+    hasCommonWord(value) ? match : `${key}[DATE OF BIRTH]${end}`,
+  );
   out = out.replace(BARE_ISO_DATE, "[DATE]");
   out = out.replace(BARE_US_DATE, "[DATE]");
-  out = out.replace(STREET_ADDRESS, "[ADDRESS]");
+  out = out.replace(STREET_ADDRESS, (match, street: string, unit: string | undefined) =>
+    hasCommonWord(`${street} ${unit ?? ""}`) ? match : "[ADDRESS]",
+  );
   out = out.replace(ZIP_CODE, "[ADDRESS]");
   return out;
 }
@@ -107,31 +117,26 @@ class DestinationLabels {
   }
 }
 
-// The form's personal values, so each is removed wherever else it
-// appears in the request.
-function formEntities(form: Record<string, unknown>): KnownEntities {
-  const found: KnownEntities = {};
-  for (const [name, field] of Object.entries(SUBMIT_FORM_FIELDS)) {
-    const text = fieldText(form[name]);
-    if (field.kind === "personal" && text !== null) found[field.entity] = [...(found[field.entity] ?? []), text];
-  }
-  return found;
-}
-
-// A personal field becomes its label, or stays empty so a missing value
-// still shows. A number field stays a number only when it is a plain one
-// no longer than an income and holds none of the person's known values;
-// anything else is scrubbed text, so a phone or ZIP typed there is still
-// caught.
+// A personal field becomes its label only when it holds exactly the
+// value the person gave for its kind. Any other value goes as scrubbed
+// text, so Guardian reads its words, and an empty field stays empty so a
+// missing value still shows. A number field stays a number only when it
+// is a plain one no longer than an income and holds none of the person's
+// known values; anything else is scrubbed text, so a phone or ZIP typed
+// there is still caught.
 function formValue(
   value: unknown,
   field: FormField,
+  confirmed: KnownEntities | undefined,
   matcher: KnownMatcher,
   scrub: (text: string) => string,
 ): unknown {
   if (typeof value !== "string" && typeof value !== "number") return undefined;
   const text = String(value).trim();
-  if (field.kind === "personal") return text === "" ? "" : KNOWN_LABELS[field.entity];
+  if (field.kind === "personal") {
+    if (text === "") return "";
+    return holdsConfirmed(field.entity, text, confirmed) ? KNOWN_LABELS[field.entity] : scrub(text);
+  }
   return PLAIN_NUMBER.test(text) && replaceKnown(text, matcher) === text ? Number(text) : scrub(text);
 }
 
@@ -146,15 +151,15 @@ function formValue(
 // structural goes through redact(). A submit also carries its form fields
 // (form.ts) and says when a document is attached. Only the action type,
 // source kinds, the origin and form numbers pass through untouched. The
-// caller holds a form whose personal fields fail formProblems before it
-// builds anything.
+// person's confirmed values are removed wherever they appear; unconfirmed
+// ones only when they look like their kind (known.ts).
 export function buildModelRequest(
   input: CheckInput,
-  known?: KnownEntities,
+  values?: PersonValues,
 ): ModelRequest {
   const raw = input.action.payload;
   const form = submitForm(input);
-  const matcher = knownMatcher(form === null ? known : mergeEntities(known, formEntities(form)));
+  const matcher = knownMatcher(mergeEntities(values?.confirmed, plausibleOnly(values?.unconfirmed)));
   const labels = new DestinationLabels();
   const recipient = canonicalRecipient(input.action.recipient);
   const others = new Map<string, string>();
@@ -214,7 +219,7 @@ export function buildModelRequest(
   }
   if (form !== null) {
     for (const [name, field] of Object.entries(SUBMIT_FORM_FIELDS)) {
-      const value = formValue(form[name], field, matcher, scrub);
+      const value = formValue(form[name], field, values?.confirmed, matcher, scrub);
       if (value !== undefined) payload[name] = value;
     }
   }

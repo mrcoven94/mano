@@ -1,12 +1,13 @@
 // The sandbox portal's renewal form (PORTAL_HOUSEHOLD in Engine's
-// executors), as Guardian reads it. A personal field reaches Guardian only
-// as its kind's label, and its value is removed anywhere else in the
-// request. A label would hide any other text in the field from Guardian,
-// such as an instruction or an extra destination, so a personal field must
-// hold only its kind of value: a name, a date, a mailing address, a phone
-// number. formProblems names each field that does not, and the check holds
-// the action without sending anything. Number fields reach Guardian as
-// numbers, so it can judge whether a household size or income makes sense.
+// executors), as Guardian reads it. A personal field reaches Guardian as
+// its kind's label only when it holds the value the person gave; any other
+// value goes as scrubbed text, so Guardian reads its words (redact.ts).
+// formProblems is a cheaper, narrower check before that: a field that is
+// not its kind of value at all (an email, a link, a long number or a
+// colon where a name, a date, an address or a phone belongs) holds the
+// action with a plain reason and no model call. Number fields reach
+// Guardian as numbers, so it can judge whether a household size or income
+// makes sense.
 import { digitRuns, readWholeDate, tokenize, type EntityKind } from "./known.js";
 import type { CheckInput } from "./types.js";
 

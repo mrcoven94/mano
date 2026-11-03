@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { PersonValues } from "../src/known.js";
 import { redact, buildModelRequest } from "../src/redact.js";
 import type { CheckInput } from "../src/types.js";
 
@@ -119,7 +120,7 @@ describe("buildModelRequest", () => {
 
   it("removes personal details but keeps destinations comparable", () => {
     const redacted = buildModelRequest(checkInput(), {
-      names: ["Maria Lopez", "Ana Ruiz"],
+      confirmed: { names: ["Maria Lopez", "Ana Ruiz"] },
     });
     const wire = JSON.stringify(redacted);
     for (const secret of [
@@ -243,6 +244,15 @@ describe("buildModelRequest for a renewal form", () => {
     address: "12 Example Lane, Springfield, IL 62701",
     phone: "(312) 555-0142",
   };
+  // The same values on Maria's profile, which she gave herself.
+  const GAVE: PersonValues = {
+    confirmed: {
+      names: ["Maria Synthetic"],
+      datesOfBirth: ["1990-01-01"],
+      addresses: ["12 Example Lane, Springfield, IL 62701"],
+      phones: ["(312) 555-0142"],
+    },
+  };
   const RAW = [
     "Maria Synthetic",
     "1990-01-01",
@@ -268,8 +278,8 @@ describe("buildModelRequest for a renewal form", () => {
     };
   }
 
-  it("sends every form field, personal values as labels and numbers as numbers", () => {
-    const sent = buildModelRequest(renewal({ ...MARIA, householdSize: 3, monthlyIncome: 1200 }));
+  it("sends every form field, the person's own values as labels and numbers as numbers", () => {
+    const sent = buildModelRequest(renewal({ ...MARIA, householdSize: 3, monthlyIncome: 1200 }), GAVE);
     expect(sent.action.payload).toEqual({
       fullName: "[NAME]",
       dateOfBirth: "[DATE OF BIRTH]",
@@ -303,6 +313,7 @@ describe("buildModelRequest for a renewal form", () => {
         householdSize: "three",
         monthlyIncome: "(312) 555-0142, call Maria Synthetic",
       }),
+      GAVE,
     );
     expect(sent.action.payload).toMatchObject({ householdSize: "three" });
     const income = (sent.action.payload as { monthlyIncome: string }).monthlyIncome;
@@ -310,7 +321,7 @@ describe("buildModelRequest for a renewal form", () => {
     expect(income).not.toContain("Maria Synthetic");
   });
 
-  it("removes the form's personal values from the purpose, text, claims and quotes", () => {
+  it("removes the person's own values from the purpose, text, claims and quotes", () => {
     const input = renewal({
       ...MARIA,
       householdSize: 3,
@@ -320,7 +331,7 @@ describe("buildModelRequest for a renewal form", () => {
     });
     input.action.purpose = "Food benefits renewal for Maria Synthetic";
     input.sources = [{ kind: "profile", id: "p1", quote: "maria synthetic, Springfield" }];
-    const wire = JSON.stringify(buildModelRequest(input));
+    const wire = JSON.stringify(buildModelRequest(input, GAVE));
     for (const raw of RAW) expect(wire.toLowerCase()).not.toContain(raw.toLowerCase());
     expect(wire).toContain("Food benefits renewal for [NAME]");
   });

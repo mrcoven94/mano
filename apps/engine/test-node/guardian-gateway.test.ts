@@ -14,7 +14,7 @@ import {
   type ActionRequest,
   type GatewayOptions,
 } from "../src/gateway/index.js";
-import { GlimmerModelChecker, type KnownEntities } from "@mano/guardian";
+import { GlimmerModelChecker, type PersonValues } from "@mano/guardian";
 import type { Profile } from "../src/profile.js";
 
 // Guardian on the gateway's live path, against a fake Guardian over real
@@ -101,7 +101,7 @@ function setup(
   env: Record<string, string>,
   extra: GatewayOptions = {},
   timeoutMs?: number,
-  entities?: () => Promise<KnownEntities>,
+  entities?: () => Promise<PersonValues>,
 ) {
   const storage = openStorage();
   ensureGatewayTables(storage as never);
@@ -117,7 +117,23 @@ function setup(
   return { gateway, store, executor, audit };
 }
 
-// Maria's renewal as the agent drafts it (apps/agent start_form_draft).
+const said = (value: string) => ({ value, source: "person" as const, updatedAt: "2026-11-01T00:00:00.000Z" });
+
+// Maria's profile, every value given by Maria herself.
+const MARIA: Profile = {
+  person: {
+    fullName: said("Maria Synthetic"),
+    dateOfBirth: said("1990-01-01"),
+    phone: said("(312) 555-0142"),
+    address: { line1: said("12 Example Lane"), city: said("Springfield"), state: said("IL"), zip: said("62701") },
+  },
+  household: [],
+  income: [],
+  programs: [],
+};
+
+// Maria's renewal as the agent drafts it from her profile (apps/agent
+// start_form_draft).
 function renewal(over: Partial<ActionRequest> = {}): ActionRequest {
   return {
     type: "submit",
@@ -142,7 +158,7 @@ function renewal(over: Partial<ActionRequest> = {}): ActionRequest {
 
 describe("Guardian on the live path", () => {
   it("asks for the yes after a pass and checks again at the yes", async () => {
-    const { gateway } = setup(GUARDIAN_ENV());
+    const { gateway } = setup(GUARDIAN_ENV(), {}, undefined, async () => profileEntities(MARIA));
     const result = await gateway.requestAction(renewal());
     expect(result.status).toBe("needs_approval");
     expect(result.approval?.problems).toEqual([]);
@@ -269,9 +285,15 @@ describe("Guardian on the live path", () => {
     expect(checks).toHaveLength(0);
   });
 
-  it("lists every name, employer and detail on the profile", () => {
-    const leaf = (value: string) => ({ value, source: "person" as const, updatedAt: "2026-11-01T00:00:00.000Z" });
-    expect(profileEntities(null)).toEqual({});
+  it("sends Maria's renewal fields as words when nothing on her profile came from her", async () => {
+    const { gateway } = setup(GUARDIAN_ENV(), {}, undefined, async () => profileEntities(null));
+    await gateway.requestAction(renewal());
+    expect(checks[0]!.body.action).toMatchObject({ payload: { fullName: "Maria Synthetic", dateOfBirth: "[DATE]" } });
+  });
+
+  it("lists every name, employer and detail the person gave, with their address as the form writes it", () => {
+    const leaf = said;
+    expect(profileEntities(null)).toEqual({ confirmed: {}, unconfirmed: {} });
     expect(
       profileEntities({
         person: {
@@ -287,18 +309,21 @@ describe("Guardian on the live path", () => {
         programs: [{ id: "snap", program: leaf("SNAP"), caseNumber: leaf("A77Q") }],
       }),
     ).toEqual({
-      names: ["Maria Synthetic", "Leo Synthetic"],
-      employers: ["Synthetic Bakery"],
-      addresses: ["12 Example Lane", "Unit 4", "Springfield", "62701", "Sample County"],
-      phones: ["(312) 555-0142"],
-      emails: ["maria@mail.example"],
-      datesOfBirth: ["1990-01-01", "2018-04-02"],
-      caseNumbers: ["A77Q"],
+      confirmed: {
+        names: ["Maria Synthetic", "Leo Synthetic"],
+        employers: ["Synthetic Bakery"],
+        addresses: ["12 Example Lane", "Unit 4", "Springfield", "62701", "Sample County", "12 Example Lane, Unit 4, Springfield, IL 62701"],
+        phones: ["(312) 555-0142"],
+        emails: ["maria@mail.example"],
+        datesOfBirth: ["1990-01-01", "2018-04-02"],
+        caseNumbers: ["A77Q"],
+      },
+      unconfirmed: {},
     });
   });
 
-  it("lists the personal values the person has not confirmed yet", () => {
-    const leaf = (value: string) => ({ value, source: "person" as const, updatedAt: "2026-11-01T00:00:00.000Z" });
+  it("lists suggestions and values from documents apart from what the person gave", () => {
+    const leaf = said;
     const suggested = (path: string, value: string | number) => ({
       path,
       value,
@@ -309,7 +334,15 @@ describe("Guardian on the live path", () => {
     expect(
       profileEntities(
         {
-          person: { fullName: leaf("Maria Synthetic"), address: {} },
+          person: {
+            fullName: leaf("Maria Synthetic"),
+            address: {
+              line1: { value: "12 Example Lane", source: "document", documentId: "letter-1", updatedAt: "2026-11-01T00:00:00.000Z" },
+              city: leaf("Springfield"),
+              state: leaf("IL"),
+              zip: leaf("62701"),
+            },
+          },
           household: [{ id: "kid1", name: leaf("Leo Synthetic") }],
           income: [{ id: "job1", source: leaf("Synthetic Bakery") }],
           programs: [],
@@ -324,10 +357,17 @@ describe("Guardian on the live path", () => {
         ],
       ),
     ).toEqual({
-      names: ["Maria Synthetic", "Leo Synthetic", "Leonardo Synthetic"],
-      employers: ["Synthetic Bakery", "Copperleaf Diner"],
-      addresses: ["Shelbyville"],
-      caseNumbers: ["SN-2026-0999"],
+      confirmed: {
+        names: ["Maria Synthetic", "Leo Synthetic"],
+        employers: ["Synthetic Bakery"],
+        addresses: ["Springfield", "62701"],
+      },
+      unconfirmed: {
+        names: ["Leonardo Synthetic"],
+        employers: ["Copperleaf Diner"],
+        addresses: ["12 Example Lane", "Shelbyville"],
+        caseNumbers: ["SN-2026-0999"],
+      },
     });
   });
 

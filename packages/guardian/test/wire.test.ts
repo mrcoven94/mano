@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GlimmerModelChecker } from "../src/glimmer.js";
-import { mergeEntities, type KnownEntities } from "../src/known.js";
+import type { KnownEntities } from "../src/known.js";
 import type { CheckInput, CheckResult } from "../src/types.js";
 
 // What leaves Mano for Guardian, read off the request body a fake endpoint
@@ -13,11 +13,12 @@ const MARIA = {
   phone: "(312) 555-0142",
 };
 
-// What Engine reads from Maria's profile and its suggestions.
+// The values Maria gave herself, as Engine reads them from her profile:
+// each part of her address, and the whole address the form is filled with.
 const PROFILE: KnownEntities = {
   names: ["Maria Synthetic", "Leo Synthetic", "Inés Synthetic"],
   employers: ["Bluebell Bakery"],
-  addresses: ["12 Example Lane", "Springfield", "62701"],
+  addresses: ["12 Example Lane, Springfield, IL 62701", "12 Example Lane", "Springfield", "62701"],
   phones: ["(312) 555-0142"],
   emails: ["maria.s@mail.example"],
   datesOfBirth: ["1990-01-01", "2018-04-02"],
@@ -44,6 +45,7 @@ interface Sent {
   // Every string and number in the request body, or null when nothing
   // was sent.
   values: string[] | null;
+  payload: Record<string, unknown> | null;
 }
 
 function valuesOf(node: unknown): string[] {
@@ -66,8 +68,9 @@ async function send(input: CheckInput, confirmed?: KnownEntities, unconfirmed?: 
       return Response.json({ verdict: "pass", problems: [] });
     },
   });
-  const result = await checker.check(input, mergeEntities(confirmed, unconfirmed));
-  return { result, values: body === null ? null : valuesOf(JSON.parse(body) as unknown) };
+  const result = await checker.check(input, { confirmed: confirmed ?? {}, unconfirmed: unconfirmed ?? {} });
+  const parsed = body === null ? null : (JSON.parse(body) as { action: { payload: Record<string, unknown> } });
+  return { result, values: parsed === null ? null : valuesOf(parsed), payload: parsed?.action.payload ?? null };
 }
 
 // Each value folded the way a reader would see past its spelling: accents
@@ -123,9 +126,9 @@ describe("Guardian's request after review findings on PR 108", () => {
   });
 
   it("removes each part of an address written on two lines without commas", async () => {
-    const input = renewal({ address: "12 Example Lane\nSpringfield IL 62701" });
+    const input = renewal({ text: "She moved from 12 Example Lane\nSpringfield IL 62701 to Springfield's east side." });
     input.sources = [{ kind: "document", id: "letter-1", quote: "She moved to Springfield last year." }];
-    const sent = await send(input);
+    const sent = await send(input, PROFILE);
     expect(sent.values).not.toBeNull();
     expect(leaks(sent, ADDRESS_SECRETS)).toEqual([]);
   });
@@ -156,19 +159,56 @@ describe("Guardian's request after review findings on PR 108", () => {
   });
 
   it.each([
-    ["a name with an accent and a hyphen", { fullName: "Inés Synthetic-Ruiz" }],
-    ["a name written last name first", { fullName: "Synthetic, Maria" }],
-    ["a long name with particles", { fullName: "María de los Ángeles García Fernández Synthetic" }],
-    ["a long address with a unit and ZIP+4", { address: "12345 North Martin Luther King Jr Boulevard Apt 1205, Rancho Santa Margarita, CA 92688-1234" }],
-    ["an address in care of someone", { address: "c/o Leo Synthetic (rear), 12 Example Lane, Springfield, IL 62701" }],
-    ["a US birth date", { dateOfBirth: "01/01/1990" }],
-    ["a birth date in words", { dateOfBirth: "January 1, 1990" }],
-    ["an address on two lines", { address: "12 Example Lane Apt 4\nSpringfield IL 62701-1234" }],
-    ["a phone with a country code", { phone: "+1 312.555.0142" }],
-  ])("labels %s and sends the form", async (_name, fields) => {
+    ["her name in other case and spacing", { fullName: "MARIA  synthetic" }, "fullName", "[NAME]"],
+    ["her birth date written the US way", { dateOfBirth: "01/01/1990" }, "dateOfBirth", "[DATE OF BIRTH]"],
+    ["her birth date in words", { dateOfBirth: "January 1, 1990" }, "dateOfBirth", "[DATE OF BIRTH]"],
+    ["her address on two lines", { address: "12 Example Lane\nSpringfield IL 62701" }, "address", "[ADDRESS]"],
+    ["her phone with a country code", { phone: "+1 312.555.0142" }, "phone", "[PHONE]"],
+  ])("labels %s, the value she gave", async (_name, fields, field, label) => {
     const sent = await send(renewal(fields), PROFILE);
     expect(sent.result.verdict).toBe("pass");
-    expect(sent.values).toEqual(expect.arrayContaining(["[NAME]", "[DATE OF BIRTH]", "[ADDRESS]", "[PHONE]", "3", "1200"]));
+    expect(sent.payload).toEqual({
+      fullName: "[NAME]",
+      dateOfBirth: "[DATE OF BIRTH]",
+      address: "[ADDRESS]",
+      phone: "[PHONE]",
+      householdSize: 3,
+      monthlyIncome: 1200,
+      attachment: "[DOCUMENT]",
+      [field]: label,
+    });
+  });
+
+  it.each([
+    ["a name with an accent and a hyphen", { fullName: "Inés Synthetic-Ruiz" }, "fullName", "[NAME]-Ruiz"],
+    ["a name written last name first", { fullName: "Synthetic, Maria" }, "fullName", "[NAME], [NAME]"],
+    [
+      "a long name with particles",
+      { fullName: "María de los Ángeles García Fernández Synthetic" },
+      "fullName",
+      "[NAME] de los Ángeles García Fernández [NAME]",
+    ],
+    [
+      "an address in care of someone",
+      { address: "c/o Leo Synthetic (rear), 12 Example Lane, Springfield, IL 62701" },
+      "address",
+      "c/o [NAME] (rear), [ADDRESS]",
+    ],
+    [
+      "a stranger's long address with a unit and ZIP+4",
+      { address: "12345 North Martin Luther King Jr Boulevard Apt 1205, Rancho Santa Margarita, CA 92688-1234" },
+      "address",
+      "[ADDRESS] North Martin Luther King Jr Boulevard Apt 1205, Rancho Santa Margarita, CA [ADDRESS]",
+    ],
+  ])("sends %s, not a value she gave, as its words with her values removed", async (_name, fields, field, words) => {
+    const sent = await send(renewal(fields), PROFILE);
+    expect(sent.result.verdict).toBe("pass");
+    expect(sent.payload?.[field]).toBe(words);
+  });
+
+  it("sends the form's personal values as words when the person gave none", async () => {
+    const sent = await send(renewal());
+    expect(sent.payload).toMatchObject({ fullName: "Maria Synthetic", dateOfBirth: "[DATE]", phone: "[PHONE-1]" });
   });
 });
 

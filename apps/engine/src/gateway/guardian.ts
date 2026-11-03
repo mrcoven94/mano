@@ -1,4 +1,10 @@
-import { DEFAULT_CHECK_TIMEOUT_MS, GlimmerModelChecker, MisconfiguredChecker, type KnownEntities } from "@mano/guardian";
+import {
+  DEFAULT_CHECK_TIMEOUT_MS,
+  GlimmerModelChecker,
+  MisconfiguredChecker,
+  type KnownEntities,
+  type PersonValues,
+} from "@mano/guardian";
 import type { Profile, Suggestion } from "../profile.js";
 import { LocalRulesChecker, type Checker, type CheckInput, type CheckResult } from "./checker.js";
 import type { GatewayOptions } from "./gateway.js";
@@ -11,7 +17,9 @@ import type { GatewayOptions } from "./gateway.js";
 // and a check that finds it warm keeps it up for the person's yes, when
 // the gateway checks again. Before each Guardian call Engine reads the
 // person's own names, employers and other details from their profile, so
-// Guardian's redactor removes them by value wherever they appear.
+// Guardian's redactor removes them by value wherever they appear. Only
+// what the person said themselves counts as confirmed; a value from a
+// document or older notes, or a suggestion, could hold an instruction.
 
 export interface GuardianEnv {
   MANO_GUARDIAN_URL?: string;
@@ -73,12 +81,12 @@ const ENTITY_PATHS: Record<string, keyof KnownEntities> = {
   "programs.*.caseNumber": "caseNumbers",
 };
 
-function profileLeaves(profile: Profile): { path: string; value: unknown }[] {
-  const leaves: { path: string; value: unknown }[] = [];
+function profileLeaves(profile: Profile): { path: string; value: unknown; source: string }[] {
+  const leaves: { path: string; value: unknown; source: string }[] = [];
   const walk = (node: object, prefix: string): void => {
     for (const [key, child] of Object.entries(node)) {
       if (key === "id" || typeof child !== "object" || child === null) continue;
-      if ("value" in child) leaves.push({ path: `${prefix}${key}`, value: child.value });
+      if ("value" in child) leaves.push({ path: `${prefix}${key}`, value: child.value, source: String(child.source) });
       else if (Array.isArray(child)) for (const entry of child as { id: string }[]) walk(entry, `${prefix}${key}.${entry.id}.`);
       else walk(child, `${prefix}${key}.`);
     }
@@ -91,14 +99,29 @@ function profileLeaves(profile: Profile): { path: string; value: unknown }[] {
 // from suggestions still waiting for the person (a lower-trust value can
 // be just as real). Names and employers have no shape a pattern catches;
 // the other details are listed too, so a value written an unusual way is
-// still removed.
-export function profileEntities(profile: Profile | null, suggestions: readonly Suggestion[] = []): KnownEntities {
-  const found: KnownEntities = {};
-  for (const { path, value } of [...(profile ? profileLeaves(profile) : []), ...suggestions]) {
+// still removed. A profile value the person said is confirmed; one from a
+// document or older notes, and every suggestion, is not, and Guardian uses
+// it only where it looks like its kind. The renewal form writes the
+// address as one line from its parts (apps/agent forms.ts), so when the
+// person gave each part, that line is confirmed too.
+export function profileEntities(profile: Profile | null, suggestions: readonly Suggestion[] = []): PersonValues {
+  const confirmed: KnownEntities = {};
+  const unconfirmed: KnownEntities = {};
+  const add = (into: KnownEntities, kind: keyof KnownEntities, value: string): void => {
+    into[kind] = [...(into[kind] ?? []), value];
+  };
+  const leaves = profile ? profileLeaves(profile) : [];
+  for (const { path, value, source } of [...leaves, ...suggestions.map((s) => ({ ...s, source: "suggestion" }))]) {
     const kind = ENTITY_PATHS[path.replace(/^(household|income|programs)\.[^.]+\./, "$1.*.")];
-    if (kind !== undefined && typeof value === "string") found[kind] = [...(found[kind] ?? []), value];
+    if (kind !== undefined && typeof value === "string") add(source === "person" ? confirmed : unconfirmed, kind, value);
   }
-  return found;
+  const address = profile?.person.address;
+  const parts = [address?.line1, address?.line2, address?.city, address?.state, address?.zip];
+  if (address?.line1 && address.city && address.state && address.zip && parts.every((leaf) => !leaf || leaf.source === "person")) {
+    const line = [address.line1.value, address.line2?.value, address.city.value, `${address.state.value} ${address.zip.value}`];
+    add(confirmed, "addresses", line.filter(Boolean).join(", "));
+  }
+  return { confirmed, unconfirmed };
 }
 
 export class GuardianChecker implements Checker {
@@ -107,14 +130,14 @@ export class GuardianChecker implements Checker {
     private readonly guardian: GlimmerModelChecker,
     // Read at check time. A read that throws fails the check, and the
     // gateway blocks.
-    private readonly entities: () => Promise<KnownEntities> = async () => ({}),
+    private readonly entities: () => Promise<PersonValues> = async () => ({}),
   ) {}
 
   async check(input: CheckInput): Promise<CheckResult> {
     const local = await this.rules.check(input);
     if (local.verdict === "block") return local;
     const [model] = await Promise.all([
-      this.entities().then((known) => this.guardian.check(input, known)),
+      this.entities().then((values) => this.guardian.check(input, values)),
       this.guardian.warm(),
     ]);
     return {
@@ -130,7 +153,7 @@ export class GuardianChecker implements Checker {
 // to 7.5 seconds, and the agent gives Engine 15 seconds per call.
 export function gatewayChecker(
   setting: CheckerSetting,
-  opts: { timeoutMs?: number; entities?: () => Promise<KnownEntities> } = {},
+  opts: { timeoutMs?: number; entities?: () => Promise<PersonValues> } = {},
 ): Pick<GatewayOptions, "checker" | "checkerTimeoutMs"> {
   switch (setting.kind) {
     case "local-rules":

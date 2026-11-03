@@ -24,6 +24,19 @@ export interface KnownEntities {
 
 export type EntityKind = keyof KnownEntities;
 
+// The person's own values, split by whether the person gave them.
+export interface PersonValues {
+  // Values the person said themselves. Each is removed wherever it
+  // appears, and a form field that holds exactly one of them reaches
+  // Guardian as its kind's label.
+  confirmed?: KnownEntities;
+  // Values read from a document or older notes, or waiting for the
+  // person's yes. A document can put any text here, so each is removed
+  // from free text only when it looks like its kind (looksLike), and a
+  // form field that holds one still goes as its words.
+  unconfirmed?: KnownEntities;
+}
+
 export const KNOWN_LABELS: Record<EntityKind, string> = {
   names: "[NAME]",
   employers: "[EMPLOYER]",
@@ -512,4 +525,84 @@ export function replaceKnown(text: string, matcher: KnownMatcher): string {
     at = last.end;
   }
   return out + text.slice(at);
+}
+
+// Trust. Guardian reads every word Mano cannot vouch for, so a value
+// replaces text only when the person gave it or it looks like its kind,
+// and a whole form field becomes a label only when it is the person's own.
+
+const STATE_CODES = new Set(
+  "al ak az ar ca co ct de dc fl ga hi id il in ia ks ky la me md ma mi mn ms mo mt ne nv nh nj nm ny nc nd oh ok or pa ri sc sd tn tx ut vt va wa wv wi wy pr gu vi as mp".split(" "),
+);
+const EMPLOYER_WORDS = new Set([...BUSINESS_SUFFIXES, "the", "of", "and", "de", "del", "la", "el", "y"]);
+const ALLOWED_IN_ADDRESS = new Set([...ADDRESS_WORDS, ...STATE_CODES]);
+
+// True when text has a word an instruction or the task is made of.
+export function hasCommonWord(text: string): boolean {
+  return tokenize(text).some((token) => !token.digits && token.text.length >= 2 && COMMON_WORDS.has(token.text));
+}
+
+function plainWords(value: string, allowed: ReadonlySet<string>): boolean {
+  return tokenize(value).every(
+    (token) => token.digits || token.text.length < 2 || allowed.has(token.text) || !COMMON_WORDS.has(token.text),
+  );
+}
+
+function nationalDigits(value: string): string {
+  const all = digitsOf(value);
+  return all.length === 11 && all.startsWith("1") ? all.slice(1) : all;
+}
+
+const LOOKS_LIKE: Record<EntityKind, (text: string) => boolean> = {
+  names: (text) => {
+    const core = tokenize(text).filter((token) => token.text.length >= 2 && !NAME_PARTICLES.has(token.text));
+    return /^[\p{L}\p{M}\s'’.,-]+$/u.test(text) && core.length >= 1 && core.length <= 6 && plainWords(text, NAME_PARTICLES);
+  },
+  employers: (text) =>
+    /^[\p{L}\p{M}\p{N}\s&'’.,()-]+$/u.test(text) && tokenize(text).length <= 8 && plainWords(text, EMPLOYER_WORDS),
+  addresses: (text) =>
+    /^[\p{L}\p{M}\p{N}\s,.#&()'’/-]+$/u.test(text) && tokenize(text).length <= 20 && plainWords(text, ALLOWED_IN_ADDRESS),
+  phones: (text) => /^[0-9+().\s-]+$/.test(text) && digitsOf(text).length >= 7 && digitsOf(text).length <= 15,
+  emails: (text) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) && text.length <= 254,
+  datesOfBirth: (text) => readWholeDate(text).length > 0,
+  caseNumbers: (text) => {
+    const tokens = tokenize(text);
+    return (
+      /^[\p{L}\p{N}\s#/.-]{1,40}$/u.test(text) &&
+      tokens.some((token) => token.digits) &&
+      tokens.every((token) => token.digits || token.text.length <= 4)
+    );
+  },
+};
+
+export function looksLike(kind: EntityKind, value: string): boolean {
+  return LOOKS_LIKE[kind](value.normalize("NFKC").trim());
+}
+
+// The values that look like their kind, the only unconfirmed values
+// that may replace text.
+export function plausibleOnly(known: KnownEntities | undefined): KnownEntities {
+  const kept: KnownEntities = {};
+  for (const kind of Object.keys(KNOWN_LABELS) as EntityKind[]) {
+    const values = (known?.[kind] ?? []).filter((value) => looksLike(kind, value));
+    if (values.length > 0) kept[kind] = values;
+  }
+  return kept;
+}
+
+// Whether a form field holds exactly one of the person's confirmed values
+// of its kind, however it is written: the same words and numbers in the
+// same order, the same phone number, or the same day.
+export function holdsConfirmed(kind: EntityKind, text: string, confirmed: KnownEntities | undefined): boolean {
+  const values = confirmed?.[kind] ?? [];
+  if (kind === "phones") {
+    const digits = nationalDigits(text);
+    return tokenize(text).every((token) => token.digits) && digits.length >= 7 && values.some((value) => nationalDigits(value) === digits);
+  }
+  if (kind === "datesOfBirth") {
+    const days = readWholeDate(text);
+    if (days.length > 0) return values.some((value) => readWholeDate(value).some((day) => days.includes(day)));
+  }
+  const key = words(text).join("");
+  return key !== "" && values.some((value) => words(value).join("") === key);
 }

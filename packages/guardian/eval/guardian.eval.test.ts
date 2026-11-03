@@ -1,5 +1,5 @@
-// Guardian eval: 44 synthetic actions, 24 of them bad, plus 11 renewal
-// forms as Engine sends them, 7 of them bad. Runs the rules checker
+// Guardian eval: 44 synthetic actions, 24 of them bad, plus 14 renewal
+// forms as Engine sends them, 10 of them bad. Runs the rules checker
 // always, and the Glimmer checker and the model alone on the renewal forms
 // when MANO_GUARDIAN_URL and MANO_GUARDIAN_TOKEN are set (and rules-only
 // mode is off). Prints precision and recall, plus the served model record.
@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { GlimmerChecker, GlimmerModelChecker, type GlimmerCheckerOptions } from "../src/glimmer.js";
 import { RulesChecker } from "../src/rules.js";
 import type { Checker } from "../src/types.js";
-import { EVAL_CASES } from "./cases.js";
+import { EVAL_CASES, MARIA_GAVE } from "./cases.js";
 import { misses, scoreGlimmer, scoreRenewals, scoreRules, summarize, type Metrics } from "./score.js";
 
 const WARM_WAIT_MS = 20 * 60_000;
@@ -85,6 +85,9 @@ describe("guardian eval scoring", () => {
       "renewal-name-instruction",
       "renewal-address-recipient",
       "renewal-extra-recipient",
+      "renewal-name-words",
+      "renewal-address-words",
+      "renewal-name-domain",
     ]);
   });
 
@@ -105,6 +108,7 @@ describe("guardian eval scoring", () => {
     const passEverything = new GlimmerModelChecker({
       url: "https://guardian.test/check",
       token: "token-not-real",
+      knownEntities: MARIA_GAVE,
       fetchImpl: async () => {
         calls += 1;
         return Response.json({ verdict: "pass", problems: [] });
@@ -160,7 +164,7 @@ describe("guardian eval", () => {
       console.log("renewal: skipped (rules-only mode or no endpoint set)");
       return;
     }
-    const checker = new GlimmerModelChecker(options);
+    const checker = new GlimmerModelChecker({ ...options, knownEntities: MARIA_GAVE });
     await warmUp("renewal", checker);
     const scored = await scoreRenewals(checker);
     for (const s of scored) console.log(`renewal ${s.name}: got ${s.verdict} ${JSON.stringify(s.problems)}`);

@@ -9,7 +9,9 @@ import {
   checkerSetting,
   ensureGatewayTables,
   gatewayChecker,
+  profileEntities,
 } from "../src/gateway/index.js";
+import type { Profile } from "../src/profile.js";
 
 // Maria's synthetic renewal through the gateway against the deployed
 // Guardian: a plausible one passes with nothing to fix, and a household of
@@ -51,10 +53,24 @@ describe.skipIf(!live)("Guardian live", () => {
     }
     expect(state).toBe("ready");
 
+    // Maria gave every value on her profile herself, so her form fields
+    // reach Guardian as labels, as on the spine.
+    const said = (value: string) => ({ value, source: "person" as const, updatedAt: "2026-11-01T00:00:00.000Z" });
+    const profile: Profile = {
+      person: {
+        fullName: said("Maria Synthetic"),
+        dateOfBirth: said("1990-01-01"),
+        phone: said("(312) 555-0142"),
+        address: { line1: said("12 Example Lane"), city: said("Springfield"), state: said("IL"), zip: said("62701") },
+      },
+      household: [],
+      income: [],
+      programs: [],
+    };
     const storage = openStorage();
     ensureGatewayTables(storage as never);
     const gateway = new ActionGateway(new SqlApprovalStore(storage as never), new InMemoryExecutor(), {
-      ...gatewayChecker(setting),
+      ...gatewayChecker(setting, { entities: async () => profileEntities(profile) }),
       linkCheck: async () => ({ allowed: true }),
     });
     const maria = {

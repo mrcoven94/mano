@@ -1,5 +1,5 @@
 import { formProblems } from "./form.js";
-import { mergeEntities, type KnownEntities } from "./known.js";
+import { mergeEntities, type KnownEntities, type PersonValues } from "./known.js";
 import { buildModelRequest } from "./redact.js";
 import { RulesChecker } from "./rules.js";
 import type { CheckInput, CheckResult, Checker, Verdict, WarmState } from "./types.js";
@@ -27,7 +27,7 @@ export interface GlimmerCheckerOptions {
   // Per-check timeout in milliseconds. A timeout is a block.
   timeoutMs?: number;
   // Personal values to redact before every check, on top of any a check
-  // passes itself.
+  // passes itself. They count as values the person gave.
   knownEntities?: KnownEntities;
   fetchImpl?: typeof fetch;
 }
@@ -143,13 +143,12 @@ export class GlimmerModelChecker implements Checker {
     }
   }
 
-  // known: this person's own values to redact, read by the caller at
-  // check time (Engine reads them from the person's profile and its
-  // suggestions).
-  async check(input: CheckInput, known?: KnownEntities): Promise<CheckResult> {
+  // values: this person's own values, read by the caller at check time
+  // (Engine reads them from the person's profile and its suggestions).
+  async check(input: CheckInput, values?: PersonValues): Promise<CheckResult> {
     this.lastServer = null;
-    // A personal form field that holds more than its value would reach
-    // the model as a bare label, hiding the rest, so it is held here.
+    // A personal field that carries a link, an email or a phone where a
+    // name or an address belongs is held here, with no model call.
     const malformed = formProblems(input);
     if (malformed.length > 0) return { verdict: "block", problems: malformed };
 
@@ -158,7 +157,12 @@ export class GlimmerModelChecker implements Checker {
       response = await this.fetchImpl(this.url, {
         method: "POST",
         headers: this.headers(),
-        body: JSON.stringify(buildModelRequest(input, mergeEntities(this.knownEntities, known))),
+        body: JSON.stringify(
+          buildModelRequest(input, {
+            confirmed: mergeEntities(this.knownEntities, values?.confirmed),
+            unconfirmed: values?.unconfirmed ?? {},
+          }),
+        ),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
@@ -240,10 +244,10 @@ export class GlimmerModelChecker implements Checker {
 export class GlimmerChecker extends GlimmerModelChecker {
   private readonly rules = new RulesChecker();
 
-  override async check(input: CheckInput, known?: KnownEntities): Promise<CheckResult> {
+  override async check(input: CheckInput, values?: PersonValues): Promise<CheckResult> {
     const rules = await this.rules.check(input);
     if (rules.verdict === "block") return rules;
-    return super.check(input, known);
+    return super.check(input, values);
   }
 }
 
