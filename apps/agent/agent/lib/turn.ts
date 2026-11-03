@@ -367,6 +367,11 @@ async function runTurn(
   let message = turnText(body);
   const turnAtMs = Date.parse(turn.firstReceivedAt);
   const decision = body.attachmentCount === 0 ? parseDecision(body.texts.join(" ")) : null;
+  // The profile, as data and never instructions (lib/profile.ts), is read
+  // while the turn closes drafts, decides and reads photos, and is given
+  // up before it could cut into the model's minimum. A decision answered
+  // without the model never uses it.
+  const profileRead = body.attachmentCount > 0 && body.texts.length === 0 ? null : profileContext(engine, deadlineMs - MODEL_MIN_MS - Date.now());
   // Closing replaced drafts is retried at every turn until it lands.
   await clock.time("close", () => closeReplaced(engine));
   if (decision) {
@@ -380,9 +385,6 @@ async function runTurn(
   // words that answer is the whole reply; the crisis line still leads
   // through Channels' finalize when the turn is a crisis.
   // The reading reaches the model only as data in the person's own turn.
-  // The profile, as data and never instructions (lib/profile.ts), is read
-  // beside it and given up before it could cut into the model's minimum.
-  const profileRead = body.attachmentCount > 0 && body.texts.length === 0 ? null : profileContext(engine, deadlineMs - MODEL_MIN_MS - Date.now());
   let letter: LetterReply | null = null;
   if (body.attachmentCount > 0) {
     letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), turn.firstReceivedAt, deadlineMs - READ_MARGIN_MS);
