@@ -265,15 +265,18 @@ export const EARLIER_NOT_UPDATED_NOTE =
 // same recipient that have no receipt are settled:
 // - one still unanswered or in flight: "checking", nothing new is prepared;
 // - one that failed: retired in Engine, so it is never run again, however
-//   the person's correction then ends (even as a question), and a pointer
-//   to its question is cleared;
+//   the person's correction then ends (even as a question);
+// - once all are settled (filed, retired or failed), a pointer to the
+//   question of any of them is cleared;
 // - "failed" when Engine could not be asked or would not retire it; the
 //   caller prepares nothing.
 export async function earlierFiling(engine: PersonEngine, recipient: string): Promise<"clear" | "checking" | "failed"> {
   try {
-    const open = proposalsOf(await engine.listApprovals(), engine.generation).filter(
-      (a) => a.recipient === recipient && a.status === "approved" && a.outcome?.attempt !== "done",
+    const filings = proposalsOf(await engine.listApprovals(), engine.generation).filter(
+      (a) => a.recipient === recipient && (a.status === "approved" || a.status === "retired"),
     );
+    // A receipt is read first: that filing went through and is settled.
+    const open = filings.filter((a) => a.status === "approved" && !a.outcome?.receipt);
     if (open.some((a) => a.outcome?.attempt !== "failed")) return "checking";
     for (const a of open) {
       const out = await engine.retire(a.id);
@@ -281,8 +284,11 @@ export async function earlierFiling(engine: PersonEngine, recipient: string): Pr
       // Completed: it went through after all, and stands.
       if (out.status !== "rejected" && out.status !== "completed") return "failed";
     }
+    // Every filing to this form is settled now (filed, retired or failed),
+    // so a question still pointing at one no longer waits on a YES: cleared,
+    // the correction goes ahead as a new filing.
     const { pointer } = await engine.getPending();
-    if (pointer && open.some((a) => a.id === pointer.approvalId)) await engine.clearPointer(pointer.approvalId);
+    if (pointer && filings.some((a) => a.id === pointer.approvalId)) await engine.clearPointer(pointer.approvalId);
     return "clear";
   } catch {
     console.warn(JSON.stringify({ type: "mano_earlier_filing_unknown" }));

@@ -493,6 +493,25 @@ describe("approval by text", () => {
     expect(no.body.text).toBe("That one was already sent, so I cannot cancel it. Confirmation RECEIVED-1.");
   });
 
+  // Review round 12: a YES left the filing in progress, and the recovery
+  // sweep later filed it. The pointer to its question must not hold every
+  // correction at "an earlier submission is still being confirmed".
+  it("once recovery files the approved filing, the correction is prepared as a new filing without another YES", async () => {
+    const portal = new FlakyPortal();
+    engine.filer = portal;
+    await send(turn("turn_fil_0000001", "Please file my renewal"));
+    const [old] = engine.approvals();
+    expect((await send(turn("turn_fil_000000Y", "YES"))).body.text).toMatch(/checking/i);
+
+    portal.checkDown = false;
+    const recovered = await engine.gatewayFor(personIdFor(HANDLE)).recoverAttempt(old!.idempotencyKey, new Date(), new Date(Date.now() + 60_000).toISOString());
+    expect(recovered?.status).toBe("completed");
+
+    const fixed = await send(turn("turn_fil_0000002", "Fix my renewal, my phone is 253-555-0199"));
+    expect(fixed.body.status).toBe("waiting_approval");
+    expect(fixed.body.approval).toContain("Phone number: 253-555-0199");
+  });
+
   it("once recovery settles the approved filing as failed, the correction is prepared without another YES", async () => {
     const portal = new FlakyPortal();
     portal.refuseRetries = true;
