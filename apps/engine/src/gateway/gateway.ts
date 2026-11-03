@@ -673,13 +673,13 @@ export class ActionGateway {
     }
     const keyHash = await auditDigest(req.idempotencyKey);
     this.store.audit({ event: "gateway.decide", type: req.type, keyHash });
-    // A draft from a turn older than the person's latest correction of
-    // this form is refused like a replaced one, here and again at the
-    // insert below.
-    if (opts.proposal && this.store.proposalFenced(req.recipient, opts.proposal)) return SUPERSEDED;
     const contentHash = await contentHashOf(req);
     const replay = this.receiptReuse(req, contentHash, keyHash);
     if (replay) return replay;
+    // A draft from a turn older than the person's latest correction of
+    // this form is refused like a replaced one, here and again at the
+    // insert below. A receipt under its key is answered first, above.
+    if (opts.proposal && this.store.proposalFenced(req.recipient, opts.proposal)) return SUPERSEDED;
 
     const decision = evaluatePolicy(req, this.opts.policyOverrides as never);
     if (decision === "block") {

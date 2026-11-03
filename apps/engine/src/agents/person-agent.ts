@@ -1050,35 +1050,38 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return result;
   }
 
+  // Runs inside the transaction that records the share's receipt: a SQL
+  // error propagates, so the whole transaction rolls back (no receipt, no
+  // done attempt, no marker) and the next lookup applies the effect once.
   private recordConsentOutcome(approval: { recipient: string; purpose: string; requestJson: string }) {
+    let stored: { payload?: { consent?: string; caseId?: string; expiresAt?: string } };
     try {
-      const stored = JSON.parse(approval.requestJson) as {
-        payload?: { consent?: string; caseId?: string; expiresAt?: string };
-      };
-      const caseId = stored.payload?.caseId;
-      if (typeof caseId !== "string" || !caseId) return;
-      if (stored.payload?.consent === "grant") {
-        // Parsed to epoch milliseconds at write time; an unreadable
-        // value fails closed as already expired.
-        const raw = stored.payload?.expiresAt;
-        const expiresAtMs = typeof raw === "string" && Number.isFinite(new Date(raw).getTime())
-          ? new Date(raw).getTime()
-          : raw === undefined
-            ? null
-            : 0;
-        this.db().exec(
-          "INSERT OR REPLACE INTO consents(recipient, case_id, purpose, expires_at_ms) VALUES (?, ?, ?, ?)",
-          approval.recipient,
-          caseId,
-          approval.purpose,
-          expiresAtMs,
-        );
-      } else if (stored.payload?.consent === "revoke") {
-        this.db().exec("DELETE FROM consents WHERE recipient = ? AND case_id = ?", approval.recipient, caseId);
-        this.db().exec("INSERT OR IGNORE INTO revoked_cases VALUES (?, ?)", caseId, new Date().toISOString());
-      }
+      stored = JSON.parse(approval.requestJson) as typeof stored;
     } catch {
-      // Approval JSON is written by the gateway; ignore unreadable rows.
+      // Approval JSON is written by the gateway; an unreadable row has no effect to apply.
+      return;
+    }
+    const caseId = stored.payload?.caseId;
+    if (typeof caseId !== "string" || !caseId) return;
+    if (stored.payload?.consent === "grant") {
+      // Parsed to epoch milliseconds at write time; an unreadable
+      // value fails closed as already expired.
+      const raw = stored.payload?.expiresAt;
+      const expiresAtMs = typeof raw === "string" && Number.isFinite(new Date(raw).getTime())
+        ? new Date(raw).getTime()
+        : raw === undefined
+          ? null
+          : 0;
+      this.db().exec(
+        "INSERT OR REPLACE INTO consents(recipient, case_id, purpose, expires_at_ms) VALUES (?, ?, ?, ?)",
+        approval.recipient,
+        caseId,
+        approval.purpose,
+        expiresAtMs,
+      );
+    } else if (stored.payload?.consent === "revoke") {
+      this.db().exec("DELETE FROM consents WHERE recipient = ? AND case_id = ?", approval.recipient, caseId);
+      this.db().exec("INSERT OR IGNORE INTO revoked_cases VALUES (?, ?)", caseId, new Date().toISOString());
     }
   }
 

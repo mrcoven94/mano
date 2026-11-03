@@ -98,3 +98,47 @@ describe("LAP-747: the applied-effects migration counts receipts already on file
     expect(await consents(name)).toHaveLength(0);
   });
 });
+
+// Review round 14: a revocation's consent write fails once. The whole
+// settle transaction rolls back (no receipt, no done attempt, no marker)
+// and the grant stays recorded; the next lookup applies the revocation once.
+describe("LAP-747: a consent write that fails rolls back the receipt with it", () => {
+  it("a failed revocation write leaves no receipt and no marker, and the next lookup applies it once", async () => {
+    const name = "lap747-effect-fails";
+    const ns = testEnv.PERSON_AGENT as DurableObjectNamespace;
+    const stub = ns.get(ns.idFromName(name));
+    const person = personStub(name);
+    const orgAgentId = "org:lap747-fails-county";
+    const grant = await person.grantConsent(name, { orgAgentId, purpose: "renewal", scope: ["documents"], caseId: "case-lap747-fails" });
+    expect((await person.approve(grant.approval!.id, name)).status).toBe("completed");
+    expect(await consents(name)).toHaveLength(1);
+
+    // The revocation's own write fails once: its table is missing.
+    await runInDurableObject(stub, (_i, state) => {
+      state.storage.sql.exec("DROP TABLE revoked_cases");
+    });
+    const revoke = await person.revokeConsent(name, { orgAgentId, caseId: "case-lap747-fails" });
+    const key = revoke.approval!.idempotencyKey;
+    expect((await person.approve(revoke.approval!.id, name)).status).toBe("blocked");
+    const after = await runInDurableObject(stub, (instance, state) => ({
+      receipt: (instance as unknown as { store: { getReceiptByKey(k: string): unknown } }).store.getReceiptByKey(key),
+      attempt: (instance as unknown as { store: { getAttempt(k: string): { status: string } | null } }).store.getAttempt(key)?.status,
+      markers: state.storage.sql.exec("SELECT COUNT(*) AS n FROM applied_effects WHERE idempotency_key = ?", key).toArray()[0],
+    }));
+    expect(after.receipt).toBeNull();
+    expect(after.attempt).toBe("unknown");
+    expect(after.markers).toEqual({ n: 0 });
+    expect(await consents(name)).toHaveLength(1);
+
+    await runInDurableObject(stub, (_i, state) => {
+      state.storage.sql.exec("CREATE TABLE IF NOT EXISTS revoked_cases(case_id TEXT PRIMARY KEY, revoked_at TEXT NOT NULL)");
+    });
+    expect((await person.approve(revoke.approval!.id, name)).status).toBe("reconciled");
+    expect(await consents(name)).toHaveLength(0);
+    expect((await person.approve(revoke.approval!.id, name)).status).toBe("completed");
+    const markers = await runInDurableObject(stub, (_i, state) =>
+      state.storage.sql.exec("SELECT COUNT(*) AS n FROM applied_effects WHERE idempotency_key = ?", key).toArray()[0],
+    );
+    expect(markers).toEqual({ n: 1 });
+  });
+});

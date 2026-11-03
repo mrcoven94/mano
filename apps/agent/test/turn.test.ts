@@ -84,6 +84,16 @@ async function fakeAgent(input: AgentTurnInput) {
     // A correction in the same message: a second call in the same turn.
     const then = /then change the phone to (\S+)/.exec(input.message)?.[1];
     if (then) await call(draft({ fullName: name, address, householdSize, phone: then }));
+    // Engine refuses the fence during a same-turn correction.
+    const unfenced = /then the fence fails for (\S+)/.exec(input.message)?.[1];
+    if (unfenced) {
+      const reachable = engine.fetch;
+      vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) =>
+        /\/approvals\/fence$/.test(new URL(String(url)).pathname) ? new Response("unavailable", { status: 503 }) : reachable(url, init),
+      );
+      await call(draft({ fullName: name, address, householdSize, phone: unfenced }));
+      vi.stubGlobal("fetch", reachable);
+    }
     // Engine stumbles during a same-turn correction and the model's turn then fails.
     const stumble = /then Engine stumbles on (\S+)/.exec(input.message)?.[1];
     if (stumble) {
@@ -325,6 +335,41 @@ describe("approval by text", () => {
     await send(turn("turn_same_00000Z", "YES"));
     expect(engine.executor.calls).toHaveLength(0);
     expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
+  });
+
+  // Review round 14: the first call holds phone 0100, the same-turn
+  // correction's fence answers 503. The early exit still cleans up.
+  it("a same-turn correction whose fence fails still closes the first draft: no question goes out, and a YES files nothing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const ask = await send(turn("turn_unf_0000001", "File my renewal, then the fence fails for 253-555-0199"));
+    expect(ask.body.status).not.toBe("waiting_approval");
+    expect(ask.body.text).not.toContain("Reply YES");
+    expect(engine.approvals().map((a) => a.status)).toEqual(["rejected"]);
+    await send(turn("turn_unf_000000Y", "YES"));
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  it("a same-turn correction whose fence and close both fail holds the first draft back", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reachable = engine.fetch;
+    const d = deps({
+      runAgent: async (input) => {
+        // The first call holds; then both the fence and the close answer 503.
+        const ctx = toolCtx({ handleHash: input.handleHash, turnId: input.turnId, grant: input.grant, generation: input.generation, turnAtMs: input.turnAtMs });
+        const first = (await fillForm.execute(draft(), ctx)) as { status: string; approvalId?: string };
+        vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) =>
+          /\/approvals\/(fence|[^/]+\/reject)$/.test(new URL(String(url)).pathname) ? new Response("unavailable", { status: 503 }) : reachable(url, init),
+        );
+        await fillForm.execute(draft({ phone: "253-555-0199" }), ctx);
+        vi.stubGlobal("fetch", reachable);
+        return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop", held: first.approvalId ? [first.approvalId] : [] };
+      },
+    });
+    const ask = await send(turn("turn_unf_0000002", "Please file my renewal"), d);
+    expect(ask.body.status).not.toBe("waiting_approval");
+    expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
+    await send(turn("turn_unf_00000Y2", "YES"));
+    expect(engine.executor.calls).toHaveLength(0);
   });
 
   it("a correction that throws in a turn that then fails never shows the draft it was correcting, and a YES files nothing", async () => {

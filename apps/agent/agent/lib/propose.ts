@@ -210,7 +210,11 @@ async function correctingNow<T extends { status: string }>(
   try {
     await engine.fence(recipient, turnId);
   } catch {
+    // Every exit that holds no new version cleans up: this turn's earlier
+    // drafts for the form are closed, or held back so the reply never
+    // shows them.
     console.warn(JSON.stringify({ type: "mano_fence_failed" }));
+    await closeThisTurn(engine, turnId, recipient);
     return "not_fenced";
   }
   const earlier = await waitingIds(engine, turnId, recipient);

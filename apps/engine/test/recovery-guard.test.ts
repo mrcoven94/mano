@@ -505,3 +505,21 @@ describe("LAP-747: drafts from turns older than a correction are refused", () =>
     });
   });
 });
+
+describe("LAP-747: a replayed filing answers its receipt before the fence", () => {
+  it("replaying completed action K from turn A after turn B fenced the form answers K's receipt", async () => {
+    const order = (turnId: string, ms: number) => ({ receivedAt: new Date(ms).toISOString(), turnId });
+    const now = Date.now();
+    const office = new Office();
+    office.next = "file";
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, office);
+    const k = proposal();
+    const held = await gateway.requestAction(k, new Date(), { proposal: order("turn-a", now - 2000) });
+    const filed = await gateway.approveAndExecute(held.approval!.id, "person-maria");
+    expect(filed.status).toBe("completed");
+    await gateway.fenceProposals("sandbox-agency-portal", order("turn-b", now - 1000), 0);
+    expect(await gateway.requestAction(k, new Date(), { proposal: order("turn-a", now - 2000) })).toMatchObject({ status: "completed", receipt: { externalId: filed.receipt!.externalId } });
+    expect(office.posts).toHaveLength(1);
+  });
+});
