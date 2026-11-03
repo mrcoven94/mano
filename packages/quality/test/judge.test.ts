@@ -9,7 +9,7 @@ import type { JudgeItem } from "../src/judge.ts";
 import { LocalDns } from "../src/links.ts";
 import { ReferencePath, needsMailReader, type AnswerPath, type PathSet } from "../src/paths.ts";
 import { judgeFacts, runBench } from "../src/run.ts";
-import { buildAllSuites } from "../src/suites/build.ts";
+import { buildAllSuites, buildSuite } from "../src/suites/build.ts";
 import type { BenchCase } from "../src/suites/types.ts";
 
 const item: JudgeItem = { answer: "a", facts: "f", reference: "r" };
@@ -170,4 +170,12 @@ test("a letter cannot open or close a section of the judge prompt", async () => 
   assert.ok(!/[\u2028\u2029]/.test(prompt), "no raw Unicode line separators");
   assert.equal(JSON.parse(prompt.split("Letter the person sent, as a JSON string:\n")[1]!.split("\n")[0]!), letter, "the letter survives whole");
   assert.equal(system, JUDGE_LETTER_SYSTEM);
+});
+
+test("the stand-in judge passes a letters version 1 reply that leaves out the [letter N] marker, as a text does", async () => {
+  const c = buildSuite("letters", { lettersVersion: 1 }).cases[0]!;
+  const answer = c.reference.replace(/\s*\[letter\s+\d+\]/i, "");
+  assert.notEqual(answer, c.reference);
+  const [score] = await new FakeJudge().score([{ answer, facts: judgeFacts(c, true), reference: c.reference }]);
+  assert.equal(score!.pass, true, score!.reason);
 });

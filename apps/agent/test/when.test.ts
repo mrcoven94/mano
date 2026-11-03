@@ -20,35 +20,57 @@ describe("parseClock", () => {
 
 describe("parseWhen", () => {
   it("parses relative times", () => {
-    expect(parseWhen("in 20 minutes", NOW, TZ)).toEqual({ dueAtMs: NOW + 20 * 60_000 });
-    expect(parseWhen("in 2 hours", NOW, TZ)).toEqual({ dueAtMs: NOW + 2 * 3_600_000 });
-    expect(parseWhen("in a week", NOW, TZ)).toEqual({ dueAtMs: NOW + 7 * 86_400_000 });
+    expect(parseWhen("in 20 minutes", NOW, TZ)).toMatchObject({ dueAtMs: NOW + 20 * 60_000 });
+    expect(parseWhen("in 2 hours", NOW, TZ)).toMatchObject({ dueAtMs: NOW + 2 * 3_600_000 });
+    expect(parseWhen("in a week", NOW, TZ)).toMatchObject({ dueAtMs: NOW + 7 * 86_400_000 });
   });
 
   it("parses tomorrow and weekdays at 9am by default", () => {
     // Friday Oct 30 09:00 MDT = 15:00 UTC.
     const friday9 = Date.UTC(2026, 9, 30, 15, 0, 0);
-    expect(parseWhen("tomorrow at 9", NOW, TZ)).toEqual({ dueAtMs: friday9 });
-    expect(parseWhen("Friday", NOW, TZ)).toEqual({ dueAtMs: friday9 });
-    expect(parseWhen("friday 9am", NOW, TZ)).toEqual({ dueAtMs: friday9 });
+    expect(parseWhen("tomorrow at 9", NOW, TZ)).toMatchObject({ dueAtMs: friday9 });
+    expect(parseWhen("Friday", NOW, TZ)).toMatchObject({ dueAtMs: friday9 });
+    expect(parseWhen("friday 9am", NOW, TZ)).toMatchObject({ dueAtMs: friday9 });
   });
 
   it("parses explicit clocks", () => {
     // Friday Oct 30 14:00 MDT = 20:00 UTC.
-    expect(parseWhen("friday at 2pm", NOW, TZ)).toEqual({ dueAtMs: Date.UTC(2026, 9, 30, 20, 0, 0) });
-    expect(parseWhen("tomorrow morning", NOW, TZ)).toEqual({ dueAtMs: Date.UTC(2026, 9, 30, 15, 0, 0) });
+    expect(parseWhen("friday at 2pm", NOW, TZ)).toMatchObject({ dueAtMs: Date.UTC(2026, 9, 30, 20, 0, 0) });
+    expect(parseWhen("tomorrow morning", NOW, TZ)).toMatchObject({ dueAtMs: Date.UTC(2026, 9, 30, 15, 0, 0) });
   });
 
   it("rolls a passed bare time to tomorrow", () => {
     // 09:00 today is exactly now, so "at 9" means tomorrow.
-    expect(parseWhen("at 9", NOW, TZ)).toEqual({ dueAtMs: Date.UTC(2026, 9, 30, 15, 0, 0) });
+    expect(parseWhen("at 9", NOW, TZ)).toMatchObject({ dueAtMs: Date.UTC(2026, 9, 30, 15, 0, 0) });
     // 10:00 today is still ahead.
-    expect(parseWhen("at 10", NOW, TZ)).toEqual({ dueAtMs: Date.UTC(2026, 9, 29, 16, 0, 0) });
+    expect(parseWhen("at 10", NOW, TZ)).toMatchObject({ dueAtMs: Date.UTC(2026, 9, 29, 16, 0, 0) });
   });
 
   it("crosses the DST boundary", () => {
     // "next friday" from Thu Oct 29 skips Oct 30 and lands Nov 6 09:00 MST = 16:00 UTC.
-    expect(parseWhen("next friday", NOW, TZ)).toEqual({ dueAtMs: Date.UTC(2026, 10, 6, 16, 0, 0) });
+    expect(parseWhen("next friday", NOW, TZ)).toMatchObject({ dueAtMs: Date.UTC(2026, 10, 6, 16, 0, 0) });
+  });
+
+  it("lands on the asked hour on the morning clocks spring forward", () => {
+    // Saturday, March 13, 2027, 12:00 PST. Sunday 9:00 is daylight time: 16:00 UTC.
+    expect(parseWhen("tomorrow at 9", Date.UTC(2027, 2, 13, 20, 0, 0), "America/Los_Angeles")).toMatchObject({ dueAtMs: Date.UTC(2027, 2, 14, 16, 0, 0) });
+  });
+
+  it("a 2:30 that the spring change skips lands just after the gap", () => {
+    // 2:30 does not exist on March 14, 2027 in California; 3:30 PDT is 10:30 UTC.
+    expect(parseWhen("tomorrow at 2:30", Date.UTC(2027, 2, 13, 20, 0, 0), "America/Los_Angeles")).toMatchObject({ dueAtMs: Date.UTC(2027, 2, 14, 10, 30, 0) });
+  });
+
+  it("tomorrow is the next date even on the 25-hour day clocks fall back", () => {
+    // Sunday, November 1, 2026, 0:30 PDT. Monday 9:00 PST is 17:00 UTC.
+    expect(parseWhen("tomorrow at 9", Date.UTC(2026, 10, 1, 7, 30, 0), "America/Los_Angeles")).toMatchObject({ dueAtMs: Date.UTC(2026, 10, 2, 17, 0, 0) });
+  });
+
+  it("rewordings of one time are asked the same, in any zone", () => {
+    const asked = (words: string, tz: string) => parseWhen(words, NOW, tz)?.asked;
+    expect(asked("tomorrow 9am", "America/New_York")).toBe(asked("tomorrow at 9", TZ));
+    expect(asked("tomorrow morning", TZ)).toBe(asked("tomorrow at 9", TZ));
+    expect(asked("friday at 9", TZ)).not.toBe(asked("tomorrow at 9", TZ));
   });
 
   it("rejects nonsense", () => {

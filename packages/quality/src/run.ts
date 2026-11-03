@@ -11,6 +11,7 @@ import { buildHoldoutSuite } from "./suites/holdout-suite.ts";
 import { loadHoldout } from "./holdout.ts";
 import { loadPaths, sentText, type BenchAnswer, type LoadedPath, type PathSet } from "./paths.ts";
 import { buildAllSuites } from "./suites/build.ts";
+import type { LettersVersion } from "./suites/letters.ts";
 import type { BenchCase, SuiteBuild, SuiteName } from "./suites/types.ts";
 import type { AgentSummary } from "./agent-types.ts";
 import type { GuardianSummary } from "./guardian.ts";
@@ -165,6 +166,8 @@ export interface RunOptions {
   pathSet?: PathSet;
   // Reruns skip the 30-case calibration; the first pass already ran it.
   skipCalibration?: boolean;
+  // Runs an older letters version (1) to compare with results recorded at it.
+  lettersVersion?: LettersVersion;
 }
 
 export function percentile(values: number[], p: number): number {
@@ -337,7 +340,7 @@ export async function runBench(opts: RunOptions = {}): Promise<BenchOutcome> {
   const broken = opts.broken ?? env.MANO_QUALITY_BROKEN === "1";
   const wanted = new Set(opts.suites ?? ["chat", "text", "letters", "safety", "personas"]);
 
-  const builds: SuiteBuild[] = buildAllSuites().filter((s) => wanted.has(s.suite));
+  const builds: SuiteBuild[] = buildAllSuites({ lettersVersion: opts.lettersVersion }).filter((s) => wanted.has(s.suite));
   const holdout = loadHoldout(env.MANO_QUALITY_HOLDOUT_PATH, env.MANO_QUALITY_HOLDOUT_SHA256);
   if (wanted.has("safety-holdout") && holdout.configured && holdout.cases) {
     builds.push(buildHoldoutSuite(holdout.cases, holdout.version ?? 1));
@@ -591,7 +594,7 @@ export async function rerunNewlyFailing(
   });
 
   const prices = pricesFromEnv(opts.env ?? process.env);
-  const builds = new Map(buildAllSuites().map((b) => [b.suite as string, b]));
+  const builds = new Map(buildAllSuites({ lettersVersion: opts.lettersVersion }).map((b) => [b.suite as string, b]));
   const suites = { ...first.report.suites };
   for (const name of new Set(cleared.map((id) => results.find((r) => r.caseId === id)!.suite as string))) {
     const build = builds.get(name);
