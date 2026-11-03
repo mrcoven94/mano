@@ -1,5 +1,5 @@
 import { DEFAULT_CHECK_TIMEOUT_MS, GlimmerModelChecker, MisconfiguredChecker, type KnownEntities } from "@mano/guardian";
-import type { Profile } from "../profile.js";
+import type { Profile, Suggestion } from "../profile.js";
 import { LocalRulesChecker, type Checker, type CheckInput, type CheckResult } from "./checker.js";
 import type { GatewayOptions } from "./gateway.js";
 
@@ -55,24 +55,50 @@ function isLocalHost(url: string): boolean {
 
 const SEVERITY: Record<CheckResult["verdict"], number> = { pass: 0, fix: 1, block: 2 };
 
-// The person's own values for Guardian's redactor. Names and employers
-// have no shape a pattern catches; the other details are listed too, so a
-// value written an unusual way is still removed.
-export function profileEntities(profile: Profile | null): KnownEntities {
-  if (!profile) return {};
-  const values = (...leaves: ({ value: unknown } | undefined)[]): string[] =>
-    leaves.flatMap((leaf) => (typeof leaf?.value === "string" ? [leaf.value] : []));
-  const { person, household, income, programs } = profile;
-  const address = person.address;
-  return {
-    names: values(person.fullName, ...household.map((member) => member.name)),
-    employers: values(...income.map((entry) => entry.source)),
-    addresses: values(address.line1, address.line2, address.city, address.zip, person.county),
-    phones: values(person.phone),
-    emails: values(person.email),
-    datesOfBirth: values(person.dateOfBirth, ...household.map((member) => member.dateOfBirth)),
-    caseNumbers: values(...programs.map((program) => program.caseNumber)),
+// Which profile fields hold a detail that identifies the person, by the
+// kind Guardian's redactor removes. An entry's id is written as *.
+const ENTITY_PATHS: Record<string, keyof KnownEntities> = {
+  "person.fullName": "names",
+  "household.*.name": "names",
+  "income.*.source": "employers",
+  "person.address.line1": "addresses",
+  "person.address.line2": "addresses",
+  "person.address.city": "addresses",
+  "person.address.zip": "addresses",
+  "person.county": "addresses",
+  "person.phone": "phones",
+  "person.email": "emails",
+  "person.dateOfBirth": "datesOfBirth",
+  "household.*.dateOfBirth": "datesOfBirth",
+  "programs.*.caseNumber": "caseNumbers",
+};
+
+function profileLeaves(profile: Profile): { path: string; value: unknown }[] {
+  const leaves: { path: string; value: unknown }[] = [];
+  const walk = (node: object, prefix: string): void => {
+    for (const [key, child] of Object.entries(node)) {
+      if (key === "id" || typeof child !== "object" || child === null) continue;
+      if ("value" in child) leaves.push({ path: `${prefix}${key}`, value: child.value });
+      else if (Array.isArray(child)) for (const entry of child as { id: string }[]) walk(entry, `${prefix}${key}.${entry.id}.`);
+      else walk(child, `${prefix}${key}.`);
+    }
   };
+  walk(profile, "");
+  return leaves;
+}
+
+// The person's own values for Guardian's redactor, from the profile and
+// from suggestions still waiting for the person (a lower-trust value can
+// be just as real). Names and employers have no shape a pattern catches;
+// the other details are listed too, so a value written an unusual way is
+// still removed.
+export function profileEntities(profile: Profile | null, suggestions: readonly Suggestion[] = []): KnownEntities {
+  const found: KnownEntities = {};
+  for (const { path, value } of [...(profile ? profileLeaves(profile) : []), ...suggestions]) {
+    const kind = ENTITY_PATHS[path.replace(/^(household|income|programs)\.[^.]+\./, "$1.*.")];
+    if (kind !== undefined && typeof value === "string") found[kind] = [...(found[kind] ?? []), value];
+  }
+  return found;
 }
 
 export class GuardianChecker implements Checker {

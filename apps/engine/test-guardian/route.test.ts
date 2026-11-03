@@ -148,13 +148,24 @@ describe("Guardian on Engine's action route", () => {
     });
     expect(patched.status).toBe(200);
     const namespace = testEnv.PERSON_AGENT as DurableObjectNamespace;
-    await runInDurableObject(namespace.get(namespace.idFromName(PERSON)), (_agent, state) => {
-      const changed = state.storage.sql.exec("UPDATE profile_suggestions SET sealed = 'not-a-sealed-value'").rowsWritten;
-      expect(changed).toBeGreaterThan(0);
+    const agent = namespace.get(namespace.idFromName(PERSON));
+    const saved = await runInDurableObject(agent, (_agent, state) => {
+      const rows = state.storage.sql.exec("SELECT path, source, sealed FROM profile_suggestions").toArray();
+      state.storage.sql.exec("UPDATE profile_suggestions SET sealed = 'not-a-sealed-value'");
+      return rows as { path: string; source: string; sealed: string }[];
     });
-    const result = await propose();
-    expect(result).toMatchObject({ status: "blocked", reason: "Blocked by review: the checker failed and the gateway fails closed." });
-    expect(checks).toHaveLength(0);
+    expect(saved.length).toBeGreaterThan(0);
+    try {
+      const result = await propose();
+      expect(result).toMatchObject({ status: "blocked", reason: "Blocked by review: the checker failed and the gateway fails closed." });
+      expect(checks).toHaveLength(0);
+    } finally {
+      await runInDurableObject(agent, (_agent, state) => {
+        for (const row of saved) {
+          state.storage.sql.exec("UPDATE profile_suggestions SET sealed = ? WHERE path = ? AND source = ?", row.sealed, row.path, row.source);
+        }
+      });
+    }
   });
 
   it("carries a fix onto the approval and refuses a block", async () => {

@@ -136,7 +136,14 @@ export class PersonAgent extends Agent<Env, PersonState> {
       ),
       {
         ...gatewayChecker(checkerSetting(env), {
-          entities: async () => profileEntities((await this.profileStore()?.read()) ?? null),
+          // A read that throws, the profile's or a suggestion's, fails the
+          // check and the gateway blocks.
+          entities: async () => {
+            const store = this.profileStore();
+            if (!store) return {};
+            const profile = await store.read();
+            return profileEntities(profile, await store.suggestions());
+          },
         }),
         listConsents: () => this.listStoredConsents(),
         documents: {
