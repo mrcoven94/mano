@@ -143,6 +143,16 @@ describe("gateSentence reads which of the person's own papers", () => {
     expect(gateSentence(sentence, NOTICE)).toEqual({ kind: "deadline", iso: "2026-11-14", form: "by", obligation: "respond" });
   });
 
+  // A paper the person already has is not a renewal they owe.
+  it.each([
+    "Send your most recent renewal receipt by November 14, 2026.",
+    "Send your two most recent renewal forms by November 14, 2026.",
+    "Return your last recertification form by November 14, 2026.",
+    "Send your latest redetermination notice and pay stub by November 14, 2026.",
+  ])("asks when a renewal word follows: %s", (sentence) => {
+    expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "ask" });
+  });
+
   it("never makes the person's benefits their duty", () => {
     expect(gateSentence("Your last day of benefits is November 30, 2026.", NOTICE)).toEqual({ kind: "ask", reason: "unrecognized" });
     expect(gateSentence("Your current benefits end on November 30, 2026.", NOTICE)).toEqual({ kind: "date-to-know", iso: "2026-11-30" });
