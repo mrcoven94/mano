@@ -166,6 +166,31 @@ describe("the zone a reminder is read in", () => {
     expect(await todayAt9("bring the pay stub", "eve-turn-2")).toMatchObject({ text: "bring the pay stub", dueAt: "2026-11-03T17:00:00.000Z" });
     expect(engine.remindersOf(PERSON).map((r) => r.text).sort()).toEqual(["Reminder: bring the pay stub", "Reminder: call the county"]);
   });
+
+  it("a recovery racing another reminder for that time never answers for it", async () => {
+    const turnAtMs = Date.UTC(2026, 10, 3, 16, 30, 0);
+    const todayAt9 = (text: string, eveTurn: string) =>
+      remind.execute({ text, when: "today at 9" }, toolCtx({ handleHash: HANDLE, turnId: "turn_zonerace01", grant, turnAtMs, eveTurn }));
+    engine.profileKeySet = false;
+    await todayAt9("call the county", "eve-turn-1");
+    engine.profileKeySet = true;
+    engine.profile = livingIn("NY");
+    // In the retry the county call reads New York and recovers; the pay
+    // stub call's profile read fails, so it reads Pacific and claims place
+    // 0 while the recovery's reminder list is still on its way.
+    const fetchEngine = engine.fetch;
+    let profileReads = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/profile") && ++profileReads === 2) return Response.json({ error: "unavailable" }, { status: 503 });
+      if (url.endsWith("/reminders") && (init?.method ?? "GET") === "GET") await new Promise((r) => setTimeout(r, 50));
+      return fetchEngine(input, init);
+    });
+    const [county, payStub] = await Promise.all([todayAt9("call the county", "eve-turn-2"), todayAt9("bring the pay stub", "eve-turn-2")]);
+    expect(county).toMatchObject({ text: "call the county" });
+    expect(payStub).toMatchObject({ text: "bring the pay stub", dueAt: "2026-11-03T17:00:00.000Z" });
+    expect(engine.remindersOf(PERSON).map((r) => r.text).sort()).toEqual(["Reminder: bring the pay stub", "Reminder: call the county"]);
+  });
 });
 
 describe("reminder identity across attempts", () => {
@@ -174,14 +199,19 @@ describe("reminder identity across attempts", () => {
   const result = { role: "tool", content: [{ type: "tool-result", toolName: "remind", toolCallId: "c1", output: {} }] };
   const ask = user("Remind me in 2 minutes to call the county office.");
 
-  it("a retry that words the reminder differently still finds the one it made", async () => {
+  it("a retry finds the one it made, and another reminder for that time is never answered with it", async () => {
     const turnAtMs = Date.now();
     const first = toolCtx({ handleHash: HANDLE, turnId: "turn_word00001", grant, messages: [ask], turnAtMs });
-    await remind.execute({ text: "call the county office", when: "in 2 minutes" }, first);
+    const made = await remind.execute({ text: "call the county office", when: "in 2 minutes" }, first);
     // The retry runs as a new attempt: the same message arrives again.
     const retry = toolCtx({ handleHash: HANDLE, turnId: "turn_word00001", grant, messages: [ask, user("Set."), ask], eveTurn: "eve-turn-2", turnAtMs });
-    await remind.execute({ text: "phone the county office", when: "in 2 minutes" }, retry);
+    expect(await remind.execute({ text: "Call the county office.", when: "in 2 minutes" }, retry)).toEqual(made);
     expect(engine.remindersOf(PERSON)).toHaveLength(1);
+    // Engine answers the new attempt's place 0 with the county reminder; the
+    // pay stub takes the next place instead of being reported as that one.
+    const other = toolCtx({ handleHash: HANDLE, turnId: "turn_word00001", grant, messages: [ask], eveTurn: "eve-turn-3", turnAtMs });
+    expect(await remind.execute({ text: "bring the pay stub", when: "in 2 minutes" }, other)).toMatchObject({ text: "bring the pay stub" });
+    expect(engine.remindersOf(PERSON).map((r) => r.text).sort()).toEqual(["Reminder: bring the pay stub", "Reminder: call the county office"]);
   });
 
   it("a different reminder for the same time later in the same turn is its own reminder", async () => {
@@ -205,8 +235,8 @@ describe("parallel reminder calls in one model step", () => {
     ]);
     expect(engine.remindersOf(PERSON)).toHaveLength(2);
     await Promise.all([
-      remind.execute({ text: "phone the office", when: "tomorrow at 9" }, stepCtx("attempt-2")),
-      remind.execute({ text: "bring your pay stub", when: "tomorrow at 9" }, stepCtx("attempt-2")),
+      remind.execute({ text: "call the office", when: "tomorrow at 9" }, stepCtx("attempt-2")),
+      remind.execute({ text: "bring the pay stub", when: "tomorrow at 9" }, stepCtx("attempt-2")),
     ]);
     expect(engine.remindersOf(PERSON)).toHaveLength(2);
   });

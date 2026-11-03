@@ -277,8 +277,7 @@ export class PersonEngine {
 
   // Creates the reminder, or returns the one this ID already names. A
   // conflict (same ID, different stored content) also returns the stored
-  // reminder: the ID is derived from the turn, the due time and the
-  // wording, so it is the same reminder said differently.
+  // reminder; the caller compares its words with the ones it asked for.
   async createReminder(input: { id: string; text: string; dueAt: string }): Promise<EngineReminder> {
     const res = await this.call("POST", "/reminders", { ...input, generation: this.generation });
     const body = (await res.json().catch(() => null)) as { reminder?: EngineReminder } | null;

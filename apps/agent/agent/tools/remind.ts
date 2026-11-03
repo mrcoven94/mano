@@ -10,6 +10,13 @@ import { parseWhen, validateDue } from "../lib/when.js";
 // Different reminders for the same time from one message.
 const MAX_SAME_TIME = 10;
 
+// Every answer goes through here: the tool never reports a reminder whose
+// words differ from the ones asked for as if it were that one.
+function answer(reminder: EngineReminder, text: string) {
+  if (!sameWords(reminder.text, text)) throw new Error("Setting that reminder failed. Ask the person to try again.");
+  return { reminderId: reminder.id, dueAt: reminder.dueAt, text: reminder.text.replace(REMINDER_PREFIX, "") };
+}
+
 export default defineTool({
   description:
     "Set one reminder the person asked for. Pass their words for when (\"tomorrow at 9\") untouched plus the short reminder text. Days and clock times are read in the time zone of the state on the person's profile, or Pacific time when no state is on file. For several reminders, call it once per reminder. Confirm the result in one short sentence afterward.",
@@ -47,23 +54,24 @@ export default defineTool({
         engine.putTurn(placeClaimId(base, attempt, place), receivedAt),
         engine.createReminder({ id: kept.id, text: kept.text, dueAt: kept.dueAt }),
       ]);
-      return { reminderId: again.id, dueAt: again.dueAt, text: again.text.replace(REMINDER_PREFIX, "") };
+      return answer(again, text);
     }
     let saved: EngineReminder | null = null;
     for (let place = 0; place < MAX_SAME_TIME && !saved; place++) {
       const id = reminderIdAt(base, place);
       const claim = await engine.putTurn(placeClaimId(base, attempt, place), receivedAt);
-      if (claim.created) {
-        saved = await engine.createReminder({ id, text, dueAt: new Date(parsed.dueAtMs).toISOString() });
-        break;
-      }
-      // Another call of this attempt holds this place. It is this same
-      // call only when Eve re-ran its step: then the reminder there has
-      // these words.
-      const there = (await engine.listReminders()).find((r) => r.id === id);
+      // A place this attempt claims can still hold an earlier attempt's
+      // reminder. With these words it is this one; with other words it is
+      // another reminder for the same time, so this one takes the next place.
+      const there = claim.created
+        ? await engine.createReminder({ id, text, dueAt: new Date(parsed.dueAtMs).toISOString() })
+        : // Another call of this attempt holds this place. It is this same
+          // call only when Eve re-ran its step: then the reminder there has
+          // these words.
+          (await engine.listReminders()).find((r) => r.id === id);
       if (there && sameWords(there.text, text)) saved = there;
     }
     if (!saved) throw new Error("Too many reminders at the same time in one message. Ask the person to set them one by one.");
-    return { reminderId: saved.id, dueAt: saved.dueAt, text: saved.text.replace(REMINDER_PREFIX, "") };
+    return answer(saved, text);
   },
 });

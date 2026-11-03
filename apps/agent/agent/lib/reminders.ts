@@ -14,11 +14,12 @@ export const REMINDER_PREFIX = "Reminder: ";
 // retry derives the time the same way, from the turn's first receive
 // time, and a retry that reads a different zone from the profile still
 // names the same reminder; Engine then returns the one already saved.
-// The reminder's wording never counts, so a retry that rewords it lands
-// on the one it already made. The place is claimed in Engine's turn
-// ledger per attempt (Eve turn), atomically, so two different reminders
-// for the same time in one model step get places 0 and 1 even when their
-// calls run in parallel, and a retry claims them again from 0.
+// A place holding other words is another reminder for that time, so the
+// tool moves on to the next place and never answers with it. The place
+// is claimed in Engine's turn ledger per attempt (Eve turn), atomically,
+// so two different reminders for the same time in one model step get
+// places 0 and 1 even when their calls run in parallel, and a retry
+// claims them again from 0.
 export function reminderBase(turnId: string, asked: string): string {
   return `rem-${createHash("sha256").update(`${turnId}\n${asked}`).digest("hex").slice(0, 32)}`;
 }
