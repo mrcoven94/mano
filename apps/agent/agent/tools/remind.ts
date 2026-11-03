@@ -35,8 +35,9 @@ export default defineTool({
       // has passed for a reminder already set. Creating it again with its
       // stored content returns it and re-arms a wake-up the first attempt
       // may have lost.
-      const stored = (await engine.listReminders()).filter((r) => r.id === base || r.id.startsWith(`${base}-`));
-      const kept = stored.find((r) => sameWords(r.text, text)) ?? stored.find((r) => r.id === base);
+      // Only this same reminder counts, its text exactly as Engine compares
+      // content; another reminder for the same time is never returned.
+      const kept = (await engine.listReminders()).find((r) => (r.id === base || r.id.startsWith(`${base}-`)) && r.text === text);
       if (!kept) throw new Error(invalid);
       const again = await engine.createReminder({ id: kept.id, text: kept.text, dueAt: kept.dueAt });
       return { reminderId: again.id, dueAt: again.dueAt, text: again.text.replace(REMINDER_PREFIX, "") };
