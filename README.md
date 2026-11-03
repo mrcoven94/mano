@@ -2,17 +2,18 @@
 
 [![check](https://github.com/mrcoven94/mano/actions/workflows/check.yml/badge.svg)](https://github.com/mrcoven94/mano/actions/workflows/check.yml) [![license](https://img.shields.io/github/license/mrcoven94/mano)](LICENSE) [![latest release](https://img.shields.io/github/v/release/mrcoven94/mano)](https://github.com/mrcoven94/mano/releases)
 
-Mano gives every person an agent that applies for help, fills out any form, reads their mail, renews on time and waits on hold. Agencies and nonprofits claim agents for their staff, and the agents work a shared case together only with the resident's consent. A person approves every decision.
+Mano gives every person an agent that applies for help, fills out any form, reads their mail and renews on time. Agencies and nonprofits claim agents for their staff, and the agents work a shared case together only with the resident's consent. A person approves every decision.
 
 Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026) on Meta's Muse models. Everything in this repository was written from October 26, 2026 onward.
 
 ## Try it now
 
+- Judges: run `pnpm install` and then `pnpm judge` from a fresh clone to watch Maria's renewal end to end on synthetic data (see [Judges](#judges-run-marias-renewal-in-one-command)).
 - Text Mano at (801) 920-3370. The current number is always on the site.
 - Visit the site: [withmano.com](https://withmano.com).
 - The resident app (iOS, Android, web) is in progress.
 
-Demo submissions go to our own sandbox agency portal, our own phone lines and our own fax number. Synthetic people only, never real resident data.
+Demo submissions go only to our own sandbox agency portal, never to a real office. Synthetic people only, never real resident data.
 
 ## How it works
 
@@ -25,7 +26,7 @@ flowchart LR
     agent --> forms[Forms and renewals]
     agent --> gateway[Action gateway: decide, approve, act]
     gateway --> portal[Sandbox agency portal]
-    gateway --> phone[Phone and fax, in progress]
+    gateway --> fax[Fax, not built yet]
     agent <--> protocol[Open protocol]
     protocol <--> staff[Staff agent: shared cases only]
 ```
@@ -119,7 +120,7 @@ With `OPENROUTER_API_KEY` set, the same command also sends one synthetic text to
 | `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel | live |
 | `apps/sandbox-portal` | The fake state benefits portal every demo submits to, on Cloudflare Workers | live |
 | `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway | landing during the hackathon |
-| `apps/agent` | The agent brain on Eve by Vercel: reads each text, remembers and proposes actions through the engine, fills out forms on the person's computer, keeps reminders and the deadlines Mano texts about on its own | landing during the hackathon |
+| `apps/agent` | The agent brain on Eve by Vercel: reads each text, remembers and proposes actions through the engine, fills out forms on Mano's computer, keeps reminders and the deadlines Mano texts about on its own | landing during the hackathon |
 | `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text | live |
 | `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits | live |
 | `packages/persona` | Mano's voice: the soul, the fast and deep paths, the voice guard, the crisis floor and the persona probes | live |
