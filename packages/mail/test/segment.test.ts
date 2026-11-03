@@ -98,29 +98,31 @@ describe("parseDetections", () => {
     expect(parsed.detections).toEqual([KEPT]);
   });
 
-  // Each is SAM's answer with one thing wrong, beside one good detection.
-  const MALFORMED_DETECTIONS: [string, Record<string, unknown>][] = [
-    ["null coordinates", { ...VALID, box_2d: [null, null, 500, 900] }],
-    ["three coordinates", { ...VALID, box_2d: [10, 20, 500] }],
-    ["five coordinates", { ...VALID, box_2d: [10, 20, 500, 900, 4] }],
-    ["coordinates as strings", { ...VALID, box_2d: ["10", "20", "500", "900"] }],
-    ["a coordinate below 0", { ...VALID, box_2d: [-5, 20, 500, 900] }],
-    ["a coordinate above 1000", { ...VALID, box_2d: [10, 20, 1500, 900] }],
-    ["ymin past ymax", { ...VALID, box_2d: [500, 20, 10, 900] }],
-    ["xmin past xmax", { ...VALID, box_2d: [10, 900, 500, 20] }],
-    ["no area", { ...VALID, box_2d: [10, 20, 10, 900] }],
-    ["no box", { label: "letter", score: 0.9 }],
-    ["no label", { ...at, score: 0.9 }],
-    ["an empty label", { ...at, label: " ", score: 0.9 }],
-    ["no score", { ...at, label: "letter" }],
-    ["a null score", { ...at, label: "letter", score: null }],
-    ["a score as a string", { ...at, label: "letter", score: "0.9" }],
-    ["a score above 1", { ...at, label: "letter", score: 1.5 }],
+  // Each is SAM's answer with one thing wrong, beside one good detection,
+  // and what the drop says about it.
+  const MALFORMED_DETECTIONS: [string, Record<string, unknown>, RegExp][] = [
+    ["null coordinates", { ...VALID, box_2d: [null, null, 500, 900] }, /box_2d is not four numbers/],
+    ["three coordinates", { ...VALID, box_2d: [10, 20, 500] }, /box_2d is not four numbers/],
+    ["five coordinates", { ...VALID, box_2d: [10, 20, 500, 900, 4] }, /box_2d is not four numbers/],
+    ["coordinates as strings", { ...VALID, box_2d: ["10", "20", "500", "900"] }, /box_2d is not four numbers/],
+    ["a coordinate below 0", { ...VALID, box_2d: [-5, 20, 500, 900] }, /box_2d is not four numbers/],
+    ["a coordinate above 1000", { ...VALID, box_2d: [10, 20, 1500, 900] }, /box_2d is not four numbers/],
+    ["no box", { label: "letter", score: 0.9 }, /box_2d is not four numbers/],
+    ["ymin past ymax", { ...VALID, box_2d: [500, 20, 10, 900] }, /out of order or has no area/],
+    ["xmin past xmax", { ...VALID, box_2d: [10, 900, 500, 20] }, /out of order or has no area/],
+    ["no area", { ...VALID, box_2d: [10, 20, 10, 900] }, /out of order or has no area/],
+    ["no label", { ...at, score: 0.9 }, /no label/],
+    ["an empty label", { ...at, label: " ", score: 0.9 }, /no label/],
+    ["no score", { ...at, label: "letter" }, /no score/],
+    ["a null score", { ...at, label: "letter", score: null }, /no score/],
+    ["a score as a string", { ...at, label: "letter", score: "0.9" }, /no score/],
+    ["a score above 1", { ...at, label: "letter", score: 1.5 }, /no score/],
   ];
 
-  it.each(MALFORMED_DETECTIONS)("drops a detection with %s and keeps the good one", (_what, bad) => {
+  it.each(MALFORMED_DETECTIONS)("drops a detection with %s and keeps the good one", (_what, bad, why) => {
     const parsed = parseDetections(JSON.stringify({ detections: [bad, VALID] }));
     expect(parsed.detections).toEqual([KEPT]);
+    expect(parsed.problems).toEqual([expect.stringMatching(why)]);
   });
 
   it("says why when no detection is usable", () => {

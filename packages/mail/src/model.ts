@@ -142,6 +142,18 @@ function isRetryable(err: unknown): boolean {
   return false;
 }
 
+// The API's own reason for refusing a call, such as "Missing 'score'"
+// or "Billing is not configured for this account.", cut short. Null when
+// the body carries none.
+async function refusalOf(res: Response): Promise<string | null> {
+  try {
+    const message = ((await res.json()) as { error?: { message?: unknown } } | null)?.error?.message;
+    return typeof message === "string" ? message.slice(0, 200) : null;
+  } catch {
+    return null;
+  }
+}
+
 export class MetaModelClient implements ModelClient {
   readonly live = true;
   readonly baseUrl: string;
@@ -189,8 +201,9 @@ export class MetaModelClient implements ModelClient {
           body: JSON.stringify(body),
         });
         if (res.status !== 429 && res.status < 500 && !res.ok) {
+          const reason = await refusalOf(res);
           clearTimeout(timer);
-          throw new Error(`Model request failed: ${res.status}`);
+          throw new Error(`Model request failed: ${res.status}${reason ? ` (${reason})` : ""}`);
         }
         const data: unknown = await res.json();
         clearTimeout(timer);
