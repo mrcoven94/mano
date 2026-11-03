@@ -37,6 +37,8 @@
 //                                              proposalTurn names the turn an agent draft belongs to
 //   GET  /api/persons/:id/approvals
 //   POST /api/persons/:id/approvals/supersede     { generation } closes every waiting draft but the latest
+//   POST /api/persons/:id/approvals/fence     { generation, recipient, turnId } a form call of turnId corrects
+//                                              the recipient's form: drafts from older turns are refused and closed
 //   POST /api/persons/:id/approvals/:aid/approve  a YES; retryable:true when the safety check could not
 //                                              answer and the approval still waits for another YES
 //   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
@@ -740,6 +742,17 @@ export default {
         const generation = writeGeneration(service, (read.value as { generation?: unknown } | null)?.generation);
         if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
         return profilePatchResponse(await agent.patchProfile(subject, read.value, generation));
+      }
+      if (rest === "/approvals/fence" && request.method === "POST") {
+        const read = await readCappedJson(request, MAX_ACTION_BODY);
+        if (!read.ok) return read.response;
+        const body = (read.value ?? {}) as { generation?: unknown; recipient?: unknown; turnId?: unknown };
+        const generation = writeGeneration(service, body.generation);
+        if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
+        const out = await agent.fenceProposals(subject, body, generation);
+        if (isStale(out)) return STALE();
+        if ("error" in out) return Response.json(out, { status: 400 });
+        return Response.json(out);
       }
       if (rest === "/approvals/supersede" && request.method === "POST") {
         const read = await readCappedJson(request, MAX_ACTION_BODY);

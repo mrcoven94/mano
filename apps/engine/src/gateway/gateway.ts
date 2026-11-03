@@ -84,6 +84,15 @@ export interface ApprovalStore {
   escalateApproval(id: string): boolean;
   getReceiptByKey(key: string): Receipt | null;
   putReceipt(r: Receipt): void;
+  // Runs fn as one transaction: every write in it commits, or none does.
+  transaction<T>(fn: () => T): T;
+  // Records that a newer turn is correcting the recipient's form: drafts
+  // from turns received before order are refused from now on, and those
+  // still waiting are rejected, in one step. Null when generation is no
+  // longer current, else how many it rejected.
+  fenceProposals(recipient: string, order: ProposalOrder, generation: number): number | null;
+  // True when a correcting turn received after order fenced the recipient.
+  proposalFenced(recipient: string, order: ProposalOrder): boolean;
   getAttempt(key: string): Attempt | null;
   // With a generation, inserts only while it is still current.
   insertAttempt(a: Attempt, generation?: number): boolean;
@@ -200,6 +209,7 @@ export class MemoryApprovalStore implements ApprovalStore {
       this.approvalGenerations.set(a.id, generation);
       if (order) {
         this.drafted.add(a.id);
+        this.proposalOrders.set(a.id, order);
         const cur = this.latestProposal();
         if (!cur || !olderProposal(order, cur)) this.latest = { approvalId: a.id, ...order, generation };
       }
@@ -281,6 +291,30 @@ export class MemoryApprovalStore implements ApprovalStore {
   }
   putReceipt(r: Receipt) {
     this.receipts.set(r.idempotencyKey, r);
+  }
+  transaction<T>(fn: () => T): T {
+    return fn();
+  }
+  private proposalOrders = new Map<string, ProposalOrder>();
+  private fences = new Map<string, ProposalOrder & { generation: number }>();
+  fenceProposals(recipient: string, order: ProposalOrder, generation: number) {
+    if (generation !== this.conversationGeneration) return null;
+    const current = this.fences.get(recipient);
+    if (!current || current.generation !== generation || olderProposal(current, order)) this.fences.set(recipient, { ...order, generation });
+    const fence = this.fences.get(recipient)!;
+    let closed = 0;
+    for (const a of this.approvals.values()) {
+      const drafted = this.proposalOrders.get(a.id);
+      if (a.status !== "pending" || a.recipient !== recipient || !drafted || this.approvalGenerations.get(a.id) !== generation) continue;
+      if (!olderProposal(drafted, fence)) continue;
+      this.approvals.set(a.id, { ...a, status: "rejected" });
+      closed += 1;
+    }
+    return closed;
+  }
+  proposalFenced(recipient: string, order: ProposalOrder) {
+    const fence = this.fences.get(recipient);
+    return !!fence && fence.generation === this.conversationGeneration && olderProposal(order, fence);
   }
   getAttempt(key: string) {
     return this.attempts.get(key) ?? null;
@@ -381,6 +415,10 @@ export interface GatewayOptions {
   documents?: DocumentStore;
   linkCheck?: LinkCheckFn;
   listConsents?: () => { recipient: string; purpose: string }[];
+  // The action's own effect (a consent grant or revocation), applied in
+  // the same transaction that records its receipt and marks the attempt
+  // done, so no crash can leave one without the other.
+  onReceipt?: (receipt: Receipt) => void;
 }
 
 // Every URL the action could touch: the recipient plus every URL anywhere
@@ -635,6 +673,10 @@ export class ActionGateway {
     }
     const keyHash = await auditDigest(req.idempotencyKey);
     this.store.audit({ event: "gateway.decide", type: req.type, keyHash });
+    // A draft from a turn older than the person's latest correction of
+    // this form is refused like a replaced one, here and again at the
+    // insert below.
+    if (opts.proposal && this.store.proposalFenced(req.recipient, opts.proposal)) return SUPERSEDED;
     const contentHash = await contentHashOf(req);
     const replay = this.receiptReuse(req, contentHash, keyHash);
     if (replay) return replay;
@@ -691,6 +733,7 @@ export class ActionGateway {
         expiresAt: win.expiresAt.toISOString(),
         escalated: win.escalated,
       };
+      if (opts.proposal && this.store.proposalFenced(req.recipient, opts.proposal)) return SUPERSEDED;
       const holder = this.store.createApprovalForKey(approval, generation, opts.proposal);
       if (!holder) return STALE;
       if (holder.id === approval.id) return { status: "needs_approval", approval };
@@ -1037,8 +1080,7 @@ export class ActionGateway {
     if (outcome.found) {
       const attempt = this.store.getAttempt(req.idempotencyKey);
       const receipt = await this.makeReceipt(req, "reconciled", outcome.externalId, undefined, now, attempt);
-      this.store.putReceipt(receipt);
-      this.store.updateAttempt(req.idempotencyKey, "done");
+      this.settle(receipt);
       this.store.audit({ event: "gateway.reconciled", keyHash });
       return { kind: "settled", result: { status: "reconciled", receipt } };
     }
@@ -1228,8 +1270,7 @@ export class ActionGateway {
         requestHash: attempt.requestHash,
         createdAt: now.toISOString(),
       };
-      this.store.putReceipt(receipt);
-      this.store.updateAttempt(key, "done");
+      this.settle(receipt);
       this.store.audit({ event: "gateway.reconciled", keyHash });
       return { status: "reconciled", receipt };
     }
@@ -1239,13 +1280,31 @@ export class ActionGateway {
     });
   }
 
+  // Records a receipt, marks its attempt done and applies the action's own
+  // effect, as one transaction.
+  private settle(receipt: Receipt): void {
+    this.store.transaction(() => {
+      this.store.putReceipt(receipt);
+      this.store.updateAttempt(receipt.idempotencyKey, "done");
+      this.opts.onReceipt?.(receipt);
+    });
+  }
+
+  // A newer turn is correcting the recipient's form: drafts from turns
+  // received before it are refused and the waiting ones closed.
+  async fenceProposals(recipient: string, order: ProposalOrder, generation: number): Promise<{ closed: number } | null> {
+    const closed = this.store.fenceProposals(recipient, order, generation);
+    if (closed === null) return null;
+    this.store.audit({ event: "gateway.fence", closed });
+    return { closed };
+  }
+
   // Runs the executor for an already-claimed (in_flight) attempt.
   private async runExecution(req: ActionRequest, now: Date, keyHash: AuditDigest): Promise<GatewayResult> {
     try {
       const out = await this.executor.execute(req);
       const receipt = await this.makeReceipt(req, "completed", out.externalId, out.simulated, now);
-      this.store.putReceipt(receipt);
-      this.store.updateAttempt(req.idempotencyKey, "done");
+      this.settle(receipt);
       this.store.audit({ event: "gateway.executed", keyHash });
       return { status: "completed", receipt };
     } catch (err) {

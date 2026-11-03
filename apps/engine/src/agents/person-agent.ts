@@ -7,7 +7,7 @@ import {
 } from "@mano/protocol";
 import type { Env } from "../env.js";
 import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureGatewayTables, gatewayChecker } from "../gateway/index.js";
-import type { ActionRequest, Approval, CheckOutcome, ProposalOrder } from "../gateway/index.js";
+import type { ActionRequest, Approval, CheckOutcome, ProposalOrder, Receipt } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
 import { getDocumentBytes, putDocument, sweepDocuments } from "../files.js";
@@ -124,20 +124,15 @@ export interface PersonState {
 const ORG_AGENT_ID = /^org:([A-Za-z0-9_-]+)$/;
 
 // The action keys whose consent effect was applied: one row per key,
-// written in the same transaction as the effect, so an effect is applied
-// at most once however many answers carry its receipt. Before this table,
-// the effect of every share (a consent grant or revocation) was applied
-// when its receipt was recorded, so when the table is first created each
-// share receipt already on file is marked applied, in the same
-// transaction. Only then: later receipts are marked by the step that
-// applies their effect, and one whose effect has not run yet must stay
-// unmarked so the next answer applies it. Safe to run on every start.
+// written in the transaction that records the share's receipt and applies
+// its effect, so an effect is applied at most once. Every share receipt on
+// file therefore has its effect applied: those from before this table had
+// it applied when they were recorded, and are marked here, idempotently,
+// on every start.
 export function ensureAppliedEffects(storage: Pick<DurableObjectStorage, "sql" | "transactionSync">): void {
   const sql = storage.sql;
   storage.transactionSync(() => {
-    const existed = sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'applied_effects'").toArray().length > 0;
-    if (existed) return;
-    sql.exec(`CREATE TABLE applied_effects(idempotency_key TEXT PRIMARY KEY, external_id TEXT NOT NULL, applied_at TEXT NOT NULL)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS applied_effects(idempotency_key TEXT PRIMARY KEY, external_id TEXT NOT NULL, applied_at TEXT NOT NULL)`);
     sql.exec(
       "INSERT INTO applied_effects(idempotency_key, external_id, applied_at)" +
         " SELECT idempotency_key, external_id, created_at FROM receipts WHERE action_type = 'share'" +
@@ -160,7 +155,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.store = new SqlApprovalStore(ctx.storage.sql);
+    this.store = new SqlApprovalStore(ctx.storage.sql, (fn) => ctx.storage.transactionSync(fn));
     this.executor = new ConsentDeliveringExecutor(
       createExecutor(env),
       (req) => this.deliverShare(req),
@@ -176,6 +171,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         documents: {
           getBytes: (documentId) => this.documentBytes(documentId),
         },
+        onReceipt: (receipt) => this.applyShareEffect(receipt),
       },
     );
     ctx.blockConcurrencyWhile(async () => {
@@ -896,37 +892,27 @@ export class PersonAgent extends Agent<Env, PersonState> {
       const result = await this.gateway.recoverAttempt(attempt.key, now, cutoff);
       if (!result) continue;
       recovered.push({ key: attempt.key, status: result.status });
-      // Recovery executes shares outside approve(), so their consent
-      // effects apply here, from the persisted original approval.
-      if ((result.status === "completed" || result.status === "reconciled") && result.receipt) {
-        await this.applyShareOutcome(result.receipt.idempotencyKey);
-      }
     }
     if (recovered.length > 0) this.syncState();
     return { recovered };
   }
 
-  // Applies the share outcome behind an idempotency key: the consent
-  // effect of the consumed approval that claimed it, once its receipt
-  // exists. Recovery runs this after it settles a stranded share. Applied
-  // at most once per key: the record of it and the effect commit in one
-  // transaction, so a later answer carrying the same receipt (a retry, a
-  // late reconcile, a replay), whatever its flags, changes nothing, and a
-  // revoked consent stays revoked.
-  async applyShareOutcome(idempotencyKey: string): Promise<{ applied: boolean }> {
-    const original = this.store.getApprovalByKey(idempotencyKey);
-    const receipt = this.store.getReceiptByKey(idempotencyKey);
-    if (!original || original.actionType !== "share" || !receipt) return { applied: false };
-    const applied = this.ctx.storage.transactionSync(() => {
-      // RETURNING reports the insert; a key already applied returns no row.
-      const first = this.db().exec(
-        "INSERT INTO applied_effects(idempotency_key, external_id, applied_at) VALUES (?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING RETURNING idempotency_key",
-        idempotencyKey, receipt.externalId, new Date().toISOString(),
-      ).toArray().length === 1;
-      if (first) this.recordConsentOutcome(original);
-      return first;
-    });
-    return { applied };
+  // A share's consent effect (a grant or revocation), applied by the
+  // gateway inside the transaction that records the share's receipt and
+  // marks its attempt done, so no crash can separate the receipt from the
+  // effect. It comes from the persisted original approval behind the key,
+  // and runs at most once per key: a later receipt for the same key (a
+  // late reconcile) finds its marker and changes nothing, so a revoked
+  // consent stays revoked.
+  private applyShareEffect(receipt: Receipt): void {
+    const original = this.store.getApprovalByKey(receipt.idempotencyKey);
+    if (!original || original.actionType !== "share") return;
+    // RETURNING reports the insert; a key already applied returns no row.
+    const first = this.db().exec(
+      "INSERT INTO applied_effects(idempotency_key, external_id, applied_at) VALUES (?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING RETURNING idempotency_key",
+      receipt.idempotencyKey, receipt.externalId, new Date().toISOString(),
+    ).toArray().length === 1;
+    if (first) this.recordConsentOutcome(original);
   }
 
   // Schedules a durable recovery run while any attempt is unresolved.
@@ -1026,6 +1012,21 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { closed };
   }
 
+  // A form call from turnId is correcting the recipient's form: drafts
+  // from turns received before it are refused from now on and the waiting
+  // ones closed, ordered by Engine's own turn ledger.
+  async fenceProposals(verified: string, input: { recipient?: unknown; turnId?: unknown }, generation?: number) {
+    await this.assertSubject(verified);
+    if (typeof input.recipient !== "string" || !input.recipient || typeof input.turnId !== "string") return { error: "Body needs a recipient and a turnId." } as const;
+    const g = generation ?? currentGeneration(this.db());
+    const order = proposalOrderFor(this.db(), input.turnId);
+    if (!order) return { error: "Unknown turn." } as const;
+    const out = await this.gateway.fenceProposals(input.recipient, order, g);
+    if (!out) return STALE_STATE;
+    this.syncState();
+    return out;
+  }
+
   async reject(approvalId: string, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.rejectApproval(approvalId, verified);
@@ -1043,12 +1044,6 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async approve(approvalId: string, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.approveAndExecute(approvalId, verified);
-    // Consent effects come from the persisted original approval behind
-    // the key, never from whichever approval triggered the outcome, and
-    // at most once per key (applyShareOutcome), whatever the answer says.
-    if ((result.status === "completed" || result.status === "reconciled") && result.receipt) {
-      await this.applyShareOutcome(result.receipt.idempotencyKey);
-    }
     this.store.audit({ event: "gateway.approve", approvalHash: await auditDigest(approvalId), status: result.status });
     await this.scheduleRecoveryIfUnresolved();
     this.syncState();

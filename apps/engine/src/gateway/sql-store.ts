@@ -41,6 +41,10 @@ export function ensureGatewayTables(sql: SqlStorage): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS latest_proposal(
     slot INTEGER PRIMARY KEY CHECK (slot = 1), generation INTEGER NOT NULL, approval_id TEXT NOT NULL,
     received_at TEXT NOT NULL, turn_id TEXT NOT NULL)`);
+  // Per recipient, the latest turn that is correcting its form: drafts
+  // from turns received before it are refused.
+  sql.exec(`CREATE TABLE IF NOT EXISTS proposal_fences(
+    recipient TEXT PRIMARY KEY, generation INTEGER NOT NULL, received_at TEXT NOT NULL, turn_id TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS attempts(
     idempotency_key TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at TEXT NOT NULL)`);
   addColumn(sql, "attempts", "request_hash", "TEXT");
@@ -122,7 +126,40 @@ function attemptFromRow(r: Record<string, unknown>): Attempt {
 }
 
 export class SqlApprovalStore implements ApprovalStore {
-  constructor(private sql: SqlStorage) {}
+  // transactionSync: the Durable Object's, so a transaction rolls back as
+  // one. Without it each write commits on its own.
+  constructor(
+    private sql: SqlStorage,
+    private transactionSync?: <T>(fn: () => T) => T,
+  ) {}
+
+  transaction<T>(fn: () => T): T {
+    return this.transactionSync ? this.transactionSync(fn) : fn();
+  }
+
+  fenceProposals(recipient: string, order: ProposalOrder, generation: number): number | null {
+    if (this.generation() !== generation) return null;
+    this.sql.exec(
+      "INSERT INTO proposal_fences(recipient, generation, received_at, turn_id) VALUES (?, ?, ?, ?)" +
+        " ON CONFLICT(recipient) DO UPDATE SET generation = excluded.generation, received_at = excluded.received_at, turn_id = excluded.turn_id" +
+        " WHERE proposal_fences.generation <> excluded.generation" +
+        " OR (excluded.received_at, excluded.turn_id) > (proposal_fences.received_at, proposal_fences.turn_id)",
+      recipient, generation, order.receivedAt, order.turnId,
+    );
+    return this.sql.exec(
+      "UPDATE approvals SET status = 'rejected' WHERE status = 'pending' AND recipient = ? AND proposal_received_at IS NOT NULL" +
+        ` AND generation = ${CURRENT_GENERATION}` +
+        " AND (proposal_received_at, proposal_turn_id) < (SELECT received_at, turn_id FROM proposal_fences WHERE recipient = ?)",
+      recipient, recipient,
+    ).rowsWritten;
+  }
+
+  proposalFenced(recipient: string, order: ProposalOrder): boolean {
+    const fence = this.sql
+      .exec(`SELECT received_at, turn_id FROM proposal_fences WHERE recipient = ? AND generation = ${CURRENT_GENERATION}`, recipient)
+      .toArray()[0] as { received_at: string; turn_id: string } | undefined;
+    return !!fence && (order.receivedAt < fence.received_at || (order.receivedAt === fence.received_at && order.turnId < fence.turn_id));
+  }
 
   getApproval(id: string): Approval | null {
     const rows = this.sql.exec(`SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE id = ?`, id).toArray();

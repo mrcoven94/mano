@@ -64,9 +64,6 @@ describe("LAP-747: a consent effect is applied at most once per filing", () => {
     expect(late.replayed).toBeUndefined();
     expect(await consents(name)).toHaveLength(0);
 
-    // The recovery sweep's path applies nothing either.
-    expect(await person.applyShareOutcome(key)).toEqual({ applied: false });
-    expect(await consents(name)).toHaveLength(0);
   });
 });
 
@@ -99,6 +96,5 @@ describe("LAP-747: the applied-effects migration counts receipts already on file
     const replay = await person.approve(grant.approval!.id, name);
     expect(replay.status).toBe("completed");
     expect(await consents(name)).toHaveLength(0);
-    expect(await person.applyShareOutcome(grant.approval!.idempotencyKey)).toEqual({ applied: false });
   });
 });

@@ -421,3 +421,87 @@ describe("LAP-747: a NO on a filed approval answers its receipt", () => {
     expect((await gateway.rejectApproval(a.id, "person-someone-else")).status).toBe("blocked");
   });
 });
+
+// LAP-747 follow-up: the receipt, the attempt's done mark and the action's
+// own effect are one transaction, so a crash cannot leave a receipt whose
+// effect never ran.
+describe("LAP-747: a receipt and its effect commit together", () => {
+  it("when the effect fails, the receipt is rolled back with it, and nothing claims the filing done", async () => {
+    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName("lap747-atomic"));
+    await runInDurableObject(stub, async (_i, state) => {
+      const sql = state.storage.sql;
+      ensureGatewayTables(sql);
+      const store = new SqlApprovalStore(sql, (fn) => state.storage.transactionSync(fn));
+      const office = new Office();
+      office.next = "file";
+      let effects = 0;
+      const crashing = new ActionGateway(store, office, { onReceipt: () => { throw new Error("process lost mid-effect"); } });
+      const a = (await crashing.requestAction(proposal())).approval!;
+      expect((await crashing.approveAndExecute(a.id, "person-maria")).status).toBe("blocked");
+      expect(store.getReceiptByKey(a.idempotencyKey)).toBeNull();
+      expect(store.getAttempt(a.idempotencyKey)?.status).toBe("unknown");
+
+      // The next lookup finds the filing and records it with its effect, once.
+      const steady = new ActionGateway(store, office, { onReceipt: () => { effects += 1; } });
+      expect((await steady.approveAndExecute(a.id, "person-maria")).status).toBe("reconciled");
+      expect(store.getReceiptByKey(a.idempotencyKey)).not.toBeNull();
+      expect(effects).toBe(1);
+    });
+  });
+});
+
+// LAP-747 follow-up: a correction fences the form against older turns.
+describe("LAP-747: drafts from turns older than a correction are refused", () => {
+  const order = (turnId: string, ms: number) => ({ receivedAt: new Date(ms).toISOString(), turnId });
+  const now = Date.now();
+
+  it("closes waiting older drafts, refuses new ones from older turns, and keeps the correcting turn's own", async () => {
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, new Office());
+    const a = (await gateway.requestAction(proposal(), new Date(), { proposal: order("turn-a", now - 2000) })).approval!;
+    expect(await gateway.fenceProposals("sandbox-agency-portal", order("turn-b", now - 1000), 0)).toEqual({ closed: 1 });
+    expect(store.getApproval(a.id)?.status).toBe("rejected");
+    expect(await gateway.requestAction(proposal(), new Date(), { proposal: order("turn-a", now - 2000) })).toMatchObject({ status: "blocked", superseded: true });
+    expect((await gateway.requestAction(proposal(), new Date(), { proposal: order("turn-b", now - 1000) })).status).toBe("needs_approval");
+    // An older fence never moves it back, and another form is untouched.
+    await gateway.fenceProposals("sandbox-agency-portal", order("turn-0", now - 5000), 0);
+    expect(store.proposalFenced("sandbox-agency-portal", order("turn-a", now - 2000))).toBe(true);
+    expect(store.proposalFenced("another-office", order("turn-a", now - 2000))).toBe(false);
+    expect(await gateway.fenceProposals("sandbox-agency-portal", order("turn-c", now), 7)).toBeNull();
+  });
+
+  it("an older turn's draft that was waiting on the safety check when the fence landed is refused at the insert", async () => {
+    let pause: Promise<void> | null = null;
+    const checker = { check: async () => { if (pause) await pause; return { verdict: "pass" as const, problems: [] }; } };
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, new Office(), { checker });
+    let resume!: () => void;
+    pause = new Promise<void>((r) => (resume = r));
+    const late = gateway.requestAction(proposal(), new Date(), { proposal: order("turn-a", now - 2000) });
+    await new Promise((r) => setTimeout(r, 0));
+    pause = null;
+    await gateway.fenceProposals("sandbox-agency-portal", order("turn-b", now - 1000), 0);
+    resume();
+    expect(await late).toMatchObject({ status: "blocked", superseded: true });
+    expect(store.approvals.size).toBe(0);
+  });
+
+  it("Engine's SQL store fences by turn order within the current generation", async () => {
+    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName("lap747-fence-sql"));
+    await runInDurableObject(stub, async (_i, state) => {
+      const sql = state.storage.sql;
+      ensureGatewayTables(sql);
+      const store = new SqlApprovalStore(sql);
+      const gateway = new ActionGateway(store, new Office());
+      const a = (await gateway.requestAction(proposal(), new Date(), { proposal: order("turn-a", now - 2000) })).approval!;
+      const b = (await gateway.requestAction(proposal(), new Date(), { proposal: order("turn-b", now - 1000) })).approval!;
+      expect(store.fenceProposals("sandbox-agency-portal", order("turn-b", now - 1000), store.generation())).toBe(1);
+      expect(store.getApproval(a.id)?.status).toBe("rejected");
+      expect(store.getApproval(b.id)?.status).toBe("pending");
+      expect(store.proposalFenced("sandbox-agency-portal", order("turn-a", now - 2000))).toBe(true);
+      expect(store.proposalFenced("sandbox-agency-portal", order("turn-b", now - 1000))).toBe(false);
+      store.fenceProposals("sandbox-agency-portal", order("turn-0", now - 9000), store.generation());
+      expect(store.proposalFenced("sandbox-agency-portal", order("turn-a", now - 2000))).toBe(true);
+    });
+  });
+});
