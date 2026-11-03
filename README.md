@@ -97,13 +97,13 @@ Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. To
 
 ## The text line
 
-Texts to Mano land on `apps/channels`, a Cloudflare Worker. Each reply is a Meta model call to Muse Spark 1.3 (a Standard model ID with `store: false`, set as `MANO_REPLY_MODEL` in `apps/channels/wrangler.toml`). Mano's voice lives in `packages/persona` and goes to the model as its instructions, with the conversation as role messages.
+Texts to Mano land on `apps/channels`, a Cloudflare Worker. When the agent is configured (`AGENT_URL`, `MANO_AGENT_SECRET` and `MANO_HANDLE_GRANT_SECRET`), every text goes to an agent turn in `apps/agent`, where Muse Spark 1.3 answers with the agent's tools and Engine (Meta's open-weight Muse Spark Open through OpenRouter instead when `MANO_MODEL_PROVIDER=openrouter`, for testing while the Meta Model API is down). If the agent times out, fails or sends a reply Channels cannot use, or the person has asked to delete their conversation, the text line answers with its plain responder instead, which is also the only responder when the agent is not configured. The plain responder is a Meta model call to Muse Spark 1.3 (a Standard model ID with `store: false`, set as `MANO_REPLY_MODEL` in `apps/channels/wrangler.toml`). Mano's voice lives in `packages/persona` and goes to that model as its instructions, with the conversation as role messages.
 
-- Simple questions take the fast path: one call at minimal reasoning effort, sent a second time 300 ms later, and the first answer wins. Replies arrive in about 2 to 4 seconds.
-- Questions that need real digging take the deep path: the fast call returns a short heads-up, which is texted at once, then a second call at medium effort writes the full answer.
+- In the plain responder, simple questions take the fast path: one call at minimal reasoning effort, sent a second time 300 ms later, and the first answer wins. Replies arrive in about 2 to 4 seconds.
+- In the plain responder, questions that need real digging take the deep path: the fast call returns a short heads-up, which is texted at once, then a second call at medium effort writes the full answer.
 - Every outgoing text passes a deterministic voice guard (plain code, not a model call). It rewrites dashes and markdown, replaces any model or provider name with "I'm Mano, an automated assistant", and sends a short safe line instead of an empty text.
 - A message about self-harm or danger never waits on a heads-up, and its reply always names 988 and 911.
-- When the Meta Model API cannot answer (HTTP 402, a 5xx or a timeout), the same call goes once to Meta's open-weight Muse Spark Open through OpenRouter, on zero-retention endpoints only (`zdr: true`, `data_collection: "deny"` on every request), and later texts skip the failing API for 5 minutes. The crisis check uses the same fallback. If both fail, Mano sends its short safe line, and a crisis message still gets 988 and 911 with no model at all. The fallback is off unless `OPENROUTER_API_KEY` is set for `apps/channels`.
+- When the Meta Model API cannot answer the plain responder (HTTP 402, a 5xx or a timeout), the same call goes once to Meta's open-weight Muse Spark Open through OpenRouter, on zero-retention endpoints only (`zdr: true`, `data_collection: "deny"` on every request), and later texts skip the failing API for 5 minutes. The crisis check uses the same fallback. If both fail, Mano sends its short safe line, and a crisis message still gets 988 and 911 with no model at all. The fallback is off unless `OPENROUTER_API_KEY` is set for `apps/channels`.
 
 Check the voice against the real model with your own key (synthetic messages only, sent to a `-contributor` model ID). Without a key, the probes are skipped:
 
@@ -169,7 +169,7 @@ David Coven decides what gets built and owns the accounts. The code is written w
 
 ## Prior work
 
-Program, office and form data come from Front Door, an earlier product by the same author, through its partner API. Front Door's code is not part of this repository.
+The site's state-by-state counts of offices and services come from Front Door, an earlier product by the same author, through its open data API, as a static snapshot in `apps/site/lib/coverage.ts`. Program facts come from official sources in `packages/programs`, and renewal forms are defined in `apps/agent/agent/lib/forms.ts`. Front Door's code is not part of this repository.
 
 ## License
 
