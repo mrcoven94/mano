@@ -382,6 +382,122 @@ describe("a date the person shows up for", () => {
   });
 });
 
+// The delivery run's steps for every due reminder at a moment: claim,
+// the deadline gate, handoff, and a sent answer. Answers the texts handed.
+let runs = 0;
+function deliver(sql: ReturnType<typeof openDb>, at: number): string[] {
+  const token = `run-${++runs}`;
+  const handed: string[] = [];
+  for (const r of claimDueReminders(sql, at, 120_000, token, 25)) {
+    if (gateNudge(sql, r.id, token, at)) continue;
+    if (handOffReminder(sql, r.id, token, at)) {
+      finishReminder(sql, r.id, token, { kind: "sent" }, at);
+      handed.push(r.text);
+    }
+  }
+  return handed;
+}
+
+// What an interview tracked before this change left behind: paperwork's
+// days in paperwork's words, and nudge rows with no due date of their own.
+async function legacyInterview() {
+  const sql = openDb();
+  await track(sql, letter({ kind: "interview" }));
+  sql.exec("DELETE FROM reminders WHERE id IN (SELECT reminder_id FROM deadline_nudges)");
+  sql.exec("DELETE FROM deadline_nudges");
+  const id = await deadlineIdFor(letter().idempotencyKey);
+  for (const [days, at] of [[14, "2026-12-01"], [7, "2026-12-08"], [2, "2026-12-13"], [0, "2026-12-15"]] as const) {
+    const when = days === 0 ? "today" : `in ${days} days, on December 15`;
+    const reminderId = `nudge:${id}:g0:0:${days}`;
+    sql.exec(
+      "INSERT INTO reminders(id, text, due_at_ms, next_at_ms, generation, status, attempts, created_at_ms) VALUES (?, ?, ?, ?, 0, 'scheduled', 0, ?)",
+      reminderId, `Your CalFresh interview is due ${when}. Want me to start it?`, Date.parse(`${at}T18:00:00Z`), Date.parse(`${at}T18:00:00Z`), NOW,
+    );
+    sql.exec(
+      "INSERT INTO deadline_nudges(reminder_id, deadline_id, revision, days_before, window_start_ms, window_end_ms) VALUES (?, ?, 0, ?, ?, ?)",
+      reminderId, id, days, Date.parse(`${at}T17:00:00Z`), Date.parse(`${at}T17:00:00Z`) + 11 * 3_600_000,
+    );
+  }
+  sql.exec("ALTER TABLE deadline_nudges DROP COLUMN due_date");
+  ensureDeadlineTables(sql);
+  return sql;
+}
+
+async function retrack(sql: ReturnType<typeof openDb>, over: Record<string, unknown>, at: number) {
+  const input = letter(over);
+  const out = trackDeadline(sql, { ...input, id: await deadlineIdFor(input.idempotencyKey), timeZone: PACIFIC }, at, TEN);
+  if (!("deadline" in out)) throw new Error("no deadline");
+  return out;
+}
+
+const scheduled = (out: { deadline: { nudges: { daysBefore: number; status: string; text: string }[] } }) =>
+  out.deadline.nudges.filter((n) => n.status === "scheduled").map((n) => [n.daysBefore, n.text]);
+
+describe("a correction plans from what is stored, never from the old kind", () => {
+  it("an interview stored before this change, corrected to a renewal, keeps one nudge a day in the renewal's words", async () => {
+    const sql = await legacyInterview();
+    const fixed = await retrack(sql, {}, NOW);
+    expect(scheduled(fixed)).toEqual([
+      [14, "Your CalFresh renewal is due in 14 days, on December 15. Want me to start it?"],
+      [7, "Your CalFresh renewal is due in 7 days, on December 15. Want me to start it?"],
+      [2, "Your CalFresh renewal is due in 2 days, on December 15. Want me to start it?"],
+      [0, "Your CalFresh renewal is due today. Want me to start it?"],
+    ]);
+    expect(listReminders(sql).filter((r) => r.status === "scheduled")).toHaveLength(4);
+  });
+
+  it("an interview stored before this change, sent again unchanged, moves to the day before and the new words, once", async () => {
+    const sql = await legacyInterview();
+    const replayed = await retrack(sql, { kind: "interview" }, NOW);
+    expect(replayed.status).toBe("updated");
+    expect(scheduled(replayed)).toEqual([
+      [14, "Your CalFresh interview is in 14 days, on December 15."],
+      [7, "Your CalFresh interview is in 7 days, on December 15."],
+      [1, "Your CalFresh interview is tomorrow."],
+      [0, "Your CalFresh interview is today."],
+    ]);
+    const before = listReminders(sql);
+    expect((await retrack(sql, { kind: "interview" }, NOW)).status).toBe("existing");
+    expect(listReminders(sql)).toEqual(before);
+  });
+
+  it("renewal, interview, renewal again after the 2-day nudge went: it never goes twice", async () => {
+    const sql = openDb();
+    await track(sql);
+    const day2 = Date.parse("2026-12-13T18:00:00Z");
+    expect(deliver(sql, day2)).toEqual(["Your CalFresh renewal is due in 2 days, on December 15. Want me to start it?"]);
+    const noon = day2 + 2 * 3_600_000;
+    await retrack(sql, { kind: "interview" }, noon);
+    const back = await retrack(sql, {}, noon + 60_000);
+    expect(scheduled(back)).toEqual([[0, "Your CalFresh renewal is due today. Want me to start it?"]]);
+    for (let at = noon + 60_000; at < Date.parse("2026-12-15T04:00:00Z"); at += 30 * 60_000) expect(deliver(sql, at)).toEqual([]);
+  });
+
+  it("interview, renewal, interview again after the day-before nudge went: it never goes twice", async () => {
+    const sql = openDb();
+    await track(sql, letter({ kind: "interview" }));
+    const day1 = Date.parse("2026-12-14T18:00:00Z");
+    expect(deliver(sql, day1)).toEqual(["Your CalFresh interview is tomorrow."]);
+    const noon = day1 + 2 * 3_600_000;
+    await retrack(sql, {}, noon);
+    const back = await retrack(sql, { kind: "interview" }, noon + 60_000);
+    expect(scheduled(back)).toEqual([[0, "Your CalFresh interview is today."]]);
+    for (let at = noon + 60_000; at < Date.parse("2026-12-15T04:00:00Z"); at += 30 * 60_000) expect(deliver(sql, at)).toEqual([]);
+  });
+
+  it("a date moved away and back after its 7-day nudge went does not send that nudge again", async () => {
+    const sql = openDb();
+    await track(sql);
+    const day7 = Date.parse("2026-12-08T18:00:00Z");
+    expect(deliver(sql, day7)).toEqual(["Your CalFresh renewal is due in 7 days, on December 15. Want me to start it?"]);
+    await retrack(sql, { dueDate: "2026-12-20" }, day7 + 60_000);
+    const back = await retrack(sql, {}, day7 + 120_000);
+    expect(back.status).toBe("moved");
+    expect(scheduled(back).map(([d]) => d)).toEqual([2, 0]);
+    for (let at = day7 + 120_000; at < Date.parse("2026-12-09T04:00:00Z"); at += 30 * 60_000) expect(deliver(sql, at)).toEqual([]);
+  });
+});
+
 describe("what a nudge says changes", () => {
   it("a new program or kind under the same key regenerates the nudges still to come", async () => {
     const sql = openDb();

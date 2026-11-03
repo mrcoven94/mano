@@ -7,10 +7,13 @@
 // out: that is when a reminder helps them get there, and three texts on
 // three days running would be noise. A deadline learned after its
 // first nudge day gets one nudge at the next nudge time instead, unless a
-// planned one is less than 3 days away. A correction rebuilds only the
-// nudges not yet sent, and a moved date plans the new days; either way a
-// slot whose day is still open (until 20:00) goes at the earliest allowed
-// time from now, and no catch-up is added.
+// planned one is less than 3 days away. Every send of the same deadline,
+// a replay included, compares the nudges stored for it with its kind's
+// days: a correction keeps the nudges not yet sent, drops a day the kind
+// no longer has and adds one it lacks while its nudge time is ahead, and
+// a moved date plans the new days, each slot whose day is still open
+// (until 20:00) at the earliest allowed time from now, with no catch-up.
+// A day already handed off for a date is never planned again for it.
 //
 // Each nudge is a reminder row (agents/agent-state.ts), so it goes out
 // from the person's one delivery wake-up through Channels' agent-send
@@ -55,6 +58,8 @@ import {
 } from "./agents/agent-state.js";
 import { sha256Hex } from "./hash.js";
 
+import { DEFAULT_TIME_ZONE } from "@mano/protocol";
+
 export { DEFAULT_TIME_ZONE, timeZoneForState } from "@mano/protocol";
 
 interface SqlExec {
@@ -87,6 +92,8 @@ export type DeadlineKind = (typeof DEADLINE_KINDS)[number];
 const ATTENDED_KINDS: readonly DeadlineKind[] = ["interview", "hearing"];
 const PAPERWORK_DAYS = [14, 7, 2, 0] as const;
 const ATTENDED_DAYS = [14, 7, 1, 0] as const;
+// Every day a schedule plans. A stored day outside it is a catch-up.
+const SCHEDULE_DAYS = new Set<number>([...PAPERWORK_DAYS, ...ATTENDED_DAYS]);
 
 function isAttended(kind: DeadlineKind | null): boolean {
   return kind !== null && ATTENDED_KINDS.includes(kind);
@@ -245,13 +252,14 @@ export interface PlannedNudge {
 // first: a deadline Mano just learned, with one catch-up when it came in
 // after its first nudge day. rebuild: a deadline whose date moved; every
 // slot whose day's window is still open, at the earliest allowed time
-// from now, and no catch-up. days: the slots, from nudgeDays.
+// from now, and no catch-up. ahead: only the slots whose nudge time is
+// still to come, as a first plan would have them. days: the slots.
 export function planNudges(
   dueDate: string,
   timeZone: string,
   nowMs: number,
   time: NudgeTime,
-  mode: "first" | "rebuild" = "first",
+  mode: "first" | "rebuild" | "ahead" = "first",
   days: readonly number[] = PAPERWORK_DAYS,
 ): PlannedNudge[] {
   const plan = (localDate: string): PlannedNudge => ({
@@ -262,6 +270,7 @@ export function planNudges(
     windowEndMs: zonedInstant(localDate, WINDOW_CLOSES_HOUR, 0, timeZone),
   });
   const planned = days.map((d) => plan(addDays(dueDate, -d)));
+  if (mode === "ahead") return planned.filter((n) => n.atMs > nowMs);
   if (mode === "rebuild") return planned.filter((n) => n.windowEndMs > nowMs).map((n) => ({ ...n, atMs: Math.max(n.atMs, nowMs) }));
   const ahead = planned.filter((n) => n.atMs > nowMs);
   if (ahead.length < planned.length) {
@@ -405,11 +414,26 @@ export function ensureDeadlineTables(sql: SqlExec): void {
     program TEXT, kind TEXT, source_json TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL,
     previous_due_date TEXT, time_zone TEXT NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL,
     closed_at_ms INTEGER)`);
-  // Each nudge's reminder row, and the 9:00 to 20:00 window of its day.
+  // Each nudge's reminder row, the due date it counts down to, and the
+  // 9:00 to 20:00 window of its day.
   sql.exec(`CREATE TABLE IF NOT EXISTS deadline_nudges(
     reminder_id TEXT PRIMARY KEY, deadline_id TEXT NOT NULL, revision INTEGER NOT NULL, days_before INTEGER NOT NULL,
-    window_start_ms INTEGER NOT NULL, window_end_ms INTEGER NOT NULL)`);
+    window_start_ms INTEGER NOT NULL, window_end_ms INTEGER NOT NULL, due_date TEXT)`);
   sql.exec("CREATE INDEX IF NOT EXISTS deadline_nudges_by_deadline ON deadline_nudges(deadline_id)");
+  const nudgeCols = sql.exec("PRAGMA table_info(deadline_nudges)").toArray() as { name: string }[];
+  if (!nudgeCols.some((c) => c.name === "due_date")) sql.exec("ALTER TABLE deadline_nudges ADD COLUMN due_date TEXT");
+  // A row written before the column: its local day, read at the middle of
+  // its window in the deadline's zone, plus its count.
+  const legacy = sql
+    .exec(
+      "SELECT n.reminder_id, n.days_before, n.window_start_ms, n.window_end_ms, d.time_zone FROM deadline_nudges n" +
+        " LEFT JOIN deadlines d ON d.id = n.deadline_id WHERE n.due_date IS NULL",
+    )
+    .toArray() as { reminder_id: string; days_before: number; window_start_ms: number; window_end_ms: number; time_zone: string | null }[];
+  for (const n of legacy) {
+    const day = wall((Number(n.window_start_ms) + Number(n.window_end_ms)) / 2, n.time_zone ?? DEFAULT_TIME_ZONE).date;
+    sql.exec("UPDATE deadline_nudges SET due_date = ? WHERE reminder_id = ?", addDays(day, Number(n.days_before)), n.reminder_id);
+  }
 }
 
 interface Row {
@@ -498,8 +522,9 @@ function scheduleNudges(sql: SqlExec, r: Row, plan: PlannedNudge[], nowMs: numbe
     const made = createReminder(sql, { id: reminderId, text: nudgeText(naming, n.daysBefore, r.due_date), dueAtMs: n.atMs, generation }, nowMs);
     if (!("created" in made) || !made.created) throw new NudgeConflictError(`Nudge ${reminderId} could not be created.`);
     sql.exec(
-      "INSERT INTO deadline_nudges(reminder_id, deadline_id, revision, days_before, window_start_ms, window_end_ms) VALUES (?, ?, ?, ?, ?, ?)",
-      reminderId, r.id, r.revision, n.daysBefore, n.windowStartMs, n.windowEndMs,
+      "INSERT INTO deadline_nudges(reminder_id, deadline_id, revision, days_before, window_start_ms, window_end_ms, due_date)" +
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+      reminderId, r.id, r.revision, n.daysBefore, n.windowStartMs, n.windowEndMs, r.due_date,
     );
   }
 }
@@ -535,11 +560,65 @@ interface Next {
   timeZone: string;
 }
 
+// The nudges a deadline should have, from its kind and what is stored,
+// never from what an earlier kind or version planned. A day already
+// handed off for this date is never planned again, at any revision. The
+// same date: the stored nudges not yet sent are kept while their day's
+// window is open, at their time or the earliest allowed time from now,
+// less a schedule day the kind no longer has; a day the kind has and
+// nothing stored covers is added only while its nudge time is ahead, as
+// a first plan would have it. A new date: every day whose window is
+// still open, at the earliest allowed time from now, and no catch-up.
+function reconcile(sql: SqlExec, r: Row, next: Next, nowMs: number, time: NudgeTime): { plan: PlannedNudge[]; changed: boolean } {
+  const days = nudgeDays(next.kind);
+  const handedOff = new Set(
+    (sql
+      .exec(
+        "SELECT n.days_before FROM deadline_nudges n JOIN reminders r ON r.id = n.reminder_id" +
+          " WHERE n.deadline_id = ? AND n.due_date = ? AND r.handoffs > 0",
+        r.id, next.dueDate,
+      )
+      .toArray() as { days_before: number }[]).map((n) => Number(n.days_before)),
+  );
+  if (next.dueDate !== r.due_date) {
+    const plan = planNudges(next.dueDate, next.timeZone, nowMs, time, "rebuild", days).filter((n) => !handedOff.has(n.daysBefore));
+    return { plan, changed: true };
+  }
+  const live = (
+    sql
+      .exec(
+        "SELECT n.days_before, n.window_start_ms, n.window_end_ms, r.due_at_ms, r.text FROM deadline_nudges n" +
+          " JOIN reminders r ON r.id = n.reminder_id WHERE n.deadline_id = ? AND n.revision = ? AND r.status IN ('scheduled', 'claimed')" +
+          " AND n.window_end_ms > ?",
+        r.id, r.revision, nowMs,
+      )
+      .toArray() as { days_before: number; window_start_ms: number; window_end_ms: number; due_at_ms: number; text: string }[]
+  ).map((n) => ({ ...n, days_before: Number(n.days_before) }));
+  const kept = live.filter((n) => days.includes(n.days_before) || !SCHEDULE_DAYS.has(n.days_before));
+  const missing = days.filter((d) => !handedOff.has(d) && !live.some((n) => n.days_before === d));
+  const added = planNudges(next.dueDate, next.timeZone, nowMs, time, "ahead", missing);
+  const naming = namingOf({ ...r, program: next.program, kind: next.kind, source_json: next.sourceJson });
+  const changed =
+    JSON.stringify(naming) !== JSON.stringify(namingOf(r)) ||
+    kept.length < live.length ||
+    added.length > 0 ||
+    live.some((n) => n.text !== nudgeText(naming, n.days_before, next.dueDate));
+  const plan = [
+    ...kept.map((n) => ({
+      daysBefore: n.days_before,
+      localDate: addDays(next.dueDate, -n.days_before),
+      atMs: Math.max(Number(n.due_at_ms), nowMs),
+      windowStartMs: Number(n.window_start_ms),
+      windowEndMs: Number(n.window_end_ms),
+    })),
+    ...added,
+  ];
+  return { plan, changed };
+}
+
 function apply(sql: SqlExec, r: Row, next: Next, nowMs: number, time: NudgeTime): DeadlineResult {
-  const sameNudges =
-    next.dueDate === r.due_date &&
-    JSON.stringify(namingOf({ ...r, program: next.program, kind: next.kind, source_json: next.sourceJson })) === JSON.stringify(namingOf(r));
-  if (sameNudges) {
+  const { plan, changed } = reconcile(sql, r, next, nowMs, time);
+  if (!changed) {
     if (next.title === r.title && next.program === r.program && next.sourceJson === r.source_json) {
       return { status: "existing", deadline: view(sql, r) };
     }
@@ -550,20 +629,6 @@ function apply(sql: SqlExec, r: Row, next: Next, nowMs: number, time: NudgeTime)
     return { status: "updated", deadline: view(sql, row(sql, r.id)!) };
   }
   const moved = next.dueDate !== r.due_date;
-  // The same date: the slots not yet sent, kept while their day's window
-  // is open, at the earliest allowed time from now. Nothing is added
-  // unless a new kind plans a different day: then the old kind's day goes
-  // and the new one is planned like a moved date's.
-  const unsent = moved
-    ? []
-    : (sql
-        .exec(
-          "SELECT n.days_before, n.window_start_ms, n.window_end_ms, r.due_at_ms FROM deadline_nudges n JOIN reminders r ON r.id = n.reminder_id" +
-            " JOIN deadlines d ON d.id = n.deadline_id WHERE n.deadline_id = ? AND n.revision = d.revision AND r.status IN ('scheduled', 'claimed')" +
-            " AND n.window_end_ms > ?",
-          r.id, nowMs,
-        )
-        .toArray() as { days_before: number; window_start_ms: number; window_end_ms: number; due_at_ms: number }[]);
   const nudgesInFlight = stopNudges(sql, r.id, nowMs);
   sql.exec(
     "UPDATE deadlines SET title = ?, due_date = ?, program = ?, kind = ?, source_json = ?, previous_due_date = ?, time_zone = ?," +
@@ -571,23 +636,6 @@ function apply(sql: SqlExec, r: Row, next: Next, nowMs: number, time: NudgeTime)
     next.title, next.dueDate, next.program, next.kind, next.sourceJson, moved ? r.due_date : r.previous_due_date, next.timeZone, nowMs, r.id,
   );
   const updated = row(sql, r.id)!;
-  const days = nudgeDays(updated.kind);
-  const dropped = nudgeDays(r.kind).filter((d) => !days.includes(d));
-  const added = days.filter((d) => !nudgeDays(r.kind).includes(d));
-  const plan: PlannedNudge[] = moved
-    ? planNudges(updated.due_date, updated.time_zone, nowMs, time, "rebuild", days)
-    : [
-        ...unsent
-          .filter((n) => !dropped.includes(Number(n.days_before)))
-          .map((n) => ({
-            daysBefore: Number(n.days_before),
-            localDate: addDays(updated.due_date, -Number(n.days_before)),
-            atMs: Math.max(Number(n.due_at_ms), nowMs),
-            windowStartMs: Number(n.window_start_ms),
-            windowEndMs: Number(n.window_end_ms),
-          })),
-        ...planNudges(updated.due_date, updated.time_zone, nowMs, time, "rebuild", added),
-      ];
   scheduleNudges(sql, updated, plan, nowMs);
   return moved
     ? { status: "moved", deadline: view(sql, updated), moved: { from: r.due_date, to: next.dueDate }, nudgesInFlight }
