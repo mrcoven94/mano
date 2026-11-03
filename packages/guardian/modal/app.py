@@ -313,8 +313,9 @@ def download():
     cache.commit()
 
 
-# Named check, as the web Function it replaces was, so its URL can keep
-# the same label; the deploy prints the URL Engine must use. No
+# Named check, as the web Function it replaces was, so the URL keeps the
+# label mano-guardian-check. Servers answer on modal.direct, not modal.run,
+# so the host still changes; the deploy prints the URL Engine must use. No
 # target_concurrency means one container, which Modal's guide prefers to
 # max_containers=1, since that would block the replacement during a redeploy.
 @app.server(
