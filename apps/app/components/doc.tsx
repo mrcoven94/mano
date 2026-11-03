@@ -15,6 +15,9 @@ interface PreviewProps {
   cacheStore?: KeyValue;
   onShown?: (shown: boolean) => void;
   onLink?: (url: string) => void;
+  // Text shows in full at its own height instead of in a 320px scroll,
+  // so nothing in it is hidden below a fold inside the card.
+  full?: boolean;
 }
 
 export function currentPlatform(): DocPlatform {
@@ -31,7 +34,7 @@ function safeMime(mimeType: string, bytesB64: string): string | null {
   }
 }
 
-export function DocPreview({ doc, cacheStore, onShown, onLink }: PreviewProps) {
+export function DocPreview({ doc, cacheStore, onShown, onLink, full = false }: PreviewProps) {
   const mime = safeMime(doc.mimeType, doc.bytesB64);
   const showable = mime !== null && canShowInApp(mime, currentPlatform());
   // Unviewable documents report as not shown so the approval gate holds.
@@ -51,10 +54,10 @@ export function DocPreview({ doc, cacheStore, onShown, onLink }: PreviewProps) {
         onError={() => onShown?.(false)}
       />
     );
-  return <TextView doc={doc} onShown={onShown} />;
+  return <TextView doc={doc} onShown={onShown} full={full} />;
 }
 
-function TextView({ doc, onShown }: { doc: ApprovalDocument; onShown?: (shown: boolean) => void }) {
+function TextView({ doc, onShown, full }: { doc: ApprovalDocument; onShown?: (shown: boolean) => void; full: boolean }) {
   let text: string | null = null;
   try {
     text = b64ToUtf8(doc.bytesB64);
@@ -65,6 +68,15 @@ function TextView({ doc, onShown }: { doc: ApprovalDocument; onShown?: (shown: b
     onShown?.(text !== null);
   }, [doc.id, text, onShown]);
   if (text === null) return <PreviewFallback doc={doc} />;
+  if (full) {
+    return (
+      <View style={{ borderRadius: 8, backgroundColor: colors.bg2 }}>
+        <Text selectable style={{ padding: 12, fontSize: 15, lineHeight: 22, color: colors.text }}>
+          {text}
+        </Text>
+      </View>
+    );
+  }
   return (
     <ScrollView style={{ maxHeight: 320, borderRadius: 8, backgroundColor: colors.bg2 }} nestedScrollEnabled>
       <Text selectable style={{ padding: 12, fontSize: 15, lineHeight: 22, color: colors.text }}>
