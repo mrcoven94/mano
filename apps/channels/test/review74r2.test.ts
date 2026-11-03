@@ -3,10 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { Responder, RespondHooks, TurnInput } from "@mano/channels";
 import { EYES } from "@mano/persona";
-import { inboundEvent, makeHarness, runTurnAfterBatch, TEST_CHAT, type Harness } from "./helpers.js";
-
-const BACKGROUND_URL = "https://withmano.example/chat-background.png";
-const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+import { inboundEvent, makeHarness, runTurnAfterBatch, seedBackground, TEST_CHAT, type Harness } from "./helpers.js";
 
 function introduced(h: Harness): Harness {
   h.store.patchMeta({ introduced: true });
@@ -70,26 +67,21 @@ describe("Sol round 2, repro 2: nothing fires after STOP", () => {
   });
 });
 
-describe("Sol round 2, repro 3: one background upload at a time per chat", () => {
-  it("never starts a second upload while the first is in flight", async () => {
-    const image = (async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("dns-query")) return Response.json({ Status: 0, Answer: [{ type: 1, data: "93.184.216.34" }] });
-      if (url === BACKGROUND_URL) return new Response(PNG, { status: 200, headers: { "content-type": "image/png" } });
-      return new Response("missing", { status: 404 });
-    }) as typeof fetch;
-    const h = makeHarness({ replies: ["a", "b", "c"], fetchFn: image, config: { backgroundUrl: BACKGROUND_URL } });
-    const set = h.channel.setBackground.bind(h.channel);
-    h.channel.setBackground = async (chatId, blob, signal) => {
+describe("Sol round 2, repro 3: one background removal at a time per chat", () => {
+  it("never starts a second removal while the first is in flight", async () => {
+    const h = makeHarness({ replies: ["a", "b", "c"] });
+    await seedBackground(h, "set");
+    const clear = h.channel.clearBackground.bind(h.channel);
+    h.channel.clearBackground = async (chatId, signal) => {
       await new Promise((r) => setTimeout(r, 120));
-      return set(chatId, blob, signal);
+      return clear(chatId, signal);
     };
     await say(h, "evt_1", "hi");
     await new Promise((r) => setTimeout(r, 30));
     await say(h, "evt_2", "ok");
     await say(h, "evt_3", "cool");
     await h.decorations.idle();
-    expect(h.channel.backgrounds.map((b) => b.chatId)).toEqual([TEST_CHAT]);
+    expect(h.channel.backgroundClears).toEqual([TEST_CHAT]);
   });
 });
 

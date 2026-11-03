@@ -32,16 +32,14 @@ export class RecordingChannel implements Channel {
   typingCalls: Array<{ chatId: string; state: "started" | "stopped" }> = [];
   readCalls: string[] = [];
   reactions: Array<{ chatId: string; messageId: string; reaction: Reaction }> = [];
-  backgrounds: Array<{ chatId: string; type: string; size: number }> = [];
-  // Set to make reactions or background uploads throw, for failure paths.
+  // Chats whose background clearBackground was asked to remove.
+  backgroundClears: string[] = [];
+  // Set to make reactions throw, for failure paths.
   failReactions = false;
-  // What setBackground does: lands, fails knowingly, ends uncertain, or
-  // never settles (until its signal aborts).
-  backgroundOutcome: "set" | "failed" | "uncertain" | "hang" = "set";
-  // What hasBackground answers per chat, for reconciling.
-  devicesWithBackground = new Set<string>();
-  backgroundReads: string[] = [];
-  backgroundSignals: AbortSignal[] = [];
+  // What clearBackground does: removes it, fails, or never settles
+  // (until its signal aborts).
+  clearOutcome: "cleared" | "failed" | "hang" = "cleared";
+  clearSignals: AbortSignal[] = [];
   lookupCalls: Array<{ chatId: string; messageId: string }> = [];
   // Feed pages served to listEvents, in order.
   feedPages: NormalizedEvent[][] = [];
@@ -120,20 +118,13 @@ export class RecordingChannel implements Channel {
     this.reactions.push({ chatId, messageId, reaction });
   }
 
-  async setBackground(chatId: string, image: Blob, signal?: AbortSignal): Promise<void> {
-    this.backgrounds.push({ chatId, type: image.type, size: image.size });
-    if (signal) this.backgroundSignals.push(signal);
-    if (this.backgroundOutcome === "failed") throw new ChannelFailed(400, "bad_image", "background failed");
-    if (this.backgroundOutcome === "uncertain") throw new ChannelUncertain("background outcome unknown", 1);
-    if (this.backgroundOutcome === "hang") {
+  async clearBackground(chatId: string, signal?: AbortSignal): Promise<void> {
+    this.backgroundClears.push(chatId);
+    if (signal) this.clearSignals.push(signal);
+    if (this.clearOutcome === "failed") throw new Error("background removal failed");
+    if (this.clearOutcome === "hang") {
       await new Promise<never>((_, reject) => signal?.addEventListener("abort", () => reject(new Error("aborted"))));
     }
-    this.devicesWithBackground.add(chatId);
-  }
-
-  async hasBackground(chatId: string): Promise<boolean> {
-    this.backgroundReads.push(chatId);
-    return this.devicesWithBackground.has(chatId);
   }
 
   async lookupMessage(chatId: string, messageId: string): Promise<ChannelMessageStatus | null> {
