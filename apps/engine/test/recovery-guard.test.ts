@@ -378,3 +378,31 @@ describe("LAP-747: a receipt wins on every answer", () => {
     expect(office.posts).toHaveLength(1);
   });
 });
+
+describe("LAP-747: Engine's SQL store retires only a failed attempt at the version read", () => {
+  it("retires a failed attempt at its version, and nothing else", async () => {
+    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName("lap747-retire-sql"));
+    await runInDurableObject(stub, (_i, state) => {
+      const sql = state.storage.sql;
+      ensureGatewayTables(sql);
+      const store = new SqlApprovalStore(sql);
+      const base = {
+        actionType: "submit", recipient: "sandbox-agency-portal", purpose: "renewal", documentHash: null, documentId: null,
+        approvedByHumanId: "person-maria", personId: "person-maria", requestJson: "{}", requestHash: "h", problems: [],
+        createdAt: new Date().toISOString(), remindAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600_000).toISOString(), escalated: false,
+      } as const;
+      const attempt = { updatedAt: "2026-11-03T00:00:00.000Z", requestHash: "h", actionType: "submit", recipient: "r", personId: "person-maria" } as const;
+      store.putApproval({ ...base, id: "a-failed", idempotencyKey: "kf", status: "approved" } as never);
+      store.insertAttempt({ ...attempt, key: "kf", status: "failed" });
+      const read = store.getAttempt("kf")!.version!;
+      store.putApproval({ ...base, id: "a-unknown", idempotencyKey: "ku", status: "approved" } as never);
+      store.insertAttempt({ ...attempt, key: "ku", status: "unknown" });
+
+      expect(store.retireApproval("a-unknown", store.getAttempt("ku")!.version!)).toBe(false);
+      expect(store.retireApproval("a-failed", read + 1)).toBe(false);
+      expect(store.retireApproval("a-failed", read)).toBe(true);
+      expect(store.getApproval("a-failed")?.status).toBe("retired");
+      expect(store.getApproval("a-unknown")?.status).toBe("approved");
+    });
+  });
+});

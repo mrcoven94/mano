@@ -37,3 +37,35 @@ describe("LAP-747: a replayed approval never re-applies its effects", () => {
     expect(await consents(name)).toHaveLength(0);
   });
 });
+
+// Review round 11: grant G is unknown; retries A and B reconcile it
+// together; B completes G; the revocation completes; then A's delayed
+// lookup finds G and answers reconciled, with no flag. The effect is
+// applied once per key, so the consent stays revoked.
+describe("LAP-747: a consent effect is applied at most once per filing", () => {
+  it("A's late reconcile of grant G after the revocation applies nothing", async () => {
+    const name = "lap747-late-reconcile";
+    const ns = testEnv.PERSON_AGENT as DurableObjectNamespace;
+    const person = personStub(name);
+    const orgAgentId = "org:lap747-late-county";
+    const grant = await person.grantConsent(name, { orgAgentId, purpose: "renewal", scope: ["documents"], caseId: "case-lap747-late" });
+    const key = grant.approval!.idempotencyKey;
+    expect((await person.approve(grant.approval!.id, name)).status).toBe("completed");
+    const revoke = await person.revokeConsent(name, { orgAgentId, caseId: "case-lap747-late" });
+    expect((await person.approve(revoke.approval!.id, name)).status).toBe("completed");
+    expect(await consents(name)).toHaveLength(0);
+
+    // A read G as unknown before B completed it: its retry reconciles.
+    await runInDurableObject(ns.get(ns.idFromName(name)), (instance) => {
+      (instance as unknown as { store: { updateAttempt(k: string, s: string): void } }).store.updateAttempt(key, "unknown");
+    });
+    const late = await person.approve(grant.approval!.id, name);
+    expect(late.status).toBe("reconciled");
+    expect(late.replayed).toBeUndefined();
+    expect(await consents(name)).toHaveLength(0);
+
+    // The recovery sweep's path applies nothing either.
+    expect(await person.applyShareOutcome(key)).toEqual({ applied: false });
+    expect(await consents(name)).toHaveLength(0);
+  });
+});

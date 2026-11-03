@@ -177,6 +177,10 @@ export class PersonAgent extends Agent<Env, PersonState> {
         sql.exec(`DROP TABLE consents`);
       }
       sql.exec(`CREATE TABLE IF NOT EXISTS consents(recipient TEXT NOT NULL, case_id TEXT NOT NULL, purpose TEXT NOT NULL, PRIMARY KEY (recipient, case_id))`);
+      // The action keys whose consent effect was applied: one row per key,
+      // written in the same transaction as the effect, so an effect is
+      // applied at most once however many answers carry its receipt.
+      sql.exec(`CREATE TABLE IF NOT EXISTS applied_effects(idempotency_key TEXT PRIMARY KEY, external_id TEXT NOT NULL, applied_at TEXT NOT NULL)`);
       try {
         sql.exec(`ALTER TABLE consents ADD COLUMN expires_at TEXT`);
       } catch {
@@ -874,7 +878,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       recovered.push({ key: attempt.key, status: result.status });
       // Recovery executes shares outside approve(), so their consent
       // effects apply here, from the persisted original approval.
-      if ((result.status === "completed" || result.status === "reconciled") && result.receipt && !result.replayed) {
+      if ((result.status === "completed" || result.status === "reconciled") && result.receipt) {
         await this.applyShareOutcome(result.receipt.idempotencyKey);
       }
     }
@@ -883,13 +887,26 @@ export class PersonAgent extends Agent<Env, PersonState> {
   }
 
   // Applies the share outcome behind an idempotency key: the consent
-  // effect of the consumed approval that claimed it. Recovery runs this
-  // after executing a stranded share. Idempotent and safe to repeat.
+  // effect of the consumed approval that claimed it, once its receipt
+  // exists. Recovery runs this after it settles a stranded share. Applied
+  // at most once per key: the record of it and the effect commit in one
+  // transaction, so a later answer carrying the same receipt (a retry, a
+  // late reconcile, a replay), whatever its flags, changes nothing, and a
+  // revoked consent stays revoked.
   async applyShareOutcome(idempotencyKey: string): Promise<{ applied: boolean }> {
     const original = this.store.getApprovalByKey(idempotencyKey);
-    if (!original || original.actionType !== "share") return { applied: false };
-    this.recordConsentOutcome(original);
-    return { applied: true };
+    const receipt = this.store.getReceiptByKey(idempotencyKey);
+    if (!original || original.actionType !== "share" || !receipt) return { applied: false };
+    const applied = this.ctx.storage.transactionSync(() => {
+      // RETURNING reports the insert; a key already applied returns no row.
+      const first = this.db().exec(
+        "INSERT INTO applied_effects(idempotency_key, external_id, applied_at) VALUES (?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING RETURNING idempotency_key",
+        idempotencyKey, receipt.externalId, new Date().toISOString(),
+      ).toArray().length === 1;
+      if (first) this.recordConsentOutcome(original);
+      return first;
+    });
+    return { applied };
   }
 
   // Schedules a durable recovery run while any attempt is unresolved.
@@ -1006,15 +1023,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
   async approve(approvalId: string, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.approveAndExecute(approvalId, verified);
-    // A replayed answer only reports a receipt another request recorded:
-    // its effects were applied then, and are never applied again (a
-    // revoked consent stays revoked).
-    if ((result.status === "completed" || result.status === "reconciled") && !result.replayed) {
-      // Consent effects come from the persisted original approval behind
-      // the key, never from whichever approval triggered the outcome.
-      const key = result.receipt?.idempotencyKey;
-      const row = key ? this.store.getApprovalByKey(key) : null;
-      if (row?.actionType === "share") this.recordConsentOutcome(row);
+    // Consent effects come from the persisted original approval behind
+    // the key, never from whichever approval triggered the outcome, and
+    // at most once per key (applyShareOutcome), whatever the answer says.
+    if ((result.status === "completed" || result.status === "reconciled") && result.receipt) {
+      await this.applyShareOutcome(result.receipt.idempotencyKey);
     }
     this.store.audit({ event: "gateway.approve", approvalHash: await auditDigest(approvalId), status: result.status });
     await this.scheduleRecoveryIfUnresolved();
