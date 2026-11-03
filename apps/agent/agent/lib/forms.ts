@@ -3,6 +3,8 @@
 // profile, the one question to ask when it is missing, and how an answer
 // is checked. Only forms on our own sandbox portal are listed (hard rule
 // 2): a resident's real portal is never a target.
+import type { RecipientId } from "@mano/protocol";
+
 import type { Frequency, Profile } from "./engine.js";
 import { confirmedByPerson } from "./profile.js";
 
@@ -21,7 +23,7 @@ export interface FormSpec {
   id: string;
   // The form's address on the sandbox portal.
   path: string;
-  recipient: string;
+  recipient: RecipientId;
   purpose: string;
   fields: FormField[];
   // The one document the form requires, read from the profile: the
