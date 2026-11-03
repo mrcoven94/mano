@@ -276,6 +276,36 @@ describe("a link opened after the draft changed", () => {
   });
 });
 
+describe("the link a question carries", () => {
+  const link = (h: string, approvalId: string) => call(h, "GET", `/approvals/${approvalId}/replay`);
+
+  it("is answered only while its approval waits as the latest version", async () => {
+    const h = handle("replay-question");
+    await turn(h, "turn-question-1");
+    const first = await propose(h, { turnId: "turn-question-1" });
+    const firstUrl = await bound(h, first);
+    expect(await pageUrl(await link(h, first))).toBe(firstUrl);
+
+    // A newer draft replaces it; the first still reads pending until closed.
+    await turn(h, "turn-question-2");
+    const second = await propose(h, { turnId: "turn-question-2", size: "4" });
+    expect((await link(h, first)).status).toBe(404);
+    const secondUrl = await bound(h, second, replayBody([4, 5]));
+    expect(await pageUrl(await link(h, second))).toBe(secondUrl);
+
+    await call(h, "POST", `/approvals/${second}/reject`);
+    expect((await link(h, second)).status).toBe(404);
+  });
+
+  it("is not answered after the person said yes", async () => {
+    const h = handle("replay-question-yes");
+    const approvalId = await propose(h);
+    await bound(h, approvalId);
+    expect(((await (await call(h, "POST", `/approvals/${approvalId}/approve`)).json()) as { status: string }).status).toBe("completed");
+    expect((await link(h, approvalId)).status).toBe(404);
+  });
+});
+
 describe("only the person's link opens the page", () => {
   it("refuses a made-up, altered or session token, and any other path", async () => {
     const h = handle("replay-access");
