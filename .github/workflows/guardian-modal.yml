@@ -19,11 +19,15 @@ name: guardian-modal
 # to stop that app.
 #
 # Every job runs only on main, because each one holds production Modal
-# credentials: branch code run with them could deploy over production. The
-# guardian-check workflow fails if a job here can run on any other ref. A
-# branch can still edit this file in its own run, so the guardian-production
-# environment must also allow only main (Settings, Environments, Deployment
-# branches), as computer-production does.
+# credentials: branch code run with them could deploy over production. Each
+# job's if checks the ref, and its first step checks it again with a
+# case-sensitive shell test, since GitHub's == ignores case. guardian-check
+# fails if the triggers, an if, or that first step differ from what is here,
+# which catches accidental edits on main and in reviewed pull requests. None
+# of this stops a hostile branch: its own run uses its own copy of this file
+# and of guardian-check. Only the guardian-production environment's
+# deployment branch policy, limited to main as computer-production is,
+# closes that.
 #
 # Needs two secrets in the guardian-production environment, set by a maintainer:
 #   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
@@ -60,6 +64,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: guardian-production
     steps:
+      # GitHub's == ignores case, so the job's if also admits a branch named
+      # MAIN. The shell compares exactly, before any step touches a secret.
+      - name: Run only on main
+        run: test "$GITHUB_REF" = "refs/heads/main"
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
@@ -96,6 +104,10 @@ jobs:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
     steps:
+      # GitHub's == ignores case, so the job's if also admits a branch named
+      # MAIN. The shell compares exactly, before any step touches a secret.
+      - name: Run only on main
+        run: test "$GITHUB_REF" = "refs/heads/main"
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
@@ -117,6 +129,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: guardian-production
     steps:
+      # GitHub's == ignores case, so the job's if also admits a branch named
+      # MAIN. The shell compares exactly, before any step touches a secret.
+      - name: Run only on main
+        run: test "$GITHUB_REF" = "refs/heads/main"
       - run: pip install "modal==1.6.2"
       - name: Stop the staging app and its containers
         run: modal app stop mano-guardian-staging --yes
@@ -131,6 +147,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: guardian-production
     steps:
+      # GitHub's == ignores case, so the job's if also admits a branch named
+      # MAIN. The shell compares exactly, before any step touches a secret.
+      - name: Run only on main
+        run: test "$GITHUB_REF" = "refs/heads/main"
       - run: pip install "modal==1.6.2"
       - name: Stop the old web Function app and its containers
         run: modal app stop mano-guardian --yes

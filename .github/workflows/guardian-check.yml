@@ -4,8 +4,10 @@ name: guardian-check
 # SDK, serve its one authenticated route as a Modal Server (whose requests
 # Modal does not store) with no Function taking a check as input, refuse
 # blank tokens, strictly parse verdicts, and match its pinned model and image.
-# Also fails if any guardian-modal job, each of which holds production Modal
-# credentials, can run on a ref other than main.
+# Also fails if guardian-modal's triggers, any job's if, or any job's first
+# step (a case-sensitive main-only check) differ from an exact allowlist.
+# That catches accidental edits on main and in reviewed pull requests; it
+# cannot stop a hostile branch, which runs its own copy of both files.
 on:
   pull_request:
     paths:
@@ -33,57 +35,105 @@ jobs:
       - run: pip install "modal==1.6.2" "fastapi==0.162.0" "httpx==0.28.1" "uvicorn==0.54.0"
       - name: Test the app
         run: python -m unittest discover -s packages/guardian/modal -v
-      - name: Every guardian-modal job runs only on main
+      - name: guardian-modal's triggers and job guards match the allowlist
         run: |
           pip install "pyyaml==6.0.2"
           python - <<'EOF'
+          import copy
           import yaml
 
+          # An exact allowlist, not a parser: any change to the triggers, a
+          # job's if, or a job's first step fails until it is copied here in
+          # a reviewed pull request. This catches accidental edits only. A
+          # hostile branch runs its own copy of both files; the
+          # guardian-production environment's branch policy stops that.
           MAIN = "github.ref == 'refs/heads/main'"
+          EXPECTED_IF = {
+              "deploy": MAIN + " && (github.event_name == 'push' || inputs.target == 'production')",
+              "staging": MAIN + " && (github.event_name == 'workflow_dispatch' && inputs.target == 'staging')",
+              "stop-staging": MAIN + " && (github.event_name == 'workflow_dispatch' && inputs.target == 'stop-staging')",
+              "stop-old": MAIN + " && (github.event_name == 'workflow_dispatch' && inputs.target == 'stop-old')",
+          }
+          # GitHub's == ignores case, so each job first checks the ref again
+          # in the shell, which compares exactly.
+          EXPECTED_FIRST_STEP = {
+              "name": "Run only on main",
+              "run": 'test "$GITHUB_REF" = "refs/heads/main"',
+          }
+          EXPECTED_ON = {
+              "push": {
+                  "branches": ["main"],
+                  "paths": [
+                      "packages/guardian/modal/**",
+                      ".github/workflows/guardian-modal.yml",
+                  ],
+              },
+              "workflow_dispatch": {
+                  "inputs": {
+                      "target": {
+                          "description": "Run from main only. production deploys mano-guardian-server; staging deploys main to mano-guardian-staging; stop-staging stops it; stop-old stops the old mano-guardian app after the URL swap",
+                          "type": "choice",
+                          "options": ["production", "staging", "stop-staging", "stop-old"],
+                          "default": "production",
+                      },
+                      "min_containers": {
+                          "description": "Production only. GPU containers kept up: 0 scales to zero, 1 keeps one warm",
+                          "type": "choice",
+                          "options": ["0", "1"],
+                          "default": "0",
+                      },
+                  }
+              },
+          }
 
 
-          def main_only(condition):
-              # Either the main check alone, or the main check AND one
-              # parenthesized group, so no `||` can reach around it.
-              if not isinstance(condition, str):
-                  return False
-              text = " ".join(condition.split())
-              if text == MAIN:
-                  return True
-              prefix = MAIN + " && ("
-              if not (text.startswith(prefix) and text.endswith(")")):
-                  return False
-              depth = 0
-              for index in range(len(prefix) - 1, len(text)):
-                  if text[index] == "(":
-                      depth += 1
-                  elif text[index] == ")":
-                      depth -= 1
-                      if depth == 0 and index != len(text) - 1:
-                          return False
-              return depth == 0
+          def problems(workflow):
+              found = []
+              triggers = workflow.get("on", workflow.get(True))
+              if triggers != EXPECTED_ON:
+                  found.append("triggers differ from the allowlist")
+              jobs = workflow.get("jobs") or {}
+              if set(jobs) != set(EXPECTED_IF):
+                  found.append(f"jobs are {sorted(jobs)}, not {sorted(EXPECTED_IF)}")
+              for name, job in jobs.items():
+                  if job.get("if") != EXPECTED_IF.get(name):
+                      found.append(f"job {name} has if {job.get('if')!r}")
+                  steps = job.get("steps") or [None]
+                  if steps[0] != EXPECTED_FIRST_STEP:
+                      found.append(f"job {name} does not start with the main-only step")
+              return found
 
-
-          for bad in (
-              None,
-              "github.event_name == 'workflow_dispatch'",
-              MAIN + " || inputs.target == 'staging'",
-              MAIN + " && inputs.target == 'staging' || github.event_name == 'push'",
-              MAIN + " && (inputs.target == 'a') || (inputs.target == 'b')",
-              "github.ref != 'refs/heads/main' && (true)",
-          ):
-              assert not main_only(bad), bad
-          assert main_only(MAIN)
-          assert main_only(MAIN + " && (github.event_name == 'push' || inputs.target == 'production')")
 
           with open(".github/workflows/guardian-modal.yml") as handle:
-              workflow = yaml.safe_load(handle)
-          triggers = workflow.get("on", workflow.get(True))
-          assert set(triggers) <= {"push", "workflow_dispatch"}, sorted(triggers)
-          assert triggers.get("push", {}).get("branches") in (None, ["main"]), triggers["push"]
-          for name, job in workflow["jobs"].items():
-              assert main_only(job.get("if")), f"job {name} can run off main: {job.get('if')!r}"
-          print(f"guardian-modal: all {len(workflow['jobs'])} jobs run only on main")
+              actual = yaml.safe_load(handle)
+
+          # The rule must refuse each known way around it.
+          def edited(change):
+              workflow = copy.deepcopy(actual)
+              change(workflow)
+              return workflow
+
+          bypasses = {
+              "quoted parentheses": lambda w: w["jobs"]["staging"].update(
+                  {"if": MAIN + " && ('(' == '(') || true || (')' == ')')"}
+              ),
+              "push without branches": lambda w: w[True].update(
+                  {"push": {"branches-ignore": ["main"]}}
+              ),
+              "no case-sensitive step": lambda w: w["jobs"]["deploy"]["steps"].pop(0),
+              "or around the main check": lambda w: w["jobs"]["deploy"].update(
+                  {"if": MAIN + " || inputs.target == 'production'"}
+              ),
+              "no if": lambda w: w["jobs"]["stop-old"].pop("if"),
+              "extra job": lambda w: w["jobs"].update({"other": {"steps": []}}),
+              "pull_request trigger": lambda w: w[True].update({"pull_request": None}),
+          }
+          for name, change in bypasses.items():
+              assert problems(edited(change)), f"allowlist accepted: {name}"
+
+          found = problems(actual)
+          assert not found, found
+          print(f"guardian-modal: triggers and all {len(EXPECTED_IF)} job guards match the allowlist")
           EOF
       - name: Import the app and check its shape
         run: |
