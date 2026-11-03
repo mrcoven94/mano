@@ -1,13 +1,16 @@
-import { SELF } from "cloudflare:test";
+import { SELF, env as testEnv, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
+import type { PersonAgent } from "../src/agents/person-agent.js";
 import { timeZoneForState } from "../src/deadlines.js";
 
 // Nudges are timed in the person's own zone, through the real worker,
 // PersonAgent and profile store: the state on the profile when the
 // deadline is tracked picks the zone, and MANO_NUDGE_TIME (09:30 in
 // vitest.config.ts) is a local wall time there, on the right local day,
-// on both sides of the next daylight saving change. With no state on
+// on both sides of the next daylight saving change. The alarm's own
+// delivery run at each scheduled instant hands that nudge to Channels
+// then, so its quiet-hours window is in the same zone. With no state on
 // file the zone is Pacific: 09:30 there is 06:30 to 13:30 local across
 // the 50 states and DC, never between 22:00 and 06:00.
 
@@ -38,14 +41,19 @@ async function call(handleHash: string, method: string, path: string, body?: unk
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
-type Nudge = { daysBefore: number; at: string };
+type Nudge = { reminderId: string; daysBefore: number; at: string };
 
 // A person whose profile says they live in this state (none: no state on
 // file), with one interview deadline: its nudges as GET lists them.
 async function nudgesFor(tag: string, state: string | null, dueDate: string): Promise<Nudge[]> {
+  return (await personWith(tag, state, dueDate)).nudges;
+}
+
+async function personWith(tag: string, state: string | null, dueDate: string): Promise<{ h: string; nudges: Nudge[] }> {
   vi.stubGlobal("fetch", async () => Response.json({ sent: true }));
   const h = handle(tag);
   if (state) {
@@ -68,7 +76,29 @@ async function nudgesFor(tag: string, state: string | null, dueDate: string): Pr
   });
   expect(created.status).toBe(201);
   const list = (await (await call(h, "GET", "/deadlines")).json()) as { deadlines: { nudges: Nudge[] }[] };
-  return list.deadlines[0].nudges;
+  return { h, nudges: list.deadlines[0].nudges };
+}
+
+// The clock set to each nudge's scheduled instant in turn, and the
+// delivery run the alarm makes (claim, quiet-hours gate, handoff to
+// Channels). Answers the keys Channels was handed at each instant.
+async function deliveredAtEachInstant(h: string, nudges: Nudge[]): Promise<string[][]> {
+  const ns = testEnv.PERSON_AGENT as DurableObjectNamespace;
+  const stub = ns.get(ns.idFromName(personIdForHandle(h)));
+  const handed: string[][] = [];
+  for (const n of nudges) {
+    const keys: string[] = [];
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      keys.push((JSON.parse(String(init?.body)) as { key: string }).key);
+      return Response.json({ sent: true });
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse(n.at));
+    await runInDurableObject(stub, (instance) => (instance as PersonAgent).deliverDueReminders());
+    vi.useRealTimers();
+    handed.push(keys);
+  }
+  return handed;
 }
 
 // The wall clock in a zone, read independently of Engine's own zone math.
@@ -116,8 +146,9 @@ describe("nudges are timed in the person's own zone", () => {
     ["NY", "America/New_York"],
   ] as const) {
     it(`a person in ${state} gets each nudge at ${NUDGE_TIME} ${zone} on its own day, across the daylight saving change`, async () => {
-      const nudges = await nudgesFor(`dz-${state}`, state, due);
+      const { h, nudges } = await personWith(`dz-${state}`, state, due);
       expect(nudges.map((n) => n.daysBefore)).toEqual([14, 7, 2, 0]);
+      expect(await deliveredAtEachInstant(h, nudges)).toEqual(nudges.map((n) => [`reminder:${n.reminderId}`]));
       for (const n of nudges) expect(local(n.at, zone)).toMatchObject({ date: addDays(due, -n.daysBefore), time: NUDGE_TIME });
       // The change falls between the 7- and 2-day nudges: same local
       // time, a different UTC offset.
@@ -129,8 +160,9 @@ describe("nudges are timed in the person's own zone", () => {
   }
 
   it("a person in Hawaii, which keeps one offset all year, gets theirs at the same local time", async () => {
-    const nudges = await nudgesFor("dz-HI", "HI", due);
+    const { h, nudges } = await personWith("dz-HI", "HI", due);
     expect(nudges.map((n) => n.daysBefore)).toEqual([14, 7, 2, 0]);
+    expect(await deliveredAtEachInstant(h, nudges)).toEqual(nudges.map((n) => [`reminder:${n.reminderId}`]));
     for (const n of nudges) expect(local(n.at, "Pacific/Honolulu")).toEqual({ date: addDays(due, -n.daysBefore), time: NUDGE_TIME, offsetMin: -600 });
   });
 
@@ -140,8 +172,9 @@ describe("nudges are timed in the person's own zone", () => {
   });
 
   it("with no state on file, nudges are Pacific and never fall in anyone's night in the 50 states and DC", async () => {
-    const nudges = await nudgesFor("dz-none", null, due);
+    const { h, nudges } = await personWith("dz-none", null, due);
     expect(nudges.map((n) => n.daysBefore)).toEqual([14, 7, 2, 0]);
+    expect(await deliveredAtEachInstant(h, nudges)).toEqual(nudges.map((n) => [`reminder:${n.reminderId}`]));
     for (const n of nudges) expect(local(n.at, "America/Los_Angeles")).toMatchObject({ date: addDays(due, -n.daysBefore), time: NUDGE_TIME });
     const zones = new Set(STATES.map((state) => timeZoneForState(state)));
     for (const zone of zones) {
