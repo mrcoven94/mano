@@ -16,6 +16,7 @@ import { parseActionView, type ParsedAction } from "../../lib/action-view";
 import { approvalGate } from "../../lib/approve-gate";
 import { approveOutcome } from "../../lib/approve-result";
 import type { ActionType, Approval, ApprovalDocument, ApproveResult, DeclineAnswer } from "../../lib/api/types";
+import { provenNotSent } from "../../lib/sent-proof";
 import { AuthError, StaleApprovalError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { formatDate } from "../../lib/dates";
@@ -36,20 +37,16 @@ type DocState = "loading" | "ready" | "failed";
 
 // A NO: in flight, failed (safe to repeat), or answered with the
 // approval's status on file afterward.
-type NoState = { phase: "idle" } | { phase: "sending" } | { phase: "failed" } | { phase: "answered"; status: DeclineAnswer };
+type NoState = { phase: "idle" } | { phase: "sending" } | { phase: "failed" } | { phase: "answered"; answer: DeclineAnswer };
 const NO_IDLE: NoState = { phase: "idle" };
 
-// The line for each answer, one entry per status so a new one cannot
-// fall through to "nothing was sent". Only expired, stale and blocked
-// leave pending without a send; revoked was approved and may have gone.
-const NO_LINES: Record<DeclineAnswer, "declinedNote" | "declineTooLate" | "declineUnconfirmed" | "declineClosed"> = {
-  rejected: "declinedNote",
-  approved: "declineTooLate",
-  revoked: "declineUnconfirmed",
-  expired: "declineClosed",
-  stale: "declineClosed",
-  blocked: "declineClosed",
-};
+// "Nothing was sent" only when proven for the whole idempotency key
+// (lib/sent-proof.ts); otherwise the honest line is that it may have gone.
+function noLine(answer: DeclineAnswer): "declinedNote" | "declineTooLate" | "unconfirmedSend" | "declineClosed" {
+  if (answer.status === "approved") return "declineTooLate";
+  if (!answer.notSent) return "unconfirmedSend";
+  return answer.status === "rejected" ? "declinedNote" : "declineClosed";
+}
 
 export default function ApprovalDetail() {
   const s = useStrings();
@@ -58,6 +55,8 @@ export default function ApprovalDetail() {
   const router = useRouter();
   const { client, session, mode, personStore, generation: sessionGeneration, isCurrentGeneration, signOut } = useAuth();
   const [approval, setApproval] = useState<Approval | null>(null);
+  // Other approvals under the same idempotency key, as of the last load.
+  const [keyMates, setKeyMates] = useState<Approval[]>([]);
   const [action, setAction] = useState<ParsedAction | null>(null);
   const [doc, setDoc] = useState<ApprovalDocument | null>(null);
   const [docState, setDocState] = useState<DocState>("loading");
@@ -77,6 +76,7 @@ export default function ApprovalDetail() {
     setFailed(false);
     setStale(false);
     setApproval(null);
+    setKeyMates([]);
     setAction(null);
     setDoc(null);
     setDocState("loading");
@@ -90,6 +90,7 @@ export default function ApprovalDetail() {
       const found = all.find((a) => a.id === id) ?? null;
       setApproval(found);
       if (!found) return;
+      setKeyMates(all.filter((a) => a.idempotencyKey === found.idempotencyKey && a.id !== found.id));
       setAction(parseActionView(found.requestJson));
       if (!found.documentId) {
         setDocState("ready");
@@ -127,6 +128,7 @@ export default function ApprovalDetail() {
   useClearOnSignOut(() => {
     generation.current += 1;
     setApproval(null);
+    setKeyMates([]);
     setAction(null);
     setDoc(null);
     setDocState("loading");
@@ -177,9 +179,9 @@ export default function ApprovalDetail() {
     if (!session || !approval) return;
     setNo({ phase: "sending" });
     try {
-      const status = await client.decline(session, approval.id);
-      setApproval({ ...approval, status });
-      setNo({ phase: "answered", status });
+      const answer = await client.decline(session, approval.id);
+      setApproval({ ...approval, status: answer.status });
+      setNo({ phase: "answered", answer });
       const gen = sessionGeneration;
       await syncReminders(language, client, session, () => isCurrentGeneration(gen)).catch(() => {});
     } catch (err) {
@@ -210,6 +212,13 @@ export default function ApprovalDetail() {
       })
     : { canApprove: false as const, reason: "not-pending" as const };
   const canApprove = gate.canApprove;
+  // Every "nothing was sent" on this screen hangs on this. A NO's answer
+  // is the freshest read of the key; before one, the last load's.
+  const nothingSent = approval
+    ? no.phase === "answered"
+      ? no.answer.notSent
+      : provenNotSent([approval, ...keyMates])
+    : false;
   const outcome = receipt ? approveOutcome(receipt) : null;
 
   const handleLink = useCallback(
@@ -316,17 +325,17 @@ export default function ApprovalDetail() {
                   {linkBlocked ? <Muted style={styles.warn}>{s.linkBlocked}</Muted> : null}
                 </View>
               ) : (
-                <Body>{s.staleNote}</Body>
+                <Body>{nothingSent ? s.staleNote : s.docUnavailable}</Body>
               )}
             </Card>
           ) : null}
 
-          {approval.status === "blocked" && !receipt ? (
+          {approval.status === "blocked" && !receipt && nothingSent ? (
             <Card>
               <Body>{s.blockedNote}</Body>
             </Card>
           ) : null}
-          {stale && approval.status === "pending" ? (
+          {stale && approval.status === "pending" && nothingSent ? (
             <Card>
               <Body>{s.staleNote}</Body>
             </Card>
@@ -340,13 +349,15 @@ export default function ApprovalDetail() {
               <Body>
                 {outcome === "sent"
                   ? s.receiptBody
-                  : outcome === "blocked"
-                    ? (receipt.reason ?? s.blockedNote)
-                    : outcome === "stale"
-                      ? s.staleNote
-                      : outcome === "needs-approval"
-                        ? s.resultNeedsApproval
-                        : s.resultSending}
+                  : outcome !== "sending" && !nothingSent
+                    ? s.unconfirmedSend
+                    : outcome === "blocked"
+                      ? (receipt.reason ?? s.blockedNote)
+                      : outcome === "stale"
+                        ? s.staleNote
+                        : outcome === "needs-approval"
+                          ? s.resultNeedsApproval
+                          : s.resultSending}
               </Body>
               {outcome === "sent" && receipt.receiptId ? (
                 <Muted>
@@ -362,7 +373,7 @@ export default function ApprovalDetail() {
             </Card>
           ) : no.phase === "answered" ? (
             <Card>
-              <Body>{s[NO_LINES[no.status]]}</Body>
+              <Body>{s[noLine(no.answer)]}</Body>
               <View style={styles.back}>
                 <Btn title={s.tabsApprovals} onPress={() => router.back()} />
               </View>

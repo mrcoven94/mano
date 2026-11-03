@@ -51,8 +51,13 @@ export interface ChatMessage {
 
 export type ActionType = "send" | "submit" | "call" | "fax" | "share";
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "revoked" | "expired" | "stale" | "blocked";
-// Where an approval stands after a NO: never still pending.
-export type DeclineAnswer = Exclude<ApprovalStatus, "pending">;
+// Where an approval stands after a NO. status is its own, never still
+// pending; notSent is true only when nothing under its idempotency key
+// went out or may have (lib/sent-proof.ts).
+export interface DeclineAnswer {
+  status: Exclude<ApprovalStatus, "pending">;
+  notSent: boolean;
+}
 
 // Mirrors the engine's Approval row (apps/engine/src/gateway/types.ts)
 // plus the document name, so cards render without a second fetch.
@@ -76,6 +81,9 @@ export interface Approval {
   remindAt: string;
   expiresAt: string;
   escalated: boolean;
+  // An attempt or receipt exists for this idempotency key, so the action
+  // may have gone out whatever this row's status says.
+  attempted: boolean;
 }
 
 export interface ApprovalDocument {
@@ -147,7 +155,8 @@ export interface ManoClient {
   // A NO, through the engine's reject route: nothing is sent, and a
   // repeat answers the same. Resolves to the approval's status on file
   // afterward: "rejected" when it is declined, otherwise the state it had
-  // already reached (approved, revoked, expired, stale, blocked).
+  // already reached (approved, revoked, expired, stale, blocked). Reads
+  // every approval under the same key before saying nothing was sent.
   decline(session: Session, approvalId: string): Promise<DeclineAnswer>;
   listDeadlines(session: Session): Promise<Deadline[]>;
   listDocuments(session: Session): Promise<DocMeta[]>;

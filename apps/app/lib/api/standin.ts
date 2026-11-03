@@ -6,6 +6,7 @@
 // the document bytes they carry, computed through the injected hasher.
 
 import { b64encode, utf8ToBytes } from "../base64";
+import { provenNotSent } from "../sent-proof";
 import {
   APPROVED_NOTICE,
   APPROVE_FOLLOWUP,
@@ -147,7 +148,7 @@ export class StandInClient implements ManoClient {
   // The one decision read. A YES or NO checks it after its last await
   // and writes in the same synchronous step, so of two racing decisions
   // exactly one finds the renewal pending.
-  private renewalStatus(): DeclineAnswer | "pending" {
+  private renewalStatus(): DeclineAnswer["status"] | "pending" {
     if (this.renewalApproved) return "approved";
     if (this.renewalDeclined) return "rejected";
     return "pending";
@@ -184,6 +185,7 @@ export class StandInClient implements ManoClient {
       remindAt: "2026-11-03T09:00:00.000Z",
       expiresAt: "2026-11-10T09:00:00.000Z",
       escalated: false,
+      attempted: this.renewalApproved !== null,
     };
   }
 
@@ -422,7 +424,7 @@ export class StandInClient implements ManoClient {
     const current = await this.currentApproval();
     if (approvalId !== current.id) throw new Error("Approval not found.");
     const status = this.renewalStatus();
-    if (status !== "pending") return status;
+    if (status !== "pending") return this.answerNo(current, status);
     this.renewalDeclined = true;
     this.messages.push({
       id: this.nextId("msg"),
@@ -432,7 +434,12 @@ export class StandInClient implements ManoClient {
       attachments: [],
       status: "sent",
     });
-    return "rejected";
+    return this.answerNo(current, "rejected");
+  }
+
+  // Judged from the live decision, not the snapshot read before it.
+  private answerNo(current: Approval, status: DeclineAnswer["status"]): DeclineAnswer {
+    return { status, notSent: provenNotSent([{ ...current, status, attempted: this.renewalApproved !== null }]) };
   }
 
   // --- deadlines ---

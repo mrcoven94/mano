@@ -107,8 +107,8 @@ describe("Maria spine run", () => {
     await client.sendMessage(session, "mail", [{ kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
     const [approval] = await client.listApprovals(session);
     if (!approval?.documentHash) throw new Error("expected a bound approval");
-    expect(await client.decline(session, approval.id)).toBe("rejected");
-    expect(await client.decline(session, approval.id)).toBe("rejected");
+    expect(await client.decline(session, approval.id)).toEqual({ status: "rejected", notSent: true });
+    expect(await client.decline(session, approval.id)).toEqual({ status: "rejected", notSent: true });
     const [after] = await client.listApprovals(session);
     expect(after?.status).toBe("rejected");
     const messages = await client.listMessages(session);
@@ -135,11 +135,11 @@ describe("Maria spine run", () => {
       const [after] = await client.listApprovals(session);
       const messages = await client.listMessages(session);
       if (yesOutcome.status === "fulfilled") {
-        expect(noOutcome).toEqual({ status: "fulfilled", value: "approved" });
+        expect(noOutcome).toEqual({ status: "fulfilled", value: { status: "approved", notSent: false } });
         expect(after?.status).toBe("approved");
         expect(messages.some((m) => m.text === DECLINE_REPLY)).toBe(false);
       } else {
-        expect(noOutcome).toEqual({ status: "fulfilled", value: "rejected" });
+        expect(noOutcome).toEqual({ status: "fulfilled", value: { status: "rejected", notSent: true } });
         expect(yesOutcome.reason).toBeInstanceOf(StaleApprovalError);
         expect(after?.status).toBe("rejected");
         expect(messages.filter((m) => m.text === DECLINE_REPLY)).toHaveLength(1);
@@ -154,7 +154,8 @@ describe("Maria spine run", () => {
     await client.sendMessage(session, "mail", [{ kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
     const [approval] = await client.listApprovals(session);
     if (!approval) throw new Error("expected an approval");
-    expect(await Promise.all([client.decline(session, approval.id), client.decline(session, approval.id)])).toEqual(["rejected", "rejected"]);
+    const answers = await Promise.all([client.decline(session, approval.id), client.decline(session, approval.id)]);
+    expect(answers.map((a) => a.status)).toEqual(["rejected", "rejected"]);
     expect((await client.listMessages(session)).filter((m) => m.text === DECLINE_REPLY)).toHaveLength(1);
   });
 
@@ -166,7 +167,7 @@ describe("Maria spine run", () => {
     const [approval] = await client.listApprovals(session);
     if (!approval?.documentHash) throw new Error("expected a bound approval");
     await client.approve(session, approval.id, { documentHash: approval.documentHash, requestHash: approval.requestHash });
-    expect(await client.decline(session, approval.id)).toBe("approved");
+    expect(await client.decline(session, approval.id)).toEqual({ status: "approved", notSent: false });
     expect((await client.listMessages(session)).some((m) => m.text === DECLINE_REPLY)).toBe(false);
   });
 
