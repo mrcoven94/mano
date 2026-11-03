@@ -12,7 +12,8 @@
 // MANO_MODEL_PROVIDER=openrouter (with OPENROUTER_API_KEY) switches the
 // agent to Meta's open-weight model through OpenRouter, pinned to
 // zero-retention endpoints that collect no data, the same pin as the text
-// line's fallback. It is for testing while the Meta Model API is down.
+// line's fallback, sorted by latency and at low reasoning effort. It is
+// for testing while the Meta Model API is down.
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   APICallError,
@@ -30,6 +31,14 @@ export const OPEN_WEIGHT_MODEL_ID = "meta/muse-spark-open";
 // OpenRouter provider routing: only endpoints with zero data retention,
 // and no provider that stores or trains on what it is sent.
 const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" } as const);
+// Among those endpoints, the fastest to answer first. Low reasoning
+// effort: over greeting, SNAP and YES turns the open model reasoned for
+// a median of 245 tokens at its default and 40 at low, and the voice
+// evals held. The model cannot turn reasoning off.
+const OPENROUTER_BODY = Object.freeze({
+  provider: { sort: "latency", ...ZERO_RETENTION },
+  reasoning: { effort: "low" },
+} as const);
 // Reasoning alone burns ~600-1100 tokens on a greeting; 4096 leaves
 // room for reasoning plus tool calls plus a short reply.
 export const MAX_OUTPUT_TOKENS = 4096;
@@ -220,7 +229,7 @@ export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageM
   const env = process.env;
   const route: ModelRoute =
     env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY
-      ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: { provider: ZERO_RETENTION } }
+      ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY }
       : {
           name: "meta",
           baseURL: opts.baseUrl ?? env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL,
