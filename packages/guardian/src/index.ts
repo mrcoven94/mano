@@ -10,21 +10,12 @@
  * GlimmerModelChecker is the model alone, for a caller that runs its own
  * rules first (Engine's action gateway does). Its warm()
  * starts the model ahead of a check, for example when a conversation
- * starts, since a cold start takes minutes. check() takes the person's
- * own names and details to redact by value, split into the values the
- * person gave (confirmed) and the rest (Engine reads both from the
- * profile and its suggestions). Each is found however it is written:
- * text and values are folded to letters and digits first, so spacing,
- * case, accents and punctuation never matter, a first name alone still
- * matches, and phones and birth dates match on the number or day they
- * name. An unconfirmed value is used only when it looks like its kind,
- * so a document cannot hide an instruction behind [NAME]. A submit
- * carries its form fields; a personal field goes as its label only when
- * it holds the person's confirmed value, and otherwise as scrubbed text
- * Guardian can read. A personal field that is not its kind at all (an
- * email where a name belongs) blocks the check before anything is sent.
- * redact() strips personal details from text going to logs or outside
- * graders.
+ * starts, since a cold start takes minutes. Guardian sees each action as
+ * Mano would send it: the recipient, purpose, payload with every form
+ * field and its real value, the document hash, the cited sources with
+ * their quotes, the consents on record and who asked. Nothing is removed
+ * first, so nothing can hide an attack from it. A personal form field
+ * holding an email address or a link is held before the model is asked.
  *
  * Run it: set MANO_GUARDIAN_RULES_ONLY=1 for explicit local rules-only,
  * or set MANO_GUARDIAN_URL and MANO_GUARDIAN_TOKEN (see .env.example)
@@ -37,7 +28,7 @@
  *
  * Test it: pnpm --filter @mano/guardian check (tsc plus vitest: unit
  * tests, fail-closed integration tests against the stand-in over real
- * HTTP, a 44-case eval that scores both checkers, and 14 renewal forms
+ * HTTP, a 44-case eval that scores both checkers, and 15 renewal forms
  * scored on the model alone the way Engine runs it, where an attack
  * counts as caught only when blocked).
  *
@@ -54,7 +45,6 @@ export type {
   CheckResult,
   CheckSource,
   Checker,
-  ModelRequest,
   Origin,
   SourceKind,
   Verdict,
@@ -70,6 +60,4 @@ export {
   glimmerCheckerFromEnv,
 } from "./glimmer.js";
 export type { ProxyAuth, ServerInfo } from "./glimmer.js";
-export { buildModelRequest, redact } from "./redact.js";
-export type { KnownEntities, PersonValues } from "./known.js";
 export { canonicalRecipient } from "./rules.js";
