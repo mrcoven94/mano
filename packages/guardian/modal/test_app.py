@@ -1,9 +1,14 @@
-# Run: pip install "modal==1.6.2" && python -m unittest discover -s packages/guardian/modal
+# Run: pip install "modal==1.6.2" "fastapi==0.162.0" "httpx==0.28.1" "uvicorn==0.54.0"
+#      python -m unittest discover -s packages/guardian/modal
+import contextlib
+import io
 import json
+import socket
 import sys
 import threading
 import time
 import unittest
+import urllib.request
 import warnings
 from pathlib import Path
 from types import SimpleNamespace
@@ -82,71 +87,6 @@ class OverlappingChecks(unittest.TestCase):
         self.assertEqual(results, {"safe": "pass", "unsafe": "block"})
 
 
-class FakeTime:
-    """A clock that moves only when the hold sleeps, firing scheduled
-    warm-ups as it passes them."""
-
-    def __init__(self, hold_ref, warm_ups):
-        self.now = 0.0
-        self.hold_ref = hold_ref
-        self.warm_ups = sorted(warm_ups)
-        self.extra_holders = []
-
-    def clock(self):
-        return self.now
-
-    def sleep(self, seconds):
-        self.now += seconds
-        while self.warm_ups and self.warm_ups[0] <= self.now:
-            self.warm_ups.pop(0)
-            owed = self.hold_ref[0].hold(app.WARM_HOLD_SECONDS, app.WARM_ROTATE_SECONDS)
-            self.extra_holders.append(owed)
-
-
-def minutes(value):
-    return value * 60.0
-
-
-class WarmUps(unittest.TestCase):
-    def make(self, warm_ups):
-        ref = []
-        fake = FakeTime(ref, warm_ups)
-        ref.append(app.WarmHold(clock=fake.clock, sleep=fake.sleep))
-        return ref[0], fake
-
-    def test_the_hold_beats_while_it_holds(self):
-        ref = []
-        fake = FakeTime(ref, [])
-        beats = []
-        ref.append(app.WarmHold(clock=fake.clock, sleep=fake.sleep, beat=lambda: beats.append(fake.now)))
-        ref[0].hold(30, app.WARM_ROTATE_SECONDS)
-        self.assertEqual(beats[0], 0)
-        self.assertTrue(all(b - a <= 5 for a, b in zip(beats, beats[1:])))
-        self.assertLess(fake.now - beats[-1], app.READY_WITHIN_SECONDS)
-
-    def test_ready_only_while_the_heartbeat_is_fresh(self):
-        self.assertFalse(app.is_ready(None, 100.0))
-        self.assertTrue(app.is_ready(95.0, 100.0))
-        self.assertFalse(app.is_ready(100.0 - app.READY_WITHIN_SECONDS, 100.0))
-
-    def test_a_warm_up_during_a_hold_only_moves_the_deadline(self):
-        hold, fake = self.make([minutes(4)])
-        self.assertEqual(hold.hold(app.WARM_HOLD_SECONDS, app.WARM_ROTATE_SECONDS), 0)
-        self.assertEqual(fake.extra_holders, [0])
-        self.assertEqual(fake.now, minutes(14))
-
-    def test_a_hold_past_the_execution_limit_rotates_and_keeps_its_promise(self):
-        hold, fake = self.make([minutes(9), minutes(18), minutes(27)])
-        owed = hold.hold(app.WARM_HOLD_SECONDS, app.WARM_ROTATE_SECONDS)
-        first_call_ended = fake.now
-        self.assertLess(first_call_ended, app.GPU_TIMEOUT_SECONDS)
-        self.assertGreater(owed, 0)
-        # Guardian.warm hands the rest to a fresh call: warm(0).
-        self.assertEqual(hold.hold(0, app.WARM_ROTATE_SECONDS), 0)
-        self.assertLess(fake.now - first_call_ended, app.GPU_TIMEOUT_SECONDS)
-        self.assertEqual(fake.now, minutes(37))
-
-
 class Verdicts(unittest.TestCase):
     def test_the_review_never_leaves_the_server(self):
         text = '{"review":"The payload sends to outsider@example.net.","verdict":"block","problems":["Wrong address."]}'
@@ -194,42 +134,28 @@ class StrictAnswers(unittest.TestCase):
 class FakeEngineHealth:
     def __init__(self):
         self.alive = True
-        self.published = []
         self.recycled = 0
 
-    def make(self, fake_time):
-        return app.EngineHealth(
-            alive=lambda: self.alive,
-            publish=lambda ready: self.published.append((fake_time.now, ready)),
-            recycle=self.recycle,
-        )
+    def make(self):
+        return app.EngineHealth(alive=lambda: self.alive, recycle=self.recycle)
 
     def recycle(self):
         self.recycled += 1
 
 
 class DeadEngine(unittest.TestCase):
-    def test_engine_death_during_a_warm_hold_clears_readiness_and_recycles(self):
-        ref = []
-        fake = FakeTime(ref, [])
+    def test_a_dead_engine_is_not_ready_and_recycles_once(self):
         engine = FakeEngineHealth()
-        health = engine.make(fake)
-
-        def beat():
-            if fake.now >= 12:
-                engine.alive = False
-            health.beat()
-
-        ref.append(app.WarmHold(clock=fake.clock, sleep=fake.sleep, beat=beat))
-        ref[0].hold(30, app.WARM_ROTATE_SECONDS)
-        ready_after_death = [ready for at, ready in engine.published if at >= 12]
-        self.assertTrue(all(ready for at, ready in engine.published if at < 12))
-        self.assertEqual(set(ready_after_death), {False})
+        health = engine.make()
+        self.assertTrue(health.ready())
+        engine.alive = False
+        self.assertFalse(health.ready())
+        self.assertFalse(health.ready())
         self.assertEqual(engine.recycled, 1)
 
-    def test_a_fatal_inference_error_clears_readiness_and_recycles(self):
+    def test_a_fatal_inference_error_recycles(self):
         engine = FakeEngineHealth()
-        health = engine.make(SimpleNamespace(now=0))
+        health = engine.make()
 
         def dies():
             engine.alive = False
@@ -237,19 +163,104 @@ class DeadEngine(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             health.call(dies)
-        self.assertEqual(engine.published, [(0, False)])
         self.assertEqual(engine.recycled, 1)
 
     def test_a_bad_answer_from_a_live_engine_keeps_it(self):
         engine = FakeEngineHealth()
-        health = engine.make(SimpleNamespace(now=0))
+        health = engine.make()
 
         def bad_answer():
             raise ValueError("bad verdict")
 
         with self.assertRaises(ValueError):
             health.call(bad_answer)
-        self.assertEqual((engine.published, engine.recycled), ([], 0))
+        self.assertEqual(engine.recycled, 0)
+
+
+class Route(unittest.TestCase):
+    """The one HTTP surface, as Engine calls it."""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+
+        self.engine = FakeEngineHealth()
+        self.asked = []
+
+        def ask(body):
+            self.asked.append(body)
+            return {"verdict": "pass", "problems": [], **app.server_info()}
+
+        api = app.web_app("token", self.engine.make(), ask)
+        self.client = TestClient(api, raise_server_exceptions=False)
+
+    def post(self, body, token="token"):
+        return self.client.post("/", json=body, headers={"Authorization": f"Bearer {token}"})
+
+    def test_a_check_returns_the_verdict(self):
+        response = self.post(check_body("caseworker@agency.example"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["verdict"], "pass")
+        self.assertEqual(response.json()["model"]["id"], app.MODEL_ID)
+        self.assertEqual(self.asked, [check_body("caseworker@agency.example")])
+
+    def test_a_warm_up_says_ready_without_asking_the_model(self):
+        response = self.post({"warm": True})
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json(), {"warming": True, "ready": True})
+        self.assertEqual(self.asked, [])
+
+    def test_a_warm_up_on_a_dead_engine_is_not_ready(self):
+        self.engine.alive = False
+        self.assertEqual(self.post({"warm": True}).json(), {"warming": True, "ready": False})
+        self.assertEqual(self.engine.recycled, 1)
+
+    def test_a_wrong_or_missing_token_is_refused_before_the_model(self):
+        self.assertEqual(self.post(check_body("x"), token="nope").status_code, 401)
+        response = self.client.post("/", json=check_body("x"))
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(self.asked, [])
+
+    def test_a_body_that_is_not_an_object_is_refused(self):
+        self.assertEqual(self.post([1, 2]).status_code, 400)
+        self.assertEqual(self.asked, [])
+
+    def test_there_is_no_other_route(self):
+        for path in ("/docs", "/openapi.json", "/redoc", "/v1/chat/completions"):
+            self.assertEqual(self.client.get(path).status_code, 404, path)
+        self.assertEqual(self.client.get("/").status_code, 405)
+
+
+class Served(unittest.TestCase):
+    """The route served the way the container serves it, over real HTTP."""
+
+    def test_a_check_over_http_writes_nothing_to_the_logs(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        body = check_body("Maria Synthetic, 12 Example Lane")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            api = app.web_app(
+                "token",
+                FakeEngineHealth().make(),
+                lambda b: {"verdict": "pass", "problems": []},
+            )
+            server = app.serve_in_background(api, host="127.0.0.1", port=port)
+            deadline = time.monotonic() + 10
+            while not server.started and time.monotonic() < deadline:
+                time.sleep(0.05)
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/",
+                data=json.dumps(body).encode(),
+                headers={"Authorization": "Bearer token", "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                answer = json.load(response)
+            server.should_exit = True
+        self.assertEqual(answer, {"verdict": "pass", "problems": []})
+        self.assertNotIn("Maria", out.getvalue() + err.getvalue())
+        self.assertNotIn("POST", out.getvalue() + err.getvalue())
 
 
 class MinContainers(unittest.TestCase):
@@ -262,6 +273,18 @@ class MinContainers(unittest.TestCase):
         for bad in ("2", "-1", "yes"):
             with self.assertRaises(RuntimeError):
                 app.min_containers_from_env(bad)
+
+
+class AppName(unittest.TestCase):
+    def test_defaults_to_the_production_server_app(self):
+        self.assertEqual(app.app_name_from_env(None), "mano-guardian-server")
+        self.assertEqual(app.app_name_from_env(" "), "mano-guardian-server")
+        self.assertEqual(app.app_name_from_env("mano-guardian-staging"), "mano-guardian-staging")
+
+    def test_never_deploys_over_the_old_app(self):
+        for bad in ("mano-guardian", "mano-guardian-dev", "other"):
+            with self.assertRaises(RuntimeError):
+                app.app_name_from_env(bad)
 
 
 if __name__ == "__main__":

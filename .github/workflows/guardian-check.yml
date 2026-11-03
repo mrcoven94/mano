@@ -1,8 +1,9 @@
 name: guardian-check
 
 # Gates guardian pull requests: the Modal app must import under the pinned
-# SDK, expose exactly one authenticated route, refuse blank tokens, strictly
-# parse verdicts, and match its pinned model and image.
+# SDK, serve its one authenticated route as a Modal Server (whose requests
+# Modal does not store) with no Function taking a check as input, refuse
+# blank tokens, strictly parse verdicts, and match its pinned model and image.
 on:
   pull_request:
     paths:
@@ -25,7 +26,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install "modal==1.6.2"
+      - run: pip install "modal==1.6.2" "fastapi==0.162.0" "httpx==0.28.1" "uvicorn==0.54.0"
       - name: Test the app
         run: python -m unittest discover -s packages/guardian/modal -v
       - name: Import the app and check its shape
@@ -38,12 +39,20 @@ jobs:
 
           sys.path.insert(0, "packages/guardian/modal")
           warnings.filterwarnings("ignore")
+          import modal  # noqa: E402
           import app  # noqa: E402  (must import under the pinned SDK)
 
-          # Exactly one web route.
-          assert app.app.registered_web_endpoints == ["check"], (
+          # The route is a Server named check. No web Function, whose
+          # requests Modal would keep as inputs, and nothing else deployed
+          # but the weight download.
+          assert isinstance(app.Guardian, modal.Server), type(app.Guardian)
+          assert app.app.registered_web_endpoints == [], (
               app.app.registered_web_endpoints
           )
+          assert sorted(app.app.registered_functions) == ["check", "download"], (
+              sorted(app.app.registered_functions)
+          )
+          assert app.app.registered_classes == {}, app.app.registered_classes
 
           # Blank tokens refuse to start.
           for bad in (None, "", "   "):
@@ -79,23 +88,34 @@ jobs:
               else:
                   raise AssertionError(f"accepted bad verdict {bad}")
 
-          # Auth, concurrency, and single-route wiring present; retired
-          # options and extra surfaces absent.
+          # Proxy auth stays on (the Server default), the route has no
+          # access log, and nothing sends a check through Modal's input
+          # system or stores it.
           source = open("packages/guardian/modal/app.py").read()
           for wanted in (
-              "requires_proxy_auth=True",
-              "modal.concurrent",
+              "@app.server(",
+              "access_log=False",
+              "max_concurrency=8",
               "revision=MODEL_REVISION",
               "vllm-openai@{IMAGE_DIGEST}",
           ):
               assert wanted in source, wanted
           assert source.count("revision=MODEL_REVISION") == 2
-          assert source.count("fastapi_endpoint") == 1
           for banned in (
-              "allow_concurrent_inputs",
-              "from_registry(IMAGE_TAG)",
+              "unauthenticated",
+              "fastapi_endpoint",
               "web_server",
               "asgi_app",
+              "@modal.method",
+              ".remote(",
+              ".spawn(",
+              ".map(",
+              "modal.Dict",
+              "modal.Queue",
+              "print(",
+              "logging",
+              "allow_concurrent_inputs",
+              "from_registry(IMAGE_TAG)",
               "/invocations",
               "subprocess",
           ):
