@@ -217,7 +217,7 @@ async function forwardToAgent(
   if (request.method !== "GET" && request.method !== "HEAD") {
     init.body = await request.arrayBuffer();
   }
-  return stub.fetch(new Request(new URL(path, "https://agent.internal"), init));
+  return stub.fetch(new Request(`https://agent.internal${path}`, init));
 }
 
 // Body caps: about 1 MB for actions, 15 MB for uploads. Both the declared

@@ -88,13 +88,13 @@ export function privateObjectUrl(creds: R2Creds, key: string): string {
 
 export function signedPrivateGet(creds: R2Creds, key: string, date = new Date()): SignedGet {
   const url = privateObjectUrl(creds, key);
-  const host = new URL(url).host;
+  const { host, pathname } = new URL(url);
   const { authorization, amzDate: stamp } = signS3Get({
     accessKeyId: creds.accessKeyId,
     secretAccessKey: creds.secretAccessKey,
     region: creds.region ?? "auto",
     host,
-    path: new URL(url).pathname,
+    path: pathname,
     date,
   });
   return {
