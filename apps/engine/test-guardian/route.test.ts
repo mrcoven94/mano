@@ -1,4 +1,4 @@
-import { SELF } from "cloudflare:test";
+import { SELF, env as testEnv, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
 
@@ -106,6 +106,55 @@ describe("Guardian on Engine's action route", () => {
     expect(checks[0]!.body.sources).toEqual([
       { kind: "document", id: "letter-1", quote: "[NAME] works at [EMPLOYER]. [NAME] is her son." },
     ]);
+  });
+
+  it("removes values waiting for the person's confirmation before asking Guardian", async () => {
+    const person = await asAgent("PATCH", "/profile", {
+      idempotencyKey: "route-profile-2",
+      source: "person",
+      generation: 0,
+      fields: {
+        "household.kid2.name": "Ana Synthetic",
+        "income.job2.memberId": "self",
+        "income.job2.source": "Synthetic Grocer",
+      },
+    });
+    expect(person.status).toBe(200);
+    const agent = await asAgent("PATCH", "/profile", {
+      idempotencyKey: "route-profile-3",
+      source: "agent",
+      generation: 0,
+      fields: { "household.kid2.name": "Anabel Synthetic", "income.job2.source": "Copperleaf Diner" },
+    });
+    expect(agent.status).toBe(200);
+    expect(((await agent.json()) as { suggestions: { path: string }[] }).suggestions.map((s) => s.path)).toEqual(
+      expect.arrayContaining(["household.kid2.name", "income.job2.source"]),
+    );
+    const said = "Anabel starts at Copperleaf Diner on Monday.";
+    const result = await propose({ sources: [{ kind: "document", id: "letter-2", quote: said }] });
+    expect(result.status).toBe("needs_approval");
+    expect(checks).toHaveLength(1);
+    const wire = JSON.stringify(checks[0]!.body);
+    for (const raw of ["Anabel", "Copperleaf"]) expect(wire).not.toContain(raw);
+    expect(checks[0]!.body.sources).toEqual([{ kind: "document", id: "letter-2", quote: "[NAME] starts at [EMPLOYER] on Monday." }]);
+  });
+
+  it("blocks without asking Guardian when a suggestion cannot be read", async () => {
+    const patched = await asAgent("PATCH", "/profile", {
+      idempotencyKey: "route-profile-4",
+      source: "agent",
+      generation: 0,
+      fields: { "income.job2.source": "Copperleaf Diner Two" },
+    });
+    expect(patched.status).toBe(200);
+    const namespace = testEnv.PERSON_AGENT as DurableObjectNamespace;
+    await runInDurableObject(namespace.get(namespace.idFromName(PERSON)), (_agent, state) => {
+      const changed = state.storage.sql.exec("UPDATE profile_suggestions SET sealed = 'not-a-sealed-value'").rowsWritten;
+      expect(changed).toBeGreaterThan(0);
+    });
+    const result = await propose();
+    expect(result).toMatchObject({ status: "blocked", reason: "Blocked by review: the checker failed and the gateway fails closed." });
+    expect(checks).toHaveLength(0);
   });
 
   it("carries a fix onto the approval and refuses a block", async () => {

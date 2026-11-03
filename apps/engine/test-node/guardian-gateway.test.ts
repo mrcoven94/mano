@@ -251,6 +251,40 @@ describe("Guardian on the live path", () => {
     });
   });
 
+  it("lists the personal values the person has not confirmed yet", () => {
+    const leaf = (value: string) => ({ value, source: "person" as const, updatedAt: "2026-11-01T00:00:00.000Z" });
+    const suggested = (path: string, value: string | number) => ({
+      path,
+      value,
+      source: "document" as const,
+      documentId: "letter-1",
+      suggestedAt: "2026-11-02T00:00:00.000Z",
+    });
+    expect(
+      profileEntities(
+        {
+          person: { fullName: leaf("Maria Synthetic"), address: {} },
+          household: [{ id: "kid1", name: leaf("Leo Synthetic") }],
+          income: [{ id: "job1", source: leaf("Synthetic Bakery") }],
+          programs: [],
+        },
+        [
+          suggested("household.kid1.name", "Leonardo Synthetic"),
+          suggested("income.job1.source", "Copperleaf Diner"),
+          suggested("person.address.city", "Shelbyville"),
+          suggested("programs.snap.caseNumber", "SN-2026-0999"),
+          suggested("household.kid1.relationship", "nephew"),
+          suggested("income.job1.amount", 1450),
+        ],
+      ),
+    ).toEqual({
+      names: ["Maria Synthetic", "Leo Synthetic", "Leonardo Synthetic"],
+      employers: ["Synthetic Bakery", "Copperleaf Diner"],
+      addresses: ["Shelbyville"],
+      caseNumbers: ["SN-2026-0999"],
+    });
+  });
+
   it("attaches Guardian's problems to the approval on a fix", async () => {
     mode = "fix";
     const { gateway, store } = setup(GUARDIAN_ENV());
