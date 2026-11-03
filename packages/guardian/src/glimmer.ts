@@ -60,6 +60,13 @@ function blocked(problem: string): CheckResult {
   return { verdict: "block", problems: [problem] };
 }
 
+// Guardian scales to zero, and a cold start takes minutes. Modal answers
+// 503 while no container is up, and a check can also time out while one
+// starts. An immediate retry would find it cold again.
+const STARTING = 503;
+const COLD =
+  "The safety check is taking longer than usual, so this action is on hold. Please try again in a few minutes.";
+
 const UNREADABLE =
   "The safety check answered in a way Mano could not understand, so this action is on hold.";
 
@@ -152,7 +159,8 @@ export class GlimmerModelChecker implements Checker {
   // conversation starts. "ready" means the model is loaded now, "starting"
   // that it is on its way (a cold start takes minutes), "failed" that the
   // endpoint refused or could not be reached. A failure changes nothing,
-  // since a cold check still blocks.
+  // since a cold check still blocks. With no container up, Modal's proxy
+  // answers 503 and starts one.
   async warm(): Promise<WarmState> {
     try {
       const response = await this.fetchImpl(this.url, {
@@ -161,6 +169,7 @@ export class GlimmerModelChecker implements Checker {
         body: JSON.stringify({ warm: true }),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
+      if (response.status === STARTING) return "starting";
       if (!response.ok) return "failed";
       const body = (await response.json()) as unknown;
       const ready =
@@ -187,18 +196,13 @@ export class GlimmerModelChecker implements Checker {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
-      // Guardian scales to zero, so a timeout is most often a cold start
-      // that takes minutes. An immediate retry would time out again.
-      if (error instanceof DOMException && error.name === "TimeoutError") {
-        return blocked(
-          "The safety check is taking longer than usual, so this action is on hold. Please try again in a few minutes.",
-        );
-      }
+      if (error instanceof DOMException && error.name === "TimeoutError") return blocked(COLD);
       return blocked(
         "The safety check could not be reached, so this action is on hold. Please try again.",
       );
     }
 
+    if (response.status === STARTING) return blocked(COLD);
     if (!response.ok) {
       return blocked(
         "The safety check returned an error, so this action is on hold. Please try again.",

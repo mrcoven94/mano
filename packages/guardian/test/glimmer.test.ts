@@ -116,6 +116,26 @@ describe("GlimmerChecker", () => {
     await expect(checker.warm()).resolves.toBe("ready");
   });
 
+  it("reports starting when no container is up yet", async () => {
+    const fetchImpl = vi.fn(async () => new Response("no ready containers", { status: 503 }));
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(checker.warm()).resolves.toBe("starting");
+  });
+
+  it("reports a refused warm-up as failed", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ error: "unauthorized" }, 401));
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(checker.warm()).resolves.toBe("failed");
+  });
+
   it("reports a failed warm-up without throwing", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new TypeError("network down");
@@ -319,8 +339,20 @@ describe("GlimmerChecker", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks a check that finds no container up as a cold start", async () => {
+    const fetchImpl = vi.fn(async () => new Response("no ready containers", { status: 503 }));
+    const checker = new GlimmerChecker({
+      url: "https://guardian.example.com",
+      token: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await checker.check(passInput());
+    expect(result.verdict).toBe("block");
+    expect(result.problems.join(" ")).toMatch(/try again in a few minutes/);
+  });
+
   it("blocks on an error status", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({}, 503));
+    const fetchImpl = vi.fn(async () => jsonResponse({}, 500));
     const checker = new GlimmerChecker({
       url: "https://guardian.example.com",
       token: "token",

@@ -6,6 +6,11 @@ name: guardian-modal
 # (min_containers 1, about $1.95 an hour); the next merge returns it to 0.
 # Never run `modal deploy` from a laptop for production.
 #
+# The app is one Modal Server, so Modal does not store the actions it
+# checks or its answers (see the header of packages/guardian/modal/app.py).
+# The last step prints the Server's URL: Engine's MANO_GUARDIAN_URL must
+# match it.
+#
 # Needs two secrets in the guardian-production environment, set by a maintainer:
 #   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
 # The `mano-guardian` Modal secret (holding MANO_GUARDIAN_TOKEN) is created
@@ -38,7 +43,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install "modal==1.6.2"
+      - run: pip install "modal==1.6.2" "fastapi==0.162.0" "httpx==0.28.1" "uvicorn==0.54.0"
       - name: Test the app
         run: python -m unittest discover -s packages/guardian/modal -v
       - name: Cache model weights (CPU, no GPU billed)
@@ -50,5 +55,10 @@ jobs:
         run: modal deploy packages/guardian/modal/app.py
         env:
           MANO_GUARDIAN_MIN_CONTAINERS: ${{ inputs.min_containers || '0' }}
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      - name: Print the URL Engine must use as MANO_GUARDIAN_URL
+        run: python -c "import modal; print(modal.Server.from_name('mano-guardian', 'check').get_url())"
+        env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
