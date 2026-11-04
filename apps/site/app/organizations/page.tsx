@@ -7,7 +7,7 @@ import Rotating from "@/components/teams/Rotating";
 import { TeamHero, Stage, Steps, Rules, Seat, Close } from "@/components/teams/Parts";
 
 const title = "Case management for nonprofits";
-const description = "Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications and tracks every renewal, so families keep their help and your team spends its time with people.";
+const description = "Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications and tracks every renewal, so families keep their help and your team spends its time with people. Mano for nonprofits is coming soon.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/organizations" }, openGraph: { title, description } };
 
@@ -30,7 +30,7 @@ export default function Organizations() {
         before="Keep more families "
         phrase={<Rotating words={["housed.", "fed.", "warm.", "in child care.", "on their feet."]} />}
         after=""
-        lede="Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications, tracks every renewal and keeps your funder reports up to date, so your team spends its time with families instead of paperwork."
+        lede="Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications, tracks every renewal and keeps your funder reports up to date, so your team spends its time with families instead of paperwork. Mano for nonprofits is coming soon."
         stage={<Stage id="desk" label="Northside Family Center" hint="Ask for the missing page, then answer as Maria"><OrgConsent /></Stage>}
       >
         <a className="btn btn-primary btn-lg" href={MAIL}>Talk to us</a>
