@@ -56,7 +56,7 @@ Every model Mano calls at runtime is a Meta model. Meta's own API answers HTTP 4
 | Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes |
 | Crisis check, before the agent, on one short health question the keyword floor flags | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis |
 | Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Standby, on Muse Spark Open during the 402 |
-| Checking the reader's date, and holding a deadline | None, plain code | `packages/mail/src/naming.ts`, `packages/mail/src/gate.ts` | Deployed, not confirmed on production yet |
+| Checking the reader's date, and holding a deadline | None, plain code | `packages/mail/src/naming.ts`, `packages/mail/src/gate.ts` | Holding ran in the production runs below, which show no question naming a date. Checking the reader's date is deployed and not confirmed on production yet |
 | Drafting the renewal | None for the form table | `apps/agent/agent/lib/forms.ts` | Running |
 | The person's yes and the filing to the sandbox portal | None, plain code | `apps/engine/src/gateway` | Running. Run a4c0ec45 on production recorded receipt SR-PPW4FECM, not simulated |
 | Reminder the day before an interview | None, plain code | `apps/engine/src/deadlines.ts` | Deployed |
@@ -69,15 +69,19 @@ A document is now labeled by what it was read as, and a renewal says so when it 
 
 ### Mano's computer on production
 
-Three unbroken production runs from 3:19 to 3:23 PM ET on November 4, 2026, by `pnpm spine:live`, on the Modal route, with Mano's computer filling the sandbox portal and Guardian not blocking the filing at the yes:
+Three unbroken production runs on the current build, from 3:50 to 3:55 PM ET on November 4, 2026, by `pnpm spine:live`, on the Modal route, with Mano's computer filling the sandbox portal and Guardian not blocking the filing at the yes:
 
-| Confirmation | Total time |
-| --- | --- |
-| SR-YZSXQYBF | 76.6 s |
-| SR-KQSBQYV4 | 95.4 s |
-| SR-VRAQZQYY | 83.4 s |
+| Confirmation | Total time | Turns to reach the question |
+| --- | --- | --- |
+| SR-MHS8KUMT | 95.4 s | 1 |
+| SR-ET57SCCT | 92.0 s | 2 |
+| SR-CKYWHZZ8 | 84.5 s | 4 |
 
-The [raw run output](https://github.com/mrcoven94/mano/pull/202#issuecomment-6641513214) shows each step, including a replay page of 9 screens for each fill, and the sandbox portal holds all three filings. The output does not print Guardian's verdict: it shows Engine filing with Guardian as its checker, and Engine files on `pass` or `fix` and refuses on `block` or when the check fails. The driver calls the agent directly, so the text line and the reminder are not in these runs. The text line waits on a real text from the maintainer to confirm it.
+The [run log](https://github.com/mrcoven94/mano/pull/202#issuecomment-6642021159) shows each step, including a replay page of 9 screens for each fill, and the sandbox portal holds all three filings. The log does not print Guardian's verdict: it shows Engine filing with Guardian as its checker, and Engine files on `pass` or `fix` and refuses on `block` or when the check fails. The build (main at 9e7fe5d4), the exit code of 0 and the hosted desktop come from the lead, not from the log. The driver calls the agent directly, so the text line and the reminder are not in these runs. The text line waits on a real text from the maintainer to confirm it.
+
+One run in Spanish passed on the same build: SR-6YNEF639, 73.8 s, answered with `sí`. It is one run, not a rate. The question is in Spanish, except the office's declaration, which it explains in Spanish and then quotes in English. The portal holds the filing, and the log is not published.
+
+An earlier build passed three runs from 3:19 to 3:23 PM ET: SR-YZSXQYBF in 76.6 s, SR-KQSBQYV4 in 95.4 s and SR-VRAQZQYY in 83.4 s, with the same limits ([raw output](https://github.com/mrcoven94/mano/pull/202#issuecomment-6641513214)). The portal holds those filings too.
 
 The site owner also measured two production runs on separate seeded layouts, SR-DVDBTGFF through the API and SR-X6RM9KYY through the browser: 2 of 2 completed, after one earlier attempt was lost to a deploy, which is a small sample. The sandbox portal holds both filings, and its record does not show a layout. The [recording of SR-DVDBTGFF](apps/site/public/try/recording/run.json) shows its layout, the fill and Guardian's `pass` at the question and at the yes. For SR-X6RM9KYY, the layout and the fill, and for both runs the lost attempt, rest on the site owner's measurement, with no public record.
 
@@ -143,7 +147,8 @@ Tests cover the three safety cases: a stale approval is refused (`apps/engine/te
 - The first held-out run measured the old rule, which named no date on 425 of 426 letters. The reader that replaced it ([PR 207](https://github.com/mrcoven94/mano/pull/207)) has no held-out result yet. The synthetic letter in `pnpm judge` holds its date through the gate, so that run does not exercise naming.
 - The deadline check reads one sentence at a time and has known gaps, listed in `packages/mail/test/gate-letters.test.ts`, such as a Re: line naming another program.
 - Mano missed 10 of 11 planted instructions in the held-out test, which ran no Guardian. Guardian has no held-out number of its own.
-- Computer fill on production rests on the runs above. The three runs skip the text line and the reminder and use one portal layout. The two runs on seeded layouts are too few to give a fill rate, and a fill has no model backup.
+- Computer fill on production rests on the runs above. The `pnpm spine:live` runs skip the text line and the reminder and use one portal layout. The two runs on seeded layouts are too few to give a fill rate, and a fill has no model backup.
+- The model may ask again for a value it already has before the fill. The driver sends every value in one message, and in the run log above Mano still asked in 2 of 3 runs, once asking for the income twice.
 - SAM 3.1 and Muse Voice Transcribe do not run while Meta's API answers 402, and voice notes have not been run live.
 - The Modal route carries no per-request retention pin. Zero retention there is Modal's stated policy for the endpoint type, and Modal sees each request in flight.
 - The estimate page in the spine in `AGENTS.md` is not built.
