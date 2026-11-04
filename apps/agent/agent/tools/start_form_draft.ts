@@ -100,6 +100,8 @@ export default defineTool({
       purpose: RENEWAL.purpose,
       payload: { ...filled.values, [DECLARATION]: RENEWAL.declaration, [ATTACHMENT]: proof.label },
       documentId: proof.id,
+      // The safety check holds a document with no cited source against the draft.
+      sources: [{ kind: "document", id: proof.id }],
     });
     if (!held.held) return { status: held.status, note: held.note, reason: held.reason, sent: false };
     return {
