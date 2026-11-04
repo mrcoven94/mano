@@ -99,7 +99,8 @@ async function prepare(engine: PersonEngine, turn: TurnIdentity, ctx: ToolContex
     type: "submit",
     recipient: RENEWAL.recipient,
     purpose: RENEWAL.purpose,
-    payload: { ...filled.values, [DECLARATION]: RENEWAL.declaration, [ATTACHMENT]: proof.label },
+    payload: { ...filled.values, [DECLARATION]: RENEWAL.declaration, [ATTACHMENT]: proof.document.id },
+    attachmentLabel: proof.label,
     documentId: proof.document.id,
     // The safety check holds a document with no cited source against the draft.
     sources: [{ kind: "document", id: proof.document.id }],

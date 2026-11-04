@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Redirect, useRouter } from "expo-router";
-import { Btn, Body, DemoBanner, Field, LanguageSwitch, Screen, Title } from "../../components/ui";
+import { Btn, Body, DemoBanner, Field, LanguageSwitch, LiveRegion, Screen, Title } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 import { useStrings } from "../../lib/i18n";
 import { pendingSignIn, setPendingSignIn } from "../../lib/sign-in-flow";
@@ -65,7 +65,9 @@ export default function Verify() {
           keyboardType="number-pad"
           maxLength={6}
         />
-        {error ? <Text style={styles.error}>{s[error]}</Text> : null}
+        <LiveRegion urgent message={error ? s[error] : null}>
+          <Text style={styles.error}>{error ? s[error] : null}</Text>
+        </LiveRegion>
         <Btn title={busy ? s.verifying : s.verify} onPress={() => void submit()} busy={busy} />
         <Pressable onPress={() => router.back()} accessibilityRole="button" style={styles.link}>
           <Text style={styles.linkText}>{s.backToEmail}</Text>

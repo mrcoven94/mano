@@ -17,7 +17,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import * as Linking from "expo-linking";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { Body, Btn, Card, ErrorView, GhostBtn, LinkBtn, LoadingView, Muted, Screen, Title, useGoBack } from "../../components/ui";
+import { Body, Btn, Card, ErrorView, GhostBtn, LinkBtn, LiveRegion, LoadingView, Muted, Screen, Title, useGoBack } from "../../components/ui";
 import { DocPreview, currentPlatform } from "../../components/doc";
 import { parseActionView, type ParsedAction } from "../../lib/action-view";
 import { declarationIntro, fieldValue, leadLine, officeName, sentInEnglishNote, whatLabel } from "../../lib/approval-text";
@@ -274,6 +274,19 @@ export default function ApprovalDetail() {
     : false;
   const outcome = receipt ? approveOutcome(receipt) : null;
   const englishNote = action && action.kind !== "unknown" ? sentInEnglishNote(action, language, s) : null;
+  const receiptTitle = outcome === "sent" ? s.receiptTitle : outcome === "blocked" ? s.blocked : outcome === "stale" ? s.stale : s.resultTitleProgress;
+  const receiptBody =
+    outcome === "sent"
+      ? s.receiptBody
+      : outcome !== "sending" && !nothingSent
+        ? s.unconfirmedSend
+        : outcome === "blocked"
+          ? (receipt?.reason ?? s.blockedNote)
+          : outcome === "stale"
+            ? s.staleNote
+            : outcome === "needs-approval"
+              ? s.resultNeedsApproval
+              : s.resultSending;
 
   const handleLink = useCallback(
     async (url: string) => {
@@ -311,7 +324,7 @@ export default function ApprovalDetail() {
         <View>
           <Card>
             {approval.status !== "pending" ? <Muted style={styles.status}>{statusLabel(approval.status, s)}</Muted> : null}
-            <Text style={[type.section, styles.lead]}>
+            <Text accessibilityRole="header" aria-level={2} style={[type.section, styles.lead]}>
               {action && action.kind !== "unknown" && approval.status === "pending" && !receipt && no.phase !== "answered"
                 ? leadLine(action, s)
                 : whatLabel(approval.actionType, s)}
@@ -380,44 +393,40 @@ export default function ApprovalDetail() {
                   ) : (
                     <Muted style={styles.warn}>{s.docCannotShow}</Muted>
                   )}
-                  {linkBlocked ? <Muted style={styles.warn}>{s.linkBlocked}</Muted> : null}
+                  <LiveRegion urgent message={linkBlocked ? s.linkBlocked : null}>
+                    <Muted style={styles.warn}>{s.linkBlocked}</Muted>
+                  </LiveRegion>
                 </View>
               ) : (
                 // A failed load says nothing about whether it was sent.
-                <Body>{s.docUnavailable}</Body>
+                <LiveRegion message={s.docUnavailable}>
+                  <Body>{s.docUnavailable}</Body>
+                </LiveRegion>
               )}
             </Card>
           ) : null}
 
           {approval.status === "blocked" && !receipt && nothingSent ? (
             <Card>
-              <Body>{s.blockedNote}</Body>
+              <LiveRegion message={s.blockedNote}>
+                <Body>{s.blockedNote}</Body>
+              </LiveRegion>
             </Card>
           ) : null}
           {stale && approval.status === "pending" && nothingSent ? (
             <Card>
-              <Body>{s.staleNote}</Body>
+              <LiveRegion message={s.staleNote}>
+                <Body>{s.staleNote}</Body>
+              </LiveRegion>
             </Card>
           ) : null}
 
           {receipt && outcome ? (
             <Card>
-              <Text style={[type.cardTitle, styles.line]}>
-                {outcome === "sent" ? s.receiptTitle : outcome === "blocked" ? s.blocked : outcome === "stale" ? s.stale : s.resultTitleProgress}
-              </Text>
-              <Body>
-                {outcome === "sent"
-                  ? s.receiptBody
-                  : outcome !== "sending" && !nothingSent
-                    ? s.unconfirmedSend
-                    : outcome === "blocked"
-                      ? (receipt.reason ?? s.blockedNote)
-                      : outcome === "stale"
-                        ? s.staleNote
-                        : outcome === "needs-approval"
-                          ? s.resultNeedsApproval
-                          : s.resultSending}
-              </Body>
+              <LiveRegion message={`${receiptTitle}. ${receiptBody}`}>
+                <Text style={[type.cardTitle, styles.line]}>{receiptTitle}</Text>
+                <Body>{receiptBody}</Body>
+              </LiveRegion>
               {outcome === "sent" ? <Body style={styles.next}>{s.receiptNext}</Body> : null}
               {outcome === "sent" && (receipt.simulated || mode === "stand-in") ? (
                 <Muted style={styles.match}>{s.receiptSimulated}</Muted>
@@ -429,7 +438,9 @@ export default function ApprovalDetail() {
             </Card>
           ) : no.phase === "answered" ? (
             <Card>
-              <Body>{s[noLine(no.answer)]}</Body>
+              <LiveRegion message={s[noLine(no.answer)]}>
+                <Body>{s[noLine(no.answer)]}</Body>
+              </LiveRegion>
               <View style={styles.back}>
                 <Btn title={s.approvalsTitle} onPress={goBack} />
               </View>
@@ -441,7 +452,9 @@ export default function ApprovalDetail() {
               {gate.reason === "not-shown" && viewable ? <Muted style={styles.note}>{s.loadingDocument}</Muted> : null}
               {gate.reason === "unknown-action" ? <Muted style={styles.note}>{s.requestUnknown}</Muted> : null}
               {gate.reason === "ready" ? <Muted style={styles.note}>{s.approveNote}</Muted> : null}
-              {no.phase === "failed" ? <Muted style={[styles.warn, styles.note]}>{s.declineFailed}</Muted> : null}
+              <LiveRegion urgent message={no.phase === "failed" ? s.declineFailed : null}>
+                <Muted style={[styles.warn, styles.note]}>{s.declineFailed}</Muted>
+              </LiveRegion>
               <View style={styles.actions}>
                 {stale ? null : (
                   <Btn title={busy ? s.approving : s.approve} onPress={() => void approve()} busy={busy} disabled={!canApprove} />

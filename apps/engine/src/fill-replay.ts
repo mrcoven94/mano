@@ -422,24 +422,32 @@ export async function replayPage(
   });
 }
 
+const ATTACHMENT_KEY = "attachment";
+
 // The values Engine will send, read from the frozen request, under the
 // form's labels in the form's order.
-function frozenFields(requestJson: string, labels: Record<string, string>): { fields: { label: string; value: string }[]; attached: boolean } {
+export function frozenFields(requestJson: string, labels: Record<string, string>): { fields: { label: string; value: string }[]; attached: boolean } {
   let payload: Record<string, unknown> = {};
   let attached = false;
+  let attachment: string | null = null;
   try {
-    const frozen = JSON.parse(requestJson) as { payload?: Record<string, unknown>; documentId?: unknown };
+    const frozen = JSON.parse(requestJson) as { payload?: Record<string, unknown>; documentId?: unknown; attachmentLabel?: unknown };
     payload = frozen.payload ?? {};
     attached = typeof frozen.documentId === "string" && frozen.documentId !== "";
+    // The payload holds the document's ID for the safety check. A draft frozen
+    // before attachmentLabel holds its words there instead.
+    const words = frozen.attachmentLabel ?? payload[ATTACHMENT_KEY];
+    if (typeof words === "string" && words && words !== frozen.documentId) attachment = words;
   } catch {
     return { fields: [], attached };
   }
   const order = Object.keys(labels);
   const rank = (k: string) => (order.includes(k) ? order.indexOf(k) : order.length);
   const fields = Object.entries(payload)
-    .filter((e): e is [string, string | number] => typeof e[1] === "string" || typeof e[1] === "number")
+    .filter((e): e is [string, string | number] => e[0] !== ATTACHMENT_KEY && (typeof e[1] === "string" || typeof e[1] === "number"))
     .sort(([a], [b]) => rank(a) - rank(b))
     .map(([k, v]) => ({ label: Object.hasOwn(labels, k) ? labels[k]! : k, value: String(v) }));
+  if (attachment) fields.push({ label: "Attached", value: attachment });
   return { fields, attached };
 }
 

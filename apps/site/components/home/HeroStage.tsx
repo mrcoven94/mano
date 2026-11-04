@@ -8,7 +8,8 @@ import TextMano from "@/components/TextMano";
    for it today, and only the food benefits renewal is filed, on the practice portal. Scenes advance when their loop ends
    while the stage is on screen; choosing a tab stops that. */
 
-const YES_NO = "Want me to hold that date? YES or NO";
+/* The question Mano really sends after reading a date (checkDate in packages/mail/src/words.ts). */
+const CHECK_DATE = "Please check that against your letter. Is that the date you need to meet?";
 
 const SCENES: { key: string; tab: string; how: string; phrase: string; thread: ThreadScene }[] = [
   {
@@ -24,11 +25,11 @@ const SCENES: { key: string; tab: string; how: string; phrase: string; thread: T
   {
     key: "rent", tab: "Rent", how: "Reads your notice", phrase: "your rent notice",
     thread: {
-      letter: { from: "Springfield Property Management", title: "Late rent notice", due: "Pay the $400 you owe by November 10.", note: "Monthly rent: $1,150" },
+      letter: { from: "Springfield Property Management", title: "Late rent notice", due: "Pay the $400 you owe by November 17.", note: "Monthly rent: $1,150" },
       me: "Got this from my landlord. What does it mean?",
-      read: "You owe $400 by Nov 10. That is the date that matters.",
-      ask: YES_NO,
-      answer: "Holding Nov 10. I'll text you Nov 3 and Nov 8.",
+      read: "It looks like your payment is due November 17, 2026.",
+      ask: CHECK_DATE,
+      answer: "Holding Nov 17. I'll text you Nov 10 and Nov 15.",
       last: { text: "Filling out rent help forms is coming soon." },
     },
   },
@@ -37,8 +38,8 @@ const SCENES: { key: string; tab: string; how: string; phrase: string; thread: T
     thread: {
       letter: { from: "Springfield County Child Care Office", title: "Your child care help is up for review", due: "Send proof of your work hours by December 1.", note: "Care on file: Mon to Fri, 7:30 to 4:00" },
       me: "Got a letter about our daycare help.",
-      read: "Send proof of your work hours by Dec 1. That is the date that matters.",
-      ask: YES_NO,
+      read: "It looks like the papers it asks for are due December 1, 2026.",
+      ask: CHECK_DATE,
       answer: "Holding Dec 1. I'll text you Nov 24 and Nov 29.",
       last: { text: "Filling out child care forms is coming soon." },
     },
@@ -48,8 +49,8 @@ const SCENES: { key: string; tab: string; how: string; phrase: string; thread: T
     thread: {
       letter: { from: "Springfield Power", title: "Your energy assistance credit is ending", due: "Reapply by November 20, 2026 to keep your winter credit.", note: "Late applications are reviewed only if funds remain." },
       me: "Is this about my power bill?",
-      read: "Yes. Reapply by Nov 20 to keep your winter credit.",
-      ask: YES_NO,
+      read: "It looks like your deadline is November 20, 2026.",
+      ask: CHECK_DATE,
       answer: "Holding Nov 20. I'll text you Nov 13 and Nov 18.",
       last: { text: "Reminder: reapply for your winter credit by Nov 20.", stamp: ["Nov 13", "10:00 AM"] },
     },
@@ -59,8 +60,8 @@ const SCENES: { key: string; tab: string; how: string; phrase: string; thread: T
     thread: {
       letter: { from: "Springfield County Human Services", title: "It is time to renew your health coverage", due: "Send your renewal form by January 15, 2027.", note: "If we do not receive it, your coverage will end on January 31, 2027." },
       me: "Is my health coverage ending?",
-      read: "Send your renewal form by Jan 15, or your coverage ends Jan 31.",
-      ask: YES_NO,
+      read: "It looks like your renewal is due January 15, 2027.",
+      ask: CHECK_DATE,
       answer: "Holding Jan 15. I'll text you Jan 8 and Jan 13.",
       last: { text: "Filling out health coverage forms is coming soon." },
     },

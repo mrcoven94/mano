@@ -24,9 +24,10 @@ const LABELS: Record<string, string> = Object.fromEntries(
   Object.values(FORMS).flatMap((form) => form.fields.map((field) => [field.name, field.label])),
 );
 
-// The payload key a draft freezes the attached document's label under,
-// such as "the letter you sent on November 2". The portal files only the
-// form's own fields, so it never receives it.
+// The payload key a draft freezes the attached document's ID under, so the
+// safety check reads a reference. What the question calls that document is the
+// request's attachmentLabel. The portal files only the form's own fields, so it
+// never receives either.
 export const ATTACHMENT = "attachment";
 
 const LINK_START = /https?:\/\/|www\./i;
@@ -191,12 +192,13 @@ export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recip
   let attached: string | null = null;
   let declaration: string | null = null;
   try {
-    const frozen = JSON.parse(approval.requestJson) as { payload?: Record<string, unknown>; documentId?: unknown };
+    const frozen = JSON.parse(approval.requestJson) as { payload?: Record<string, unknown>; documentId?: unknown; attachmentLabel?: unknown };
     payload = frozen.payload ?? {};
     if (typeof payload[DECLARATION] === "string") declaration = payload[DECLARATION];
-    const label = payload[ATTACHMENT];
+    // A draft frozen before attachmentLabel holds its label in the payload.
+    const label = frozen.attachmentLabel ?? payload[ATTACHMENT];
     if (typeof frozen.documentId === "string" && frozen.documentId !== "") {
-      attached = typeof label === "string" && label !== "" ? label : "your document";
+      attached = typeof label === "string" && label !== "" && label !== frozen.documentId ? label : "your document";
     }
   } catch {
     // Unreadable frozen request: the question shows purpose and recipient only.

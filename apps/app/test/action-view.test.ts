@@ -160,3 +160,18 @@ describe("parseActionView", () => {
     expect(field(parsed, "toString")).toMatchObject({ label: null, value: "y" });
   });
 });
+
+describe("what the app calls the attached document", () => {
+  const known = (json: string) => parseActionView(json) as KnownAction;
+
+  it("reads the request's words, not the document's ID", () => {
+    const parsed = known(request({ documentId: "doc-1", attachmentLabel: "the letter you sent on November 4", payload: { attachment: "doc-1" } }));
+    expect(parsed.attachment).toBe("the letter you sent on November 4");
+    expect(parsed.answers).toEqual([]);
+  });
+
+  it("shows no ID when there are no words, and reads an older draft's words from the payload", () => {
+    expect(known(request({ documentId: "doc-1", payload: { attachment: "doc-1" } })).attachment).toBeNull();
+    expect(known(request({ documentId: "doc-1", payload: { attachment: "the letter you sent on November 2" } })).attachment).toBe("the letter you sent on November 2");
+  });
+});
