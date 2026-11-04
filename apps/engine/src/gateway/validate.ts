@@ -50,6 +50,8 @@ function parseSources(value: unknown): SourceCitation[] {
 // Validates untrusted input into an ActionRequest. Builds a fresh object and
 // never spreads caller input, so prototype names ("toString", "__proto__")
 // cannot smuggle properties or match policy entries.
+const ATTACHMENT_LABEL = /^[\p{L}\p{N} ,'’-]+$/u;
+
 export function parseActionRequest(raw: unknown): ActionRequest {
   if (!isRecord(raw)) throw new ValidationError("Action request must be an object.");
   if (typeof raw.type !== "string" || !ACTION_TYPE_SET.has(raw.type)) {
@@ -78,6 +80,13 @@ export function parseActionRequest(raw: unknown): ActionRequest {
   };
   const documentId = optionalString(raw.documentId, "documentId", 200);
   if (documentId !== undefined) req.documentId = documentId;
+  const attachmentLabel = optionalString(raw.attachmentLabel, "attachmentLabel", 200);
+  if (attachmentLabel !== undefined) {
+    // The safety check and the link check never read this, so it can hold no
+    // link and no instruction: words, numbers and a comma, nothing else.
+    if (!ATTACHMENT_LABEL.test(attachmentLabel)) throw new ValidationError("attachmentLabel holds characters it may not.");
+    req.attachmentLabel = attachmentLabel;
+  }
   // documentContent from the caller is ignored: bytes come from storage.
   const caseId = optionalString(raw.caseId, "caseId", 200);
   if (caseId !== undefined) req.caseId = caseId;

@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Btn, Body, Card, DemoBanner, Field, LanguageSwitch, Muted, Screen, Title } from "../../components/ui";
+import { Btn, Body, Card, DemoBanner, Field, LanguageSwitch, LiveRegion, Muted, Screen, Title } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 import { crisisLineForSignIn } from "../../lib/crisis-help";
 import { useStrings } from "../../lib/i18n";
@@ -64,7 +64,9 @@ export default function SignIn() {
           placeholder={s.emailPlaceholder}
           keyboardType="email-address"
         />
-        {error ? <Muted style={styles.error}>{s[error]}</Muted> : null}
+        <LiveRegion urgent message={error ? s[error] : null}>
+          <Muted style={styles.error}>{error ? s[error] : null}</Muted>
+        </LiveRegion>
         <Btn title={busy ? s.sending : s.sendCode} onPress={() => void submit()} busy={busy} />
       </View>
     </Screen>

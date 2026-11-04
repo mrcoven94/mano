@@ -17,16 +17,17 @@ import { recipientName } from "@mano/protocol";
 
 import type { EngineApproval } from "./engine.js";
 import { FORMS } from "./forms.js";
-import { QUESTION_WORDS } from "./words.js";
+import { QUESTION_WORDS, attachmentIn, purposeIn } from "./words.js";
 
 // The exact version uses each form's own labels, in the form's order.
 const LABELS: Record<string, string> = Object.fromEntries(
   Object.values(FORMS).flatMap((form) => form.fields.map((field) => [field.name, field.label])),
 );
 
-// The payload key a draft freezes the attached document's label under,
-// such as "the letter you sent on November 2". The portal files only the
-// form's own fields, so it never receives it.
+// The payload key a draft freezes the attached document's ID under, so the
+// safety check reads a reference. What the question calls that document is the
+// request's attachmentLabel. The portal files only the form's own fields, so it
+// never receives either.
 export const ATTACHMENT = "attachment";
 
 const LINK_START = /https?:\/\/|www\./i;
@@ -179,8 +180,9 @@ export function isShareGrant(approval: Pick<EngineApproval, "requestJson">): boo
 // gets a meaning in the person's language: any other stays English alone.
 const PERJURY = /^I declare under penalty of perjury that the information in this .+ is true, correct and complete to the best of my knowledge\.$/;
 
-// In the person's language only the frame changes. The purpose, labels,
-// values, office and declaration are the frozen English the yes approves.
+// In the person's language the sentence is theirs: the frame, the form's name
+// and labels, the office and the attachment, from closed tables. The values and
+// declaration are the frozen English the yes approves, word for word.
 // A share question is English for now, in every language.
 export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">, language: ReplyLanguage = "en"): string {
   const words = QUESTION_WORDS[language];
@@ -191,12 +193,13 @@ export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recip
   let attached: string | null = null;
   let declaration: string | null = null;
   try {
-    const frozen = JSON.parse(approval.requestJson) as { payload?: Record<string, unknown>; documentId?: unknown };
+    const frozen = JSON.parse(approval.requestJson) as { payload?: Record<string, unknown>; documentId?: unknown; attachmentLabel?: unknown };
     payload = frozen.payload ?? {};
     if (typeof payload[DECLARATION] === "string") declaration = payload[DECLARATION];
-    const label = payload[ATTACHMENT];
+    // A draft frozen before attachmentLabel holds its label in the payload.
+    const label = frozen.attachmentLabel ?? payload[ATTACHMENT];
     if (typeof frozen.documentId === "string" && frozen.documentId !== "") {
-      attached = typeof label === "string" && label !== "" ? label : "your document";
+      attached = typeof label === "string" && label !== "" && label !== frozen.documentId ? attachmentIn(language, label) : words.yourDocument;
     }
   } catch {
     // Unreadable frozen request: the question shows purpose and recipient only.
@@ -208,11 +211,15 @@ export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recip
   const lines = Object.entries(payload)
     .filter(([k, v]) => k !== ATTACHMENT && k !== DECLARATION && (typeof v === "string" || typeof v === "number"))
     .sort(([a], [b]) => order(a) - order(b))
-    .map(([k, v]) => `${LABELS[k] ?? k}: ${v}`);
+    .map(([k, v]) => {
+      const label = LABELS[k] ?? k;
+      return `${Object.hasOwn(words.labels, label) ? words.labels[label] : label}: ${v}`;
+    });
+  const office = recipientName(approval.recipient);
   // One paragraph: the text line flattens line breaks, so fields are
   // separated in the sentence itself.
   return [
-    words.ready(approval.purpose, recipientName(approval.recipient)),
+    words.ready(purposeIn(language, approval.purpose), Object.hasOwn(words.recipients, office) ? words.recipients[office]! : office),
     lines.length > 0 ? `${lines.join("; ")}.` : "",
     attached ? words.attached(attached) : "",
     declaration ? `${words.declares(PERJURY.test(declaration) ? words.perjuryMeaning : null)} ${declaration}` : "",

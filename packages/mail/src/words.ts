@@ -4,6 +4,7 @@
 // every language and no letter text gets in. A language missing a line is
 // a type error, never an English sentence in the middle of a reply.
 import type { LetterType, SendCategory } from "./answer.js";
+import type { DocumentKind } from "./types.js";
 
 export const REPLY_LANGUAGES = ["en", "es", "vi", "tl"] as const;
 export type ReplyLanguage = (typeof REPLY_LANGUAGES)[number];
@@ -14,6 +15,8 @@ export interface AnswerWords {
   // How a letter with no program on Mano's list is named.
   benefits: string;
   letterType: Record<LetterType, (program: string) => string>;
+  // What a document is when it is not a benefits letter, and that it was read.
+  documentKind: Record<Exclude<DocumentKind, "benefits_letter">, string>;
   categories: Record<SendCategory, string>;
   due(date: string): string;
   nextDue(kind: "renewal" | "recertification", date: string): string;
@@ -38,8 +41,6 @@ export interface AnswerWords {
   checkDate: string;
   twoDates(first: string, firstFor: string, second: string, secondFor: string): string;
   alsoInterview(date: string): string;
-  askRequest(date: string): string;
-  askWindow(days: number, from: string, result: string): string;
   notYours: string;
   askAnyDate: string;
   official: string;
@@ -118,12 +119,16 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     checkDate: "Please check that against your letter. Is that the date you need to meet?",
     twoDates: (first, firstFor, second, secondFor) => `Your letter gives two dates: ${first} for ${firstFor}, and ${second} for ${secondFor}. Please check them against your letter. Which one do you need to meet first?`,
     alsoInterview: (date) => `It also lists an interview on ${date}.`,
-    askRequest: (date) => `It looks like the date to send your request is ${date}. Please check that against your letter. Is that what it says?`,
-    askWindow: (days, from, result) => `It looks like you have ${days} days from ${from}, which would be ${result}. Please check that against your letter. Is that what it says?`,
     notYours: "Something on this letter says it may be for someone else or may no longer apply, so I am not treating its dates as yours. Is this letter for you, and is it still current?",
     askAnyDate: "I don't want to guess wrong about the date on this letter. Which date, if any, does it say you need to meet?",
     official: "If you need to call the office, use the number on your state's official site, not one from a letter.",
-    unread: "I could not read the letter in your photo. Send it again with the whole page flat, in good light, and I will try once more.",
+    documentKind: {
+      pay_stub: "This looks like a pay stub, and I could read it.",
+      utility_bill: "This looks like a utility bill, and I could read it.",
+      id: "This looks like an ID, and I could read it.",
+      unknown: "I could read this, but I cannot tell what kind of document it is.",
+    },
+    unread: "I could not read the page in your photo. Send it again with the whole page flat, in good light, and I will try once more.",
     failed: "I could not finish reading your photo just now. Send it again and I will try once more.",
     missedPart: "I could not read part of what you sent. Send that photo again if it had another letter.",
     saved: (date) => `I saved ${date} to your deadlines.`,
@@ -182,12 +187,16 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     checkDate: "Compruébelo en su carta, por favor. ¿Es esa la fecha que debe cumplir?",
     twoDates: (first, firstFor, second, secondFor) => `Su carta da dos fechas: el ${first} para ${firstFor}, y el ${second} para ${secondFor}. Compruébelas en su carta, por favor. ¿Cuál debe cumplir primero?`,
     alsoInterview: (date) => `También indica una entrevista el ${date}.`,
-    askRequest: (date) => `Parece que la fecha para enviar su solicitud es el ${date}. Compruébelo en su carta, por favor. ¿Es eso lo que dice?`,
-    askWindow: (days, from, result) => `Parece que tiene ${days} días a partir del ${from}, es decir, hasta el ${result}. Compruébelo en su carta, por favor. ¿Es eso lo que dice?`,
     notYours: "Algo en esta carta indica que puede ser para otra persona o que ya no aplica, así que no tomo sus fechas como suyas. ¿Esta carta es para usted y sigue vigente?",
     askAnyDate: "No quiero equivocarme con la fecha de esta carta. ¿Qué fecha, si hay alguna, dice que debe cumplir?",
     official: "Si necesita llamar a la oficina, use el número del sitio oficial de su estado, no uno de una carta.",
-    unread: "No pude leer la carta de su foto. Envíela de nuevo con toda la página plana y con buena luz, y lo intentaré otra vez.",
+    documentKind: {
+      pay_stub: "Parece un talón de pago, y pude leerlo.",
+      utility_bill: "Parece una factura de servicios, y pude leerla.",
+      id: "Parece una identificación, y pude leerla.",
+      unknown: "Pude leer esto, pero no sé qué tipo de documento es.",
+    },
+    unread: "No pude leer la página de su foto. Envíela de nuevo con toda la página plana y con buena luz, y lo intentaré otra vez.",
     failed: "No pude terminar de leer su foto ahora. Envíela de nuevo y lo intentaré otra vez.",
     missedPart: "No pude leer parte de lo que envió. Envíe esa foto de nuevo si tenía otra carta.",
     saved: (date) => `Guardé el ${date} en sus fechas límite.`,
@@ -249,12 +258,16 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     checkDate: "Vui lòng đối chiếu với thư của bạn. Đó có phải là ngày bạn cần kịp không?",
     twoDates: (first, firstFor, second, secondFor) => `Thư của bạn có hai ngày: ${first} cho ${firstFor}, và ${second} cho ${secondFor}. Vui lòng đối chiếu với thư của bạn. Bạn cần kịp ngày nào trước?`,
     alsoInterview: (date) => `Thư cũng ghi một cuộc phỏng vấn vào ${date}.`,
-    askRequest: (date) => `Có vẻ hạn gửi yêu cầu của bạn là ${date}. Vui lòng đối chiếu với thư của bạn. Thư có nói vậy không?`,
-    askWindow: (days, from, result) => `Có vẻ bạn có ${days} ngày kể từ ${from}, tức là đến ${result}. Vui lòng đối chiếu với thư của bạn. Thư có nói vậy không?`,
     notYours: "Có chỗ trong thư cho thấy thư này có thể dành cho người khác hoặc không còn áp dụng, nên tôi không coi các ngày trong thư là của bạn. Thư này có phải cho bạn và vẫn còn hiệu lực không?",
     askAnyDate: "Tôi không muốn đoán sai ngày trong thư này. Thư nói bạn cần kịp ngày nào, nếu có?",
     official: "Nếu cần gọi văn phòng, hãy dùng số trên trang web chính thức của tiểu bang, không dùng số trong thư.",
-    unread: "Tôi không đọc được thư trong ảnh của bạn. Hãy gửi lại, để cả trang phẳng, đủ sáng, và tôi sẽ thử lại.",
+    documentKind: {
+      pay_stub: "Đây có vẻ là phiếu lương, và tôi đã đọc được.",
+      utility_bill: "Đây có vẻ là hóa đơn tiện ích, và tôi đã đọc được.",
+      id: "Đây có vẻ là giấy tờ tùy thân, và tôi đã đọc được.",
+      unknown: "Tôi đọc được, nhưng không biết đây là loại giấy tờ gì.",
+    },
+    unread: "Tôi không đọc được trang trong ảnh của bạn. Hãy gửi lại, để cả trang phẳng, đủ sáng, và tôi sẽ thử lại.",
     failed: "Tôi chưa đọc xong ảnh của bạn. Hãy gửi lại và tôi sẽ thử lại.",
     missedPart: "Tôi không đọc được một phần bạn gửi. Hãy gửi lại ảnh đó nếu có thư khác.",
     saved: (date) => `Tôi đã lưu ${date} vào danh sách hạn chót của bạn.`,
@@ -313,12 +326,16 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     checkDate: "Pakitingnan ito sa sulat mo. Iyon ba ang petsang dapat mong habulin?",
     twoDates: (first, firstFor, second, secondFor) => `Dalawang petsa ang nasa sulat mo: ${first} para sa ${firstFor}, at ${second} para sa ${secondFor}. Pakitingnan ang mga ito sa sulat mo. Alin ang dapat mong habulin muna?`,
     alsoInterview: (date) => `May nakalista rin itong interview sa ${date}.`,
-    askRequest: (date) => `Mukhang ${date} ang huling araw para ipadala ang hiling mo. Pakitingnan ito sa sulat mo. Iyon ba ang sinasabi nito?`,
-    askWindow: (days, from, result) => `Mukhang may ${days} araw ka mula ${from}, ibig sabihin hanggang ${result}. Pakitingnan ito sa sulat mo. Iyon ba ang sinasabi nito?`,
     notYours: "May nakasaad sa sulat na maaaring para ito sa iba o hindi na ito naaangkop, kaya hindi ko itinuturing na iyo ang mga petsa nito. Para sa iyo ba ang sulat na ito, at kasalukuyan pa ba ito?",
     askAnyDate: "Ayokong magkamali sa petsa sa sulat na ito. Aling petsa, kung mayroon, ang sinasabi nitong dapat mong habulin?",
     official: "Kung kailangan mong tawagan ang opisina, gamitin ang numero sa opisyal na site ng iyong estado, hindi ang nasa sulat.",
-    unread: "Hindi ko mabasa ang sulat sa larawan mo. Ipadala ulit na patag ang buong pahina at maliwanag, at susubukan ko ulit.",
+    documentKind: {
+      pay_stub: "Mukhang pay stub ito, at nabasa ko.",
+      utility_bill: "Mukhang utility bill ito, at nabasa ko.",
+      id: "Mukhang ID ito, at nabasa ko.",
+      unknown: "Nabasa ko ito, pero hindi ko masabi kung anong uri ng dokumento ito.",
+    },
+    unread: "Hindi ko mabasa ang pahina sa larawan mo. Ipadala ulit na patag ang buong pahina at maliwanag, at susubukan ko ulit.",
     failed: "Hindi ko natapos basahin ang larawan mo ngayon. Ipadala ulit at susubukan ko ulit.",
     missedPart: "Hindi ko mabasa ang bahagi ng ipinadala mo. Ipadala ulit ang larawang iyon kung may isa pang sulat.",
     saved: (date) => `Na-save ko ang ${date} sa iyong mga deadline.`,

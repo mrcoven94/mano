@@ -68,10 +68,16 @@ export interface LetterFields {
   excerpt: string;
 }
 
+// What the reader says a document appears to be. It names a document,
+// nothing more: no kind says a person qualifies for anything.
+export type DocumentKind = "pay_stub" | "utility_bill" | "benefits_letter" | "id" | "unknown";
+
 export interface Letter {
   id: string;
   pages: LetterPage[];
   fields: LetterFields;
+  // Absent when the reading did not say.
+  documentKind?: DocumentKind;
   // Every page was read and no text on them holds a date.
   noDateInText?: boolean;
 }
@@ -153,23 +159,18 @@ export interface Question {
 // What the first reply may name when the gate held nothing, always as a
 // question. Naming holds nothing: only the gate's grammar does.
 export type NamedDates =
-  // One or two dates the person is told to meet, and any interview beside them.
+  // One or two dates the person must meet, and any interview beside them.
   | { kind: "duty"; dates: NamedDate[]; interview: string | null }
-  // No duty: a request for a hearing, appeal or review with its own date.
-  | { kind: "request"; iso: string }
-  // No duty: a count from a date, shown with the count.
-  | { kind: "window"; days: number; fromIso: string; resultIso: string }
   // Before the letter's own notice date.
   | { kind: "passed"; iso: string }
   // The letter says it is someone else's or no longer stands.
   | { kind: "not-theirs" }
-  // Something on the letter could change whose date it is, or whether it holds.
-  | { kind: "unsure" };
+  // The reader found nothing, or what it found did not hold up against the letter.
+  | { kind: "unsure"; readerNamedNone?: boolean };
 
 export interface NamedDate {
   iso: string;
-  sentence: string;
-  obligation: Obligation;
+  purpose: "renewal" | "documents" | "payment" | "deadline";
 }
 
 export interface DeadlineProposal {

@@ -296,7 +296,10 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     self.send_json(422, {"applied": applied, "error": str(exc)})
                     return
-                if any(action.get("type") in ("click", "double_click", "keypress") for action in actions):
+                # Only the last action can have started a page load the next
+                # screenshot must wait for. After typing, a field's blinking
+                # caret would keep the screens from matching until the limit.
+                if actions and actions[-1].get("type") in ("click", "double_click", "keypress"):
                     settle()
                 self.send_json(200, {"applied": applied})
             elif path == "/goto":
@@ -407,9 +410,12 @@ def parse_portal_origin(value: str) -> Portal:
 
 def chromium_policy(portal: Portal) -> dict:
     """URLBlocklist covers navigations of every kind (typed, redirected,
-    popups, form posts, file://). The leading dot keeps subdomains out."""
+    popups, form posts, file://). The leading dot keeps subdomains out.
+    Encrypted Client Hello is off because it hides the portal's name behind
+    its CDN's (cloudflare-ech.com, in the portal's own DNS record), and the
+    sandbox's outbound rule allows the portal by name."""
     exact = "https://." + portal.host + (":%d" % portal.port if portal.port else "")
-    return {"URLBlocklist": ["*"], "URLAllowlist": [exact], "DeveloperToolsAvailability": 2}
+    return {"URLBlocklist": ["*"], "URLAllowlist": [exact], "DeveloperToolsAvailability": 2, "EncryptedClientHelloEnabled": False}
 
 
 def profile_volume_name(person_id: str, key: str) -> str:

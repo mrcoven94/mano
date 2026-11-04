@@ -40,6 +40,7 @@ export function useTryRun() {
   const [available, setAvailable] = useState<boolean | null>(TRY_DEV_RECORDED ? true : null);
   const seq = useRef(0);
   const alive = useRef(true);
+  const played = useRef(false);
 
   useEffect(() => {
     alive.current = true;
@@ -52,10 +53,12 @@ export function useTryRun() {
     return () => { alive.current = false; };
   }, []);
 
+  /* The poll and the read at a leg's end can ask for the same events. Each counts once. */
   const take = useCallback((fresh: TryLogged[]) => {
-    if (fresh.length === 0) return;
-    seq.current = fresh[fresh.length - 1]!.seq;
-    setEvents((all) => [...all, ...fresh]);
+    const unseen = fresh.filter((e) => e.seq > seq.current);
+    if (unseen.length === 0) return;
+    seq.current = unseen[unseen.length - 1]!.seq;
+    setEvents((all) => [...all, ...unseen]);
   }, []);
 
   /* The events arrive on their own clock while a leg runs, so the page shows each step as it happens. */
@@ -122,6 +125,13 @@ export function useTryRun() {
     setPhase("ended");
   }, [play]);
 
+  /* Paused, whether at load or on a press: say so, then play the real run once. */
+  useEffect(() => {
+    if (refusal !== "paused" || played.current) return;
+    played.current = true;
+    void playRecording();
+  }, [refusal, playRecording]);
+
   const start = useCallback(async (chosen: TryScenario) => {
     setScenario(chosen);
     setEvents([]);
@@ -152,8 +162,7 @@ export function useTryRun() {
     }
     if ("refused" in started) {
       setRefusal(started.refused);
-      if (started.refused === "paused") await playRecording();
-      else setPhase("idle");
+      if (started.refused !== "paused") setPhase("idle");
       return;
     }
     const id = started.runId;
@@ -175,7 +184,7 @@ export function useTryRun() {
       setSecondsLeft(null);
     }
     await drive(id);
-  }, [drive, play, playRecording]);
+  }, [drive, play]);
 
   const pressYes = useCallback(async () => {
     if (TRY_DEV_RECORDED) {

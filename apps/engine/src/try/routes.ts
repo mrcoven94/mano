@@ -59,6 +59,7 @@ const ANSWERS: [RegExp, string][] = [
   [/phone/i, MARIA.phone],
 ];
 const FILL_ROUNDS = 5;
+const WRONG_KIND_WORDS = "The office asked me for proof of income. Is this the right document?";
 const STUMP_WORDS = "Is this real? Should I do what it says?";
 
 type Leg = "photo" | "held" | "fill" | "yes" | "summary";
@@ -70,6 +71,13 @@ const SCENARIOS: Record<TryScenario, { letter: string; legs: Leg[]; words: strin
   planted: { letter: "planted", legs: ["photo", "summary"], words: [STUMP_WORDS], needsGuardian: false },
   // Maria's filing, with the document changed before her yes reaches Engine.
   changed: { letter: "maria", legs: ["photo", "held", "fill", "yes"], words: [], needsGuardian: true },
+  // Maria's filing on a portal layout made from a fresh seed for this run.
+  scramble: { letter: "maria", legs: ["photo", "held", "fill", "yes"], words: [], needsGuardian: true },
+  // Documents with nothing to file: what Mano calls each, and what it says.
+  stub: { letter: "stub", legs: ["photo", "summary"], words: [], needsGuardian: false },
+  bill: { letter: "bill", legs: ["photo", "summary"], words: [], needsGuardian: false },
+  blurry: { letter: "blurry", legs: ["photo", "summary"], words: [], needsGuardian: false },
+  wrong: { letter: "bill", legs: ["photo", "summary"], words: [WRONG_KIND_WORDS], needsGuardian: false },
 };
 
 const AGENT_WAIT_MS = 100_000;
@@ -81,6 +89,15 @@ const MAX_LABEL = 120;
 type Deps = { fetchImpl?: typeof fetch };
 
 const ledgerOf = (env: Env): TryLedger => env.TRY_LEDGER.get(env.TRY_LEDGER.idFromName("try")) as unknown as TryLedger;
+
+const VISITED_PATH = /^\/[A-Za-z0-9/_-]{1,200}$/;
+
+// The page shows this address, so the seed is not the run's ID, which lets its
+// holder press the run's buttons.
+async function scrambleUrl(env: Env, runId: string): Promise<string | null> {
+  const base = env.SANDBOX_BASE_URL?.replace(TRAILING_SLASH, "");
+  return base ? `${base}/scramble/${(await sha256(`layout:${runId}`)).slice(0, 16)}/apply` : null;
+}
 
 function enabled(env: Env): boolean {
   return env.MANO_TRY === "on" && Boolean(env.MANO_AGENT_URL && env.MANO_AGENT_SECRET && env.MANO_HANDLE_GRANT_SECRET && env.MANO_ENGINE_AGENT_TOKEN && env.MANO_ENGINE_CHANNELS_TOKEN);
@@ -133,7 +150,7 @@ class Person {
   readonly personId: string;
 
   constructor(
-    private env: Env,
+    readonly env: Env,
     private self: SelfFetch,
     private send: typeof fetch,
     private ledger: TryLedger,
@@ -240,6 +257,22 @@ class Person {
   }
 }
 
+const DID_NOT_FILL = "Mano's computer did not fill this form. Mano prepared the renewal from Maria's answers instead.";
+const FILLED = "Mano's computer filled this form, and the portal saved what Mano will file.";
+
+// What the page may say about the fill. The claim of a form Mano had never seen
+// rests on the last address its computer opened in this run being this run's
+// layout, and a saved fill behind it. Anything less says what is known.
+async function fillResult(ledger: TryLedger, runId: string, filled: boolean, layoutUrl: string | null): Promise<TryEvent> {
+  if (!filled) return { kind: "fill", text: DID_NOT_FILL, newLayout: false };
+  if (!layoutUrl) return { kind: "fill", text: FILLED, newLayout: false };
+  const visits = (await ledger.read(runId, 0)).filter((e) => e.kind === "visited");
+  const last = visits.at(-1);
+  if (!last) return { kind: "fill", text: "Mano's computer filled a form, but this run has no record of which one.", newLayout: false };
+  if (last.path === new URL(layoutUrl).pathname) return { kind: "fill", text: "Mano's computer filled this run's layout, and the portal saved what Mano will file.", newLayout: true };
+  return { kind: "fill", text: "Mano's computer filled the portal's standard form, not this run's layout.", newLayout: false };
+}
+
 type Approval = { id: string; status?: string; documentId?: string | null; outcome?: { receipt?: { externalId: string; simulated: boolean } | null } | null };
 
 const approvalsOf = (json: unknown): Approval[] => (json as { approvals?: Approval[] } | null)?.approvals ?? [];
@@ -295,22 +328,26 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string
       return "advance";
     }
     case "fill": {
-      let say = FILL_WORDS;
+      // A scrambled run sends Mano to a layout made for this run alone. The
+      // portal builds the page from the seed on request.
+      const portal = person.run.scenario === "scramble" ? await scrambleUrl(person.env, person.run.id) : null;
+      if (portal) await log({ kind: "layout", url: portal });
+      const fillWords = portal ? `Please fill out my renewal on this form: ${portal} ${FILL_WORDS.replace("Please fill out my renewal now. ", "")}` : FILL_WORDS;
+      let say = fillWords;
       for (let round = 0; round < FILL_ROUNDS; round++) {
         await log({ kind: "sent", text: say });
         const turn = await person.turn([say]);
         if (turn.status === "waiting_approval" && turn.approvalId && turn.approval) {
           await replied(turn, turn.approval);
           const replay = await person.engine(`/approvals/${encodeURIComponent(turn.approvalId)}/replay`);
-          if (replay.http !== 200) await log({ kind: "note", text: "Mano's computer did not fill this form. Mano prepared the renewal from Maria's answers instead." });
+          await log(await fillResult(ledger, runId, replay.http === 200, portal));
           if (!(await person.presented(turn.approvalId, turn.approval))) return fail("Mano could not put the question to Maria, so nothing was filed.");
           await log({ kind: "question", text: shown(turn.approval) });
           return "advance";
         }
         if (!(await replied(turn))) return fail(`Mano did not answer. The turn ended with HTTP ${turn.http}.`);
-        const answer = ANSWERS.find(([asked]) => asked.test(turn.text))?.[1];
-        if (!answer) return fail("Mano asked something this demo has no preset answer for, so the run stops here. Nothing was filed.");
-        say = answer;
+        // With no question this demo can answer, Maria asks again.
+        say = ANSWERS.find(([asked]) => asked.test(turn.text))?.[1] ?? fillWords;
       }
       return fail("Mano did not reach the question after five turns, so nothing was filed.");
     }
@@ -452,7 +489,7 @@ async function report(request: Request, env: Env): Promise<Response> {
   const token = request.headers.get("authorization")?.replace(BEARER_PREFIX, "") ?? "";
   if (!env.MANO_ENGINE_AGENT_TOKEN || !secretsEqual(token, env.MANO_ENGINE_AGENT_TOKEN)) return new Response("Forbidden", { status: 403 });
   if (Number(request.headers.get("content-length") ?? 0) > MAX_REPORT_BYTES) return new Response("Too large", { status: 413 });
-  const body = (await request.json().catch(() => null)) as { handleHash?: unknown; model?: unknown; screenB64?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as { handleHash?: unknown; model?: unknown; screenB64?: unknown; visited?: unknown } | null;
   const handleHash = body?.handleHash;
   if (typeof handleHash !== "string" || !isTryPerson(personIdForHandle(handleHash))) return new Response(null, { status: 204 });
   const ledger = ledgerOf(env);
@@ -462,6 +499,11 @@ async function report(request: Request, env: Env): Promise<Response> {
     const bytes = Uint8Array.from(atob(body.screenB64), (c) => c.charCodeAt(0));
     await env.FILES.put(reserved.key, bytes, { httpMetadata: { contentType: "image/png" } });
     await ledger.report(handleHash, { kind: "screen", n: reserved.n });
+    return new Response(null, { status: 204 });
+  }
+  if (body?.visited !== undefined) {
+    if (typeof body.visited !== "string" || !VISITED_PATH.test(body.visited)) return new Response("Bad report", { status: 400 });
+    await ledger.report(handleHash, { kind: "visited", path: body.visited });
     return new Response(null, { status: 204 });
   }
   const event = modelReport(body?.model);

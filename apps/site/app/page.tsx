@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import HeroStage from "@/components/home/HeroStage";
 import TrustDemo from "@/components/home/TrustDemo";
+import Needs from "@/components/home/Needs";
 import { NeedIcon } from "@/components/home/NeedIcons";
 import Faq from "@/components/Faq";
 import Mascot from "@/components/Mascot";
@@ -10,15 +11,15 @@ import TextQr from "@/components/TextQr";
 import { SMS_HREF, SMS_NUMBER, SMS_IS_PLACEHOLDER } from "@/lib/site";
 
 export const metadata: Metadata = {
-  title: { absolute: "Mano: text a photo of your renewal letter" },
-  description: "Text Mano a photo of your renewal letter. It reads the letter, tracks the deadline and files the renewal after your yes. Mano is free in this demo and files only on a practice portal.",
+  title: { absolute: "Mano: find, apply for and track your benefits" },
+  description: "Mano helps you find, apply for and track your benefits across rent, food, health care, child care, bills and transportation. Today it reads your letters, tracks your deadlines and files food benefits renewals after your yes. Mano is free in this demo and files only on a practice portal.",
   alternates: { canonical: "/" },
 };
 
 const TODAY: [icon: string, title: string, text: string][] = [
-  ["pencil", "Reads your letter", "Mano finds the deadline that matters and quotes the line it came from. If a page is too blurry, it asks for a new photo."],
-  ["calendar", "Tracks the deadline", "After you say so, Mano keeps the date and texts you before it."],
-  ["clipboard", "Files your renewal on a practice portal", "Mano fills out the food benefits renewal and files it after your yes. The portal is made up, so nothing reaches a real office."],
+  ["programs", "Find", "Ask what help there is. Mano answers questions about food benefits, health coverage and energy bill help in California, Texas, New York, Florida, Illinois, Washington, Arizona and Ohio, each fact sourced to the official page. It can give a rough income check. The office decides if you qualify."],
+  ["clipboard", "Apply", "Today this is one form. Mano fills out the food benefits renewal and files it after your yes, on a practice portal. The portal is made up, so nothing reaches a real office. New applications and other forms are coming soon."],
+  ["calendar", "Track", "Mano reads your letter, finds the deadline that matters and quotes the line it came from. After you say so, Mano keeps the date and texts you before it."],
 ];
 
 const faqs: [string, string][] = [
@@ -30,7 +31,7 @@ const faqs: [string, string][] = [
   ["What if a letter tells Mano to do something?", "Mano treats letters, forms and web pages as information, never as orders. It checks every link before opening it and will not open one that fails the check."],
   ["What do I need to start?", `A phone that can text. Text or iMessage Mano at ${SMS_NUMBER}.`],
   ["Is Mano part of the government?", "No. Mano is independent."],
-  ["What else can I ask Mano?", "Questions about food benefits, health coverage and energy bill help in eight states, each fact sourced to the official page."],
+  ["What can Mano help me with?", "Mano is built to help with rent, food, health care, child care, bills and transportation. Today it reads your letters, keeps the date after you say so, fills out food benefits renewals and files them on a practice portal, and answers questions about food benefits, health coverage and energy bill help in eight states. The rest is coming soon."],
 ];
 
 export default function Home() {
@@ -40,7 +41,8 @@ export default function Home() {
 
       <section className="h-today" aria-labelledby="today-h">
         <div className="wrap">
-          <h2 id="today-h">What Mano does today</h2>
+          <h2 id="today-h">Find, apply for and track your benefits</h2>
+          <p className="lede">Here is what each one means today.</p>
           <ul className="h-today-list">
             {TODAY.map(([icon, title, text]) => (
               <li key={title}>
@@ -50,6 +52,12 @@ export default function Home() {
               </li>
             ))}
           </ul>
+        </div>
+      </section>
+
+      <section className="h-needs" aria-labelledby="nd-h">
+        <div className="wrap">
+          <Needs />
         </div>
       </section>
 
@@ -64,7 +72,7 @@ export default function Home() {
       <section id="get-mano" className="h-close" aria-labelledby="close-h">
         <div className="wrap">
           <Mascot tile wave tone="orange" size={88} className="close-mascot" />
-          <h2 id="close-h">Text a photo of your renewal letter.</h2>
+          <h2 id="close-h">Start with the letter you have been putting off.</h2>
           <p className="lede">Mano will find the date and tell you what happens next.</p>
           <a className="close-num" href={SMS_HREF}>{SMS_NUMBER}</a>
           <div className="btn-row">

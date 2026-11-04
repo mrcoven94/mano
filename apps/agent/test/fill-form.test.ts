@@ -6,7 +6,10 @@ import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
 import { engineFrom, personIdFor, type Profile } from "../agent/lib/engine.js";
 import { FORMS, layoutOf, resolveForm } from "../agent/lib/forms.js";
+import { readTextedPhotos } from "../agent/lib/letters.js";
 import { heldBack, presentsExactly, renderQuestion } from "../agent/lib/pending.js";
+import type { CheckInput } from "../../engine/src/gateway/checker.js";
+import { NIL, letterPhoto, pageJson, recordedReader } from "../../../packages/mail/test/letter-fixture.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 import { screen } from "./fill-double.js";
@@ -467,7 +470,62 @@ describe("fill_form", () => {
     const frozen = JSON.parse(held.requestJson);
     expect(frozen.documentId).toBe("doc-letter");
     expect(frozen.sources).toEqual([{ kind: "document", id: "doc-letter" }]);
-    expect(frozen.payload.attachment).toEqual(expect.any(String));
+    expect(frozen.payload.attachment).toBe("doc-letter");
+    expect(frozen.attachmentLabel).toEqual(expect.any(String));
+  });
+
+  describe("what a fill says it attached", () => {
+    const person = personIdFor(HANDLE);
+    const STUB_PAGE = pageJson({
+      document_kind: "pay_stub",
+      full_text: "Sample Works LLC\nEmployee: Rosa Testcase\nGross pay $1,000.00\nNet pay $850.00",
+      sender: { text: "Sample Works LLC", box_2d: [40, 60, 70, 400] },
+      program: NIL,
+      subject: NIL,
+      asked: [],
+      deadlines: [],
+      consequence: NIL,
+      reference_no: NIL,
+      notice_date: NIL,
+      phones: [],
+    });
+    const LETTER_PAGE = pageJson({ document_kind: "benefits_letter" });
+
+    async function filledAfterReading(page: string) {
+      const p = profile();
+      p.income[0].amount = { value: 1075, source: "person", updatedAt: at } as never;
+      engine.profile = p;
+      engine.putDocument(person, "g0t1i0-0123456789ab", new Uint8Array(await letterPhoto()));
+      await readTextedPhotos(client(), [{ id: "g0t1i0-0123456789ab", mimeType: "image/jpeg" }], recordedReader([page]), new Date().toISOString(), Date.now() + 60_000);
+      const checks: CheckInput[] = [];
+      engine.checker = {
+        check: async (input: CheckInput) => {
+          checks.push(input);
+          return { verdict: "pass", problems: [] };
+        },
+      };
+      expect((await run("turn_fill0032", { form: "food-renewal" })).status).toBe("waiting_for_yes");
+      const [held] = engine.approvals();
+      return { held, frozen: JSON.parse(held.requestJson), checks };
+    }
+
+    it("a renewal letter is named as a letter, and the question says no proof of income is attached", async () => {
+      const { held, frozen, checks } = await filledAfterReading(LETTER_PAGE);
+      expect(frozen.attachmentLabel).toMatch(/^the letter you sent on \w+ \d+, and no proof of income$/);
+      expect(renderQuestion(held)).toContain(`With ${frozen.attachmentLabel} attached.`);
+      expect(presentsExactly(renderQuestion(held))).toBe(true);
+      expect(checks.map((c) => (c.action.payload as Record<string, unknown>).attachment)).toContain(frozen.documentId);
+      expect(JSON.stringify(checks)).not.toContain(frozen.attachmentLabel);
+    });
+
+    it("a pay stub read as one goes as proof of income, as start_form_draft attaches it", async () => {
+      const { held, frozen, checks } = await filledAfterReading(STUB_PAGE);
+      expect(frozen.documentId).toBe("g0t1i0-0123456789ab");
+      expect(frozen.attachmentLabel).toMatch(/^the pay stub you sent on \w+ \d+ as proof of income$/);
+      expect(renderQuestion(held)).toContain(`With ${frozen.attachmentLabel} attached.`);
+      expect(checks.map((c) => (c.action.payload as Record<string, unknown>).attachment)).toContain(frozen.documentId);
+      expect(JSON.stringify(checks)).not.toContain(frozen.attachmentLabel);
+    });
   });
 
   it.each([

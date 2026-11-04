@@ -10,7 +10,7 @@ import * as Linking from "expo-linking";
 import * as Sharing from "expo-sharing";
 import { DocPreview } from "../../components/doc";
 import { shortHash } from "../../lib/doc-show";
-import { Body, Card, ErrorView, GhostBtn, LoadingView, Muted, Screen, Title } from "../../components/ui";
+import { Body, Card, ErrorView, GhostBtn, LiveRegion, LoadingView, Muted, Screen, Title } from "../../components/ui";
 import { b64decode } from "../../lib/base64";
 import type { ApprovalDocument } from "../../lib/api/types";
 import { AuthError } from "../../lib/api/types";
@@ -115,7 +115,9 @@ export default function DocumentViewer() {
                 onLink={(url) => void handleLink(url)}
               />
             </View>
-            {linkBlocked ? <Muted style={styles.warn}>{s.linkBlocked}</Muted> : null}
+            <LiveRegion urgent message={linkBlocked ? s.linkBlocked : null}>
+              <Muted style={styles.warn}>{s.linkBlocked}</Muted>
+            </LiveRegion>
           </Card>
           {Platform.OS !== "web" ? (
             <GhostBtn title={sharing ? s.sending : s.share} onPress={() => void share()} />

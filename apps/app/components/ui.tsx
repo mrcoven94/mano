@@ -2,11 +2,13 @@
 // pill buttons, highlighter accents. Every touch target is at least
 // 48px tall.
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useRouter, type Href } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,6 +21,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLanguage, useStrings } from "../lib/i18n";
+import { LIVE_REGION_ARM_MS, announceOptions, announcesByCall, liveRegionProps } from "../lib/live-region";
 import type { Language } from "../lib/strings";
 import { colors, fonts, radius, tapTarget, type } from "../lib/theme";
 
@@ -78,11 +81,19 @@ export function Screen({
 }
 
 export function Title({ children, style }: { children: ReactNode; style?: StyleProp<TextStyle> }) {
-  return <Text style={[type.title, styles.title, style]}>{children}</Text>;
+  return (
+    <Text accessibilityRole="header" aria-level={1} style={[type.title, styles.title, style]}>
+      {children}
+    </Text>
+  );
 }
 
 export function SectionTitle({ children }: { children: ReactNode }) {
-  return <Text style={[type.section, styles.sectionTitle]}>{children}</Text>;
+  return (
+    <Text accessibilityRole="header" aria-level={2} style={[type.section, styles.sectionTitle]}>
+      {children}
+    </Text>
+  );
 }
 
 export function Body({ children, style }: { children: ReactNode; style?: StyleProp<TextStyle> }) {
@@ -95,6 +106,39 @@ export function Muted({ children, style }: { children: ReactNode; style?: StyleP
 
 export function Card({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
   return <View style={[styles.card, style]}>{children}</View>;
+}
+
+// Shows its children only while message is set, and has a screen reader say
+// message when it arrives. It is on screen first and fills in a moment later,
+// so a message present from the first render is still announced. Keep buttons
+// out of it: a spinner swapping in would read the message again.
+export function LiveRegion({
+  message,
+  urgent = false,
+  style,
+  children,
+}: {
+  message: string | null;
+  urgent?: boolean;
+  style?: StyleProp<ViewStyle>;
+  children: ReactNode;
+}) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setArmed(true), LIVE_REGION_ARM_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  const shown = armed ? message : null;
+  useEffect(() => {
+    if (shown !== null && announcesByCall(Platform.OS)) {
+      AccessibilityInfo.announceForAccessibilityWithOptions(shown, announceOptions(urgent));
+    }
+  }, [shown, urgent]);
+  return (
+    <View collapsable={false} style={style} {...liveRegionProps(urgent)}>
+      {shown !== null ? children : null}
+    </View>
+  );
 }
 
 export function Btn({
@@ -260,8 +304,10 @@ export function LoadingView() {
 export function ErrorView({ title, body, retry, retryTitle }: { title: string; body: string; retry: () => void; retryTitle: string }) {
   return (
     <View style={styles.center}>
-      <Text style={[type.cardTitle, styles.errorTitle]}>{title}</Text>
-      <Text style={[type.small, styles.muted, styles.errorBody]}>{body}</Text>
+      <LiveRegion urgent message={`${title}. ${body}`}>
+        <Text style={[type.cardTitle, styles.errorTitle]}>{title}</Text>
+        <Text style={[type.small, styles.muted, styles.errorBody]}>{body}</Text>
+      </LiveRegion>
       <GhostBtn title={retryTitle} onPress={retry} />
     </View>
   );
@@ -307,7 +353,7 @@ const styles = StyleSheet.create({
   field: {
     minHeight: tapTarget,
     borderWidth: 1,
-    borderColor: colors.border2,
+    borderColor: colors.fieldBorder,
     borderRadius: radius.sm,
     paddingHorizontal: 14,
     fontSize: 16,
@@ -319,7 +365,7 @@ const styles = StyleSheet.create({
   badgeAlert: { backgroundColor: colors.alertSoft },
   badgeGreen: { backgroundColor: colors.greenSoft },
   badgeBlue: { backgroundColor: colors.penSoft },
-  badgeText: { fontSize: 12, fontWeight: "600", color: colors.text },
+  badgeText: { fontSize: 14, lineHeight: 20, fontWeight: "600", color: colors.text },
   languages: { flexDirection: "row", justifyContent: "flex-end", marginTop: -12, marginRight: -10, marginBottom: 4 },
   languageOption: { minHeight: tapTarget, minWidth: tapTarget, paddingHorizontal: 10, alignItems: "center", justifyContent: "center" },
   languageActive: { fontSize: 15, fontWeight: "600", color: colors.text },

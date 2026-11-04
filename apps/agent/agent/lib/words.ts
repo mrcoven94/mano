@@ -1,9 +1,10 @@
 // The sentences Mano says around an approval, without a model, in each
-// language it has closed words for: the frame of the yes or no question
-// and what comes back after the answer. Only the frame changes. The form's
-// labels, the values, the office and the declaration stay in English and
-// word for word, since they are what the yes approves. A language missing
-// a line is a type error, never an English sentence in the middle of a reply.
+// language it has closed words for: the question and what comes back after
+// the answer. The form's name and labels, the office and the attachment are
+// translated from these tables, and anything not in them stays in its exact
+// English. The values and the declaration never change, since they are what
+// the yes approves. A language missing a line is a type error, never an
+// English sentence in the middle of a reply.
 import type { ReplyLanguage } from "@mano/mail";
 
 export interface QuestionWords {
@@ -16,7 +17,18 @@ export interface QuestionWords {
   replay(url: string): string;
   // What the known declaration means. The English after it is what they make.
   perjuryMeaning: string;
+  // Each keyed by the English it stands for. A test holds them to the forms
+  // and recipients in the code.
+  purposes: Record<string, string>;
+  labels: Record<string, string>;
+  recipients: Record<string, string>;
+  yourDocument: string;
+  sentDocument(noun: DocumentNoun, month: number, day: number): string;
+  // Follows a document that goes without proof of income.
+  noProof: string;
 }
+
+export type DocumentNoun = "letter" | "photo" | "PDF" | "file";
 
 export interface OutcomeWords {
   done(purpose: string, receipt: { externalId: string; simulated: boolean } | null | undefined): string;
@@ -40,6 +52,27 @@ export interface OutcomeWords {
   yourRequest: string;
 }
 
+const MONTHS_EN = "January February March April May June July August September October November December".split(" ");
+const MONTHS_ES = "enero febrero marzo abril mayo junio julio agosto septiembre octubre noviembre diciembre".split(" ");
+const MONTHS_TL = "Enero Pebrero Marso Abril Mayo Hunyo Hulyo Agosto Setyembre Oktubre Nobyembre Disyembre".split(" ");
+
+// How Engine names a document ("the letter you sent on November 4"), in the
+// person's language. Any other words stay as they are.
+const SENT_LABEL = /^the (letter|photo|PDF|file) you sent on ([A-Z][a-z]+) (\d{1,2})(, and no proof of income)?$/;
+
+export function attachmentIn(language: ReplyLanguage, label: string): string {
+  const words = QUESTION_WORDS[language];
+  const sent = SENT_LABEL.exec(label);
+  const month = sent ? MONTHS_EN.indexOf(sent[2]!) + 1 : 0;
+  if (!sent || month === 0) return label;
+  return `${words.sentDocument(sent[1] as DocumentNoun, month, Number(sent[3]))}${sent[4] ? words.noProof : ""}`;
+}
+
+// A form's name in the person's language, or its exact English.
+export function purposeIn(language: ReplyLanguage, purpose: string): string {
+  return Object.hasOwn(QUESTION_WORDS[language].purposes, purpose) ? QUESTION_WORDS[language].purposes[purpose]! : purpose;
+}
+
 export const QUESTION_WORDS: Record<ReplyLanguage, QuestionWords> = {
   en: {
     ready: (purpose, office) => `Ready to send: ${purpose} (to ${office}).`,
@@ -49,15 +82,41 @@ export const QUESTION_WORDS: Record<ReplyLanguage, QuestionWords> = {
     answer: "Reply YES to send exactly this, or NO to stop.",
     replay: (url) => `See each step Mano took on the form: ${url}`,
     perjuryMeaning: "",
+    purposes: {},
+    labels: {},
+    recipients: {},
+    yourDocument: "your document",
+    sentDocument: (noun, month, day) => `the ${noun} you sent on ${MONTHS_EN[month - 1]} ${day}`,
+    noProof: ", and no proof of income",
   },
   es: {
-    ready: (purpose, office) => `Listo para enviar: ${purpose} (a ${office}).`,
+    ready: (purpose, office) => `Listo para enviar: ${purpose} (para ${office}).`,
     attached: (label) => `Adjunto: ${label}.`,
     declares: (meaning) => `Termina con una declaración que solo usted puede hacer.${meaning ? ` ${meaning}` : ""} Así dice en inglés, igual que en el formulario:`,
     answerWithDeclaration: "Responda SÍ para hacer esta declaración usted y enviar exactamente esto, o NO para parar.",
     answer: "Responda SÍ para enviar exactamente esto, o NO para parar.",
     replay: (url) => `Vea cada paso que Mano hizo en el formulario: ${url}`,
     perjuryMeaning: "Significa que usted afirma, bajo pena de perjurio, que la información es verdadera, correcta y completa según su conocimiento.",
+    purposes: { "Food benefits renewal": "Renovación de beneficios de alimentos" },
+    labels: {
+      "Case number": "Número de caso",
+      "Full legal name": "Nombre legal completo",
+      "Date of birth": "Fecha de nacimiento",
+      "People in household": "Personas en el hogar",
+      "Monthly income ($)": "Ingreso mensual ($)",
+      "Mailing address": "Dirección postal",
+      "Phone number": "Teléfono",
+    },
+    recipients: {
+      "the State Benefits Renewal Office test portal": "el portal de prueba de la Oficina Estatal de Renovación de Beneficios",
+      "the Mano test fax line": "la línea de fax de prueba de Mano",
+      "a practice mailbox where nothing is really mailed": "un buzón de práctica donde nada se envía de verdad",
+      "the Sandbox County Human Services test office": "la oficina de prueba de Servicios Humanos del Condado Sandbox",
+      "an office Mano has no name for": "una oficina que Mano no puede nombrar",
+    },
+    yourDocument: "su documento",
+    sentDocument: (noun, month, day) => `${{ letter: "la carta", photo: "la foto", PDF: "el PDF", file: "el archivo" }[noun]} que envió el ${day} de ${MONTHS_ES[month - 1]}`,
+    noProof: ", y ningún comprobante de ingresos",
   },
   vi: {
     ready: (purpose, office) => `Sẵn sàng gửi: ${purpose} (đến ${office}).`,
@@ -67,6 +126,26 @@ export const QUESTION_WORDS: Record<ReplyLanguage, QuestionWords> = {
     answer: "Trả lời CÓ để gửi đúng nội dung trên, hoặc KHÔNG để dừng lại.",
     replay: (url) => `Xem từng bước Mano đã làm trên đơn: ${url}`,
     perjuryMeaning: "Lời khai có nghĩa là bạn khẳng định, chịu hình phạt về tội khai man, rằng thông tin là đúng sự thật, chính xác và đầy đủ theo hiểu biết của bạn.",
+    purposes: { "Food benefits renewal": "Gia hạn phúc lợi thực phẩm" },
+    labels: {
+      "Case number": "Số hồ sơ",
+      "Full legal name": "Họ tên đầy đủ theo giấy tờ",
+      "Date of birth": "Ngày sinh",
+      "People in household": "Số người trong hộ",
+      "Monthly income ($)": "Thu nhập hàng tháng ($)",
+      "Mailing address": "Địa chỉ gửi thư",
+      "Phone number": "Số điện thoại",
+    },
+    recipients: {
+      "the State Benefits Renewal Office test portal": "cổng thử nghiệm của Văn phòng Gia hạn Phúc lợi Tiểu bang",
+      "the Mano test fax line": "đường fax thử nghiệm của Mano",
+      "a practice mailbox where nothing is really mailed": "hộp thư thực hành, nơi không có gì được gửi thật",
+      "the Sandbox County Human Services test office": "văn phòng thử nghiệm Dịch vụ Nhân sinh Quận Sandbox",
+      "an office Mano has no name for": "một văn phòng Mano không có tên",
+    },
+    yourDocument: "giấy tờ của bạn",
+    sentDocument: (noun, month, day) => `${{ letter: "thư", photo: "ảnh", PDF: "tệp PDF", file: "tệp" }[noun]} bạn gửi ngày ${day} tháng ${month}`,
+    noProof: ", và không có giấy tờ chứng minh thu nhập",
   },
   tl: {
     ready: (purpose, office) => `Handa nang ipadala: ${purpose} (sa ${office}).`,
@@ -76,6 +155,26 @@ export const QUESTION_WORDS: Record<ReplyLanguage, QuestionWords> = {
     answer: "Sumagot ng OPO para ipadala ang eksaktong ito, o HINDI para huminto.",
     replay: (url) => `Tingnan ang bawat hakbang ni Mano sa form: ${url}`,
     perjuryMeaning: "Ibig sabihin, pinagtitibay mo, sa ilalim ng parusa ng perjury, na totoo, tama at kumpleto ang impormasyon ayon sa iyong kaalaman.",
+    purposes: { "Food benefits renewal": "Pag-renew ng benepisyo sa pagkain" },
+    labels: {
+      "Case number": "Numero ng kaso",
+      "Full legal name": "Buong legal na pangalan",
+      "Date of birth": "Petsa ng kapanganakan",
+      "People in household": "Bilang ng tao sa bahay",
+      "Monthly income ($)": "Buwanang kita ($)",
+      "Mailing address": "Mailing address",
+      "Phone number": "Numero ng telepono",
+    },
+    recipients: {
+      "the State Benefits Renewal Office test portal": "test portal ng State Benefits Renewal Office",
+      "the Mano test fax line": "test fax line ng Mano",
+      "a practice mailbox where nothing is really mailed": "practice mailbox kung saan walang talagang ipinapadala",
+      "the Sandbox County Human Services test office": "test office ng Sandbox County Human Services",
+      "an office Mano has no name for": "opisinang walang pangalan sa Mano",
+    },
+    yourDocument: "ang iyong dokumento",
+    sentDocument: (noun, month, day) => `ang ${{ letter: "sulat", photo: "larawan", PDF: "PDF", file: "file" }[noun]} na ipinadala mo noong ${MONTHS_TL[month - 1]} ${day}`,
+    noProof: ", at walang katibayan ng kita",
   },
 };
 
@@ -108,7 +207,7 @@ export const OUTCOME_WORDS: Record<ReplyLanguage, OutcomeWords> = {
     done(purpose, receipt) {
       const label = receipt?.simulated ? " Fue una presentación simulada." : "";
       const confirmation = receipt ? ` Confirmación ${receipt.externalId}.` : "";
-      return `Listo. Enviado: ${purpose}.${confirmation}${label}`;
+      return `Listo. Enviado: ${purposeIn("es", purpose)}.${confirmation}${label}`;
     },
     checking: "Estoy revisando si se envió. No se enviará dos veces. Responda SÍ en unos minutos y revisaré otra vez.",
     checkStarting: "La revisión de seguridad está tardando un momento, así que todavía no se envió nada. Responda SÍ otra vez en unos minutos y lo enviaré.",
@@ -132,7 +231,7 @@ export const OUTCOME_WORDS: Record<ReplyLanguage, OutcomeWords> = {
     done(purpose, receipt) {
       const label = receipt?.simulated ? " Đây là lần nộp mô phỏng." : "";
       const confirmation = receipt ? ` Mã xác nhận ${receipt.externalId}.` : "";
-      return `Xong. Đã gửi: ${purpose}.${confirmation}${label}`;
+      return `Xong. Đã gửi: ${purposeIn("vi", purpose)}.${confirmation}${label}`;
     },
     checking: "Tôi đang kiểm tra xem đã gửi được chưa. Sẽ không gửi hai lần. Trả lời CÓ sau vài phút và tôi sẽ kiểm tra lại.",
     checkStarting: "Bước kiểm tra an toàn đang cần thêm chút thời gian, nên chưa có gì được gửi. Trả lời CÓ lại sau vài phút và tôi sẽ gửi.",
@@ -156,7 +255,7 @@ export const OUTCOME_WORDS: Record<ReplyLanguage, OutcomeWords> = {
     done(purpose, receipt) {
       const label = receipt?.simulated ? " Simulated na filing ito." : "";
       const confirmation = receipt ? ` Kumpirmasyon ${receipt.externalId}.` : "";
-      return `Tapos na. Naipadala: ${purpose}.${confirmation}${label}`;
+      return `Tapos na. Naipadala: ${purposeIn("tl", purpose)}.${confirmation}${label}`;
     },
     checking: "Tinitingnan ko kung naipadala ito. Hindi ito ipapadala nang dalawang beses. Sumagot ng OPO pagkalipas ng ilang minuto at titingnan ko ulit.",
     checkStarting: "Sandali pa ang safety check, kaya wala pang naipadala. Sumagot ulit ng OPO pagkalipas ng ilang minuto at ipapadala ko ito.",

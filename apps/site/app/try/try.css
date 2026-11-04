@@ -13,14 +13,17 @@
 
 .try-steps{display:flex;flex-direction:column;gap:12px;min-height:420px;padding:20px;background:var(--bg2);border-radius:20px}
 .try-empty{margin:auto;max-width:38ch;text-align:center;color:var(--muted)}
-.try-steps .bub.me{font-size:.96rem;align-self:flex-end;max-width:86%}
+.try-steps .bub.me{font-size:.96rem;align-self:flex-end;max-width:86%;overflow-wrap:anywhere}
 .try-mano{white-space:pre-line;font-size:.98rem}
 .try-question{font-weight:600}
 .try-fact{color:var(--text);font-size:.96rem;padding:2px 8px}
 .try-fact[data-tone=stop]{color:var(--alert);font-weight:500}
 .try-problem{margin-top:4px;color:var(--muted);font-size:.9rem}
+.try-layout{padding:14px 18px;background:#fff;border-radius:12px;color:var(--text);font-size:.96rem}
+.try-layout a{color:var(--pen)}
 .try-filed{padding:14px 18px;background:var(--hl);border-radius:12px;color:var(--text);font-size:1.05rem}
-.try-filed b{font-family:var(--font-mono),monospace;font-weight:600}
+.try-filed b{font-weight:700}
+.try-filed code{font-family:var(--font-mono),monospace;font-weight:600}
 .try-warming{color:var(--text);padding:6px 8px;font-size:1.02rem}
 .try-warming b{font-variant-numeric:tabular-nums}
 .try-working{color:var(--faint);padding:2px 8px;font-size:.92rem;animation:tryPulse 1.6s ease-in-out infinite}
@@ -58,6 +61,9 @@
 .try-stump-btn{display:flex;flex-direction:column;gap:4px;width:100%;height:100%;padding:16px 18px;text-align:left;background:var(--bg2);border:0;border-radius:14px;font:inherit;color:var(--text);cursor:pointer;transition:background .15s}
 .try-stump-btn span{color:var(--muted);font-size:.92rem;line-height:1.4}
 .try-stump-btn:hover:not(:disabled){background:var(--bg3)}
+.try-stump-btn[data-lead]{background:var(--hl)}
+.try-stump-btn[data-lead] span{color:var(--text)}
+.try-stump-btn[data-lead]:hover:not(:disabled){background:#FFD91F}
 .try-stump-btn:disabled{opacity:.5;cursor:not-allowed}
 .try-stump-btn:focus-visible,.try-send:focus-visible,.try-yes:focus-visible{outline:3px solid var(--pen);outline-offset:2px}
 
