@@ -4,11 +4,15 @@
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Redirect, useRouter } from "expo-router";
-import { Btn, Body, DemoBanner, Field, Screen, Title } from "../../components/ui";
+import { Btn, Body, DemoBanner, Field, LanguageSwitch, Screen, Title } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 import { useStrings } from "../../lib/i18n";
 import { pendingSignIn, setPendingSignIn } from "../../lib/sign-in-flow";
+import type { StringKey } from "../../lib/strings";
 import { colors } from "../../lib/theme";
+
+const SIX_DIGITS = /^\d{6}$/;
+const NON_DIGITS = /[^\d]/g;
 
 export default function Verify() {
   const s = useStrings();
@@ -18,14 +22,15 @@ export default function Verify() {
   const { client, mode, signIn } = useAuth();
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // A key, not its words, so the line follows the language switch.
+  const [error, setError] = useState<StringKey | null>(null);
 
   if (!pending) return <Redirect href="/(auth)/sign-in" />;
   const { email, challengeId } = pending;
 
   const submit = async (): Promise<void> => {
-    if (!/^\d{6}$/.test(code.trim())) {
-      setError(s.invalidCode);
+    if (!SIX_DIGITS.test(code.trim())) {
+      setError("invalidCode");
       return;
     }
     setBusy(true);
@@ -36,7 +41,7 @@ export default function Verify() {
       setPendingSignIn(null);
       router.replace("/(tabs)");
     } catch {
-      setError(s.signInFailed);
+      setError("signInFailed");
     } finally {
       setBusy(false);
     }
@@ -44,6 +49,7 @@ export default function Verify() {
 
   return (
     <Screen>
+      <LanguageSwitch />
       {mode === "stand-in" ? <DemoBanner text={s.demoMode} /> : null}
       <Title>{s.codeTitle}</Title>
       <Body>
@@ -54,12 +60,12 @@ export default function Verify() {
         <Field
           label={s.codeLabel}
           value={code}
-          onChangeText={(v) => setCode(v.replace(/[^\d]/g, "").slice(0, 6))}
+          onChangeText={(v) => setCode(v.replace(NON_DIGITS, "").slice(0, 6))}
           placeholder={s.codePlaceholder}
           keyboardType="number-pad"
           maxLength={6}
         />
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {error ? <Text style={styles.error}>{s[error]}</Text> : null}
         <Btn title={busy ? s.verifying : s.verify} onPress={() => void submit()} busy={busy} />
         <Pressable onPress={() => router.back()} accessibilityRole="button" style={styles.link}>
           <Text style={styles.linkText}>{s.backToEmail}</Text>

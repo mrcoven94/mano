@@ -168,6 +168,12 @@ class SessionSecret(Service):
             self.assertNotIn(banned, app.START_SH)
             self.assertNotIn(banned, app.CONTROL_PY)
 
+    def test_the_window_manager_binds_nothing(self):
+        # Its default keys and clicks include Alt+F2, a launcher that runs commands.
+        keys = app.START_SH.index(': > "$HOME/.fluxbox/keys"')
+        self.assertLess(app.START_SH.index("export HOME=/root"), keys)
+        self.assertLess(keys, app.START_SH.index("fluxbox >"))
+
 
 class PersonStorage(Service):
     def test_a_sandbox_mounts_only_that_persons_volume(self):
@@ -348,6 +354,26 @@ class ControlServer(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MANO_SESSION_SECRET_SHA256": ""}):
             self.assertFalse(self.control.authorized_header("Bearer ", ""))
             self.assertFalse(self.control.authorized_header("Bearer " + SECRET, ""))
+
+    def test_each_form_key_reaches_xdotool_by_a_name_it_has(self):
+        # xdotool ignores a name it does not know and exits 0, so a wrong one fails silently.
+        names = {
+            ("Tab",): "Tab",
+            ("Shift", "Tab"): "shift+Tab",
+            ("Enter",): "Return",
+            ("Backspace",): "BackSpace",
+            ("Delete",): "Delete",
+            ("Escape",): "Escape",
+            ("ArrowLeft",): "Left",
+            ("ArrowRight",): "Right",
+            ("ArrowUp",): "Up",
+            ("ArrowDown",): "Down",
+            ("ctrl", "a"): "ctrl+a",
+        }
+        for keys, name in names.items():
+            self.ran.clear()
+            self.control.apply_action({"type": "keypress", "keys": list(keys)})
+            self.assertEqual(self.ran, [("xdotool", "key", name)])
 
 
 class Shape(unittest.TestCase):

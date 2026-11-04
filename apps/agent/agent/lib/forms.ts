@@ -62,10 +62,21 @@ export interface FormSpec {
   proof: { label: string; question: string; fromProfile(profile: Profile): string | null };
 }
 
+const WHITESPACE_RUN = /\s+/g;
+const ISO_DATE = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
+const US_DATE = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+const NON_DIGITS = /\D/g;
+const WHOLE_NUMBER = /^\d+$/;
+const LEADING_DOLLAR = /^\$/;
+const COMMAS = /,/g;
+const DOLLAR_AMOUNT = /^\d+(\.\d{1,2})?$/;
+const TRAILING_SLASH = /\/$/;
+const COMMA_BREAK = /\s*,\s*/;
+
 // The text line shows a run of spaces as one, so a value is taken that way
 // before it is checked: what the question shows is what is filed.
 function taken(answer: string): string {
-  return answer.trim().replace(/\s+/g, " ");
+  return answer.trim().replace(WHITESPACE_RUN, " ");
 }
 
 // One line of text of at most max characters.
@@ -79,8 +90,8 @@ function trimmed(max: number) {
 function isoDate(answer: string): string | null {
   const v = answer.trim();
   let y: number, m: number, d: number;
-  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(v);
-  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v);
+  const iso = ISO_DATE.exec(v);
+  const us = US_DATE.exec(v);
   if (iso) [y, m, d] = [Number(iso[1]), Number(iso[2]), Number(iso[3])];
   else if (us) [y, m, d] = [Number(us[3]), Number(us[1]), Number(us[2])];
   else return null;
@@ -92,22 +103,22 @@ function isoDate(answer: string): string | null {
 
 function phone(answer: string): string | null {
   const v = taken(answer);
-  const digits = v.replace(/\D/g, "");
+  const digits = v.replace(NON_DIGITS, "");
   return digits.length === 10 || (digits.length === 11 && digits.startsWith("1")) ? v : null;
 }
 
 function wholeNumber(min: number, max: number) {
   return (answer: string) => {
     const v = answer.trim();
-    if (!/^\d+$/.test(v)) return null;
+    if (!WHOLE_NUMBER.test(v)) return null;
     const n = Number(v);
     return n >= min && n <= max ? String(n) : null;
   };
 }
 
 function dollars(answer: string): string | null {
-  const v = answer.trim().replace(/^\$/, "").replace(/,/g, "");
-  if (!/^\d+(\.\d{1,2})?$/.test(v)) return null;
+  const v = answer.trim().replace(LEADING_DOLLAR, "").replace(COMMAS, "");
+  if (!DOLLAR_AMOUNT.test(v)) return null;
   return String(Number(v));
 }
 
@@ -163,7 +174,7 @@ function addressFields(value: string): ProfileFields {
   if (!ENDS_IN_ZIP.test(value) || value.length > ADDRESS_LINE_MAX) return {};
   const at = (part: string) => `person.address.${part}`;
   const found = usAddressParts(value);
-  const pieces = found?.rest.split(/\s*,\s*/).filter(Boolean) ?? [];
+  const pieces = found?.rest.split(COMMA_BREAK).filter(Boolean) ?? [];
   if (!found || pieces.length < 2) return { "person.address": null, [at("line1")]: value, ...(found ? { [at("state")]: found.state } : {}) };
   const line2 = pieces.slice(1, -1).join(", ");
   return { "person.address": null, [at("line1")]: pieces[0]!, ...(line2 ? { [at("line2")]: line2 } : {}), [at("city")]: pieces.at(-1)!, [at("state")]: found.state, [at("zip")]: found.zip };
@@ -335,11 +346,11 @@ const FOOD_RENEWAL: FormSpec = {
 
 export const FORMS: Record<string, FormSpec> = { [FOOD_RENEWAL.id]: FOOD_RENEWAL };
 
-// A form by its ID, or by its address on our sandbox portal. Any other
-// address is refused, so Mano never fills a real portal.
-export function resolveForm(ref: string, portalUrl: string | null): FormSpec | null {
-  const byId = Object.hasOwn(FORMS, ref.trim()) ? FORMS[ref.trim()] : undefined;
-  if (byId) return byId;
+// The portal serves a form's path under its test layouts too.
+const TEST_LAYOUT = /^(\/v\/[a-z-]+|\/scramble\/[A-Za-z0-9-]{1,32})(\/.*)$/;
+
+// Where an address sits on our sandbox portal, or null for any other address.
+function onPortal(ref: string, portalUrl: string | null): { layout: string; path: string } | null {
   if (!portalUrl) return null;
   let url: URL, portal: URL;
   try {
@@ -349,7 +360,23 @@ export function resolveForm(ref: string, portalUrl: string | null): FormSpec | n
     return null;
   }
   if (url.origin !== portal.origin) return null;
-  return Object.values(FORMS).find((f) => url.pathname.replace(/\/$/, "") === f.path) ?? null;
+  const path = url.pathname.replace(TRAILING_SLASH, "");
+  const layout = TEST_LAYOUT.exec(path);
+  return layout ? { layout: layout[1]!, path: layout[2]! } : { layout: "", path };
+}
+
+// A form by its ID, or by its address on our sandbox portal, under a test
+// layout or not. Any other address is refused, so Mano never fills a real portal.
+export function resolveForm(ref: string, portalUrl: string | null): FormSpec | null {
+  const byId = Object.hasOwn(FORMS, ref.trim()) ? FORMS[ref.trim()] : undefined;
+  if (byId) return byId;
+  const found = onPortal(ref, portalUrl);
+  return found && (Object.values(FORMS).find((f) => found.path === f.path) ?? null);
+}
+
+// The test layout an address asks for, or "" for the form's plain page.
+export function layoutOf(ref: string, portalUrl: string | null): string {
+  return onPortal(ref, portalUrl)?.layout ?? "";
 }
 
 export interface FilledForm {

@@ -1,6 +1,6 @@
-import { describe, expect, test } from "vitest";
-import type { SafetyCheck } from "../src/actions";
-import { runLoop, type LoopOptions } from "../src/loop";
+import { describe, expect, test, vi } from "vitest";
+import type { ComputerAction, SafetyCheck } from "../src/actions";
+import { LOOP_INSTRUCTIONS, runLoop, type LoopOptions } from "../src/loop";
 import { FakeModelClient } from "../src/model";
 import { assistantMessage, computerCall, FAKE_PNG, FakeComputer } from "./fake-computer";
 
@@ -80,6 +80,24 @@ describe("observe-act loop", () => {
     expect(computer.actions).toEqual([]);
   });
 
+  test("a refused batch logs its key names and earlier turns, and never a typed value or an unknown word", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const model = new FakeModelClient([
+      [computerCall("call-1", [{ type: "click", button: "left", x: 1, y: 2 }, { type: "type", text: "Maria Torres" }])],
+      [computerCall("call-2", [{ type: "type", text: "418 Alder St" }, { type: "keypress", keys: ["ctrl", "Maria"] }, { type: "keypress", keys: ["Home"] }])],
+    ]);
+    const outcome = await runLoop(new FakeComputer(), model, "task", { model: MODEL });
+    expect(outcome).toEqual({ status: "refused", steps: 2 });
+    const logged = String(warn.mock.calls[0]?.[0]);
+    warn.mockRestore();
+    expect(JSON.parse(logged)).toEqual({
+      type: "mano_computer_refused",
+      turns: ["click,type"],
+      refused: [{ type: "type" }, { type: "keypress", keys: ["ctrl", "other"] }, { type: "keypress", keys: ["Home"] }],
+    });
+    expect(logged).not.toMatch(/Maria|Alder/);
+  });
+
   test("replay stops at 29 pairs instead of sending a refused request", async () => {
     const computer = new FakeComputer();
     const turns = Array.from({ length: 29 }, (_, i) => [computerCall(`call-${i}`, [{ type: "wait" }])]);
@@ -106,5 +124,53 @@ describe("observe-act loop", () => {
     const outcome = await runLoop(computer, model, "do the thing", { model: MODEL, maxSteps: 2 });
     expect(outcome).toEqual({ status: "step_budget", steps: 2 });
     expect(computer.actions).toHaveLength(2);
+  });
+
+  describe("what a model may press and click, on any model path", () => {
+    const refusedKeys = [["alt", "F2"], ["Alt+F2"], ["alt", "F1"], ["alt", "F4"], ["alt", "Tab"], ["F2"], ["super"], ["meta", "d"], ["ctrl", "l"], ["ctrl", "t"], ["ctrl", "n"], ["ctrl", "o"], ["ctrl", "s"], ["ctrl", "shift", "i"], ["ctrl", "alt", "t"], ["ctrl", "a", "l"], ["shift", "a"], ["a"], [" "], ["constructor"], []];
+
+    test.each(refusedKeys.map((keys) => [keys]))("%j stops the run before anything in its batch acts", async (keys) => {
+      const computer = new FakeComputer();
+      const batch: ComputerAction[] = [{ type: "click", button: "left", x: 1, y: 1 }, { type: "keypress", keys }, { type: "wait" }, { type: "type", text: "touch /tmp/mano-escape" }, { type: "keypress", keys: ["Enter"] }];
+      const outcome = await runLoop(computer, new FakeModelClient([[computerCall("call-1", batch)]]), "Go.", { model: MODEL });
+      expect(outcome).toEqual({ status: "refused", steps: 1 });
+      expect(computer.actions).toEqual([]);
+    });
+
+    test.each([
+      [["Tab"], ["Tab"]],
+      [["tab"], ["Tab"]],
+      [["Enter"], ["Enter"]],
+      [["return"], ["Enter"]],
+      [["Backspace"], ["Backspace"]],
+      [["DELETE"], ["Delete"]],
+      [["esc"], ["Escape"]],
+      [["Escape"], ["Escape"]],
+      [["ArrowLeft"], ["ArrowLeft"]],
+      [["right"], ["ArrowRight"]],
+      [["UP"], ["ArrowUp"]],
+      [["arrowdown"], ["ArrowDown"]],
+      [["shift", "Tab"], ["Shift", "Tab"]],
+      [["Shift+Tab"], ["Shift", "Tab"]],
+      [["ctrl", "a"], ["ctrl", "a"]],
+      [["Control", "A"], ["ctrl", "a"]],
+    ])("%j reaches the computer as %j, and the call replays as the model sent it", async (keys, sent) => {
+      const computer = new FakeComputer();
+      const model = new FakeModelClient([[computerCall("call-1", [{ type: "keypress", keys }])], [assistantMessage("ok")]]);
+      await runLoop(computer, model, "Go.", { model: MODEL });
+      expect(computer.actions).toEqual([[{ type: "keypress", keys: sent }]]);
+      expect(model.requests[1]!.input[1]).toMatchObject({ type: "computer_call", actions: [{ type: "keypress", keys }] });
+    });
+
+    test.each(["right", "wheel", "back", "forward"] as const)("a %s click is refused: only the left button fills a form", async (button) => {
+      const computer = new FakeComputer();
+      const outcome = await runLoop(computer, new FakeModelClient([[computerCall("call-1", [{ type: "click", button, x: 1, y: 1 }])]]), "Go.", { model: MODEL });
+      expect(outcome).toEqual({ status: "refused", steps: 1 });
+      expect(computer.actions).toEqual([]);
+    });
+
+    test("the model is told which keys it has", () => {
+      expect(LOOP_INSTRUCTIONS).toContain("Tab, Shift+Tab, Enter, Backspace, Delete, Escape, the arrow keys and Ctrl+A");
+    });
   });
 });

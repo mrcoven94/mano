@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { chromium } from "playwright";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { allowedActions } from "../src/actions";
 import { PlaywrightComputer } from "../src/playwright";
 
 // Real Chromium on this machine. CI has no browser installed and skips.
@@ -98,5 +99,42 @@ describe.skipIf(!installed)("playwright stand-in in real Chromium", () => {
     await settle();
     expect(portal.hits).toContain("GET /fetch-refused");
     expect(offsite.hits).toEqual([]);
+  });
+
+  test("every form key the loop allows does what it says in real Chromium", async () => {
+    const page = `<input id="a" value="abc"><input id="b" value="xyz"><script>document.title = "ready"; window.state = () => [document.activeElement.id, document.activeElement.value, document.activeElement.selectionStart, document.activeElement.selectionEnd].join(":");</script>`;
+    const server = createServer((_req, res) => res.writeHead(200, { "content-type": "text/html" }).end(page));
+    await listen(server);
+    const computer = new PlaywrightComputer();
+    const states: string[] = [];
+    let probe: { evaluate(fn: string): Promise<string> } | null = null;
+    const press = async (...keys: string[]) => {
+      const actions = allowedActions([{ type: "keypress", keys }]);
+      expect(actions).not.toBeNull();
+      await computer.act(actions!);
+      states.push(await probe!.evaluate("window.state()"));
+    };
+    try {
+      await computer.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`);
+      probe = (computer as unknown as { launched: { page: { evaluate(fn: string): Promise<string> } } }).launched.page;
+      await press("Tab");
+      await press("Tab");
+      await press("Shift+Tab");
+      await press("right");
+      await press("left");
+      await press("Backspace");
+      await press("Delete");
+      await press("ctrl", "a");
+      await press("up");
+      await press("down");
+      await press("Escape");
+      await press("Enter");
+    } finally {
+      await computer.close();
+      server.close();
+    }
+    // Ctrl+A selects all on the Linux desktop; macOS binds it to line start.
+    const selectAll = process.platform === "darwin" ? "a:a:0:0" : "a:a:0:1";
+    expect(states.slice(0, 8)).toEqual(["a:abc:0:3", "b:xyz:0:3", "a:abc:0:3", "a:abc:3:3", "a:abc:2:2", "a:ac:1:1", "a:a:1:1", selectAll]);
   });
 });

@@ -13,9 +13,10 @@ import { z } from "zod";
 
 import { fillDepsFromEnv, fillOnComputer, type FillDeps, type ReplayStep } from "../lib/computer-fill.js";
 import { EngineError, type PersonEngine } from "../lib/engine.js";
-import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
+import { FORMS, fillFrom, layoutOf, resolveForm, type FormSpec } from "../lib/forms.js";
 import { keepAnswers } from "../lib/form-answers.js";
-import { DECLARATION } from "../lib/pending.js";
+import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
+import { tracedFillDeps } from "../lib/try-trace.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { EARLIER_NOT_UPDATED_NOTE, EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, sameDraft, earlierFiling, type Draft } from "../lib/propose.js";
 
@@ -53,6 +54,9 @@ async function shareReplay(engine: PersonEngine, approvalId: string, form: FormS
   }
 }
 
+// Ways a fill ends that say nothing about the form or what it saved.
+const COMPUTER_STOPPED = new Set(["error", "deadline", "step_budget", "refused"]);
+
 async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext) {
   const turn = requireTurn(ctx);
   const engine = personEngine(ctx);
@@ -81,18 +85,28 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     return { status: "unavailable", sent: false, note: "Mano cannot read this person's saved details yet. Prepare the renewal with start_form_draft from the person's answers instead." };
   }
   const filled = fillFrom(form, profile, input.answers ?? {});
+  // Hearing that benefits are ending is not asking for a form. A renewal
+  // starts from a document: with none on file and nothing answered yet, in
+  // this call or saved from an earlier one, the model asks for the letter
+  // instead of the form's first question.
+  const starting = form === FORMS["food-renewal"] && Object.keys(filled.values).length === 0 && filled.invalid.length === 0 && !filled.documentId && filled.missing?.name !== "proof";
+  if (starting && (await engine.listDocuments()).length === 0) {
+    return {
+      status: "needs_letter",
+      sent: false,
+      note: "No form was started. Ask for a photo of their letter, since it has the deadline and Mano reads it right away, and nothing else. If they have no letter, ask for a photo of their most recent pay stub.",
+    };
+  }
   await keepAnswers(engine, turn.turnId, form, profile, input.answers ?? {});
   const bad = filled.invalid[0];
   if (bad) {
     return { status: "needs_answer", field: bad.name, question: bad.question, sent: false, note: `That answer does not fit "${bad.label}". Ask this one question again, and nothing else.` };
   }
-  if (filled.missing) {
-    // start_form_draft attaches a document on file; a fill takes only one
-    // the profile names, which needs Mail to have read it. Asking again
-    // for a photo already on file would never end.
-    if (filled.missing.name === "proof" && form === FORMS["food-renewal"] && (await engine.listDocuments()).some((d) => d.filing === "fileable")) {
-      return { status: "unavailable", sent: false, note: "The renewal can go with a document Mano already has on file. Prepare it with start_form_draft from the person's answers." };
-    }
+  // A renewal goes with the document the profile names, else the newest one
+  // on file the portal takes, as start_form_draft attaches it.
+  const onFile =
+    filled.missing?.name === "proof" && form === FORMS["food-renewal"] ? ((await engine.listDocuments()).find((d) => d.filing === "fileable") ?? null) : null;
+  if (filled.missing && !onFile) {
     const note =
       filled.missing.name === "proof"
         ? "The form needs a proof of income document and Mano has none on file yet. Ask this one question, and nothing else."
@@ -100,12 +114,12 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     return { status: "needs_answer", field: filled.missing.name, question: filled.missing.question, sent: false, note };
   }
 
-  const deps = depsForTests ? depsForTests(engine.personId) : fillDepsFromEnv(engine.personId);
+  const deps = tracedFillDeps(depsForTests ? depsForTests(engine.personId) : fillDepsFromEnv(engine.personId), engine.personId);
   if ("unavailable" in deps) {
     console.warn(JSON.stringify({ type: "mano_fill_unavailable", reason: deps.unavailable }));
     return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Prepare the renewal with start_form_draft from the person's answers instead." };
   }
-  const fill = await fillOnComputer(form, filled.values, portalUrl, deps);
+  const fill = await fillOnComputer(form, filled.values, portalUrl, deps, layoutOf(input.form, portalUrl));
   console.log(
     JSON.stringify({
       type: "mano_fill",
@@ -127,20 +141,23 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     };
   }
   if (fill.status !== "filled") {
-    // The computer or its model never ran, which says nothing about the
-    // form, so the renewal can still be prepared without them.
-    if (fill.reason === "error" && form === FORMS["food-renewal"]) {
+    // The computer or its model stopped, which says nothing about the form,
+    // so the renewal can still be prepared without them. Offering to try again
+    // here can leave a person asking forever and never reach their yes.
+    if (COMPUTER_STOPPED.has(fill.reason) && form === FORMS["food-renewal"]) {
       return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Prepare the renewal with start_form_draft from the person's answers instead." };
     }
     return { status: "fill_failed", sent: false, note: "Mano could not finish filling the form on its computer, so nothing was prepared or sent. Say so and offer to try again." };
   }
 
+  const documentId = filled.documentId ?? onFile?.id;
   const draft: Draft = {
     type: "submit",
     recipient: form.recipient,
     purpose: form.purpose,
-    payload: { ...fill.saved, [DECLARATION]: form.declaration },
-    ...(filled.documentId ? { documentId: filled.documentId } : {}),
+    payload: { ...fill.saved, [DECLARATION]: form.declaration, ...(onFile ? { [ATTACHMENT]: onFile.label } : {}) },
+    // The safety check holds a document with no cited source against the draft.
+    ...(documentId ? { documentId, sources: [{ kind: "document" as const, id: documentId }] } : {}),
   };
   const held = await holdForYes(engine, ctx, turn, draft);
   if (!held.held) return { status: held.status, note: held.note, reason: held.reason, sent: false };
@@ -158,7 +175,7 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
 
 export default defineTool({
   description:
-    "Fill out a form for the person: their food benefits renewal (form food-renewal) or a form on the sandbox portal. Call it as soon as they ask. It returns either one question to ask (ask exactly that, then call again with their answer added to answers) or the filled form, which it holds for their YES. It sends nothing.",
+    "Fill out a form for the person: their food benefits renewal (form food-renewal) or a form on the sandbox portal. Call it once they have sent their letter or ask you to fill out the form; saying benefits are ending is not asking. It returns either one question to ask (ask exactly that, then call again with their answer added to answers) or the filled form, which it holds for their YES. It sends nothing.",
   inputSchema,
   label: {
     start: () => "Fill out the form",

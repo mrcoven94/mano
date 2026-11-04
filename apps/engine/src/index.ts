@@ -57,6 +57,7 @@
 //                                              version the fill was bound to; else 404
 //   POST /webhooks/calls                       the phone company's call events, signature checked by the
 //                                              provider (src/calls); 404 until a provider is set up
+//   /try/*                                     the judge demo, preset letters and buttons only (src/try/routes.ts)
 //   GET  /fill/:token                          the replay page (src/fill-replay.ts): the token is the only key,
 //                                              and the page asks the approval again on every view
 //   GET  /api/persons/:id/memory
@@ -170,10 +171,12 @@ import {
   getSessionSecret,
   mintSessionToken,
   mintWsTicket,
+  secretsEqual,
   sessionConfigured,
 } from "./auth.js";
 import { checkerSetting, createExecutor, deliveryRoute, faxConfigured, parseFaxEvent, parseMailEvent, verifyFaxSignature, verifyMailSignature, type CheckerSetting } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
+import { tryRoute } from "./try/routes.js";
 import { base64ToBytes } from "./hash.js";
 import { SANDBOX_ORG_ID } from "@mano/protocol";
 import { profilePatchResponse } from "./profile.js";
@@ -191,6 +194,7 @@ import { parseDocumentMark } from "./documents.js";
 import { createCallServices } from "./calls/provider.js";
 
 export { PersonAgent, OrgAgent };
+export { TryLedger } from "./try/ledger.js";
 export { ActionGateway, MemoryApprovalStore, InMemoryExecutor } from "./gateway/index.js";
 export * from "./gateway/types.js";
 export { checkLinkSafety } from "./link-safety.js";
@@ -200,6 +204,9 @@ export { encryptForPerson, decryptForPerson, documentAad } from "./crypto.js";
 export { putDocument, getDocumentBytes, documentR2Key } from "./files.js";
 export { InMemorySharedStore } from "./shared-store.js";
 export { sha256Hex } from "./hash.js";
+
+const ORG_CASE_PATH = /^\/cases\/([^/]+)(\/document-requests|\/documents\/[^/]+)?$/;
+const UNSAFE_IN_FILENAME = /["\r\n]/g;
 
 function personStub(env: Env, personId: string) {
   return env.PERSON_AGENT.get(env.PERSON_AGENT.idFromName(personId));
@@ -254,13 +261,25 @@ async function forwardToAgent(
   if (request.method !== "GET" && request.method !== "HEAD") {
     init.body = await request.arrayBuffer();
   }
-  return stub.fetch(new Request(new URL(path, "https://agent.internal"), init));
+  return stub.fetch(new Request(`https://agent.internal${path}`, init));
 }
 
 // Body caps: about 1 MB for actions, 15 MB for uploads. Both the declared
 // length and the actual bytes are enforced.
 const MAX_ACTION_BODY = 1_000_000;
 const MAX_UPLOAD_BODY = 15_000_000;
+
+const REMINDER_CANCEL_PATH = /^\/reminders\/([^/]+)\/cancel$/;
+const TURN_PATH = /^\/turns\/([^/]+)(\/complete)?$/;
+const DIGITS = /^[0-9]+$/;
+const ADMIN_SYNTHETIC_PERSON_PATH = /^\/api\/admin\/persons\/([^/]+)\/synthetic$/;
+const PERSON_PATH = /^\/api\/persons\/([^/]+)(\/.*)?$/;
+const APPROVAL_REPLAY_PATH = /^\/approvals\/([^/]+)\/replay$/;
+const DOCUMENT_PATH = /^\/documents\/([^/]+)$/;
+const FILENAME_UNSAFE_CHARS = /["\r\n]/g;
+const MEMORY_PATH = /^\/memory\/([^/]+)$/;
+const APPROVAL_DECISION_PATH = /^\/approvals\/([^/]+)\/(approve|reject|retire)$/;
+const ORG_PATH = /^\/api\/orgs\/([^/]+)(\/.*)?$/;
 
 async function readCappedJson(
   request: Request,
@@ -303,13 +322,6 @@ async function readCappedJson(
   } catch {
     return { ok: false, response: Response.json({ error: "Invalid JSON." }, { status: 400 }) };
   }
-}
-
-function secretsEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
 }
 
 function bearerToken(request: Request): string | null {
@@ -426,7 +438,7 @@ async function handleAgentState(
     if (rest === "/reminders" && method === "GET") {
       return Response.json({ reminders: await agent.listReminders(subject) });
     }
-    const cancelMatch = rest.match(/^\/reminders\/([^/]+)\/cancel$/);
+    const cancelMatch = rest.match(REMINDER_CANCEL_PATH);
     if (cancelMatch && method === "POST") {
       const out = await agent.cancelReminder(subject, requireIdentity(decodeURIComponent(cancelMatch[1])));
       if (!out.reminder) return Response.json({ error: "Reminder not found." }, { status: 404 });
@@ -439,7 +451,7 @@ async function handleAgentState(
       if (isStale(out)) return STALE();
       return Response.json(out, { status: out.created ? 201 : 200 });
     }
-    const turnMatch = rest.match(/^\/turns\/([^/]+)(\/complete)?$/);
+    const turnMatch = rest.match(TURN_PATH);
     if (turnMatch && ((method === "GET" && !turnMatch[2]) || (method === "POST" && turnMatch[2]))) {
       const turnId = requireIdentity(decodeURIComponent(turnMatch[1]));
       let turn;
@@ -464,7 +476,7 @@ async function handleAgentState(
     }
     if (rest === "/pending-approval" && method === "GET") {
       const raw = url.searchParams.get("generation");
-      const generation = raw !== null && /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
+      const generation = raw !== null && DIGITS.test(raw) ? Number(raw) : Number.NaN;
       return Response.json(await agent.getPendingApproval(subject, requireGeneration(generation)));
     }
     if (rest === "/pending-approval" && method === "DELETE") {
@@ -534,7 +546,7 @@ async function fillReplayResponse(env: Env, pathname: string): Promise<Response>
 
 let loggedStartup = false;
 
-export default {
+const worker = {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (!loggedStartup) {
       loggedStartup = true;
@@ -543,6 +555,8 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/health") return Response.json({ ok: healthOk(env), live: liveStatus(env) });
+
+    if (url.pathname.startsWith("/try/")) return tryRoute(request, env, (inner) => worker.fetch(inner, env));
 
     if (url.pathname === "/fill" || url.pathname.startsWith("/fill/")) {
       if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed.", { status: 405 });
@@ -595,7 +609,7 @@ export default {
       return Response.json({ token: session, expiresInSeconds: STAFF_SESSION_SECONDS });
     }
 
-    const adminMatch = url.pathname.match(/^\/api\/admin\/persons\/([^/]+)\/synthetic$/);
+    const adminMatch = url.pathname.match(ADMIN_SYNTHETIC_PERSON_PATH);
     if (adminMatch && request.method === "POST") {
       if (!env.OPERATOR_SECRET) {
         return Response.json({ error: "Operator access is not configured." }, { status: 503 });
@@ -613,7 +627,7 @@ export default {
       return Response.json({ ok: true, synthetic });
     }
 
-    const personMatch = url.pathname.match(/^\/api\/persons\/([^/]+)(\/.*)?$/);
+    const personMatch = url.pathname.match(PERSON_PATH);
     if (personMatch) {
       const personId = decodeURIComponent(personMatch[1]);
       const rest = personMatch[2] ?? "";
@@ -697,7 +711,7 @@ export default {
       if (rest === "/approvals" && request.method === "GET") {
         return Response.json({ approvals: await agent.listApprovals(subject) });
       }
-      const replayMatch = rest.match(/^\/approvals\/([^/]+)\/replay$/);
+      const replayMatch = rest.match(APPROVAL_REPLAY_PATH);
       if (replayMatch && request.method === "PUT") {
         if (service !== "agent") return FORBIDDEN();
         const read = await readCappedJson(request, MAX_UPLOAD_BODY);
@@ -764,7 +778,7 @@ export default {
       if (rest === "/documents" && request.method === "GET") {
         return Response.json({ documents: await agent.listDocuments(subject) });
       }
-      const documentMatch = rest.match(/^\/documents\/([^/]+)$/);
+      const documentMatch = rest.match(DOCUMENT_PATH);
       if (documentMatch && request.method === "PATCH") {
         const read = await readCappedJson(request, MAX_ACTION_BODY);
         if (!read.ok) return read.response;
@@ -785,7 +799,7 @@ export default {
         try {
           const doc = await agent.getDocument(subject, docId);
           const bytes = base64ToBytes(doc.contentB64);
-          const filename = doc.name.replace(/["\r\n]/g, "_");
+          const filename = doc.name.replace(FILENAME_UNSAFE_CHARS, "_");
           return new Response(bytes as BodyInit, {
             headers: {
               "content-type": "application/octet-stream",
@@ -821,7 +835,7 @@ export default {
         if (isStale(id)) return STALE();
         return Response.json({ id });
       }
-      const memoryMatch = rest.match(/^\/memory\/([^/]+)$/);
+      const memoryMatch = rest.match(MEMORY_PATH);
       if (memoryMatch && request.method === "DELETE") {
         return Response.json(await agent.forgetMemory(subject, decodeURIComponent(memoryMatch[1])));
       }
@@ -857,7 +871,7 @@ export default {
         if (isStale(out)) return STALE();
         return Response.json(out);
       }
-      const decisionMatch = rest.match(/^\/approvals\/([^/]+)\/(approve|reject|retire)$/);
+      const decisionMatch = rest.match(APPROVAL_DECISION_PATH);
       if (decisionMatch && request.method === "POST") {
         const approvalId = decodeURIComponent(decisionMatch[1]);
         const result =
@@ -874,7 +888,7 @@ export default {
       return new Response("Not found", { status: 404 });
     }
 
-    const orgMatch = url.pathname.match(/^\/api\/orgs\/([^/]+)(\/.*)?$/);
+    const orgMatch = url.pathname.match(ORG_PATH);
     if (orgMatch) {
       const orgId = decodeURIComponent(orgMatch[1]);
       const claims = await authenticate(request, env);
@@ -888,7 +902,7 @@ export default {
         const cases = await org.listCases(orgId);
         return Response.json({ cases: cases.map(({ personId: _personId, ...shared }) => shared) });
       }
-      const caseMatch = rest.match(/^\/cases\/([^/]+)(\/document-requests|\/documents\/[^/]+)?$/);
+      const caseMatch = rest.match(ORG_CASE_PATH);
       if (caseMatch) {
         const caseId = decodeURIComponent(caseMatch[1]);
         const sub = caseMatch[2] ?? "";
@@ -912,7 +926,7 @@ export default {
           return new Response(base64ToBytes(document.contentB64) as BodyInit, {
             headers: {
               "content-type": "application/octet-stream",
-              "content-disposition": `attachment; filename="${document.name.replace(/["\r\n]/g, "_")}"`,
+              "content-disposition": `attachment; filename="${document.name.replace(UNSAFE_IN_FILENAME, "_")}"`,
               "cache-control": "no-store",
             },
           });
@@ -924,3 +938,5 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;
+
+export default worker;

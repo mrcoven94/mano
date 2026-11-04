@@ -7,10 +7,11 @@ const INSTRUCTION_PATTERNS = [
   /click (here|the link)/i,
   /system prompt/i,
 ];
+const NEWLINE = /\n/;
 
 export function detectPlantedInstructions(text: string): string[] {
   const hits: string[] = [];
-  for (const line of text.split(/\n/)) {
+  for (const line of text.split(NEWLINE)) {
     for (const re of INSTRUCTION_PATTERNS) {
       if (re.test(line)) hits.push(line.trim().slice(0, 200));
     }
@@ -27,7 +28,7 @@ export interface EvidenceResult {
 export function extractEvidence(rawLetterText: string): EvidenceResult {
   const hits = detectPlantedInstructions(rawLetterText);
   const cleanLines = rawLetterText
-    .split(/\n/)
+    .split(NEWLINE)
     .filter((line) => !INSTRUCTION_PATTERNS.some((re) => re.test(line)));
   const safeSummary = cleanLines.join("\n").trim().slice(0, 4000);
   return { evidenceText: rawLetterText, instructionsIgnored: hits, safeSummary };

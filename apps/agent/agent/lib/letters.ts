@@ -13,7 +13,7 @@
 // invented: a failed or slow reading says so and offers to try again.
 import { createHash } from "node:crypto";
 
-import { answerReading, readMail, type HeldDeadline, type MailReading, type ModelClient } from "@mano/mail";
+import { ANSWER_WORDS, answerReading, readMail, type AnswerWords, type HeldDeadline, type MailReading, type ModelClient, type ReplyLanguage } from "@mano/mail";
 
 import { daysLeft } from "./deadlines.js";
 import { EngineError, type EngineDocument, type PersonEngine } from "./engine.js";
@@ -26,9 +26,6 @@ export interface TextedPhoto {
 
 // Kept back from the reading for the deadline writes after it.
 const HOLD_RESERVE_MS = 5_000;
-
-const UNSAVED = "I could not save your photo, so I have not read it. Please send it again.";
-const FAILED = "I could not finish reading your photo just now. Send it again and I will try once more.";
 
 export interface LetterReply {
   // How the reply opens: Mano's words from the letter's cited fields.
@@ -52,26 +49,17 @@ function deadlineKey(d: HeldDeadline): string {
   return createHash("sha256").update(`letter:${d.dueDate}:${d.sentence}`).digest("hex").slice(0, 40);
 }
 
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-const spoken = (iso: string): string => {
-  const [y, m, d] = iso.split("-").map(Number);
-  return `${MONTHS[m! - 1]} ${d}, ${y}`;
-};
-
 // receivedAt: when the photo arrived (Channels' receive time for the
 // turn), so a nudge can name the letter by the day it was sent.
 // Each write takes what is left of the step's budget; one that does not
 // fit is skipped, and the reply says the date is not saved yet.
-async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt: string, deadlineAt: number): Promise<string[]> {
+async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt: string, deadlineAt: number, w: AnswerWords): Promise<string[]> {
   const lines: string[] = [];
   for (const d of deadlines) {
     let outcome: "saved" | "passed" | "unavailable" | "failed";
     const time = timeLeft(deadlineAt);
     if (time === null) {
-      lines.push(`I could not save ${spoken(d.dueDate)} to your deadlines yet.`);
+      lines.push(w.notSavedYet(w.date(d.dueDate)));
       continue;
     }
     try {
@@ -91,15 +79,15 @@ async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt:
       console.warn(JSON.stringify({ type: "mano_deadline_failed", status: err instanceof EngineError ? err.status : null, timedOut }));
       outcome = timedOut ? "unavailable" : "failed";
     }
-    const date = spoken(d.dueDate);
+    const date = w.date(d.dueDate);
     lines.push(
       outcome === "saved"
-        ? `I saved ${date} to your deadlines.`
+        ? w.saved(date)
         : outcome === "passed"
-          ? `${date} has already passed, so no reminder will go out. If the office gave you a newer date, send it to me.`
+          ? w.passed(date)
           : outcome === "unavailable"
-            ? `I could not save ${date} to your deadlines yet.`
-            : `I could not save ${date} to your deadlines just now.`,
+            ? w.notSavedYet(date)
+            : w.notSavedNow(date),
     );
   }
   return lines;
@@ -173,6 +161,13 @@ export function letterBlock(reply: LetterReply): string {
   return `<letter_reading>\n${data}\n</letter_reading>`;
 }
 
+// The earliest date it can be anywhere in the United States when the photo
+// arrived, so a date still live where the person is never reads as past.
+function dayBehind(receivedAt: string): string | undefined {
+  const at = Date.parse(receivedAt);
+  return Number.isNaN(at) ? undefined : new Date(at - 12 * 3_600_000).toISOString().slice(0, 10);
+}
+
 export async function readTextedPhotos(
   engine: PersonEngine,
   photos: TextedPhoto[],
@@ -181,8 +176,10 @@ export async function readTextedPhotos(
   // When the whole step must be done: downloads, reading and deadline
   // writes. The reading itself stops a few seconds earlier.
   deadlineAt: number,
+  // Asked once the reading is done, so nothing waits on it.
+  language: () => ReplyLanguage = () => "en",
 ): Promise<LetterReply> {
-  if (photos.length === 0) return { text: UNSAVED, read: false };
+  if (photos.length === 0) return { text: ANSWER_WORDS[language()].photoUnsaved, read: false };
   const started = Date.now();
   const deadline = deadlineAt - HOLD_RESERVE_MS;
   let text: string;
@@ -204,9 +201,10 @@ export async function readTextedPhotos(
     // Fixed words only: a fallback's detail never quotes the letter or the provider.
     const fallback = reading.warnings.find((w) => w.kind === "segmentation_fallback");
     if (fallback) console.log(JSON.stringify({ type: "mano_letters_segmentation_fallback", why: fallback.detail ?? null }));
-    const answer = answerReading(reading);
+    const w = ANSWER_WORDS[language()];
+    const answer = answerReading(reading, language(), dayBehind(receivedAt));
     read = answer.outcome === "read";
-    const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt), markLetters(engine, reading, deadlineAt)]);
+    const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt, w), markLetters(engine, reading, deadlineAt)]);
     text = [answer.text, ...held].join(" ");
     if (read) {
       await rememberFact(engine, `From a letter photo: ${text}`, deadlineAt).catch((err: unknown) =>
@@ -216,7 +214,7 @@ export async function readTextedPhotos(
     console.log(JSON.stringify({ type: "mano_letters_read", photos: files.length, letters: reading.letters.length, held: answer.deadlines.length, asked: reading.questions.map((q) => q.kind), failed: reading.warnings.flatMap((w) => (w.failure ? [w.failure] : [])), latencyMs: Date.now() - started }));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_letters_failed", err: err instanceof Error ? err.name : "unknown", latencyMs: Date.now() - started }));
-    text = FAILED;
+    text = ANSWER_WORDS[language()].failed;
   }
   return { text, read };
 }

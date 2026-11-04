@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { answerReading, readMail } from "../src/index.js";
 import { normalizeImage } from "../src/media.js";
 import { segmentFrame } from "../src/segment.js";
-import { MetaModelClient, RecordedModelClient, createModelClient, type ResponsesRequest } from "../src/model.js";
+import { MetaModelClient, OpenWeightModelClient, RecordedModelClient, createModelClient, type ResponsesRequest } from "../src/model.js";
 import { DOUBTFUL_PAGE, NIL, PLANTED_DEADLINE, PLANTED_DEADLINE_PAGE, RENEWAL_PAGE, RENEWAL_TEXT, letterPhoto, pageJson } from "./letter-fixture.js";
 
 const KEY = "test-openrouter-key";
@@ -49,6 +49,72 @@ const read = async (model: ReturnType<typeof createModelClient>) =>
 
 const answering = (content: string) => () => completion(content);
 
+describe("OpenRouter as Modal's backup for a read", () => {
+  const MODAL_URL = "https://example--ep-test-server.us-west.modal.direct/v1/chat/completions";
+  const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+  const SETTINGS = { MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://example--ep-test-server.us-west.modal.direct", MODAL_PROXY_TOKEN: "wk-test.ws-test", OPENROUTER_API_KEY: KEY };
+  const REQ: ResponsesRequest = { model: "muse-spark-1.3", input: "Read this." };
+
+  function client(modal: () => Response, env: Record<string, string> = SETTINGS, openRouter: () => Response = () => completion("from the backup")) {
+    const sent: Sent[] = [];
+    const fetchFn = (async (url: string, init: RequestInit) => {
+      sent.push({ url, authorization: new Headers(init.headers).get("authorization"), body: JSON.parse(init.body as string) as Sent["body"] });
+      return url === MODAL_URL ? modal() : openRouter();
+    }) as unknown as typeof fetch;
+    return { sent, model: createModelClient(env, { synthetic: true, fetchFn }) };
+  }
+
+  it.each([[429], [500], [503]])("reads on OpenRouter under its pin when Modal says %i, with one Modal try, and logs the route", async (code) => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { sent, model } = client(() => new Response("{}", { status: code }));
+    const out = await model.responses(REQ);
+    expect(out.text).toBe("from the backup");
+    expect(out.model).toBe("meta/muse-spark-open");
+    expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPENROUTER_URL]);
+    expect(sent[1]!.authorization).toBe(`Bearer ${KEY}`);
+    expect(sent[1]!.body.provider).toEqual({ zdr: true, data_collection: "deny" });
+    expect(log.mock.calls.map((c) => String(c[0]))).toEqual([JSON.stringify({ type: "mano_model_route", surface: "mail", route: "openrouter" })]);
+  });
+
+  it("does not touch OpenRouter when Modal answers, and logs that route", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { sent, model } = client(() => completion("from Modal"));
+    expect((await model.responses(REQ)).model).toBe("meta-models/Muse-Spark-Open-816B-A42B");
+    expect(sent.map((s) => s.url)).toEqual([MODAL_URL]);
+    expect(log.mock.calls.map((c) => String(c[0]))).toEqual([JSON.stringify({ type: "mano_model_route", surface: "mail", route: "modal" })]);
+  });
+
+  it.each([[400], [401], [403]])("does not fall back when Modal refuses the request with %i", async (code) => {
+    const { sent, model } = client(() => new Response("{}", { status: code }));
+    await expect(model.responses(REQ)).rejects.toThrow(String(code));
+    expect(sent.map((s) => s.url)).toEqual([MODAL_URL]);
+  });
+
+  it("ends the read when OpenRouter answers 402 too, and tries nothing else", async () => {
+    const { sent, model } = client(() => new Response("{}", { status: 503 }), SETTINGS, () => new Response("{}", { status: 402 }));
+    await expect(model.responses(REQ)).rejects.toThrow("402");
+    expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPENROUTER_URL]);
+  });
+
+  it("refuses a redirect on Modal's call and on the backup's", async () => {
+    const seen: Array<RequestRedirect | undefined> = [];
+    const fetchFn = (async (url: string, init: RequestInit) => {
+      seen.push(init.redirect);
+      return url === MODAL_URL ? new Response("{}", { status: 503 }) : completion("from the backup");
+    }) as unknown as typeof fetch;
+    await createModelClient(SETTINGS, { synthetic: true, fetchFn }).responses(REQ);
+    expect(seen).toEqual(["error", "error"]);
+  });
+
+  it("does not fall back without an OpenRouter key, and keeps Modal's retries", async () => {
+    const { MODAL_PROXY_TOKEN, MODAL_ENDPOINT_URL, MANO_MODEL_PROVIDER } = SETTINGS;
+    const { sent, model } = client(() => new Response("{}", { status: 503 }), { MODAL_PROXY_TOKEN, MODAL_ENDPOINT_URL, MANO_MODEL_PROVIDER });
+    await expect(model.responses(REQ)).rejects.toThrow("503");
+    expect(sent.every((s) => s.url === MODAL_URL)).toBe(true);
+    expect(sent).toHaveLength(3);
+  });
+});
+
 describe("which client createModelClient builds", () => {
   it("is the Meta Model API when the provider is not chosen", () => {
     expect(createModelClient({ META_MODEL_API_KEY: "k", OPENROUTER_API_KEY: KEY })).toBeInstanceOf(MetaModelClient);
@@ -61,6 +127,51 @@ describe("which client createModelClient builds", () => {
   it("is the stand-in when OpenRouter is chosen with no key at all", () => {
     expect(createModelClient({ MANO_MODEL_PROVIDER: "openrouter" })).toBeInstanceOf(RecordedModelClient);
   });
+
+  const MODAL = { MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://example--ep-test-server.us-west.modal.direct/", MODAL_PROXY_TOKEN: "wk-test.ws-test" };
+
+  it("reads with the open-weight model on Modal when it is chosen, with no OpenRouter fields", async () => {
+    const { model, sent } = stub([answering(RENEWAL_PAGE)], { ...MODAL, META_MODEL_API_KEY: "k", OPENROUTER_API_KEY: KEY });
+    await read(model);
+    expect(sent[0]!.url).toBe("https://example--ep-test-server.us-west.modal.direct/v1/chat/completions");
+    expect(sent[0]!.authorization).toBe("Bearer wk-test.ws-test");
+    expect(sent[0]!.body.model).toBe("meta-models/Muse-Spark-Open-816B-A42B");
+    expect(sent[0]!.body.provider).toBeUndefined();
+    expect(model.live).toBe(true);
+  });
+
+  it("refuses a redirect on Modal's route, and leaves OpenRouter's as it was", async () => {
+    const seen: Array<RequestRedirect | undefined> = [];
+    const fetchFn = (async (_url: string, init: RequestInit) => {
+      seen.push(init.redirect);
+      return completion(RENEWAL_PAGE);
+    }) as unknown as typeof fetch;
+    await createModelClient(MODAL, { synthetic: true, fetchFn }).responses({ model: "muse-spark-1.3", input: "Read this." });
+    await createModelClient(ENV, { synthetic: true, fetchFn }).responses({ model: "muse-spark-1.3", input: "Read this." });
+    expect(seen).toEqual(["error", undefined]);
+  });
+
+  it("is off by default: Modal settings alone change nothing", () => {
+    const { MANO_MODEL_PROVIDER: _chosen, ...settings } = MODAL;
+    expect(createModelClient({ ...settings, META_MODEL_API_KEY: "k" })).toBeInstanceOf(MetaModelClient);
+  });
+
+  it.each([
+    ["no token", { ...MODAL, MODAL_PROXY_TOKEN: "" }],
+    ["no URL", { ...MODAL, MODAL_ENDPOINT_URL: "" }],
+    ["a URL off Modal's domain", { ...MODAL, MODAL_ENDPOINT_URL: "https://example.com" }],
+    ["a URL that only looks like Modal's domain", { ...MODAL, MODAL_ENDPOINT_URL: "https://x.modal.direct.example.com" }],
+    ["a plain http URL", { ...MODAL, MODAL_ENDPOINT_URL: "http://example--ep-test-server.us-west.modal.direct" }],
+  ])("is the stand-in when Modal is chosen with %s, even with other keys set", (_name, env) => {
+    expect(createModelClient({ ...env, META_MODEL_API_KEY: "k", OPENROUTER_API_KEY: KEY })).toBeInstanceOf(RecordedModelClient);
+  });
+
+  it.each(["", "https://example.com", "https://x.modal.direct.example.com", "http://example--ep-test-server.us-west.modal.direct", "not a url"])(
+    "the client itself refuses the Modal URL %j",
+    (modalUrl) => {
+      expect(() => new OpenWeightModelClient({ apiKey: KEY, modalUrl })).toThrow("Modal's own domain");
+    },
+  );
 
   it("prefers OpenRouter over a Meta key when it is chosen", async () => {
     const { model, sent } = stub([answering(RENEWAL_PAGE)], { ...ENV, META_MODEL_API_KEY: "k" });

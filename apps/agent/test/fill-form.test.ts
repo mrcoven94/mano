@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FakeModelClient, type Computer, type ComputerAction } from "@mano/computer";
+import { FakeModelClient, OpenWeightModelClient, type Computer, type ComputerAction } from "@mano/computer";
 
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
 import { engineFrom, personIdFor, type Profile } from "../agent/lib/engine.js";
-import { FORMS } from "../agent/lib/forms.js";
+import { FORMS, layoutOf, resolveForm } from "../agent/lib/forms.js";
 import { heldBack, presentsExactly, renderQuestion } from "../agent/lib/pending.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
@@ -235,7 +235,7 @@ describe("fill_form", () => {
     const page = (await engine.replayPageAt(url!))!;
     const captions = [...page.matchAll(/<li><p>([^<]*)<\/p>/g)].map((m) => m[1]);
     expect(captions).toEqual([
-      "1. Mano opened the form.",
+      "1. Mano opened the form. An AI model chose each step below from what it saw on the screen.",
       ...FORMS["food-renewal"]!.fields.map((f, i) => `${i + 2}. Mano filled in &quot;${f.label}&quot;.`),
     ]);
     // Each typed step shows its field up close, centered where Mano
@@ -259,7 +259,7 @@ describe("fill_form", () => {
     ];
     const steps = replayOf(frames, form, VALUES);
     expect(steps.map((s) => [s.caption, s.png[33], s.focus])).toEqual([
-      ["Mano opened the form.", 0, null],
+      ["Mano opened the form. An AI model chose each step below from what it saw on the screen.", 0, null],
       ["Mano typed into the form.", 1, { x: 600, y: 430 }],
       ["Mano corrected the field.", 2, { x: 600, y: 430 }],
     ]);
@@ -345,6 +345,15 @@ describe("fill_form", () => {
     expect(engine.approvals()).toHaveLength(0);
   });
 
+  it("a key that could leave the browser stops the fill before any action: nothing is typed or prepared", async () => {
+    engine.profile = profile();
+    model = new FakeModelClient([[call([{ type: "keypress", keys: ["alt", "F2"] }, { type: "type", text: "touch /tmp/mano-escape" }])]]);
+    const out = await run("turn_fill0041", { form: "food-renewal" });
+    expect(out.status).toBe("unavailable");
+    expect(computer.acted).toEqual([]);
+    expect(engine.approvals()).toHaveLength(0);
+  });
+
   it("a safety check stops the fill before any action: nothing is typed or prepared, and only the check codes are logged", async () => {
     engine.profile = profile();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -367,6 +376,48 @@ describe("fill_form", () => {
     expect(String(out.note)).toContain("start_form_draft");
     expect(computer.visited).toEqual([]);
     expect(engine.approvals()).toHaveLength(0);
+  });
+
+  describe("someone with no letter on file yet", () => {
+    const emptyProfile = { person: { address: {} }, household: [], income: [], programs: [] };
+
+    // Production, November 4: "My food benefits are ending. Can you help?"
+    // came back as "What is your mailing address?" in one run of three.
+    it.each([[{ form: "food-renewal" }], [{ form: "food-renewal", answers: {} }]])("starts no form on %j: it asks for the letter, not their address", async (input) => {
+      engine.profile = emptyProfile;
+      const out = await run("turn_noletter01", input);
+      expect(out.status).toBe("needs_letter");
+      expect(out).not.toHaveProperty("question");
+      expect(out.note).toMatch(/photo of their letter/);
+      expect(computer.visited).toEqual([]);
+      expect(engine.approvals()).toHaveLength(0);
+    });
+
+    it("goes ahead once a photo is on file", async () => {
+      engine.profile = emptyProfile;
+      engine.putDocument(personIdFor(HANDLE), "doc-letter", new TextEncoder().encode(PAY_STUB));
+      expect((await run("turn_noletter02", { form: "food-renewal" })).status).toBe("needs_answer");
+    });
+
+    it("a returning person with a saved answer and no document gets the next question", async () => {
+      engine.profile = { ...emptyProfile, person: { address: {}, fullName: leaf("Rosa Testcase") } };
+      expect((await run("turn_noletter04", { form: "food-renewal" })).status).toBe("needs_answer");
+    });
+
+    it("an answer that does not fit is asked about again, not met with a request for the letter", async () => {
+      engine.profile = emptyProfile;
+      expect(await run("turn_noletter06", { form: "food-renewal", answers: { dateOfBirth: "someday" } })).toMatchObject({ status: "needs_answer", field: "dateOfBirth" });
+    });
+
+    it("what is saved beside the form, such as a language, does not count as starting it", async () => {
+      engine.profile = { ...emptyProfile, person: { address: {}, language: leaf("Spanish") } };
+      expect((await run("turn_noletter05", { form: "food-renewal" })).status).toBe("needs_letter");
+    });
+
+    it("goes ahead when the person is already answering the form", async () => {
+      engine.profile = emptyProfile;
+      expect((await run("turn_noletter03", { form: "food-renewal", answers: { fullName: "Rosa Testcase" } })).status).toBe("needs_answer");
+    });
   });
 
   it("asks for one missing field at a time, and again when an answer does not fit", async () => {
@@ -404,15 +455,36 @@ describe("fill_form", () => {
     expect(engine.approvals()).toHaveLength(0);
   });
 
-  it("with no proof in the profile but a document on file, hands the renewal to start_form_draft without touching the computer", async () => {
+  it("with no proof in the profile but a document on file, fills on the computer and attaches that document, cited and named", async () => {
     const p = profile();
     p.income[0].amount = { value: 1075, source: "person", updatedAt: at } as never;
     engine.profile = p;
     engine.putDocument(personIdFor(HANDLE), "doc-letter", new TextEncoder().encode(PAY_STUB));
     const out = await run("turn_fill0031", { form: "food-renewal" });
+    expect(out.status).toBe("waiting_for_yes");
+    expect(model.requests.length).toBeGreaterThan(0);
+    const [held] = engine.approvals();
+    const frozen = JSON.parse(held.requestJson);
+    expect(frozen.documentId).toBe("doc-letter");
+    expect(frozen.sources).toEqual([{ kind: "document", id: "doc-letter" }]);
+    expect(frozen.payload.attachment).toEqual(expect.any(String));
+  });
+
+  it.each([
+    ["runs out of steps", { type: "wait" }],
+    ["presses a key a form does not need", { type: "keypress", keys: ["ctrl", "l"] }],
+  ])("when the computer %s, hands the renewal to start_form_draft and prepares nothing", async (_name, action) => {
+    engine.profile = profile();
+    let call = 0;
+    model = {
+      createResponse: async () => {
+        call += 1;
+        return { id: `r${call}`, status: "completed", output: [{ type: "computer_call", id: `c${call}`, call_id: `c${call}`, actions: [action], pending_safety_checks: [], status: "completed" }] };
+      },
+    } as never;
+    const out = await run("turn_fill0033", { form: "food-renewal" });
     expect(out.status).toBe("unavailable");
     expect(out.note).toMatch(/start_form_draft/);
-    expect(model.requests).toHaveLength(0);
     expect(engine.approvals()).toHaveLength(0);
   });
 
@@ -423,6 +495,45 @@ describe("fill_form", () => {
     expect(out.status).toBe("unavailable");
     expect(out.note).toMatch(/start_form_draft/);
     expect(engine.approvals()).toHaveLength(0);
+  });
+
+  it.each(["/scramble/judge-1", "/v/larkmoor"])("fills the test layout at %s by its address, reads the draft as usual and files nothing", async (layout) => {
+    engine.profile = profile();
+    const out = await run("turn_layout01", { form: `${PORTAL}${layout}/apply` });
+    expect(out.status).toBe("waiting_for_yes");
+    expect(computer.visited[0]).toMatch(new RegExp(`^${PORTAL}${layout}/apply\\?draft=[0-9a-f]{32,128}$`));
+    expect(portal.reads).toHaveLength(1);
+    expect(engine.approvals()[0].status).toBe("pending");
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  it.each([
+    "https://real-benefits.example.gov/scramble/judge-1/apply",
+    "https://real-benefits.example.gov/v/larkmoor/apply",
+    "http://portal.test.example.gov/scramble/judge-1/apply",
+    "http://portal.test:8080/scramble/judge-1/apply",
+    "https://portal.test/scramble/judge-1/apply",
+  ])("refuses a layout's path on another origin: %s", async (form) => {
+    engine.profile = profile();
+    const out = await run("turn_layout02", { form });
+    expect(out.status).toBe("unknown_form");
+    expect(computer.visited).toEqual([]);
+  });
+
+  it.each(["/scramble/judge-1/caseworker", "/scramble/bad_seed!/apply", "/v/Larkmoor/apply", "/v/larkmoor/../../caseworker", "/v/larkmoor/submissions", "/scramble/apply"])(
+    "refuses what is not a layout of the form: %s",
+    (path) => {
+      expect(resolveForm(`${PORTAL}${path}`, PORTAL)).toBeNull();
+    },
+  );
+
+  it("takes only the layout from an address, nothing else it carries", () => {
+    const ref = `http://someone:secret@portal.test/scramble/judge-1/apply?draft=${"a".repeat(64)}#x`;
+    expect(resolveForm(ref, PORTAL)?.id).toBe("food-renewal");
+    expect(layoutOf(ref, PORTAL)).toBe("/scramble/judge-1");
+    expect(layoutOf("food-renewal", PORTAL)).toBe("");
+    expect(layoutOf(`${PORTAL}/apply`, PORTAL)).toBe("");
+    expect(layoutOf("https://real-benefits.example.gov/scramble/judge-1/apply", PORTAL)).toBe("");
   });
 
   it("refuses any address that is not the sandbox portal", async () => {
@@ -603,6 +714,36 @@ describe("the computer and portal a deployment fills with", () => {
     if ("unavailable" in deps) return;
     await deps.computer.screenshot().catch(() => undefined);
     expect(bodies).toEqual([expect.objectContaining({ person_id: "person-abc" })]);
+  });
+
+  it("follows the agent's model switch, and takes the open-weight key alone when the switch is on", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return Response.json({ id: "r", status: "completed", output: [] });
+    });
+    const request = { instructions: "i", tools: [], input: [], store: false };
+    const on = fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined, MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "test-open-key" });
+    if ("unavailable" in on) throw new Error(on.unavailable);
+    await on.model.createResponse({ ...request, model: on.modelId });
+    expect(on.modelId).toBe("meta/muse-spark-open");
+
+    const off = fillDepsFromEnv("person-abc", { ...env, OPENROUTER_API_KEY: "test-open-key" });
+    if ("unavailable" in off) throw new Error(off.unavailable);
+    await off.model.createResponse({ ...request, model: off.modelId });
+    expect(off.modelId).toBe("muse-spark-1.3");
+    expect(urls).toEqual(["https://openrouter.ai/api/v1/responses", "https://api.meta.ai/v1/responses"]);
+
+    expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined })).toEqual({ unavailable: "no model key" });
+    const modal = { ...env, MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://example--ep-test-server.us-west.modal.direct" };
+    const onModal = fillDepsFromEnv("person-abc", { ...modal, MODAL_PROXY_TOKEN: "wk-test.ws-test", MANO_COMPUTER_MODEL: "not-meta/other-model" });
+    if ("unavailable" in onModal) throw new Error("expected a fill on the Modal route");
+    expect(onModal.model).toBeInstanceOf(OpenWeightModelClient);
+    expect(onModal.modelId).toBe("meta-models/Muse-Spark-Open-816B-A42B");
+    await onModal.model.createResponse({ ...request, model: onModal.modelId });
+    expect(urls.at(-1)).toBe("https://example--ep-test-server.us-west.modal.direct/v1/responses");
+    expect(fillDepsFromEnv("person-abc", modal)).toEqual({ unavailable: "no model key" });
+    expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined, MANO_MODEL_PROVIDER: "openrouter" })).toEqual({ unavailable: "no model key" });
   });
 
   it("is not available without the portal's draft token, since nothing could be read back", () => {

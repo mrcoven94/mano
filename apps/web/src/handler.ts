@@ -73,6 +73,10 @@ const EMAIL_HANDLE_PREFIX = "web-email:";
 const WEB_GENERATION = 0;
 const CHAT_PATH = /^\/api\/persons\/([^/]+)\/(chat|conversation)$/;
 const SHOWN_PATH = /^\/api\/persons\/([^/]+)\/approvals\/([^/]+)\/shown$/;
+const SIX_DIGITS = /^\d{6}$/;
+const TRAILING_SLASH = /\/$/;
+const WHITESPACE_RUN = /\s+/g;
+const CLIENT_OP_ID = /^[A-Za-z0-9_-]{1,100}$/;
 
 const NOT_CONFIGURED = "Mano on the web is not configured.";
 const SIGN_IN_AGAIN = "Sign in again.";
@@ -140,7 +144,7 @@ async function verifyCode(request: Request, env: WebEnv, secret: string, pepper:
   const body = await readJson(request, MAX_AUTH_BODY);
   const email = normalizeEmail(body?.email);
   const { challengeId, code } = body ?? {};
-  if (!email || typeof challengeId !== "string" || typeof code !== "string" || !/^\d{6}$/.test(code)) {
+  if (!email || typeof challengeId !== "string" || typeof code !== "string" || !SIX_DIGITS.test(code)) {
     return error(400, "That code did not work.");
   }
   const expected = await signInCode(secret, challengeId, email);
@@ -154,7 +158,7 @@ async function verifyCode(request: Request, env: WebEnv, secret: string, pepper:
 async function signedAgentPost(env: WebEnv, secret: string, path: string, raw: string, timeoutMs: number): Promise<Response> {
   const timestamp = Math.floor(currentTime(env) / 1000);
   const fetchFn = env.fetchFn ?? boundFetch;
-  return fetchFn(`${(env.AGENT_URL as string).replace(/\/$/, "")}${path}`, {
+  return fetchFn(`${(env.AGENT_URL as string).replace(TRAILING_SLASH, "")}${path}`, {
     method: "POST",
     signal: AbortSignal.timeout(timeoutMs),
     headers: {
@@ -166,7 +170,7 @@ async function signedAgentPost(env: WebEnv, secret: string, path: string, raw: s
   });
 }
 
-const collapse = (text: string): string => text.replace(/\s+/g, " ").trim();
+const collapse = (text: string): string => text.replace(WHITESPACE_RUN, " ").trim();
 
 // The reply the person sees, or null when the agent gave no answer. A
 // question is armed only when every word of it is in what will be shown:
@@ -253,7 +257,7 @@ async function chat(request: Request, env: WebEnv, personSegment: string): Promi
   // for the crisis check.
   const said = message || raw;
   const crisisLine = crisisGate(said) !== "none" ? crisisLineFor(said) : null;
-  const clientOp = typeof body?.clientOpId === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(body.clientOpId) ? body.clientOpId : crypto.randomUUID();
+  const clientOp = typeof body?.clientOpId === "string" && CLIENT_OP_ID.test(body.clientOpId) ? body.clientOpId : crypto.randomUUID();
   const opId = await operationKey(clientOp, said);
   let person: StateStub | null = null;
 

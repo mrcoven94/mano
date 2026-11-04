@@ -1,4 +1,5 @@
 import { DEFAULT_CHECK_TIMEOUT_MS, GlimmerModelChecker, MisconfiguredChecker } from "@mano/guardian";
+import type { TryEvent } from "@mano/protocol";
 import { LocalRulesChecker, type Checker, type CheckInput, type CheckResult } from "./checker.js";
 import type { GatewayOptions } from "./gateway.js";
 import { boundFetch } from "../fetch.js";
@@ -24,6 +25,9 @@ export type CheckerSetting =
   | { kind: "guardian"; url: string; token: string; proxyAuth?: { keyId: string; secret: string } }
   | { kind: "guardian-misconfigured" };
 
+const HTTP_URL = /^https?:\/\//i;
+const STAND_IN_SERVER = /stand-?in/i;
+
 // None of the four set keeps the local rules. A deployed Guardian needs
 // all four: Modal refuses a request without its key pair, so a URL and
 // token alone would report healthy while every check failed. Only a
@@ -36,7 +40,7 @@ export function checkerSetting(env: GuardianEnv): CheckerSetting {
   const keyId = env.MANO_GUARDIAN_KEY_ID?.trim() ?? "";
   const secret = env.MANO_GUARDIAN_KEY_SECRET?.trim() ?? "";
   if (url === "" && token === "" && keyId === "" && secret === "") return { kind: "local-rules" };
-  if (!/^https?:\/\//i.test(url) || token === "" || (keyId === "") !== (secret === "")) {
+  if (!HTTP_URL.test(url) || token === "" || (keyId === "") !== (secret === "")) {
     return { kind: "guardian-misconfigured" };
   }
   if (keyId === "" && !isLocalHost(url)) return { kind: "guardian-misconfigured" };
@@ -60,12 +64,19 @@ type GuardianOptions = ConstructorParameters<typeof GlimmerModelChecker>[0];
 // success response behind it is Guardian being unavailable, not Guardian
 // refusing, so it is marked unavailable. Each check gets its own model
 // client, so concurrent checks never share what they observed.
+export type GuardianTrace = (event: TryEvent) => void;
+const GUARDIAN_MODEL_NAME = "muse-glimmer-30b";
+const GUARDIAN_RUNS_ON = "Our GPU on Modal";
+const STAND_IN = { model: "stand-in", where: "No model called", state: "stand-in" } as const;
+
 export class GuardianChecker implements Checker {
   private readonly warmer: GlimmerModelChecker;
 
   constructor(
     private readonly rules: Checker,
     private readonly options: GuardianOptions,
+    // Told each model call and verdict, for the judge demo's panel.
+    private readonly trace?: GuardianTrace,
   ) {
     this.warmer = new GlimmerModelChecker(options);
   }
@@ -75,16 +86,36 @@ export class GuardianChecker implements Checker {
     if (local.verdict === "block") return local;
     const send = this.options.fetchImpl ?? boundFetch;
     let answered = false;
+    const calls: { ms: number; status: string; ok: boolean }[] = [];
     const guardian = new GlimmerModelChecker({
       ...this.options,
       fetchImpl: async (...args) => {
-        const response = await send(...args);
-        answered = response.ok;
-        return response;
+        const at = Date.now();
+        try {
+          const response = await send(...args);
+          answered = response.ok;
+          calls.push({ ms: Date.now() - at, status: response.status === 503 ? "503, warming" : String(response.status), ok: response.ok });
+          return response;
+        } catch (err) {
+          calls.push({ ms: Date.now() - at, status: "no answer", ok: false });
+          throw err;
+        }
       },
     });
+    const at = Date.now();
     const [model] = await Promise.all([guardian.check(input), this.warmer.warm()]);
     const problems = [...local.problems, ...model.problems];
+    if (this.trace) {
+      // Who answered, as the server says. A call it did not answer has only
+      // the address it was sent to.
+      const server = guardian.serverInfo?.model.id;
+      const standIn = server !== undefined && STAND_IN_SERVER.test(server);
+      for (const call of calls) {
+        const identity = !call.ok ? { model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, state: "live" as const } : standIn ? STAND_IN : { model: server ?? "not named", where: GUARDIAN_RUNS_ON, state: "live" as const };
+        this.trace({ kind: "model", ...identity, purpose: "Guardian checks the action", ms: call.ms, status: call.status });
+      }
+      this.trace({ kind: "guardian", verdict: model.verdict === "block" && !answered ? "warming" : model.verdict, ms: Date.now() - at, state: standIn ? "stand-in" : "live" });
+    }
     if (model.verdict === "block") return answered ? { verdict: "block", problems } : { verdict: "block", problems, unavailable: true };
     return { verdict: SEVERITY[model.verdict] > SEVERITY[local.verdict] ? model.verdict : local.verdict, problems };
   }
@@ -96,7 +127,7 @@ export class GuardianChecker implements Checker {
 // to 7.5 seconds, and the agent gives Engine 15 seconds per call.
 export function gatewayChecker(
   setting: CheckerSetting,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; trace?: GuardianTrace } = {},
 ): Pick<GatewayOptions, "checker" | "checkerTimeoutMs"> {
   switch (setting.kind) {
     case "local-rules":
@@ -111,7 +142,7 @@ export function gatewayChecker(
         timeoutMs,
         ...(setting.proxyAuth ? { proxyAuth: setting.proxyAuth } : {}),
       };
-      return { checker: new GuardianChecker(new LocalRulesChecker(), guardian), checkerTimeoutMs: timeoutMs + 1000 };
+      return { checker: new GuardianChecker(new LocalRulesChecker(), guardian, opts.trace), checkerTimeoutMs: timeoutMs + 1000 };
     }
   }
 }

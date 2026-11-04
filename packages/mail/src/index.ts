@@ -107,6 +107,7 @@ import {
   type AskReason,
   type DayCount,
 } from "./gate.js";
+import { dutyDate, nameDates } from "./naming.js";
 import { scanContent, screenScam, type ContentFlag } from "./safety.js";
 import { verifyExtraction, type DroppedField } from "./citations.js";
 import { ModelFailure, failureKindOf, readingModelFor } from "./model.js";
@@ -124,6 +125,7 @@ import type {
   LetterPage,
   MailReading,
   ModelCallStat,
+  NamedDates,
   Obligation,
   Question,
   ReadMailOptions,
@@ -133,9 +135,11 @@ import type {
 export type { InputFile, MailReading, ReadMailOptions };
 export * from "./types.js";
 export * from "./model.js";
+export { makePrivateTmpDir, releasePrivateTmpDir } from "./media.js";
 export { parseWrittenDate, parseAllDates } from "./dates.js";
 export { gateSentence } from "./gate.js";
 export { scanContent, findInstructions, findLinks, findPhones, screenScam } from "./safety.js";
+export { ANSWER_WORDS, REPLY_LANGUAGES, type AnswerWords, type ReplyLanguage } from "./words.js";
 export { answerReading, type DeadlineKind, type HeldDeadline, type LetterType, type MailAnswer, type SendCategory } from "./answer.js";
 export { qualityAnswerPath, qualityDeadlineReader } from "./quality.js";
 
@@ -162,6 +166,8 @@ interface PipelinePage {
   readFailed: boolean;
   dropped: DroppedField[];
 }
+
+const COUNTED_PERIOD = /\b\d{1,3}\s+(?:business\s+|calendar\s+|working\s+)?(?:days?|weeks?|months?)\b/i;
 
 export async function readMail(files: InputFile[], opts: ReadMailOptions): Promise<MailReading> {
   const started = Date.now();
@@ -534,7 +540,8 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     const cite = (memberIdx: number, box: Box | null): Citation | null =>
       box ? { file: members[memberIdx]!.file, page: memberIdx + 1, box } : null;
     const fields = mergeFields(members, cite);
-    letters.push({ id: letterId, pages: letterPages, fields });
+    const noDateInText = members.every((m) => !m.readFailed && m.extraction && parseAllDates(m.extraction.fullText).length === 0);
+    letters.push({ id: letterId, pages: letterPages, fields, noDateInText });
 
     // Every cause that holds back the letter's dates is a plain reason.
     // The letter publishes only when there is none; otherwise it asks
@@ -760,6 +767,10 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       : null;
     if (proposal !== null || withheld.length > 0 || reasons.some((r) => !ownQuestion.has(r))) {
       const why = [...new Set(reasons)].join("; ");
+      // Two letters read from one crop share one transcription, so a date in it
+      // may belong to the other letter.
+      const sharedCrop = members.some((m) => pages.some((p) => p.order !== m.order && p.file === m.file && p.crop === m.crop));
+      const named: NamedDates | null = sharedCrop ? { kind: "unsure" } : nameDates(letterText, noticeIso);
       ask({
         kind: "confirm_deadline",
         letterId,
@@ -773,6 +784,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         citation: proposal?.citation ?? withheld.find((c) => c.citation)?.citation ?? null,
         candidates: withheld,
         ...(proposal ? { proposal } : {}),
+        ...(named ? { named } : {}),
       });
     }
 
@@ -860,7 +872,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         const candidates = [...(q.candidates ?? []), ...(q.proposal?.others ?? [])];
         for (const c of candidates) {
           for (const date of c.dates) claimed.add(date);
-          counted ||= /\b\d{1,3}\s+(?:business\s+|calendar\s+|working\s+)?(?:days?|weeks?|months?)\b/i.test(c.sentence);
+          counted ||= COUNTED_PERIOD.test(c.sentence);
         }
         if (q.proposal) claimed.add(q.proposal.dueDate);
         counted ||= Boolean(q.proposal?.count);
@@ -930,10 +942,12 @@ async function fileToFrames(
   return { frames, truncated: raw.truncated };
 }
 
+const PAGE_MARKER = /page\s*(\d+)\s*of\s*(\d+)/i;
+
 function pageMarkerNum(ex: PageExtraction | null): number {
   const marker = ex?.pageMarker.text;
   if (!marker) return 0;
-  const m = marker.match(/page\s*(\d+)\s*of\s*(\d+)/i);
+  const m = marker.match(PAGE_MARKER);
   if (m) return Number(m[1]);
   return 0;
 }
@@ -1039,7 +1053,7 @@ function checkMissingPages(
   members.forEach((m) => {
     const marker = m.extraction?.pageMarker.text;
     if (!marker) return;
-    const mt = marker.match(/page\s*(\d+)\s*of\s*(\d+)/i);
+    const mt = marker.match(PAGE_MARKER);
     if (mt) {
       seen.add(Number(mt[1]));
       expected = Math.max(expected, Number(mt[2]));
@@ -1209,10 +1223,14 @@ function pickProposal(
     .filter((p) => isDeadlineSentence(p.sentence))
     .map((pick) => {
       const v = gateSentence(pick.sentence, noticeIso);
-      if (v.kind === "deadline") return { pick, tier: 0, dueDate: v.iso, count: null };
-      if (v.kind === "ask" && v.count) return { pick, tier: 1, dueDate: v.count.resultIso, count: v.count };
+      // A date the person must meet, then a date the sentence states, then a
+      // window counted from the notice date. An appeal right is never first.
+      if (v.kind === "deadline") return { pick, tier: v.obligation === "appeal" ? 2 : 0, dueDate: v.iso, count: null };
+      if (v.kind === "ask" && v.count) return { pick, tier: 3, dueDate: v.count.resultIso, count: v.count };
       const dates = parseAllDates(pick.sentence, noticeIso);
-      return dates.length === 1 ? { pick, tier: 2, dueDate: dates[0]!, count: null } : null;
+      if (dates.length !== 1) return null;
+      const stated = dutyDate(pick.sentence) !== null && obligationOf(pick.sentence) !== "appeal";
+      return { pick, tier: stated ? 1 : 2, dueDate: dates[0]!, count: null };
     })
     .filter((x): x is NonNullable<typeof x> => x !== null && chronologyOf(x.dueDate, noticeIso) === "ok")
     .sort((a, b) => a.tier - b.tier);

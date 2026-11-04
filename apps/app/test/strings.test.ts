@@ -28,6 +28,36 @@ describe("strings", () => {
     expect(es.docUnavailable.toLowerCase()).not.toMatch(/envi/);
   });
 
+  it("keeps tab titles short enough to fit a 320px phone", () => {
+    // Four tabs share 320px, about 70px each, and a tab label at 12px fits
+    // about ten characters.
+    for (const strings of [en, es]) {
+      for (const title of [strings.tabsAgent, strings.tabsApprovals, strings.tabsDeadlines, strings.tabsMore]) {
+        expect(title.length).toBeLessThanOrEqual(10);
+      }
+    }
+  });
+
+  it("tells a resident the demo is sample data, in words a resident uses", () => {
+    expect(en.demoMode).toContain("sample data");
+    expect(en.demoMode).toContain("real office");
+    expect(es.demoMode).toContain("datos de ejemplo");
+    expect(es.demoMode).toContain("oficina real");
+    expect(`${en.demoMode} ${es.demoMode}`).not.toMatch(/engine|stand-in|motor|provisional/i);
+  });
+
+  it("does not use the imperative tab title as the name of the list", () => {
+    // "Aprobar" on a button after a decision would read as approve again.
+    expect(es.approvalsTitle).toBe("Aprobaciones");
+    expect(es.tabsApprovals).toBe("Aprobar");
+    expect(es.approvalsPending).toBe("Esperando su respuesta");
+  });
+
+  it("explains a failed code request in the person's language", () => {
+    expect(en.codeNotSent).toMatch(/could not send/i);
+    expect(es.codeNotSent).toMatch(/No pudimos enviar/);
+  });
+
   it("resolves both languages", () => {
     expect(stringsFor("en").send).toBe("Send");
     expect(stringsFor("es").send).toBe("Enviar");

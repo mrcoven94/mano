@@ -90,3 +90,36 @@ describe("boundaries after accented letters", () => {
     }
   });
 });
+
+describe("choking in English and Spanish", () => {
+  it.each(["my husband is choking me", "he is strangling me", "me está ahorcando", "me está estrangulando", "mi esposo me ahorca", "me quiere ahorcar", "va a estrangularme"])("%j is a crisis", (text) => {
+    expect(crisisTurn(text)).toBe(true);
+  });
+});
+
+describe("the crisis floor in Vietnamese and Tagalog", () => {
+  it.each([
+    // Self-harm.
+    "tôi muốn tự tử", "To\u0302i muo\u0302\u0301n chết", "tôi không muốn sống nữa", "tôi chán sống rồi", "tôi muốn tự làm hại mình", "toi muon chet", "toi muon tu tu", "toi khong muon song nua",
+    "Papatayin ko ang sarili ko", "Gusto ko nang mamatay", "gusto kong mamatay", "magpapakamatay ako", "ayoko nang mabuhay", "sasaktan ko ang sarili ko", "gusto ko nang maglaslas",
+    // Being hit or threatened.
+    "Chồng tôi đang đánh tôi", "chồng tôi đánh tôi", "tôi bị đánh", "anh ấy dọa giết tôi", "tôi bị bạo hành", "chong toi dang danh toi",
+    "binubugbog ako ng asawa ko", "binubugbog niya ako", "sinasaktan ako ng asawa ko", "sinuntok niya ako", "papatayin niya ako", "sinasakal niya ako", "sinasakal ako ng asawa ko", "sasakalin niya ako",
+    "Chồng tôi đang bóp cổ tôi", "anh ấy siết cổ tôi", "tôi bị bóp cổ", "tôi muốn treo cổ", "chong toi dang bop co toi", "anh ta dang danh em",
+    // Immediate danger.
+    "Tôi đang gặp nguy hiểm", "tôi không an toàn", "cứu tôi với", "toi dang gap nguy hiem",
+    "nasa panganib ako", "nanganganib kami", "hindi ako ligtas", "nanganganib ang buhay ko", "nasa peligro ang anak ko", "saklolo",
+  ])("%j is a crisis, and names 988 and 911", (text) => {
+    expect(crisisTurn(text)).toBe(true);
+    expect(crisisLineFor(text)).toMatch(/988/);
+    expect(crisisLineFor(text)).toMatch(/911/);
+  });
+
+  // Ordinary benefit messages, and the look-alikes the phrases must leave alone.
+  it.each([
+    "Tôi cần giúp đỡ về phiếu thực phẩm", "tôi muốn gia hạn phúc lợi", "từ từ thôi", "tu tu thoi", "đánh thức tôi lúc 7 giờ", "khoản này bị đánh thuế", "chồng tôi đánh máy đơn", "Tôi đang đánh máy đơn gia hạn SNAP, giúp tôi kiểm tra nhé", "toi dang danh may don gia han SNAP", "tôi đang đánh giá đơn này", "đơn của tôi bị đánh giá lại", "giấy tờ bị đánh dấu sai", "tôi bị đánh mất thẻ", "bị đánh thức lúc 5 giờ", "phúc lợi của tôi đang gặp nguy hiểm", "SNAP đang gặp nguy hiểm", "phuc loi cua toi dang gap nguy hiem", "bóp cổ tay giúp tôi", "tôi đau cổ chân, siết cổ chân lại", "bí danh của tôi", "bi danh cua toi",
+    "Kailangan ko ng tulong para sa pagkain po", "Ano ang gagawin ko sa sulat na ito", "Hindi ako sigurado", "tulungan mo ako sa form", "nawala ang benepisyo ko", "Nanganganib na mawala ang SNAP ko. Ito ang hinihinging dokumento.", "nanganganib ang benepisyo ko", "nasa panganib ang SNAP ko", "tinatakot ako ng sulat na ito", "ang sarili kong bahay",
+  ])("%j is not", (text) => {
+    expect(crisisTurn(text)).toBe(false);
+  });
+});

@@ -1,4 +1,5 @@
 import { draftFileKey, stagingAttemptKey, submissionFileKey, trackedOwner, type FileStore } from "./files";
+import { layoutHouseholdBody, layoutsIndexBody, mountFromPath, seedFromInput } from "./layouts";
 import { staffRoute } from "./staff";
 import {
   API_SCOPE_PREFIX,
@@ -24,6 +25,7 @@ import {
   errorPage,
   homePage,
   householdPage,
+  layout,
   reviewPage,
   savedPage,
   timeoutPage,
@@ -78,6 +80,15 @@ const RETIRE_BATCH_LIMIT = 500;
 
 const RATE_WINDOW_MS = 60_000;
 const SLOW_LEASE_TTL_MS = 65_000;
+
+const NON_PRINTABLE_ASCII = /[^\x20-\x7E]/g;
+const QUOTE_OR_BACKSLASH = /["\\]/g;
+const LINE_BREAK = /[\r\n]/g;
+const BEARER = /^Bearer (.+)$/;
+const DRAFT_PATH = /^\/drafts\/([^/]+)$/;
+const SUBMISSION_PATH = /^\/submissions\/([^/]+)$/;
+const CASEWORKER_FILE_PATH = /^\/caseworker\/([^/]+)\/file\/(\d+)$/;
+const CASEWORKER_CASE_PATH = /^\/caseworker\/([^/]+)$/;
 
 type CappedBody = { ok: true; bytes: Uint8Array } | { ok: false };
 
@@ -163,7 +174,7 @@ async function releaseStaged(fileStore: FileStore, store: Store, keys: string[])
 
 /** Attachment header that cannot break out of the filename parameter. */
 function contentDisposition(name: string): string {
-  const ascii = name.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_").replace(/[\r\n]/g, "_").trim() || "download";
+  const ascii = name.replace(NON_PRINTABLE_ASCII, "_").replace(QUOTE_OR_BACKSLASH, "_").replace(LINE_BREAK, "_").trim() || "download";
   return `attachment; filename="${ascii.slice(0, 100)}"; filename*=UTF-8''${encodeURIComponent(name.slice(0, 200))}`;
 }
 
@@ -241,7 +252,7 @@ function readSessionId(request: Request): string | null {
 
 function bearerToken(request: Request): string | null {
   const header = request.headers.get("authorization") ?? "";
-  const match = /^Bearer (.+)$/.exec(header.trim());
+  const match = BEARER.exec(header.trim());
   return match?.[1] ?? null;
 }
 
@@ -795,7 +806,12 @@ export async function handleRequest(request: Request, store: Store, fileStore: F
 
 async function routeRequest(request: Request, store: Store, fileStore: FileStore, config: PortalConfig): Promise<Response> {
   const url = new URL(request.url);
-  const path = url.pathname;
+  const mount = mountFromPath(url.pathname);
+  // Past this line a layout's address is the plain route, under the same checks.
+  const path = mount?.rest ?? url.pathname;
+  const prefix = mount?.prefix ?? "";
+  const firstStep = (draftId: string | null, error?: string, previous?: Partial<Household>): string =>
+    mount ? layout("Renewal", layoutHouseholdBody(mount, draftId, error, previous), mount) : householdPage(draftId, error, previous);
   const method = request.method.toUpperCase();
 
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
@@ -815,10 +831,20 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
 
   if (method === "GET" && path === "/") return html(homePage());
 
+  if (mount && mount.rest === null) return redirect(`${prefix}/apply`);
+
+  if (method === "GET" && path === "/layouts") return html(layout("Other layouts", layoutsIndexBody()));
+
+  if (method === "GET" && path === "/scramble") {
+    const seed = seedFromInput(url.searchParams.get("seed"), newId);
+    if (!seed) return html(errorPage("Bad seed", "A seed is 1 to 32 letters, numbers or dashes.", "/layouts", "Back to the layouts"), 400);
+    return redirect(`/scramble/${seed}/apply`);
+  }
+
   if (method === "GET" && path === "/apply") {
     const draftId = url.searchParams.get("draft");
     if (draftId !== null && !DRAFT_ID.test(draftId)) return html(errorPage("Bad draft number", DRAFT_ID_RULE, "/apply", "Start over"), 400);
-    return html(householdPage(draftId));
+    return html(firstStep(draftId));
   }
 
   if (method === "POST" && path === "/apply/household") {
@@ -830,9 +856,9 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
       if (typeof v === "string") fields[k] = v;
     }
     const requested = fields["draft"] || null;
-    if (requested !== null && !DRAFT_ID.test(requested)) return html(householdPage(null, DRAFT_ID_RULE, fields), 400);
+    if (requested !== null && !DRAFT_ID.test(requested)) return html(firstStep(null, DRAFT_ID_RULE, fields), 400);
     const parsed = validateHousehold(fields, config.maxFieldLength);
-    if (!parsed.household) return html(householdPage(requested, parsed.error, fields), 400);
+    if (!parsed.household) return html(firstStep(requested, parsed.error, fields), 400);
     let session = await loadLiveSession(request, store, fileStore, config);
     const draftId = requested ?? session?.draftId ?? newId();
     let isNew = false;
@@ -847,25 +873,25 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
       // A new session has no row to renew; it is created, never renewed.
       session.expiresAt = nowMs(config) + config.sessionTimeoutMinutes * 60 * 1000;
       await store.putSession(session);
-      return redirect("/apply/documents", sessionCookie(session.id));
+      return redirect(`${prefix}/apply/documents`, sessionCookie(session.id));
     }
     const fresh = await touchSession(store, session, config);
     if (!fresh) return timedOut();
-    return redirect("/apply/documents", sessionCookie(fresh.id));
+    return redirect(`${prefix}/apply/documents`, sessionCookie(fresh.id));
   }
 
   if (method === "GET" && path === "/apply/documents") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!hasHousehold(session)) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect(`${prefix}/apply`);
     if (!(await touchSession(store, session, config))) return timedOut();
-    return html(documentsPage());
+    return html(documentsPage(undefined, mount));
   }
 
   if (method === "POST" && path === "/apply/documents") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!hasHousehold(session)) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect(`${prefix}/apply`);
     const capped = await readCappedBody(request, config.maxBodyBytes);
     if (!capped.ok) return tooLargeResponse(false);
     const form = await formRequestFromBytes(request, capped.bytes).formData();
@@ -877,7 +903,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     }
     if (!parsed.files) {
       if (!(await touchSession(store, session, config))) return timedOut();
-      return html(documentsPage(parsed.error), 400);
+      return html(documentsPage(parsed.error, mount), 400);
     }
     // Replacing the draft drops the previous draft objects. If that fails the
     // session keeps pointing at them and the new drafts go away instead.
@@ -890,30 +916,30 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     }
     session.files = parsed.files;
     if (!(await touchSession(store, session, config))) return timedOut();
-    return redirect("/apply/review");
+    return redirect(`${prefix}/apply/review`);
   }
 
   if (method === "GET" && path === "/apply/review") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!hasHousehold(session)) return redirect("/apply");
-    if (session.files.length === 0) return redirect("/apply/documents");
+    if (!hasHousehold(session)) return redirect(`${prefix}/apply`);
+    if (session.files.length === 0) return redirect(`${prefix}/apply/documents`);
     if (!(await touchSession(store, session, config))) return timedOut();
-    return html(reviewPage(session.household, session.files));
+    return html(reviewPage(session.household, session.files, mount));
   }
 
   // The browser's Submit saves the draft and files nothing.
   if (method === "POST" && path === "/apply/submit") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!hasHousehold(session)) return redirect("/apply");
-    if (session.files.length === 0) return redirect("/apply/documents");
+    if (!hasHousehold(session)) return redirect(`${prefix}/apply`);
+    if (session.files.length === 0) return redirect(`${prefix}/apply/documents`);
     if (!(await saveDraft(store, session, session.household, config))) return draftInUse();
     if (!(await touchSession(store, session, config))) return timedOut();
-    return html(savedPage(session.draftId));
+    return html(savedPage(session.draftId, mount));
   }
 
-  const draftMatch = /^\/drafts\/([^/]+)$/.exec(path);
+  const draftMatch = DRAFT_PATH.exec(path);
   if (method === "GET" && draftMatch?.[1]) {
     const id = draftMatch[1];
     if (!DRAFT_ID.test(id)) return json({ error: DRAFT_ID_RULE }, 400);
@@ -939,7 +965,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     return handleSubmit(request, url, store, fileStore, config);
   }
 
-  const submissionMatch = /^\/submissions\/([^/]+)$/.exec(path);
+  const submissionMatch = SUBMISSION_PATH.exec(path);
   if (method === "GET" && submissionMatch?.[1]) {
     const key = decodeURIComponent(submissionMatch[1]);
     const scope = await callerScope(request);
@@ -980,7 +1006,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     return html(caseworkerListPage(subs, page, totalPages));
   }
 
-  const fileMatch = /^\/caseworker\/([^/]+)\/file\/(\d+)$/.exec(path);
+  const fileMatch = CASEWORKER_FILE_PATH.exec(path);
   if (method === "GET" && fileMatch?.[1] && fileMatch[2] !== undefined) {
     const sub = await store.getSubmissionByConfirmation(decodeURIComponent(fileMatch[1]));
     const file = sub?.files[Number(fileMatch[2])];
@@ -999,7 +1025,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     });
   }
 
-  const caseMatch = /^\/caseworker\/([^/]+)$/.exec(path);
+  const caseMatch = CASEWORKER_CASE_PATH.exec(path);
   if (method === "GET" && caseMatch?.[1]) {
     const sub = await store.getSubmissionByConfirmation(decodeURIComponent(caseMatch[1]));
     if (!sub) {

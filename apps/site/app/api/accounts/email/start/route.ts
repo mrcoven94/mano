@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 import { OAUTH_STATE_COOKIE, issueOAuthChallenge, originAllowed } from "@mano/accounts";
 import { SESSION_COOKIE, accounts, accountsPepper, oauthCookieOptions } from "@/lib/accounts-server";
 
-function cookieValue(cookieHeader: string | null, name: string): string | null {
+const SESSION_COOKIE_VALUE = new RegExp(`${SESSION_COOKIE}=([^;]+)`);
+
+function cookieValue(cookieHeader: string | null, pattern: RegExp): string | null {
   if (!cookieHeader) return null;
-  const match = cookieHeader.match(new RegExp(`${name}=([^;]+)`));
+  const match = cookieHeader.match(pattern);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -24,7 +26,7 @@ export async function POST(request: Request) {
     // Caller state is ignored: the server generates state bound to this
     // browser, this session (or its absence), and the linking intent, plus
     // a PKCE challenge. The signed challenge rides in a Secure cookie.
-    const sessionToken = cookieValue(request.headers.get("cookie"), SESSION_COOKIE);
+    const sessionToken = cookieValue(request.headers.get("cookie"), SESSION_COOKIE_VALUE);
     const challenge = await issueOAuthChallenge({ sessionToken, pepper: accountsPepper() });
     const url = service.startEmailSignIn(challenge.state, provider, { codeChallenge: challenge.codeChallenge });
     const res = NextResponse.json({ url });

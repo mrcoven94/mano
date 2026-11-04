@@ -8,6 +8,8 @@
 // Merge: previewMerge shows preview.confirmText exactly, then confirmMerge.
 // Account: getAccount, removeIdentity, signOutEverywhere, deleteAccount.
 
+const TRAILING_SLASH_RE = /\/$/;
+
 export const ACCOUNTS_CLIENT_VERSION = "v1";
 
 export interface SignInResult {
@@ -57,7 +59,7 @@ export class HttpAccountsClient implements AccountsClient {
   private fetchFn: typeof fetch;
 
   constructor(baseUrl: string, fetchFn: typeof fetch = fetch) {
-    this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.baseUrl = baseUrl.replace(TRAILING_SLASH_RE, "");
     this.fetchFn = fetchFn;
   }
 

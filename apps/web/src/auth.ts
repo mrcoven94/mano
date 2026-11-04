@@ -9,6 +9,13 @@
 export const CODE_TTL_MS = 10 * 60_000;
 export const SESSION_TTL_SECONDS = 24 * 3600;
 
+const B64_PLUS = /\+/g;
+const B64_SLASH = /\//g;
+const B64_PADDING = /=+$/;
+const B64URL_DASH = /-/g;
+const B64URL_UNDERSCORE = /_/g;
+const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
 const encoder = new TextEncoder();
 
 async function hmac(key: BufferSource, message: string): Promise<Uint8Array> {
@@ -27,11 +34,11 @@ function hex(bytes: Uint8Array): string {
 function b64url(bytes: Uint8Array): string {
   let s = "";
   for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(s).replace(B64_PLUS, "-").replace(B64_SLASH, "_").replace(B64_PADDING, "");
 }
 
 function fromB64url(s: string): Uint8Array {
-  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+  const bin = atob(s.replace(B64URL_DASH, "+").replace(B64URL_UNDERSCORE, "/"));
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
 
@@ -45,7 +52,7 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
 export function normalizeEmail(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const email = raw.trim().toLowerCase();
-  if (email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return null;
+  if (email.length > 254 || !EMAIL_SHAPE.test(email)) return null;
   return email;
 }
 

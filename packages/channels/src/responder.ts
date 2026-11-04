@@ -10,6 +10,8 @@ import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 import { OpenWeightFailed, primaryDownStatus, type OpenWeightAnswer, type OpenWeightFallback } from "./open-weight.js";
 
+const TRAILING_SLASH_RE = /\/$/;
+
 // The API accepts minimal, low, medium, high, xhigh and max ("none" is
 // rejected). Minimal answers a greeting in about 3 s; uncapped
 // reasoning took 8 to 30 s for the same reply.
@@ -52,6 +54,8 @@ export interface TurnInput {
   // The turn's crisis decision, made once by the worker (decideCrisis).
   // Without it the responder falls back to the keyword floor.
   crisis?: boolean;
+  // The texts hold words Mano heard in a voice note.
+  spoken?: boolean;
 }
 
 // What one model was sent for a turn: requests, the largest request in
@@ -110,6 +114,9 @@ export interface Responder {
   // True when it reads the turn's stored photos (the agent). Others only
   // hear that a photo came and was not read.
   readonly readsPhotos?: boolean;
+  // The words in voice notes already stored, all of them, and whether any
+  // note gave none. Others cannot listen at all.
+  listen?(notes: StoredPhoto[], generation: number): Promise<{ text: string; missed: boolean }>;
   respond(turn: TurnInput, hooks?: RespondHooks): Promise<ResponderResult>;
 }
 
@@ -168,6 +175,8 @@ export const PHOTO_UNREAD_TEXT = `I could not read your photo just now. Send it 
 export const PHOTO_UNSAVED_TEXT = `I could not save your photo, so I have not read it. Please send it again. ${SAFETY_LINE}`;
 // Added to the reply when a photo could not be turned into a file an
 // office takes (PDF, PNG or JPEG). It can still be read.
+// Sent when a voice note could not be heard or stored. Nothing is guessed.
+export const VOICE_UNHEARD_TEXT = `I could not listen to your voice note just now. Please send it as a text. ${SAFETY_LINE}`;
 export const PHOTO_FORMAT_TEXT = "I could not make a copy of this photo that an office will take, so I cannot attach it to a form. If you want me to send it with one, please send a screenshot of the photo instead.";
 
 export function extractOutputText(data: unknown): string {
@@ -216,7 +225,7 @@ export function buildModelBaseUrl(opts: { accountId?: string; gatewayId?: string
     const provider = opts.provider ?? "meta";
     return { url: `https://gateway.ai.cloudflare.com/v1/${opts.accountId}/${opts.gatewayId}/${provider}`, via: "ai-gateway" };
   }
-  return { url: (opts.directBaseUrl ?? "https://api.meta.ai/v1").replace(/\/$/, ""), via: "direct" };
+  return { url: (opts.directBaseUrl ?? "https://api.meta.ai/v1").replace(TRAILING_SLASH_RE, ""), via: "direct" };
 }
 
 // The fast call is hedged: an identical second request goes out this
@@ -311,7 +320,7 @@ export class SparkResponder implements Responder {
     if (!opts.model) throw new Error("A model ID is required.");
     this.apiKey = opts.apiKey;
     this.model = opts.model;
-    this.baseUrl = (opts.baseUrl ?? "https://api.meta.ai/v1").replace(/\/$/, "");
+    this.baseUrl = (opts.baseUrl ?? "https://api.meta.ai/v1").replace(TRAILING_SLASH_RE, "");
     this.timeoutMs = opts.timeoutMs ?? 90000;
     this.maxRetries = opts.maxRetries ?? 2;
     this.hedgeAfterMs = opts.hedgeAfterMs ?? HEDGE_AFTER_MS;

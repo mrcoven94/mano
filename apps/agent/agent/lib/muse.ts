@@ -13,7 +13,20 @@
 // agent to Meta's open-weight model through OpenRouter, pinned to
 // zero-retention endpoints that collect no data, the same pin as the text
 // line's fallback, sorted by latency and at low reasoning effort. It is
-// for testing while the Meta Model API is down.
+// for testing while the Meta Model API is down. Filling a form follows the
+// same switch (computer-fill.ts), on a client of its own.
+//
+// MANO_MODEL_PROVIDER=modal (with MODAL_ENDPOINT_URL and MODAL_PROXY_TOKEN)
+// switches turns to the same open-weight model on a Modal Shared Endpoint.
+// Off unless chosen. Rule 7 allows it on the strength of Modal's stated zero
+// retention for this endpoint type (no request carries a pin; see the November
+// 4 entry in docs/decisions.md). Chosen with a setting missing or a URL off
+// Modal's domain, it calls no model and never falls back to another
+// route. Filling a form follows it, on a client of its own.
+//
+// With OPENROUTER_API_KEY too, OpenRouter is the backup when a Modal call fails
+// at run time: only Meta's open-weight model, under the same pin. Nothing else
+// is ever tried.
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   APICallError,
@@ -39,6 +52,23 @@ const OPENROUTER_BODY = Object.freeze({
   provider: { sort: "latency", ...ZERO_RETENTION },
   reasoning: { effort: "low" },
 } as const);
+export const MODAL_MODEL_ID = "meta-models/Muse-Spark-Open-816B-A42B";
+// Modal has no per-request routing to pin: its security page says Shared
+// Endpoints keep no request or response payloads. Low effort cut the median
+// reasoning from 453 tokens to 168 over six synthetic turns each.
+const MODAL_BODY = Object.freeze({ reasoning: { effort: "low" } } as const);
+
+// The endpoint's API root, or nothing unless it is https on Modal's own
+// endpoint domain, so a setting cannot send turns to another host.
+function modalBaseUrl(raw: string | undefined): string | undefined {
+  try {
+    const url = new URL(raw ?? "");
+    return url.protocol === "https:" && url.hostname.endsWith(".modal.direct") ? `${url.origin}/v1` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Reasoning alone burns ~600-1100 tokens on a greeting; 4096 leaves
 // room for reasoning plus tool calls plus a short reply.
 export const MAX_OUTPUT_TOKENS = 4096;
@@ -218,7 +248,7 @@ function meteringMiddleware(opts: {
 }
 
 interface ModelRoute {
-  name: "meta" | "openrouter";
+  name: "meta" | "openrouter" | "modal";
   baseURL: string;
   // Empty when the chosen route has no key; the agent then runs a stand-in.
   apiKey: string;
@@ -228,8 +258,13 @@ interface ModelRoute {
 
 // The one place that picks the model path, for both createMuseModel and
 // the agent's stand-in check.
-export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKey"> = {}): ModelRoute {
-  const env = process.env;
+export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKey"> = {}, env: NodeJS.ProcessEnv = process.env): ModelRoute {
+  if (env.MANO_MODEL_PROVIDER === "modal") {
+    const baseURL = modalBaseUrl(env.MODAL_ENDPOINT_URL);
+    // An empty key sends the agent to its stand-in, so an incomplete choice
+    // reaches no model rather than the Meta Model API.
+    return { name: "modal", baseURL: baseURL ?? "", apiKey: baseURL ? (env.MODAL_PROXY_TOKEN ?? "") : "", modelId: MODAL_MODEL_ID, bodyExtra: MODAL_BODY };
+  }
   return env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY
     ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY }
     : {
@@ -241,18 +276,101 @@ export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKe
       };
 }
 
+// On Modal's route a redirect must not carry a person's words to another host.
+const refuseRedirects: typeof fetch = (input, init) => globalThis.fetch(input, { ...init, redirect: "error" });
+
+// How long Modal may take to start answering when a backup is waiting. Once a
+// response starts, nothing here limits it.
+const MODAL_START_LIMIT_MS = 30_000;
+
+class ModalStartTimeout extends Error {
+  override name = "ModalStartTimeout";
+}
+
+function limitedStart(limitMs: number): typeof fetch {
+  return async (input, init) => {
+    const limit = new AbortController();
+    const timer = setTimeout(() => limit.abort(new ModalStartTimeout()), limitMs);
+    try {
+      return await refuseRedirects(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, limit.signal]) : limit.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
+// A failure of the service, read after sanitizeModelError: a timeout, a 429, a
+// 5xx or a lost connection. A refused request would fail again on the backup
+// and an abort is the caller's, so neither falls back.
+function serviceDown(err: unknown): boolean {
+  if (APICallError.isInstance(err)) return err.statusCode === undefined || err.statusCode === 429 || err.statusCode >= 500;
+  return err instanceof Error && (err.name === "ModalStartTimeout" || err.name === "TypeError");
+}
+
+// Which route answered a turn, in fixed words, for the logs that report it.
+function logRoute(route: "modal" | "openrouter"): void {
+  console.log(JSON.stringify({ type: "mano_model_route", surface: "agent", route }));
+}
+
+// Eve names a step's model when the step starts, before anyone has answered, so
+// a step the backup answered still starts under Modal's name. The one thing it
+// keeps from the call is this provider field on step.completed. No gateway is in
+// use on this route, so try-trace.ts reads it as this fixed mark.
+export const BACKUP_ANSWERED = "mano-route-openrouter";
+
+// Falls back only when a call fails before any of its answer has arrived, so
+// a person never gets part of one reply and all of another. A failure of the
+// backup, a 402 included, ends the call as any model failure does.
+function backupMiddleware(backup: ReturnType<typeof wrapLanguageModel>): LanguageModelMiddleware {
+  const marked = <T extends { providerMetadata?: unknown }>(part: T): T => ({
+    ...part,
+    providerMetadata: { ...(part.providerMetadata as object | undefined), gateway: { generationId: BACKUP_ANSWERED } },
+  });
+  return {
+    wrapGenerate: async ({ doGenerate, params }) => {
+      try {
+        const result = await doGenerate();
+        logRoute("modal");
+        return result;
+      } catch (err) {
+        if (!serviceDown(err)) throw err;
+        const result = await backup.doGenerate(params);
+        logRoute("openrouter");
+        return marked(result);
+      }
+    },
+    wrapStream: async ({ doStream, params }) => {
+      try {
+        const result = await doStream();
+        logRoute("modal");
+        return result;
+      } catch (err) {
+        if (!serviceDown(err)) throw err;
+        const result = await backup.doStream(params);
+        logRoute("openrouter");
+        type Part = typeof result.stream extends ReadableStream<infer C> ? C : never;
+        const stream = result.stream.pipeThrough(
+          new TransformStream<Part, Part>({
+            transform: (part, controller) => controller.enqueue(part.type === "finish" ? marked(part) : part),
+          }),
+        );
+        return { ...result, stream };
+      }
+    },
+  };
+}
+
 export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageModel; modelId: string } {
   const route = selectModelRoute(opts);
-  const provider = createOpenAICompatible({
-    name: route.name,
-    baseURL: route.baseURL,
-    apiKey: route.apiKey || "missing-key",
-    includeUsage: true,
-  });
+  if (route.name === "modal" && !route.apiKey) throw new Error("Modal is chosen but its settings are incomplete.");
   const recorder = new UsageRecorder(opts.usageSink ? [opts.usageSink] : undefined);
-  const model = wrapLanguageModel({
-    model: provider(route.modelId),
-    middleware: meteringMiddleware({ modelId: route.modelId, provider: route.name, bodyExtra: route.bodyExtra, recorder, now: opts.now ?? Date.now }),
-  });
-  return { model, modelId: route.modelId };
+  const metered = (r: Pick<ModelRoute, "name" | "baseURL" | "apiKey" | "modelId" | "bodyExtra">, fetchFn?: typeof fetch) =>
+    wrapLanguageModel({
+      model: createOpenAICompatible({ name: r.name, baseURL: r.baseURL, apiKey: r.apiKey || "missing-key", includeUsage: true, ...(fetchFn ? { fetch: fetchFn } : {}) })(r.modelId),
+      middleware: meteringMiddleware({ modelId: r.modelId, provider: r.name, bodyExtra: r.bodyExtra, recorder, now: opts.now ?? Date.now }),
+    });
+  const backupKey = route.name === "modal" ? process.env.OPENROUTER_API_KEY : undefined;
+  if (!backupKey) return { model: metered(route, route.name === "modal" ? refuseRedirects : undefined), modelId: route.modelId };
+  const backup = metered({ name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: backupKey, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY }, refuseRedirects);
+  return { model: wrapLanguageModel({ model: metered(route, limitedStart(MODAL_START_LIMIT_MS)), middleware: backupMiddleware(backup) }), modelId: route.modelId };
 }

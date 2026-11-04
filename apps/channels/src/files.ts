@@ -31,15 +31,20 @@ export async function attachmentDocumentId(generation: number, turn: number, ind
 }
 
 // Read from the bytes' own signature, never from what the provider
-// claims. Null for anything else (video, audio), which keeps its label.
+// claims. Null for anything else (video), which keeps its label.
 export function sniffMediaType(bytes: Uint8Array): string | null {
   const ascii = (from: number, to: number): string => String.fromCharCode(...bytes.subarray(from, to));
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
   if (ascii(0, 8) === "\x89PNG\r\n\x1a\n") return "image/png";
   if (ascii(0, 5) === "%PDF-") return "application/pdf";
   if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WAVE") return "audio/wav";
+  if (ascii(0, 4) === "caff") return "audio/x-caf";
+  if (ascii(0, 4) === "OggS") return "audio/ogg";
+  if (ascii(0, 3) === "ID3") return "audio/mpeg";
   if (ascii(4, 8) === "ftyp") {
     const brand = ascii(8, 12);
+    if (brand === "M4A ") return "audio/mp4";
     if (["heic", "heix", "heim", "heis", "hevc", "hevx", "hevm", "hevs"].includes(brand)) return "image/heic";
     if (brand === "mif1" || brand === "msf1") return "image/heif";
   }
@@ -49,6 +54,16 @@ export function sniffMediaType(bytes: Uint8Array): string | null {
 // The sandbox portal takes only PDF, PNG and JPEG. A photo in one of these
 // formats is stored as a JPEG copy instead of the original.
 const TO_JPEG = new Set(["image/heic", "image/heif", "image/webp"]);
+
+// The type without parameters: a label can carry the file's name.
+function bareType(label: string): string {
+  return label.split(";")[0]!.trim().toLowerCase();
+}
+
+// A voice note, which Mano listens to instead of reading.
+export function isVoiceNote(mimeType: string): boolean {
+  return bareType(mimeType).startsWith("audio/");
+}
 
 export interface PhotoConverter {
   toJpeg(bytes: Uint8Array): Promise<Uint8Array>;
@@ -76,17 +91,13 @@ export interface StoredForm {
   unconverted?: "no_converter" | "failed" | "too_large";
 }
 
-// The type without parameters: a label can carry the file's name.
-function bareType(label: string): string {
-  return label.split(";")[0]!.trim().toLowerCase();
-}
-
 // The only media types Channels passes on, stores or logs. It holds every
 // type Mail reads (packages/mail/src/media.ts); a test fails when Mail
 // accepts a type this set does not.
 export const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "image/jpeg", "image/png", "image/heic", "image/heif", "image/webp", "image/gif", "application/pdf",
   "video/mp4", "video/quicktime", "video/3gpp", "video/webm", "video/mpeg", "audio/mp4", "audio/x-m4a", "audio/mpeg",
+  "audio/x-caf", "audio/aac", "audio/ogg", "audio/wav",
   "application/octet-stream",
 ]);
 

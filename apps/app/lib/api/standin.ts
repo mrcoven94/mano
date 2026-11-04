@@ -7,23 +7,13 @@
 
 import { b64encode, utf8ToBytes } from "../base64";
 import { provenNotSent } from "../sent-proof";
+import type { Language } from "../strings";
 import {
-  APPROVED_NOTICE,
-  APPROVE_FOLLOWUP,
-  CASEWORKER_REQUEST,
-  CHANGE_REPLY,
-  CHANGE_REPLY_ES,
-  DECLINE_REPLY,
-  FALLBACK_REPLY,
-  GREETING,
-  MAIL_REPLY,
+  DEMO_WORDS,
   MARIA,
-  PAYSTUB_REPLY,
   RENEWAL_ANSWERS,
   RENEWAL_DECLARATION,
   approvalNoticePdfB64,
-  approvalsReply,
-  deadlinesReply,
   electricBillText,
   renewalPacketText,
   snapLetterText,
@@ -52,6 +42,10 @@ export interface StandInOptions {
   // Milliseconds each call waits, so loading states show in demos.
   latencyMs?: number;
   now?: () => Date;
+  // The language it answers in. What it says is written when it says it, as
+  // in a real thread. The frozen approval and its document stay in English,
+  // as a live one does, so a language change never makes an approval stale.
+  language?: () => Language;
 }
 
 interface StoredDoc {
@@ -61,6 +55,8 @@ interface StoredDoc {
 
 const RENEWAL_ID = "doc-renewal-packet";
 const APPROVAL_ID = "appr-renewal-001";
+const SIX_DIGITS = /^\d{6}$/;
+const HTTPS_LINK = /^https:\/\/[^/\s]+/i;
 
 function stamp(id: string): string {
   return `standin-${id}`;
@@ -71,6 +67,7 @@ export class StandInClient implements ManoClient {
   private sha256B64: Hasher;
   private latencyMs: number;
   private now: () => Date;
+  private language: () => Language;
   private messages: ChatMessage[] = [];
   private seeded = false;
   private mailReceived = false;
@@ -87,6 +84,11 @@ export class StandInClient implements ManoClient {
     this.sha256B64 = options.sha256B64;
     this.latencyMs = options.latencyMs ?? 350;
     this.now = options.now ?? (() => new Date());
+    this.language = options.language ?? (() => "en");
+  }
+
+  private get words() {
+    return DEMO_WORDS[this.language()];
   }
 
   private async wait(): Promise<void> {
@@ -113,7 +115,7 @@ export class StandInClient implements ManoClient {
       {
         id: stamp("greeting"),
         role: "agent",
-        text: GREETING,
+        text: this.words.greeting,
         createdAt: "2026-10-28T09:00:00.000Z",
         attachments: [],
         status: "sent",
@@ -123,9 +125,9 @@ export class StandInClient implements ManoClient {
       {
         recipient: "org:springfield-county",
         orgName: "Springfield County SNAP office",
-        purpose: "Your SNAP renewal, case R-1042",
+        purpose: this.words.grantPurpose,
         caseId: "R-1042",
-        scope: ["case documents", "deadlines"],
+        scope: this.words.grantScope,
         grantedAt: "2026-10-27T15:30:00.000Z",
       },
     ];
@@ -204,7 +206,7 @@ export class StandInClient implements ManoClient {
 
   async verifyCode(email: string, challengeId: string, code: string): Promise<Session> {
     await this.wait();
-    if (!/^\d{6}$/.test(code)) throw new AuthError("Enter the 6-digit code.");
+    if (!SIX_DIGITS.test(code)) throw new AuthError("Enter the 6-digit code.");
     if (!challengeId.startsWith("standin-")) throw new AuthError();
     void email;
     this.seed();
@@ -309,7 +311,7 @@ export class StandInClient implements ManoClient {
           bytesB64: b64encode(utf8ToBytes(electricBillText())),
         },
       );
-      return { text: MAIL_REPLY, followUps: [] };
+      return { text: this.words.mailReply, followUps: [] };
     }
     if (hasMail && this.renewalApproved && !this.paystubReceived) {
       this.paystubReceived = true;
@@ -340,26 +342,26 @@ export class StandInClient implements ManoClient {
         bytesB64: noticeB64,
       });
       // The county answer lands right after in the recorded run.
-      return { text: PAYSTUB_REPLY, followUps: [APPROVED_NOTICE] };
+      return { text: this.words.paystubReply, followUps: [this.words.approvedNotice] };
     }
     const lower = text.toLowerCase();
     // "Ask Mano to change something" opens the chat with these words.
     // Only while the renewal waits: once decided, "nothing was sent" may be false.
     const waiting = this.mailReceived && this.renewalStatus() === "pending";
-    if (waiting && lower.includes("please change")) return { text: CHANGE_REPLY, followUps: [] };
-    if (waiting && lower.includes("por favor cambie")) return { text: CHANGE_REPLY_ES, followUps: [] };
-    if (lower.includes("deadline")) {
+    if (waiting && lower.includes("please change")) return { text: DEMO_WORDS.en.changeReply, followUps: [] };
+    if (waiting && lower.includes("por favor cambie")) return { text: DEMO_WORDS.es.changeReply, followUps: [] };
+    if (lower.includes("deadline") || lower.includes("fecha")) {
       const base = !this.mailReceived ? 0 : this.renewalApproved ? 1 : 2;
       const open = base + this.extraDeadlines.filter((d) => !d.done).length;
-      return { text: deadlinesReply(open), followUps: [] };
+      return { text: this.words.deadlinesReply(open), followUps: [] };
     }
-    if (lower.includes("approv")) {
-      return { text: approvalsReply(this.mailReceived && this.renewalStatus() === "pending" ? 1 : 0), followUps: [] };
+    if (lower.includes("approv") || lower.includes("aprob")) {
+      return { text: this.words.approvalsReply(this.mailReceived && this.renewalStatus() === "pending" ? 1 : 0), followUps: [] };
     }
     if (lower.includes("hola") || lower.includes("espa")) {
       return { text: "Claro, hablamos español. Fotografíe su correo para empezar, o pregúnteme por sus fechas límite.", followUps: [] };
     }
-    return { text: FALLBACK_REPLY, followUps: [] };
+    return { text: this.words.fallbackReply, followUps: [] };
   }
 
   // --- approvals ---
@@ -404,7 +406,7 @@ export class StandInClient implements ManoClient {
       {
         id: this.nextId("msg"),
         role: "agent",
-        text: APPROVE_FOLLOWUP,
+        text: this.words.approveFollowup,
         createdAt: this.iso(),
         attachments: [],
         status: "sent",
@@ -412,7 +414,7 @@ export class StandInClient implements ManoClient {
       {
         id: this.nextId("msg"),
         role: "agent",
-        text: CASEWORKER_REQUEST,
+        text: this.words.caseworkerRequest,
         createdAt: this.iso(),
         attachments: [],
         status: "sent",
@@ -420,8 +422,7 @@ export class StandInClient implements ManoClient {
     );
     this.extraDeadlines.push({
       id: "ddl-paystub",
-      title: "Send the county a pay stub",
-      detail: "Springfield County asked for a pay stub from the last 30 days for case R-1042.",
+      ...this.words.paystubDeadline,
       dueAt: "2026-11-12T17:00:00.000Z",
       relatedApprovalId: null,
       done: false,
@@ -442,7 +443,7 @@ export class StandInClient implements ManoClient {
     this.messages.push({
       id: this.nextId("msg"),
       role: "agent",
-      text: DECLINE_REPLY,
+      text: this.words.declineReply,
       createdAt: this.iso(),
       attachments: [],
       status: "sent",
@@ -465,16 +466,14 @@ export class StandInClient implements ManoClient {
     const base: Deadline[] = [
       {
         id: "ddl-renewal",
-        title: "SNAP renewal due",
-        detail: "Springfield County, case R-1042. Your filled renewal is waiting in Approvals.",
+        ...this.words.renewalDeadline,
         dueAt: "2026-11-15T17:00:00.000Z",
         relatedApprovalId: APPROVAL_ID,
         done: this.renewalApproved !== null,
       },
       {
         id: "ddl-electric",
-        title: "Electricity bill, $84.20",
-        detail: "Springfield Light and Power, account ending 4471.",
+        ...this.words.electricDeadline,
         dueAt: "2026-11-08T17:00:00.000Z",
         relatedApprovalId: null,
         done: false,
@@ -537,7 +536,7 @@ export class StandInClient implements ManoClient {
     await this.wait();
     this.checkSession(session);
     // Recorded verdicts: encrypted pages load, everything else stays shut.
-    if (/^https:\/\/[^/\s]+/i.test(url)) return { allowed: true, reason: null };
+    if (HTTPS_LINK.test(url)) return { allowed: true, reason: null };
     return { allowed: false, reason: "Blocked in the demo." };
   }
 }

@@ -11,13 +11,17 @@ import { glimmerCheckerFromEnv } from "@mano/guardian";
 
 import { handleDeleted } from "../lib/deletion.js";
 import { engineFromEnv } from "../lib/engine.js";
+import { selectModelRoute } from "../lib/muse.js";
 import { settleStream, startIndexFor, type StreamEventLike } from "../lib/settle.js";
 import { AgentMarks } from "../lib/timings.js";
+import { handleListen } from "../lib/listen.js";
+import { tryStepTrace } from "../lib/try-trace.js";
 import { handlePresented, handleTurn } from "../lib/turn.js";
 
 export const TURN_PATH = "/channels/mano/turn";
 export const DELETED_PATH = "/channels/mano/deleted";
 export const PRESENTED_PATH = "/channels/mano/presented";
+export const LISTEN_PATH = "/channels/mano/listen";
 // Channels' responder timeout sits above this, so a slow turn fails
 // over to the fallback answer instead of hanging the conversation.
 export const SETTLE_TIMEOUT_MS = 90_000;
@@ -39,6 +43,7 @@ export default defineChannel({
       handleTurn(request, {
         secret: process.env.MANO_AGENT_SECRET,
         engine: engineFromEnv(),
+        modelId: selectModelRoute().modelId,
         warmGuardian: () => warmGuardian(),
         background: (work) => waitUntil(work),
         async runAgent({ handleHash, turnId, turnAtMs, generation, grant, message, context, deadlineMs, timings }) {
@@ -72,16 +77,21 @@ export default defineChannel({
           const stream = (await session.getEventStream({ startIndex })) as unknown as ReadableStream<StreamEventLike>;
           timings.send = Date.now() - sending;
           const marks = new AgentMarks(sending);
+          const trace = tryStepTrace(handleHash, marks);
           try {
-            return await settleStream(stream, { timeoutMs: Math.max(1_000, Math.min(SETTLE_TIMEOUT_MS, deadlineMs - Date.now())), marks, turnId });
+            return await settleStream(stream, { timeoutMs: Math.max(1_000, Math.min(SETTLE_TIMEOUT_MS, deadlineMs - Date.now())), marks: trace, turnId });
           } finally {
             marks.write(timings);
+            await trace.flush();
           }
         },
       }),
     ),
     POST(PRESENTED_PATH, async (request) =>
       handlePresented(request, { secret: process.env.MANO_AGENT_SECRET, engine: engineFromEnv() }),
+    ),
+    POST(LISTEN_PATH, async (request) =>
+      handleListen(request, { secret: process.env.MANO_AGENT_SECRET, engine: engineFromEnv(), env: process.env }),
     ),
     POST(DELETED_PATH, async (request, { from }) =>
       handleDeleted(request, {

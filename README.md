@@ -12,9 +12,13 @@ Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026
 
 The whole renewal runs on your machine with `pnpm judge`, on synthetic data, with each step labeled real or simulated.
 
-On production, you can text Mano at (801) 920-3370. The conversation runs on Meta's open-weight model, Muse Spark Open, through OpenRouter with zero data retention, because Meta's hosted API answers HTTP 402 (billing not set up, checked November 4, 2026). Muse Glimmer checks actions on our own GPU. Computer use calls Meta's hosted API, so it does not run on production while the 402 lasts. [PR 152](https://github.com/mrcoven94/mano/pull/152) would move it to Muse Spark Open and is still open. A texted photo is read on Muse Spark Open too, with on-device paper detection in place of SAM 3.1. Reading letters and keeping a person's answers on their profile are deployed and not confirmed live on a model. The whole renewal has not been confirmed on the current production build.
+On production, you can text Mano at (801) 920-3370. The conversation runs on Meta's open-weight model, Muse Spark Open, through OpenRouter or a Modal Shared Endpoint, both with zero data retention, because Meta's hosted API answers HTTP 402 (billing not set up, checked November 4, 2026). Muse Glimmer checks actions on our own GPU. Computer use calls Meta's hosted API, so it does not run on production while the 402 lasts. [PR 152](https://github.com/mrcoven94/mano/pull/152) would move it to Muse Spark Open and is still open. A texted photo is read on Muse Spark Open too, with on-device paper detection in place of SAM 3.1. Reading letters and keeping a person's answers on their profile are deployed and not confirmed live on a model. The whole renewal has not been confirmed on the current production build.
 
 A plain letter usually gets a question that names the date, not a held deadline. The check in `packages/mail/src/gate.ts` holds a date only when the letter has one deadline sentence, in wording it allows, and no other date, and because it reads one sentence at a time it has known gaps, listed in `packages/mail/test/gate-letters.test.ts`, such as a Re: line naming another program. The synthetic letter in `pnpm judge` does hold its date. A scam letter gets the warning first, and a single date in it appears only as the letter's claim, to check with the office.
+
+## Try it on the web, no login
+
+[withmano.com/try](https://withmano.com/try) runs preset synthetic letters through the deployed agent, Engine, Guardian and sandbox portal, with buttons only, and lists every model call beside the steps. It stays off until Engine has `MANO_AGENT_URL` and `MANO_AGENT_SECRET`, and `MANO_TRY` in `apps/engine/wrangler.toml` stops it. When the daily cap is spent it says so.
 
 ## Run Maria's renewal in one command
 
@@ -41,11 +45,12 @@ Every model Mano calls at runtime is a Meta model. Seven spine steps below call 
 
 | Spine step | Meta model | Where it runs | On production today | In `pnpm judge` |
 | --- | --- | --- | --- | --- |
-| Maria texts and Mano answers, with its tools | Muse Spark Open (open weights) | OpenRouter, zero-retention endpoints only | Running | Left out, Mano's words are printed |
+| Maria texts and Mano answers, with its tools | Muse Spark Open (open weights) | OpenRouter, zero-retention endpoints only, or a Modal Shared Endpoint | Running | Left out, Mano's words are printed |
 | Crisis check, before the agent, on one short health question that the keyword floor flags | Muse Spark 1.3, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis | Left out |
 | Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter | Standby, on Muse Spark Open during the 402 | Left out |
+| Listening to a voice note | Muse Voice Transcribe, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter, zero-retention endpoints only | Built, not yet run live: Muse Voice Transcribe waits on the 402 and needs ffmpeg for anything but WAV | Left out, Mano says it could not listen and asks for a text |
 | Finding the letter in the photo | SAM 3.1, or none during the 402 (on-device paper detection, plain code) | Meta's hosted API, or Mano's own code | Deployed, on-device during the 402, not confirmed live | Live with your key, else a recording |
-| Reading the letter into cited fields | Muse Spark 1.3, or Muse Spark Open during the 402 | Meta's hosted API, or OpenRouter, zero-retention endpoints only | Deployed, on Muse Spark Open during the 402, not confirmed live on a model | Live with your key, else a recording |
+| Reading the letter into cited fields | Muse Spark 1.3, or Muse Spark Open during the 402 | Meta's hosted API, or OpenRouter, zero-retention endpoints only, or a Modal Shared Endpoint | Deployed, on Muse Spark Open during the 402, not confirmed live on a model | Live with your key, else a recording |
 | Filling the form with Mano's computer | Muse Spark 1.3 computer use | Meta's hosted API, driving a desktop on Modal | Not running, 402 | Stand-in |
 | Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes | Recording |
 | Holding the one deadline | None, plain code | `packages/mail/src/gate.ts` | Deployed. A plain letter usually gets a question naming the date | Real |
@@ -53,9 +58,11 @@ Every model Mano calls at runtime is a Meta model. Seven spine steps below call 
 | Maria's yes and the filing to the sandbox portal | None, plain code | `apps/engine/src/gateway` | Deployed, no filing confirmed on this build | Real code, scripted yes |
 | Reminder the day before her interview | None, plain code | `apps/engine/src/deadlines.ts` | Deployed | Not in this run |
 
-The route for agent turns is set in `apps/agent/agent/lib/muse.ts`. With `MANO_MODEL_PROVIDER=openrouter` and `OPENROUTER_API_KEY` set, a turn goes to `meta/muse-spark-open` with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight. With either setting missing, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. Production has both set until Meta's billing works (see the November 3 entry in `docs/decisions.md`). The same two settings send Mail's page reads to the same model with the same pin (`packages/mail/src/model.ts`), and SAM 3.1 is not called on that path.
+The route for agent turns is set in `apps/agent/agent/lib/muse.ts`. With `MANO_MODEL_PROVIDER=openrouter` and `OPENROUTER_API_KEY` set, a turn goes to `meta/muse-spark-open` with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight. With either setting missing, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. Production has both set until Meta's billing works (see the November 3 entry in `docs/decisions.md`). The same two settings send Mail's page reads to the same model with the same pin (`packages/mail/src/model.ts`), and SAM 3.1 is not called on that path. Filling a form follows the same two settings (`apps/agent/agent/lib/computer-fill.ts`). That path has no hosted computer tool, so it never raises a safety check; `pnpm --filter @mano/computer probe:live` checks that the model can drive the desktop and spends model credit. `MANO_MODEL_PROVIDER=modal` with `MODAL_ENDPOINT_URL` and `MODAL_PROXY_TOKEN` sends turns and page reads to the same model on a Modal Shared Endpoint. No request carries a pin on this route: Modal states zero data retention for the endpoint type, and Modal sees each request in flight (see the November 4 entry in `docs/decisions.md`). Chosen with a setting missing or a URL off Modal's domain, it calls no model, and it does not fall back to another route. With `OPENROUTER_API_KEY` set as well, a Modal call that times out, gets a 429 or 5xx, or loses its connection goes to `meta/muse-spark-open` on OpenRouter under its pin, and a log line with fixed words says which route answered. Filling a form follows the Modal route too, with no backup.
 
 These parts are not Meta model calls: the keyword crisis floor that every text passes through, on-device paper detection, the deadline gate and field checks, the scam screen, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images. `pnpm judge` reads its synthetic letter with the `muse-spark-1.3-contributor` ID, which `AGENTS.md` allows only for synthetic data.
+
+`pnpm spine:live` runs the same renewal on a deployed Mano instead: a new synthetic handle each run, signed turns to the agent, a filing on the sandbox portal, and the portal's own record of the confirmation number. It prints each step with its model and wall time, takes `--runs N`, `--lang es`, `--yes <word>` and `--json`, and exits non-zero when any step fails. It spends model credit, and its settings are in `packages/quality/.env.example`.
 
 ## Live versus in progress
 
@@ -72,7 +79,7 @@ These parts are not Meta model calls: the keyword crisis floor that every text p
 
 `node scripts/status.mjs` generates this table from each health URL and the latest deploy. A daily workflow warns when this copy is stale.
 
-The site labels these pieces coming soon. This is what is true of each one today:
+The site does not offer these pieces. This is what is true of each one today:
 
 | Piece | True today |
 | --- | --- |
@@ -145,6 +152,8 @@ EXPO_PUBLIC_DEMO_MODE=true pnpm --filter @mano/app start
 ```
 
 Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. `META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live` checks Mano's voice against the real model with synthetic messages. To deploy your own copy, see the workflows in `.github/workflows/`.
+
+The sandbox portal also serves the renewal under other layouts (`/layouts`): five fixed ones and one generated from any seed at `/scramble/<seed>/apply`. `MEASURE_PORTAL_URL=<portal> SANDBOX_PORTAL_DRAFT_TOKEN=... MEASURE_MODEL=standin pnpm --filter @mano/computer probe:live layouts` runs a fill on each and prints correct fields, wall time, steps and model per layout, read back from what the portal saved. The stand-in needs no key and measures no model; `MEASURE_MODEL=meta`, `open` or `route` spends credit (see `packages/computer/probe/layouts.probe.ts`).
 
 ## Held-out test
 

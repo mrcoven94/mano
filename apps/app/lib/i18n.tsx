@@ -1,8 +1,11 @@
 // Language follows the person: the device locale picks the default and
-// the More screen overrides it. Screens read strings through useStrings.
+// the switch on the sign-in screens or the More screen overrides it. Screens
+// read strings through useStrings.
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { Platform } from "react-native";
 import { getLocales } from "expo-localization";
+import { noteLanguage } from "./language-now";
 import { appStore } from "./storage";
 import { stringsFor, type Language, type Strings } from "./strings";
 
@@ -31,17 +34,26 @@ function deviceLanguage(): Language {
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<Language>(deviceLanguage);
+  // A choice made while the saved one is still loading wins over it.
+  const chosen = useRef(false);
+  noteLanguage(language);
 
   useEffect(() => {
     appStore
       .get(LANGUAGE_KEY)
       .then((saved) => {
-        if (saved === "en" || saved === "es") setLanguageState(saved);
+        if (!chosen.current && (saved === "en" || saved === "es")) setLanguageState(saved);
       })
       .catch(() => {});
   }, []);
 
+  // Screen readers and browser translation read the page's language.
+  useEffect(() => {
+    if (Platform.OS === "web") document.documentElement.lang = language;
+  }, [language]);
+
   const setLanguage = async (next: Language): Promise<void> => {
+    chosen.current = true;
     setLanguageState(next);
     await appStore.set(LANGUAGE_KEY, next);
   };

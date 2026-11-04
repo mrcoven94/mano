@@ -8,8 +8,12 @@ import { b64encode, utf8ToBytes } from "./base64";
 import type { Cipher, CipherFactory } from "./cipher";
 import { assertSafeKey, type SecureBackend } from "./kv";
 
+const PLUS = /\+/g;
+const SLASH = /\//g;
+const PADDING = /=+$/;
+
 function keyName(personId: string): string {
-  const encoded = b64encode(utf8ToBytes(personId)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const encoded = b64encode(utf8ToBytes(personId)).replace(PLUS, "-").replace(SLASH, "_").replace(PADDING, "");
   const name = `mano.dkey.${encoded}`;
   assertSafeKey(name);
   return name;

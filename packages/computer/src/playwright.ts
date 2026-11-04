@@ -4,6 +4,8 @@ import { join } from "node:path";
 import type { ComputerAction } from "./actions";
 import type { Computer, ComputerOptions } from "./computer";
 
+const UNSAFE_FILENAME_CHARS_RE = /[^a-zA-Z0-9._-]/g;
+
 /** Smallest page surface the stand-in needs. Playwright's Page satisfies it. */
 export interface MouseLike {
   click(x: number, y: number, options?: { button?: "left" | "right" | "middle"; clickCount?: number }): Promise<void>;
@@ -24,7 +26,7 @@ export interface FileChooserLike {
 
 export interface PageLike {
   goto(url: string): Promise<unknown>;
-  screenshot(): Promise<Buffer>;
+  screenshot(options?: { timeout?: number }): Promise<Buffer>;
   waitForTimeout(ms: number): Promise<void>;
   mouse: MouseLike;
   keyboard: KeyboardLike;
@@ -59,6 +61,12 @@ export interface PlaywrightComputerOptions extends ComputerOptions {
   /** Injected for tests. Defaults to real Chromium. */
   launcher?: BrowserLauncher;
 }
+
+// A screenshot taken as a click's navigation starts can hang until Playwright's
+// 30 second timeout, and a fill has only 60. The wait avoids nearly all of them;
+// the short timeout and one retry bound the rest, since the next try works.
+const NAVIGATION_SETTLE_MS = 300;
+const SCREENSHOT_TIMEOUT_MS = 8_000;
 
 /** Local stand-in: real Chromium on this machine behind the Computer interface. */
 export class PlaywrightComputer implements Computer {
@@ -136,7 +144,8 @@ export class PlaywrightComputer implements Computer {
 
   async screenshot(): Promise<Uint8Array> {
     const { page } = await this.started();
-    return new Uint8Array(await page.screenshot());
+    const shot = await page.screenshot({ timeout: SCREENSHOT_TIMEOUT_MS }).catch(() => page.screenshot({ timeout: SCREENSHOT_TIMEOUT_MS }));
+    return new Uint8Array(shot);
   }
 
   async act(actions: ComputerAction[]): Promise<void> {
@@ -181,6 +190,7 @@ export class PlaywrightComputer implements Computer {
           break;
       }
     }
+    if (actions.some((a) => a.type === "click" || a.type === "double_click" || a.type === "keypress")) await page.waitForTimeout(NAVIGATION_SETTLE_MS);
   }
 
   /** The first call fixes the allowed origin when none was configured, so open the portal before anything else. */
@@ -192,7 +202,7 @@ export class PlaywrightComputer implements Computer {
 
   async stageFile(name: string, data: Uint8Array): Promise<string> {
     if (!this.scratch) this.scratch = mkdtempSync(join(tmpdir(), "mano-computer-"));
-    const safe = name.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
+    const safe = name.replace(UNSAFE_FILENAME_CHARS_RE, "_") || "upload";
     const path = join(this.scratch, safe);
     writeFileSync(path, data);
     this.staged.push(path);

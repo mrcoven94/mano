@@ -4,12 +4,15 @@
 import { useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Btn, Body, Card, DemoBanner, Field, Muted, Screen, Title } from "../../components/ui";
+import { Btn, Body, Card, DemoBanner, Field, LanguageSwitch, Muted, Screen, Title } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 import { crisisLineForSignIn } from "../../lib/crisis-help";
 import { useStrings } from "../../lib/i18n";
 import { setPendingSignIn } from "../../lib/sign-in-flow";
+import type { StringKey } from "../../lib/strings";
 import { colors } from "../../lib/theme";
+
+const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 export default function SignIn() {
   const s = useStrings();
@@ -18,12 +21,13 @@ export default function SignIn() {
   const [crisisLine] = useState(() => crisisLineForSignIn(Date.now()));
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // A key, not its words, so the line follows the language switch.
+  const [error, setError] = useState<StringKey | null>(null);
 
   const submit = async (): Promise<void> => {
     const trimmed = email.trim();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(trimmed)) {
-      setError(s.invalidEmail);
+    if (!EMAIL_SHAPE.test(trimmed)) {
+      setError("invalidEmail");
       return;
     }
     setBusy(true);
@@ -32,8 +36,9 @@ export default function SignIn() {
       const out = await client.requestCode(trimmed);
       setPendingSignIn({ email: trimmed, challengeId: out.challengeId });
       router.push("/(auth)/verify");
-    } catch (err) {
-      setError((err as Error).message);
+    } catch {
+      // A failure's own text is English and written for developers.
+      setError("codeNotSent");
     } finally {
       setBusy(false);
     }
@@ -41,6 +46,7 @@ export default function SignIn() {
 
   return (
     <Screen>
+      <LanguageSwitch />
       {mode === "stand-in" ? <DemoBanner text={s.demoMode} /> : null}
       {crisisLine ? (
         <Card>
@@ -58,7 +64,7 @@ export default function SignIn() {
           placeholder={s.emailPlaceholder}
           keyboardType="email-address"
         />
-        {error ? <Muted style={styles.error}>{error}</Muted> : null}
+        {error ? <Muted style={styles.error}>{s[error]}</Muted> : null}
         <Btn title={busy ? s.sending : s.sendCode} onPress={() => void submit()} busy={busy} />
       </View>
     </Screen>

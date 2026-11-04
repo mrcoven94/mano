@@ -20,8 +20,11 @@ interface ErrorBody {
   code?: unknown;
 }
 
+const MACHINE_STRING_RE = /^[a-z0-9_.-]{1,64}$/i;
+const TRAILING_SLASH_RE = /\/$/;
+
 function field(value: unknown): string | null {
-  return typeof value === "string" && /^[a-z0-9_.-]{1,64}$/i.test(value) ? value : null;
+  return typeof value === "string" && MACHINE_STRING_RE.test(value) ? value : null;
 }
 
 // Reads only the error type and code, which are machine strings; the
@@ -52,7 +55,7 @@ export async function checkProvider(
   const key = env.META_MODEL_API_KEY ?? "";
   const model = env.MANO_MODEL_BENCH_ID || env.MANO_MODEL_JUDGE_ID || "";
   if (!key || !model) return null;
-  const base = (env.MANO_MODEL_BASE_URL || DEFAULT_MODEL_BASE_URL).replace(/\/$/, "");
+  const base = (env.MANO_MODEL_BASE_URL || DEFAULT_MODEL_BASE_URL).replace(TRAILING_SLASH_RE, "");
   try {
     const res = await fetchFn(`${base}/responses`, {
       method: "POST",

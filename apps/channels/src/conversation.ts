@@ -7,6 +7,7 @@ import {
   AgentResponder,
   ModelCrisisCheck,
   OpenWeightClient,
+  OpenWeightFailed,
   PrimaryBreaker,
   isMetaModelId,
   reportPresentation,
@@ -23,7 +24,10 @@ import {
   type Channel,
   type Logger,
   type NormalizedEvent,
+  type OpenWeightAnswer,
   type OpenWeightFallback,
+  type OpenWeightOptions,
+  type OpenWeightRequest,
   type Responder,
 } from "@mano/channels";
 import { DEFAULT_MEDIA_HOSTS, DEFAULT_RUNNER_CONFIG, ConversationRunner, type ModelCosts, type SpendLedger } from "./runner.js";
@@ -130,10 +134,92 @@ const primaryBreaker = new PrimaryBreaker();
 // names the model and must be a Meta one (AGENTS.md rule 13), never a
 // -contributor ID. Off, every reply and crisis check works exactly as
 // before.
+//
+// MANO_MODEL_PROVIDER=modal, with MODAL_ENDPOINT_URL and MODAL_PROXY_TOKEN,
+// asks the same model on a Modal Shared Endpoint instead (AGENTS.md rule 7).
+// No request carries a pin there: zero retention is Modal's stated policy for
+// the endpoint type (November 4 entry in docs/decisions.md). Chosen with a
+// setting missing or a URL off Modal's domain, there is no fallback at all. A
+// Shared Endpoint serves one model and answers whatever model name it is sent,
+// so MANO_OPEN_WEIGHT_MODEL stays as it is, and it ignores the OpenRouter pin in
+// the body. It refuses minimal reasoning with a 400, so the fast path and crisis
+// check ask for low there.
+//
+// With OPENROUTER_API_KEY too, OpenRouter is the backup when a Modal call fails
+// at run time, on the same model under its pin. Nothing else is ever tried.
 export function buildOpenWeight(env: Env, breaker: PrimaryBreaker = primaryBreaker): OpenWeightFallback | undefined {
   const model = env.MANO_OPEN_WEIGHT_MODEL?.trim() ?? "";
-  if (!env.OPENROUTER_API_KEY || !isMetaModelId(model) || model.endsWith("-contributor")) return undefined;
+  if (!isMetaModelId(model) || model.endsWith("-contributor")) return undefined;
+  const modal = env as Env & ModalSettings;
+  if (modal.MANO_MODEL_PROVIDER === "modal") {
+    const baseUrl = modalBaseUrl(modal.MODAL_ENDPOINT_URL);
+    if (!baseUrl || !modal.MODAL_PROXY_TOKEN) return undefined;
+    const backup = env.OPENROUTER_API_KEY ? new OpenWeightClient({ apiKey: env.OPENROUTER_API_KEY, model: MODAL_BACKUP_MODEL, fetchFn: noFollow }) : undefined;
+    return { client: new ModalOpenWeightClient({ apiKey: modal.MODAL_PROXY_TOKEN, model, baseUrl, fetchFn: noFollow, ...(backup ? { timeoutMs: MODAL_TIMEOUT_WITH_BACKUP_MS } : {}) }, backup), breaker };
+  }
+  if (!env.OPENROUTER_API_KEY) return undefined;
   return { client: new OpenWeightClient({ apiKey: env.OPENROUTER_API_KEY, model }), breaker };
+}
+
+const MODAL_BACKUP_MODEL = "meta/muse-spark-open";
+// A redirect must not carry a person's texts to another host. A Worker's fetch
+// throws on redirect: "error", so this is "manual": the 3xx comes back as a
+// failed call, and is not followed or sent to the backup.
+const noFollow: typeof fetch = (input, init) => boundFetch(input, { ...init, redirect: "manual" });
+// Short enough to leave the backup time inside a turn.
+const MODAL_TIMEOUT_WITH_BACKUP_MS = 30_000;
+const SERVER_ERROR = /^http_5\d\d$/;
+
+// A failure of the service, not of this request: a bad token or a refused
+// body would fail the same way on the next try, and an abort is the caller's.
+function modalDown(reason: string): boolean {
+  return reason === "timeout" || reason === "network" || reason === "http_429" || SERVER_ERROR.test(reason);
+}
+
+// Which route answered, in fixed words, for the logs that report the model.
+function logRoute(route: "modal" | "openrouter"): void {
+  console.log(JSON.stringify({ type: "mano_model_route", surface: "text_line", route }));
+}
+
+class ModalOpenWeightClient extends OpenWeightClient {
+  private backup: OpenWeightClient | undefined;
+
+  constructor(opts: OpenWeightOptions, backup?: OpenWeightClient) {
+    super(opts);
+    this.backup = backup;
+  }
+
+  override async ask(req: OpenWeightRequest, signal?: AbortSignal): Promise<OpenWeightAnswer> {
+    let answer: OpenWeightAnswer;
+    try {
+      answer = await super.ask({ ...req, effort: req.effort === "minimal" ? "low" : req.effort }, signal);
+    } catch (err) {
+      if (!this.backup || !(err instanceof OpenWeightFailed) || !modalDown(err.reason)) throw err;
+      // A 402 here ends as any failed fallback does.
+      answer = await this.backup.ask(req, signal);
+      logRoute("openrouter");
+      return answer;
+    }
+    logRoute("modal");
+    return answer;
+  }
+}
+
+interface ModalSettings {
+  MANO_MODEL_PROVIDER?: string;
+  MODAL_ENDPOINT_URL?: string;
+  MODAL_PROXY_TOKEN?: string;
+}
+
+// The endpoint's API root, or nothing unless it is https on Modal's own
+// endpoint domain, so a setting cannot send texts to another host.
+function modalBaseUrl(raw: string | undefined): string | undefined {
+  try {
+    const url = new URL(raw ?? "");
+    return url.protocol === "https:" && url.hostname.endsWith(".modal.direct") ? `${url.origin}/v1` : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Real texts go only to a Standard model ID (AGENTS.md rule 7). A
@@ -450,7 +536,7 @@ export class ConversationDO implements DurableObject {
         turn: store.meta().turn,
         introduced: store.meta().introduced,
         pending: store.pending().length,
-        approvals: store.pendingApprovals(Date.now()).length,
+        approvals: store.pendingApprovalCount(Date.now()),
         engineDeletePending: loadPendingDelete(this.ctx.storage.sql),
       });
     }

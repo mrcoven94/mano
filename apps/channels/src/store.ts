@@ -241,6 +241,16 @@ export function defaultMeta(): ConversationMeta {
   };
 }
 
+export type TurnHistoryRow = Pick<PersistedTurn, "itemsJson" | "answerJson">;
+
+// Rows for reactions and the eyes, never for words.
+export const DECORATION_TAGS: ReadonlySet<string> = new Set(["react", "eyes"]);
+
+// A word send whose outcome is not known yet.
+export function openSend(r: Pick<OutboundRow, "tag" | "state">): boolean {
+  return !DECORATION_TAGS.has(r.tag) && (r.state === "uncertain" || r.state === "sending");
+}
+
 export interface ConversationStore {
   hasEvent(eventId: string): boolean;
   recordEvent(eventId: string, kind: string, atMs: number): void;
@@ -265,13 +275,21 @@ export interface ConversationStore {
   outboundByMessageId(messageId: string): OutboundRow | null;
   updateOutbound(key: string, patch: Partial<OutboundRow>): void;
   outbounds(): OutboundRow[];
+  // Word sends still sending or uncertain, oldest first.
+  openSends(): OutboundRow[];
+  hasOpenSend(turn?: number): boolean;
+  outboundStates(turn: number): OutboundState[];
   holdReceipt(receipt: HeldReceipt): void;
   takeReceipts(messageId: string): HeldReceipt[];
   addApproval(row: ApprovalRow): void;
   pendingApprovals(nowMs: number): ApprovalRow[];
+  pendingApprovalCount(nowMs: number): number;
+  pendingApprovalIdByCode(codeHash: string, nowMs: number): string | null;
   answerApproval(id: string, decision: "yes" | "no"): void;
   startTurn(row: PersistedTurn): void;
   unfinishedTurn(): PersistedTurn | null;
+  // The unfinished turn's attempts, without reading its stored input.
+  unfinishedTurnAttempts(): number | null;
   bumpTurnAttempt(turn: number, atMs: number): void;
   updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number, costByModel?: ModelCosts): void;
   markTurnSettled(turn: number, atMs: number): void;
@@ -279,8 +297,8 @@ export interface ConversationStore {
   finishTurn(turn: number, atMs: number): void;
   attachmentChoice(turn: number, index: number): AttachmentChoice | null;
   saveAttachmentChoice(row: AttachmentChoice): void;
-  // Finished turns, newest first.
-  recentTurns(limit: number): PersistedTurn[];
+  // Finished turns, newest first: only what the model's history reads.
+  recentTurns(limit: number): TurnHistoryRow[];
   savePresentation(row: PresentationRow): void;
   pendingPresentations(): PresentationRow[];
   finishPresentation(turn: number, state: "reported" | "not_shown"): void;
@@ -371,6 +389,20 @@ export class MemoryStore implements ConversationStore {
     return [...this.outboundRows.values()];
   }
 
+  openSends(): OutboundRow[] {
+    return this.outbounds().filter(openSend);
+  }
+
+  hasOpenSend(turn?: number): boolean {
+    return this.outbounds().some((r) => (turn === undefined || r.turn === turn) && openSend(r));
+  }
+
+  outboundStates(turn: number): OutboundState[] {
+    return this.outbounds()
+      .filter((r) => r.turn === turn)
+      .map((r) => r.state);
+  }
+
   private heldReceipts: HeldReceipt[] = [];
 
   holdReceipt(receipt: HeldReceipt): void {
@@ -395,6 +427,14 @@ export class MemoryStore implements ConversationStore {
     return [...this.approvalRows.values()].filter((a) => a.status === "pending" && a.expiresAtMs > nowMs);
   }
 
+  pendingApprovalCount(nowMs: number): number {
+    return this.pendingApprovals(nowMs).length;
+  }
+
+  pendingApprovalIdByCode(codeHash: string, nowMs: number): string | null {
+    return this.pendingApprovals(nowMs).find((a) => a.codeHash === codeHash)?.id ?? null;
+  }
+
   answerApproval(id: string, decision: "yes" | "no"): void {
     const row = this.approvalRows.get(id);
     if (row) this.approvalRows.set(id, { ...row, status: "answered", decision });
@@ -413,6 +453,10 @@ export class MemoryStore implements ConversationStore {
       if (!oldest || row.turn < oldest.turn) oldest = row;
     }
     return oldest ? { ...oldest } : null;
+  }
+
+  unfinishedTurnAttempts(): number | null {
+    return this.unfinishedTurn()?.attempts ?? null;
   }
 
   updateTurnAnswer(turn: number, answerJson: string, costUsd: number, atMs: number, costByModel?: ModelCosts): void {
@@ -447,12 +491,12 @@ export class MemoryStore implements ConversationStore {
     this.attachmentChoices.set(`${row.turn}:${row.index}`, { ...row });
   }
 
-  recentTurns(limit: number): PersistedTurn[] {
+  recentTurns(limit: number): TurnHistoryRow[] {
     return [...this.turnRows.values()]
       .filter((r) => r.state === "finished")
       .sort((a, b) => b.turn - a.turn)
       .slice(0, limit)
-      .map((r) => ({ ...r }));
+      .map((r) => ({ itemsJson: r.itemsJson, answerJson: r.answerJson }));
   }
 
   private agentSendRows = new Map<string, AgentSendRow>();

@@ -23,11 +23,18 @@
  * recordFrames wraps any computer and keeps the screens a run showed,
  * one after each typed value, so a person can see each step of a fill.
  *
+ * Models: FetchModelClient calls the Meta Model API and its hosted computer
+ * tool. OpenWeightModelClient runs the same loop on Meta's open-weight model
+ * through OpenRouter, pinned to zero-retention endpoints (see open-weight.ts).
+ *
  * Run it: set COMPUTER_BACKEND (playwright by default). For modal, set
  * MODAL_COMPUTER_URL, MODAL_COMPUTER_TOKEN and COMPUTER_PERSON_ID (see
  * .env.example), then call runLoop with a ModelClient. Test it:
  * pnpm --filter @mano/computer check (tsc plus vitest against fake screens;
  * the real-Chromium tests run when Playwright's Chromium is installed).
+ * pnpm --filter @mano/computer probe:live spends real model credit: with
+ * OPENROUTER_API_KEY set, the open-weight model fills a synthetic form in
+ * local Chromium, which is the check that it can drive a computer at all.
  */
 import type { Computer, ComputerOptions } from "./computer";
 import { ModalComputer } from "./modal";
@@ -35,8 +42,10 @@ import { PlaywrightComputer } from "./playwright";
 
 export { isComputerCall, outputText, type ComputerAction, type ComputerCall, type SafetyCheck } from "./actions";
 export type { Computer, ComputerOptions } from "./computer";
+export { FILL_DEADLINE_MS, FILL_INSTRUCTIONS, FILL_MAX_STEPS, fillTask } from "./form-fill";
 export { LOOP_INSTRUCTIONS, runLoop, type LoopOptions, type LoopOutcome } from "./loop";
 export { FakeModelClient, FetchModelClient, type ModelClient, type ResponsePayload, type ResponseRequest } from "./model";
+export { MODAL_MODEL_ID, OPEN_WEIGHT_BASE_URL, OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient, type OpenWeightModelOptions } from "./open-weight";
 export { ModalComputer, type ModalComputerOptions } from "./modal";
 export { PlaywrightComputer, type BrowserLauncher, type LaunchedPage, type PageLike, type PlaywrightComputerOptions } from "./playwright";
 export { editsForm, recordFrames, type Frame } from "./recorder";

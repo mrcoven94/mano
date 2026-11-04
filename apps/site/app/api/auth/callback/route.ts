@@ -2,23 +2,26 @@ import { NextResponse } from "next/server";
 import { OAUTH_STATE_COOKIE, consumeOAuthChallenge } from "@mano/accounts";
 import { SESSION_COOKIE, accounts, accountsPepper, sessionCookieOptions } from "@/lib/accounts-server";
 
-function cookieValue(cookieHeader: string | null, name: string): string | null {
+const SESSION_COOKIE_VALUE = new RegExp(`${SESSION_COOKIE}=([^;]+)`);
+const OAUTH_STATE_COOKIE_VALUE = new RegExp(`${OAUTH_STATE_COOKIE}=([^;]+)`);
+
+function cookieValue(cookieHeader: string | null, pattern: RegExp): string | null {
   if (!cookieHeader) return null;
-  const match = cookieHeader.match(new RegExp(`${name}=([^;]+)`));
+  const match = cookieHeader.match(pattern);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const cookieHeader = request.headers.get("cookie");
-  const sessionToken = cookieValue(cookieHeader, SESSION_COOKIE);
+  const sessionToken = cookieValue(cookieHeader, SESSION_COOKIE_VALUE);
   try {
     const { service } = accounts();
     // Verifies the signed challenge, the returned state, the session
     // binding, the linking intent, and the expiry in one step. A planted
     // state or a session swap fails here.
     const challenge = await consumeOAuthChallenge({
-      cookieValue: cookieValue(cookieHeader, OAUTH_STATE_COOKIE),
+      cookieValue: cookieValue(cookieHeader, OAUTH_STATE_COOKIE_VALUE),
       returnedState: url.searchParams.get("state"),
       sessionToken,
       pepper: accountsPepper(),
