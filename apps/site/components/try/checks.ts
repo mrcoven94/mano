@@ -47,6 +47,7 @@ const PLANS: Record<TryScenario, Key[]> = {
 const OPTIONAL = new Set<Key>(["guard2"]);
 
 const GUARDIAN = /guardian/i;
+const OK_STATUS = new Set(["ok", "200", "completed"]);
 const READING = /read/i;
 const NO_DATE = /did not hold a date/i;
 const NOT_FILLED = /did not fill/i;
@@ -69,7 +70,11 @@ function verdict(e: Extract<TryLogged, { kind: "guardian" }>): Omit<Settled, "se
 function settle(key: Key, e: TryLogged, done: Map<Key, Settled>, scenario: TryScenario): Omit<Settled, "seq"> | null {
   switch (key) {
     case "read":
-      if (e.kind === "model" && READING.test(e.purpose) && e.state !== "skipped") return e.state === "live" ? { state: "pass" } : { state: "warn", detail: "A stand-in read it" };
+      // state says where a call ran, not whether it worked; the status says that.
+      if (e.kind === "model" && READING.test(e.purpose) && e.state !== "skipped") {
+        if (!OK_STATUS.has(e.status)) return { state: "stop", detail: `The reading call ended with ${e.status}` };
+        return e.state === "live" ? { state: "pass" } : { state: "warn", detail: "A stand-in read it" };
+      }
       if (e.kind === "reply") return { state: "pass" };
       return null;
     case "date":
@@ -82,9 +87,8 @@ function settle(key: Key, e: TryLogged, done: Map<Key, Settled>, scenario: TrySc
       if (scenario === "scramble" || NOT_FILLED.test(e.text)) return { state: "warn", detail: e.text };
       return { state: "pass", detail: "The portal saved what Mano will file" };
     case "guard":
-      return e.kind === "guardian" ? verdict(e) : null;
     case "guard2":
-      return e.kind === "guardian" && done.has("yes") ? verdict(e) : null;
+      return e.kind === "guardian" ? verdict(e) : null;
     case "ask":
       return e.kind === "question" ? { state: "pass", detail: "Her yes covers this exact document and nothing else" } : null;
     case "tamper":
@@ -116,13 +120,19 @@ export function buildChecks(scenario: TryScenario, events: TryLogged[], mode: "i
   for (const e of events) {
     if (e.kind === "filed") confirmation = e.confirmation;
     if (e.kind === "outcome") outcome = { ok: e.ok, text: e.text, confirmation };
+    // A verdict belongs to the check before or after Maria's yes, and a later verdict (a retry after warming)
+    // replaces an earlier one there.
+    if (e.kind === "guardian") {
+      const key: Key = done.has("yes") && plan.includes("guard2") ? "guard2" : "guard";
+      if (plan.includes(key)) done.set(key, { ...verdict(e), seq: e.seq });
+      continue;
+    }
     for (const key of plan) {
-      if (done.has(key)) continue;
+      // A failed reading call can still be followed by a reply that shows Mano read it.
+      if (done.has(key) && !(key === "read" && done.get(key)!.state === "stop")) continue;
       const result = settle(key, e, done, scenario);
       if (!result) continue;
       done.set(key, { ...result, seq: e.seq });
-      // One reply can both finish the reading and answer Maria; one verdict settles one Guardian check.
-      if (e.kind === "guardian") break;
     }
   }
 
