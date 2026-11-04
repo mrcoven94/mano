@@ -94,6 +94,7 @@ class FakeTelnyx {
   media = new Map<string, Uint8Array>();
   faxPosts = 0;
   next: Timeout | "lands-late" = "none";
+  rejectWith: number | null = null;
   held: (typeof this.faxes)[number] | null = null;
   totalPages = 1;
   fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -105,6 +106,7 @@ class FakeTelnyx {
     }
     if (init?.method === "POST") {
       this.faxPosts += 1;
+      if (this.rejectWith) return new Response("{}", { status: this.rejectWith });
       const mode = this.next;
       this.next = "none";
       if (mode === "before-recording") throw abortError();
@@ -173,10 +175,13 @@ function fax(over: Record<string, unknown> = {}, payload: Record<string, unknown
 }
 
 // Prices the request the way Engine does before it reaches the gateway.
-async function draft(gateway: ActionGateway, documents: MapDocumentStore, raw: unknown): Promise<GatewayResult> {
+async function draft(gateway: ActionGateway, documents: MapDocumentStore, raw: unknown, turn?: { turnId: string; receivedAt: string }): Promise<GatewayResult> {
   const priced = await withOutboundPrice(raw, (id) => documents.getBytes(id), DEFAULT_PRICING);
-  return gateway.requestAction(priced);
+  return gateway.requestAction(priced, new Date(), turn ? { proposal: turn } : {});
 }
+
+const TURN_1 = { turnId: "turn-1", receivedAt: "2026-11-03T10:00:00.000Z" };
+const TURN_2 = { turnId: "turn-2", receivedAt: "2026-11-03T10:05:00.000Z" };
 
 function faxExecutor(telnyx: FakeTelnyx, now: () => number = Date.now): FaxExecutor {
   return new FaxExecutor(
@@ -210,7 +215,7 @@ function hexTexts(pdf: Uint8Array): string {
 describe("mailed letters", () => {
   it("asks with the price first, then sends once with the attestation on the letter", async () => {
     const lob = new FakeLob();
-    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await samplePdf(2));
+    const { gateway, documents, store } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await samplePdf(2));
     const asked = await draft(gateway, documents, letter());
     expect(asked.status).toBe("needs_approval");
     expect(lob.posts).toBe(0);
@@ -221,6 +226,8 @@ describe("mailed letters", () => {
     const done = await gateway.approveAndExecute(asked.approval!.id, PERSON);
     expect(done.status).toBe("completed");
     expect(done.receipt).toMatchObject({ externalId: "ltr_1", simulated: true });
+    expect(store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("done");
+    expect(store.getReceiptByKey(asked.approval!.idempotencyKey)?.externalId).toBe("ltr_1");
     const sent = [...lob.letters.values()][0];
     expect(sent.to).toBe("State Benefits Office");
     expect((await PDFDocument.load(sent.file)).getPageCount()).toBe(3);
@@ -238,7 +245,7 @@ describe("mailed letters", () => {
     expect(lob.posts).toBe(1);
     expect(lob.letters.size).toBe(1);
     const again = await gateway.approveAndExecute(asked.approval!.id, PERSON);
-    expect(again.status).toBe("blocked");
+    expect(again).toMatchObject({ status: "completed", replayed: true, receipt: { externalId: "ltr_1" } });
     expect(lob.posts).toBe(1);
   });
 
@@ -432,6 +439,122 @@ describe("faxes", () => {
     now += 6 * 60_000;
     expect((await gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
     expect(telnyx.faxPosts).toBe(1);
+  });
+});
+
+describe("after the person corrects a fax or letter", () => {
+  function mailRig(lob: FakeLob) {
+    return rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) });
+  }
+
+  it("a retired letter is never sent again", async () => {
+    const lob = new FakeLob();
+    lob.rejectWith = 422;
+    const { gateway, documents } = await mailRig(lob);
+    const asked = await draft(gateway, documents, letter());
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect((await gateway.retireApproval(asked.approval!.id, PERSON)).approval?.status).toBe("retired");
+    lob.rejectWith = null;
+    const retry = await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(retry.status).toBe("blocked");
+    expect(retry.reason).toContain("replaced by a correction");
+    expect(lob.posts).toBe(1);
+    expect(lob.letters.size).toBe(0);
+  });
+
+  it("a retired fax is never sent again", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.rejectWith = 422;
+    const { gateway, documents } = await rig({ fax: faxExecutor(telnyx) });
+    const asked = await draft(gateway, documents, fax());
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    await gateway.retireApproval(asked.approval!.id, PERSON);
+    telnyx.rejectWith = null;
+    expect((await gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    expect(telnyx.faxPosts).toBe(1);
+    expect(telnyx.faxes).toHaveLength(0);
+  });
+
+  it("a letter a newer proposal replaced is reconciled, then never sent", async () => {
+    const lob = new FakeLob();
+    lob.next = "before-recording";
+    const { gateway, documents } = await mailRig(lob);
+    const asked = await draft(gateway, documents, letter(), TURN_1);
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    await draft(gateway, documents, letter(), TURN_2);
+    const retry = await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(retry.superseded).toBe(true);
+    expect(lob.posts).toBe(1);
+    expect(lob.letters.size).toBe(0);
+  });
+
+  it("a fax a newer proposal replaced is reconciled, then never sent", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.next = "before-recording";
+    let now = 1_000_000;
+    const { gateway, documents } = await rig({ fax: faxExecutor(telnyx, () => now) });
+    const asked = await draft(gateway, documents, fax(), TURN_1);
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    await draft(gateway, documents, fax(), TURN_2);
+    now += 6 * 60_000;
+    const retry = await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(retry.superseded).toBe(true);
+    expect(telnyx.faxPosts).toBe(1);
+    expect(telnyx.faxes).toHaveLength(0);
+  });
+
+  it("a letter that did go out answers its receipt even though a newer proposal replaced it", async () => {
+    const lob = new FakeLob();
+    lob.next = "after-recording";
+    lob.lookupDown = true;
+    const { gateway, documents, store } = await mailRig(lob);
+    const asked = await draft(gateway, documents, letter(), TURN_1);
+    expect((await gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    await draft(gateway, documents, letter(), TURN_2);
+    lob.lookupDown = false;
+    const retry = await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(retry.status).toBe("reconciled");
+    expect(retry.receipt).toMatchObject({ externalId: "ltr_1", simulated: true, actionType: "mail" });
+    expect(store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("done");
+    expect(lob.posts).toBe(1);
+  });
+
+  it("a draft from before a correction cannot be approved", async () => {
+    const lob = new FakeLob();
+    const { gateway, documents, store } = await mailRig(lob);
+    const asked = await draft(gateway, documents, letter(), TURN_1);
+    await gateway.fenceProposals(MAIL_RECIPIENT, TURN_2, store.generation());
+    expect((await gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    expect(lob.posts).toBe(0);
+  });
+
+  it("recovery settles a stranded letter with its simulated label, and sends nothing", async () => {
+    const lob = new FakeLob();
+    lob.next = "after-recording";
+    lob.lookupDown = true;
+    const { gateway, documents, store } = await mailRig(lob);
+    const asked = await draft(gateway, documents, letter());
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    lob.lookupDown = false;
+    const later = new Date(Date.now() + 60_000);
+    const recovered = await gateway.recoverAttempt(asked.approval!.idempotencyKey, later, later.toISOString());
+    expect(recovered).toMatchObject({ status: "reconciled", receipt: { externalId: "ltr_1", simulated: true } });
+    expect(store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("done");
+    expect(lob.posts).toBe(1);
+  });
+
+  it("recovery does not send a stranded letter a newer proposal replaced", async () => {
+    const lob = new FakeLob();
+    lob.next = "before-recording";
+    const { gateway, documents, store } = await mailRig(lob);
+    const asked = await draft(gateway, documents, letter(), TURN_1);
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    await draft(gateway, documents, letter(), TURN_2);
+    const later = new Date(Date.now() + 60_000);
+    const recovered = await gateway.recoverAttempt(asked.approval!.idempotencyKey, later, later.toISOString());
+    expect(recovered?.superseded).toBe(true);
+    expect(store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("failed");
+    expect(lob.posts).toBe(1);
   });
 });
 

@@ -167,7 +167,7 @@ function fitted(box: { width: number; height: number }): { x: number; y: number;
 // The cover page, then each page of the document fitted to US Letter,
 // which both providers accept. The same request always renders the same
 // bytes, so a retry sends what the first try sent.
-async function renderOutgoing(req: ActionRequest, name: string, bytes: Uint8Array, documentHash: string): Promise<Uint8Array> {
+async function renderOutgoing(req: ActionRequest, name: string, bytes: Uint8Array, documentHash: string): Promise<Uint8Array<ArrayBuffer>> {
   const kind = kindOf(bytes);
   if (!kind) throw new Error("unsupported document");
   const out = await PDFDocument.create();
@@ -190,10 +190,10 @@ async function renderOutgoing(req: ActionRequest, name: string, bytes: Uint8Arra
   out.setModificationDate(fixed);
   out.setProducer("Mano");
   out.setCreator("Mano");
-  return out.save();
+  return (await out.save()).slice();
 }
 
-export type Outgoing = { ok: true; name: string; pdf: Uint8Array } | { ok: false; problem: string };
+export type Outgoing = { ok: true; name: string; pdf: Uint8Array<ArrayBuffer> } | { ok: false; problem: string };
 
 // Everything a fax and a letter must have, checked before the question
 // and again right before sending: a document, a name for the attestation,

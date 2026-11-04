@@ -20,7 +20,7 @@ function fresh(timestampMs: number, nowMs: number): boolean {
   return Number.isFinite(timestampMs) && Math.abs(nowMs - timestampMs) <= TOLERANCE_MS;
 }
 
-function hexToBytes(hex: string): Uint8Array | null {
+function hexToBytes(hex: string): Uint8Array<ArrayBuffer> | null {
   if (!/^(?:[0-9a-f]{2})+$/i.test(hex)) return null;
   return Uint8Array.from(hex.match(/../g)!, (pair) => parseInt(pair, 16));
 }
@@ -43,8 +43,8 @@ export async function verifyFaxSignature(rawBody: string, headers: Headers, publ
   const timestamp = headers.get("telnyx-timestamp") ?? "";
   if (!signature || !/^\d+$/.test(timestamp) || !fresh(Number(timestamp) * 1000, nowMs)) return false;
   try {
-    const key = await crypto.subtle.importKey("raw", base64ToBytes(publicKeyB64), { name: "Ed25519" }, false, ["verify"]);
-    return await crypto.subtle.verify({ name: "Ed25519" }, key, base64ToBytes(signature), new TextEncoder().encode(`${timestamp}|${rawBody}`));
+    const key = await crypto.subtle.importKey("raw", base64ToBytes(publicKeyB64).slice(), { name: "Ed25519" }, false, ["verify"]);
+    return await crypto.subtle.verify({ name: "Ed25519" }, key, base64ToBytes(signature).slice(), new TextEncoder().encode(`${timestamp}|${rawBody}`));
   } catch {
     return false;
   }
