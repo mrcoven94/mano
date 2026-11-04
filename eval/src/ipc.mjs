@@ -38,7 +38,7 @@ export function childBroker({ timeoutMs = 120000, helloTimeoutMs = 5000 } = {}) 
     if (msg.channel === HELLO && helloResolve) {
       const r = helloResolve;
       helloResolve = null;
-      r({ keyAvailable: msg.keyAvailable === true, route: msg.route ?? null });
+      r({ keyAvailable: msg.keyAvailable === true, route: msg.route ?? null, chatUrl: msg.chatUrl ?? null });
       return;
     }
     if (msg.channel !== CHANNEL || !pending.has(msg.id)) return;

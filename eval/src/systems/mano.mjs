@@ -38,7 +38,7 @@ if (!hello.keyAvailable) {
   const { default: sharp } = await import("sharp");
   outputs = await mapPool(inputs, CONCURRENT_HOUSEHOLDS, async (h) => {
     try {
-      return await manoHousehold(h, { route: hello.route, fetchImpl: broker, sharp });
+      return await manoHousehold(h, { route: hello.route, chatUrl: hello.chatUrl, fetchImpl: broker, sharp });
     } catch {
       return shell(h, "error", "household failed");
     }
