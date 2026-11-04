@@ -6,3 +6,8 @@ export * from "./guardian.js";
 export * from "./gateway.js";
 export * from "./sql-store.js";
 export * from "./executors.js";
+export * from "./outbound.js";
+export * from "./outbound-router.js";
+export * from "./mail.js";
+export * from "./fax.js";
+export * from "./delivery.js";

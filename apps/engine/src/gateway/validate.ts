@@ -8,7 +8,7 @@ export class ValidationError extends Error {
   }
 }
 
-export const ACTION_TYPES = ["send", "submit", "call", "fax", "share"] as const;
+export const ACTION_TYPES = ["send", "submit", "call", "fax", "mail", "share"] as const;
 const ACTION_TYPE_SET: ReadonlySet<string> = new Set(ACTION_TYPES);
 const SOURCE_KINDS: ReadonlySet<string> = new Set(["document", "message", "profile", "program"]);
 

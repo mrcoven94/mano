@@ -12,6 +12,7 @@ import requestsInstruction from "../agent/instructions/requests.js";
 import { toolCtx } from "./ctx.js";
 import { getPendingPointer } from "../../engine/src/agents/agent-state.js";
 import { LocalRulesChecker } from "../../engine/src/gateway/checker.js";
+import { UnconfirmedSendError } from "../../engine/src/gateway/types.js";
 import { GuardianChecker } from "../../engine/src/gateway/guardian.js";
 import { DefiniteFailureError, TimeoutError, type ActionRequest, type CheckOutcome, type Executor } from "../../engine/src/gateway/index.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_CHANNELS_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
@@ -913,6 +914,26 @@ describe("uncertain and refused outcomes", () => {
     checkDown = false;
     const again = await send(turn("turn_yes_000011", "YES"));
     expect(again.body.text).toMatch(/^Done/);
+    expect(engine.executor.calls).toHaveLength(1);
+  });
+
+  it("a fax Mano could not confirm is said plainly, is not sent again, and closes the question", async () => {
+    await send(turn("turn_ask_000060", "Please file my renewal"));
+    engine.executor.failNextWithTimeout = true;
+    let checks = 0;
+    engine.executor.check = async () => {
+      checks += 1;
+      throw new UnconfirmedSendError("Mano could not confirm this fax went through.");
+    };
+    const yes = await send(turn("turn_yes_000060", "YES"));
+    expect(yes.body.text).toMatch(/could not confirm/i);
+    expect(yes.body.text).toMatch(/not send it again/i);
+    expect(yes.body.text).not.toMatch(/nothing was sent/i);
+    expect(yes.body.text).not.toMatch(/will not be sent twice/i);
+    expect(engine.executor.calls).toHaveLength(1);
+    const lookups = checks;
+    await send(turn("turn_yes_000061", "YES"));
+    expect(checks).toBe(lookups);
     expect(engine.executor.calls).toHaveLength(1);
   });
 
