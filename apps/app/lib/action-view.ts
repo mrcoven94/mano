@@ -86,11 +86,14 @@ function formatValue(value: unknown): { text: string; format?: FieldFormat } {
   }
 }
 
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const PLAIN_AMOUNT = /^(0|[1-9]\d{0,8})(\.\d{1,2})?$/;
+
 // YYYY-MM-DD naming a day that exists, in a year from 1900 to this one,
 // so 1988-02-30 stays as written, and so does 0000-01-01, which would
 // otherwise read the same as 0001-01-01.
 function isCalendarDay(text: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  if (!ISO_DAY.test(text)) return false;
   const date = new Date(`${text}T00:00:00Z`);
   if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) return false;
   const year = date.getUTCFullYear();
@@ -107,7 +110,7 @@ function fieldFor(key: string, value: unknown): ActionField {
   // calendar day; anything else shows as text.
   const fits =
     format === "money"
-      ? /^(0|[1-9]\d{0,8})(\.\d{1,2})?$/.test(text)
+      ? PLAIN_AMOUNT.test(text)
       : format === "date"
         ? isCalendarDay(text)
         : true;

@@ -60,10 +60,12 @@ function familyPattern(family: { name: string; variants: string[] }): RegExp {
   const name = escapeRegExp(family.name);
   const variant = family.variants.length > 0 ? `(?:[\\s-]?(?:${family.variants.join("|")}))?` : "";
   // Optional version in any separator style: 4o, 3.5, 1.3, 2.0 flash.
+  // regex-ok: only buildPatterns calls this, once at module load
   return new RegExp(`\\b${name}${variant}(?:[\\s-]?\\d[o0-9a-z.]*(?:[\\s-]?(?:pro|flash|ultra|lite|mini|turbo|max|nano))?)?(?:-contributor)?\\b`, "gi");
 }
 
 function phrasePattern(phrase: string): RegExp {
+  // regex-ok: only buildPatterns calls this, once at module load
   return new RegExp(`\\b${escapeRegExp(phrase).replace(WHITESPACE_RUN_RE, "\\s+")}\\b`, "gi");
 }
 

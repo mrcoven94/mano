@@ -15,6 +15,11 @@ const MAX_FORM_BYTES = 4096;
 
 const OFFICE = "Sandbox County Human Services (test office)";
 
+const COOKIE_BREAK = /;\s*/;
+const HEX_SIGNATURE = /^[0-9a-f]{64}$/;
+const BYTE_PAIR = /../g;
+const STAFF_CASE_PATH = /^\/staff\/cases\/([^/]+)(\/requests|\/documents\/[^/]+)?$/;
+
 const encoder = new TextEncoder();
 
 function page(title: string, body: string, status = 200, headers?: HeadersInit): Response {
@@ -33,10 +38,10 @@ function toHex(bytes: ArrayBuffer): string {
 }
 
 async function signedIn(request: Request, token: string, nowMs: number): Promise<boolean> {
-  const cookie = (request.headers.get("cookie") ?? "").split(/;\s*/).find((c) => c.startsWith(`${STAFF_COOKIE}=`));
+  const cookie = (request.headers.get("cookie") ?? "").split(COOKIE_BREAK).find((c) => c.startsWith(`${STAFF_COOKIE}=`));
   const [expires, signature] = (cookie?.slice(STAFF_COOKIE.length + 1) ?? "").split(".");
-  if (!expires || !signature || !/^[0-9a-f]{64}$/.test(signature) || !(Number(expires) > nowMs)) return false;
-  const bytes = Uint8Array.from(signature.match(/../g)!, (h) => parseInt(h, 16));
+  if (!expires || !signature || !HEX_SIGNATURE.test(signature) || !(Number(expires) > nowMs)) return false;
+  const bytes = Uint8Array.from(signature.match(BYTE_PAIR)!, (h) => parseInt(h, 16));
   return crypto.subtle.verify("HMAC", await cookieKey(token), bytes, encoder.encode(`staff:${expires}`));
 }
 
@@ -181,7 +186,7 @@ export async function staffRoute(request: Request, path: string, method: string,
     if (!res?.ok) return ENGINE_DOWN();
     return caseListPage(((await res.json()) as { cases: { caseId: string; purpose: string; sharedAt: string }[] }).cases);
   }
-  const match = /^\/staff\/cases\/([^/]+)(\/requests|\/documents\/[^/]+)?$/.exec(path);
+  const match = STAFF_CASE_PATH.exec(path);
   if (match) {
     const caseRoute = `/cases/${match[1]}`;
     const sub = match[2] ?? "";
