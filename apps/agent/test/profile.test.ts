@@ -360,3 +360,27 @@ describe("Sol's second review", () => {
     expect(out.summary).toContain("Weekend cleaning amount 320");
   });
 });
+
+describe("the daily check flag", () => {
+  it("turns the daily check on and off, and says what it covers where the person lives", async () => {
+    await update({ person: { address: { state: "CA" } } }, "turn_check_state");
+    const on = (await update({ person: { alwaysOn: true } }, "turn_check_on")) as unknown as { saved: string[]; dailyCheck: string };
+    expect(on.saved).toEqual(["daily check"]);
+    expect(on.dailyCheck).toContain("It is on");
+    expect(on.dailyCheck).toContain("the office always decides");
+    const off = (await update({ person: { alwaysOn: false } }, "turn_check_off")) as unknown as { saved: string[]; dailyCheck?: string };
+    expect(off.saved).toEqual(["daily check"]);
+    expect(off.dailyCheck).toBeUndefined();
+  });
+
+  it("promises nothing from the daily check outside the catalog's states", async () => {
+    const elsewhere = (await update({ person: { alwaysOn: true, address: { state: "co" } } }, "turn_check_co")) as unknown as { dailyCheck: string };
+    expect(elsewhere.dailyCheck).toContain("will not find anything");
+    expect(elsewhere.dailyCheck).not.toContain("It is on");
+  });
+
+  it("asks for the state before promising anything from the daily check", async () => {
+    const unknown = (await update({ person: { alwaysOn: true } }, "turn_check_none")) as unknown as { dailyCheck: string };
+    expect(unknown.dailyCheck).toContain("Ask which state");
+  });
+});

@@ -81,6 +81,7 @@ import {
   updateDeadline,
   type DeadlineResult,
 } from "../deadlines.js";
+import { gateHelpText, isHelpText, nextCheckAt, planHelpText } from "../always-on.js";
 
 // A delivery run holds its claim this long; a run that crashed is
 // reclaimed after it. Retries back off from 30 seconds to an hour and
@@ -287,6 +288,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // re-armed from the table, so a lost schedule never strands one.
   async onStart() {
     await this.armReminderWakeup();
+    await this.armAlwaysOnCheck();
   }
 
   async armSocketExpiry(sessionExp: number, callback: keyof PersonAgent = "closeExpiredSessionSockets"): Promise<boolean> {
@@ -577,7 +579,10 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const store = this.profileStore();
     if (!store) return { status: "unavailable" };
     const out = await store.patch(raw, generation ?? currentGeneration(this.db()));
-    return out.status === "ok" ? { ...out, profile: await store.read(), suggestions: await store.suggestions() } : out;
+    if (out.status !== "ok") return out;
+    // The flag or the state may have changed: a retried patch repairs this too.
+    await this.armAlwaysOnCheck();
+    return { ...out, profile: await store.read(), suggestions: await store.suggestions() };
   }
 
   // For code inside Engine that reads a document (Mail, Forms): facts it
@@ -611,7 +616,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // their deadline instead.
   async listReminders(verified: string) {
     await this.assertSubject(verified);
-    return listReminders(this.db()).filter((r) => !isNudge(r.id));
+    return listReminders(this.db()).filter((r) => !isNudge(r.id) && !isHelpText(r.id));
   }
 
   // Deadlines Mano tracks itself (src/deadlines.ts). Their nudges are
@@ -734,12 +739,17 @@ export class PersonAgent extends Agent<Env, PersonState> {
     for (const reminder of claimed) {
       // A deadline's nudge is checked against its deadline and its quiet
       // hours in the same step as the handoff, so nothing lands between.
+      const help = isHelpText(reminder.id) ? await this.alwaysOnSetting() : null;
       const step = this.ctx.storage.transactionSync(() => {
-        const held = gateNudge(this.db(), reminder.id, token, Date.now());
+        const held = help
+          ? gateHelpText(this.db(), reminder.id, token, Date.now(), help)
+          : gateNudge(this.db(), reminder.id, token, Date.now());
         return held ?? (handOffReminder(this.db(), reminder.id, token, Date.now()) ? "handed" : "lost");
       });
       if (step === "withdrawn" || step === "deferred" || step === "missed") {
-        this.store.audit({ event: `deadline.nudge_${step}`, reminderHash: await auditDigest(reminder.id) });
+        const reminderHash = await auditDigest(reminder.id);
+        if (help) this.store.audit({ event: `always_on.text_${step}`, reminderHash });
+        else this.store.audit({ event: `deadline.nudge_${step}`, reminderHash });
         continue;
       }
       if (step === "lost") continue;
@@ -767,6 +777,56 @@ export class PersonAgent extends Agent<Env, PersonState> {
     }
     await this.armReminderWakeup();
     return { claimed: claimed.length, sent };
+  }
+
+  // The daily check for new help (src/always-on.ts). Its flag and zone, read
+  // without the rest of the profile. Off when the profile cannot be read.
+  private async alwaysOnSetting(): Promise<{ on: boolean; timeZone: string }> {
+    try {
+      const store = this.profileStore();
+      const state = await store?.value("person.address.state");
+      return { on: (await store?.value("person.alwaysOn")) === true, timeZone: timeZoneForState(typeof state === "string" ? state : null) };
+    } catch {
+      return { on: false, timeZone: timeZoneForState(null) };
+    }
+  }
+
+  // Keeps one check scheduled at the person's next nudge time while the flag
+  // is on, and none while it is off. Serialized like the delivery wake-up.
+  private alwaysOnChain: Promise<void> = Promise.resolve();
+  armAlwaysOnCheck(): Promise<void> {
+    const run = this.alwaysOnChain.then(() => this.moveAlwaysOnCheck());
+    this.alwaysOnChain = run.catch(() => {});
+    return run;
+  }
+
+  private async moveAlwaysOnCheck(): Promise<void> {
+    const { on, timeZone } = await this.alwaysOnSetting();
+    const atMs = on ? nextCheckAt(timeZone, Date.now(), nudgeTimeOf(this.env)) : null;
+    let kept = false;
+    for (const schedule of await this.listSchedules()) {
+      if (schedule.callback !== "runAlwaysOnCheck") continue;
+      if (!kept && atMs !== null && schedule.time * 1000 === atMs) kept = true;
+      else await this.cancelSchedule(schedule.id);
+    }
+    if (atMs !== null && !kept) await this.schedule(new Date(atMs), "runAlwaysOnCheck", {});
+  }
+
+  // The scheduled callback. Plans at most one text and hands it to the
+  // delivery wake-up; the next day's check is armed whatever happened.
+  async runAlwaysOnCheck() {
+    try {
+      const generation = currentGeneration(this.db());
+      const { on, timeZone } = await this.alwaysOnSetting();
+      const profile = on ? await this.profileStore()?.read() : null;
+      if (!profile) return;
+      const planned = planHelpText(this.db(), profile, generation, timeZone, Date.now());
+      if (!planned) return;
+      this.store.audit({ event: "always_on.text_planned", reminderHash: await auditDigest(planned) });
+      await this.armReminderWakeup();
+    } finally {
+      await this.armAlwaysOnCheck();
+    }
   }
 
   // The turn ledger: the first receive time of a turn is kept forever, so

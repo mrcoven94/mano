@@ -12,6 +12,8 @@
 //   person.householdConfirmed   (true once the person said who lives with them;
 //                                only source person sets it, and forgetting
 //                                any household member clears it)
+//   person.alwaysOn            (the person turned on the daily check for new
+//                                help, src/always-on.ts; only source person sets it)
 //   household.<id>.name|relationship|dateOfBirth
 //   income.<id>.memberId|source|amount|frequency   (memberId: a household id, or "self")
 //   programs.<id>.program|state|caseNumber|status
@@ -65,6 +67,7 @@ export interface Profile {
     county?: Leaf;
     language?: Leaf;
     householdConfirmed?: Leaf<boolean>;
+    alwaysOn?: Leaf<boolean>;
   };
   household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];
   income: { id: string; memberId?: Leaf; source?: Leaf; amount?: Leaf<number>; frequency?: Leaf<Frequency> }[];
@@ -119,6 +122,7 @@ const PERSON_LEAVES: Record<string, Kind> = {
   "person.county": "text",
   "person.language": "text",
   "person.householdConfirmed": "flag",
+  "person.alwaysOn": "flag",
 };
 
 const ENTRY_LEAVES = {
@@ -188,6 +192,9 @@ export function parseProfilePatch(raw: unknown): ParsedPatch {
     if (target.kind === "group") throw new ProfileInputError(`${path} is a group; set its fields one by one.`);
     if (path === "person.householdConfirmed" && source !== "person") {
       throw new ProfileInputError("Only the person can confirm who lives with them.");
+    }
+    if (path === "person.alwaysOn" && source !== "person") {
+      throw new ProfileInputError("Only the person can turn the daily check on or off.");
     }
     const clean = NORMALIZE[target.type](value);
     if (clean === null) throw new ProfileInputError(`${path} is not a valid ${target.type}.`);
@@ -388,6 +395,12 @@ export class ProfileStore {
       entry[field] = leaf;
     }
     return profile;
+  }
+
+  // One leaf, opening nothing else: for code that runs on every wake.
+  async value(path: string): Promise<Value | undefined> {
+    const row = this.rows([path])[0];
+    return row ? this.open(row.path, row.sealed) : undefined;
   }
 
   async suggestions(): Promise<Suggestion[]> {

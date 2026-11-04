@@ -12,6 +12,7 @@
 // only which fields are on file or missing, never a value.
 import { createHash } from "node:crypto";
 
+import { STATES } from "@mano/programs";
 import { timeZoneForState } from "@mano/protocol";
 
 import type { Frequency, Leaf, PersonEngine, Profile, ProfileView, Suggestion } from "./engine.js";
@@ -27,6 +28,7 @@ export interface ProfileInput {
     address?: { line1?: string; line2?: string; city?: string; state?: string; zip?: string };
     county?: string;
     language?: string;
+    alwaysOn?: boolean;
   };
   household?: { ref?: string; new?: boolean; name?: string; relationship?: string; dateOfBirth?: string }[];
   householdComplete?: boolean;
@@ -54,6 +56,7 @@ const FIELD_LABELS: Record<string, string> = {
   "person.county": "county",
   "person.language": "language",
   "person.householdConfirmed": "household",
+  "person.alwaysOn": "daily check",
 };
 
 // Plain names the model may pass to forget, and the path each clears.
@@ -124,7 +127,7 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
   const p = input.person ?? {};
   for (const [key, value] of Object.entries(p)) {
     if (key === "address") continue;
-    set(`person.${key}`, value as string | undefined, FIELD_LABELS[`person.${key}`] ?? key);
+    set(`person.${key}`, value as string | boolean | undefined, FIELD_LABELS[`person.${key}`] ?? key);
   }
   for (const [key, value] of Object.entries(p.address ?? {})) set(`person.address.${key}`, value, "address");
   if (input.householdComplete) set("person.householdConfirmed", true, "household");
@@ -198,6 +201,18 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
   });
 
   return { fields, labels };
+}
+
+// What to tell a person who just turned on the daily check: what it can
+// actually do where they live. Engine's rule is the catalog's own list of
+// states, so a person elsewhere is never told to expect anything.
+export function dailyCheckNote(profile: Profile, stateJustSaid?: string): string {
+  const state = (stateJustSaid ?? profile.person.address.state?.value)?.toUpperCase();
+  if (!state) return `The daily check only covers ${STATES.join(", ")}. Ask which state they live in, and promise nothing until you know.`;
+  if (!(STATES as readonly string[]).includes(state)) {
+    return `The daily check only covers ${STATES.join(", ")}, and they live in ${state}. Tell them plainly it will not find anything for them there and they should not expect a text from it. They can still ask about programs any time.`;
+  }
+  return "It is on. Say Mano will check once a day and text only when a program may fit, once per program, and that the office always decides. It needs their state, who lives with them and their income on file: ask for whichever is missing. They can say stop checking any time.";
 }
 
 // One key per turn and exact change: a retried turn converges on the
@@ -290,6 +305,7 @@ export function profileData(view: ProfileView): Record<string, unknown> {
       from: from(m.name ?? m.relationship),
     })),
     householdConfirmed: confirmedByPerson(profile),
+    dailyCheckOn: profile.person.alwaysOn?.value === true,
     income: profile.income.map((inc) => ({
       ref: inc.id,
       earner: !inc.memberId || inc.memberId.value === "self" ? "the person" : (profile.household.find((m) => m.id === inc.memberId?.value)?.name?.value ?? "a household member"),

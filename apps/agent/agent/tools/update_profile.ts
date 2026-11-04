@@ -2,7 +2,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 
 import { ProfileRefused } from "../lib/engine.js";
-import { FORGET_NAMES, ProfileInputProblem, profileChanges, profileKey } from "../lib/profile.js";
+import { FORGET_NAMES, ProfileInputProblem, dailyCheckNote, profileChanges, profileKey } from "../lib/profile.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 
 const text = (max = 200) => z.string().trim().min(1).max(max);
@@ -13,6 +13,7 @@ export default defineTool({
     "Save facts the person just told you to their profile: name, date of birth, phone, email, address, county, language, household members, income and programs with case numbers. " +
     "Save only what they said themselves, in their words. Never save a guess, an estimate, or something you inferred. " +
     "To change a household member, income or program already on file, pass its ref from the profile. A household member changes only by ref: a name already on file with a different relationship or birth date is added as a different person; otherwise pass the ref, or new: true for someone else with the same name, and ask the person if you are not sure. " +
+    "Set person.alwaysOn true only when the person asks Mano to keep checking every day for new help they may qualify for, and false when they say to stop checking. " +
     "Set householdComplete when the person says who lives with them is everyone (for example \"just me and my son\"). " +
     "A fact the person already gave stays even if a document or older note says otherwise: that value waits for their confirmation, and saving their answer here settles it. " +
     `Use forget when they ask you to forget something (${FORGET_NAMES.join(", ")}, or an entry's ref). ` +
@@ -29,6 +30,7 @@ export default defineTool({
           .partial(),
         county: text(),
         language: text(60),
+        alwaysOn: z.boolean().describe("The person asked for the daily check for new help on (true) or off (false)"),
       })
       .partial()
       .optional(),
@@ -66,8 +68,9 @@ export default defineTool({
     const engine = personEngine(ctx);
     if (!engine) throw new Error("The profile is not available right now. Say so plainly and do not claim anything was saved.");
     let changes;
+    let view;
     try {
-      const view = await engine.getProfileView();
+      view = await engine.getProfileView();
       changes = profileChanges(input, view.profile, turnId, new Set(view.suggestions.map((s) => s.path)));
     } catch (err) {
       if (err instanceof ProfileInputProblem) return { saved: [], problem: err.message };
@@ -83,6 +86,7 @@ export default defineTool({
         waitingForConfirmation: [...new Set(out.suggested.map(label))],
         forgotten: [...new Set(out.cleared.map(label))],
         alreadyOnFile: [...new Set(out.unchanged.map(label))],
+        ...(input.person?.alwaysOn === true ? { dailyCheck: dailyCheckNote(view.profile, input.person.address?.state) } : {}),
       };
     } catch (err) {
       if (err instanceof ProfileRefused) return { saved: [], problem: err.reason };
