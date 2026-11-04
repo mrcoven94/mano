@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "../lib/api/types";
-import { inDisplayOrder, mergeArrived, questionsToAcknowledge, visibleMessageIds } from "../lib/chat-thread";
+import { canSend, edgeKey, inDisplayOrder, listRows, mergeArrived, questionsToAcknowledge, showsThread, visibleEdges } from "../lib/chat-thread";
 
 const message = (id: string, ask?: string): ChatMessage => ({
   id,
@@ -24,30 +24,58 @@ describe("mergeArrived", () => {
 });
 
 describe("questionsToAcknowledge", () => {
-  const visible = (...ids: string[]) => new Set(ids);
+  const seen = (...keys: string[]) => new Set(keys);
+  const top = edgeKey("a-2", "top");
+  const bottom = edgeKey("a-2", "bottom");
 
-  it("names a question on screen once", () => {
+  it("names a question once both its edges have been seen, and only once", () => {
     const thread = [message("a-1"), message("a-2", "appr-1")];
-    expect(questionsToAcknowledge(thread, visible("a-1", "a-2"), true, new Set())).toEqual([{ approvalId: "appr-1", messageId: "a-2" }]);
-    expect(questionsToAcknowledge(thread, visible("a-2"), true, new Set(["a-2"]))).toEqual([]);
+    expect(questionsToAcknowledge(thread, seen(top, bottom), true, new Set())).toEqual([{ approvalId: "appr-1", messageId: "a-2" }]);
+    expect(questionsToAcknowledge(thread, seen(top, bottom), true, new Set(["a-2"]))).toEqual([]);
   });
 
-  it("names nothing for a question loaded in the thread but scrolled out of view", () => {
-    expect(questionsToAcknowledge([message("a-1"), message("a-2", "appr-1")], visible("a-1"), true, new Set())).toEqual([]);
+  it("names nothing when only one edge of a tall question has been on screen", () => {
+    expect(questionsToAcknowledge([message("a-2", "appr-1")], seen(top), true, new Set())).toEqual([]);
+    expect(questionsToAcknowledge([message("a-2", "appr-1")], seen(bottom), true, new Set())).toEqual([]);
+  });
+
+  it("names nothing for a question loaded in the thread but never scrolled to", () => {
+    expect(questionsToAcknowledge([message("a-1"), message("a-2", "appr-1")], seen(), true, new Set())).toEqual([]);
   });
 
   it("names nothing while the app or tab is in the background, since nobody saw it", () => {
-    expect(questionsToAcknowledge([message("a-2", "appr-1")], visible("a-2"), false, new Set())).toEqual([]);
+    expect(questionsToAcknowledge([message("a-2", "appr-1")], seen(top, bottom), false, new Set())).toEqual([]);
   });
 });
 
-describe("visibleMessageIds", () => {
-  it("counts only rows the list says are viewable", () => {
-    const tokens = [
-      { item: message("a-1"), isViewable: true },
-      { item: message("a-2"), isViewable: false },
-    ];
-    expect([...visibleMessageIds(tokens)]).toEqual(["a-1"]);
+describe("listRows", () => {
+  it("brackets only a message with a question between its two edges, for a list drawn bottom up", () => {
+    const rows = listRows([message("a-2", "appr-1"), message("a-1")]);
+    expect(rows.map((r) => r.key)).toEqual([edgeKey("a-2", "bottom"), "a-2", edgeKey("a-2", "top"), "a-1"]);
+  });
+});
+
+describe("visibleEdges", () => {
+  it("counts only edge rows the list says are viewable", () => {
+    const rows = listRows([message("a-2", "appr-1")]);
+    const tokens = rows.map((item, i) => ({ item, isViewable: i !== 2 }));
+    expect([...visibleEdges(tokens)]).toEqual([edgeKey("a-2", "bottom")]);
+  });
+});
+
+describe("canSend", () => {
+  it("waits for a send in progress, except for a message naming a crisis", () => {
+    expect(canSend("Hi", false)).toBe(true);
+    expect(canSend("Hi", true)).toBe(false);
+    expect(canSend("   ", false)).toBe(false);
+    expect(canSend("I want to kill myself", true)).toBe(true);
+  });
+});
+
+describe("showsThread", () => {
+  it("shows anything local at once, even while the conversation is still loading", () => {
+    expect(showsThread([message("device-crisis-1")])).toBe(true);
+    expect(showsThread([])).toBe(false);
   });
 });
 

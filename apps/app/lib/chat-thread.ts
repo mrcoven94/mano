@@ -1,6 +1,7 @@
 // How the chat screen builds its thread and decides which questions it has
 // really shown, apart from the screen so they can be tested.
 
+import { crisisGate } from "@mano/persona/crisis";
 import type { ChatMessage } from "./api/types";
 
 // A reply that came back from a send but not from the conversation stays
@@ -16,27 +17,58 @@ export interface QuestionShown {
   messageId: string;
 }
 
-// How long and how much of a row must be on screen to count as seen: all
-// of it, for long enough that scrolling past it does not count. A question
-// too tall to fit stays unacknowledged, which fails closed: a YES to it is
-// not taken, and Mano asks again.
-export const SEEN_ROW = { itemVisiblePercentThreshold: 100, minimumViewTime: 500 };
+// A list row: a message, or a one-pixel marker at the top or bottom of a
+// message that asks a question. The list itself reports when a marker is on
+// screen, so nothing here measures layout and an inverted list needs no
+// special case. A short question has both markers on screen at once; a tall
+// one has them on screen in turn, as the person scrolls.
+export type QuestionEdge = "top" | "bottom";
+export type ListRow = { kind: "message"; key: string; message: ChatMessage } | { kind: "edge"; key: string };
 
-export function visibleMessageIds(rows: { item: ChatMessage; isViewable: boolean }[]): Set<string> {
-  return new Set(rows.filter((r) => r.isViewable).map((r) => r.item.id));
+export const EDGE_ON_SCREEN = { itemVisiblePercentThreshold: 100 };
+
+export const edgeKey = (messageId: string, edge: QuestionEdge): string => `${messageId}#${edge}`;
+
+// Takes messages newest first, as the inverted list draws them from the
+// bottom up, so each message's bottom marker comes before it in the array.
+export function listRows(newestFirst: ChatMessage[]): ListRow[] {
+  return newestFirst.flatMap((message): ListRow[] => {
+    const row: ListRow = { kind: "message", key: message.id, message };
+    if (!message.ask) return [row];
+    return [{ kind: "edge", key: edgeKey(message.id, "bottom") }, row, { kind: "edge", key: edgeKey(message.id, "top") }];
+  });
 }
 
-// The questions the person can see now that the server has not heard about.
-// A question loaded in the thread but scrolled away does not count, and
-// nothing counts while the app or tab is in the background.
+export function visibleEdges(tokens: { item: ListRow; isViewable: boolean }[]): Set<string> {
+  return new Set(tokens.filter((t) => t.isViewable && t.item.kind === "edge").map((t) => t.item.key));
+}
+
+// One send at a time, except that a slow send never holds back a message
+// naming a crisis: sending it is what puts the numbers on screen.
+export function canSend(text: string, sending: boolean): boolean {
+  return text.trim().length > 0 && (!sending || crisisGate(text) !== "none");
+}
+
+// The empty card only when there is truly nothing to show: a queued message
+// or a crisis line appears at once, even while the conversation still loads.
+export function showsThread(messages: ChatMessage[]): boolean {
+  return messages.length > 0;
+}
+
+// The questions the person has read in this viewing that the server has not
+// heard about: both edges seen, with the app or tab in the foreground.
 export function questionsToAcknowledge(
   thread: ChatMessage[],
-  visible: ReadonlySet<string>,
+  seen: ReadonlySet<string>,
   appActive: boolean,
   alreadySent: ReadonlySet<string>,
 ): QuestionShown[] {
   if (!appActive) return [];
-  return thread.flatMap((m) => (m.ask && visible.has(m.id) && !alreadySent.has(m.id) ? [{ approvalId: m.ask.approvalId, messageId: m.id }] : []));
+  return thread.flatMap((m) =>
+    m.ask && !alreadySent.has(m.id) && seen.has(edgeKey(m.id, "top")) && seen.has(edgeKey(m.id, "bottom"))
+      ? [{ approvalId: m.ask.approvalId, messageId: m.id }]
+      : [],
+  );
 }
 
 // Sent, waiting and device-only messages in the order they happened. The

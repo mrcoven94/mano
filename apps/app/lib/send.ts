@@ -6,9 +6,11 @@
 //
 // A message naming a crisis gets 988 and 911 on the device first, before
 // anything that can stop it: a held send ahead of it, no network, an
-// expired session.
+// expired session. The line is also kept for the sign-in screen, in case a
+// sign-out takes this screen away first.
 
 import { crisisGate, crisisLineFor } from "@mano/persona/crisis";
+import { noteCrisisLine } from "./crisis-help";
 import { AuthError, type ChatMessage, type ManoClient, type NewAttachment, type Session } from "./api/types";
 import type { Outbox } from "./queue";
 
@@ -34,7 +36,9 @@ export async function submitMessage(
   if (crisisGate(text) !== "none") {
     // It shows before the message is queued but reads after it.
     const createdAt = new Date(Date.now() + 1000).toISOString();
-    onReply?.({ id: `device-crisis-${createdAt}`, role: "agent", text: crisisLineFor(text), createdAt, attachments: [], status: "sent" });
+    const line = crisisLineFor(text);
+    noteCrisisLine(line, Date.now());
+    onReply?.({ id: `device-crisis-${createdAt}`, role: "agent", text: line, createdAt, attachments: [], status: "sent" });
   }
   if (!sessionUsable(session)) throw new AuthError();
   const item = await outbox.enqueue(session.personId, text, attachments);

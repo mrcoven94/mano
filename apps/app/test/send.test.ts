@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AuthError, UnreconciledSendError, type ChatMessage, type ManoClient, type Session } from "../lib/api/types";
 import { MemoryStore } from "../lib/kv";
 import { Outbox } from "../lib/queue";
+import { crisisLineForSignIn, forgetCrisisLine } from "../lib/crisis-help";
 import { submitMessage } from "../lib/send";
 
 function sessionFor(personId: string, expiresAt = new Date(Date.now() + 3600_000).toISOString()): Session {
@@ -122,6 +123,24 @@ describe("submitMessage", () => {
       await submitMessage(client, sessionFor("alice"), outbox, CRISIS, [], (r) => replies.push(r));
       const [queued] = await outbox.list();
       expect(new Date(replies[0]?.createdAt ?? 0).getTime()).toBeGreaterThan(new Date(queued?.createdAt ?? Infinity).getTime());
+    });
+
+    it("keeps only the line for the sign-in screen when the session has expired or an older send gets a 401", async () => {
+      forgetCrisisLine();
+      const expired = { ...sessionFor("alice"), expiresAt: new Date(Date.now() - 1000).toISOString() };
+      await expect(submitMessage(stubClient(async () => ({ id: "x" })).client, expired, new Outbox(new MemoryStore()), CRISIS, [])).rejects.toBeInstanceOf(AuthError);
+      const kept = crisisLineForSignIn(Date.now());
+      expect(kept).toMatch(/988[\s\S]*911/);
+      expect(kept).not.toContain(CRISIS);
+
+      forgetCrisisLine();
+      const session = sessionFor("alice");
+      const outbox = new Outbox(new MemoryStore());
+      await outbox.enqueue(session.personId, "older", []);
+      const refused = stubClient(() => Promise.reject(new AuthError()));
+      await expect(submitMessage(refused.client, session, outbox, CRISIS, [])).rejects.toBeInstanceOf(AuthError);
+      expect(crisisLineForSignIn(Date.now())).toMatch(/988[\s\S]*911/);
+      forgetCrisisLine();
     });
 
     it("adds nothing for an ordinary message", async () => {

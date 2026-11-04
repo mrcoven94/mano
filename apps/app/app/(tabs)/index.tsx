@@ -26,7 +26,8 @@ import { AuthError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { takeChatDraft } from "../../lib/chat-draft";
 import { trackCacheFile } from "../../lib/cache-files";
-import { SEEN_ROW, inDisplayOrder, mergeArrived, questionsToAcknowledge, visibleMessageIds } from "../../lib/chat-thread";
+import { EDGE_ON_SCREEN, canSend, inDisplayOrder, listRows, mergeArrived, questionsToAcknowledge, showsThread, visibleEdges, type ListRow } from "../../lib/chat-thread";
+import { QuestionViewing } from "../../lib/question-viewing";
 import { useStrings } from "../../lib/i18n";
 import { submitMessage } from "../../lib/send";
 import { fileToB64, pickMailPhotos, pickMailVideo, takeMailPhoto, takeMailVideo, type PickedMedia } from "../../lib/media";
@@ -66,7 +67,6 @@ export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [arrived, setArrived] = useState<ChatMessage[]>([]);
   const [queued, setQueued] = useState<QueuedMessage[]>([]);
-  const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
@@ -78,7 +78,7 @@ export default function Chat() {
   const [voicePlaying, setVoicePlaying] = useState(false);
   const recorder = useAudioRecorder(RecordingPresets.LOW_QUALITY);
   const playerRef = useRef<AudioPlayer | null>(null);
-  const listRef = useRef<FlatList<ChatMessage>>(null);
+  const listRef = useRef<FlatList<ListRow>>(null);
   const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
 
   const keepReply = useCallback((reply: ChatMessage) => setArrived((current) => [...current, reply]), []);
@@ -110,8 +110,6 @@ export default function Chat() {
       }
       setQueued(await outbox.list());
       setOfflineNote(true);
-    } finally {
-      setLoading(false);
     }
   }, [client, session, outbox, signOut, keepReply]);
 
@@ -121,24 +119,63 @@ export default function Chat() {
     }, [refresh]),
   );
 
-  // The list reports which rows are fully on screen. FlatList refuses a
-  // viewability callback that changes, so this one is fixed for its life.
-  const [visible, setVisible] = useState<ReadonlySet<string>>(new Set());
-  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: { item: ChatMessage; isViewable: boolean }[] }) => {
-    setVisible(visibleMessageIds(viewableItems));
+  // What the person has had in front of them. The list reports which edge
+  // markers are on screen; a timer wakes when the next one finishes its
+  // dwell. FlatList refuses a viewability callback that changes, so that
+  // one is fixed for its life.
+  const viewing = useRef(new QuestionViewing()).current;
+  const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
+  const wake = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const focused = useRef(false);
+  const pump = useRef(() => {
+    if (wake.current) clearTimeout(wake.current);
+    wake.current = null;
+    const now = Date.now();
+    const next = viewing.seen(now);
+    setSeen((current) => (current.size === next.size ? current : next));
+    const due = viewing.nextDueIn(now);
+    if (due !== null) wake.current = setTimeout(() => pump.current(), due);
+  });
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: { item: ListRow; isViewable: boolean }[] }) => {
+    viewing.setVisible(visibleEdges(viewableItems), Date.now());
+    pump.current();
   }).current;
 
-  // Runs while this tab is showing, whenever a row comes fully into view.
+  // A viewing lasts while this tab shows with the app in the foreground.
+  useFocusEffect(
+    useCallback(() => {
+      focused.current = true;
+      if (AppState.currentState === "active") viewing.enterForeground(Date.now());
+      pump.current();
+      return () => {
+        focused.current = false;
+        viewing.leaveForeground();
+        pump.current();
+      };
+    }, [viewing]),
+  );
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state: AppStateStatus) => {
+      if (state === "active" && focused.current) viewing.enterForeground(Date.now());
+      else if (state !== "active") viewing.leaveForeground();
+      pump.current();
+    });
+    return () => {
+      sub.remove();
+      if (wake.current) clearTimeout(wake.current);
+    };
+  }, [viewing]);
+
   // Coming back to the app refreshes the thread, which runs this again.
   const acknowledged = useRef(new Set<string>());
   useFocusEffect(
     useCallback(() => {
-      if (!session || loading) return;
-      for (const { approvalId, messageId } of questionsToAcknowledge(thread, visible, AppState.currentState === "active", acknowledged.current)) {
+      if (!session) return;
+      for (const { approvalId, messageId } of questionsToAcknowledge(thread, seen, AppState.currentState === "active", acknowledged.current)) {
         acknowledged.current.add(messageId);
         client.acknowledgeQuestion(session, approvalId, messageId).catch(() => acknowledged.current.delete(messageId));
       }
-    }, [client, session, thread, visible, loading]),
+    }, [client, session, thread, seen]),
   );
 
   // A draft another screen handed over (an approval quoted for a change)
@@ -171,7 +208,9 @@ export default function Chat() {
       setText("");
       setQueued(await outbox.list());
       setOfflineNote(report.kept.length > 0);
-      await refresh();
+      // Not awaited: a stalled conversation must not lock the composer, or a
+      // later message that needs the crisis line could never be sent.
+      void refresh();
       return report.kept.length === 0;
     } catch (err) {
       if (err instanceof AuthError) {
@@ -384,20 +423,20 @@ export default function Chat() {
         </View>
 
         {/* An inverted list draws its empty component upside down on the web. */}
-        {loading || shown.length === 0 ? (
+        {!showsThread(shown) ? (
           <View style={styles.empty}>
             <EmptyView body={s.agentEmpty} />
           </View>
         ) : (
           <FlatList
             ref={listRef}
-            data={shown}
-            keyExtractor={(m) => m.id}
+            data={listRows(shown)}
+            keyExtractor={(row) => row.key}
             inverted
             contentContainerStyle={styles.list}
             keyboardShouldPersistTaps="handled"
-            renderItem={({ item }) => <Bubble message={item} queuedLabel={s.queued} />}
-            viewabilityConfig={SEEN_ROW}
+            renderItem={({ item }) => (item.kind === "edge" ? <View style={styles.edge} /> : <Bubble message={item.message} queuedLabel={s.queued} />)}
+            viewabilityConfig={EDGE_ON_SCREEN}
             onViewableItemsChanged={onViewableItemsChanged}
           />
         )}
@@ -510,8 +549,8 @@ export default function Chat() {
           />
           <Pressable
             onPress={() => void sendNow(text, [])}
-            disabled={sending || !text.trim()}
-            style={[styles.sendBtn, (sending || !text.trim()) && styles.disabled]}
+            disabled={!canSend(text, sending)}
+            style={[styles.sendBtn, !canSend(text, sending) && styles.disabled]}
             accessibilityRole="button"
             accessibilityLabel={s.send}
           >
@@ -524,6 +563,7 @@ export default function Chat() {
 }
 
 const styles = StyleSheet.create({
+  edge: { height: 1 },
   screen: { flex: 1, backgroundColor: colors.bg },
   flex: { flex: 1 },
   header: { paddingHorizontal: 20, paddingTop: 16, maxWidth: 640, width: "100%", alignSelf: "center" },

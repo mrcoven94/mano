@@ -4,8 +4,9 @@
 import { useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Btn, Body, DemoBanner, Field, Muted, Screen, Title } from "../../components/ui";
+import { Btn, Body, Card, DemoBanner, Field, Muted, Screen, Title } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
+import { crisisLineForSignIn } from "../../lib/crisis-help";
 import { useStrings } from "../../lib/i18n";
 import { setPendingSignIn } from "../../lib/sign-in-flow";
 import { colors } from "../../lib/theme";
@@ -14,6 +15,7 @@ export default function SignIn() {
   const s = useStrings();
   const router = useRouter();
   const { client, mode } = useAuth();
+  const [crisisLine] = useState(() => crisisLineForSignIn(Date.now()));
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +42,11 @@ export default function SignIn() {
   return (
     <Screen>
       {mode === "stand-in" ? <DemoBanner text={s.demoMode} /> : null}
+      {crisisLine ? (
+        <Card>
+          <Body>{crisisLine}</Body>
+        </Card>
+      ) : null}
       <Title>{s.signInTitle}</Title>
       <Body>{s.signInBody}</Body>
       {mode === "live" ? <Muted style={styles.live}>{s.signInLive}</Muted> : null}
