@@ -15,8 +15,8 @@ import { fillDepsFromEnv, fillOnComputer, type FillDeps, type ReplayStep } from 
 import { EngineError, type PersonEngine } from "../lib/engine.js";
 import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
 import { keepAnswers } from "../lib/form-answers.js";
+import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
 import { tracedFillDeps } from "../lib/try-trace.js";
-import { DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { EARLIER_NOT_UPDATED_NOTE, EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, sameDraft, earlierFiling, type Draft } from "../lib/propose.js";
 
@@ -87,13 +87,11 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
   if (bad) {
     return { status: "needs_answer", field: bad.name, question: bad.question, sent: false, note: `That answer does not fit "${bad.label}". Ask this one question again, and nothing else.` };
   }
-  if (filled.missing) {
-    // start_form_draft attaches a document on file; a fill takes only one
-    // the profile names, which needs Mail to have read it. Asking again
-    // for a photo already on file would never end.
-    if (filled.missing.name === "proof" && form === FORMS["food-renewal"] && (await engine.listDocuments()).some((d) => d.filing === "fileable")) {
-      return { status: "unavailable", sent: false, note: "The renewal can go with a document Mano already has on file. Prepare it with start_form_draft from the person's answers." };
-    }
+  // A renewal goes with the document the profile names, else the newest one
+  // on file the portal takes, as start_form_draft attaches it.
+  const onFile =
+    filled.missing?.name === "proof" && form === FORMS["food-renewal"] ? ((await engine.listDocuments()).find((d) => d.filing === "fileable") ?? null) : null;
+  if (filled.missing && !onFile) {
     const note =
       filled.missing.name === "proof"
         ? "The form needs a proof of income document and Mano has none on file yet. Ask this one question, and nothing else."
@@ -136,12 +134,14 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     return { status: "fill_failed", sent: false, note: "Mano could not finish filling the form on its computer, so nothing was prepared or sent. Say so and offer to try again." };
   }
 
+  const documentId = filled.documentId ?? onFile?.id;
   const draft: Draft = {
     type: "submit",
     recipient: form.recipient,
     purpose: form.purpose,
-    payload: { ...fill.saved, [DECLARATION]: form.declaration },
-    ...(filled.documentId ? { documentId: filled.documentId } : {}),
+    payload: { ...fill.saved, [DECLARATION]: form.declaration, ...(onFile ? { [ATTACHMENT]: onFile.label } : {}) },
+    // The safety check holds a document with no cited source against the draft.
+    ...(documentId ? { documentId, sources: [{ kind: "document" as const, id: documentId }] } : {}),
   };
   const held = await holdForYes(engine, ctx, turn, draft);
   if (!held.held) return { status: held.status, note: held.note, reason: held.reason, sent: false };
