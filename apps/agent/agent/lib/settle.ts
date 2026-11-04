@@ -120,7 +120,7 @@ export class SettleTimeout extends Error {
 
 export async function settleStream(
   stream: ReadableStream<StreamEventLike>,
-  opts: { timeoutMs: number; signal?: AbortSignal; marks?: AgentMarks; turnId?: string },
+  opts: { timeoutMs: number; signal?: AbortSignal; marks?: Pick<AgentMarks, "observe">; turnId?: string },
 ): Promise<SettleResult> {
   const state = initialSettleState(opts.turnId ?? null);
   const reader = stream.getReader();

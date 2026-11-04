@@ -127,7 +127,8 @@ jobs:
               MANO_ENGINE_AGENT_TOKEN, MANO_HANDLE_GRANT_SECRET, MANO_ENGINE_CHANNELS_TOKEN,
               MANO_CHANNELS_URL, MANO_ENGINE_SEND_SECRET, EXECUTOR_MODE,
               SANDBOX_BASE_URL, SANDBOX_PORTAL_TOKEN, CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER, MODEL_ALLOWLIST_EXTRA,
-              MANO_GUARDIAN_URL, MANO_GUARDIAN_TOKEN, MANO_GUARDIAN_KEY_ID, MANO_GUARDIAN_KEY_SECRET
+              MANO_GUARDIAN_URL, MANO_GUARDIAN_TOKEN, MANO_GUARDIAN_KEY_ID, MANO_GUARDIAN_KEY_SECRET,
+              MANO_AGENT_URL, MANO_AGENT_SECRET
             } | with_entries(select(.value != null and .value != ""))' > "$secrets_file"
           pnpm exec wrangler deploy --secrets-file "$secrets_file"
         env:
@@ -145,6 +146,8 @@ jobs:
           EXECUTOR_MODE: ${{ secrets.EXECUTOR_MODE }}
           SANDBOX_BASE_URL: ${{ secrets.SANDBOX_BASE_URL }}
           SANDBOX_PORTAL_TOKEN: ${{ secrets.SANDBOX_PORTAL_TOKEN }}
+          MANO_AGENT_URL: ${{ secrets.MANO_AGENT_URL }}
+          MANO_AGENT_SECRET: ${{ secrets.MANO_AGENT_SECRET }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           AI_GATEWAY_ID: ${{ secrets.AI_GATEWAY_ID }}
           AI_GATEWAY_PROVIDER: ${{ secrets.AI_GATEWAY_PROVIDER }}
