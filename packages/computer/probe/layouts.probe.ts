@@ -193,6 +193,7 @@ async function fillOne(layout: string, model: ReturnType<typeof modelFromEnv>, t
   const started = performance.now();
   let steps = 0;
   let outcome: string;
+  let outOfCredit = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await computer.goto(`${PORTAL}${layout}/apply?draft=${draft}`);
@@ -205,7 +206,7 @@ async function fillOne(layout: string, model: ReturnType<typeof modelFromEnv>, t
   } catch (err) {
     // The status code only: a model's error text can echo what it was sent.
     const status = /status (\d+)/.exec(String(err))?.[1];
-    if (status === "402") throw new OutOfCredit();
+    outOfCredit = status === "402";
     outcome = status ? `model error ${status}` : `error: ${String(err).split("\n")[0]!.slice(0, 80)}`;
   } finally {
     clearTimeout(timer);
@@ -213,6 +214,7 @@ async function fillOne(layout: string, model: ReturnType<typeof modelFromEnv>, t
   const seconds = (performance.now() - started) / 1000;
   if (out) await computer.screenshot().then((png) => writeFileSync(join(out, `${layout.replaceAll("/", "_")}.png`), png)).catch(() => undefined);
   await computer.close();
+  if (outOfCredit) throw new OutOfCredit();
   const saved = await readDraft(draft, token);
   const missed = PERSON.filter((f) => saved?.[f.name] !== f.value).map((f) => f.name);
   return { layout, model: model.label, outcome, correct: PERSON.length - missed.length, missed, seconds, steps };
@@ -263,8 +265,8 @@ describe.skipIf(!PORTAL)("fills on layouts it has never seen", () => {
       const whole = rows.filter((r) => r.correct === PERSON.length);
       const inBudget = whole.filter((r) => r.steps <= AGENT_STEPS && r.seconds * 1000 <= AGENT_MS);
       const seconds = rows.map((r) => r.seconds).sort((a, b) => a - b);
-      const median = seconds.length > 0 ? seconds[Math.floor(seconds.length / 2)]!.toFixed(1) : "none";
-      console.log(`Layouts run: ${rows.length} of ${layouts.length}${stopped ? " (stopped early)" : ""}. Fully correct: ${whole.length}. Fields correct: ${correct} of ${rows.length * PERSON.length}. Median wall: ${median}s.`);
+      const median = seconds.length > 0 ? `${seconds[Math.floor(seconds.length / 2)]!.toFixed(1)}s` : "none";
+      console.log(`Layouts run: ${rows.length} of ${layouts.length}${stopped ? " (stopped early)" : ""}. Fully correct: ${whole.length}. Fields correct: ${correct} of ${rows.length * PERSON.length}. Median wall: ${median}.`);
       console.log(`Fully correct within the agent's current limits of ${AGENT_STEPS} steps and ${AGENT_MS / 1000}s: ${inBudget.length}. This run allowed ${MAX_STEPS} steps and ${LAYOUT_DEADLINE_MS / 1000}s.`);
       if (seeds.length > 0) console.log(`Seeds: ${seeds.join(",")}`);
       if (out) writeFileSync(join(out, "results.json"), JSON.stringify({ portal: PORTAL, seeds, rows }, null, 2));
