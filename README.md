@@ -12,7 +12,7 @@ Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026
 
 The whole renewal runs on your machine with `pnpm judge`, on synthetic data, with each step labeled real or simulated.
 
-On production, you can text Mano at (801) 920-3370. The conversation runs on Meta's open-weight model, Muse Spark Open, through OpenRouter with zero data retention, because Meta's hosted API answers HTTP 402 (billing not set up, checked November 3, 2026). Muse Glimmer checks actions on our own GPU. The steps that call Meta's hosted API (SAM 3.1, reading a letter, computer use) do not run on production while the 402 lasts, so a texted photo is not read there today. The whole renewal has not been confirmed on the current production build.
+On production, you can text Mano at (801) 920-3370. The conversation runs on Meta's open-weight model, Muse Spark Open, through OpenRouter with zero data retention, because Meta's hosted API answers HTTP 402 (billing not set up, checked November 3, 2026). Muse Glimmer checks actions on our own GPU. Computer use calls Meta's hosted API, so it does not run on production while the 402 lasts. A texted photo is read on Muse Spark Open too, with on-device paper detection in place of SAM 3.1; that path has been tested against a stubbed provider and not yet confirmed live. The whole renewal has not been confirmed on the current production build.
 
 ## Run Maria's renewal in one command
 
@@ -42,8 +42,8 @@ Every model Mano calls at runtime is a Meta model. Seven spine steps below call 
 | Maria texts and Mano answers, with its tools | Muse Spark Open (open weights) | OpenRouter, zero-retention endpoints only | Running | Left out, Mano's words are printed |
 | Crisis check, before the agent, on one short health question that the keyword floor flags | Muse Spark 1.3, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis | Left out |
 | Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter | Standby, on Muse Spark Open during the 402 | Left out |
-| Finding the letter in the photo | SAM 3.1 | Meta's hosted API | Not running, 402 | Live with your key, else a recording |
-| Reading the letter into cited fields | Muse Spark 1.3 | Meta's hosted API | Not running, 402 | Live with your key, else a recording |
+| Finding the letter in the photo | SAM 3.1, or none during the 402 (on-device paper detection, plain code) | Meta's hosted API, or Mano's own code | Deployed, on-device during the 402, not confirmed live | Live with your key, else a recording |
+| Reading the letter into cited fields | Muse Spark 1.3, or Muse Spark Open during the 402 | Meta's hosted API, or OpenRouter, zero-retention endpoints only | Deployed, on Muse Spark Open during the 402, not confirmed live | Live with your key, else a recording |
 | Filling the form with Mano's computer | Muse Spark 1.3 computer use | Meta's hosted API, driving a desktop on Modal | Not running, 402 | Stand-in |
 | Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes | Recording |
 | Holding the one deadline | None, plain code | `packages/mail/src/gate.ts` | Waits on the reading | Real |
@@ -51,9 +51,9 @@ Every model Mano calls at runtime is a Meta model. Seven spine steps below call 
 | Maria's yes and the filing to the sandbox portal | None, plain code | `apps/engine/src/gateway` | Deployed, no filing confirmed on this build | Real code, scripted yes |
 | Reminder the day before her interview | None, plain code | `apps/engine/src/deadlines.ts` | Deployed | Not in this run |
 
-The route for agent turns is set in `apps/agent/agent/lib/muse.ts`. With `MANO_MODEL_PROVIDER=openrouter` and `OPENROUTER_API_KEY` set, a turn goes to `meta/muse-spark-open` with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight. With either setting missing, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. Production has both set until Meta's billing works (see the November 3 entry in `docs/decisions.md`).
+The route for agent turns is set in `apps/agent/agent/lib/muse.ts`. With `MANO_MODEL_PROVIDER=openrouter` and `OPENROUTER_API_KEY` set, a turn goes to `meta/muse-spark-open` with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight. With either setting missing, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. Production has both set until Meta's billing works (see the November 3 entry in `docs/decisions.md`). The same two settings send Mail's page reads to the same model with the same pin (`packages/mail/src/model.ts`), and SAM 3.1 is not called on that path.
 
-These parts are not Meta model calls: the keyword crisis floor that every text passes through, the deadline gate and field checks, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images. `pnpm judge` reads its synthetic letter with the `muse-spark-1.3-contributor` ID, which `AGENTS.md` allows only for synthetic data.
+These parts are not Meta model calls: the keyword crisis floor that every text passes through, on-device paper detection, the deadline gate and field checks, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images. `pnpm judge` reads its synthetic letter with the `muse-spark-1.3-contributor` ID, which `AGENTS.md` allows only for synthetic data.
 
 ## Live versus in progress
 

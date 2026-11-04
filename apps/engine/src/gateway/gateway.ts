@@ -1307,7 +1307,7 @@ export class ActionGateway {
         recipient: attempt.recipient,
         status: "reconciled",
         externalId: outcome.externalId,
-        simulated: outcome.simulated ?? (attempt.actionType === "share" ? false : this.executor.simulated),
+        simulated: attempt.actionType === "share" ? false : (outcome.simulated ?? this.executor.simulated),
         requestHash: attempt.requestHash,
         createdAt: now.toISOString(),
       };

@@ -20,6 +20,9 @@ import { createModelClient, defaultModelFor } from "../model-client.js";
 import { getSessionSecret, verifyWsTicket } from "../auth.js";
 import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
 import { ConsentDeliveringExecutor } from "./person-executor.js";
+import { HoldCallExecutor } from "../calls/executor.js";
+import { HoldCalls, type HoldLimit } from "../calls/hold-calls.js";
+import { createCallServices, type CallEvent } from "../calls/provider.js";
 import { handleForPersonId } from "@mano/protocol";
 import { sendToChannels } from "../channels-send.js";
 import {
@@ -150,14 +153,32 @@ export class PersonAgent extends Agent<Env, PersonState> {
   private store: SqlApprovalStore;
   private gateway: ActionGateway;
   private executor: ConsentDeliveringExecutor;
+  private holdCalls: HoldCalls;
   private keypair: { privateKey: CryptoKey; publicKeyB64: string } | null = null;
   personId = "";
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = new SqlApprovalStore(ctx.storage.sql, (fn) => ctx.storage.transactionSync(fn));
+    this.holdCalls = new HoldCalls({
+      sql: ctx.storage.sql,
+      transaction: (fn) => ctx.storage.transactionSync(fn),
+      services: createCallServices,
+      generation: () => currentGeneration(this.db()),
+      schedule: async (at, limit) => {
+        await this.schedule(at, "holdCallLimit", limit);
+      },
+      text: async (id, text, generation) => {
+        const now = Date.now();
+        createReminder(this.db(), { id, text, dueAtMs: now, generation }, now);
+        await this.armReminderWakeup();
+      },
+      audit: async (event, id) => {
+        this.store.audit({ event, callHash: await auditDigest(id) });
+      },
+    });
     this.executor = new ConsentDeliveringExecutor(
-      new OutboundRouter(createExecutor(env), outboundProviders(env, new SqlFaxSendLog(ctx.storage.sql), { remember: (id, person) => rememberDeliveryRoute(env.FILES, id, person) }), (key) => this.store.getAttempt(key)),
+      new HoldCallExecutor(new OutboundRouter(createExecutor(env), outboundProviders(env, new SqlFaxSendLog(ctx.storage.sql), { remember: (id, person) => rememberDeliveryRoute(env.FILES, id, person) }), (key) => this.store.getAttempt(key)), this.holdCalls, (key) => this.store.getAttempt(key)?.actionType ?? null),
       (req) => this.deliverShare(req),
       (key) => this.checkShareDelivery(key),
       (key) => this.store.getAttempt(key)?.actionType ?? null,
@@ -771,6 +792,22 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { claimed: claimed.length, sent };
   }
 
+  // A verified webhook about a hold call. The worker checks its signature
+  // before calling this.
+  async holdCallEvent(event: CallEvent) {
+    await this.holdCalls.onEvent(event);
+  }
+
+  // One short window of the line's audio. Heard in memory, never stored.
+  async holdCallAudio(id: string, audio: Uint8Array) {
+    await this.holdCalls.onAudio(id, audio);
+  }
+
+  // The durable timer behind a hold call's limits.
+  async holdCallLimit(limit: HoldLimit) {
+    await this.holdCalls.onLimit(limit);
+  }
+
   // The turn ledger: the first receive time of a turn is kept forever, so
   // a retried turn reuses its original timing and mutation identities.
   async putTurn(verified: string, input: unknown) {
@@ -836,6 +873,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     // no upload prepared before can commit after it. Then the files of
     // older generations go by prefix, including one that landed during
     // the delete. A failed sweep throws, and Channels' retry sweeps again.
+    const generationBefore = currentGeneration(this.db());
     const removed = this.ctx.storage.transactionSync(() => {
       const before = currentGeneration(this.db());
       const out = removeConversationState(this.db(), Date.now(), toGeneration);
@@ -848,6 +886,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       }
       return out;
     });
+    if (currentGeneration(this.db()) > generationBefore) await this.holdCalls.conversationDeleted();
     // Replay images live with the documents and go with them.
     await sweepDocuments(this.env.FILES, this.personId, currentGeneration(this.db()));
     await finishLinkCleanup(this.db(), (keys) => this.env.FILES.delete(keys));

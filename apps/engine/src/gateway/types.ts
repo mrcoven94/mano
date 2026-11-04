@@ -174,8 +174,8 @@ export interface StoredDocumentFacts {
 export type DocumentFiling = "fileable" | "too_large" | "wrong_type" | "size_unknown";
 
 // The recorded outcome for a key: found carries the outside ID, absent
-// means the executor confirms it never ran this key. simulated labels a
-// receipt the way execute would, when that differs from the executor's own.
+// means the executor confirms it never ran this key. simulated overrides
+// the executor's label for this receipt, as execute's result can.
 export type CheckOutcome = { found: true; externalId: string; simulated?: boolean } | { found: false };
 
 export class TimeoutError extends Error {

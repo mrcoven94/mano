@@ -59,3 +59,12 @@ MANO_GUARDIAN_URL=
 MANO_GUARDIAN_TOKEN= # gitleaks:allow (empty example value)
 MANO_GUARDIAN_KEY_ID=
 MANO_GUARDIAN_KEY_SECRET= # gitleaks:allow (empty example value)
+# Hold calls: stay off until a phone provider is set up in
+# src/calls/provider.ts. Our own numbers Mano may dial, comma separated in
+# E.164; the one person ID who may use it and the one phone it rings; and
+# the limits (defaults 60 minutes on hold, 45 seconds ringing).
+MANO_CALL_ALLOWED_NUMBERS=
+MANO_CALL_PERSON_ID=
+MANO_CALL_PERSON_NUMBER=
+MANO_CALL_HOLD_LIMIT_MINUTES=
+MANO_CALL_RING_LIMIT_SECONDS=
