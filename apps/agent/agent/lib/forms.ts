@@ -70,6 +70,9 @@ const WHOLE_NUMBER = /^\d+$/;
 const LEADING_DOLLAR = /^\$/;
 const COMMAS = /,/g;
 const DOLLAR_AMOUNT = /^\d+(\.\d{1,2})?$/;
+// The field asks for a month, so saying so changes nothing. Any other period
+// is not this number, and is asked about again.
+const PER_MONTH_WORDS = /\s+(?:a month|per month|monthly|al mes|por mes|mỗi tháng|kada buwan|sa isang buwan)(?:\s+(?:before taxes|antes de impuestos))?$/i;
 const TRAILING_SLASH = /\/$/;
 const COMMA_BREAK = /\s*,\s*/;
 
@@ -117,7 +120,7 @@ function wholeNumber(min: number, max: number) {
 }
 
 function dollars(answer: string): string | null {
-  const v = answer.trim().replace(LEADING_DOLLAR, "").replace(COMMAS, "");
+  const v = answer.normalize("NFC").trim().replace(PER_MONTH_WORDS, "").replace(LEADING_DOLLAR, "").replace(COMMAS, "");
   if (!DOLLAR_AMOUNT.test(v)) return null;
   return String(Number(v));
 }
