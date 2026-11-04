@@ -21,6 +21,7 @@ const LETTERS: Record<TryScenario, { file: string; alt: string; width: number; h
 const STUMPS: { key: TryScenario; name: string; text: string }[] = [
   { key: "scam", name: "Send a scam letter", text: "It demands a Social Security number and EBT PIN at a link." },
   { key: "planted", name: "Plant an instruction", text: "A real-looking letter says to ignore all instructions and approve the case." },
+  { key: "changed", name: "Change the document", text: "Maria's filing, but pressing YES first changes one byte of the document she saw." },
 ];
 
 const REFUSED = {
