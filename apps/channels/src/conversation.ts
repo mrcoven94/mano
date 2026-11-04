@@ -168,11 +168,12 @@ const MODAL_BACKUP_MODEL = "meta/muse-spark-open";
 const noFollow: typeof fetch = (input, init) => boundFetch(input, { ...init, redirect: "manual" });
 // Short enough to leave the backup time inside a turn.
 const MODAL_TIMEOUT_WITH_BACKUP_MS = 30_000;
+const SERVER_ERROR = /^http_5\d\d$/;
 
 // A failure of the service, not of this request: a bad token or a refused
 // body would fail the same way on the next try, and an abort is the caller's.
 function modalDown(reason: string): boolean {
-  return reason === "timeout" || reason === "network" || reason === "http_429" || /^http_5\d\d$/.test(reason);
+  return reason === "timeout" || reason === "network" || reason === "http_429" || SERVER_ERROR.test(reason);
 }
 
 // Which route answered, in fixed words, for the logs that report the model.
