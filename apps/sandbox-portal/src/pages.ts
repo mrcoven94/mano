@@ -81,7 +81,6 @@ export function homePage(): string {
 <table class="form">
 <tr><td class="label">Renew your benefits</td><td>Fill out your yearly renewal online in three steps: household information, supporting documents, review. Submitting saves your application as a draft. The office files it and sends you a confirmation number.</td></tr>
 <tr><td class="label">Other layouts</td><td><a href="/layouts">The same renewal under layouts Mano has never seen</a>, for testing.</td></tr>
-<tr><td class="label">Caseworkers</td><td><a href="/caseworker">View submitted applications</a> (staff test view). <a href="/staff">Cases residents shared</a> (staff sign-in).</td></tr>
 </table>
 <p><a class="btn" style="text-decoration:none; display:inline-block; margin-top:10px;" href="/apply">Start renewal application</a></p>`,
   );
