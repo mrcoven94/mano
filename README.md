@@ -52,7 +52,7 @@ Every model Mano calls at runtime is a Meta model. Meta's own API answers HTTP 4
 | Reading a letter into cited fields | Muse Spark Open | The same route and backup | Running |
 | Finding the letter in the photo | SAM 3.1 | Meta's API | Not running, 402. On-device paper detection (plain code) takes its place |
 | Listening to a voice note | Muse Voice Transcribe, then Muse Spark Open | Meta's API, then OpenRouter | Muse Voice Transcribe is not running, 402. The backup is deployed and not confirmed live |
-| Filling the form with Mano's computer | Muse Spark Open, which reads screenshots and clicks points | Modal Shared Endpoint with no backup, driving a desktop on Modal | Computer fill on production: not confirmed yet. When a fill stops, Mano drafts the renewal without the computer and says so |
+| Filling the form with Mano's computer | Muse Spark Open, which reads screenshots and clicks points | Modal Shared Endpoint with no backup, driving a desktop on Modal | Computer fill on production: not confirmed yet. When the computer or its model stops (an error, the deadline, the step limit or a refused action), Mano drafts the renewal without the computer and says so. When the form refuses a value, the saved draft differs from the person's values, or no draft was saved, Mano prepares nothing |
 | Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes |
 | Crisis check, before the agent, on one short health question the keyword floor flags | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis |
 | Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Standby, on Muse Spark Open during the 402 |
@@ -147,10 +147,10 @@ A scam letter gets the warning first, and a single date in it appears only as th
 <!-- status:start -->
 | Piece | Status | URL | Last deploy |
 | --- | --- | --- | --- |
-| Site | live | https://withmano.com | 68d75ad success 2026-11-04 |
+| Site | live | https://withmano.com | bedd340 success 2026-11-04 |
 | Sandbox portal | live | https://sandbox.withmano.com/ | ba452d4 success 2026-11-04 |
-| Engine | live | https://engine.withmano.com/health | 68d75ad success 2026-11-04 |
-| Channels | live | https://text.withmano.com/health | 3d514b2 success 2026-11-04 |
+| Engine | live | https://engine.withmano.com/health | cc29936 success 2026-11-04 |
+| Channels | live | https://text.withmano.com/health | cc29936 success 2026-11-04 |
 | Guardian | live | no public URL | 5a6ba65 success 2026-11-03 |
 | Quality | in progress | not deployed yet | none |
 <!-- status:end -->
