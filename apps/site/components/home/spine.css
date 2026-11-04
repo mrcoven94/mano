@@ -48,7 +48,7 @@
 @media (max-width:455.98px){.ev-phone{aspect-ratio:354/440}}
 .ev-stage .ev-device{left:36px}
 .ev-stage .ss-stage[data-layout="compact"] .ev-device{left:16px}
-.ev-stage .ev-app{display:flex;flex-direction:column;height:530px;background:#fff}
+.ev-stage .ev-app{display:flex;flex-direction:column;height:530px}
 .ev-stage .ss-stage[data-layout="compact"] .ev-app{height:446px}
 .ev-stage .ev-compose{flex:none;display:flex;align-items:center;gap:10px;padding:8px 14px 0}
 .ev-stage .ev-plus{display:grid;flex:none;place-items:center;width:34px;height:34px;border-radius:50%;background:#e9e9eb;color:#3c3c43}
