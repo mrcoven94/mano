@@ -84,7 +84,7 @@ function Letter({ letter, marked }: { letter: ThreadScene["letter"]; marked: boo
   );
 }
 
-function Photo() {
+export function LetterPhoto() {
   return (
     <div className="sp-photo-row">
       <div className="sp-photo">
@@ -139,7 +139,7 @@ export default function HeroThread({ scene, onLoop }: { scene: ThreadScene; onLo
                     <Bubble from="me">Ok, thank you</Bubble>
                     <Stamp><b>Today</b> 9:41 PM</Stamp>
                     <Bubble from="me" tail={!s.photo}>{scene.me}</Bubble>
-                    {s.photo && <Photo />}
+                    {s.photo && <LetterPhoto />}
                     {(s.thinking || s.deadline) && <Bubble from="them" typing={s.thinking}>{scene.read}</Bubble>}
                     {s.ask && <Bubble from="them">{scene.ask}</Bubble>}
                     {s.yes && <Bubble from="me">Yes</Bubble>}

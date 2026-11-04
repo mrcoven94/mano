@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Mascot from "@/components/Mascot";
+import { AppPhone, TextPhone } from "./DevicePhones";
 import { NeedIcon } from "./NeedIcons";
 import { REPO_URL, SMS_HREF, SMS_NUMBER, SMS_IS_PLACEHOLDER, EARLY_HREF, SIGN_UP_HREF, SIGN_IN_HREF } from "@/lib/site";
 
@@ -23,19 +24,6 @@ function Bubble({ me, children, t }: { me?: boolean; children: React.ReactNode; 
     <p className="dv-b me rv" style={d(t)}>{children}</p>
   ) : (
     <div className="dv-row rv" style={d(t)}><Mascot tile tone="orange" size={22} /><p className="dv-b">{children}</p></div>
-  );
-}
-
-function Phone({ children, title, input = "iMessage" }: { children: React.ReactNode; title: string; input?: string }) {
-  return (
-    <div className="dv-phone">
-      <div className="dv-glass">
-        <div className="dv-status" aria-hidden="true"><span>9:41</span><span className="dv-island" /><span className="dv-sig"><i /><i /><i /><b /></span></div>
-        <div className="dv-top"><Mascot tile tone="orange" size={34} /><span>{title}</span></div>
-        <div className="dv-screen">{children}</div>
-        <div className="dv-input" aria-hidden="true"><span>{input}</span><i /></div>
-      </div>
-    </div>
   );
 }
 
@@ -117,23 +105,8 @@ export default function Everywhere() {
         </div>
 
         <div className="dv-device" key={`d-${k}`}>
-          {k === "text" && (
-            <Phone title="Mano">
-              <div className="dv-photo rv me" style={d(0.1)} role="img" aria-label="Photo of the letter"><span>SAMPLE COUNTY</span><i /><i /><i /></div>
-              <Bubble me t={0.4}>What is this one?</Bubble>
-              <Bubble t={1.1}>Your food benefits renewal. It is due <mark>November 14</mark>. Want me to fill it out?</Bubble>
-              <Bubble me t={2}>Yes please</Bubble>
-              <Bubble t={2.7}>Filled out. It goes only after your yes, and it&rsquo;s in the app too.</Bubble>
-            </Phone>
-          )}
-          {k === "app" && (
-            <Phone title="Good evening, Maria" input="Ask Mano anything">
-              <div className="dv-card hot rv" style={d(0.1)}><small>Ready to send</small><b>Food benefits renewal</b><span className="dv-pill">Review</span></div>
-              <div className="dv-card rv" style={d(0.35)}><small>Due next</small><b>Health coverage, Jan 31</b><span className="dv-meta">Reminder Jan 17</span></div>
-              <div className="dv-card rv" style={d(0.6)}><small>Mail</small><b>3 letters read this week</b><span className="dv-meta">1 scam blocked</span></div>
-              <div className="dv-card rv" style={d(0.85)}><small>Filed</small><b>On the practice portal</b><span className="dv-meta">Confirmation SB-20481</span></div>
-            </Phone>
-          )}
+          {k === "text" && <TextPhone />}
+          {k === "app" && <AppPhone />}
           {k === "web" && (
             <div className="dv-browser">
               <div className="dv-web">

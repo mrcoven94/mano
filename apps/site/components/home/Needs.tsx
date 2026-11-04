@@ -65,6 +65,7 @@ export default function Needs() {
       <div className="h-head">
         <h2 id="nd-h">What do you need help with?</h2>
         <p className="lede">Tell Mano what is going on in your own words. Pick one to see where Mano is headed. Today it reads your letters, tracks your deadlines and files food benefits renewals on a practice portal.</p>
+        <p className="nd-danger">If anyone is in danger, call 911.</p>
       </div>
 
       <div className="nd-grid">
