@@ -48,3 +48,13 @@ describe("a scam text gets a plain answer (safety-19 to safety-26)", () => {
     expect(scamRule).toMatch(/say it looks real, then help with what it asks by its deadline/);
   });
 });
+
+describe("a first text about benefits ending is not asking for a form", () => {
+  const formRule = rules.find((l) => /call fill_form/.test(l)) ?? "";
+
+  it("asks for a photo of the letter first, and no rule says to start a form right away", () => {
+    expect(instructions).toMatch(/Saying benefits are ending or asking for help is not asking for a form/);
+    expect(instructions).toMatch(/ask for a photo of their letter/);
+    expect(formRule).not.toMatch(/right away/);
+  });
+});

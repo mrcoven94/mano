@@ -150,6 +150,9 @@ beforeEach(async () => {
   vi.stubEnv("MANO_PORTAL_URL", "http://portal.test");
   vi.stubGlobal("fetch", engine.fetch);
   grant = await grantFor(HANDLE);
+  // She sent her letter first: a renewal starts from a document. This one is
+  // on file but no office takes its format, so it is never attached.
+  engine.putDocument(PERSON, "letter-as-sent", new TextEncoder().encode("RIFF\u0024\u0000\u0000\u0000WEBPVP8 "));
 });
 
 afterEach(() => {
@@ -990,6 +993,8 @@ describe("a photo Mano could not read", () => {
   });
 
   it("leaves the model told nothing about photos when none arrived, so saying none came is true", async () => {
+    engine = new EngineDouble();
+    vi.stubGlobal("fetch", engine.fetch);
     await text("ok I sent the pay stub");
     expect(seen.at(-1)!.context.join("\n")).not.toMatch(/photo/i);
   });
