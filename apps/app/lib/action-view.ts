@@ -157,6 +157,11 @@ export function parseActionView(requestJson: string): ParsedAction {
     else if (key === ATTACHMENT && typeof value === "string" && value) attachment = value;
     else answers.push(fieldFor(key, value));
   }
+  // The payload holds the document's ID for the safety check, and the words the
+  // person reads are the request's own. A draft frozen before that holds its
+  // words in the payload.
+  if (typeof raw.attachmentLabel === "string" && raw.attachmentLabel) attachment = raw.attachmentLabel;
+  else if (attachment === raw.documentId) attachment = null;
   return {
     kind,
     recipient: raw.recipient,
