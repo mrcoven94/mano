@@ -399,6 +399,8 @@ export default function Chat() {
       } catch {
         // Stopping a failed recording still ends it.
       }
+      // Recording mode can send playback to the earpiece on iOS; the preview belongs on the speaker.
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => undefined);
       setRecording(false);
       setVoiceUri(recorder.uri);
       if (recorder.uri && personStore) {

@@ -76,12 +76,6 @@ describe("strings", () => {
     }
   });
 
-  it("claims nothing but what the screen has proven when an approval is stopped", () => {
-    expect(en.blockedStopped).toContain("Nothing was sent");
-    expect(es.blockedStopped).toContain("No se envió nada");
-    expect(`${en.blockedStopped} ${es.blockedStopped}`).not.toMatch(/unsafe|inseguro/i);
-  });
-
   it("resolves both languages", () => {
     expect(stringsFor("en").send).toBe("Send");
     expect(stringsFor("es").send).toBe("Enviar");

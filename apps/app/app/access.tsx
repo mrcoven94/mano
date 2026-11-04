@@ -141,8 +141,9 @@ export default function Access() {
             {revokeResult ? (
               <View>
                 <Text style={[type.cardTitle, styles.org]}>{s.revokeTitle}</Text>
-                <LiveRegion message={revokeResult.status === "needs_approval" ? s.revokeNeedsApproval : s.revokeBlocked}>
+                <LiveRegion message={[revokeResult.status === "needs_approval" ? s.revokeNeedsApproval : s.revokeBlocked, revokeResult.reason].filter(Boolean).join(" ")}>
                   <Body>{revokeResult.status === "needs_approval" ? s.revokeNeedsApproval : s.revokeBlocked}</Body>
+                  {revokeResult.reason ? <Muted>{revokeResult.reason}</Muted> : null}
                 </LiveRegion>
                 <View style={styles.sheetBtns}>
                   <GhostBtn title={s.close} onPress={closeSheet} />

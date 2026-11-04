@@ -281,7 +281,7 @@ export default function ApprovalDetail() {
       : outcome !== "sending" && !nothingSent
         ? s.unconfirmedSend
         : outcome === "blocked"
-          ? s.blockedStopped
+          ? (receipt?.reason ?? s.blockedNote)
           : outcome === "stale"
             ? s.staleNote
             : outcome === "needs-approval"
