@@ -23,7 +23,9 @@ import {
   type Channel,
   type Logger,
   type NormalizedEvent,
+  type OpenWeightAnswer,
   type OpenWeightFallback,
+  type OpenWeightRequest,
   type Responder,
 } from "@mano/channels";
 import { DEFAULT_MEDIA_HOSTS, DEFAULT_RUNNER_CONFIG, ConversationRunner, type ModelCosts, type SpendLedger } from "./runner.js";
@@ -130,10 +132,50 @@ const primaryBreaker = new PrimaryBreaker();
 // names the model and must be a Meta one (AGENTS.md rule 13), never a
 // -contributor ID. Off, every reply and crisis check works exactly as
 // before.
+//
+// MANO_MODEL_PROVIDER=modal, with MODAL_ENDPOINT_URL and MODAL_PROXY_TOKEN,
+// asks the same model on a Modal Shared Endpoint instead. Off by default.
+// Chosen with a setting missing or a URL off Modal's domain, there is no
+// fallback at all, never OpenRouter's.
+// AGENTS.md rule 7 does not list this route, so it carries synthetic data
+// only until David changes that rule. A Shared Endpoint serves one model and
+// answers whatever model name it is sent, so MANO_OPEN_WEIGHT_MODEL stays as
+// it is, and it ignores the OpenRouter pin in the body. It refuses minimal
+// reasoning with a 400, so the fast path and crisis check ask for low there.
 export function buildOpenWeight(env: Env, breaker: PrimaryBreaker = primaryBreaker): OpenWeightFallback | undefined {
   const model = env.MANO_OPEN_WEIGHT_MODEL?.trim() ?? "";
-  if (!env.OPENROUTER_API_KEY || !isMetaModelId(model) || model.endsWith("-contributor")) return undefined;
+  if (!isMetaModelId(model) || model.endsWith("-contributor")) return undefined;
+  const modal = env as Env & ModalSettings;
+  if (modal.MANO_MODEL_PROVIDER === "modal") {
+    const baseUrl = modalBaseUrl(modal.MODAL_ENDPOINT_URL);
+    if (!baseUrl || !modal.MODAL_PROXY_TOKEN) return undefined;
+    return { client: new ModalOpenWeightClient({ apiKey: modal.MODAL_PROXY_TOKEN, model, baseUrl }), breaker };
+  }
+  if (!env.OPENROUTER_API_KEY) return undefined;
   return { client: new OpenWeightClient({ apiKey: env.OPENROUTER_API_KEY, model }), breaker };
+}
+
+class ModalOpenWeightClient extends OpenWeightClient {
+  override ask(req: OpenWeightRequest, signal?: AbortSignal): Promise<OpenWeightAnswer> {
+    return super.ask({ ...req, effort: req.effort === "minimal" ? "low" : req.effort }, signal);
+  }
+}
+
+interface ModalSettings {
+  MANO_MODEL_PROVIDER?: string;
+  MODAL_ENDPOINT_URL?: string;
+  MODAL_PROXY_TOKEN?: string;
+}
+
+// The endpoint's API root, or nothing unless it is https on Modal's own
+// endpoint domain, so a setting cannot send texts to another host.
+function modalBaseUrl(raw: string | undefined): string | undefined {
+  try {
+    const url = new URL(raw ?? "");
+    return url.protocol === "https:" && url.hostname.endsWith(".modal.direct") ? `${url.origin}/v1` : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Real texts go only to a Standard model ID (AGENTS.md rule 7). A
