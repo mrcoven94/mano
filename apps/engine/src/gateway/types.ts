@@ -40,7 +40,9 @@ export interface Approval {
   documentHash: string | null;
   documentId: string | null;
   idempotencyKey: string;
-  status: "pending" | "approved" | "rejected" | "revoked" | "expired" | "stale" | "blocked";
+  // retired: was approved, then the person corrected the form after its
+  // filing failed or went unanswered; it is reconciled but never run again.
+  status: "pending" | "approved" | "retired" | "rejected" | "revoked" | "expired" | "stale" | "blocked";
   approvedByHumanId: string | null;
   // The person this approval belongs to, the frozen request it authorizes
   // (canonical JSON, executed verbatim), and the hash binding type,
@@ -87,6 +89,9 @@ export interface Attempt {
   actionType: ActionType;
   recipient: string;
   personId: string;
+  // Bumped by every write to the attempt, so a step that read it before an
+  // await can tell whether anything claimed or ran it since.
+  version?: number;
 }
 
 export interface GatewayResult {
@@ -96,6 +101,10 @@ export interface GatewayResult {
   reason?: string;
   // Set on a refused approve: a newer proposal replaced this one.
   superseded?: true;
+  // Set on a completed answer that only reports a receipt another request
+  // already recorded. Nothing ran in this call, so a caller applies no
+  // effects for it (a consent grant is never re-recorded).
+  replayed?: true;
   // Set on a refused approve when the safety check could not answer. The
   // approval still waits, nothing ran, and the same approve may be sent
   // again later.

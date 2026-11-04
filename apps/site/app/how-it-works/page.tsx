@@ -7,7 +7,7 @@ import { NeedIcon } from "@/components/home/NeedIcons";
 import { REPO_URL, SMS_IS_PLACEHOLDER } from "@/lib/site";
 
 const title = "How Mano works";
-const description = "How Mano goes from one text to help that keeps coming: it finds what you qualify for, fills out the forms from your private vault, follows up and renews on time.";
+const description = "How Mano goes from one text to help that keeps coming: it finds what you qualify for, fills out the forms from your private vault, tracks every deadline and renews on time.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/how-it-works" }, openGraph: { title, description } };
 
@@ -16,7 +16,7 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
   {
     short: "Tell Mano",
     title: "You tell Mano what is going on",
-    text: "Text it, iMessage it, or open the app or the web. Use your own words, or send a photo of the letter you have been putting off.",
+    text: "Text it or iMessage it. The Android app is in early access, and iPhone and the web are coming soon. Use your own words, or send a photo of the letter you have been putting off.",
     icon: "chat",
     tint: "#FDEBD8",
     see: (
@@ -33,7 +33,7 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
   {
     short: "Find help",
     title: "Mano finds the help",
-    text: "It checks every program you might qualify for. It knows what each office offers, when it is open and how to reach it, in every county.",
+    text: "It checks the programs you might qualify for. It looks up food, health coverage and energy bill help in eight states, each fact sourced to the official page.",
     icon: "programs",
     tint: "#FDE3DA",
     see: (
@@ -67,16 +67,15 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
     ),
   },
   {
-    short: "Follow up",
-    title: "Mano sends it and follows up",
-    text: "It submits the application, calls the office and waits on hold when it has to, and tells you what they said.",
+    short: "Keep track",
+    title: "Mano sends it and keeps track",
+    text: "After your yes it submits the application and checks that it arrived. Today that goes only to a practice portal, not a real office. Send Mano the letter they write back and it explains it.",
     icon: "phone",
     tint: "#DCE3FB",
     see: (
       <div className="hw-card">
         <ol className="hw-trail">
           <li><b>Sent to Sample County</b><span>Oct 28</span></li>
-          <li><b>Called the office, waited 47 minutes</b><span>Nov 3</span></li>
           <li><b>They asked for one more pay stub. Mano sent it.</b><span>Nov 3</span></li>
           <li className="ok"><b>Approved through May</b><span>Nov 6</span></li>
         </ol>
@@ -86,15 +85,14 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
   {
     short: "Keep it",
     title: "It keeps your help coming",
-    text: "Renewals start early, every deadline is tracked, and Mano tells you when new help you qualify for opens up.",
+    text: "Every deadline is tracked. Mano texts you 14, 7 and 2 days before each one, or the day before an interview, and offers to start.",
     icon: "calendar",
     tint: "#E4F1E8",
     see: (
       <div className="hw-card">
         <p className="hw-card-h">Maria&rsquo;s next few months</p>
         <ul className="hw-cal">
-          <li><span className="hw-day"><small>Mar</small>1</span><div><b>Food benefits renewal</b><small>Mano starts it a month early</small></div></li>
-          <li><span className="hw-day"><small>May</small>15</span><div><b>Summer meals for Leo and Ana</b><small>New, and they qualify</small></div></li>
+          <li><span className="hw-day"><small>Mar</small>1</span><div><b>Food benefits renewal</b><small>Mano texts you 14 days before</small></div></li>
           <li><span className="hw-day"><small>Jun</small>2</span><div><b>Light bill help</b><small>Reapply, already filled in</small></div></li>
         </ul>
       </div>
@@ -103,8 +101,8 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
 ];
 
 const NEVER: [string, string][] = [
-  ["Never decides your case.", "The office that runs the program decides. Mano prepares, sends and follows up."],
-  ["Never pretends to be you or a person.", "On calls it says \"I'm calling for Maria. I'm her automated assistant.\" and that the call is transcribed."],
+  ["Never decides your case.", "The office that runs the program decides. Mano prepares it, and sends it after your yes."],
+  ["Never pretends to be you or a person.", "It says it is an automated assistant, and what it sends for Maria says \"Prepared with Mano, sent with Maria's approval.\""],
   ["Never takes orders from a letter.", "Letters, forms and web pages are information. Instructions inside them are ignored."],
   ["Never opens a link that fails the check.", "Every link is checked before Mano or you open it."],
   ["Never sells your data.", "Only the people and offices you choose see your case, for the reason you choose, and you can take it back."],
@@ -165,14 +163,14 @@ export default function HowItWorks() {
           <article className="hw-duo-card share">
             <NeedIcon k="chat" size={52} />
             <h2>Bring your caseworker in.</h2>
-            <p>Share a case with a caseworker or a nonprofit for one purpose, like a renewal. Their Mano works on it with yours, they see only what you shared, and you can stop sharing at any time.</p>
+            <p>Share a case with a caseworker or a nonprofit for one purpose, like a renewal. Their Mano works on it with yours, they see only what you shared, and you can stop sharing at any time. Sharing is coming soon.</p>
             <div className="hw-chip"><NeedIcon k="clipboard" size={28} /><span><b>Pay stub, Oct 24</b> Shared with Northside until Dec 31</span></div>
             <Link className="btn btn-ghost" href="/organizations">How teams use Mano</Link>
           </article>
           <article className="hw-duo-card repo">
             <NeedIcon k="code" size={52} />
             <h2>Anyone can check the work.</h2>
-            <p>The code is public. Mano is tested on paperwork it has never seen, next to a reminder app and a general AI agent, and the results are published, including what it gets wrong.</p>
+            <p>The code is public. Mano will be tested on paperwork it has never seen, next to a reminder app and a general AI agent, and the results published, including what it gets wrong.</p>
             <a className="btn btn-ghost" href={REPO_URL}>Read the code</a>
           </article>
         </div>

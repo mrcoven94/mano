@@ -31,10 +31,11 @@ describe("r3 blocker 6: share outcomes apply idempotently", () => {
     expect(done.status).toBe("completed");
     const key = done.receipt!.idempotencyKey;
 
-    // What recovery runs after it executes a stranded share: same effect,
-    // safe to repeat.
-    await person.applyShareOutcome(key);
-    await person.applyShareOutcome(key);
+    // The effect is applied once, when the receipt is recorded (LAP-747):
+    // approving the same grant again answers its receipt and changes nothing.
+    expect(key).toBeTruthy();
+    expect((await person.approve(grant.approval!.id, "r3b6-share")).status).toBe("completed");
+    expect((await person.approve(grant.approval!.id, "r3b6-share")).status).toBe("completed");
     const cases = await org.listCases("r3b6-share-county");
     expect(cases.filter((c) => c.caseId === "case-r3b6-share")).toHaveLength(1);
 

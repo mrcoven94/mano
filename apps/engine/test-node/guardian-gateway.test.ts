@@ -362,8 +362,9 @@ describe("a yes that finds the safety check unavailable", () => {
     expect(warm.status).toBe("completed");
     expect(executor.calls).toHaveLength(1);
 
+    // Runs nothing again: it answers the receipt it has (LAP-747).
     const again = await gateway.approveAndExecute(approvalId, "maria");
-    expect(again.status).not.toBe("completed");
+    expect(again).toMatchObject({ status: "completed", receipt: { externalId: warm.receipt!.externalId } });
     expect(again.retryable).toBeUndefined();
     expect(executor.calls).toHaveLength(1);
   });
@@ -386,7 +387,8 @@ describe("a yes that finds the safety check unavailable", () => {
       gateway.approveAndExecute(approvalId, "maria"),
     ]);
     expect(first.status).toBe("completed");
-    expect(late.status).toBe("blocked");
+    // The other yes filed it, so the late one answers that receipt (LAP-747).
+    expect(late).toMatchObject({ status: "completed", receipt: { externalId: first.receipt!.externalId } });
     expect(late.retryable).toBeUndefined();
     expect(executor.calls).toHaveLength(1);
   });

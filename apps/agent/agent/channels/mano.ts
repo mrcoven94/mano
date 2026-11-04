@@ -73,7 +73,7 @@ export default defineChannel({
           timings.send = Date.now() - sending;
           const marks = new AgentMarks(sending);
           try {
-            return await settleStream(stream, { timeoutMs: Math.max(1_000, Math.min(SETTLE_TIMEOUT_MS, deadlineMs - Date.now())), marks });
+            return await settleStream(stream, { timeoutMs: Math.max(1_000, Math.min(SETTLE_TIMEOUT_MS, deadlineMs - Date.now())), marks, turnId });
           } finally {
             marks.write(timings);
           }
