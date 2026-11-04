@@ -1,24 +1,69 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { ApplyScene, FormScene, RenewScene, HoldScene } from "./Scenes";
-import SpineDemo, { SPINE_SECONDS } from "./SpineDemo";
+import HeroThread, { threadSeconds, type ThreadScene } from "./HeroThread";
 import Mascot from "@/components/Mascot";
 import TextMano from "@/components/TextMano";
 
-/* The hero: one headline whose highlighted outcome follows the demo below it. Each tab names the outcome and the work behind it.
-   Scenes advance on their own while the stage is on screen; choosing a tab stops that. The first scene is the spine
-   (a text thread that ends with a renewal filed); it moves on when its loop ends, and chosen, it keeps looping. */
+/* The hero: one headline whose highlighted outcome follows the demo below it. Each tab names the outcome and what Mano
+   does toward it today. Scenes advance when their loop ends while the stage is on screen; choosing a tab stops that. */
 
-const SECONDS = 8;
+const YES_NO = "Want me to hold that date? YES or NO";
 
-type SceneDef = { key: string; tab: string; how: string; phrase: string; Scene: (props: { onLoop?: () => void }) => React.ReactNode; seconds?: number; flush?: boolean };
-
-const SCENES: SceneDef[] = [
-  { key: "spine", tab: "Keep your benefits", how: "Renews by text", phrase: "keeps food coming", Scene: SpineDemo, seconds: SPINE_SECONDS, flush: true },
-  { key: "apply", tab: "Pay rent", how: "Applies for help", phrase: "helps you pay rent", Scene: ApplyScene },
-  { key: "forms", tab: "Find child care", how: "Fills out any form", phrase: "finds child care", Scene: FormScene },
-  { key: "renew", tab: "Keep the lights on", how: "Renews on time", phrase: "keeps the lights on", Scene: RenewScene },
-  { key: "hold", tab: "Get your medicine", how: "Waits on hold, coming soon", phrase: "gets your medicine", Scene: HoldScene },
+const SCENES: { key: string; tab: string; how: string; phrase: string; thread: ThreadScene }[] = [
+  {
+    key: "spine", tab: "Keep your benefits", how: "Renews by text", phrase: "keeps food coming",
+    thread: {
+      letter: { from: "Sample County Human Services", title: "Your food benefits end November 30", due: "Return your renewal by November 14.", note: "Phone interview: November 13 at 10:00 AM" },
+      me: "Got a letter. My food benefits are ending?",
+      read: "Your renewal is due Nov 14. That is the date that matters.",
+      ask: "I filled it in. Send it to the practice portal? YES or NO",
+      answer: "Filed on the practice portal, not a real office. Confirmation SB-20481",
+    },
+  },
+  {
+    key: "rent", tab: "Pay rent", how: "Reads your notice", phrase: "helps you pay rent",
+    thread: {
+      letter: { from: "Sample Property Management", title: "Late rent notice", due: "Pay the $400 you owe by November 10.", note: "Monthly rent: $1,150" },
+      me: "Got this from my landlord. What does it mean?",
+      read: "You owe $400 by Nov 10. That is the date that matters.",
+      ask: YES_NO,
+      answer: "Holding Nov 10. I'll text you Nov 3 and Nov 8.",
+      last: { text: "Filling out rent help forms is coming soon." },
+    },
+  },
+  {
+    key: "care", tab: "Find child care", how: "Holds your date", phrase: "finds child care",
+    thread: {
+      letter: { from: "Sample County Child Care Office", title: "Your child care help is up for review", due: "Send proof of your work hours by December 1.", note: "Care on file: Mon to Fri, 7:30 to 4:00" },
+      me: "Got a letter about our daycare help.",
+      read: "Send proof of your work hours by Dec 1. That is the date that matters.",
+      ask: YES_NO,
+      answer: "Holding Dec 1. I'll text you Nov 24 and Nov 29.",
+      last: { text: "Filling out child care forms is coming soon." },
+    },
+  },
+  {
+    key: "lights", tab: "Keep the lights on", how: "Reminds you on time", phrase: "keeps the lights on",
+    thread: {
+      letter: { from: "Sample Power", title: "Your energy assistance credit is ending", due: "Reapply by November 20, 2026 to keep your winter credit.", note: "Late applications are reviewed only if funds remain." },
+      me: "Is this about my power bill?",
+      read: "Yes. Reapply by Nov 20 to keep your winter credit.",
+      ask: YES_NO,
+      answer: "Holding Nov 20. I'll text you Nov 13 and Nov 18.",
+      last: { text: "Reminder: reapply for your winter credit by Nov 20.", stamp: ["Nov 13", "10:00 AM"] },
+    },
+  },
+  {
+    key: "medicine", tab: "Get your medicine", how: "Reads your letter", phrase: "gets your medicine",
+    thread: {
+      letter: { from: "Sample County Human Services", title: "It is time to renew your health coverage", due: "Send your renewal form by January 15, 2027.", note: "If we do not receive it, your coverage will end on January 31, 2027." },
+      me: "Is my health coverage ending?",
+      read: "Send your renewal form by Jan 15, or your coverage ends Jan 31.",
+      ask: YES_NO,
+      answer: "Holding Jan 15. I'll text you Jan 8 and Jan 13.",
+      last: { text: "Waiting on hold for you is coming soon." },
+    },
+  },
 ];
 
 export default function HeroStage() {
@@ -47,7 +92,6 @@ export default function HeroStage() {
     document.getElementById(`tab-${SCENES[n].key}`)?.focus();
   };
 
-  const { Scene, flush } = SCENES[i];
   const playing = auto && visible;
 
   return (
@@ -90,16 +134,15 @@ export default function HeroStage() {
                 <span
                   key={`p-${i}`}
                   className="h-tab-bar"
-                  style={{ animationDuration: `${s.seconds ?? SECONDS}s`, animationPlayState: playing ? "running" : "paused" }}
-                  onAnimationEnd={s.seconds ? undefined : next}
+                  style={{ animationDuration: `${threadSeconds(s.thread)}s`, animationPlayState: playing ? "running" : "paused" }}
                   aria-hidden="true"
                 />
               )}
             </button>
           ))}
         </div>
-        <div className="h-stage" id="h-panel" role="tabpanel" aria-labelledby={`tab-${SCENES[i].key}`} data-paused={(auto && !visible) || undefined} data-flush={flush || undefined}>
-          <Scene key={SCENES[i].key} onLoop={auto ? next : undefined} />
+        <div className="h-stage" id="h-panel" role="tabpanel" aria-labelledby={`tab-${SCENES[i].key}`} data-flush>
+          <HeroThread key={SCENES[i].key} scene={SCENES[i].thread} onLoop={auto ? next : undefined} />
         </div>
       </div>
     </div>

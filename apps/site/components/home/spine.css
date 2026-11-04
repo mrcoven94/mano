@@ -1,4 +1,4 @@
-/* The spine demo in the hero (SpineDemo.tsx). The hero panel is the ground: the stage is transparent over it. */
+/* The text thread in the hero (HeroThread.tsx). The hero panel is the ground: the stage is transparent over it. */
 .sp{height:min(500px,calc(100cqw * 500 / 1100))}
 @container (max-width:719.98px){.sp{height:420px}}
 .sp-stage .ss-stage{overflow:hidden;background:transparent}

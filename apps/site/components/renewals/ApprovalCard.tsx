@@ -26,7 +26,7 @@ export default function ApprovalCard() {
         <>
           <p className="tr-msg">Your food benefits renewal is ready. Here is exactly what will be sent.</p>
           <dl className="tr-dl">
-            <div><dt>To</dt><dd>Sample County Human Services</dd></div>
+            <div><dt>To</dt><dd>Practice portal, not a real office</dd></div>
             <div><dt>For</dt><dd>Food benefits renewal</dd></div>
             <div><dt>Pages</dt><dd>Renewal form, 4 pages, 2 pay stubs</dd></div>
           </dl>
@@ -46,9 +46,9 @@ export default function ApprovalCard() {
         <>
           <p className="tr-msg rv" style={d(0)}>Sent with your yes. I checked that it arrived.</p>
           <ol className="tr-steps">
-            <li className="rv" style={d(0.3)}><span>8:12 PM</span>Sent to Sample County Human Services</li>
-            <li className="rv" style={d(0.8)}><span>8:13 PM</span>Checked the county portal: received</li>
-            <li className="rv ok" style={d(1.3)}><span>Result</span>One copy on file. Due Dec 5, sent Nov 24.</li>
+            <li className="rv" style={d(0.3)}><span>8:12 PM</span>Sent to the practice portal</li>
+            <li className="rv" style={d(0.8)}><span>8:13 PM</span>Checked the portal: received</li>
+            <li className="rv ok" style={d(1.3)}><span>Result</span>One copy on file, confirmation SB-20481. Due Dec 5, sent Nov 24.</li>
           </ol>
           <button className="tr-no rw-again" onClick={() => setView("ready")}>Start over</button>
         </>

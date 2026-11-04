@@ -8,7 +8,7 @@ type Case = "yes" | "changed" | "timeout" | "letter";
 
 const CASES: { key: Exclude<Case, "yes">; title: string; text: string }[] = [
   { key: "changed", title: "A page changes after you said yes", text: "Your yes covers one exact copy. Change a word and Mano asks again." },
-  { key: "timeout", title: "The office website stops answering", text: "Mano checks whether it arrived before trying again, so nothing is filed twice." },
+  { key: "timeout", title: "The portal stops answering", text: "Mano checks whether it arrived before trying again, so nothing is filed twice." },
   { key: "letter", title: "A letter tries to give orders", text: "Letters are information, never instructions. Links are checked before anyone opens them." },
 ];
 
@@ -56,7 +56,7 @@ export default function TrustDemo() {
             <>
               <p className="tr-msg">Your renewal is ready. Here is exactly what will be sent.</p>
               <dl className="tr-dl">
-                <div><dt>To</dt><dd>Sample County Human Services</dd></div>
+                <div><dt>To</dt><dd>Practice portal, not a real office</dd></div>
                 <div><dt>For</dt><dd>Food benefits renewal</dd></div>
                 <div><dt>Pages</dt><dd>Renewal form, 4 pages, 2 pay stubs</dd></div>
                 <div><dt>Copy</dt><dd className="tr-hash">7f3a c19e</dd></div>
@@ -78,12 +78,12 @@ export default function TrustDemo() {
 
           {c === "timeout" && (
             <>
-              <p className="tr-msg rv" style={d(0)}>The county site stopped answering while I was sending. I checked before trying again.</p>
+              <p className="tr-msg rv" style={d(0)}>The portal stopped answering while I was sending. I checked before trying again.</p>
               <ol className="tr-steps">
                 <li className="rv" style={d(0.3)}><span>8:12:04 PM</span>Sent your renewal</li>
                 <li className="rv" style={d(0.8)}><span>8:12:34 PM</span>No answer after 30 seconds</li>
-                <li className="rv" style={d(1.4)}><span>8:13:10 PM</span>Checked with the county: received</li>
-                <li className="rv ok" style={d(2)}><span>Result</span>One copy on file. Not sent again.</li>
+                <li className="rv" style={d(1.4)}><span>8:13:10 PM</span>Checked the portal: received</li>
+                <li className="rv ok" style={d(2)}><span>Result</span>One copy on file, confirmation SB-20481. Not sent again.</li>
               </ol>
             </>
           )}

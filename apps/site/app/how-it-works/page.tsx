@@ -38,12 +38,11 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
     tint: "#FDE3DA",
     see: (
       <div className="hw-card">
-        <p className="hw-card-h">You likely qualify for 4 programs</p>
+        <p className="hw-card-h">What Mano looked up for you</p>
         <ul className="hw-rows">
           <li><NeedIcon k="food" size={30} /><b>Food benefits</b><span className="hw-tag hot">Renew by Nov 14</span></li>
-          <li><NeedIcon k="bills" size={30} /><b>Light bill help</b><span className="hw-tag">Open now</span></li>
-          <li><NeedIcon k="medicine" size={30} /><b>Health coverage</b><span className="hw-tag">You qualify</span></li>
-          <li><NeedIcon k="childcare" size={30} /><b>Child care</b><span className="hw-tag">Opens Jan 6</span></li>
+          <li><NeedIcon k="bills" size={30} /><b>Light bill help</b><span className="hw-tag">Reapply by Nov 20</span></li>
+          <li><NeedIcon k="medicine" size={30} /><b>Health coverage</b><span className="hw-tag">Renew by Jan 15</span></li>
         </ul>
       </div>
     ),
@@ -75,9 +74,9 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
     see: (
       <div className="hw-card">
         <ol className="hw-trail">
-          <li><b>Sent to Sample County</b><span>Oct 28</span></li>
-          <li><b>They asked for one more pay stub. Mano sent it.</b><span>Nov 3</span></li>
-          <li className="ok"><b>Approved through May</b><span>Nov 6</span></li>
+          <li><b>You said yes</b><span>Oct 28</span></li>
+          <li><b>Filed on the practice portal</b><span>Oct 28</span></li>
+          <li className="ok"><b>Checked that it arrived. Confirmation SB-20481</b><span>Oct 28</span></li>
         </ol>
       </div>
     ),
@@ -93,7 +92,7 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
         <p className="hw-card-h">Maria&rsquo;s next few months</p>
         <ul className="hw-cal">
           <li><span className="hw-day"><small>Mar</small>1</span><div><b>Food benefits renewal</b><small>Mano texts you 14 days before</small></div></li>
-          <li><span className="hw-day"><small>Jun</small>2</span><div><b>Light bill help</b><small>Reapply, already filled in</small></div></li>
+          <li><span className="hw-day"><small>Jun</small>2</span><div><b>Light bill help</b><small>Mano texts you 14 days before</small></div></li>
         </ul>
       </div>
     ),

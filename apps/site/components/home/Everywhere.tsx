@@ -123,7 +123,7 @@ export default function Everywhere() {
               <Bubble me t={0.4}>What is this one?</Bubble>
               <Bubble t={1.1}>Your food benefits renewal. It is due <mark>November 14</mark>. Want me to fill it out?</Bubble>
               <Bubble me t={2}>Yes please</Bubble>
-              <Bubble t={2.7}>Done. It&rsquo;s in the app too.</Bubble>
+              <Bubble t={2.7}>Filled out. It goes only after your yes, and it&rsquo;s in the app too.</Bubble>
             </Phone>
           )}
           {k === "app" && (
@@ -131,7 +131,7 @@ export default function Everywhere() {
               <div className="dv-card hot rv" style={d(0.1)}><small>Ready to send</small><b>Food benefits renewal</b><span className="dv-pill">Review</span></div>
               <div className="dv-card rv" style={d(0.35)}><small>Due next</small><b>Health coverage, Jan 31</b><span className="dv-meta">Reminder Jan 17</span></div>
               <div className="dv-card rv" style={d(0.6)}><small>Mail</small><b>3 letters read this week</b><span className="dv-meta">1 scam blocked</span></div>
-              <div className="dv-card rv" style={d(0.85)}><small>Shared</small><b>Northside Family Center</b><span className="dv-meta">Renewal only</span></div>
+              <div className="dv-card rv" style={d(0.85)}><small>Filed</small><b>On the practice portal</b><span className="dv-meta">Confirmation SB-20481</span></div>
             </Phone>
           )}
           {k === "web" && (
@@ -140,7 +140,7 @@ export default function Everywhere() {
                 <nav aria-hidden="true"><b><Mascot tile tone="orange" size={20} />mano</b><span className="on">Messages</span><span>Applications</span><span>Documents</span><span>Deadlines</span></nav>
                 <div className="dv-web-thread">
                   <p className="sc-label">Earlier, by text</p>
-                  <Bubble t={0.1}>Done. It&rsquo;s in the app too.</Bubble>
+                  <Bubble t={0.1}>Filled out. It goes only after your yes, and it&rsquo;s in the app too.</Bubble>
                   <p className="sc-label">Now, on your laptop</p>
                   <Bubble me t={0.6}>Can you print the renewal for my records?</Bubble>
                   <Bubble t={1.3}>Here it is, 4 pages and your 2 pay stubs. I marked the pages you still need to sign.</Bubble>
