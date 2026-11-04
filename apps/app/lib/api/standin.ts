@@ -226,6 +226,10 @@ export class StandInClient implements ManoClient {
     return [...this.messages];
   }
 
+  async acknowledgeQuestion(session: Session): Promise<void> {
+    this.checkSession(session);
+  }
+
   async sendMessage(session: Session, text: string, attachments: NewAttachment[], opId?: string): Promise<ChatMessage> {
     await this.wait();
     this.checkSession(session);
