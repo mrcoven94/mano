@@ -26,6 +26,9 @@ const HOLD_RESERVE_MS = 5_000;
 
 const UNSAVED = "I could not save your photo, so I have not read it. Please send it again.";
 const FAILED = "I could not finish reading your photo just now. Send it again and I will try once more.";
+const EMAIL_FAILED = "I saved that email but could not finish reading it just now. Send me a photo of it, or ask the office to send it again.";
+// Channels names every document it stores from an email this way.
+const fromEmail = (photo: TextedPhoto): boolean => photo.id.startsWith("email-");
 
 export interface LetterReply {
   // How the reply opens: Mano's words from the letter's cited fields.
@@ -146,6 +149,7 @@ export async function readTextedPhotos(
   if (photos.length === 0) return { text: UNSAVED, read: false };
   const started = Date.now();
   const deadline = deadlineAt - HOLD_RESERVE_MS;
+  const emailed = photos.some(fromEmail);
   let text: string;
   let read = false;
   try {
@@ -165,7 +169,7 @@ export async function readTextedPhotos(
     const answer = answerReading(reading);
     read = answer.outcome === "read";
     const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt), markLetters(engine, reading, deadlineAt)]);
-    text = [answer.text, ...held].join(" ");
+    text = [!read && emailed ? EMAIL_FAILED : answer.text, ...held].join(" ");
     if (read) {
       await rememberFact(engine, `From a letter photo: ${text}`, deadlineAt).catch((err: unknown) =>
         console.warn(JSON.stringify({ type: "mano_letters_remember_failed", status: err instanceof EngineError ? err.status : null })),
@@ -174,7 +178,7 @@ export async function readTextedPhotos(
     console.log(JSON.stringify({ type: "mano_letters_read", photos: files.length, letters: reading.letters.length, held: answer.deadlines.length, latencyMs: Date.now() - started }));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_letters_failed", err: err instanceof Error ? err.name : "unknown", latencyMs: Date.now() - started }));
-    text = FAILED;
+    text = emailed ? EMAIL_FAILED : FAILED;
   }
   return { text, read };
 }

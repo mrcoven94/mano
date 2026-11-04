@@ -17,6 +17,10 @@
 // returns the recorded stand-in, which only answers explicitly
 // recorded requests and fails closed otherwise.
 //
+// A text/plain file (an email's words) skips decoding and segmenting: it is
+// one page whose transcription is the text itself, and every step after
+// that is the same as for a photo.
+//
 // Flow per file: decode to frames (one for photos, up to 30 for video
 // at 1 fps; truncation is reported and asked about, never silent),
 // segment each frame into pages (SAM 3.1, on-device paper detection,
@@ -75,6 +79,8 @@ import {
   groupDeterministic,
   groupWithModel,
   readPage,
+  readTextPage,
+  WHOLE_PAGE,
   type GroupablePage,
   type PageExtraction,
 } from "./read.js";
@@ -130,6 +136,8 @@ export { answerReading, type DeadlineKind, type HeldDeadline, type LetterType, t
 export { qualityAnswerPath, qualityDeadlineReader } from "./quality.js";
 
 const MAX_FILES = 10;
+// What stands in for the crop of a page that was never an image.
+const TEXT_PAGE_IMAGE: NormalizedImage = { buffer: Buffer.alloc(0), width: 1000, height: 1000 };
 const MAX_PHOTO_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
 const VIDEO_FPS = 1;
@@ -146,6 +154,8 @@ interface PipelinePage {
   file: string;
   crop: Box;
   image: NormalizedImage;
+  // Set on a page that is an email's text; image is then a stand-in.
+  text?: string;
   frameTimeMs: number;
   rotationDegrees: number;
   extraction: PageExtraction | null;
@@ -213,6 +223,10 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         prompt: `Could not use ${file.name}: send a photo (JPEG, PNG, HEIC) or a short video instead.`,
         citation: null,
       });
+      continue;
+    }
+    if (kind === "text") {
+      pages.push({ order: pages.length, file: file.name, crop: WHOLE_PAGE, image: TEXT_PAGE_IMAGE, text: new TextDecoder().decode(file.bytes), frameTimeMs: 0, rotationDegrees: 0, extraction: null, readFailed: false, dropped: [] });
       continue;
     }
     if (kind === "video" && file.bytes.length > MAX_VIDEO_BYTES) {
@@ -364,11 +378,11 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
   const reads = await mapPool(pages, PAGE_READS_AT_ONCE, async (page): Promise<PageRead> => {
     if (overBudget(page.file)) return { kind: "skipped" };
     try {
-      const readBuffer = await downscaleForModel(page.image);
-      const extraction = await readPage(readBuffer, opts.model, {
-        synthetic: opts.synthetic,
-        deadline: deadlineFor(page.file),
-      });
+      const readOpts = { synthetic: opts.synthetic, deadline: deadlineFor(page.file) };
+      const extraction =
+        page.text !== undefined
+          ? await readTextPage(page.text, opts.model, readOpts)
+          : await readPage(await downscaleForModel(page.image), opts.model, readOpts);
       addUsage(page.file, extraction.usage);
       return { kind: "read", extraction };
     } catch (err) {

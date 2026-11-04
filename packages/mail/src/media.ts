@@ -59,8 +59,9 @@ const IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const HEIC_MIMES = new Set(["image/heic", "image/heif"]);
 const VIDEO_MIMES = new Set(["video/mp4", "video/quicktime", "video/webm", "video/3gpp", "video/mpeg"]);
 
-export function mediaKind(mimeType: string): "image" | "heic" | "video" | "other" {
+export function mediaKind(mimeType: string): "image" | "heic" | "video" | "text" | "other" {
   const base = mimeType.split(";")[0]!.trim().toLowerCase();
+  if (base === "text/plain") return "text";
   if (IMAGE_MIMES.has(base)) return "image";
   if (HEIC_MIMES.has(base)) return "heic";
   if (VIDEO_MIMES.has(base)) return "video";
