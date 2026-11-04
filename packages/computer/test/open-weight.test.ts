@@ -25,19 +25,42 @@ function scripted(replies: Array<{ output: unknown[]; status?: string }>) {
 const run = (client: OpenWeightModelClient, computer = new FakeComputer()) => runLoop(computer, client, "Fill the form.", { model: OPEN_WEIGHT_MODEL_ID });
 
 describe("computer use on the open-weight model", () => {
+  test("the model's 0 to 1000 grid becomes pixels on the screen, and its own numbers replay", async () => {
+    const computer = new FakeComputer();
+    const { client, bodies } = scripted([
+      { output: [fn("a", { actions: [{ type: "click", x: 227, y: 98 }, { type: "double_click", x: 500, y: 500 }, { type: "scroll", x: 1000, y: 1000, scroll_y: 300 }] })] },
+      { output: [say("ACCEPTED")] },
+    ]);
+
+    expect(await run(client, computer)).toEqual({ status: "done", message: "ACCEPTED", steps: 2 });
+
+    // The first click is the Case number field, whose centre on the 1280 by
+    // 800 screen is (291, 79): where the live model aimed.
+    expect(computer.actions).toEqual([
+      [
+        { type: "click", button: "left", x: 291, y: 78 },
+        { type: "double_click", x: 640, y: 400 },
+        { type: "scroll", x: 1279, y: 799, scroll_x: 0, scroll_y: 300 },
+      ],
+    ]);
+    const replayed = (bodies[1]!.input as { type?: string; arguments?: string }[]).find((item) => item.type === "function_call");
+    expect(JSON.parse(replayed!.arguments!).actions.slice(0, 2)).toMatchObject([{ x: 227, y: 98 }, { x: 500, y: 500 }]);
+    expect(JSON.stringify((bodies[0]!.tools as unknown[])[0])).toContain("0 to 1000");
+  });
+
   test("a run: function calls reach the computer, and every request carries the pin, the model and each screen", async () => {
     const computer = new FakeComputer();
     const { client, bodies, urls } = scripted([
-      { output: [{ type: "reasoning", summary: [] }, fn("a", { actions: [{ type: "click", x: 10.4, y: 20.6 }, { type: "type", text: "Rosa Testcase" }, { type: "keypress", keys: ["ctrl", "a"] }] })] },
-      { output: [fn("b", { actions: [{ type: "scroll", x: 1, y: 2, scroll_y: 300 }, { type: "wait" }] })] },
+      { output: [{ type: "reasoning", summary: [] }, fn("a", { actions: [{ type: "click", x: 100, y: 500 }, { type: "type", text: "Rosa Testcase" }, { type: "keypress", keys: ["ctrl", "a"] }] })] },
+      { output: [fn("b", { actions: [{ type: "scroll", x: 500, y: 250, scroll_y: 300 }, { type: "wait" }] })] },
       { output: [say("ACCEPTED")] },
     ]);
 
     expect(await run(client, computer)).toEqual({ status: "done", message: "ACCEPTED", steps: 3 });
 
     expect(computer.actions).toEqual([
-      [{ type: "click", button: "left", x: 10, y: 21 }, { type: "type", text: "Rosa Testcase" }, { type: "keypress", keys: ["ctrl", "a"] }],
-      [{ type: "scroll", x: 1, y: 2, scroll_x: 0, scroll_y: 300 }, { type: "wait" }],
+      [{ type: "click", button: "left", x: 128, y: 400 }, { type: "type", text: "Rosa Testcase" }, { type: "keypress", keys: ["ctrl", "a"] }],
+      [{ type: "scroll", x: 640, y: 200, scroll_x: 0, scroll_y: 300 }, { type: "wait" }],
     ]);
     expect(urls).toEqual(Array(3).fill("https://openrouter.ai/api/v1/responses"));
     for (const body of bodies) {
@@ -166,7 +189,7 @@ describe("computer use on the open-weight model", () => {
 
   test.each([
     ["a right click", { type: "click", button: "right", x: 1, y: 1 }],
-    ["a click off the screen", { type: "click", x: 1280, y: 1 }],
+    ["a click off the grid", { type: "click", x: 1001, y: 1 }],
     ["a negative coordinate", { type: "double_click", x: 1, y: -1 }],
     ["a click with no y", { type: "click", x: 1 }],
     ["a runaway scroll", { type: "scroll", x: 1, y: 1, scroll_y: 1_000_000 }],
