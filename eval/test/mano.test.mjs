@@ -7,10 +7,14 @@ import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { build } from "esbuild";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { createServer } from "node:http";
 import { generalAgentBaseline } from "../src/baselines.mjs";
 import { buildMano } from "../src/build-mano.mjs";
 import { gradeAll } from "../src/grader.mjs";
-import { runSystem } from "../src/harness.mjs";
+import { osSandboxAvailable, osSandboxProfile, runSystem } from "../src/harness.mjs";
+import { readRecord, verifyMano } from "../src/verify.mjs";
 import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody, preflight, toChatMessages, ZERO_RETENTION } from "../src/openrouter.mjs";
 
 // The adapter imports @mano/mail, which is TypeScript, so it loads the way the
@@ -54,15 +58,20 @@ test("the route needs both the provider setting and the key", () => {
 });
 
 test("the pin wins over anything in the request", () => {
-  const body = pinnedChatBody({ model: "other/model", provider: { zdr: false, data_collection: "allow", sort: "latency" } });
+  const body = pinnedChatBody({ model: "other/model", models: ["other/model"], route: "fallback", plugins: [], messages: [], provider: { zdr: false, data_collection: "allow", sort: "latency", order: ["x"], only: ["x"] } });
   assert.equal(body.model, OPEN_WEIGHT_MODEL);
   assert.deepEqual(body.provider, { sort: "latency", ...ZERO_RETENTION });
+  assert.deepEqual(Object.keys(body).sort(), ["messages", "model", "provider", "usage"]);
 });
 
 test("preflight stops a run on a refused call", async () => {
   const seen = [];
   const refused = await preflight("openrouter", { env: { OPENROUTER_API_KEY: "x" }, fetchImpl: async (_u, o) => { seen.push(JSON.parse(o.body)); return jsonResponse({}, 402); } });
   assert.deepEqual(refused, { ok: false, status: 402 });
+  const errorBody = await preflight("openrouter", { env: { OPENROUTER_API_KEY: "x" }, fetchImpl: async () => jsonResponse({ error: { code: 402 } }) });
+  assert.equal(errorBody.ok, false, "status 200 with an error body is not a usable answer");
+  const answered = await preflight("openrouter", { env: { OPENROUTER_API_KEY: "x" }, fetchImpl: async () => jsonResponse({ choices: [{ message: { content: "ok" } }] }) });
+  assert.equal(answered.ok, true);
   assert.deepEqual(seen[0].provider, { ...ZERO_RETENTION });
   assert.equal((await preflight(null)).ok, true);
   const meta = await preflight("meta", { env: { META_MODEL_API_KEY: "x" }, fetchImpl: async (u, o) => { assert.match(String(u), /api\.meta\.ai/); assert.equal(JSON.parse(o.body).store, false); return jsonResponse({}, 402); } });
@@ -122,6 +131,14 @@ const letter = { letterId: "hh-900-L1" };
 const noModel = { responses: async () => { throw new Error("no model call expected"); } };
 const noNet = async () => { throw new Error("no network expected"); };
 
+test("a question that names no date earns no reminder", async () => {
+  const q = confirm("2026-11-25");
+  q.proposal.confidence = "low";
+  q.proposal.others = [{ sentence: "Or return it by December 1, 2026.", dates: ["2026-12-01"], citation: null }];
+  const r = await letterResult(letter, reading({ questions: [q] }), { client: noModel, fetchImpl: noNet, hasDocuments: [] });
+  assert.equal(r.reminder, null);
+});
+
 test("a date Mano asks about counts as a reminder, and not on a scam", async () => {
   const asked = await letterResult(letter, reading({ questions: [confirm("2026-11-25")] }), { client: noModel, fetchImpl: noNet, hasDocuments: [] });
   assert.deepEqual(asked.reminder, { letterId: "hh-900-L1", dueDate: "2026-11-25" });
@@ -150,6 +167,52 @@ test("only an unreadable page earns the readable-copy credit, never a failed cal
   assert.equal(await score(reading({ questions: [{ id: "Q1", kind: "read_failed", letterId: null, prompt: "", citation: null }] })), 0);
 });
 
+test("the freeze pins Mano's reader and catches a change", async () => {
+  const record = await readRecord();
+  assert.ok(record.mano["packages/mail/src/gate.ts"], "the reader's source is pinned");
+  assert.ok(record.mano["pnpm-lock.yaml"], "the locked dependencies are pinned");
+  const changed = { ...record, mano: { ...record.mano, "packages/mail/src/gate.ts": "0".repeat(64) } };
+  assert.ok((await verifyMano(changed)).mismatches.includes("packages/mail/src/gate.ts"));
+});
+
+test("an interrupted run removes its temp dir and exits", async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "mano-eval-interrupt-")));
+  const cleanup = new URL("../src/cleanup.mjs", import.meta.url).pathname;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `const { registerTemp } = await import(${JSON.stringify(cleanup)}); registerTemp(${JSON.stringify(dir)}); console.log("ready"); setInterval(() => {}, 1000);`], { stdio: ["ignore", "pipe", "inherit"] });
+  await new Promise((resolve) => child.stdout.once("data", resolve));
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill("SIGTERM");
+  assert.equal(await exited, 143);
+  assert.equal(existsSync(dir), false);
+});
+
+test("the OS sandbox stops what Node's permission model cannot", { skip: osSandboxAvailable() ? false : "macOS only" }, async () => {
+  const answers = new URL("../data/dev-answers.json", import.meta.url).pathname;
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "mano-eval-os-")));
+  const profile = osSandboxProfile(dir);
+  const server = createServer((_q, a) => a.end("ok"));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const inside = (cmd, ...args) => new Promise((resolve) => {
+    const p = spawn("/usr/bin/sandbox-exec", ["-p", profile, process.execPath, "-e", cmd, ...args], { stdio: "pipe" });
+    let out = "";
+    p.stdout.on("data", (d) => { out += d; });
+    p.on("close", () => resolve(out));
+  });
+  try {
+    assert.equal(spawnSync("/usr/bin/sandbox-exec", ["-p", "(version 1)(allow default)", "/bin/cat", answers]).status, 0, "the file exists and is readable outside");
+    assert.match(await inside(`try { require("fs").readFileSync(${JSON.stringify(answers)}); console.log("READ"); } catch (e) { console.log(e.code); }`), /EPERM/);
+    assert.match(await inside(`fetch(${JSON.stringify(url)}).then(() => console.log("REACHED"), () => console.log("DENIED"));`), /DENIED/);
+    assert.match(await inside(`try { require("child_process").execFileSync("/bin/echo", ["RAN"], { stdio: "pipe" }); console.log("RAN"); } catch { console.log("DENIED"); }`), /DENIED/);
+    assert.match(await inside(`try { require("fs").writeFileSync(${JSON.stringify(answers + ".probe")}, "x"); console.log("WROTE"); } catch (e) { console.log(e.code); }`), /EPERM/);
+    assert.equal(existsSync(answers + ".probe"), false);
+    assert.match(await inside(`require("fs").writeFileSync(${JSON.stringify(join(dir, "ok"))}, "x"); console.log("WROTE");`), /WROTE/);
+  } finally {
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("the broker pins OpenRouter and refuses another model", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mano-eval-pin-"));
   const probe = join(dir, "probe.mjs");
@@ -161,7 +224,7 @@ const ask = (id, body) => new Promise((resolve) => {
   process.on("message", on);
   process.send({ channel: "mano-eval-broker", id, url: "https://openrouter.ai/api/v1/chat/completions", method: "POST", headers: {}, body });
 });
-const good = await ask(1, JSON.stringify({ provider: { zdr: false, data_collection: "allow" }, messages: [] }));
+const good = await ask(1, JSON.stringify({ models: ["other/model"], route: "fallback", provider: { zdr: false, data_collection: "allow" }, messages: [] }));
 const bad = await ask(2, JSON.stringify({ model: "other/model", messages: [] }));
 await writeFile(out, JSON.stringify([{ householdId: "hh-900", good: good.ok, bad: bad.ok, why: bad.error }]));
 process.disconnect();
@@ -175,6 +238,9 @@ process.disconnect();
     const sent = JSON.parse(seen[0].body);
     assert.equal(sent.model, OPEN_WEIGHT_MODEL);
     assert.deepEqual(sent.provider, { ...ZERO_RETENTION });
+    assert.equal(sent.models, undefined);
+    assert.equal(sent.route, undefined);
+    assert.ok(seen[0].signal, "the request can be stopped");
     assert.match(seen[0].headers.authorization, /^Bearer /);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -208,6 +274,30 @@ test("Mano's reader runs offline in the sandboxed child and scores", async () =>
     assert.ok(urls.every((u) => u.includes("openrouter.ai")), "SAM never reaches a network");
   } finally {
     await built.cleanup();
+  }
+});
+
+test("native code in the Mano child cannot read outside the run dir", { skip: osSandboxAvailable() ? false : "macOS only" }, async () => {
+  const built = await buildMano();
+  const dir = await mkdtemp(join(tmpdir(), "mano-eval-addon-"));
+  const probe = join(dir, "probe.mjs");
+  const photo = new URL("../data/photos/hh-013-L2.jpg", import.meta.url).pathname;
+  await writeFile(probe, `import { writeFile } from "node:fs/promises";
+const { default: sharp } = await import("sharp");
+const args = process.argv.slice(2);
+const out = args[args.indexOf("--out") + 1];
+const staged = await sharp({ create: { width: 4, height: 4, channels: 3, background: "#fff" } }).png().toBuffer();
+let verdict = "READ";
+try { await sharp(${JSON.stringify(photo)}).metadata(); } catch { verdict = "DENIED"; }
+await writeFile(out, JSON.stringify([{ householdId: "hh-900", verdict, sharpWorks: staged.length > 0 }]));
+`);
+  try {
+    const { outputs } = await runSystem(probe, [HOUSEHOLD], { sandbox: built.sandbox });
+    assert.equal(outputs[0].sharpWorks, true, "sharp itself still works");
+    assert.equal(outputs[0].verdict, "DENIED", "the file sharp can read without the OS sandbox stays out of reach");
+  } finally {
+    await built.cleanup();
+    await rm(dir, { recursive: true, force: true });
   }
 });
 

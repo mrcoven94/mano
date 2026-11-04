@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { generateHeldoutHouseholds } from "./generator.mjs";
-import { currentFileHashes, currentPhotoHashes, photoTrackLetters } from "./verify.mjs";
+import { currentFileHashes, currentManoHashes, currentPhotoHashes, photoTrackLetters } from "./verify.mjs";
 
 const seed = process.env.MANO_EVAL_HELDOUT_SEED;
 if (!seed) {
@@ -43,6 +43,7 @@ const record = {
     answers: sha256(await readFile(new URL("../data/dev-answers.json", import.meta.url), "utf8")),
   },
   code: await currentFileHashes(),
+  mano: await currentManoHashes(),
   photos,
   tracks: { photo: photoTrackLetters(photos) },
   heldout: heldout.map((h) => ({ householdId: h.householdId, sha256: sha256(JSON.stringify(h)) })),

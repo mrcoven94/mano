@@ -16,7 +16,9 @@ import { photoTrackInput, sliceAnswers, toAnswers, toBaselineInputs } from "./in
 import { modelRoute, preflight, routeLabel } from "./openrouter.mjs";
 import { photoFilesByLetter, photoHouseholdIds, renderHouseholdPhotos } from "./render.mjs";
 import { runTrack } from "./tracks.mjs";
-import { readRecord, verifyCode, verifyDev, verifyHeldout, verifyPhotos, verifySeedCommitment } from "./verify.mjs";
+import { registerTemp } from "./cleanup.mjs";
+import { osSandboxAvailable } from "./harness.mjs";
+import { readRecord, verifyCode, verifyDev, verifyHeldout, verifyMano, verifyPhotos, verifySeedCommitment } from "./verify.mjs";
 
 function abort(message) {
   console.error(`ABORT: ${message}`);
@@ -25,6 +27,8 @@ function abort(message) {
 
 const seed = process.env.MANO_EVAL_HELDOUT_SEED;
 if (!seed || !process.env.MANO_EVAL_TEMPLATE_PACK) abort("needs MANO_EVAL_HELDOUT_SEED and MANO_EVAL_TEMPLATE_PACK");
+// Mano needs native code, which only an OS sandbox can keep from the pack.
+if (!osSandboxAvailable()) abort("needs an OS sandbox for Mano's native image code; only macOS sandbox-exec is implemented");
 // With no model key, Mano and the general agent report "not run" and the
 // deterministic baselines still score, at no cost.
 const route = modelRoute();
@@ -39,6 +43,7 @@ const checks = [
   ["dev", await verifyDev(record)],
   ["photos", await verifyPhotos(record)],
   ["held-out", await verifyHeldout(record, seed)],
+  ["Mano reader and dependencies", await verifyMano(record)],
 ];
 const bad = checks.filter(([, r]) => !r.ok).map(([name]) => name);
 if (bad.length > 0) abort(`frozen commitments do not match: ${bad.join(", ")}`);
@@ -61,6 +66,7 @@ console.log("");
 await runTrack("text track", inputs, answers, { label });
 
 const dir = await realpath(await mkdtemp(join(tmpdir(), "mano-eval-heldout-")));
+const unregister = registerTemp(dir);
 try {
   // The photo set follows the whole-cohort rule the freeze used.
   const photoIds = photoHouseholdIds([...generateDevHouseholds(), ...households]);
@@ -72,5 +78,6 @@ try {
   await runTrack("photo track", photoInputs, sliceAnswers(answers, keep), { label });
 } finally {
   await rm(dir, { recursive: true, force: true });
+  unregister();
 }
 console.log("held-out: done");

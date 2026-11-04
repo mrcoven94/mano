@@ -11,8 +11,10 @@
 // answers are never written to disk while a system runs.
 import { fork, spawnSync } from "node:child_process";
 import { mkdtemp, writeFile, readFile, rm, mkdir, copyFile, realpath, stat, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { realpathSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
+import { registerChild, registerTemp } from "./cleanup.mjs";
 import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody } from "./openrouter.mjs";
 
 // The harness refuses to run unless the runtime can deny network: a child
@@ -40,10 +42,44 @@ const HELLO = "mano-eval-broker-hello";
 // and link-check DNS lookups. The key is injected here; the child never
 // sees it.
 const BROKER_RULES = [
-  { host: "api.meta.ai", pathPrefix: "/v1/responses", methods: ["POST"], keyEnv: "META_MODEL_API_KEY" },
-  { host: "openrouter.ai", pathPrefix: "/api/v1/chat/completions", methods: ["POST"], keyEnv: "OPENROUTER_API_KEY", pinned: true },
+  { host: "api.meta.ai", pathPrefix: "/v1/responses", methods: ["POST"], keyEnv: "META_MODEL_API_KEY", modelRoute: "meta" },
+  { host: "openrouter.ai", pathPrefix: "/api/v1/chat/completions", methods: ["POST"], keyEnv: "OPENROUTER_API_KEY", modelRoute: "openrouter", pinned: true },
   { host: "security.cloudflare-dns.com", pathPrefix: "/dns-query", methods: ["GET"] },
 ];
+
+// A request ends here, before the child's own timer, so retries never overlap.
+const BROKER_TIMEOUT_MS = 170000;
+const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
+
+function sbString(p) {
+  return JSON.stringify(p);
+}
+
+// Node's permission model does not cover native code, and a system that needs
+// sharp must load native code. On macOS the kernel then enforces the same limits
+// on everything in the process: no network, no exec, writes only to the run dir,
+// and no reading of the home folder, which holds the repo, or of temp folders,
+// which hold the pack during a run. File metadata stays readable so paths resolve.
+export function osSandboxProfile(runDir, readDirs = [], execPath = process.execPath) {
+  const realExec = realpathSync(execPath);
+  const allowRead = [runDir, ...readDirs, dirname(dirname(realExec))];
+  return [
+    "(version 1)",
+    "(allow default)",
+    "(deny network*)",
+    "(deny process-exec*)",
+    `(allow process-exec (literal ${sbString(execPath)}) (literal ${sbString(realExec)}))`,
+    "(deny file-write*)",
+    `(allow file-write* (subpath ${sbString(runDir)}) (literal "/dev/null"))`,
+    `(deny file-read-data (subpath ${sbString(realpathSync(homedir()))}) (subpath "/private/tmp") (subpath "/private/var/folders"))`,
+    `(allow file-read-data ${allowRead.map((p) => `(subpath ${sbString(p)})`).join(" ")})`,
+  ].join("\n");
+}
+
+export function osSandboxAvailable() {
+  if (process.platform !== "darwin") return false;
+  return spawnSync(SANDBOX_EXEC, ["-p", "(version 1)(allow default)", "/usr/bin/true"]).status === 0;
+}
 
 function brokerRoute(url, method) {
   let u;
@@ -60,10 +96,12 @@ export async function withRunDir(fn) {
   // Resolved: the permission model checks literal path components, so any
   // symlink (like /tmp on macOS) would demand its ancestors too.
   const dir = await realpath(await mkdtemp(join(tmpdir(), "mano-eval-run-")));
+  const unregister = registerTemp(dir);
   try {
     return await fn(dir);
   } finally {
     await rm(dir, { recursive: true, force: true });
+    unregister();
   }
 }
 
@@ -81,7 +119,8 @@ function scrubbedEnv(allow) {
 // the parent answers IPC fetch requests per BROKER_RULES. Returns
 // { outputs, runs }.
 // sandbox widens the child's reach only for a system that needs a native
-// module: { allowAddons, allowFsRead: [dirs], links: { package: dir } }.
+// module: { allowAddons, allowFsRead: [dirs], links: { package: dir } }. Native
+// code gets the OS sandbox wherever one is available (see osSandboxProfile).
 export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [], timeoutMs = 1500000, broker = false, fetchImpl = fetch, sandbox = {} } = {}) {
   void netAllow;
   assertNetDenyCapable();
@@ -124,6 +163,18 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
     const inputPath = join(dir, "input.json");
     const outputPath = join(dir, "output.json");
     await writeFile(inputPath, JSON.stringify(stagedInputs));
+    const nodeArgs = [
+      // One value per flag: comma-joined values are treated as one path.
+      // The run dir is fully resolved, so no ancestor grant is needed
+      // and the child reads nothing else, not even the OS temp dir.
+      "--permission",
+      `--allow-fs-read=${dir}`,
+      `--allow-fs-write=${dir}`,
+      ...(sandbox.allowFsRead ?? []).map((p) => `--allow-fs-read=${p}`),
+      ...(sandbox.allowAddons ? ["--allow-addons"] : []),
+      // No --allow-net: the child is offline; the broker fetches for it.
+    ];
+    const osSandbox = sandbox.allowAddons && osSandboxAvailable();
     const child = fork(
       stagedEntry,
       ["--input", inputPath, "--out", outputPath],
@@ -131,19 +182,15 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
         cwd: dir,
         env: scrubbedEnv(envAllow),
         silent: true,
-        execArgv: [
-          // One value per flag: comma-joined values are treated as one path.
-          // The run dir is fully resolved, so no ancestor grant is needed
-          // and the child reads nothing else, not even the OS temp dir.
-          "--permission",
-          `--allow-fs-read=${dir}`,
-          `--allow-fs-write=${dir}`,
-          ...(sandbox.allowFsRead ?? []).map((p) => `--allow-fs-read=${p}`),
-          ...(sandbox.allowAddons ? ["--allow-addons"] : []),
-          // No --allow-net: the child is offline; the broker fetches for it.
-        ],
+        ...(osSandbox
+          ? { execPath: SANDBOX_EXEC, execArgv: ["-p", osSandboxProfile(dir, sandbox.allowFsRead), process.execPath, ...nodeArgs] }
+          : { execArgv: nodeArgs }),
       }
     );
+    registerChild(child);
+    // Nothing in flight outlives the child it was for.
+    const inFlight = new AbortController();
+    child.on("exit", () => inFlight.abort());
     child.on("message", (msg) => {
       if (!msg || typeof msg !== "object" || msg.channel !== CHANNEL) return;
       const reply = (rest) => {
@@ -159,6 +206,10 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
         const route = brokerRoute(msg.url, msg.method || "GET");
         if (!route) {
           reply({ ok: false, error: "broker denied: not on the allowlist" });
+          return;
+        }
+        if (route.modelRoute && route.modelRoute !== modelRoute()) {
+          reply({ ok: false, error: "broker denied: not the selected model route" });
           return;
         }
         const headers = { ...(msg.headers && typeof msg.headers === "object" ? msg.headers : {}) };
@@ -190,12 +241,18 @@ export async function runSystem(entryFile, inputs, { envAllow = [], netAllow = [
         try {
           // Never follow redirects: a 302 off the allowlist must fail
           // closed, not fetch a second, unchecked URL.
-          const res = await fetchImpl(msg.url, { method: msg.method || "GET", headers, body, redirect: "error" });
+          const limit = Math.min(Number(msg.timeoutMs) > 0 ? Number(msg.timeoutMs) : BROKER_TIMEOUT_MS, BROKER_TIMEOUT_MS);
+          const signal = AbortSignal.any([inFlight.signal, AbortSignal.timeout(limit)]);
+          const res = await fetchImpl(msg.url, { method: msg.method || "GET", headers, body, redirect: "error", signal });
           let json = null;
           try {
             json = await res.json();
           } catch {
             json = null;
+          }
+          if (route.pinned && json?.model && json.model !== OPEN_WEIGHT_MODEL) {
+            reply({ ok: false, error: "broker denied: a different model answered" });
+            return;
           }
           reply({ ok: true, statusOk: res.ok === true, status: res.status ?? 0, json });
         } catch (err) {

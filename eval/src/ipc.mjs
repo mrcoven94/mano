@@ -8,7 +8,7 @@
 // - Parent to child once, when the broker is enabled:
 //   { channel: "mano-eval-broker-hello", keyAvailable: bool, route: "openrouter" | "meta" | null }
 // - Child to parent per fetch:
-//   { channel: "mano-eval-broker", id, url, method, headers, body? }
+//   { channel: "mano-eval-broker", id, url, method, headers, body?, timeoutMs? }
 // - Parent to child per fetch:
 //   { channel: "mano-eval-broker", id, ok: true, statusOk, status, json }
 //   or { channel: "mano-eval-broker", id, ok: false, error }
@@ -18,6 +18,7 @@
 // https://security.cloudflare-dns.com/dns-query.
 const CHANNEL = "mano-eval-broker";
 const HELLO = "mano-eval-broker-hello";
+const REPLY_GRACE_MS = 5000;
 
 export function childBroker({ timeoutMs = 120000, helloTimeoutMs = 5000 } = {}) {
   if (typeof process.send !== "function") return null;
@@ -50,10 +51,12 @@ export function childBroker({ timeoutMs = 120000, helloTimeoutMs = 5000 } = {}) 
   const fetch = async (url, opts = {}) => {
     const id = nextId++;
     return new Promise((resolve, reject) => {
+      // The parent stops the request at timeoutMs and answers; this later timer
+      // only covers a parent that never answers.
       const timer = setTimeout(() => {
         pending.delete(id);
         reject(new Error("broker timeout"));
-      }, timeoutMs);
+      }, opts.timeoutMs === undefined ? timeoutMs : opts.timeoutMs + REPLY_GRACE_MS);
       pending.set(id, { resolve, reject, timer });
       try {
         process.send({
@@ -63,6 +66,7 @@ export function childBroker({ timeoutMs = 120000, helloTimeoutMs = 5000 } = {}) 
           method: opts.method || "GET",
           headers: opts.headers && typeof opts.headers === "object" ? opts.headers : {},
           body: typeof opts.body === "string" ? opts.body : undefined,
+          timeoutMs: opts.timeoutMs,
         });
       } catch (err) {
         pending.delete(id);

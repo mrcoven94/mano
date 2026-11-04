@@ -3,7 +3,7 @@
 // With MANO_EVAL_HELDOUT_SEED and MANO_EVAL_TEMPLATE_PACK (via ws keys
 // run) this also checks the held-out hashes and the private pack hash;
 // without them the held-out check is loudly skipped.
-import { readRecord, verifyCode, verifyDev, verifyPhotos, verifyHeldout, verifySeedCommitment } from "./verify.mjs";
+import { readRecord, verifyCode, verifyDev, verifyMano, verifyPhotos, verifyHeldout, verifySeedCommitment } from "./verify.mjs";
 
 const record = await readRecord();
 let failed = false;
@@ -22,6 +22,7 @@ if (seed && packPath) {
   console.log(`seed commitment: ${commitment ? "match" : "MISMATCH (wrong seed for this freeze)"}`);
   if (!commitment) failed = true;
   show("held-out set", await verifyHeldout(record, seed));
+  show("Mano reader and dependencies", await verifyMano(record));
 } else {
   console.log("held-out set: SKIPPED (needs MANO_EVAL_HELDOUT_SEED and MANO_EVAL_TEMPLATE_PACK; run with ws keys run for the full check)");
 }

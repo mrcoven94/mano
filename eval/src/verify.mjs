@@ -17,6 +17,7 @@ export const CODE_FILES = [
   "eval/src/render.mjs",
   "eval/src/tools.mjs",
   "eval/src/ipc.mjs",
+  "eval/src/cleanup.mjs",
   "eval/src/openrouter.mjs",
   "eval/src/pool.mjs",
   "eval/src/mano-adapter.mjs",
@@ -47,6 +48,25 @@ export async function currentFileHashes() {
     out[f] = sha256(await readFile(rootUrl(f), "utf8"));
   }
   return out;
+}
+
+// What Mano is at the freeze: its reader's source and the locked dependencies.
+// Checked only before a held-out run, since Mano keeps changing on main and a
+// run on a newer Mano needs a new freeze, not a failing test for everyone else.
+export async function currentManoHashes() {
+  const out = { "pnpm-lock.yaml": sha256(await readFile(rootUrl("pnpm-lock.yaml"), "utf8")), "packages/mail/package.json": sha256(await readFile(rootUrl("packages/mail/package.json"), "utf8")) };
+  for (const f of (await readdir(rootUrl("packages/mail/src/"))).sort()) {
+    out[`packages/mail/src/${f}`] = sha256(await readFile(rootUrl(`packages/mail/src/${f}`), "utf8"));
+  }
+  return out;
+}
+
+export async function verifyMano(record) {
+  const current = await currentManoHashes();
+  const frozen = record.mano ?? {};
+  const names = new Set([...Object.keys(current), ...Object.keys(frozen)]);
+  const mismatches = [...names].filter((f) => frozen[f] !== current[f]);
+  return { ok: mismatches.length === 0, mismatches };
 }
 
 export async function readRecord() {

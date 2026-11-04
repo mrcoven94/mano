@@ -7,6 +7,7 @@ export const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completion
 export const OPEN_WEIGHT_MODEL = "meta/muse-spark-open";
 export const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" });
 const META_RESPONSES_URL = "https://api.meta.ai/v1/responses";
+const PREFLIGHT_TIMEOUT_MS = 60000;
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1500;
 
@@ -23,13 +24,24 @@ export function routeLabel(route, date = new Date().toLocaleDateString("en-CA"))
   return "offline (no model key)";
 }
 
+// Only these fields leave the parent. Listing them keeps out OpenRouter's other
+// ways to pick a model or a route, such as "models" and "route".
+const CHAT_FIELDS = ["messages", "tools", "tool_choice", "max_tokens", "reasoning", "response_format"];
+const PROVIDER_FIELDS = ["sort", "require_parameters"];
+
+function picked(from, fields) {
+  const out = {};
+  for (const k of fields) if (from && from[k] !== undefined) out[k] = from[k];
+  return out;
+}
+
 // Fixes the model, the pin and usage reporting on any request body. Applied
 // last in the parent, so nothing the child sends can change them.
 export function pinnedChatBody(body) {
   return {
-    ...body,
+    ...picked(body, CHAT_FIELDS),
     model: OPEN_WEIGHT_MODEL,
-    provider: { ...(body && typeof body.provider === "object" ? body.provider : {}), ...ZERO_RETENTION },
+    provider: { ...picked(body?.provider, PROVIDER_FIELDS), ...ZERO_RETENTION },
     usage: { include: true },
   };
 }
@@ -94,6 +106,8 @@ export async function postChat(body, { fetchImpl = fetch, maxRetries = MAX_RETRI
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        // The broker aborts the request itself when this runs out.
+        ...(deadline !== undefined ? { timeoutMs: Math.max(1, deadline - Date.now()) } : {}),
       });
       if (res.ok) {
         const data = await res.json();
@@ -110,10 +124,12 @@ export async function postChat(body, { fetchImpl = fetch, maxRetries = MAX_RETRI
 
 // One tiny call before a held-out run, so an account problem stops the run
 // instead of scoring every household as a failure. A provider that runs out
-// mid-run shows up in the report's model call failures.
-export async function preflight(route, { env = process.env, fetchImpl = fetch } = {}) {
+// mid-run shows up in the report's model call failures. Only a usable answer
+// passes: an error body can come back with status 200.
+export async function preflight(route, { env = process.env, fetchImpl = fetch, timeoutMs = PREFLIGHT_TIMEOUT_MS } = {}) {
   if (route === null) return { ok: true, status: null };
-  const call = route === "openrouter"
+  const openRouter = route === "openrouter";
+  const call = openRouter
     ? {
         url: OPENROUTER_CHAT_URL,
         key: env.OPENROUTER_API_KEY,
@@ -129,8 +145,12 @@ export async function preflight(route, { env = process.env, fetchImpl = fetch } 
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${call.key}` },
       body: JSON.stringify(call.body),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    return { ok: res.ok, status: res.status };
+    if (!res.ok) return { ok: false, status: res.status };
+    const data = await res.json();
+    const usable = openRouter ? chatText(data).length > 0 : Boolean(data?.output_text || data?.output?.length);
+    return { ok: usable, status: res.status };
   } catch {
     return { ok: false, status: null };
   }

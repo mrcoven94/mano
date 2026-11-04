@@ -4,8 +4,10 @@
 // - Each letter is read on its own, so a result belongs to its letterId.
 // - Mano reads images only. On the text track the letter's exact text is drawn
 //   onto a clean page; on the photo track the staged photos go in as they are.
-// - A reminder is the deadline Mano holds, or else the date on the question it
-//   asks, since the person would confirm that date. A scam letter has neither.
+// - A reminder is the deadline Mano holds, or else a date its answer shows the
+//   person in a question, since they would confirm it. A question that names no
+//   date earns nothing, even when the reader has a date in mind, and a scam
+//   letter has neither.
 // - A readable copy counts as asked for only when Mano asks about an unreadable
 //   or missing page. A failed model call is a failure with no such credit.
 // - Packet items come from what the reader says a letter asks for. Its words are
@@ -162,6 +164,12 @@ export function splitNames(names, hasDocuments) {
   return { packet: [...packet].sort(), requested: [...requested].sort() };
 }
 
+// How the answer writes a date ("November 25, 2026").
+function spokenDate(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { timeZone: "UTC", month: "long", day: "numeric", year: "numeric" });
+}
+
 function linkUrl(value) {
   return /^https?:\/\//i.test(value) ? value : `https://${value}`;
 }
@@ -183,7 +191,8 @@ export async function letterResult(letter, reading, { client, fetchImpl, hasDocu
   const scam = reading.warnings.some((w) => w.kind === "scam_suspect");
   const instruction = reading.warnings.some((w) => w.kind === "instruction_in_content");
   const proposal = reading.questions.find((q) => q.kind === "confirm_deadline" && q.proposal)?.proposal;
-  const due = answer.deadlines[0]?.dueDate ?? proposal?.dueDate ?? null;
+  const shown = proposal && answer.text.includes(spokenDate(proposal.dueDate)) ? proposal.dueDate : null;
+  const due = answer.deadlines[0]?.dueDate ?? shown;
   if (due && !scam) out.reminder = { letterId: letter.letterId, dueDate: due };
   if (askedForCopy(reading)) {
     out.failure = { letterId: letter.letterId, reason: "page unreadable or missing, please send a readable copy" };
