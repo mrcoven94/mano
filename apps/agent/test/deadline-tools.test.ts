@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { personIdFor } from "../agent/lib/engine.js";
 import { parseDueDate, renderDeadlines } from "../agent/lib/deadlines.js";
+import { PROFILE_CLOSE, PROFILE_OPEN } from "../agent/lib/profile.js";
 import cancelDeadline from "../agent/tools/cancel_deadline.js";
 import listDeadlines from "../agent/tools/list_deadlines.js";
 import trackDeadline from "../agent/tools/track_deadline.js";
@@ -106,6 +107,144 @@ describe("deadline tools", () => {
     vi.stubGlobal("fetch", without);
     await expect(listDeadlines.execute({}, ctx("turn_dl_0010"))).rejects.toThrow(/not available/);
     await expect(trackDeadline.execute({ title: "CalFresh renewal", due: "November 12" }, ctx("turn_dl_0011"))).rejects.toThrow(/not available/);
+  });
+});
+
+describe("a due date's year", () => {
+  type Answer = { dueDate: string; status: string; firstNudgeAt: string | null; today?: string; tell?: string; note?: string };
+  // Engine's clock and the turn are one moment; the grant lasts minutes.
+  async function at(iso: string): Promise<number> {
+    const ms = Date.parse(iso);
+    vi.setSystemTime(ms);
+    engine.now = () => ms;
+    grant = await grantFor(HANDLE);
+    return ms;
+  }
+  const said = (turnId: string, words: string, turnAtMs: number) =>
+    toolCtx({ handleHash: HANDLE, turnId, grant, generation: 0, turnAtMs, messages: [{ role: "user", content: words }] });
+  const track = async (due: string, words: string, turnAtMs: number, extra: { kind?: "renewal" | "interview" } = {}) =>
+    (await trackDeadline.execute({ title: "Food benefits renewal", due, ...extra }, said("turn_year_0001", words, turnAtMs))) as Answer;
+  const livingIn = (state: string) => ({ person: { address: { state: { value: state, source: "person", updatedAt: "2026-10-30T00:00:00.000Z" } } } }) as never;
+  const scheduled = () => engine.deadlinesOf(PERSON).flatMap((d) => d.nudges.filter((n) => n.status === "scheduled").map((n) => n.daysBefore));
+
+  // Production trace wrun_41M6J3HAAP0GXDAG4B4GWSNZ0R, synthetic person.
+  const TRACED = "2026-11-04T01:45:19.191Z";
+  const TRACED_WORDS = "the letter says my renewal form is due November 24. can you fill out my renewal for me";
+
+  it("a year the model made up never reaches Engine: the date goes live with its reminders", async () => {
+    const turnAtMs = await at(TRACED);
+    const out = await track("2024-11-24", TRACED_WORDS, turnAtMs, { kind: "renewal" });
+    expect(out).toMatchObject({ dueDate: "2026-11-24", status: "created", firstNudgeAt: "2026-11-10T18:00:00.000Z" });
+    expect(engine.deadlinesOf(PERSON).map((d) => d.dueDate)).toEqual(["2026-11-24"]);
+    expect(scheduled()).toEqual([14, 7, 2, 0]);
+    expect(engine.remindersOf(PERSON).filter((r) => r.status === "scheduled")).toHaveLength(4);
+    expect(out.note).toContain("2026");
+  });
+
+  it("an interview gets its own days, the day before in place of two days out", async () => {
+    const turnAtMs = await at(TRACED);
+    const out = await track("2023-12-01", "my interview is December 1", turnAtMs, { kind: "interview" });
+    expect(out).toMatchObject({ dueDate: "2026-12-01", firstNudgeAt: "2026-11-17T18:00:00.000Z" });
+    expect(scheduled()).toEqual([14, 7, 1, 0]);
+  });
+
+  it("the person's words with no year take the same path", async () => {
+    const turnAtMs = await at(TRACED);
+    const out = await track("November 24", TRACED_WORDS, turnAtMs);
+    expect(out).toMatchObject({ dueDate: "2026-11-24", firstNudgeAt: "2026-11-10T18:00:00.000Z" });
+    expect(out.note).toBeUndefined();
+  });
+
+  it("a later year the person did not say is not kept either, and one they said is", async () => {
+    const turnAtMs = await at(TRACED);
+    expect(await track("2027-11-24", TRACED_WORDS, turnAtMs)).toMatchObject({ dueDate: "2026-11-24" });
+    expect(await track("11/24/2027", "my renewal is due 11/24/27", turnAtMs)).toMatchObject({ dueDate: "2027-11-24" });
+    expect(await track("March 3, 2027", "it is due March 3 2027", turnAtMs)).toMatchObject({ dueDate: "2027-03-03" });
+  });
+
+  it("a date just gone by, whatever year the model gives it, is not saved and the model is told", async () => {
+    const turnAtMs = await at(TRACED);
+    for (const due of ["2026-10-27", "2024-10-27", "October 27"]) {
+      const out = await track(due, "it was due last week", turnAtMs);
+      expect(out).toMatchObject({ status: "passed", dueDate: "2026-10-27", today: "2026-11-03", firstNudgeAt: null });
+      expect(out.tell).toMatch(/has already passed/);
+    }
+    expect(engine.deadlinesOf(PERSON)).toEqual([]);
+    expect(engine.remindersOf(PERSON)).toEqual([]);
+  });
+
+  it("a year the person said stands even when it has passed, and is not moved ahead", async () => {
+    const turnAtMs = await at(TRACED);
+    const out = await track("2024-11-24", "my renewal was due November 24, 2024", turnAtMs);
+    expect(out).toMatchObject({ status: "passed", dueDate: "2024-11-24" });
+    expect(engine.deadlinesOf(PERSON)).toEqual([]);
+  });
+
+  it("a letter's year in the person's turn counts, the profile's does not, and neither do Mano's replies", async () => {
+    const turnAtMs = await at(TRACED);
+    const input = { title: "Food benefits renewal", due: "2024-11-24" };
+    const fromLetter = toolCtx({
+      handleHash: HANDLE, turnId: "turn_year_letter", grant, generation: 0, turnAtMs,
+      messages: [{ role: "user", content: [{ type: "text", text: "what about this\n\nThe letter says: due November 24, 2024." }] }],
+    });
+    expect(await trackDeadline.execute(input, fromLetter)).toMatchObject({ status: "passed", dueDate: "2024-11-24" });
+    const notThePerson = toolCtx({
+      handleHash: HANDLE, turnId: "turn_year_other", grant, generation: 0, turnAtMs,
+      messages: [
+        { role: "user", content: `Mano's records\n${PROFILE_OPEN}{"since":"2024-01-02"}${PROFILE_CLOSE}` },
+        { role: "assistant", content: "Your renewal from 2024 is closed." },
+        { role: "user", content: "it is due November 24" },
+      ],
+    });
+    expect(await trackDeadline.execute(input, notThePerson)).toMatchObject({ dueDate: "2026-11-24", status: "created" });
+  });
+
+  it("December 30, \"January 3\" is four days away, in the next year", async () => {
+    const turnAtMs = await at("2026-12-30T20:00:00.000Z");
+    for (const due of ["2026-01-03", "2025-01-03", "January 3", "1/3"]) {
+      expect(await track(due, "it is due January 3", turnAtMs)).toMatchObject({ dueDate: "2027-01-03", firstNudgeAt: "2027-01-01T18:00:00.000Z" });
+    }
+    expect(scheduled()).toEqual([2, 0]);
+  });
+
+  it("a leap day: the next one when it is near, a question when it is not", async () => {
+    let turnAtMs = await at("2027-12-20T20:00:00.000Z");
+    expect(await track("2024-02-29", "it is due February 29", turnAtMs)).toMatchObject({ dueDate: "2028-02-29", firstNudgeAt: "2028-02-15T18:00:00.000Z" });
+    expect(scheduled()).toEqual([14, 7, 2, 0]);
+    turnAtMs = await at("2028-03-10T20:00:00.000Z");
+    expect(await track("February 29", "it is due February 29", turnAtMs)).toMatchObject({ status: "passed", dueDate: "2028-02-29" });
+    turnAtMs = await at(TRACED);
+    await expect(track("February 29", "it is due February 29", turnAtMs)).rejects.toThrow(/Could not read/);
+    await expect(track("February 29, 2027", "it is due February 29, 2027", turnAtMs)).rejects.toThrow(/Could not read/);
+  });
+
+  it("today is the person's today, by the state on their profile, not UTC's", async () => {
+    // 23:30 on November 3 in California; already November 4 in UTC and Denver.
+    let turnAtMs = await at("2026-11-04T07:30:00.000Z");
+    const today = await track("November 3", "it is due November 3", turnAtMs);
+    expect(today).toMatchObject({ dueDate: "2026-11-03", status: "created", firstNudgeAt: null });
+    expect(today.note).toMatch(/no reminder/);
+    expect(await track("November 4", "it is due November 4", turnAtMs)).toMatchObject({ dueDate: "2026-11-04", firstNudgeAt: "2026-11-04T18:00:00.000Z" });
+
+    // The same moment is already past the date in New York.
+    engine.profile = livingIn("NY");
+    expect(await track("November 3", "it was due November 3", turnAtMs)).toMatchObject({ status: "passed", dueDate: "2026-11-03", today: "2026-11-04" });
+
+    // Guam is ahead of UTC: 01:00 on November 4 there, 15:00 on November 3 in UTC.
+    turnAtMs = await at("2026-11-03T15:00:00.000Z");
+    engine.profile = livingIn("GU");
+    expect(await track("November 3", "it was due November 3", turnAtMs)).toMatchObject({ status: "passed", today: "2026-11-04" });
+  });
+
+  it("moving a deadline reads its date the same way, and a past date moves nothing", async () => {
+    const turnAtMs = await at(TRACED);
+    const { deadlineId } = (await track("2024-11-24", TRACED_WORDS, turnAtMs)) as unknown as Tracked;
+    const moved = await updateDeadline.execute({ deadlineId, due: "2024-12-01" }, said("turn_year_move1", "it moved to December 1", turnAtMs));
+    expect(moved).toMatchObject({ found: true, status: "moved", moved: { from: "2026-11-24", to: "2026-12-01" }, dueDate: "2026-12-01" });
+    const past = await updateDeadline.execute({ deadlineId, due: "2026-10-27" }, said("turn_year_move2", "no it was October 27", turnAtMs));
+    expect(past).toMatchObject({ status: "passed", dueDate: "2026-10-27" });
+    expect(engine.deadlinesOf(PERSON).map((d) => d.dueDate)).toEqual(["2026-12-01"]);
+    expect(scheduled().length).toBeGreaterThan(0);
   });
 });
 
