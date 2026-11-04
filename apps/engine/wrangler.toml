@@ -48,6 +48,10 @@ MANO_DAILY_CHECK_SENDS = "off"
 #   MANO_NUDGE_TIME (optional, local HH:MM deadline nudges go out, default 10:00)
 #   EXECUTOR_MODE (simulated or sandbox), plus SANDBOX_BASE_URL and
 #   SANDBOX_PORTAL_TOKEN (the portal's own token) for sandbox
+#   LOB_TEST_API_KEY, LOB_WEBHOOK_SECRET, TELNYX_API_KEY,
+#   TELNYX_FAX_CONNECTION_ID, TELNYX_PUBLIC_KEY, MANO_OWN_FAX_NUMBER,
+#   MANO_FAX_FROM_NUMBER (optional: faxes and letters stay off without them,
+#   see apps/engine/.dev.vars.example)
 #   MANO_GUARDIAN_URL, MANO_GUARDIAN_TOKEN (optional: Guardian's check
 #   endpoint and bearer token; with none of the four set the checker is
 #   local rules only), MANO_GUARDIAN_KEY_ID and MANO_GUARDIAN_KEY_SECRET

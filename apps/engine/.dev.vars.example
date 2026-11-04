@@ -37,6 +37,21 @@ MODEL_ALLOWLIST_EXTRA=
 EXECUTOR_MODE=
 SANDBOX_BASE_URL=
 SANDBOX_PORTAL_TOKEN=
+# Faxes and mailed letters stay off until their settings are present. Mail
+# reads only a test mode key and refuses anything else. A fax goes only to
+# MANO_OWN_FAX_NUMBER. The webhook secret and public key open
+# /webhooks/mail and /webhooks/fax. The cents settings override the prices
+# the approval question shows.
+LOB_TEST_API_KEY= # gitleaks:allow (empty example value)
+LOB_WEBHOOK_SECRET= # gitleaks:allow (empty example value)
+TELNYX_API_KEY= # gitleaks:allow (empty example value)
+TELNYX_FAX_CONNECTION_ID=
+TELNYX_PUBLIC_KEY=
+MANO_OWN_FAX_NUMBER=
+MANO_FAX_FROM_NUMBER=
+MANO_FAX_CENTS_PER_PAGE=
+MANO_MAIL_BASE_CENTS=
+MANO_MAIL_CENTS_PER_EXTRA_PAGE=
 # Guardian checks every action after the local rules when its URL is set;
 # with none of these four set the checker is local rules only, and a
 # partial set blocks every action. The key pair is Modal's

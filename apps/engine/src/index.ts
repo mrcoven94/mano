@@ -31,6 +31,7 @@
 // HTTP surface:
 //
 //   GET  /health
+//   POST /webhooks/mail, /webhooks/fax         provider delivery reports, verified by signature
 //   POST /api/check-link                       { url } (person token; 200 with allowed:false when blocked)
 //   POST /api/persons/:id/chat                 { message }
 //   POST /api/persons/:id/action               action request (worker stamps personId from the token);
@@ -132,6 +133,11 @@
 // wrangler.toml, kept equal to the portal's), so in sandbox mode the
 // gateway refuses anything else before it drafts an approval.
 //
+// Faxes and letters have their own executors, on only when their settings
+// are present (gateway/outbound.ts). A fax goes only to our own number and
+// a letter only to the mail provider's test mode, and the approval question
+// shows the price Engine worked out for the exact document.
+//
 // Secrets: never put a key on a command line. Set secrets from stdin:
 //
 //   ~/Desktop/code/bin/ws keys run -- sh -c 'printf %s "$META_MODEL_API_KEY" | pnpm --filter @mano/engine exec wrangler secret put META_MODEL_API_KEY'
@@ -166,7 +172,7 @@ import {
   mintWsTicket,
   sessionConfigured,
 } from "./auth.js";
-import { checkerSetting, createExecutor, type CheckerSetting } from "./gateway/index.js";
+import { checkerSetting, createExecutor, deliveryRoute, faxConfigured, parseFaxEvent, parseMailEvent, verifyFaxSignature, verifyMailSignature, type CheckerSetting } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
 import { SANDBOX_ORG_ID } from "@mano/protocol";
@@ -321,6 +327,8 @@ export interface LiveStatus {
   files: "bound" | "missing";
   kek: boolean;
   checker: CheckerSetting["kind"];
+  mail: "test-mode" | "off";
+  fax: "own-number" | "off";
   calls: "off" | "stand-in" | "live";
 }
 
@@ -334,6 +342,8 @@ export function liveStatus(env: Env): LiveStatus {
     files: env.FILES ? "bound" : "missing",
     kek: Boolean(env.ENCRYPTION_KEK_B64),
     checker: checkerSetting(env).kind,
+    mail: env.LOB_TEST_API_KEY ? "test-mode" : "off",
+    fax: faxConfigured(env) ? "own-number" : "off",
     calls: !calls ? "off" : calls.provider.simulated ? "stand-in" : "live",
   };
 }
@@ -362,6 +372,28 @@ export function healthOk(env: Env): boolean {
     return false;
   }
   return true;
+}
+
+// A provider's report on a fax or letter. Closed until its secret is set,
+// and nothing past the signature check runs on an unverified body. An event
+// it cannot place is not acknowledged, so the provider sends it again: the
+// route to a letter's person may not be written yet.
+async function deliveryWebhook(request: Request, env: Env, channel: "fax" | "mail"): Promise<Response> {
+  if (request.method !== "POST") return new Response("Method not allowed.", { status: 405 });
+  const secret = channel === "mail" ? env.LOB_WEBHOOK_SECRET : env.TELNYX_PUBLIC_KEY;
+  if (!secret) return new Response("Not found.", { status: 404 });
+  const declared = Number(request.headers.get("content-length") ?? 0);
+  if (declared > MAX_ACTION_BODY) return new Response("Too large.", { status: 413 });
+  const body = await request.text();
+  if (body.length > MAX_ACTION_BODY) return new Response("Too large.", { status: 413 });
+  const verified = channel === "mail" ? await verifyMailSignature(body, request.headers, secret) : await verifyFaxSignature(body, request.headers, secret);
+  if (!verified) return new Response("Bad signature.", { status: 401 });
+  const event = channel === "mail" ? parseMailEvent(body) : parseFaxEvent(body);
+  if (!event) return new Response("Not an event Mano can read.", { status: 422 });
+  const personId = event.personId ?? (await deliveryRoute(env.FILES, event.externalId));
+  if (!personId) return new Response("Not placed.", { status: 404 });
+  const placed = await (personStub(env, personId) as unknown as PersonAgent).recordDelivery({ ...event, personId });
+  return placed ? new Response(null, { status: 204 }) : new Response("Not placed.", { status: 404 });
 }
 
 // Reminders, the turn ledger, the pending approval pointer and the
@@ -515,6 +547,10 @@ export default {
     if (url.pathname === "/fill" || url.pathname.startsWith("/fill/")) {
       if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed.", { status: 405 });
       return fillReplayResponse(env, url.pathname);
+    }
+
+    if (url.pathname === "/webhooks/mail" || url.pathname === "/webhooks/fax") {
+      return deliveryWebhook(request, env, url.pathname === "/webhooks/mail" ? "mail" : "fax");
     }
 
     if (url.pathname === CALL_WEBHOOK_PATH) {

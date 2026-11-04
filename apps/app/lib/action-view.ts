@@ -9,7 +9,7 @@
 
 import type { StringKey } from "./strings";
 
-export type KnownKind = "submit" | "send" | "share" | "call" | "fax";
+export type KnownKind = "submit" | "send" | "share" | "call" | "fax" | "mail";
 
 // How the screen writes a value. Only the label and the number format
 // change; the words and digits are the request's own.
@@ -38,7 +38,7 @@ export interface KnownAction {
 
 export type ParsedAction = KnownAction | { kind: "unknown"; reason: string };
 
-const ACTION_TYPES = new Set(["send", "submit", "call", "fax", "share"]);
+const ACTION_TYPES = new Set(["send", "submit", "call", "fax", "mail", "share"]);
 
 // Payload names the agent and engine write today (apps/agent forms.ts,
 // pending.ts and the engine's share requests), mapped to labels.

@@ -11,7 +11,7 @@ import {
   type MessageType,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
-import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureGatewayTables, gatewayChecker } from "../gateway/index.js";
+import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureDeliveryTable, ensureFaxSendTable, ensureGatewayTables, gatewayChecker, outboundProviders, OutboundRouter, outboundPricing, recordDeliveryEvent, rememberDeliveryRoute, SqlFaxSendLog, withOutboundPrice, type DeliveryEvent } from "../gateway/index.js";
 import type { ActionRequest, Approval, CheckOutcome, ProposalOrder, Receipt } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
@@ -200,7 +200,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       },
     });
     this.executor = new ConsentDeliveringExecutor(
-      new HoldCallExecutor(createExecutor(env), this.holdCalls, (key) => this.store.getAttempt(key)?.actionType ?? null),
+      new HoldCallExecutor(new OutboundRouter(createExecutor(env), outboundProviders(env, { sendLog: new SqlFaxSendLog(ctx.storage.sql), attemptVersion: (key) => this.store.getAttempt(key)?.version ?? null, routes: { remember: (id, person) => rememberDeliveryRoute(env.FILES, id, person) } }), (key) => this.store.getAttempt(key)), this.holdCalls, (key) => this.store.getAttempt(key)?.actionType ?? null),
       (req) => this.deliverShare(req),
       (key) => this.checkShareDelivery(key),
       (key) => this.store.getAttempt(key)?.actionType ?? null,
@@ -220,6 +220,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
     ctx.blockConcurrencyWhile(async () => {
       const sql = ctx.storage.sql;
       ensureGatewayTables(sql);
+      ensureDeliveryTable(sql);
+      ensureFaxSendTable(sql);
       ensureAgentStateTables(sql);
       sql.exec(`CREATE TABLE IF NOT EXISTS profile(id TEXT PRIMARY KEY, display_name TEXT, synthetic INTEGER NOT NULL DEFAULT 0, public_key_b64 TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)`);
@@ -1016,7 +1018,10 @@ export class PersonAgent extends Agent<Env, PersonState> {
       this.store.audit({ event: "consent.regrant_refused", caseHash: await auditDigest(asked.payload.caseId) });
       return { status: "blocked" as const, reason: `Case ${asked.payload.caseId} was revoked and cannot be shared again with this organization.` };
     }
-    const result = await this.gateway.requestAction(split.request, new Date(), { generation, proposal });
+    const priced = await withOutboundPrice(split.request, (id) => this.documentBytes(id), outboundPricing(this.env), (key) =>
+      this.store.keyHeld(key) ? (this.store.getApprovalByKey(key)?.requestJson ?? null) : null,
+    );
+    const result = await this.gateway.requestAction(priced, new Date(), { generation, proposal });
     this.store.audit({ event: "gateway.request", status: result.status });
     if (result.status === "needs_approval" && result.approval) {
       // Durable schedules drive the reminder and the expiry; each firing
@@ -1027,6 +1032,16 @@ export class PersonAgent extends Agent<Env, PersonState> {
     await this.scheduleRecoveryIfUnresolved();
     this.syncState();
     return result;
+  }
+
+  // What a provider's signed webhook said became of a fax or letter. False
+  // when this is not that person's record: a late report for someone since
+  // deleted never brings their record back.
+  async recordDelivery(event: DeliveryEvent): Promise<boolean> {
+    if (this.personId !== event.personId) return false;
+    recordDeliveryEvent(this.ctx.storage.sql, event, new Date());
+    this.store.audit({ event: "gateway.delivery", channel: event.channel, detailHash: await auditDigest(`${event.channel}:${event.externalId}:${event.status}`) });
+    return true;
   }
 
   // Recovers attempts left unresolved by a restart. The gateway
@@ -1145,6 +1160,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         ...approval,
         outcome: {
           attempt: attempt?.status ?? null,
+          ...(attempt?.lookupFailingSince && !attempt.nextLookupAt ? { lookupsEnded: true } : {}),
           receipt: receipt ? { externalId: receipt.externalId, simulated: receipt.simulated } : null,
         },
       };

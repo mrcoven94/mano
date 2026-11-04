@@ -248,7 +248,9 @@ export function requestStatus(approvals: EngineApproval[], generation: number, a
     ? isShare(latest)
       ? "the person approved it and it went through"
       : `the person approved it and it was filed, confirmation ${receipt.externalId}${receipt.simulated ? " (a simulated filing)" : ""}`
-    : latest.status === "approved"
+    : latest.outcome?.lookupsEnded
+      ? "the person approved it, Mano could not confirm it went through and has stopped checking, and it will not be sent again without a new approval"
+      : latest.status === "approved"
       ? "the person approved it and Mano is checking whether it went through"
       : latest.status === "rejected"
         ? "the person declined it, or it was closed; nothing was sent"

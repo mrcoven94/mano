@@ -6,6 +6,9 @@
 export const RECIPIENT_NAMES = {
   // Our own fake portal, named the way it names itself.
   "sandbox-agency-portal": "the State Benefits Renewal Office test portal",
+  // Rule 2: the only places a fax or a letter can go for now.
+  "mano-test-fax-line": "the Mano test fax line",
+  "mano-practice-mailbox": "a practice mailbox where nothing is really mailed",
   // Our own fake office, the only organization a case can be shared with.
   "org:sandbox-county": "the Sandbox County Human Services test office",
 } as const;
