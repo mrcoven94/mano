@@ -82,12 +82,14 @@ export function findInstructions(text: string): ContentFlag[] {
 // ("/scam-prevention", "lawyers-fee.example") is never read as prose.
 const LINK_HOLE = /\uE000(\d+)\uE001/g;
 
+const LINK_TRAILING_PUNCTUATION = /[.,;:!?)\]'">]+$/;
+
 function maskLinks(text: string): { masked: string; links: string[] } {
   const links: string[] = [];
   let masked = text;
   for (const re of [LINK_RE, WWW_RE, BARE_USERINFO_RE, BARE_DOMAIN_RE, CAPS_DOMAIN_RE]) {
     masked = masked.replace(re, (m) => {
-      const url = m.replace(/[.,;:!?)\]'">]+$/, "");
+      const url = m.replace(LINK_TRAILING_PUNCTUATION, "");
       links.push(url);
       return `\uE000${links.length - 1}\uE001${m.slice(url.length)}`;
     });
@@ -320,6 +322,9 @@ const LOOKALIKE_AGENCY =
   /\b(?:u\.?s\.?|united\s+states|federal|national|american|government)\s+(?:benefits?|food\s+benefits?|food\s+stamps?|snap|ebt|medicaid|welfare)\s+(?:department|dept\.?|office|administration|agency|bureau|authority|commission|board)\b|\bdepartment\s+of\s+(?:benefits|food\s+stamps|snap)\b/i;
 const DRESSED_AS_GOVERNMENT = /(?:^|[.-])gov(?:t|ernment)?(?:[.-]|$)/;
 
+const UNSAFE_HOST = /[^a-z0-9.-]|^\d+\.\d+\.\d+\.\d+$/;
+const GOV_IN_PATH = /\.gov(?:[/?#]|$)/i;
+
 // A link built to hide where it goes: a name before the @ sign, a bare
 // address, a host with marks no real name has, a lookalike letter, a
 // government name in the wrong place, or something a browser cannot even
@@ -334,7 +339,7 @@ function hidesWhereItGoes(link: string): boolean {
   if (url.username || url.password) return true;
   const host = url.hostname.toLowerCase();
   if (isOfficial(host)) return false;
-  return /[^a-z0-9.-]|^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes("xn--") || DRESSED_AS_GOVERNMENT.test(host) || /\.gov(?:[/?#]|$)/i.test(url.pathname + url.search);
+  return UNSAFE_HOST.test(host) || host.includes("xn--") || DRESSED_AS_GOVERNMENT.test(host) || GOV_IN_PATH.test(url.pathname + url.search);
 }
 
 function isUnofficial(link: string): boolean {
@@ -358,18 +363,24 @@ interface Reading {
   said: string;
 }
 
+// "S.S.N." and "Social Security no." do not end a sentence.
+const LETTER_SENTENCE_BREAK = /(?<=[.!?])(?<!\bno\.|\bs\.s\.n\.)\s+|\n\s*\n/i;
+const HAS_LINK_HOLE = /\uE000/;
+const DOLLAR_FIGURE = /\$\s*\d/;
+const OR_NOR_START = /^(?:or|nor)\b/i;
+const MENTIONS_FAX = /\bfax/i;
+
 function readLetter(masked: string, links: string[]): Reading {
   const unmask = (s: string): string => s.replace(LINK_HOLE, (_m, k: string) => links[Number(k)]!);
-  // "S.S.N." and "Social Security no." do not end a sentence.
-  const parts = masked.split(/(?<=[.!?])(?<!\bno\.|\bs\.s\.n\.)\s+|\n\s*\n/i).map((s) => s.trim()).filter(Boolean);
+  const parts = masked.split(LETTER_SENTENCE_BREAK).map((s) => s.trim()).filter(Boolean);
   const clausesOf = (s: string): string[] => s.split(CLAUSE_BREAK).map((c) => c.trim()).filter(Boolean);
   const warns = (s: string): boolean => {
     const [first, ...rest] = clausesOf(s);
     return (
       WARNS_READER.test(s) &&
-      !/\uE000/.test(s) &&
+      !HAS_LINK_HOLE.test(s) &&
       !PAY_DEMAND.test(first ?? "") &&
-      !rest.some((c) => PAY_DEMAND.test(c) || HAND_OVER.test(c) || /\$\s*\d/.test(c))
+      !rest.some((c) => PAY_DEMAND.test(c) || HAND_OVER.test(c) || DOLLAR_FIGURE.test(c))
     );
   };
   const sentences = parts.map((part, i) => {
@@ -383,7 +394,7 @@ function readLetter(masked: string, links: string[]): Reading {
         negated = true;
         continue;
       }
-      if (negated && (/^(?:or|nor)\b/i.test(clause) || !ACTION.test(clause))) continue;
+      if (negated && (OR_NOR_START.test(clause) || !ACTION.test(clause))) continue;
       negated = false;
       kept.push(clause);
     }
@@ -405,9 +416,10 @@ function chargedFor(clause: string, food: boolean, chargesEnrollment: boolean): 
   if (!food) {
     real ||= HEALTH_CHARGE.test(rest);
     rest = rest.replace(NAMED_REAL_FEE, " ");
-    if (chargesEnrollment && ENROLLMENT_FEE.test(rest)) {
-      real = true;
-      rest = rest.replace(ENROLLMENT_FEE, " ");
+    if (chargesEnrollment) {
+      const withoutFee = rest.replace(ENROLLMENT_FEE, " ");
+      real ||= withoutFee !== rest;
+      rest = withoutFee;
     }
   }
   return real && !ANY_FEE.test(rest) ? null : rest;
@@ -453,7 +465,7 @@ function clearScam(reading: Reading): ContentFlag | null {
   if (lookalike) return scam("names an agency that does not exist", lookalike[0]);
   const secret = sentences.find((s) => {
     // A fax is a real way to send one, and only the clause that says so.
-    const whole = s.clauses.filter((c) => !/\bfax/i.test(c)).join(" ");
+    const whole = s.clauses.filter((c) => !MENTIONS_FAX.test(c)).join(" ");
     return !OFFICE_SENDS.test(whole) && SECRET_BY_MESSAGE.test(whole);
   });
   if (secret) return scam("asks for a Social Security number, PIN or password by message", secret.original);
@@ -461,6 +473,9 @@ function clearScam(reading: Reading): ContentFlag | null {
   if (fee) return scam("charges a fee to keep or renew benefits", fee);
   return null;
 }
+
+const VERIFY_NOW = /\bverify\s+now\b/i;
+const CUT_OFF_FROM_OFFICE = /\b(?:do\s+not|don't|never)\s+(?:call|contact|phone|visit)\s+(?:the\s+|your\s+)?(?:county|office|agency|state|caseworker|benefits\s+office)\b[^.!?\n]*/i;
 
 // Pressure to pay or verify, with an unofficial link or a warning off the
 // person's own office.
@@ -470,11 +485,11 @@ function urgentScam({ sentences, links, said }: Reading): ContentFlag | null {
   if (urgency.length === 0) return null;
   // "Send your pay stubs right away" or "so we can verify your income" is
   // ordinary, whatever link the letter also prints.
-  const asks = /\bverify\s+now\b/i.test(said) || VERIFY_ASK.test(said) || SECRET_ASK.test(said) || said.split("\n").some((c) => PAY_DEMAND.test(c));
+  const asks = VERIFY_NOW.test(said) || VERIFY_ASK.test(said) || SECRET_ASK.test(said) || said.split("\n").some((c) => PAY_DEMAND.test(c));
   if (!asks) return null;
   const detail = `urgency words: ${urgency.slice(0, 3).join(", ")}`;
   // A real office never tells the person not to contact it.
-  const cutOff = sentences.map((s) => s.original.match(/\b(?:do\s+not|don't|never)\s+(?:call|contact|phone|visit)\s+(?:the\s+|your\s+)?(?:county|office|agency|state|caseworker|benefits\s+office)\b[^.!?\n]*/i)).find(Boolean);
+  const cutOff = sentences.map((s) => s.original.match(CUT_OFF_FROM_OFFICE)).find(Boolean);
   if (cutOff) return { kind: "scam", label: "urgent verification ask that tells the person not to contact their office", match: cutOff[0], detail };
   const link = sentences.flatMap((s) => linksIn(s.reachable, links)).find(isUnofficial);
   if (!link) return null;
@@ -492,7 +507,7 @@ function suspectLink({ sentences, links }: Reading): ContentFlag | null {
   // A cost paid to someone else is no demand, unless its own clause carries
   // the link, which makes that link the way to pay.
   const pays = sentences.some((s) =>
-    s.clauses.some((c) => (PAY_DEMAND.test(c) && (!COST_SHARE.test(c) || /\uE000/.test(c))) || (PAY_ROUTE.test(c) && !REFERRAL.test(c) && linksIn(c, links).some(isUnofficial))),
+    s.clauses.some((c) => (PAY_DEMAND.test(c) && (!COST_SHARE.test(c) || HAS_LINK_HOLE.test(c))) || (PAY_ROUTE.test(c) && !REFERRAL.test(c) && linksIn(c, links).some(isUnofficial))),
   );
   if (pays) return { kind: "suspect_link", label: "payment demand with an unofficial link", match: link };
   for (const [k, s] of sentences.entries()) {
@@ -504,10 +519,12 @@ function suspectLink({ sentences, links }: Reading): ContentFlag | null {
   return null;
 }
 
+const WHITESPACE_RUN = /\s+/g;
+
 // One pass, so no pattern below ever walks a long run of whitespace. Line
 // breaks still end a clause, and a blank line still ends a sentence.
 function collapseWhitespace(text: string): string {
-  return text.replace(/\s+/g, (run) => {
+  return text.replace(WHITESPACE_RUN, (run) => {
     const breaks = run.split("\n").length - 1;
     return breaks === 0 ? " " : breaks === 1 ? "\n" : "\n\n";
   });

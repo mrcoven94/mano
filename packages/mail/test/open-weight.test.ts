@@ -49,6 +49,72 @@ const read = async (model: ReturnType<typeof createModelClient>) =>
 
 const answering = (content: string) => () => completion(content);
 
+describe("OpenRouter as Modal's backup for a read", () => {
+  const MODAL_URL = "https://example--ep-test-server.us-west.modal.direct/v1/chat/completions";
+  const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+  const SETTINGS = { MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://example--ep-test-server.us-west.modal.direct", MODAL_PROXY_TOKEN: "wk-test.ws-test", OPENROUTER_API_KEY: KEY };
+  const REQ: ResponsesRequest = { model: "muse-spark-1.3", input: "Read this." };
+
+  function client(modal: () => Response, env: Record<string, string> = SETTINGS, openRouter: () => Response = () => completion("from the backup")) {
+    const sent: Sent[] = [];
+    const fetchFn = (async (url: string, init: RequestInit) => {
+      sent.push({ url, authorization: new Headers(init.headers).get("authorization"), body: JSON.parse(init.body as string) as Sent["body"] });
+      return url === MODAL_URL ? modal() : openRouter();
+    }) as unknown as typeof fetch;
+    return { sent, model: createModelClient(env, { synthetic: true, fetchFn }) };
+  }
+
+  it.each([[429], [500], [503]])("reads on OpenRouter under its pin when Modal says %i, with one Modal try, and logs the route", async (code) => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { sent, model } = client(() => new Response("{}", { status: code }));
+    const out = await model.responses(REQ);
+    expect(out.text).toBe("from the backup");
+    expect(out.model).toBe("meta/muse-spark-open");
+    expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPENROUTER_URL]);
+    expect(sent[1]!.authorization).toBe(`Bearer ${KEY}`);
+    expect(sent[1]!.body.provider).toEqual({ zdr: true, data_collection: "deny" });
+    expect(log.mock.calls.map((c) => String(c[0]))).toEqual([JSON.stringify({ type: "mano_model_route", surface: "mail", route: "openrouter" })]);
+  });
+
+  it("does not touch OpenRouter when Modal answers, and logs that route", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { sent, model } = client(() => completion("from Modal"));
+    expect((await model.responses(REQ)).model).toBe("meta-models/Muse-Spark-Open-816B-A42B");
+    expect(sent.map((s) => s.url)).toEqual([MODAL_URL]);
+    expect(log.mock.calls.map((c) => String(c[0]))).toEqual([JSON.stringify({ type: "mano_model_route", surface: "mail", route: "modal" })]);
+  });
+
+  it.each([[400], [401], [403]])("does not fall back when Modal refuses the request with %i", async (code) => {
+    const { sent, model } = client(() => new Response("{}", { status: code }));
+    await expect(model.responses(REQ)).rejects.toThrow(String(code));
+    expect(sent.map((s) => s.url)).toEqual([MODAL_URL]);
+  });
+
+  it("ends the read when OpenRouter answers 402 too, and tries nothing else", async () => {
+    const { sent, model } = client(() => new Response("{}", { status: 503 }), SETTINGS, () => new Response("{}", { status: 402 }));
+    await expect(model.responses(REQ)).rejects.toThrow("402");
+    expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPENROUTER_URL]);
+  });
+
+  it("refuses a redirect on Modal's call and on the backup's", async () => {
+    const seen: Array<RequestRedirect | undefined> = [];
+    const fetchFn = (async (url: string, init: RequestInit) => {
+      seen.push(init.redirect);
+      return url === MODAL_URL ? new Response("{}", { status: 503 }) : completion("from the backup");
+    }) as unknown as typeof fetch;
+    await createModelClient(SETTINGS, { synthetic: true, fetchFn }).responses(REQ);
+    expect(seen).toEqual(["error", "error"]);
+  });
+
+  it("does not fall back without an OpenRouter key, and keeps Modal's retries", async () => {
+    const { MODAL_PROXY_TOKEN, MODAL_ENDPOINT_URL, MANO_MODEL_PROVIDER } = SETTINGS;
+    const { sent, model } = client(() => new Response("{}", { status: 503 }), { MODAL_PROXY_TOKEN, MODAL_ENDPOINT_URL, MANO_MODEL_PROVIDER });
+    await expect(model.responses(REQ)).rejects.toThrow("503");
+    expect(sent.every((s) => s.url === MODAL_URL)).toBe(true);
+    expect(sent).toHaveLength(3);
+  });
+});
+
 describe("which client createModelClient builds", () => {
   it("is the Meta Model API when the provider is not chosen", () => {
     expect(createModelClient({ META_MODEL_API_KEY: "k", OPENROUTER_API_KEY: KEY })).toBeInstanceOf(MetaModelClient);

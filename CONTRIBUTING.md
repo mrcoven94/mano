@@ -18,6 +18,8 @@ Copy an app's `.env.example` to `.dev.vars` or `.env` to use your own keys.
 
 `pnpm check` at the root runs every package's checks. Changes to the action gateway, the protocol or anything that sends must add tests. If `pnpm-lock.yaml` conflicts, rebase on `main` and run `pnpm install` again.
 
+It also fails on a regex built inside a function in source under `apps/` and `packages/`, and on `.test` or `.exec` on a shared regex with the `g` or `y` flag. Move the regex to a module-level const. A pattern built from per-call data takes a marker with a reason, on its line or the line above: `// regex-ok: <reason>`. `scripts/check-regexes.mjs` has the rules.
+
 ## Propose a change
 
 Small pull requests, one job each, with a `[Session]` prefix in the title so release notes group by session (for example `[Site] ...`). `pnpm check` must pass. Put usage in the root `README.md` or a header comment, and reports in the pull request.

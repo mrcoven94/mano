@@ -124,10 +124,12 @@ export async function withOutboundPrice(
   return { ...raw, payload: { ...payload, [PAYLOAD.pages]: pages, [PAYLOAD.price]: priceText(type, pages, pricing) } };
 }
 
+const WHITESPACE_RUN = /\s+/;
+
 function wrap(text: string, font: PDFFont, size: number, width: number): string[] {
   const lines: string[] = [];
   let line = "";
-  for (const word of text.split(/\s+/)) {
+  for (const word of text.split(WHITESPACE_RUN)) {
     const next = line ? `${line} ${word}` : word;
     if (line && font.widthOfTextAtSize(next, size) > width) {
       lines.push(line);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FakeModelClient, type Computer, type ComputerAction } from "@mano/computer";
+import { FakeModelClient, OpenWeightModelClient, type Computer, type ComputerAction } from "@mano/computer";
 
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
@@ -349,7 +349,7 @@ describe("fill_form", () => {
     engine.profile = profile();
     model = new FakeModelClient([[call([{ type: "keypress", keys: ["alt", "F2"] }, { type: "type", text: "touch /tmp/mano-escape" }])]]);
     const out = await run("turn_fill0041", { form: "food-renewal" });
-    expect(out.status).toBe("fill_failed");
+    expect(out.status).toBe("unavailable");
     expect(computer.acted).toEqual([]);
     expect(engine.approvals()).toHaveLength(0);
   });
@@ -468,6 +468,24 @@ describe("fill_form", () => {
     expect(frozen.documentId).toBe("doc-letter");
     expect(frozen.sources).toEqual([{ kind: "document", id: "doc-letter" }]);
     expect(frozen.payload.attachment).toEqual(expect.any(String));
+  });
+
+  it.each([
+    ["runs out of steps", { type: "wait" }],
+    ["presses a key a form does not need", { type: "keypress", keys: ["ctrl", "l"] }],
+  ])("when the computer %s, hands the renewal to start_form_draft and prepares nothing", async (_name, action) => {
+    engine.profile = profile();
+    let call = 0;
+    model = {
+      createResponse: async () => {
+        call += 1;
+        return { id: `r${call}`, status: "completed", output: [{ type: "computer_call", id: `c${call}`, call_id: `c${call}`, actions: [action], pending_safety_checks: [], status: "completed" }] };
+      },
+    } as never;
+    const out = await run("turn_fill0033", { form: "food-renewal" });
+    expect(out.status).toBe("unavailable");
+    expect(out.note).toMatch(/start_form_draft/);
+    expect(engine.approvals()).toHaveLength(0);
   });
 
   it("when the computer's model refuses, hands the renewal to start_form_draft and prepares nothing", async () => {
@@ -718,7 +736,12 @@ describe("the computer and portal a deployment fills with", () => {
 
     expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined })).toEqual({ unavailable: "no model key" });
     const modal = { ...env, MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://example--ep-test-server.us-west.modal.direct" };
-    expect(fillDepsFromEnv("person-abc", { ...modal, MODAL_PROXY_TOKEN: "wk-test.ws-test" })).toEqual({ unavailable: "no computer on this model route" });
+    const onModal = fillDepsFromEnv("person-abc", { ...modal, MODAL_PROXY_TOKEN: "wk-test.ws-test", MANO_COMPUTER_MODEL: "not-meta/other-model" });
+    if ("unavailable" in onModal) throw new Error("expected a fill on the Modal route");
+    expect(onModal.model).toBeInstanceOf(OpenWeightModelClient);
+    expect(onModal.modelId).toBe("meta-models/Muse-Spark-Open-816B-A42B");
+    await onModal.model.createResponse({ ...request, model: onModal.modelId });
+    expect(urls.at(-1)).toBe("https://example--ep-test-server.us-west.modal.direct/v1/responses");
     expect(fillDepsFromEnv("person-abc", modal)).toEqual({ unavailable: "no model key" });
     expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined, MANO_MODEL_PROVIDER: "openrouter" })).toEqual({ unavailable: "no model key" });
   });

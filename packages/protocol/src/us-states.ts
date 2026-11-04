@@ -60,13 +60,19 @@ const STATE_FORMS: Record<string, readonly string[]> = {
   VI: ["Virgin Islands", "US Virgin Islands", "USVI", "Islas Virgenes", "Islas Virgenes Americanas", "Islas Virgenes de los Estados Unidos"],
 };
 
+const COMBINING_MARK = /\p{M}/gu;
+const NAME_PUNCTUATION = /[.,'’ʻ]/g;
+const WHITESPACE_RUN = /\s+/g;
+const WORD_BREAK = /\s+/;
+const ADDRESS_THEN_ZIP = /^(.*?),?\s*\b(\d{5}(?:-\d{4})?)$/;
+
 // Case, accents, periods, commas and apostrophes do not change a name.
 function plain(name: string): string {
   return name
     .normalize("NFD")
-    .replace(/\p{M}/gu, "")
-    .replace(/[.,'’ʻ]/g, "")
-    .replace(/\s+/g, " ")
+    .replace(COMBINING_MARK, "")
+    .replace(NAME_PUNCTUATION, "")
+    .replace(WHITESPACE_RUN, " ")
     .trim()
     .toLowerCase();
 }
@@ -89,12 +95,12 @@ export function usStateCode(name: string): string | null {
 // Two letters in mixed case are a street word ("12 Oak Ct 93721") unless they
 // sit in their own place: street, city, state.
 export function usAddressParts(address: string): { rest: string; state: string; zip: string } | null {
-  const [, before, zip] = /^(.*?),?\s*\b(\d{5}(?:-\d{4})?)$/.exec(address.trim()) ?? [];
+  const [, before, zip] = ADDRESS_THEN_ZIP.exec(address.trim()) ?? [];
   if (!before || !zip) return null;
   const inOwnPlace = before.split(",").length >= 3;
   const lastComma = before.lastIndexOf(",");
   const head = before.slice(0, Math.max(lastComma, 0)).trim();
-  const words = before.slice(lastComma + 1).trim().split(/\s+/);
+  const words = before.slice(lastComma + 1).trim().split(WORD_BREAK);
   for (let n = Math.min(words.length, LONGEST_FORM); n > 0; n--) {
     const phrase = words.slice(-n).join(" ");
     const state = usStateCode(phrase);

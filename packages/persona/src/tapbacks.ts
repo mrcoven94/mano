@@ -42,6 +42,7 @@ export function splitTapback(text: string): { tapback: Tapback | null; text: str
 
 // Words as whole words, in any language: JavaScript's \b is ASCII only.
 function words(list: readonly string[]): RegExp {
+  // regex-ok: every call is at module scope, once per word list
   return new RegExp(`(?<![\\p{L}\\p{N}])(?:${list.join("|")})(?![\\p{L}\\p{N}])`, "iu");
 }
 

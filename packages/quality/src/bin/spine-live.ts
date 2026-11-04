@@ -51,9 +51,11 @@ const guardian = glimmerCheckerFromEnv({
 });
 const seconds = (ms: number): string => `${(ms / 1000).toFixed(1)} s`;
 
+const WHITESPACE_RUN = /\s+/g;
+
 const print = (step: StepReport): void => {
   console.log(`  ${step.ok ? "pass" : "FAIL"}  ${step.step.padEnd(9)}${seconds(step.wallMs).padStart(9)}  ${step.model ?? "no model"}  ${step.detail}`);
-  if (step.reply) console.log(`        Mano: ${step.reply.replace(/\s+/g, " ")}`);
+  if (step.reply) console.log(`        Mano: ${step.reply.replace(WHITESPACE_RUN, " ")}`);
 };
 
 const config: LiveConfig = {

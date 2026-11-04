@@ -26,6 +26,7 @@ export type CheckerSetting =
   | { kind: "guardian-misconfigured" };
 
 const HTTP_URL = /^https?:\/\//i;
+const STAND_IN_SERVER = /stand-?in/i;
 
 // None of the four set keeps the local rules. A deployed Guardian needs
 // all four: Modal refuses a request without its key pair, so a URL and
@@ -108,7 +109,7 @@ export class GuardianChecker implements Checker {
       // Who answered, as the server says. A call it did not answer has only
       // the address it was sent to.
       const server = guardian.serverInfo?.model.id;
-      const standIn = server !== undefined && /stand-?in/i.test(server);
+      const standIn = server !== undefined && STAND_IN_SERVER.test(server);
       for (const call of calls) {
         const identity = !call.ok ? { model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, state: "live" as const } : standIn ? STAND_IN : { model: server ?? "not named", where: GUARDIAN_RUNS_ON, state: "live" as const };
         this.trace({ kind: "model", ...identity, purpose: "Guardian checks the action", ms: call.ms, status: call.status });
