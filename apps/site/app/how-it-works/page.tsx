@@ -79,7 +79,7 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
         <ol className="hw-trail">
           <li><b>You said yes</b><span>Nov 10</span></li>
           <li><b>Filed on the practice portal</b><span>Nov 10</span></li>
-          <li className="ok"><b>Checked that it arrived. Confirmation SR-G6WYKQU8</b><span>Nov 10</span></li>
+          <li className="ok"><b>Checked that it arrived. Confirmation <span className="nb">SR-G6WYKQU8</span></b><span>Nov 10</span></li>
         </ol>
       </div>
     ),

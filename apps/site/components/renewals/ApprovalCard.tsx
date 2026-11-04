@@ -48,7 +48,7 @@ export default function ApprovalCard() {
           <ol className="tr-steps">
             <li className="rv" style={d(0.3)}><span>8:12 PM</span>Sent to the practice portal</li>
             <li className="rv" style={d(0.8)}><span>8:13 PM</span>Checked the portal: received</li>
-            <li className="rv ok" style={d(1.3)}><span>Result</span>One copy on file, confirmation SR-G6WYKQU8. Due Nov 14, sent Nov 10.</li>
+            <li className="rv ok" style={d(1.3)}><span>Result</span>One copy on file, confirmation <span className="nb">SR-G6WYKQU8</span>. Due Nov 14, sent Nov 10.</li>
           </ol>
           <button className="tr-no rw-again" onClick={() => setView("ready")}>Start over</button>
         </>
