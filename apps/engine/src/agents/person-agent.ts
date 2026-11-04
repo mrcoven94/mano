@@ -6,7 +6,7 @@ import {
   type ConsentRevokePayload,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
-import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureGatewayTables, gatewayChecker } from "../gateway/index.js";
+import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureDeliveryTable, ensureGatewayTables, gatewayChecker, outboundProviders, OutboundRouter, outboundPricing, recordDeliveryEvent, withOutboundPrice, type DeliveryEvent } from "../gateway/index.js";
 import type { ActionRequest, Approval, CheckOutcome, ProposalOrder } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
@@ -139,7 +139,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     super(ctx, env);
     this.store = new SqlApprovalStore(ctx.storage.sql);
     this.executor = new ConsentDeliveringExecutor(
-      createExecutor(env),
+      new OutboundRouter(createExecutor(env), outboundProviders(env), (key) => this.store.getAttempt(key)?.actionType ?? null),
       (req) => this.deliverShare(req),
       (key) => this.checkShareDelivery(key),
       (key) => this.store.getAttempt(key)?.actionType ?? null,
@@ -158,6 +158,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     ctx.blockConcurrencyWhile(async () => {
       const sql = ctx.storage.sql;
       ensureGatewayTables(sql);
+      ensureDeliveryTable(sql);
       ensureAgentStateTables(sql);
       sql.exec(`CREATE TABLE IF NOT EXISTS profile(id TEXT PRIMARY KEY, display_name TEXT, synthetic INTEGER NOT NULL DEFAULT 0, public_key_b64 TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)`);
@@ -847,7 +848,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
       proposal = proposalOrderFor(this.db(), split.turnId) ?? undefined;
       if (!proposal) return { status: "blocked" as const, reason: "That turn is not in this conversation's ledger." };
     }
-    const result = await this.gateway.requestAction(split.request, new Date(), { generation, proposal });
+    const priced = await withOutboundPrice(split.request, (id) => this.documentBytes(id), outboundPricing(this.env));
+    const result = await this.gateway.requestAction(priced, new Date(), { generation, proposal });
     this.store.audit({ event: "gateway.request", status: result.status });
     if (result.status === "needs_approval" && result.approval) {
       // Durable schedules drive the reminder and the expiry; each firing
@@ -858,6 +860,14 @@ export class PersonAgent extends Agent<Env, PersonState> {
     await this.scheduleRecoveryIfUnresolved();
     this.syncState();
     return result;
+  }
+
+  // What a provider's signed webhook said became of a fax or letter. A
+  // late report for a person since deleted never brings their record back.
+  async recordDelivery(event: DeliveryEvent): Promise<void> {
+    if (this.personId !== event.personId) return;
+    recordDeliveryEvent(this.ctx.storage.sql, event, new Date());
+    this.store.audit({ event: "gateway.delivery", channel: event.channel, detailHash: await auditDigest(`${event.channel}:${event.externalId}:${event.status}`) });
   }
 
   // Recovers attempts left unresolved by a restart. The gateway

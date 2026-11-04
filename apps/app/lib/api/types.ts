@@ -49,7 +49,7 @@ export interface ChatMessage {
   status: MessageStatus;
 }
 
-export type ActionType = "send" | "submit" | "call" | "fax" | "share";
+export type ActionType = "send" | "submit" | "call" | "fax" | "mail" | "share";
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "revoked" | "expired" | "stale" | "blocked";
 // Where an approval stands after a NO. status is its own, never still
 // pending; notSent is true only when nothing under its idempotency key

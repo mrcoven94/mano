@@ -12,6 +12,7 @@ const ACTION_TYPES: ReadonlySet<string> = new Set([
   "submit",
   "call",
   "fax",
+  "mail",
   "share",
 ]);
 
@@ -56,7 +57,8 @@ export const PAYLOAD_SCHEMAS: Record<ActionType, PayloadSchema> = {
   send: { destinations: ["to"], content: ["subject", "body", "text"], extra: [] },
   submit: { destinations: [], content: ["text"], extra: ["formId"] },
   call: { destinations: [], content: ["script", "text"], extra: [] },
-  fax: { destinations: ["to"], content: ["cover", "text"], extra: [] },
+  fax: { destinations: ["to", "Fax to"], content: ["cover", "text"], extra: ["Approved by", "Pages", "Price"] },
+  mail: { destinations: ["Mail to", "Return address"], content: ["text"], extra: ["Approved by", "Pages", "Price"] },
   share: { destinations: ["with"], content: ["text"], extra: [] },
 };
 

@@ -31,6 +31,7 @@
 // HTTP surface:
 //
 //   GET  /health
+//   POST /webhooks/mail, /webhooks/fax         provider delivery reports, verified by signature
 //   POST /api/check-link                       { url } (person token; 200 with allowed:false when blocked)
 //   POST /api/persons/:id/chat                 { message }
 //   POST /api/persons/:id/action               action request (worker stamps personId from the token);
@@ -117,6 +118,11 @@
 // wrangler.toml, kept equal to the portal's), so in sandbox mode the
 // gateway refuses anything else before it drafts an approval.
 //
+// Faxes and letters have their own executors, on only when their settings
+// are present (gateway/outbound.ts). A fax goes only to our own number and
+// a letter only to the mail provider's test mode, and the approval question
+// shows the price Engine worked out for the exact document.
+//
 // Secrets: never put a key on a command line. Set secrets from stdin:
 //
 //   ~/Desktop/code/bin/ws keys run -- sh -c 'printf %s "$META_MODEL_API_KEY" | pnpm --filter @mano/engine exec wrangler secret put META_MODEL_API_KEY'
@@ -150,7 +156,7 @@ import {
   mintWsTicket,
   sessionConfigured,
 } from "./auth.js";
-import { checkerSetting, createExecutor, type CheckerSetting } from "./gateway/index.js";
+import { checkerSetting, createExecutor, outboundProviders, parseFaxEvent, parseMailEvent, verifyFaxSignature, verifyMailSignature, type CheckerSetting } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
 import { profilePatchResponse } from "./profile.js";
@@ -297,10 +303,13 @@ export interface LiveStatus {
   files: "bound" | "missing";
   kek: boolean;
   checker: CheckerSetting["kind"];
+  mail: "test-mode" | "off";
+  fax: "own-number" | "off";
 }
 
 export function liveStatus(env: Env): LiveStatus {
   const hasKey = Boolean(env.META_MODEL_API_KEY);
+  const providers = outboundProviders(env);
   return {
     model: hasKey ? "meta" : "stand-in",
     modelVia: !hasKey ? "none" : env.CF_ACCOUNT_ID && env.AI_GATEWAY_ID ? "ai-gateway" : "direct",
@@ -308,6 +317,8 @@ export function liveStatus(env: Env): LiveStatus {
     files: env.FILES ? "bound" : "missing",
     kek: Boolean(env.ENCRYPTION_KEK_B64),
     checker: checkerSetting(env).kind,
+    mail: providers.mail ? "test-mode" : "off",
+    fax: providers.fax ? "own-number" : "off",
   };
 }
 
@@ -335,6 +346,24 @@ export function healthOk(env: Env): boolean {
     return false;
   }
   return true;
+}
+
+// A provider's report on a fax or letter. Closed until its secret is set,
+// and nothing past the signature check runs on an unverified body. An
+// event for nothing of ours is acknowledged and dropped.
+async function deliveryWebhook(request: Request, env: Env, channel: "fax" | "mail"): Promise<Response> {
+  if (request.method !== "POST") return new Response("Method not allowed.", { status: 405 });
+  const secret = channel === "mail" ? env.LOB_WEBHOOK_SECRET : env.TELNYX_PUBLIC_KEY;
+  if (!secret) return new Response("Not found.", { status: 404 });
+  const declared = Number(request.headers.get("content-length") ?? 0);
+  if (declared > MAX_ACTION_BODY) return new Response("Too large.", { status: 413 });
+  const body = await request.text();
+  if (body.length > MAX_ACTION_BODY) return new Response("Too large.", { status: 413 });
+  const verified = channel === "mail" ? await verifyMailSignature(body, request.headers, secret) : await verifyFaxSignature(body, request.headers, secret);
+  if (!verified) return new Response("Bad signature.", { status: 401 });
+  const event = channel === "mail" ? parseMailEvent(body) : parseFaxEvent(body);
+  if (event) await (personStub(env, event.personId) as unknown as PersonAgent).recordDelivery(event);
+  return new Response(null, { status: 204 });
 }
 
 // Reminders, the turn ledger, the pending approval pointer and the
@@ -472,6 +501,10 @@ export default {
     if (url.pathname === "/fill" || url.pathname.startsWith("/fill/")) {
       if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed.", { status: 405 });
       return fillReplayResponse(env, url.pathname);
+    }
+
+    if (url.pathname === "/webhooks/mail" || url.pathname === "/webhooks/fax") {
+      return deliveryWebhook(request, env, url.pathname === "/webhooks/mail" ? "mail" : "fax");
     }
 
     // Outside development, a partly configured engine answers only

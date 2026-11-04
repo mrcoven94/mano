@@ -5,6 +5,8 @@
 
 const RECIPIENT_NAMES: Record<string, string> = {
   "sandbox-agency-portal": "the State Benefits Renewal Office test portal",
+  "mano-test-fax-line": "the Mano test fax line",
+  "mano-practice-mailbox": "a practice mailbox where nothing is really mailed",
 };
 
 export const UNNAMED_RECIPIENT = "an office Mano has no name for";

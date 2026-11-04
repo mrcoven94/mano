@@ -38,4 +38,16 @@ export interface Env {
   // wrangler.toml [vars]; a test keeps them equal to the portal's.
   SANDBOX_MAX_FIELD_LENGTH?: string;
   SANDBOX_MAX_UPLOAD_BYTES?: string;
+  // Faxes and letters: see gateway/outbound.ts. Each stays off until its
+  // settings are present. Only a test mode key is ever read for mail.
+  LOB_TEST_API_KEY?: string;
+  LOB_WEBHOOK_SECRET?: string;
+  TELNYX_API_KEY?: string;
+  TELNYX_FAX_CONNECTION_ID?: string;
+  TELNYX_PUBLIC_KEY?: string;
+  MANO_OWN_FAX_NUMBER?: string;
+  MANO_FAX_FROM_NUMBER?: string;
+  MANO_FAX_CENTS_PER_PAGE?: string;
+  MANO_MAIL_BASE_CENTS?: string;
+  MANO_MAIL_CENTS_PER_EXTRA_PAGE?: string;
 }

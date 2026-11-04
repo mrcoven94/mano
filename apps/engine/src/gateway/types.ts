@@ -1,6 +1,6 @@
 import type { SourceCitation } from "@mano/protocol";
 
-export type ActionType = "send" | "submit" | "call" | "fax" | "share";
+export type ActionType = "send" | "submit" | "call" | "fax" | "mail" | "share";
 export type PolicyDecision = "allow" | "ask" | "block";
 export type ActorKind = "foreground" | "background";
 
@@ -131,7 +131,7 @@ export interface Executor {
   // it. The gateway asks before it drafts an approval or executes, so a
   // person is never asked to approve an action that would then be
   // refused. An executor without it takes every request.
-  refuse?(req: ActionRequest): string | null;
+  refuse?(req: ActionRequest): string | null | Promise<string | null>;
   // Whether this executor could file a stored document of this media type
   // and size, without reading its bytes. The person's document list
   // answers it for each document so Mano attaches one the filing takes.
@@ -149,8 +149,9 @@ export interface StoredDocumentFacts {
 export type DocumentFiling = "fileable" | "too_large" | "wrong_type" | "size_unknown";
 
 // The recorded outcome for a key: found carries the outside ID, absent
-// means the executor confirms it never ran this key.
-export type CheckOutcome = { found: true; externalId: string } | { found: false };
+// means the executor confirms it never ran this key. simulated labels a
+// receipt the way execute would, when that differs from the executor's own.
+export type CheckOutcome = { found: true; externalId: string; simulated?: boolean } | { found: false };
 
 export class TimeoutError extends Error {
   constructor(msg = "executor timed out") {

@@ -12,6 +12,7 @@ export function leadLine(action: KnownAction, s: Strings): string {
   if (action.kind === "send") return s.leadSend;
   if (action.kind === "call") return s.leadCall;
   if (action.kind === "fax") return s.leadFax;
+  if (action.kind === "mail") return s.leadMail;
   const consent = action.answers.find((f) => f.format === "consent")?.value;
   return consent === "revoke" ? s.leadShareRevoke : s.leadShareGrant;
 }

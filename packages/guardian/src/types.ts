@@ -1,7 +1,7 @@
 // Checker interface. The action gateway calls this after its policy check and
 // before it asks a person to approve anything.
 
-export type ActionType = "send" | "submit" | "call" | "fax" | "share";
+export type ActionType = "send" | "submit" | "call" | "fax" | "mail" | "share";
 
 export type Origin = "person" | "content";
 
