@@ -51,6 +51,9 @@ export interface LiveConfig {
   portalToken: string;
   lang: Lang;
   yesWord?: string;
+  // Keep going to YES after a fill with no replay behind it, to see the rest
+  // of the path. The run still fails.
+  pastFill?: boolean;
   fetchImpl?: typeof fetch;
   // Asks the deployed Guardian whether its model is loaded. Only "ready"
   // passes: Engine's /health says Guardian is set, not that it can answer.
@@ -189,6 +192,8 @@ interface Turn {
 
 class Person {
   readonly handleHash = createHash("sha256").update(`spine-live-${randomBytes(32).toString("hex")}`).digest("hex");
+  // The model the deployment last named on a turn.
+  model: string | null = null;
   private turns = 0;
   private docs = 0;
   private readonly cfg: LiveConfig;
@@ -238,6 +243,7 @@ class Person {
     } catch {
       parsed = {};
     }
+    this.model = parsed.model ?? this.model;
     return { ...parsed, http: res.status, status: parsed.status ?? "not_json", text: parsed.text ?? "" };
   }
 
@@ -313,6 +319,7 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
   const started = Date.now();
   let approvalId = "";
   let confirmation: string | null = null;
+  let presented = false;
 
   const steps: Record<StepName, () => Promise<StepResult>> = {
     async health() {
@@ -371,6 +378,9 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
         throw new StepFailure(`no approval question after ${rounds} turns`, turn.http, reply);
       }
       approvalId = turn.approvalId;
+      const shown = await person.presented(approvalId, turn.approval);
+      if (shown !== 200) throw new StepFailure(`the presented report answered HTTP ${shown}`, shown, reply);
+      presented = true;
       // A question with no replay page was drafted without the computer. The
       // link is opened as the person opens it, with no credentials.
       const link = turn.text.match(/https?:\/\/\S+\/fill\/[0-9a-f]{32}/)?.[0];
@@ -381,8 +391,6 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
       if (replay.status !== 200 || !page.includes(REPLAY_WAITING) || screens === 0 || !page.includes(MARIA.caseNumber)) {
         throw new StepFailure(`the replay page did not show the fill: HTTP ${replay.status}, ${screens} screens`, replay.status, reply);
       }
-      const shown = await person.presented(approvalId, turn.approval);
-      if (shown !== 200) throw new StepFailure(`the presented report answered HTTP ${shown}`, shown, reply);
       return { model: reported(turn), http: turn.http, detail: `filled, replay page shows ${screens} screens, after ${rounds} turn${rounds === 1 ? "" : "s"}`, attempts: rounds, reply };
     },
     async yes() {
@@ -443,17 +451,18 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
         step,
         ok: false,
         wallMs: Date.now() - at,
-        model: step === "guardian" || step === "yes" ? DEFAULT_GUARDIAN_MODEL : null,
+        model: step === "guardian" || step === "yes" ? DEFAULT_GUARDIAN_MODEL : step === "text" || step === "photo" || step === "fill" ? person.model : null,
         http: failure?.http ?? null,
         attempts: 1,
         detail: failure ? failure.message : `${step} could not finish: ${err instanceof Error ? err.name : "error"}`,
         ...(failure?.reply ? { reply: failure.reply } : {}),
       };
-      failedStep = step;
+      failedStep ??= step;
     }
     reports.push(report);
     cfg.onStep?.(report);
-    if (failedStep) break;
+    const goOn = cfg.pastFill && report.step === "fill" && presented;
+    if (!report.ok && !goOn) break;
   }
 
   return {

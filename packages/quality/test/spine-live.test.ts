@@ -141,6 +141,21 @@ test("a question with no replay link fails: the draft never used the computer", 
   assert.equal(await failedAt({ fillTurns: [{ status: "waiting_approval", text: QUESTION }] }), "fill");
 });
 
+test("--past-fill carries a draft with no fill to YES and the run still fails", async () => {
+  const run = await runLive(config({ fillTurns: [{ status: "waiting_approval", text: QUESTION }] }, { pastFill: true }));
+  assert.equal(run.ok, false);
+  assert.equal(run.failedStep, "fill");
+  assert.equal(run.steps.find((s) => s.step === "fill")?.model, "meta/muse-spark-open");
+  assert.equal(run.confirmation, CONFIRMATION);
+  assert.ok(run.steps.find((s) => s.step === "portal")?.ok);
+});
+
+test("--past-fill does not carry on when no question was shown", async () => {
+  const run = await runLive(config({ fillTurns: Array.from({ length: 9 }, () => ({ status: "replied", text: "What is your date of birth?" })) }, { pastFill: true }));
+  assert.equal(run.failedStep, "fill");
+  assert.equal(run.steps.at(-1)?.step, "fill");
+});
+
 test("a replay link on another host fails and is not opened", async () => {
   assert.equal(await failedAt({ fillTurns: [{ status: "waiting_approval", text: `${QUESTION} https://elsewhere.test/fill/${REPLAY_TOKEN}` }] }), "fill");
 });
