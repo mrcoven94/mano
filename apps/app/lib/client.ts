@@ -6,6 +6,7 @@
 import { CryptoDigestAlgorithm, digest } from "expo-crypto";
 import { b64decode } from "./base64";
 import { demoMode, engineUrl } from "./config";
+import { currentLanguage } from "./language-now";
 import { decideEngineMode } from "./mode";
 import { EngineClient } from "./api/engine";
 import { StandInClient, type Hasher } from "./api/standin";
@@ -47,7 +48,7 @@ export function resolveClient(): ResolvedClient {
     cached = { client: new EngineClient({ baseUrl: url, sha256B64: expoSha256B64 }), mode: "live" };
   } else {
     console.info("[mano] engine: stand-in (recorded synthetic responses)");
-    cached = { client: new StandInClient({ sha256B64: expoSha256B64 }), mode: "stand-in" };
+    cached = { client: new StandInClient({ sha256B64: expoSha256B64, language: currentLanguage }), mode: "stand-in" };
   }
   return cached;
 }
