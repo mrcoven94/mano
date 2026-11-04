@@ -116,6 +116,33 @@ describe("a texted letter for someone who writes in another language", () => {
   });
 });
 
+describe("a crisis Channels' floor found, with a photo", () => {
+  function crisisPhotoTurn(turnId: string, text: string) {
+    const raw = JSON.stringify({
+      turnId, generation: 0, handleHash: HANDLE, grant, receivedAt: Date.now(), texts: [text], attachmentCount: 1, documents: [{ id: DOC, mimeType: "image/jpeg" }], crisis: true,
+    });
+    const ts = Math.floor(Date.now() / 1000);
+    return new Request("http://agent.test/channels/mano/turn", {
+      method: "POST",
+      headers: { "content-type": "application/json", [TIMESTAMP_HEADER]: String(ts), [SIGNATURE_HEADER]: signBody(SECRET, ts, raw) },
+      body: raw,
+    });
+  }
+
+  it("tells the model, in a language the agent's own words do not cover", async () => {
+    await send(crisisPhotoTurn("turn_crisis_tl_01", "Papatayin ko ang sarili ko"), deps([RENEWAL_PAGE]));
+    expect(calls[0]!.context.join("\n")).toMatch(/988/);
+  });
+
+  it("with no time left for the model, answers with the letter alone, for Channels to open with the line", async () => {
+    await dayIs("2026-11-03T18:00:00.000Z");
+    const { body } = await send(crisisPhotoTurn("turn_crisis_vi_01", "Chồng tôi đang đánh tôi"), deps([RENEWAL_PAGE], { turnBudgetMs: 10_000 }));
+    expect(calls).toHaveLength(0);
+    expect(body.status).toBe("replied");
+    expect(body.text).toMatch(/Medi-Cal/);
+  });
+});
+
 describe("a texted letter", () => {
   it("is answered in the same reply: what it is, the deadline, what to send, and the deadline is held in Engine", async () => {
     await dayIs("2026-11-03T18:00:00.000Z");

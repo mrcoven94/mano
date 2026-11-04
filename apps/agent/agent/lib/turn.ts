@@ -104,6 +104,8 @@ interface TurnBody {
   // Engine, by ID.
   attachmentCount: number;
   documents: TextedPhoto[];
+  // Channels' floor, in every language it reads, called this turn a crisis.
+  crisis: boolean;
 }
 
 function parseDocuments(value: unknown): TextedPhoto[] | null {
@@ -146,6 +148,7 @@ function parseBody(value: unknown): TurnBody | null {
     texts,
     attachmentCount: Math.max(attachmentCount, documents.length),
     documents,
+    crisis: body.crisis === true,
   };
 }
 
@@ -398,7 +401,7 @@ async function runTurn(
   }
 
   // A crisis is never answered with a document question.
-  const crisis = body.texts.some(detectCrisis);
+  const crisis = body.crisis || body.texts.some(detectCrisis);
   if (body.documents.length > 0 && !crisis) {
     const answered = await clock.time("share", () =>
       answerRequestWithPhoto(engine, { turnId: body.turnId, turnAtMs }, body.documents.map((d) => d.id), body.attachmentCount),

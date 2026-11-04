@@ -255,10 +255,38 @@ const SPANISH = new RegExp(
   "u",
 );
 
-// Vietnamese and Tagalog, narrow and with no model behind them: words for
-// taking one's life, not wanting to live, and being beaten.
-const VIETNAMESE_TAGALOG =
-  /(?:^|\s)(?:tự tử|tự sát|muốn chết|không muốn sống|tự làm hại|kết liễu|đang bị đánh|magpakamatay|magpapakamatay|gusto ko nang mamatay|gusto kong mamatay|ayoko nang mabuhay|ayaw ko nang mabuhay|saktan ang sarili|sasaktan ko ang sarili|wakasan ang buhay|binubugbog ako)(?=\s|$)/u;
+// Vietnamese and Tagalog: self-harm, being hit or threatened, and immediate
+// danger. Plain phrases and no model, so this is a floor and not a reader:
+// a sentence it has no phrase for still reaches only the model's own rule.
+// Over-triggering is accepted, so "đói muốn chết" (starving) names 988 too.
+const VIETNAMESE = [
+  "tự tử", "tự sát", "tự vẫn", "muốn chết", "thà chết", "không muốn sống", "không còn muốn sống", "hết muốn sống", "không thiết sống", "chán sống",
+  "tự làm hại", "tự hại", "tự làm đau", "kết liễu", "kết thúc cuộc đời", "kết thúc cuộc sống", "kết thúc đời mình",
+  "đánh tôi", "đánh đập tôi", "đánh em", "đánh con tôi", "bị đánh(?! thuế| rơi| cắp)", "bạo hành", "hành hung", "đe dọa tôi", "dọa giết", "giết tôi", "cưỡng hiếp", "hiếp dâm",
+  "gặp nguy hiểm", "đang nguy hiểm", "nguy hiểm tính mạng", "nguy đến tính mạng", "tôi không an toàn", "cứu tôi", "cứu với",
+].join("|");
+// The same words typed with no marks, without any that then mean something
+// else: "tu tu" is also "từ từ" (slowly), and "bi danh" is "bí danh" (alias).
+const VIETNAMESE_BARE = [
+  "muon tu tu", "se tu tu", "tu sat", "muon chet", "khong muon song", "chan song", "ket lieu",
+  "danh toi", "dang danh", "bao hanh", "gap nguy hiem", "giet toi", "cuu toi",
+].join("|");
+const TAGALOG = [
+  "magpakamatay", "magpapakamatay", "nagpakamatay", "nagpapakamatay",
+  "(?:papatayin|patayin|pinapatay|sasaktan|saktan|sinasaktan|nasasaktan)(?: ko)? ang sarili(?: ko)?", "pumatay sa sarili",
+  "gusto ko nang mamatay", "gusto ko na mamatay", "gusto kong mamatay", "gusto ko mamatay", "mamatay na lang", "mamamatay na lang", "magbigti", "maglaslas", "naglalaslas",
+  "ayoko nang mabuhay", "ayoko na mabuhay", "ayaw ko nang mabuhay", "ayaw ko na mabuhay", "ayokong mabuhay", "wakasan ang buhay", "tapusin ang buhay",
+  "(?:binubugbog|binugbog|bubugbugin|sinasaktan|sinaktan|sasaktan|sinasampal|sinampal|sinusuntok|sinuntok|sinisipa|sinipa|pinapalo|pinalo|hinahampas|hinampas|ginugulpi|ginulpi|papatayin|pinagbabantaan|tinatakot|sinasakal|sinakal)(?: \\p{L}+){0,2} ako",
+  "gusto akong patayin", "ginahasa", "hinahalay", "hinalay",
+  "nasa panganib", "nasa peligro", "nanganganib", "delikado ako", "delikado ang buhay", "hindi ako ligtas", "saklolo",
+].join("|");
+const OTHER_LANGUAGES = new RegExp(String.raw`(?:^|\s)(?:${VIETNAMESE}|${TAGALOG})(?=\s|$)`, "u");
+const OTHER_LANGUAGES_BARE = new RegExp(String.raw`(?:^|\s)(?:${VIETNAMESE_BARE})(?=\s|$)`, "u");
+
+// Lowercased words with every mark gone, and đ as d.
+function unmarked(words: string): string {
+  return words.normalize("NFD").replace(/\p{M}/gu, "").replace(/đ/g, "d");
+}
 
 function accented(text: string): string {
   return ` ${text.normalize("NFC").toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, " ").replace(/\s+/g, " ")} `;
@@ -266,7 +294,7 @@ function accented(text: string): string {
 
 export function spanishOrImplicitCrisis(text: string): boolean {
   const words = accented(text);
-  return IMPLICIT.test(words) || SPANISH.test(words) || VIETNAMESE_TAGALOG.test(words);
+  return IMPLICIT.test(words) || SPANISH.test(words) || OTHER_LANGUAGES.test(words) || OTHER_LANGUAGES_BARE.test(unmarked(words));
 }
 
 // The gate into the model check (the lead's decision after Sol's second

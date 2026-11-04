@@ -47,7 +47,7 @@ describe("a yes in another language", () => {
     "co", "cô", "cò", "cỏ", "cố", "cọ", "cơ", "cổ",
     "có lẽ", "có thể", "có không", "có sao không", "có phải không", "chưa có",
     // Spanish "si" is also "if", and a question is not an answer.
-    "si?", "sí?", "¿sí?", "¿si?", "si no", "si puedo", "si quiero saber", "si tuviera", "sí pero cambia mi teléfono", "sí, espera", "sino", "sí sí", "sí no", "no sí", "si,", "a si",
+    "si...", "si..", "si…", "sí...", "sí..", "sí…", "si.!", "si!!", "có...", "có…", "opo...", "oui...", "yes...", "si?", "sí?", "¿sí?", "¿si?", "si no", "si puedo", "si quiero saber", "si tuviera", "sí pero cambia mi teléfono", "sí, espera", "sino", "sí sí", "sí no", "no sí", "si,", "a si",
     "oui ou non", "oui?", "oui mais", "non oui",
     "opo ba", "opo?", "hindi opo", "opo hindi", "opo pero teka", "oo", "po",
     "sí 👍", "👍", "ya", "tal vez", "quizás", "dạ", "vâng", "khoan",

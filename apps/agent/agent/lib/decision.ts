@@ -27,9 +27,10 @@ const WORDS = new Map<string, { decision: Decision; language: ReplyLanguage | nu
   ["non", { decision: "no", language: null }],
 ]);
 
-// NFC first: a phone can send "có" as a letter plus a combining mark.
+// NFC first: a phone can send "có" as a letter plus a combining mark. One
+// closing mark at most, so "si..." stays the unfinished "if..." it is.
 function wordOf(text: string) {
-  const bare = text.normalize("NFC").trim().toLowerCase().replace(/^¡/, "").replace(/[.!]+$/, "").replace(/\s+/g, " ");
+  const bare = text.normalize("NFC").trim().toLowerCase().replace(/^¡/, "").replace(/[.!]$/, "").replace(/\s+/g, " ");
   return WORDS.get(bare);
 }
 
