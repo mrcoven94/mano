@@ -163,6 +163,25 @@ describe("the question in the person's language", () => {
     expect(presentsExactly(replayLine("https://x.test/fill/1", language).replace(/https:\S+/, "").trim())).toBe(true);
   });
 
+  // The demo's renewal goes with a letter and no pay stub. The person's yes
+  // covers that, so these words must reach them in every language.
+  it.each([
+    ["en", "With the letter you sent on November 4, and no proof of income attached."],
+    ["es", "Adjunto: la carta que envió el 4 de noviembre, y ningún comprobante de ingresos."],
+    ["vi", "Đính kèm: thư bạn gửi ngày 4 tháng 11, và không có giấy tờ chứng minh thu nhập."],
+    ["tl", "Kalakip: ang sulat na ipinadala mo noong Nobyembre 4, at walang katibayan ng kita."],
+  ] as const)("%s says when no proof of income goes", (language, line) => {
+    const noProof = { ...renewal, requestJson: JSON.stringify({ documentId: "doc-1", attachmentLabel: "the letter you sent on November 4, and no proof of income", payload: { fullName: "Rosa Testcase" } }) };
+    expect(renderQuestion(noProof, language)).toContain(line);
+    expect(presentsExactly(renderQuestion(noProof, language))).toBe(true);
+  });
+
+  it.each(["es", "vi", "tl"] as const)("%s keeps a label with any other ending whole, in English, and drops nothing", (language) => {
+    const label = "the letter you sent on November 4, and no pay stub";
+    const other = { ...renewal, requestJson: JSON.stringify({ documentId: "doc-1", attachmentLabel: label, payload: {} }) };
+    expect(renderQuestion(other, language)).toContain(label);
+  });
+
   it("a purpose, label, office or attachment it has no words for stays in its exact English", () => {
     const other = {
       purpose: "Housing form",
