@@ -57,13 +57,13 @@ export function resolveDueDate(due: string, nowMs: number, timeZone: string, yea
   const daysAhead = (d: string) => (Date.parse(d) - Date.parse(today)) / 86_400_000;
   const thisYear = Number(today.slice(0, 4));
   const thisYears = isoDate(thisYear, parts[1]!, parts[2]!);
+  const next = thisYears && thisYears >= today ? thisYears : isoDate(thisYear + 1, parts[1]!, parts[2]!);
   if (date < today) {
-    const next = thisYears && thisYears >= today ? thisYears : isoDate(thisYear + 1, parts[1]!, parts[2]!);
     if (next && daysAhead(next) <= NEAR_DAYS) return { status: "save", date: next, note: `Saved as the next such date, ${spoken(next)}. ${SAY_THE_YEAR}` };
     return ask(next ? `${spoken(date)} has passed. Do you mean ${spoken(next)}, or has it already gone by?` : `${spoken(date)} has passed. What date do you mean?`);
   }
   if (daysAhead(date) <= NEAR_DAYS) return { status: "save", date, note: null };
-  if (thisYears && thisYears >= today && thisYears !== date) return ask(`Do you mean ${spoken(thisYears)} or ${spoken(date)}?`);
+  if (next && next < date) return ask(`Do you mean ${spoken(next)} or ${spoken(date)}?`);
   return { status: "save", date, note: `That is more than six months away. ${SAY_THE_YEAR}` };
 }
 
