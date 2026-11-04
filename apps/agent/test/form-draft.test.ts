@@ -358,11 +358,12 @@ describe("starting a form draft", () => {
   });
 });
 
-// LAP-747. Propel tested general AI agents on real SNAP applications
-// (April 2026): they guessed missing fields, cut a mistyped phone number
-// to 10 digits instead of asking, and ticked the legal attestation
-// themselves. Mano asks one plain question instead of guessing, carries
-// every value exactly as given, and leaves the declaration to her YES.
+// LAP-747. Propel tested general AI agents on SNAP applications in an
+// internal test with no real applicants (April 2026): they guessed
+// missing fields, cut a mistyped phone number to 10 digits instead of
+// asking, and ticked the legal attestation themselves. Mano asks one
+// plain question instead of guessing, carries every value exactly as
+// given, and leaves the declaration to her YES.
 describe("LAP-747: Mano asks instead of guessing", () => {
   const RENEWAL = FORMS["food-renewal"]!;
   const at = "2026-11-02T18:00:00.000Z";
