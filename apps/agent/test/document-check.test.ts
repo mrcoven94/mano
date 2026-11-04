@@ -56,6 +56,48 @@ const LETTER = pageJson({ document_kind: "benefits_letter" });
 const NO_PROOF_PHOTO = "the photo you sent on November 2, and no proof of income";
 const NO_PROOF_LETTER = "the letter you sent on November 2, and no proof of income";
 
+// A real letter the reader misnames, with a program no list holds.
+function misnamed(kind: string, program: string, sentence: string, asked: string[] = ["Send the signed renewal form"]) {
+  return pageJson({
+    document_kind: kind,
+    full_text: `Testville County Office\nRe: ${program}\nNotice date November 2, 2026\n\n${sentence}`,
+    sender: { text: "Testville County Office", box_2d: [40, 60, 70, 400] },
+    program: { text: program, box_2d: [80, 60, 100, 200] },
+    subject: NIL,
+    asked: asked.map((text) => ({ text, box_2d: [150, 60, 170, 400] })),
+    deadlines: [{ text: sentence, box_2d: [200, 60, 220, 300] }],
+    consequence: NIL,
+    reference_no: NIL,
+    notice_date: { text: "November 2, 2026", box_2d: [135, 60, 150, 300] },
+    phones: [],
+  });
+}
+const CHILD_CARE = misnamed("utility_bill", "Child Care Subsidy", "Your renewal is due November 20, 2026.");
+const FOOD_SERVICES = misnamed("id", "Food and Nutrition Services", "Your renewal is due November 20, 2026.");
+const STRANGE_WITH_DUTY = misnamed("unknown", "Child Care Subsidy", "Your renewal is due November 20, 2026.");
+// The reader marked nothing, and the date is recovered from the transcription.
+const STUB_WITH_RECOVERED_DATE = notALetter("pay_stub", "Sample Works LLC\nNet pay $850.00\nYour renewal is due November 20, 2026.", "Sample Works LLC");
+const SHUTOFF = misnamed("utility_bill", "Electric service", "Pay $61.40 by November 20, 2026 to avoid shutoff.", []);
+const BILL_AMOUNT_DUE = misnamed("utility_bill", "Electric service", "Amount due $61.40 by November 20, 2026.", ["Pay the amount due"]);
+// What the reader returned live for a pay stub: its address line trips the
+// gate, so a question with no date comes back and the reply asks nothing.
+const STUB_WITH_DATELESS_QUESTION = notALetter("pay_stub", "Sample Works LLC\n400 Example Road, Testville, WA 98000\nEarnings Statement\nPay date: November 2, 2026\nNet pay $1,217.84", "Sample Works LLC");
+
+// A deadline the reader marked that its own transcription does not hold.
+const STUB_WITH_DROPPED_DEADLINE = pageJson({
+  document_kind: "pay_stub",
+  full_text: "Sample Works LLC\nNet pay $850.00",
+  sender: { text: "Sample Works LLC", box_2d: [40, 60, 70, 400] },
+  program: NIL,
+  subject: NIL,
+  asked: [],
+  deadlines: [{ text: "Your renewal is due November 20, 2026.", box_2d: [200, 60, 220, 300] }],
+  consequence: NIL,
+  reference_no: NIL,
+  notice_date: NIL,
+  phones: [],
+});
+
 const DOCUMENTS: { name: string; page: string; reply: RegExp; label: string }[] = [
   { name: "a renewal letter", page: LETTER, reply: /^This is a Medi-Cal renewal letter\. It is due November 20, 2026\./, label: NO_PROOF_LETTER },
   { name: "a pay stub", page: STUB, reply: /^This looks like a pay stub, and I could read it\.$/, label: "the pay stub you sent on November 2 as proof of income" },
@@ -63,7 +105,15 @@ const DOCUMENTS: { name: string; page: string; reply: RegExp; label: string }[] 
   { name: "an ID", page: ID_CARD, reply: /^This looks like an ID, and I could read it\.$/, label: NO_PROOF_PHOTO },
   { name: "something else", page: STRANGE, reply: /^I could read this, but I cannot tell what kind of document it is\.$/, label: NO_PROOF_PHOTO },
   { name: "a blurry document", page: BLURRY, reply: /^I could not read the page in your photo\./, label: NO_PROOF_PHOTO },
-  { name: "a renewal letter the reader called a pay stub", page: LETTER_CALLED_A_STUB, reply: /^I could read this, but I cannot tell what kind of document it is\./, label: NO_PROOF_PHOTO },
+  { name: "a renewal letter the reader called a pay stub", page: LETTER_CALLED_A_STUB, reply: /^This is a Medi-Cal renewal letter\. It is due November 20, 2026\./, label: NO_PROOF_LETTER },
+  { name: "a child care letter the reader called a utility bill", page: CHILD_CARE, reply: /^This is a benefits renewal letter\..*November 20, 2026/, label: NO_PROOF_LETTER },
+  { name: "a food letter the reader called an ID", page: FOOD_SERVICES, reply: /^This is a benefits renewal letter\..*November 20, 2026/, label: NO_PROOF_LETTER },
+  { name: "a letter with a duty the reader could not name", page: STRANGE_WITH_DUTY, reply: /^This is a benefits renewal letter\..*November 20, 2026/, label: NO_PROOF_LETTER },
+  { name: "a page called a pay stub with a date recovered from its text", page: STUB_WITH_RECOVERED_DATE, reply: /^This is a benefits renewal letter\..*Which date, if any, does it say you need to meet\?$/, label: NO_PROOF_LETTER },
+  { name: "a page called a pay stub with a deadline its text does not hold", page: STUB_WITH_DROPPED_DEADLINE, reply: /^This is a benefits letter\./, label: NO_PROOF_LETTER },
+  { name: "a shutoff notice", page: SHUTOFF, reply: /^This is a benefits letter\..*November 20, 2026/, label: NO_PROOF_LETTER },
+  { name: "a bill with an amount due by a date", page: BILL_AMOUNT_DUE, reply: /^This is a benefits letter\..*November 20, 2026/, label: NO_PROOF_LETTER },
+  { name: "a pay stub with a question that holds no date", page: STUB_WITH_DATELESS_QUESTION, reply: /^This looks like a pay stub, and I could read it\.$/, label: "the pay stub you sent on November 2 as proof of income" },
 ];
 
 let engine: EngineDouble;
@@ -141,7 +191,7 @@ afterEach(() => {
 describe.each(DOCUMENTS)("$name arriving by text and then going with a renewal", ({ page, reply, label }) => {
   it("says what it is once, decides nothing, and every party to the filing reads the same label", async () => {
     const text = await arrives(page);
-    expect(text).toMatch(reply);
+    expect(text.replace(/\n/g, " ")).toMatch(reply);
     expect(text).not.toMatch(/\b(qualif|eligib|approved|will get|entitled)/i);
 
     expect((await draft("turn_doccheck02")).status).toBe("waiting_for_yes");

@@ -262,18 +262,26 @@ function noDateFound(reading: MailReading, letter: Letter): boolean {
   return letter.noDateInText === true && !reading.questions.some((q) => q.letterId === letter.id || q.letterId === null);
 }
 
-// The reader's kind, unless the page itself gives a reason to doubt it. A
-// letter is evidence (rule 4), so its words can sway the reader: one that tries
-// to instruct Mano or reads as a scam is not taken at its word. Neither is one
-// that names a benefits program, so a real letter called something else keeps
-// its dates and questions. A pay stub asks nothing and sets no date, and only a
-// pay stub goes as proof of income.
+// A duty the reader marked that its own transcription does not hold.
+const UNVERIFIED_DUTY = /^Letter \S+: the (?:deadline|requested item) /;
+
+// The reader's kind, unless the reading gives a reason to doubt it. Any duty on
+// the letter (something asked, a deadline, a question holding a date) means it
+// reads as a normal letter, whatever it was called, so a label never drops a
+// date or question and nothing with a duty goes as proof of income. A letter is
+// evidence (rule 4), so one that tries to instruct Mano, reads as a scam or
+// names a benefits program is not taken at its word either.
 function trustedKind(reading: MailReading, letter: Letter): DocumentKind | undefined {
   const kind = letter.documentKind;
-  if (!kind || kind === "benefits_letter" || kind === "unknown") return kind;
+  if (!kind || kind === "benefits_letter") return kind;
+  const duty =
+    letter.fields.asked.length > 0 ||
+    letter.fields.deadlineText !== null ||
+    reading.questions.some((q) => q.letterId === letter.id && (q.proposal !== undefined || (q.candidates ?? []).length > 0 || (q.named !== undefined && q.named.kind !== "unsure") || (q.kind === "unverified_field" && UNVERIFIED_DUTY.test(q.prompt))));
+  if (duty) return undefined;
+  if (kind === "unknown") return kind;
   const doubted = reading.warnings.some((w) => w.letterId === letter.id && (w.kind === "instruction_in_content" || w.kind === "scam_suspect"));
-  const asks = kind === "pay_stub" && (letter.fields.asked.length > 0 || letter.fields.deadlineText !== null);
-  return doubted || asks || programOf(letter.fields) ? "unknown" : kind;
+  return doubted || programOf(letter.fields) ? "unknown" : kind;
 }
 
 function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPile: boolean, today: string | undefined): { lines: string[]; held: HeldDeadline | null } {
@@ -287,7 +295,7 @@ function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPi
     const planted = warnings.some((w) => w.kind === "instruction_in_content");
     return { lines: [...(otherKind ? [otherKind] : []), ...suspectLinkLines(question, w), ...(planted ? [w.planted] : [])], held: null };
   }
-  // A pay date or a bill's due date is not a duty from an office.
+  // With no duty on it, there is nothing more to say.
   if (otherKind && kind !== "unknown") return { lines: [otherKind], held: null };
   const program = programOf(letter.fields);
   const type = typeOf(letter);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { answerReading, readMail } from "../src/index.js";
+import { answerReading, documentsRead, readMail } from "../src/index.js";
 import { REPLY_LANGUAGES } from "../src/words.js";
 import { strictSchemaErrors } from "../src/model.js";
 import { parsePageExtraction, PAGE_SCHEMA } from "../src/read.js";
@@ -43,7 +43,7 @@ describe("what the same read says a document is", () => {
     expect(letter.fields.sender?.citation.box).toEqual({ ymin: 40, xmin: 60, ymax: 70, xmax: 400 });
   });
 
-  it("a bill's due date stays out of the reply and out of the deadlines", async () => {
+  it("a bill's due date is a duty: it reads as a letter, and the date is not lost", async () => {
     const bill = pageJson({
       document_kind: "utility_bill",
       full_text: "Testville Power\nAmount due $61.40 by November 20, 2026.",
@@ -57,15 +57,36 @@ describe("what the same read says a document is", () => {
       notice_date: NIL,
       phones: [],
     });
-    const answer = answerReading(await read(bill), "en", "2026-11-03");
-    expect(answer.text).toBe("This looks like a utility bill, and I could read it.");
-    expect(answer.deadlines).toEqual([]);
+    const reading = await read(bill);
+    expect(answerReading(reading, "en", "2026-11-03").text).toContain("November 20, 2026");
+    expect(documentsRead(reading).map((d) => d.kind)).toEqual([undefined]);
   });
 
   it("a letter naming a benefits program, called something else, keeps its deadline", async () => {
     const answer = answerReading(await read(pageJson({ document_kind: "utility_bill" })), "en", "2026-11-03");
-    expect(answer.text).toMatch(/^I could read this, but I cannot tell what kind of document it is\. It is due November 20, 2026\./);
+    expect(answer.text).toMatch(/^This is a Medi-Cal renewal letter\. It is due November 20, 2026\./);
     expect(answer.deadlines.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
+  });
+
+  it("a question that holds no date is not a duty, so a pay stub stays a pay stub", async () => {
+    const reading = await read(
+      pageJson({
+        document_kind: "pay_stub",
+        full_text: "Sample Works LLC\n400 Example Road, Testville, WA 98000\nEarnings Statement\nPay date: November 2, 2026\nNet pay $1,217.84",
+        sender: { text: "Sample Works LLC", box_2d: [40, 60, 70, 400] },
+        program: NIL,
+        subject: NIL,
+        asked: [],
+        deadlines: [],
+        consequence: NIL,
+        reference_no: NIL,
+        notice_date: NIL,
+        phones: [],
+      }),
+    );
+    expect(reading.questions.map((q) => q.kind)).toContain("confirm_deadline");
+    expect(answerReading(reading, "en", "2026-11-03").text).toBe("This looks like a pay stub, and I could read it.");
+    expect(documentsRead(reading).map((d) => d.kind)).toEqual(["pay_stub"]);
   });
 
   it("a reading with no kind answers as it always has", async () => {
