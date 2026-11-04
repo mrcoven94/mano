@@ -404,3 +404,11 @@
 .t-tabs .h-tab[aria-selected="true"]::after{display:none}
 .t-tabs .h-tab-bar{bottom:0;height:4px;background:var(--hl)}
 @media (max-width:720px){.t-more .h-tabs.t-tabs{margin-left:0;margin-right:0;padding:0;gap:8px}.t-tabs .h-tab{padding:9px 14px;font-size:.92rem;white-space:normal}}
+
+/* The short page each kind of team gets until there is a product for them. */
+.t-today{padding-bottom:88px}
+.t-today h1{margin-top:20px;max-width:16em;font-size:clamp(2.2rem,5.4vw,4rem);line-height:1.05;text-wrap:balance}
+.t-today .h-lede{margin-top:20px}
+.t-today-list{display:grid;gap:12px;max-width:680px;margin-top:32px;padding:0;list-style:none}
+.t-today-list li{background:var(--bg2);border-radius:16px;padding:20px 24px;line-height:1.5}
+.t-today .h-ctas{justify-content:flex-start}
