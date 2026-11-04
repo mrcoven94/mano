@@ -79,6 +79,8 @@ export interface AgentResponderOptions {
   grantSecret: string;
   handleHash: string;
   fallback: Responder;
+  // The person's own Mano email address, when the inbox is on.
+  emailAddress?: string;
   timeoutMs?: number;
   fetchFn?: typeof fetch;
   nowSeconds?: () => number;
@@ -100,6 +102,7 @@ export class AgentResponder implements Responder {
   private grantSecret: string;
   private handleHash: string;
   private fallback: Responder;
+  private emailAddress: string | undefined;
   private timeoutMs: number;
   private fetchFn: typeof fetch;
   private nowSeconds: () => number;
@@ -114,6 +117,7 @@ export class AgentResponder implements Responder {
     this.grantSecret = opts.grantSecret;
     this.handleHash = opts.handleHash;
     this.fallback = opts.fallback;
+    this.emailAddress = opts.emailAddress;
     this.timeoutMs = opts.timeoutMs ?? AGENT_RESPONDER_TIMEOUT_MS;
     this.maxAttempts = 1 + opts.fallback.maxAttempts;
     this.fetchFn = opts.fetchFn ?? boundFetch;
@@ -136,6 +140,7 @@ export class AgentResponder implements Responder {
         texts: turn.texts,
         attachmentCount: turn.attachmentCount,
         documents: turn.documents ?? [],
+        ...(this.emailAddress ? { emailAddress: this.emailAddress } : {}),
       });
       const timestamp = this.nowSeconds();
       const res = await this.fetchFn(`${this.agentUrl}${AGENT_TURN_PATH}`, {
@@ -303,7 +308,7 @@ export interface EngineDocumentUpload {
   fetchFn?: typeof fetch;
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
+export function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(binary);

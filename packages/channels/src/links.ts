@@ -18,9 +18,9 @@ export interface LinkCheckResult {
 // Anything Messages would render tappable: full URLs in any scheme
 // case, www. hosts, and bare domains with a dotted alpha TLD, in any
 // script. Numbers (1.2), single-letter trails (Section 4.b) and the
-// domain inside an email address do not match.
+// domain inside an email address, subdomains included, do not match.
 const LINK_PATTERN =
-  /\bhttps?:\/\/[^\s<>"')\]]+|\b(?<!@)(?:www\.)?(?:[\p{L}0-9](?:[\p{L}0-9-]{0,61}[\p{L}0-9])?\.)+[\p{L}]{2,}(?::\d{1,5})?(?:\/[^\s<>"')\]]*)?/giu;
+  /\bhttps?:\/\/[^\s<>"')\]]+|\b(?<!@[\p{L}0-9.-]*)(?:www\.)?(?:[\p{L}0-9](?:[\p{L}0-9-]{0,61}[\p{L}0-9])?\.)+[\p{L}]{2,}(?::\d{1,5})?(?:\/[^\s<>"')\]]*)?/giu;
 const TRAILING_PUNCT = /[.,;:!?)\]]+$/;
 
 export function extractLinks(text: string): string[] {

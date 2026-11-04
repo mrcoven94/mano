@@ -1485,6 +1485,10 @@ export class ConversationRunner {
     const saved: StoredPhoto[] = [];
     let unfileable = false;
     for (const [index, attachment] of attachments.slice(0, MAX_ATTACHMENTS_PER_TURN).entries()) {
+      if (attachment.stored) {
+        saved.push(attachment.stored);
+        continue;
+      }
       // A replay keeps what an earlier attempt chose for this file.
       const chosen = store.attachmentChoice(turn, index);
       if (chosen?.state === "stored" && chosen.generation === generation) {

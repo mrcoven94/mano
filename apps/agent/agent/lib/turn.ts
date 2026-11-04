@@ -25,6 +25,7 @@ import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { profileContext } from "./profile.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
+import { emailAddressLine, parseEmailAddress } from "./email-address.js";
 import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
 import { closeReplaced, presentable, presentationHash, proposalsOf, renderQuestion, replayLine, waitingFrom, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
@@ -98,6 +99,8 @@ interface TurnBody {
   // Engine, by ID.
   attachmentCount: number;
   documents: TextedPhoto[];
+  // The person's own Mano email address, when the inbox is on.
+  emailAddress: string | null;
 }
 
 function parseDocuments(value: unknown): TextedPhoto[] | null {
@@ -140,6 +143,7 @@ function parseBody(value: unknown): TurnBody | null {
     texts,
     attachmentCount: Math.max(attachmentCount, documents.length),
     documents,
+    emailAddress: parseEmailAddress(body.emailAddress),
   };
 }
 
@@ -396,6 +400,7 @@ async function runTurn(
   }
   const profile = await clock.time("profile", async () => profileRead);
   if (profile) context.push(profile);
+  if (body.emailAddress) context.push(emailAddressLine(body.emailAddress));
   // Where earlier requests stand (instructions/requests.ts) reaches the
   // model as a system instruction, never as part of the person's message.
   let settled: SettleResult;

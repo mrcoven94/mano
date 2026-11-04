@@ -46,6 +46,7 @@ import {
   savePendingDelete,
 } from "./conversation-delete.js";
 import { numberEnv, type Env } from "./env.js";
+import { addressFor, clearInbox, dropEmailRoute, ensureInboxToken, loadInbox, parseEmailDelivery, receiveEmail } from "./email.js";
 
 export const GLOBAL_STATE_ID = "global";
 
@@ -195,7 +196,7 @@ export function engineDocuments(env: Env, handleHash: string): DocumentStore | n
   };
 }
 
-export function buildResponder(env: Env, handleHash?: string, opts: { agentAllowed?: boolean; breaker?: PrimaryBreaker } = {}): Responder {
+export function buildResponder(env: Env, handleHash?: string, opts: { agentAllowed?: boolean; breaker?: PrimaryBreaker; emailAddress?: string } = {}): Responder {
   const fallback = buildFallbackResponder(env, opts.breaker);
   if (opts.agentAllowed === false) return fallback;
   // The agent answers when configured; otherwise the plain model answer
@@ -207,6 +208,7 @@ export function buildResponder(env: Env, handleHash?: string, opts: { agentAllow
       grantSecret: env.MANO_HANDLE_GRANT_SECRET,
       handleHash,
       fallback,
+      emailAddress: opts.emailAddress,
     });
   }
   return fallback;
@@ -235,7 +237,7 @@ export class ConversationDO implements DurableObject {
 
   private runTurnSerialized(handleHash: string): Promise<{ result: import("./runner.js").TurnResult; retryAfterMs: number }> {
     const next = this.turnChain.then(async () => {
-      const { runner } = this.runner(handleHash);
+      const { runner } = this.runner(handleHash, await this.emailAddress(handleHash));
       const result = await runner.runDueTurn();
       return { result, retryAfterMs: runner.retryAfterMs() };
     });
@@ -244,6 +246,21 @@ export class ConversationDO implements DurableObject {
       () => undefined,
     );
     return next;
+  }
+
+  // The person's own email address, minted the first time a turn needs
+  // it. A failure only leaves this one turn without it.
+  private async emailAddress(handleHash: string): Promise<string | undefined> {
+    const domain = this.env.MANO_EMAIL_DOMAIN?.trim();
+    if (!domain) return undefined;
+    try {
+      const store = new SqlConversationStore(this.ctx.storage.sql);
+      const token = await ensureInboxToken(this.ctx.storage.sql, store, globalStateStub(this.env), handleHash);
+      return token ? addressFor(token, domain) : undefined;
+    } catch (err) {
+      this.logger.warn("email_token_failed", { handle: handleHash, err: errName(err) });
+      return undefined;
+    }
   }
 
   private crisisCheckNoticed = false;
@@ -258,11 +275,11 @@ export class ConversationDO implements DurableObject {
     return check;
   }
 
-  private runner(handleHash: string): { runner: ConversationRunner; channel: Channel; responder: Responder } {
+  private runner(handleHash: string, emailAddress?: string): { runner: ConversationRunner; channel: Channel; responder: Responder } {
     const channel = buildChannel(this.env);
     // While a delete waits for Engine, old approvals could still be
     // answered, so the agent is not used: the plain model answers.
-    const responder = buildResponder(this.env, handleHash, { agentAllowed: loadPendingDelete(this.ctx.storage.sql) === null });
+    const responder = buildResponder(this.env, handleHash, { agentAllowed: loadPendingDelete(this.ctx.storage.sql) === null, emailAddress });
     const runner = new ConversationRunner({
       store: new SqlConversationStore(this.ctx.storage.sql),
       channel,
@@ -407,6 +424,26 @@ export class ConversationDO implements DurableObject {
         return new Response("Agent send failed.", { status: 500 });
       }
     }
+    if (request.method === "POST" && url.pathname === "/internal/email") {
+      const delivery = parseEmailDelivery(await request.json().catch(() => null));
+      if (!delivery) return new Response("Bad email.", { status: 400 });
+      const sql = this.ctx.storage.sql;
+      const { runner } = this.runner(delivery.handleHash);
+      const answer = await receiveEmail(delivery, {
+        sql,
+        store: new SqlConversationStore(sql),
+        runner,
+        documents: engineDocuments(this.env, delivery.handleHash),
+        photoConverter: this.env.IMAGES ? imagesConverter(this.env.IMAGES) : null,
+        spend: new StateSpendLedger(globalStateStub(this.env)),
+        logger: this.logger,
+        nowMs: () => Date.now(),
+      });
+      if (answer.result === "queued") {
+        await this.ctx.storage.setAlarm(Date.now() + numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs));
+      }
+      return Response.json(answer);
+    }
     if (request.method === "POST" && url.pathname === "/internal/delete") {
       const body = (await request.json().catch(() => null)) as { handleHash?: unknown } | null;
       if (!body || typeof body.handleHash !== "string") return new Response("Bad delete.", { status: 400 });
@@ -415,11 +452,17 @@ export class ConversationDO implements DurableObject {
       // agent stays off for this handle and the alarm keeps retrying.
       const sql = this.ctx.storage.sql;
       const store = new SqlConversationStore(sql);
+      const inboxToken = loadInbox(sql)?.token ?? null;
       store.wipe(Date.now());
+      // The address dies with the conversation, here in this same step: a
+      // token this table no longer holds is refused even if the global
+      // route below is not removed.
+      clearInbox(sql);
       this.decorations.cancelAll("deleted");
       const intent = { ...newPendingDelete(this.env, body.handleHash, store.meta().generation), nextAtMs: Date.now() };
       savePendingDelete(sql, intent);
       await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(1));
+      if (inboxToken) await dropEmailRoute(globalStateStub(this.env), inboxToken, this.logger);
       const { pending, engineRemoved } = await this.advancePendingDelete(intent);
       if (!pending) {
         this.logger.info("conversation_deleted", { handle: body.handleHash, engineCleared: true, agentCleared: true });
