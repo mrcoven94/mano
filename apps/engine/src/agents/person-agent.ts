@@ -11,6 +11,7 @@ import {
   type MessageType,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
+import { reportTryEvent } from "../try/ledger.js";
 import { APPROVAL_COLUMNS, ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureDeliveryTable, ensureFaxSendTable, ensureGatewayTables, gatewayChecker, outboundProviders, OutboundRouter, outboundPricing, recordDeliveryEvent, rememberDeliveryRoute, SqlFaxSendLog, withOutboundPrice, type DeliveryEvent } from "../gateway/index.js";
 import type { ActionRequest, Approval, CheckOutcome, ProposalOrder, Receipt } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
@@ -209,7 +210,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       this.store,
       this.executor,
       {
-        ...gatewayChecker(checkerSetting(env)),
+        ...gatewayChecker(checkerSetting(env), { trace: (event) => reportTryEvent(env, this.personId, event) }),
         listConsents: () => this.listStoredConsents(),
         documents: {
           getBytes: (documentId) => this.documentBytes(documentId),

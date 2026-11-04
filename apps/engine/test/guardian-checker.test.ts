@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkerSetting, gatewayChecker } from "../src/gateway/index.js";
 import type { CheckInput } from "../src/gateway/index.js";
 import { healthOk, liveStatus } from "../src/index.js";
+import type { TryEvent } from "@mano/protocol";
 import type { Env } from "../src/env.js";
 
 // Guardian's client inside workerd: production throws "Illegal invocation"
@@ -76,5 +77,34 @@ describe("Guardian in workerd", () => {
     const result = await checker!.check(INPUT);
     expect(result.verdict).toBe("block");
     expect(result.problems.join(" ")).toMatch(/taking longer than usual.*try again in a few minutes/);
+  });
+});
+
+describe("what Guardian's checker reports for the judge demo", () => {
+  const answer = (id: string) =>
+    Response.json({ verdict: "pass", problems: [], model: { id, revision: "r" }, image: { tag: "t", digest: "d" } });
+  const run = async (response: () => Response) => {
+    installStrictFetch(async (body) => (body.includes('"warm"') ? Response.json({ ready: true }, { status: 202 }) : response()));
+    const events: TryEvent[] = [];
+    const { checker } = gatewayChecker(checkerSetting({ ...GUARDIAN } as unknown as Env), { trace: (event) => events.push(event) });
+    await checker!.check(INPUT);
+    return events;
+  };
+
+  it("names the model the server says answered", async () => {
+    const events = await run(() => answer("RedHatAI/Muse-Glimmer-30B-FP8-block"));
+    expect(events[0]).toMatchObject({ kind: "model", model: "RedHatAI/Muse-Glimmer-30B-FP8-block", where: "Our GPU on Modal", state: "live", status: "200" });
+    expect(events[1]).toMatchObject({ kind: "guardian", verdict: "pass", state: "live" });
+  });
+
+  it("marks a stand-in as a stand-in, on the call and the verdict", async () => {
+    const events = await run(() => answer("stand-in"));
+    expect(events[0]).toMatchObject({ kind: "model", model: "stand-in", where: "No model called", state: "stand-in" });
+    expect(events[1]).toMatchObject({ kind: "guardian", verdict: "pass", state: "stand-in" });
+  });
+
+  it("names only the address for a call nothing answered", async () => {
+    const events = await run(() => new Response(null, { status: 500 }));
+    expect(events[0]).toMatchObject({ kind: "model", where: "Our GPU on Modal", state: "live", status: "500" });
   });
 });
