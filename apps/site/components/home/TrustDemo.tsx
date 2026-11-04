@@ -82,7 +82,7 @@ export default function TrustDemo() {
               <ol className="tr-steps">
                 <li className="rv" style={d(0.3)}><span>8:12:04 PM</span>Sent your renewal</li>
                 <li className="rv" style={d(0.8)}><span>8:12:34 PM</span>No answer after 30 seconds</li>
-                <li className="rv" style={d(1.4)}><span>8:13:10 PM</span>Checked your county account: received</li>
+                <li className="rv" style={d(1.4)}><span>8:13:10 PM</span>Checked with the county: received</li>
                 <li className="rv ok" style={d(2)}><span>Result</span>One copy on file. Not sent again.</li>
               </ol>
             </>

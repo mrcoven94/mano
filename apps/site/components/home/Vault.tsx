@@ -40,7 +40,7 @@ export default function Vault() {
     <div className="vt">
       <div className="h-head">
         <h2 id="vt-h">Everything you have proved, in your private vault.</h2>
-        <p className="lede">Your ID, pay stubs, lease, utility bills and your Social Security number or ITIN. No SSN or ITIN? Mano helps you prove who you are, where you live, who is in your household and what you earn another way. Snap a photo, forward an email or let Mano pull the record. Mano uses it for every application, so you never dig for the same paper twice.</p>
+        <p className="lede">Your ID, pay stubs, lease, utility bills and your Social Security number or ITIN. No SSN or ITIN? Mano helps you prove who you are, where you live, who is in your household and what you earn another way. Snap a photo and text it to Mano. Mano uses it for every application, so you never dig for the same paper twice.</p>
       </div>
 
       <div className="vt-picks" role="group" aria-label="Pick an application">

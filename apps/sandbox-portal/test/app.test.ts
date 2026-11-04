@@ -2120,3 +2120,39 @@ describe("LAP-747: only the applicant makes the declaration", () => {
     expect(await res.text()).toContain("case number from the renewal letter");
   });
 });
+
+// LAP-747 follow-up: a browser session saved before the case number was
+// added has household details and an attachment but no case number. Each
+// step sends it back to step 1 instead of failing, however often it reloads.
+describe("LAP-747: a session saved before the case number goes back to step 1", () => {
+  test("review, documents and submit redirect to /apply, and the household step then takes the case number", async () => {
+    const store = new MemoryStore();
+    const files = new MemoryFileStore();
+    const config = testConfig();
+    const cookie = await postHousehold(store, files, config);
+    await postDocuments(store, files, config, cookie, [pdfFile()]);
+    const id = cookie.split("=")[1]!;
+    const saved = (await store.getSession(id))!;
+    const { caseNumber: _dropped, ...older } = saved.household!;
+    await store.putSession({ ...saved, household: older as Household });
+
+    for (let reload = 0; reload < 2; reload++) {
+      const review = await handleRequest(new Request(`${BASE}/apply/review`, { headers: { cookie } }), store, files, config);
+      expect(review.status).toBe(303);
+      expect(review.headers.get("location")).toBe("/apply");
+    }
+    const documents = await handleRequest(new Request(`${BASE}/apply/documents`, { headers: { cookie } }), store, files, config);
+    expect(documents.headers.get("location")).toBe("/apply");
+    const submit = await handleRequest(new Request(`${BASE}/apply/submit`, { method: "POST", headers: { cookie } }), store, files, config);
+    expect(submit.headers.get("location")).toBe("/apply");
+
+    const again = await handleRequest(
+      new Request(`${BASE}/apply/household`, { method: "POST", headers: { cookie }, body: householdForm() }),
+      store,
+      files,
+      config,
+    );
+    expect(again.headers.get("location")).toBe("/apply/documents");
+    expect((await store.getSession(id))?.household?.caseNumber).toBe(HOUSEHOLD.caseNumber);
+  });
+});

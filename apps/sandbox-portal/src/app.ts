@@ -352,6 +352,15 @@ const HOUSEHOLD_LABELS: Record<keyof Household, string> = {
   monthlyIncome: "Monthly income",
 };
 
+/**
+ * True when the session holds every household field. A session saved before
+ * a field was added (the case number) goes back to step 1 to collect it.
+ */
+function hasHousehold(session: SessionData): session is SessionData & { household: Household } {
+  const household = session.household as Partial<Record<keyof Household, unknown>> | undefined;
+  return !!household && Object.keys(HOUSEHOLD_LABELS).every((field) => typeof household[field as keyof Household] === "string");
+}
+
 function validateHousehold(
   data: Record<string, string>,
   maxFieldLength: number,
@@ -841,7 +850,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "GET" && path === "/apply/documents") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect("/apply");
     if (!(await touchSession(store, session, config))) return timedOut();
     return html(documentsPage());
   }
@@ -849,7 +858,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "POST" && path === "/apply/documents") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect("/apply");
     const capped = await readCappedBody(request, config.maxBodyBytes);
     if (!capped.ok) return tooLargeResponse(false);
     const form = await formRequestFromBytes(request, capped.bytes).formData();
@@ -880,7 +889,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "GET" && path === "/apply/review") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect("/apply");
     if (session.files.length === 0) return redirect("/apply/documents");
     if (!(await touchSession(store, session, config))) return timedOut();
     return html(reviewPage(session.household, session.files));
@@ -890,7 +899,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "POST" && path === "/apply/submit") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect("/apply");
     if (session.files.length === 0) return redirect("/apply/documents");
     if (!(await saveDraft(store, session, session.household, config))) return draftInUse();
     if (!(await touchSession(store, session, config))) return timedOut();
