@@ -421,3 +421,117 @@ describe("rate windows use the time of admission", () => {
     expect(allow()).toBe(true);
   });
 });
+
+describe("an operation answers only for its own message", () => {
+  const CRISIS = "I want to kill myself";
+  const hasLine = (text: string) => expect(text).toMatch(/988[\s\S]*911/);
+
+  it("does not carry an old question onto a crisis reply under the same operation", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    asking(h);
+    const asked = await chatJson(h, s, "Send it", "x");
+    expect(asked.ask).toEqual({ approvalId: "appr-1" });
+    h.setAgent(() => Response.json({ status: "replied", text: "Hello from Mano." }));
+    for (let i = 0; i < 59; i++) await chatJson(h, s, "Hi", `fill-${i}`);
+    expect((await handleApi(post(`/api/persons/${s.personId}/chat`, { message: "Hi", clientOpId: "over" }, s.token), h.env)).status).toBe(429);
+
+    const crisis = await chatJson(h, s, CRISIS, "x");
+    hasLine(crisis.reply);
+    expect(crisis.ask).toBeUndefined();
+    expect((await shown(h, s, "appr-1", crisis.id)).status).toBe(409);
+    expect(presentedCalls(h)).toHaveLength(0);
+    const list = await handleApi(new Request(`https://web.test/api/persons/${s.personId}/conversation`, { headers: auth(s.token) }), h.env);
+    const { messages } = (await list.json()) as { messages: { id: string; text: string; ask?: unknown }[] };
+    expect(messages.find((m) => m.id === crisis.id)?.ask).toBeUndefined();
+    expect(messages.find((m) => m.id === asked.id)?.text).toBe(QUESTION);
+  });
+
+  it("clears the question when a message's reply is replaced with none", () => {
+    const store = new WebStore(sqlite(), () => Date.parse("2026-11-03T12:00:00Z"));
+    store.beginTurn("x", "Send it");
+    const first = store.finishTurn("x", QUESTION, { approvalId: "appr-1", textHash: "hash" });
+    expect(first.ask).toEqual({ approvalId: "appr-1" });
+    const second = store.finishTurn("x", "Something else.", null);
+    expect(second.ask).toBeUndefined();
+    expect(store.questionToReport("appr-1", first.id)).toBeNull();
+    expect(store.listMessages().every((m) => m.ask === undefined)).toBe(true);
+  });
+
+  it("answers crisis wording under an operation already used for an ordinary message", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    await chatJson(h, s, "Hi", "same");
+    const out = await chatJson(h, s, CRISIS, "same");
+    hasLine(out.reply);
+    expect(out.reply).not.toBe("Hello from Mano.");
+  });
+
+  it("runs a different ordinary message as its own turn and leaves the first reply alone", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    h.setAgent(() => Response.json({ status: "replied", text: "First." }));
+    const first = await chatJson(h, s, "Hi", "same");
+    h.setAgent(() => Response.json({ status: "replied", text: "Second." }));
+    expect((await chatJson(h, s, "Something else", "same")).reply).toBe("Second.");
+    const repeat = await chatJson(h, s, "Hi", "same");
+    expect(repeat).toMatchObject({ id: first.id, reply: "First." });
+    expect(h.agentCalls).toHaveLength(2);
+  });
+
+  it("answers a retry from the record at the limit, without spending a turn", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    await chatJson(h, s, "Hi", "first");
+    for (let i = 0; i < 59; i++) await chatJson(h, s, "Hi", `fill-${i}`);
+    const retry = await handleApi(post(`/api/persons/${s.personId}/chat`, { message: "Hi", clientOpId: "first" }, s.token), h.env);
+    expect(retry.status).toBe(200);
+  });
+});
+
+describe("the crisis check reads the whole message", () => {
+  const route = (id: string) => `/api/persons/${id}/chat`;
+  const hasLine = (text: string) => expect(text).toMatch(/988[\s\S]*911/);
+
+  it("finds crisis wording past the first 16,384 characters", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    const res = await handleApi(post(route(s.personId), { message: `${"x".repeat(17_000)} I want to kill myself` }, s.token), h.env);
+    expect(res.status).toBe(200);
+    hasLine(((await res.json()) as { reply: string }).reply);
+  });
+
+  it("answers from what was read when a body passes the hard limit, and refuses the rest", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    const crisis = await handleApi(post(route(s.personId), { message: `${"x".repeat(100_000)} I want to kill myself ${"x".repeat(400_000)}` }, s.token), h.env);
+    expect(crisis.status).toBe(200);
+    hasLine(((await crisis.json()) as { reply: string }).reply);
+    const plain = await handleApi(post(route(s.personId), { message: "x".repeat(400_000) }, s.token), h.env);
+    expect(plain.status).toBe(400);
+    expect(h.agentCalls).toHaveLength(0);
+  });
+
+  it("stops reading a body at the hard limit", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    let pulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(64 * 1024).fill(120));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const res = await handleApi(
+      new Request(`https://web.test${route(s.personId)}`, { method: "POST", headers: { authorization: `Bearer ${s.token}` }, body, duplex: "half" } as RequestInit),
+      h.env,
+    );
+    expect(res.status).toBe(400);
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThan(10);
+  });
+});

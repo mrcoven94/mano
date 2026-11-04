@@ -111,15 +111,19 @@ export class WebStore {
     return true;
   }
 
+  // The stored reply for an operation already answered, if any.
+  answered(opId: string): WebMessage | null {
+    const row = this.sql.exec("SELECT reply_id FROM turns WHERE op_id = ? AND state = 'done'", opId).toArray()[0] as { reply_id: string | null } | undefined;
+    return row?.reply_id ? this.message(row.reply_id) : null;
+  }
+
   beginTurn(opId: string, text: string): TurnStart {
     const nowMs = this.now();
     const row = this.sql.exec("SELECT turn, received_ms, started_ms, state, reply_id FROM turns WHERE op_id = ?", opId).toArray()[0] as
       | { turn: number; received_ms: number; started_ms: number; state: string; reply_id: string | null }
       | undefined;
-    if (row?.state === "done" && row.reply_id) {
-      const reply = this.message(row.reply_id);
-      if (reply) return { kind: "answered", reply };
-    }
+    const reply = this.answered(opId);
+    if (reply) return { kind: "answered", reply };
     if (row?.state === "running" && nowMs - row.started_ms < TURN_LEASE_MS) return { kind: "busy" };
     if (row) {
       this.sql.exec("UPDATE turns SET state = 'running', started_ms = ? WHERE op_id = ?", nowMs, opId);
@@ -133,11 +137,14 @@ export class WebStore {
   }
 
   // Stores the reply and, when it carries a question that survived whole,
-  // the question waiting for the browser to say it displayed it.
+  // the question waiting for the browser to say it displayed it. A message
+  // holds only what its current reply asks: any older question goes with
+  // the old words.
   finishTurn(opId: string, text: string, question: ShownQuestion | null): WebMessage {
     const id = `a-${opId}`;
     this.sql.exec("INSERT OR REPLACE INTO messages(id, role, text, created_ms) VALUES (?, 'agent', ?, ?)", id, text, this.now());
     this.sql.exec("UPDATE turns SET state = 'done', reply_id = ? WHERE op_id = ?", id, opId);
+    this.sql.exec("DELETE FROM questions WHERE message_id = ?", id);
     if (question) {
       this.sql.exec(
         "INSERT OR REPLACE INTO questions(approval_id, message_id, text_hash, state) VALUES (?, ?, ?, 'pending')",

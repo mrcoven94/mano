@@ -36,7 +36,7 @@ import { CODE_TTL_MS, addressHash, codesMatch, maskEmail, mintWebSession, normal
 import type { ShownQuestion, WebMessage, WebStore } from "./store.js";
 
 type Async<T> = { [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => R | Promise<R> : never };
-export type StateStub = Async<Pick<WebStore, "allow" | "createChallenge" | "dropChallenge" | "spendChallenge" | "beginTurn" | "finishTurn" | "failTurn" | "recordCrisis" | "questionToReport" | "settleQuestion" | "listMessages">>;
+export type StateStub = Async<Pick<WebStore, "allow" | "createChallenge" | "dropChallenge" | "spendChallenge" | "answered" | "beginTurn" | "finishTurn" | "failTurn" | "recordCrisis" | "questionToReport" | "settleQuestion" | "listMessages">>;
 
 export interface WebEnv {
   stateFor(name: string): StateStub;
@@ -56,7 +56,9 @@ const AGENT_TIMEOUT_MS = 100_000;
 // Nobody in a crisis waits out a slow agent; the fixed line goes instead.
 const CRISIS_AGENT_TIMEOUT_MS = 20_000;
 const MAX_AUTH_BODY = 4_096;
-const MAX_CHAT_BODY = 16_384;
+// The most of one chat request ever read. Past this the message is refused,
+// after a crisis check of what was read.
+const MAX_CHAT_READ_BYTES = 256 * 1024;
 const MAX_MESSAGE_CHARS = 4_000;
 const CODES_PER_ADDRESS_HOUR = 5;
 const CODES_PER_IP_HOUR = 20;
@@ -211,17 +213,48 @@ async function runTurn(
   return { text: shown, question: { approvalId, textHash: await presentationHash(approval) } };
 }
 
+// Reads a body up to a byte limit and stops, so a huge paste costs no more
+// than the limit. truncated says there was more.
+async function readCapped(request: Request, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+  const reader = request.body?.getReader();
+  if (!reader) return { text: "", truncated: false };
+  const decoder = new TextDecoder();
+  let text = "";
+  let read = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return { text: text + decoder.decode(), truncated: false };
+    read += value.byteLength;
+    text += decoder.decode(value.subarray(0, Math.max(0, value.byteLength - Math.max(0, read - maxBytes))), { stream: true });
+    if (read > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return { text: text + decoder.decode(), truncated: true };
+    }
+  }
+}
+
+// An operation answers only for the message it was first sent with. The
+// same ID on different words is a different operation, so a cached reply
+// can never stand in for what the person just wrote.
+async function operationKey(opId: string, message: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(message));
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${opId}-${hex.slice(0, 16)}`;
+}
+
 const chatAnswer = (message: WebMessage): Response =>
   Response.json({ id: message.id, reply: message.text, createdAt: message.createdAt, ...(message.ask ? { ask: message.ask } : {}) });
 
 async function chat(request: Request, env: WebEnv, personSegment: string): Promise<Response> {
-  const raw = await request.text();
-  const body = parseObject(raw, MAX_CHAT_BODY);
+  const { text: raw, truncated } = await readCapped(request, MAX_CHAT_READ_BYTES);
+  const body = truncated ? null : parseObject(raw, MAX_CHAT_READ_BYTES);
   const message = typeof body?.message === "string" ? body.message.trim() : "";
-  // A message too long to take is still read for the crisis check.
-  const said = message || raw.slice(0, MAX_CHAT_BODY);
+  // A message too long to take, or a body too big to parse, is still read
+  // for the crisis check.
+  const said = message || raw;
   const crisisLine = crisisGate(said) !== "none" ? crisisLineFor(said) : null;
-  const opId = typeof body?.clientOpId === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(body.clientOpId) ? body.clientOpId : crypto.randomUUID();
+  const clientOp = typeof body?.clientOpId === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(body.clientOpId) ? body.clientOpId : crypto.randomUUID();
+  const opId = await operationKey(clientOp, said);
   let person: StateStub | null = null;
 
   // Every way a message can fail ends here, so a crisis always gets its line.
@@ -244,6 +277,10 @@ async function chat(request: Request, env: WebEnv, personSegment: string): Promi
     if (decodeURIComponent(personSegment) !== personId || !handleHash) return await refuse(403, SIGN_IN_AGAIN);
     person = env.stateFor(`person:${personId}`);
     if (!message || message.length > MAX_MESSAGE_CHARS) return await refuse(400, "Send a message of up to 4,000 characters.");
+    // A retry of an answered message spends nothing, and its reply is for
+    // these same words: a crisis reply already leads with the crisis line.
+    const answered = await person.answered(opId);
+    if (answered) return chatAnswer(answered);
     const allowed = (await person.allow("turns", TURNS_PER_PERSON_HOUR, HOUR_MS)) && (await env.stateFor("auth").allow("turns:all", TURNS_PER_DAY, DAY_MS));
     if (!allowed) return await refuse(429, "That is a lot of messages. Try again in a while.");
     const start = await person.beginTurn(opId, message);

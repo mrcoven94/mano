@@ -44,6 +44,9 @@ export class WebState extends DurableObject<Env> {
   spendChallenge(...args: Parameters<WebStore["spendChallenge"]>) {
     return this.store.spendChallenge(...args);
   }
+  answered(...args: Parameters<WebStore["answered"]>) {
+    return this.store.answered(...args);
+  }
   beginTurn(...args: Parameters<WebStore["beginTurn"]>) {
     return this.store.beginTurn(...args);
   }

@@ -26,7 +26,7 @@ import { AuthError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { takeChatDraft } from "../../lib/chat-draft";
 import { trackCacheFile } from "../../lib/cache-files";
-import { mergeArrived, questionsToAcknowledge } from "../../lib/chat-thread";
+import { SEEN_ROW, inDisplayOrder, mergeArrived, questionsToAcknowledge, visibleMessageIds } from "../../lib/chat-thread";
 import { useStrings } from "../../lib/i18n";
 import { submitMessage } from "../../lib/send";
 import { fileToB64, pickMailPhotos, pickMailVideo, takeMailPhoto, takeMailVideo, type PickedMedia } from "../../lib/media";
@@ -121,17 +121,24 @@ export default function Chat() {
     }, [refresh]),
   );
 
-  // Runs after the thread is on screen, while this tab is the one showing.
+  // The list reports which rows are fully on screen. FlatList refuses a
+  // viewability callback that changes, so this one is fixed for its life.
+  const [visible, setVisible] = useState<ReadonlySet<string>>(new Set());
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: { item: ChatMessage; isViewable: boolean }[] }) => {
+    setVisible(visibleMessageIds(viewableItems));
+  }).current;
+
+  // Runs while this tab is showing, whenever a row comes fully into view.
   // Coming back to the app refreshes the thread, which runs this again.
   const acknowledged = useRef(new Set<string>());
   useFocusEffect(
     useCallback(() => {
       if (!session || loading) return;
-      for (const { approvalId, messageId } of questionsToAcknowledge(thread, AppState.currentState === "active", acknowledged.current)) {
+      for (const { approvalId, messageId } of questionsToAcknowledge(thread, visible, AppState.currentState === "active", acknowledged.current)) {
         acknowledged.current.add(messageId);
         client.acknowledgeQuestion(session, approvalId, messageId).catch(() => acknowledged.current.delete(messageId));
       }
-    }, [client, session, thread, loading]),
+    }, [client, session, thread, visible, loading]),
   );
 
   // A draft another screen handed over (an approval quoted for a change)
@@ -343,7 +350,7 @@ export default function Chat() {
     status: "queued",
   }));
 
-  const all = [...thread, ...queuedAsMessages];
+  const all = inDisplayOrder(thread, queuedAsMessages);
   const shown = [...all].reverse();
   const heldCount = queued.filter((q) => q.held === true).length;
 
@@ -390,6 +397,8 @@ export default function Chat() {
             contentContainerStyle={styles.list}
             keyboardShouldPersistTaps="handled"
             renderItem={({ item }) => <Bubble message={item} queuedLabel={s.queued} />}
+            viewabilityConfig={SEEN_ROW}
+            onViewableItemsChanged={onViewableItemsChanged}
           />
         )}
 

@@ -3,7 +3,12 @@
 // attempt. An expired session throws before anything is queued, and an
 // auth failure mid-flush drops the failed item and rethrows so the
 // caller signs out instead of stranding mail for the next resident.
+//
+// A message naming a crisis gets 988 and 911 on the device first, before
+// anything that can stop it: a held send ahead of it, no network, an
+// expired session.
 
+import { crisisGate, crisisLineFor } from "@mano/persona/crisis";
 import { AuthError, type ChatMessage, type ManoClient, type NewAttachment, type Session } from "./api/types";
 import type { Outbox } from "./queue";
 
@@ -26,6 +31,11 @@ export async function submitMessage(
   attachments: NewAttachment[],
   onReply?: (reply: ChatMessage) => void,
 ): Promise<SubmitReport> {
+  if (crisisGate(text) !== "none") {
+    // It shows before the message is queued but reads after it.
+    const createdAt = new Date(Date.now() + 1000).toISOString();
+    onReply?.({ id: `device-crisis-${createdAt}`, role: "agent", text: crisisLineFor(text), createdAt, attachments: [], status: "sent" });
+  }
   if (!sessionUsable(session)) throw new AuthError();
   const item = await outbox.enqueue(session.personId, text, attachments);
   const report = await outbox.flush(session, async (queued) => {
