@@ -2,7 +2,7 @@
 // tab carries the pending count; notification taps land here too.
 
 import { useCallback, useState } from "react";
-import { Text, type ColorValue } from "react-native";
+import { Platform, Text, type ColorValue } from "react-native";
 import { Redirect, Tabs, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -69,7 +69,7 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: s.tabsAgent,
-          tabBarAccessibilityLabel: tabLabel(s.tabsAgent),
+          tabBarAccessibilityLabel: tabLabel(s.tabsAgent, { position: 1, total: 4 }, Platform.OS, s),
           tabBarIcon: ({ color, size }) => <Ionicons name="chatbubble-ellipses-outline" color={typeof color === "string" ? color : colors.faint} size={size} />,
         }}
       />
@@ -77,7 +77,7 @@ export default function TabsLayout() {
         name="approvals"
         options={{
           title: s.tabsApprovals,
-          tabBarAccessibilityLabel: tabLabel(s.tabsApprovals, pending),
+          tabBarAccessibilityLabel: tabLabel(s.tabsApprovals, { position: 2, total: 4, count: pending }, Platform.OS, s),
           tabBarBadge: pending > 0 ? pending : undefined,
           tabBarBadgeStyle: { backgroundColor: colors.hl, color: colors.text },
           tabBarIcon: ({ color, size }) => <Ionicons name="checkmark-circle-outline" color={typeof color === "string" ? color : colors.faint} size={size} />,
@@ -87,7 +87,7 @@ export default function TabsLayout() {
         name="deadlines"
         options={{
           title: s.tabsDeadlines,
-          tabBarAccessibilityLabel: tabLabel(s.tabsDeadlines),
+          tabBarAccessibilityLabel: tabLabel(s.tabsDeadlines, { position: 3, total: 4 }, Platform.OS, s),
           tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" color={typeof color === "string" ? color : colors.faint} size={size} />,
         }}
       />
@@ -95,7 +95,7 @@ export default function TabsLayout() {
         name="more"
         options={{
           title: s.tabsMore,
-          tabBarAccessibilityLabel: tabLabel(s.tabsMore),
+          tabBarAccessibilityLabel: tabLabel(s.tabsMore, { position: 4, total: 4 }, Platform.OS, s),
           tabBarIcon: ({ color, size }) => <Ionicons name="ellipsis-horizontal-circle-outline" color={typeof color === "string" ? color : colors.faint} size={size} />,
         }}
       />

@@ -9,6 +9,8 @@ export const en = {
   tabsApprovals: "Approvals",
   tabsDeadlines: "Deadlines",
   tabsMore: "More",
+  tabWord: "tab",
+  tabOf: "of",
   back: "Back",
 
   signInTitle: "Welcome to Mano",
@@ -239,6 +241,8 @@ export const es: Strings = {
   tabsApprovals: "Aprobar",
   tabsDeadlines: "Fechas",
   tabsMore: "Más",
+  tabWord: "pestaña",
+  tabOf: "de",
   back: "Atrás",
 
   signInTitle: "Le damos la bienvenida a Mano",

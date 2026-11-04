@@ -11,8 +11,9 @@ export function voiceRecordLabel(recording: boolean, s: Strings): string {
   return recording ? s.recording : s.attachVoice;
 }
 
-// A tab's name carries the count its badge shows, which a name set here would
-// otherwise hide from a screen reader.
-export function tabLabel(title: string, count = 0): string {
-  return count > 0 ? `${title}, ${count}` : title;
+// A tab's name carries the count its badge shows. iOS exposes tabs as buttons,
+// so there the name also says it is a tab and which one, in the person's language.
+export function tabLabel(title: string, tab: { position: number; total: number; count?: number }, platform: string, s: Strings): string {
+  const named = tab.count ? `${title}, ${tab.count}` : title;
+  return platform === "ios" ? `${named}, ${s.tabWord}, ${tab.position} ${s.tabOf} ${tab.total}` : named;
 }

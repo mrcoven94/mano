@@ -21,7 +21,7 @@ import {
 import * as Linking from "expo-linking";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { RecordingPresets, createAudioPlayer, requestRecordingPermissionsAsync, useAudioRecorder, type AudioPlayer } from "expo-audio";
+import { RecordingPresets, createAudioPlayer, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, type AudioPlayer } from "expo-audio";
 import { deleteAsync } from "expo-file-system/legacy";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Btn, DemoBanner, EmptyView, LiveRegion, LoadingView, Title } from "../../components/ui";
@@ -410,7 +410,8 @@ export default function Chat() {
     try {
       const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) throw new PermissionDeniedError("microphone");
-      // record() throws until the recorder is prepared.
+      // record() throws until recording is allowed (iOS) and the recorder is prepared.
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
       recorder.record();
       setVoiceUri(null);

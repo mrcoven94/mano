@@ -18,8 +18,14 @@ describe("labels that follow state", () => {
   });
 
   it("speaks a tab's badge count only when there is one", () => {
-    expect(tabLabel("Approvals", 2)).toBe("Approvals, 2");
-    expect(tabLabel("Approvals", 0)).toBe("Approvals");
-    expect(tabLabel("More")).toBe("More");
+    expect(tabLabel("Approvals", { position: 2, total: 4, count: 2 }, "android", en)).toBe("Approvals, 2");
+    expect(tabLabel("Approvals", { position: 2, total: 4, count: 0 }, "web", en)).toBe("Approvals");
+    expect(tabLabel("More", { position: 4, total: 4 }, "android", en)).toBe("More");
+  });
+
+  it("says it is a tab and which one on iOS, in the person's language", () => {
+    expect(tabLabel("Agent", { position: 1, total: 4 }, "ios", en)).toBe("Agent, tab, 1 of 4");
+    expect(tabLabel("Approvals", { position: 2, total: 4, count: 1 }, "ios", en)).toBe("Approvals, 1, tab, 2 of 4");
+    expect(tabLabel("Agente", { position: 1, total: 4 }, "ios", es)).toBe("Agente, pestaña, 1 de 4");
   });
 });
