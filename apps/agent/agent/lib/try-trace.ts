@@ -142,7 +142,12 @@ function tracedComputer(inner: Computer, handleHash: string, sending: Promise<vo
       return png;
     },
     act: (actions) => inner.act(actions),
-    goto: (url) => inner.goto(url),
+    // The address only, so the page can tell which form this fill opened. The
+    // draft's ID in the query stays here.
+    goto: (url) => {
+      sending.push(report({ handleHash, visited: new URL(url).pathname }));
+      return inner.goto(url);
+    },
     stageFile: (name, data) => inner.stageFile(name, data),
     fileUploadHint: () => inner.fileUploadHint(),
     liveViewUrl: () => inner.liveViewUrl(),

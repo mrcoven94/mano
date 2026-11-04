@@ -81,6 +81,16 @@ describe("reports for the judge demo", () => {
     expect(reports).toHaveLength(1);
   });
 
+  it("reports the address a fill opened, without the draft's ID", async () => {
+    const opened: string[] = [];
+    const computer = { goto: async (url: string) => { opened.push(url); }, close: async () => undefined } as never;
+    const deps = tracedFillDeps({ computer, model: {}, modelId: "m", deadlineMs: 1, draftToken: "t" } as unknown as FillDeps, `handle-${DEMO}`) as FillDeps;
+    await deps.computer.goto("https://portal.test/scramble/abc/apply?draft=secret");
+    await deps.computer.close();
+    expect(opened).toEqual(["https://portal.test/scramble/abc/apply?draft=secret"]);
+    expect(reports).toEqual([{ handleHash: DEMO, visited: "/scramble/abc/apply" }]);
+  });
+
   it("names whichever route the step itself used", async () => {
     const trace = tryStepTrace(DEMO, { observe: () => undefined });
     step(trace, "modal/meta-models/Muse-Spark-Open-816B-A42B");
