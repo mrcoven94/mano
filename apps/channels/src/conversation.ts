@@ -7,6 +7,7 @@ import {
   AgentResponder,
   ModelCrisisCheck,
   OpenWeightClient,
+  OpenWeightFailed,
   PrimaryBreaker,
   isMetaModelId,
   reportPresentation,
@@ -25,6 +26,7 @@ import {
   type NormalizedEvent,
   type OpenWeightAnswer,
   type OpenWeightFallback,
+  type OpenWeightOptions,
   type OpenWeightRequest,
   type Responder,
 } from "@mano/channels";
@@ -134,14 +136,17 @@ const primaryBreaker = new PrimaryBreaker();
 // before.
 //
 // MANO_MODEL_PROVIDER=modal, with MODAL_ENDPOINT_URL and MODAL_PROXY_TOKEN,
-// asks the same model on a Modal Shared Endpoint instead. Off by default.
-// Chosen with a setting missing or a URL off Modal's domain, there is no
-// fallback at all, never OpenRouter's.
-// AGENTS.md rule 7 does not list this route, so it carries synthetic data
-// only until David changes that rule. A Shared Endpoint serves one model and
-// answers whatever model name it is sent, so MANO_OPEN_WEIGHT_MODEL stays as
-// it is, and it ignores the OpenRouter pin in the body. It refuses minimal
-// reasoning with a 400, so the fast path and crisis check ask for low there.
+// asks the same model on a Modal Shared Endpoint instead (AGENTS.md rule 7).
+// No request carries a pin there: zero retention is Modal's stated policy for
+// the endpoint type (November 4 entry in docs/decisions.md). Chosen with a
+// setting missing or a URL off Modal's domain, there is no fallback at all. A
+// Shared Endpoint serves one model and answers whatever model name it is sent,
+// so MANO_OPEN_WEIGHT_MODEL stays as it is, and it ignores the OpenRouter pin in
+// the body. It refuses minimal reasoning with a 400, so the fast path and crisis
+// check ask for low there.
+//
+// With OPENROUTER_API_KEY too, OpenRouter is the backup when a Modal call fails
+// at run time, on the same model under its pin. Nothing else is ever tried.
 export function buildOpenWeight(env: Env, breaker: PrimaryBreaker = primaryBreaker): OpenWeightFallback | undefined {
   const model = env.MANO_OPEN_WEIGHT_MODEL?.trim() ?? "";
   if (!isMetaModelId(model) || model.endsWith("-contributor")) return undefined;
@@ -149,15 +154,49 @@ export function buildOpenWeight(env: Env, breaker: PrimaryBreaker = primaryBreak
   if (modal.MANO_MODEL_PROVIDER === "modal") {
     const baseUrl = modalBaseUrl(modal.MODAL_ENDPOINT_URL);
     if (!baseUrl || !modal.MODAL_PROXY_TOKEN) return undefined;
-    return { client: new ModalOpenWeightClient({ apiKey: modal.MODAL_PROXY_TOKEN, model, baseUrl }), breaker };
+    const backup = env.OPENROUTER_API_KEY ? new OpenWeightClient({ apiKey: env.OPENROUTER_API_KEY, model: MODAL_BACKUP_MODEL }) : undefined;
+    return { client: new ModalOpenWeightClient({ apiKey: modal.MODAL_PROXY_TOKEN, model, baseUrl, ...(backup ? { timeoutMs: MODAL_TIMEOUT_WITH_BACKUP_MS } : {}) }, backup), breaker };
   }
   if (!env.OPENROUTER_API_KEY) return undefined;
   return { client: new OpenWeightClient({ apiKey: env.OPENROUTER_API_KEY, model }), breaker };
 }
 
+const MODAL_BACKUP_MODEL = "meta/muse-spark-open";
+// Short enough to leave the backup time inside a turn.
+const MODAL_TIMEOUT_WITH_BACKUP_MS = 30_000;
+
+// A failure of the service, not of this request: a bad token or a refused
+// body would fail the same way on the next try, and an abort is the caller's.
+function modalDown(reason: string): boolean {
+  return reason === "timeout" || reason === "network" || reason === "http_429" || /^http_5\d\d$/.test(reason);
+}
+
+// Which route answered, in fixed words, for the logs that report the model.
+function logRoute(route: "modal" | "openrouter"): void {
+  console.log(JSON.stringify({ type: "mano_model_route", surface: "text_line", route }));
+}
+
 class ModalOpenWeightClient extends OpenWeightClient {
-  override ask(req: OpenWeightRequest, signal?: AbortSignal): Promise<OpenWeightAnswer> {
-    return super.ask({ ...req, effort: req.effort === "minimal" ? "low" : req.effort }, signal);
+  private backup: OpenWeightClient | undefined;
+
+  constructor(opts: OpenWeightOptions, backup?: OpenWeightClient) {
+    super(opts);
+    this.backup = backup;
+  }
+
+  override async ask(req: OpenWeightRequest, signal?: AbortSignal): Promise<OpenWeightAnswer> {
+    let answer: OpenWeightAnswer;
+    try {
+      answer = await super.ask({ ...req, effort: req.effort === "minimal" ? "low" : req.effort }, signal);
+    } catch (err) {
+      if (!this.backup || !(err instanceof OpenWeightFailed) || !modalDown(err.reason)) throw err;
+      // A 402 here ends as any failed fallback does.
+      answer = await this.backup.ask(req, signal);
+      logRoute("openrouter");
+      return answer;
+    }
+    logRoute("modal");
+    return answer;
   }
 }
 

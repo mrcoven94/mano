@@ -215,6 +215,74 @@ describe("the fallback on Modal, only when it is chosen", () => {
     expect(calls.map((c) => c.url)).toContain(MODAL_URL);
   });
 
+  describe("with OpenRouter as the backup", () => {
+    const withBackup = { ...base, ...modal, OPENROUTER_API_KEY: "test-open-key-not-real" } as Env;
+    const ASK = { instructions: "x", input: [{ role: "user" as const, content: "hi" }], maxTokens: 10, effort: "minimal" as const };
+
+    function script(modalAnswer: () => Response | Promise<Response>, backupAnswer: () => Response = () => openResponse("From the backup.")) {
+      const sent: Array<{ url: string; body: Record<string, unknown> }> = [];
+      vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
+        sent.push({ url: String(url), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+        return String(url) === MODAL_URL ? modalAnswer() : backupAnswer();
+      });
+      return sent;
+    }
+
+    it.each([[429], [500], [503]])("answers from OpenRouter under its pin when Modal says %i, and logs the route", async (code) => {
+      const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+      const sent = script(() => new Response("{}", { status: code }));
+      const answer = await buildOpenWeight(withBackup)!.client.ask(ASK);
+      expect(answer.text).toBe("From the backup.");
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPEN_URL]);
+      expect(sent[1]!.body.model).toBe(OPEN);
+      expect(sent[1]!.body.provider).toEqual({ zdr: true, data_collection: "deny" });
+      expect(logs.mock.calls.map((c) => String(c[0]))).toEqual([JSON.stringify({ type: "mano_model_route", surface: "text_line", route: "openrouter" })]);
+      logs.mockRestore();
+    });
+
+    it("answers from OpenRouter when Modal cannot be reached", async () => {
+      const sent = script(() => Promise.reject(new TypeError("no connection")));
+      expect((await buildOpenWeight(withBackup)!.client.ask(ASK)).text).toBe("From the backup.");
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPEN_URL]);
+    });
+
+    it("does not touch OpenRouter when Modal answers, and logs that route", async () => {
+      const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+      const sent = script(() => openResponse("From Modal."));
+      expect((await buildOpenWeight(withBackup)!.client.ask(ASK)).text).toBe("From Modal.");
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL]);
+      expect(logs.mock.calls.map((c) => String(c[0]))).toEqual([JSON.stringify({ type: "mano_model_route", surface: "text_line", route: "modal" })]);
+      logs.mockRestore();
+    });
+
+    it.each([[400], [401], [403]])("does not fall back when Modal refuses the request with %i", async (code) => {
+      const sent = script(() => new Response("{}", { status: code }));
+      await expect(buildOpenWeight(withBackup)!.client.ask(ASK)).rejects.toMatchObject({ reason: `http_${code}` });
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL]);
+    });
+
+    it("ends in the plain failure when OpenRouter answers 402 too, and tries nothing else", async () => {
+      const sent = script(() => new Response("{}", { status: 503 }), () => new Response("{}", { status: 402 }));
+      await expect(buildOpenWeight(withBackup)!.client.ask(ASK)).rejects.toMatchObject({ reason: "http_402" });
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPEN_URL]);
+    });
+
+    it("does not fall back without an OpenRouter key", async () => {
+      const sent = script(() => new Response("{}", { status: 503 }));
+      await expect(buildOpenWeight({ ...base, ...modal } as Env)!.client.ask(ASK)).rejects.toMatchObject({ reason: "http_503" });
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL]);
+    });
+
+    it("answers the text whole through the responder when Modal is down", async () => {
+      const sent = script(() => new Response("{}", { status: 503 }), () => openResponse("Here to help."));
+      const inner = globalThis.fetch;
+      vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => (String(url) === PRIMARY_URL ? new Response("{}", { status: 402 }) : inner(url as RequestInfo, init)));
+      const responder = buildResponder(withBackup, undefined, { breaker: new PrimaryBreaker() });
+      expect((await responder.respond({ texts: ["hi"], attachmentCount: 0 })).text).toBe("Here to help.");
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPEN_URL]);
+    });
+  });
+
   it("is off by default: Modal settings alone change nothing", () => {
     const { MANO_MODEL_PROVIDER: _chosen, ...settings } = modal;
     expect(buildOpenWeight({ ...base, ...settings } as Env)).toBeUndefined();
