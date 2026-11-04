@@ -1,7 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { nextNudge, personDeadlineKey, resolveDueDate } from "../lib/deadlines.js";
+import { NO_REMINDER, nextNudge, personDeadlineKey, resolveDueDate } from "../lib/deadlines.js";
 import { DEADLINE_KINDS } from "../lib/engine.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { profileTimeZone } from "../lib/profile.js";
@@ -33,7 +33,7 @@ export default defineTool({
     });
     if (!out) throw new Error("Tracking deadlines is not available right now. Say so plainly and do not promise it.");
     const firstNudgeAt = nextNudge(out.deadline);
-    const notes = [due.note, firstNudgeAt || out.deadline.status !== "open" ? null : "This date's reminder times have passed, so no reminder will go out. Say so plainly."].filter(Boolean);
+    const notes = [due.note, firstNudgeAt || out.deadline.status !== "open" ? null : NO_REMINDER].filter(Boolean);
     return {
       deadlineId: out.deadline.id,
       title: out.deadline.title,

@@ -11,6 +11,9 @@ import type { EngineDeadline } from "./engine.js";
 
 // Past this many days ahead a date gets a second look.
 const NEAR_DAYS = 183;
+// Engine refuses a date over 731 days out, counted from UTC's today, which
+// can be a day behind the person's in a zone ahead of UTC.
+const MAX_AHEAD_DAYS = 730;
 
 export function localDate(atMs: number, timeZone: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(atMs));
@@ -30,6 +33,16 @@ function isoDate(y: number, m: number, d: number): string | null {
 
 const spoken = (date: string) => new Intl.DateTimeFormat("en-US", { timeZone: "UTC", year: "numeric", month: "long", day: "numeric" }).format(new Date(date));
 const SAY_THE_YEAR = "State the full date with its year so the person can correct it.";
+export const NO_REMINDER = "This date's reminder times have passed, so no reminder will go out. Say so plainly.";
+
+// The first real one on or after today; a leap day can be years off. The
+// caller has a real date with this month and day, so one always comes.
+function nextOccurrence(m: number, d: number, today: string): string {
+  for (let y = Number(today.slice(0, 4)); ; y++) {
+    const date = isoDate(y, m, d);
+    if (date && date >= today) return date;
+  }
+}
 
 export type DueDate =
   | { status: "save"; date: string; note: string | null }
@@ -47,23 +60,23 @@ export function resolveDueDate(due: string, nowMs: number, timeZone: string, yea
   if (!parts || !date) {
     return { status: "ask", today, tell: "Nothing was saved: due must be a real date written YYYY-MM-DD. Work it out from today's date. If a numeric date the person wrote could mean two days, ask which." };
   }
-  if (yearConfirmed) return { status: "save", date, note: null };
+  const daysAhead = (d: string) => (Date.parse(d) - Date.parse(today)) / 86_400_000;
+  const tooFar: DueDate = { status: "ask", today, tell: "Nothing was saved: Mano tracks dates up to two years ahead. Say so plainly and ask if there is a sooner date." };
+  if (yearConfirmed) return daysAhead(date) > MAX_AHEAD_DAYS ? tooFar : { status: "save", date, note: null };
   const ask = (question: string): DueDate => ({
     status: "ask",
     today,
     question,
     tell: "Nothing was saved. Ask the person this, in their language. Once they answer with a date, call again with it and yearConfirmed true. If it already passed, it needs no deadline.",
   });
-  const daysAhead = (d: string) => (Date.parse(d) - Date.parse(today)) / 86_400_000;
-  const thisYear = Number(today.slice(0, 4));
-  const thisYears = isoDate(thisYear, parts[1]!, parts[2]!);
-  const next = thisYears && thisYears >= today ? thisYears : isoDate(thisYear + 1, parts[1]!, parts[2]!);
+  const next = nextOccurrence(parts[1]!, parts[2]!, today);
   if (date < today) {
-    if (next && daysAhead(next) <= NEAR_DAYS) return { status: "save", date: next, note: `Saved as the next such date, ${spoken(next)}. ${SAY_THE_YEAR}` };
-    return ask(next ? `${spoken(date)} has passed. Do you mean ${spoken(next)}, or has it already gone by?` : `${spoken(date)} has passed. What date do you mean?`);
+    if (daysAhead(next) <= NEAR_DAYS) return { status: "save", date: next, note: `Saved as the next such date, ${spoken(next)}. ${SAY_THE_YEAR}` };
+    return ask(`${spoken(date)} has passed. Do you mean ${spoken(next)}, or has it already gone by?`);
   }
   if (daysAhead(date) <= NEAR_DAYS) return { status: "save", date, note: null };
-  if (next && next < date) return ask(`Do you mean ${spoken(next)} or ${spoken(date)}?`);
+  if (next < date) return ask(`Do you mean ${spoken(next)} or ${spoken(date)}?`);
+  if (daysAhead(date) > MAX_AHEAD_DAYS) return tooFar;
   return { status: "save", date, note: `That is more than six months away. ${SAY_THE_YEAR}` };
 }
 

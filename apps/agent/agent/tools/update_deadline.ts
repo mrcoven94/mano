@@ -1,7 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { nextNudge, resolveDueDate } from "../lib/deadlines.js";
+import { NO_REMINDER, nextNudge, resolveDueDate } from "../lib/deadlines.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { profileTimeZone } from "../lib/profile.js";
 
@@ -34,15 +34,17 @@ export default defineTool({
     if (Object.keys(patch).length === 0) throw new Error("Nothing to change: pass a new date, a title or done.");
     const out = await engine.updateDeadline(input.deadlineId, patch);
     if (!out) return { found: false };
+    const nextNudgeAt = out.deadline.status === "open" ? nextNudge(out.deadline) : null;
+    const notes = [note, patch.dueDate && out.deadline.status === "open" && !nextNudgeAt ? NO_REMINDER : null].filter(Boolean);
     return {
       found: true,
       status: out.status,
       dueDate: out.deadline.dueDate,
       moved: out.moved ?? null,
-      nextNudgeAt: out.deadline.status === "open" ? nextNudge(out.deadline) : null,
+      nextNudgeAt,
       // A nudge already on its way when it closed may still arrive.
       nudgeAlreadySending: (out.nudgesInFlight ?? 0) > 0,
-      ...(note ? { note } : {}),
+      ...(notes.length ? { note: notes.join(" ") } : {}),
     };
   },
 });
