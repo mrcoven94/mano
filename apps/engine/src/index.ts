@@ -161,7 +161,7 @@ import {
   mintWsTicket,
   sessionConfigured,
 } from "./auth.js";
-import { checkerSetting, createExecutor, outboundProviders, parseFaxEvent, parseMailEvent, verifyFaxSignature, verifyMailSignature, type CheckerSetting } from "./gateway/index.js";
+import { checkerSetting, createExecutor, faxConfigured, parseFaxEvent, parseMailEvent, verifyFaxSignature, verifyMailSignature, type CheckerSetting } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
 import { profilePatchResponse } from "./profile.js";
@@ -314,7 +314,6 @@ export interface LiveStatus {
 
 export function liveStatus(env: Env): LiveStatus {
   const hasKey = Boolean(env.META_MODEL_API_KEY);
-  const providers = outboundProviders(env);
   return {
     model: hasKey ? "meta" : "stand-in",
     modelVia: !hasKey ? "none" : env.CF_ACCOUNT_ID && env.AI_GATEWAY_ID ? "ai-gateway" : "direct",
@@ -322,8 +321,8 @@ export function liveStatus(env: Env): LiveStatus {
     files: env.FILES ? "bound" : "missing",
     kek: Boolean(env.ENCRYPTION_KEK_B64),
     checker: checkerSetting(env).kind,
-    mail: providers.mail ? "test-mode" : "off",
-    fax: providers.fax ? "own-number" : "off",
+    mail: env.LOB_TEST_API_KEY ? "test-mode" : "off",
+    fax: faxConfigured(env) ? "own-number" : "off",
   };
 }
 

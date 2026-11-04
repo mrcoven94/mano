@@ -1,21 +1,26 @@
-import { FaxExecutor } from "./fax.js";
+import { FaxExecutor, type FaxSendLog } from "./fax.js";
 import { MailExecutor } from "./mail.js";
 import { isOutbound, outboundPricing, type OutboundEnv, type OutboundType } from "./outbound.js";
 import type { ActionRequest, ActionType, Attempt, CheckOutcome, DocumentFiling, Executor, StoredDocumentFacts } from "./types.js";
 
+export function faxConfigured(env: OutboundEnv): boolean {
+  return Boolean(env.TELNYX_API_KEY && env.TELNYX_FAX_CONNECTION_ID && env.MANO_OWN_FAX_NUMBER && env.MANO_FAX_FROM_NUMBER);
+}
+
 // Each provider exists only with all of its settings. Mail reads the test
 // mode key and no other.
-export function outboundProviders(env: OutboundEnv): Partial<Record<OutboundType, Executor>> {
+export function outboundProviders(env: OutboundEnv, sendLog: FaxSendLog): Partial<Record<OutboundType, Executor>> {
   const pricing = outboundPricing(env);
   const providers: Partial<Record<OutboundType, Executor>> = {};
   if (env.LOB_TEST_API_KEY) providers.mail = new MailExecutor(env.LOB_TEST_API_KEY, pricing);
-  if (env.TELNYX_API_KEY && env.TELNYX_FAX_CONNECTION_ID && env.MANO_OWN_FAX_NUMBER && env.MANO_FAX_FROM_NUMBER) {
+  if (faxConfigured(env)) {
     providers.fax = new FaxExecutor({
-      apiKey: env.TELNYX_API_KEY,
-      connectionId: env.TELNYX_FAX_CONNECTION_ID,
-      ownNumber: env.MANO_OWN_FAX_NUMBER,
-      fromNumber: env.MANO_FAX_FROM_NUMBER,
+      apiKey: env.TELNYX_API_KEY!,
+      connectionId: env.TELNYX_FAX_CONNECTION_ID!,
+      ownNumber: env.MANO_OWN_FAX_NUMBER!,
+      fromNumber: env.MANO_FAX_FROM_NUMBER!,
       pricing,
+      sendLog,
     });
   }
   return providers;

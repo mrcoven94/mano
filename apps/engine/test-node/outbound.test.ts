@@ -2,10 +2,10 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { inflateSync } from "node:zlib";
-import { PDFDocument } from "pdf-lib";
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, PDFStream, type PDFObject } from "pdf-lib";
 import { ActionGateway, MapDocumentStore } from "../src/gateway/gateway.js";
 import { InMemoryExecutor } from "../src/gateway/executors.js";
-import { FaxExecutor } from "../src/gateway/fax.js";
+import { FaxExecutor, SqlFaxSendLog, ensureFaxSendTable, type FaxSendLog } from "../src/gateway/fax.js";
 import { MailExecutor } from "../src/gateway/mail.js";
 import {
   DEFAULT_PRICING,
@@ -176,16 +176,21 @@ function fax(over: Record<string, unknown> = {}, payload: Record<string, unknown
 
 // Prices the request the way Engine does before it reaches the gateway.
 async function draft(gateway: ActionGateway, documents: MapDocumentStore, raw: unknown, turn?: { turnId: string; receivedAt: string }): Promise<GatewayResult> {
-  const priced = await withOutboundPrice(raw, (id) => documents.getBytes(id), DEFAULT_PRICING);
+  const priced = await withOutboundPrice(raw, (id) => documents.getBytes(id), DEFAULT_PRICING, () => null);
   return gateway.requestAction(priced, new Date(), turn ? { proposal: turn } : {});
 }
 
 const TURN_1 = { turnId: "turn-1", receivedAt: "2026-11-03T10:00:00.000Z" };
 const TURN_2 = { turnId: "turn-2", receivedAt: "2026-11-03T10:05:00.000Z" };
 
+function memoryLog(): FaxSendLog {
+  const sent = new Map<string, number>();
+  return { lastSentAt: (key) => sent.get(key) ?? null, markSent: (key, at) => void sent.set(key, at) };
+}
+
 function faxExecutor(telnyx: FakeTelnyx, now: () => number = Date.now): FaxExecutor {
   return new FaxExecutor(
-    { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING },
+    { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: memoryLog() },
     telnyx.fetch,
     1000,
     now,
@@ -210,6 +215,39 @@ function hexTexts(pdf: Uint8Array): string {
   }
   const hex = out.match(/<([0-9A-Fa-f]+)>/g) ?? [];
   return hex.map((h) => Buffer.from(h.slice(1, -1), "hex").toString("latin1")).join(" ");
+}
+
+// The text a page really draws: its content streams and the form objects
+// they can reach. An appearance stream left behind in the file with nothing
+// drawing it does not count.
+function drawnText(doc: PDFDocument, pageIndex: number): string {
+  const decode = (stream: PDFStream): string => {
+    const raw = Buffer.from((stream as PDFRawStream).contents);
+    let text: string;
+    try {
+      text = inflateSync(raw).toString("latin1");
+    } catch {
+      text = raw.toString("latin1");
+    }
+    return (text.match(/<([0-9A-Fa-f]+)>/g) ?? []).map((h) => Buffer.from(h.slice(1, -1), "hex").toString("latin1")).join(" ");
+  };
+  const fromResources = (resources: PDFObject | undefined): string => {
+    if (!(resources instanceof PDFDict)) return "";
+    const forms = resources.lookup(PDFName.of("XObject"));
+    if (!(forms instanceof PDFDict)) return "";
+    return forms
+      .keys()
+      .map((name) => {
+        const form = forms.lookup(name);
+        return form instanceof PDFStream ? `${decode(form)} ${fromResources(form.dict.lookup(PDFName.of("Resources")))}` : "";
+      })
+      .join(" ");
+  };
+  const node = doc.getPage(pageIndex).node;
+  const contents = node.Contents();
+  const streams = contents instanceof PDFArray ? contents.asArray().map((ref) => doc.context.lookup(ref)) : [contents];
+  const own = streams.map((s) => (s instanceof PDFStream ? decode(s) : "")).join(" ");
+  return `${own} ${fromResources(node.Resources())}`;
 }
 
 describe("mailed letters", () => {
@@ -306,8 +344,8 @@ describe("mailed letters", () => {
     expect(asked.status).toBe("blocked");
     expect(asked.reason).toContain("test mode only");
     expect(lob.posts).toBe(0);
-    expect(outboundProviders({ LOB_TEST_API_KEY: "test_not_real" }).mail).toBeDefined();
-    expect(outboundProviders({ LOB_API_KEY: "live_not_real" } as never).mail).toBeUndefined();
+    expect(outboundProviders({ LOB_TEST_API_KEY: "test_not_real" }, memoryLog()).mail).toBeDefined();
+    expect(outboundProviders({ LOB_API_KEY: "live_not_real" } as never, memoryLog()).mail).toBeUndefined();
   });
 
   it.each([
@@ -558,6 +596,127 @@ describe("after the person corrects a fax or letter", () => {
   });
 });
 
+describe("a fax timeout across a restart", () => {
+  // One person's SQLite, and everything rebuilt over it, as a Durable
+  // Object restart does: nothing held in memory survives.
+  function restartable(telnyx: FakeTelnyx, documents: MapDocumentStore, now: () => number) {
+    const storage = openTestStorage() as never;
+    ensureGatewayTables(storage);
+    ensureFaxSendTable(storage);
+    const boot = () => {
+      const store = new SqlApprovalStore(storage);
+      const executor = new FaxExecutor(
+        { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: new SqlFaxSendLog(storage) },
+        telnyx.fetch,
+        1000,
+        now,
+      );
+      const router = new OutboundRouter(new InMemoryExecutor(), { fax: executor }, (key) => store.getAttempt(key)?.actionType ?? null);
+      return { store, gateway: new ActionGateway(store, router, { documents, linkCheck: async () => ({ allowed: true }) }) };
+    };
+    return boot;
+  }
+
+  it("a YES replayed after a restart inside the window sends no second fax, and says it is still settling", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.next = "lands-late";
+    let now = 1_000_000;
+    const documents = new MapDocumentStore();
+    documents.set("doc-1", await samplePdf());
+    const boot = restartable(telnyx, documents, () => now);
+    const before = boot();
+    const asked = await draft(before.gateway, documents, fax());
+    expect((await before.gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    expect(telnyx.faxPosts).toBe(1);
+
+    const after = boot();
+    now += 60_000;
+    const replay = await after.gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(replay.status).toBe("blocked");
+    expect(replay.reason).toContain("still settling");
+    expect(after.store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("unknown");
+    expect(telnyx.faxPosts).toBe(1);
+
+    telnyx.land();
+    const settled = await after.gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(settled.status).toBe("reconciled");
+    expect(telnyx.faxes).toHaveLength(1);
+  });
+
+  it("recovery after a restart inside the window leaves the attempt unknown and sends nothing", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.next = "before-recording";
+    let now = 1_000_000;
+    const documents = new MapDocumentStore();
+    documents.set("doc-1", await samplePdf());
+    const boot = restartable(telnyx, documents, () => now);
+    const before = boot();
+    const asked = await draft(before.gateway, documents, fax());
+    await before.gateway.approveAndExecute(asked.approval!.id, PERSON);
+    const after = boot();
+    const later = new Date(Date.now() + 60_000);
+    const recovered = await after.gateway.recoverAttempt(asked.approval!.idempotencyKey, later, later.toISOString());
+    expect(recovered?.reason).toContain("still settling");
+    expect(after.store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("unknown");
+    expect(telnyx.faxPosts).toBe(1);
+  });
+
+  it("past the window with the lookup still saying no, the same key sends once more", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.next = "before-recording";
+    let now = 1_000_000;
+    const documents = new MapDocumentStore();
+    documents.set("doc-1", await samplePdf());
+    const boot = restartable(telnyx, documents, () => now);
+    const before = boot();
+    const asked = await draft(before.gateway, documents, fax());
+    await before.gateway.approveAndExecute(asked.approval!.id, PERSON);
+    const after = boot();
+    now += 6 * 60_000;
+    expect((await after.gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("completed");
+    expect(telnyx.faxPosts).toBe(2);
+    expect(telnyx.faxes).toHaveLength(1);
+  });
+});
+
+describe("what a filled-in PDF sends", () => {
+  async function filledPdf(answer: string): Promise<Uint8Array> {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    page.drawText("Renewal form", { x: 72, y: 720 });
+    const field = doc.getForm().createTextField("household_name");
+    field.setText(answer);
+    field.addToPage(page, { x: 72, y: 640, width: 300, height: 30 });
+    return doc.save();
+  }
+
+  it("keeps the person's answers in a form field on the page", async () => {
+    const lob = new FakeLob();
+    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await filledPdf("Maria Testperson"));
+    const asked = await draft(gateway, documents, letter({}, { [PAYLOAD.approvedBy]: "Ana Example" }));
+    expect(asked.status).toBe("needs_approval");
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    const sent = [...lob.letters.values()][0].file;
+    const out = await PDFDocument.load(sent);
+    expect(out.getPageCount()).toBe(2);
+    expect(drawnText(out, 1)).toContain("Maria Testperson");
+  });
+
+  it("refuses a PDF with a note or stamp it could not carry over", async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    page.drawText("Renewal form", { x: 72, y: 720 });
+    const note = doc.context.register(doc.context.obj({ Type: "Annot", Subtype: "FreeText", Rect: [72, 600, 300, 640], Contents: "Written on the page" }));
+    page.node.addAnnot(note);
+    const lob = new FakeLob();
+    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await doc.save());
+    const asked = await draft(gateway, documents, letter());
+    expect(asked.status).toBe("blocked");
+    expect(asked.reason).toContain("exactly as written");
+    expect(lob.posts).toBe(0);
+  });
+});
+
 describe("routing", () => {
   it("with no provider set, the stand-in labels the action simulated and the provider is untouched", async () => {
     const { gateway, documents, inner } = await rig({});
@@ -569,9 +728,9 @@ describe("routing", () => {
 
   it("a fax needs every setting before it turns on", () => {
     const all = { TELNYX_API_KEY: "x", TELNYX_FAX_CONNECTION_ID: "c", MANO_OWN_FAX_NUMBER: OWN_NUMBER, MANO_FAX_FROM_NUMBER: "+15550100002" };
-    expect(outboundProviders(all).fax).toBeDefined();
+    expect(outboundProviders(all, memoryLog()).fax).toBeDefined();
     for (const key of Object.keys(all)) {
-      expect(outboundProviders({ ...all, [key]: undefined }).fax).toBeUndefined();
+      expect(outboundProviders({ ...all, [key]: undefined }, memoryLog()).fax).toBeUndefined();
     }
   });
 

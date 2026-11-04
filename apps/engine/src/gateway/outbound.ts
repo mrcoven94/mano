@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
+import { PDFDict, PDFDocument, PDFName, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
 import { base64ToBytes, sha256Hex } from "../hash.js";
 import type { ActionRequest } from "./types.js";
 import { DefiniteFailureError, TimeoutError } from "./types.js";
@@ -92,16 +92,24 @@ export async function outgoingPages(type: OutboundType, bytes: Uint8Array): Prom
 
 // Sets the pages and price on a fax or letter from the stored document,
 // over whatever the caller wrote, so the question shows Engine's own
-// numbers. Anything else, or a document it cannot read, passes through
-// unchanged and the executor refuses it.
+// numbers. A key that already holds an approval keeps the numbers it froze
+// and reads nothing, so a replay is answered whatever storage is doing.
+// Anything else, or a document it cannot read, passes through unchanged
+// and the executor refuses it.
 export async function withOutboundPrice(
   raw: unknown,
   readDocument: (id: string) => Promise<Uint8Array | string | null>,
   pricing: OutboundPricing,
+  frozenRequest: (idempotencyKey: string) => string | null,
 ): Promise<unknown> {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
-  const { type, documentId, payload } = raw as { type?: unknown; documentId?: unknown; payload?: unknown };
+  const { type, documentId, payload, idempotencyKey } = raw as { type?: unknown; documentId?: unknown; payload?: unknown; idempotencyKey?: unknown };
   if (!isOutbound(type) || typeof documentId !== "string" || typeof payload !== "object" || payload === null) return raw;
+  const frozen = typeof idempotencyKey === "string" ? frozenRequest(idempotencyKey) : null;
+  if (frozen) {
+    const { payload: held } = JSON.parse(frozen) as { payload: Record<string, unknown> };
+    return { ...raw, payload: { ...payload, [PAYLOAD.pages]: held[PAYLOAD.pages], [PAYLOAD.price]: held[PAYLOAD.price] } };
+  }
   let stored: Uint8Array | string | null;
   try {
     stored = await readDocument(documentId);
@@ -164,6 +172,27 @@ function fitted(box: { width: number; height: number }): { x: number; y: number;
   };
 }
 
+// Embedding a page keeps only what its content draws, so a form's filled-in
+// answers are drawn into the page first. A note, stamp or dynamic form that
+// cannot be carried over stops the send instead of going out without it.
+const HARMLESS_ANNOTATIONS = new Set(["/Link", "/Popup"]);
+
+function drawFormsIntoPages(source: PDFDocument): void {
+  const form = source.catalog.getAcroForm();
+  if (form?.dict.has(PDFName.of("XFA"))) throw new Error("dynamic form");
+  if (form) source.getForm().flatten();
+  for (const page of source.getPages()) {
+    const annotations = page.node.Annots();
+    for (let i = 0; i < (annotations?.size() ?? 0); i++) {
+      // Flattening leaves a dangling entry for each widget it drew.
+      const annotation = annotations!.lookup(i);
+      if (annotation instanceof PDFDict && !HARMLESS_ANNOTATIONS.has(String(annotation.get(PDFName.of("Subtype"))))) {
+        throw new Error("annotation that cannot be carried over");
+      }
+    }
+  }
+}
+
 // The cover page, then each page of the document fitted to US Letter,
 // which both providers accept. The same request always renders the same
 // bytes, so a retry sends what the first try sent.
@@ -175,6 +204,7 @@ async function renderOutgoing(req: ActionRequest, name: string, bytes: Uint8Arra
   drawCover(out.addPage([LETTER.width, LETTER.height]), font, bold, req, name, documentHash);
   if (kind === "pdf") {
     const source = await PDFDocument.load(bytes);
+    drawFormsIntoPages(source);
     const pages = await out.embedPdf(source, source.getPageIndices());
     for (const page of pages) {
       const { x, y, xScale, yScale } = fitted(page);
@@ -215,8 +245,8 @@ export async function prepareOutgoing(req: ActionRequest, type: OutboundType, pr
   try {
     return { ok: true, name: name.trim(), pdf: await renderOutgoing(req, name.trim(), bytes, req.document.hash) };
   } catch {
-    // The built-in fonts cover Western alphabets only. A name or purpose
-    // outside them is refused rather than printed with letters changed.
+    // The built-in fonts cover Western alphabets only, and some PDFs hold
+    // what cannot be carried over. Either is refused rather than sent changed.
     return { ok: false, problem: `Mano could not print this ${what} exactly as written, so it was not prepared.` };
   }
 }

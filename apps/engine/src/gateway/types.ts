@@ -169,6 +169,15 @@ export class TimeoutError extends Error {
   }
 }
 
+// The lookup answered, but too soon after a send to believe a "not there":
+// the request that timed out can still land. The attempt stays unknown.
+export class StillSettlingError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "StillSettlingError";
+  }
+}
+
 // The action definitely did not happen: a 4xx from the portal, an org
 // rejection, a request the executor refused before acting. The gateway
 // records a failed attempt, which allows a clean retry with no reconcile.

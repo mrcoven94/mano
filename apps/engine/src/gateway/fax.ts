@@ -1,7 +1,7 @@
 import { boundFetch } from "../fetch.js";
 import { bytesToBase64 } from "../hash.js";
 import type { ActionRequest, CheckOutcome, Executor } from "./types.js";
-import { DefiniteFailureError } from "./types.js";
+import { DefiniteFailureError, StillSettlingError } from "./types.js";
 import {
   FAX_RECIPIENT,
   PAYLOAD,
@@ -25,6 +25,32 @@ const PAGE_SIZE = 250;
 // of our own send is not believed, and the attempt stays unknown.
 const SETTLE_MS = 5 * 60_000;
 
+// When each key last went to the provider. It lives in the person's
+// SQLite, written before the send, so a restart cannot forget a send that
+// timed out. A Durable Object holds outgoing requests until its writes
+// are durable.
+export interface FaxSendLog {
+  lastSentAt(key: string): number | null;
+  markSent(key: string, atMs: number): void;
+}
+
+export function ensureFaxSendTable(sql: SqlStorage): void {
+  sql.exec("CREATE TABLE IF NOT EXISTS fax_sends(key TEXT PRIMARY KEY, sent_at_ms INTEGER NOT NULL)");
+}
+
+export class SqlFaxSendLog implements FaxSendLog {
+  constructor(private sql: SqlStorage) {}
+
+  lastSentAt(key: string): number | null {
+    const rows = this.sql.exec("SELECT sent_at_ms FROM fax_sends WHERE key = ?", key).toArray() as unknown as { sent_at_ms: number }[];
+    return rows[0]?.sent_at_ms ?? null;
+  }
+
+  markSent(key: string, atMs: number): void {
+    this.sql.exec("INSERT INTO fax_sends(key, sent_at_ms) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET sent_at_ms = excluded.sent_at_ms", key, atMs);
+  }
+}
+
 export interface FaxConfig {
   apiKey: string;
   connectionId: string;
@@ -32,6 +58,7 @@ export interface FaxConfig {
   ownNumber: string;
   fromNumber: string;
   pricing: OutboundPricing;
+  sendLog: FaxSendLog;
 }
 
 export interface FaxClientState {
@@ -41,7 +68,6 @@ export interface FaxClientState {
 
 export class FaxExecutor implements Executor {
   readonly simulated = false;
-  private sentAt = new Map<string, number>();
 
   constructor(
     private config: FaxConfig,
@@ -92,7 +118,7 @@ export class FaxExecutor implements Executor {
     // The provider keeps its copy of the document only as long as sending takes.
     media.set("ttl_secs", "3600");
     await this.post("/media", { body: media });
-    this.sentAt.set(key, this.now());
+    this.config.sendLog.markSent(key, this.now());
     const res = await this.post("/faxes", {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -136,9 +162,9 @@ export class FaxExecutor implements Executor {
     if (typeof body.meta?.total_pages !== "number" || body.meta.total_pages > 1) {
       throw new Error(`${LABEL} check could not read the whole list.`);
     }
-    const sent = this.sentAt.get(key);
-    if (sent !== undefined && this.now() - sent < SETTLE_MS) {
-      throw new Error(`${LABEL} has not settled since this fax was sent.`);
+    const sent = this.config.sendLog.lastSentAt(key);
+    if (sent !== null && this.now() - sent < SETTLE_MS) {
+      throw new StillSettlingError("This fax was sent moments ago and is still settling, so its outcome stays unknown.");
     }
     return { found: false };
   }

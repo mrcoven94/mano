@@ -6,7 +6,7 @@ import {
   type ConsentRevokePayload,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
-import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureDeliveryTable, ensureGatewayTables, gatewayChecker, outboundProviders, OutboundRouter, outboundPricing, recordDeliveryEvent, withOutboundPrice, type DeliveryEvent } from "../gateway/index.js";
+import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureDeliveryTable, ensureFaxSendTable, ensureGatewayTables, gatewayChecker, outboundProviders, OutboundRouter, outboundPricing, recordDeliveryEvent, SqlFaxSendLog, withOutboundPrice, type DeliveryEvent } from "../gateway/index.js";
 import type { ActionRequest, Approval, CheckOutcome, ProposalOrder, Receipt } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
@@ -157,7 +157,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     super(ctx, env);
     this.store = new SqlApprovalStore(ctx.storage.sql, (fn) => ctx.storage.transactionSync(fn));
     this.executor = new ConsentDeliveringExecutor(
-      new OutboundRouter(createExecutor(env), outboundProviders(env), (key) => this.store.getAttempt(key)?.actionType ?? null),
+      new OutboundRouter(createExecutor(env), outboundProviders(env, new SqlFaxSendLog(ctx.storage.sql)), (key) => this.store.getAttempt(key)?.actionType ?? null),
       (req) => this.deliverShare(req),
       (key) => this.checkShareDelivery(key),
       (key) => this.store.getAttempt(key)?.actionType ?? null,
@@ -178,6 +178,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       const sql = ctx.storage.sql;
       ensureGatewayTables(sql);
       ensureDeliveryTable(sql);
+      ensureFaxSendTable(sql);
       ensureAgentStateTables(sql);
       sql.exec(`CREATE TABLE IF NOT EXISTS profile(id TEXT PRIMARY KEY, display_name TEXT, synthetic INTEGER NOT NULL DEFAULT 0, public_key_b64 TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)`);
@@ -868,7 +869,9 @@ export class PersonAgent extends Agent<Env, PersonState> {
       proposal = proposalOrderFor(this.db(), split.turnId) ?? undefined;
       if (!proposal) return { status: "blocked" as const, reason: "That turn is not in this conversation's ledger." };
     }
-    const priced = await withOutboundPrice(split.request, (id) => this.documentBytes(id), outboundPricing(this.env));
+    const priced = await withOutboundPrice(split.request, (id) => this.documentBytes(id), outboundPricing(this.env), (key) =>
+      this.store.keyHeld(key) ? (this.store.getApprovalByKey(key)?.requestJson ?? null) : null,
+    );
     const result = await this.gateway.requestAction(priced, new Date(), { generation, proposal });
     this.store.audit({ event: "gateway.request", status: result.status });
     if (result.status === "needs_approval" && result.approval) {

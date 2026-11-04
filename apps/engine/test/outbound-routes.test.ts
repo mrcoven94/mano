@@ -2,7 +2,7 @@ import { SELF, env as testEnv, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { PDFDocument } from "pdf-lib";
 import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
-import { DEFAULT_PRICING, MailExecutor, PAYLOAD, verifyFaxSignature, withOutboundPrice, type ActionRequest } from "../src/gateway/index.js";
+import { DEFAULT_PRICING, MailExecutor, PAYLOAD, SqlFaxSendLog, verifyFaxSignature, withOutboundPrice, type ActionRequest } from "../src/gateway/index.js";
 import { bytesToBase64, sha256Hex } from "../src/hash.js";
 
 // Faxes and letters in the real runtime: the worker route, the person's
@@ -76,6 +76,45 @@ describe("a letter through Engine", () => {
   });
 });
 
+describe("replaying a sent letter", () => {
+  it("answers the saved receipt without reading storage, when the first request left pricing to Engine", async () => {
+    const { person, call } = rig("outbound-replay");
+    const pdf = await samplePdf();
+    await call("POST", "/documents", { id: "g0t1i0-replay", name: "letter", contentB64: bytesToBase64(pdf), generation: 0 }, CHANNELS_TOKEN);
+    const unpriced = {
+      ...LETTER,
+      payload: { [PAYLOAD.mailTo]: LETTER.payload[PAYLOAD.mailTo], [PAYLOAD.returnAddress]: LETTER.payload[PAYLOAD.returnAddress], [PAYLOAD.approvedBy]: LETTER.payload[PAYLOAD.approvedBy] },
+      documentId: "g0t1i0-replay",
+      idempotencyKey: "replay-1",
+    };
+    const asked = (await (await call("POST", "/action", unpriced)).json()) as { approval: { id: string } };
+    const first = (await (await call("POST", `/approvals/${asked.approval.id}/approve`, {})).json()) as { status: string; receipt: { id: string } };
+    expect(first.status).toBe("completed");
+
+    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(person));
+    await runInDurableObject(stub, async (agent) => {
+      (agent as unknown as { documentBytes: () => Promise<never> }).documentBytes = async () => {
+        throw new Error("storage is down");
+      };
+    });
+    const replay = (await (await call("POST", "/action", unpriced)).json()) as { status: string; receipt?: { id: string }; reason?: string };
+    expect(replay.reason).toBeUndefined();
+    expect(replay.status).toBe("completed");
+    expect(replay.receipt?.id).toBe(first.receipt.id);
+  });
+
+  it("still refuses the same key with different content", async () => {
+    const { call } = rig("outbound-reuse");
+    await call("POST", "/documents", { id: "g0t1i0-reuse", name: "letter", contentB64: bytesToBase64(await samplePdf()), generation: 0 }, CHANNELS_TOKEN);
+    const request = { ...LETTER, documentId: "g0t1i0-reuse", idempotencyKey: "reuse-1" };
+    const asked = (await (await call("POST", "/action", request)).json()) as { approval: { id: string } };
+    await call("POST", `/approvals/${asked.approval.id}/approve`, {});
+    const other = (await (await call("POST", "/action", { ...request, purpose: "Something else" })).json()) as { status: string; reason: string };
+    expect(other.status).toBe("blocked");
+    expect(other.reason).toContain("different content");
+  });
+});
+
 describe("the provider path in workerd", () => {
   it("renders the PDF and posts the form with its idempotency key", async () => {
     const pdf = await samplePdf();
@@ -89,7 +128,7 @@ describe("the provider path in workerd", () => {
       actor: "foreground",
       personId: "maria-synthetic",
     };
-    const priced = (await withOutboundPrice(raw, async () => pdf, DEFAULT_PRICING)) as ActionRequest;
+    const priced = (await withOutboundPrice(raw, async () => pdf, DEFAULT_PRICING, () => null)) as ActionRequest;
     const sent: { key: string | null; file: Blob }[] = [];
     const fakeFetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
       sent.push({ key: new Headers(init?.headers).get("idempotency-key"), file: (init?.body as FormData).get("file") as unknown as Blob });
@@ -106,6 +145,19 @@ describe("the provider path in workerd", () => {
     expect(sent[0].key).toMatch(/^mano-[0-9a-f]{64}$/);
     const out = await PDFDocument.load(await sent[0].file.arrayBuffer());
     expect(out.getPageCount()).toBe(2);
+  });
+
+  it("keeps a fax's send time in the person's own SQLite", async () => {
+    const { person, call } = rig("outbound-fax-log");
+    await call("POST", "/documents", { id: "g0t1i0-faxlog", name: "letter", contentB64: bytesToBase64(await samplePdf()), generation: 0 }, CHANNELS_TOKEN);
+    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(person));
+    const read = await runInDurableObject(stub, async (_agent, state) => {
+      const log = new SqlFaxSendLog(state.storage.sql);
+      log.markSent("key", 5);
+      log.markSent("key", 9);
+      return [log.lastSentAt("key"), log.lastSentAt("other")];
+    });
+    expect(read).toEqual([9, null]);
   });
 
   it("verifies an Ed25519 fax signature with workerd's web crypto", async () => {
