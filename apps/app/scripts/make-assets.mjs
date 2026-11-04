@@ -103,17 +103,18 @@ function chunk(type, data) {
   return Buffer.concat([len, body, crc]);
 }
 
-function writePng(path, c) {
+function writePng(path, c, { opaque = false } = {}) {
   const s = c.size;
   const rows = [];
   for (let y = 0; y < s; y++) {
-    rows.push(Buffer.concat([Buffer.from([0]), c.buf.subarray(y * s * 4, (y + 1) * s * 4)]));
+    const row = c.buf.subarray(y * s * 4, (y + 1) * s * 4);
+    rows.push(Buffer.concat([Buffer.from([0]), opaque ? row.filter((_, i) => i % 4 !== 3) : row]));
   }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(s, 0);
   ihdr.writeUInt32BE(s, 4);
   ihdr[8] = 8;
-  ihdr[9] = 6;
+  ihdr[9] = opaque ? 2 : 6;
   const png = Buffer.concat([
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     chunk("IHDR", ihdr),
@@ -128,6 +129,13 @@ const icon = makeCanvas(1024);
 roundedTile(icon, INK);
 drawM(icon, YELLOW);
 writePng(join(root, "icon.png"), icon);
+
+// Apple rejects an icon with an alpha channel and rounds the corners
+// itself, so this one is a full square with no alpha at all.
+const iosIcon = makeCanvas(1024);
+rect(iosIcon, 0, 0, 1024, 1024, INK);
+drawM(iosIcon, YELLOW);
+writePng(join(root, "icon-ios.png"), iosIcon, { opaque: true });
 
 const adaptive = makeCanvas(1024);
 drawM(adaptive, YELLOW);
