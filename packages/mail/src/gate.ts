@@ -47,7 +47,7 @@ const any = (words: string[]): string => `(?:${words.map((w) => w.replace(/ /g, 
 // each addition needs a test that it states a duty the person owes.
 const DETERMINERS = any(["the", "your", "this", "these", "all", "each", "a", "both"]);
 const ADJECTIVES = any([
-  "signed", "completed", "written", "enclosed", "current", "required", "requested", "missing", "new",
+  "signed", "complete", "completed", "written", "enclosed", "current", "required", "requested", "missing", "new",
   "renewal", "recertification", "redetermination", "application", "income", "identity", "address",
   "residency", "photo", "household", "verification", "tax", "medical", "yearly",
   "child care", "rent", "utility", "bank", "next",
@@ -93,9 +93,11 @@ const TRANSITIVE = any([
   "sign", "turn in", "fill out", "file", "renew", "request", "pay", "show", "give",
 ]);
 const INTRANSITIVE = any(["respond", "reply", "apply", "renew", "recertify", "appeal", "pay"]);
+const PLACE = String.raw`(?:this|the|our)\s+(?:(?:review|renewal|county|benefits)\s+)?office`;
 const MODIFIER = any([
   "to us", "to the office", "to our office", "to this office", "to the county office",
   "by mail", "by fax", "online", "in person", "in writing", "so it arrives", "so they arrive",
+  `so (?:that )?it reaches ${PLACE}`, `so (?:that )?they reach ${PLACE}`,
 ]);
 const PARTICIPLES = any([
   "returned", "submitted", "sent", "completed", "mailed", "postmarked", "signed", "filed",
@@ -103,7 +105,10 @@ const PARTICIPLES = any([
 ]);
 
 const VERB_PHRASE = String.raw`(?:${TRANSITIVE}\s+${OBJECT}|${INTRANSITIVE}|ask\s+for\s+${NOUN_PHRASE})(?:\s+${MODIFIER})*`;
-const DUTY = String.raw`(?:(?:please\s+)?${VERB_PHRASE}|you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+${VERB_PHRASE}|your\s+${OWED_ITEM}\s+must\s+(?:arrive|be\s+${PARTICIPLES})(?:\s+${MODIFIER})*|your\s+${OWED_ITEM}\s+(?:is|are)\s+due)`;
+const DUTY = String.raw`(?:(?:please\s+)?${VERB_PHRASE}|you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+${VERB_PHRASE}|your\s+${OWED_ITEM}\s+must\s+(?:arrive|reach\s+${PLACE}|be\s+${PARTICIPLES})(?:\s+${MODIFIER})*|your\s+${OWED_ITEM}\s+(?:is|are)\s+due)`;
+
+// Reading a paper first changes nothing about what is owed or when.
+const LEAD_IN = String.raw`(?:after\s+review\s+of\s+(?:the|this)\s+(?:checklist|list|packet|form|notice|letter),\s+)?`;
 
 const DATE = `(?<date>${DATE_PATTERN})`;
 // Calendar days only. Business-day counts ask: holidays would make a
@@ -115,8 +120,8 @@ const FORMS: { form: DeadlineForm; re: RegExp }[] = [
   { form: "on-or-before", tail: String.raw`on\s+or\s+before\s+${DATE}` },
   { form: "no-later-than", tail: String.raw`no\s+later\s+than\s+${DATE}` },
   { form: "within-days-of-date", tail: String.raw`${COUNT}\s+${DATE}` },
-  { form: "within-days-of-notice", tail: String.raw`${COUNT}\s+the\s+date\s+of\s+this\s+(?:notice|letter)` },
-].map(({ form, tail }) => ({ form: form as DeadlineForm, re: new RegExp(`^(?<duty>${DUTY})\\s+${tail}$`, "i") }));
+  { form: "within-days-of-notice", tail: String.raw`${COUNT}\s+the\s+(?:date\s+of\s+this\s+(?:notice|letter)|notice\s+date(?:\s+(?:printed|shown|listed)\s+above)?)` },
+].map(({ form, tail }) => ({ form: form as DeadlineForm, re: new RegExp(`^${LEAD_IN}(?<duty>${DUTY})\\s+${tail}$`, "i") }));
 FORMS.push({
   form: "due",
   re: new RegExp(String.raw`^(?<duty>your\s+${OWED_ITEM}\s+(?:is|are)\s+due)\s+(?:on\s+)?${DATE}$`, "i"),
@@ -128,7 +133,10 @@ const SPELLED_NUMBER = String.raw`(?:a|an|one|two|three|four|five|six|seven|eigh
 const ANY_COUNT = String.raw`(?:\d{1,3}|${SPELLED_NUMBER})\s+(?:business\s+|calendar\s+|working\s+)?(?:days?|weeks?|months?|hours?|years?)`;
 const MONTH_WORD = String.raw`(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?`;
 const DEADLINE_LIKE: RegExp[] = [
-  /\bdue\b(?!\s+to\b)/i,
+  // "Due for renewal" says a renewal is coming, not when. With a date
+  // or a count in the sentence, other wording here or isDeadlineSentence
+  // still catches it.
+  /\bdue\b(?!\s+to\b)(?!\s+for\s+(?:renewal|recertification|redetermination|review)\b)/i,
   /\b(?:deadline|postmarked)\b/i,
   /\b(?:no|not)\s+later\s+than\b/i,
   /\bon\s+or\s+before\b/i,
@@ -170,24 +178,55 @@ export function isDeadlineSentence(sentence: string): boolean {
   return DEADLINE_WORD.test(sentence) && (DATE_OR_COUNT.test(sentence) || parseAllDates(sentence).length > 0);
 }
 
+function tidy(sentence: string): string {
+  return sentence.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "").replace(/^[-\u2022*]\s+/, "");
+}
+
 // Conditions, audiences and cancellations that make a deadline
 // someone else's, not yet owed, or withdrawn. Searched across the whole
 // letter, salutation and headings included, before anything is
 // stripped, one sentence at a time.
-const QUALIFIER = new RegExp(
-  String.raw`\b(?:${[
-    "if applicable", "if", "only", "unless", "except", "when", "dear county staff", "staff",
-    "office use", "caseworker use", "for county", "applies to", "does not apply", "not required",
-    "cancelled", "canceled", "disregard", "void", "no longer", "ignore", "optional",
-    "withdrawn", "rescinded", "no action", "not needed", "provided that", "providers",
-  ]
-    .map((w) => w.replace(/ /g, String.raw`\s+`))
-    .join("|")})\b`,
+const words = (list: string[]): RegExp => new RegExp(String.raw`\b(?:${list.map((w) => w.replace(/ /g, String.raw`\s+`)).join("|")})\b`, "i");
+const ALWAYS_QUALIFIES = words([
+  "if applicable", "except", "dear county staff", "staff", "office use", "caseworker use", "for county",
+  "applies to", "does not apply", "not required", "cancelled", "canceled", "disregard", "void", "ignore",
+  "optional", "withdrawn", "rescinded", "no action", "not needed", "provided that", "providers",
+]);
+const QUALIFIES_UNLESS_HARMLESS = words(["if", "only", "unless", "when", "no longer"]);
+
+// Whole sentences that carry one of those words and still leave the
+// letter's deadline alone: they offer help, restate what missing that
+// same date costs, or are about something else. Each is closed, so any
+// other condition, a new date or a new outcome still stops the letter,
+// and adding one needs a test that it cannot change whether or when the
+// person owes the deadline.
+const SAME_DATE = String.raw`(?:the\s+date\s+above|that\s+date|the\s+return\s+date)`;
+const CUTOFF = String.raw`(?:your\s+)?(?:${PROGRAMS}\s+)?(?:benefits|coverage|payments)\s+(?:will\s+)?(?:stop|end)`;
+const CONTACT = String.raw`(?:contact|call)\s+(?:us|this\s+office|our\s+office|the\s+(?:(?:renewal|redetermination|recertification|scheduling|verification|hearing|benefits|county|review)\s+)?(?:desk|office|unit)|\(\d{3}\)\s*\d{3}-\d{4})`;
+const HELP_NEEDED = String.raw`you\s+(?:have\s+(?:any\s+)?questions|need\s+(?:help|assistance|another\s+copy|a\s+copy)(?:\s+(?:reading|completing|with)\s+(?:the|this|your)\s+(?:packet|form|notice|letter))?)`;
+const HAVE_READY = String.raw`(?:case\s+number|income\s+information)`;
+const HARMLESS = new RegExp(
+  `^(?:${[
+    String.raw`if\s+(?:we\s+do|this\s+office\s+does)\s+not\s+receive\s+${NOUN_PHRASE}\s+by\s+${SAME_DATE},\s+${CUTOFF}`,
+    String.raw`if\s+${NOUN_PHRASE}\s+(?:is|are)\s+not\s+received\s+by\s+${SAME_DATE},\s+${CUTOFF}(?:\s+at\s+the\s+close\s+of\s+that\s+day)?`,
+    String.raw`if\s+${HELP_NEEDED},\s+${CONTACT}(?:\s+and\s+provide\s+your\s+case\s+number)?`,
+    String.raw`${CONTACT}\s+if\s+${HELP_NEEDED}`,
+    String.raw`if\s+the\s+item\s+is\s+unavailable,\s+${CONTACT}\s+before\s+${SAME_DATE}\s+to\s+discuss\s+other\s+proof`,
+    String.raw`if\s+you\s+cannot\s+attend,\s+${CONTACT}\s+to\s+request\s+another\s+appointment`,
+    String.raw`have\s+your\s+${HAVE_READY}(?:\s+and\s+(?:your\s+)?${HAVE_READY})?\s+(?:available|ready)\s+when\s+you\s+call`,
+    String.raw`language\s+assistance\s+may\s+be\s+requested\s+when\s+arranging\s+the\s+interview`,
+    String.raw`send\s+copies\s+unless\s+an\s+original\s+is\s+(?:specifically\s+)?requested`,
+    String.raw`review\s+(?:each\s+entry|every\s+page|the\s+form|the\s+information)\s+and\s+(?:correct|change|update)\s+any\s+information\s+that\s+is\s+no\s+longer\s+(?:accurate|correct|current)`,
+    String.raw`this\s+notice\s+concerns\s+${PROGRAMS}\s+only`,
+    String.raw`sign\s+the\s+(?:certification|form)(?:\s+on\s+the\s+last\s+page)?,?\s+even\s+if\s+there\s+are\s+no\s+changes`,
+  ].join("|")})$`,
   "i",
 );
 
 export function hasQualifier(sentence: string): boolean {
-  return QUALIFIER.test(sentence);
+  const s = tidy(sentence);
+  if (ALWAYS_QUALIFIES.test(s)) return true;
+  return QUALIFIES_UNLESS_HARMLESS.test(s) && !HARMLESS.test(s);
 }
 
 // A date to know states one plain date and names no duty: no
@@ -204,7 +243,7 @@ const DUTY_WORDS = new RegExp(
 // A participle the grammar publishes ("must be received") states the
 // same response as its verb.
 const RESPOND = new RegExp(
-  String.raw`\b(?:respond|response|return|send|submit|provide|arrive|receive|paperwork|complete|deliver|mail|bring|due|deadline|no\s+later\s+than|${PARTICIPLES})\b`,
+  String.raw`\b(?:respond|response|return|send|submit|provide|arrive|reach|receive|paperwork|complete|deliver|mail|bring|due|deadline|no\s+later\s+than|${PARTICIPLES})\b`,
 );
 
 // The duty a deadline states, read from its own words. Dates within
@@ -250,7 +289,7 @@ function matchForm(s: string): { form: DeadlineForm; groups: Record<string, stri
 
 // Gates one sentence as splitSentences returns it.
 export function gateSentence(sentence: string, noticeIso: string | null): GateVerdict {
-  const s = sentence.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "");
+  const s = tidy(sentence);
   if (findAmbiguousDate(s)) return { kind: "ask", reason: "ambiguous-date" };
   const match = matchForm(s);
   if (match) {
