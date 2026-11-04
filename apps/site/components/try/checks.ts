@@ -97,7 +97,8 @@ function settle(key: Key, e: TryLogged, done: Map<Key, Settled>, scenario: TrySc
       return e.kind === "sent" && e.text?.trim().toUpperCase() === "YES" ? { state: "pass", detail: "Maria pressed YES" } : null;
     case "file":
       if (e.kind === "filed") return { state: "pass", detail: `Confirmation ${e.confirmation}` };
-      if (e.kind === "outcome") return { state: e.ok ? "pass" : "stop", detail: e.text };
+      // Only a portal confirmation passes a filing. An outcome without one, even a safe refusal, did not file.
+      if (e.kind === "outcome") return { state: e.ok ? "warn" : "stop", detail: e.text };
       return null;
     case "refuse":
       if (e.kind === "filed") return { state: "stop", detail: `It filed anyway: ${e.confirmation}` };
