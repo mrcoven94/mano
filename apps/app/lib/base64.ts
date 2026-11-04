@@ -2,6 +2,7 @@
 // run this file unchanged, so the API client and the offline queue share it.
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const WHITESPACE = /\s/g;
 
 export function b64encode(bytes: Uint8Array): string {
   let out = "";
@@ -18,7 +19,7 @@ export function b64encode(bytes: Uint8Array): string {
 }
 
 export function b64decode(s: string): Uint8Array {
-  const clean = s.replace(/\s/g, "");
+  const clean = s.replace(WHITESPACE, "");
   if (clean.length % 4 !== 0) throw new Error("Invalid base64 length.");
   const out: number[] = [];
   for (let i = 0; i < clean.length; i += 4) {

@@ -1,6 +1,7 @@
-import { env as testEnv, SELF } from "cloudflare:test";
+import { env as testEnv, runInDurableObject, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { mintSessionToken } from "../src/auth.js";
+import { ensureGatewayTables } from "../src/gateway/index.js";
 import type { PersonAgent } from "../src/agents/person-agent.js";
 
 // Must match the SESSION_SECRET binding in vitest.config.ts.
@@ -95,5 +96,26 @@ describe("item 9: approve route and due-approval processing", () => {
     expect(late.expired).toContain(id);
     const approvals = await person.listApprovals("i9due");
     expect(approvals.find((a) => a.id === id)?.status).toBe("expired");
+  });
+
+  it("fills deadline_at for approvals stored before the column, and the sweep escalates from it", async () => {
+    const person = personStub("i9backfill");
+    const soon = new Date(Date.now() + 30 * 3600_000).toISOString();
+    const made = await person.requestAction({ ...actionBody({ deadlineAt: soon }), personId: "i9backfill" }, "i9backfill");
+    expect(made.status).toBe("needs_approval");
+    const id = made.approval!.id;
+
+    const column = await runInDurableObject(person as unknown as DurableObjectStub, (_i, state) => {
+      const sql = state.storage.sql;
+      expect((sql.exec("SELECT deadline_at FROM approvals WHERE id = ?", id).toArray()[0] as { deadline_at: string }).deadline_at).toBe(soon);
+      // A database from before the column: drop it, then migrate again.
+      sql.exec("ALTER TABLE approvals DROP COLUMN deadline_at");
+      ensureGatewayTables(sql);
+      return (sql.exec("SELECT deadline_at FROM approvals WHERE id = ?", id).toArray()[0] as { deadline_at: string | null }).deadline_at;
+    });
+    expect(column).toBe(soon);
+
+    const mid = await person.processDueApprovals({ now: new Date(Date.now() + 12 * 3600_000).toISOString() });
+    expect(mid.escalated).toContain(id);
   });
 });

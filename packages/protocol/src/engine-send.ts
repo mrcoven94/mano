@@ -20,6 +20,8 @@ export const ENGINE_SEND_TIMESTAMP_HEADER = "x-mano-engine-timestamp";
 export const ENGINE_SEND_SIGNATURE_HEADER = "x-mano-engine-signature";
 export const ENGINE_SEND_WINDOW_SECONDS = 300;
 const PREFIX = "mano-engine-send:v1";
+const TIMESTAMP_SECONDS = /^[0-9]{1,12}$/;
+const SIGNATURE_HEX = /^[0-9a-f]{64}$/;
 
 function signedBytes(method: string, path: string, timestamp: string, body: string | Uint8Array): Uint8Array {
   const head = new TextEncoder().encode(`${PREFIX}\n${method.toUpperCase()}\n${path}\n${timestamp}\n`);
@@ -53,9 +55,9 @@ export async function verifyEngineSend(
   nowSeconds: number,
 ): Promise<{ ok: true } | { ok: false; reason: EngineSendRejection }> {
   if (!secret || !request.timestamp || !request.signature) return { ok: false, reason: "missing" };
-  if (!/^[0-9]{1,12}$/.test(request.timestamp)) return { ok: false, reason: "bad_timestamp" };
+  if (!TIMESTAMP_SECONDS.test(request.timestamp)) return { ok: false, reason: "bad_timestamp" };
   if (Math.abs(nowSeconds - Number(request.timestamp)) > ENGINE_SEND_WINDOW_SECONDS) return { ok: false, reason: "stale" };
-  if (!/^[0-9a-f]{64}$/.test(request.signature)) return { ok: false, reason: "bad_signature" };
+  if (!SIGNATURE_HEX.test(request.signature)) return { ok: false, reason: "bad_signature" };
   const mac = new Uint8Array(32);
   for (let i = 0; i < 32; i++) mac[i] = parseInt(request.signature.slice(i * 2, i * 2 + 2), 16);
   const ok = await crypto.subtle.verify(

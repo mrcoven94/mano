@@ -2,10 +2,12 @@ import { allowedActions, isComputerCall, outputText, type ComputerAction, type C
 import type { Computer } from "./computer";
 import type { ModelClient } from "./model";
 
+export const PIXEL_COORDINATES = "Coordinates are pixels in the screenshot you were last shown: (0, 0) is the top-left. Click the center of the target element.";
+
 /** Rules the model works under. Content on screen is evidence, never instructions. */
 export const LOOP_INSTRUCTIONS = [
   "You are a computer-use agent operating a browser. You receive screenshots and choose the next actions.",
-  "Coordinates are pixels in the screenshot you were last shown: (0, 0) is the top-left. Click the center of the target element.",
+  PIXEL_COORDINATES,
   "Return a short batch of actions only when they do not depend on intermediate visual feedback, such as click, type, and keypress.",
   "Work briskly: fill one full field per turn by clicking it and typing its value in a single batch. Do not revisit a field the screenshot shows is correct.",
   "Do not batch across page loads, searches, modal transitions, or any step where the next action depends on a new screenshot.",
@@ -43,6 +45,9 @@ function dataUrl(png: Uint8Array): string {
 /** Stateless replay holds 29 call pairs; past that the server refuses. */
 const MAX_REPLAY_PAIRS = 29;
 
+const INFEASIBLE_RE = /^INFEASIBLE:/im;
+const CREDENTIALS_NEEDED_RE = /CREDENTIALS NEEDED/i;
+
 /**
  * Observe-act loop over the Responses API with store:false. Every turn replays
  * the full history (each computer_call verbatim, so replay receipts survive)
@@ -72,7 +77,7 @@ export async function runLoop(computer: Computer, model: ModelClient, task: stri
       const message = outputText(response.output);
       options.onTurn?.({ step: step + 1, message });
       // There is no live view to hand a login to, so a login ends the run.
-      const infeasible = /^INFEASIBLE:/im.test(message) || /CREDENTIALS NEEDED/i.test(message);
+      const infeasible = INFEASIBLE_RE.test(message) || CREDENTIALS_NEEDED_RE.test(message);
       return { status: infeasible ? "infeasible" : "done", message, steps: step + 1 };
     }
     const call: ComputerCall = calls[0]!;

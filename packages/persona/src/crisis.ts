@@ -37,8 +37,14 @@ const BENEFITS_DANGER = /\bin danger of (?:losing|being)\b/g;
 const POSSIBLE_CRISIS =
   /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut myself|cut my|cutting|slit\w*|wrists?|throw(?:ing)? myself|jump(?:ing)? off|kill myself|end it|end my life|(?:not|don'?t|do not) want to (?:live|be here)|better off dead)\b/;
 
+const CURLY_APOSTROPHE = /[’]/g;
+const NOT_ASCII_WORD_CHAR = /[^a-z0-9' ]/g;
+const NOT_WORD_CHAR = /[^\p{L}\p{N}' ]/gu;
+const WHITESPACE_RUN = /\s+/g;
+const WHITESPACE = /\s+/;
+
 function normalize(text: string): string {
-  return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]/g, " ").replace(/\s+/g, " ")} `;
+  return ` ${text.normalize("NFC").toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_ASCII_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
 }
 
 // Wanting everything to end, "what's the point anymore", and taking a
@@ -68,8 +74,11 @@ export function mightBeCrisis(text: string): boolean {
   return isCrisis(text) || POSSIBLE_CRISIS.test(normalize(text).replace(BENEFITS_DANGER, " "));
 }
 
+const NUMBER_988 = /\b988\b/;
+const NUMBER_911 = /\b911\b/;
+
 export function namesCrisisLines(reply: string): boolean {
-  return /\b988\b/.test(reply) && /\b911\b/.test(reply);
+  return NUMBER_988.test(reply) && NUMBER_911.test(reply);
 }
 
 // The reply a crisis turn sends: the model's own words when they name
@@ -120,7 +129,7 @@ const REPEAT_FILLER = new Set(
 );
 
 function wordsOf(text: string): string[] {
-  return text.toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, " ").split(/\s+/).filter(Boolean);
+  return text.toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_WORD_CHAR, " ").split(WHITESPACE).filter(Boolean);
 }
 
 function callShape(sentence: string): CallShape {
@@ -143,17 +152,21 @@ function callShape(sentence: string): CallShape {
 // "Call or text 988 now", "If you're in danger right now, call 911".
 // Another action for a number ("text 911"), another number, an action
 // or a question all stay.
+const QUESTION_MARK = /[?¿]/;
+const DIGIT = /\d/;
+const SPACE_AFTER_SENTENCE = /(?<=[.!?])\s+/;
+
 function repeatsTheLine(sentence: string, lineSentences: readonly CallShape[]): boolean {
-  if (/[?¿]/.test(sentence)) return false;
+  if (QUESTION_MARK.test(sentence)) return false;
   const shape = callShape(sentence);
   if (shape.unpaired || shape.pairs.size === 0 || shape.pairs.has("none 988") || shape.pairs.has("none 911")) return false;
-  if ([...shape.words].some((w) => /\d/.test(w))) return false;
+  if ([...shape.words].some((w) => DIGIT.test(w))) return false;
   return lineSentences.some((ls) => [...shape.pairs].every((p) => ls.pairs.has(p)) && [...shape.words].every((w) => ls.words.has(w)));
 }
 
 function withoutRepeats(bubble: string, lineSentences: readonly CallShape[]): string {
   return bubble
-    .split(/(?<=[.!?])\s+/)
+    .split(SPACE_AFTER_SENTENCE)
     .filter((sentence) => !repeatsTheLine(sentence, lineSentences))
     .join(" ")
     .trim();
@@ -171,14 +184,18 @@ const SAFETY_QUESTIONS_ES = new Set([
   "hay alguien contigo", "hay alguien contigo ahora",
 ]);
 
+const ENDS_IN_PUNCTUATION = /[.!?…]$/;
+const LEADING_INVERTED_QUESTION = /^¿/;
+const UNACCENTED_ESTAS = /estas/g;
+
 function askSafety(bubble: string): string {
   return bubble
-    .split(/(?<=[.!?])\s+/)
+    .split(SPACE_AFTER_SENTENCE)
     .map((sentence) => {
       // A sentence that already ends in . ! ? or … stays as written.
-      if (/[.!?…]$/.test(sentence.trim())) return sentence;
-      const bare = sentence.replace(/^¿/, "").trim();
-      const key = bare.toLowerCase().replace(/estas/g, "estás");
+      if (ENDS_IN_PUNCTUATION.test(sentence.trim())) return sentence;
+      const bare = sentence.replace(LEADING_INVERTED_QUESTION, "").trim();
+      const key = bare.toLowerCase().replace(UNACCENTED_ESTAS, "estás");
       if (SAFETY_QUESTIONS_EN.has(key)) return `${bare}?`;
       if (SAFETY_QUESTIONS_ES.has(key)) return `¿${bare}?`;
       return sentence;
@@ -216,11 +233,13 @@ const BENEFITS_CUT_SENTENCE = new RegExp(
 // Newlines are spaces here, so a line break never makes a template
 // sentence out of part of a longer one ("they cut my benefits\nand my
 // throat"). Sentences end only at . ! or ? before whitespace or the end.
+const SENTENCE_END = /(?<=[.!?])(?:\s+|$)/;
+
 function sentencesOf(text: string): string[] {
   return text
-    .replace(/[’]/g, "'")
-    .replace(/\s+/g, " ")
-    .split(/(?<=[.!?])(?:\s+|$)/)
+    .replace(CURLY_APOSTROPHE, "'")
+    .replace(WHITESPACE_RUN, " ")
+    .split(SENTENCE_END)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
@@ -255,13 +274,53 @@ const SPANISH = new RegExp(
   "u",
 );
 
+// Vietnamese and Tagalog: self-harm, being hit or threatened, and immediate
+// danger. Plain phrases and no model, so this is a floor and not a reader:
+// a sentence it has no phrase for still reaches only the model's own rule.
+// Over-triggering is accepted, so "đói muốn chết" (starving) names 988 too.
+// Danger counts only when it is about a person: a benefit can be at risk too.
+const VI_PERSON = "(?<!của )(?:tôi|em|mình|chúng tôi|con tôi|gia đình tôi)";
+const TL_PERSON = "(?:ako|kami|ang buhay|ang anak|ang pamilya)";
+const VIETNAMESE = [
+  "tự tử", "tự sát", "tự vẫn", "muốn chết", "thà chết", "không muốn sống", "không còn muốn sống", "hết muốn sống", "không thiết sống", "chán sống",
+  "tự làm hại", "tự hại", "tự làm đau", "kết liễu", "kết thúc cuộc đời", "kết thúc cuộc sống", "kết thúc đời mình",
+  "đánh tôi", "đánh đập tôi", "đánh em", "đánh con tôi", "bị đánh(?! thuế| rơi| cắp| giá| dấu| máy| thức| mất| số| vần)", "bạo hành", "hành hung", "đe dọa tôi", "dọa giết", "giết tôi", "cưỡng hiếp", "hiếp dâm",
+  "bóp cổ(?! tay| chân)", "siết cổ(?! tay| chân)", "thắt cổ(?! tay| chân)", "treo cổ",
+  `${VI_PERSON}(?: đang)? gặp nguy hiểm`, `${VI_PERSON} đang nguy hiểm`, "nguy hiểm tính mạng", "nguy đến tính mạng", "tôi không an toàn", "cứu tôi", "cứu với",
+].join("|");
+// The same words typed with no marks, without any that then mean something
+// else: "tu tu" is also "từ từ" (slowly), "bi danh" is "bí danh" (alias),
+// "that co" is "thật có" (really has) and "treo co" is "treo cờ" (hang a flag).
+const VIETNAMESE_BARE = [
+  "muon tu tu", "se tu tu", "tu sat", "muon chet", "khong muon song", "chan song", "ket lieu",
+  "danh toi", "danh em", "danh con toi", "bao hanh", "(?<!cua )toi(?: dang)? gap nguy hiem", "giet toi", "cuu toi", "bop co(?! tay| chan)", "siet co(?! tay| chan)",
+].join("|");
+const TAGALOG = [
+  "magpakamatay", "magpapakamatay", "nagpakamatay", "nagpapakamatay",
+  "(?:papatayin|patayin|pinapatay|sasaktan|saktan|sinasaktan|nasasaktan)(?: ko)? ang sarili(?: ko)?", "pumatay sa sarili",
+  "gusto ko nang mamatay", "gusto ko na mamatay", "gusto kong mamatay", "gusto ko mamatay", "mamatay na lang", "mamamatay na lang", "magbigti", "maglaslas", "naglalaslas",
+  "ayoko nang mabuhay", "ayoko na mabuhay", "ayaw ko nang mabuhay", "ayaw ko na mabuhay", "ayokong mabuhay", "wakasan ang buhay", "tapusin ang buhay",
+  "(?:binubugbog|binugbog|bubugbugin|sinasaktan|sinaktan|sasaktan|sinasampal|sinampal|sinusuntok|sinuntok|sinisipa|sinipa|pinapalo|pinalo|hinahampas|hinampas|ginugulpi|ginulpi|papatayin|pinagbabantaan|sinasakal|sinakal|sasakalin)(?: \\p{L}+){0,2} ako",
+  "gusto akong patayin", "ginahasa", "hinahalay", "hinalay",
+  `nasa panganib ${TL_PERSON}`, `nasa peligro ${TL_PERSON}`, `nanganganib ${TL_PERSON}`, "delikado ako", "delikado ang buhay", "hindi ako ligtas", "saklolo",
+].join("|");
+// Being choked, in English and Spanish, which the lists above did not have.
+const CHOKING = String.raw`strangl\p{L}* me|me (?:est[áa] |quiere |va a |trat[óo] de |intent[óo] )?(?:ahorc\p{L}*|estrangul\p{L}*|asfixi\p{L}*)|(?:ahorcarme|estrangularme|asfixiarme)`;
+const OTHER_LANGUAGES = new RegExp(String.raw`(?:^|\s)(?:${VIETNAMESE}|${TAGALOG}|${CHOKING})(?=\s|$)`, "u");
+const OTHER_LANGUAGES_BARE = new RegExp(String.raw`(?:^|\s)(?:${VIETNAMESE_BARE})(?=\s|$)`, "u");
+
+// Lowercased words with every mark gone, and đ as d.
+function unmarked(words: string): string {
+  return words.normalize("NFD").replace(/\p{M}/gu, "").replace(/đ/g, "d");
+}
+
 function accented(text: string): string {
-  return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, " ").replace(/\s+/g, " ")} `;
+  return ` ${text.normalize("NFC").toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
 }
 
 export function spanishOrImplicitCrisis(text: string): boolean {
   const words = accented(text);
-  return IMPLICIT.test(words) || SPANISH.test(words);
+  return IMPLICIT.test(words) || SPANISH.test(words) || OTHER_LANGUAGES.test(words) || OTHER_LANGUAGES_BARE.test(unmarked(words));
 }
 
 // The gate into the model check (the lead's decision after Sol's second
@@ -277,10 +336,10 @@ const OPENS_ES = /^¿\s*(?:debo|deber[íi]a|es|puedo|puede|pueden|se puede|tengo
 const INTENT = /(?:^|\s)(?:i want|i'm going to|im going to|i am going to|i'll|i will|i wish|i hope|so i|because|cause|quiero|voy a|ojal[áa]|porque)(?=\s|$)/iu;
 
 export function isOneHealthQuestion(text: string): boolean {
-  const trimmed = text.trim().replace(/[’]/g, "'");
+  const trimmed = text.trim().replace(CURLY_APOSTROPHE, "'");
   if (trimmed.length > MAX_QUESTION_CHARS) return false;
   if (sentencesOf(trimmed).length !== 1 || !trimmed.endsWith("?")) return false;
-  if (trimmed.split(/\s+/).length > MAX_QUESTION_WORDS) return false;
+  if (trimmed.split(WHITESPACE).length > MAX_QUESTION_WORDS) return false;
   const opens = trimmed.startsWith("¿") ? OPENS_ES.test(trimmed) : OPENS_EN.test(trimmed);
   if (!opens) return false;
   return !INTENT.test(accented(trimmed));
@@ -312,8 +371,10 @@ export const CRISIS_CHECK_INSTRUCTIONS =
   "Answer with exactly one word, in lowercase: yes or no.";
 
 // The person's text as the check sees it: inside delimiters it cannot close.
+const MESSAGE_TAG = /<\/?message>/gi;
+
 export function crisisCheckInput(text: string): string {
-  return `<message>\n${text.replace(/<\/?message>/gi, " ")}\n</message>`;
+  return `<message>\n${text.replace(MESSAGE_TAG, " ")}\n</message>`;
 }
 
 export const CRISIS_CHECK_TIMEOUT_MS = 3000;
@@ -346,8 +407,11 @@ export function plainLatin(text: string): boolean {
   return PLAIN_LATIN.test(normalizeCurly(text));
 }
 
+const CURLY_SINGLE_QUOTE = /[\u2018\u2019]/g;
+const CURLY_DOUBLE_QUOTE = /[\u201C\u201D]/g;
+
 function normalizeCurly(text: string): string {
-  return text.replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"');
+  return text.replace(CURLY_SINGLE_QUOTE, "'").replace(CURLY_DOUBLE_QUOTE, '"');
 }
 
 export function mentionsInstructions(text: string): boolean {

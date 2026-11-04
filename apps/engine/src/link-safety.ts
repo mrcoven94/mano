@@ -7,9 +7,12 @@ export interface DohAnswer {
 
 export type FetchFn = typeof fetch;
 
+const HTTP_URLS = /https?:\/\/[^\s<>"')\]]+/gi;
+const TRAILING_PUNCTUATION = /[.,;:!?]+$/;
+
 export function extractHttpUrls(text: string): string[] {
-  const found = text.match(/https?:\/\/[^\s<>"')\]]+/gi) ?? [];
-  return [...new Set(found.map((url) => url.replace(/[.,;:!?]+$/, "")))];
+  const found = text.match(HTTP_URLS) ?? [];
+  return [...new Set(found.map((url) => url.replace(TRAILING_PUNCTUATION, "")))];
 }
 
 // Replaces every blocked URL in person-visible text. A check error blocks,

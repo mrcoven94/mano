@@ -11,11 +11,13 @@
 // model's words, so the person reads the exact content their yes sends.
 import { createHash } from "node:crypto";
 
+import type { ReplyLanguage } from "@mano/mail";
 import { guardReply } from "@mano/persona";
 import { recipientName } from "@mano/protocol";
 
 import type { EngineApproval } from "./engine.js";
 import { FORMS } from "./forms.js";
+import { QUESTION_WORDS } from "./words.js";
 
 // The exact version uses each form's own labels, in the form's order.
 const LABELS: Record<string, string> = Object.fromEntries(
@@ -26,6 +28,9 @@ const LABELS: Record<string, string> = Object.fromEntries(
 // such as "the letter you sent on November 2". The portal files only the
 // form's own fields, so it never receives it.
 export const ATTACHMENT = "attachment";
+
+const LINK_START = /https?:\/\/|www\./i;
+const WHITESPACE_RUN = /\s+/g;
 
 // The payload key a draft freezes its form's declaration under, word for
 // word. The question shows it, so the person's YES is what makes it, and
@@ -91,9 +96,9 @@ function turnOf(idempotencyKey: string): string {
 // The one check before an approval question is shown or counted as shown:
 // the question to show, or null for a draft held back after a correction
 // or one the text line would not carry word for word.
-export function presentable(approval: Pick<EngineApproval, "id" | "idempotencyKey" | "purpose" | "recipient" | "requestJson">): string | null {
+export function presentable(approval: Pick<EngineApproval, "id" | "idempotencyKey" | "purpose" | "recipient" | "requestJson">, language: ReplyLanguage = "en"): string | null {
   if (heldBack(turnOf(approval.idempotencyKey), approval.id)) return null;
-  const question = renderQuestion(approval);
+  const question = renderQuestion(approval, language);
   return presentsExactly(question) ? question : null;
 }
 
@@ -167,7 +172,15 @@ export function isShareGrant(approval: Pick<EngineApproval, "requestJson">): boo
   return frozenShare(approval)?.consent === "grant";
 }
 
-export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">): string {
+// The known declaration, whichever form it closes. Only this exact wording
+// gets a meaning in the person's language: any other stays English alone.
+const PERJURY = /^I declare under penalty of perjury that the information in this .+ is true, correct and complete to the best of my knowledge\.$/;
+
+// In the person's language only the frame changes. The purpose, labels,
+// values, office and declaration are the frozen English the yes approves.
+// A share question is English for now, in every language.
+export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">, language: ReplyLanguage = "en"): string {
+  const words = QUESTION_WORDS[language];
   const share = frozenShare(approval);
   const shared = share && shareQuestion(approval, share);
   if (shared) return shared;
@@ -196,11 +209,11 @@ export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recip
   // One paragraph: the text line flattens line breaks, so fields are
   // separated in the sentence itself.
   return [
-    `Ready to send: ${approval.purpose} (to ${recipientName(approval.recipient)}).`,
+    words.ready(approval.purpose, recipientName(approval.recipient)),
     lines.length > 0 ? `${lines.join("; ")}.` : "",
-    attached ? `With ${attached} attached.` : "",
-    declaration ? `It ends with a declaration only you can make: ${declaration}` : "",
-    declaration ? "Reply YES to make this declaration yourself and send exactly this, or NO to stop." : "Reply YES to send exactly this, or NO to stop.",
+    attached ? words.attached(attached) : "",
+    declaration ? `${words.declares(PERJURY.test(declaration) ? words.perjuryMeaning : null)} ${declaration}` : "",
+    declaration ? words.answerWithDeclaration : words.answer,
   ]
     .filter(Boolean)
     .join(" ");
@@ -210,8 +223,8 @@ export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recip
 // behind it. It is never part of the question: the question stays the
 // exact text the person answers, and the line can be dropped (a link
 // check that blocks it) without touching the question.
-export function replayLine(url: string): string {
-  return `See each step Mano took on the form: ${url}`;
+export function replayLine(url: string, language: ReplyLanguage = "en"): string {
+  return QUESTION_WORDS[language].replay(url);
 }
 
 // True when the text line would carry the question word for word: the
@@ -220,7 +233,7 @@ export function replayLine(url: string): string {
 // holds no link for the link check to strip. Anything else cannot be put
 // to a YES. Channels runs the same check before sending.
 export function presentsExactly(question: string): boolean {
-  return guardReply(question).text === question && !/https?:\/\/|www\./i.test(question);
+  return guardReply(question).text === question && !LINK_START.test(question);
 }
 
 // What Channels reports after it sent a question: SHA-256 (hex) of the
@@ -228,7 +241,7 @@ export function presentsExactly(question: string): boolean {
 // text line may split it into bubbles at spaces. Channels computes the
 // same hash over what it sent.
 export function presentationHash(text: string): string {
-  return createHash("sha256").update(text.replace(/\s+/g, " ").trim()).digest("hex");
+  return createHash("sha256").update(text.replace(WHITESPACE_RUN, " ").trim()).digest("hex");
 }
 
 // What the model is told, as a system instruction, about where requests
@@ -238,7 +251,7 @@ export function requestStatus(approvals: EngineApproval[], generation: number, a
   const answerable = answerableId ? approvals.find((a) => a.id === answerableId) : undefined;
   const question = answerable && answerable.status === "pending" ? presentable(answerable) : null;
   if (question) {
-    return `A yes-or-no approval question is waiting for this person:\n${question}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`;
+    return `A yes-or-no approval question is waiting for this person:\n${question}\nA plain yes or no answers it automatically, in English or in their language. If they ask about it, answer briefly, in their language.`;
   }
   const latest = proposalsOf(approvals, generation)[0];
   if (!latest) return null;

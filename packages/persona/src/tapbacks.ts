@@ -47,8 +47,11 @@ function words(list: readonly string[]): RegExp {
 
 // Curly quotes and apostrophes become straight ones before any check, so
 // "can’t" and "can't" read the same.
+const CURLY_SINGLE_QUOTE = /[‘’‚‛′]/g;
+const CURLY_DOUBLE_QUOTE = /[“”„‟″«»]/g;
+
 export function normalizeQuotes(text: string): string {
-  return text.replace(/[‘’‚‛′]/g, "'").replace(/[“”„‟″«»]/g, '"');
+  return text.replace(CURLY_SINGLE_QUOTE, "'").replace(CURLY_DOUBLE_QUOTE, '"');
 }
 
 // A reaction that reached Mano as text (SMS shows a tapback as
@@ -98,12 +101,16 @@ const ALLOWS: Record<MessageKind, readonly Tapback[]> = {
 
 // The message as words: lowercased, 😂 kept as a word, other emoji and
 // punctuation dropped.
+const TEARS_OF_JOY = /😂/gu;
+const NOT_WORD_CHAR = /[^\p{L}\p{N}'😂\s]/gu;
+const WHITESPACE = /\s+/;
+
 function wordsOf(text: string): string[] {
   return normalizeQuotes(text)
     .toLowerCase()
-    .replace(/😂/gu, " 😂 ")
-    .replace(/[^\p{L}\p{N}'😂\s]/gu, " ")
-    .split(/\s+/)
+    .replace(TEARS_OF_JOY, " 😂 ")
+    .replace(NOT_WORD_CHAR, " ")
+    .split(WHITESPACE)
     .filter(Boolean);
 }
 

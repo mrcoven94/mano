@@ -19,6 +19,8 @@ import { trackCacheFile } from "../../lib/cache-files";
 import { useStrings } from "../../lib/i18n";
 import { colors, type } from "../../lib/theme";
 
+const UNSAFE_FILENAME_CHARS = /[^A-Za-z0-9._-]+/g;
+
 export default function DocumentViewer() {
   const s = useStrings();
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -79,7 +81,7 @@ export default function DocumentViewer() {
     setSharing(true);
     try {
       if (!(await Sharing.isAvailableAsync())) return;
-      const file = new File(Paths.cache, doc.name.replace(/[^A-Za-z0-9._-]+/g, "_"));
+      const file = new File(Paths.cache, doc.name.replace(UNSAFE_FILENAME_CHARS, "_"));
       const writer = file.writableStream().getWriter();
       await writer.write(b64decode(doc.bytesB64));
       await writer.close();

@@ -2,6 +2,9 @@
 // the fake client answers deterministically and the report says so. Real
 // resident content only ever goes to Standard model IDs with store disabled.
 
+const TRAILING_SLASH_RE = /\/$/;
+const CONTRIBUTOR_SUFFIX_RE = /-contributor$/i;
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
@@ -34,7 +37,7 @@ export class MetaModelClient implements ModelClient {
 
   constructor(modelId: string, baseUrl: string, apiKey: string, fetchFn: typeof fetch = (input, init) => fetch(input, init)) {
     this.id = modelId;
-    this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.baseUrl = baseUrl.replace(TRAILING_SLASH_RE, "");
     this.apiKey = apiKey;
     this.fetchFn = fetchFn;
   }
@@ -109,7 +112,7 @@ export function judgeClientFromEnv(env: NodeJS.ProcessEnv = process.env): ModelC
   const key = env.META_MODEL_API_KEY ?? "";
   const base = env.MANO_MODEL_BASE_URL || DEFAULT_MODEL_BASE_URL;
   const id = env.MANO_MODEL_JUDGE_ID || DEFAULT_JUDGE_MODEL_ID;
-  if (/-contributor$/i.test(id)) throw new Error("the judge must run on a Standard model ID, not a -contributor one");
+  if (CONTRIBUTOR_SUFFIX_RE.test(id)) throw new Error("the judge must run on a Standard model ID, not a -contributor one");
   if (key) return new MetaModelClient(id, base, key);
   return new FakeModelClient();
 }

@@ -51,6 +51,9 @@ export interface LiveConfig {
   portalToken: string;
   lang: Lang;
   yesWord?: string;
+  // Keep going to YES after a fill with no replay behind it, to see the rest
+  // of the path. The run still fails.
+  pastFill?: boolean;
   fetchImpl?: typeof fetch;
   // Asks the deployed Guardian whether its model is loaded. Only "ready"
   // passes: Engine's /health says Guardian is set, not that it can answer.
@@ -74,6 +77,8 @@ export const REQUIRED_ENV = [
   "MANO_GUARDIAN_KEY_ID",
   "MANO_GUARDIAN_KEY_SECRET",
 ] as const;
+
+const letter = (): Buffer => readFileSync(new URL("./spine-letter.jpg", import.meta.url));
 
 // What spine-letter.jpg says.
 const LETTER_DUE = "2026-11-14";
@@ -187,6 +192,8 @@ interface Turn {
 
 class Person {
   readonly handleHash = createHash("sha256").update(`spine-live-${randomBytes(32).toString("hex")}`).digest("hex");
+  // The model the deployment last named on a turn.
+  model: string | null = null;
   private turns = 0;
   private docs = 0;
   private readonly cfg: LiveConfig;
@@ -236,6 +243,7 @@ class Person {
     } catch {
       parsed = {};
     }
+    this.model = parsed.model ?? this.model;
     return { ...parsed, http: res.status, status: parsed.status ?? "not_json", text: parsed.text ?? "" };
   }
 
@@ -260,7 +268,7 @@ class Person {
   async uploadLetter(): Promise<{ http: number; document: { id: string; mimeType: string } }> {
     this.docs += 1;
     const id = `spinelive${this.docs}`;
-    const bytes = readFileSync(new URL("./spine-letter.jpg", import.meta.url));
+    const bytes = letter();
     const res = await this.fetchImpl(`${this.personPath}/documents`, {
       method: "POST",
       signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
@@ -311,6 +319,7 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
   const started = Date.now();
   let approvalId = "";
   let confirmation: string | null = null;
+  let presented = false;
 
   const steps: Record<StepName, () => Promise<StepResult>> = {
     async health() {
@@ -369,6 +378,9 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
         throw new StepFailure(`no approval question after ${rounds} turns`, turn.http, reply);
       }
       approvalId = turn.approvalId;
+      const shown = await person.presented(approvalId, turn.approval);
+      if (shown !== 200) throw new StepFailure(`the presented report answered HTTP ${shown}`, shown, reply);
+      presented = true;
       // A question with no replay page was drafted without the computer. The
       // link is opened as the person opens it, with no credentials.
       const link = turn.text.match(/https?:\/\/\S+\/fill\/[0-9a-f]{32}/)?.[0];
@@ -379,8 +391,6 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
       if (replay.status !== 200 || !page.includes(REPLAY_WAITING) || screens === 0 || !page.includes(MARIA.caseNumber)) {
         throw new StepFailure(`the replay page did not show the fill: HTTP ${replay.status}, ${screens} screens`, replay.status, reply);
       }
-      const shown = await person.presented(approvalId, turn.approval);
-      if (shown !== 200) throw new StepFailure(`the presented report answered HTTP ${shown}`, shown, reply);
       return { model: reported(turn), http: turn.http, detail: `filled, replay page shows ${screens} screens, after ${rounds} turn${rounds === 1 ? "" : "s"}`, attempts: rounds, reply };
     },
     async yes() {
@@ -415,8 +425,15 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
       if (wrong.length > 0) {
         throw new StepFailure(`the filing is wrong: ${wrong.map((f) => `${f.label} is ${rows.get(f.label) ?? "missing"}, expected ${f.expected}`).join("; ")}`, res.status);
       }
-      if (!rows.has("File 1")) throw new StepFailure("the filing has no document attached", res.status);
-      return { model: null, http: res.status, detail: `the portal holds ${confirmation} with every field as Maria gave it and the document attached` };
+      const file = await fetchImpl(`${cfg.portalUrl}/caseworker/${encodeURIComponent(confirmation!)}/file/0`, {
+        signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        headers: { authorization: `Bearer ${cfg.portalToken}` },
+      });
+      const filed = Buffer.from(await file.arrayBuffer());
+      if (file.status !== 200 || !filed.equals(letter())) {
+        throw new StepFailure(`the filed document is not Maria's letter: HTTP ${file.status}, ${filed.length} bytes`, file.status);
+      }
+      return { model: null, http: res.status, detail: `the portal holds ${confirmation} with every field as Maria gave it and her letter, byte for byte` };
     },
   };
 
@@ -434,17 +451,18 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
         step,
         ok: false,
         wallMs: Date.now() - at,
-        model: step === "guardian" || step === "yes" ? DEFAULT_GUARDIAN_MODEL : null,
+        model: step === "guardian" || step === "yes" ? DEFAULT_GUARDIAN_MODEL : step === "text" || step === "photo" || step === "fill" ? person.model : null,
         http: failure?.http ?? null,
         attempts: 1,
         detail: failure ? failure.message : `${step} could not finish: ${err instanceof Error ? err.name : "error"}`,
         ...(failure?.reply ? { reply: failure.reply } : {}),
       };
-      failedStep = step;
+      failedStep ??= step;
     }
     reports.push(report);
     cfg.onStep?.(report);
-    if (failedStep) break;
+    const goOn = cfg.pastFill && report.step === "fill" && presented;
+    if (!report.ok && !goOn) break;
   }
 
   return {

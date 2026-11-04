@@ -24,6 +24,9 @@ export function timingSafeEqualHex(a: string, b: string): boolean {
   return diff === 0;
 }
 
+const DECIMAL_DIGITS_RE = /^[0-9]+$/;
+const HEX_DIGITS_RE = /^[0-9a-fA-F]+$/;
+
 export function parseSignatureHeader(header: string): { t: string; v1: string } | null {
   let t: string | null = null;
   let v1: string | null = null;
@@ -32,7 +35,7 @@ export function parseSignatureHeader(header: string): { t: string; v1: string } 
     if (trimmed.startsWith("t=")) t = trimmed.slice(2);
     else if (trimmed.startsWith("v1=")) v1 = trimmed.slice(3);
   }
-  if (!t || !v1 || !/^[0-9]+$/.test(t) || !/^[0-9a-fA-F]+$/.test(v1)) return null;
+  if (!t || !v1 || !DECIMAL_DIGITS_RE.test(t) || !HEX_DIGITS_RE.test(v1)) return null;
   return { t, v1: v1.toLowerCase() };
 }
 

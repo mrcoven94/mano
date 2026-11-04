@@ -41,7 +41,8 @@ export type GateVerdict =
   | { kind: "ask"; reason: AskReason; count?: DayCount }
   | { kind: "no-date" };
 
-const any = (words: string[]): string => `(?:${words.map((w) => w.replace(/ /g, String.raw`\s+`)).join("|")})`;
+const SPACE = / /g;
+const any = (words: string[]): string => `(?:${words.map((w) => w.replace(SPACE, String.raw`\s+`)).join("|")})`;
 
 // The grammar's vocabulary. Adding a word widens what publishes, so
 // each addition needs a test that it states a duty the person owes.
@@ -154,8 +155,11 @@ const DEADLINE_LIKE: RegExp[] = [
   /\b\d{1,2}\/\d{1,2}\b(?!\/)/,
 ];
 
+const WHITESPACE_RUN = /\s+/g;
+const TRAILING_PUNCTUATION = /[\s.!;:,]+$/;
+
 function tidy(sentence: string): string {
-  return sentence.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "");
+  return sentence.replace(WHITESPACE_RUN, " ").trim().replace(TRAILING_PUNCTUATION, "");
 }
 
 export function isDeadlineLike(sentence: string): boolean {
@@ -220,7 +224,7 @@ const QUALIFIER = new RegExp(
     "(?:households?|people|persons|anyone|those|applicants|members|residents) (?:that|who|with|without)",
     "(?:not|never|(?:do|does|did|wo|ca|would|should)n['\u2019]t)\\b[^.]{0,40}\\b(?:return|send|submit|respond|reply|renew|recertify|sign|apply|(?:file|mail) (?:it|them|the|this|your))",
   ]
-    .map((w) => w.replace(/ /g, String.raw`\s+`))
+    .map((w) => w.replace(SPACE, String.raw`\s+`))
     .join("|")})\b|\b(?:to|attn|attention|cc)\s*:`,
   "i",
 );
@@ -276,11 +280,16 @@ const RESPOND = new RegExp(
 
 // The duty a deadline states, read from its own words. Dates within
 // one duty are compared with each other.
+const APPEAL_WORDS = /\b(appeal|hearing|grievance|reconsideration|dispute|contest|decision)\b/;
+const PAY_WORDS = /\b(pay|payment|premium|amount due|balance due)\b/;
+const PAY_STUBS = /\bpay stubs?\b/;
+const RENEW_WORDS = /\b(renew\w*|recertif\w*|redetermin\w*)\b/;
+
 export function obligationOf(text: string): Obligation {
   const t = text.toLowerCase();
-  if (/\b(appeal|hearing|grievance|reconsideration|dispute|contest|decision)\b/.test(t)) return "appeal";
-  if (/\b(pay|payment|premium|amount due|balance due)\b/.test(t) && !/\bpay stubs?\b/.test(t)) return "pay";
-  if (/\b(renew\w*|recertif\w*|redetermin\w*)\b/.test(t)) return "renew";
+  if (APPEAL_WORDS.test(t)) return "appeal";
+  if (PAY_WORDS.test(t) && !PAY_STUBS.test(t)) return "pay";
+  if (RENEW_WORDS.test(t)) return "renew";
   if (RESPOND.test(t)) return "respond";
   return "other";
 }
@@ -314,6 +323,7 @@ function matchForm(s: string): { form: DeadlineForm; groups: Record<string, stri
   }
   return null;
 }
+
 
 // Gates one sentence as splitSentences returns it.
 export function gateSentence(sentence: string, noticeIso: string | null): GateVerdict {
