@@ -23,8 +23,9 @@ const OPEN_WEIGHT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" } as const);
 
 // The same open-weight model on a Modal Shared Endpoint, for
-// MANO_MODEL_PROVIDER=modal. Off by default. Rule 7 does not list this
-// route, so it carries synthetic data only until David changes that rule.
+// MANO_MODEL_PROVIDER=modal. Off unless chosen. Rule 7 allows it on the
+// strength of Modal's stated zero retention for this endpoint type; no request
+// carries a pin (November 4 entry in docs/decisions.md).
 export const MODAL_OPEN_WEIGHT_MODEL = "meta-models/Muse-Spark-Open-816B-A42B";
 
 // Chat completions URL for a Modal endpoint, or nothing unless it is https

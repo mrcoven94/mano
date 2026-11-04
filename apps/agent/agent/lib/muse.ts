@@ -18,9 +18,10 @@
 //
 // MANO_MODEL_PROVIDER=modal (with MODAL_ENDPOINT_URL and MODAL_PROXY_TOKEN)
 // switches turns to the same open-weight model on a Modal Shared Endpoint.
-// Off by default. Rule 7 does not list this route, so it carries synthetic
-// data only until David changes that rule. Chosen with a setting missing or
-// a URL off Modal's domain, it calls no model and never falls back to another
+// Off unless chosen. Rule 7 allows it on the strength of Modal's stated zero
+// retention for this endpoint type (no request carries a pin; see the November
+// 4 entry in docs/decisions.md). Chosen with a setting missing or a URL off
+// Modal's domain, it calls no model and never falls back to another
 // route. Filling a form is unavailable on it.
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
