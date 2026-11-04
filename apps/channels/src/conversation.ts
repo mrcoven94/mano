@@ -154,14 +154,18 @@ export function buildOpenWeight(env: Env, breaker: PrimaryBreaker = primaryBreak
   if (modal.MANO_MODEL_PROVIDER === "modal") {
     const baseUrl = modalBaseUrl(modal.MODAL_ENDPOINT_URL);
     if (!baseUrl || !modal.MODAL_PROXY_TOKEN) return undefined;
-    const backup = env.OPENROUTER_API_KEY ? new OpenWeightClient({ apiKey: env.OPENROUTER_API_KEY, model: MODAL_BACKUP_MODEL }) : undefined;
-    return { client: new ModalOpenWeightClient({ apiKey: modal.MODAL_PROXY_TOKEN, model, baseUrl, ...(backup ? { timeoutMs: MODAL_TIMEOUT_WITH_BACKUP_MS } : {}) }, backup), breaker };
+    const backup = env.OPENROUTER_API_KEY ? new OpenWeightClient({ apiKey: env.OPENROUTER_API_KEY, model: MODAL_BACKUP_MODEL, fetchFn: noFollow }) : undefined;
+    return { client: new ModalOpenWeightClient({ apiKey: modal.MODAL_PROXY_TOKEN, model, baseUrl, fetchFn: noFollow, ...(backup ? { timeoutMs: MODAL_TIMEOUT_WITH_BACKUP_MS } : {}) }, backup), breaker };
   }
   if (!env.OPENROUTER_API_KEY) return undefined;
   return { client: new OpenWeightClient({ apiKey: env.OPENROUTER_API_KEY, model }), breaker };
 }
 
 const MODAL_BACKUP_MODEL = "meta/muse-spark-open";
+// A redirect must not carry a person's texts to another host. A Worker's fetch
+// throws on redirect: "error", so this is "manual": the 3xx comes back as a
+// failed call, and is not followed or sent to the backup.
+const noFollow: typeof fetch = (input, init) => boundFetch(input, { ...init, redirect: "manual" });
 // Short enough to leave the backup time inside a turn.
 const MODAL_TIMEOUT_WITH_BACKUP_MS = 30_000;
 

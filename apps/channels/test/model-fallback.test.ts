@@ -267,6 +267,21 @@ describe("the fallback on Modal, only when it is chosen", () => {
       expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPEN_URL]);
     });
 
+    it("follows no redirect on either route, and a redirect from Modal fails without going to the backup", async () => {
+      const seen: Array<string | undefined> = [];
+      const urls: string[] = [];
+      vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
+        urls.push(String(url));
+        seen.push(init?.redirect);
+        return String(url) === MODAL_URL && urls.length === 1 ? new Response(null, { status: 307, headers: { location: "https://elsewhere.example/" } }) : new Response("{}", { status: 503 });
+      });
+      await expect(buildOpenWeight(withBackup)!.client.ask(ASK)).rejects.toMatchObject({ reason: "http_307" });
+      expect(urls).toEqual([MODAL_URL]);
+      await expect(buildOpenWeight(withBackup)!.client.ask(ASK)).rejects.toMatchObject({ reason: "http_503" });
+      expect(urls.slice(1)).toEqual([MODAL_URL, OPEN_URL]);
+      expect(seen).toEqual(["manual", "manual", "manual"]);
+    });
+
     it("does not fall back without an OpenRouter key", async () => {
       const sent = script(() => new Response("{}", { status: 503 }));
       await expect(buildOpenWeight({ ...base, ...modal } as Env)!.client.ask(ASK)).rejects.toMatchObject({ reason: "http_503" });
