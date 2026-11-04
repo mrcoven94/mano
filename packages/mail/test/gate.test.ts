@@ -160,6 +160,64 @@ describe("gateSentence reads which of the person's own papers", () => {
   });
 });
 
+describe("gateSentence reads the wording plain renewal letters use", () => {
+  it.each([
+    ["- Return the complete signed form by December 4, 2026.", "2026-12-04", "respond"],
+    ["\u2022 Return the form by December 4, 2026.", "2026-12-04", "respond"],
+    ["Return the complete form by December 4, 2026.", "2026-12-04", "respond"],
+    ["After review of the checklist, send the requested proof so that it reaches this office by November 18, 2026.", "2026-11-18", "respond"],
+    ["Send the requested proof so it reaches the office by November 18, 2026.", "2026-11-18", "respond"],
+    ["Send the forms so that they reach our office by November 18, 2026.", "2026-11-18", "respond"],
+    ["Your packet must reach this office by November 18, 2026.", "2026-11-18", "respond"],
+    ["Your renewal must reach the review office by November 18, 2026.", "2026-11-18", "renew"],
+  ])("publishes %s", (sentence, iso, obligation) => {
+    expect(gateSentence(sentence, NOTICE)).toEqual({ kind: "deadline", iso, form: "by", obligation });
+  });
+
+  it("counts from the notice date however the letter points at it, and still asks", () => {
+    expect(gateSentence("Your request must reach the review office within 30 calendar days after the notice date printed above.", "2026-11-03")).toEqual({
+      kind: "ask",
+      reason: "counted",
+      count: { days: 30, fromIso: "2026-11-03", resultIso: "2026-12-03" },
+    });
+    expect(gateSentence("Your request must reach the review office within 30 calendar days after the notice date printed above.", null)).toEqual({
+      kind: "ask",
+      reason: "no-notice-date",
+    });
+  });
+
+  // Each near-miss keeps the new wording and breaks what makes it a duty.
+  it.each([
+    "- If you moved, send proof of address by December 4, 2026.",
+    "- Do not return the form by December 4, 2026.",
+    "-- Return the form by December 4, 2026.",
+    "The complete form was received by December 4, 2026.",
+    "After review of the checklist, we will send the requested proof by November 18, 2026.",
+    "After review of the checklist, do not send the requested proof by November 18, 2026.",
+    "After review of the case, send the requested proof by November 18, 2026.",
+    "After November 5, 2026, send the requested proof by November 18, 2026.",
+    "Send the requested proof so that it reaches your employer by November 18, 2026.",
+    "Send the requested proof so that it reaches this office before November 18, 2026.",
+    "Your hearing must reach the review office by November 18, 2026.",
+    "Your benefits must reach the review office by November 18, 2026.",
+    "Your payment must reach the review office by November 18, 2026.",
+    "This office must reach you by November 18, 2026.",
+    "Your request must reach the review office within 10 business days after the notice date printed above.",
+    "Your renewal is due for review on November 18, 2026.",
+    "Your case is due for renewal by November 18, 2026.",
+  ])("asks: %s", (sentence) => {
+    expect(gateSentence(sentence, NOTICE)).toMatchObject({ kind: "ask" });
+  });
+
+  it("does not treat a case due for renewal as a deadline, with no date in it", () => {
+    expect(isDeadlineLike("Your SNAP case is due for renewal")).toBe(false);
+    expect(isDeadlineLike("Your authorization is due for redetermination")).toBe(false);
+    expect(isDeadlineLike("Your renewal is due")).toBe(true);
+    expect(isDeadlineLike("Your case is due for payment")).toBe(true);
+    expect(isDeadlineLike("Your case is due for renewal in 30 days")).toBe(true);
+  });
+});
+
 describe("gateSentence asks on everything else", () => {
   it.each([
     "You must not respond before November 20, 2026.",
