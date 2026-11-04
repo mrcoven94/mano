@@ -45,16 +45,22 @@ export interface OAuthConsumed {
   linking: boolean;
 }
 
+const BASE64_PLUS_RE = /\+/g;
+const BASE64_SLASH_RE = /\//g;
+const BASE64_PADDING_RE = /=+$/;
+const BASE64URL_DASH_RE = /-/g;
+const BASE64URL_UNDERSCORE_RE = /_/g;
+
 function b64urlEncode(bytes: Uint8Array): string {
   if (typeof Buffer !== "undefined") return Buffer.from(bytes).toString("base64url");
   let s = "";
   for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(s).replace(BASE64_PLUS_RE, "-").replace(BASE64_SLASH_RE, "_").replace(BASE64_PADDING_RE, "");
 }
 
 function b64urlDecode(s: string): Uint8Array {
   if (typeof Buffer !== "undefined") return new Uint8Array(Buffer.from(s, "base64url"));
-  const padded = s.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = s.replace(BASE64URL_DASH_RE, "+").replace(BASE64URL_UNDERSCORE_RE, "/");
   const bin = atob(padded);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);

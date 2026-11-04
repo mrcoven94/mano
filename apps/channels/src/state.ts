@@ -42,7 +42,7 @@ class SqlGlobalStore implements GlobalStore {
   }
 
   state(): GlobalStateRow {
-    const rows = this.sql.exec("SELECT * FROM global_state WHERE id = 1").toArray() as unknown as Array<{
+    const rows = this.sql.exec("SELECT cursor, spend_day, spent_usd, byte_day, bytes_used FROM global_state WHERE id = 1").toArray() as unknown as Array<{
       cursor: string | null;
       spend_day: string;
       spent_usd: number;
@@ -72,7 +72,7 @@ class SqlGlobalStore implements GlobalStore {
   }
 
   spendReservations(day: string): SpendReservation[] {
-    return (this.sql.exec("SELECT * FROM spend_reservations WHERE day = ?", day).toArray() as unknown as Array<{
+    return (this.sql.exec("SELECT res_key, worst_usd, day FROM spend_reservations WHERE day = ?", day).toArray() as unknown as Array<{
       res_key: string;
       worst_usd: number;
       day: string;
@@ -120,7 +120,7 @@ class SqlGlobalStore implements GlobalStore {
   }
 
   byteReservations(day: string): ByteReservation[] {
-    return (this.sql.exec("SELECT * FROM byte_reservations WHERE day = ?", day).toArray() as unknown as Array<{
+    return (this.sql.exec("SELECT res_key, bytes, day FROM byte_reservations WHERE day = ?", day).toArray() as unknown as Array<{
       res_key: string;
       bytes: number;
       day: string;

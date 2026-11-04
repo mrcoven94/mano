@@ -15,6 +15,8 @@ import './phone.css'
 // inside it renders at the size iOS uses (15pt, not 8px) and keeps the right
 // letter shapes and spacing. Inside the screen, 1pt is 1px; `--pt` is kept
 // at 1px there so calc(var(--pt) * n) still works.
+const CSS_URL = /url\(["']?([^"')]+)["']?\)/
+const COLONS = /:/g
 const IPHONE = { w: 402, h: 874, r: 64 }
 const CORNER = { a: 71, n: 2.31 }
 // soft: the illustrative phone marketing pages draw, measured from one (a
@@ -112,7 +114,7 @@ export function Phone({ width, frame: asked = 'pro', time = '9:41', island, stat
   useEffect(() => {
     if (asked !== 'photo' || !photoRef.current) return
     const bg = getComputedStyle(photoRef.current).backgroundImage
-    const url = bg.match(/url\(["']?([^"')]+)["']?\)/)?.[1]
+    const url = bg.match(CSS_URL)?.[1]
     if (!url) return void setPhotoOk(false)
     let live = true
     const img = new Image()
@@ -129,7 +131,7 @@ export function Phone({ width, frame: asked = 'pro', time = '9:41', island, stat
   const edge = band + glass
   const s = width / (SCREEN.w + edge * 2)
   const pt = (n: number) => n * s
-  const id = useId().replace(/:/g, '')
+  const id = useId().replace(COLONS, '')
   const ios = frame !== 'android' && frame !== 'soft'
   const outline = ios ? superellipsePath(pt(SCREEN.w), pt(SCREEN.h), pt(CORNER.a), CORNER.n) : null
   const bands = BANDS[frame]

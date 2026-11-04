@@ -10,6 +10,8 @@ import { boundFetch } from "./fetch.js";
 import { splitBubbles } from "./bubbles.js";
 import { OpenWeightFailed, primaryDownStatus, type OpenWeightAnswer, type OpenWeightFallback } from "./open-weight.js";
 
+const TRAILING_SLASH_RE = /\/$/;
+
 // The API accepts minimal, low, medium, high, xhigh and max ("none" is
 // rejected). Minimal answers a greeting in about 3 s; uncapped
 // reasoning took 8 to 30 s for the same reply.
@@ -223,7 +225,7 @@ export function buildModelBaseUrl(opts: { accountId?: string; gatewayId?: string
     const provider = opts.provider ?? "meta";
     return { url: `https://gateway.ai.cloudflare.com/v1/${opts.accountId}/${opts.gatewayId}/${provider}`, via: "ai-gateway" };
   }
-  return { url: (opts.directBaseUrl ?? "https://api.meta.ai/v1").replace(/\/$/, ""), via: "direct" };
+  return { url: (opts.directBaseUrl ?? "https://api.meta.ai/v1").replace(TRAILING_SLASH_RE, ""), via: "direct" };
 }
 
 // The fast call is hedged: an identical second request goes out this
@@ -318,7 +320,7 @@ export class SparkResponder implements Responder {
     if (!opts.model) throw new Error("A model ID is required.");
     this.apiKey = opts.apiKey;
     this.model = opts.model;
-    this.baseUrl = (opts.baseUrl ?? "https://api.meta.ai/v1").replace(/\/$/, "");
+    this.baseUrl = (opts.baseUrl ?? "https://api.meta.ai/v1").replace(TRAILING_SLASH_RE, "");
     this.timeoutMs = opts.timeoutMs ?? 90000;
     this.maxRetries = opts.maxRetries ?? 2;
     this.hedgeAfterMs = opts.hedgeAfterMs ?? HEDGE_AFTER_MS;

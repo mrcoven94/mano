@@ -59,8 +59,11 @@ export interface PhotoScore {
   notes: string[];
 }
 
+const NON_ALPHANUMERIC = /[^a-z0-9]/g;
+const NON_DIGIT = /\D/g;
+
 function norm(s: string | null | undefined): string {
-  return (s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return (s ?? "").toLowerCase().replace(NON_ALPHANUMERIC, "");
 }
 
 function matchLetters(truth: GradeLetterTruth[], found: Letter[]): Map<number, Letter> {
@@ -156,9 +159,9 @@ export function scorePhoto(truth: GradeTruth, reading: MailReading, elapsedMs: n
     }
     for (const phone of t.phones) {
       contactsExpected += 1;
-      const digits = phone.replace(/\D/g, "");
+      const digits = phone.replace(NON_DIGIT, "");
       const warned = reading.warnings.some(
-        (w) => w.kind === "phone_unchecked" && (w.detail ?? "").replace(/\D/g, "").includes(digits),
+        (w) => w.kind === "phone_unchecked" && (w.detail ?? "").replace(NON_DIGIT, "").includes(digits),
       );
       if (warned) contactsWarned += 1;
       else notes.push(`${t.id} phone not warned: ${phone}`);

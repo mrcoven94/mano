@@ -10,6 +10,9 @@ import { CRISIS_CHECK_INSTRUCTIONS, crisisCheckInput, type CrisisCheck } from "@
 import { boundFetch } from "./fetch.js";
 import { primaryDownStatus, type OpenWeightFallback } from "./open-weight.js";
 
+const CONTRIBUTOR_MODEL_RE = /-contributor$/i;
+const TRAILING_SLASH_RE = /\/$/;
+
 // A primary request that failed: down (402, 5xx, no connection) means
 // the fallback may answer instead.
 class CheckFailed extends Error {
@@ -46,10 +49,10 @@ export class ModelCrisisCheck implements CrisisCheck {
 
   constructor(opts: ModelCrisisCheckOptions) {
     if (!opts.apiKey) throw new Error("A model API key is required.");
-    if (!opts.model || /-contributor$/i.test(opts.model)) throw new Error("The crisis check runs on a Standard model ID only.");
+    if (!opts.model || CONTRIBUTOR_MODEL_RE.test(opts.model)) throw new Error("The crisis check runs on a Standard model ID only.");
     this.apiKey = opts.apiKey;
     this.model = opts.model;
-    this.baseUrl = (opts.baseUrl ?? "https://api.meta.ai/v1").replace(/\/$/, "");
+    this.baseUrl = (opts.baseUrl ?? "https://api.meta.ai/v1").replace(TRAILING_SLASH_RE, "");
     this.fetchFn = opts.fetchFn ?? boundFetch;
     this.collectLogs = opts.collectLogs ?? true;
     this.hedgeAfterMs = opts.hedgeAfterMs ?? 700;

@@ -9,6 +9,8 @@ import { createHash } from "node:crypto";
 
 import type { EngineDeadline } from "./engine.js";
 
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const NON_WORD_RUN = /[^\p{L}\p{N}]+/gu;
 // Past this many days ahead a date gets a second look.
 const NEAR_DAYS = 183;
 // Engine refuses a date over 731 days out, counted from UTC's today, which
@@ -55,7 +57,7 @@ export type DueDate =
 // a lost deadline is not, and what stays unclear goes to the person.
 export function resolveDueDate(due: string, nowMs: number, timeZone: string, yearConfirmed = false): DueDate {
   const today = localDate(nowMs, timeZone);
-  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(due.trim())?.slice(1).map(Number);
+  const parts = ISO_DATE.exec(due.trim())?.slice(1).map(Number);
   const date = parts ? isoDate(parts[0]!, parts[1]!, parts[2]!) : null;
   if (!parts || !date) {
     return { status: "ask", today, tell: "Nothing was saved: due must be a real date written YYYY-MM-DD. Work it out from today's date. If a numeric date the person wrote could mean two days, ask which." };
@@ -88,7 +90,7 @@ const FILLER = new Set(["a", "an", "the", "upcoming", "next"]);
 export function taskWords(title: string): string {
   return title
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(NON_WORD_RUN, " ")
     .split(" ")
     .filter((w) => w && !FILLER.has(w))
     .join(" ");

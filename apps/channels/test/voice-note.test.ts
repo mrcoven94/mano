@@ -79,7 +79,7 @@ describe("a voice note on the text line", () => {
     expect(turns[0]!.texts).toEqual(["listen to this\nmy renewal is due friday"]);
   });
 
-  it.each(["I want to kill myself", "quiero matarme"])("%j reaches the crisis floor, and the line goes first", async (said) => {
+  it.each(["I want to kill myself", "quiero matarme", "tôi muốn tự tử", "Chồng tôi đang đánh tôi", "gusto ko nang mamatay"])("%j reaches the crisis floor, and the line goes first", async (said) => {
     const { responder, turns } = hearing(said);
     const { sends } = await voiceNote(responder);
     expect(turns[0]).toMatchObject({ crisis: true });

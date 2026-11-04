@@ -18,6 +18,11 @@ import { PHOTO_UNREAD_TEXT, ResponderFailed, type ModelUsage, type Responder, ty
 import { splitBubbles } from "./bubbles.js";
 import { computeSignatureHex, SIGNATURE_WINDOW_SECONDS, timingSafeEqualHex } from "./verify.js";
 
+const TRAILING_SLASH_RE = /\/$/;
+const LINK_HINT_RE = /https?:\/\/|www\./i;
+const WHITESPACE_RUN_RE = /\s+/g;
+const DECIMAL_DIGITS_RE = /^[0-9]+$/;
+
 export const AGENT_TURN_PATH = "/channels/mano/turn";
 export const AGENT_DELETED_PATH = "/channels/mano/deleted";
 export const AGENT_PRESENTED_PATH = "/channels/mano/presented";
@@ -41,10 +46,10 @@ export const APPROVAL_REFUSED_TEXT =
 // reply whose text dropped or changed the question on the way.
 export function approvalSurvivesTextLine(text: string, approval: unknown): boolean {
   if (typeof approval !== "string" || !approval || !text.includes(approval)) return false;
-  return guardReply(approval).text === approval && !/https?:\/\/|www\./i.test(approval);
+  return guardReply(approval).text === approval && !LINK_HINT_RE.test(approval);
 }
 
-const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
+const collapse = (text: string) => text.replace(WHITESPACE_RUN_RE, " ").trim();
 
 // SHA-256 (hex) of the question with whitespace runs collapsed, since
 // bubble splitting breaks at spaces. The agent computes the same hash
@@ -64,7 +69,7 @@ export async function verifyAgentRequest(
   nowSeconds: number,
 ): Promise<{ ok: boolean; reason?: AgentVerifyFailure }> {
   if (!secret || !timestampHeader || !signatureHeader) return { ok: false, reason: "missing" };
-  if (!/^[0-9]+$/.test(timestampHeader)) return { ok: false, reason: "bad_timestamp" };
+  if (!DECIMAL_DIGITS_RE.test(timestampHeader)) return { ok: false, reason: "bad_timestamp" };
   const age = nowSeconds - Number(timestampHeader);
   if (Math.abs(age) > SIGNATURE_WINDOW_SECONDS) return { ok: false, reason: "stale" };
   const expected = await computeSignatureHex(secret, timestampHeader, rawBody);
@@ -112,7 +117,7 @@ export class AgentResponder implements Responder {
     if (!opts.secret) throw new Error("An agent secret is required.");
     if (!opts.grantSecret) throw new Error("A handle grant secret is required.");
     if (!opts.handleHash) throw new Error("A handle hash is required.");
-    this.agentUrl = opts.agentUrl.replace(/\/$/, "");
+    this.agentUrl = opts.agentUrl.replace(TRAILING_SLASH_RE, "");
     this.secret = opts.secret;
     this.grantSecret = opts.grantSecret;
     this.handleHash = opts.handleHash;
@@ -168,6 +173,7 @@ export class AgentResponder implements Responder {
         texts: turn.texts,
         attachmentCount: turn.attachmentCount,
         documents: turn.documents ?? [],
+        ...(turn.crisis ? { crisis: true } : {}),
         ...(turn.spoken ? { spoken: true } : {}),
       });
       const timestamp = this.nowSeconds();
@@ -266,7 +272,7 @@ export async function notifyAgentDeleted(notice: AgentDeletedNotice): Promise<bo
     grant: await mintHandleGrant(notice.handleHash, notice.grantSecret),
   });
   const timestamp = notice.nowSeconds ?? Math.floor(Date.now() / 1000);
-  const res = await (notice.fetchFn ?? boundFetch)(`${notice.agentUrl.replace(/\/$/, "")}${AGENT_DELETED_PATH}`, {
+  const res = await (notice.fetchFn ?? boundFetch)(`${notice.agentUrl.replace(TRAILING_SLASH_RE, "")}${AGENT_DELETED_PATH}`, {
     method: "POST",
     signal: AbortSignal.timeout(30_000),
     headers: {
@@ -301,7 +307,7 @@ export async function deleteConversationInEngine(
 ): Promise<Record<string, number | boolean> | null> {
   const personId = personIdForHandle(req.handleHash);
   const res = await (req.fetchFn ?? boundFetch)(
-    `${req.engineUrl.replace(/\/$/, "")}/api/persons/${encodeURIComponent(personId)}/conversation`,
+    `${req.engineUrl.replace(TRAILING_SLASH_RE, "")}/api/persons/${encodeURIComponent(personId)}/conversation`,
     {
       method: "DELETE",
       signal: AbortSignal.timeout(30_000),
@@ -349,7 +355,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 export async function saveDocumentInEngine(req: EngineDocumentUpload): Promise<boolean> {
   const personId = personIdForHandle(req.handleHash);
   const res = await (req.fetchFn ?? boundFetch)(
-    `${req.engineUrl.replace(/\/$/, "")}/api/persons/${encodeURIComponent(personId)}/documents`,
+    `${req.engineUrl.replace(TRAILING_SLASH_RE, "")}/api/persons/${encodeURIComponent(personId)}/documents`,
     {
       method: "POST",
       signal: AbortSignal.timeout(30_000),
@@ -394,7 +400,7 @@ export async function reportPresentation(report: PresentationReport): Promise<bo
     grant: await mintHandleGrant(report.handleHash, report.grantSecret),
   });
   const timestamp = Math.floor(Date.now() / 1000);
-  const res = await (report.fetchFn ?? boundFetch)(`${report.agentUrl.replace(/\/$/, "")}${AGENT_PRESENTED_PATH}`, {
+  const res = await (report.fetchFn ?? boundFetch)(`${report.agentUrl.replace(TRAILING_SLASH_RE, "")}${AGENT_PRESENTED_PATH}`, {
     method: "POST",
     signal: AbortSignal.timeout(30_000),
     headers: {

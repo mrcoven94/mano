@@ -3,7 +3,7 @@
 // channel, the responder, files and the spend ledger. Nothing here names
 // a provider or a runtime.
 import { Decorations } from "./decorations.js";
-import type { AttachmentChoice, ChatBackground } from "./store.js";
+import { DECORATION_TAGS, openSend, type AttachmentChoice, type ChatBackground } from "./store.js";
 import {
   ChannelFailed,
   ChannelRefused,
@@ -249,14 +249,18 @@ export function partitionByChat(
   return [...groups.values()];
 }
 
+const ENDS_WITH_QUESTION = /\?\s*$/;
+const SPLIT_PIECE_SUFFIX = /#\d+$/;
+const BUSY_NOTICE_KEY = /^busy:([^:]+):(\d+)$/;
+
 // In a burst of two or more texts, the reply answers the one question
 // that is not the latest message, shown inline under it. With no such
 // question, or more than one, the reply is not threaded.
 export function inlineReplyTarget(items: import("./store.js").PendingInbound[]): string | null {
   const texts = items.filter((i) => (i.text ?? "").trim().length > 0 && i.messageId);
   if (texts.length < 2) return null;
-  const earlier = texts.slice(0, -1).filter((i) => /\?\s*$/.test(i.text ?? ""));
-  return earlier.length === 1 && !/\?\s*$/.test(texts[texts.length - 1].text ?? "") ? (earlier[0].messageId ?? null) : null;
+  const earlier = texts.slice(0, -1).filter((i) => ENDS_WITH_QUESTION.test(i.text ?? ""));
+  return earlier.length === 1 && !ENDS_WITH_QUESTION.test(texts[texts.length - 1].text ?? "") ? (earlier[0].messageId ?? null) : null;
 }
 
 function turnTextOf(texts: string[]): string {
@@ -269,7 +273,7 @@ function turnTextOf(texts: string[]): string {
 export function rejoinPieces(items: import("./store.js").PendingInbound[]): string {
   let out = "";
   items.forEach((item, i) => {
-    if (i > 0) out += /#\d+$/.test(item.eventId) ? "" : "\n";
+    if (i > 0) out += SPLIT_PIECE_SUFFIX.test(item.eventId) ? "" : "\n";
     out += item.text ?? "";
   });
   return out;
@@ -647,7 +651,7 @@ export class ConversationRunner {
     const { store, nowMs, logger } = this.deps;
     // Fast path stays synchronous when nothing needs resolving, so the
     // batch decision below sees the same state as the caller.
-    if (store.outbounds().some((r) => openSend(r))) {
+    if (store.hasOpenSend()) {
       try {
         await this.resolveUncertain();
       } catch (err) {
@@ -796,17 +800,17 @@ export class ConversationRunner {
   // Work remains when a turn never finished or a send never resolved.
   // The alarm must re-arm until none remains, even with no new input.
   needsRetry(): boolean {
-    if (this.store.unfinishedTurn()) return true;
+    if (this.store.unfinishedTurnAttempts() !== null) return true;
     if (this.deps.reportPresentation && this.store.pendingPresentations().length > 0) return true;
-    return this.store.outbounds().some((r) => openSend(r));
+    return this.store.hasOpenSend();
   }
 
   // Backoff for the next attempt: the unfinished turn's count, else the
   // most-retried stuck send.
   retryAfterMs(): number {
-    const unfinished = this.store.unfinishedTurn();
-    if (unfinished) return retryDelayMs(Math.max(1, unfinished.attempts));
-    const stuck = this.store.outbounds().filter((r) => openSend(r));
+    const unfinishedAttempts = this.store.unfinishedTurnAttempts();
+    if (unfinishedAttempts !== null) return retryDelayMs(Math.max(1, unfinishedAttempts));
+    const stuck = this.store.openSends();
     const attempts = stuck.reduce((max, r) => Math.max(max, r.attempts), 0);
     return retryDelayMs(Math.max(1, attempts));
   }
@@ -1014,7 +1018,7 @@ export class ConversationRunner {
     }
 
     const approval = texts.length === 1 && attachments.length === 0 ? parseApprovalReply(texts[0]) : null;
-    if (approval && store.pendingApprovals(nowMs()).length > 0) {
+    if (approval && store.pendingApprovalCount(nowMs()) > 0) {
       // The decision is recorded after the crisis line.
       const recordedPart = crisisBubbles.length + 1;
       const answered = await this.answerApproval(approval.code, approval.decision, turn, chatId, to, recordedPart);
@@ -1237,8 +1241,7 @@ export class ConversationRunner {
   // and the retry looks each send up again.
   private checkSendsResolved(turn: number, generation: number): void {
     this.checkGeneration(generation);
-    const stuck = this.store.outbounds().some((r) => r.turn === turn && openSend(r));
-    if (stuck) throw new TurnIncomplete();
+    if (this.store.hasOpenSend(turn)) throw new TurnIncomplete();
   }
 
   private async settleResumedCost(turn: number, resumed: import("./store.js").PersistedTurn): Promise<void> {
@@ -1484,7 +1487,7 @@ export class ConversationRunner {
   private async sendBusy(turn: number, chatId: string | null, to: string | null, nowMs: number): Promise<boolean> {
     const meta = this.store.meta();
     const day = dayKeyFor(nowMs);
-    const match = /^busy:([^:]+):(\d+)$/.exec(meta.busyNoticeKey ?? "");
+    const match = BUSY_NOTICE_KEY.exec(meta.busyNoticeKey ?? "");
     const count = match && match[1] === day ? Number(match[2]) : 0;
     if (count >= BUSY_DAILY_CAP) return false;
     this.store.patchMeta({ busyNoticeKey: `busy:${day}:${count + 1}` });
@@ -1831,8 +1834,7 @@ export class ConversationRunner {
   async resolveUncertain(): Promise<number> {
     const generation = this.store.meta().generation;
     let resolved = 0;
-    for (const row of this.store.outbounds()) {
-      if (!openSend(row)) continue;
+    for (const row of this.store.openSends()) {
       const result = await this.resolveUncertainKey(
         row.key,
         { text: row.text, chatId: row.chatId, to: this.store.meta().to },
@@ -1945,7 +1947,7 @@ export class ConversationRunner {
       this.checkSendsResolved(turn, generation);
       // Sent only when the provider accepted every bubble; a refusal or a
       // definite failure is final and reported as not sent.
-      const states = store.outbounds().filter((r) => r.turn === turn).map((r) => r.state);
+      const states = store.outboundStates(turn);
       const outcome: "sent" | "refused" | "failed" = states.includes("refused")
         ? "refused"
         : states.includes("failed")
@@ -1976,10 +1978,10 @@ export class ConversationRunner {
   ): Promise<boolean> {
     const { store, logger, nowMs } = this.deps;
     const codeHash = await sha256Hex(code);
-    const match = store.pendingApprovals(nowMs()).find((a) => a.codeHash === codeHash);
-    if (!match) return false;
-    store.answerApproval(match.id, decision);
-    logger.info("approval_answered", { handle: this.logHandle(), approval: match.id, decision });
+    const approvalId = store.pendingApprovalIdByCode(codeHash, nowMs());
+    if (!approvalId) return false;
+    store.answerApproval(approvalId, decision);
+    logger.info("approval_answered", { handle: this.logHandle(), approval: approvalId, decision });
     await this.sendBubble({ turn, part, tag: "", text: APPROVAL_RECORDED_BUBBLE, chatId, to });
     return true;
   }
@@ -2001,12 +2003,6 @@ interface Eyes {
 
 // A message send whose outcome is still open. A reaction or the eyes are
 // never one: sent at most once, an unknown outcome dropped, not retried.
-function openSend(r: import("./store.js").OutboundRow): boolean {
-  return !DECORATION_TAGS.has(r.tag) && (r.state === "uncertain" || r.state === "sending");
-}
 
 // A text its sender asked Channels not to replay.
 const NO_REPLAY_TAG = "agent_once";
-
-// Rows for reactions and the eyes, never for words.
-const DECORATION_TAGS: ReadonlySet<string> = new Set(["react", "eyes"]);

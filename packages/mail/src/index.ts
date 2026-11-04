@@ -137,6 +137,7 @@ export { makePrivateTmpDir, releasePrivateTmpDir } from "./media.js";
 export { parseWrittenDate, parseAllDates } from "./dates.js";
 export { gateSentence } from "./gate.js";
 export { scanContent, findInstructions, findLinks, findPhones, screenScam } from "./safety.js";
+export { ANSWER_WORDS, REPLY_LANGUAGES, type AnswerWords, type ReplyLanguage } from "./words.js";
 export { answerReading, type DeadlineKind, type HeldDeadline, type LetterType, type MailAnswer, type SendCategory } from "./answer.js";
 export { qualityAnswerPath, qualityDeadlineReader } from "./quality.js";
 
@@ -931,10 +932,12 @@ async function fileToFrames(
   return { frames, truncated: raw.truncated };
 }
 
+const PAGE_MARKER = /page\s*(\d+)\s*of\s*(\d+)/i;
+
 function pageMarkerNum(ex: PageExtraction | null): number {
   const marker = ex?.pageMarker.text;
   if (!marker) return 0;
-  const m = marker.match(/page\s*(\d+)\s*of\s*(\d+)/i);
+  const m = marker.match(PAGE_MARKER);
   if (m) return Number(m[1]);
   return 0;
 }
@@ -1040,7 +1043,7 @@ function checkMissingPages(
   members.forEach((m) => {
     const marker = m.extraction?.pageMarker.text;
     if (!marker) return;
-    const mt = marker.match(/page\s*(\d+)\s*of\s*(\d+)/i);
+    const mt = marker.match(PAGE_MARKER);
     if (mt) {
       seen.add(Number(mt[1]));
       expected = Math.max(expected, Number(mt[2]));
