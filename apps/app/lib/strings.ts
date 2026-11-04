@@ -9,6 +9,8 @@ export const en = {
   tabsApprovals: "Approvals",
   tabsDeadlines: "Deadlines",
   tabsMore: "More",
+  tabWord: "tab",
+  tabOf: "of",
   back: "Back",
 
   signInTitle: "Welcome to Mano",
@@ -44,6 +46,7 @@ export const en = {
   attachCamera: "Camera",
   attachVideo: "Video",
   attachVoice: "Voice note",
+  attachClose: "Close photo and voice options",
   mailTitle: "Photograph your mail",
   mailBody: "Take several photos or a short video of your letters in one go. Your agent splits them up, reads each one and builds your deadlines.",
   mailStart: "Start",
@@ -57,6 +60,7 @@ export const en = {
   videoSent: "Video of my mail",
   recording: "Recording… tap to stop",
   voiceTap: "Hold to record a voice note",
+  voicePlay: "Play your voice note",
   retry: "Try again",
   offline: "You are offline. Messages wait here and send when you reconnect.",
   workingMail: "Mano is working on your mail. No need to send it again.",
@@ -222,8 +226,8 @@ export const en = {
   errorBody: "Try again. If it keeps failing, your messages are saved on this phone.",
   engineGapTitle: "Not here yet",
   engineGapBody: "This part of Mano is not in the app or on the web yet. Ask Mano in the chat, and answer its questions there with YES or NO.",
-  configErrorTitle: "Mano is not configured",
-  configErrorBody: "This build needs an engine address or the demo flag to start.",
+  configErrorTitle: "Mano cannot start",
+  configErrorBody: "This copy of the app is missing a setting it needs. Try again later, or install the latest version.",
 } as const;
 
 export type StringKey = keyof typeof en;
@@ -236,6 +240,8 @@ export const es: Strings = {
   tabsApprovals: "Aprobar",
   tabsDeadlines: "Fechas",
   tabsMore: "Más",
+  tabWord: "pestaña",
+  tabOf: "de",
   back: "Atrás",
 
   signInTitle: "Le damos la bienvenida a Mano",
@@ -271,6 +277,7 @@ export const es: Strings = {
   attachCamera: "Cámara",
   attachVideo: "Video",
   attachVoice: "Nota de voz",
+  attachClose: "Cerrar las opciones de fotos y voz",
   mailTitle: "Fotografíe su correo",
   mailBody: "Tome varias fotos o un video corto de sus cartas de una vez. Su agente las separa, lee cada una y crea sus fechas límite.",
   mailStart: "Empezar",
@@ -284,6 +291,7 @@ export const es: Strings = {
   videoSent: "Video de mi correo",
   recording: "Grabando… toque para detener",
   voiceTap: "Mantenga para grabar una nota de voz",
+  voicePlay: "Reproducir su nota de voz",
   retry: "Reintentar",
   offline: "Sin conexión. Los mensajes esperan aquí y se envían al reconectar.",
   workingMail: "Mano está trabajando en su correo. No hace falta enviarlo otra vez.",
@@ -448,8 +456,8 @@ export const es: Strings = {
   errorBody: "Inténtelo de nuevo. Si sigue fallando, sus mensajes están guardados en este teléfono.",
   engineGapTitle: "Todavía no está aquí",
   engineGapBody: "Esta parte de Mano aún no está en la aplicación ni en la web. Pregúntele a Mano en el chat y responda allí a sus preguntas con SÍ o NO.",
-  configErrorTitle: "Mano no está configurado",
-  configErrorBody: "Esta versión necesita una dirección del motor o el modo de demostración para iniciar.",
+  configErrorTitle: "Mano no puede iniciar",
+  configErrorBody: "A esta copia de la aplicación le falta un ajuste que necesita. Inténtelo más tarde o instale la versión más reciente.",
 };
 
 export type Language = "en" | "es";

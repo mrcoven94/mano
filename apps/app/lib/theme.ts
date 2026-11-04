@@ -1,6 +1,7 @@
 // Shared look for the resident app. Tokens come from the marketing site
 // (apps/site/app/globals.css): paper, ink, a yellow highlighter and a blue
-// ballpoint. The app never invents its own palette.
+// ballpoint. The app adds one color of its own, fieldBorder: the site has no
+// border dark enough to mark a field at 3:1.
 
 export const colors = {
   bg: "#FFFFFF",
@@ -12,6 +13,7 @@ export const colors = {
   faint: "#6A6A64",
   border: "#E7E5E0",
   border2: "#D6D3CC",
+  fieldBorder: "#8E8B83",
   pen: "#2443D6",
   penSoft: "#E9EDFC",
   hl: "#FFE14A",
