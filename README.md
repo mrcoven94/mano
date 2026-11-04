@@ -58,7 +58,7 @@ Every model Mano calls at runtime is a Meta model. Meta's own API answers HTTP 4
 | Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes |
 | Crisis check, before the agent, on one short health question the keyword floor flags | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis |
 | Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Standby, on Muse Spark Open during the 402 |
-| Checking the reader's date, and holding a deadline | None, plain code | `packages/mail/src/naming.ts`, `packages/mail/src/gate.ts` | Holding ran in the production runs below, which show no question naming a date. Checking the reader's date is deployed and not confirmed on production yet |
+| Checking the reader's date, and holding a deadline | None, plain code | `packages/mail/src/naming.ts`, `packages/mail/src/gate.ts` | Running. The gate held the spine's letter in the production runs below. The reader's question was seen on production on two synthetic fixture letters ([PR 216](https://github.com/mrcoven94/mano/pull/216), still open), which is not a rate |
 | Drafting the renewal | None for the form table | `apps/agent/agent/lib/forms.ts` | Running |
 | The person's yes and the filing to the sandbox portal | None, plain code | `apps/engine/src/gateway` | Running. Run a4c0ec45 on production recorded receipt SR-PPW4FECM, not simulated |
 | Reminder the day before an interview | None, plain code | `apps/engine/src/deadlines.ts` | Deployed |
