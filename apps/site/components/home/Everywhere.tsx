@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Mascot from "@/components/Mascot";
+import { AppPhone, TextPhone } from "./DevicePhones";
 import { NeedIcon } from "./NeedIcons";
 import { REPO_URL, SMS_HREF, SMS_NUMBER, SMS_IS_PLACEHOLDER, EARLY_HREF, SIGN_UP_HREF, SIGN_IN_HREF } from "@/lib/site";
 
@@ -11,8 +12,8 @@ const INSTALL = `git clone ${REPO_URL}\ncd mano && pnpm install\npnpm check`;
 
 const TABS = [
   { key: "text", icon: "phone", sub: "Any phone", label: "Text or iMessage", title: "No app needed.", text: "Any phone that can text works. Send Mano a photo of a letter or ask a question, the same way you would text a friend." },
-  { key: "app", icon: "app", sub: "Early access", label: "iPhone and Android", title: "Everything in one place.", text: "The app shows what is ready to send, what is due next and every letter Mano has read for you." },
-  { key: "web", icon: "laptop", sub: "Any browser", label: "Computer", title: "Pick up where you left off.", text: "Open Mano in any browser to read long forms on a bigger screen, print copies or upload a stack of documents." },
+  { key: "app", icon: "app", sub: "Android early access, iPhone coming soon", label: "iPhone and Android", title: "Everything in one place.", text: "The app shows what is ready to send, what is due next and every letter Mano has read for you." },
+  { key: "web", icon: "laptop", sub: "Coming soon", label: "Computer", title: "Pick up where you left off.", text: "Open Mano in any browser to read long forms on a bigger screen, print copies or upload a stack of documents." },
   { key: "own", icon: "code", sub: "Open source", label: "Run your own", title: "Download the whole system.", text: "Mano is open source. An agency, nonprofit or developer can download it, read every line and run their own copy." },
 ] as const;
 
@@ -23,19 +24,6 @@ function Bubble({ me, children, t }: { me?: boolean; children: React.ReactNode; 
     <p className="dv-b me rv" style={d(t)}>{children}</p>
   ) : (
     <div className="dv-row rv" style={d(t)}><Mascot tile tone="orange" size={22} /><p className="dv-b">{children}</p></div>
-  );
-}
-
-function Phone({ children, title, input = "iMessage" }: { children: React.ReactNode; title: string; input?: string }) {
-  return (
-    <div className="dv-phone">
-      <div className="dv-glass">
-        <div className="dv-status" aria-hidden="true"><span>9:41</span><span className="dv-island" /><span className="dv-sig"><i /><i /><i /><b /></span></div>
-        <div className="dv-top"><Mascot tile tone="orange" size={34} /><span>{title}</span></div>
-        <div className="dv-screen">{children}</div>
-        <div className="dv-input" aria-hidden="true"><span>{input}</span><i /></div>
-      </div>
-    </div>
   );
 }
 
@@ -117,30 +105,15 @@ export default function Everywhere() {
         </div>
 
         <div className="dv-device" key={`d-${k}`}>
-          {k === "text" && (
-            <Phone title="Mano">
-              <div className="dv-photo rv me" style={d(0.1)}><span>SAMPLE COUNTY</span><i /><i /><i /></div>
-              <Bubble me t={0.4}>What is this one?</Bubble>
-              <Bubble t={1.1}>Your food benefits renewal. It is due <mark>November 14</mark>. Want me to fill it out?</Bubble>
-              <Bubble me t={2}>Yes please</Bubble>
-              <Bubble t={2.7}>Done. It&rsquo;s in the app too.</Bubble>
-            </Phone>
-          )}
-          {k === "app" && (
-            <Phone title="Good evening, Maria" input="Ask Mano anything">
-              <div className="dv-card hot rv" style={d(0.1)}><small>Ready to send</small><b>Food benefits renewal</b><span className="dv-pill">Review</span></div>
-              <div className="dv-card rv" style={d(0.35)}><small>Due next</small><b>Health coverage, Jan 31</b><span className="dv-meta">Mano starts Jan 6</span></div>
-              <div className="dv-card rv" style={d(0.6)}><small>Mail</small><b>3 letters read this week</b><span className="dv-meta">1 scam blocked</span></div>
-              <div className="dv-card rv" style={d(0.85)}><small>Shared</small><b>Northside Family Center</b><span className="dv-meta">Renewal only</span></div>
-            </Phone>
-          )}
+          {k === "text" && <TextPhone />}
+          {k === "app" && <AppPhone />}
           {k === "web" && (
             <div className="dv-browser">
               <div className="dv-web">
                 <nav aria-hidden="true"><b><Mascot tile tone="orange" size={20} />mano</b><span className="on">Messages</span><span>Applications</span><span>Documents</span><span>Deadlines</span></nav>
                 <div className="dv-web-thread">
                   <p className="sc-label">Earlier, by text</p>
-                  <Bubble t={0.1}>Done. It&rsquo;s in the app too.</Bubble>
+                  <Bubble t={0.1}>Filled out. It goes only after your yes, and it&rsquo;s in the app too.</Bubble>
                   <p className="sc-label">Now, on your laptop</p>
                   <Bubble me t={0.6}>Can you print the renewal for my records?</Bubble>
                   <Bubble t={1.3}>Here it is, 4 pages and your 2 pay stubs. I marked the pages you still need to sign.</Bubble>

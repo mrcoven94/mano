@@ -65,13 +65,46 @@ export function proposalsOf(approvals: EngineApproval[], generation: number): En
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+// Drafts this process could not close after the person corrected them in
+// the same turn: one draft by its ID, or every draft of a turn when Engine
+// could not even list them. Engine still holds them pending, so the turn's
+// reply must not show their question; never shown, they have no pointer,
+// and a YES approves none of them. Kept for the life of the process,
+// oldest dropped first, since the reply goes out within the same turn.
+const HELD_BACK = new Set<string>();
+const HELD_BACK_MAX = 1000;
+
+export function holdBack(target: { approvalId: string } | { turnId: string }): void {
+  HELD_BACK.add("approvalId" in target ? `a:${target.approvalId}` : `t:${target.turnId}`);
+  if (HELD_BACK.size > HELD_BACK_MAX) HELD_BACK.delete(HELD_BACK.values().next().value!);
+}
+
+export function heldBack(turnId: string, approvalId: string): boolean {
+  return HELD_BACK.has(`a:${approvalId}`) || HELD_BACK.has(`t:${turnId}`);
+}
+
+// The turn a drafted approval came from, read from its key (see proposalKey).
+function turnOf(idempotencyKey: string): string {
+  return idempotencyKey.replace(/^agent:g\d+:/, "").replace(/:d\d+$/, "");
+}
+
+// The one check before an approval question is shown or counted as shown:
+// the question to show, or null for a draft held back after a correction
+// or one the text line would not carry word for word.
+export function presentable(approval: Pick<EngineApproval, "id" | "idempotencyKey" | "purpose" | "recipient" | "requestJson">): string | null {
+  if (heldBack(turnOf(approval.idempotencyKey), approval.id)) return null;
+  const question = renderQuestion(approval);
+  return presentsExactly(question) ? question : null;
+}
+
+// The drafts one turn proposed that still wait, newest first.
+export function waitingFrom(approvals: EngineApproval[], generation: number, turnId: string): EngineApproval[] {
+  return proposalsOf(approvals, generation).filter((a) => a.status === "pending" && a.idempotencyKey.startsWith(`${prefix(generation)}${turnId}:`));
+}
+
 // The approval this turn proposed and Engine still holds.
 export function proposedIn(approvals: EngineApproval[], generation: number, turnId: string): EngineApproval | null {
-  return (
-    proposalsOf(approvals, generation).find(
-      (a) => a.status === "pending" && a.idempotencyKey.startsWith(`${prefix(generation)}${turnId}:`),
-    ) ?? null
-  );
+  return waitingFrom(approvals, generation, turnId)[0] ?? null;
 }
 
 // Proposals of this conversation still waiting that are not the answerable one.
@@ -79,7 +112,65 @@ export function waitingProposals(approvals: EngineApproval[], generation: number
   return proposalsOf(approvals, generation).filter((a) => a.status === "pending" && a.id !== exceptId);
 }
 
+// A share action's words, one per effect, from what Engine froze. Null for
+// any other action.
+function frozenShare(approval: Pick<EngineApproval, "requestJson">): Record<string, unknown> | null {
+  try {
+    const payload = (JSON.parse(approval.requestJson) as { payload?: Record<string, unknown> }).payload;
+    return typeof payload?.consent === "string" ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function shareQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">, share: Record<string, unknown>): string | null {
+  const office = recipientName(approval.recipient);
+  switch (share.consent) {
+    case "grant": {
+      const details = ((share.details ?? []) as { label: string; value: string }[]).map((d) => `${d.label}: ${d.value}`);
+      return `Ready to share ${approval.purpose} with ${office}: ${details.join("; ")}. They can also ask you for documents, and nothing else goes to them without your yes. Reply YES to share exactly this, or NO to stop.`;
+    }
+    case "revoke":
+      return `Ready to stop sharing ${String(share.sharedFor)} with ${office}. They lose access right away and cannot ask you for more. Stopping cannot recall what they already received. Reply YES to stop sharing, or NO to keep sharing.`;
+    case "provide":
+      return `Ready to send ${String(share.attachment)} to ${office}, as your ${String(share.label)} for ${String(share.sharedFor)}. Reply YES to send exactly this, or NO to stop.`;
+    default:
+      return null;
+  }
+}
+
+function sentence(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+// What Mano says once a share action went through. Null for any other action.
+export function shareDone(approval: Pick<EngineApproval, "recipient" | "purpose" | "requestJson">): string | null {
+  const share = frozenShare(approval);
+  const office = recipientName(approval.recipient);
+  switch (share?.consent) {
+    case "grant":
+      return `Done. ${sentence(office)} can now see what you shared for ${approval.purpose}. Tell me any time if you want to stop sharing.`;
+    case "revoke":
+      return `Done. ${sentence(office)} can no longer see ${String(share.sharedFor)} or ask you for more. Stopping cannot recall what they already received.`;
+    case "provide":
+      return `Done. I sent your ${String(share.label)} to ${office}.`;
+    default:
+      return null;
+  }
+}
+
+export function isShare(approval: Pick<EngineApproval, "requestJson">): boolean {
+  return frozenShare(approval) !== null;
+}
+
+export function isShareGrant(approval: Pick<EngineApproval, "requestJson">): boolean {
+  return frozenShare(approval)?.consent === "grant";
+}
+
 export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">): string {
+  const share = frozenShare(approval);
+  const shared = share && shareQuestion(approval, share);
+  if (shared) return shared;
   let payload: Record<string, unknown> = {};
   let attached: string | null = null;
   let declaration: string | null = null;
@@ -145,16 +236,22 @@ export function presentationHash(text: string): string {
 // this it would say a filed draft is still waiting.
 export function requestStatus(approvals: EngineApproval[], generation: number, answerableId: string | null): string | null {
   const answerable = answerableId ? approvals.find((a) => a.id === answerableId) : undefined;
-  if (answerable && answerable.status === "pending") {
-    return `A yes-or-no approval question is waiting for this person:\n${renderQuestion(answerable)}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`;
+  const question = answerable && answerable.status === "pending" ? presentable(answerable) : null;
+  if (question) {
+    return `A yes-or-no approval question is waiting for this person:\n${question}\nA plain YES or NO answers it automatically. If they ask about it, answer briefly.`;
   }
   const latest = proposalsOf(approvals, generation)[0];
   if (!latest) return null;
-  const state =
-    latest.status === "approved"
-      ? latest.outcome?.attempt === "done"
-        ? "the person approved it and it was filed"
-        : "the person approved it and Mano is checking whether it went through"
+  // A receipt is read first, whatever the status: it was filed.
+  const receipt = latest.outcome?.receipt;
+  const state = receipt
+    ? isShare(latest)
+      ? "the person approved it and it went through"
+      : `the person approved it and it was filed, confirmation ${receipt.externalId}${receipt.simulated ? " (a simulated filing)" : ""}`
+    : latest.outcome?.lookupsEnded
+      ? "the person approved it, Mano could not confirm it went through and has stopped checking, and it will not be sent again without a new approval"
+      : latest.status === "approved"
+      ? "the person approved it and Mano is checking whether it went through"
       : latest.status === "rejected"
         ? "the person declined it, or it was closed; nothing was sent"
         : latest.status === "pending"

@@ -21,7 +21,7 @@ export default function ShareFlow() {
     <div className="share">
       <div className="h-head">
         <h2 id="share-h">Case management made easy for nonprofits and government offices.</h2>
-        <p className="lede">Give every caseworker their own Mano. It gathers documents, fills out applications and tracks every renewal for the people they serve, so staff spend their time with people instead of paperwork. Residents pick what to share and can stop sharing at any time.</p>
+        <p className="lede">Give every caseworker their own Mano. It gathers documents, fills out applications and tracks every renewal for the people they serve, so staff spend their time with people instead of paperwork. Residents pick what to share and can stop sharing at any time. Case management is coming soon.</p>
       </div>
 
       <InView as="ol" className="share-flow" threshold={0.3}>
@@ -46,7 +46,7 @@ export default function ShareFlow() {
         <li className="share-step rv" style={d(0.9)}>
           <p className="share-n">The renewal is ready</p>
           <div className="share-card">
-            <p className="share-from"><NeedIcon k="check" size={34} /><span>Northside case 0418<small>Food benefits renewal</small></span></p>
+            <p className="share-from"><NeedIcon k="check" size={34} /><span>Northside case R-1042<small>Food benefits renewal</small></span></p>
             <p className="share-big">Ready to submit</p>
             <p className="share-small"><mark>4 of 4 pages.</mark> No phone tag. Maria can see who has her pay stub and stop sharing whenever she wants.</p>
           </div>
@@ -54,7 +54,6 @@ export default function ShareFlow() {
       </InView>
 
       <div className="share-links">
-        <Link href="/organizations">Case management for nonprofits</Link>
         <Link href="/government">Case management for government</Link>
         <Link href="/partners">Partners</Link>
       </div>

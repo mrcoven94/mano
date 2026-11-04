@@ -21,21 +21,56 @@ export interface SettleResult {
   text: string;
   // Machine-safe reason for logs: stop, tool_fallback, input, failed.
   reason: string;
+  // The approvals this run's form calls left waiting for the person's YES,
+  // read from the run's own tool results. Only these can be shown.
+  held?: string[];
 }
 
 export interface SettleState {
   stopTexts: string[];
   lastText: string | null;
+  // This run's Mano turn; a form result from another turn is ignored.
+  turnId: string | null;
+  // Per form, what its last form call in this turn left waiting, or null.
+  heldByForm: Map<string, string | null>;
 }
 
-export function initialSettleState(): SettleState {
-  return { stopTexts: [], lastText: null };
+export function initialSettleState(turnId: string | null = null): SettleState {
+  return { stopTexts: [], lastText: null, turnId, heldByForm: new Map() };
+}
+
+const FORM_TOOLS: ReadonlySet<string> = new Set(["fill_form", "start_form_draft", "share_case", "stop_sharing"]);
+
+// Only the last form call per form counts: one that did not end waiting
+// for a YES means nothing earlier for that form is shown, in any instance,
+// since this reads only the run's own events. A result from another turn
+// (a fill that outlived its turn) is ignored. A call that failed names no
+// form, so it could be correcting any of them.
+function noteFormResult(state: SettleState, data: Record<string, unknown>): void {
+  const result = data.result as { kind?: unknown; toolName?: unknown; output?: unknown } | undefined;
+  if (result?.kind !== "tool-result" || typeof result.toolName !== "string" || !FORM_TOOLS.has(result.toolName)) return;
+  const output = result.output as { status?: unknown; approvalId?: unknown; form?: unknown; turn?: unknown } | null | undefined;
+  if (data.status === "completed" && output?.status === "unknown_form") return;
+  if (data.status !== "completed" || typeof output?.form !== "string") {
+    for (const form of state.heldByForm.keys()) state.heldByForm.set(form, null);
+    return;
+  }
+  if (output.turn !== state.turnId) return;
+  state.heldByForm.set(output.form, output.status === "waiting_for_yes" && typeof output.approvalId === "string" ? output.approvalId : null);
+}
+
+export function heldOf(state: SettleState): string[] {
+  return [...state.heldByForm.values()].filter((id): id is string => id !== null);
 }
 
 // Returns a terminal result when the event ends the turn, else null.
 export function reduceSettleEvent(state: SettleState, event: StreamEventLike): SettleResult | null {
   const data = event.data ?? {};
   switch (event.type) {
+    case "action.result": {
+      noteFormResult(state, data);
+      return null;
+    }
     case "message.completed": {
       const message = typeof data.message === "string" ? data.message : "";
       if (message) {
@@ -53,16 +88,16 @@ export function reduceSettleEvent(state: SettleState, event: StreamEventLike): S
     case "turn.completed":
     case "session.waiting": {
       if (state.stopTexts.length > 0) {
-        return { status: "replied", text: state.stopTexts.join("\n"), reason: "stop" };
+        return { status: "replied", text: state.stopTexts.join("\n"), reason: "stop", held: heldOf(state) };
       }
       if (state.lastText) {
-        return { status: "replied", text: state.lastText, reason: "tool_fallback" };
+        return { status: "replied", text: state.lastText, reason: "tool_fallback", held: heldOf(state) };
       }
-      return { status: "failed", text: "", reason: "empty" };
+      return { status: "failed", text: "", reason: "empty", held: heldOf(state) };
     }
     case "turn.failed":
     case "session.failed": {
-      return { status: "failed", text: "", reason: "failed" };
+      return { status: "failed", text: "", reason: "failed", held: heldOf(state) };
     }
     default:
       return null;
@@ -85,9 +120,9 @@ export class SettleTimeout extends Error {
 
 export async function settleStream(
   stream: ReadableStream<StreamEventLike>,
-  opts: { timeoutMs: number; signal?: AbortSignal; marks?: AgentMarks },
+  opts: { timeoutMs: number; signal?: AbortSignal; marks?: AgentMarks; turnId?: string },
 ): Promise<SettleResult> {
-  const state = initialSettleState();
+  const state = initialSettleState(opts.turnId ?? null);
   const reader = stream.getReader();
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<never>((_, reject) => {
@@ -99,8 +134,8 @@ export async function settleStream(
       const { done, value } = await reader.read();
       if (done) {
         return state.stopTexts.length > 0
-          ? { status: "replied", text: state.stopTexts.join("\n"), reason: "stop" }
-          : { status: "failed", text: "", reason: "closed" };
+          ? { status: "replied", text: state.stopTexts.join("\n"), reason: "stop", held: heldOf(state) }
+          : { status: "failed", text: "", reason: "closed", held: heldOf(state) };
       }
       opts.marks?.observe(value);
       const terminal = reduceSettleEvent(state, value);

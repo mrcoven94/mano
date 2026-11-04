@@ -27,6 +27,13 @@ export interface Env {
   MANO_GUARDIAN_TOKEN?: string;
   MANO_GUARDIAN_KEY_ID?: string;
   MANO_GUARDIAN_KEY_SECRET?: string;
+  // Hold calls (src/calls/provider.ts parseCallConfig): our own numbers Mano
+  // may dial, the one person who may use it and the one phone it rings.
+  MANO_CALL_ALLOWED_NUMBERS?: string;
+  MANO_CALL_PERSON_ID?: string;
+  MANO_CALL_PERSON_NUMBER?: string;
+  MANO_CALL_HOLD_LIMIT_MINUTES?: string;
+  MANO_CALL_RING_LIMIT_SECONDS?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;
@@ -38,4 +45,16 @@ export interface Env {
   // wrangler.toml [vars]; a test keeps them equal to the portal's.
   SANDBOX_MAX_FIELD_LENGTH?: string;
   SANDBOX_MAX_UPLOAD_BYTES?: string;
+  // Faxes and letters: see gateway/outbound.ts. Each stays off until its
+  // settings are present. Only a test mode key is ever read for mail.
+  LOB_TEST_API_KEY?: string;
+  LOB_WEBHOOK_SECRET?: string;
+  TELNYX_API_KEY?: string;
+  TELNYX_FAX_CONNECTION_ID?: string;
+  TELNYX_PUBLIC_KEY?: string;
+  MANO_OWN_FAX_NUMBER?: string;
+  MANO_FAX_FROM_NUMBER?: string;
+  MANO_FAX_CENTS_PER_PAGE?: string;
+  MANO_MAIL_BASE_CENTS?: string;
+  MANO_MAIL_CENTS_PER_EXTRA_PAGE?: string;
 }

@@ -5,6 +5,7 @@ const DEFAULT_POLICY: Record<ActionType, PolicyDecision> = {
   submit: "ask",
   call: "ask",
   fax: "ask",
+  mail: "ask",
   share: "ask",
 };
 

@@ -9,10 +9,10 @@ import { REPO_URL } from "@/lib/site";
 const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
 
 const STEPS = [
-  { key: "correct", icon: "pencil", title: "You correct it once", text: "Tell Mano something changed and it fixes every open application, then remembers for next time." },
-  { key: "learn", icon: "clipboard", title: "It learns the form and you", text: "Each form Mano fills makes the next one faster. What it learns about your life stays private to you, and it uses that to see what you need next and start early." },
-  { key: "review", icon: "chat", title: "A caseworker checks the work", text: "A real caseworker reviews sample packets. What they flag goes back into how Mano prepares the next one." },
-  { key: "test", icon: "check", title: "Every mistake becomes a test", text: "Mano is graded on paperwork it has never seen, next to a reminder app and a general AI agent with the same tools." },
+  { key: "correct", icon: "pencil", title: "You correct it once", text: "Tell Mano something changed. It remembers for your next form and asks before using it." },
+  { key: "learn", icon: "clipboard", title: "It remembers you", text: "What Mano learns about your life stays private to you. It fills each form from what you already told it." },
+  { key: "review", icon: "chat", title: "A caseworker checks the work", text: "A real caseworker will review sample packets. What they flag goes back into how Mano prepares the next one." },
+  { key: "test", icon: "check", title: "Every mistake becomes a test", text: "Mano will be graded on paperwork it has never seen, next to a reminder app and a general AI agent with the same tools." },
 ] as const;
 
 type Key = (typeof STEPS)[number]["key"];
@@ -37,7 +37,7 @@ export default function Improve() {
     <div className="im">
       <div className="h-head">
         <h2 id="im-h">Mano is always improving.</h2>
-        <p className="lede">Mano learns from every form it fills and from you, so it adjusts, sees what you will need next and starts before you ask. Every correction and every caseworker review makes it better. It is graded on paperwork it has never seen, and the results are public.</p>
+        <p className="lede">Mano remembers what you tell it, so you never answer the same question twice. A caseworker will review sample packets, and Mano will be graded on paperwork it has never seen, with the results published.</p>
       </div>
 
       <div className="im-grid">
@@ -57,11 +57,10 @@ export default function Improve() {
             {k === "correct" && (
               <div className="im-chat">
                 <p className="bub me rv" style={d(0.1)}>I work 24 hours a week now, not 20.</p>
-                <div className="bub-row rv" style={d(0.8)}><Avatar /><p className="bub mano">Got it. I updated both open applications and I&rsquo;ll use 24 hours from now on.</p></div>
+                <div className="bub-row rv" style={d(0.8)}><Avatar /><p className="bub mano">Got it. I&rsquo;ll remember 24 hours a week and check with you before I use it on your next form.</p></div>
                 <div className="im-diff rv" style={d(1.5)}>
-                  <p className="sc-label">Changed in 2 applications</p>
+                  <p className="sc-label">Saved for your next form</p>
                   <div><span>Hours per week</span><span><s>20</s> 24</span></div>
-                  <div><span>Monthly income</span><span><s>$2,140</s> $2,570</span></div>
                 </div>
               </div>
             )}
@@ -70,7 +69,7 @@ export default function Improve() {
               <div className="im-recipe">
                 <div className="im-recipe-col rv" style={d(0.1)}>
                   <p className="sc-label">From the form</p>
-                  <b>Sample County child care form</b>
+                  <b>Springfield County child care form</b>
                   <ul>
                     {["Household size", "Monthly income", "Employer", "Hours of care", "Signature page"].map((f, n) => (
                       <li key={f} className="rv" style={d(0.3 + n * 0.15)}><span>{f}</span><span className="im-ok">Mapped</span></li>
@@ -80,9 +79,9 @@ export default function Improve() {
                 <div className="im-recipe-col rv" style={d(0.6)}>
                   <p className="sc-label">From Maria, kept private</p>
                   <ul>
-                    {["Works 24 hours a week", "Leo starts kindergarten in August", "Lease ends March 31"].map((f) => <li key={f}><span>{f}</span></li>)}
+                    {["Works 24 hours a week", "Sofia starts kindergarten in August", "Lease ends March 31"].map((f) => <li key={f}><span>{f}</span></li>)}
                   </ul>
-                  <p className="im-foot">So Mano moves child care to after school in July and starts housing waitlists in January, before she asks.</p>
+                  <p className="im-foot">So Mano fills her next form from these and never asks her twice.</p>
                 </div>
               </div>
             )}
@@ -95,7 +94,7 @@ export default function Improve() {
                   <li className="rv" style={d(0.7)}><span className="im-ok">Correct</span>Every page the county asks for is attached</li>
                   <li className="rv flag" style={d(1)}><span className="im-flag">Flagged</span>The county wants the signature page first</li>
                 </ul>
-                <div className="bub-row rv" style={d(1.6)}><Avatar /><p className="bub mano">Thanks, Dana. Sample County packets now start with the signature page.</p></div>
+                <div className="bub-row rv" style={d(1.6)}><Avatar /><p className="bub mano">Thanks, Dana. Springfield County packets now start with the signature page.</p></div>
               </div>
             )}
 
@@ -111,7 +110,7 @@ export default function Improve() {
                   <div className="rv" style={d(0)}><span className="sc-label">Given</span><p>{CASES[c].given}</p></div>
                   <div className="rv" style={d(0.25)}><span className="sc-label">Pass only if</span><p><mark>{CASES[c].expect}</mark></p></div>
                 </div>
-                <p className="im-foot">Each run reports correct packets, missed deadlines, unsafe actions blocked, failures, cost and time. Results are published with the final run, including the cases Mano gets wrong. <a href={REPO_URL}>See the test</a></p>
+                <p className="im-foot">Each run reports correct packets, missed deadlines, unsafe actions blocked, failures, cost and time. Results will be published after the final run, including the cases Mano gets wrong. <a href={REPO_URL}>See the test</a></p>
               </div>
             )}
           </div>

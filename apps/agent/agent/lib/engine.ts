@@ -62,6 +62,7 @@ export interface Profile {
     county?: Leaf;
     language?: Leaf;
     householdConfirmed?: Leaf<boolean>;
+    householdSize?: Leaf<number>;
   };
   household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];
   income: { id: string; memberId?: Leaf; source?: Leaf; amount?: Leaf<number>; frequency?: Leaf<Frequency> }[];
@@ -119,6 +120,8 @@ export interface EngineApproval {
   outcome?: {
     attempt: "in_flight" | "unknown" | "failed" | "done" | null;
     receipt: { externalId: string; simulated: boolean } | null;
+    // Mano could not confirm a send and has stopped checking on its own.
+    lookupsEnded?: boolean;
   };
 }
 
@@ -200,6 +203,9 @@ export interface EngineResult {
   // A refused approve: the safety check could not answer. The approval
   // still waits and nothing ran, so the same yes can be tried again.
   retryable?: true;
+  // A refused approve: a fax could not be confirmed and will not be sent
+  // again. Only a fresh approval can send it.
+  unconfirmed?: true;
 }
 
 // The person's newest drafted approval. Engine moves it only forward, in
@@ -212,6 +218,20 @@ export interface EngineLatest {
 
 // What the agent asks Engine to freeze for approval. Engine stamps the
 // person from the grant and owns hashing, policy and execution.
+// What the person shares, as GET /shares lists it. Every organization has
+// its own rows: stopping with one says nothing about another.
+export interface EngineShare {
+  recipient: string;
+  caseId: string;
+  purpose: string;
+  openRequests: { id: string; documentKind: string; label: string; requestedAt: string }[];
+}
+
+export interface EngineShares {
+  active: EngineShare[];
+  revoked: { recipient: string; caseId: string }[];
+}
+
 export interface ActionProposal {
   type: "submit" | "send" | "share";
   recipient: string;
@@ -221,6 +241,8 @@ export interface ActionProposal {
   // A document in the person's Engine storage. Engine reads its bytes
   // itself and binds their hash into the approval.
   documentId?: string;
+  // Where the draft's content came from, for the safety check.
+  sources?: { kind: "document" | "message" | "profile" | "program"; id: string }[];
 }
 
 const RESULT_STATUSES = new Set(["completed", "needs_approval", "blocked", "stale", "reconciled", "in_progress", "rejected"]);
@@ -501,6 +523,10 @@ export class PersonEngine {
   }
 
   // turnId: the turn this draft belongs to. Engine orders proposals by it.
+  async listShares(): Promise<EngineShares> {
+    return (await this.json("GET", "/shares")) as EngineShares;
+  }
+
   async proposeAction(proposal: ActionProposal, turnId: string): Promise<EngineResult> {
     return parseResult(
       await this.json("POST", "/action", {
@@ -527,8 +553,22 @@ export class PersonEngine {
   // Engine closes every waiting draft that is not the latest proposal,
   // decided in one statement when it runs. The agent never names which:
   // anything it read earlier may be out of date by then.
+  // Records that this turn is correcting the recipient's form: Engine
+  // refuses drafts for it from turns received before this one, and closes
+  // the ones still waiting.
+  async fence(recipient: string, turnId: string): Promise<number> {
+    return ((await this.json("POST", "/approvals/fence", { generation: this.generation, recipient, turnId })) as { closed: number }).closed;
+  }
+
   async supersede(): Promise<number> {
     return ((await this.json("POST", "/approvals/supersede", { generation: this.generation })) as { closed: number }).closed;
+  }
+
+  // Retires an approved filing that failed or went unanswered, after the
+  // person corrected the form: Engine never runs it again. Completed when
+  // it went through, in_progress while a filing is in flight.
+  async retire(approvalId: string): Promise<EngineResult> {
+    return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/retire`));
   }
 
   async reject(approvalId: string): Promise<EngineResult> {
@@ -595,8 +635,8 @@ export class PersonEngine {
     return new Uint8Array(await res.arrayBuffer());
   }
 
-  async listDocuments(): Promise<EngineDocument[]> {
-    const out = (await this.json("GET", "/documents")) as { documents?: unknown };
+  async listDocuments(timeoutMs?: number): Promise<EngineDocument[]> {
+    const out = (await this.json("GET", "/documents", undefined, timeoutMs)) as { documents?: unknown };
     return Array.isArray(out.documents) ? (out.documents as EngineDocument[]) : [];
   }
 
@@ -610,12 +650,12 @@ export class PersonEngine {
   // the generation this turn started under (fixed when the turn was
   // parsed, before any await), so Engine refuses it with 409 once the
   // conversation was deleted or moved on.
-  async saveDeadline(input: DeadlineInput, timeoutMs?: number): Promise<"saved" | "unavailable"> {
+  async saveDeadline(input: DeadlineInput, timeoutMs?: number): Promise<EngineDeadlineResult | "unavailable"> {
     const res = await this.call("POST", "/deadlines", { ...input, generation: this.generation }, timeoutMs);
+    if (res.ok) return (await res.json()) as EngineDeadlineResult;
     await res.body?.cancel().catch(() => undefined);
     if (res.status === 404) return "unavailable";
-    if (!res.ok) throw new EngineError(res.status);
-    return "saved";
+    throw new EngineError(res.status);
   }
 }
 

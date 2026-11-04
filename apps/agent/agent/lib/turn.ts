@@ -25,8 +25,10 @@ import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { profileContext } from "./profile.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
-import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
-import { closeReplaced, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, replayLine, waitingProposals } from "./pending.js";
+import { LETTER_RULES, documentsContext, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
+import { closeReplaced, isShare, presentable, presentationHash, proposalsOf, renderQuestion, replayLine, shareDone, waitingFrom, waitingProposals } from "./pending.js";
+import { answerRequestWithPhoto } from "./sharing.js";
+import type { HoldResult } from "./propose.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 import { TurnClock } from "./timings.js";
 
@@ -158,8 +160,10 @@ const failure = (httpStatus: number, status: string, reason?: string): TurnRespo
   body: { status, text: "", ...(reason ? { reason } : {}) },
 });
 
-// Live readings use the Standard model ID with store: false. Without a
-// key the stand-in answers nothing, so the reply says it could not read.
+// Live readings use the Standard model ID with store: false, or Meta's
+// open-weight model on zero-retention endpoints under the same setting as
+// the agent's own model path (lib/muse.ts). Without a key the stand-in
+// answers nothing, so the reply says it could not read.
 let mailModel: ModelClient | null = null;
 function defaultMailModel(): ModelClient {
   mailModel ??= createModelClient(process.env, { synthetic: false });
@@ -174,6 +178,11 @@ const CHECKING =
 const CHECK_STARTING =
   "The safety check is taking a moment, so nothing was sent yet. Reply YES again in a few minutes and I will send it.";
 
+// A send that could not be confirmed is never sent again by a YES. The
+// question closes, so a new one can be prepared and answered on its own.
+const UNCONFIRMED =
+  "I could not confirm that went through, so I will not send it again on my own. If you want it sent, ask me to prepare it again and you can approve the new one.";
+
 function doneText(purpose: string, receipt: { externalId: string; simulated: boolean } | null | undefined): string {
   const label = receipt?.simulated ? " This was a simulated filing." : "";
   const confirmation = receipt ? ` Confirmation ${receipt.externalId}.` : "";
@@ -186,8 +195,9 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
     case "completed":
     case "reconciled": {
       await engine.clearPointer(approvalId);
-      const purpose = result.approval?.purpose ?? (await engine.approval(approvalId))?.purpose ?? "your request";
-      return doneText(purpose, result.receipt);
+      const approval = result.approval ?? (await engine.approval(approvalId));
+      const shared = approval ? shareDone(approval) : null;
+      return shared ?? doneText(approval?.purpose ?? "your request", result.receipt);
     }
     case "stale":
       await engine.clearPointer(approvalId);
@@ -196,6 +206,10 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       return CHECKING;
     default: {
       if (result.retryable) return CHECK_STARTING;
+      if (result.unconfirmed) {
+        await engine.clearPointer(approvalId);
+        return UNCONFIRMED;
+      }
       if (result.superseded) {
         await engine.clearPointer(approvalId);
         return `${UPDATED} Ask me to show the latest.`;
@@ -204,13 +218,18 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       // approval whose attempt settled carries its receipt; one still
       // unknown keeps the pointer until Engine reconciles it.
       const approval = await engine.approval(approvalId);
-      if (approval?.status === "approved") {
-        if (approval.outcome?.attempt === "done" && approval.outcome.receipt) {
-          await engine.clearPointer(approvalId);
-          return doneText(approval.purpose, approval.outcome.receipt);
-        }
-        return CHECKING;
+      // A receipt is read first, whatever the status: it went through.
+      if (approval?.outcome?.receipt) {
+        await engine.clearPointer(approvalId);
+        return doneText(approval.purpose, approval.outcome.receipt);
       }
+      // A share the organization refused for good: nothing to wait for.
+      if (approval && isShare(approval) && approval.outcome?.attempt === "failed") {
+        await engine.clearPointer(approvalId);
+        return "That did not go through, so nothing was sent.";
+      }
+      if (approval?.status === "approved") return CHECKING;
+      console.warn(JSON.stringify({ type: "mano_yes_refused", status: result.status, approval: approval?.status ?? null }));
       await engine.clearPointer(approvalId);
       return "That approval can no longer be used, so nothing was sent. Want me to prepare it again?";
     }
@@ -218,6 +237,8 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
 }
 
 async function answerNo(engine: PersonEngine, approval: EngineApproval | null, approvalId: string): Promise<string> {
+  const sent = await alreadySent(engine, approval, approvalId);
+  if (sent) return sent;
   if (approval?.status === "approved") {
     return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
   }
@@ -226,11 +247,24 @@ async function answerNo(engine: PersonEngine, approval: EngineApproval | null, a
     await engine.clearPointer(approvalId);
     return "Okay, I did not send it. Nothing left Mano.";
   }
-  if ((await engine.approval(approvalId))?.status === "approved") {
+  // Read again: the filing may have been recorded since the first read.
+  const fresh = await engine.approval(approvalId);
+  const sentSince = await alreadySent(engine, fresh, approvalId);
+  if (sentSince) return sentSince;
+  if (fresh?.status === "approved") {
     return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
   }
   await engine.clearPointer(approvalId);
   return "That request had already expired or changed, so nothing was sent.";
+}
+
+// A receipt is read before any status: the filing went through, so a NO
+// cannot cancel it and Mano never says nothing was sent.
+async function alreadySent(engine: PersonEngine, approval: EngineApproval | null, approvalId: string): Promise<string | null> {
+  const receipt = approval?.outcome?.receipt;
+  if (!receipt) return null;
+  await engine.clearPointer(approvalId);
+  return `That one was already sent, so I cannot cancel it. Confirmation ${receipt.externalId}.`;
 }
 
 async function decide(engine: PersonEngine, approvalId: string, decision: "yes" | "no"): Promise<TurnResponse> {
@@ -250,16 +284,12 @@ const UNSHOWN = reply("I haven't shown you that one yet, so nothing was approved
 
 const UPDATED = "I just updated that, so nothing was approved and nothing was sent.";
 
-// The answer to a YES or NO that was aimed at a replaced question: the
-// latest one, shown now as a question of its own, when it still waits,
-// with the line linking to its replay as when it was first shown.
-function updated(engine: PersonEngine, approvals: EngineApproval[], latest: { approvalId: string } | null, link: string | null): TurnResponse {
-  const waiting = latest ? waitingProposals(approvals, engine.generation).find((a) => a.id === latest.approvalId) : undefined;
-  const question = waiting ? renderQuestion(waiting) : null;
-  if (!waiting || !question || !presentsExactly(question)) return reply(`${UPDATED} Ask me to show the latest.`);
-  const text = [`${UPDATED} Here's the latest.`, question, link ? replayLine(link) : ""].filter(Boolean).join("\n\n");
-  return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: waiting.id } };
-}
+// The answer to a YES or NO aimed at a question that has since been
+// replaced. The newer draft is never shown here: only a question that went
+// out with the reply of the turn that prepared it, and that Channels then
+// reported, can be answered, so a draft that was corrected away (and held
+// back only in some process's memory) can never surface on its own.
+const CHANGED = reply("The question you answered changed since you saw it, so nothing was sent. Tell me what you want to send.");
 
 // A YES or NO turn is bound, in Engine's turn ledger, to what its first
 // attempt decided: one ledger row per approval it acted on, or one row
@@ -319,20 +349,12 @@ async function decideTurn(
   // Engine's latest proposal can be answered, and only once its question
   // was shown strictly before Channels received this message. A pointer to
   // anything older means the person last saw a question that has since
-  // been replaced: nothing is approved, and they get the latest one.
+  // been replaced: nothing is approved, and nothing new is shown.
   const arrived = Date.parse(turn.firstReceivedAt);
   const { pointer, latest } = await engine.getPending();
   if (pointer && pointer.approvalId !== latest?.approvalId) {
     await bind(engine, body.turnId, turn.firstReceivedAt, ["unshown"]);
-    // Read again after the binding write: a newer draft may have replaced
-    // the latest one while it ran. The link counts only for the draft that
-    // is still the latest.
-    const [now, current, link] = await Promise.all([
-      engine.getPending(),
-      engine.listApprovals(),
-      latest ? replayLinkOf(engine, latest.approvalId) : null,
-    ]);
-    return updated(engine, current, now.latest, now.latest && now.latest.approvalId === latest?.approvalId ? link : null);
+    return CHANGED;
   }
   const answerable = pointer && Date.parse(pointer.setAt) < arrived ? pointer : null;
   if (pointer && !answerable) {
@@ -379,8 +401,17 @@ async function runTurn(
     if (decided) return decided;
   }
 
+  // A crisis is never answered with a document question.
+  const crisis = body.texts.some(detectCrisis);
+  if (body.documents.length > 0 && !crisis) {
+    const answered = await clock.time("share", () =>
+      answerRequestWithPhoto(engine, { turnId: body.turnId, turnAtMs }, body.documents.map((d) => d.id), body.attachmentCount),
+    );
+    if (answered) return answerShown(answered);
+  }
+
   const context: string[] = [];
-  if (body.texts.some(detectCrisis)) context.push(CRISIS_LINE);
+  if (crisis) context.push(CRISIS_LINE);
   // A texted photo is read first and answered in this same reply. With no
   // words that answer is the whole reply; the crisis line still leads
   // through Channels' finalize when the turn is a crisis.
@@ -392,8 +423,10 @@ async function runTurn(
     context.push(LETTER_RULES);
     message = `${message}\n\n${letterBlock(letter)}`;
   }
-  const profile = await clock.time("profile", async () => profileRead);
+  // Read after the photos, so a letter this turn just read is marked.
+  const [profile, documents] = await clock.time("profile", () => Promise.all([profileRead, documentsContext(engine, deadlineMs - MODEL_MIN_MS - Date.now())]));
   if (profile) context.push(profile);
+  if (documents) context.push(documents);
   // Where earlier requests stand (instructions/requests.ts) reaches the
   // model as a system instruction, never as part of the person's message.
   let settled: SettleResult;
@@ -415,19 +448,30 @@ async function runTurn(
     throw err;
   }
   const after = await engine.listApprovals();
-  const own = proposedIn(after, body.generation, body.turnId);
+  // Only a draft this turn proposed and its last form call left waiting is
+  // shown; Engine's listing only confirms it still waits.
+  const heldNow = new Set(settled.held ?? []);
+  const own = waitingFrom(after, body.generation, body.turnId).find((a) => heldNow.has(a.id)) ?? null;
   // Only Engine's latest proposal is ever shown: never a draft a newer
   // turn replaced, whether this turn is a replay or just slow.
   const [pending, link] = own ? await Promise.all([engine.getPending(), replayLinkOf(engine, own.id)]) : [null, null];
   const latest = pending?.latest ?? null;
-  const proposed = own && latest?.approvalId === own.id && presentsExactly(renderQuestion(own)) ? own : null;
-  const question = proposed ? renderQuestion(proposed) : null;
+  const question = own && latest?.approvalId === own.id ? presentable(own) : null;
+  const proposed = question ? own : null;
   const text = [letter?.text ?? "", settled.status === "failed" ? "" : settled.text, question ?? "", question && link ? replayLine(link) : ""]
     .filter(Boolean)
     .join("\n\n");
   if (!text) return failure(502, "failed", settled.reason);
   if (!proposed || !question) return reply(text, letter ? "replied" : settled.status);
   return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: proposed.id } };
+}
+
+// The reply to a photo that answers a waiting request: the exact question,
+// or plainly that nothing was sent.
+function answerShown(held: HoldResult | { pickOne: string }): TurnResponse {
+  if ("pickOne" in held) return reply(held.pickOne);
+  if (!held.held) return reply("I could not get that ready to send just now, so nothing was sent. Try sending the photo again in a moment.");
+  return { httpStatus: 200, body: { status: "waiting_approval", text: held.question, approval: held.question, approvalId: held.approval.id } };
 }
 
 // The replay page of a filled form, or null: a question without a link
@@ -576,6 +620,12 @@ export async function handlePresented(request: Request, deps: { secret: string |
   if (!approval || presentationHash(renderQuestion(approval)) !== textHash) {
     console.warn(JSON.stringify({ type: "mano_presented_mismatch", handle: handleHash }));
     return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
+  }
+  // A draft held back after a correction is never made answerable, even
+  // when Channels reports it from before: it is closed like a replaced one.
+  if (!presentable(approval)) {
+    await engine.reject(approval.id).catch(() => console.warn(JSON.stringify({ type: "mano_close_failed", count: 1 })));
+    return Response.json({ ok: true, superseded: true });
   }
   const set = await engine.setPointer(approvalId);
   if (!set) return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });

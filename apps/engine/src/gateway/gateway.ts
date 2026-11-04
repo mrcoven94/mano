@@ -6,6 +6,7 @@ import type {
   ActionRequest,
   Approval,
   Attempt,
+  CheckOutcome,
   Executor,
   GatewayResult,
   LatestProposal,
@@ -13,7 +14,7 @@ import type {
   ProposalOrder,
   Receipt,
 } from "./types.js";
-import { DefiniteFailureError, TimeoutError } from "./types.js";
+import { DefiniteFailureError, NotTheSenderError, TimeoutError, UnconfirmedSendError } from "./types.js";
 import { auditDigest, type AuditDigest, type AuditEntry } from "./audit.js";
 import { ValidationError, parseActionRequest } from "./validate.js";
 import { LocalRulesChecker, checkerWithTimeout, type Checker, type CheckResult } from "./checker.js";
@@ -84,6 +85,15 @@ export interface ApprovalStore {
   escalateApproval(id: string): boolean;
   getReceiptByKey(key: string): Receipt | null;
   putReceipt(r: Receipt): void;
+  // Runs fn as one transaction: every write in it commits, or none does.
+  transaction<T>(fn: () => T): T;
+  // Records that a newer turn is correcting the recipient's form: drafts
+  // from turns received before order are refused from now on, and those
+  // still waiting are rejected, in one step. Null when generation is no
+  // longer current, else how many it rejected.
+  fenceProposals(recipient: string, order: ProposalOrder, generation: number): number | null;
+  // True when a correcting turn received after order fenced the recipient.
+  proposalFenced(recipient: string, order: ProposalOrder): boolean;
   getAttempt(key: string): Attempt | null;
   // With a generation, inserts only while it is still current.
   insertAttempt(a: Attempt, generation?: number): boolean;
@@ -98,17 +108,33 @@ export interface ApprovalStore {
   // unexpired and of the current generation (a conversation delete
   // revokes it), checked in the same statement. False otherwise, so a
   // window that lapses during recovery's awaited checks cannot execute.
-  adoptForRecoveryIfApprovalLive(key: string, now: Date): boolean;
+  adoptForRecoveryIfApprovalLive(key: string, now: Date, version?: number): boolean;
   // Claims an unresolved attempt for recovery: refreshes its timestamp
   // so a second recovery cannot claim it too.
   claimRecoverableAttempt(key: string, olderThanIso: string, now: Date): boolean;
   // Attempts recovery may own: in_flight or unknown and older than the
   // cutoff, so no live request can still be working them.
-  listRecoverableAttempts(olderThanIso: string): Attempt[];
-  // True when any attempt is in_flight or unknown. The agent schedules
-  // a durable recovery run while this holds.
+  // A failing lookup waits for its next time, and one the sweep stopped on
+  // is left out.
+  listRecoverableAttempts(olderThanIso: string, nowIso?: string): Attempt[];
+  // True when any attempt is in_flight or unknown and the sweep has not
+  // stopped looking for it. The agent schedules a durable recovery run while
+  // this holds.
   hasUnresolvedAttempts(): boolean;
+  // When lookups began failing for this attempt and when to look next. Both
+  // null clears it; a time with no next lookup ends the sweep's looking.
+  setLookupSchedule(key: string, failingSince: string | null, nextLookupAt: string | null): void;
   updateAttempt(key: string, status: Attempt["status"]): void;
+  // Retires an approved approval, in one guarded step: only while its
+  // attempt is still failed at version and no receipt exists for its key.
+  // False otherwise, or when it is not approved.
+  retireApproval(id: string, version: number): boolean;
+  // Moves an attempt to failed only while it is still at version (nothing
+  // claimed, ran or settled it since the caller read it before its lookup
+  // or checks) and no receipt exists. A receipt always wins. Every failed
+  // write that does not own the execution goes through here, so a failed
+  // attempt always means it was confirmed absent or definitely refused.
+  failAttemptAt(key: string, version: number): boolean;
   audit<const T extends { event: string }>(entry: T & AuditEntry<T>): void;
 }
 
@@ -122,7 +148,16 @@ export const SUPERSEDED_REASON = "A newer request replaced this one, so it can n
 // Statuses that hold an action key, in the order a lookup prefers them:
 // a NO first, then a revocation, then the consumed approval, then the
 // live one.
-export const KEY_HOLDING: readonly Approval["status"][] = ["rejected", "revoked", "approved", "pending"];
+// A request is bounded by far less than this, so a send still in flight this
+// long has no live request behind it, the same age recovery works from.
+const SEND_DEAD_AFTER_MS = 5 * 60_000;
+
+// How the recovery sweep backs off a lookup with no answer: each wait is as
+// long as it has been failing, starting here, up to the end of the window.
+const FIRST_LOOKUP_DELAY_MS = 5 * 60_000;
+const LOOKUP_WINDOW_MS = 24 * 3600_000;
+
+export const KEY_HOLDING: readonly Approval["status"][] = ["rejected", "revoked", "retired", "approved", "pending"];
 
 function transition(store: Map<string, Approval>, id: string, to: Approval["status"]): boolean {
   const current = store.get(id);
@@ -147,7 +182,7 @@ export class MemoryApprovalStore implements ApprovalStore {
     const matches = [...this.approvals.values()].filter((a) => a.idempotencyKey === key);
     if (matches.length === 0) return null;
     matches.sort((a, b) => {
-      const rank = (s: string) => (s === "approved" ? 0 : 1);
+      const rank = (s: string) => (s === "approved" || s === "retired" ? 0 : 1);
       return rank(a.status) - rank(b.status) || (a.createdAt < b.createdAt ? 1 : -1);
     });
     return matches[0];
@@ -190,6 +225,7 @@ export class MemoryApprovalStore implements ApprovalStore {
       this.approvalGenerations.set(a.id, generation);
       if (order) {
         this.drafted.add(a.id);
+        this.proposalOrders.set(a.id, order);
         const cur = this.latestProposal();
         if (!cur || !olderProposal(order, cur)) this.latest = { approvalId: a.id, ...order, generation };
       }
@@ -207,6 +243,14 @@ export class MemoryApprovalStore implements ApprovalStore {
   }
   keyDeclined(key: string) {
     return [...this.approvals.values()].some((a) => a.idempotencyKey === key && a.status === "rejected");
+  }
+  retireApproval(id: string, version: number) {
+    const current = this.approvals.get(id);
+    if (!current || current.status !== "approved") return false;
+    const attempt = this.attempts.get(current.idempotencyKey);
+    if (this.receipts.has(current.idempotencyKey) || attempt?.status !== "failed" || (attempt.version ?? 0) !== version) return false;
+    this.approvals.set(id, { ...current, status: "retired" });
+    return true;
   }
   private generationOf(id: string) {
     return this.approvalGenerations.get(id) ?? 0;
@@ -234,7 +278,7 @@ export class MemoryApprovalStore implements ApprovalStore {
       if (prior.status !== "unknown" && prior.status !== "failed") return null;
       if (prior.requestHash && attempt.requestHash && prior.requestHash !== attempt.requestHash) return null;
     }
-    this.attempts.set(attempt.key, attempt);
+    this.attempts.set(attempt.key, { ...attempt, version: (prior?.version ?? 0) + 1 });
     const approved: Approval = { ...current, status: "approved", approvedByHumanId: humanId };
     this.approvals.set(id, approved);
     return approved;
@@ -264,6 +308,30 @@ export class MemoryApprovalStore implements ApprovalStore {
   putReceipt(r: Receipt) {
     this.receipts.set(r.idempotencyKey, r);
   }
+  transaction<T>(fn: () => T): T {
+    return fn();
+  }
+  private proposalOrders = new Map<string, ProposalOrder>();
+  private fences = new Map<string, ProposalOrder & { generation: number }>();
+  fenceProposals(recipient: string, order: ProposalOrder, generation: number) {
+    if (generation !== this.conversationGeneration) return null;
+    const current = this.fences.get(recipient);
+    if (!current || current.generation !== generation || olderProposal(current, order)) this.fences.set(recipient, { ...order, generation });
+    const fence = this.fences.get(recipient)!;
+    let closed = 0;
+    for (const a of this.approvals.values()) {
+      const drafted = this.proposalOrders.get(a.id);
+      if (a.status !== "pending" || a.recipient !== recipient || !drafted || this.approvalGenerations.get(a.id) !== generation) continue;
+      if (!olderProposal(drafted, fence)) continue;
+      this.approvals.set(a.id, { ...a, status: "rejected" });
+      closed += 1;
+    }
+    return closed;
+  }
+  proposalFenced(recipient: string, order: ProposalOrder) {
+    const fence = this.fences.get(recipient);
+    return !!fence && fence.generation === this.conversationGeneration && olderProposal(order, fence);
+  }
   getAttempt(key: string) {
     return this.attempts.get(key) ?? null;
   }
@@ -282,12 +350,13 @@ export class MemoryApprovalStore implements ApprovalStore {
   private adoptFrom(key: string, from: Attempt["status"], now: Date) {
     const current = this.attempts.get(key);
     if (!current || current.status !== from) return false;
-    this.attempts.set(key, { ...current, status: "in_flight", updatedAt: now.toISOString() });
+    this.attempts.set(key, { ...current, status: "in_flight", updatedAt: now.toISOString(), version: (current.version ?? 0) + 1 });
     return true;
   }
-  adoptForRecoveryIfApprovalLive(key: string, now: Date) {
+  adoptForRecoveryIfApprovalLive(key: string, now: Date, version?: number) {
     const current = this.attempts.get(key);
     if (!current || (current.status !== "unknown" && current.status !== "in_flight")) return false;
+    if (version !== undefined && (current.version ?? 0) !== version) return false;
     const live = [...this.approvals.values()].some(
       (a) =>
         a.idempotencyKey === key &&
@@ -296,7 +365,7 @@ export class MemoryApprovalStore implements ApprovalStore {
         new Date(a.expiresAt).getTime() > now.getTime(),
     );
     if (!live) return false;
-    this.attempts.set(key, { ...current, status: "in_flight", updatedAt: now.toISOString() });
+    this.attempts.set(key, { ...current, status: "in_flight", updatedAt: now.toISOString(), version: (current.version ?? 0) + 1 });
     return true;
   }
   claimRecoverableAttempt(key: string, olderThanIso: string, now: Date) {
@@ -304,20 +373,37 @@ export class MemoryApprovalStore implements ApprovalStore {
     if (!current) return false;
     if (current.status !== "in_flight" && current.status !== "unknown") return false;
     if (current.updatedAt >= olderThanIso) return false;
-    this.attempts.set(key, { ...current, updatedAt: now.toISOString() });
+    this.attempts.set(key, { ...current, updatedAt: now.toISOString(), version: (current.version ?? 0) + 1 });
     return true;
   }
-  listRecoverableAttempts(olderThanIso: string) {
+  listRecoverableAttempts(olderThanIso: string, nowIso = new Date().toISOString()) {
     return [...this.attempts.values()].filter(
-      (a) => (a.status === "in_flight" || a.status === "unknown") && a.updatedAt < olderThanIso,
+      (a) =>
+        (a.status === "in_flight" || a.status === "unknown") &&
+        a.updatedAt < olderThanIso &&
+        (!a.lookupFailingSince || (!!a.nextLookupAt && a.nextLookupAt <= nowIso)),
     );
   }
   hasUnresolvedAttempts() {
-    return [...this.attempts.values()].some((a) => a.status === "in_flight" || a.status === "unknown");
+    return [...this.attempts.values()].some(
+      (a) => (a.status === "in_flight" || a.status === "unknown") && (!a.lookupFailingSince || !!a.nextLookupAt),
+    );
+  }
+  setLookupSchedule(key: string, failingSince: string | null, nextLookupAt: string | null) {
+    const current = this.attempts.get(key);
+    if (current) this.attempts.set(key, { ...current, lookupFailingSince: failingSince, nextLookupAt });
   }
   updateAttempt(key: string, status: Attempt["status"]) {
     const current = this.attempts.get(key);
-    if (current) this.attempts.set(key, { ...current, status, updatedAt: new Date().toISOString() });
+    if (current) this.attempts.set(key, { ...current, status, updatedAt: new Date().toISOString(), version: (current.version ?? 0) + 1 });
+  }
+  failAttemptAt(key: string, version: number) {
+    const current = this.attempts.get(key);
+    if (!current || (current.version ?? 0) !== version) return false;
+    if (current.status === "done") return false;
+    if (this.receipts.has(key)) return false;
+    this.attempts.set(key, { ...current, status: "failed", updatedAt: new Date().toISOString(), version: version + 1 });
+    return true;
   }
   audit<const T extends { event: string }>(entry: T & AuditEntry<T>) {
     this.auditLog.push(entry);
@@ -355,6 +441,10 @@ export interface GatewayOptions {
   documents?: DocumentStore;
   linkCheck?: LinkCheckFn;
   listConsents?: () => { recipient: string; purpose: string }[];
+  // The action's own effect (a consent grant or revocation), applied in
+  // the same transaction that records its receipt and marks the attempt
+  // done, so no crash can leave one without the other.
+  onReceipt?: (receipt: Receipt) => void;
 }
 
 // Every URL the action could touch: the recipient plus every URL anywhere
@@ -430,6 +520,7 @@ function approvalGoneReason(status: Approval["status"]): string {
   const reasons: Record<Approval["status"], string> = {
     pending: "This approval is still pending.",
     approved: "This approval was already used.",
+    retired: "This approval was replaced by a correction, so it will not be sent.",
     rejected: "This approval was declined.",
     revoked: "This approval was revoked when the conversation was deleted.",
     stale: "This approval is stale: the request changed after it was created.",
@@ -611,6 +702,10 @@ export class ActionGateway {
     const contentHash = await contentHashOf(req);
     const replay = this.receiptReuse(req, contentHash, keyHash);
     if (replay) return replay;
+    // A draft from a turn older than the person's latest correction of
+    // this form is refused like a replaced one, here and again at the
+    // insert below. A receipt under its key is answered first, above.
+    if (opts.proposal && this.store.proposalFenced(req.recipient, opts.proposal)) return SUPERSEDED;
 
     const decision = evaluatePolicy(req, this.opts.policyOverrides as never);
     if (decision === "block") {
@@ -632,7 +727,7 @@ export class ActionGateway {
     // than claim nothing was sent; the content hash leaves out the
     // document bytes, so a replay after the document changed keeps its key.
     const drafting = !this.store.getAttempt(req.idempotencyKey) && !this.store.keyHeld(req.idempotencyKey);
-    const refusal = drafting ? this.executor.refuse?.(withDocument) : null;
+    const refusal = drafting ? await this.executor.refuse?.(withDocument) : null;
     if (refusal) {
       this.store.audit({ event: "gateway.block", type: req.type, reason: "executor" });
       return { status: "blocked", reason: `${refusal} Nothing was sent.` };
@@ -664,6 +759,11 @@ export class ActionGateway {
         expiresAt: win.expiresAt.toISOString(),
         escalated: win.escalated,
       };
+      // Rechecked with no await before the insert: the fence may have landed
+      // during the checks above, and a receipt may have too. A receipt wins.
+      if (opts.proposal && this.store.proposalFenced(req.recipient, opts.proposal)) {
+        return this.receiptReuse(req, contentHash, keyHash) ?? SUPERSEDED;
+      }
       const holder = this.store.createApprovalForKey(approval, generation, opts.proposal);
       if (!holder) return STALE;
       if (holder.id === approval.id) return { status: "needs_approval", approval };
@@ -693,6 +793,10 @@ export class ActionGateway {
   // with an approve: whichever reaches the row first wins. A second NO on
   // a declined approval answers the same.
   async rejectApproval(approvalId: string, humanId: string): Promise<GatewayResult> {
+    return this.receiptFirst(approvalId, humanId, await this.rejectNow(approvalId, humanId));
+  }
+
+  private async rejectNow(approvalId: string, humanId: string): Promise<GatewayResult> {
     const approval = this.store.getApproval(approvalId);
     if (!approval) return { status: "blocked", reason: "Approval not found." };
     if (!humanId || humanId !== approval.personId) {
@@ -708,11 +812,59 @@ export class ActionGateway {
     return { status: "rejected", approval: fresh };
   }
 
+  // The person corrected the form after approving this filing, and its
+  // filing definitely failed. Retired, it is still reconciled (a receipt
+  // found later stands) but never executed again: every retry and adopt
+  // path requires an approved approval. Only an attempt still failed at
+  // the version read here is retired; one a concurrent YES moved (in
+  // flight, or unknown after a lost response) answers in_progress and
+  // changes nothing, and a receipt answers completed.
+  async retireApproval(approvalId: string, humanId: string): Promise<GatewayResult> {
+    return this.receiptFirst(approvalId, humanId, await this.retireNow(approvalId, humanId));
+  }
+
+  private async retireNow(approvalId: string, humanId: string): Promise<GatewayResult> {
+    const approval = this.store.getApproval(approvalId);
+    if (!approval) return { status: "blocked", reason: "Approval not found." };
+    if (!humanId || humanId !== approval.personId) {
+      return { status: "blocked", reason: "This approval belongs to a different person." };
+    }
+    if (approval.status === "retired") return { status: "rejected", approval };
+    const attempt = this.store.getAttempt(approval.idempotencyKey);
+    if (!this.store.retireApproval(approvalId, attempt?.version ?? 0)) {
+      const receipt = this.store.getReceiptByKey(approval.idempotencyKey);
+      if (receipt) return { status: "completed", receipt, replayed: true };
+      if (approval.status === "approved" && attempt && attempt.status !== "failed" && attempt.status !== "done") {
+        return { status: "in_progress", reason: "Another request with this idempotency key is running." };
+      }
+      return { status: "blocked", reason: approvalGoneReason(this.store.getApproval(approvalId)?.status ?? approval.status) };
+    }
+    this.store.audit({ event: "gateway.retire", approvalHash: await auditDigest(approval.id) });
+    return { status: "rejected", approval: this.store.getApproval(approvalId) ?? approval };
+  }
+
   async approveAndExecute(
     approvalId: string,
     humanId: string,
     now = new Date(),
   ): Promise<GatewayResult> {
+    return this.receiptFirst(approvalId, humanId, await this.approveNow(approvalId, humanId, now));
+  }
+
+  // One rule for every answer about an approval: a receipt under its key
+  // means it went through, so that answer wins over superseded, retired,
+  // declined, stale or any other refusal, for the person's own approval.
+  // A second approve of a filed approval runs nothing and answers the same
+  // receipt.
+  private receiptFirst(approvalId: string, humanId: string, answer: GatewayResult): GatewayResult {
+    if (answer.status === "completed" || answer.status === "reconciled") return answer;
+    const approval = this.store.getApproval(approvalId);
+    if (!approval || approval.status === "pending" || !humanId || humanId !== approval.personId) return answer;
+    const receipt = this.store.getReceiptByKey(approval.idempotencyKey);
+    return receipt ? { status: "completed", receipt, replayed: true } : answer;
+  }
+
+  private async approveNow(approvalId: string, humanId: string, now: Date): Promise<GatewayResult> {
     const approval = this.store.getApproval(approvalId);
     if (!approval) return { status: "blocked", reason: "Approval not found." };
     if (this.store.keyDeclined(approval.idempotencyKey)) return { status: "blocked", reason: approvalGoneReason("rejected") };
@@ -807,6 +959,7 @@ export class ActionGateway {
       actionType: stored.type,
       recipient: stored.recipient,
       personId: stored.personId,
+      provider: this.executor.providerOf?.(stored) ?? null,
     };
     const consumed = this.store.consumeApprovalAndClaim(approvalId, humanId, attempt, {
       personId: approval.personId,
@@ -860,9 +1013,15 @@ export class ActionGateway {
       this.store.audit({ event: "gateway.stale_block", approvalHash: hashes.approval });
       return { status: "stale", approval, reason: "Document changed after approval." };
     }
-    const attempt = this.store.getAttempt(approval.idempotencyKey);
+    let attempt = this.store.getAttempt(approval.idempotencyKey);
     if (!attempt) {
       return { status: "blocked", reason: "This approval has no recorded attempt. Refusing to execute." };
+    }
+    // A provider send that crashed before its receipt: a YES looks it up
+    // rather than waiting on a request that is gone.
+    if (attempt.status === "in_flight" && attempt.provider && now.getTime() - Date.parse(attempt.updatedAt) > SEND_DEAD_AFTER_MS) {
+      this.store.updateAttempt(attempt.key, "unknown");
+      attempt = this.store.getAttempt(attempt.key) ?? attempt;
     }
     // Reconcile before any expiry decision: if the action happened, the
     // person gets the receipt even after the window passed.
@@ -880,9 +1039,17 @@ export class ActionGateway {
     }
     // Synchronous with the adopt below: a delete during the awaits above
     // revoked this approval or moved the generation, and it cannot run.
-    if (!this.store.approvalAuthorized(approval.id)) return { status: "blocked", reason: approvalGoneReason("revoked") };
+    if (!this.store.approvalAuthorized(approval.id)) {
+      return { status: "blocked", reason: approvalGoneReason(this.store.getApproval(approval.id)?.status ?? "revoked") };
+    }
     if (check.problems.length > 0) this.store.setApprovalProblems(approval.id, check.problems);
     if (attempt.status === "failed" || attempt.status === "unknown") {
+      // A newer proposal replaced this one (the person corrected it): it is
+      // never executed again. Checked here, with no await before the adopt,
+      // so a replayed YES or one that waited on the safety check cannot
+      // file the old values after the correction.
+      // A filing that went through meanwhile answers its receipt first.
+      if (!this.store.proposalCurrent(approval.id)) return this.store.getReceiptByKey(approval.idempotencyKey) ? this.movedOn(approval.idempotencyKey) : SUPERSEDED;
       const adopt =
         attempt.status === "failed"
           ? this.store.adoptFailedAttempt(approval.idempotencyKey, now)
@@ -932,11 +1099,14 @@ export class ActionGateway {
   // unknown and blocks. A failed lookup is never treated as "did not
   // happen".
   private async reconcileUnknown(req: ActionRequest, now: Date, keyHash: AuditDigest): Promise<ReconcileOutcome> {
-    let outcome: { found: true; externalId: string } | { found: false };
+    let outcome: CheckOutcome;
     try {
       outcome = await this.executor.check(req.idempotencyKey, req.personId);
     } catch (err) {
-      this.store.audit({ event: "gateway.check_error", keyHash, detailHash: await auditDigest(String(err)) });
+      await this.noteLookupFailed(req.idempotencyKey, err, now, keyHash);
+      if (err instanceof UnconfirmedSendError) {
+        return { kind: "unavailable", result: { status: "blocked", reason: err.message, unconfirmed: true } };
+      }
       return {
         kind: "unavailable",
         result: {
@@ -947,11 +1117,11 @@ export class ActionGateway {
         },
       };
     }
+    if (this.store.getAttempt(req.idempotencyKey)?.lookupFailingSince) this.store.setLookupSchedule(req.idempotencyKey, null, null);
     if (outcome.found) {
       const attempt = this.store.getAttempt(req.idempotencyKey);
-      const receipt = await this.makeReceipt(req, "reconciled", outcome.externalId, undefined, now, attempt);
-      this.store.putReceipt(receipt);
-      this.store.updateAttempt(req.idempotencyKey, "done");
+      const receipt = await this.makeReceipt(req, "reconciled", outcome.externalId, outcome.simulated, now, attempt);
+      this.settle(receipt);
       this.store.audit({ event: "gateway.reconciled", keyHash });
       return { kind: "settled", result: { status: "reconciled", receipt } };
     }
@@ -1012,6 +1182,7 @@ export class ActionGateway {
       actionType: req.type,
       recipient: req.recipient,
       personId: req.personId,
+      provider: this.executor.providerOf?.(req) ?? null,
     };
     if (!this.store.insertAttempt(fresh, generation)) {
       if (stale()) return STALE;
@@ -1035,33 +1206,33 @@ export class ActionGateway {
     const keyHash = await auditDigest(key);
     if (!this.store.claimRecoverableAttempt(key, olderThanIso, now)) return null;
     this.store.audit({ event: "gateway.recover_claimed", keyHash });
+    // Every failed write below is guarded by the version this claim left,
+    // so a YES that adopts or files the key meanwhile keeps its outcome.
+    const seen = this.store.getAttempt(key)?.version ?? 0;
     const approval = this.store.getApprovalByKey(key);
-    if (!approval) return this.recoverAllowAttempt(key, attempt, now, keyHash);
+    if (!approval) return this.recoverAllowAttempt(key, attempt, now, keyHash, seen);
     const approvalHash = await auditDigest(approval.id);
     let stored: ActionRequest;
     try {
       stored = parseActionRequest(JSON.parse(approval.requestJson));
     } catch {
-      this.store.updateAttempt(key, "failed");
+      // Still reconciled by key from the attempt row, never failed unread.
       this.store.audit({ event: "gateway.recover_corrupt", keyHash });
-      return { status: "blocked", reason: "The stored request for this key is unreadable." };
+      return this.recoverAllowAttempt(key, attempt, now, keyHash, seen);
     }
     // Reconcile before any expiry decision: if the action happened, the
     // person gets the receipt even after the window passed.
     const settled = await this.reconcileUnknown(stored, now, keyHash);
     if (settled.kind !== "absent") return settled.result;
     if (new Date(approval.expiresAt).getTime() < Date.now()) {
-      this.store.updateAttempt(key, "failed");
-      return { status: "blocked", reason: "Approval expired before the stranded attempt could be recovered." };
+      return this.failAt(key, seen, () => ({ status: "blocked", reason: "Approval expired before the stranded attempt could be recovered." }));
     }
     if (evaluatePolicy(stored, this.opts.policyOverrides as never) === "block") {
-      this.store.updateAttempt(key, "failed");
-      return { status: "blocked", reason: "Policy now blocks this action." };
+      return this.failAt(key, seen, () => ({ status: "blocked", reason: "Policy now blocks this action." }));
     }
     const blockedLink = await this.findBlockedLink(stored);
     if (blockedLink) {
-      this.store.updateAttempt(key, "failed");
-      return this.linkBlocked(blockedLink);
+      return this.store.failAttemptAt(key, seen) ? this.linkBlocked(blockedLink) : this.movedOn(key);
     }
     const docRead = await this.readDocumentBytes(stored.documentId);
     if (!docRead.ok) {
@@ -1071,43 +1242,59 @@ export class ActionGateway {
     }
     const frozen = await freezeActionRequest(stored, docRead.bytes);
     if (frozen.requestHash !== approval.requestHash) {
-      this.store.updateAttempt(key, "failed");
-      this.store.audit({ event: "gateway.stale_block", approvalHash });
-      return { status: "stale", approval, reason: "Document changed after approval." };
+      return this.failAt(key, seen, () => {
+        this.store.audit({ event: "gateway.stale_block", approvalHash });
+        return { status: "stale", approval, reason: "Document changed after approval." };
+      });
     }
     const check = await this.runChecker(stored, frozen.documentHash);
-    if (!check.ok) {
-      this.store.updateAttempt(key, "failed");
-      return { status: "blocked", reason: check.reason };
-    }
+    if (!check.ok) return this.failAt(key, seen, () => ({ status: "blocked", reason: check.reason }));
     if (check.problems.length > 0) this.store.setApprovalProblems(approval.id, check.problems);
     // The window can lapse during the awaited checks above, so approval
     // liveness is re-verified here, in the same step that claims the key
     // for execution, with a fresh clock. Only then may it execute.
     if (this.store.keyDeclined(key)) {
-      this.store.updateAttempt(key, "failed");
-      return { status: "blocked", reason: approvalGoneReason("rejected") };
+      return this.failAt(key, seen, () => ({ status: "blocked", reason: approvalGoneReason("rejected") }));
     }
-    if (!this.store.adoptForRecoveryIfApprovalLive(key, new Date())) {
-      const receipt = this.store.getReceiptByKey(key);
-      if (receipt) return { status: "completed", receipt };
-      this.store.updateAttempt(key, "failed");
-      this.store.audit({ event: "gateway.recover_expired", keyHash });
-      return { status: "blocked", reason: "Approval expired before the stranded attempt could be recovered." };
+    // Confirmed absent and replaced by a newer proposal: it ends here,
+    // never executed again with the values the person corrected.
+    if (!this.store.proposalCurrent(approval.id)) return this.failAt(key, seen, () => SUPERSEDED);
+    if (approval.status === "retired") {
+      return this.failAt(key, seen, () => ({ status: "blocked", reason: approvalGoneReason("retired") }));
+    }
+    if (!this.store.adoptForRecoveryIfApprovalLive(key, new Date(), seen)) {
+      return this.failAt(key, seen, () => {
+        this.store.audit({ event: "gateway.recover_expired", keyHash });
+        return { status: "blocked", reason: "Approval expired before the stranded attempt could be recovered." };
+      });
     }
     const answered = approval.approvedByHumanId ? { answeredBy: approval.approvedByHumanId } : {};
     return this.runExecution(this.enrichWithDocument({ ...stored, ...answered }, docRead.bytes, frozen.documentHash), now, keyHash);
   }
 
-  private async recoverAllowAttempt(key: string, attempt: Attempt, now: Date, keyHash: AuditDigest): Promise<GatewayResult> {
+  // Fails the attempt only if it is still at the version read before the
+  // lookup or checks that decided it (see failAttemptAt), then answers
+  // ended. Otherwise another request moved it, and its outcome stands: a
+  // receipt answers completed, anything else is still running.
+  private failAt(key: string, seen: number, ended: () => GatewayResult): GatewayResult {
+    return this.store.failAttemptAt(key, seen) ? ended() : this.movedOn(key);
+  }
+
+  private movedOn(key: string): GatewayResult {
+    const receipt = this.store.getReceiptByKey(key);
+    if (receipt) return { status: "completed", receipt, replayed: true };
+    return { status: "in_progress", reason: "Another request with this idempotency key is running." };
+  }
+
+  private async recoverAllowAttempt(key: string, attempt: Attempt, now: Date, keyHash: AuditDigest, seen: number): Promise<GatewayResult> {
     // No stored request exists on the allow path, so recovery reconciles
     // only: found settles with a receipt built from the attempt row,
     // absent marks the key failed so a fresh request retries cleanly.
-    let outcome: { found: true; externalId: string } | { found: false };
+    let outcome: CheckOutcome;
     try {
       outcome = await this.executor.check(key, attempt.personId);
     } catch (err) {
-      this.store.audit({ event: "gateway.check_error", keyHash, detailHash: await auditDigest(String(err)) });
+      await this.noteLookupFailed(key, err, now, keyHash);
       return {
         status: "blocked",
         reason: "The gateway cannot reach the outside system to reconcile this action. Recovery will retry.",
@@ -1121,18 +1308,60 @@ export class ActionGateway {
         recipient: attempt.recipient,
         status: "reconciled",
         externalId: outcome.externalId,
-        simulated: attempt.actionType === "share" ? false : this.executor.simulated,
+        simulated: attempt.actionType === "share" ? false : (outcome.simulated ?? this.executor.simulated),
         requestHash: attempt.requestHash,
         createdAt: now.toISOString(),
       };
-      this.store.putReceipt(receipt);
-      this.store.updateAttempt(key, "done");
+      this.settle(receipt);
       this.store.audit({ event: "gateway.reconciled", keyHash });
       return { status: "reconciled", receipt };
     }
-    this.store.updateAttempt(key, "failed");
-    this.store.audit({ event: "gateway.recover_absent", keyHash });
-    return { status: "blocked", reason: "The outside system has no record of this key. Send the action again." };
+    return this.failAt(key, seen, () => {
+      this.store.audit({ event: "gateway.recover_absent", keyHash });
+      return { status: "blocked", reason: "The outside system has no record of this key. Send the action again." };
+    });
+  }
+
+  // A lookup with no answer. For an attempt against a real provider or one
+  // that could not be confirmed, the sweep looks less often as time passes
+  // and stops after a day, leaving it unknown and logging only the first
+  // failure. The attempt is never resent from here, and a person's own YES
+  // still looks. Others keep their usual sweep and log each failure.
+  private async noteLookupFailed(key: string, err: unknown, now: Date, keyHash: AuditDigest): Promise<void> {
+    const attempt = this.store.getAttempt(key);
+    const backsOff = err instanceof UnconfirmedSendError || !!attempt?.provider;
+    if (attempt && backsOff) {
+      // Nothing live owns a send whose lookup ran: its request timed out or
+      // died. Unknown is what a YES reconciles, however long this takes.
+      if (attempt.status === "in_flight") this.store.updateAttempt(key, "unknown");
+      if (attempt.lookupFailingSince && !attempt.nextLookupAt) return;
+      const since = attempt.lookupFailingSince ?? now.toISOString();
+      const cutoff = Date.parse(since) + LOOKUP_WINDOW_MS;
+      const wait = Math.max(FIRST_LOOKUP_DELAY_MS, now.getTime() - Date.parse(since));
+      const next = now.getTime() >= cutoff ? null : new Date(Math.min(now.getTime() + wait, cutoff)).toISOString();
+      this.store.setLookupSchedule(key, since, next);
+      if (attempt.lookupFailingSince) return;
+    }
+    this.store.audit({ event: "gateway.check_error", keyHash, detailHash: await auditDigest(String(err)) });
+  }
+
+  // Records a receipt, marks its attempt done and applies the action's own
+  // effect, as one transaction.
+  private settle(receipt: Receipt): void {
+    this.store.transaction(() => {
+      this.store.putReceipt(receipt);
+      this.store.updateAttempt(receipt.idempotencyKey, "done");
+      this.opts.onReceipt?.(receipt);
+    });
+  }
+
+  // A newer turn is correcting the recipient's form: drafts from turns
+  // received before it are refused and the waiting ones closed.
+  async fenceProposals(recipient: string, order: ProposalOrder, generation: number): Promise<{ closed: number } | null> {
+    const closed = this.store.fenceProposals(recipient, order, generation);
+    if (closed === null) return null;
+    this.store.audit({ event: "gateway.fence", closed });
+    return { closed };
   }
 
   // Runs the executor for an already-claimed (in_flight) attempt.
@@ -1140,11 +1369,11 @@ export class ActionGateway {
     try {
       const out = await this.executor.execute(req);
       const receipt = await this.makeReceipt(req, "completed", out.externalId, out.simulated, now);
-      this.store.putReceipt(receipt);
-      this.store.updateAttempt(req.idempotencyKey, "done");
+      this.settle(receipt);
       this.store.audit({ event: "gateway.executed", keyHash });
       return { status: "completed", receipt };
     } catch (err) {
+      if (err instanceof NotTheSenderError) return { status: "in_progress", reason: err.message };
       if (err instanceof TimeoutError || (err as Error)?.name === "TimeoutError") {
         const settled = await this.reconcileUnknown(req, now, keyHash);
         if (settled.kind === "settled") return settled.result;

@@ -28,9 +28,10 @@ describe("blocker 4: one approval authorizes one action", () => {
     const first = await gw.requestAction(baseReq({ personId: "b4maria" }));
     const ok = await gw.approveAndExecute(first.approval!.id, "b4maria");
     expect(ok.status).toBe("completed");
+    // Runs nothing again, and answers the receipt it already has (LAP-747:
+    // a receipt is answered before any refusal).
     const again = await gw.approveAndExecute(first.approval!.id, "b4maria");
-    expect(again.status).toBe("blocked");
-    expect(again.reason).toMatch(/already used/i);
+    expect(again).toMatchObject({ status: "completed", receipt: { externalId: ok.receipt!.externalId } });
     expect(exec.calls.length).toBe(1);
   });
 

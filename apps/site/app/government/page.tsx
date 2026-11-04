@@ -7,7 +7,7 @@ import Reach from "@/components/home/Reach";
 import { TeamHero, Stage, Steps, Rules, Seat, Close } from "@/components/teams/Parts";
 
 const title = "Case management for government offices";
-const description = "Mano helps government offices keep residents covered. It keeps renewals on time, brings caseworkers complete cases with every finding cited to the rule, and enters approved cases into the system you already run.";
+const description = "Mano helps government offices keep residents covered. It keeps renewals on time, brings caseworkers complete cases with every finding cited to the rule, and fills approved cases into the system you already run for staff to save. Mano for government offices is coming soon.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/government" }, openGraph: { title, description } };
 
@@ -18,7 +18,7 @@ const faqs: [string, string][] = [
   ["Do we have to replace our current system?", "No. Your agent types approved cases into the system you already run, the way a person would, and reads the screen back to check it. The old system stays and the retyping goes away."],
   ["Who decides a case?", "Your staff. Mano prepares the case, cites the rule behind each finding and flags what it cannot settle. A person approves, denies or asks for more."],
   ["What can a resident see about our office?", "Your profile, and the cases they chose to share with you. A resident shares a case for one purpose and can take that access back."],
-  ["Do agents call residents or other offices?", "Only when staff approve it. Every call starts by saying whose automated assistant is calling and that the call is transcribed."],
+  ["Do agents call residents or other offices?", "No. Mano does not speak on phone calls. Staff approve every message it sends, and each one says it was prepared with Mano."],
   ["How is it priced?", "Per staff seat. Residents never pay for anything your office asks Mano to do."],
   ["Is Mano a government system?", "No. Mano is independent. Your office keeps its own systems, seals and authority, and Mano never presents itself as your office."],
 ];
@@ -30,8 +30,8 @@ export default function Government() {
         before="Residents "
         phrase="stay covered"
         after=" and the backlog shrinks."
-        lede="Many people lose benefits over a missed form, not because they stopped qualifying. Mano keeps renewals on time and brings your caseworkers complete cases, with every finding cited to your rule. Your staff decide, and Mano enters the result into the system you already run."
-        stage={<Stage id="desk" label="Sample County Human Services" hint="Approve the case, or ask for more"><GovDesk /></Stage>}
+        lede="Many people lose benefits over a missed form, not because they stopped qualifying. Mano keeps renewals on time and brings your caseworkers complete cases, with every finding cited to your rule. Your staff decide, and Mano enters the result into the system you already run. Mano for government offices is coming soon."
+        stage={<Stage id="desk" label="Springfield County Food Assistance Office" hint="Approve the case, or ask for more"><GovDesk /></Stage>}
       >
         <a className="btn btn-primary btn-lg" href={MAIL}>Talk to us</a>
         <a className="btn btn-ghost btn-lg" href="#gov-start">How an office starts</a>
@@ -52,7 +52,7 @@ export default function Government() {
         </div>
       </section>
 
-      <Verified id="gov-vf" office="Sample County" />
+      <Verified id="gov-vf" office="Springfield County" />
 
       <Rules
         id="gov-rules"
@@ -62,17 +62,17 @@ export default function Government() {
           ["A person approves", "every case and every notice."],
           ["Every finding cites", "the rule it rests on, with the evidence attached."],
           ["Nothing is entered twice.", "After a timeout, Mano checks whether the case was saved before it tries again."],
-          ["Agents say they are automated", "on every call, and that the call is transcribed."],
+          ["Agents say they are automated", "in every message they send."],
           ["Your systems, seal and authority", "stay yours."],
         ]}
         log={{
-          title: "Case 0418 · Food benefits renewal",
+          title: "Case R-1042 · Food benefits renewal",
           lines: [
             { at: "10:41", who: "J. Park", role: "Eligibility worker", text: "Approved the renewal." },
             { at: "10:41", who: "Mano", mano: true, text: "Recorded the approval for this exact copy, before doing anything." },
-            { at: "10:42", who: "Mano", mano: true, text: "Entered the case in the county system." },
+            { at: "10:42", who: "Mano", mano: true, text: "Filled the case in the county system and stopped before saving." },
             { at: "10:42", who: "Mano", mano: true, text: "Read the screen back. Everything matches." },
-            { at: "10:43", who: "Mano", mano: true, text: "Sent Maria her approval notice, in Spanish." },
+            { at: "10:43", who: "Mano", mano: true, text: "Drafted Maria's approval notice, in Spanish, for J. Park to review." },
           ],
         }}
       />
@@ -86,7 +86,7 @@ export default function Government() {
           ["Find your profile", (
             <>
               <p className="sc-label">Independent profile · Not claimed</p>
-              <p className="share-big">Sample County Human Services</p>
+              <p className="share-big">Springfield County Food Assistance Office</p>
               <p className="share-small">Programs, hours and the documents you ask for, written from public sources. It cannot message residents, request records or send notices.</p>
             </>
           ), "programs"],

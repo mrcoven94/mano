@@ -48,6 +48,9 @@ export interface DocumentProvidePayload {
   documentId: string;
   documentHash: string;
   r2Key: string;
+  requestId?: string;
+  documentKind?: string;
+  name?: string;
 }
 
 export interface DecisionPayload {
@@ -66,6 +69,8 @@ export interface ConsentGrantPayload {
   purpose: string;
   scope: string[];
   expiresAt?: string;
+  // The exact values shared, as the person read them in their approval.
+  details?: { label: string; value: string }[];
 }
 
 export interface ConsentRevokePayload {

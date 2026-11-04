@@ -2,12 +2,17 @@ import { Agent, type Connection, type ConnectionContext, type WSMessage } from "
 import {
   PROTOCOL_VERSION,
   signMessage,
+  validateMessageShape,
+  verifyMessage,
   type ConsentGrantPayload,
   type ConsentRevokePayload,
+  type DocumentProvidePayload,
+  type DocumentRequestPayload,
+  type MessageType,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
-import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureGatewayTables, gatewayChecker } from "../gateway/index.js";
-import type { ActionRequest, Approval, CheckOutcome, ProposalOrder } from "../gateway/index.js";
+import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureDeliveryTable, ensureFaxSendTable, ensureGatewayTables, gatewayChecker, outboundProviders, OutboundRouter, outboundPricing, recordDeliveryEvent, rememberDeliveryRoute, SqlFaxSendLog, withOutboundPrice, type DeliveryEvent } from "../gateway/index.js";
+import type { ActionRequest, Approval, CheckOutcome, ProposalOrder, Receipt } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
 import { getDocumentBytes, putDocument, sweepDocuments } from "../files.js";
@@ -18,8 +23,27 @@ import { checkLinkSafety, redactBlockedLinks } from "../link-safety.js";
 import { base64ToBytes, bytesToBase64, sha256Hex } from "../hash.js";
 import { createModelClient, defaultModelFor } from "../model-client.js";
 import { getSessionSecret, verifyWsTicket } from "../auth.js";
-import { generateAgentKeypair, importAgentPrivateKey } from "./agent-keys.js";
+import { generateAgentKeypair, importAgentPrivateKey, resolveAgentKey } from "./agent-keys.js";
+import {
+  applyShareOutcome,
+  documentKindLabel,
+  documentRequestText,
+  endDocumentAccess,
+  ensureCaseSharingTables,
+  isShareReminder,
+  listShares,
+  migrateRevokedCases,
+  readableDocuments,
+  recordDocumentRequest,
+  requestReminderId,
+  queueDeleteNotice,
+  shareActive,
+  shareRevoked,
+} from "../case-sharing.js";
 import { ConsentDeliveringExecutor } from "./person-executor.js";
+import { HoldCallExecutor } from "../calls/executor.js";
+import { HoldCalls, type HoldLimit } from "../calls/hold-calls.js";
+import { createCallServices, type CallEvent } from "../calls/provider.js";
 import { handleForPersonId } from "@mano/protocol";
 import { sendToChannels } from "../channels-send.js";
 import {
@@ -123,6 +147,24 @@ export interface PersonState {
 
 const ORG_AGENT_ID = /^org:([A-Za-z0-9_-]+)$/;
 
+// The action keys whose consent effect was applied: one row per key,
+// written in the transaction that records the share's receipt and applies
+// its effect, so an effect is applied at most once. Every share receipt on
+// file therefore has its effect applied: those from before this table had
+// it applied when they were recorded, and are marked here, idempotently,
+// on every start.
+export function ensureAppliedEffects(storage: Pick<DurableObjectStorage, "sql" | "transactionSync">): void {
+  const sql = storage.sql;
+  storage.transactionSync(() => {
+    sql.exec(`CREATE TABLE IF NOT EXISTS applied_effects(idempotency_key TEXT PRIMARY KEY, external_id TEXT NOT NULL, applied_at TEXT NOT NULL)`);
+    sql.exec(
+      "INSERT INTO applied_effects(idempotency_key, external_id, applied_at)" +
+        " SELECT idempotency_key, external_id, created_at FROM receipts WHERE action_type = 'share'" +
+        " ON CONFLICT (idempotency_key) DO NOTHING",
+    );
+  });
+}
+
 export class PersonAgent extends Agent<Env, PersonState> {
   initialState: PersonState = { personId: "", approvals: [], consents: [], reminders: [] };
 
@@ -132,14 +174,32 @@ export class PersonAgent extends Agent<Env, PersonState> {
   private store: SqlApprovalStore;
   private gateway: ActionGateway;
   private executor: ConsentDeliveringExecutor;
+  private holdCalls: HoldCalls;
   private keypair: { privateKey: CryptoKey; publicKeyB64: string } | null = null;
   personId = "";
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.store = new SqlApprovalStore(ctx.storage.sql);
+    this.store = new SqlApprovalStore(ctx.storage.sql, (fn) => ctx.storage.transactionSync(fn));
+    this.holdCalls = new HoldCalls({
+      sql: ctx.storage.sql,
+      transaction: (fn) => ctx.storage.transactionSync(fn),
+      services: createCallServices,
+      generation: () => currentGeneration(this.db()),
+      schedule: async (at, limit) => {
+        await this.schedule(at, "holdCallLimit", limit);
+      },
+      text: async (id, text, generation) => {
+        const now = Date.now();
+        createReminder(this.db(), { id, text, dueAtMs: now, generation }, now);
+        await this.armReminderWakeup();
+      },
+      audit: async (event, id) => {
+        this.store.audit({ event, callHash: await auditDigest(id) });
+      },
+    });
     this.executor = new ConsentDeliveringExecutor(
-      createExecutor(env),
+      new HoldCallExecutor(new OutboundRouter(createExecutor(env), outboundProviders(env, { sendLog: new SqlFaxSendLog(ctx.storage.sql), attemptVersion: (key) => this.store.getAttempt(key)?.version ?? null, routes: { remember: (id, person) => rememberDeliveryRoute(env.FILES, id, person) } }), (key) => this.store.getAttempt(key)), this.holdCalls, (key) => this.store.getAttempt(key)?.actionType ?? null),
       (req) => this.deliverShare(req),
       (key) => this.checkShareDelivery(key),
       (key) => this.store.getAttempt(key)?.actionType ?? null,
@@ -153,11 +213,14 @@ export class PersonAgent extends Agent<Env, PersonState> {
         documents: {
           getBytes: (documentId) => this.documentBytes(documentId),
         },
+        onReceipt: (receipt) => this.applyShareEffect(receipt),
       },
     );
     ctx.blockConcurrencyWhile(async () => {
       const sql = ctx.storage.sql;
       ensureGatewayTables(sql);
+      ensureDeliveryTable(sql);
+      ensureFaxSendTable(sql);
       ensureAgentStateTables(sql);
       sql.exec(`CREATE TABLE IF NOT EXISTS profile(id TEXT PRIMARY KEY, display_name TEXT, synthetic INTEGER NOT NULL DEFAULT 0, public_key_b64 TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)`);
@@ -177,6 +240,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         sql.exec(`DROP TABLE consents`);
       }
       sql.exec(`CREATE TABLE IF NOT EXISTS consents(recipient TEXT NOT NULL, case_id TEXT NOT NULL, purpose TEXT NOT NULL, PRIMARY KEY (recipient, case_id))`);
+      ensureAppliedEffects(ctx.storage);
       try {
         sql.exec(`ALTER TABLE consents ADD COLUMN expires_at TEXT`);
       } catch {
@@ -207,8 +271,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
       // One stored outbound message per consent key. Retries resend the
       // same message (same ID), so the org's dedupe sees one delivery.
       sql.exec(`CREATE TABLE IF NOT EXISTS outbound_consent(idempotency_key TEXT PRIMARY KEY, message_json TEXT NOT NULL)`);
-      // Terminal local record: a revoked case cannot be granted again.
-      sql.exec(`CREATE TABLE IF NOT EXISTS revoked_cases(case_id TEXT PRIMARY KEY, revoked_at TEXT NOT NULL)`);
+      ensureCaseSharingTables(sql);
+      migrateRevokedCases(sql);
       const stored = await ctx.storage.get<string>("personId");
       if (stored) this.personId = stored;
       // The keypair is created here, inside blockConcurrencyWhile, so two
@@ -591,7 +655,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // their deadline instead.
   async listReminders(verified: string) {
     await this.assertSubject(verified);
-    return listReminders(this.db()).filter((r) => !isNudge(r.id));
+    return listReminders(this.db()).filter((r) => !isNudge(r.id) && !isShareReminder(r.id));
   }
 
   // Deadlines Mano tracks itself (src/deadlines.ts). Their nudges are
@@ -749,6 +813,22 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { claimed: claimed.length, sent };
   }
 
+  // A verified webhook about a hold call. The worker checks its signature
+  // before calling this.
+  async holdCallEvent(event: CallEvent) {
+    await this.holdCalls.onEvent(event);
+  }
+
+  // One short window of the line's audio. Heard in memory, never stored.
+  async holdCallAudio(id: string, audio: Uint8Array) {
+    await this.holdCalls.onAudio(id, audio);
+  }
+
+  // The durable timer behind a hold call's limits.
+  async holdCallLimit(limit: HoldLimit) {
+    await this.holdCalls.onLimit(limit);
+  }
+
   // The turn ledger: the first receive time of a turn is kept forever, so
   // a retried turn reuses its original timing and mutation identities.
   async putTurn(verified: string, input: unknown) {
@@ -756,6 +836,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const { turnId, receivedAt, generation } = parseTurnInput(input);
     const out = putTurnIfAbsent(this.db(), turnId, receivedAt, generation);
     if ("stale" in out) return STALE_STATE;
+    if (queueDeleteNotice(this.db(), Date.now())) await this.armReminderWakeup();
     return out;
   }
 
@@ -814,6 +895,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     // no upload prepared before can commit after it. Then the files of
     // older generations go by prefix, including one that landed during
     // the delete. A failed sweep throws, and Channels' retry sweeps again.
+    const generationBefore = currentGeneration(this.db());
     const removed = this.ctx.storage.transactionSync(() => {
       const before = currentGeneration(this.db());
       const out = removeConversationState(this.db(), Date.now(), toGeneration);
@@ -823,9 +905,11 @@ export class PersonAgent extends Agent<Env, PersonState> {
       if (out.generation > before) {
         removeDeadlines(this.db(), Date.now());
         removeFillReplays(this.db());
+        endDocumentAccess(this.db(), Date.now());
       }
       return out;
     });
+    if (currentGeneration(this.db()) > generationBefore) await this.holdCalls.conversationDeleted();
     // Replay images live with the documents and go with them.
     await sweepDocuments(this.env.FILES, this.personId, currentGeneration(this.db()));
     await finishLinkCleanup(this.db(), (keys) => this.env.FILES.delete(keys));
@@ -847,7 +931,15 @@ export class PersonAgent extends Agent<Env, PersonState> {
       proposal = proposalOrderFor(this.db(), split.turnId) ?? undefined;
       if (!proposal) return { status: "blocked" as const, reason: "That turn is not in this conversation's ledger." };
     }
-    const result = await this.gateway.requestAction(split.request, new Date(), { generation, proposal });
+    const asked = split.request as { type?: unknown; recipient?: unknown; payload?: { consent?: unknown; caseId?: unknown } | null };
+    if (asked.type === "share" && asked.payload?.consent === "grant" && typeof asked.recipient === "string" && typeof asked.payload.caseId === "string" && shareRevoked(this.db(), asked.recipient, asked.payload.caseId)) {
+      this.store.audit({ event: "consent.regrant_refused", caseHash: await auditDigest(asked.payload.caseId) });
+      return { status: "blocked" as const, reason: `Case ${asked.payload.caseId} was revoked and cannot be shared again with this organization.` };
+    }
+    const priced = await withOutboundPrice(split.request, (id) => this.documentBytes(id), outboundPricing(this.env), (key) =>
+      this.store.keyHeld(key) ? (this.store.getApprovalByKey(key)?.requestJson ?? null) : null,
+    );
+    const result = await this.gateway.requestAction(priced, new Date(), { generation, proposal });
     this.store.audit({ event: "gateway.request", status: result.status });
     if (result.status === "needs_approval" && result.approval) {
       // Durable schedules drive the reminder and the expiry; each firing
@@ -858,6 +950,16 @@ export class PersonAgent extends Agent<Env, PersonState> {
     await this.scheduleRecoveryIfUnresolved();
     this.syncState();
     return result;
+  }
+
+  // What a provider's signed webhook said became of a fax or letter. False
+  // when this is not that person's record: a late report for someone since
+  // deleted never brings their record back.
+  async recordDelivery(event: DeliveryEvent): Promise<boolean> {
+    if (this.personId !== event.personId) return false;
+    recordDeliveryEvent(this.ctx.storage.sql, event, new Date());
+    this.store.audit({ event: "gateway.delivery", channel: event.channel, detailHash: await auditDigest(`${event.channel}:${event.externalId}:${event.status}`) });
+    return true;
   }
 
   // Recovers attempts left unresolved by a restart. The gateway
@@ -872,24 +974,29 @@ export class PersonAgent extends Agent<Env, PersonState> {
       const result = await this.gateway.recoverAttempt(attempt.key, now, cutoff);
       if (!result) continue;
       recovered.push({ key: attempt.key, status: result.status });
-      // Recovery executes shares outside approve(), so their consent
-      // effects apply here, from the persisted original approval.
-      if ((result.status === "completed" || result.status === "reconciled") && result.receipt) {
-        await this.applyShareOutcome(result.receipt.idempotencyKey);
-      }
     }
     if (recovered.length > 0) this.syncState();
     return { recovered };
   }
 
-  // Applies the share outcome behind an idempotency key: the consent
-  // effect of the consumed approval that claimed it. Recovery runs this
-  // after executing a stranded share. Idempotent and safe to repeat.
-  async applyShareOutcome(idempotencyKey: string): Promise<{ applied: boolean }> {
-    const original = this.store.getApprovalByKey(idempotencyKey);
-    if (!original || original.actionType !== "share") return { applied: false };
-    this.recordConsentOutcome(original);
-    return { applied: true };
+  // A share's effect (a grant, a revocation or a document), applied by the
+  // gateway inside the transaction that records the share's receipt and
+  // marks its attempt done, so no crash can separate the receipt from the
+  // effect. It comes from the persisted original approval behind the key,
+  // and runs at most once per key: a later receipt for the same key (a
+  // late reconcile) finds its marker and changes nothing, so a revoked
+  // consent stays revoked. Inside that transaction a SQL error rolls it all
+  // back (no receipt, no done attempt, no marker), and the next lookup
+  // applies the effect once.
+  private applyShareEffect(receipt: Receipt): void {
+    const original = this.store.getApprovalByKey(receipt.idempotencyKey);
+    if (!original || original.actionType !== "share") return;
+    // RETURNING reports the insert; a key already applied returns no row.
+    const first = this.db().exec(
+      "INSERT INTO applied_effects(idempotency_key, external_id, applied_at) VALUES (?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING RETURNING idempotency_key",
+      receipt.idempotencyKey, receipt.externalId, new Date().toISOString(),
+    ).toArray().length === 1;
+    if (first) applyShareOutcome(this.db(), original, Date.now(), this.store.approvalCurrent(original.id));
   }
 
   // Schedules a durable recovery run while any attempt is unresolved.
@@ -971,6 +1078,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         ...approval,
         outcome: {
           attempt: attempt?.status ?? null,
+          ...(attempt?.lookupFailingSince && !attempt.nextLookupAt ? { lookupsEnded: true } : {}),
           receipt: receipt ? { externalId: receipt.externalId, simulated: receipt.simulated } : null,
         },
       };
@@ -989,6 +1097,21 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { closed };
   }
 
+  // A form call from turnId is correcting the recipient's form: drafts
+  // from turns received before it are refused from now on and the waiting
+  // ones closed, ordered by Engine's own turn ledger.
+  async fenceProposals(verified: string, input: { recipient?: unknown; turnId?: unknown }, generation?: number) {
+    await this.assertSubject(verified);
+    if (typeof input.recipient !== "string" || !input.recipient || typeof input.turnId !== "string") return { error: "Body needs a recipient and a turnId." } as const;
+    const g = generation ?? currentGeneration(this.db());
+    const order = proposalOrderFor(this.db(), input.turnId);
+    if (!order) return { error: "Unknown turn." } as const;
+    const out = await this.gateway.fenceProposals(input.recipient, order, g);
+    if (!out) return STALE_STATE;
+    this.syncState();
+    return out;
+  }
+
   async reject(approvalId: string, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.rejectApproval(approvalId, verified);
@@ -996,57 +1119,20 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return result;
   }
 
-  async approve(approvalId: string, verified: string) {
+  async retire(approvalId: string, verified: string) {
     await this.assertSubject(verified);
-    const result = await this.gateway.approveAndExecute(approvalId, verified);
-    if (result.status === "completed" || result.status === "reconciled") {
-      // Consent effects come from the persisted original approval behind
-      // the key, never from whichever approval triggered the outcome.
-      const key = result.receipt?.idempotencyKey;
-      const row = key ? this.store.getApprovalByKey(key) : null;
-      if (row?.actionType === "share") this.recordConsentOutcome(row);
-    }
-    this.store.audit({ event: "gateway.approve", approvalHash: await auditDigest(approvalId), status: result.status });
-    await this.scheduleRecoveryIfUnresolved();
+    const result = await this.gateway.retireApproval(approvalId, verified);
     this.syncState();
     return result;
   }
 
-  private recordConsentOutcome(approval: { recipient: string; purpose: string; requestJson: string }) {
-    try {
-      const stored = JSON.parse(approval.requestJson) as {
-        payload?: { consent?: string; caseId?: string; expiresAt?: string };
-      };
-      const caseId = stored.payload?.caseId;
-      if (typeof caseId !== "string" || !caseId) return;
-      if (stored.payload?.consent === "grant") {
-        // Parsed to epoch milliseconds at write time; an unreadable
-        // value fails closed as already expired.
-        const raw = stored.payload?.expiresAt;
-        const expiresAtMs = typeof raw === "string" && Number.isFinite(new Date(raw).getTime())
-          ? new Date(raw).getTime()
-          : raw === undefined
-            ? null
-            : 0;
-        this.db().exec(
-          "INSERT OR REPLACE INTO consents(recipient, case_id, purpose, expires_at_ms) VALUES (?, ?, ?, ?)",
-          approval.recipient,
-          caseId,
-          approval.purpose,
-          expiresAtMs,
-        );
-      } else if (stored.payload?.consent === "revoke") {
-        this.db().exec("DELETE FROM consents WHERE recipient = ? AND case_id = ?", approval.recipient, caseId);
-        this.db().exec("INSERT OR IGNORE INTO revoked_cases VALUES (?, ?)", caseId, new Date().toISOString());
-      }
-    } catch {
-      // Approval JSON is written by the gateway; ignore unreadable rows.
-    }
-  }
-
-  private revokedLocally(caseId: string): boolean {
-    const rows = this.db().exec("SELECT case_id FROM revoked_cases WHERE case_id = ?", caseId).toArray();
-    return rows.length > 0;
+  async approve(approvalId: string, verified: string) {
+    await this.assertSubject(verified);
+    const result = await this.gateway.approveAndExecute(approvalId, verified);
+    this.store.audit({ event: "gateway.approve", approvalHash: await auditDigest(approvalId), status: result.status });
+    await this.scheduleRecoveryIfUnresolved();
+    this.syncState();
+    return result;
   }
 
   async grantConsent(verified: string, input: GrantConsentInput) {
@@ -1063,11 +1149,6 @@ export class PersonAgent extends Agent<Env, PersonState> {
       if (at <= Date.now()) {
         return { status: "blocked" as const, reason: "Consent expiry already passed." };
       }
-    }
-    if (this.revokedLocally(input.caseId)) {
-      const reason = `Case ${input.caseId} was revoked and cannot be shared again.`;
-      this.store.audit({ event: "consent.regrant_refused", caseHash: await auditDigest(input.caseId) });
-      return { status: "blocked" as const, reason };
     }
     // The key identifies the grant: person, organization, case and
     // expiry. The same grant retried resends one message, while another
@@ -1120,15 +1201,23 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const match = ORG_AGENT_ID.exec(req.recipient);
     if (!match) throw new DefiniteFailureError("Share recipient must be an org agent ID.");
     const consent = req.payload.consent;
-    if (consent !== "grant" && consent !== "revoke") {
-      throw new DefiniteFailureError("Share payload must declare a grant or revoke.");
+    if (!isShareEffect(consent)) {
+      throw new DefiniteFailureError("Share payload must declare a grant, revoke or provide.");
     }
     const caseId = req.payload.caseId;
     if (!isCaseId(caseId)) throw new DefiniteFailureError(CASE_ID_RULE);
+    if (consent === "provide" && !shareActive(this.db(), match[0], caseId, Date.now())) {
+      throw new DefiniteFailureError("This case is no longer shared with that organization.");
+    }
+    // The one way out for a grant, whichever route drafted it: drafted before
+    // a revocation, it never reaches the organization.
+    if (consent === "grant" && shareRevoked(this.db(), match[0], caseId)) {
+      throw new DefiniteFailureError("This case was revoked and cannot be shared again with this organization.");
+    }
     const stored = this.storedOutboundMessage(req.idempotencyKey);
     const message = stored ?? (await this.buildAndStoreOutboundMessage(req, match[0], consent, caseId));
-    const stub = this.env.ORG_AGENT.get(this.env.ORG_AGENT.idFromName(match[1]));
-    const result = await (stub as unknown as OrgAgent).receiveConsent(message);
+    const stub = this.env.ORG_AGENT.get(this.env.ORG_AGENT.idFromName(match[1])) as unknown as OrgAgent;
+    const result = consent === "provide" ? await stub.receiveDocument(message) : await stub.receiveConsent(message);
     if (!result.accepted) {
       const reason = result.reason ?? "The org rejected the consent message.";
       // A retryable org failure (storage unavailable) stays uncertain so
@@ -1155,7 +1244,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   private async buildAndStoreOutboundMessage(
     req: ActionRequest,
     orgAgentId: string,
-    consent: string,
+    consent: ShareEffect,
     caseId: string,
   ): Promise<ProtocolMessage> {
     // Two approvals can share one key, so the lookup selects the exact
@@ -1182,16 +1271,18 @@ export class PersonAgent extends Agent<Env, PersonState> {
     if (expiresAt !== null && !Number.isFinite(new Date(expiresAt).getTime())) {
       throw new DefiniteFailureError("Share payload carries an invalid consent expiry.");
     }
-    const payload: ConsentGrantPayload | ConsentRevokePayload =
+    const payload: ConsentGrantPayload | ConsentRevokePayload | DocumentProvidePayload =
       consent === "grant"
-        ? { orgAgentId, purpose: req.purpose, scope, ...(expiresAt ? { expiresAt } : {}) }
-        : { orgAgentId };
+        ? { orgAgentId, purpose: req.purpose, scope, ...(expiresAt ? { expiresAt } : {}), ...sharedDetails(req.payload.details) }
+        : consent === "revoke"
+          ? { orgAgentId }
+          : this.providedDocument(req);
     const keys = await this.ensureKeypair();
     const message = await signMessage(
       {
         id: crypto.randomUUID(),
         version: PROTOCOL_VERSION,
-        type: consent === "grant" ? "consent.grant" : "consent.revoke",
+        type: SHARE_MESSAGE_TYPES[consent],
         caseId,
         fromAgentId: `person:${this.personId}`,
         toAgentId: orgAgentId,
@@ -1214,6 +1305,96 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return this.storedOutboundMessage(req.idempotencyKey) ?? message;
   }
 
+  // The document the person's yes sends, by what Engine stored: the
+  // gateway already checked these bytes against the approval's hash.
+  private providedDocument(req: ActionRequest): DocumentProvidePayload {
+    const row = req.documentId ? this.documentRow(req.documentId) : undefined;
+    const requestId = req.payload.requestId;
+    if (!row || !req.documentId) throw new DefiniteFailureError("There is no document to send.");
+    if (typeof requestId !== "string" || !documentKindLabel(req.payload.documentKind)) {
+      throw new DefiniteFailureError("A document goes only in answer to a request.");
+    }
+    return {
+      documentId: req.documentId,
+      documentHash: row.hash,
+      r2Key: row.r2_key,
+      requestId,
+      documentKind: req.payload.documentKind as string,
+      name: row.name,
+    };
+  }
+
+  // A signed request from an organization this person shares the case
+  // with. Only the sender's agent stub names the key to check it against.
+  // The text goes through a reminder row, so it survives a restart and
+  // goes out once; one request answers the same however often it is
+  // redelivered.
+  async receiveDocumentRequest(message: unknown): Promise<{ accepted: boolean; reason?: string }> {
+    if (!validateMessageShape(message)) return { accepted: false, reason: "Malformed request." };
+    const msg = message as ProtocolMessage;
+    if (msg.type !== "document.request" || !this.personId || msg.toAgentId !== `person:${this.personId}` || !ORG_AGENT_ID.test(msg.fromAgentId)) {
+      return { accepted: false, reason: "This request is not addressed to this person." };
+    }
+    const key = await resolveAgentKey(this.env, msg.fromAgentId);
+    if (!key || !(await verifyMessage(msg, key))) return { accepted: false, reason: "Bad request signature." };
+    const now = Date.now();
+    if (!shareActive(this.db(), msg.fromAgentId, msg.caseId, now)) {
+      return { accepted: false, reason: "This case is not shared with that organization." };
+    }
+    const { documentKind } = msg.payload as DocumentRequestPayload;
+    const label = documentKindLabel(documentKind);
+    if (!label) return { accepted: false, reason: "Unknown document kind." };
+    const purpose = listShares(this.db(), now).active.find((s) => s.recipient === msg.fromAgentId && s.caseId === msg.caseId)?.purpose ?? "your case";
+    const generation = currentGeneration(this.db());
+    this.ctx.storage.transactionSync(() => {
+      const fresh = recordDocumentRequest(this.db(), {
+        recipient: msg.fromAgentId,
+        id: msg.idempotencyKey,
+        caseId: msg.caseId,
+        documentKind,
+        requestedAt: new Date(now).toISOString(),
+      });
+      if (fresh) {
+        createReminder(this.db(), { id: requestReminderId(msg.fromAgentId, msg.idempotencyKey), text: documentRequestText(msg.fromAgentId, purpose, label), dueAtMs: now, generation }, now);
+      }
+    });
+    this.store.audit({ event: "case.document_requested", caseHash: await auditDigest(msg.caseId) });
+    await this.armReminderWakeup();
+    return { accepted: true };
+  }
+
+  // The bytes of a document this person sent to this organization, for its
+  // staff. Checked here too: a revoked share reads nothing, whatever the
+  // organization's records say.
+  async readSharedDocument(recipient: string, caseId: string, documentId: string): Promise<{ name: string; contentB64: string } | null> {
+    const grantNow = () =>
+      shareActive(this.db(), recipient, caseId, Date.now())
+        ? readableDocuments(this.db(), recipient, caseId).find((d) => d.documentId === documentId)
+        : undefined;
+    const grant = grantNow();
+    const row = grant ? this.documentRow(documentId) : undefined;
+    const bytes = row?.name ? await this.documentBytes(documentId) : null;
+    if (!grant || !row?.name || bytes == null) return null;
+    const raw = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
+    const [hash, caseHash] = await Promise.all([sha256Hex(raw), auditDigest(caseId)]);
+    // A delete or revoke can land during those waits: this check is the last
+    // step before the bytes leave.
+    if (hash !== grant.hash || grantNow()?.hash !== grant.hash) return null;
+    this.store.audit({ event: "case.document_read", caseHash });
+    return { name: row.name, contentB64: bytesToBase64(raw) };
+  }
+
+  // Which documents staff can still open on a case, for their screen.
+  async readableDocumentIds(recipient: string, caseId: string): Promise<string[]> {
+    if (!shareActive(this.db(), recipient, caseId, Date.now())) return [];
+    return readableDocuments(this.db(), recipient, caseId).map((d) => d.documentId);
+  }
+
+  async listShares(verified: string) {
+    await this.assertSubject(verified);
+    return listShares(this.db(), Date.now());
+  }
+
   // Reconciles a share by asking the org whether it recorded the key. No
   // stored message means nothing was ever sent (confirmed absent); an
   // unreachable org throws, which the gateway treats as unavailable.
@@ -1225,8 +1406,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
     // The reconcile consults for this sender's message of this type: a
     // foreign delivery under the same caller-controlled key, or a grant
     // where this revoke was asked, must not count as found. Anything but
-    // the two consent message types reconciles absent, fail closed.
-    const event = stored.type === "consent.grant" ? "share" : stored.type === "consent.revoke" ? "revoke" : null;
+    // the share message types reconciles absent, fail closed.
+    const event = stored.type === "consent.grant" ? "share" : stored.type === "consent.revoke" ? "revoke" : stored.type === "document.provide" ? "document" : null;
     if (!event) return { found: false };
     const stub = this.env.ORG_AGENT.get(this.env.ORG_AGENT.idFromName(match[1]));
     const recorded = await (stub as unknown as OrgAgent).hasConsentRecord(stored.fromAgentId, idempotencyKey, event);
@@ -1373,6 +1554,26 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const raw = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
     return { name: row.name, contentB64: bytesToBase64(raw) };
   }
+}
+
+type ShareEffect = "grant" | "revoke" | "provide";
+
+// Each approved share action goes out as one protocol message.
+const SHARE_MESSAGE_TYPES = {
+  grant: "consent.grant",
+  revoke: "consent.revoke",
+  provide: "document.provide",
+} as const satisfies Record<ShareEffect, MessageType>;
+
+function isShareEffect(value: unknown): value is ShareEffect {
+  return typeof value === "string" && Object.hasOwn(SHARE_MESSAGE_TYPES, value);
+}
+
+// The exact values a grant shares, as its approval froze them.
+function sharedDetails(value: unknown): { details?: { label: string; value: string }[] } {
+  if (!Array.isArray(value)) return {};
+  const details = value.filter((d): d is { label: string; value: string } => typeof d?.label === "string" && typeof d?.value === "string");
+  return details.length > 0 ? { details: details.map(({ label, value }) => ({ label, value })) } : {};
 }
 
 function requireOrgAgentId(value: string): string {

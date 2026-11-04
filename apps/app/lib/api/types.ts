@@ -47,9 +47,12 @@ export interface ChatMessage {
   createdAt: string;
   attachments: Attachment[];
   status: MessageStatus;
+  // An approval question in this message that the app must acknowledge
+  // once it has displayed it; only then can a YES answer it.
+  ask?: { approvalId: string };
 }
 
-export type ActionType = "send" | "submit" | "call" | "fax" | "share";
+export type ActionType = "send" | "submit" | "call" | "fax" | "mail" | "share";
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "revoked" | "expired" | "stale" | "blocked";
 // Where an approval stands after a NO. status is its own, never still
 // pending; notSent is true only when nothing under its idempotency key
@@ -142,6 +145,8 @@ export interface ManoClient {
   // opId is the outbox operation ID, stable across retries, sent so the
   // engine can dedupe a retried send.
   sendMessage(session: Session, text: string, attachments: NewAttachment[], opId?: string): Promise<ChatMessage>;
+  // Says the person's screen displayed the question in this message.
+  acknowledgeQuestion(session: Session, approvalId: string, messageId: string): Promise<void>;
   listApprovals(session: Session): Promise<Approval[]>;
   getApprovalDocument(session: Session, approval: Approval): Promise<ApprovalDocument>;
   // The client re-reads the approval first and refuses when anything

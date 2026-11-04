@@ -1,4 +1,5 @@
 import { draftFileKey, stagingAttemptKey, submissionFileKey, trackedOwner, type FileStore } from "./files";
+import { staffRoute } from "./staff";
 import {
   API_SCOPE_PREFIX,
   DECLARATION,
@@ -41,6 +42,11 @@ export interface PortalConfig {
   portalToken?: string;
   /** Read-only token for GET /drafts/:id. Unset turns that route off; the filing token also reads drafts. */
   draftToken?: string;
+  /** Engine's address and the one organization staff sign in for. Unset turns /staff off. */
+  engineUrl?: string;
+  sandboxOrgId?: string;
+  /** Tests stand in for Engine here. */
+  engineFetch?: typeof fetch;
   now?: () => number;
 }
 
@@ -351,6 +357,15 @@ const HOUSEHOLD_LABELS: Record<keyof Household, string> = {
   householdSize: "Household size",
   monthlyIncome: "Monthly income",
 };
+
+/**
+ * True when the session holds every household field. A session saved before
+ * a field was added (the case number) goes back to step 1 to collect it.
+ */
+function hasHousehold(session: SessionData): session is SessionData & { household: Household } {
+  const household = session.household as Partial<Record<keyof Household, unknown>> | undefined;
+  return !!household && Object.keys(HOUSEHOLD_LABELS).every((field) => typeof household[field as keyof Household] === "string");
+}
 
 function validateHousehold(
   data: Record<string, string>,
@@ -786,6 +801,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
   const allowed = await store.checkRateLimit(ip, nowMs(config), RATE_WINDOW_MS, config.rateLimitPerMinute);
   if (!allowed) return rateLimitedResponse(path);
+  if (path === "/staff" || path.startsWith("/staff/")) return staffRoute(request, path, method, config);
   // Filing, reconciling and the caseworker view take the filing token only.
   if (path === "/caseworker" || path.startsWith("/caseworker/") || path.startsWith("/submissions")) {
     const auth = await authState(request, config.portalToken, [config.portalToken]);
@@ -841,7 +857,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "GET" && path === "/apply/documents") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect("/apply");
     if (!(await touchSession(store, session, config))) return timedOut();
     return html(documentsPage());
   }
@@ -849,7 +865,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "POST" && path === "/apply/documents") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect("/apply");
     const capped = await readCappedBody(request, config.maxBodyBytes);
     if (!capped.ok) return tooLargeResponse(false);
     const form = await formRequestFromBytes(request, capped.bytes).formData();
@@ -880,7 +896,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "GET" && path === "/apply/review") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect("/apply");
     if (session.files.length === 0) return redirect("/apply/documents");
     if (!(await touchSession(store, session, config))) return timedOut();
     return html(reviewPage(session.household, session.files));
@@ -890,7 +906,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   if (method === "POST" && path === "/apply/submit") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect("/apply");
     if (session.files.length === 0) return redirect("/apply/documents");
     if (!(await saveDraft(store, session, session.household, config))) return draftInUse();
     if (!(await touchSession(store, session, config))) return timedOut();

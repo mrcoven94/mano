@@ -31,15 +31,21 @@
 // HTTP surface:
 //
 //   GET  /health
+//   POST /webhooks/mail, /webhooks/fax         provider delivery reports, verified by signature
 //   POST /api/check-link                       { url } (person token; 200 with allowed:false when blocked)
 //   POST /api/persons/:id/chat                 { message }
 //   POST /api/persons/:id/action               action request (worker stamps personId from the token);
 //                                              proposalTurn names the turn an agent draft belongs to
 //   GET  /api/persons/:id/approvals
 //   POST /api/persons/:id/approvals/supersede     { generation } closes every waiting draft but the latest
+//   POST /api/persons/:id/approvals/fence     { generation, recipient, turnId } a form call of turnId corrects
+//                                              the recipient's form: drafts from older turns are refused and closed
 //   POST /api/persons/:id/approvals/:aid/approve  a YES; retryable:true when the safety check could not
 //                                              answer and the approval still waits for another YES
 //   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
+//   POST /api/persons/:id/approvals/:aid/retire  the person corrected the form after this filing failed or
+//                                              went unanswered: never run again (completed with its receipt
+//                                              when it went through, in_progress while one is in flight)
 //   PUT  /api/persons/:id/approvals/:aid/replay   { generation, labels, steps: [{ caption, pngB64 }] } (agent):
 //                                              the screens of the fill behind a waiting approval; first bind wins.
 //                                              201 or 200 with { path } of the page, 404 no approval,
@@ -49,6 +55,8 @@
 //   GET  /api/persons/:id/approvals/:aid/replay   { path } of the replay page while its link opens and the
 //                                              approval still waits, unexpired and latest, under the
 //                                              version the fill was bound to; else 404
+//   POST /webhooks/calls                       the phone company's call events, signature checked by the
+//                                              provider (src/calls); 404 until a provider is set up
 //   GET  /fill/:token                          the replay page (src/fill-replay.ts): the token is the only key,
 //                                              and the page asks the approval again on every view
 //   GET  /api/persons/:id/memory
@@ -89,7 +97,15 @@
 //   GET  /api/persons/:id/documents/:docId     decrypted bytes, owner only
 //   POST /api/persons/:id/ws-ticket            one 60-second single-use ticket for /ws
 //   GET  /api/persons/:id/ws?ticket=           chat socket (closes when the session expires)
+//   GET  /api/persons/:id/shares               { active, revoked } what the person shares, with open document
+//                                              requests (session or agent; src/case-sharing.ts)
 //   GET  /api/orgs/:id/cases                   staff only
+//   GET  /api/orgs/:id/cases/:caseId           staff only: what the person shared; 404 when not shared or revoked
+//   POST /api/orgs/:id/cases/:caseId/document-requests  { documentKind, idempotencyKey } staff only: the person
+//                                              gets one text; 404 when not shared or revoked
+//   GET  /api/orgs/:id/cases/:caseId/documents/:docId   staff only: bytes the person sent; 404 when not shared or revoked
+//   POST /api/staff/session                    { orgId } a staff session for the sandbox org only, for the
+//                                              sandbox portal's bearer token (SANDBOX_PORTAL_TOKEN)
 //   POST /api/admin/persons/:id/synthetic      { synthetic } (operator secret)
 //
 // Bodies are capped at about 1 MB for actions and 15 MB for uploads.
@@ -116,6 +132,11 @@
 // and upload limits (SANDBOX_MAX_FIELD_LENGTH and SANDBOX_MAX_UPLOAD_BYTES in
 // wrangler.toml, kept equal to the portal's), so in sandbox mode the
 // gateway refuses anything else before it drafts an approval.
+//
+// Faxes and letters have their own executors, on only when their settings
+// are present (gateway/outbound.ts). A fax goes only to our own number and
+// a letter only to the mail provider's test mode, and the approval question
+// shows the price Engine worked out for the exact document.
 //
 // Secrets: never put a key on a command line. Set secrets from stdin:
 //
@@ -147,12 +168,14 @@ import {
   authenticateService,
   serviceMayUse,
   getSessionSecret,
+  mintSessionToken,
   mintWsTicket,
   sessionConfigured,
 } from "./auth.js";
-import { checkerSetting, createExecutor, type CheckerSetting } from "./gateway/index.js";
+import { checkerSetting, createExecutor, deliveryRoute, faxConfigured, parseFaxEvent, parseMailEvent, verifyFaxSignature, verifyMailSignature, type CheckerSetting } from "./gateway/index.js";
 import { checkLinkSafety } from "./link-safety.js";
 import { base64ToBytes } from "./hash.js";
+import { SANDBOX_ORG_ID } from "@mano/protocol";
 import { profilePatchResponse } from "./profile.js";
 import { routeDeadlines } from "./deadlines.js";
 import {
@@ -165,6 +188,7 @@ import {
   type ReplayLinkEntry,
 } from "./fill-replay.js";
 import { parseDocumentMark } from "./documents.js";
+import { createCallServices } from "./calls/provider.js";
 
 export { PersonAgent, OrgAgent };
 export { ActionGateway, MemoryApprovalStore, InMemoryExecutor } from "./gateway/index.js";
@@ -186,6 +210,12 @@ function orgStub(env: Env, orgId: string) {
 }
 
 const FORBIDDEN = () => Response.json({ error: "Forbidden." }, { status: 403 });
+
+// Staff never learn why a case is absent: never shared, revoked and
+// expired read the same.
+const NOT_SHARED = () => Response.json({ error: "This case is not shared with this organization." }, { status: 404 });
+
+const STAFF_SESSION_SECONDS = 15 * 60;
 
 // A write prepared under a conversation generation a delete has moved
 // past: nothing was written. The answer carries no state of the new one.
@@ -297,10 +327,14 @@ export interface LiveStatus {
   files: "bound" | "missing";
   kek: boolean;
   checker: CheckerSetting["kind"];
+  mail: "test-mode" | "off";
+  fax: "own-number" | "off";
+  calls: "off" | "stand-in" | "live";
 }
 
 export function liveStatus(env: Env): LiveStatus {
   const hasKey = Boolean(env.META_MODEL_API_KEY);
+  const calls = createCallServices();
   return {
     model: hasKey ? "meta" : "stand-in",
     modelVia: !hasKey ? "none" : env.CF_ACCOUNT_ID && env.AI_GATEWAY_ID ? "ai-gateway" : "direct",
@@ -308,6 +342,9 @@ export function liveStatus(env: Env): LiveStatus {
     files: env.FILES ? "bound" : "missing",
     kek: Boolean(env.ENCRYPTION_KEK_B64),
     checker: checkerSetting(env).kind,
+    mail: env.LOB_TEST_API_KEY ? "test-mode" : "off",
+    fax: faxConfigured(env) ? "own-number" : "off",
+    calls: !calls ? "off" : calls.provider.simulated ? "stand-in" : "live",
   };
 }
 
@@ -335,6 +372,28 @@ export function healthOk(env: Env): boolean {
     return false;
   }
   return true;
+}
+
+// A provider's report on a fax or letter. Closed until its secret is set,
+// and nothing past the signature check runs on an unverified body. An event
+// it cannot place is not acknowledged, so the provider sends it again: the
+// route to a letter's person may not be written yet.
+async function deliveryWebhook(request: Request, env: Env, channel: "fax" | "mail"): Promise<Response> {
+  if (request.method !== "POST") return new Response("Method not allowed.", { status: 405 });
+  const secret = channel === "mail" ? env.LOB_WEBHOOK_SECRET : env.TELNYX_PUBLIC_KEY;
+  if (!secret) return new Response("Not found.", { status: 404 });
+  const declared = Number(request.headers.get("content-length") ?? 0);
+  if (declared > MAX_ACTION_BODY) return new Response("Too large.", { status: 413 });
+  const body = await request.text();
+  if (body.length > MAX_ACTION_BODY) return new Response("Too large.", { status: 413 });
+  const verified = channel === "mail" ? await verifyMailSignature(body, request.headers, secret) : await verifyFaxSignature(body, request.headers, secret);
+  if (!verified) return new Response("Bad signature.", { status: 401 });
+  const event = channel === "mail" ? parseMailEvent(body) : parseFaxEvent(body);
+  if (!event) return new Response("Not an event Mano can read.", { status: 422 });
+  const personId = event.personId ?? (await deliveryRoute(env.FILES, event.externalId));
+  if (!personId) return new Response("Not placed.", { status: 404 });
+  const placed = await (personStub(env, personId) as unknown as PersonAgent).recordDelivery({ ...event, personId });
+  return placed ? new Response(null, { status: 204 }) : new Response("Not placed.", { status: 404 });
 }
 
 // Reminders, the turn ledger, the pending approval pointer and the
@@ -438,6 +497,22 @@ async function handleAgentState(
 // A replay page by its link. The token's hash names the person and the
 // approval; the person's agent checks its own row holds the same token.
 // Anything else, an expired link included, gets the same 404 page.
+const CALL_WEBHOOK_PATH = "/webhooks/calls";
+
+// The phone company's events about a hold call. With no provider set up the
+// route does not exist. A signature that does not check is refused, and an
+// event for anyone but the configured person never reaches an agent.
+async function callWebhook(env: Env, request: Request): Promise<Response> {
+  const services = createCallServices();
+  if (!services) return new Response("Not found.", { status: 404 });
+  const event = await services.provider.parseWebhook(request);
+  if (event === "reject") return new Response("Bad signature.", { status: 401 });
+  if (event !== "ignore" && event.personId === services.config.personId) {
+    await (personStub(env, event.personId) as unknown as PersonAgent).holdCallEvent(event);
+  }
+  return new Response(null, { status: 204 });
+}
+
 async function fillReplayResponse(env: Env, pathname: string): Promise<Response> {
   const unavailable = (status: number) => new Response(renderReplayPage({ state: "missing" }), { status, headers: REPLAY_PAGE_HEADERS });
   const token = REPLAY_LINK_PATH.exec(pathname)?.[1];
@@ -474,6 +549,15 @@ export default {
       return fillReplayResponse(env, url.pathname);
     }
 
+    if (url.pathname === "/webhooks/mail" || url.pathname === "/webhooks/fax") {
+      return deliveryWebhook(request, env, url.pathname === "/webhooks/mail" ? "mail" : "fax");
+    }
+
+    if (url.pathname === CALL_WEBHOOK_PATH) {
+      if (request.method !== "POST") return new Response("Method not allowed.", { status: 405 });
+      return callWebhook(env, request);
+    }
+
     // Outside development, a partly configured engine answers only
     // /health: no business request runs while required config is missing.
     if (url.pathname.startsWith("/api/") && env.MANO_ENV !== "development" && !healthOk(env)) {
@@ -497,6 +581,18 @@ export default {
       // with allowed:false, not an auth failure.
       const result = await checkLinkSafety(typeof body?.url === "string" ? body.url : "", { forDisplay: true });
       return Response.json(result);
+    }
+
+    if (url.pathname === "/api/staff/session" && request.method === "POST") {
+      const token = bearerToken(request);
+      if (!env.SANDBOX_PORTAL_TOKEN || !token || !secretsEqual(token, env.SANDBOX_PORTAL_TOKEN)) return FORBIDDEN();
+      const read = await readCappedJson(request, MAX_ACTION_BODY);
+      if (!read.ok) return read.response;
+      if ((read.value as { orgId?: unknown } | null)?.orgId !== SANDBOX_ORG_ID) return FORBIDDEN();
+      const configured = getSessionSecret(env);
+      if (!configured) return Response.json({ error: "Sessions are not configured." }, { status: 503 });
+      const session = await mintSessionToken({ kind: "staff", sub: "sandbox-portal-staff", org: SANDBOX_ORG_ID }, configured.secret, STAFF_SESSION_SECONDS);
+      return Response.json({ token: session, expiresInSeconds: STAFF_SESSION_SECONDS });
     }
 
     const adminMatch = url.pathname.match(/^\/api\/admin\/persons\/([^/]+)\/synthetic$/);
@@ -702,6 +798,9 @@ export default {
           return Response.json({ error: message }, { status: 500 });
         }
       }
+      if (rest === "/shares" && request.method === "GET") {
+        return Response.json(await agent.listShares(subject));
+      }
       if (rest === "/memory" && request.method === "GET") {
         return Response.json({ memories: await agent.listMemory(subject) });
       }
@@ -738,6 +837,17 @@ export default {
         if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
         return profilePatchResponse(await agent.patchProfile(subject, read.value, generation));
       }
+      if (rest === "/approvals/fence" && request.method === "POST") {
+        const read = await readCappedJson(request, MAX_ACTION_BODY);
+        if (!read.ok) return read.response;
+        const body = (read.value ?? {}) as { generation?: unknown; recipient?: unknown; turnId?: unknown };
+        const generation = writeGeneration(service, body.generation);
+        if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
+        const out = await agent.fenceProposals(subject, body, generation);
+        if (isStale(out)) return STALE();
+        if ("error" in out) return Response.json(out, { status: 400 });
+        return Response.json(out);
+      }
       if (rest === "/approvals/supersede" && request.method === "POST") {
         const read = await readCappedJson(request, MAX_ACTION_BODY);
         if (!read.ok) return read.response;
@@ -747,11 +857,15 @@ export default {
         if (isStale(out)) return STALE();
         return Response.json(out);
       }
-      const decisionMatch = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
+      const decisionMatch = rest.match(/^\/approvals\/([^/]+)\/(approve|reject|retire)$/);
       if (decisionMatch && request.method === "POST") {
         const approvalId = decodeURIComponent(decisionMatch[1]);
         const result =
-          decisionMatch[2] === "approve" ? await agent.approve(approvalId, subject) : await agent.reject(approvalId, subject);
+          decisionMatch[2] === "approve"
+            ? await agent.approve(approvalId, subject)
+            : decisionMatch[2] === "reject"
+              ? await agent.reject(approvalId, subject)
+              : await agent.retire(approvalId, subject);
         return Response.json(result);
       }
       // No model route: the agent calls the model client itself with the
@@ -769,9 +883,40 @@ export default {
       const rest = orgMatch[2] ?? "";
       // Cases reach the org only through consent messages from a person's
       // agent; there is deliberately no share route here.
+      const org = stub as unknown as OrgAgent;
       if (rest === "/cases" && request.method === "GET") {
-        const cases = await (stub as unknown as OrgAgent).listCases(orgId);
-        return Response.json({ cases });
+        const cases = await org.listCases(orgId);
+        return Response.json({ cases: cases.map(({ personId: _personId, ...shared }) => shared) });
+      }
+      const caseMatch = rest.match(/^\/cases\/([^/]+)(\/document-requests|\/documents\/[^/]+)?$/);
+      if (caseMatch) {
+        const caseId = decodeURIComponent(caseMatch[1]);
+        const sub = caseMatch[2] ?? "";
+        if (sub === "" && request.method === "GET") {
+          const view = await org.getCase(orgId, caseId);
+          return view ? Response.json({ case: view }) : NOT_SHARED();
+        }
+        if (sub === "/document-requests" && request.method === "POST") {
+          const read = await readCappedJson(request, MAX_ACTION_BODY);
+          if (!read.ok) return read.response;
+          const { documentKind, idempotencyKey } = (read.value ?? {}) as { documentKind?: unknown; idempotencyKey?: unknown };
+          const out = await org.requestDocument(orgId, caseId, { documentKind, idempotencyKey });
+          if (out.status === "not_shared") return NOT_SHARED();
+          if (out.status === "bad_input") return Response.json({ error: out.reason }, { status: 400 });
+          if (out.status === "unavailable") return Response.json({ error: "Could not reach the person's agent. Send it again." }, { status: 503 });
+          return Response.json(out, { status: 201 });
+        }
+        if (sub.startsWith("/documents/") && request.method === "GET") {
+          const document = await org.readDocument(orgId, caseId, decodeURIComponent(sub.slice("/documents/".length)));
+          if (!document) return NOT_SHARED();
+          return new Response(base64ToBytes(document.contentB64) as BodyInit, {
+            headers: {
+              "content-type": "application/octet-stream",
+              "content-disposition": `attachment; filename="${document.name.replace(/["\r\n]/g, "_")}"`,
+              "cache-control": "no-store",
+            },
+          });
+        }
       }
       return new Response("Not found", { status: 404 });
     }

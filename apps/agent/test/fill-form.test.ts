@@ -4,9 +4,9 @@ import { FakeModelClient, type Computer, type ComputerAction } from "@mano/compu
 
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
-import { engineFrom, type Profile } from "../agent/lib/engine.js";
+import { engineFrom, personIdFor, type Profile } from "../agent/lib/engine.js";
 import { FORMS } from "../agent/lib/forms.js";
-import { presentsExactly, renderQuestion } from "../agent/lib/pending.js";
+import { heldBack, presentsExactly, renderQuestion } from "../agent/lib/pending.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 import { screen } from "./fill-double.js";
@@ -35,7 +35,7 @@ function profile() {
     income: [
       { id: "i1", memberId: leaf("self"), source: leaf("job"), amount: { value: 1075, source: "document", documentId: "doc-stub", updatedAt: at }, frequency: leaf("biweekly") },
     ],
-    programs: [{ id: "snap", program: leaf("SNAP"), caseNumber: leaf("WA-SNAP-0042117") }],
+    programs: [{ id: "snap", program: leaf("SNAP"), state: leaf("WA"), caseNumber: leaf("WA-SNAP-0042117") }],
   };
 }
 
@@ -292,14 +292,14 @@ describe("fill_form", () => {
     expect(page).toContain("<dt>People in household</dt><dd>3</dd>");
   });
 
-  it("a retry that filled different values binds no screens to the approval the first attempt froze", async () => {
+  it("a retry that filled different values closes the approval the first attempt froze and holds the new version", async () => {
     engine.profile = profile();
     engine.replayFailure = 500;
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const first = await run("turn_fill0033", { form: "food-renewal" });
 
     // The profile changed before the retry, so the retry types a different
-    // household size than the approval froze.
+    // household size than the first attempt froze.
     engine.replayFailure = null;
     const grown = profile();
     grown.household.push({ id: "m3", name: leaf("Eva Testcase"), relationship: leaf("child") });
@@ -307,11 +307,13 @@ describe("fill_form", () => {
     model = new FakeModelClient([[call(typing({ ...VALUES, householdSize: "4" }))], [say("ACCEPTED")]]);
     const retry = (await fillForm.execute({ form: "food-renewal" }, retryCtx("turn_fill0033", "eve-turn-2"))) as Record<string, unknown>;
 
-    // The question still asks about what the first attempt froze, and YES
-    // sends that, so no screen of the retry's values may stand beside it.
-    expect(retry).toMatchObject({ status: "waiting_for_yes", approvalId: first.approvalId });
-    const [approval] = engine.approvals();
-    expect(JSON.parse(approval.requestJson).payload.householdSize).toBe("3");
+    // The question and the YES are for what the retry filled, with its screens.
+    expect(retry.status).toBe("waiting_for_yes");
+    expect(retry.approvalId).not.toBe(first.approvalId);
+    expect(engine.approvals().find((a) => a.id === first.approvalId)?.status).toBe("rejected");
+    const fresh = engine.approvals().find((a) => a.id === retry.approvalId)!;
+    expect(JSON.parse(fresh.requestJson).payload.householdSize).toBe("4");
+    expect(await engine.replayPageAt((await client().replayLink(fresh.id))!)).toContain("<dt>People in household</dt><dd>4</dd>");
     expect(await client().replayLink(String(first.approvalId))).toBeNull();
   });
 
@@ -402,6 +404,27 @@ describe("fill_form", () => {
     expect(engine.approvals()).toHaveLength(0);
   });
 
+  it("with no proof in the profile but a document on file, hands the renewal to start_form_draft without touching the computer", async () => {
+    const p = profile();
+    p.income[0].amount = { value: 1075, source: "person", updatedAt: at } as never;
+    engine.profile = p;
+    engine.putDocument(personIdFor(HANDLE), "doc-letter", new TextEncoder().encode(PAY_STUB));
+    const out = await run("turn_fill0031", { form: "food-renewal" });
+    expect(out.status).toBe("unavailable");
+    expect(out.note).toMatch(/start_form_draft/);
+    expect(model.requests).toHaveLength(0);
+    expect(engine.approvals()).toHaveLength(0);
+  });
+
+  it("when the computer's model refuses, hands the renewal to start_form_draft and prepares nothing", async () => {
+    engine.profile = profile();
+    model = { createResponse: async () => { throw new Error("model request failed with status 402"); } } as never;
+    const out = await run("turn_fill0032", { form: "food-renewal" });
+    expect(out.status).toBe("unavailable");
+    expect(out.note).toMatch(/start_form_draft/);
+    expect(engine.approvals()).toHaveLength(0);
+  });
+
   it("refuses any address that is not the sandbox portal", async () => {
     engine.profile = profile();
     const out = await run("turn_fill0006", { form: "https://real-benefits.example.gov/apply" });
@@ -417,6 +440,61 @@ describe("fill_form", () => {
     model = new FakeModelClient([[call(typing({ ...VALUES, monthlyIncome: "2392" }))], [say("ACCEPTED")]]);
     expect((await run("turn_fill0008", { form: "food-renewal" })).status).toBe("fill_failed");
     expect(engine.approvals()).toHaveLength(0);
+  });
+
+  // LAP-747: a same-turn correction that throws partway (Engine's turn
+  // ledger answers 503 as the new draft is held) still closes the draft it
+  // was correcting, or holds it back when Engine will not close it either.
+  it.each([
+    { name: "closes", down: /\/turns$/, after: "rejected", held: false },
+    { name: "holds back", down: /\/(turns|reject)$/, after: "pending", held: true },
+  ])("a correction that throws in the same turn $name the draft it was correcting", async ({ down, after, held }) => {
+    engine.profile = profile();
+    const turnId = held ? "turn_fillthr02" : "turn_fillthr01";
+    const c = await ctx(turnId);
+    expect(((await fillForm.execute({ form: "food-renewal" }, c)) as { status: string }).status).toBe("waiting_for_yes");
+    model = new FakeModelClient([[call(typing({ ...VALUES, phone: "253-555-0199" }))], [say("ACCEPTED")]]);
+    const reachable = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).startsWith(ENGINE_URL) && down.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : reachable(input, init),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await expect(fillForm.execute({ form: "food-renewal", answers: { phone: "253-555-0199" } }, c)).rejects.toThrow();
+    vi.stubGlobal("fetch", reachable);
+    const [approval] = engine.approvals();
+    expect(approval!.status).toBe(after);
+    expect(heldBack(turnId, approval!.id)).toBe(held);
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  // Review round 4: a slow fill and a correction in the same turn. The
+  // correction runs after the fill holds its draft, so it closes it; the
+  // fill can never publish after the correction cleaned up.
+  it("form calls in one turn run one at a time: a slower fill never holds its draft after the correction closed the turn's drafts", async () => {
+    engine.profile = profile();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const typist = new FakeModelClient([[call(typing(VALUES))], [say("ACCEPTED")]]);
+    model = { createResponse: async (request) => (await gate, typist.createResponse(request)) } as FakeModelClient;
+    const c = await ctx("turn_lock00001");
+    const slow = fillForm.execute({ form: "food-renewal" }, c);
+    await new Promise((r) => setTimeout(r, 5));
+    const correction = fillForm.execute({ form: "food-renewal", answers: { phone: "253-555-01422" } }, c);
+    await new Promise((r) => setTimeout(r, 5));
+    release();
+    expect(((await slow) as { status: string }).status).toBe("waiting_for_yes");
+    expect((await correction) as Record<string, unknown>).toMatchObject({ status: "needs_answer", field: "phone" });
+    expect(engine.approvals().map((a) => a.status)).toEqual(["rejected"]);
+  });
+
+  it("a correction when the computer is not set up still closes the version she was shown", async () => {
+    engine.profile = profile();
+    const shown = await run("turn_nourl0001", { form: "food-renewal" });
+    expect(shown.status).toBe("waiting_for_yes");
+    vi.stubEnv("MANO_PORTAL_URL", "");
+    const fix = await run("turn_nourl0002", { form: "food-renewal", answers: { phone: "253-555-0199" } });
+    expect(fix.status).toBe("unavailable");
+    expect(engine.approvals().find((a) => a.id === shown.approvalId)?.status).toBe("rejected");
   });
 
   it("files on YES through the gateway with exactly the approved values and document", async () => {

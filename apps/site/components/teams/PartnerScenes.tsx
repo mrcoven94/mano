@@ -50,7 +50,7 @@ function ReviewScene() {
             </li>
           ))}
         </ul>
-        <p className="sc-foot rv" style={d(3)}>Approved for people in Sample County. Any change to the manifest is reviewed again.</p>
+        <p className="sc-foot rv" style={d(3)}>Approved for people in Springfield County. Any change to the manifest is reviewed again.</p>
       </div>
     </div>
   );

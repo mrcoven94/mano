@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Faq from "@/components/Faq";
+import ShareFlow from "@/components/home/ShareFlow";
 import OrgConsent from "@/components/teams/OrgConsent";
 import OrgScenes from "@/components/teams/OrgScenes";
 import Verified from "@/components/teams/Verified";
@@ -7,7 +8,7 @@ import Rotating from "@/components/teams/Rotating";
 import { TeamHero, Stage, Steps, Rules, Seat, Close } from "@/components/teams/Parts";
 
 const title = "Case management for nonprofits";
-const description = "Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications and tracks every renewal, so families keep their help and your team spends its time with people.";
+const description = "Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications and tracks every renewal, so families keep their help and your team spends its time with people. Mano for nonprofits is coming soon.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/organizations" }, openGraph: { title, description } };
 
@@ -30,7 +31,7 @@ export default function Organizations() {
         before="Keep more families "
         phrase={<Rotating words={["housed.", "fed.", "warm.", "in child care.", "on their feet."]} />}
         after=""
-        lede="Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications, tracks every renewal and keeps your funder reports up to date, so your team spends its time with families instead of paperwork."
+        lede="Give every case manager their own Mano. It gathers documents, fills out rent, food and child care applications, tracks every renewal and keeps your funder reports up to date, so your team spends its time with families instead of paperwork. Mano for nonprofits is coming soon."
         stage={<Stage id="desk" label="Northside Family Center" hint="Ask for the missing page, then answer as Maria"><OrgConsent /></Stage>}
       >
         <a className="btn btn-primary btn-lg" href={MAIL}>Talk to us</a>
@@ -43,6 +44,12 @@ export default function Organizations() {
             <h2 id="org-more-h">The paperwork, done before you get to it.</h2>
           </div>
           <OrgScenes />
+        </div>
+      </section>
+
+      <section className="h-share" aria-labelledby="share-h">
+        <div className="wrap">
+          <ShareFlow />
         </div>
       </section>
 
@@ -60,13 +67,13 @@ export default function Organizations() {
           ["Mano never sells personal data.", ""],
         ]}
         log={{
-          title: "Maria Lopez · Food benefits renewal",
+          title: "Maria Torres · Food benefits renewal",
           lines: [
             { at: "9:12", who: "Dana", role: "Case manager", text: "Asked Maria for her Oct 24 pay stub, for this renewal only." },
-            { at: "9:40", who: "Maria Lopez", text: "Shared the pay stub with Northside until Dec 31." },
+            { at: "9:40", who: "Maria Torres", text: "Shared the pay stub with Northside until Dec 31." },
             { at: "9:41", who: "Mano", mano: true, text: "Attached it to the renewal." },
             { at: "9:55", who: "Dana", role: "Case manager", text: "Approved the renewal." },
-            { at: "9:56", who: "Mano", mano: true, text: "Submitted it to Sample County, once." },
+            { at: "9:56", who: "Mano", mano: true, text: "Submitted it to Springfield County, once." },
           ],
         }}
       />
