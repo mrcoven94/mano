@@ -11,7 +11,8 @@
 //   person.address.line1|line2|city|state|zip  person.county  person.language
 //   person.householdConfirmed   (true once the person said who lives with them;
 //                                only source person sets it, and forgetting
-//                                any household member clears it)
+//                                any household member, or anyone else but the
+//                                person adding one, clears it)
 //   person.alwaysOn            (the person turned on the daily check for new
 //                                help, src/always-on.ts; only source person sets it)
 //   household.<id>.name|relationship|dateOfBirth
@@ -212,6 +213,14 @@ const TRUST: Record<ProfileSource, number> = { person: 3, document: 2, agent: 1 
 const TRUST_SQL = "(CASE source WHEN 'person' THEN 3 WHEN 'document' THEN 2 ELSE 1 END)";
 const UNDER = "(path = ? OR substr(path, 1, ?) = ?)";
 const under = (group: string) => [group, group.length + 1, `${group}.`];
+
+// Changes with any write to the profile, a rewrite of the same value included:
+// each seal is new. Compared in the same step as an action decided on values
+// read earlier, since reading them means waiting on decryption.
+export function profileRevision(sql: SqlExec): string {
+  const rows = sql.exec("SELECT path, sealed FROM profile_fields ORDER BY path").toArray() as { path: string; sealed: string }[];
+  return rows.map((r) => `${r.path}\n${r.sealed}`).join("\n");
+}
 
 export function ensureProfileTables(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS profile_fields(
@@ -502,6 +511,14 @@ export class ProfileStore {
         }
         sql.exec(`DELETE FROM profile_fields WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
         sql.exec(`DELETE FROM profile_suggestions WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
+      }
+      // A member the person did not name is not on the roster they confirmed.
+      const addsMember = (path: string) => {
+        const [collection, id] = path.split(".");
+        return collection === "household" && sql.exec(`SELECT 1 FROM profile_fields WHERE ${UNDER} LIMIT 1`, ...under(`household.${id}`)).toArray().length === 0;
+      };
+      if (parsed.source !== "person" && changed.some((c) => addsMember(c.path))) {
+        sql.exec("DELETE FROM profile_fields WHERE path = 'person.householdConfirmed'");
       }
       for (const c of changed) {
         retireLinkedNotes(sql, c.path, false);

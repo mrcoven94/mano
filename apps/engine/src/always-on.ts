@@ -10,7 +10,9 @@
 // text only ever says "may" and what to check. A match needs the state, the
 // person's own word on who lives with them, and every income entry with an
 // amount and a frequency: anything missing or unsettled is no match, never a
-// guess. A program already on their profile is not news.
+// guess. A letter that adds someone to the household ends that word until the
+// person gives it again (src/profile.ts), so a letter cannot widen the screen.
+// A program already on their profile is not news.
 //
 // Each text is a reminder row keyed by generation, state and program, so it
 // goes out through the person's one delivery wake-up and Channels' agent-send
@@ -22,16 +24,21 @@
 // or sent today, so three new programs are three days of one text, not three at once.
 //
 // The check runs at the nudge time (MANO_NUDGE_TIME) in the zone of the
-// person's state. Right before each handoff the text is checked again: with
-// the flag off it is withdrawn, and outside 9:00 to 20:00 local it waits for
-// the next 9:00, because unlike a countdown it is just as true tomorrow.
+// person's state. Right before each handoff the profile is read and the text
+// screened again, because it may have waited overnight: with the flag off or
+// the match gone it is withdrawn, and otherwise it goes in the words the
+// profile supports now. Outside 9:00 to 20:00 local it waits for the next 9:00,
+// because unlike a countdown it is just as true tomorrow. Reading the profile
+// means waiting on decryption, so the handoff's own step compares the profile
+// with the one that was read: if a write landed, the text waits for the next
+// run, which reads it again.
 //
 // Test: test/always-on.test.ts, through the real worker and the Durable Object
 // alarm.
 import { listPrograms, parseProgram, screenIncome } from "@mano/programs";
 import { createReminder, currentGeneration } from "./agents/agent-state.js";
-import { addDays, deferReminder, localDate, zonedInstant, type NudgeTime } from "./deadlines.js";
-import type { Frequency, Profile } from "./profile.js";
+import { addDays, deferReminder, localDate, timeZoneForState, zonedInstant, type NudgeTime } from "./deadlines.js";
+import { profileRevision, type Frequency, type Profile } from "./profile.js";
 
 interface SqlExec {
   exec(query: string, ...bindings: unknown[]): { toArray(): unknown[]; rowsWritten: number };
@@ -86,6 +93,10 @@ export function helpMatches(profile: Profile): HelpMatch[] {
   return matches;
 }
 
+function helpTextId(generation: number, match: HelpMatch): string {
+  return `${HELP_PREFIX}g${generation}:${match.key}`;
+}
+
 export function helpText(match: HelpMatch): string {
   return (
     `Mano's daily check found something new: you may qualify for ${match.name}. ` +
@@ -111,7 +122,7 @@ export function planHelpText(sql: SqlExec, profile: Profile, generation: number,
   if (busy) return null;
   const raised = new Set(earlier.map((r) => r.id));
   for (const match of helpMatches(profile)) {
-    const id = `${HELP_PREFIX}g${generation}:${match.key}`;
+    const id = helpTextId(generation, match);
     if (raised.has(id)) continue;
     const made = createReminder(sql, { id, text: helpText(match), dueAtMs: nowMs, generation }, nowMs);
     return "created" in made && made.created ? id : null;
@@ -119,27 +130,41 @@ export function planHelpText(sql: SqlExec, profile: Profile, generation: number,
   return null;
 }
 
-// The check a delivery run makes on each claimed text right before its
-// handoff, in the same step. null: it goes. withdrawn: the person turned the
-// check off. deferred: outside the person's hours, it waits for the next 9:00.
-export function gateHelpText(
-  sql: SqlExec,
-  reminderId: string,
-  token: string,
-  nowMs: number,
-  setting: { on: boolean; timeZone: string },
-): "withdrawn" | "deferred" | null {
-  if (!setting.on) {
+// What the profile says about a text, read before its handoff. text is what
+// to send, null when the person turned the check off, the program no longer
+// fits or the profile cannot be read. revision names the profile that was read.
+export interface HelpStanding {
+  text: string | null;
+  timeZone: string;
+  revision: string;
+}
+
+export function standingOf(profile: Profile | null | undefined, reminder: { id: string; generation: number }, revision: string): HelpStanding {
+  const state = profile?.person.address.state?.value;
+  const match = profile?.person.alwaysOn?.value === true ? helpMatches(profile).find((m) => helpTextId(reminder.generation, m) === reminder.id) : undefined;
+  return { text: match ? helpText(match) : null, timeZone: timeZoneForState(state), revision };
+}
+
+// The check a delivery run makes on each claimed text, in the same step as its
+// handoff. null: it goes. deferred: the profile changed after it was read, so
+// it waits for the next run, or it is outside the person's hours and waits for
+// the next 9:00. withdrawn: it no longer stands.
+export function gateHelpText(sql: SqlExec, reminderId: string, token: string, nowMs: number, standing: HelpStanding): "withdrawn" | "deferred" | null {
+  if (profileRevision(sql) !== standing.revision) {
+    deferReminder(sql, reminderId, token, nowMs);
+    return "deferred";
+  }
+  if (standing.text === null) {
     sql.exec(
       "UPDATE reminders SET status = 'withdrawn', finished_at_ms = ? WHERE id = ? AND claim_token = ? AND status IN ('claimed', 'sending')",
       nowMs, reminderId, token,
     );
     return "withdrawn";
   }
-  const today = localDate(nowMs, setting.timeZone);
-  const opens = zonedInstant(today, WINDOW_OPENS_HOUR, 0, setting.timeZone);
-  if (nowMs >= opens && nowMs < zonedInstant(today, WINDOW_CLOSES_HOUR, 0, setting.timeZone)) return null;
-  deferReminder(sql, reminderId, token, nowMs < opens ? opens : zonedInstant(addDays(today, 1), WINDOW_OPENS_HOUR, 0, setting.timeZone));
+  const today = localDate(nowMs, standing.timeZone);
+  const opens = zonedInstant(today, WINDOW_OPENS_HOUR, 0, standing.timeZone);
+  if (nowMs >= opens && nowMs < zonedInstant(today, WINDOW_CLOSES_HOUR, 0, standing.timeZone)) return null;
+  deferReminder(sql, reminderId, token, nowMs < opens ? opens : zonedInstant(addDays(today, 1), WINDOW_OPENS_HOUR, 0, standing.timeZone));
   return "deferred";
 }
 

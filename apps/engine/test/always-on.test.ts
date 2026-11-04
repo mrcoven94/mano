@@ -273,6 +273,106 @@ describe("the daily check", () => {
     expect(await checkTimes(h)).toEqual([]);
   });
 
+  it("a letter that adds someone to the household does not widen the screen until the person confirms", async () => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    // Confirmed single at $2,000 a month: over CalFresh's lowest limit for one
+    // ($1,729), under it for two ($2,345).
+    const h = handle("ao-letter");
+    expect(
+      (await patch(h, { "person.address.state": "CA", "person.householdConfirmed": true, "income.job.amount": 2000, "income.job.frequency": "monthly", "person.alwaysOn": true })).status,
+    ).toBe(200);
+    await alarmsAt(h, at(1, 9, 30, PACIFIC));
+    expect(posts).toEqual([]);
+
+    const added = await runInDurableObject(stubFor(h), async (instance, state) => {
+      state.storage.sql.exec("INSERT INTO documents(id, name, hash, r2_key) VALUES ('doc-1', 'letter.txt', 'h', 'k')");
+      return (instance as PersonAgent).recordDocumentFacts(personIdForHandle(h), {
+        documentId: "doc-1",
+        idempotencyKey: `patch-${++keyCount}`,
+        fields: { "household.child.name": "Sam Example" },
+      });
+    });
+    expect(added.status).toBe("ok");
+    await alarmsAt(h, at(2, 9, 30, PACIFIC));
+    expect(posts).toEqual([]);
+
+    // The person says who lives with them, and only then is the child counted.
+    expect((await patch(h, { "person.householdConfirmed": true })).status).toBe(200);
+    await alarmsAt(h, at(3, 9, 30, PACIFIC));
+    expect(posts.map((p) => p.key)).toEqual(["reminder:help:g0:CA:snap"]);
+    expect(posts[0].text).toContain("household of 2");
+  });
+
+  it("a text held overnight is withdrawn when a correction means it no longer fits", async () => {
+    const posts = recordChannels();
+    const zone = "America/New_York";
+    setClock(at(0, 12, 0, zone));
+    const h = await personIn("ao-corrected", "NY");
+    await alarmsAt(h, at(1, 22, 30, zone));
+    expect(await helpRows(h)).toEqual([{ id: "help:g0:NY:snap", status: "scheduled" }]);
+
+    setClock(at(1, 23, 0, zone));
+    expect((await patch(h, { "income.job.amount": 50000 })).status).toBe(200);
+    await alarmsAt(h, at(2, 9, 0, zone));
+    expect(posts).toEqual([]);
+    expect(await helpRows(h)).toEqual([{ id: "help:g0:NY:snap", status: "withdrawn" }]);
+  });
+
+  it("a text held overnight says the household as it is when it goes", async () => {
+    const posts = recordChannels();
+    const zone = "America/New_York";
+    setClock(at(0, 12, 0, zone));
+    const h = await personIn("ao-grew", "NY");
+    await alarmsAt(h, at(1, 22, 30, zone));
+    setClock(at(1, 23, 0, zone));
+    expect((await patch(h, { "household.baby.name": "Lee Example" })).status).toBe(200);
+    await alarmsAt(h, at(2, 9, 0, zone));
+    expect(posts.map((p) => p.key)).toEqual(["reminder:help:g0:NY:snap"]);
+    expect(posts[0].text).toContain("household of 3");
+  });
+
+  // A write that lands while delivery is waiting on decryption, at each point
+  // it could: the k-th decryption after the claim runs the write first.
+  const racing = [
+    ["stop checking", { "person.alwaysOn": false }],
+    ["an income correction", { "income.job.amount": 50000 }],
+  ] as const;
+  describe.each(racing)("%s landing while delivery decrypts", (name, fields) => {
+    it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])("at decryption %i: never sent", async (k) => {
+      const posts = recordChannels();
+      const zone = "America/New_York";
+      setClock(at(0, 12, 0, zone));
+      const h = await personIn(`ao-race-${name.length}-${k}-x`, "NY");
+      await alarmsAt(h, at(1, 22, 30, zone));
+      setClock(at(2, 9, 0, zone));
+
+      const personId = personIdForHandle(h);
+      let landed = false;
+      await runInDurableObject(stubFor(h), async (instance) => {
+        const agent = instance as PersonAgent;
+        const real = crypto.subtle.decrypt.bind(crypto.subtle);
+        let seen = 0;
+        const spy = vi.spyOn(crypto.subtle, "decrypt").mockImplementation(async (...args) => {
+          // Two AES calls per sealed leaf: the second opens the value.
+          if (!landed && ++seen === k) {
+            landed = true;
+            const out = await agent.patchProfile(personId, { idempotencyKey: `race-${k}`, source: "person", fields });
+            expect(out.status).toBe("ok");
+          }
+          return real(...args);
+        });
+        await agent.deliverDueReminders();
+        spy.mockRestore();
+      });
+      expect(landed).toBe(true);
+      // Whatever the first run held back, the next run settles.
+      await alarmsAt(h, at(2, 9, 0, zone));
+      expect(posts).toEqual([]);
+      expect(await helpRows(h)).toEqual([{ id: "help:g0:NY:snap", status: "withdrawn" }]);
+    });
+  });
+
   it("the alarm that wakes an evicted agent still runs the check that is due", async () => {
     const posts = recordChannels();
     setClock(at(0, 12, 0, PACIFIC));

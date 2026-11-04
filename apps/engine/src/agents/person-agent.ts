@@ -63,7 +63,7 @@ import {
   type ReplayInput,
   type ReplayStorage,
 } from "../fill-replay.js";
-import { ProfileStore, forgetMemoryNote, type PatchAnswer, type Profile, type Suggestion } from "../profile.js";
+import { ProfileStore, forgetMemoryNote, profileRevision, type PatchAnswer, type Profile, type Suggestion } from "../profile.js";
 import { decryptForPerson, documentAad, encryptForPerson, profileCipher, type EncryptedBlob } from "../crypto.js";
 import {
   cancelDeadline,
@@ -81,7 +81,7 @@ import {
   updateDeadline,
   type DeadlineResult,
 } from "../deadlines.js";
-import { gateHelpText, isHelpText, nextCheckAt, planHelpText } from "../always-on.js";
+import { gateHelpText, isHelpText, nextCheckAt, planHelpText, standingOf, type HelpStanding } from "../always-on.js";
 
 // A delivery run holds its claim this long; a run that crashed is
 // reclaimed after it. Retries back off from 30 seconds to an hour and
@@ -739,7 +739,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     for (const reminder of claimed) {
       // A deadline's nudge is checked against its deadline and its quiet
       // hours in the same step as the handoff, so nothing lands between.
-      const help = isHelpText(reminder.id) ? await this.alwaysOnSetting() : null;
+      const help = isHelpText(reminder.id) ? await this.helpStanding(reminder) : null;
       const step = this.ctx.storage.transactionSync(() => {
         const held = help
           ? gateHelpText(this.db(), reminder.id, token, Date.now(), help)
@@ -760,7 +760,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         const result = await sendToChannels(this.env, {
           handleHash,
           key: `reminder:${reminder.id}`,
-          text: reminder.text,
+          text: help?.text ?? reminder.text,
           generation: reminder.generation,
         });
         outcome =
@@ -788,6 +788,17 @@ export class PersonAgent extends Agent<Env, PersonState> {
       return { on: (await store?.value("person.alwaysOn")) === true, timeZone: timeZoneForState(typeof state === "string" ? state : null) };
     } catch {
       return { on: false, timeZone: timeZoneForState(null) };
+    }
+  }
+
+  // What the profile says about a text about to go. The revision is taken
+  // before the read, so a write during it never passes for what was read.
+  private async helpStanding(reminder: { id: string; generation: number }): Promise<HelpStanding> {
+    const revision = profileRevision(this.db());
+    try {
+      return standingOf(await this.profileStore()?.read(), reminder, revision);
+    } catch {
+      return standingOf(null, reminder, revision);
     }
   }
 
