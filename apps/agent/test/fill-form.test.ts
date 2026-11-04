@@ -235,7 +235,7 @@ describe("fill_form", () => {
     const page = (await engine.replayPageAt(url!))!;
     const captions = [...page.matchAll(/<li><p>([^<]*)<\/p>/g)].map((m) => m[1]);
     expect(captions).toEqual([
-      "1. Mano opened the form.",
+      "1. Mano opened the form. An AI model chose each step below from what it saw on the screen.",
       ...FORMS["food-renewal"]!.fields.map((f, i) => `${i + 2}. Mano filled in &quot;${f.label}&quot;.`),
     ]);
     // Each typed step shows its field up close, centered where Mano
@@ -259,7 +259,7 @@ describe("fill_form", () => {
     ];
     const steps = replayOf(frames, form, VALUES);
     expect(steps.map((s) => [s.caption, s.png[33], s.focus])).toEqual([
-      ["Mano opened the form.", 0, null],
+      ["Mano opened the form. An AI model chose each step below from what it saw on the screen.", 0, null],
       ["Mano typed into the form.", 1, { x: 600, y: 430 }],
       ["Mano corrected the field.", 2, { x: 600, y: 430 }],
     ]);
@@ -342,6 +342,15 @@ describe("fill_form", () => {
     setFillDepsForTests(() => ({ computer, model, modelId: "muse-spark-1.3-contributor", deadlineMs: 5000, draftToken: "wrong-token" }));
     model = new FakeModelClient([[call(typing(VALUES))], [say("ACCEPTED")]]);
     expect((await run("turn_fill0019", { form: "food-renewal" })).status).toBe("fill_failed");
+    expect(engine.approvals()).toHaveLength(0);
+  });
+
+  it("a key that could leave the browser stops the fill before any action: nothing is typed or prepared", async () => {
+    engine.profile = profile();
+    model = new FakeModelClient([[call([{ type: "keypress", keys: ["alt", "F2"] }, { type: "type", text: "touch /tmp/mano-escape" }])]]);
+    const out = await run("turn_fill0041", { form: "food-renewal" });
+    expect(out.status).toBe("fill_failed");
+    expect(computer.acted).toEqual([]);
     expect(engine.approvals()).toHaveLength(0);
   });
 
@@ -603,6 +612,28 @@ describe("the computer and portal a deployment fills with", () => {
     if ("unavailable" in deps) return;
     await deps.computer.screenshot().catch(() => undefined);
     expect(bodies).toEqual([expect.objectContaining({ person_id: "person-abc" })]);
+  });
+
+  it("follows the agent's model switch, and takes the open-weight key alone when the switch is on", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return Response.json({ id: "r", status: "completed", output: [] });
+    });
+    const request = { instructions: "i", tools: [], input: [], store: false };
+    const on = fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined, MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "test-open-key" });
+    if ("unavailable" in on) throw new Error(on.unavailable);
+    await on.model.createResponse({ ...request, model: on.modelId });
+    expect(on.modelId).toBe("meta/muse-spark-open");
+
+    const off = fillDepsFromEnv("person-abc", { ...env, OPENROUTER_API_KEY: "test-open-key" });
+    if ("unavailable" in off) throw new Error(off.unavailable);
+    await off.model.createResponse({ ...request, model: off.modelId });
+    expect(off.modelId).toBe("muse-spark-1.3");
+    expect(urls).toEqual(["https://openrouter.ai/api/v1/responses", "https://api.meta.ai/v1/responses"]);
+
+    expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined })).toEqual({ unavailable: "no model key" });
+    expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined, MANO_MODEL_PROVIDER: "openrouter" })).toEqual({ unavailable: "no model key" });
   });
 
   it("is not available without the portal's draft token, since nothing could be read back", () => {
