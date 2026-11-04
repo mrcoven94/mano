@@ -22,6 +22,22 @@ const OPEN_WEIGHT_URL = "https://openrouter.ai/api/v1/chat/completions";
 // and no provider that stores or trains on what it is sent.
 const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" } as const);
 
+// The same open-weight model on a Modal Shared Endpoint, for
+// MANO_MODEL_PROVIDER=modal. Off by default. Rule 7 does not list this
+// route, so it carries synthetic data only until David changes that rule.
+export const MODAL_OPEN_WEIGHT_MODEL = "meta-models/Muse-Spark-Open-816B-A42B";
+
+// Chat completions URL for a Modal endpoint, or nothing unless it is https
+// on Modal's own endpoint domain, so a setting cannot send pages elsewhere.
+function modalChatUrl(raw: string | undefined): string | undefined {
+  try {
+    const url = new URL(raw ?? "");
+    return url.protocol === "https:" && url.hostname.endsWith(".modal.direct") ? `${url.origin}/v1/chat/completions` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export type ModelContent =
   | { type: "input_text"; text: string }
   | { type: "input_image"; image_url: string; detail?: "low" | "high" | "auto" };
@@ -369,11 +385,11 @@ interface ChatMessage {
 // field, so nothing on a request reaches the body unmapped, and the model
 // and pin are constants no option or setting can change.
 interface OpenWeightBody {
-  model: typeof OPEN_WEIGHT_MODEL;
+  model: typeof OPEN_WEIGHT_MODEL | typeof MODAL_OPEN_WEIGHT_MODEL;
   messages: ChatMessage[];
   max_tokens?: number;
   response_format?: { type: "json_schema"; json_schema: Omit<JsonSchemaFormat, "type"> };
-  provider: typeof ZERO_RETENTION;
+  provider?: typeof ZERO_RETENTION;
 }
 
 function chatMessage(item: ModelInputItem): ChatMessage {
@@ -386,7 +402,7 @@ function chatMessage(item: ModelInputItem): ChatMessage {
   return { role: item.role, content: parts.length === 1 && only?.type === "text" ? only.text : parts };
 }
 
-function openWeightBody(req: ResponsesRequest): OpenWeightBody {
+function openWeightBody(req: ResponsesRequest, route: OpenWeightRoute): OpenWeightBody {
   const input: ModelInputItem[] = typeof req.input === "string" ? [{ role: "user", content: [{ type: "input_text", text: req.input }] }] : req.input;
   const format = req.text?.format;
   const messages = input.map(chatMessage);
@@ -396,11 +412,11 @@ function openWeightBody(req: ResponsesRequest): OpenWeightBody {
   // readable; readPage's parser and retry handle the rest.
   if (format) messages.unshift({ role: "system", content: `Answer with one JSON object and nothing else, matching this JSON schema: ${JSON.stringify(format.schema)}` });
   return {
-    model: OPEN_WEIGHT_MODEL,
+    model: route.model,
     messages,
     ...(req.max_output_tokens === undefined ? {} : { max_tokens: req.max_output_tokens }),
     ...(format ? { response_format: { type: "json_schema" as const, json_schema: { name: format.name, schema: format.schema, ...(format.strict === undefined ? {} : { strict: format.strict }) } } } : {}),
-    provider: ZERO_RETENTION,
+    ...route.pin,
   };
 }
 
@@ -415,8 +431,19 @@ function openWeightText(data: unknown, billed: ModelFailure["billed"]): string {
   return answerOr(typeof message?.content === "string" ? message.content : "", refused, billed);
 }
 
+interface OpenWeightRoute {
+  url: string;
+  model: OpenWeightBody["model"];
+  pin: Pick<OpenWeightBody, "provider">;
+}
+
+const OPENROUTER_ROUTE: OpenWeightRoute = { url: OPEN_WEIGHT_URL, model: OPEN_WEIGHT_MODEL, pin: { provider: ZERO_RETENTION } };
+
 export interface OpenWeightClientOptions {
   apiKey: string;
+  // A Modal endpoint's URL, with apiKey as its proxy token. Without one,
+  // OpenRouter. Anything off Modal's domain is refused.
+  modalUrl?: string;
   timeoutMs?: number;
   maxRetries?: number;
   fetchFn?: typeof fetch;
@@ -424,22 +451,32 @@ export interface OpenWeightClientOptions {
 
 // Meta's open-weight model through OpenRouter, while the Meta Model API
 // cannot answer. It takes Mail's reading requests only and answers them
-// all with the one model. There is no base URL or model option, so rule
-// 13's Meta-only limit and rule 7's pin hold whatever the settings say.
+// all with the one model. There is no model option and the only URL option
+// is held to Modal's domain, so rule 13's Meta-only limit and the OpenRouter
+// pin hold whatever the settings say.
 export class OpenWeightModelClient implements ModelClient {
   readonly live = true;
   private transport: Transport;
+  private route: OpenWeightRoute;
 
   constructor(opts: OpenWeightClientOptions) {
     this.transport = transportFrom(opts);
+    if (opts.modalUrl === undefined) {
+      this.route = OPENROUTER_ROUTE;
+      return;
+    }
+    const url = modalChatUrl(opts.modalUrl);
+    if (!url) throw new Error("A Modal endpoint URL must be https on Modal's own domain.");
+    this.route = { url, model: MODAL_OPEN_WEIGHT_MODEL, pin: {} };
   }
 
   async responses(req: ResponsesRequest, opts: CallOptions = {}): Promise<ResponsesResult> {
     if (req.model === SEGMENT_MODEL) throw new SegmentationSkipped();
     if (req.model !== STANDARD_MODEL && req.model !== CONTRIBUTOR_MODEL) throw new Error(`Unknown model ID: ${req.model}.`);
-    const data = await postJson(this.transport, OPEN_WEIGHT_URL, openWeightBody(req), opts.deadline);
+    const { model } = this.route;
+    const data = await postJson(this.transport, this.route.url, openWeightBody(req, this.route), opts.deadline);
     const usage = extractUsage(data);
-    return { text: openWeightText(data, { usage, model: OPEN_WEIGHT_MODEL }), model: OPEN_WEIGHT_MODEL, usage, raw: data };
+    return { text: openWeightText(data, { usage, model }), model, usage, raw: data };
   }
 }
 
@@ -447,6 +484,8 @@ export interface ModelClientEnv {
   META_MODEL_API_KEY?: string;
   MANO_MODEL_PROVIDER?: string;
   OPENROUTER_API_KEY?: string;
+  MODAL_ENDPOINT_URL?: string;
+  MODAL_PROXY_TOKEN?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;
@@ -467,6 +506,12 @@ export function createModelClient(
   env: ModelClientEnv,
   opts: { synthetic: boolean; fetchFn?: typeof fetch } = { synthetic: false },
 ): MetaModelClient | OpenWeightModelClient | RecordedModelClient {
+  // Chosen with a setting missing or a URL off Modal's domain, it reads with
+  // the stand-in, which answers nothing, rather than the Meta Model API.
+  if (env.MANO_MODEL_PROVIDER === "modal") {
+    if (!env.MODAL_PROXY_TOKEN || !modalChatUrl(env.MODAL_ENDPOINT_URL)) return new RecordedModelClient([]);
+    return new OpenWeightModelClient({ apiKey: env.MODAL_PROXY_TOKEN, modalUrl: env.MODAL_ENDPOINT_URL, fetchFn: opts.fetchFn });
+  }
   if (env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY) {
     return new OpenWeightModelClient({ apiKey: env.OPENROUTER_API_KEY, fetchFn: opts.fetchFn });
   }

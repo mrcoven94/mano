@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { answerReading, readMail } from "../src/index.js";
 import { normalizeImage } from "../src/media.js";
 import { segmentFrame } from "../src/segment.js";
-import { MetaModelClient, RecordedModelClient, createModelClient, type ResponsesRequest } from "../src/model.js";
+import { MetaModelClient, OpenWeightModelClient, RecordedModelClient, createModelClient, type ResponsesRequest } from "../src/model.js";
 import { DOUBTFUL_PAGE, NIL, PLANTED_DEADLINE, PLANTED_DEADLINE_PAGE, RENEWAL_PAGE, RENEWAL_TEXT, letterPhoto, pageJson } from "./letter-fixture.js";
 
 const KEY = "test-openrouter-key";
@@ -61,6 +61,40 @@ describe("which client createModelClient builds", () => {
   it("is the stand-in when OpenRouter is chosen with no key at all", () => {
     expect(createModelClient({ MANO_MODEL_PROVIDER: "openrouter" })).toBeInstanceOf(RecordedModelClient);
   });
+
+  const MODAL = { MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://example--ep-test-server.us-west.modal.direct/", MODAL_PROXY_TOKEN: "wk-test.ws-test" };
+
+  it("reads with the open-weight model on Modal when it is chosen, with no OpenRouter fields", async () => {
+    const { model, sent } = stub([answering(RENEWAL_PAGE)], { ...MODAL, META_MODEL_API_KEY: "k", OPENROUTER_API_KEY: KEY });
+    await read(model);
+    expect(sent[0]!.url).toBe("https://example--ep-test-server.us-west.modal.direct/v1/chat/completions");
+    expect(sent[0]!.authorization).toBe("Bearer wk-test.ws-test");
+    expect(sent[0]!.body.model).toBe("meta-models/Muse-Spark-Open-816B-A42B");
+    expect(sent[0]!.body.provider).toBeUndefined();
+    expect(model.live).toBe(true);
+  });
+
+  it("is off by default: Modal settings alone change nothing", () => {
+    const { MANO_MODEL_PROVIDER: _chosen, ...settings } = MODAL;
+    expect(createModelClient({ ...settings, META_MODEL_API_KEY: "k" })).toBeInstanceOf(MetaModelClient);
+  });
+
+  it.each([
+    ["no token", { ...MODAL, MODAL_PROXY_TOKEN: "" }],
+    ["no URL", { ...MODAL, MODAL_ENDPOINT_URL: "" }],
+    ["a URL off Modal's domain", { ...MODAL, MODAL_ENDPOINT_URL: "https://example.com" }],
+    ["a URL that only looks like Modal's domain", { ...MODAL, MODAL_ENDPOINT_URL: "https://x.modal.direct.example.com" }],
+    ["a plain http URL", { ...MODAL, MODAL_ENDPOINT_URL: "http://example--ep-test-server.us-west.modal.direct" }],
+  ])("is the stand-in when Modal is chosen with %s, even with other keys set", (_name, env) => {
+    expect(createModelClient({ ...env, META_MODEL_API_KEY: "k", OPENROUTER_API_KEY: KEY })).toBeInstanceOf(RecordedModelClient);
+  });
+
+  it.each(["", "https://example.com", "https://x.modal.direct.example.com", "http://example--ep-test-server.us-west.modal.direct", "not a url"])(
+    "the client itself refuses the Modal URL %j",
+    (modalUrl) => {
+      expect(() => new OpenWeightModelClient({ apiKey: KEY, modalUrl })).toThrow("Modal's own domain");
+    },
+  );
 
   it("prefers OpenRouter over a Meta key when it is chosen", async () => {
     const { model, sent } = stub([answering(RENEWAL_PAGE)], { ...ENV, META_MODEL_API_KEY: "k" });

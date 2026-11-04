@@ -15,6 +15,13 @@
 // line's fallback, sorted by latency and at low reasoning effort. It is
 // for testing while the Meta Model API is down. Filling a form follows the
 // same switch (computer-fill.ts), on a client of its own.
+//
+// MANO_MODEL_PROVIDER=modal (with MODAL_ENDPOINT_URL and MODAL_PROXY_TOKEN)
+// switches turns to the same open-weight model on a Modal Shared Endpoint.
+// Off by default. Rule 7 does not list this route, so it carries synthetic
+// data only until David changes that rule. Chosen with a setting missing or
+// a URL off Modal's domain, it calls no model and never falls back to another
+// route. Filling a form is unavailable on it.
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   APICallError,
@@ -40,6 +47,23 @@ const OPENROUTER_BODY = Object.freeze({
   provider: { sort: "latency", ...ZERO_RETENTION },
   reasoning: { effort: "low" },
 } as const);
+export const MODAL_MODEL_ID = "meta-models/Muse-Spark-Open-816B-A42B";
+// Modal has no per-request routing to pin: its security page says Shared
+// Endpoints keep no request or response payloads. Low effort cut the median
+// reasoning from 453 tokens to 168 over six synthetic turns each.
+const MODAL_BODY = Object.freeze({ reasoning: { effort: "low" } } as const);
+
+// The endpoint's API root, or nothing unless it is https on Modal's own
+// endpoint domain, so a setting cannot send turns to another host.
+function modalBaseUrl(raw: string | undefined): string | undefined {
+  try {
+    const url = new URL(raw ?? "");
+    return url.protocol === "https:" && url.hostname.endsWith(".modal.direct") ? `${url.origin}/v1` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Reasoning alone burns ~600-1100 tokens on a greeting; 4096 leaves
 // room for reasoning plus tool calls plus a short reply.
 export const MAX_OUTPUT_TOKENS = 4096;
@@ -219,7 +243,7 @@ function meteringMiddleware(opts: {
 }
 
 interface ModelRoute {
-  name: "meta" | "openrouter";
+  name: "meta" | "openrouter" | "modal";
   baseURL: string;
   // Empty when the chosen route has no key; the agent then runs a stand-in.
   apiKey: string;
@@ -230,6 +254,12 @@ interface ModelRoute {
 // The one place that picks the model path, for both createMuseModel and
 // the agent's stand-in check.
 export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKey"> = {}, env: NodeJS.ProcessEnv = process.env): ModelRoute {
+  if (env.MANO_MODEL_PROVIDER === "modal") {
+    const baseURL = modalBaseUrl(env.MODAL_ENDPOINT_URL);
+    // An empty key sends the agent to its stand-in, so an incomplete choice
+    // reaches no model rather than the Meta Model API.
+    return { name: "modal", baseURL: baseURL ?? "", apiKey: baseURL ? (env.MODAL_PROXY_TOKEN ?? "") : "", modelId: MODAL_MODEL_ID, bodyExtra: MODAL_BODY };
+  }
   return env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY
     ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY }
     : {
@@ -243,6 +273,7 @@ export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKe
 
 export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageModel; modelId: string } {
   const route = selectModelRoute(opts);
+  if (route.name === "modal" && !route.apiKey) throw new Error("Modal is chosen but its settings are incomplete.");
   const provider = createOpenAICompatible({
     name: route.name,
     baseURL: route.baseURL,
