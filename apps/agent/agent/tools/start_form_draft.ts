@@ -19,13 +19,14 @@
 // a document on file that Engine says its executor could file (by kind
 // and size), this asks for one and drafts nothing. The question names the
 // attached document by its label, which the draft freezes, so the person
-// sees what their yes sends.
+// sees what their yes sends, and that says when no proof of income goes.
 import { defineTool, type ToolContext } from "eve/tools";
 import { z } from "zod";
 
 import type { EngineDocument, PersonEngine, Profile } from "../lib/engine.js";
 import { FORMS, fillFrom } from "../lib/forms.js";
 import { keepAnswers } from "../lib/form-answers.js";
+import { attachmentFor, type Attachment } from "../lib/letters.js";
 import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn, type TurnIdentity } from "../lib/person.js";
 import { EARLIER_NOT_UPDATED_NOTE, EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, earlierFiling } from "../lib/propose.js";
@@ -56,14 +57,10 @@ function unfileableQuestion(newest: EngineDocument): string {
   }
 }
 
-// The renewal's proof among the person's documents, which Engine lists
-// newest first: the one fill_form would attach (a profile value was read
-// from it) if Engine could file it, else the newest it could file.
-async function proofOnFile(engine: PersonEngine): Promise<{ proof: EngineDocument | null; newest: EngineDocument | null; profile: Profile | null }> {
+async function proofOnFile(engine: PersonEngine): Promise<{ proof: Attachment | null; newest: EngineDocument | null; profile: Profile | null }> {
   const [profile, documents] = await Promise.all([engine.getProfile(), engine.listDocuments()]);
-  const fileable = documents.filter((d) => d.filing === "fileable");
-  const fromProfile = profile ? RENEWAL.proof.fromProfile(profile) : null;
-  return { proof: fileable.find((d) => d.id === fromProfile) ?? fileable[0] ?? null, newest: documents[0] ?? null, profile };
+  const proof = await attachmentFor(engine, documents, profile ? RENEWAL.proof.fromProfile(profile) : null);
+  return { proof, newest: documents[0] ?? null, profile };
 }
 
 async function prepare(engine: PersonEngine, turn: TurnIdentity, ctx: ToolContext, answers: Record<string, string>) {
@@ -103,9 +100,9 @@ async function prepare(engine: PersonEngine, turn: TurnIdentity, ctx: ToolContex
     recipient: RENEWAL.recipient,
     purpose: RENEWAL.purpose,
     payload: { ...filled.values, [DECLARATION]: RENEWAL.declaration, [ATTACHMENT]: proof.label },
-    documentId: proof.id,
+    documentId: proof.document.id,
     // The safety check holds a document with no cited source against the draft.
-    sources: [{ kind: "document", id: proof.id }],
+    sources: [{ kind: "document", id: proof.document.id }],
   });
   if (!held.held) return { status: held.status, note: held.note, reason: held.reason, sent: false };
   return {

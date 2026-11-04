@@ -15,6 +15,7 @@ import { fillDepsFromEnv, fillOnComputer, type FillDeps, type ReplayStep } from 
 import { EngineError, type PersonEngine } from "../lib/engine.js";
 import { FORMS, fillFrom, layoutOf, resolveForm, type FormSpec } from "../lib/forms.js";
 import { keepAnswers } from "../lib/form-answers.js";
+import { attachmentFor } from "../lib/letters.js";
 import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
 import { tracedFillDeps } from "../lib/try-trace.js";
 import { personEngine, requireTurn } from "../lib/person.js";
@@ -102,10 +103,9 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
   if (bad) {
     return { status: "needs_answer", field: bad.name, question: bad.question, sent: false, note: `That answer does not fit "${bad.label}". Ask this one question again, and nothing else.` };
   }
-  // A renewal goes with the document the profile names, else the newest one
-  // on file the portal takes, as start_form_draft attaches it.
-  const onFile =
-    filled.missing?.name === "proof" && form === FORMS["food-renewal"] ? ((await engine.listDocuments()).find((d) => d.filing === "fileable") ?? null) : null;
+  // A renewal goes with the document the profile names, else what is on
+  // file the portal takes, named as start_form_draft names it.
+  const onFile = filled.missing?.name === "proof" && form === FORMS["food-renewal"] ? await attachmentFor(engine, await engine.listDocuments(), null) : null;
   if (filled.missing && !onFile) {
     const note =
       filled.missing.name === "proof"
@@ -150,7 +150,7 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     return { status: "fill_failed", sent: false, note: "Mano could not finish filling the form on its computer, so nothing was prepared or sent. Say so and offer to try again." };
   }
 
-  const documentId = filled.documentId ?? onFile?.id;
+  const documentId = filled.documentId ?? onFile?.document.id;
   const draft: Draft = {
     type: "submit",
     recipient: form.recipient,

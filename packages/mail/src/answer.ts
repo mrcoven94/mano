@@ -10,7 +10,7 @@
 // link a warning about the link. Either way its date is said only as what the letter claims, to check
 // with the office, so a false alarm never takes a real date away and a real
 // scam's date is never stated as fact. Mano holds no deadline from either.
-import type { Letter, LetterFields, MailReading, NamedDate, NamedDates, Obligation, Question, Warning } from "./types.js";
+import type { DocumentKind, Letter, LetterFields, MailReading, NamedDate, NamedDates, Obligation, Question, Warning } from "./types.js";
 import { ANSWER_WORDS, type AnswerWords, type ReplyLanguage } from "./words.js";
 
 // What a held deadline is for, when the published sentence says.
@@ -262,18 +262,36 @@ function noDateFound(reading: MailReading, letter: Letter): boolean {
   return letter.noDateInText === true && !reading.questions.some((q) => q.letterId === letter.id || q.letterId === null);
 }
 
+// The reader's kind, unless the page itself gives a reason to doubt it. A
+// letter is evidence (rule 4), so its words can sway the reader: one that tries
+// to instruct Mano or reads as a scam is not taken at its word. Neither is one
+// that names a benefits program, so a real letter called something else keeps
+// its dates and questions. A pay stub asks nothing and sets no date, and only a
+// pay stub goes as proof of income.
+function trustedKind(reading: MailReading, letter: Letter): DocumentKind | undefined {
+  const kind = letter.documentKind;
+  if (!kind || kind === "benefits_letter" || kind === "unknown") return kind;
+  const doubted = reading.warnings.some((w) => w.letterId === letter.id && (w.kind === "instruction_in_content" || w.kind === "scam_suspect"));
+  const asks = kind === "pay_stub" && (letter.fields.asked.length > 0 || letter.fields.deadlineText !== null);
+  return doubted || asks || programOf(letter.fields) ? "unknown" : kind;
+}
+
 function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPile: boolean, today: string | undefined): { lines: string[]; held: HeldDeadline | null } {
   const warnings = reading.warnings.filter((w) => w.letterId === letter.id);
   const scam = warnings.find((w) => w.kind === "scam_suspect");
   if (scam) return { lines: scamLines(scam, w), held: null };
   const question = reading.questions.find((q) => q.letterId === letter.id && q.kind === "confirm_deadline");
+  const kind = trustedKind(reading, letter);
+  const otherKind = kind && kind !== "benefits_letter" ? w.documentKind[kind] : null;
   if (warnings.some((w) => w.kind === "link_suspect")) {
     const planted = warnings.some((w) => w.kind === "instruction_in_content");
-    return { lines: [...suspectLinkLines(question, w), ...(planted ? [w.planted] : [])], held: null };
+    return { lines: [...(otherKind ? [otherKind] : []), ...suspectLinkLines(question, w), ...(planted ? [w.planted] : [])], held: null };
   }
+  // A pay date or a bill's due date is not a duty from an office.
+  if (otherKind && kind !== "unknown") return { lines: [otherKind], held: null };
   const program = programOf(letter.fields);
   const type = typeOf(letter);
-  const lines = [w.letterType[type](program?.name ?? w.benefits)];
+  const lines = [otherKind ?? w.letterType[type](program?.name ?? w.benefits)];
   const proposal = question?.proposal;
   let held: HeldDeadline | null = null;
   let ask: string | null = null;
@@ -299,7 +317,7 @@ function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPi
   if (send.length > 0) lines.push(w.asksToSend(listOf(send.map((c) => w.categories[c]), w.and)));
   if (inPile && noDateFound(reading, letter)) lines.push(w.noDateFound);
   if (warnings.some((warning) => warning.kind === "instruction_in_content")) lines.push(w.planted);
-  lines.push(w.official);
+  if (!otherKind) lines.push(w.official);
   // The question goes last, so the reply ends on the one thing to answer.
   if (ask) lines.push(ask);
   return { lines, held };
@@ -309,6 +327,11 @@ function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPi
 function wasRead(letter: Letter): boolean {
   const f = letter.fields;
   return f.excerpt.trim().length > 0 || f.asked.length > 0 || [f.sender, f.program, f.subject, f.deadlineText].some(Boolean);
+}
+
+// Each document something was read from, by its files, and what it was read as.
+export function documentsRead(reading: MailReading): { files: string[]; kind: DocumentKind | undefined }[] {
+  return reading.letters.filter(wasRead).map((letter) => ({ files: letter.pages.map((p) => p.file), kind: trustedKind(reading, letter) }));
 }
 
 // today (YYYY-MM-DD), when the caller knows it, keeps a date already past

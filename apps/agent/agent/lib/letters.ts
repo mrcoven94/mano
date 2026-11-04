@@ -13,7 +13,7 @@
 // invented: a failed or slow reading says so and offers to try again.
 import { createHash } from "node:crypto";
 
-import { ANSWER_WORDS, answerReading, readMail, type AnswerWords, type HeldDeadline, type MailReading, type ModelClient, type ReplyLanguage } from "@mano/mail";
+import { ANSWER_WORDS, answerReading, documentsRead, readMail, type AnswerWords, type HeldDeadline, type MailReading, type ModelClient, type ReplyLanguage } from "@mano/mail";
 
 import { daysLeft } from "./deadlines.js";
 import { EngineError, type EngineDocument, type PersonEngine } from "./engine.js";
@@ -93,11 +93,12 @@ async function hold(engine: PersonEngine, deadlines: HeldDeadline[], receivedAt:
   return lines;
 }
 
-// Marks each photo Mail found a letter in, deadline or not, so Mano can
+// Marks each photo Mail read a letter from, deadline or not, so Mano can
 // name it ("the letter you sent on November 2") when it attaches it. A
-// photo left unmarked is still on file, named as a photo.
+// photo left unmarked, a pay stub or one that could not be read, is still
+// on file, named as a photo.
 async function markLetters(engine: PersonEngine, reading: MailReading, deadlineAt: number): Promise<void> {
-  const ids = new Set(reading.letters.flatMap((l) => l.pages.map((p) => p.file)));
+  const ids = new Set(documentsRead(reading).flatMap((d) => (!d.kind || d.kind === "benefits_letter" ? d.files : [])));
   await Promise.all(
     [...ids].map(async (id) => {
       const time = timeLeft(deadlineAt);
@@ -109,6 +110,54 @@ async function markLetters(engine: PersonEngine, reading: MailReading, deadlineA
       }
     }),
   );
+}
+
+// Engine's document marks name only letters, so a pay stub is remembered by
+// its document ID, closed words Mano writes itself. The model is told IDs only
+// for these, so it cannot write one for a letter. Forgetting the fact only
+// loses the proof label, never claims one.
+const payStubFact = (id: string): string => `Read as a pay stub: document ${id}.`;
+const PAY_STUB_FACT = /^Read as a pay stub: document (\S+)\.$/;
+const LABEL_NOUN = /^the \S+ /;
+
+async function rememberPayStubs(engine: PersonEngine, reading: MailReading, deadlineAt: number): Promise<void> {
+  for (const id of new Set(documentsRead(reading).flatMap((d) => (d.kind === "pay_stub" ? d.files : [])))) {
+    await rememberFact(engine, payStubFact(id), deadlineAt).catch((err: unknown) =>
+      console.warn(JSON.stringify({ type: "mano_pay_stub_remember_failed", status: err instanceof EngineError ? err.status : null })),
+    );
+  }
+}
+
+async function payStubsOnFile(engine: PersonEngine): Promise<Set<string>> {
+  try {
+    return new Set((await engine.listMemory()).flatMap((r) => PAY_STUB_FACT.exec(r.content)?.[1] ?? []));
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_pay_stubs_read_failed", status: err instanceof EngineError ? err.status : null }));
+    return new Set();
+  }
+}
+
+export interface Attachment {
+  document: EngineDocument;
+  // Frozen in the draft. Guardian reads it in the payload and the question
+  // shows it, so both say the same thing about what the person's yes sends.
+  label: string;
+}
+
+// What goes with a renewal, among documents Engine lists newest first: the one
+// a profile income value was read from, else a pay stub read as one, else the
+// newest the portal takes, since the portal needs one document. Only a pay
+// stub is called proof of income, and the last says plainly that none is there.
+export async function attachmentFor(engine: PersonEngine, documents: EngineDocument[], incomeDocumentId: string | null): Promise<Attachment | null> {
+  const fileable = documents.filter((d) => d.filing === "fileable");
+  const income = fileable.find((d) => d.id === incomeDocumentId);
+  if (income) return { document: income, label: income.label };
+  const newest = fileable[0];
+  if (!newest) return null;
+  const stubs = await payStubsOnFile(engine);
+  const stub = fileable.find((d) => stubs.has(d.id));
+  if (stub) return { document: stub, label: `${stub.label.replace(LABEL_NOUN, "the pay stub ")} as proof of income` };
+  return { document: newest, label: `${newest.label}, and no proof of income` };
 }
 
 // The fixed system rule for a photo turn. It never carries letter text:
@@ -204,7 +253,7 @@ export async function readTextedPhotos(
     const w = ANSWER_WORDS[language()];
     const answer = answerReading(reading, language(), dayBehind(receivedAt));
     read = answer.outcome === "read";
-    const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt, w), markLetters(engine, reading, deadlineAt)]);
+    const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt, w), markLetters(engine, reading, deadlineAt), rememberPayStubs(engine, reading, deadlineAt)]);
     text = [answer.text, ...held].join(" ");
     if (read) {
       await rememberFact(engine, `From a letter photo: ${text}`, deadlineAt).catch((err: unknown) =>

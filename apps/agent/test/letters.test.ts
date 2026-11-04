@@ -267,7 +267,7 @@ describe("a texted letter", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
       const { body } = await send(photoTurn("turn_letter0090", { documents: [{ id: "doc-broken", mimeType: "image/jpeg" }] }), deps([]));
-      expect(body.text).toContain("I could not read the letter in your photo.");
+      expect(body.text).toContain("I could not read the page in your photo.");
       const line = log.mock.calls.map(([m]) => String(m)).find((m) => m.includes("mano_letters_read"));
       expect(JSON.parse(line!)).toMatchObject({ letters: 0, asked: ["unreadable_page"] });
     } finally {

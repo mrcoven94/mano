@@ -162,7 +162,7 @@ describe("starting a form draft", () => {
     expect(frozen.payload).toMatchObject(fields);
     expect(frozen.documentId).toBe("doc-letter");
     expect(approval.documentHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(renderQuestion((await client().listApprovals())[0])).toContain("With the photo you sent on November 2 attached.");
+    expect(renderQuestion((await client().listApprovals())[0])).toContain("With the photo you sent on November 2, and no proof of income attached.");
 
     const done = await client().approve(approval.id);
     expect(done.status).toBe("completed");
@@ -223,7 +223,7 @@ describe("starting a form draft", () => {
     expect(out.status).toBe("waiting_for_yes");
     expect(frozenDocument()).toBe("g0t2i0-letter02");
     const question = renderQuestion((await client().listApprovals())[0]);
-    expect(question).toContain("With the letter you sent on November 2 attached.");
+    expect(question).toContain("With the letter you sent on November 2, and no proof of income attached.");
     expect(question).not.toContain("attachment");
   });
 
@@ -287,7 +287,7 @@ describe("starting a form draft", () => {
     const out = await draft("turn_form000026");
     expect(out.status).toBe("waiting_for_yes");
     expect(frozenDocument()).toBe("g0t1i0-stub001");
-    expect(renderQuestion((await client().listApprovals())[0])).toContain("With the PDF you sent on November 2 attached.");
+    expect(renderQuestion((await client().listApprovals())[0])).toContain("With the PDF you sent on November 2, and no proof of income attached.");
     // Asked again, it picks the same PDF rather than the photo it cannot file.
     await draft("turn_form000027", fields, Date.now() + 10);
     expect(frozenDocument()).toBe("g0t1i0-stub001");
