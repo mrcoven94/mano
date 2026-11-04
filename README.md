@@ -1,27 +1,96 @@
 # Mano
 
-[![check](https://github.com/mrcoven94/mano/actions/workflows/check.yml/badge.svg)](https://github.com/mrcoven94/mano/actions/workflows/check.yml) [![license](https://img.shields.io/github/license/mrcoven94/mano)](LICENSE) [![latest release](https://img.shields.io/github/v/release/mrcoven94/mano)](https://github.com/mrcoven94/mano/releases)
+[![check](https://github.com/mrcoven94/mano/actions/workflows/check.yml/badge.svg)](https://github.com/mrcoven94/mano/actions/workflows/check.yml) [![license](https://img.shields.io/github/license/mrcoven94/mano)](LICENSE)
 
-Mano gives every person an agent that applies for help, fills out any form, reads their mail and renews on time. Agencies and nonprofits claim agents for their staff, and the agents work a shared case together only with the resident's consent. A person approves every decision.
+Mano is a text line for people renewing public benefits. Text it a photo of the letter. Mano finds the deadline that matters, fills out the renewal, and files it only after you say yes.
 
-Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026) on Meta's Muse models. Everything in this repository was written from October 26, 2026 onward.
+In April 2026, [Propel tested general-purpose AI agents on the online SNAP application](https://www.propel.app/insights/can-ai-agents-help-people-apply-for-snap-part-1/) in two states, in an internal test with no real applicants and nothing submitted. Both agents guessed what they had not been told, entered a mistyped phone number without asking, and ticked the legal checkbox themselves. Mano asks one plain question instead of guessing, leaves the declaration to the person, and has Muse Glimmer check every action before anything is filed.
 
-## Try it now
+Built for the Meta Global AI Developer Hackathon (October 26 to November 4, 2026). Synthetic people only: no real resident data, and demo submissions go only to our own sandbox agency portal, never to a real office.
 
-- Judges: run `pnpm install` and then `pnpm judge` from a fresh clone to watch Maria's renewal end to end on synthetic data (see [Judges](#judges-run-marias-renewal-in-one-command)).
-- Text Mano at (801) 920-3370. The current number is always on the site.
-- Visit the site: [withmano.com](https://withmano.com).
-- The resident app (iOS, Android, web) is in progress.
+## What runs today
 
-Demo submissions go only to our own sandbox agency portal, never to a real office. Synthetic people only, never real resident data.
+The whole renewal runs on your machine with `pnpm judge`, on synthetic data, with each step labeled real or simulated.
 
-## How it works
+On production, you can text Mano at (801) 920-3370. The conversation runs on Meta's open-weight model, Muse Spark Open, through OpenRouter with zero data retention, because Meta's hosted API answers HTTP 402 (billing not set up, checked November 3, 2026). Muse Glimmer checks actions on our own GPU. The steps that call Meta's hosted API (SAM 3.1, reading a letter, computer use) do not run on production while the 402 lasts, so a texted photo is not read there today. The whole renewal has not been confirmed on the current production build.
 
-A resident talks to Mano by text, app or web. Their agent reads mail, tracks deadlines, fills out forms and drafts submissions. It keeps one profile of the person (name, address, household, income, programs and case numbers), each fact marked with whether the person said it or a document showed it, so they never answer the same question twice. If they ask, Mano checks once a day, with plain rules and no model call, for new help they may qualify for in the eight states the program catalog covers, and texts them once per program. Every outside action goes through the action gateway: the agent decides, the person approves the exact version, then Mano acts. Staff agents at agencies and nonprofits see only the cases residents shared with them, and the agents coordinate over an open protocol.
+## Run Maria's renewal in one command
+
+You need Node 24 or newer and pnpm 10. No key, login or account is needed. From a fresh clone:
+
+```sh
+pnpm install
+pnpm judge
+```
+
+The command runs nine steps in one process. Every line says `real` or `simulated` and names the Meta model behind it. It writes the letter photo, the portal's view of the filing and Maria's replay page to a folder it names.
+
+- With no key, each model step uses its recorded response and says so, and the command exits 0. A recording answers only the input it was made for.
+- With your own `META_MODEL_API_KEY` set, SAM 3.1 and Muse Spark 1.3 run live on Meta's API.
+- If a live call fails (HTTP 402, for example), the step prints why, finishes on its recording when the recording matches, and stops otherwise. The command exits 1 either way.
+
+Three parts are simulated even with a key. Guardian's verdict is recorded, because Muse Glimmer runs on our own GPU. A stand-in for Mano's computer posts the same values to the portal's form, because the desktop runs on our Modal account. Maria's yes is scripted, because she is synthetic. The text line and Mano's agent turn are left out, and the output says so. Engine's action gateway and the sandbox portal run from their real code, on in-memory stores.
+
+Checked on macOS from a fresh clone and on Ubuntu in CI (`pnpm check`, which includes `packages/quality/test/judge-command.test.ts`). Windows is not tested.
+
+## Each spine step and the Meta model behind it
+
+Every model Mano calls at runtime is a Meta model. Seven spine steps below call one, and the other four are plain code.
+
+| Spine step | Meta model | Where it runs | On production today | In `pnpm judge` |
+| --- | --- | --- | --- | --- |
+| Maria texts and Mano answers, with its tools | Muse Spark Open (open weights) | OpenRouter, zero-retention endpoints only | Running | Left out, Mano's words are printed |
+| Crisis check, before the agent, on one short health question that the keyword floor flags | Muse Spark 1.3, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis | Left out |
+| Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter | Standby, on Muse Spark Open during the 402 | Left out |
+| Finding the letter in the photo | SAM 3.1 | Meta's hosted API | Not running, 402 | Live with your key, else a recording |
+| Reading the letter into cited fields | Muse Spark 1.3 | Meta's hosted API | Not running, 402 | Live with your key, else a recording |
+| Filling the form with Mano's computer | Muse Spark 1.3 computer use | Meta's hosted API, driving a desktop on Modal | Not running, 402 | Stand-in |
+| Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes | Recording |
+| Holding the one deadline | None, plain code | `packages/mail/src/gate.ts` | Waits on the reading | Real |
+| Drafting the renewal from the profile and the letter | None for the form table, the agent turn above calls it | `apps/agent/agent/lib/forms.ts` | Deployed, not confirmed end to end | Real form table |
+| Maria's yes and the filing to the sandbox portal | None, plain code | `apps/engine/src/gateway` | Deployed, no filing confirmed on this build | Real code, scripted yes |
+| Reminder the day before her interview | None, plain code | `apps/engine/src/deadlines.ts` | Deployed | Not in this run |
+
+The route for agent turns is set in `apps/agent/agent/lib/muse.ts`. With `MANO_MODEL_PROVIDER=openrouter` and `OPENROUTER_API_KEY` set, a turn goes to `meta/muse-spark-open` with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight. With either setting missing, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. Production has both set until Meta's billing works (see the November 3 entry in `docs/decisions.md`).
+
+These parts are not Meta model calls: the keyword crisis floor that every text passes through, the deadline gate and field checks, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images. `pnpm judge` reads its synthetic letter with the `muse-spark-1.3-contributor` ID, which `AGENTS.md` allows only for synthetic data.
+
+## Live versus in progress
+
+<!-- status:start -->
+| Piece | Status | URL | Last deploy |
+| --- | --- | --- | --- |
+| Site | live | https://withmano.com | c6edc52 success 2026-11-04 |
+| Sandbox portal | live | https://sandbox.withmano.com/ | c6edc52 success 2026-11-04 |
+| Engine | live | https://engine.withmano.com/health | c6edc52 success 2026-11-04 |
+| Channels | live | https://text.withmano.com/health | c6edc52 success 2026-11-04 |
+| Guardian | live | no public URL | 5a6ba65 success 2026-11-03 |
+| Quality | in progress | not deployed yet | none |
+<!-- status:end -->
+
+`node scripts/status.mjs` generates this table from each health URL and the latest deploy. A daily workflow warns when this copy is stale.
+
+The site labels these pieces coming soon, and none of them is live:
+
+| Piece | True today |
+| --- | --- |
+| Mano's own email inbox | Code is in [PR 149](https://github.com/mrcoven94/mano/pull/149), and stays off until email routing is turned on |
+| Daily check for new help | Code is in [PR 150](https://github.com/mrcoven94/mano/pull/150) |
+| Waiting on hold | Engine side is in [PR 146](https://github.com/mrcoven94/mano/pull/146), against a fake provider. It places no real call |
+| Faxes and mailed letters | Code is in [PR 144](https://github.com/mrcoven94/mano/pull/144), faxing only our own number and mailing only in a provider's test mode |
+| Sharing a case with a caseworker | Code is in [PR 155](https://github.com/mrcoven94/mano/pull/155) |
+| Mano on the web | Code is in [PR 148](https://github.com/mrcoven94/mano/pull/148) |
+| iPhone app | [PR 148](https://github.com/mrcoven94/mano/pull/148) prepares the build, which still needs the maintainer's Apple account |
+
+The estimate page in the spine in `AGENTS.md` is not built.
+
+## What was built during the hackathon
+
+All of this was written from October 26, 2026 onward, except what [Prior work](#prior-work) and `docs/third-party.md` list.
 
 ```mermaid
 flowchart LR
-    resident[Resident: text, app, web] --> agent[Personal agent]
+    resident[Person: text line] --> agent[Personal agent]
     agent --> mail[Mail and deadlines]
     agent --> forms[Forms and renewals]
     agent --> gateway[Action gateway: decide, approve, act]
@@ -29,131 +98,49 @@ flowchart LR
     gateway --> fax[Fax, not built yet]
     agent <--> protocol[Open protocol]
     protocol <--> staff[Staff agent: shared cases only]
+    gateway --> guardian[Guardian: Muse Glimmer]
 ```
 
-## Live versus in progress
+| Path | What it does |
+| --- | --- |
+| `apps/channels` | The text line on Cloudflare Workers: iMessage and SMS webhooks, one conversation per handle, and the plain answer when the agent cannot answer |
+| `apps/agent` | The agent on Eve by Vercel: reads each text, keeps a profile, proposes actions through Engine, and fills out forms |
+| `apps/engine` | The system of record on Cloudflare: one Durable Object per person, encrypted files in R2, deadlines, approvals, and the action gateway |
+| `packages/mail` | Turns a photo into letters, cited fields and one deadline, or asks a question when the date is in doubt |
+| `packages/computer` | The screenshot and mouse loop for Mano's computer. It fills forms and never files them |
+| `packages/guardian` | Muse Glimmer on one Modal GPU, plus the local rules Engine runs first |
+| `packages/persona` | Mano's voice, the voice guard, and the crisis floor that always names 988 and 911 |
+| `packages/programs` | Sourced facts for SNAP, Medicaid and LIHEAP in eight states. `pnpm --filter @mano/programs verify-sources` fetches every source again |
+| `packages/protocol` | The open message format for working a shared case. The spec is in `docs/protocol.md` |
+| `packages/accounts` | One person, one account: phone and email sign-in, linking and merge |
+| `packages/quality` | The answer-quality bench and `pnpm judge` |
+| `apps/sandbox-portal` | The fake state benefits portal that every demo files to |
+| `apps/site` | withmano.com |
+| `apps/app` | The resident app in React Native with Expo |
 
-<!-- status:start -->
-| Piece | Status | URL | Last deploy |
-| --- | --- | --- | --- |
-| Site | live | https://withmano.com | f846c8d success 2026-11-02 |
-| Sandbox portal | live | https://sandbox.withmano.com/ | 5d854a0 success 2026-11-02 |
-| Engine | live | https://engine.withmano.com/health | 80767ac success 2026-11-02 |
-| Channels | live | https://text.withmano.com/health | 789eaf4 success 2026-11-02 |
-| Guardian | live | no public URL | 25c099c success 2026-10-29 |
-| Quality | in progress | not deployed yet | none |
-<!-- status:end -->
+Tests cover the three safety cases: a stale approval is refused (`apps/engine/test/sandbox-portal-contract.test.ts`), a timeout is reconciled before any retry (`apps/engine/test/blocker-7-single-flight.test.ts`), and a scam link is caught (`packages/quality/test/checks.test.ts`, `packages/mail/test/safety.test.ts`). The tests for asking instead of guessing and for the person's declaration are in `apps/agent/test/form-draft.test.ts` and `apps/engine/test/sandbox-portal-contract.test.ts`. The reasons behind each choice are in `docs/decisions.md`.
 
-This table is generated by `scripts/status.mjs`, which checks each health URL and the latest deploy per environment. A daily workflow posts the fresh table to its job summary and warns when this copy is stale; refresh it with `node scripts/status.mjs`. Deployments are visible in the repository's [Deployments panel](https://github.com/mrcoven94/mano/deployments).
+Guardian scales to zero when idle, and a check fails closed after 10 seconds. A check that finds Guardian cold refuses with "try again in a few minutes" and leaves it starting. To keep one GPU warm (about $1.95 an hour), run the `guardian-modal` workflow from `main` with `min_containers` set to 1.
 
-## Judges: run Maria's renewal in one command
+## Run and deploy it yourself
 
-You need Node 24 and pnpm. From a fresh clone:
+What each app needs differs:
 
-```sh
-pnpm install
-pnpm judge
-```
-
-Set `META_MODEL_API_KEY` in your environment first to run the Meta model steps live. The command runs Maria's renewal end to end on this machine, on synthetic data, with no login and none of our accounts. Maria texts a photo of a synthetic renewal letter. SAM 3.1 finds the letter in the photo and Muse Spark 1.3 reads it. Mano answers with the deadline and drafts the renewal from Maria's profile and the letter. Mano's computer fills the form on the sandbox portal. Engine's action gateway and Guardian check the action. The renewal carries her case number and ends with the office's declaration, which only Maria makes: before her yes, Engine refuses to file it. Maria says yes, and the portal receives the filing with her declaration. Without a key the run takes seconds; with one, the live letter reading adds about 30 seconds. The command writes the letter photo, the portal's view of the filing and Maria's replay page of each step to a folder it names.
-
-Every step prints a label and says which parts ran for real and which were simulated, with the Meta model behind each part:
-
-- Real: SAM 3.1 and Muse Spark 1.3 on Meta's API with your key, and Mano's own code, all in one process: the mail reader and its deadline gate, the agent's form table and approval question, Engine's action gateway and sandbox executor, the sandbox portal's request handler, and Engine's replay page.
-- Simulated: Guardian's verdict (Muse Glimmer runs on our own GPU, so the run uses its recorded verdict), Mano's computer (Muse Spark 1.3 drives a hosted desktop on our Modal account, so a stand-in posts the same values to the portal's form and draws each screen), and Maria's yes (she is synthetic). Some parts of Mano are left out and labeled as such: the text line (the photo is handed to Mano directly and Mano's words are printed), Mano's agent turn (the run calls the form table its renewal tool uses), and Engine and the portal as deployed (their code runs here on in-memory stores). The saved replay page lists the same parts at the top.
-
-Without a key, every model step uses its recorded response and says so. A recording answers only the input it was made for: the reading only the page SAM 3.1's recording found, and Guardian's verdict only the exact action it checked. A different input gets no recorded answer, and its step fails. If a live model call fails (for example HTTP 402), the step prints why, finishes on its recorded response, and the command exits 1. `pnpm --filter @mano/quality check` runs the same command both ways.
-
-## Run it locally
-
-You need Node 24 and pnpm. No accounts and no keys. Each package runs with local stand-ins when its keys are missing (a fake model client, an in-memory store, a local link check) and says which parts are not live.
+- `apps/site`: with no keys, the sign-in routes run on stand-ins and print which parts are not live.
+- `apps/app`: it needs `EXPO_PUBLIC_ENGINE_URL` or `EXPO_PUBLIC_DEMO_MODE=true`, and otherwise shows "Mano is not configured". Demo mode uses recorded synthetic responses and says so on screen.
+- `apps/sandbox-portal`: it needs [wrangler](https://developers.cloudflare.com/workers/wrangler/) installed globally, because `pnpm install` does not add it for that package.
+- `apps/agent` and `apps/channels`: with no model key, a stand-in answers. The agent's turn route answers 503 without `ENGINE_URL` and `MANO_ENGINE_AGENT_TOKEN`.
+- `apps/engine`: with no model key, it refuses to answer unless `MANO_ENV=development` is set, as in `apps/engine/.dev.vars.example`, and then uses a labeled stand-in.
 
 ```sh
 pnpm install
 pnpm check
-```
-
-Run the site:
-
-```sh
 pnpm --filter @mano/site dev
-```
-
-Run the sandbox agency portal (needs [wrangler](https://developers.cloudflare.com/workers/wrangler/)):
-
-```sh
 pnpm --filter @mano/sandbox-portal dev
+EXPO_PUBLIC_DEMO_MODE=true pnpm --filter @mano/app start
 ```
 
-Run the resident app with Expo:
-
-```sh
-pnpm --filter @mano/app start
-```
-
-Without `EXPO_PUBLIC_ENGINE_URL` the app talks to a stand-in engine with recorded synthetic responses and says so on screen; production refuses to start without the URL unless `EXPO_PUBLIC_DEMO_MODE=true`. `pnpm --filter @mano/app check` runs its typecheck, lint and tests.
-
-Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. To deploy your own copy, see the deploy workflows in `.github/workflows/`.
-
-## The text line
-
-Texts to Mano land on `apps/channels`, a Cloudflare Worker. When the agent is configured (`AGENT_URL`, `MANO_AGENT_SECRET` and `MANO_HANDLE_GRANT_SECRET`), every text goes to an agent turn in `apps/agent`, where Muse Spark 1.3 answers with the agent's tools and Engine (Meta's open-weight Muse Spark Open through OpenRouter instead when `MANO_MODEL_PROVIDER=openrouter`, for testing while the Meta Model API is down). If the agent times out, fails or sends a reply Channels cannot use, or the person has asked to delete their conversation, the text line answers with its plain responder instead, which is also the only responder when the agent is not configured. The plain responder is a Meta model call to Muse Spark 1.3 (a Standard model ID with `store: false`, set as `MANO_REPLY_MODEL` in `apps/channels/wrangler.toml`). Mano's voice lives in `packages/persona` and goes to that model as its instructions, with the conversation as role messages.
-
-- In the plain responder, simple questions take the fast path: one call at minimal reasoning effort, sent a second time 300 ms later, and the first answer wins. Replies arrive in about 2 to 4 seconds.
-- In the plain responder, questions that need real digging take the deep path: the fast call returns a short heads-up, which is texted at once, then a second call at medium effort writes the full answer.
-- Every outgoing text passes a deterministic voice guard (plain code, not a model call). It rewrites dashes and markdown, replaces any model or provider name with "I'm Mano, an automated assistant", and sends a short safe line instead of an empty text.
-- A message about self-harm or danger never waits on a heads-up, and its reply always names 988 and 911.
-- A photo texted as HEIC, HEIF or WebP is stored as a JPEG copy, so it can be attached to a form. Cloudflare Images makes the copy (an image service, not a model call) through the `IMAGES` binding in `apps/channels/wrangler.toml`. Without the binding the photo is stored as sent, Mano can still read it, and the reply asks for a screenshot.
-- When the Meta Model API cannot answer the plain responder (HTTP 402, a 5xx or a timeout), the same call goes once to Meta's open-weight Muse Spark Open through OpenRouter, on zero-retention endpoints only (`zdr: true`, `data_collection: "deny"` on every request), and later texts skip the failing API for 5 minutes. The crisis check uses the same fallback. If both fail, Mano sends its short safe line, and a crisis message still gets 988 and 911 with no model at all. The fallback is off unless `OPENROUTER_API_KEY` is set for `apps/channels`.
-
-Check the voice against the real model with your own key (synthetic messages only, sent to a `-contributor` model ID). Without a key, the probes are skipped:
-
-```sh
-META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
-```
-
-With `OPENROUTER_API_KEY` set, the same command also sends one synthetic text to the open-weight fallback, with the Meta Model API played as down.
-
-## Packages and apps
-
-| Path | What | Status |
-| --- | --- | --- |
-| `apps/site` | withmano.com: the public website and the resident and staff screens, on Vercel | live |
-| `apps/sandbox-portal` | The fake state benefits portal every demo submits to, on Cloudflare Workers | live |
-| `apps/engine` | The agent engine on Cloudflare: one agent per person and per organization, the action gateway | landing during the hackathon |
-| `apps/agent` | The agent brain on Eve by Vercel: reads each text, remembers and proposes actions through the engine, fills out forms on Mano's computer, keeps reminders and the deadlines Mano texts about on its own | landing during the hackathon |
-| `apps/channels` | The messaging worker on Cloudflare: webhooks, one conversation per handle, answers by text | live |
-| `packages/channels` | The messaging library: the provider interface, the responder interface, turns and limits | live |
-| `packages/persona` | Mano's voice: the soul, the fast and deep paths, the voice guard, the crisis floor and the persona probes | live |
-| `packages/protocol` | The open message format agents use to work a case together | landing during the hackathon |
-| `packages/guardian` | The checker that reviews every outside action before a person approves it | live |
-| `packages/computer` | The desktop Mano drives: screenshots in, mouse and keyboard out, on Modal or local Playwright | landing during the hackathon |
-| `packages/quality` | The nightly answer-quality bench | landing during the hackathon |
-| `packages/programs` | Sourced facts for SNAP, Medicaid and LIHEAP in eight states, which the agent looks up before stating any | landing during the hackathon |
-| `packages/accounts` | One person, one account: phone and email sign-in, linking, merge, the account page | landing during the hackathon |
-| `apps/app` | The resident app in React Native (iOS, Android, web) | landing during the hackathon |
-| `eval` | The held-out test: scenarios, baselines and results | landing during the hackathon |
-| `docs` | Decisions and design notes | live |
-
-### Guardian
-
-Guardian runs on one GPU on Modal and scales to zero when idle. A cold start takes about three minutes, and a check fails closed after 10 seconds, so Mano calls `warm()` when a conversation starts. Once Engine has `MANO_GUARDIAN_URL`, its action gateway runs Engine's local rules and then Guardian on every action, before the person is asked and again at their yes, and sends a warm-up with each check. A check that finds Guardian cold blocks with "try again in a few minutes" and leaves it starting. At the yes, a check that could not get Guardian's answer keeps the approval waiting and Engine marks the refusal `retryable`, so Mano asks the person to reply YES again in a few minutes and files it once. Guardian sees each action as Mano would send it, every value as written: the recipient, the purpose, every form field, text and claim, the cited sources with their quotes, and the consents on record. Nothing is removed first, so nothing can hide an attack from it. Guardian runs on our own GPU as a Modal Server in the app `mano-guardian-server`. Its code stores and logs no request or answer, and Modal passes a Server's requests and responses straight to the container without storing them. The earlier app, `mano-guardian`, is a web Function, and Modal keeps each input it receives for up to 7 days, so no copy is kept only once Engine has moved off it and it is stopped. The order: merge, which deploys the Server and prints its URL; copy that URL into the `MANO_GUARDIAN_URL` GitHub secret, its vault copy, and the agent's and quality nightly's copies; redeploy Engine; check that Engine's `/health` shows `checker: guardian` and run one live check; then run the `guardian-modal` workflow from `main` with `target` set to `stop-old`. A check that gets Modal's 503 retries once after a second when a full check still fits its 10 seconds, since the proxy can answer 503 for a moment after a container is ready. A personal form field that holds an email address or a link blocks the action before Guardian is asked. Engine's `/health` shows `checker: guardian`, or `local-rules` when none of the four `MANO_GUARDIAN_*` names is set. To keep one GPU warm (about $1.95 an hour), run the `guardian-modal` workflow from `main` under Actions with `min_containers` set to 1. To turn it off, run it again with 0. Any merge that touches the guardian also deploys 0. Every target is written to run only from `main`, since each holds production Modal credentials: each job's condition checks the ref, and its first step checks it again case-sensitively, because GitHub's `==` ignores case. Jobs carry no services, container or env that would see a secret before that step. The `guardian-check` workflow fails if the triggers, the guards or the keys a job may have change, which catches accidental edits on `main` and in reviewed pull requests. It cannot stop a hostile branch, which runs its own copy of both workflows; only the `guardian-production` environment's deployment branch policy, limited to `main` since November 3, 2026, closes that. To check a merged change on its own app before Engine's URL moves to it, run the workflow from `main` with `target` set to `staging`, which deploys `mano-guardian-staging` scaled to zero and prints its URL, then run it with `stop-staging`.
-
-### Quality
-
-Pull requests that can change what Mano says run the quality smoke: 28 synthetic cases through the real text line on a Meta model, gated against main's last nightly run. When the model provider refuses calls for billing (HTTP 402), the smoke and the nightly score nothing and report "model provider unavailable" in the job summary instead of failing. Any other error still fails. The `smoke-replay` job runs the same text line and safety checks on recorded synthetic replies with no key, so the code path stays covered while the provider is down: `pnpm --filter @mano/quality smoke-replay`. The letters suite is version 2: 26 full one-page notices from made-up county offices, drawn in code, three of them with a hedged date Mano should ask about instead of holding. Results from version 1 (three short lines per letter) compare only with a version 1 run: `pnpm --filter @mano/quality bench --suite letters --letters-version 1`.
-
-### Computer
-
-`packages/computer` is the desktop Mano drives: a loop that shows the model a screenshot and executes the mouse and keyboard actions it returns. The hosted backend is a Modal Sandbox running a Linux desktop with Chromium (see `packages/computer/modal/`); the local stand-in drives Chromium through Playwright. The desktop fills forms and never files them: filing goes through Engine's action gateway after the person's yes. Each fill keeps the screens it showed; Engine stores them encrypted for the person with the approval they produced, and the yes-or-no question links to a private page that replays each step, ends on the filled form and lists exactly what will be sent. A link opened after the draft changed says so and shows none of the old steps. A pending safety check stops the run and goes back to the caller, and a login prompt ends it, because there is no live view and the agent never sees passwords. Each desktop opens only the portal origin, mounts only its own person's profile, and answers only the caller holding its per-session secret. Details in the header comment of its `src/index.ts` and the docstring of `modal/app.py`; `modal run modal/prove.py` checks those rules live on throwaway Modal resources.
-
-### Programs
-
-`packages/programs` is the only place the agent gets program facts: the state's own name for SNAP, Medicaid and LIHEAP in California, Texas, New York, Florida, Illinois, Washington, Arizona and Ohio, what each covers, income limits by household size with their year, the renewal cycle, how to apply and the official phone and site. Every fact carries the official page it came from, the day it was checked and the text that shows it; anything not confirmed is listed in the entry's gaps. `pnpm --filter @mano/programs check` fails on a missing source or date or a site that is not official; `pnpm --filter @mano/programs verify-sources` fetches every source again and looks for each quote.
-
-### Accounts
-
-Texting Mano creates the account. The same person signs in on the web at `/sign-in` with that phone number (a 6-digit code by text) or with email through WorkOS, and manages sign-in methods at `/account`. Details live in the header comment of `packages/accounts/src/index.ts`; run its checks with `pnpm --filter @mano/accounts run check`.
+Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. `META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live` checks Mano's voice against the real model with synthetic messages. To deploy your own copy, see the workflows in `.github/workflows/`.
 
 ## Held-out test
 
