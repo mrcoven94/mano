@@ -86,7 +86,9 @@ export function unavailableSummary(lane: "smoke" | "nightly", check: Extract<Pro
   return [
     `## Quality ${lane}: model provider unavailable`,
     "",
-    `This is not a pass and not a quality failure. ${unavailableReason(check)}.`,
+    lane === "smoke"
+      ? `This is not a pass and not a quality failure. ${unavailableReason(check)}.`
+      : `No quality was measured tonight, so this run fails. ${unavailableReason(check)}.`,
     skipped,
     "",
     lane === "smoke"

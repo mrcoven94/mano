@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import HeroStage from "@/components/home/HeroStage";
+import MedicaidExample from "@/components/home/MedicaidExample";
 import TrustDemo from "@/components/home/TrustDemo";
 import Needs from "@/components/home/Needs";
 import { NeedIcon } from "@/components/home/NeedIcons";
@@ -38,6 +39,7 @@ export default function Home() {
   return (
     <div className="home">
       <HeroStage />
+      <MedicaidExample />
 
       <section className="h-today" aria-labelledby="today-h">
         <div className="wrap">
