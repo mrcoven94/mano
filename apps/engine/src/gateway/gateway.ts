@@ -14,7 +14,7 @@ import type {
   ProposalOrder,
   Receipt,
 } from "./types.js";
-import { DefiniteFailureError, TimeoutError, UnconfirmedSendError } from "./types.js";
+import { DefiniteFailureError, NotTheSenderError, TimeoutError, UnconfirmedSendError } from "./types.js";
 import { auditDigest, type AuditDigest, type AuditEntry } from "./audit.js";
 import { ValidationError, parseActionRequest } from "./validate.js";
 import { LocalRulesChecker, checkerWithTimeout, type Checker, type CheckResult } from "./checker.js";
@@ -108,7 +108,7 @@ export interface ApprovalStore {
   // unexpired and of the current generation (a conversation delete
   // revokes it), checked in the same statement. False otherwise, so a
   // window that lapses during recovery's awaited checks cannot execute.
-  adoptForRecoveryIfApprovalLive(key: string, now: Date): boolean;
+  adoptForRecoveryIfApprovalLive(key: string, now: Date, version?: number): boolean;
   // Claims an unresolved attempt for recovery: refreshes its timestamp
   // so a second recovery cannot claim it too.
   claimRecoverableAttempt(key: string, olderThanIso: string, now: Date): boolean;
@@ -353,9 +353,10 @@ export class MemoryApprovalStore implements ApprovalStore {
     this.attempts.set(key, { ...current, status: "in_flight", updatedAt: now.toISOString(), version: (current.version ?? 0) + 1 });
     return true;
   }
-  adoptForRecoveryIfApprovalLive(key: string, now: Date) {
+  adoptForRecoveryIfApprovalLive(key: string, now: Date, version?: number) {
     const current = this.attempts.get(key);
     if (!current || (current.status !== "unknown" && current.status !== "in_flight")) return false;
+    if (version !== undefined && (current.version ?? 0) !== version) return false;
     const live = [...this.approvals.values()].some(
       (a) =>
         a.idempotencyKey === key &&
@@ -1261,7 +1262,7 @@ export class ActionGateway {
     if (approval.status === "retired") {
       return this.failAt(key, seen, () => ({ status: "blocked", reason: approvalGoneReason("retired") }));
     }
-    if (!this.store.adoptForRecoveryIfApprovalLive(key, new Date())) {
+    if (!this.store.adoptForRecoveryIfApprovalLive(key, new Date(), seen)) {
       return this.failAt(key, seen, () => {
         this.store.audit({ event: "gateway.recover_expired", keyHash });
         return { status: "blocked", reason: "Approval expired before the stranded attempt could be recovered." };
@@ -1372,6 +1373,7 @@ export class ActionGateway {
       this.store.audit({ event: "gateway.executed", keyHash });
       return { status: "completed", receipt };
     } catch (err) {
+      if (err instanceof NotTheSenderError) return { status: "in_progress", reason: err.message };
       if (err instanceof TimeoutError || (err as Error)?.name === "TimeoutError") {
         const settled = await this.reconcileUnknown(req, now, keyHash);
         if (settled.kind === "settled") return settled.result;

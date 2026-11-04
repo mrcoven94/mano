@@ -9,6 +9,7 @@ import { FaxExecutor, SqlFaxSendLog, ensureFaxSendTable, type FaxSendLog } from 
 import { MailExecutor } from "../src/gateway/mail.js";
 import {
   DEFAULT_PRICING,
+  downstreamKey,
   FAX_RECIPIENT,
   MAIL_RECIPIENT,
   PAYLOAD,
@@ -16,7 +17,7 @@ import {
 } from "../src/gateway/outbound.js";
 import { OutboundRouter, outboundProviders } from "../src/gateway/outbound-router.js";
 import { SqlApprovalStore, ensureGatewayTables } from "../src/gateway/sql-store.js";
-import type { Executor, GatewayResult } from "../src/gateway/types.js";
+import type { ActionRequest, Executor, GatewayResult } from "../src/gateway/types.js";
 
 // The fax and letter state machine against the real gateway and SQLite
 // store, with fakes standing in for the providers at the HTTP boundary.
@@ -223,12 +224,18 @@ const TURN_2 = { turnId: "turn-2", receivedAt: "2026-11-03T10:05:00.000Z" };
 
 function memoryLog(): FaxSendLog {
   const sent = new Set<string>();
-  return { wasSent: (key) => sent.has(key), markSent: (key) => void sent.add(key) };
+  return {
+    wasSent: (key) => sent.has(key),
+    claim: (key) => !sent.has(key) && !!sent.add(key),
+    release: (key) => void sent.delete(key),
+  };
 }
+
+const deps = () => ({ sendLog: memoryLog(), attemptVersion: () => null });
 
 function faxExecutor(telnyx: FakeTelnyx): FaxExecutor {
   return new FaxExecutor(
-    { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: memoryLog() },
+    { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: memoryLog(), attemptVersion: () => null },
     telnyx.fetch,
     1000,
   );
@@ -421,8 +428,8 @@ describe("mailed letters", () => {
     expect(asked.status).toBe("blocked");
     expect(asked.reason).toContain("test mode only");
     expect(lob.posts).toBe(0);
-    expect(outboundProviders({ LOB_TEST_API_KEY: "test_not_real" }, memoryLog()).mail).toBeDefined();
-    expect(outboundProviders({ LOB_API_KEY: "live_not_real" } as never, memoryLog()).mail).toBeUndefined();
+    expect(outboundProviders({ LOB_TEST_API_KEY: "test_not_real" }, deps()).mail).toBeDefined();
+    expect(outboundProviders({ LOB_API_KEY: "live_not_real" } as never, deps()).mail).toBeUndefined();
   });
 
   it.each([
@@ -448,6 +455,26 @@ describe("mailed letters", () => {
     const unpriced = await gateway.requestAction(letter({}, { [PAYLOAD.price]: "$0.01", [PAYLOAD.pages]: 3 }));
     expect(unpriced.status).toBe("blocked");
     expect(unpriced.reason).toContain("price");
+  });
+
+  it.each([
+    ["a cover note", "cover"],
+    ["message text", "text"],
+    ["a declaration", "declaration"],
+    ["anything else", "Note"],
+  ])("refuses %s the question would show and the letter would not carry", async (_name, field) => {
+    const lob = new FakeLob();
+    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) });
+    const asked = await draft(gateway, documents, letter({}, { [field]: "Please approve this right away" }));
+    expect(asked.status).toBe("blocked");
+    expect(asked.reason).toContain("only");
+    expect(lob.posts).toBe(0);
+  });
+
+  it("keeps the attached document's label, which the question shows about the document it sends", async () => {
+    const lob = new FakeLob();
+    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) });
+    expect((await draft(gateway, documents, letter({}, { attachment: "the letter you sent on November 2" }))).status).toBe("needs_approval");
   });
 
   it("refuses more pages than an envelope takes, and a file that is not a document", async () => {
@@ -496,6 +523,14 @@ describe("faxes", () => {
     const asked = await draft(gateway, documents, fax(over, payload));
     expect(asked.status).toBe("blocked");
     expect(asked.reason).toContain("its own test line");
+    expect(telnyx.faxPosts).toBe(0);
+  });
+
+  it.each([["a cover note", "cover"], ["message text", "text"]])("refuses %s the question would show and the fax would not carry", async (_name, field) => {
+    const telnyx = new FakeTelnyx();
+    const { gateway, documents } = await rig({ fax: faxExecutor(telnyx) });
+    const asked = await draft(gateway, documents, fax({}, { [field]: "Please approve this right away" }));
+    expect(asked.status).toBe("blocked");
     expect(telnyx.faxPosts).toBe(0);
   });
 
@@ -569,7 +604,7 @@ describe("faxes", () => {
     const telnyx = new FakeTelnyx();
     telnyx.hangBodyNext = true;
     const executor = new FaxExecutor(
-      { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: memoryLog() },
+      { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: memoryLog(), attemptVersion: () => null },
       telnyx.fetch,
       50,
     );
@@ -720,7 +755,7 @@ describe("a fax timeout across a restart", () => {
     const boot = () => {
       const store = new SqlApprovalStore(storage);
       const executor = new FaxExecutor(
-        { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: new SqlFaxSendLog(storage) },
+        { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: new SqlFaxSendLog(storage), attemptVersion: () => null },
         telnyx.fetch,
         1000,
       );
@@ -847,7 +882,7 @@ describe("an outbound attempt whose provider setting went away", () => {
     const boot = boots(
       () => ({
         fax: new FaxExecutor(
-          { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: log },
+          { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: log, attemptVersion: () => null },
           telnyx.fetch,
           1000,
         ),
@@ -978,29 +1013,7 @@ describe("a photo's stored orientation", () => {
   });
 });
 
-describe("what a filled-in PDF sends", () => {
-  async function filledPdf(answer: string): Promise<Uint8Array> {
-    const doc = await PDFDocument.create();
-    const page = doc.addPage([612, 792]);
-    page.drawText("Renewal form", { x: 72, y: 720 });
-    const field = doc.getForm().createTextField("household_name");
-    field.setText(answer);
-    field.addToPage(page, { x: 72, y: 640, width: 300, height: 30 });
-    return doc.save();
-  }
-
-  it("keeps the person's answers in a form field on the page", async () => {
-    const lob = new FakeLob();
-    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await filledPdf("Maria Testperson"));
-    const asked = await draft(gateway, documents, letter({}, { [PAYLOAD.approvedBy]: "Ana Example" }));
-    expect(asked.status).toBe("needs_approval");
-    await gateway.approveAndExecute(asked.approval!.id, PERSON);
-    const sent = [...lob.letters.values()][0].file;
-    const out = await PDFDocument.load(sent);
-    expect(out.getPageCount()).toBe(2);
-    expect(drawnText(out, 1)).toContain("Maria Testperson");
-  });
-
+describe("what a PDF sends", () => {
   it("draws the page it was given", async () => {
     const lob = new FakeLob();
     const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await samplePdf(1, "plain"));
@@ -1055,23 +1068,6 @@ describe("what a filled-in PDF sends", () => {
     expect(drawnText(out, 1)).toContain("Near the top of a legal page");
   });
 
-  it("sends a form with plain visible text and checkbox fields", async () => {
-    const doc = await PDFDocument.create();
-    const page = doc.addPage([612, 792]);
-    const name = doc.getForm().createTextField("household_name");
-    name.setText("Maria Testperson");
-    name.addToPage(page, { x: 72, y: 640, width: 300, height: 30 });
-    const box = doc.getForm().createCheckBox("renewing");
-    box.check();
-    box.addToPage(page, { x: 72, y: 600, width: 20, height: 20 });
-    const lob = new FakeLob();
-    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await doc.save());
-    const asked = await draft(gateway, documents, letter({}, { [PAYLOAD.approvedBy]: "Ana Example" }));
-    expect(asked.status).toBe("needs_approval");
-    await gateway.approveAndExecute(asked.approval!.id, PERSON);
-    expect(drawnText(await PDFDocument.load([...lob.letters.values()][0].file), 1)).toContain("Maria Testperson");
-  });
-
   const withField = async (change: (doc: PDFDocument, page: ReturnType<PDFDocument["addPage"]>) => void) => {
     const doc = await PDFDocument.create();
     const page = doc.addPage([612, 792]);
@@ -1090,7 +1086,35 @@ describe("what a filled-in PDF sends", () => {
     doc.catalog.set(PDFName.of("OCProperties"), doc.context.obj({ OCGs: [layer], D: d } as never));
   };
 
+  it("sends a PDF whose form has no fields", async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([612, 792]).drawText("Plain letter", { x: 72, y: 700 });
+    doc.getForm();
+    const lob = new FakeLob();
+    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await doc.save());
+    const asked = await draft(gateway, documents, letter());
+    expect(asked.status).toBe("needs_approval");
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(drawnText(await PDFDocument.load([...lob.letters.values()][0].file), 1)).toContain("Plain letter");
+  });
+
   it.each<[string, (doc: PDFDocument, page: ReturnType<PDFDocument["addPage"]>) => void]>([
+    ["a filled-in text field", (doc, page) => {
+      const field = doc.getForm().createTextField("household_name");
+      field.setText("Maria Testperson");
+      field.addToPage(page, { x: 72, y: 640, width: 300, height: 30 });
+    }],
+    ["a checkbox", (doc, page) => {
+      const box = doc.getForm().createCheckBox("renewing");
+      box.check();
+      box.addToPage(page, { x: 72, y: 600, width: 20, height: 20 });
+    }],
+    ["a field whose widget is missing from the page's list", (doc, page) => {
+      const field = doc.getForm().createTextField("unlisted");
+      field.setText("Painted but not listed");
+      field.addToPage(page, { x: 72, y: 640, width: 300, height: 30 });
+      page.node.removeAnnot(page.node.Annots()!.get(0) as never);
+    }],
     ["a hidden field", hiddenField(2)],
     ["a field set not to view", hiddenField(32)],
     ["an invisible field", hiddenField(1)],
@@ -1168,13 +1192,13 @@ describe("the provider an attempt began against", () => {
     const log = memoryLog();
     const standIn = new InMemoryExecutor();
     const boot = bootsOver(documents, () => standIn, () => ({
-      fax: new FaxExecutor({ apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: log }, telnyx.fetch, 1000),
+      fax: new FaxExecutor({ apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: log, attemptVersion: () => null }, telnyx.fetch, 1000),
     }));
     const first = boot(true);
     const asked = await draft(first.gateway, documents, fax());
     await first.gateway.approveAndExecute(asked.approval!.id, PERSON);
     const key = asked.approval!.idempotencyKey;
-    expect(first.store.getAttempt(key)?.provider).toBe("telnyx");
+    expect(first.store.getAttempt(key)?.provider).toMatch(/^telnyx:[0-9a-f]+$/);
 
     const gone = boot(false);
     const later = new Date(Date.now() + 6 * 60_000);
@@ -1212,6 +1236,176 @@ describe("the provider an attempt began against", () => {
     const done = await boot(true).gateway.approveAndExecute(asked.approval!.id, PERSON);
     expect(done.receipt?.simulated).toBe(true);
     expect(telnyx.faxPosts).toBe(0);
+  });
+});
+
+describe("the account an attempt began against", () => {
+  it("a letter stays unknown under another account's key, whose empty lookup would send a second one", async () => {
+    const accountA = new FakeLob();
+    accountA.next = "after-recording";
+    accountA.lookupDown = true;
+    const accountB = new FakeLob();
+    const documents = new MapDocumentStore();
+    documents.set("doc-1", await samplePdf());
+    const storage = openTestStorage() as never;
+    ensureGatewayTables(storage);
+    const boot = (key: string, lob: FakeLob) => {
+      const store = new SqlApprovalStore(storage);
+      const router = new OutboundRouter(new InMemoryExecutor(), { mail: new MailExecutor(key, DEFAULT_PRICING, lob.fetch) }, (k) => store.getAttempt(k));
+      return { store, gateway: new ActionGateway(store, router, { documents, linkCheck: async () => ({ allowed: true }) }) };
+    };
+    const first = boot("test_account_a", accountA);
+    const asked = await draft(first.gateway, documents, letter());
+    await first.gateway.approveAndExecute(asked.approval!.id, PERSON);
+    const key = asked.approval!.idempotencyKey;
+    expect(first.store.getAttempt(key)?.provider).toMatch(/^lob:[0-9a-f]+$/);
+    expect(first.store.getAttempt(key)?.provider).not.toContain("account_a");
+
+    const second = boot("test_account_b", accountB);
+    expect((await second.gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    expect(second.store.getAttempt(key)?.status).toBe("unknown");
+    expect(accountB.posts).toBe(0);
+
+    accountA.lookupDown = false;
+    expect((await boot("test_account_a", accountA).gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("reconciled");
+    expect(accountA.posts).toBe(1);
+  });
+
+  it("a fax stays unknown under another account's key", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.next = "after-recording";
+    telnyx.lookupDown = true;
+    const documents = new MapDocumentStore();
+    documents.set("doc-1", await samplePdf());
+    const storage = openTestStorage() as never;
+    ensureGatewayTables(storage);
+    const log = memoryLog();
+    const boot = (apiKey: string, listCalls: { count: number }) => {
+      const store = new SqlApprovalStore(storage);
+      const counting = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        listCalls.count += init?.method === "POST" ? 0 : 1;
+        return telnyx.fetch(input, init);
+      }) as typeof fetch;
+      const executor = new FaxExecutor({ apiKey, connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: log, attemptVersion: () => null }, counting, 1000);
+      const router = new OutboundRouter(new InMemoryExecutor(), { fax: executor }, (k) => store.getAttempt(k));
+      return { store, gateway: new ActionGateway(store, router, { documents, linkCheck: async () => ({ allowed: true }) }) };
+    };
+    const first = boot("key-a", { count: 0 });
+    const asked = await draft(first.gateway, documents, fax());
+    await first.gateway.approveAndExecute(asked.approval!.id, PERSON);
+    telnyx.lookupDown = false;
+    const otherLookups = { count: 0 };
+    const second = boot("key-b", otherLookups);
+    expect((await second.gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    expect(otherLookups.count).toBe(0);
+    expect(second.store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("unknown");
+    expect(telnyx.faxPosts).toBe(1);
+  });
+});
+
+describe("two runs reaching the same fax", () => {
+  function gated() {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { gate, release };
+  }
+
+  async function faxRequest(raw: Record<string, unknown>): Promise<ActionRequest> {
+    const pdf = await samplePdf();
+    const priced = (await withOutboundPrice(raw, async () => pdf, DEFAULT_PRICING, () => null)) as ActionRequest;
+    return { ...priced, answeredBy: PERSON, document: { bytesB64: Buffer.from(pdf).toString("base64"), hash: "a".repeat(64) } };
+  }
+
+  it("recovery that paused on its document read does not send beside a YES that started meanwhile", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.mediaTimesOutNext = true;
+    const bytes = await samplePdf();
+    const { gate, release } = gated();
+    let hold = false;
+    let reachedGate = false;
+    const documents = {
+      getBytes: async () => {
+        if (hold) {
+          hold = false;
+          reachedGate = true;
+          await gate;
+        }
+        return bytes;
+      },
+    };
+    const storage = openTestStorage() as never;
+    ensureGatewayTables(storage);
+    ensureFaxSendTable(storage);
+    const store = new SqlApprovalStore(storage);
+    const executor = new FaxExecutor(
+      { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: new SqlFaxSendLog(storage), attemptVersion: (k) => store.getAttempt(k)?.version ?? null },
+      telnyx.fetch,
+      1000,
+    );
+    const gateway = new ActionGateway(store, new OutboundRouter(new InMemoryExecutor(), { fax: executor }, (k) => store.getAttempt(k)), { documents, linkCheck: async () => ({ allowed: true }) });
+    const priced = await withOutboundPrice(fax(), async () => bytes, DEFAULT_PRICING, () => null);
+    const asked = await gateway.requestAction(priced);
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    const key = asked.approval!.idempotencyKey;
+    expect(store.getAttempt(key)?.status).toBe("unknown");
+
+    hold = true;
+    const later = new Date(Date.now() + 6 * 60_000);
+    const recovery = gateway.recoverAttempt(key, later, later.toISOString());
+    await vi.waitFor(() => expect(reachedGate).toBe(true));
+    telnyx.next = "crash";
+    void gateway.approveAndExecute(asked.approval!.id, PERSON);
+    await vi.waitFor(() => expect(telnyx.faxPosts).toBe(1));
+    release();
+    const result = await recovery;
+    expect(result?.status).toBe("in_progress");
+    expect(telnyx.faxPosts).toBe(1);
+    expect(store.getAttempt(key)?.status).toBe("in_flight");
+  });
+
+  it("does not send when another run already holds the row for this key", async () => {
+    const telnyx = new FakeTelnyx();
+    const log = memoryLog();
+    const executor = new FaxExecutor({ apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: log, attemptVersion: () => 1 }, telnyx.fetch, 1000);
+    const request = await faxRequest(fax());
+    log.claim(await downstreamKey(PERSON, request.idempotencyKey));
+    await expect(executor.execute(request)).rejects.toMatchObject({ name: "NotTheSenderError" });
+    expect(telnyx.faxPosts).toBe(0);
+  });
+
+  it("does not send when the attempt moved on while its upload ran", async () => {
+    const telnyx = new FakeTelnyx();
+    const { gate, release } = gated();
+    let version = 1;
+    let uploading = false;
+    const held = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/media")) {
+        uploading = true;
+        await gate;
+      }
+      return telnyx.fetch(input, init);
+    }) as typeof fetch;
+    const executor = new FaxExecutor({ apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: memoryLog(), attemptVersion: () => version }, held, 5000);
+    const sending = executor.execute(await faxRequest(fax()));
+    await vi.waitFor(() => expect(uploading).toBe(true));
+    version = 2;
+    release();
+    await expect(sending).rejects.toMatchObject({ name: "NotTheSenderError" });
+    expect(telnyx.faxPosts).toBe(0);
+  });
+
+  it("the row and the attempt version let exactly one claim through, and a refusal gives the row back", () => {
+    const storage = openTestStorage() as never;
+    ensureFaxSendTable(storage);
+    const log = new SqlFaxSendLog(storage);
+    expect(log.claim("k")).toBe(true);
+    expect(log.claim("k")).toBe(false);
+    expect(log.wasSent("k")).toBe(true);
+    log.release("k");
+    expect(log.wasSent("k")).toBe(false);
+    expect(log.claim("k")).toBe(true);
   });
 });
 
@@ -1379,9 +1573,9 @@ describe("routing", () => {
 
   it("a fax needs every setting before it turns on", () => {
     const all = { TELNYX_API_KEY: "x", TELNYX_FAX_CONNECTION_ID: "c", MANO_OWN_FAX_NUMBER: OWN_NUMBER, MANO_FAX_FROM_NUMBER: "+15550100002" };
-    expect(outboundProviders(all, memoryLog()).fax).toBeDefined();
+    expect(outboundProviders(all, deps()).fax).toBeDefined();
     for (const key of Object.keys(all)) {
-      expect(outboundProviders({ ...all, [key]: undefined }, memoryLog()).fax).toBeUndefined();
+      expect(outboundProviders({ ...all, [key]: undefined }, deps()).fax).toBeUndefined();
     }
   });
 

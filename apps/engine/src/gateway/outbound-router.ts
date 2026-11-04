@@ -9,12 +9,18 @@ export function faxConfigured(env: OutboundEnv): boolean {
   return Boolean(env.TELNYX_API_KEY && env.TELNYX_FAX_CONNECTION_ID && env.MANO_OWN_FAX_NUMBER && env.MANO_FAX_FROM_NUMBER);
 }
 
+export interface OutboundDeps {
+  sendLog: FaxSendLog;
+  attemptVersion: (idempotencyKey: string) => number | null;
+  routes?: DeliveryRoutes;
+}
+
 // Each provider exists only with all of its settings. Mail reads the test
 // mode key and no other.
-export function outboundProviders(env: OutboundEnv, sendLog: FaxSendLog, routes?: DeliveryRoutes): Partial<Record<OutboundType, Executor>> {
+export function outboundProviders(env: OutboundEnv, deps: OutboundDeps): Partial<Record<OutboundType, Executor>> {
   const pricing = outboundPricing(env);
   const providers: Partial<Record<OutboundType, Executor>> = {};
-  if (env.LOB_TEST_API_KEY) providers.mail = new MailExecutor(env.LOB_TEST_API_KEY, pricing, undefined, undefined, routes);
+  if (env.LOB_TEST_API_KEY) providers.mail = new MailExecutor(env.LOB_TEST_API_KEY, pricing, undefined, undefined, deps.routes);
   if (faxConfigured(env)) {
     providers.fax = new FaxExecutor({
       apiKey: env.TELNYX_API_KEY!,
@@ -22,7 +28,8 @@ export function outboundProviders(env: OutboundEnv, sendLog: FaxSendLog, routes?
       ownNumber: env.MANO_OWN_FAX_NUMBER!,
       fromNumber: env.MANO_FAX_FROM_NUMBER!,
       pricing,
-      sendLog,
+      sendLog: deps.sendLog,
+      attemptVersion: deps.attemptVersion,
     });
   }
   return providers;
@@ -53,7 +60,8 @@ const STAND_IN = "stand-in";
 // copy runs with no accounts; any other executor never sees it. An attempt
 // already started stays with what it began against, read from the persisted
 // attempt, never from the key, which the caller controls. One that records
-// nothing, or something no longer here, stays unknown in every mode.
+// nothing, or another provider or account than is set here now, stays unknown
+// in every mode.
 export class OutboundRouter implements Executor {
   readonly simulated: boolean;
 

@@ -178,7 +178,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       },
     });
     this.executor = new ConsentDeliveringExecutor(
-      new HoldCallExecutor(new OutboundRouter(createExecutor(env), outboundProviders(env, new SqlFaxSendLog(ctx.storage.sql), { remember: (id, person) => rememberDeliveryRoute(env.FILES, id, person) }), (key) => this.store.getAttempt(key)), this.holdCalls, (key) => this.store.getAttempt(key)?.actionType ?? null),
+      new HoldCallExecutor(new OutboundRouter(createExecutor(env), outboundProviders(env, { sendLog: new SqlFaxSendLog(ctx.storage.sql), attemptVersion: (key) => this.store.getAttempt(key)?.version ?? null, routes: { remember: (id, person) => rememberDeliveryRoute(env.FILES, id, person) } }), (key) => this.store.getAttempt(key)), this.holdCalls, (key) => this.store.getAttempt(key)?.actionType ?? null),
       (req) => this.deliverShare(req),
       (key) => this.checkShareDelivery(key),
       (key) => this.store.getAttempt(key)?.actionType ?? null,

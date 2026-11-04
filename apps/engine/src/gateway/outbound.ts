@@ -1,4 +1,5 @@
-import { PDFCheckBox, PDFDict, PDFDocument, PDFName, PDFTextField, StandardFonts, degrees, type PDFFont, type PDFPage } from "pdf-lib";
+import { createHash } from "node:crypto";
+import { PDFDocument, PDFName, StandardFonts, degrees, type PDFFont, type PDFPage } from "pdf-lib";
 import { base64ToBytes, sha256Hex } from "../hash.js";
 import type { ActionRequest } from "./types.js";
 import { DefiniteFailureError, TimeoutError } from "./types.js";
@@ -173,51 +174,35 @@ function fitted(box: { width: number; height: number }): { x: number; y: number;
 }
 
 // The one rule for a PDF: it goes out only if it is plain. Anything a viewer
-// can show differently from what is sent (a layer, a hidden or unusual field,
-// a note, a link, a crop, a rotation, a page away from the origin) means the
-// person may approve one thing and something else goes out, so it is refused
-// before the question and they are asked for a photo instead. What is left
-// embeds as is, with plain text and checkbox fields drawn into the page.
+// can show differently from what is sent (a form field, a layer, a note, a
+// link, a crop, a rotation, a page away from the origin) means the person may
+// approve one thing and something else goes out, so it is refused before the
+// question and they are asked for a photo instead. What is left is drawn by
+// its page content alone, which is what embedding carries over. Completed
+// forms come back when there is a renderer to compare the result against.
 const NOT_PLAIN =
   "Mano only sends plain PDFs, and this one has parts that could go out looking different from what you saw, so it was not prepared. Send a photo of it instead.";
 const SAME_BOX_POINTS = 0.5;
-const INVISIBLE = 1;
-const HIDDEN = 2;
-const NO_VIEW = 32;
-const TOGGLE_NO_VIEW = 256;
 
 async function isPlainPdf(bytes: Uint8Array): Promise<boolean> {
-  let doc: PDFDocument;
   try {
-    doc = await PDFDocument.load(bytes, { throwOnInvalidObject: true });
+    const doc = await PDFDocument.load(bytes, { throwOnInvalidObject: true });
+    if (doc.catalog.has(PDFName.of("OCProperties"))) return false;
+    const form = doc.catalog.getAcroForm();
+    if (form && (form.dict.has(PDFName.of("XFA")) || form.getAllFields().length > 0)) return false;
+    return doc.getPages().every((page) => {
+      const [crop, media] = [page.getCropBox(), page.getMediaBox()];
+      return (
+        page.getRotation().angle % 360 === 0 &&
+        Math.abs(media.x) <= SAME_BOX_POINTS &&
+        Math.abs(media.y) <= SAME_BOX_POINTS &&
+        (["x", "y", "width", "height"] as const).every((side) => Math.abs(crop[side] - media[side]) <= SAME_BOX_POINTS) &&
+        (page.node.Annots()?.size() ?? 0) === 0
+      );
+    });
   } catch {
     return false;
   }
-  if (doc.catalog.has(PDFName.of("OCProperties"))) return false;
-  const form = doc.catalog.getAcroForm();
-  if (form?.dict.has(PDFName.of("XFA"))) return false;
-  const fieldWidgets = new Set<PDFDict>();
-  if (form) {
-    for (const field of doc.getForm().getFields()) {
-      if (!(field instanceof PDFTextField) && !(field instanceof PDFCheckBox)) return false;
-      for (const widget of field.acroField.getWidgets()) {
-        if (widget.getFlags() & (INVISIBLE | HIDDEN | NO_VIEW | TOGGLE_NO_VIEW)) return false;
-        fieldWidgets.add(widget.dict);
-      }
-    }
-  }
-  for (const page of doc.getPages()) {
-    if (page.getRotation().angle % 360 !== 0) return false;
-    const [crop, media] = [page.getCropBox(), page.getMediaBox()];
-    if (Math.abs(media.x) > SAME_BOX_POINTS || Math.abs(media.y) > SAME_BOX_POINTS) return false;
-    if ((["x", "y", "width", "height"] as const).some((side) => Math.abs(crop[side] - media[side]) > SAME_BOX_POINTS)) return false;
-    const annotations = page.node.Annots();
-    for (let i = 0; i < (annotations?.size() ?? 0); i++) {
-      const annotation = annotations!.lookup(i);
-      if (!(annotation instanceof PDFDict) || !fieldWidgets.has(annotation)) return false;
-    }
-  }
-  return true;
 }
 
 // How far to turn a photo so it reads the way a viewer shows it, by its
@@ -257,7 +242,6 @@ async function renderOutgoing(req: ActionRequest, name: string, bytes: Uint8Arra
   drawCover(out.addPage([LETTER.width, LETTER.height]), font, bold, req, name, documentHash);
   if (kind === "pdf") {
     const source = await PDFDocument.load(bytes);
-    if (source.catalog.getAcroForm()) source.getForm().flatten();
     const pages = await out.embedPdf(source, source.getPageIndices());
     for (const page of pages) {
       const { x, y, xScale, yScale } = fitted(page);
@@ -284,6 +268,15 @@ async function renderOutgoing(req: ActionRequest, name: string, bytes: Uint8Arra
   return (await out.save()).slice();
 }
 
+// All a fax or letter may carry beside its document. The question prints
+// every payload field, so one that does not go out must not be there: what
+// the person approves is what is sent. The attachment label only names the
+// document that goes.
+const PAYLOAD_FIELDS: Record<OutboundType, ReadonlySet<string>> = {
+  fax: new Set([PAYLOAD.faxTo, PAYLOAD.approvedBy, PAYLOAD.pages, PAYLOAD.price, "attachment"]),
+  mail: new Set([PAYLOAD.mailTo, PAYLOAD.returnAddress, PAYLOAD.approvedBy, PAYLOAD.pages, PAYLOAD.price, "attachment"]),
+};
+
 export type Outgoing = { ok: true; name: string; pdf: Uint8Array<ArrayBuffer> } | { ok: false; problem: string };
 
 // Everything a fax and a letter must have, checked before the question
@@ -292,6 +285,9 @@ export type Outgoing = { ok: true; name: string; pdf: Uint8Array<ArrayBuffer> } 
 export async function prepareOutgoing(req: ActionRequest, type: OutboundType, pricing: OutboundPricing): Promise<Outgoing> {
   const what = type === "fax" ? "fax" : "letter";
   if (!req.document) return { ok: false, problem: `A ${what} needs a document to send.` };
+  if (Object.keys(req.payload).some((field) => !PAYLOAD_FIELDS[type].has(field))) {
+    return { ok: false, problem: `A ${what} can only carry the document itself, so Mano did not prepare anything written beside it.` };
+  }
   const bytes = base64ToBytes(req.document.bytesB64);
   if (kindOf(bytes) === "pdf" && !(await isPlainPdf(bytes))) return { ok: false, problem: NOT_PLAIN };
   const name = req.payload[PAYLOAD.approvedBy];
@@ -319,6 +315,13 @@ export function assertAnswered(req: ActionRequest): void {
   if (!req.answeredBy || req.answeredBy !== req.personId) {
     throw new DefiniteFailureError("Only the person it is sent for can approve this, and they have not answered.");
   }
+}
+
+// Names the provider and the account an attempt begins against, without
+// the key: a truncated hash of it. A lookup under another account finds
+// nothing, which must never read as "never sent".
+export function providerIdentity(provider: string, apiKey: string): string {
+  return `${provider}:${createHash("sha256").update(apiKey).digest("hex").slice(0, 16)}`;
 }
 
 // The key the provider sees: scoped to the person, and free of anything

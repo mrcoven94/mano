@@ -61,8 +61,8 @@ export const PAYLOAD_SCHEMAS: Record<ActionType, PayloadSchema> = {
   call: { destinations: [], content: ["script", "text"], extra: [] },
   // A fax's number and a letter's addresses are not the recipient's ID, so
   // they are not destinations. Engine's executors hold them to the allowlist.
-  fax: { destinations: ["to"], content: ["cover", "text"], extra: ["Fax to", "Approved by", "Price"], counts: ["Pages"] },
-  mail: { destinations: [], content: ["text"], extra: ["Mail to", "Return address", "Approved by", "Price"], counts: ["Pages"] },
+  fax: { destinations: ["to"], content: ["cover", "text"], extra: ["Fax to", "Approved by", "Price", "attachment"], counts: ["Pages"] },
+  mail: { destinations: [], content: ["text"], extra: ["Mail to", "Return address", "Approved by", "Price", "attachment"], counts: ["Pages"] },
   share: { destinations: ["with"], content: ["text"], extra: [] },
 };
 

@@ -1,7 +1,7 @@
 import { boundFetch } from "../fetch.js";
 import { bytesToBase64 } from "../hash.js";
 import type { ActionRequest, CheckOutcome, Executor } from "./types.js";
-import { DefiniteFailureError, UnconfirmedSendError } from "./types.js";
+import { DefiniteFailureError, NotTheSenderError, UnconfirmedSendError } from "./types.js";
 import {
   FAX_RECIPIENT,
   PAYLOAD,
@@ -10,6 +10,7 @@ import {
   downstreamKey,
   prepareOutgoing,
   providerFetch,
+  providerIdentity,
   type ProviderResponse,
   type OutboundPricing,
 } from "./outbound.js";
@@ -24,13 +25,16 @@ const PAGE_SIZE = 250;
 // More than this many pages of our own number's faxes is not an answer.
 const MAX_LIST_PAGES = 40;
 
-// Which keys ever went to the provider. Written to the person's SQLite
-// before the send, so a restart cannot forget one. A Durable Object holds
-// outgoing requests until its writes are durable. A key with no row never
-// reached POST /faxes, so nothing under it can land.
+// Which keys may have gone to the provider. A run claims its row in the
+// person's SQLite right before the send, and a row means another run is the
+// sender. A Durable Object holds outgoing requests until its writes are
+// durable, so a restart cannot forget one. Only an answered refusal gives the
+// row back. A key with no row never reached POST /faxes, so nothing under it
+// can land.
 export interface FaxSendLog {
   wasSent(key: string): boolean;
-  markSent(key: string): void;
+  claim(key: string): boolean;
+  release(key: string): void;
 }
 
 export function ensureFaxSendTable(sql: SqlStorage): void {
@@ -44,8 +48,12 @@ export class SqlFaxSendLog implements FaxSendLog {
     return this.sql.exec("SELECT key FROM fax_sends WHERE key = ?", key).toArray().length > 0;
   }
 
-  markSent(key: string): void {
-    this.sql.exec("INSERT OR IGNORE INTO fax_sends(key) VALUES (?)", key);
+  claim(key: string): boolean {
+    return this.sql.exec("INSERT OR IGNORE INTO fax_sends(key) VALUES (?)", key).rowsWritten > 0;
+  }
+
+  release(key: string): void {
+    this.sql.exec("DELETE FROM fax_sends WHERE key = ?", key);
   }
 }
 
@@ -57,6 +65,9 @@ export interface FaxConfig {
   fromNumber: string;
   pricing: OutboundPricing;
   sendLog: FaxSendLog;
+  // The attempt's current version, read at the start of a run and again
+  // right before the send, so a run whose attempt moved on sends nothing.
+  attemptVersion: (idempotencyKey: string) => number | null;
 }
 
 export interface FaxClientState {
@@ -66,13 +77,15 @@ export interface FaxClientState {
 
 export class FaxExecutor implements Executor {
   readonly simulated = false;
-  readonly provider = "telnyx";
+  readonly provider: string;
 
   constructor(
     private config: FaxConfig,
     private fetchFn: typeof fetch = boundFetch,
     private timeoutMs = 20000,
-  ) {}
+  ) {
+    this.provider = providerIdentity("telnyx", config.apiKey);
+  }
 
   private get authorization(): string {
     return `Bearer ${this.config.apiKey}`;
@@ -100,6 +113,7 @@ export class FaxExecutor implements Executor {
   }
 
   async execute(req: ActionRequest): Promise<{ externalId: string; simulated: boolean }> {
+    const version = this.config.attemptVersion(req.idempotencyKey);
     assertAnswered(req);
     const problem = this.recipientProblem(req);
     if (problem) throw new DefiniteFailureError(problem);
@@ -118,17 +132,26 @@ export class FaxExecutor implements Executor {
     // store_media, off by default, cannot be sent with media_name anyway.
     media.set("ttl_secs", "3600");
     await this.post("/media", { body: media });
-    this.config.sendLog.markSent(key);
-    const res = await this.post("/faxes", {
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        connection_id: this.config.connectionId,
-        media_name: mediaName,
-        to: this.config.ownNumber,
-        from: this.config.fromNumber,
-        client_state: bytesToBase64(new TextEncoder().encode(JSON.stringify(state))),
-      }),
-    });
+    // One synchronous step with the send: the attempt is still this run's,
+    // and no other run holds the row. The provider has no dedupe, so this is
+    // what makes one POST.
+    if (this.config.attemptVersion(req.idempotencyKey) !== version || !this.config.sendLog.claim(key)) throw new NotTheSenderError();
+    let res: ProviderResponse;
+    try {
+      res = await this.post("/faxes", {
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connection_id: this.config.connectionId,
+          media_name: mediaName,
+          to: this.config.ownNumber,
+          from: this.config.fromNumber,
+          client_state: bytesToBase64(new TextEncoder().encode(JSON.stringify(state))),
+        }),
+      });
+    } catch (err) {
+      if (err instanceof DefiniteFailureError) this.config.sendLog.release(key);
+      throw err;
+    }
     const data = JSON.parse(res.text) as { data?: { id?: unknown } };
     const id = data.data?.id;
     if (typeof id !== "string" || !id) throw new Error(`${LABEL} returned no fax ID.`);

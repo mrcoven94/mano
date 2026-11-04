@@ -195,6 +195,15 @@ export class UnconfirmedSendError extends Error {
   }
 }
 
+// Another run owns this send. It sent nothing and changes nothing, and the
+// other run's outcome stands.
+export class NotTheSenderError extends Error {
+  constructor(msg = "Another request with this idempotency key is running.") {
+    super(msg);
+    this.name = "NotTheSenderError";
+  }
+}
+
 // The action definitely did not happen: a 4xx from the portal, an org
 // rejection, a request the executor refused before acting. The gateway
 // records a failed attempt, which allows a clean retry with no reconcile.

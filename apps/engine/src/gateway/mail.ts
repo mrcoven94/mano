@@ -10,6 +10,7 @@ import {
   downstreamKey,
   prepareOutgoing,
   providerFetch,
+  providerIdentity,
   type OutboundPricing,
 } from "./outbound.js";
 
@@ -41,7 +42,7 @@ function parseAddress(value: unknown): MailAddress | null {
 
 export class MailExecutor implements Executor {
   readonly simulated = true;
-  readonly provider = "lob";
+  readonly provider: string;
 
   constructor(
     private apiKey: string,
@@ -49,7 +50,9 @@ export class MailExecutor implements Executor {
     private fetchFn: typeof fetch = boundFetch,
     private timeoutMs = 20000,
     private routes?: DeliveryRoutes,
-  ) {}
+  ) {
+    this.provider = providerIdentity("lob", apiKey);
+  }
 
   private get authorization(): string {
     return `Basic ${btoa(`${this.apiKey}:`)}`;

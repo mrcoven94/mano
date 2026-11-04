@@ -174,11 +174,10 @@ describe("the provider path in workerd", () => {
     const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(person));
     const read = await runInDurableObject(stub, async (_agent, state) => {
       const log = new SqlFaxSendLog(state.storage.sql);
-      log.markSent("key");
-      log.markSent("key");
-      return [log.wasSent("key"), log.wasSent("other")];
+      const claims = [log.claim("key"), log.claim("key")];
+      return [...claims, log.wasSent("key"), log.wasSent("other")];
     });
-    expect(read).toEqual([true, false]);
+    expect(read).toEqual([true, false, true, false]);
   });
 
   it("verifies an Ed25519 fax signature with workerd's web crypto", async () => {
