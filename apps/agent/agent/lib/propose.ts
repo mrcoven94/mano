@@ -25,8 +25,12 @@ function canonical(v: Record<string, unknown>): string {
 // True when the approval froze exactly this draft's values and document.
 export function sameDraft(a: EngineApproval, draft: Draft): boolean {
   try {
-    const frozen = JSON.parse(a.requestJson) as { payload?: Record<string, unknown>; documentId?: string };
-    return canonical(frozen.payload ?? {}) === canonical(draft.payload) && (frozen.documentId ?? null) === (draft.documentId ?? null);
+    const frozen = JSON.parse(a.requestJson) as { payload?: Record<string, unknown>; documentId?: string; attachmentLabel?: string };
+    return (
+      canonical(frozen.payload ?? {}) === canonical(draft.payload) &&
+      (frozen.documentId ?? null) === (draft.documentId ?? null) &&
+      (frozen.attachmentLabel ?? null) === (draft.attachmentLabel ?? null)
+    );
   } catch {
     return false;
   }

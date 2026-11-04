@@ -470,7 +470,8 @@ describe("fill_form", () => {
     const frozen = JSON.parse(held.requestJson);
     expect(frozen.documentId).toBe("doc-letter");
     expect(frozen.sources).toEqual([{ kind: "document", id: "doc-letter" }]);
-    expect(frozen.payload.attachment).toEqual(expect.any(String));
+    expect(frozen.payload.attachment).toBe("doc-letter");
+    expect(frozen.attachmentLabel).toEqual(expect.any(String));
   });
 
   describe("what a fill says it attached", () => {
@@ -510,18 +511,20 @@ describe("fill_form", () => {
 
     it("a renewal letter is named as a letter, and the question says no proof of income is attached", async () => {
       const { held, frozen, checks } = await filledAfterReading(LETTER_PAGE);
-      expect(frozen.payload.attachment).toMatch(/^the letter you sent on \w+ \d+, and no proof of income$/);
-      expect(renderQuestion(held)).toContain(`With ${frozen.payload.attachment} attached.`);
+      expect(frozen.attachmentLabel).toMatch(/^the letter you sent on \w+ \d+, and no proof of income$/);
+      expect(renderQuestion(held)).toContain(`With ${frozen.attachmentLabel} attached.`);
       expect(presentsExactly(renderQuestion(held))).toBe(true);
-      expect(checks.map((c) => (c.action.payload as Record<string, unknown>).attachment)).toContain(frozen.payload.attachment);
+      expect(checks.map((c) => (c.action.payload as Record<string, unknown>).attachment)).toContain(frozen.documentId);
+      expect(JSON.stringify(checks)).not.toContain(frozen.attachmentLabel);
     });
 
     it("a pay stub read as one goes as proof of income, as start_form_draft attaches it", async () => {
       const { held, frozen, checks } = await filledAfterReading(STUB_PAGE);
       expect(frozen.documentId).toBe("g0t1i0-0123456789ab");
-      expect(frozen.payload.attachment).toMatch(/^the pay stub you sent on \w+ \d+ as proof of income$/);
-      expect(renderQuestion(held)).toContain(`With ${frozen.payload.attachment} attached.`);
-      expect(checks.map((c) => (c.action.payload as Record<string, unknown>).attachment)).toContain(frozen.payload.attachment);
+      expect(frozen.attachmentLabel).toMatch(/^the pay stub you sent on \w+ \d+ as proof of income$/);
+      expect(renderQuestion(held)).toContain(`With ${frozen.attachmentLabel} attached.`);
+      expect(checks.map((c) => (c.action.payload as Record<string, unknown>).attachment)).toContain(frozen.documentId);
+      expect(JSON.stringify(checks)).not.toContain(frozen.attachmentLabel);
     });
   });
 
