@@ -1,0 +1,58 @@
+/* Adapted from Stageshow static-card: one source object, one result in front.
+   The compact composition keeps the source sentence readable above the result. */
+.h-medicaid {
+  background:var(--bg2);
+  .md-intro { display:grid;grid-template-columns:1fr 1fr;gap:72px;align-items:start; }
+  .md-eyebrow { font-size:.9rem;color:var(--muted);margin-bottom:14px; }
+  h2 { max-width:14ch; }
+  .md-context { display:grid;gap:18px;line-height:1.6;font-size:1.04rem;color:var(--muted); }
+  .md-context strong { color:var(--text);font-weight:550; }
+  .md-sources { font-size:.86rem; }
+  a:not(.btn) { color:inherit;text-decoration:underline;text-underline-offset:3px; }
+  .md-case-head { margin:64px 0 24px; }
+  .md-case-head h3 { font-size:1.55rem;font-weight:550; }
+  .md-case-head p { margin-top:8px;color:var(--muted);font-size:.92rem; }
+  .md-example { --ss-font:var(--font-sans),Arial,sans-serif; }
+  .md-example .ss-stage { overflow:hidden;background:transparent; }
+  .md-paper { position:absolute;top:24px;left:0;width:440px; }
+  .md-paper img { display:block;width:100%;height:auto;box-shadow:0 15px 30px -22px rgba(0,0,0,.35); }
+  .md-result { position:absolute;left:430px;right:0;top:24px;padding:26px 30px;background:#fff;box-shadow:0 10px 45px -28px rgba(0,0,0,.3);border-radius:12px;color:var(--text); }
+  .md-result-top { display:flex;justify-content:space-between;gap:14px;font-size:13px;color:var(--muted);margin-bottom:24px; }
+  .md-result-top a { font-size:12px; }
+  .md-program { font-size:19px;font-weight:550;line-height:1.35; }
+  .md-case { font-size:12px;color:var(--muted);margin-top:4px; }
+  .md-date-label { margin-top:24px;font-size:13px;color:var(--muted); }
+  .md-date { font-size:36px;line-height:1.2;letter-spacing:-.02em;font-weight:550;margin-top:5px; }
+  .md-quote { font-size:13px;line-height:1.5;margin-top:14px;max-width:44ch; }
+  .md-evidence-title { font-size:13px;font-weight:550;margin-top:24px; }
+  .md-evidence { padding-left:19px;margin:8px 0 0;display:grid;gap:8px;font-size:13px;line-height:1.5; }
+  .md-evidence li { padding-left:3px; }
+  .md-next { display:grid;gap:6px;margin-top:22px;background:var(--pen-soft);padding:14px 16px;border-radius:8px;font-size:13px;line-height:1.5; }
+  .md-next strong { font-weight:550; }
+  .md-next span { color:var(--muted); }
+  .md-bottom { display:flex;align-items:center;justify-content:space-between;gap:40px;margin-top:24px; }
+  .md-bottom p { max-width:650px;color:var(--muted);font-size:.92rem;line-height:1.55; }
+  .md-bottom .btn { flex-shrink:0; }
+  [data-layout="compact"] {
+    .md-paper { top:0;left:0;width:358px;transform:none;padding:22px 22px 30px;background:#fffdf6;min-height:250px; }
+    .md-paper-top { display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--muted); }
+    .md-office { margin-top:24px;font-size:14px;font-weight:550; }
+    .md-source-quote { font-size:16px;line-height:1.55;margin-top:14px; }
+    .md-source-case { font-size:12px;color:var(--muted);margin-top:16px; }
+    .md-result { left:0;right:0;top:300px;padding:22px;min-height:550px; }
+    .md-result-top { margin-bottom:22px; }
+    .md-program { font-size:18px; }
+    .md-date { font-size:30px; }
+    .md-quote { display:none; }
+    .md-date-label { margin-top:22px; }
+    .md-evidence-title { margin-top:24px; }
+    .md-evidence { font-size:14px;gap:10px; }
+    .md-next { margin-top:24px;font-size:14px; }
+  }
+  @media(max-width:760px) {
+    .md-intro { grid-template-columns:1fr;gap:24px; }
+    h2 { max-width:18ch; }
+    .md-case-head { margin-top:44px; }
+    .md-bottom { align-items:start;flex-direction:column;gap:22px;margin-top:0; }
+  }
+}

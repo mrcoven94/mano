@@ -1,0 +1,189 @@
+{
+  "recordedAt": "2026-11-04T22:27:15.843Z",
+  "synthetic": true,
+  "source": "/try/letters/datecheck.jpg",
+  "sourceSha256": "aea9a1053f029b0cf3528eba14456c92dfb80c2d468572e65ec6301d16dad4e8",
+  "elapsedMs": 7755,
+  "fields": {
+    "sender": {
+      "value": "Sacramento County Medi-Cal Office",
+      "citation": {
+        "file": "datecheck.jpg",
+        "page": 1,
+        "box": {
+          "ymin": 110,
+          "xmin": 110,
+          "ymax": 150,
+          "xmax": 375
+        }
+      }
+    },
+    "program": {
+      "value": "Medi-Cal",
+      "citation": {
+        "file": "datecheck.jpg",
+        "page": 1,
+        "box": {
+          "ymin": 150,
+          "xmin": 110,
+          "ymax": 175,
+          "xmax": 295
+        }
+      }
+    },
+    "subject": {
+      "value": "Re: Medi-Cal Renewal",
+      "citation": {
+        "file": "datecheck.jpg",
+        "page": 1,
+        "box": {
+          "ymin": 365,
+          "xmin": 110,
+          "ymax": 385,
+          "xmax": 295
+        }
+      }
+    },
+    "asked": [
+      {
+        "value": "1. Signed renewal form (enclosed)",
+        "citation": {
+          "file": "datecheck.jpg",
+          "page": 1,
+          "box": {
+            "ymin": 545,
+            "xmin": 98,
+            "ymax": 565,
+            "xmax": 385
+          }
+        }
+      },
+      {
+        "value": "2. Proof of household income for last month (pay stubs or award letters)",
+        "citation": {
+          "file": "datecheck.jpg",
+          "page": 1,
+          "box": {
+            "ymin": 565,
+            "xmin": 98,
+            "ymax": 605,
+            "xmax": 645
+          }
+        }
+      },
+      {
+        "value": "3. Proof of address if you moved since September 1, 2026",
+        "citation": {
+          "file": "datecheck.jpg",
+          "page": 1,
+          "box": {
+            "ymin": 615,
+            "xmin": 102,
+            "ymax": 636,
+            "xmax": 556
+          }
+        }
+      }
+    ],
+    "deadlineText": {
+      "value": "To keep your coverage without a break, we must receive your completed renewal packet by November 20, 2026.",
+      "citation": {
+        "file": "datecheck.jpg",
+        "page": 1,
+        "box": {
+          "ymin": 474,
+          "xmin": 102,
+          "ymax": 512,
+          "xmax": 658
+        }
+      }
+    },
+    "consequence": {
+      "value": "If we do not receive your packet by November 20, 2026, your Medi-Cal coverage will end on December 20, 2026. You may reapply, but there may be a gap in coverage.",
+      "citation": {
+        "file": "datecheck.jpg",
+        "page": 1,
+        "box": {
+          "ymin": 690,
+          "xmin": 91,
+          "ymax": 750,
+          "xmax": 676
+        }
+      }
+    },
+    "referenceNo": {
+      "value": "CA-2026-410231",
+      "citation": {
+        "file": "datecheck.jpg",
+        "page": 1,
+        "box": {
+          "ymin": 386,
+          "xmin": 109,
+          "ymax": 408,
+          "xmax": 336
+        }
+      }
+    },
+    "noticeDate": {
+      "value": "November 2, 2026",
+      "citation": {
+        "file": "datecheck.jpg",
+        "page": 1,
+        "box": {
+          "ymin": 244,
+          "xmin": 112,
+          "ymax": 263,
+          "xmax": 379
+        }
+      }
+    },
+    "contacts": [
+      {
+        "kind": "phone",
+        "value": "(555) 214-8800",
+        "citation": {
+          "file": "datecheck.jpg",
+          "page": 1,
+          "box": {
+            "ymin": 192,
+            "xmin": 150,
+            "ymax": 210,
+            "xmax": 320
+          }
+        }
+      },
+      {
+        "kind": "address",
+        "value": "3993 Sample Street, Sacramento, CA 95814",
+        "citation": {
+          "file": "datecheck.jpg",
+          "page": 1,
+          "box": {
+            "ymin": 165,
+            "xmin": 111,
+            "ymax": 185,
+            "xmax": 440
+          }
+        }
+      },
+      {
+        "kind": "address",
+        "value": "7189 Test Boulevard, Sacramento, CA 95814",
+        "citation": {
+          "file": "datecheck.jpg",
+          "page": 1,
+          "box": {
+            "ymin": 324,
+            "xmin": 109,
+            "ymax": 343,
+            "xmax": 465
+          }
+        }
+      }
+    ],
+    "excerpt": "Sacramento County Medi-Cal Office\n3993 Sample Street, Sacramento, CA 95814\nPhone: (555) 214-8800 | TTY: 711\n\nNotice Date: November 2, 2026\n\nMaria Santos\n7189 Test Boulevard, Sacramento, CA 95814\n\nRe: Medi-Cal Renewal\nCase No.: CA-2026-410231\n\nDear Maria Santos,\n\nYour Medi-Cal cov"
+  },
+  "reply": "This is a Medi-Cal renewal letter. It asks you to send: proof of income, proof of address, pay stubs and other documents the letter lists. If you need to call the office, use the number on your state's official site, not one from a letter. It looks like your renewal is due November 20, 2026. Please check that against your letter. Is that the date you need to meet?",
+  "deadlineSaved": false,
+  "proposedDate": "2026-11-20"
+}
