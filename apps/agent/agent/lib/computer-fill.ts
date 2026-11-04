@@ -15,10 +15,14 @@
 import { randomBytes } from "node:crypto";
 
 import {
+  FILL_DEADLINE_MS,
+  FILL_INSTRUCTIONS,
+  FILL_MAX_STEPS,
   FetchModelClient,
   OpenWeightModelClient,
   computerFromEnv,
   editsForm,
+  fillTask,
   recordFrames,
   runLoop,
   type Computer,
@@ -57,8 +61,6 @@ export interface FillDeps {
   portalFetch?: typeof fetch;
 }
 
-// Inside the 90-second turn, with room for the reply around it.
-const DEFAULT_DEADLINE_MS = 60_000;
 const DEFAULT_MODEL = "muse-spark-1.3";
 const CLOSE_WAIT_MS = 3_000;
 const READ_TIMEOUT_MS = 10_000;
@@ -89,7 +91,7 @@ export function fillDepsFromEnv(personId: string, env: NodeJS.ProcessEnv = proce
     computer,
     model,
     modelId: openWeight ? route.modelId : (env.MANO_COMPUTER_MODEL ?? DEFAULT_MODEL),
-    deadlineMs: Number.isFinite(deadline) && deadline > 0 ? deadline : DEFAULT_DEADLINE_MS,
+    deadlineMs: Number.isFinite(deadline) && deadline > 0 ? deadline : FILL_DEADLINE_MS,
     draftToken: env.SANDBOX_PORTAL_DRAFT_TOKEN,
   };
 }
@@ -98,18 +100,6 @@ export function fillDepsFromEnv(personId: string, env: NodeJS.ProcessEnv = proce
 export function typedValue(name: string, value: string): string {
   const iso = name === "dateOfBirth" ? ISO_DATE.exec(value) : null;
   return iso ? `${iso[2]}/${iso[3]}/${iso[1]}` : value;
-}
-
-function taskText(form: FormSpec, values: Record<string, string>): string {
-  const lines = form.fields.map((f) => `${f.label}: ${typedValue(f.name, values[f.name] ?? "")}`);
-  return [
-    "Fill out the form open in this browser with exactly these values, then continue to the form's next step. Do not submit anything.",
-    ...lines,
-    "Type each value exactly as written. For a date field, click it, press Ctrl+A, then type the date.",
-    "A long value can look cut off in a narrow field; that is fine, do not retype it.",
-    "When the form's next step appears, stop and reply with exactly: ACCEPTED",
-    "If the form shows an error instead, stop and reply with REJECTED: and the error text.",
-  ].join("\n");
 }
 
 // Engine keeps at most this many steps of one fill.
@@ -178,7 +168,8 @@ async function readDraft(portalUrl: string, id: string, deps: FillDeps): Promise
   return saved;
 }
 
-export async function fillOnComputer(form: FormSpec, values: Record<string, string>, portalUrl: string, deps: FillDeps): Promise<FillOutcome> {
+// layout: the address of one of the portal's test layouts of this form, or "".
+export async function fillOnComputer(form: FormSpec, values: Record<string, string>, portalUrl: string, deps: FillDeps, layout = ""): Promise<FillOutcome> {
   const started = Date.now();
   // Fresh per fill, so a draft read back can only be this fill's.
   const draftId = randomBytes(32).toString("hex");
@@ -189,14 +180,11 @@ export async function fillOnComputer(form: FormSpec, values: Record<string, stri
   });
   try {
     const run = (async (): Promise<FillOutcome> => {
-      const page = new URL(`${portalUrl.replace(TRAILING_SLASH, "")}${form.path}`);
+      const page = new URL(`${portalUrl.replace(TRAILING_SLASH, "")}${layout}${form.path}`);
       page.searchParams.set("draft", draftId);
       await computer.goto(page.toString());
-      const outcome = await runLoop(computer, deps.model, taskText(form, values), {
-        model: deps.modelId,
-        maxSteps: 8,
-        instructions: "These fields do not depend on each other: fill all of them in one batch of click and type actions, then click Continue.",
-      });
+      const task = fillTask(form.fields.map((f) => ({ label: f.label, value: typedValue(f.name, values[f.name] ?? "") })));
+      const outcome = await runLoop(computer, deps.model, task, { model: deps.modelId, maxSteps: FILL_MAX_STEPS, instructions: FILL_INSTRUCTIONS });
       const ms = () => Date.now() - started;
       if (outcome.status === "safety_check") return { status: "safety_check", codes: outcome.checks.map((c) => c.code), steps: outcome.steps, ms: ms() };
       if (outcome.status !== "done") return { status: "failed", reason: outcome.status, ms: ms() };
