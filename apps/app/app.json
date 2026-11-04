@@ -15,7 +15,12 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.withmano.app"
+      "bundleIdentifier": "com.withmano.app",
+      "icon": "./assets/icon-ios.png",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.withmano.app",

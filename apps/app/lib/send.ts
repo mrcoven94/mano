@@ -3,8 +3,16 @@
 // attempt. An expired session throws before anything is queued, and an
 // auth failure mid-flush drops the failed item and rethrows so the
 // caller signs out instead of stranding mail for the next resident.
+//
+// A message naming a crisis gets 988 and 911 on the device first, before
+// anything that can stop it: a held send ahead of it, no network, an
+// expired session. The line is also kept for the sign-in screen, in case a
+// sign-out takes this screen away first.
 
-import { AuthError, type ManoClient, type NewAttachment, type Session } from "./api/types";
+import { crisisGate, crisisLineFor } from "@mano/persona/crisis";
+import { deviceCrisisId } from "./chat-thread";
+import { noteCrisisLine } from "./crisis-help";
+import { AuthError, type ChatMessage, type ManoClient, type NewAttachment, type Session } from "./api/types";
 import type { Outbox } from "./queue";
 
 export interface SubmitReport {
@@ -24,11 +32,20 @@ export async function submitMessage(
   outbox: Outbox,
   text: string,
   attachments: NewAttachment[],
+  onReply?: (reply: ChatMessage) => void,
 ): Promise<SubmitReport> {
+  if (crisisGate(text) !== "none") {
+    // It shows before the message is queued but reads after it.
+    const createdAt = new Date(Date.now() + 1000).toISOString();
+    const line = crisisLineFor(text);
+    noteCrisisLine(line, Date.now());
+    onReply?.({ id: deviceCrisisId(createdAt), role: "agent", text: line, createdAt, attachments: [], status: "sent" });
+  }
   if (!sessionUsable(session)) throw new AuthError();
   const item = await outbox.enqueue(session.personId, text, attachments);
-  const report = await outbox.flush(session, (queued) =>
-    client.sendMessage(session, queued.text, queued.attachments, queued.id),
-  );
+  const report = await outbox.flush(session, async (queued) => {
+    const reply = await client.sendMessage(session, queued.text, queued.attachments, queued.id);
+    onReply?.(reply);
+  });
   return { opId: item.id, sent: report.sent, kept: report.kept, held: report.held };
 }
