@@ -119,7 +119,7 @@ export default function HeroThread({ scene, onLoop }: { scene: ThreadScene; onLo
           poster={{ ...initial, photo: true, deadline: true, ask: true, yes: true, filed: true, last: !!scene.last }}
           script={play}
           play="loop"
-          accent="#1E7BF6"
+          accent="#1A6FE0"
           tokens={{ "--ss-font": "var(--font-sans), system-ui, sans-serif" }}
           className="sp-stage"
         >

@@ -1,5 +1,5 @@
 /* Home page. Paper white, ink type, one yellow highlighter and one blue pen. The person's own texts are message blue. */
-:root{--text-blue:#1E7BF6}
+:root{--text-blue:#1A6FE0}
 
 .home section{padding:112px 0}
 .home .lede{max-width:560px}
@@ -513,7 +513,7 @@ mark{background:none;color:inherit}
 .nd-steps li{display:grid;grid-template-columns:20px 1fr;gap:12px;align-items:center;font-size:.96rem}
 .nd-get{padding:4px 2px 0;display:grid;gap:6px}
 .nd-get p{font-family:var(--font-display),sans-serif;font-weight:700;font-size:clamp(1.2rem,2vw,1.45rem);letter-spacing:-.02em;line-height:1.3}
-.nd-get mark{background-image:linear-gradient(var(--hl),var(--hl));background-repeat:no-repeat;background-size:100% 100%;padding:0 .08em;-webkit-box-decoration-break:clone;box-decoration-break:clone;animation:hlDraw .55s cubic-bezier(.6,0,.2,1) var(--d,.15s) both}
+.nd-get mark{color:var(--text);background-image:linear-gradient(var(--hl),var(--hl));background-repeat:no-repeat;background-size:100% 100%;padding:0 .08em;-webkit-box-decoration-break:clone;box-decoration-break:clone;animation:hlDraw .55s cubic-bezier(.6,0,.2,1) var(--d,.15s) both}
 .nd-small{font-size:.88rem;color:var(--muted)}
 @media (max-width:1080px){.nd-grid{grid-template-columns:1fr;gap:24px}.nd-stage{min-height:0}}
 @media (max-width:720px){.nd-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.nd-pick{min-height:0;padding:14px}.nd-icon{width:44px;height:44px}.nd-stage{padding:18px;border-radius:16px}}

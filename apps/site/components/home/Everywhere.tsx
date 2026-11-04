@@ -119,7 +119,7 @@ export default function Everywhere() {
         <div className="dv-device" key={`d-${k}`}>
           {k === "text" && (
             <Phone title="Mano">
-              <div className="dv-photo rv me" style={d(0.1)}><span>SAMPLE COUNTY</span><i /><i /><i /></div>
+              <div className="dv-photo rv me" style={d(0.1)} role="img" aria-label="Photo of the letter"><span>SAMPLE COUNTY</span><i /><i /><i /></div>
               <Bubble me t={0.4}>What is this one?</Bubble>
               <Bubble t={1.1}>Your food benefits renewal. It is due <mark>November 14</mark>. Want me to fill it out?</Bubble>
               <Bubble me t={2}>Yes please</Bubble>

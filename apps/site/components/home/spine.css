@@ -15,7 +15,8 @@
 .sp-stage .sp-head{display:grid;justify-items:center;gap:4px;padding:10px 0;background:#f7f7f8;border-bottom:.5px solid #d8d8dc;flex:none;position:relative;z-index:1}
 .sp-stage .sp-name{font-size:14px;font-weight:500;color:#000;line-height:18px}
 .sp-stage .sp-thread{flex:1;padding:0 16px 0 16px}
-.sp-stage .sp-thread .ss-stamp{margin:12px 0 6px}
+.sp-stage .sp-thread{--ss-me:var(--text-blue)}
+.sp-stage .sp-thread .ss-stamp{margin:12px 0 6px;color:#6C6C70}
 .sp-stage .sp-thread .ss-stamp b{font-weight:600}
 
 /* The reset: the thread dissolves, returns to its opening while hidden, and fades back; the header stays */
