@@ -25,7 +25,7 @@ import { CRISIS_LINE, detectCrisis } from "./crisis.js";
 import { profileContext } from "./profile.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
-import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
+import { LETTER_RULES, documentsContext, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
 import { closeReplaced, presentable, presentationHash, proposalsOf, renderQuestion, replayLine, waitingFrom, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 import { TurnClock } from "./timings.js";
@@ -394,8 +394,10 @@ async function runTurn(
     context.push(LETTER_RULES);
     message = `${message}\n\n${letterBlock(letter)}`;
   }
-  const profile = await clock.time("profile", async () => profileRead);
+  // Read after the photos, so a letter this turn just read is marked.
+  const [profile, documents] = await clock.time("profile", () => Promise.all([profileRead, documentsContext(engine, deadlineMs - MODEL_MIN_MS - Date.now())]));
   if (profile) context.push(profile);
+  if (documents) context.push(documents);
   // Where earlier requests stand (instructions/requests.ts) reaches the
   // model as a system instruction, never as part of the person's message.
   let settled: SettleResult;

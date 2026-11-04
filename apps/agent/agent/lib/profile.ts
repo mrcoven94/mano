@@ -54,6 +54,7 @@ const FIELD_LABELS: Record<string, string> = {
   "person.county": "county",
   "person.language": "language",
   "person.householdConfirmed": "household",
+  "person.householdSize": "household",
 };
 
 // Plain names the model may pass to forget, and the path each clears.
@@ -267,8 +268,15 @@ export function confirmedByPerson(profile: Profile): boolean {
   return leaf?.value === true && leaf.source === "person";
 }
 
+// How many live in the household, counting the person: a roster they
+// confirmed, else the number they gave, else unknown.
+export function householdSizeOf(profile: Profile): number | null {
+  if (confirmedByPerson(profile)) return profile.household.length + 1;
+  return profile.person.householdSize?.value ?? null;
+}
+
 function isEmpty(profile: Profile): boolean {
-  return PERSON_FIELDS.every(([, get]) => !get(profile).value) && !profile.household.length && !profile.income.length && !profile.programs.length;
+  return PERSON_FIELDS.every(([, get]) => !get(profile).value) && !profile.person.householdSize && !profile.household.length && !profile.income.length && !profile.programs.length;
 }
 
 // The profile as data for the model: plain JSON, keyed by our own field
@@ -290,6 +298,7 @@ export function profileData(view: ProfileView): Record<string, unknown> {
       from: from(m.name ?? m.relationship),
     })),
     householdConfirmed: confirmedByPerson(profile),
+    ...(profile.person.householdSize ? { householdSize: householdSizeOf(profile) } : {}),
     income: profile.income.map((inc) => ({
       ref: inc.id,
       earner: !inc.memberId || inc.memberId.value === "self" ? "the person" : (profile.household.find((m) => m.id === inc.memberId?.value)?.name?.value ?? "a household member"),
@@ -367,10 +376,13 @@ export function profileGuide(view: ProfileView): string {
   if (onFile.length) lines.push(`On file now: ${onFile.join(", ")}.`);
   if (missing.length) lines.push(`Not on file yet: ${missing.join(", ")}.`);
   const others = profile.household.length;
+  const size = householdSizeOf(profile);
   lines.push(
     confirmedByPerson(profile)
       ? `Household size: ${1 + others} including the person (they confirmed who lives with them).`
-      : `Household members on file besides the person: ${others}. The person has not confirmed who lives with them, so ask before using a household size, and save their answer with householdComplete.`,
+      : size !== null
+        ? `Household size: ${size} including the person (the number they gave).`
+        : `Household members on file besides the person: ${others}. The person has not confirmed who lives with them, so ask before using a household size, and save their answer with householdComplete.`,
   );
   if (view.suggestions.length) lines.push(`Waiting for the person to confirm: ${view.suggestions.length} item${view.suggestions.length === 1 ? "" : "s"}.`);
   return lines.join("\n");
@@ -403,6 +415,7 @@ export function summarizeProfile(view: ProfileView): string {
       `Household: ${profile.household.map((m) => [m.name?.value ?? "someone", m.relationship ? `(${m.relationship.value})` : null].filter(Boolean).join(" ")).join(", ")}`,
     );
   }
+  if (profile.person.householdSize && !confirmedByPerson(profile)) sentences.push(`Household of ${profile.person.householdSize.value}`);
   if (profile.income.length) sentences.push(`Income: ${profile.income.map((inc) => incomeText(profile, inc, profile.household.length > 0 ? "you" : null)).join("; ")}`);
   if (profile.programs.length) {
     sentences.push(

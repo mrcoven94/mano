@@ -14,7 +14,7 @@
 import type { RecipientId } from "@mano/protocol";
 
 import type { Frequency, Profile } from "./engine.js";
-import { confirmedByPerson } from "./profile.js";
+import { confirmedByPerson, householdSizeOf } from "./profile.js";
 
 export interface FormField {
   // The form's own input name, which the filing carries.
@@ -26,7 +26,12 @@ export interface FormField {
   fromProfile(profile: Profile): string | null;
   // The checked value, or null when the answer does not fit the field.
   parse(answer: string): string | null;
+  // The Engine profile fields that keep this checked value, so fromProfile
+  // gives it back on a later call. Empty: the value cannot stand on its own.
+  toProfile(value: string, profile: Profile): ProfileFields;
 }
+
+export type ProfileFields = Record<string, string | number | boolean | null>;
 
 export interface FormSpec {
   id: string;
@@ -96,22 +101,47 @@ function dollars(answer: string): string | null {
 
 const PER_MONTH: Record<Frequency, number> = { weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, yearly: 1 / 12 };
 
-// Unknown unless every entry has an amount and how often it comes: a
-// total that left one out would understate the household's income.
+// The form asks for one household total. It is kept as its own entry and
+// never added to the others, which it already counts.
+const STATED_TOTAL = "stated-monthly-total";
+
+// The total the person gave, until an entry changes after it. Otherwise
+// unknown unless every entry has an amount and how often it comes: a total
+// that left one out would understate the household's income.
 function monthlyIncome(profile: Profile): string | null {
-  if (profile.income.length === 0) return null;
+  const stated = profile.income.find((i) => i.id === STATED_TOTAL)?.amount;
+  const entries = profile.income.filter((i) => i.id !== STATED_TOTAL);
+  if (stated && !entries.some((i) => (i.amount?.updatedAt ?? "") > stated.updatedAt)) return String(stated.value);
+  if (entries.length === 0) return null;
   let total = 0;
-  for (const i of profile.income) {
+  for (const i of entries) {
     if (!i.amount || !i.frequency) return null;
     total += i.amount.value * PER_MONTH[i.frequency.value];
   }
   return String(Math.round(total));
 }
 
+const ENDS_IN_ZIP = /\b\d{5}(-\d{4})?$/;
+const ADDRESS_PARTS = /^(.+?), (?:(.+), )?([^,]+), ([A-Za-z]{2}),? (\d{5}(?:-\d{4})?)$/;
+// What Engine keeps in one line of text.
+const ADDRESS_LINE_MAX = 200;
+
+// An address given in one line that could not be split into parts is kept
+// whole on its first line, and is complete if it ends in a ZIP.
 function mailingAddress(profile: Profile): string | null {
   const a = profile.person.address;
-  if (!a?.line1 || !a.city || !a.state || !a.zip) return null;
+  if (!a?.line1) return null;
+  if (!a.city || !a.state || !a.zip) return ENDS_IN_ZIP.test(a.line1.value) ? a.line1.value : null;
   return [a.line1.value, a.line2?.value, a.city.value, `${a.state.value} ${a.zip.value}`].filter(Boolean).join(", ");
+}
+
+// Nothing without a ZIP: part of an address must not replace a whole one.
+function addressFields(value: string): ProfileFields {
+  if (!ENDS_IN_ZIP.test(value) || value.length > ADDRESS_LINE_MAX) return {};
+  const [, line1, line2, city, state, zip] = ADDRESS_PARTS.exec(value) ?? [];
+  const at = (part: string) => `person.address.${part}`;
+  if (!line1) return { [at("line1")]: value, [at("line2")]: null, [at("city")]: null, [at("state")]: null, [at("zip")]: null };
+  return { [at("line1")]: line1, [at("line2")]: line2 ?? null, [at("city")]: city!, [at("state")]: state!, [at("zip")]: zip! };
 }
 
 // The case number of the person's one food benefits case. Two different
@@ -122,6 +152,14 @@ function foodCaseNumber(profile: Profile): string | null {
     profile.programs.flatMap((p) => (p.program && FOOD_PROGRAM.test(p.program.value) && p.caseNumber ? [p.caseNumber.value] : [])),
   );
   return numbers.size === 1 ? [...numbers][0]! : null;
+}
+
+// The number goes on every food case on file, since it answers which of
+// them is hers; with none on file it starts one.
+function caseNumberFields(value: string, profile: Profile): ProfileFields {
+  const onFile = profile.programs.filter((p) => p.program && FOOD_PROGRAM.test(p.program.value));
+  if (onFile.length === 0) return { "programs.food.program": "Food benefits", "programs.food.caseNumber": value };
+  return Object.fromEntries(onFile.map((p) => [`programs.${p.id}.caseNumber`, value]));
 }
 
 // The pay stub or other document an income amount was read from.
@@ -142,6 +180,7 @@ const FOOD_RENEWAL: FormSpec = {
       question: "What is the case number on your renewal letter?",
       fromProfile: foodCaseNumber,
       parse: trimmed(40),
+      toProfile: caseNumberFields,
     },
     {
       name: "fullName",
@@ -149,6 +188,7 @@ const FOOD_RENEWAL: FormSpec = {
       question: "What is your full legal name, as it appears on your benefits letters?",
       fromProfile: (p) => p.person.fullName?.value ?? null,
       parse: trimmed(200),
+      toProfile: (value) => ({ "person.fullName": value }),
     },
     {
       name: "dateOfBirth",
@@ -156,6 +196,7 @@ const FOOD_RENEWAL: FormSpec = {
       question: "What is your date of birth?",
       fromProfile: (p) => p.person.dateOfBirth?.value ?? null,
       parse: isoDate,
+      toProfile: (value) => ({ "person.dateOfBirth": value }),
     },
     // What the benefit is decided on.
     {
@@ -164,9 +205,15 @@ const FOOD_RENEWAL: FormSpec = {
       question: "How many people live in your household, counting you?",
       // Only the person's own confirmation says the list is everyone: one
       // child mentioned in passing is not a household, and a confirmed
-      // empty list means they live alone.
-      fromProfile: (p) => (confirmedByPerson(p) ? String(p.household.length + 1) : null),
+      // empty list means they live alone. Or the number they gave.
+      fromProfile: (p) => {
+        const size = householdSizeOf(p);
+        return size === null ? null : String(size);
+      },
       parse: wholeNumber(1, 30),
+      // A number that differs replaces the roster's confirmation: the list
+      // on file is no longer everyone.
+      toProfile: (value, p) => ({ "person.householdSize": Number(value), ...(confirmedByPerson(p) ? { "person.householdConfirmed": null } : {}) }),
     },
     {
       name: "monthlyIncome",
@@ -174,6 +221,11 @@ const FOOD_RENEWAL: FormSpec = {
       question: "About how much does your household earn in a month, before taxes?",
       fromProfile: monthlyIncome,
       parse: dollars,
+      toProfile: (value) => ({
+        [`income.${STATED_TOTAL}.source`]: "Household total the person gave",
+        [`income.${STATED_TOTAL}.amount`]: Number(value),
+        [`income.${STATED_TOTAL}.frequency`]: "monthly",
+      }),
     },
     // How the office reaches her.
     {
@@ -182,6 +234,7 @@ const FOOD_RENEWAL: FormSpec = {
       question: "What is your mailing address, with city, state and ZIP?",
       fromProfile: mailingAddress,
       parse: trimmed(300),
+      toProfile: addressFields,
     },
     {
       name: "phone",
@@ -189,6 +242,7 @@ const FOOD_RENEWAL: FormSpec = {
       question: "What phone number should the office use to reach you?",
       fromProfile: (p) => p.person.phone?.value ?? null,
       parse: phone,
+      toProfile: (value) => ({ "person.phone": value }),
     },
   ],
   declaration:
@@ -252,4 +306,18 @@ export function fillFrom(form: FormSpec, profile: Profile, answers: Record<strin
   const documentId = form.proof.fromProfile(profile);
   if (!documentId) missing ??= { name: "proof", label: form.proof.label, question: form.proof.question };
   return { values, documentId, missing, invalid };
+}
+
+// What the person's answers change on their profile, one entry per field:
+// the checked answers that differ from what the profile already gives.
+export function answerChanges(form: FormSpec, profile: Profile, answers: Record<string, string>): { field: string; fields: ProfileFields }[] {
+  return form.fields.flatMap((field) => {
+    const answer = Object.hasOwn(answers, field.name) ? answers[field.name] : undefined;
+    const value = answer === undefined ? null : field.parse(answer);
+    if (value === null) return [];
+    const onFile = field.fromProfile(profile);
+    if (onFile !== null && field.parse(onFile) === value) return [];
+    const fields = field.toProfile(value, profile);
+    return Object.keys(fields).length > 0 ? [{ field: field.name, fields }] : [];
+  });
 }

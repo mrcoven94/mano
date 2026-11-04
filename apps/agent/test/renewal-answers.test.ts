@@ -7,11 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signBody } from "../agent/lib/auth.js";
 import { engineFrom, personIdFor } from "../agent/lib/engine.js";
+import { FORMS, fillFrom } from "../agent/lib/forms.js";
 import { presentationHash } from "../agent/lib/pending.js";
+import { profileGuide, summarizeProfile } from "../agent/lib/profile.js";
 import { heldOf, initialSettleState, reduceSettleEvent } from "../agent/lib/settle.js";
 import { handlePresented, handleTurn, type AgentTurnInput } from "../agent/lib/turn.js";
 import fillForm from "../agent/tools/fill_form.js";
 import startFormDraft from "../agent/tools/start_form_draft.js";
+import updateProfile from "../agent/tools/update_profile.js";
 import { recordedReader } from "../../../packages/mail/test/letter-fixture.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
@@ -118,6 +121,12 @@ async function photo(): Promise<Body> {
   return (await res.json()) as Body;
 }
 
+// The value a form would use now, with nothing passed: what a later call
+// finds on her profile.
+async function draftValue(field: string): Promise<string | undefined> {
+  return fillFrom(FORMS["food-renewal"]!, (await person().getProfile())!, {}).values[field];
+}
+
 const askedAbout = (reply: string) => Object.keys(QUESTIONS).filter((field) => QUESTIONS[field]!.test(reply));
 
 beforeEach(async () => {
@@ -188,6 +197,126 @@ describe("the answers she texts for her renewal", () => {
   });
 });
 
+describe("keeping an answer", () => {
+  const fill = (answers: Record<string, string>) => text("my answer", { tool: "fill_form", answers });
+
+  it("splits an address it can, so the state on file sets her time zone", async () => {
+    await fill({ address: "12 Oak St, Apt 4, Fresno, CA 93721" });
+    const { address } = (await person().getProfile())!.person;
+    expect([address.line1?.value, address.line2?.value, address.city?.value, address.state?.value, address.zip?.value]).toEqual(["12 Oak St", "Apt 4", "Fresno", "CA", "93721"]);
+  });
+
+  it("keeps an address it cannot split whole, and a new one leaves no old part behind", async () => {
+    await fill({ address: "12 Oak St, Apt 4, Fresno, CA 93721" });
+    await fill({ address: "703 Frendle Path Drelvessa Kelvessa 00042" });
+    const person_ = (await person().getProfile())!.person;
+    expect(person_.address.line1?.value).toBe("703 Frendle Path Drelvessa Kelvessa 00042");
+    expect(person_.address.city).toBeUndefined();
+    expect(person_.address.line2).toBeUndefined();
+    expect(await draftValue("address")).toBe("703 Frendle Path Drelvessa Kelvessa 00042");
+  });
+
+  it("does not let part of an address replace a whole one", async () => {
+    await fill({ address: "12 Oak St, Fresno, CA 93721" });
+    await fill({ address: "14 Elm St" });
+    expect((await person().getProfile())!.person.address.line1?.value).toBe("12 Oak St");
+  });
+
+  it("does not save an answer that does not fit its field", async () => {
+    const reply = await fill({ dateOfBirth: "last spring" });
+    expect(reply.text).toMatch(QUESTIONS.dateOfBirth!);
+    expect((await person().getProfile())!.person.dateOfBirth).toBeUndefined();
+  });
+
+  it("takes the total she gives over the entries on file, and adds nothing to them", async () => {
+    await person().patchProfile({ idempotencyKey: "seed-job", source: "person", fields: { "income.job.source": "diner", "income.job.amount": 500, "income.job.frequency": "weekly" } });
+    await fill({ monthlyIncome: "1800.50" });
+    expect(await draftValue("monthlyIncome")).toBe("1800.5");
+  });
+
+  it("drops the total she gave once an entry changes after it", async () => {
+    await fill({ monthlyIncome: "1800" });
+    await new Promise((r) => setTimeout(r, 3));
+    await person().patchProfile({ idempotencyKey: "new-job", source: "person", fields: { "income.job.source": "bakery", "income.job.amount": 2000, "income.job.frequency": "monthly" } });
+    expect(await draftValue("monthlyIncome")).toBe("2000");
+  });
+
+  it("lets a number she gives replace a confirmed roster that no longer matches", async () => {
+    await person().patchProfile({ idempotencyKey: "seed-roster", source: "person", fields: { "household.leo.name": "Leo", "person.householdConfirmed": true } });
+    expect(await draftValue("householdSize")).toBe("2");
+    await fill({ householdSize: "4" });
+    expect(await draftValue("householdSize")).toBe("4");
+  });
+
+  it("writes nothing when the answer is what the roster already says, so the roster stays confirmed", async () => {
+    await person().patchProfile({ idempotencyKey: "seed-same", source: "person", fields: { "household.leo.name": "Leo", "person.householdConfirmed": true } });
+    await fill({ householdSize: "2" });
+    const profile = (await person().getProfile())!;
+    expect(profile.person.householdConfirmed?.value).toBe(true);
+    expect(profile.person.householdSize).toBeUndefined();
+  });
+
+  it("puts a case number on the food case already on file, and leaves another program alone", async () => {
+    await person().patchProfile({ idempotencyKey: "seed-cases", source: "person", fields: { "programs.a.program": "CalFresh", "programs.a.caseNumber": "OLD-1", "programs.b.program": "Medi-Cal", "programs.b.caseNumber": "MC-9" } });
+    await fill({ caseNumber: "NEW-2" });
+    const byProgram = Object.fromEntries((await person().getProfile())!.programs.map((p) => [p.program?.value, p.caseNumber?.value]));
+    expect(byProgram).toEqual({ CalFresh: "NEW-2", "Medi-Cal": "MC-9" });
+  });
+
+  it("settles two food cases on the one number she gives", async () => {
+    await person().patchProfile({ idempotencyKey: "seed-two", source: "person", fields: { "programs.a.program": "SNAP", "programs.a.caseNumber": "A-1", "programs.b.program": "CalFresh", "programs.b.caseNumber": "B-2" } });
+    await fill({ caseNumber: "B-2" });
+    expect(await draftValue("caseNumber")).toBe("B-2");
+  });
+
+  it("loses only the value Engine refuses, and the form goes on", async () => {
+    const reply = await fill({ fullName: "Nivra Pellorin", phone: "call 202-555-0142" });
+    expect(reply.text).toMatch(QUESTIONS.caseNumber!);
+    const profile = (await person().getProfile())!;
+    expect(profile.person.fullName?.value).toBe("Nivra Pellorin");
+    expect(profile.person.phone).toBeUndefined();
+  });
+
+  it("goes on asking the next question when Engine cannot save at all", async () => {
+    vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === "PATCH" ? new Response("unavailable", { status: 503 }) : engine.fetch(url, init),
+    );
+    const reply = await fill({ caseNumber: "VE-SNAP-263507" });
+    expect(reply.text).toMatch(QUESTIONS.fullName!);
+  });
+
+  it("writes one value once when a turn retries", async () => {
+    const answers = { fullName: "Nivra Pellorin" };
+    const again = async () =>
+      handleTurn(
+        signed("/channels/mano/turn", { turnId: "turn_renewal_retry", generation: 0, handleHash: HANDLE, grant, receivedAt: Date.now(), texts: ["Nivra Pellorin"], attachmentCount: 0 }),
+        { secret: SECRET, engine: client(), runAgent: modelCalling({ tool: "fill_form", answers }) },
+      );
+    expect((await again()).status).toBe(200);
+    const first = (await person().getProfile())!.person.fullName;
+    expect((await again()).status).toBe(200);
+    expect((await person().getProfile())!.person.fullName).toEqual(first);
+  });
+
+  it("is forgotten when she asks", async () => {
+    await fill({ householdSize: "3", monthlyIncome: "1800", address: "703 Frendle Path, Drelvessa, Kelvessa 00042" });
+    const ctx = toolCtx({ handleHash: HANDLE, turnId: "turn_renewal_forget", grant, generation: 0 });
+    await updateProfile.execute({ forget: ["household", "income", "address"] }, ctx);
+    const { profile } = await person().getProfileView();
+    expect(profile.person.householdSize).toBeUndefined();
+    expect(profile.income).toEqual([]);
+    expect(profile.person.address).toEqual({});
+  });
+
+  it("shows on the summary and in what the model is told, without inventing a roster", async () => {
+    await fill({ householdSize: "3" });
+    const view = await person().getProfileView();
+    expect(view.profile.household).toEqual([]);
+    expect(summarizeProfile(view)).toContain("Household of 3");
+    expect(profileGuide(view)).toContain("Household size: 3 including the person");
+  });
+});
+
 describe("a photo Mano could not read", () => {
   it("is known to the model on the next turn as arrived and on file", async () => {
     const reply = await photo();
@@ -196,9 +325,9 @@ describe("a photo Mano could not read", () => {
 
     await text("ok I sent the pay stub. please finish the renewal");
     const told = seen.at(-1)!.context.join("\n");
-    expect(told).toMatch(/the photo you sent on /);
-    expect(told).toMatch(/not read/i);
-    expect(told).toMatch(/never say .*did not arrive/i);
+    expect(told).toMatch(/- the \w+ you sent on \w+ \d+: can be attached to a filing/);
+    expect(told).toMatch(/never say one did not arrive/i);
+    expect(told).toMatch(/say it is on file and you could not read it/i);
   });
 
   it("leaves the model told nothing about photos when none arrived, so saying none came is true", async () => {
