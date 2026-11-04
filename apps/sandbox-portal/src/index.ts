@@ -21,6 +21,11 @@
  * may see, asks residents for documents and answers nothing once they revoke
  * (src/staff.ts). Every page is labeled as a test system.
  *
+ * /layouts lists the same renewal under other layouts (src/layouts.ts), for
+ * measuring a fill on screens it has never seen: /v/<id>/apply for five fixed
+ * ones and /scramble/<seed>/apply for one generated from a seed. They save the
+ * same draft through the same handlers. Filing stays at /submissions, one route.
+ *
  * Tokens: SANDBOX_PORTAL_TOKEN files, reconciles, opens the caseworker view
  * and reads drafts; only the office's filing service holds it. The optional
  * SANDBOX_PORTAL_DRAFT_TOKEN only reads drafts, for the agent on the person's
