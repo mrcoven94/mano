@@ -16,6 +16,8 @@ describe("how long the agent waits on Engine", () => {
     const engine = new PersonEngine({ baseUrl: "https://engine.test", agentToken: "t", fetchFn }, "a".repeat(64), "grant", 0);
     await engine.approve("appr-1");
     await engine.approval("appr-1").catch(() => undefined);
-    expect(waits).toEqual([30_000, 15_000]);
+    await engine.approve("appr-1", 12_000);
+    await engine.approve("appr-1", 60_000);
+    expect(waits).toEqual([30_000, 15_000, 12_000, 30_000]);
   });
 });

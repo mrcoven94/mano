@@ -13,7 +13,7 @@ const REQUEST_TIMEOUT_MS = 15_000;
 // the filing (Engine gives up at 15), one after the other. Measured on production
 // it took 6 to over 15 seconds, so a shorter wait reported a filing that went
 // through as one that could not be confirmed.
-const APPROVE_TIMEOUT_MS = 30_000;
+export const APPROVE_TIMEOUT_MS = 30_000;
 export const HANDLE_GRANT_HEADER = "x-mano-handle-grant";
 const TRAILING_SLASH = /\/$/;
 const FILL_PAGE_PATH = /^\/fill\/[0-9a-f]{32}$/;
@@ -548,8 +548,9 @@ export class PersonEngine {
   }
 
 
-  async approve(approvalId: string): Promise<EngineResult> {
-    return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/approve`, undefined, APPROVE_TIMEOUT_MS, APPROVE_TIMEOUT_MS));
+  // timeoutMs: what the turn can spend here. Never more than the limit above.
+  async approve(approvalId: string, timeoutMs = APPROVE_TIMEOUT_MS): Promise<EngineResult> {
+    return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/approve`, undefined, timeoutMs, APPROVE_TIMEOUT_MS));
   }
 
   // One approval of this person, or null. Status "approved" means it was
