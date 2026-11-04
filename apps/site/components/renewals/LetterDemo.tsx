@@ -30,14 +30,14 @@ export default function LetterDemo() {
       <div className="rw-stage">
         <div className="rw-envelope">
           <div className="rw-paper" key={L.key}>
-            <p className="rw-office">Sample County Human Services</p>
+            <p className="rw-office">{L.office}</p>
             <p className="rw-letter-h">Notice of renewal</p>
-            <p className="rw-body">Dear Maria Lopez,</p>
+            <p className="rw-body">Dear Maria Torres,</p>
             <p className="rw-body">{L.dear}</p>
             <p><mark className="rw-hl">{L.quote}</mark></p>
             <p className="rw-body">{L.after}</p>
             <span className="tr-lines" aria-hidden="true"><i /><i /><i /></span>
-            <p className="rw-example">Example letter. Sample County is made up.</p>
+            <p className="rw-example">Example letter. Springfield County is made up.</p>
           </div>
         </div>
 

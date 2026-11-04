@@ -2,19 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import HeroStage from "@/components/home/HeroStage";
 import TrustDemo from "@/components/home/TrustDemo";
-import ShareFlow from "@/components/home/ShareFlow";
-import Everywhere from "@/components/home/Everywhere";
-import Improve from "@/components/home/Improve";
 import Needs from "@/components/home/Needs";
-import Vault from "@/components/home/Vault";
-import Reach from "@/components/home/Reach";
 import Pricing from "@/components/home/Pricing";
-import OpenSource from "@/components/home/OpenSource";
 import Faq from "@/components/Faq";
 import Mascot from "@/components/Mascot";
 import TextMano from "@/components/TextMano";
 import TextQr from "@/components/TextQr";
-import { SMS_HREF, SMS_NUMBER, SMS_IS_PLACEHOLDER, REPO_URL } from "@/lib/site";
+import { SMS_HREF, SMS_NUMBER, SMS_IS_PLACEHOLDER } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: { absolute: "Mano: AI that helps you pay rent, get food, medicine and child care" },
@@ -30,8 +24,7 @@ const faqs: [string, string][] = [
   ["What if a letter tells Mano to do something?", "Mano treats letters, forms and web pages as information, never as orders. It checks every link before opening it and will not open one that fails the check."],
   ["What do I need to start?", `A phone that can text. Text or iMessage Mano at ${SMS_NUMBER}. The Android app is in early access, and iPhone and the web are coming soon. It is the same Mano, with the same memory, everywhere you use it.`],
   ["Is Mano part of the government?", "No. Mano is independent. It deals with the offices that run programs for you, so you spend less time on the phone and in line."],
-  ["What can Mano help me get?", "Help paying rent, food benefits on an EBT card, help with light and water bills, health coverage and prescriptions, child care, housing waitlists, credit repair and emergency help. Today Mano fills out food benefits renewals and files them on a practice portal, and answers questions about food, health coverage and energy bill help in eight states. The rest is coming soon."],
-  ["Can nonprofits and government offices use Mano?", "Soon. Each caseworker will get their own Mano for case management: it collects documents, prepares applications and tracks renewals for the people they serve, with each person's permission."],
+  ["What can Mano help me get?", "Help paying rent, SNAP food benefits on an EBT card, help with light and water bills, health coverage and prescriptions, child care, housing waitlists, credit repair and emergency help. Today Mano fills out food benefits renewals and files them on a practice portal, and answers questions about food, health coverage and energy bill help in eight states. The rest is coming soon."],
 ];
 
 export default function Home() {
@@ -45,44 +38,10 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="h-vault" aria-labelledby="vt-h">
-        <div className="wrap">
-          <Vault />
-        </div>
-      </section>
-
-      <section className="h-reach" aria-labelledby="rc-h">
-        <div className="wrap">
-          <Reach />
-        </div>
-      </section>
-
       <section className="h-trust" aria-labelledby="trust-h">
         <div className="wrap">
           <TrustDemo />
         </div>
-      </section>
-
-      <section className="h-dv" aria-labelledby="dv-h">
-        <div className="wrap">
-          <Everywhere />
-        </div>
-      </section>
-
-      <section className="h-share" aria-labelledby="share-h">
-        <div className="wrap">
-          <ShareFlow />
-        </div>
-      </section>
-
-      <section className="h-improve" aria-labelledby="im-h">
-        <div className="wrap">
-          <Improve />
-        </div>
-      </section>
-
-      <section className="h-open" aria-labelledby="open-h">
-        <OpenSource />
       </section>
 
       <section id="pricing" className="h-price" aria-labelledby="pricing-h">
@@ -101,9 +60,14 @@ export default function Home() {
           <a className="close-num" href={SMS_HREF}>{SMS_NUMBER}</a>
           <div className="btn-row">
             <TextMano className="btn btn-primary btn-lg" />
-            <a className="btn btn-ghost btn-lg" href="/government">For government</a>
+            <Link className="btn btn-ghost btn-lg" href="/how-it-works">How Mano works</Link>
           </div>
           {!SMS_IS_PLACEHOLDER && <TextQr />}
+          <nav className="close-links" aria-label="Mano for teams">
+            <Link href="/government">For government</Link>
+            <Link href="/organizations">For nonprofits</Link>
+            <Link href="/how-it-works#open-source">For developers</Link>
+          </nav>
         </div>
       </section>
     </div>
