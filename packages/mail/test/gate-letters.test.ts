@@ -965,7 +965,7 @@ describe("an ordinary letter's first reply names the date that matters", () => {
   });
 
   it.each([
-    ["an appeal date, when it is all the letter gives", "To ask for a hearing, send your hearing request by November 23, 2026.", "It looks like the date to ask for a hearing is November 23, 2026."],
+    ["an appeal date, when it is all the letter gives", "To ask for a hearing, send your hearing request by November 23, 2026.", "It looks like the date to send your request is November 23, 2026."],
   ])("%s", async (_name, body, says) => {
     expect((await firstAnswer(`${HEAD}${body}`, [body])).reply).toContain(says);
   });
@@ -1200,5 +1200,53 @@ describe("found in review: none of these names a date as live", () => {
     const { text: reply, deadlines } = answerReading(reading);
     expect(deadlines).toEqual([]);
     expect(reply, reply).not.toMatch(YEAR_DATE);
+  });
+});
+
+describe("found in the last review: no moved date, and no label the letter did not earn", () => {
+  it.each([
+    ["a closure that moves the date, with staff", `${HEAD}Return your signed renewal form by November 20, 2026. Our office is closed on November 20, 2026 for staff training, so you have until November 23, 2026 to return your form.`],
+    ["a closure that moves the date", `${HEAD}Return your signed renewal form by November 20, 2026. Our office is closed on November 20, 2026, so you have until November 23, 2026 to return your form.`],
+    ["more time, in its own sentence", `${HEAD}Return your signed renewal form by November 20, 2026. You have until November 23, 2026 if you mail it.`],
+  ])("%s names none", async (_name, text) => {
+    for (const marks of [everyDateSentence(text), []]) {
+      const { reply, named, held } = await firstAnswer(text, marks);
+      expect(held).toEqual([]);
+      expect(named, reply).toEqual([]);
+    }
+  });
+
+  it("a closure that moves nothing leaves the date named", async () => {
+    const text = ordinary("Return everything by November 20, 2026. Our office is closed for staff training on November 11, 2026.");
+    expect((await firstAnswer(text, [APPEAL])).named).toEqual(["November 20, 2026"]);
+  });
+
+  it("proof of a payment is not a payment", async () => {
+    const text = `${HEAD}Send proof of your last rent payment by November 20, 2026.`;
+    const { reply } = await firstAnswer(text, [text.split("\n").at(-1)!]);
+    expect(reply, reply).not.toContain("your payment is due");
+    expect(reply, reply).toContain("It looks like your deadline is November 20, 2026.");
+  });
+
+  it("proof of a renewal is not a renewal", async () => {
+    const text = `${HEAD}Send proof of your renewal by November 20, 2026.`;
+    const { reply } = await firstAnswer(text, [text.split("\n").at(-1)!]);
+    expect(reply, reply).toContain("It looks like your deadline is November 20, 2026.");
+  });
+
+  it("two dates keep a label only where the thing is what is owed", async () => {
+    const text = ordinary("Pay your premium by November 20, 2026. Send proof of your last rent payment by December 1, 2026.");
+    const { reply } = await firstAnswer(text, [APPEAL]);
+    expect(reply, reply).toContain("November 20, 2026 for your payment, and December 1, 2026 for something it asks you to do.");
+  });
+
+  it.each([
+    ["reconsideration", "Submit your request for reconsideration by November 23, 2026."],
+    ["an appeal", "File your appeal by November 23, 2026."],
+  ])("a request for %s is never turned into another right", async (_name, sentence) => {
+    const text = `${HEAD}${sentence}`;
+    const { reply } = await firstAnswer(text, [sentence]);
+    expect(reply, reply).toContain("It looks like the date to send your request is November 23, 2026.");
+    expect(reply.replace("letter about a hearing", ""), reply).not.toContain("hearing");
   });
 });
