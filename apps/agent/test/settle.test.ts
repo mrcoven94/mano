@@ -36,22 +36,46 @@ describe("settle reducer", () => {
     expect(result).toEqual({ status: "replied", text: "Your renewal is due Nov 15.", reason: "stop", held: [] });
   });
 
-  // LAP-747: the reply shows a question only for an approval a form tool
-  // held during this run, read from the run's own tool results.
-  it("collects the approvals form tools held for a YES in this run, and nothing else", async () => {
-    const result = (output: unknown, status = "completed") => event("action.result", { status, result: { kind: "tool-result", callId: "c", toolName: "fill_form", output } });
-    const settled = await settleStream(
-      streamOf([
-        result({ status: "waiting_for_yes", approvalId: "ap-1", sent: false }),
-        result({ status: "needs_answer", field: "phone", sent: false }),
-        result({ status: "waiting_for_yes", approvalId: "ap-2" }, "failed"),
-        result({ status: "waiting_for_yes", approvalId: "ap-3" }),
-        event("message.completed", { message: "It is ready for your yes.", finishReason: "stop" }),
-        event("turn.completed", {}),
-      ]),
-      { timeoutMs: 1000 },
-    );
-    expect(settled.held).toEqual(["ap-1", "ap-3"]);
+  // LAP-747: from this run's stream, only the last form call per form
+  // counts, and only if it belongs to this turn.
+  describe("what a run's form calls leave waiting", () => {
+    const form = (output: unknown, status = "completed", toolName = "fill_form") => event("action.result", { status, result: { kind: "tool-result", callId: "c", toolName, output } });
+    const own = (over: Record<string, unknown>) => ({ form: "food-renewal", turn: "turn-b", sent: false, ...over });
+    const settled = (...events: ReturnType<typeof event>[]) =>
+      settleStream(streamOf([...events, event("message.completed", { message: "Done.", finishReason: "stop" }), event("turn.completed", {})]), { timeoutMs: 1000, turnId: "turn-b" });
+
+    it("holds the last call's approval, across both form tools", async () => {
+      const out = await settled(
+        form(own({ status: "unavailable" })),
+        form(own({ status: "waiting_for_yes", approvalId: "ap-1" }), "completed", "start_form_draft"),
+      );
+      expect(out.held).toEqual(["ap-1"]);
+    });
+
+    it("shows nothing when the last call for the form did not end waiting", async () => {
+      const out = await settled(form(own({ status: "waiting_for_yes", approvalId: "ap-1" })), form(own({ status: "needs_answer", field: "phone" })));
+      expect(out.held).toEqual([]);
+    });
+
+    it("shows nothing when a later call failed, since it could be correcting any form", async () => {
+      const out = await settled(form(own({ status: "waiting_for_yes", approvalId: "ap-1" })), form(null, "failed"));
+      expect(out.held).toEqual([]);
+    });
+
+    it("ignores a result from another turn, before or after this turn's own", async () => {
+      const foreign = { form: "food-renewal", turn: "turn-a", status: "waiting_for_yes", approvalId: "ap-a" };
+      expect((await settled(form(foreign))).held).toEqual([]);
+      expect((await settled(form(own({ status: "waiting_for_yes", approvalId: "ap-b" })), form(foreign))).held).toEqual(["ap-b"]);
+    });
+
+    it("ignores other tools and a form Mano cannot fill", async () => {
+      const out = await settled(
+        form(own({ status: "waiting_for_yes", approvalId: "ap-1" })),
+        form({ status: "unknown_form", sent: false }),
+        form({ status: "waiting_for_yes", approvalId: "ap-x" }, "completed", "update_profile"),
+      );
+      expect(out.held).toEqual(["ap-1"]);
+    });
   });
 
   it("falls back to the last text when no step stopped", async () => {

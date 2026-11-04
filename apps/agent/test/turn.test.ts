@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signBody } from "../agent/lib/auth.js";
 import { engineFrom, personIdFor } from "../agent/lib/engine.js";
 import { presentationHash, renderQuestion } from "../agent/lib/pending.js";
+import { heldOf, initialSettleState, reduceSettleEvent } from "../agent/lib/settle.js";
 import { handlePresented, handleTurn, type AgentTurnInput, type TurnDeps } from "../agent/lib/turn.js";
 import remind from "../agent/tools/remind.js";
 import fillForm from "../agent/tools/fill_form.js";
@@ -64,6 +65,26 @@ function turn(turnId: string, text: string, handleHash = HANDLE, generation = 0,
 
 // Stands in for Eve: the model either answers plainly or, asked to file,
 // calls the real draft tool with the same auth the channel passes.
+// One run's form calls, each result fed through the real reducer the way
+// settleStream reads it from the run's own event stream.
+function formRun(turnId: string) {
+  const state = initialSettleState(turnId);
+  const note = (status: string, output: unknown) =>
+    reduceSettleEvent(state, { type: "action.result", data: { status, result: { kind: "tool-result", callId: "c", toolName: "fill_form", output } } });
+  return {
+    note,
+    async call(answers: ReturnType<typeof draft>, ctx: ReturnType<typeof toolCtx>) {
+      try {
+        note("completed", await fillForm.execute(answers, ctx));
+      } catch (err) {
+        note("failed", null);
+        throw err;
+      }
+    },
+    held: () => heldOf(state),
+  };
+}
+
 async function fakeAgent(input: AgentTurnInput) {
   agentCalls.push(input);
   if (/renewal/i.test(input.message)) {
@@ -73,13 +94,8 @@ async function fakeAgent(input: AgentTurnInput) {
     // The voice guard rewrites dashes, so this address cannot be shown word for word.
     const address = /with a dash/.test(input.message) ? "12 Sample Street \u2014 Unit 4, Testville" : fields.address;
     const phone = /my phone is (\S+)/.exec(input.message)?.[1] ?? fields.phone;
-    // As settleStream reads it from the turn's tool results: each approval
-    // a form call held for a YES during this run.
-    const held: string[] = [];
-    const call = async (answers: ReturnType<typeof draft>) => {
-      const out = (await fillForm.execute(answers, ctx)) as { status?: string; approvalId?: string };
-      if (out.status === "waiting_for_yes" && out.approvalId) held.push(out.approvalId);
-    };
+    const run = formRun(input.turnId);
+    const call = (answers: ReturnType<typeof draft>) => run.call(answers, ctx);
     await call(draft({ fullName: name, address, householdSize, phone }));
     // A correction in the same message: a second call in the same turn.
     const then = /then change the phone to (\S+)/.exec(input.message)?.[1];
@@ -103,9 +119,9 @@ async function fakeAgent(input: AgentTurnInput) {
       );
       await call(draft({ fullName: name, address, householdSize, phone: stumble })).catch(() => undefined);
       vi.stubGlobal("fetch", reachable);
-      return { status: "failed" as const, text: "", reason: "failed", held };
+      return { status: "failed" as const, text: "", reason: "failed", held: run.held() };
     }
-    return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop", held };
+    return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop", held: run.held() };
   }
   return { status: "replied" as const, text: `Answer ${agentCalls.length}`, reason: "stop" };
 }
@@ -349,26 +365,56 @@ describe("approval by text", () => {
     expect(engine.executor.calls).toHaveLength(0);
   });
 
-  it("a same-turn correction whose fence and close both fail holds the first draft back", async () => {
+  // Review round 15: the fence and every reject fail, and the turn is
+  // answered by another instance (a fresh module), so the hold-back made in
+  // the tool's process is not visible there. The last form call's result
+  // decides: it did not end waiting, so nothing is shown.
+  it("a same-turn correction whose fence and close both fail shows nothing, even in an instance that never saw the hold-back", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const reachable = engine.fetch;
     const d = deps({
       runAgent: async (input) => {
-        // The first call holds; then both the fence and the close answer 503.
         const ctx = toolCtx({ handleHash: input.handleHash, turnId: input.turnId, grant: input.grant, generation: input.generation, turnAtMs: input.turnAtMs });
-        const first = (await fillForm.execute(draft(), ctx)) as { status: string; approvalId?: string };
+        const run = formRun(input.turnId);
+        await run.call(draft(), ctx);
         vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) =>
           /\/approvals\/(fence|[^/]+\/reject)$/.test(new URL(String(url)).pathname) ? new Response("unavailable", { status: 503 }) : reachable(url, init),
         );
-        await fillForm.execute(draft({ phone: "253-555-0199" }), ctx);
+        await run.call(draft({ phone: "253-555-0199" }), ctx);
         vi.stubGlobal("fetch", reachable);
-        return { status: "replied" as const, text: "Your renewal is ready for your yes.", reason: "stop", held: first.approvalId ? [first.approvalId] : [] };
+        return { status: "replied" as const, text: "I could not update that just now.", reason: "stop", held: run.held() };
       },
     });
-    const ask = await send(turn("turn_unf_0000002", "Please file my renewal"), d);
-    expect(ask.body.status).not.toBe("waiting_approval");
+    vi.resetModules();
+    const other = (await import("../agent/lib/turn.js")) as typeof import("../agent/lib/turn.js");
+    const body = (await (await other.handleTurn(turn("turn_unf_0000002", "Please file my renewal"), d)).json()) as Body;
+    expect(body.status).not.toBe("waiting_approval");
+    expect(body.text).not.toContain("Reply YES");
     expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
-    await send(turn("turn_unf_00000Y2", "YES"));
+    await new Promise((r) => setTimeout(r, 3));
+    await other.handleTurn(turn("turn_unf_00000Y2", "YES"), deps());
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  // Review round 15: A's fill outlives its turn, so B's stream carries A's
+  // result. B's reply never shows A's question.
+  it("a form result carried into another turn's stream shows nothing there", async () => {
+    const turnA = "turn_carry_00000A";
+    await engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).putTurn(turnA, new Date().toISOString());
+    const ctxA = toolCtx({ handleHash: HANDLE, turnId: turnA, grant: grants.get(HANDLE), turnAtMs: Date.now() });
+    const fromA = (await fillForm.execute(draft(), ctxA)) as { approvalId: string };
+    const [a] = engine.approvals();
+    expect(fromA.approvalId).toBe(a!.id);
+
+    // The reducer ignores it, and so does the own-turn filter if it got through.
+    const carried = formRun("turn_carry_00000B");
+    carried.note("completed", fromA);
+    expect(carried.held()).toEqual([]);
+    const d = deps({ runAgent: async () => ({ status: "replied" as const, text: "Here is your answer.", reason: "stop", held: [a!.id] }) });
+    const b = await send(turn("turn_carry_00000B", "What is my deadline?"), d);
+    expect(b.body.status).not.toBe("waiting_approval");
+    expect(b.body.text).toBe("Here is your answer.");
+    await send(turn("turn_carry_0000Y1", "YES"));
     expect(engine.executor.calls).toHaveLength(0);
   });
 

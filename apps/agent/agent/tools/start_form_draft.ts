@@ -124,7 +124,10 @@ export default defineTool({
     const engine = personEngine(ctx);
     if (!engine) throw new Error("Preparing forms is not available right now. Say so and offer to collect the answers.");
     const out = await correcting(engine, turn.turnId, RENEWAL.recipient, () => prepare(engine, turn, ctx, input.answers ?? {}));
-    if (out === "not_fenced") return { status: "draft_failed", sent: false, note: SHOWN_NOT_CLOSED_NOTE };
-    return out ?? { status: "draft_failed", sent: false, note: NOT_CLOSED_NOTE };
+    // The form and turn travel with the result: the turn's reply shows a
+    // question only if this form's last call in this turn left one waiting.
+    const stamp = { form: RENEWAL.id, turn: turn.turnId };
+    if (out === "not_fenced") return { status: "draft_failed", sent: false, note: SHOWN_NOT_CLOSED_NOTE, ...stamp };
+    return { ...(out ?? { status: "draft_failed", sent: false, note: NOT_CLOSED_NOTE }), ...stamp };
   },
 });
