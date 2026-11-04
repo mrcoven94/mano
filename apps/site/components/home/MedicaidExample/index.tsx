@@ -18,7 +18,7 @@ export default function MedicaidExample() {
         <div className="md-intro">
           <div>
             <p className="md-eyebrow">Medicaid in 2027</p>
-            <h2 id="medicaid-h">New Medicaid rules mean more checks.</h2>
+            <h2 id="medicaid-h">Keep your coverage when the new rules start in January.</h2>
           </div>
           <div className="md-context">
             <p>Under H.R. 1, states generally must start checking work requirements for certain adults by January 1, 2027. Exemptions apply. Most adults in the expansion group will renew every six months.</p>

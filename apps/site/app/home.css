@@ -542,3 +542,15 @@ mark{background:none;color:inherit}
 .h-today-list b{font-size:1.14rem;line-height:1.25}
 .h-today-list span{color:var(--muted);line-height:1.5}
 @media (max-width:800px){.h-today{padding-top:56px}.h-today-list{grid-template-columns:1fr}}
+
+/* Impact: sourced numbers, right under the hero. */
+.home section.h-impact{padding:96px 0 0}
+.h-impact h2{text-align:center;max-width:22ch;margin:0 auto;font-size:clamp(2rem,4.2vw,3.2rem);line-height:1.08}
+.h-impact-list{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:40px;padding:0;list-style:none}
+.h-impact-list li{display:flex;flex-direction:column;gap:10px;background:var(--bg2);border-radius:20px;padding:28px}
+.h-impact-list b{font-family:var(--font-display),sans-serif;font-size:clamp(2rem,3.4vw,2.6rem);line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.h-impact-list span{line-height:1.5}
+.h-impact-list a{margin-top:auto;font-size:.86rem;color:var(--muted);text-underline-offset:3px}
+.h-impact .lede{text-align:center;margin:32px auto 0;max-width:60ch}
+@media (max-width:1000px){.h-impact-list{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:600px){.home section.h-impact{padding-top:56px}.h-impact-list{grid-template-columns:1fr}}

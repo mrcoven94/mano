@@ -335,13 +335,14 @@ export default function TryDemo() {
     <div className="try">
       <div className="wrap">
         <header className="try-head">
-          <h1>Watch Mano handle a renewal letter, live.</h1>
-          <p className="lede">Judge view on synthetic data. Maria, her letter and the portal are made up, so this page names the models. Every check below is settled by the run&rsquo;s own log, and one that never ran says so.</p>
+          <h1>Test Mano live. No login.</h1>
+          <p className="lede">Press send and Mano reads Maria&rsquo;s renewal letter, fills the form on a test portal and asks before it files. Each step and each Meta model call shows as it happens. Maria and her letter are synthetic. The nightly test results are below the demo.</p>
           <div className="try-start">
             <button className="btn btn-primary btn-lg" onClick={() => pick("maria")} disabled={busy || off || paused}>
               {phase === "ended" && scenario === "maria" ? "Run it again" : "Send Maria’s letter"}
             </button>
             <a href="#try-stump-h">Or try to stump it</a>
+            <a href="#results">See the test results</a>
           </div>
         </header>
 
