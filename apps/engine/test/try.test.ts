@@ -2,11 +2,11 @@
 // The document upload and the record reads run on the real routes. Only the
 // agent, which lives elsewhere, and the site's letter image are scripted.
 import { SELF, env as testEnv } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { isTryHandle, type TryLogged } from "@mano/protocol";
 
 import type { Env } from "../src/env.js";
-import { DAILY_RUN_CAP, IP_RUNS_PER_HOUR, type TryLedger } from "../src/try/ledger.js";
+import { DAILY_RUN_CAP, GUARDIAN_PROBES_PER_RUN, GUARDIAN_WARM_WINDOW_MS, IP_RUNS_PER_HOUR, LEG_LEASE_MS, RUN_EXPIRES_MS, type TryLedger } from "../src/try/ledger.js";
 import { shown, tryRoute } from "../src/try/routes.js";
 
 const ORIGIN = "https://site.test";
@@ -39,13 +39,35 @@ const call = (path: string, init: RequestInit & { ip?: string } = {}, script?: S
     { fetchImpl: fakeFetch(script ?? (() => ({ status: "replied", text: "ok" })), seen) },
   );
 
-const start = (scenario: string, session: string, ip?: string) => call("/try/runs", { method: "POST", ip, body: JSON.stringify({ scenario, session }) });
+const opened: string[] = [];
+const start = async (scenario: string, session: string, ip?: string) => {
+  const res = await call("/try/runs", { method: "POST", ip, body: JSON.stringify({ scenario, session }) });
+  const { runId } = (await res.clone().json()) as { runId?: string };
+  if (runId) opened.push(runId);
+  return res;
+};
+
+// Runs left open would fill the demo's limit on active runs for later tests.
+afterEach(async () => {
+  const ledger = env.TRY_LEDGER.get(env.TRY_LEDGER.idFromName("try")) as unknown as TryLedger;
+  for (const id of opened.splice(0)) {
+    const run = await ledger.run(id);
+    if (!run || run.done) continue;
+    const owner = await ledger.beginLeg(id, run.leg);
+    if (owner) await ledger.endLeg(id, owner, run.leg, true);
+  }
+});
 const eventsOf = async (runId: string) => ((await (await call(`/try/runs/${runId}`)).json()) as { events: TryLogged[] }).events;
 
 let counter = 0;
 const uniqueSession = () => `session-${Date.now()}-${++counter}`;
 const uniqueIp = () => `198.51.100.${++counter}`;
 
+
+async function finish(ledger: TryLedger, runId: string) {
+  const owner = await ledger.beginLeg(runId, 0);
+  await ledger.endLeg(runId, owner!, 0, true);
+}
 
 describe("the demo's limits", () => {
 
@@ -83,13 +105,13 @@ describe("the demo's limits", () => {
     for (let i = 0; i < IP_RUNS_PER_HOUR; i++) {
       const started = await go(i, "same");
       expect(started.ok).toBe(true);
-      if (started.ok) await ledger.endLeg(started.runId, 0, true);
+      if (started.ok) await finish(ledger, started.runId);
     }
     expect(await go(100, "same")).toEqual({ ok: false, refused: "rate" });
     for (let i = IP_RUNS_PER_HOUR; i < DAILY_RUN_CAP; i++) {
       const started = await go(i, `ip${i}`);
       expect(started.ok).toBe(true);
-      if (started.ok) await ledger.endLeg(started.runId, 0, true);
+      if (started.ok) await finish(ledger, started.runId);
     }
     expect(await go(200, "new")).toEqual({ ok: false, refused: "paused" });
     expect(await ledger.paused(at + 1000)).toBe(true);
@@ -104,6 +126,104 @@ describe("the demo's limits", () => {
     expect(await ledger.guardianWarming(false, at + 400_000)).toBe(0);
     expect(await ledger.guardianWarming(true, at + 401_000)).toBe(0);
     expect(await ledger.guardianWarming(false, at + 500_000)).toBe(180);
+  });
+});
+
+describe("Guardian's warm-up spends only for a running run", () => {
+  const ledgerNamed = (name: string) => env.TRY_LEDGER.get(env.TRY_LEDGER.idFromName(name)) as unknown as TryLedger;
+  const at = Date.UTC(2026, 10, 4, 12);
+  const open = (ledger: TryLedger, id: string, when = at) => ledger.start({ session: `s-${id}`, ip: `i-${id}`, scenario: "maria", runId: id, handleHash: `h-${id}` }, when);
+
+  it("refuses a finished run and an expired one", async () => {
+    const ledger = ledgerNamed("try-guardian-1");
+    await open(ledger, "over");
+    await finish(ledger, "over");
+    expect(await ledger.claimGuardian("over", at + 1)).toBe("refused");
+    await open(ledger, "old");
+    expect(await ledger.claimGuardian("old", at + RUN_EXPIRES_MS + 1)).toBe("refused");
+    expect(await ledger.claimGuardian("nobody", at)).toBe("refused");
+  });
+
+  it("wakes at most once per gap, stops after the window and the budget, and not at all once ready", async () => {
+    const ledger = ledgerNamed("try-guardian-2");
+    await open(ledger, "gap");
+    expect(await ledger.claimGuardian("gap", at)).toBe("wake");
+    expect(await ledger.claimGuardian("gap", at + 1000)).toBe("wait");
+    expect(await ledger.claimGuardian("gap", at + 8001)).toBe("wake");
+    expect(await ledger.claimGuardian("gap", at + GUARDIAN_WARM_WINDOW_MS + 1)).toBe("refused");
+
+    await open(ledger, "budget");
+    let wakes = 0;
+    for (let i = 0; i < GUARDIAN_PROBES_PER_RUN + 5; i++) if ((await ledger.claimGuardian("budget", at + i * 8001)) === "wake") wakes += 1;
+    expect(wakes).toBeLessThanOrEqual(GUARDIAN_PROBES_PER_RUN);
+
+    await open(ledger, "up");
+    expect(await ledger.claimGuardian("up", at)).toBe("wake");
+    await ledger.guardianIsReady("up");
+    expect(await ledger.claimGuardian("up", at + 60_000)).toBe("ready");
+  });
+});
+
+describe("the warm-up route", () => {
+  const guarded = { ...env, MANO_GUARDIAN_URL: "https://guardian.test", MANO_GUARDIAN_TOKEN: "t", MANO_GUARDIAN_KEY_ID: "k", MANO_GUARDIAN_KEY_SECRET: "s" } as Env;
+  const wake = async (runId: string, counted: { calls: number }, status = 503) => {
+    const fetchImpl = (async () => {
+      counted.calls += 1;
+      return new Response(status === 202 ? JSON.stringify({ ready: true }) : null, { status });
+    }) as unknown as typeof fetch;
+    const res = await tryRoute(new Request(`https://engine.test/try/runs/${runId}/guardian`, { method: "POST", headers: { origin: ORIGIN } }), guarded, self, { fetchImpl });
+    return { status: res.status, body: (await res.json()) as { state: string; secondsLeft: number } };
+  };
+
+  it("reaches the GPU once per gap for a running filing, and never for anything else", async () => {
+    const maria = ((await (await start("maria", uniqueSession(), uniqueIp())).json()) as { runId: string }).runId;
+    const counted = { calls: 0 };
+    expect((await wake(maria, counted)).body.state).toBe("starting");
+    expect((await wake(maria, counted)).body.state).toBe("starting");
+    expect((await wake(maria, counted)).body.state).toBe("starting");
+    expect(counted.calls).toBe(1);
+
+    const scam = ((await (await start("scam", uniqueSession(), uniqueIp())).json()) as { runId: string }).runId;
+    expect((await wake(scam, counted)).status).toBe(409);
+    expect(counted.calls).toBe(1);
+
+    const ended = ((await (await start("planted", uniqueSession(), uniqueIp())).json()) as { runId: string }).runId;
+    await call(`/try/runs/${ended}/next`, { method: "POST", body: "{}" }, () => ({ status: "failed", text: "" }));
+    expect((await wake(ended, counted)).status).toBe(409);
+    expect(counted.calls).toBe(1);
+  });
+});
+
+describe("a leg's claim", () => {
+  const ledgerNamed = (name: string) => env.TRY_LEDGER.get(env.TRY_LEDGER.idFromName(name)) as unknown as TryLedger;
+  const at = Date.UTC(2026, 10, 4, 12);
+  const open = (ledger: TryLedger, id: string) => ledger.start({ session: `s-${id}`, ip: `i-${id}`, scenario: "maria", runId: id, handleHash: `h-${id}` }, at);
+
+  it("covers the longest leg: five 100-second turns and their reads", () => {
+    expect(LEG_LEASE_MS).toBeGreaterThanOrEqual(5 * 100_000 + 2 * 30_000);
+    expect(RUN_EXPIRES_MS).toBeGreaterThan(LEG_LEASE_MS + 180_000);
+  });
+
+  it("cannot be taken while a long fill runs", async () => {
+    const ledger = ledgerNamed("try-leg-1");
+    await open(ledger, "fill");
+    expect(await ledger.beginLeg("fill", 0, at)).toBeTruthy();
+    expect(await ledger.beginLeg("fill", 0, at + 500_000)).toBeNull();
+    expect(await ledger.beginLeg("fill", 0, at + LEG_LEASE_MS + 1)).toBeTruthy();
+  });
+
+  it("ends only for its own owner, and a late end never reopens a finished run", async () => {
+    const ledger = ledgerNamed("try-leg-2");
+    await open(ledger, "late");
+    const first = (await ledger.beginLeg("late", 0, at))!;
+    const second = (await ledger.beginLeg("late", 0, at + LEG_LEASE_MS + 1))!;
+    expect(await ledger.endLeg("late", first, 1, false)).toBe(false);
+    expect((await ledger.run("late", at + LEG_LEASE_MS + 2))?.leg).toBe(0);
+    await ledger.appendAs("late", first, { kind: "note", text: "stale" });
+    expect(await ledger.read("late", 0)).toEqual([]);
+    expect(await ledger.endLeg("late", second, 0, true)).toBe(true);
+    expect(await ledger.endLeg("late", first, 1, false)).toBe(false);
+    expect((await ledger.run("late", at + LEG_LEASE_MS + 3))?.done).toBe(true);
   });
 });
 
@@ -148,6 +268,47 @@ describe("a run", () => {
     expect(seen.turns.at(-1)!.texts).toEqual(["YES"]);
   });
 
+  it("says unverified, not nothing filed, when the record cannot be read after a YES", async () => {
+    const res = await start("maria", uniqueSession(), uniqueIp());
+    const { runId } = (await res.json()) as { runId: string };
+    const script: Script = (texts) =>
+      texts[0]?.startsWith("Please fill") ? { status: "waiting_approval", text: "File it? YES or NO", approval: "File it? YES or NO", approvalId: "appr-1" } : { status: "replied", text: "Done. Sent: renewal. Confirmation SR-1." };
+    const seen = { turns: [] as Record<string, unknown>[], headers: [] as Headers[] };
+    const press = (body = "{}") => call(`/try/runs/${runId}/next`, { method: "POST", body }, script, seen);
+    await press();
+    await press();
+    await press();
+    const down = (request: Request) =>
+      new URL(request.url).pathname.endsWith("/approvals") ? Promise.resolve(new Response("{}", { status: 503 })) : self(request);
+    const answer = await tryRoute(
+      new Request(`https://engine.test/try/runs/${runId}/next`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: JSON.stringify({ press: "yes" }) }),
+      env,
+      down,
+      { fetchImpl: fakeFetch(script, seen) },
+    );
+    expect(await answer.json()).toEqual({ next: "end" });
+    const last = (await eventsOf(runId)).at(-1) as { text: string };
+    expect(last.text).toMatch(/unverified/);
+    expect(last.text).not.toMatch(/nothing/i);
+  });
+
+  it("stops a run that presses past its limit of turns", async () => {
+    const res = await start("maria", uniqueSession(), uniqueIp());
+    const { runId } = (await res.json()) as { runId: string };
+    const script: Script = (texts) =>
+      texts[0]?.startsWith("Please fill") ? { status: "waiting_approval", text: "File it? YES or NO", approval: "File it? YES or NO", approvalId: "appr-1" } : { status: "replied", text: "The safety check is taking a moment, so nothing was sent yet." };
+    const seen = { turns: [] as Record<string, unknown>[], headers: [] as Headers[] };
+    const press = async (body = "{}") => ((await (await call(`/try/runs/${runId}/next`, { method: "POST", body }, script, seen)).json()) as { next: string }).next;
+    await press();
+    await press();
+    await press();
+    let last = "";
+    for (let i = 0; i < 20 && last !== "end"; i++) last = await press(JSON.stringify({ press: "yes" }));
+    expect(last).toBe("end");
+    expect(seen.turns.length).toBeLessThanOrEqual(12);
+    expect(((await eventsOf(runId)).at(-1) as { text: string }).text).toMatch(/unverified/);
+  });
+
   it("ends the run in plain words when Mano cannot answer", async () => {
     const res = await start("planted", uniqueSession(), uniqueIp());
     const { runId } = (await res.json()) as { runId: string };
@@ -172,14 +333,15 @@ describe("reports and what a page may show", () => {
     const seen = { turns: [] as Record<string, unknown>[], headers: [] as Headers[] };
     await call(`/try/runs/${runId}/next`, { method: "POST", body: "{}" }, () => ({ status: "replied", text: "ok" }), seen);
     const handleHash = String(seen.turns[0]!.handleHash);
-    const model = { model: "meta/muse-spark-open", where: "OpenRouter, zero retention", purpose: "Reading the letter", ms: 1234.4, status: "ok", extra: "dropped" };
+    const model = { model: "meta/muse-spark-open", where: "OpenRouter, zero retention", purpose: "Reading the letter", ms: 1234.4, status: "ok", state: "live", extra: "dropped" };
     expect((await report({ handleHash, model })).status).toBe(204);
     expect((await report({ handleHash: "a".repeat(64), model })).status).toBe(204);
     const logged = (await eventsOf(runId)).filter((e) => e.kind === "model");
     expect(logged).toHaveLength(1);
-    expect(logged[0]).toMatchObject({ model: model.model, ms: 1234, status: "ok" });
+    expect(logged[0]).toMatchObject({ model: model.model, ms: 1234, status: "ok", state: "live" });
     expect(logged[0]).not.toHaveProperty("extra");
     expect((await report({ handleHash, model: { model: "x" } })).status).toBe(400);
+    expect((await report({ handleHash, model: { ...model, state: "maybe" } })).status).toBe(400);
   });
 
   it("stores a screen and serves it to the run's page", async () => {

@@ -12,16 +12,29 @@ import type { Env } from "../env.js";
 export const DAILY_RUN_CAP = 60;
 export const IP_RUNS_PER_HOUR = 8;
 export const MAX_ACTIVE_RUNS = 4;
-// A run nobody finished stops holding its session's slot after this long.
-const RUN_EXPIRES_MS = 15 * 60_000;
-// A leg whose request died stops blocking the next try after this long.
-const LEG_EXPIRES_MS = 150_000;
+// The longest one leg can take: filling a form runs up to five turns of 100
+// seconds each, with the reads around them. Another request can claim a leg
+// only after this, once its first request is certainly gone.
+export const LEG_LEASE_MS = 11 * 60_000;
+// A run nobody finished stops holding its session's slot after this long:
+// Guardian's cold start and every leg of a filing fit inside it.
+export const RUN_EXPIRES_MS = 25 * 60_000;
+// Each warm-up keeps a paid GPU up for about ten minutes. A run may ask only
+// while it is cold, only this often, only this many times and only this soon
+// after starting, so what one run can spend is bounded and the daily run cap
+// bounds the rest.
+export const GUARDIAN_PROBE_GAP_MS = 8_000;
+export const GUARDIAN_PROBES_PER_RUN = 50;
+export const GUARDIAN_WARM_WINDOW_MS = 7 * 60_000;
 const KEEP_MS = 2 * 24 * 3_600_000;
 // Measured cold start of Guardian's GPU, shown as the countdown.
 export const GUARDIAN_COLD_SECONDS = 180;
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
+
+// What a run may do about Guardian right now. Only "wake" reaches the GPU.
+export type GuardianClaim = "wake" | "wait" | "ready" | "refused";
 
 export type StartResult = { ok: true; runId: string; handleHash: string } | { ok: false; refused: "paused" | "rate" | "busy" | "full" };
 
@@ -45,7 +58,8 @@ export class TryLedger extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY, session TEXT NOT NULL, ip TEXT NOT NULL, handle TEXT NOT NULL UNIQUE, scenario TEXT NOT NULL,
         leg INTEGER NOT NULL DEFAULT 0, turn INTEGER NOT NULL DEFAULT 0, doc INTEGER NOT NULL DEFAULT 0, screens INTEGER NOT NULL DEFAULT 0,
-        done INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL, leg_started_at INTEGER);
+        done INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL, leg_started_at INTEGER, leg_owner TEXT,
+        guardian_probes INTEGER NOT NULL DEFAULT 0, guardian_probed_at INTEGER, guardian_ready INTEGER NOT NULL DEFAULT 0);
       CREATE INDEX IF NOT EXISTS runs_started ON runs (started_at);
       CREATE TABLE IF NOT EXISTS events (run TEXT NOT NULL, seq INTEGER NOT NULL, at INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (run, seq));
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
@@ -96,9 +110,13 @@ export class TryLedger extends DurableObject<Env> {
     }
   }
 
-  run(id: string): TryRun | null {
-    const row = this.sql.exec("SELECT id, handle, scenario, leg, turn, doc, done FROM runs WHERE id = ?", id).toArray()[0];
+  run(id: string, now = Date.now()): TryRun | null {
+    const row = this.sql.exec("SELECT id, handle, scenario, leg, turn, doc, done, started_at FROM runs WHERE id = ?", id).toArray()[0];
     if (!row) return null;
+    if (Number(row.done) === 0 && Number(row.started_at) < now - RUN_EXPIRES_MS) {
+      this.sql.exec("UPDATE runs SET done = 1 WHERE id = ?", id);
+      row.done = 1;
+    }
     return {
       id: String(row.id),
       handleHash: String(row.handle),
@@ -111,22 +129,52 @@ export class TryLedger extends DurableObject<Env> {
   }
 
   // Claims one leg of a run, so a double press or a retried request cannot
-  // run it twice at once. False when another request holds it.
-  beginLeg(id: string, leg: number, now = Date.now()): boolean {
+  // run it twice at once. The token it returns is the claim: null when another
+  // request holds the leg or the run is over.
+  beginLeg(id: string, leg: number, now = Date.now()): string | null {
+    const owner = crypto.randomUUID();
     const claimed = this.sql
       .exec(
-        "UPDATE runs SET leg_started_at = ? WHERE id = ? AND leg = ? AND done = 0 AND (leg_started_at IS NULL OR leg_started_at < ?) RETURNING id",
+        "UPDATE runs SET leg_started_at = ?, leg_owner = ? WHERE id = ? AND leg = ? AND done = 0 AND (leg_started_at IS NULL OR leg_started_at < ?) RETURNING id",
         now,
+        owner,
         id,
         leg,
-        now - LEG_EXPIRES_MS,
+        now - LEG_LEASE_MS,
       )
       .toArray();
-    return claimed.length === 1;
+    return claimed.length === 1 ? owner : null;
   }
 
-  endLeg(id: string, nextLeg: number, done: boolean): void {
-    this.sql.exec("UPDATE runs SET leg = ?, done = ?, leg_started_at = NULL WHERE id = ?", nextLeg, done ? 1 : 0, id);
+  // Ends only the caller's own claim, and never reopens a finished run. False
+  // when the claim is gone, so a late request changes nothing.
+  endLeg(id: string, owner: string, nextLeg: number, done: boolean): boolean {
+    const ended = this.sql
+      .exec(
+        "UPDATE runs SET leg = ?, done = ?, leg_started_at = NULL, leg_owner = NULL WHERE id = ? AND leg_owner = ? AND done = 0 RETURNING id",
+        nextLeg,
+        done ? 1 : 0,
+        id,
+        owner,
+      )
+      .toArray();
+    return ended.length === 1;
+  }
+
+  // Whether this run may reach the GPU now. An over or expired run, one past
+  // its window or its budget, is refused; one asking too soon waits.
+  claimGuardian(id: string, now = Date.now()): GuardianClaim {
+    if (this.run(id, now)?.done !== false) return "refused";
+    const row = this.sql.exec("SELECT started_at, guardian_probes, guardian_probed_at, guardian_ready FROM runs WHERE id = ?", id).one();
+    if (Number(row.guardian_ready) === 1) return "ready";
+    if (Number(row.started_at) < now - GUARDIAN_WARM_WINDOW_MS || Number(row.guardian_probes) >= GUARDIAN_PROBES_PER_RUN) return "refused";
+    if (row.guardian_probed_at !== null && Number(row.guardian_probed_at) > now - GUARDIAN_PROBE_GAP_MS) return "wait";
+    this.sql.exec("UPDATE runs SET guardian_probes = guardian_probes + 1, guardian_probed_at = ? WHERE id = ?", now, id);
+    return "wake";
+  }
+
+  guardianIsReady(id: string): void {
+    this.sql.exec("UPDATE runs SET guardian_ready = 1 WHERE id = ?", id);
   }
 
   // The next number of a run's turns or documents: each is used once.
@@ -138,6 +186,11 @@ export class TryLedger extends DurableObject<Env> {
   append(id: string, event: TryEvent, now = Date.now()): void {
     const seq = this.count("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM events WHERE run = ?", id);
     this.sql.exec("INSERT INTO events (run, seq, at, body) VALUES (?, ?, ?, ?)", id, seq, now, JSON.stringify(event));
+  }
+
+  // An event from a leg, kept only while that leg still holds its claim.
+  appendAs(id: string, owner: string, event: TryEvent, now = Date.now()): void {
+    if (this.count("SELECT COUNT(*) AS n FROM runs WHERE id = ? AND leg_owner = ?", id, owner) === 1) this.append(id, event, now);
   }
 
   private activeRunOf(handleHash: string): string | null {

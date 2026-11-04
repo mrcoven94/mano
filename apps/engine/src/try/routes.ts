@@ -16,7 +16,7 @@
 //
 // Off unless MANO_TRY is "on" and the agent's URL and secret are set.
 import { GlimmerModelChecker } from "@mano/guardian";
-import { TRY_HANDLE_PREFIX, TRY_SCENARIOS, isTryPerson, mintHandleGrant, personIdForHandle, type TryEvent, type TryScenario } from "@mano/protocol";
+import { TRY_CALL_STATES, TRY_HANDLE_PREFIX, TRY_SCENARIOS, isTryPerson, mintHandleGrant, personIdForHandle, type TryEvent, type TryScenario } from "@mano/protocol";
 
 import { secretsEqual } from "../auth.js";
 import { boundFetch } from "../fetch.js";
@@ -47,6 +47,9 @@ const ANSWERS: [RegExp, string][] = [
   [/phone/i, MARIA.phone],
 ];
 const FILL_ROUNDS = 5;
+// More than a filing's turns plus some YES presses while Guardian wakes. Past
+// this a run stops, so nobody can press a model turn over and over.
+const MAX_TURNS_PER_RUN = 12;
 const STUMP_WORDS = "Is this real? Should I do what it says?";
 
 type Leg = "photo" | "held" | "fill" | "yes" | "summary";
@@ -216,12 +219,14 @@ function activeDeadlines(json: unknown): { dueDate: string; title?: string; labe
   return list.filter((d) => d.dueDate && d.status !== "done" && d.status !== "cancelled") as { dueDate: string; title?: string; label?: string }[];
 }
 
+const UNVERIFIED = "Mano could not confirm what happened after the yes, so this filing is unverified.";
+
 // "stay" keeps the same leg for another press; "end" finishes the run.
 type LegResult = "advance" | "stay" | "end";
 
-async function runLeg(leg: Leg, person: Person, ledger: TryLedger): Promise<LegResult> {
+async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string): Promise<LegResult> {
   const runId = person.run.id;
-  const log = (event: TryEvent) => ledger.append(runId, event);
+  const log = (event: TryEvent) => ledger.appendAs(runId, owner, event);
   const fail = async (text: string): Promise<LegResult> => {
     await log({ kind: "outcome", ok: false, text });
     return "end";
@@ -277,17 +282,22 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger): Promise<LegR
     case "yes": {
       await log({ kind: "sent", text: "YES" });
       const turn = await person.turn(["YES"]);
-      if (!(await replied(turn))) return fail(`The YES did not get an answer. The turn ended with HTTP ${turn.http}.`);
-      if (/safety check is taking a moment|checking whether it went through/i.test(turn.text)) return "stay";
-      const { json } = await person.engine("/approvals");
-      const receipt = approvalsOf(json)
-        .map((a) => a.outcome?.receipt)
-        .find((r) => r && !r.simulated);
-      if (receipt) {
+      const answered = await replied(turn);
+      if (answered && /safety check is taking a moment|checking whether it went through/i.test(turn.text)) return "stay";
+      // Only Engine's record says what happened, and only when it can be read.
+      const { http, json } = await person.engine("/approvals");
+      if (http !== 200) return fail(UNVERIFIED);
+      const approvals = approvalsOf(json);
+      const receipt = approvals.map((a) => a.outcome?.receipt).find(Boolean);
+      if (receipt && !receipt.simulated) {
         await log({ kind: "filed", confirmation: receipt.externalId });
         await log({ kind: "outcome", ok: true, text: "Filed on the sandbox portal after Maria's yes." });
+      } else if (receipt) {
+        await log({ kind: "outcome", ok: false, text: "This deployment simulated the filing, so nothing reached the portal." });
+      } else if (!answered || approvals.some((a) => a.status === "approved")) {
+        await log({ kind: "outcome", ok: false, text: UNVERIFIED });
       } else {
-        await log({ kind: "outcome", ok: false, text: "No filing was recorded, so nothing reached the portal." });
+        await log({ kind: "outcome", ok: false, text: "Engine has no filing on record for this yes." });
       }
       return "end";
     }
@@ -325,11 +335,20 @@ async function start(request: Request, env: Env, headers: Record<string, string>
   return json({ runId, needsGuardian: SCENARIOS[scenario].needsGuardian }, 201, headers);
 }
 
-async function guardian(env: Env, ledger: TryLedger, headers: Record<string, string>): Promise<Response> {
+async function guardian(env: Env, ledger: TryLedger, runId: string, send: typeof fetch, headers: Record<string, string>): Promise<Response> {
+  const run = await ledger.run(runId);
+  if (!run) return json({ error: "No such run." }, 404, headers);
+  if (!SCENARIOS[run.scenario].needsGuardian) return json({ state: "failed", secondsLeft: 0 }, 409, headers);
   const setting = checkerSetting(env);
   if (setting.kind !== "guardian") return json({ state: setting.kind === "local-rules" ? "ready" : "failed", secondsLeft: 0 }, 200, headers);
-  const state = await new GlimmerModelChecker({ url: setting.url, token: setting.token, timeoutMs: 10_000, ...(setting.proxyAuth ? { proxyAuth: setting.proxyAuth } : {}) }).warm();
+  const claim = await ledger.claimGuardian(runId);
+  if (claim === "refused") return json({ state: "failed", secondsLeft: 0 }, 409, headers);
+  if (claim === "ready") return json({ state: "ready", secondsLeft: 0 }, 200, headers);
+  // Asked again too soon: the same answer as before, with no call to the GPU.
+  if (claim === "wait") return json({ state: "starting", secondsLeft: await ledger.guardianWarming(false) }, 200, headers);
+  const state = await new GlimmerModelChecker({ url: setting.url, token: setting.token, timeoutMs: 10_000, fetchImpl: send, ...(setting.proxyAuth ? { proxyAuth: setting.proxyAuth } : {}) }).warm();
   if (state === "failed") return json({ state, secondsLeft: 0 }, 200, headers);
+  if (state === "ready") await ledger.guardianIsReady(runId);
   return json({ state, secondsLeft: await ledger.guardianWarming(state === "ready") }, 200, headers);
 }
 
@@ -343,18 +362,29 @@ async function next(request: Request, env: Env, runId: string, self: SelfFetch, 
   const body = (await request.json().catch(() => null)) as { press?: unknown } | null;
   // Only a person's press answers the question.
   if (leg === "yes" && body?.press !== "yes") return json({ next: "yes" }, 200, headers);
-  if (!(await ledger.beginLeg(runId, run.leg))) return json({ next: "busy" }, 409, headers);
+  const owner = await ledger.beginLeg(runId, run.leg);
+  if (!owner) return json({ next: "busy" }, 409, headers);
   let result: LegResult;
-  try {
-    result = await runLeg(leg, new Person(env, self, send, ledger, run), ledger);
-  } catch (err) {
-    console.warn(JSON.stringify({ type: "mano_try_leg_failed", leg, error: err instanceof Error ? err.name : "unknown" }));
-    await ledger.append(runId, { kind: "outcome", ok: false, text: "This step did not finish, so the run stopped here. Nothing was filed after it." });
+  if (run.turn >= MAX_TURNS_PER_RUN) {
+    await ledger.appendAs(runId, owner, { kind: "outcome", ok: false, text: leg === "yes" ? UNVERIFIED : "This run reached its limit of turns, so it stopped here. Nothing was filed." });
     result = "end";
+  } else {
+    try {
+      result = await runLeg(leg, new Person(env, self, send, ledger, run), ledger, owner);
+    } catch (err) {
+      console.warn(JSON.stringify({ type: "mano_try_leg_failed", leg, error: err instanceof Error ? err.name : "unknown" }));
+      // Only a yes can file, so only then is the outcome in doubt.
+      const text = leg === "yes" ? UNVERIFIED : "This step did not finish, so the run stopped here. Nothing was filed.";
+      await ledger.appendAs(runId, owner, { kind: "outcome", ok: false, text });
+      result = "end";
+    }
   }
   const nextLeg = result === "advance" ? run.leg + 1 : run.leg;
   const done = result === "end" || nextLeg >= legs.length;
-  await ledger.endLeg(runId, nextLeg, done);
+  // A claim another request took over or a finished run changes nothing here.
+  if (!(await ledger.endLeg(runId, owner, nextLeg, done))) {
+    return json({ next: (await ledger.run(runId))?.done === false ? "busy" : "end" }, 200, headers);
+  }
   if (done) return json({ next: "end" }, 200, headers);
   return json({ next: legs[nextLeg] === "yes" ? "yes" : "auto" }, 200, headers);
 }
@@ -362,11 +392,12 @@ async function next(request: Request, env: Env, runId: string, self: SelfFetch, 
 // The only fields a report may carry: numbers and short labels, so nothing
 // else the agent holds can reach a page.
 function modelReport(value: unknown): TryEvent | null {
-  const r = value as { model?: unknown; where?: unknown; purpose?: unknown; ms?: unknown; status?: unknown } | null;
+  const r = value as { model?: unknown; where?: unknown; purpose?: unknown; ms?: unknown; status?: unknown; state?: unknown } | null;
   const label = (v: unknown) => (typeof v === "string" && v.length > 0 && v.length <= MAX_LABEL ? shown(v) : null);
   const [model, where, purpose, status] = [label(r?.model), label(r?.where), label(r?.purpose), label(r?.status)];
-  if (!model || !where || !purpose || !status || typeof r?.ms !== "number") return null;
-  return { kind: "model", model, where, purpose, status, ms: Math.max(0, Math.round(r.ms)) };
+  const state = TRY_CALL_STATES.find((s) => s === r?.state);
+  if (!model || !where || !purpose || !status || !state || typeof r?.ms !== "number") return null;
+  return { kind: "model", model, where, purpose, status, state, ms: Math.max(0, Math.round(r.ms)) };
 }
 
 async function report(request: Request, env: Env): Promise<Response> {
@@ -412,8 +443,7 @@ export async function tryRoute(request: Request, env: Env, self: SelfFetch, deps
   const runId = match[1]!;
   const ledger = ledgerOf(env);
   if (match[2] === "guardian" && request.method === "POST") {
-    if (!(await ledger.run(runId))) return json({ error: "No such run." }, 404, headers);
-    return guardian(env, ledger, headers);
+    return guardian(env, ledger, runId, deps.fetchImpl ?? boundFetch, headers);
   }
   if (match[2] === "next" && request.method === "POST") return next(request, env, runId, self, deps.fetchImpl ?? boundFetch, headers);
   if (match[3] && request.method === "GET") {

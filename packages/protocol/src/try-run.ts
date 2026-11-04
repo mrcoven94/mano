@@ -10,6 +10,11 @@ export const isTryPerson = (personId: string): boolean => personId.startsWith(`h
 export const TRY_SCENARIOS = ["maria", "scam", "planted"] as const;
 export type TryScenario = (typeof TRY_SCENARIOS)[number];
 
+// live: a request went to that model. skipped: the path has no such call, so
+// no request was made. stand-in: no model was involved at all.
+export const TRY_CALL_STATES = ["live", "skipped", "stand-in"] as const;
+export type TryCallState = (typeof TRY_CALL_STATES)[number];
+
 // What one run shows, in the order it happened. The page renders only this
 // log, live or from a recording.
 export type TryEvent =
@@ -20,7 +25,7 @@ export type TryEvent =
   | { kind: "guardian"; verdict: string; ms: number }
   | { kind: "question"; text: string }
   | { kind: "filed"; confirmation: string }
-  | { kind: "model"; model: string; where: string; purpose: string; ms: number; status: string }
+  | { kind: "model"; model: string; where: string; purpose: string; ms: number; status: string; state: TryCallState }
   | { kind: "note"; text: string }
   | { kind: "outcome"; ok: boolean; text: string };
 

@@ -3,7 +3,7 @@
 // with the demo's prefix reports anything, so a real person's turn is unchanged
 // and sends no report. A report that fails never affects the turn.
 import type { Computer, ModelClient as ComputerModel } from "@mano/computer";
-import type { ModelClient as MailModel } from "@mano/mail";
+import { BudgetExceeded, SEGMENT_MODEL, SegmentationSkipped, type ModelClient as MailModel } from "@mano/mail";
 import { isTryHandle, isTryPerson } from "@mano/protocol";
 
 import { OPEN_WEIGHT_MODEL_ID, selectModelRoute } from "./muse.js";
@@ -28,11 +28,23 @@ async function report(body: Record<string, unknown>): Promise<void> {
   }
 }
 
-const whereOf = (modelId: string): string => (modelId === OPEN_WEIGHT_MODEL_ID ? "OpenRouter, zero retention" : "Meta's API");
+type Call = { model: string; where: string; purpose: string; ms: number; status: string; state: "live" | "skipped" | "stand-in" };
 
-function reportModel(handleHash: string, model: string, purpose: string, ms: number, status: string): Promise<void> {
-  return report({ handleHash, model: { model, where: whereOf(model), purpose, ms, status } });
+const STAND_IN = { model: "stand-in", where: "No model called", state: "stand-in" } as const;
+
+// Who a call really went to, read from the ID the call itself used. Eve can
+// prefix an ID with its provider's name, and the where is never assumed from
+// the settings, so a backup route that answers is named as itself.
+export function identityOf(raw: string): Pick<Call, "model" | "where" | "state"> {
+  const id = raw.replace(/^(openrouter|modal|mano)\//, "").replace(/^meta\/(?=muse-spark-1|sam-)/, "");
+  if (id.includes("stand-in")) return STAND_IN;
+  if (id.startsWith("meta-models/")) return { model: id, where: "Modal", state: "live" };
+  if (id === OPEN_WEIGHT_MODEL_ID) return { model: id, where: "OpenRouter, zero retention", state: "live" };
+  if (/^(muse-|sam-)/.test(id)) return { model: id, where: "Meta's API", state: "live" };
+  return { model: id, where: "Not known", state: "live" };
 }
+
+const reportCall = (handleHash: string, model: Call): Promise<void> => report({ handleHash, model });
 
 const MODEL_OUTPUT = new Set(["reasoning.appended", "message.appended", "action.input.appended", "actions.requested"]);
 
@@ -41,15 +53,14 @@ interface Marks {
 }
 
 // One line per step of the agent's run, from the times Eve stamps on its
-// events. A step's model call ends at its last output, before its tools run.
+// events and the model it names on each step. A step's model call ends at its
+// last output, before its tools run.
 export function tryStepTrace(handleHash: string, marks: Marks): Marks & { flush(): Promise<unknown> } {
   if (!isTryHandle(handleHash)) return { observe: (event) => marks.observe(event), flush: async () => undefined };
-  // A deployment with no key answers with the stand-in, and the panel says so.
-  const route = selectModelRoute();
-  const model = route.apiKey ? route.modelId : "stand-in, no model called";
   const sent: Promise<void>[] = [];
   let started: number | null = null;
   let lastOutput: number | null = null;
+  let modelId = "";
   return {
     observe(event) {
       marks.observe(event);
@@ -58,11 +69,14 @@ export function tryStepTrace(handleHash: string, marks: Marks): Marks & { flush(
       if (event.type === "step.started") {
         started = at;
         lastOutput = null;
+        const named = (event as { data?: { modelId?: unknown } }).data?.modelId;
+        modelId = typeof named === "string" ? named : "";
       } else if (started !== null && MODEL_OUTPUT.has(event.type)) {
         lastOutput = at;
       } else if (started !== null && (event.type === "step.completed" || event.type === "step.failed")) {
         const failed = event.type === "step.failed" && lastOutput === null;
-        sent.push(reportModel(handleHash, model, "Mano's turn", (lastOutput ?? at) - started, failed ? "failed" : "ok"));
+        const identity = identityOf(modelId || "not named");
+        sent.push(reportCall(handleHash, { ...identity, purpose: "Mano's turn", ms: (lastOutput ?? at) - started, status: failed ? "failed" : "ok" }));
         started = null;
       }
     },
@@ -70,18 +84,35 @@ export function tryStepTrace(handleHash: string, marks: Marks): Marks & { flush(
   };
 }
 
+// A letter read names who answered in its result. A failed one goes to the
+// route this deployment reads on, since the request's ID is only what Mail
+// asked for: the open-weight clients answer every read with their own model.
 export function tracedMailModel(client: MailModel, handleHash: string): MailModel {
   if (!isTryHandle(handleHash)) return client;
+  const purposeOf = (model: string) => (model === SEGMENT_MODEL ? "Finding the letter in the photo" : "Reading the letter");
   return {
     live: client.live,
     async responses(req, opts) {
       const at = Date.now();
+      const purpose = purposeOf(req.model);
+      const skipped = () => reportCall(handleHash, { model: req.model, where: "Not called", purpose, ms: 0, status: "skipped", state: "skipped" });
+      if (!client.live) {
+        try {
+          return await client.responses(req, opts);
+        } finally {
+          await reportCall(handleHash, { ...STAND_IN, purpose, ms: Date.now() - at, status: "no model" });
+        }
+      }
       try {
         const result = await client.responses(req, opts);
-        await reportModel(handleHash, req.model, "Reading the letter", Date.now() - at, "ok");
+        await reportCall(handleHash, { ...identityOf(result.model), purpose, ms: Date.now() - at, status: "ok" });
         return result;
       } catch (err) {
-        await reportModel(handleHash, req.model, "Reading the letter", Date.now() - at, "failed");
+        if (err instanceof SegmentationSkipped || err instanceof BudgetExceeded) await skipped();
+        else {
+          const route = selectModelRoute();
+          await reportCall(handleHash, { ...identityOf(route.name === "meta" ? req.model : route.modelId), purpose, ms: Date.now() - at, status: "failed" });
+        }
         throw err;
       }
     },
@@ -115,15 +146,18 @@ export function tracedFillDeps<T extends FillDeps | { unavailable: string }>(dep
   if ("unavailable" in deps || !isTryPerson(personId)) return deps;
   const handleHash = personId.slice("handle-".length);
   const inner: ComputerModel = deps.model;
+  const purpose = "Mano's computer";
   const model: ComputerModel = {
     async createResponse(request) {
       const at = Date.now();
       try {
         const response = await inner.createResponse(request);
-        await reportModel(handleHash, request.model, "Mano's computer", Date.now() - at, response.status);
+        // The raw reply names the model that answered, when the host says.
+        const named = (response as { model?: unknown }).model;
+        await reportCall(handleHash, { ...identityOf(typeof named === "string" && named ? named : request.model), purpose, ms: Date.now() - at, status: response.status });
         return response;
       } catch (err) {
-        await reportModel(handleHash, request.model, "Mano's computer", Date.now() - at, "failed");
+        await reportCall(handleHash, { ...identityOf(request.model), purpose, ms: Date.now() - at, status: "failed" });
         throw err;
       }
     },

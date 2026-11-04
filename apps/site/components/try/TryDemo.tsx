@@ -23,7 +23,7 @@ const STUMPS: { key: TryScenario; name: string; text: string }[] = [
 const REFUSED = {
   paused: "The demo is paused for today. It has used its daily limit of live runs.",
   rate: "This address has started too many runs in the last hour. Try again later.",
-  busy: "A run from this window is still going. Let it finish, or try again in 15 minutes.",
+  busy: "A run from this window is still going. Let it finish, or try again in 25 minutes.",
   full: "Other judges are running the demo right now. Try again in a few minutes.",
 };
 
@@ -85,7 +85,7 @@ function Step({ event }: { event: TryLogged }) {
 function Panel({ calls, source }: { calls: Extract<TryLogged, { kind: "model" }>[]; source: Source }) {
   return (
     <aside className="try-panel" aria-label="Model calls on this run">
-      <h2>Model calls on this run <span>{calls.length}</span></h2>
+      <h2>Model calls on this run <span>{calls.filter((c) => c.state === "live").length}</span></h2>
       {source.kind === "recording" && <p className="try-panel-note">From the recording. Not live.</p>}
       {source.kind === "dev" && <p className="try-panel-note">Dev fixture. Made up, not a real run.</p>}
       {calls.length === 0 ? (
@@ -96,11 +96,11 @@ function Panel({ calls, source }: { calls: Extract<TryLogged, { kind: "model" }>
             <thead><tr><th scope="col">Model</th><th scope="col">Where it ran</th><th scope="col" className="num">Time</th><th scope="col">Status</th></tr></thead>
             <tbody aria-live="polite">
               {calls.map((c) => (
-                <tr key={c.seq}>
+                <tr key={c.seq} data-state={c.state}>
                   <td><code>{c.model}</code><small>{c.purpose}</small></td>
                   <td>{c.where}</td>
-                  <td className="num">{seconds(c.ms)}</td>
-                  <td data-bad={c.status === "ok" || c.status === "200" || c.status === "completed" ? undefined : ""}>{c.status}</td>
+                  <td className="num">{c.state === "skipped" ? "" : seconds(c.ms)}</td>
+                  <td data-bad={c.state !== "live" || c.status === "ok" || c.status === "200" || c.status === "completed" ? undefined : ""}>{c.state === "stand-in" ? "stand-in" : c.status}</td>
                 </tr>
               ))}
             </tbody>

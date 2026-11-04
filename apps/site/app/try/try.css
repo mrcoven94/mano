@@ -44,6 +44,8 @@
 .try-panel small{display:block;margin-top:2px;color:#BAC4D8;font-size:.78rem}
 .try-panel .num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .try-panel td[data-bad]{color:#FFB4A8;font-weight:600}
+.try-panel tr[data-state=skipped] td,.try-panel tr[data-state=skipped] code{color:#BAC4D8}
+.try-panel tr[data-state=stand-in] td{color:var(--hl)}
 
 .try-stump{margin-top:40px}
 .try-stump h2{font-size:1.4rem}

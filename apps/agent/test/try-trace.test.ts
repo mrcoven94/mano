@@ -1,7 +1,9 @@
 import { TRY_HANDLE_PREFIX } from "@mano/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { tracedFillDeps, tracedMailModel, tryStepTrace } from "../agent/lib/try-trace.js";
+import { BudgetExceeded, SegmentationSkipped } from "@mano/mail";
+
+import { identityOf, tracedFillDeps, tracedMailModel, tryStepTrace } from "../agent/lib/try-trace.js";
 import type { FillDeps } from "../agent/lib/computer-fill.js";
 
 const DEMO = `${TRY_HANDLE_PREFIX}${"a".repeat(56)}`;
@@ -28,8 +30,8 @@ describe("reports for the judge demo", () => {
     vi.unstubAllGlobals();
   });
 
-  const step = (trace: ReturnType<typeof tryStepTrace>) => {
-    trace.observe({ type: "step.started", meta: { at: at(0) } });
+  const step = (trace: ReturnType<typeof tryStepTrace>, modelId = "openrouter/meta/muse-spark-open") => {
+    trace.observe({ type: "step.started", meta: { at: at(0) }, data: { modelId } } as never);
     trace.observe({ type: "message.appended", meta: { at: at(1500) } });
     trace.observe({ type: "step.completed", meta: { at: at(9000) } });
   };
@@ -52,24 +54,57 @@ describe("reports for the judge demo", () => {
     step(trace);
     await trace.flush();
     expect(reports).toEqual([
-      { handleHash: DEMO, model: { model: "meta/muse-spark-open", where: "OpenRouter, zero retention", purpose: "Mano's turn", ms: 1500, status: "ok" } },
+      { handleHash: DEMO, model: { model: "meta/muse-spark-open", where: "OpenRouter, zero retention", state: "live", purpose: "Mano's turn", ms: 1500, status: "ok" } },
     ]);
   });
 
-  it("says stand-in when no model was called", async () => {
-    vi.stubEnv("OPENROUTER_API_KEY", "");
-    vi.stubEnv("MANO_MODEL_PROVIDER", "");
-    vi.stubEnv("META_MODEL_API_KEY", "");
+  it("names whichever route the step itself used", async () => {
     const trace = tryStepTrace(DEMO, { observe: () => undefined });
-    step(trace);
+    step(trace, "modal/meta-models/Muse-Spark-Open-816B-A42B");
     await trace.flush();
-    expect((reports[0]!.model as { model: string }).model).toBe("stand-in, no model called");
+    expect(reports[0]!.model).toMatchObject({ model: "meta-models/Muse-Spark-Open-816B-A42B", where: "Modal", state: "live" });
   });
 
-  it("reports a failed letter read and still throws", async () => {
+  it("says stand-in when no model was called", async () => {
+    const trace = tryStepTrace(DEMO, { observe: () => undefined });
+    step(trace, "mano/stand-in");
+    await trace.flush();
+    expect(reports[0]!.model).toMatchObject({ model: "stand-in", where: "No model called", state: "stand-in" });
+  });
+
+  it("knows each route from the ID alone", () => {
+    expect(identityOf("meta/muse-spark-1.3")).toEqual({ model: "muse-spark-1.3", where: "Meta's API", state: "live" });
+    expect(identityOf("muse-spark-1.3")).toEqual({ model: "muse-spark-1.3", where: "Meta's API", state: "live" });
+    expect(identityOf("meta/muse-spark-open").where).toBe("OpenRouter, zero retention");
+    expect(identityOf("meta-models/Muse-Spark-Open-816B-A42B").where).toBe("Modal");
+    expect(identityOf("something-new").where).toBe("Not known");
+  });
+
+  it("names the model that answered a read, not the one Mail asked for", async () => {
+    const client = { live: true, responses: async () => ({ text: "", model: "meta/muse-spark-open" }) } as never;
+    await tracedMailModel(client, DEMO).responses({ model: "muse-spark-1.3" } as never);
+    expect(reports[0]!.model).toMatchObject({ model: "meta/muse-spark-open", where: "OpenRouter, zero retention", state: "live", status: "ok" });
+  });
+
+  it("marks a skipped call skipped, with no time and no failure", async () => {
+    const skip = { live: true, responses: async () => { throw new SegmentationSkipped(); } } as never;
+    await expect(tracedMailModel(skip, DEMO).responses({ model: "sam-3.1" } as never)).rejects.toThrow(SegmentationSkipped);
+    expect(reports[0]!.model).toEqual({ model: "sam-3.1", where: "Not called", purpose: "Finding the letter in the photo", ms: 0, status: "skipped", state: "skipped" });
+    const budget = { live: true, responses: async () => { throw new BudgetExceeded(); } } as never;
+    await expect(tracedMailModel(budget, DEMO).responses({ model: "muse-spark-1.3" } as never)).rejects.toThrow(BudgetExceeded);
+    expect(reports[1]!.model).toMatchObject({ state: "skipped", status: "skipped" });
+  });
+
+  it("names the route on a failed read, since a failure has no answer to read", async () => {
     const client = { live: true, responses: async () => { throw new Error("402"); } } as never;
-    await expect(tracedMailModel(client, DEMO).responses({ model: "meta/muse-spark-open" } as never)).rejects.toThrow("402");
-    expect((reports[0]!.model as { status: string; purpose: string })).toMatchObject({ status: "failed", purpose: "Reading the letter" });
+    await expect(tracedMailModel(client, DEMO).responses({ model: "muse-spark-1.3" } as never)).rejects.toThrow("402");
+    expect(reports[0]!.model).toMatchObject({ model: "meta/muse-spark-open", where: "OpenRouter, zero retention", state: "live", status: "failed", purpose: "Reading the letter" });
+  });
+
+  it("marks a read with no model as a stand-in", async () => {
+    const client = { live: false, responses: async () => { throw new Error("nothing recorded"); } } as never;
+    await expect(tracedMailModel(client, DEMO).responses({ model: "muse-spark-1.3" } as never)).rejects.toThrow();
+    expect(reports[0]!.model).toMatchObject({ model: "stand-in", where: "No model called", state: "stand-in" });
   });
 
   it("reports each new screen once, and only the model call's own status", async () => {
@@ -82,6 +117,6 @@ describe("reports for the judge demo", () => {
     await deps.computer.screenshot();
     expect(reports.filter((r) => r.screenB64)).toHaveLength(2);
     await deps.model.createResponse({ model: "muse-spark-1.3" } as never);
-    expect(reports.at(-1)!.model).toMatchObject({ model: "muse-spark-1.3", where: "Meta's API", purpose: "Mano's computer", status: "completed" });
+    expect(reports.at(-1)!.model).toMatchObject({ model: "muse-spark-1.3", where: "Meta's API", purpose: "Mano's computer", status: "completed", state: "live" });
   });
 });

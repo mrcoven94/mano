@@ -89,10 +89,10 @@ export class GuardianChecker implements Checker {
         try {
           const response = await send(...args);
           answered = response.ok;
-          this.trace?.({ kind: "model", model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, purpose: "Guardian checks the action", ms: Date.now() - at, status: String(response.status) });
+          this.trace?.({ kind: "model", model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, purpose: "Guardian checks the action", ms: Date.now() - at, status: response.status === 503 ? "503, warming" : String(response.status), state: "live" });
           return response;
         } catch (err) {
-          this.trace?.({ kind: "model", model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, purpose: "Guardian checks the action", ms: Date.now() - at, status: "no answer" });
+          this.trace?.({ kind: "model", model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, purpose: "Guardian checks the action", ms: Date.now() - at, status: "no answer", state: "live" });
           throw err;
         }
       },
