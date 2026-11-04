@@ -284,6 +284,28 @@ describe("approval by text", () => {
     expect(yes.body.text).toMatch(/simulated/i);
   });
 
+  // A filing's confirmation must land inside Channels' wait, however long the
+  // calls before it took.
+  it("a YES waits on Engine only as long as the turn can afford, keeping room for the outcome", async () => {
+    const wait = async (id: string, turnBudgetMs: number) => {
+      await send(turn(`turn_wait_ask_${id}`, "Please file my renewal"));
+      const real = AbortSignal.timeout.bind(AbortSignal);
+      const waits: number[] = [];
+      const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+        waits.push(ms);
+        return real(ms);
+      });
+      const yes = await send(turn(`turn_wait_yes_${id}`, "YES"), deps({ turnBudgetMs }));
+      spy.mockRestore();
+      expect(yes.status).toBe(200);
+      return Math.max(...waits);
+    };
+    expect(await wait("a", 95_000)).toBe(30_000);
+    const tight = await wait("b", 40_000);
+    expect(tight).toBeGreaterThan(20_000);
+    expect(tight).toBeLessThanOrEqual(25_000);
+  });
+
   // LAP-747 follow-up: a correction that does not fit the form is asked
   // again, and the version shown before it can no longer be filed.
   it("a correction that does not fit closes the question shown: YES files nothing until the new version is shown and answered", async () => {
