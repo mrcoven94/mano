@@ -86,7 +86,8 @@ export class EngineClient implements ManoClient {
   constructor(options: EngineOptions) {
     this.baseUrl = options.baseUrl;
     this.sha256B64 = options.sha256B64;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    // Called as a method, the browser's fetch throws "Illegal invocation".
+    this.fetchImpl = options.fetchImpl ?? ((...args) => fetch(...args));
   }
 
   private async call(session: Session | null, path: string, init: RequestInit = {}): Promise<Response> {

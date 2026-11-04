@@ -355,7 +355,8 @@ export default function Chat() {
           ) : null}
         </View>
 
-        {loading ? (
+        {/* An inverted list draws its empty component upside down on the web. */}
+        {loading || shown.length === 0 ? (
           <View style={styles.empty}>
             <EmptyView body={s.agentEmpty} />
           </View>
@@ -368,7 +369,6 @@ export default function Chat() {
             contentContainerStyle={styles.list}
             keyboardShouldPersistTaps="handled"
             renderItem={({ item }) => <Bubble message={item} queuedLabel={s.queued} />}
-            ListEmptyComponent={<EmptyView body={s.agentEmpty} />}
           />
         )}
 

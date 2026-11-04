@@ -7,6 +7,7 @@ import { useRouter } from "expo-router";
 import { Btn, Body, DemoBanner, Field, Muted, Screen, Title } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 import { useStrings } from "../../lib/i18n";
+import { setPendingSignIn } from "../../lib/sign-in-flow";
 import { colors } from "../../lib/theme";
 
 export default function SignIn() {
@@ -27,7 +28,8 @@ export default function SignIn() {
     setError(null);
     try {
       const out = await client.requestCode(trimmed);
-      router.push({ pathname: "/(auth)/verify", params: { email: trimmed, challengeId: out.challengeId } });
+      setPendingSignIn({ email: trimmed, challengeId: out.challengeId });
+      router.push("/(auth)/verify");
     } catch (err) {
       setError((err as Error).message);
     } finally {

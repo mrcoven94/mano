@@ -277,6 +277,19 @@ describe("EngineClient", () => {
     await expect(client.listMessages(session)).resolves.toMatchObject([{ id: "m1", text: "Hi", attachments: [], status: "sent" }]);
   });
 
+  it("calls the browser's fetch unbound, which throws when called as a method", async () => {
+    vi.stubGlobal("fetch", function (this: unknown) {
+      if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+      return Promise.resolve(jsonResponse({ challengeId: "c1", maskedEmail: "m***@b.c" }));
+    });
+    try {
+      const client = new EngineClient({ baseUrl: "https://web.test", sha256B64 });
+      await expect(client.requestCode("a@b.c")).resolves.toMatchObject({ challengeId: "c1" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("shows a server's error in plain words", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: "Sign-in email is not turned on yet." }), { status: 503 }));
     const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: fetchImpl });
