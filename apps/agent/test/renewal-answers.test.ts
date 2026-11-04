@@ -16,6 +16,7 @@ import fillForm from "../agent/tools/fill_form.js";
 import startFormDraft from "../agent/tools/start_form_draft.js";
 import updateProfile from "../agent/tools/update_profile.js";
 import { recordedReader } from "../../../packages/mail/test/letter-fixture.js";
+import { STATE_NAMES } from "../../../packages/protocol/test/state-names.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
@@ -632,6 +633,45 @@ describe("review of f808af6: a total she corrected does not come back", () => {
     expect(out.forgotten).toEqual([]);
     await fill({ monthlyIncome: "1800" });
     expect(await draftValue("monthlyIncome")).toBe("1800");
+  });
+});
+
+describe("a state written out in an address", () => {
+  const fill = (answers: Record<string, string>) => text("my answer", { tool: "fill_form", answers });
+
+  it.each(STATE_NAMES.flatMap(([code, english, spanish]) => (english === spanish ? [[code, english]] : [[code, english], [code, spanish]])))("%s from %s: the state is known, the case is kept, and the address files as she typed it", async (code, name) => {
+    const address = `12 Main St, Anytown, ${name} 00601`;
+    await fill({ address, caseNumber: "CASE-1" });
+    expect((await person().getProfile())!.person.address.state?.value).toBe(code);
+    expect(await draftValue("address")).toBe(address);
+    expect(await draftValue("caseNumber")).toBe("CASE-1");
+  });
+
+  it("routes a number by a state written out in the same call, and leaves the old state's case", async () => {
+    await person().patchProfile({ idempotencyKey: "wa-case-4", source: "person", fields: { "person.address.state": "WA", "programs.wa.program": "SNAP", "programs.wa.state": "WA", "programs.wa.caseNumber": "WA-1" } });
+    await fill({ caseNumber: "CA-9", address: "12 Oak St, Fresno, California 93721" });
+    expect(await caseOf("wa")).toBe("WA-1");
+    expect(await draftValue("caseNumber")).toBe("CA-9");
+  });
+
+  it("a later address replaces the state and its parts", async () => {
+    await fill({ address: "12 Oak St, Fresno, CA 93721" });
+    await fill({ address: "5 Hill Rd, Charleston, West Virginia 25301" });
+    const { address } = (await person().getProfile())!.person;
+    expect([address.line1?.value, address.city, address.state?.value, address.zip]).toEqual(["5 Hill Rd, Charleston, West Virginia 25301", undefined, "WV", undefined]);
+  });
+
+  it("reads back once on the summary, not with the state twice", async () => {
+    await fill({ address: "12 Oak St, Fresno, California 93721" });
+    expect(summarizeProfile(await person().getProfileView())).toContain("12 Oak St, Fresno, California 93721.");
+  });
+
+  it.each(["703 Frendle Path, Drelvessa, Kelvessa 00042", "12 Oak St, Fresno, Californa 93721"])("%s still asks for the case number later", async (address) => {
+    await fill({ address, caseNumber: "CASE-1" });
+    expect((await person().getProfile())!.person.address.state).toBeUndefined();
+    expect(await draftValue("caseNumber")).toBeUndefined();
+    const again = await text("is it ready?", { tool: "fill_form", answers: {} });
+    expect(askedAbout(again.text)).toEqual(["caseNumber"]);
   });
 });
 
