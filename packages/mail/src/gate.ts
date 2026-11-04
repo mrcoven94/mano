@@ -47,7 +47,7 @@ const any = (words: string[]): string => `(?:${words.map((w) => w.replace(/ /g, 
 // each addition needs a test that it states a duty the person owes.
 const DETERMINERS = any(["the", "your", "this", "these", "all", "each", "a", "both"]);
 const ADJECTIVES = any([
-  "signed", "complete", "completed", "written", "enclosed", "current", "required", "requested", "missing", "new",
+  "signed", "completed", "written", "enclosed", "current", "required", "requested", "missing", "new",
   "renewal", "recertification", "redetermination", "application", "income", "identity", "address",
   "residency", "photo", "household", "verification", "tax", "medical", "yearly",
   "child care", "rent", "utility", "bank", "next",
@@ -93,11 +93,10 @@ const TRANSITIVE = any([
   "sign", "turn in", "fill out", "file", "renew", "request", "pay", "show", "give",
 ]);
 const INTRANSITIVE = any(["respond", "reply", "apply", "renew", "recertify", "appeal", "pay"]);
-const PLACE = String.raw`(?:this|the|our)\s+(?:(?:review|renewal|county|benefits)\s+)?office`;
 const MODIFIER = any([
   "to us", "to the office", "to our office", "to this office", "to the county office",
   "by mail", "by fax", "online", "in person", "in writing", "so it arrives", "so they arrive",
-  `so (?:that )?it reaches ${PLACE}`, `so (?:that )?they reach ${PLACE}`,
+  "so that it reaches this office",
 ]);
 const PARTICIPLES = any([
   "returned", "submitted", "sent", "completed", "mailed", "postmarked", "signed", "filed",
@@ -105,10 +104,10 @@ const PARTICIPLES = any([
 ]);
 
 const VERB_PHRASE = String.raw`(?:${TRANSITIVE}\s+${OBJECT}|${INTRANSITIVE}|ask\s+for\s+${NOUN_PHRASE})(?:\s+${MODIFIER})*`;
-const DUTY = String.raw`(?:(?:please\s+)?${VERB_PHRASE}|you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+${VERB_PHRASE}|your\s+${OWED_ITEM}\s+must\s+(?:arrive|reach\s+${PLACE}|be\s+${PARTICIPLES})(?:\s+${MODIFIER})*|your\s+${OWED_ITEM}\s+(?:is|are)\s+due)`;
+const DUTY = String.raw`(?:(?:please\s+)?${VERB_PHRASE}|you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+${VERB_PHRASE}|your\s+${OWED_ITEM}\s+must\s+(?:arrive|be\s+${PARTICIPLES})(?:\s+${MODIFIER})*|your\s+${OWED_ITEM}\s+(?:is|are)\s+due)`;
 
-// Reading a paper first changes nothing about what is owed or when.
-const LEAD_IN = String.raw`(?:after\s+review\s+of\s+(?:the|this)\s+(?:checklist|list|packet|form|notice|letter),\s+)?`;
+// Reading the checklist first changes nothing about what is owed or when.
+const LEAD_IN = String.raw`(?:after\s+review\s+of\s+the\s+checklist,\s+)?`;
 
 const DATE = `(?<date>${DATE_PATTERN})`;
 // Calendar days only. Business-day counts ask: holidays would make a
@@ -120,7 +119,7 @@ const FORMS: { form: DeadlineForm; re: RegExp }[] = [
   { form: "on-or-before", tail: String.raw`on\s+or\s+before\s+${DATE}` },
   { form: "no-later-than", tail: String.raw`no\s+later\s+than\s+${DATE}` },
   { form: "within-days-of-date", tail: String.raw`${COUNT}\s+${DATE}` },
-  { form: "within-days-of-notice", tail: String.raw`${COUNT}\s+the\s+(?:date\s+of\s+this\s+(?:notice|letter)|notice\s+date(?:\s+(?:printed|shown|listed)\s+above)?)` },
+  { form: "within-days-of-notice", tail: String.raw`${COUNT}\s+the\s+date\s+of\s+this\s+(?:notice|letter)` },
 ].map(({ form, tail }) => ({ form: form as DeadlineForm, re: new RegExp(`^${LEAD_IN}(?<duty>${DUTY})\\s+${tail}$`, "i") }));
 FORMS.push({
   form: "due",
@@ -153,18 +152,10 @@ const DEADLINE_LIKE: RegExp[] = [
 ];
 
 function tidy(sentence: string): string {
-  return sentence.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "").replace(/^[-\u2022*]\s+/, "");
+  return sentence.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "");
 }
 
-// "Your SNAP case is due for renewal" says a renewal is coming, not
-// when, and only as this whole sentence: any other word may be a date.
-const DUE_FOR_RENEWAL = new RegExp(
-  String.raw`^your\s+(?:(?:${PROGRAMS}|child\s+care\s+assistance)\s+(?:\([a-z]+\)\s+)?)?(?:case|authorization|coverage|benefits)\s+(?:is|are)\s+due\s+for\s+(?:renewal|recertification|redetermination|review)$`,
-  "i",
-);
-
 export function isDeadlineLike(sentence: string): boolean {
-  if (DUE_FOR_RENEWAL.test(tidy(sentence))) return false;
   return DEADLINE_LIKE.some((re) => re.test(sentence)) || findAmbiguousDate(sentence) !== null;
 }
 
@@ -272,7 +263,7 @@ const DUTY_WORDS = new RegExp(
 // A participle the grammar publishes ("must be received") states the
 // same response as its verb.
 const RESPOND = new RegExp(
-  String.raw`\b(?:respond|response|return|send|submit|provide|arrive|reach|receive|paperwork|complete|deliver|mail|bring|due|deadline|no\s+later\s+than|${PARTICIPLES})\b`,
+  String.raw`\b(?:respond|response|return|send|submit|provide|arrive|receive|paperwork|complete|deliver|mail|bring|due|deadline|no\s+later\s+than|${PARTICIPLES})\b`,
 );
 
 // The duty a deadline states, read from its own words. Dates within

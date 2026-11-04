@@ -129,7 +129,7 @@ RC-2N. Submission of a form does not by itself establish continued eligibility.`
     id: "medicaid-annual-packet",
     notice: "November 2, 2026",
     marks: ["Return the complete signed form by December 4, 2026."],
-    result: "held right",
+    result: "asked right date",
     date: "2026-12-04",
     text: `State of Kelvessa Medical Coverage Review Office
 165 Vellorin Plaza
@@ -284,8 +284,8 @@ AN-3. This determination applies only to the program and household shown.`,
     id: "denial-relative-appeal",
     notice: "November 3, 2026",
     marks: ["Your request must reach the review office within 30 calendar days after the notice date printed above."],
-    result: "asked right date",
-    date: "2026-12-03",
+    result: "asked no date",
+    date: null,
     text: `State of Kelvessa Family Assistance Review Office
 620 Nerrivet Square
 Vellquora, Kelvessa 00047
@@ -522,7 +522,7 @@ describe("the twelve letters", () => {
   it("adds up to the counts in the pull request", () => {
     const counts: Record<string, number> = {};
     for (const { result } of LETTERS) counts[result] = (counts[result] ?? 0) + 1;
-    expect(counts).toEqual({ "held right": 2, "asked right date": 4, "asked no date": 5, "scam warning": 1 });
+    expect(counts).toEqual({ "held right": 1, "asked right date": 4, "asked no date": 6, "scam warning": 1 });
   });
 });
 
@@ -542,13 +542,10 @@ const HARMLESS = [
 ];
 
 describe("a plain renewal letter holds with sentences that do not touch its date", () => {
-  it.each([...HARMLESS, "Your Child Care Assistance authorization is due for redetermination.", "Your SNAP case is due for renewal."])(
-    "%s",
-    async (sentence) => {
-      const reading = await read(`${HEAD}${sentence}\n\n${DUTY}`, NOTICE, [DUTY]);
-      expect(resultOf(reading, "2026-11-20")).toBe("held right");
-    },
-  );
+  it.each(HARMLESS)("%s", async (sentence) => {
+    const reading = await read(`${HEAD}${sentence}\n\n${DUTY}`, NOTICE, [DUTY]);
+    expect(resultOf(reading, "2026-11-20")).toBe("held right");
+  });
 
   // The shapes are closed, so one more word anywhere ends the exemption.
   it.each(HARMLESS)("any word added to it stops the letter again: %s", (sentence) => {
@@ -589,6 +586,7 @@ describe("near-misses never hold a date", () => {
     ["a lead-in that is a date", `${HEAD}After November 5, 2026, send the requested proof by November 18, 2026.`],
     ["a lead-in with a negation", `${HEAD}After review of the checklist, do not send the requested proof by November 18, 2026.`],
     ["a list item with a condition", `${HEAD}- If you moved, send proof of address by November 20, 2026.`],
+    ["a plain list item", `${HEAD}- ${DUTY}`],
     ["a list item with a negation", `${HEAD}- Do not return the form by November 20, 2026.`],
     ["reaches before, not by", `${HEAD}Send the requested proof so that it reaches this office before November 18, 2026.`],
     ["a two-digit year", `${HEAD}Return the form by 11/20/26.`],
@@ -629,6 +627,14 @@ describe("wrong holds from review never hold again", () => {
     ["a named other addressee", `${TEREN}The instructions below are addressed to your neighbor Selvi Darnovel. This notice concerns SNAP only.\n\n${TERSE}`],
     ["an exception after a help offer", `${HEAD}${TERSE} If you have questions, contact this office. Otherwise, you need not return the form.`],
     ["a conflicting weekday", `${HEAD}Your SNAP case is due for renewal on Friday.\n\n${TERSE}`],
+    ["a bullet under Do not", `${HEAD}Do not:\n\n- ${TERSE}`],
+    ["a bullet under Do not, on the next line", `${HEAD}Do not:\n- ${TERSE}`],
+    ["a bullet under examples", `${HEAD}Examples of renewal notices:\n\n- ${TERSE}`],
+    ["a bullet under examples, on the next line", `${HEAD}Examples of renewal notices:\n- ${TERSE}`],
+    ["a bullet under the office's steps", `${HEAD}Our office will take these steps.\n\n- ${TERSE}`],
+    ["a bullet under the office's steps, on the next line", `${HEAD}Our office will take these steps.\n- ${TERSE}`],
+    ["a bullet under a help offer", `${HEAD}Contact us if you need another copy:\n\n- ${TERSE}`],
+    ["a bullet under a help offer, on the next line", `${HEAD}Contact us if you need another copy:\n- ${TERSE}`],
   ])("%s", async (_name, text) => {
     for (const marks of [everyDateSentence(text), [TERSE]]) {
       const held = answerReading(await read(text, NOTICE, marks)).deadlines;
@@ -775,6 +781,8 @@ describe("near-misses in the same families never hold", () => {
   ]);
 
   family("a date not written as one", [
+    "Your SNAP case is due for renewal.",
+    "Your Child Care Assistance authorization is due for redetermination.",
     "Your SNAP case is due for renewal on Friday.",
     "Your SNAP case is due for renewal next Friday.",
     "Your SNAP case is due for renewal soon.",
@@ -795,11 +803,11 @@ describe("near-misses in the same families never hold", () => {
 // list cannot name every exception. it.fails turns red once one is fixed.
 describe("known gaps that need the whole letter", () => {
   it.fails.each([
-    ["a second salutation alone", `${TEREN}Dear Lorna Talvek:\n\n- ${TERSE}`],
+    ["a second salutation alone", `${TEREN}Dear Lorna Talvek:\n\n${TERSE}`],
     ["a subject for another program", `${HEAD}Re: Medicaid renewal\n\nReturn your SNAP renewal form by November 20, 2026.`],
     ["an exception in wording the list does not name", `${HEAD}Your aunt handles this one.\n\n${TERSE}`],
   ])("%s asks", async (_name, text) => {
-    const marks = [text.split("\n").at(-1)!.replace(/^- /, "")];
+    const marks = [text.split("\n").at(-1)!];
     expect(answerReading(await read(text, NOTICE, marks)).deadlines).toEqual([]);
   });
 });
