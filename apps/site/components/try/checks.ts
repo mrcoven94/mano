@@ -112,7 +112,9 @@ function settle(key: Key, e: TryLogged, done: Map<Key, Settled>, scenario: TrySc
 
 /* "idle" lays the plan out, "live" marks the first open check as running, "ended" says which never ran. */
 export function buildChecks(scenario: TryScenario, events: TryLogged[], mode: "idle" | "live" | "ended"): { checks: Check[]; outcome: Outcome | null } {
-  const plan = PLANS[scenario];
+  const base = PLANS[scenario];
+  // A plan with no Guardian row still shows a verdict its run logged, before its last check.
+  const plan: Key[] = base.includes("guard") || !events.some((e) => e.kind === "guardian") ? base : [...base.slice(0, -1), "guard", base[base.length - 1]!];
   const done = new Map<Key, Settled>();
   let outcome: Outcome | null = null;
   let confirmation: string | undefined;
