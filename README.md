@@ -151,7 +151,7 @@ David Coven decides what gets built and owns the accounts. The code is written w
 
 ## Prior work
 
-The site's state-by-state counts of offices and services come from Front Door, an earlier product by the same author, through its open data API, as a static snapshot in `apps/site/lib/coverage.ts`. Program facts come from official sources in `packages/programs`, and renewal forms are defined in `apps/agent/agent/lib/forms.ts`. Front Door's code is not part of this repository, with one exception found by comparing the two: the state-to-time-zone table in `packages/protocol/src/time-zones.ts` has the same rows in the same order as a table in Front Door.
+The site's state-by-state counts of offices and services come from Front Door, an earlier product by the same author, through its open data API, as a static snapshot in `apps/site/lib/coverage.ts`. Program facts come from official sources in `packages/programs`, and renewal forms are defined in `apps/agent/agent/lib/forms.ts`. Front Door's code is not part of this repository.
 
 ## License
 
