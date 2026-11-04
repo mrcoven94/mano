@@ -238,11 +238,13 @@ export default async function QualityResults() {
           value={mail ? pct(mail.accuracy) : "Not run"}
           sub={mail ? (mail.live ? `${mail.correct} of ${mail.letters} letters` : `stand-in: the mail reader is not merged yet`) : undefined}
         />
-        <Tile
-          label="Cost per 1,000 answers"
-          value={latest.prices.configured ? `$${weighted(latest, (s) => s.usdPer1kAnswers).toFixed(2)}` : "Rates unset"}
-          sub={`about ${Math.round(tokensPerAnswer).toLocaleString()} tokens per answer`}
-        />
+        {latest.prices.configured ? (
+          <Tile
+            label="Cost per 1,000 answers"
+            value={`$${weighted(latest, (s) => s.usdPer1kAnswers).toFixed(2)}`}
+            sub={`about ${Math.round(tokensPerAnswer).toLocaleString()} tokens per answer`}
+          />
+        ) : null}
       </div>
 
       <section className={styles.section} style={{ padding: 0 }}>
