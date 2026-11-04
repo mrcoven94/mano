@@ -18,7 +18,7 @@ A plain letter usually gets a question that names the date, not a held deadline.
 
 ## Try it on the web, no login
 
-[withmano.com/try](https://withmano.com/try) runs preset synthetic letters through the deployed agent, Engine, Guardian and sandbox portal, with buttons only, and lists every model call beside the steps. It is off unless `MANO_TRY` is `on` in `apps/engine/wrangler.toml`, and it needs the model account to be working. When the daily cap is spent it says so.
+[withmano.com/try](https://withmano.com/try) runs preset synthetic letters through the deployed agent, Engine, Guardian and sandbox portal, with buttons only, and lists every model call beside the steps. It stays off until Engine has `MANO_AGENT_URL` and `MANO_AGENT_SECRET`, and `MANO_TRY` in `apps/engine/wrangler.toml` stops it. When the daily cap is spent it says so.
 
 ## Run Maria's renewal in one command
 

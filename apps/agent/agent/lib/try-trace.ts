@@ -44,7 +44,9 @@ interface Marks {
 // events. A step's model call ends at its last output, before its tools run.
 export function tryStepTrace(handleHash: string, marks: Marks): Marks & { flush(): Promise<unknown> } {
   if (!isTryHandle(handleHash)) return { observe: (event) => marks.observe(event), flush: async () => undefined };
-  const model = selectModelRoute().modelId;
+  // A deployment with no key answers with the stand-in, and the panel says so.
+  const route = selectModelRoute();
+  const model = route.apiKey ? route.modelId : "stand-in, no model called";
   const sent: Promise<void>[] = [];
   let started: number | null = null;
   let lastOutput: number | null = null;

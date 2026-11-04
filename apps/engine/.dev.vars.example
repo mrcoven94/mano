@@ -20,7 +20,7 @@ MANO_ENGINE_SEND_SECRET= # gitleaks:allow (empty example value)
 # (default 10:00).
 MANO_NUDGE_TIME=
 # The judge demo (src/try): the agent's URL and the secret its turn route checks.
-# MANO_TRY=on in wrangler.toml or here turns it on.
+# Without both it stays off. MANO_TRY=off in wrangler.toml stops it.
 MANO_AGENT_URL=
 MANO_AGENT_SECRET= # gitleaks:allow (empty example value)
 # "on" lets the daily check for new help send its text. wrangler.toml ships off.
