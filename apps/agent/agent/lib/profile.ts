@@ -57,6 +57,9 @@ const FIELD_LABELS: Record<string, string> = {
   "person.householdSize": "household",
 };
 
+// The income entry that keeps the monthly total the person gave for a form.
+export const STATED_TOTAL = "stated-monthly-total";
+
 // Plain names the model may pass to forget, and the path each clears.
 const FORGET_TARGETS: Record<string, string> = {
   name: "person.fullName",
@@ -129,13 +132,7 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
     set(`person.${key}`, value as string | undefined, FIELD_LABELS[`person.${key}`] ?? key);
   }
   for (const [key, value] of Object.entries(p.address ?? {})) set(`person.address.${key}`, value, "address");
-  if (input.householdComplete) {
-    set("person.householdConfirmed", true, "household");
-    // They said the list on file is everyone, so everyone on it is their word.
-    for (const m of current.household) {
-      if (m.name && m.name.source !== "person") set(`household.${m.id}.name`, m.name.value, m.name.value);
-    }
-  }
+  if (input.householdComplete) set("person.householdConfirmed", true, "household");
 
   // Members by ref, for income that names an earner; new ones join as added.
   const added: Member[] = [];
@@ -194,17 +191,41 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
     set(`income.${id}.frequency`, inc.frequency, "income");
   });
 
+  // A case number belongs to one state: one given with none named is for
+  // the state they live in, and never lands on another state's case.
+  const livesIn = input.person?.address?.state ?? current.person.address?.state?.value;
   (input.programs ?? []).forEach((prog, i) => {
+    const state = prog.state ?? livesIn;
     const id =
       refIn(current.programs, prog.ref, "programs") ??
-      current.programs.find((e) => prog.program && same(e.program?.value, prog.program) && (!prog.state || same(e.state?.value, prog.state)))?.id ??
-      newRef(turnId, "programs", i, `${prog.program ?? ""}\n${prog.state ?? ""}`);
-    const name = prog.program ?? current.programs.find((e) => e.id === id)?.program?.value ?? "program";
+      current.programs.find((e) => prog.program && same(e.program?.value, prog.program) && (!state || !e.state || same(e.state.value, state)))?.id ??
+      newRef(turnId, "programs", i, `${prog.program ?? ""}\n${state ?? ""}`);
+    const stored = current.programs.find((e) => e.id === id);
+    const name = prog.program ?? stored?.program?.value ?? "program";
     set(`programs.${id}.program`, prog.program, name);
-    set(`programs.${id}.state`, prog.state, `${name} state`);
+    set(`programs.${id}.state`, prog.state ?? (prog.caseNumber && !stored?.state ? livesIn : undefined), `${name} state`);
     set(`programs.${id}.caseNumber`, prog.caseNumber, `${name} case number`);
     set(`programs.${id}.status`, prog.status, `${name} status`);
   });
+
+  // Forget always wins: nothing is written back under what they forgot. A
+  // member they both forgot and named leaves the list unsettled, so it is
+  // not confirmed and the size is asked.
+  const forgotten = Object.keys(fields).filter((path) => fields[path] === null);
+  for (const path of Object.keys(fields)) {
+    if (fields[path] === null || !forgotten.some((gone) => path === gone || path.startsWith(`${gone}.`))) continue;
+    delete fields[path];
+    if (path.startsWith("household.")) delete fields["person.householdConfirmed"];
+  }
+
+  // Any other change to their income ends a total they gave for a form. It
+  // goes silently: this is not something they asked to forget.
+  const total = `income.${STATED_TOTAL}`;
+  const incomeChanged = Object.keys(fields).some((path) => path.startsWith("income.") && !path.startsWith(total));
+  if (incomeChanged && current.income.some((e) => e.id === STATED_TOTAL)) {
+    fields[total] = null;
+    labels[total] = "";
+  }
 
   return { fields, labels };
 }
@@ -226,7 +247,8 @@ function addressOf(profile: Profile): string | null {
   const a = profile.person.address;
   const street = [a.line1?.value, a.line2?.value].filter(Boolean).join(" ");
   const cityLine = [a.city?.value, [a.state?.value, a.zip?.value].filter(Boolean).join(" ")].filter(Boolean).join(", ");
-  const text = [street, cityLine].filter(Boolean).join(", ");
+  // An address kept whole on its first line already names its state.
+  const text = !a.city && !a.zip && street ? street : [street, cityLine].filter(Boolean).join(", ");
   return text || null;
 }
 
@@ -277,12 +299,11 @@ export function confirmedByPerson(profile: Profile): boolean {
 }
 
 // How many live in the household, counting the person: a roster they
-// confirmed, else the number they gave, else unknown. Someone a document
-// named after they confirmed is not on the list they confirmed.
+// confirmed, else the number they gave, else unknown. A roster counts only
+// who they named: someone only a document or note named is not their word.
 export function householdSizeOf(profile: Profile): number | null {
-  const confirmed = profile.person.householdConfirmed;
-  if (confirmed && confirmedByPerson(profile)) {
-    return profile.household.filter((m) => m.name?.source === "person" || (m.name?.updatedAt ?? "") <= confirmed.updatedAt).length + 1;
+  if (confirmedByPerson(profile)) {
+    return profile.household.filter((m) => [m.name, m.relationship, m.dateOfBirth].some((leaf) => leaf?.source === "person")).length + 1;
   }
   return profile.person.householdSize?.value ?? null;
 }

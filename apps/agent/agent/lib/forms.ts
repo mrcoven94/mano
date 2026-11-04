@@ -11,10 +11,10 @@
 // changed to fit: a value that is missing, or does not fit its field,
 // becomes one plain question, asked in the form's order of importance.
 
-import type { RecipientId } from "@mano/protocol";
+import { isUsState, type RecipientId } from "@mano/protocol";
 
 import type { Frequency, Leaf, Profile } from "./engine.js";
-import { confirmedByPerson, householdSizeOf } from "./profile.js";
+import { STATED_TOTAL, confirmedByPerson, householdSizeOf } from "./profile.js";
 
 export interface FormField {
   // The form's own input name, which the filing carries.
@@ -41,8 +41,14 @@ export interface FormSpec {
   path: string;
   recipient: RecipientId;
   purpose: string;
-  // In the order Mano asks for them, most important first.
+  // In the form's own order, which is the order Mano asks for them, most
+  // important first, except asksFirst.
   fields: FormField[];
+  // Asked before the rest because another field depends on it.
+  asksFirst: string;
+  // The profile as one call's answers leave it, where one field depends on
+  // another.
+  answered(profile: Profile, answers: Record<string, string>): Profile;
   // The declaration the form ends with, word for word. Only the person
   // makes it, by their own YES to the question that shows it; Mano never
   // answers it for them.
@@ -103,26 +109,18 @@ function dollars(answer: string): string | null {
 
 const PER_MONTH: Record<Frequency, number> = { weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, yearly: 1 / 12 };
 
-// A value the person gave for a form stands until they change a fact it
-// summarizes. A document or a note ranks below their word, so neither
-// replaces it, however new.
-function stands(given: Leaf<unknown>, facts: (Leaf<unknown> | undefined)[]): boolean {
-  return !facts.some((f) => f?.source === "person" && f.updatedAt > given.updatedAt);
-}
-
-// The form asks for one household total. It is kept as its own entry and
-// never added to the others, which it already counts. Changed to anything
-// but monthly, it is an entry like the others.
-const STATED_TOTAL = "stated-monthly-total";
-
+// The form asks for one household total, kept as its own entry and never
+// added to the others, which it already counts. The person changing any
+// other entry retires it (profileChanges), so it never comes back; a document
+// or note ranks below their word and leaves it. Changed to anything but
+// monthly, it is an entry like the others.
 function incomeOnFile(profile: Profile): { stated: Leaf<number> | null; entries: Profile["income"] } {
   const own = profile.income.find((i) => i.id === STATED_TOTAL);
   if (own?.frequency?.value !== "monthly" || !own.amount) return { stated: null, entries: profile.income };
-  const entries = profile.income.filter((i) => i !== own);
-  return { stated: stands(own.amount, entries.flatMap((i) => [i.amount, i.frequency])) ? own.amount : null, entries };
+  return { stated: own.amount, entries: profile.income.filter((i) => i !== own) };
 }
 
-// The total the person gave, if it stands. Otherwise unknown unless every
+// The total the person gave. Otherwise unknown unless every
 // entry has an amount and how often it comes: a total that left one out
 // would understate the household's income.
 function monthlyIncome(profile: Profile): string | null {
@@ -151,49 +149,63 @@ function mailingAddress(profile: Profile): string | null {
   return [a.line1.value, a.line2?.value, a.city.value, `${a.state.value} ${a.zip.value}`].filter(Boolean).join(", ");
 }
 
+// The state an address names: its own part, or two capitals before the ZIP
+// when it has no commas ("Ct" in "12 Oak Ct 93721" is a street).
+function stateIn(address: string): string | null {
+  const code = ADDRESS_PARTS.exec(address)?.[4] ?? /\b([A-Z]{2}),? \d{5}(?:-\d{4})?$/.exec(address)?.[1];
+  return code && isUsState(code) ? code.toUpperCase() : null;
+}
+
 // Nothing without a ZIP: part of an address must not replace a whole one.
 function addressFields(value: string): ProfileFields {
   if (!ENDS_IN_ZIP.test(value) || value.length > ADDRESS_LINE_MAX) return {};
-  const [, line1, line2, city, state, zip] = ADDRESS_PARTS.exec(value) ?? [];
   const at = (part: string) => `person.address.${part}`;
-  if (!line1) return { [at("line1")]: value, [at("line2")]: null, [at("city")]: null, [at("state")]: null, [at("zip")]: null };
-  return { [at("line1")]: line1, [at("line2")]: line2 ?? null, [at("city")]: city!, [at("state")]: state!, [at("zip")]: zip! };
+  const state = stateIn(value);
+  const [, line1, line2, city, , zip] = ADDRESS_PARTS.exec(value) ?? [];
+  if (!line1 || !state) return { [at("line1")]: value, [at("line2")]: null, [at("city")]: null, [at("state")]: state, [at("zip")]: null };
+  return { [at("line1")]: line1, [at("line2")]: line2 ?? null, [at("city")]: city!, [at("state")]: state, [at("zip")]: zip! };
+}
+
+// The profile as this call's answers leave it, for the state the case
+// number depends on. An address that names no state leaves the state unknown.
+function withAnsweredState(profile: Profile, answers: Record<string, string>): Profile {
+  const answer = Object.hasOwn(answers, "address") ? taken(answers.address!) : "";
+  if (!answer) return profile;
+  const { state: _onFile, ...address } = profile.person.address;
+  const state = stateIn(answer);
+  return { ...profile, person: { ...profile.person, address: state ? { ...address, state: { value: state, source: "person", updatedAt: "" } } : address } };
 }
 
 const FOOD_PROGRAM = /\b(snap|calfresh|food)\b/i;
-// The entry that keeps the number the person gave when no one case on file
-// is the one to write it to, so no other case is changed.
-const GIVEN_CASE = "food";
 
-// The food cases this renewal could be: none in another state than hers.
+// The person's food cases in the state on file. A case counts only for its
+// own state, so a number never reaches another state's filing: with the
+// state unknown, or a case with no state, the person is asked.
 function foodCases(profile: Profile): Profile["programs"] {
   const state = profile.person.address?.state?.value.toUpperCase();
-  return profile.programs.filter(
-    (p) => p.id !== GIVEN_CASE && p.program && FOOD_PROGRAM.test(p.program.value) && (!state || !p.state || p.state.value.toUpperCase() === state),
-  );
+  if (!state) return [];
+  return profile.programs.filter((p) => p.program && FOOD_PROGRAM.test(p.program.value) && p.state?.value.toUpperCase() === state);
 }
 
-function givenCase(profile: Profile): Leaf | null {
-  const given = profile.programs.find((p) => p.id === GIVEN_CASE)?.caseNumber;
-  return given && stands(given, foodCases(profile).map((p) => p.caseNumber)) ? given : null;
-}
-
-// The number she gave, if it stands, or the one number on her food cases.
 // Two different numbers are not chosen between; the person is asked.
 function foodCaseNumber(profile: Profile): string | null {
-  const given = givenCase(profile);
-  if (given) return given.value;
   const numbers = new Set(foodCases(profile).flatMap((p) => (p.caseNumber ? [p.caseNumber.value] : [])));
   return numbers.size === 1 ? [...numbers][0]! : null;
 }
 
-// Clearing an entry and setting it in one patch writes it as new even when
-// the value is the same, so the person restating it counts as their latest word.
+// The number goes on the one case for her state, or a case with no state,
+// which it then belongs to, or a new one. Nothing is kept where that is not
+// clear: the form still has the answer, and a later call asks.
 function caseNumberFields(value: string, profile: Profile): ProfileFields {
-  const given = `programs.${GIVEN_CASE}`;
+  const state = profile.person.address?.state?.value.toUpperCase();
+  if (!state) return {};
   const cases = foodCases(profile);
-  if (cases.length === 1) return { [`programs.${cases[0]!.id}.caseNumber`]: value, [given]: null };
-  return { [given]: null, [`${given}.program`]: "Food benefits", [`${given}.caseNumber`]: value };
+  if (cases.length > 1) return {};
+  if (cases[0]) return { [`programs.${cases[0].id}.caseNumber`]: value };
+  const stateless = profile.programs.filter((p) => p.program && FOOD_PROGRAM.test(p.program.value) && !p.state);
+  if (stateless.length === 1) return { [`programs.${stateless[0]!.id}.caseNumber`]: value, [`programs.${stateless[0]!.id}.state`]: state };
+  const id = `programs.food-${state.toLowerCase()}`;
+  return { [`${id}.program`]: "Food benefits", [`${id}.state`]: state, [`${id}.caseNumber`]: value };
 }
 
 // The pay stub or other document an income amount was read from.
@@ -206,6 +218,9 @@ const FOOD_RENEWAL: FormSpec = {
   path: "/apply",
   recipient: "sandbox-agency-portal",
   purpose: "Food benefits renewal",
+  answered: withAnsweredState,
+  // A case number counts only for its own state.
+  asksFirst: "address",
   fields: [
     // Which case this is and whose: the office cannot match a renewal without them.
     {
@@ -213,10 +228,7 @@ const FOOD_RENEWAL: FormSpec = {
       label: "Case number",
       question: "What is the case number on your renewal letter?",
       fromProfile: foodCaseNumber,
-      readFrom: (p) => {
-        const given = givenCase(p);
-        return given ? [given] : foodCases(p).map((c) => c.caseNumber);
-      },
+      readFrom: (p) => foodCases(p).map((c) => c.caseNumber),
       parse: trimmed(40),
       toProfile: caseNumberFields,
     },
@@ -266,10 +278,7 @@ const FOOD_RENEWAL: FormSpec = {
         return stated ? [stated] : entries.flatMap((i) => [i.amount, i.frequency]);
       },
       parse: dollars,
-      // Cleared and set in one patch, so restating the same total is written
-      // as new and stands over an entry that changed since.
       toProfile: (value) => ({
-        [`income.${STATED_TOTAL}`]: null,
         [`income.${STATED_TOTAL}.source`]: "Household total the person gave",
         [`income.${STATED_TOTAL}.amount`]: Number(value),
         [`income.${STATED_TOTAL}.frequency`]: "monthly",
@@ -339,10 +348,12 @@ export interface FilledForm {
 // Fills the form from the person's own answers first, then the profile.
 // A profile value that does not fit its field is asked about by name,
 // never shortened or changed to fit.
-export function fillFrom(form: FormSpec, profile: Profile, answers: Record<string, string>): FilledForm {
+export function fillFrom(form: FormSpec, saved: Profile, answers: Record<string, string>): FilledForm {
+  const profile = form.answered(saved, answers);
   const values: Record<string, string> = {};
   const invalid: FilledForm["invalid"] = [];
   let missing: FilledForm["missing"] = null;
+  let first: FilledForm["missing"] = null;
   for (const field of form.fields) {
     const ask = { name: field.name, label: field.label, question: field.question };
     const answer = Object.hasOwn(answers, field.name) ? answers[field.name] : undefined;
@@ -351,11 +362,14 @@ export function fillFrom(form: FormSpec, profile: Profile, answers: Record<strin
     const onFile = fromAnswer === null ? field.fromProfile(profile) : null;
     const value = fromAnswer ?? (onFile === null ? null : field.parse(onFile));
     if (value === null) {
-      missing ??= onFile === null ? ask : { ...ask, question: `I have ${onFile.trim()} as your ${field.label.toLowerCase()}, but it does not fit the form. ${field.question}` };
+      const asking = onFile === null ? ask : { ...ask, question: `I have ${onFile.trim()} as your ${field.label.toLowerCase()}, but it does not fit the form. ${field.question}` };
+      missing ??= asking;
+      if (field.name === form.asksFirst) first = asking;
       continue;
     }
     values[field.name] = value;
   }
+  missing = first ?? missing;
   const documentId = form.proof.fromProfile(profile);
   if (!documentId) missing ??= { name: "proof", label: form.proof.label, question: form.proof.question };
   return { values, documentId, missing, invalid };
@@ -365,7 +379,8 @@ export function fillFrom(form: FormSpec, profile: Profile, answers: Record<strin
 // every checked answer, unless the profile already gives that value as
 // their own word. One that only matches a document's value is still written,
 // so it becomes theirs and a later document can only suggest a change.
-export function answerChanges(form: FormSpec, profile: Profile, answers: Record<string, string>): { field: string; fields: ProfileFields }[] {
+export function answerChanges(form: FormSpec, saved: Profile, answers: Record<string, string>): { field: string; fields: ProfileFields }[] {
+  const profile = form.answered(saved, answers);
   return form.fields.flatMap((field) => {
     const answer = Object.hasOwn(answers, field.name) ? answers[field.name] : undefined;
     const value = answer === undefined ? null : field.parse(answer);

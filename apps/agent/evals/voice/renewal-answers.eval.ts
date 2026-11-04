@@ -10,7 +10,7 @@ const ANSWERS: [RegExp, string][] = [
   [/date of birth/i, "03/14/1985"],
   [/how many people/i, "3"],
   [/how much does your household earn/i, "1800"],
-  [/mailing address/i, "703 Frendle Path, Drelvessa, Kelvessa 00042"],
+  [/mailing address/i, "703 Frendle Path, Tacoma, WA 98401"],
   [/phone number/i, "(202) 555-0142"],
 ];
 
