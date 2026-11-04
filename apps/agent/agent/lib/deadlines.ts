@@ -9,6 +9,9 @@ import { createHash } from "node:crypto";
 
 import type { EngineDeadline } from "./engine.js";
 
+// Past this many days ahead a date gets a second look.
+const NEAR_DAYS = 183;
+
 export function localDate(atMs: number, timeZone: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(atMs));
 }
@@ -17,6 +20,51 @@ export function localDate(atMs: number, timeZone: string): string {
 export function todayLine(nowMs: number, timeZone: string): string {
   const today = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(new Date(nowMs));
   return `Today is ${today}, in the person's time zone. Work out every date and day from this, never from anything else you think you know about the year.`;
+}
+
+function isoDate(y: number, m: number, d: number): string | null {
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+const spoken = (date: string) => new Intl.DateTimeFormat("en-US", { timeZone: "UTC", year: "numeric", month: "long", day: "numeric" }).format(new Date(date));
+const SAY_THE_YEAR = "State the full date with its year so the person can correct it.";
+
+export type DueDate =
+  | { status: "save"; date: string; note: string | null }
+  | { status: "ask"; today: string; tell: string; question?: string };
+
+// The date a deadline tool may save, from the date the model passed and
+// today in the person's zone. The model has no reliable sense of the year
+// and Engine plans no nudges for a past date, so this is settled before
+// anything is written. A wrong reminder the person can correct is cheap;
+// a lost deadline is not, and what stays unclear goes to the person.
+export function resolveDueDate(due: string, nowMs: number, timeZone: string, yearConfirmed = false): DueDate {
+  const today = localDate(nowMs, timeZone);
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(due.trim())?.slice(1).map(Number);
+  const date = parts ? isoDate(parts[0]!, parts[1]!, parts[2]!) : null;
+  if (!parts || !date) {
+    return { status: "ask", today, tell: "Nothing was saved: due must be a real date written YYYY-MM-DD. Work it out from today's date. If a numeric date the person wrote could mean two days, ask which." };
+  }
+  if (yearConfirmed) return { status: "save", date, note: null };
+  const ask = (question: string): DueDate => ({
+    status: "ask",
+    today,
+    question,
+    tell: "Nothing was saved. Ask the person this, in their language. Once they answer with a date, call again with it and yearConfirmed true. If it already passed, it needs no deadline.",
+  });
+  const daysAhead = (d: string) => (Date.parse(d) - Date.parse(today)) / 86_400_000;
+  const thisYear = Number(today.slice(0, 4));
+  const thisYears = isoDate(thisYear, parts[1]!, parts[2]!);
+  if (date < today) {
+    const next = thisYears && thisYears >= today ? thisYears : isoDate(thisYear + 1, parts[1]!, parts[2]!);
+    if (next && daysAhead(next) <= NEAR_DAYS) return { status: "save", date: next, note: `Saved as the next such date, ${spoken(next)}. ${SAY_THE_YEAR}` };
+    return ask(next ? `${spoken(date)} has passed. Do you mean ${spoken(next)}, or has it already gone by?` : `${spoken(date)} has passed. What date do you mean?`);
+  }
+  if (daysAhead(date) <= NEAR_DAYS) return { status: "save", date, note: null };
+  if (thisYears && thisYears >= today && thisYears !== date) return ask(`Do you mean ${spoken(thisYears)} or ${spoken(date)}?`);
+  return { status: "save", date, note: `That is more than six months away. ${SAY_THE_YEAR}` };
 }
 
 // The words that name a task, without articles and filler, so "the
