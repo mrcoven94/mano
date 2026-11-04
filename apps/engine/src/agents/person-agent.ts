@@ -11,7 +11,8 @@ import {
   type MessageType,
 } from "@mano/protocol";
 import type { Env } from "../env.js";
-import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureDeliveryTable, ensureFaxSendTable, ensureGatewayTables, gatewayChecker, outboundProviders, OutboundRouter, outboundPricing, recordDeliveryEvent, rememberDeliveryRoute, SqlFaxSendLog, withOutboundPrice, type DeliveryEvent } from "../gateway/index.js";
+import { reportTryEvent } from "../try/ledger.js";
+import { APPROVAL_COLUMNS, ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureDeliveryTable, ensureFaxSendTable, ensureGatewayTables, gatewayChecker, outboundProviders, OutboundRouter, outboundPricing, recordDeliveryEvent, rememberDeliveryRoute, SqlFaxSendLog, withOutboundPrice, type DeliveryEvent } from "../gateway/index.js";
 import type { ActionRequest, Approval, CheckOutcome, ProposalOrder, Receipt } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
@@ -209,7 +210,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       this.store,
       this.executor,
       {
-        ...gatewayChecker(checkerSetting(env)),
+        ...gatewayChecker(checkerSetting(env), { trace: (event) => reportTryEvent(env, this.personId, event) }),
         listConsents: () => this.listStoredConsents(),
         documents: {
           getBytes: (documentId) => this.documentBytes(documentId),
@@ -347,7 +348,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
 
   private syncState(): void {
     this.closeExpiredSockets();
-    const approvals = this.db().exec("SELECT * FROM approvals ORDER BY created_at DESC").toArray()
+    const approvals = this.db().exec(`SELECT ${APPROVAL_COLUMNS} FROM approvals ORDER BY created_at DESC`).toArray()
       .map((r) => approvalFromRow(r as Record<string, unknown>));
     const reminders = this.db().exec("SELECT approval_id, reminded_at FROM approval_reminders").toArray() as unknown as {
       approval_id: string;
@@ -586,7 +587,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
 
   async listMemory(verified: string) {
     await this.assertSubject(verified);
-    return [...this.db().exec("SELECT * FROM memory ORDER BY created_at").toArray()];
+    return [...this.db().exec("SELECT id, content, source, created_at FROM memory ORDER BY created_at").toArray()];
   }
 
   // The person's profile (src/profile.ts). Null without the key that
@@ -1107,11 +1108,23 @@ export class PersonAgent extends Agent<Env, PersonState> {
       recovered: [] as { key: string; status: string }[],
     };
     out.recovered = (await this.recoverStrandedAttempts()).recovered;
+    // Only what the sweep reads: the frozen request stays unread.
+    const columns = "id, status, remind_at, expires_at, escalated, deadline_at";
     const rows = (
       input.approvalId
-        ? this.db().exec("SELECT * FROM approvals WHERE id = ?", input.approvalId).toArray()
-        : this.db().exec("SELECT * FROM approvals WHERE status = 'pending'").toArray()
-    ).map((r) => approvalFromRow(r as Record<string, unknown>));
+        ? this.db().exec(`SELECT ${columns} FROM approvals WHERE id = ?`, input.approvalId).toArray()
+        : this.db().exec(`SELECT ${columns} FROM approvals WHERE status = 'pending'`).toArray()
+    ).map((r) => {
+      const row = r as { id: string; status: string; remind_at: string; expires_at: string; escalated: number; deadline_at: string | null };
+      return {
+        id: row.id,
+        status: row.status,
+        remindAt: row.remind_at,
+        expiresAt: row.expires_at,
+        escalated: Number(row.escalated) === 1,
+        deadlineAt: row.deadline_at,
+      };
+    });
     for (const approval of rows) {
       if (approval.status !== "pending") continue;
       if (new Date(approval.expiresAt).getTime() <= nowMs) {
@@ -1130,7 +1143,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         }
       }
       if (!approval.escalated) {
-        const hoursLeft = hoursToDeadline(approval.requestJson, nowMs);
+        const hoursLeft = hoursToDeadline(approval.deadlineAt, nowMs);
         if (hoursLeft !== null && hoursLeft < 24) {
           if (this.store.escalateApproval(approval.id)) {
             this.store.audit({ event: "approval.escalated", approvalHash: await auditDigest(approval.id) });
@@ -1151,7 +1164,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // the receipt once one exists, so a caller can tell filed from unknown.
   async listApprovals(verified: string) {
     await this.assertSubject(verified);
-    const rows = this.db().exec("SELECT * FROM approvals ORDER BY created_at DESC").toArray();
+    const rows = this.db().exec(`SELECT ${APPROVAL_COLUMNS} FROM approvals ORDER BY created_at DESC`).toArray();
     return rows.map((r) => {
       const approval = approvalFromRow(r as Record<string, unknown>);
       const attempt = this.store.getAttempt(approval.idempotencyKey);
@@ -1665,12 +1678,7 @@ function requireOrgAgentId(value: string): string {
   return value;
 }
 
-function hoursToDeadline(requestJson: string, nowMs: number): number | null {
-  try {
-    const stored = JSON.parse(requestJson) as { deadlineAt?: string };
-    if (!stored.deadlineAt) return null;
-    return (new Date(stored.deadlineAt).getTime() - nowMs) / 3600_000;
-  } catch {
-    return null;
-  }
+function hoursToDeadline(deadlineAt: string | null, nowMs: number): number | null {
+  if (!deadlineAt) return null;
+  return (new Date(deadlineAt).getTime() - nowMs) / 3600_000;
 }

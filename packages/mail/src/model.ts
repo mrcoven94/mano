@@ -254,6 +254,7 @@ const FAILED_BECAUSE: Record<number, string> = {
   429: "rate limited",
 };
 const RUN_STATES = new Set(["failed", "incomplete", "cancelled", "queued", "in_progress"]);
+const TRAILING_SLASH = /\/$/;
 
 function failed(status: number): string {
   const why = FAILED_BECAUSE[status];
@@ -265,6 +266,8 @@ interface Transport {
   timeoutMs: number;
   maxRetries: number;
   fetchFn: typeof fetch;
+  // Set on Modal's route: a redirect must not carry a person's pages to another host.
+  redirect?: RequestRedirect;
 }
 
 function transportFrom(opts: { apiKey: string; timeoutMs?: number; maxRetries?: number; fetchFn?: typeof fetch }): Transport {
@@ -290,6 +293,7 @@ async function postJson(transport: Transport, url: string, body: unknown, deadli
     const timer = setTimeout(() => controller.abort(), Math.min(transport.timeoutMs, remaining));
     try {
       const res = await transport.fetchFn(url, {
+        ...(transport.redirect ? { redirect: transport.redirect } : {}),
         method: "POST",
         signal: controller.signal,
         headers: {
@@ -355,7 +359,7 @@ export class MetaModelClient implements ModelClient {
 
   constructor(opts: MetaClientOptions) {
     this.transport = transportFrom(opts);
-    this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
+    this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(TRAILING_SLASH, "");
     this.allowExtra = new Set(opts.allowExtra ?? []);
     this.synthetic = opts.synthetic ?? false;
   }
@@ -483,6 +487,7 @@ export class OpenWeightModelClient implements ModelClient {
     const url = modalChatUrl(opts.modalUrl);
     if (!url) throw new Error("A Modal endpoint URL must be https on Modal's own domain.");
     this.route = { url, model: MODAL_OPEN_WEIGHT_MODEL, pin: {} };
+    this.transport = { ...this.transport, redirect: "error" };
     if (opts.backupApiKey) {
       this.backup = new OpenWeightModelClient({ apiKey: opts.backupApiKey, ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}) });
       // One short try, so the backup has time inside the file's budget.

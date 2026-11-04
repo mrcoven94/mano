@@ -356,7 +356,7 @@ export async function sweepExpiredFiles(files: FileStore, nowMs: number): Promis
 // outbound path under the generation the reminder was set in. Terminal
 // outcomes answer 200 {sent:false, reason} with a non-empty reason, so
 // Engine drops them; budget (429) and anything uncertain ask it to retry.
-export async function handleAgentSend(request: Request, env: Env): Promise<Response> {
+export async function handleAgentSend(request: Request, env: Env, path = new URL(request.url).pathname): Promise<Response> {
   const started = Date.now();
   const logger = createLogger();
   const rawBytes = new Uint8Array(await request.arrayBuffer());
@@ -364,7 +364,7 @@ export async function handleAgentSend(request: Request, env: Env): Promise<Respo
     env.MANO_ENGINE_SEND_SECRET,
     {
       method: request.method.toUpperCase(),
-      path: new URL(request.url).pathname,
+      path,
       timestamp: request.headers.get(ENGINE_SEND_TIMESTAMP_HEADER),
       signature: request.headers.get(ENGINE_SEND_SIGNATURE_HEADER),
       body: rawBytes,
@@ -424,7 +424,7 @@ export default {
       return handleWebhook(request, env);
     }
     if (request.method === "POST" && url.pathname === AGENT_SEND_PATH) {
-      return handleAgentSend(request, env);
+      return handleAgentSend(request, env, url.pathname);
     }
     // Local end-to-end runs only: deletes one conversation by its handle.
     // Exists only when MANO_DEV_ROUTES is "1", which no deployment sets.

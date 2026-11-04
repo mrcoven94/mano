@@ -276,6 +276,9 @@ export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKe
       };
 }
 
+// On Modal's route a redirect must not carry a person's words to another host.
+const refuseRedirects: typeof fetch = (input, init) => globalThis.fetch(input, { ...init, redirect: "error" });
+
 // How long Modal may take to start answering when a backup is waiting. Once a
 // response starts, nothing here limits it.
 const MODAL_START_LIMIT_MS = 30_000;
@@ -289,7 +292,7 @@ function limitedStart(limitMs: number): typeof fetch {
     const limit = new AbortController();
     const timer = setTimeout(() => limit.abort(new ModalStartTimeout()), limitMs);
     try {
-      return await globalThis.fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, limit.signal]) : limit.signal });
+      return await refuseRedirects(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, limit.signal]) : limit.signal });
     } finally {
       clearTimeout(timer);
     }
@@ -351,7 +354,7 @@ export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageM
       middleware: meteringMiddleware({ modelId: r.modelId, provider: r.name, bodyExtra: r.bodyExtra, recorder, now: opts.now ?? Date.now }),
     });
   const backupKey = route.name === "modal" ? process.env.OPENROUTER_API_KEY : undefined;
-  if (!backupKey) return { model: metered(route), modelId: route.modelId };
+  if (!backupKey) return { model: metered(route, route.name === "modal" ? refuseRedirects : undefined), modelId: route.modelId };
   const backup = metered({ name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: backupKey, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY });
   return { model: wrapLanguageModel({ model: metered(route, limitedStart(MODAL_START_LIMIT_MS)), middleware: backupMiddleware(backup) }), modelId: route.modelId };
 }

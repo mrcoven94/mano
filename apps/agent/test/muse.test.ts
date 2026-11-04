@@ -258,6 +258,17 @@ describe("OpenRouter as Modal's backup", () => {
     }
   });
 
+  it("refuses redirects on Modal's call with a backup waiting, and leaves OpenRouter's as it was", async () => {
+    settings();
+    const redirects: Array<RequestRedirect | undefined> = [];
+    vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
+      redirects.push(init?.redirect);
+      return String(url) === MODAL_URL ? new Response("{}", { status: 503 }) : completion();
+    });
+    await generateText({ model: createMuseModel().model, prompt: "hello", maxRetries: 0 });
+    expect(redirects).toEqual(["error", undefined]);
+  });
+
   it("does not touch OpenRouter when Modal answers, and logs that route", async () => {
     settings();
     const calls = script(() => completion());
@@ -320,9 +331,11 @@ describe("OpenRouter switch", () => {
     vi.stubEnv("MODAL_PROXY_TOKEN", "wk-test.ws-test");
     const urls: string[] = [];
     let authorization: string | null = null;
+    let redirect: RequestRedirect | undefined;
     vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
       urls.push(String(url));
       authorization = new Headers(init?.headers).get("authorization");
+      redirect = init?.redirect;
       bodies.push(JSON.parse(String(init?.body ?? "{}")));
       return completion();
     });
@@ -331,6 +344,7 @@ describe("OpenRouter switch", () => {
     expect(modelId).toBe("meta-models/Muse-Spark-Open-816B-A42B");
     expect(urls[0]).toBe("https://example--ep-test-server.us-west.modal.direct/v1/chat/completions");
     expect(authorization).toBe("Bearer wk-test.ws-test");
+    expect(redirect).toBe("error");
     expect(bodies[0].model).toBe("meta-models/Muse-Spark-Open-816B-A42B");
     expect(bodies[0].reasoning).toEqual({ effort: "low" });
     expect(bodies[0].provider).toBeUndefined();

@@ -62,6 +62,9 @@ const DEFAULT_DEADLINE_MS = 60_000;
 const DEFAULT_MODEL = "muse-spark-1.3";
 const CLOSE_WAIT_MS = 3_000;
 const READ_TIMEOUT_MS = 10_000;
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const TRAILING_SLASH = /\/$/;
+const REJECTED_PREFIX = /^REJECTED:\s*/i;
 
 // The computer and model this deployment fills forms with, or why there is none.
 export function fillDepsFromEnv(personId: string, env: NodeJS.ProcessEnv = process.env): FillDeps | { unavailable: string } {
@@ -93,7 +96,7 @@ export function fillDepsFromEnv(personId: string, env: NodeJS.ProcessEnv = proce
 
 // What the person's values look like typed into the form.
 export function typedValue(name: string, value: string): string {
-  const iso = name === "dateOfBirth" ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(value) : null;
+  const iso = name === "dateOfBirth" ? ISO_DATE.exec(value) : null;
   return iso ? `${iso[2]}/${iso[3]}/${iso[1]}` : value;
 }
 
@@ -162,7 +165,7 @@ class DraftReadFailed extends Error {
 
 // The draft as the portal saved it, or null when it has none by this id.
 async function readDraft(portalUrl: string, id: string, deps: FillDeps): Promise<Record<string, string> | null> {
-  const res = await (deps.portalFetch ?? globalThis.fetch)(`${portalUrl.replace(/\/$/, "")}/drafts/${id}`, {
+  const res = await (deps.portalFetch ?? globalThis.fetch)(`${portalUrl.replace(TRAILING_SLASH, "")}/drafts/${id}`, {
     headers: { authorization: `Bearer ${deps.draftToken}` },
     signal: AbortSignal.timeout(READ_TIMEOUT_MS),
   });
@@ -186,7 +189,7 @@ export async function fillOnComputer(form: FormSpec, values: Record<string, stri
   });
   try {
     const run = (async (): Promise<FillOutcome> => {
-      const page = new URL(`${portalUrl.replace(/\/$/, "")}${form.path}`);
+      const page = new URL(`${portalUrl.replace(TRAILING_SLASH, "")}${form.path}`);
       page.searchParams.set("draft", draftId);
       await computer.goto(page.toString());
       const outcome = await runLoop(computer, deps.model, taskText(form, values), {
@@ -198,7 +201,7 @@ export async function fillOnComputer(form: FormSpec, values: Record<string, stri
       if (outcome.status === "safety_check") return { status: "safety_check", codes: outcome.checks.map((c) => c.code), steps: outcome.steps, ms: ms() };
       if (outcome.status !== "done") return { status: "failed", reason: outcome.status, ms: ms() };
       const reply = outcome.message.trim();
-      if (/^REJECTED:/i.test(reply)) return { status: "rejected", message: reply.replace(/^REJECTED:\s*/i, ""), steps: outcome.steps, ms: ms() };
+      if (REJECTED_PREFIX.test(reply)) return { status: "rejected", message: reply.replace(REJECTED_PREFIX, ""), steps: outcome.steps, ms: ms() };
       // What the person approves is what the portal saved, field for field.
       const saved = await readDraft(portalUrl, draftId, deps);
       if (!saved) return { status: "failed", reason: "no draft saved", ms: ms() };

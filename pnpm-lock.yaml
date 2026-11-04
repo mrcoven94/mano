@@ -245,6 +245,9 @@ importers:
       '@mano/accounts':
         specifier: workspace:*
         version: link:../../packages/accounts
+      '@mano/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@mano/quality':
         specifier: workspace:*
         version: link:../../packages/quality

@@ -19,6 +19,12 @@ export interface HandleGrantClaims {
 export const HANDLE_GRANT_MAX_TTL_SECONDS = 900;
 const HANDLE_HASH = /^[0-9a-f]{64}$/;
 const MAC_PREFIX = "mano-handle-grant:v1.";
+const HANDLE_PERSON_ID = /^handle-([0-9a-f]{64})$/;
+const BASE64_PLUS = /\+/g;
+const BASE64_SLASH = /\//g;
+const BASE64_PADDING = /=+$/;
+const BASE64URL_DASH = /-/g;
+const BASE64URL_UNDERSCORE = /_/g;
 
 // The engine person a handle maps to. The agent builds route paths with
 // it; the engine accepts a grant only on this person's routes.
@@ -29,18 +35,18 @@ export function personIdForHandle(handleHash: string): string {
 
 // The handle hash behind a handle person, or null for any other person.
 export function handleForPersonId(personId: string): string | null {
-  const match = /^handle-([0-9a-f]{64})$/.exec(personId);
+  const match = HANDLE_PERSON_ID.exec(personId);
   return match ? match[1] : null;
 }
 
 function b64urlEncode(bytes: Uint8Array): string {
   let s = "";
   for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(s).replace(BASE64_PLUS, "-").replace(BASE64_SLASH, "_").replace(BASE64_PADDING, "");
 }
 
 function b64urlDecode(s: string): Uint8Array {
-  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+  const bin = atob(s.replace(BASE64URL_DASH, "+").replace(BASE64URL_UNDERSCORE, "/"));
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;

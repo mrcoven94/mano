@@ -80,8 +80,11 @@ const FORGET_TARGETS: Record<string, string> = {
 };
 export const FORGET_NAMES = Object.keys(FORGET_TARGETS);
 
+const WHITESPACE_RUN = /\s+/g;
+const SELF_WORD = /^(self|me|myself)$/i;
+
 const same = (a: string | undefined, b: string | undefined) =>
-  (a ?? "").trim().toLowerCase().replace(/\s+/g, " ") === (b ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  (a ?? "").trim().toLowerCase().replace(WHITESPACE_RUN, " ") === (b ?? "").trim().toLowerCase().replace(WHITESPACE_RUN, " ");
 
 function newRef(turnId: string, collection: string, index: number, key: string): string {
   return `${collection.slice(0, 1)}${createHash("sha256").update(`${turnId}\n${collection}\n${index}\n${key}`).digest("hex").slice(0, 10)}`;
@@ -182,7 +185,7 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
     if (inc.member) {
       const who = inc.member.trim();
       const byName = members.filter((m) => same(m.name?.value, who));
-      if (/^(self|me|myself)$/i.test(who)) memberId = "self";
+      if (SELF_WORD.test(who)) memberId = "self";
       else if (members.some((m) => m.id === who)) memberId = who;
       else if (byName.length === 1) memberId = byName[0].id;
       else if (byName.length > 1) throw new ProfileInputProblem(`More than one household member is named ${who}. Pass the member's ref instead.`);
@@ -412,12 +415,12 @@ export function profileDataBlock(view: ProfileView): string | null {
   ].join("\n");
 }
 
-// The block for this turn, or null when there is nothing on file or the
-// profile cannot be read within timeoutMs (the turn goes on without it).
-export async function profileContext(engine: PersonEngine, timeoutMs?: number): Promise<string | null> {
+// The profile for this turn, or null when it cannot be read within
+// timeoutMs (the turn goes on without it).
+export async function readProfileView(engine: PersonEngine, timeoutMs?: number): Promise<ProfileView | null> {
   if (timeoutMs !== undefined && timeoutMs <= 0) return null;
   try {
-    return profileDataBlock(await engine.getProfileView(timeoutMs));
+    return await engine.getProfileView(timeoutMs);
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_profile_read_failed", err: err instanceof Error ? err.name : "unknown" }));
     return null;

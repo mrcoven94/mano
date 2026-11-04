@@ -62,10 +62,20 @@ export interface FormSpec {
   proof: { label: string; question: string; fromProfile(profile: Profile): string | null };
 }
 
+const WHITESPACE_RUN = /\s+/g;
+const ISO_DATE = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
+const US_DATE = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+const NON_DIGITS = /\D/g;
+const WHOLE_NUMBER = /^\d+$/;
+const LEADING_DOLLAR = /^\$/;
+const COMMAS = /,/g;
+const DOLLAR_AMOUNT = /^\d+(\.\d{1,2})?$/;
+const TRAILING_SLASH = /\/$/;
+
 // The text line shows a run of spaces as one, so a value is taken that way
 // before it is checked: what the question shows is what is filed.
 function taken(answer: string): string {
-  return answer.trim().replace(/\s+/g, " ");
+  return answer.trim().replace(WHITESPACE_RUN, " ");
 }
 
 // One line of text of at most max characters.
@@ -79,8 +89,8 @@ function trimmed(max: number) {
 function isoDate(answer: string): string | null {
   const v = answer.trim();
   let y: number, m: number, d: number;
-  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(v);
-  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v);
+  const iso = ISO_DATE.exec(v);
+  const us = US_DATE.exec(v);
   if (iso) [y, m, d] = [Number(iso[1]), Number(iso[2]), Number(iso[3])];
   else if (us) [y, m, d] = [Number(us[3]), Number(us[1]), Number(us[2])];
   else return null;
@@ -92,22 +102,22 @@ function isoDate(answer: string): string | null {
 
 function phone(answer: string): string | null {
   const v = taken(answer);
-  const digits = v.replace(/\D/g, "");
+  const digits = v.replace(NON_DIGITS, "");
   return digits.length === 10 || (digits.length === 11 && digits.startsWith("1")) ? v : null;
 }
 
 function wholeNumber(min: number, max: number) {
   return (answer: string) => {
     const v = answer.trim();
-    if (!/^\d+$/.test(v)) return null;
+    if (!WHOLE_NUMBER.test(v)) return null;
     const n = Number(v);
     return n >= min && n <= max ? String(n) : null;
   };
 }
 
 function dollars(answer: string): string | null {
-  const v = answer.trim().replace(/^\$/, "").replace(/,/g, "");
-  if (!/^\d+(\.\d{1,2})?$/.test(v)) return null;
+  const v = answer.trim().replace(LEADING_DOLLAR, "").replace(COMMAS, "");
+  if (!DOLLAR_AMOUNT.test(v)) return null;
   return String(Number(v));
 }
 
@@ -349,7 +359,7 @@ export function resolveForm(ref: string, portalUrl: string | null): FormSpec | n
     return null;
   }
   if (url.origin !== portal.origin) return null;
-  return Object.values(FORMS).find((f) => url.pathname.replace(/\/$/, "") === f.path) ?? null;
+  return Object.values(FORMS).find((f) => url.pathname.replace(TRAILING_SLASH, "") === f.path) ?? null;
 }
 
 export interface FilledForm {

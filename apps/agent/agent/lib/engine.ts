@@ -10,6 +10,8 @@ import { engineRoute } from "./timings.js";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 export const HANDLE_GRANT_HEADER = "x-mano-handle-grant";
+const TRAILING_SLASH = /\/$/;
+const FILL_PAGE_PATH = /^\/fill\/[0-9a-f]{32}$/;
 
 const boundFetch: typeof fetch = (...args) => globalThis.fetch(...args);
 
@@ -21,7 +23,7 @@ export interface EngineConfig {
 
 export function engineConfigFromEnv(env: NodeJS.ProcessEnv = process.env): EngineConfig | null {
   if (!env.ENGINE_URL || !env.MANO_ENGINE_AGENT_TOKEN) return null;
-  return { baseUrl: env.ENGINE_URL.replace(/\/$/, ""), agentToken: env.MANO_ENGINE_AGENT_TOKEN };
+  return { baseUrl: env.ENGINE_URL.replace(TRAILING_SLASH, ""), agentToken: env.MANO_ENGINE_AGENT_TOKEN };
 }
 
 // The Engine person a Channels handle maps to (Engine accepts a grant
@@ -619,7 +621,7 @@ export class PersonEngine {
   // address this agent uses, which is the one the person can open too.
   private linkFrom(body: unknown): string | null {
     const path = (body as { path?: unknown } | null)?.path;
-    return typeof path === "string" && /^\/fill\/[0-9a-f]{32}$/.test(path) ? `${this.cfg.baseUrl}${path}` : null;
+    return typeof path === "string" && FILL_PAGE_PATH.test(path) ? `${this.cfg.baseUrl}${path}` : null;
   }
 
   // A photo Channels stored for this person, or null when Engine has none.

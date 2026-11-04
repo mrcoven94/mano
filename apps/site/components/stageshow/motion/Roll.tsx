@@ -3,6 +3,13 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { useReducedMotion } from '../reduced-motion'
 import './Roll.css'
 
+const FLEX_DISPLAY = /flex/
+const END_TEXT_ALIGN = /right|end/
+const END_JUSTIFY = /space-between|flex-end|^end/
+const NUMERIC_CHANGE = /^[\d.,$€£%+\-−\s]*$/
+const WHITESPACE = /\s/
+const AFTER_WHITESPACE = /(?<=\s)/
+
 /**
  * Text that rolls when it changes. Only the part that differs moves: in
  * "$0.01 per 1,000" to "$0.0098 per 1,000", "$0.0" and " per 1,000" hold still
@@ -74,7 +81,7 @@ function RollNow({
     const parent = box.parentElement
     if (!parent) return
     const p = getComputedStyle(parent)
-    const flex = /flex/.test(p.display) && p.flexDirection.startsWith('row')
+    const flex = FLEX_DISPLAY.test(p.display) && p.flexDirection.startsWith('row')
     // Pushed to the right edge by an auto margin (or anything else) reads the
     // same from the layout: flush with the row's end, slack before it
     const pushed = () => {
@@ -86,8 +93,8 @@ function RollNow({
       return flush && slack > 1
     }
     const end =
-      /right|end/.test(getComputedStyle(el).textAlign) ||
-      (flex && box === parent.lastElementChild && (/space-between|flex-end|^end/.test(p.justifyContent) || pushed()))
+      END_TEXT_ALIGN.test(getComputedStyle(el).textAlign) ||
+      (flex && box === parent.lastElementChild && (END_JUSTIFY.test(p.justifyContent) || pushed()))
     setSide(end ? 'end' : 'start')
   }, [align])
   useEffect(() => {
@@ -104,9 +111,9 @@ function RollNow({
     while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++
     // Digits can change one at a time; words can't. Snap a wordy change out to
     // whole words.
-    const numeric = /^[\d.,$€£%+\-−\s]*$/.test(a.slice(head, a.length - tail) + b.slice(head, b.length - tail))
+    const numeric = NUMERIC_CHANGE.test(a.slice(head, a.length - tail) + b.slice(head, b.length - tail))
     if (!numeric) {
-      const space = (c: string | undefined) => c === undefined || /\s/.test(c)
+      const space = (c: string | undefined) => c === undefined || WHITESPACE.test(c)
       while (head > 0 && !space(b[head - 1]) && !space(b[head])) head--
       while (tail > 0 && !space(b[b.length - tail - 1]) && !space(b[b.length - tail])) tail--
     }
@@ -164,7 +171,7 @@ function RollNow({
     : view
   const now = text.slice(head, text.length - tail)
   // Characters for numbers, whole words (with their spaces) for text
-  const units = numeric ? now.split('') : now.split(/(?<=\s)/)
+  const units = numeric ? now.split('') : now.split(AFTER_WHITESPACE)
   return (
     <span ref={root} className={`ss-roll${className ? ` ${className}` : ''}`} data-variant={variant} data-align={side} style={style}>
       {text.slice(0, head)}

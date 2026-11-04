@@ -10,7 +10,7 @@ import { BANNER_ATTR, BANNER_KEY, SMS_HREF, SMS_NUMBER } from "@/lib/site";
 
 export default function RenewalBanner() {
   const path = usePathname();
-  if (path === "/" || path === "/renewals") return null;
+  if (path === "/" || path === "/renewals" || path === "/try") return null;
 
   const dismiss = () => {
     document.documentElement.setAttribute(BANNER_ATTR, "");

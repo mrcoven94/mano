@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { answerReading, gateSentence, readMail } from "../src/index.js";
+import { ANSWER_WORDS, REPLY_LANGUAGES, answerReading, gateSentence, readMail } from "../src/index.js";
 import {
   DOUBTFUL_PAGE,
   PLANTED_DEADLINE,
@@ -402,5 +402,34 @@ describe("answerReading builds the reply from closed fields only", () => {
     expect(answer.outcome).toBe("unread");
     expect(answer.text).toMatch(/could not/i);
     expect(answer.text).toMatch(/again/i);
+  });
+});
+
+describe("the answer in the person's language", () => {
+  async function reading(pages: string[]) {
+    return readMail([{ bytes: await letterPhoto(), mimeType: "image/jpeg", name: "doc-1" }], { personId: "p1", synthetic: true, model: recordedReader(pages) });
+  }
+
+  it.each([
+    ["es", "Vence el 20 de noviembre de 2026.", "Esta carta parece una estafa."],
+    ["vi", "Hạn chót là ngày 20 tháng 11 năm 2026.", "Thư này có vẻ là lừa đảo."],
+    ["tl", "Ang huling araw ay Nobyembre 20, 2026.", "Mukhang scam ang sulat na ito."],
+  ] as const)("%s says the same date and the same warning, in closed words", async (language, due, scam) => {
+    const real = answerReading(await reading([RENEWAL_PAGE]), language);
+    expect(real.text).toContain(due);
+    expect(real.text).toContain("Medi-Cal");
+    // What Mano holds does not change with the language it speaks.
+    expect(real.deadlines).toEqual(answerReading(await reading([RENEWAL_PAGE])).deadlines);
+    expect(answerReading(await reading([SCAM_PAGE]), language).text).toContain(scam);
+    expect(answerReading(await reading([PLANTED_PAGE]), language).text).not.toContain(PLANTED_INSTRUCTION);
+  });
+
+  it("every language says every line, so a missing one is a type error and not an English sentence", () => {
+    for (const language of REPLY_LANGUAGES) {
+      const w = ANSWER_WORDS[language];
+      for (const value of Object.values(w)) expect(value).toBeTruthy();
+      expect(Object.keys(w.categories)).toHaveLength(8);
+      expect(Object.keys(w.letterType)).toHaveLength(8);
+    }
   });
 });
