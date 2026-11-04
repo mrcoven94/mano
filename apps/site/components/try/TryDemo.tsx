@@ -33,6 +33,13 @@ const STUMPS: { key: TryScenario; name: string; text: string; lead?: boolean }[]
   { key: "changed", name: "Change the document", text: "Maria's filing, but pressing YES first changes one byte of the document she saw." },
 ];
 
+/* Only samples that gave the expected answer on production. The pay stub is not here: it was read as a letter. */
+const DOCUMENTS: { key: TryScenario; name: string; text: string }[] = [
+  { key: "bill", name: "A utility bill", text: "What does Mano call it?" },
+  { key: "wrong", name: "The wrong document", text: "The office asked for proof of income, and Maria has a utility bill." },
+  { key: "blurry", name: "A blurry pay stub", text: "Too blurred to read. Does Mano guess?" },
+];
+
 const REFUSED = {
   paused: "The demo is paused for today. It has used its daily limit of live runs.",
   rate: "This address has started too many runs in the last hour. Try again later.",
@@ -43,6 +50,8 @@ const REFUSED = {
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 const seconds = (ms: number) => `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 const dateWords = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+
+const paper = (letter: string) => (letter === "bill" || letter === "stub" || letter === "blurry" ? "document" : "letter");
 
 function screenUrl(n: number, runId: string | null, source: Source): string {
   if (source.kind === "recording") return `/try/recording/${n}.png`;
@@ -64,8 +73,8 @@ function Step({ event }: { event: TryLogged }) {
   switch (event.kind) {
     case "sent":
       return event.letter && !event.text
-        ? <p className="bub me">Maria sends a photo of the letter.</p>
-        : <p className="bub me">{event.letter ? `Photo of the letter. ${event.text}` : event.text}</p>;
+        ? <p className="bub me">Maria sends a photo of the {paper(event.letter)}.</p>
+        : <p className="bub me">{event.letter ? `Photo of the ${paper(event.letter)}. ${event.text}` : event.text}</p>;
     case "reply":
       return (
         <div className="bub-row">
@@ -207,6 +216,21 @@ export default function TryDemo() {
             {STUMPS.map((s) => (
               <li key={s.key}>
                 <button className="try-stump-btn" data-lead={s.lead || undefined} onClick={() => run.start(s.key)} disabled={busy || off || paused}>
+                  <b>{s.name}</b>
+                  <span>{s.text}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section className="try-stump" aria-labelledby="try-docs-h">
+          <h2 id="try-docs-h">Send a document</h2>
+          <p className="try-docs-note">An automated check on a made-up document. The office still decides.</p>
+          <ul>
+            {DOCUMENTS.map((s) => (
+              <li key={s.key}>
+                <button className="try-stump-btn" onClick={() => run.start(s.key)} disabled={busy || off || paused}>
                   <b>{s.name}</b>
                   <span>{s.text}</span>
                 </button>
