@@ -98,6 +98,9 @@ const COMPUTER_TOOL = Object.freeze({
   },
 });
 
+// Other computer-use actions a model may reach for, which this tool does not offer.
+const KNOWN_ACTIONS = new Set(["left_click", "right_click", "middle_click", "triple_click", "move", "mouse_move", "drag", "left_click_drag", "hover", "key", "press", "hotkey", "zoom", "cursor_position", "navigate", "goto", "open_url", "back", "forward", "select", "clear", "fill", "focus", "submit"]);
+
 // Every failure below is a fixed string: what the model sent can echo the
 // person's values, and errors get logged. Keys are checked by the loop, which
 // holds the list for both model paths.
@@ -132,6 +135,9 @@ function parseAction(raw: unknown): ComputerAction {
     case "screenshot":
       return { type: "screenshot" };
     default:
+      // Named only when it is a known action: what the model sent can echo the
+      // person's values, and a fill's error reaches the log as a bare "error".
+      console.warn(JSON.stringify({ type: "mano_computer_unknown_action", action: KNOWN_ACTIONS.has(String(a["type"])) ? a["type"] : "other" }));
       throw new Error("the model sent an action the computer tool does not have");
   }
 }
