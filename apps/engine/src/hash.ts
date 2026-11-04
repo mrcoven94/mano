@@ -10,8 +10,10 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(s);
 }
 
+const BASE64_CHARS = /^[A-Za-z0-9+/=]+$/;
+
 export function base64ToBytes(s: string): Uint8Array {
-  if (typeof s !== "string" || s.length === 0 || s.length % 4 !== 0 || !/^[A-Za-z0-9+/=]+$/.test(s)) {
+  if (typeof s !== "string" || s.length === 0 || s.length % 4 !== 0 || !BASE64_CHARS.test(s)) {
     throw new Error("Not valid base64.");
   }
   const bin = atob(s);

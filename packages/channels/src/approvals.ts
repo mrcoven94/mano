@@ -2,13 +2,15 @@
 // and a code, answered with "YES <code>" or "NO <code>". This module only
 // parses the reply; the engine's gateway decides.
 
+const APPROVAL_REPLY_RE = /^(yes|no)\s+([A-Za-z0-9-]{4,32})$/i;
+
 export interface ApprovalReply {
   decision: "yes" | "no";
   code: string;
 }
 
 export function parseApprovalReply(text: string): ApprovalReply | null {
-  const match = text.trim().match(/^(yes|no)\s+([A-Za-z0-9-]{4,32})$/i);
+  const match = text.trim().match(APPROVAL_REPLY_RE);
   if (!match) return null;
   return { decision: match[1].toLowerCase() === "yes" ? "yes" : "no", code: match[2] };
 }

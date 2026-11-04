@@ -11,6 +11,7 @@ export const REQUIRED_FIELDS: Record<ProgramId, FactField[]> = {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PHONE_RE = /^(?:1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}$/;
+const WWW_PREFIX_RE = /^www\./;
 
 function hostOf(url: string): string | null {
   try {
@@ -22,7 +23,7 @@ function hostOf(url: string): string | null {
 }
 
 function onHost(host: string, site: string): boolean {
-  const s = site.toLowerCase().replace(/^www\./, "");
+  const s = site.toLowerCase().replace(WWW_PREFIX_RE, "");
   return host === s || host.endsWith(`.${s}`);
 }
 

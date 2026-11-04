@@ -23,6 +23,8 @@ import { viaAiGateway } from "./models.ts";
 import type { AnswerPath, BenchAnswer } from "./paths.ts";
 import type { BenchCase } from "./suites/types.ts";
 
+const CONTRIBUTOR_SUFFIX_RE = /-contributor$/i;
+
 // Who wrote a case's answers: the agent on every turn, the plain fallback on
 // every turn, a mix, the plain line with no agent, or the worker itself
 // (STOP, which no responder sees).
@@ -103,7 +105,7 @@ export class TextLine {
     this.crisisCheck =
       opts.crisisCheck !== undefined
         ? opts.crisisCheck
-        : opts.crisisCheckModel && !/-contributor$/i.test(opts.crisisCheckModel)
+        : opts.crisisCheckModel && !CONTRIBUTOR_SUFFIX_RE.test(opts.crisisCheckModel)
           ? new ModelCrisisCheck({
               apiKey: opts.apiKey,
               model: opts.crisisCheckModel,

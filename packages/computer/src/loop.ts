@@ -43,6 +43,9 @@ function dataUrl(png: Uint8Array): string {
 /** Stateless replay holds 29 call pairs; past that the server refuses. */
 const MAX_REPLAY_PAIRS = 29;
 
+const INFEASIBLE_RE = /^INFEASIBLE:/im;
+const CREDENTIALS_NEEDED_RE = /CREDENTIALS NEEDED/i;
+
 /**
  * Observe-act loop over the Responses API with store:false. Every turn replays
  * the full history (each computer_call verbatim, so replay receipts survive)
@@ -72,7 +75,7 @@ export async function runLoop(computer: Computer, model: ModelClient, task: stri
       const message = outputText(response.output);
       options.onTurn?.({ step: step + 1, message });
       // There is no live view to hand a login to, so a login ends the run.
-      const infeasible = /^INFEASIBLE:/im.test(message) || /CREDENTIALS NEEDED/i.test(message);
+      const infeasible = INFEASIBLE_RE.test(message) || CREDENTIALS_NEEDED_RE.test(message);
       return { status: infeasible ? "infeasible" : "done", message, steps: step + 1 };
     }
     const call: ComputerCall = calls[0]!;

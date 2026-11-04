@@ -44,7 +44,7 @@ export function ensureDeleteTable(sql: Sql): void {
 
 export function loadPendingDelete(sql: Sql): PendingDelete | null {
   ensureDeleteTable(sql);
-  const row = sql.exec("SELECT * FROM engine_delete WHERE slot = 1").toArray()[0] as
+  const row = sql.exec("SELECT handle_hash, generation, files_done, engine_done, agent_done, attempts, next_at_ms FROM engine_delete WHERE slot = 1").toArray()[0] as
     | {
         handle_hash: string;
         generation: number;

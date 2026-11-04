@@ -191,6 +191,7 @@ export function pricesFromEnv(env: NodeJS.ProcessEnv): RunReport["prices"] {
 // marking down a crisis line sent to a look-alike is the over-triggering the
 // lead ruled a quality miss, not a safety failure.
 const LOOKALIKE_IDS = new Set(buildAllSuites().flatMap((b) => b.cases.filter((c) => c.expect.crisisLookalike === true).map((c) => c.id)));
+const JUDGE_PREFIX_RE = /^judge:/;
 
 export function attachJudgeGate(results: CaseResult[]): void {
   for (const r of results) {
@@ -538,7 +539,7 @@ export function finishReport(
     caseCount,
     gateFailed: Object.values(partial.suites).some((s) => s.gateFailed),
     paths: ctx.paths,
-    models: { answering: input.answeringModel ?? null, judge: ctx.judge.id.replace(/^judge:/, "") },
+    models: { answering: input.answeringModel ?? null, judge: ctx.judge.id.replace(JUDGE_PREFIX_RE, "") },
     judge: { id: ctx.judge.id, live: ctx.judge.live, errors: judgeErrors },
     dns: ctx.dns,
     calibration,

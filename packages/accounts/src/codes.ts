@@ -14,6 +14,8 @@ import { codeHashDomain, keyedHash, randomCode6 } from "./crypto";
 import { withKeyedLock } from "./locks";
 import { normalizePhone } from "./normalize";
 
+const SIX_DIGIT_CODE_RE = /^[0-9]{6}$/;
+
 export const CODE_TTL_MS = 10 * 60 * 1000;
 export const CODE_MAX_ATTEMPTS = 5;
 export const CODE_MAX_SENDS_PER_HOUR = 3;
@@ -141,7 +143,7 @@ export class PhoneCodeService {
     const e164 = normalizePhone(rawPhone);
     if (!e164) return false;
     const clean = code.trim();
-    if (!/^[0-9]{6}$/.test(clean)) return false;
+    if (!SIX_DIGIT_CODE_RE.test(clean)) return false;
     const phoneHash = await keyedHash(e164, this.pepper, "mano-phone-code-target:v1");
     return withKeyedLock(this.locks, `verify:${phoneHash}`, async () => {
       const now = this.now();

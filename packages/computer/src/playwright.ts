@@ -4,6 +4,8 @@ import { join } from "node:path";
 import type { ComputerAction } from "./actions";
 import type { Computer, ComputerOptions } from "./computer";
 
+const UNSAFE_FILENAME_CHARS_RE = /[^a-zA-Z0-9._-]/g;
+
 /** Smallest page surface the stand-in needs. Playwright's Page satisfies it. */
 export interface MouseLike {
   click(x: number, y: number, options?: { button?: "left" | "right" | "middle"; clickCount?: number }): Promise<void>;
@@ -192,7 +194,7 @@ export class PlaywrightComputer implements Computer {
 
   async stageFile(name: string, data: Uint8Array): Promise<string> {
     if (!this.scratch) this.scratch = mkdtempSync(join(tmpdir(), "mano-computer-"));
-    const safe = name.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
+    const safe = name.replace(UNSAFE_FILENAME_CHARS_RE, "_") || "upload";
     const path = join(this.scratch, safe);
     writeFileSync(path, data);
     this.staged.push(path);
