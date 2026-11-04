@@ -14,6 +14,7 @@ import {
   MAX_OUTPUT_CHARS,
   OUTBOUND_RANK,
   PHOTO_FORMAT_TEXT,
+  VOICE_UNHEARD_TEXT,
   PHOTO_UNREAD_TEXT,
   PHOTO_UNSAVED_TEXT,
   ResponderFailed,
@@ -50,7 +51,7 @@ import {
   INTRO_BUBBLE,
   OPT_OUT_BUBBLE,
 } from "./text.js";
-import { attachmentDocumentId, fetchAttachment, loggableType, storedAgain, storedForm, type DocumentStore, type PhotoConverter } from "./files.js";
+import { attachmentDocumentId, fetchAttachment, isVoiceNote, loggableType, storedAgain, storedForm, type DocumentStore, type PhotoConverter } from "./files.js";
 
 // Cost per model ID for one turn, recorded in the ledger beside the total.
 export type ModelCosts = Record<string, number>;
@@ -981,7 +982,7 @@ export class ConversationRunner {
     // The decision was made once on the whole message before it was
     // split, and every chunk carries it. An item with no decision (a turn
     // persisted before decisions were stored) is a crisis, always.
-    const crisis = items.some((i) => i.crisis !== false);
+    let crisis = items.some((i) => i.crisis !== false);
     // A resumed turn with a persisted answer skips straight to sending
     // it: same keys, same text, no second model call.
     if (resumed?.answerJson) {
@@ -1001,7 +1002,7 @@ export class ConversationRunner {
     // ledger, attachments, any model), so 988 and 911 never wait on them.
     // Every path below opens its saved answer with this same bubble under
     // the same key, so it is sent once.
-    const crisisBubbles = crisis ? await this.finalize(turn, "", true, turnTextOf(texts)) : [];
+    let crisisBubbles = crisis ? await this.finalize(turn, "", true, turnTextOf(texts)) : [];
     const replyTo = inlineReplyTarget(items);
     if (replyTo && crisisBubbles[0]) crisisBubbles[0] = { ...crisisBubbles[0], replyTo };
     if (crisisBubbles.length > 0) {
@@ -1031,7 +1032,7 @@ export class ConversationRunner {
     // Chunks arrive under the cap by construction (buffer-time split
     // plus chunkByTextCap), so the join is never cut: every input
     // reaches the responder exactly once, across as many turns as needed.
-    const turnText = texts.join("\n");
+    let turnText = texts.join("\n");
     const history = this.history(meta.introduced);
     const historyChars = history.reduce((sum, h) => sum + h.text.length, 0);
     const { responder } = this.deps;
@@ -1101,7 +1102,27 @@ export class ConversationRunner {
       }, config.typingRefreshMs);
     }
     try {
-      const { photos: saved, unfileable } = await this.saveAttachments(turn, attachments, generation);
+      const { photos: stored, unfileable } = await this.saveAttachments(turn, attachments, generation);
+      const voiceNotes = stored.filter((d) => isVoiceNote(d.mimeType));
+      const saved = stored.filter((d) => !isVoiceNote(d.mimeType));
+      // What a voice note says is a text like any other, so it goes through
+      // the same crisis floor, and the crisis line still goes out first.
+      const heard = voiceNotes.length > 0 ? ((await this.deps.responder.listen?.(voiceNotes, generation)) ?? null) : null;
+      this.checkGeneration(generation);
+      if (voiceNotes.length > 0) logger.info("voice_note", { handle: this.logHandle(), turn, notes: voiceNotes.length, heard: heard !== null });
+      if (heard) {
+        turnText = (turnText ? `${turnText}\n${heard}` : heard).slice(0, TURN_TEXT_CAP);
+        if (!crisis) {
+          const gate = crisisGate(heard);
+          crisis = gate === "ask" ? (await decideCrisis(heard, this.deps.crisisCheck ?? null)).crisis : gate !== "none";
+          if (crisis) {
+            if (!meta.introduced) store.patchMeta({ introduced: true });
+            crisisBubbles = await this.finalize(turn, "", true, heard);
+            await this.sendBubbles(turn, crisisBubbles, chatId, to, 0, generation, epoch);
+            this.checkSendsResolved(turn, generation);
+          }
+        }
+      }
       // A photo kept as sent (no JPEG copy) can be read but not filed, so
       // the reply says so now instead of at filing time, in a bubble of
       // its own after the capped reply, so the cap never cuts it. Never on
@@ -1116,12 +1137,14 @@ export class ConversationRunner {
       // A photo with no words goes to the agent, which reads it. Without
       // a reader, or when it was not stored, a fixed line says so.
       const photoOnly = !turnText && attachments.length > 0;
-      const photoLine = !photoOnly ? null : saved.length === 0 ? PHOTO_UNSAVED_TEXT : this.deps.responder.readsPhotos ? null : PHOTO_UNREAD_TEXT;
+      // A voice note that was not heard, or never stored, says so plainly.
+      const voiceSent = voiceNotes.length > 0 || attachments.some((a) => a.mediaType && isVoiceNote(a.mediaType));
+      const photoLine = !photoOnly ? null : saved.length === 0 ? (voiceSent ? VOICE_UNHEARD_TEXT : PHOTO_UNSAVED_TEXT) : this.deps.responder.readsPhotos ? null : PHOTO_UNREAD_TEXT;
       if (turnText || (photoOnly && !photoLine)) {
         this.checkGeneration(generation);
         // The turn's latest message: what the agent orders a YES by.
         const receivedAtMs = Math.max(...items.map((i) => i.receivedAtMs));
-        const answer = await this.respondWithInterim(turn, turnText, history, attachments.length, saved, chatId, to, generation, crisis, receivedAtMs, () => eyes.put("deep"));
+        const answer = await this.respondWithInterim(turn, turnText, history, attachments.length - voiceNotes.length, saved, chatId, to, generation, crisis, receivedAtMs, heard !== null, () => eyes.put("deep"));
         stopEyesTimer();
         if (answer.ok) {
           // Links come out before splitting, and each final bubble is
@@ -1136,6 +1159,8 @@ export class ConversationRunner {
           const answered = await this.finalize(turn, answer.text, crisis, turnText);
           if (replyTo && answered[0]) answered[0] = { ...answered[0], replyTo };
           bubbles.push(...withFormat(answered));
+          // Words came with a voice note nobody could hear: say so after the reply.
+          if (voiceNotes.length > 0 && !heard && !crisis) bubbles.push({ part: Math.max(0, ...bubbles.map((b) => b.part)) + 1, tag: "", text: VOICE_UNHEARD_TEXT });
           if (tapback && target && chatId && answered.length > 0) {
             bubbles.push({ part: 0, tag: "react", text: tapback, messageId: target.messageId, epoch });
           }
@@ -1328,6 +1353,7 @@ export class ConversationRunner {
     generation: number,
     crisis: boolean,
     receivedAtMs: number,
+    spoken: boolean,
     onDeep: () => void = () => {},
   ): Promise<
     | {
@@ -1367,7 +1393,7 @@ export class ConversationRunner {
         }
       };
       const result = await responder.respond(
-        { texts: turnText ? [turnText] : [], attachmentCount, documents, history, turnKey: { generation, turn }, receivedAtMs, crisis },
+        { texts: turnText ? [turnText] : [], attachmentCount, documents, history, turnKey: { generation, turn }, receivedAtMs, crisis, ...(spoken ? { spoken } : {}) },
         { onHeadsUp },
       );
       const { costUsd, byModel } = costByModel(usageOf(result), config.usdPer1kChars);

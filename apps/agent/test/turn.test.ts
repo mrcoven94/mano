@@ -774,6 +774,24 @@ function useGuardian() {
 
 const pointerOf = () => getPendingPointer(engine.person(personIdFor(HANDLE)).sql, 0);
 
+describe("a voice note and a waiting question", () => {
+  function spokenTurn(turnId: string, text: string) {
+    return signedAt("/channels/mano/turn", { turnId, generation: 0, handleHash: HANDLE, grant: grants.get(HANDLE), receivedAt: Date.now(), texts: [text], attachmentCount: 0, spoken: true });
+  }
+
+  it.each(["yes", "YES", "ok", "1"])("a spoken %j approves nothing: it goes to the model, which is told so", async (said) => {
+    await send(turn("turn_voice_000001", "Please file my renewal"));
+    const before = agentCalls.length;
+    const heard = await send(spokenTurn("turn_voice_000002", said));
+    expect(agentCalls.length).toBe(before + 1);
+    expect(agentCalls.at(-1)!.context.join("\n")).toMatch(/A yes in a voice note approves nothing/);
+    expect(heard.body.text).not.toMatch(/^Done/);
+    expect(engine.approvals().filter((a) => a.status === "pending")).toHaveLength(1);
+    // The typed answer still files it.
+    expect((await send(turn("turn_voice_000003", "YES"))).body.text).toMatch(/^Done/);
+  });
+});
+
 describe("a YES while the safety check is starting", () => {
   it("keeps the approval and the question, and asks for YES again", async () => {
     useGuardian();

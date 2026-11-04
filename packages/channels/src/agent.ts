@@ -14,18 +14,21 @@ import { guardReply } from "@mano/persona";
 import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
 
 import { boundFetch } from "./fetch.js";
-import { PHOTO_UNREAD_TEXT, ResponderFailed, type ModelUsage, type Responder, type ResponderResult, type TurnInput } from "./responder.js";
+import { PHOTO_UNREAD_TEXT, ResponderFailed, type ModelUsage, type Responder, type ResponderResult, type StoredPhoto, type TurnInput } from "./responder.js";
 import { splitBubbles } from "./bubbles.js";
 import { computeSignatureHex, SIGNATURE_WINDOW_SECONDS, timingSafeEqualHex } from "./verify.js";
 
 export const AGENT_TURN_PATH = "/channels/mano/turn";
 export const AGENT_DELETED_PATH = "/channels/mano/deleted";
 export const AGENT_PRESENTED_PATH = "/channels/mano/presented";
+export const AGENT_LISTEN_PATH = "/channels/mano/listen";
 export const AGENT_SIGNATURE_HEADER = "x-mano-signature";
 export const AGENT_TIMESTAMP_HEADER = "x-mano-timestamp";
 // Above the agent's own settle timeout, so a slow turn falls back
 // instead of hanging the conversation.
 export const AGENT_RESPONDER_TIMEOUT_MS = 100_000;
+// Over the agent's own budget for listening.
+const LISTEN_TIMEOUT_MS = 60_000;
 
 // Sent instead of an approval question that would not reach the person
 // word for word. It asks for nothing, so no YES can follow it.
@@ -120,6 +123,35 @@ export class AgentResponder implements Responder {
     this.nowSeconds = opts.nowSeconds ?? (() => Math.floor(Date.now() / 1000));
   }
 
+  // Asks the agent for the words in stored voice notes. Any failure is no
+  // words: Channels then says it could not listen.
+  async listen(notes: StoredPhoto[], generation: number): Promise<string | null> {
+    try {
+      const raw = JSON.stringify({
+        handleHash: this.handleHash,
+        generation,
+        grant: await mintHandleGrant(this.handleHash, this.grantSecret),
+        documents: notes,
+      });
+      const timestamp = this.nowSeconds();
+      const res = await this.fetchFn(`${this.agentUrl}${AGENT_LISTEN_PATH}`, {
+        method: "POST",
+        signal: AbortSignal.timeout(LISTEN_TIMEOUT_MS),
+        headers: {
+          "content-type": "application/json",
+          [AGENT_TIMESTAMP_HEADER]: String(timestamp),
+          [AGENT_SIGNATURE_HEADER]: await signAgentRequest(this.secret, timestamp, new TextEncoder().encode(raw)),
+        },
+        body: raw,
+      });
+      const data = (await res.json().catch(() => null)) as { text?: unknown } | null;
+      const text = res.ok && typeof data?.text === "string" ? data.text.trim() : "";
+      return text || null;
+    } catch {
+      return null;
+    }
+  }
+
   async respond(turn: TurnInput): Promise<ResponderResult> {
     const inputChars = turn.texts.join("\n").length;
     // Without a stable key the agent could run the turn twice, so it is
@@ -136,6 +168,7 @@ export class AgentResponder implements Responder {
         texts: turn.texts,
         attachmentCount: turn.attachmentCount,
         documents: turn.documents ?? [],
+        ...(turn.spoken ? { spoken: true } : {}),
       });
       const timestamp = this.nowSeconds();
       const res = await this.fetchFn(`${this.agentUrl}${AGENT_TURN_PATH}`, {

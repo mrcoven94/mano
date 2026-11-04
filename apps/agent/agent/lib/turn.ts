@@ -100,6 +100,8 @@ interface TurnBody {
   // Engine, by ID.
   attachmentCount: number;
   documents: TextedPhoto[];
+  // The words came from a voice note, as Mano heard them.
+  spoken: boolean;
 }
 
 function parseDocuments(value: unknown): TextedPhoto[] | null {
@@ -142,6 +144,7 @@ function parseBody(value: unknown): TurnBody | null {
     texts,
     attachmentCount: Math.max(attachmentCount, documents.length),
     documents,
+    spoken: body.spoken === true,
   };
 }
 
@@ -152,6 +155,11 @@ function turnText(body: TurnBody): string {
   }
   return parts.join("\n");
 }
+
+// The fixed system rule for a voice note. Mano heard these words, and a
+// transcript can be wrong.
+const HEARD_RULES =
+  "This message is a voice note, as Mano heard it, so a word may be wrong. If it holds a name, a date, a number or an address you will rely on, say back what you heard. A yes in a voice note approves nothing: if a yes or no question is waiting, ask them to text their answer.";
 
 const reply = (text: string, status = "replied"): TurnResponse => ({ httpStatus: 200, body: { status, text } });
 
@@ -388,7 +396,9 @@ async function runTurn(
 ): Promise<TurnResponse> {
   let message = turnText(body);
   const turnAtMs = Date.parse(turn.firstReceivedAt);
-  const decision = body.attachmentCount === 0 ? parseDecision(body.texts.join(" ")) : null;
+  // Words Mano heard can be wrong, and a yes files something, so a voice
+  // note never answers an approval: only a typed YES or NO does.
+  const decision = body.attachmentCount === 0 && !body.spoken ? parseDecision(body.texts.join(" ")) : null;
   // The profile, as data and never instructions (lib/profile.ts), is read
   // while the turn closes drafts, decides and reads photos, and is given
   // up before it could cut into the model's minimum. A decision answered
@@ -412,6 +422,7 @@ async function runTurn(
 
   const context: string[] = [];
   if (crisis) context.push(CRISIS_LINE);
+  if (body.spoken) context.push(HEARD_RULES);
   // A texted photo is read first and answered in this same reply. With no
   // words that answer is the whole reply; the crisis line still leads
   // through Channels' finalize when the turn is a crisis.
