@@ -161,9 +161,9 @@ describe.skipIf(!installed)("fill_form in real Chromium", () => {
         address: { line1: leaf("100 Sample St"), city: leaf("Tacoma"), state: leaf("WA"), zip: leaf("98402") },
         householdConfirmed: leaf(true),
       },
-      household: [{ id: "m1" }, { id: "m2" }],
+      household: [{ id: "m1", name: leaf("Ana Testcase") }, { id: "m2", name: leaf("Luis Testcase") }],
       income: [{ id: "i1", amount: { value: 1075, source: "document", documentId: "doc-stub", updatedAt: at }, frequency: leaf("biweekly") }],
-      programs: [{ id: "snap", program: leaf("SNAP"), caseNumber: leaf("WA-SNAP-0042117") }],
+      programs: [{ id: "snap", program: leaf("SNAP"), state: leaf("WA"), caseNumber: leaf("WA-SNAP-0042117") }],
     };
     Object.assign(portal, { hits: [], offsiteHits: [], authorizedFromBrowser: 0, submissions: [], mode: "sealed" });
     portal.drafts.clear();

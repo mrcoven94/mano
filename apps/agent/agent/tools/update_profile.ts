@@ -14,7 +14,7 @@ export default defineTool({
     "Save only what they said themselves, in their words. Never save a guess, an estimate, or something you inferred. " +
     "To change a household member, income or program already on file, pass its ref from the profile. A household member changes only by ref: a name already on file with a different relationship or birth date is added as a different person; otherwise pass the ref, or new: true for someone else with the same name, and ask the person if you are not sure. " +
     "Set person.alwaysOn true only when the person asks Mano to keep checking every day for new help they may qualify for, and false when they say to stop checking. " +
-    "Set householdComplete when the person says who lives with them is everyone (for example \"just me and my son\"). " +
+    "Set householdComplete when the person says who lives with them is everyone (for example \"just me and my son\"), and pass in household everyone they named: someone only a document named does not count unless they name them. " +
     "A fact the person already gave stays even if a document or older note says otherwise: that value waits for their confirmation, and saving their answer here settles it. " +
     `Use forget when they ask you to forget something (${FORGET_NAMES.join(", ")}, or an entry's ref). ` +
     "Afterward confirm what changed in one short line. Facts that do not fit the profile go to remember instead.",
@@ -42,7 +42,7 @@ export default defineTool({
       )
       .max(15)
       .optional(),
-    householdComplete: z.boolean().optional().describe("The person said the household on file is everyone who lives with them"),
+    householdComplete: z.boolean().optional().describe("The person said who lives with them is everyone they named"),
     income: z
       .array(
         z
@@ -84,7 +84,7 @@ export default defineTool({
       return {
         saved: [...new Set(out.changed.map(label))],
         waitingForConfirmation: [...new Set(out.suggested.map(label))],
-        forgotten: [...new Set(out.cleared.map(label))],
+        forgotten: [...new Set(out.cleared.map(label))].filter(Boolean),
         alreadyOnFile: [...new Set(out.unchanged.map(label))],
         ...(input.person?.alwaysOn === true ? { dailyCheck: dailyCheckNote(view.profile, input.person.address?.state) } : {}),
       };

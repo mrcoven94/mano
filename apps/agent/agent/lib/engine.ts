@@ -63,6 +63,7 @@ export interface Profile {
     language?: Leaf;
     householdConfirmed?: Leaf<boolean>;
     alwaysOn?: Leaf<boolean>;
+    householdSize?: Leaf<number>;
   };
   household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];
   income: { id: string; memberId?: Leaf; source?: Leaf; amount?: Leaf<number>; frequency?: Leaf<Frequency> }[];
@@ -612,8 +613,8 @@ export class PersonEngine {
     return new Uint8Array(await res.arrayBuffer());
   }
 
-  async listDocuments(): Promise<EngineDocument[]> {
-    const out = (await this.json("GET", "/documents")) as { documents?: unknown };
+  async listDocuments(timeoutMs?: number): Promise<EngineDocument[]> {
+    const out = (await this.json("GET", "/documents", undefined, timeoutMs)) as { documents?: unknown };
     return Array.isArray(out.documents) ? (out.documents as EngineDocument[]) : [];
   }
 

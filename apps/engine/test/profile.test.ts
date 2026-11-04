@@ -440,6 +440,102 @@ describe("profile: read inside Engine", () => {
   });
 });
 
+describe("profile: the household size a person gives", () => {
+  it("only a person-sourced whole number in range may set it", async () => {
+    const h = handle("profile-size-src");
+    const personId = personIdForHandle(h);
+    const doc = await asPerson(personId, "POST", "/documents", { name: "letter.txt", contentB64: btoa("Synthetic letter") });
+    const { id: documentId } = (await doc.json()) as { id: string };
+    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(personId)) as unknown as PersonAgent;
+    expect(await stub.recordDocumentFacts(personId, { documentId, idempotencyKey: "hs1", fields: { "person.householdSize": 3 } })).toMatchObject({ status: "invalid" });
+    const write = (key: string, source: string, value: unknown) =>
+      asAgent(h, "PATCH", "/profile", { idempotencyKey: key, source, generation: 0, fields: { "person.householdSize": value } });
+    expect((await write("hs2", "agent", 3)).status).toBe(400);
+    for (const [i, bad] of [0, 31, 2.5, "3"].entries()) expect((await write(`hs3-${i}`, "person", bad)).status).toBe(400);
+    expect((await profileOf(await asAgent(h, "GET", "/profile"))).person.householdSize).toBeUndefined();
+    expect((await write("hs4", "person", 3)).status).toBe(200);
+    expect((await profileOf(await asAgent(h, "GET", "/profile"))).person.householdSize).toMatchObject({ value: 3, source: "person" });
+  });
+
+  it("forgetting the household or one member clears it, even with no one on the list", async () => {
+    const h = handle("profile-size-forget");
+    const write = (key: string, fields: Record<string, unknown>) =>
+      asAgent(h, "PATCH", "/profile", { idempotencyKey: key, source: "person", generation: 0, fields });
+    await write("sf1", { "person.householdSize": 3 });
+    await write("sf2", { household: null });
+    expect((await profileOf(await asAgent(h, "GET", "/profile"))).person.householdSize).toBeUndefined();
+    await write("sf3", { "person.householdSize": 3, "household.leo.name": "Leo" });
+    await write("sf4", { "household.leo": null });
+    expect((await profileOf(await asAgent(h, "GET", "/profile"))).person.householdSize).toBeUndefined();
+  });
+});
+
+describe("profile: the household size is cleared only on the person's word", () => {
+  const seeded = async (tag: string) => {
+    const h = handle(tag);
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "seed", source: "person", generation: 0, fields: { "person.householdSize": 3 } });
+    return h;
+  };
+  const size = async (h: string) => (await profileOf(await asAgent(h, "GET", "/profile"))).person.householdSize?.value;
+
+  it("a lower-trust clear of an empty household leaves it", async () => {
+    const h = await seeded("size-agent-empty");
+    const out = await asAgent(h, "PATCH", "/profile", { idempotencyKey: "low", source: "agent", generation: 0, fields: { household: null } });
+    expect(out.status).toBe(200);
+    expect(await size(h)).toBe(3);
+  });
+
+  it("a lower-trust clear of its own member leaves it", async () => {
+    const h = await seeded("size-agent-member");
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "add", source: "agent", generation: 0, fields: { "household.leo.name": "Leo" } });
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "low", source: "agent", generation: 0, fields: { household: null } });
+    expect((await profileOf(await asAgent(h, "GET", "/profile"))).household).toEqual([]);
+    expect(await size(h)).toBe(3);
+  });
+
+  it("a lower-trust clear of an empty household leaves her confirmation that she lives alone", async () => {
+    const h = handle("confirm-agent-empty");
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "seed", source: "person", generation: 0, fields: { "person.householdConfirmed": true } });
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "low", source: "agent", generation: 0, fields: { household: null } });
+    expect((await profileOf(await asAgent(h, "GET", "/profile"))).person.householdConfirmed?.value).toBe(true);
+  });
+
+  it("the person forgetting the household clears it, and deleting the conversation does too", async () => {
+    const h = await seeded("size-person-forget");
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "own", source: "person", generation: 0, fields: { household: null } });
+    expect(await size(h)).toBeUndefined();
+
+    const d = await seeded("size-person-delete");
+    expect((await asAgent(d, "DELETE", "/conversation", { generation: 1 }, CHANNELS_TOKEN)).status).toBe(200);
+    expect(await size(d)).toBeUndefined();
+  });
+});
+
+describe("profile: one person's fields written at the same time", () => {
+  it("each land, the way the form tools keep several answers", async () => {
+    const h = handle("profile-concurrent");
+    const fields: Record<string, unknown>[] = [
+      { "person.fullName": "Nivra Pellorin" },
+      { "person.dateOfBirth": "1985-03-14" },
+      { "person.householdSize": 3 },
+      { "income.stated-monthly-total.amount": 1800, "income.stated-monthly-total.frequency": "monthly" },
+      { "person.address.line1": "703 Frendle Path, Drelvessa, Kelvessa 00042", "person.address.city": null, "person.address.zip": null },
+      { "person.phone": "(202) 555-0142" },
+      { "programs.food.program": "Food benefits", "programs.food.caseNumber": "VE-SNAP-263507" },
+    ];
+    const answers = await Promise.all(
+      fields.map((f, i) => asAgent(h, "PATCH", "/profile", { idempotencyKey: `at-once-${i}`, source: "person", generation: 0, fields: f })),
+    );
+    expect(answers.map((r) => r.status)).toEqual(fields.map(() => 200));
+    const profile = await profileOf(await asAgent(h, "GET", "/profile"));
+    expect(profile.person.fullName?.value).toBe("Nivra Pellorin");
+    expect(profile.person.householdSize?.value).toBe(3);
+    expect(profile.person.phone?.value).toBe("(202) 555-0142");
+    expect(profile.income[0]?.amount?.value).toBe(1800);
+    expect(profile.programs[0]?.caseNumber?.value).toBe("VE-SNAP-263507");
+  });
+});
+
 describe("profile: the household confirmation is the person's alone", () => {
   it("only a person-sourced write may set it", async () => {
     const h = handle("profile-confirm-src");
