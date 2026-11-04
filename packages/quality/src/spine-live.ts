@@ -75,6 +75,8 @@ export const REQUIRED_ENV = [
   "MANO_GUARDIAN_KEY_SECRET",
 ] as const;
 
+const letter = (): Buffer => readFileSync(new URL("./spine-letter.jpg", import.meta.url));
+
 // What spine-letter.jpg says.
 const LETTER_DUE = "2026-11-14";
 const LETTER_DUE_WORDS: Record<Lang, RegExp> = { en: /\bNovember 14, 2026\b/i, es: /\b14 de noviembre de 2026\b|\bNovember 14, 2026\b/i };
@@ -260,7 +262,7 @@ class Person {
   async uploadLetter(): Promise<{ http: number; document: { id: string; mimeType: string } }> {
     this.docs += 1;
     const id = `spinelive${this.docs}`;
-    const bytes = readFileSync(new URL("./spine-letter.jpg", import.meta.url));
+    const bytes = letter();
     const res = await this.fetchImpl(`${this.personPath}/documents`, {
       method: "POST",
       signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
@@ -415,8 +417,15 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
       if (wrong.length > 0) {
         throw new StepFailure(`the filing is wrong: ${wrong.map((f) => `${f.label} is ${rows.get(f.label) ?? "missing"}, expected ${f.expected}`).join("; ")}`, res.status);
       }
-      if (!rows.has("File 1")) throw new StepFailure("the filing has no document attached", res.status);
-      return { model: null, http: res.status, detail: `the portal holds ${confirmation} with every field as Maria gave it and the document attached` };
+      const file = await fetchImpl(`${cfg.portalUrl}/caseworker/${encodeURIComponent(confirmation!)}/file/0`, {
+        signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        headers: { authorization: `Bearer ${cfg.portalToken}` },
+      });
+      const filed = Buffer.from(await file.arrayBuffer());
+      if (file.status !== 200 || !filed.equals(letter())) {
+        throw new StepFailure(`the filed document is not Maria's letter: HTTP ${file.status}, ${filed.length} bytes`, file.status);
+      }
+      return { model: null, http: res.status, detail: `the portal holds ${confirmation} with every field as Maria gave it and her letter, byte for byte` };
     },
   };
 
