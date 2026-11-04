@@ -349,7 +349,7 @@ describe("fill_form", () => {
     engine.profile = profile();
     model = new FakeModelClient([[call([{ type: "keypress", keys: ["alt", "F2"] }, { type: "type", text: "touch /tmp/mano-escape" }])]]);
     const out = await run("turn_fill0041", { form: "food-renewal" });
-    expect(out.status).toBe("fill_failed");
+    expect(out.status).toBe("unavailable");
     expect(computer.acted).toEqual([]);
     expect(engine.approvals()).toHaveLength(0);
   });
@@ -468,6 +468,24 @@ describe("fill_form", () => {
     expect(frozen.documentId).toBe("doc-letter");
     expect(frozen.sources).toEqual([{ kind: "document", id: "doc-letter" }]);
     expect(frozen.payload.attachment).toEqual(expect.any(String));
+  });
+
+  it.each([
+    ["runs out of steps", { type: "wait" }],
+    ["presses a key a form does not need", { type: "keypress", keys: ["ctrl", "l"] }],
+  ])("when the computer %s, hands the renewal to start_form_draft and prepares nothing", async (_name, action) => {
+    engine.profile = profile();
+    let call = 0;
+    model = {
+      createResponse: async () => {
+        call += 1;
+        return { id: `r${call}`, status: "completed", output: [{ type: "computer_call", id: `c${call}`, call_id: `c${call}`, actions: [action], pending_safety_checks: [], status: "completed" }] };
+      },
+    } as never;
+    const out = await run("turn_fill0033", { form: "food-renewal" });
+    expect(out.status).toBe("unavailable");
+    expect(out.note).toMatch(/start_form_draft/);
+    expect(engine.approvals()).toHaveLength(0);
   });
 
   it("when the computer's model refuses, hands the renewal to start_form_draft and prepares nothing", async () => {
