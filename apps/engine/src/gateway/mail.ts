@@ -94,7 +94,7 @@ export class MailExecutor implements Executor {
       LABEL,
     );
     assertAccepted(res, LABEL);
-    const data = (await res.json()) as { id?: unknown };
+    const data = JSON.parse(res.text) as { id?: unknown };
     if (typeof data.id !== "string" || !data.id) throw new Error(`${LABEL} returned no letter ID.`);
     return { externalId: data.id, simulated: true };
   }
@@ -110,7 +110,7 @@ export class MailExecutor implements Executor {
       LABEL,
     );
     if (!res.ok) throw new Error(`${LABEL} check failed: ${res.status}`);
-    const data = (await res.json()) as { data?: { id?: unknown }[] };
+    const data = JSON.parse(res.text) as { data?: { id?: unknown }[] };
     if (!Array.isArray(data.data)) throw new Error(`${LABEL} check returned malformed data.`);
     const id = data.data[0]?.id;
     if (data.data.length === 0) return { found: false };

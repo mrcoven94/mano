@@ -1,7 +1,7 @@
 import { boundFetch } from "../fetch.js";
 import { bytesToBase64 } from "../hash.js";
 import type { ActionRequest, CheckOutcome, Executor } from "./types.js";
-import { DefiniteFailureError, StillSettlingError } from "./types.js";
+import { DefiniteFailureError, UnconfirmedSendError } from "./types.js";
 import {
   FAX_RECIPIENT,
   PAYLOAD,
@@ -10,6 +10,7 @@ import {
   downstreamKey,
   prepareOutgoing,
   providerFetch,
+  type ProviderResponse,
   type OutboundPricing,
 } from "./outbound.js";
 
@@ -20,34 +21,31 @@ import {
 const BASE_URL = "https://api.telnyx.com/v2";
 const LABEL = "The fax provider";
 const PAGE_SIZE = 250;
-// With no dedupe at the provider, a request that timed out may still land
-// after a lookup says it is not there. So a "not there" within this long
-// of our own send is not believed, and the attempt stays unknown.
-const SETTLE_MS = 5 * 60_000;
+// More than this many pages of our own number's faxes is not an answer.
+const MAX_LIST_PAGES = 40;
 
-// When each key last went to the provider. It lives in the person's
-// SQLite, written before the send, so a restart cannot forget a send that
-// timed out. A Durable Object holds outgoing requests until its writes
-// are durable.
+// Which keys ever went to the provider. Written to the person's SQLite
+// before the send, so a restart cannot forget one. A Durable Object holds
+// outgoing requests until its writes are durable. A key with no row never
+// reached POST /faxes, so nothing under it can land.
 export interface FaxSendLog {
-  lastSentAt(key: string): number | null;
-  markSent(key: string, atMs: number): void;
+  wasSent(key: string): boolean;
+  markSent(key: string): void;
 }
 
 export function ensureFaxSendTable(sql: SqlStorage): void {
-  sql.exec("CREATE TABLE IF NOT EXISTS fax_sends(key TEXT PRIMARY KEY, sent_at_ms INTEGER NOT NULL)");
+  sql.exec("CREATE TABLE IF NOT EXISTS fax_sends(key TEXT PRIMARY KEY)");
 }
 
 export class SqlFaxSendLog implements FaxSendLog {
   constructor(private sql: SqlStorage) {}
 
-  lastSentAt(key: string): number | null {
-    const rows = this.sql.exec("SELECT sent_at_ms FROM fax_sends WHERE key = ?", key).toArray() as unknown as { sent_at_ms: number }[];
-    return rows[0]?.sent_at_ms ?? null;
+  wasSent(key: string): boolean {
+    return this.sql.exec("SELECT key FROM fax_sends WHERE key = ?", key).toArray().length > 0;
   }
 
-  markSent(key: string, atMs: number): void {
-    this.sql.exec("INSERT INTO fax_sends(key, sent_at_ms) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET sent_at_ms = excluded.sent_at_ms", key, atMs);
+  markSent(key: string): void {
+    this.sql.exec("INSERT OR IGNORE INTO fax_sends(key) VALUES (?)", key);
   }
 }
 
@@ -73,7 +71,6 @@ export class FaxExecutor implements Executor {
     private config: FaxConfig,
     private fetchFn: typeof fetch = boundFetch,
     private timeoutMs = 20000,
-    private now: () => number = Date.now,
   ) {}
 
   private get authorization(): string {
@@ -94,7 +91,7 @@ export class FaxExecutor implements Executor {
     return outgoing.ok ? null : outgoing.problem;
   }
 
-  private async post(path: string, init: RequestInit): Promise<Response> {
+  private async post(path: string, init: RequestInit): Promise<ProviderResponse> {
     const headers = { authorization: this.authorization, ...init.headers };
     const res = await providerFetch(this.fetchFn, `${BASE_URL}${path}`, { ...init, method: "POST", headers }, this.timeoutMs, LABEL);
     assertAccepted(res, LABEL);
@@ -118,7 +115,7 @@ export class FaxExecutor implements Executor {
     // The provider keeps its copy of the document only as long as sending takes.
     media.set("ttl_secs", "3600");
     await this.post("/media", { body: media });
-    this.config.sendLog.markSent(key, this.now());
+    this.config.sendLog.markSent(key);
     const res = await this.post("/faxes", {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -130,18 +127,38 @@ export class FaxExecutor implements Executor {
         store_media: false,
       }),
     });
-    const data = (await res.json()) as { data?: { id?: unknown } };
+    const data = JSON.parse(res.text) as { data?: { id?: unknown } };
     const id = data.data?.id;
     if (typeof id !== "string" || !id) throw new Error(`${LABEL} returned no fax ID.`);
     return { externalId: id, simulated: false };
   }
 
+  // Found, or nothing was ever sent, are the only definite answers. The
+  // provider has no dedupe, so a send it does not list may still land, and
+  // no amount of waiting makes that absent: it is never resent from here.
   async check(idempotencyKey: string, personId: string): Promise<CheckOutcome> {
     const key = await downstreamKey(personId, idempotencyKey);
+    if (!this.config.sendLog.wasSent(key)) return { found: false };
+    for (let page = 1; page <= MAX_LIST_PAGES; page++) {
+      const body = await this.listPage(page);
+      for (const fax of body.data) {
+        if (typeof fax.id === "string" && fax.id && readClientState(fax.client_state)?.key === key) {
+          return { found: true, externalId: fax.id, simulated: false };
+        }
+      }
+      if (page >= body.totalPages) {
+        throw new UnconfirmedSendError("Mano could not confirm this fax went through, so it was not sent again. Only a fresh approval can send it.");
+      }
+    }
+    throw new Error(`${LABEL} check could not read the whole list.`);
+  }
+
+  private async listPage(page: number): Promise<{ data: { id?: unknown; client_state?: unknown }[]; totalPages: number }> {
     const query = new URLSearchParams({
       "filter[to][eq]": this.config.ownNumber,
       "filter[direction][eq]": "outbound",
       "page[size]": String(PAGE_SIZE),
+      "page[number]": String(page),
     });
     const res = await providerFetch(
       this.fetchFn,
@@ -151,22 +168,11 @@ export class FaxExecutor implements Executor {
       LABEL,
     );
     if (!res.ok) throw new Error(`${LABEL} check failed: ${res.status}`);
-    const body = (await res.json()) as { data?: { id?: unknown; client_state?: unknown }[]; meta?: { total_pages?: unknown } };
-    if (!Array.isArray(body.data)) throw new Error(`${LABEL} check returned malformed data.`);
-    for (const fax of body.data) {
-      if (typeof fax.id === "string" && fax.id && readClientState(fax.client_state)?.key === key) {
-        return { found: true, externalId: fax.id, simulated: false };
-      }
+    const body = JSON.parse(res.text) as { data?: { id?: unknown; client_state?: unknown }[]; meta?: { total_pages?: unknown } };
+    if (!Array.isArray(body.data) || typeof body.meta?.total_pages !== "number") {
+      throw new Error(`${LABEL} check returned malformed data.`);
     }
-    // The newest page did not have it. Absent is only true of the whole list.
-    if (typeof body.meta?.total_pages !== "number" || body.meta.total_pages > 1) {
-      throw new Error(`${LABEL} check could not read the whole list.`);
-    }
-    const sent = this.config.sendLog.lastSentAt(key);
-    if (sent !== null && this.now() - sent < SETTLE_MS) {
-      throw new StillSettlingError("This fax was sent moments ago and is still settling, so its outcome stays unknown.");
-    }
-    return { found: false };
+    return { data: body.data, totalPages: body.meta.total_pages };
   }
 }
 

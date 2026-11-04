@@ -109,6 +109,9 @@ export interface GatewayResult {
   // approval still waits, nothing ran, and the same approve may be sent
   // again later.
   retryable?: true;
+  // Set when a send could not be confirmed and will not be retried. The
+  // person is told, and only a fresh approval can send it again.
+  unconfirmed?: true;
 }
 
 // Where a drafted approval sits among the person's proposals: when the
@@ -169,12 +172,13 @@ export class TimeoutError extends Error {
   }
 }
 
-// The lookup answered, but too soon after a send to believe a "not there":
-// the request that timed out can still land. The attempt stays unknown.
-export class StillSettlingError extends Error {
+// The lookup answered and does not list a send that went to a provider
+// with no dedupe. It may still land, so it is neither found nor absent: the
+// attempt stays unknown and only a fresh approval can send again.
+export class UnconfirmedSendError extends Error {
   constructor(msg: string) {
     super(msg);
-    this.name = "StillSettlingError";
+    this.name = "UnconfirmedSendError";
   }
 }
 

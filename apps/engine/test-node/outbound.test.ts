@@ -2,9 +2,9 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { inflateSync } from "node:zlib";
-import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, PDFStream, type PDFObject } from "pdf-lib";
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, PDFStream, degrees, type PDFObject } from "pdf-lib";
 import { ActionGateway, MapDocumentStore } from "../src/gateway/gateway.js";
-import { InMemoryExecutor } from "../src/gateway/executors.js";
+import { InMemoryExecutor, SandboxExecutor } from "../src/gateway/executors.js";
 import { FaxExecutor, SqlFaxSendLog, ensureFaxSendTable, type FaxSendLog } from "../src/gateway/fax.js";
 import { MailExecutor } from "../src/gateway/mail.js";
 import {
@@ -58,7 +58,12 @@ type Timeout = "none" | "after-recording" | "before-recording";
 class FakeLob {
   letters = new Map<string, { id: string; file: Uint8Array; to: string }>();
   posts = 0;
-  next: Timeout = "none";
+  next: Timeout | "lands-late" = "none";
+  held: { key: string; letter: { id: string; file: Uint8Array; to: string } } | null = null;
+  land() {
+    if (this.held && !this.letters.has(this.held.key)) this.letters.set(this.held.key, this.held.letter);
+    this.held = null;
+  }
   lookupDown = false;
   rejectWith: number | null = null;
   fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -72,6 +77,10 @@ class FakeLob {
       const form = init.body as FormData;
       const key = new Headers(init.headers).get("idempotency-key")!;
       expect(form.get("metadata[mano_key]")).toBe(key);
+      if (mode === "lands-late") {
+        this.held = { key, letter: { id: "ltr_late", file: new Uint8Array(), to: String(form.get("to[name]")) } };
+        throw abortError();
+      }
       if (!this.letters.has(key)) {
         this.letters.set(key, {
           id: `ltr_${this.letters.size + 1}`,
@@ -96,10 +105,18 @@ class FakeTelnyx {
   next: Timeout | "lands-late" = "none";
   rejectWith: number | null = null;
   held: (typeof this.faxes)[number] | null = null;
-  totalPages = 1;
+  lookupDown = false;
+  mediaTimesOutNext = false;
+  hangBodyNext = false;
+  listCalls = 0;
+  pageSize = 250;
   fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     if (url.pathname.endsWith("/media")) {
+      if (this.mediaTimesOutNext) {
+        this.mediaTimesOutNext = false;
+        throw abortError();
+      }
       const form = init!.body as FormData;
       this.media.set(String(form.get("media_name")), new Uint8Array(await (form.get("media") as unknown as Blob).arrayBuffer()));
       return Response.json({ data: { media_name: form.get("media_name") } });
@@ -118,10 +135,24 @@ class FakeTelnyx {
       }
       this.faxes.push(fax);
       if (mode === "after-recording") throw abortError();
+      if (this.hangBodyNext) {
+        this.hangBodyNext = false;
+        const body = new ReadableStream({
+          start(controller) {
+            init.signal?.addEventListener("abort", () => controller.error(abortError()));
+          },
+        });
+        return new Response(body, { status: 202 });
+      }
       return Response.json({ data: { id: fax.id } }, { status: 202 });
     }
+    this.listCalls += 1;
+    if (this.lookupDown) return new Response("{}", { status: 503 });
     const to = url.searchParams.get("filter[to][eq]");
-    return Response.json({ data: this.faxes.filter((f) => f.to === to), meta: { total_pages: this.totalPages } });
+    const matching = this.faxes.filter((f) => f.to === to);
+    const page = Number(url.searchParams.get("page[number]") ?? 1);
+    const start = (page - 1) * this.pageSize;
+    return Response.json({ data: matching.slice(start, start + this.pageSize), meta: { total_pages: Math.max(1, Math.ceil(matching.length / this.pageSize)) } });
   }) as typeof fetch;
   land() {
     if (this.held) this.faxes.push(this.held);
@@ -184,16 +215,15 @@ const TURN_1 = { turnId: "turn-1", receivedAt: "2026-11-03T10:00:00.000Z" };
 const TURN_2 = { turnId: "turn-2", receivedAt: "2026-11-03T10:05:00.000Z" };
 
 function memoryLog(): FaxSendLog {
-  const sent = new Map<string, number>();
-  return { lastSentAt: (key) => sent.get(key) ?? null, markSent: (key, at) => void sent.set(key, at) };
+  const sent = new Set<string>();
+  return { wasSent: (key) => sent.has(key), markSent: (key) => void sent.add(key) };
 }
 
-function faxExecutor(telnyx: FakeTelnyx, now: () => number = Date.now): FaxExecutor {
+function faxExecutor(telnyx: FakeTelnyx): FaxExecutor {
   return new FaxExecutor(
     { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: memoryLog() },
     telnyx.fetch,
     1000,
-    now,
   );
 }
 
@@ -297,6 +327,20 @@ describe("mailed letters", () => {
     expect(store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("unknown");
     const retry = await gateway.approveAndExecute(asked.approval!.id, PERSON);
     expect(retry.status).toBe("completed");
+    expect(lob.posts).toBe(2);
+    expect(lob.letters.size).toBe(1);
+  });
+
+  it("a letter that lands after the lookup said no is one letter, because the provider dedupes the key", async () => {
+    const lob = new FakeLob();
+    lob.next = "lands-late";
+    const { gateway, documents, store } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) });
+    const asked = await draft(gateway, documents, letter());
+    expect((await gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    expect(store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("unknown");
+    const retry = await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(retry.status).toBe("completed");
+    lob.land();
     expect(lob.posts).toBe(2);
     expect(lob.letters.size).toBe(1);
   });
@@ -433,7 +477,7 @@ describe("faxes", () => {
     expect(telnyx.faxPosts).toBe(1);
   });
 
-  it("a fax that lands after the lookup said no is not sent twice", async () => {
+  it("a fax that lands after the lookup said no is not sent twice, however long it takes", async () => {
     const telnyx = new FakeTelnyx();
     telnyx.next = "lands-late";
     const { gateway, documents, store } = await rig({ fax: faxExecutor(telnyx) });
@@ -441,9 +485,9 @@ describe("faxes", () => {
     const first = await gateway.approveAndExecute(asked.approval!.id, PERSON);
     expect(first.status).toBe("blocked");
     expect(store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("unknown");
-    // The lookup still says no, but too soon after our send to believe it.
-    const tooSoon = await gateway.approveAndExecute(asked.approval!.id, PERSON);
-    expect(tooSoon.status).toBe("blocked");
+    const replay = await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(replay.status).toBe("blocked");
+    expect(replay.unconfirmed).toBe(true);
     expect(telnyx.faxPosts).toBe(1);
     telnyx.land();
     const settled = await gateway.approveAndExecute(asked.approval!.id, PERSON);
@@ -452,30 +496,69 @@ describe("faxes", () => {
     expect(telnyx.faxes).toHaveLength(1);
   });
 
-  it("sends again only after the settling window with the lookup still saying no", async () => {
+  it("a fresh approval sends it again under its own key", async () => {
     const telnyx = new FakeTelnyx();
     telnyx.next = "before-recording";
-    let now = 1_000_000;
-    const { gateway, documents } = await rig({ fax: faxExecutor(telnyx, () => now) });
-    const asked = await draft(gateway, documents, fax());
+    const { gateway, documents } = await rig({ fax: faxExecutor(telnyx) });
+    const asked = await draft(gateway, documents, fax(), TURN_1);
     await gateway.approveAndExecute(asked.approval!.id, PERSON);
-    now += 6 * 60_000;
-    const retry = await gateway.approveAndExecute(asked.approval!.id, PERSON);
-    expect(retry.status).toBe("completed");
-    expect(telnyx.faxPosts).toBe(2);
+    const fresh = await draft(gateway, documents, fax(), TURN_2);
+    expect(fresh.status).toBe("needs_approval");
+    expect((await gateway.approveAndExecute(fresh.approval!.id, PERSON)).status).toBe("completed");
     expect(telnyx.faxes).toHaveLength(1);
   });
 
-  it("does not call a fax absent when the list has pages it did not read", async () => {
+  it("a timeout on the upload, before any fax was sent, may try again", async () => {
     const telnyx = new FakeTelnyx();
-    telnyx.next = "before-recording";
-    telnyx.totalPages = 2;
-    let now = 1_000_000;
-    const { gateway, documents } = await rig({ fax: faxExecutor(telnyx, () => now) });
+    telnyx.mediaTimesOutNext = true;
+    const { gateway, documents } = await rig({ fax: faxExecutor(telnyx) });
+    const asked = await draft(gateway, documents, fax());
+    expect((await gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    expect(telnyx.faxPosts).toBe(0);
+    expect(telnyx.listCalls).toBe(0);
+    expect((await gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("completed");
+    expect(telnyx.faxes).toHaveLength(1);
+  });
+
+  it("a provider refusal is a definite answer, so the same key may try again", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.rejectWith = 422;
+    const { gateway, documents, store } = await rig({ fax: faxExecutor(telnyx) });
     const asked = await draft(gateway, documents, fax());
     await gateway.approveAndExecute(asked.approval!.id, PERSON);
-    now += 6 * 60_000;
-    expect((await gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    expect(store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("failed");
+    telnyx.rejectWith = null;
+    expect((await gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("completed");
+    expect(telnyx.faxes).toHaveLength(1);
+  });
+
+  it("a response body that hangs after the provider accepted counts as a timeout, and is found by the lookup", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.hangBodyNext = true;
+    const executor = new FaxExecutor(
+      { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: memoryLog() },
+      telnyx.fetch,
+      50,
+    );
+    const { gateway, documents } = await rig({ fax: executor });
+    const asked = await draft(gateway, documents, fax());
+    const done = await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(done.status).toBe("reconciled");
+    expect(telnyx.faxPosts).toBe(1);
+  });
+
+  it("the lookup finds a fax on a later page of the list", async () => {
+    const telnyx = new FakeTelnyx();
+    telnyx.pageSize = 2;
+    telnyx.faxes.push(
+      { id: "fax_a", client_state: "", to: OWN_NUMBER, from: "", media_name: "" },
+      { id: "fax_b", client_state: "", to: OWN_NUMBER, from: "", media_name: "" },
+    );
+    telnyx.next = "after-recording";
+    const { gateway, documents } = await rig({ fax: faxExecutor(telnyx) });
+    const asked = await draft(gateway, documents, fax());
+    const done = await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(done.status).toBe("reconciled");
     expect(telnyx.faxPosts).toBe(1);
   });
 });
@@ -526,17 +609,15 @@ describe("after the person corrects a fax or letter", () => {
     expect(lob.letters.size).toBe(0);
   });
 
-  it("a fax a newer proposal replaced is reconciled, then never sent", async () => {
+  it("a fax a newer proposal replaced is looked up and never sent", async () => {
     const telnyx = new FakeTelnyx();
     telnyx.next = "before-recording";
-    let now = 1_000_000;
-    const { gateway, documents } = await rig({ fax: faxExecutor(telnyx, () => now) });
+    const { gateway, documents } = await rig({ fax: faxExecutor(telnyx) });
     const asked = await draft(gateway, documents, fax(), TURN_1);
     await gateway.approveAndExecute(asked.approval!.id, PERSON);
     await draft(gateway, documents, fax(), TURN_2);
-    now += 6 * 60_000;
     const retry = await gateway.approveAndExecute(asked.approval!.id, PERSON);
-    expect(retry.superseded).toBe(true);
+    expect(retry.status).toBe("blocked");
     expect(telnyx.faxPosts).toBe(1);
     expect(telnyx.faxes).toHaveLength(0);
   });
@@ -599,7 +680,7 @@ describe("after the person corrects a fax or letter", () => {
 describe("a fax timeout across a restart", () => {
   // One person's SQLite, and everything rebuilt over it, as a Durable
   // Object restart does: nothing held in memory survives.
-  function restartable(telnyx: FakeTelnyx, documents: MapDocumentStore, now: () => number) {
+  function restartable(telnyx: FakeTelnyx, documents: MapDocumentStore) {
     const storage = openTestStorage() as never;
     ensureGatewayTables(storage);
     ensureFaxSendTable(storage);
@@ -609,7 +690,6 @@ describe("a fax timeout across a restart", () => {
         { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: new SqlFaxSendLog(storage) },
         telnyx.fetch,
         1000,
-        now,
       );
       const router = new OutboundRouter(new InMemoryExecutor(), { fax: executor }, (key) => store.getAttempt(key)?.actionType ?? null);
       return { store, gateway: new ActionGateway(store, router, { documents, linkCheck: async () => ({ allowed: true }) }) };
@@ -617,23 +697,22 @@ describe("a fax timeout across a restart", () => {
     return boot;
   }
 
-  it("a YES replayed after a restart inside the window sends no second fax, and says it is still settling", async () => {
+  it("a YES replayed after a restart sends no second fax and says it could not confirm it", async () => {
     const telnyx = new FakeTelnyx();
     telnyx.next = "lands-late";
-    let now = 1_000_000;
     const documents = new MapDocumentStore();
     documents.set("doc-1", await samplePdf());
-    const boot = restartable(telnyx, documents, () => now);
+    const boot = restartable(telnyx, documents);
     const before = boot();
     const asked = await draft(before.gateway, documents, fax());
     expect((await before.gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
     expect(telnyx.faxPosts).toBe(1);
 
     const after = boot();
-    now += 60_000;
     const replay = await after.gateway.approveAndExecute(asked.approval!.id, PERSON);
     expect(replay.status).toBe("blocked");
-    expect(replay.reason).toContain("still settling");
+    expect(replay.unconfirmed).toBe(true);
+    expect(replay.reason).toContain("could not confirm");
     expect(after.store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("unknown");
     expect(telnyx.faxPosts).toBe(1);
 
@@ -643,39 +722,104 @@ describe("a fax timeout across a restart", () => {
     expect(telnyx.faxes).toHaveLength(1);
   });
 
-  it("recovery after a restart inside the window leaves the attempt unknown and sends nothing", async () => {
+  it("recovery after a restart leaves the attempt unknown and sends nothing", async () => {
     const telnyx = new FakeTelnyx();
     telnyx.next = "before-recording";
-    let now = 1_000_000;
     const documents = new MapDocumentStore();
     documents.set("doc-1", await samplePdf());
-    const boot = restartable(telnyx, documents, () => now);
+    const boot = restartable(telnyx, documents);
     const before = boot();
     const asked = await draft(before.gateway, documents, fax());
     await before.gateway.approveAndExecute(asked.approval!.id, PERSON);
     const after = boot();
-    const later = new Date(Date.now() + 60_000);
+    const later = new Date(Date.now() + 6 * 60_000);
     const recovered = await after.gateway.recoverAttempt(asked.approval!.idempotencyKey, later, later.toISOString());
-    expect(recovered?.reason).toContain("still settling");
+    expect(recovered?.unconfirmed).toBe(true);
     expect(after.store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("unknown");
     expect(telnyx.faxPosts).toBe(1);
   });
+});
 
-  it("past the window with the lookup still saying no, the same key sends once more", async () => {
+describe("an outbound attempt whose provider setting went away", () => {
+  const notFound = (async () => new Response("{}", { status: 404 })) as typeof fetch;
+
+  function boots(providers: () => Partial<Record<"fax" | "mail", Executor>>, documents: MapDocumentStore) {
+    const storage = openTestStorage() as never;
+    ensureGatewayTables(storage);
+    ensureFaxSendTable(storage);
+    return (withProvider: boolean) => {
+      const store = new SqlApprovalStore(storage);
+      const sandbox = new SandboxExecutor("https://sandbox.test", 1000, notFound, "not-real");
+      const router = new OutboundRouter(sandbox, withProvider ? providers() : {}, (key) => store.getAttempt(key)?.actionType ?? null);
+      return { store, sandbox, gateway: new ActionGateway(store, router, { documents, linkCheck: async () => ({ allowed: true }) }) };
+    };
+  }
+
+  it("a fax stays unknown, never reaches the sandbox, and is found when the setting returns", async () => {
     const telnyx = new FakeTelnyx();
-    telnyx.next = "before-recording";
-    let now = 1_000_000;
+    telnyx.next = "after-recording";
+    telnyx.lookupDown = true;
     const documents = new MapDocumentStore();
     documents.set("doc-1", await samplePdf());
-    const boot = restartable(telnyx, documents, () => now);
-    const before = boot();
-    const asked = await draft(before.gateway, documents, fax());
-    await before.gateway.approveAndExecute(asked.approval!.id, PERSON);
-    const after = boot();
-    now += 6 * 60_000;
-    expect((await after.gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("completed");
-    expect(telnyx.faxPosts).toBe(2);
-    expect(telnyx.faxes).toHaveLength(1);
+    const log = memoryLog();
+    const boot = boots(
+      () => ({
+        fax: new FaxExecutor(
+          { apiKey: "not-real", connectionId: "c-1", ownNumber: OWN_NUMBER, fromNumber: "+15550100002", pricing: DEFAULT_PRICING, sendLog: log },
+          telnyx.fetch,
+          1000,
+        ),
+      }),
+      documents,
+    );
+    const first = boot(true);
+    const asked = await draft(first.gateway, documents, fax());
+    expect((await first.gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    const key = asked.approval!.idempotencyKey;
+    expect(first.store.getAttempt(key)?.status).toBe("unknown");
+
+    const missing = boot(false);
+    expect((await missing.gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    expect(missing.store.getAttempt(key)?.status).toBe("unknown");
+    expect(missing.sandbox.calls).toHaveLength(0);
+    const later = new Date(Date.now() + 6 * 60_000);
+    await missing.gateway.recoverAttempt(key, later, later.toISOString());
+    expect(missing.store.getAttempt(key)?.status).toBe("unknown");
+    expect(missing.sandbox.calls).toHaveLength(0);
+
+    telnyx.lookupDown = false;
+    const back = boot(true);
+    expect((await back.gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("reconciled");
+    expect(telnyx.faxPosts).toBe(1);
+  });
+
+  it("a letter stays unknown and never reaches the sandbox", async () => {
+    const lob = new FakeLob();
+    lob.next = "after-recording";
+    lob.lookupDown = true;
+    const documents = new MapDocumentStore();
+    documents.set("doc-1", await samplePdf());
+    const boot = boots(() => ({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }), documents);
+    const first = boot(true);
+    const asked = await draft(first.gateway, documents, letter());
+    await first.gateway.approveAndExecute(asked.approval!.id, PERSON);
+    const missing = boot(false);
+    await missing.gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(missing.store.getAttempt(asked.approval!.idempotencyKey)?.status).toBe("unknown");
+    expect(missing.sandbox.calls).toHaveLength(0);
+    lob.lookupDown = false;
+    expect((await boot(true).gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("reconciled");
+    expect(lob.posts).toBe(1);
+  });
+
+  it("a new fax with no provider is refused before the question", async () => {
+    const documents = new MapDocumentStore();
+    documents.set("doc-1", await samplePdf());
+    const { gateway, sandbox } = boots(() => ({}), documents)(false);
+    const asked = await draft(gateway, documents, fax());
+    expect(asked.status).toBe("blocked");
+    expect(asked.reason).toContain("not set up");
+    expect(sandbox.calls).toHaveLength(0);
   });
 });
 
@@ -702,6 +846,29 @@ describe("what a filled-in PDF sends", () => {
     expect(drawnText(out, 1)).toContain("Maria Testperson");
   });
 
+  it("draws the page it was given", async () => {
+    const lob = new FakeLob();
+    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await samplePdf(1, "plain"));
+    const asked = await draft(gateway, documents, letter());
+    await gateway.approveAndExecute(asked.approval!.id, PERSON);
+    expect(drawnText(await PDFDocument.load([...lob.letters.values()][0].file), 1)).toContain("plain page 1");
+  });
+
+  it.each([
+    ["a crop that hides part of the page", (doc: PDFDocument) => doc.getPage(0).setCropBox(0, 0, 300, 300)],
+    ["a rotated page", (doc: PDFDocument) => doc.getPage(0).setRotation(degrees(90))],
+  ])("refuses %s before the question, so nothing goes out that the person did not see", async (_name, change) => {
+    const doc = await PDFDocument.create();
+    doc.addPage([612, 792]).drawText("Text outside the crop", { x: 72, y: 700 });
+    change(doc);
+    const lob = new FakeLob();
+    const { gateway, documents } = await rig({ mail: new MailExecutor("test_not_real", DEFAULT_PRICING, lob.fetch) }, await doc.save());
+    const asked = await draft(gateway, documents, letter());
+    expect(asked.status).toBe("blocked");
+    expect(asked.reason).toContain("exactly as written");
+    expect(lob.posts).toBe(0);
+  });
+
   it("refuses a PDF with a note or stamp it could not carry over", async () => {
     const doc = await PDFDocument.create();
     const page = doc.addPage([612, 792]);
@@ -714,6 +881,36 @@ describe("what a filled-in PDF sends", () => {
     expect(asked.status).toBe("blocked");
     expect(asked.reason).toContain("exactly as written");
     expect(lob.posts).toBe(0);
+  });
+});
+
+describe("Guardian checks each fax and letter", () => {
+  it("runs on the draft and again on the yes, and its block stops the send", async () => {
+    const telnyx = new FakeTelnyx();
+    const documents = new MapDocumentStore();
+    documents.set("doc-1", await samplePdf());
+    const storage = openTestStorage() as never;
+    ensureGatewayTables(storage);
+    const store = new SqlApprovalStore(storage);
+    const seen: string[] = [];
+    let verdict: "pass" | "block" = "pass";
+    const router = new OutboundRouter(new InMemoryExecutor(), { fax: faxExecutor(telnyx) }, (key) => store.getAttempt(key)?.actionType ?? null);
+    const gateway = new ActionGateway(store, router, {
+      documents,
+      linkCheck: async () => ({ allowed: true }),
+      checker: {
+        check: async (input) => {
+          seen.push(input.action.type);
+          return { verdict, problems: verdict === "block" ? ["held"] : [] };
+        },
+      },
+    });
+    const asked = await draft(gateway, documents, fax());
+    expect(seen).toEqual(["fax"]);
+    verdict = "block";
+    expect((await gateway.approveAndExecute(asked.approval!.id, PERSON)).status).toBe("blocked");
+    expect(seen).toEqual(["fax", "fax"]);
+    expect(telnyx.faxPosts).toBe(0);
   });
 });
 

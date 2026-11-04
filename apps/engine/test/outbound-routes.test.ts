@@ -147,17 +147,17 @@ describe("the provider path in workerd", () => {
     expect(out.getPageCount()).toBe(2);
   });
 
-  it("keeps a fax's send time in the person's own SQLite", async () => {
+  it("keeps which faxes went out in the person's own SQLite", async () => {
     const { person, call } = rig("outbound-fax-log");
     await call("POST", "/documents", { id: "g0t1i0-faxlog", name: "letter", contentB64: bytesToBase64(await samplePdf()), generation: 0 }, CHANNELS_TOKEN);
     const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(person));
     const read = await runInDurableObject(stub, async (_agent, state) => {
       const log = new SqlFaxSendLog(state.storage.sql);
-      log.markSent("key", 5);
-      log.markSent("key", 9);
-      return [log.lastSentAt("key"), log.lastSentAt("other")];
+      log.markSent("key");
+      log.markSent("key");
+      return [log.wasSent("key"), log.wasSent("other")];
     });
-    expect(read).toEqual([9, null]);
+    expect(read).toEqual([true, false]);
   });
 
   it("verifies an Ed25519 fax signature with workerd's web crypto", async () => {

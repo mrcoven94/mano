@@ -200,6 +200,9 @@ export interface EngineResult {
   // A refused approve: the safety check could not answer. The approval
   // still waits and nothing ran, so the same yes can be tried again.
   retryable?: true;
+  // A refused approve: a fax could not be confirmed and will not be sent
+  // again. Only a fresh approval can send it.
+  unconfirmed?: true;
 }
 
 // The person's newest drafted approval. Engine moves it only forward, in

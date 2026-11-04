@@ -302,3 +302,49 @@ describe("RulesChecker", () => {
     expect(result.problems.length).toBe(3);
   });
 });
+
+describe("real faxes and letters", () => {
+  const base = { sources: [], consents: [], origin: "person" as const };
+
+  it("passes a fax to Mano's own line, whose number differs from the recipient's name", async () => {
+    const result = await new RulesChecker().check({
+      ...base,
+      action: {
+        type: "fax",
+        recipient: "mano-test-fax-line",
+        purpose: "Food benefits renewal",
+        documentHash: "a".repeat(64),
+        payload: { "Fax to": "+15550100001", "Approved by": "Maria Testperson", Pages: 2, Price: "$0.04, not charged on the test line" },
+      },
+    });
+    expect(result).toEqual({ verdict: "pass", problems: [] });
+  });
+
+  it("passes a letter to the practice mailbox", async () => {
+    const result = await new RulesChecker().check({
+      ...base,
+      action: {
+        type: "mail",
+        recipient: "mano-practice-mailbox",
+        purpose: "Food benefits renewal",
+        documentHash: "a".repeat(64),
+        payload: {
+          "Mail to": "State Benefits Office, 100 Practice Way, Sacramento, CA 95814",
+          "Return address": "Maria Testperson, 1 Example St, Sacramento, CA 95814",
+          "Approved by": "Maria Testperson",
+          Pages: 3,
+          Price: "$1.05, not charged in practice",
+        },
+      },
+    });
+    expect(result).toEqual({ verdict: "pass", problems: [] });
+  });
+
+  it("still blocks a fax to anyone else with no consent, a page count that is not a number, and content-made actions", async () => {
+    const action = { type: "fax" as const, recipient: "Unknown fax 555-0199", purpose: "Renewal", documentHash: null, payload: { "Fax to": "+15550100001" } };
+    expect((await new RulesChecker().check({ ...base, action })).verdict).toBe("block");
+    const ownLine = { ...action, recipient: "mano-test-fax-line" };
+    expect((await new RulesChecker().check({ ...base, action: { ...ownLine, payload: { Pages: "two" } } })).verdict).toBe("block");
+    expect((await new RulesChecker().check({ ...base, origin: "content", action: ownLine })).verdict).toBe("block");
+  });
+});

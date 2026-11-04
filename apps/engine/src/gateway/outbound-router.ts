@@ -2,6 +2,7 @@ import { FaxExecutor, type FaxSendLog } from "./fax.js";
 import { MailExecutor } from "./mail.js";
 import { isOutbound, outboundPricing, type OutboundEnv, type OutboundType } from "./outbound.js";
 import type { ActionRequest, ActionType, Attempt, CheckOutcome, DocumentFiling, Executor, StoredDocumentFacts } from "./types.js";
+import { DefiniteFailureError } from "./types.js";
 
 export function faxConfigured(env: OutboundEnv): boolean {
   return Boolean(env.TELNYX_API_KEY && env.TELNYX_FAX_CONNECTION_ID && env.MANO_OWN_FAX_NUMBER && env.MANO_FAX_FROM_NUMBER);
@@ -26,9 +27,25 @@ export function outboundProviders(env: OutboundEnv, sendLog: FaxSendLog): Partia
   return providers;
 }
 
+// A fax or letter whose provider is not set here. Nothing new starts, and
+// a lookup has no answer, so an attempt already out stays unknown until the
+// setting returns. It never falls through to the portal, whose "no such
+// filing" would turn a sent fax into a failed one that a YES sends again.
+const NO_PROVIDER = "Faxes and letters are not set up here.";
+const UNAVAILABLE: Executor = {
+  simulated: false,
+  refuse: () => NO_PROVIDER,
+  execute: async () => {
+    throw new DefiniteFailureError(NO_PROVIDER);
+  },
+  check: async () => {
+    throw new Error(NO_PROVIDER);
+  },
+};
+
 // Sends faxes and letters to their own executors and everything else to
-// inner. Without a provider for one, that action goes to inner too: the
-// stand-in simulates it, and the sandbox portal refuses it. Reconcile
+// inner. With no provider, an explicit stand-in simulates them, so a local
+// copy runs with no accounts; any other executor never sees them. Reconcile
 // routing reads the persisted attempt, never the key, which the caller
 // controls.
 export class OutboundRouter implements Executor {
@@ -43,7 +60,8 @@ export class OutboundRouter implements Executor {
   }
 
   private route(type: ActionType | null): Executor {
-    return (isOutbound(type) ? this.providers[type] : undefined) ?? this.inner;
+    if (!isOutbound(type)) return this.inner;
+    return this.providers[type] ?? (this.inner.simulated ? this.inner : UNAVAILABLE);
   }
 
   execute(req: ActionRequest): Promise<{ externalId: string; simulated?: boolean }> {

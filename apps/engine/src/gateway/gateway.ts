@@ -14,7 +14,7 @@ import type {
   ProposalOrder,
   Receipt,
 } from "./types.js";
-import { DefiniteFailureError, StillSettlingError, TimeoutError } from "./types.js";
+import { DefiniteFailureError, TimeoutError, UnconfirmedSendError } from "./types.js";
 import { auditDigest, type AuditDigest, type AuditEntry } from "./audit.js";
 import { ValidationError, parseActionRequest } from "./validate.js";
 import { LocalRulesChecker, checkerWithTimeout, type Checker, type CheckResult } from "./checker.js";
@@ -1072,15 +1072,16 @@ export class ActionGateway {
       outcome = await this.executor.check(req.idempotencyKey, req.personId);
     } catch (err) {
       this.store.audit({ event: "gateway.check_error", keyHash, detailHash: await auditDigest(String(err)) });
+      if (err instanceof UnconfirmedSendError) {
+        return { kind: "unavailable", result: { status: "blocked", reason: err.message, unconfirmed: true } };
+      }
       return {
         kind: "unavailable",
         result: {
           status: "blocked",
           reason:
-            err instanceof StillSettlingError
-              ? `${err.message} Nothing new was sent. Try again later with the same idempotency key.`
-              : "The gateway cannot reach the outside system to reconcile this action, so it stays unknown. " +
-                "Try again later with the same idempotency key.",
+            "The gateway cannot reach the outside system to reconcile this action, so it stays unknown. " +
+            "Try again later with the same idempotency key.",
         },
       };
     }

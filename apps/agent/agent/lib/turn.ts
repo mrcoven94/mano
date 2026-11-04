@@ -174,6 +174,12 @@ const CHECKING =
 const CHECK_STARTING =
   "The safety check is taking a moment, so nothing was sent yet. Reply YES again in a few minutes and I will send it.";
 
+// A fax has no dedupe at the provider, so one that could not be confirmed
+// is never sent again by a YES. The question closes, so a new one can be
+// prepared and answered on its own.
+const UNCONFIRMED =
+  "I could not confirm that fax went through, so I will not send it again on my own. If you want it sent, ask me to prepare it again and you can approve the new one.";
+
 function doneText(purpose: string, receipt: { externalId: string; simulated: boolean } | null | undefined): string {
   const label = receipt?.simulated ? " This was a simulated filing." : "";
   const confirmation = receipt ? ` Confirmation ${receipt.externalId}.` : "";
@@ -196,6 +202,10 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       return CHECKING;
     default: {
       if (result.retryable) return CHECK_STARTING;
+      if (result.unconfirmed) {
+        await engine.clearPointer(approvalId);
+        return UNCONFIRMED;
+      }
       if (result.superseded) {
         await engine.clearPointer(approvalId);
         return `${UPDATED} Ask me to show the latest.`;

@@ -51,15 +51,26 @@ interface PayloadSchema {
   destinations: string[];
   content: string[];
   extra: string[];
+  // Whole numbers Engine worked out, such as a page count.
+  counts?: string[];
 }
 
 export const PAYLOAD_SCHEMAS: Record<ActionType, PayloadSchema> = {
   send: { destinations: ["to"], content: ["subject", "body", "text"], extra: [] },
   submit: { destinations: [], content: ["text"], extra: ["formId"] },
   call: { destinations: [], content: ["script", "text"], extra: [] },
-  fax: { destinations: ["to", "Fax to"], content: ["cover", "text"], extra: ["Approved by", "Pages", "Price"] },
-  mail: { destinations: ["Mail to", "Return address"], content: ["text"], extra: ["Approved by", "Pages", "Price"] },
+  // A fax's number and a letter's addresses are not the recipient's ID, so
+  // they are not destinations. Engine's executors hold them to the allowlist.
+  fax: { destinations: ["to"], content: ["cover", "text"], extra: ["Fax to", "Approved by", "Price"], counts: ["Pages"] },
+  mail: { destinations: [], content: ["text"], extra: ["Mail to", "Return address", "Approved by", "Price"], counts: ["Pages"] },
   share: { destinations: ["with"], content: ["text"], extra: [] },
+};
+
+// Mano's own test line and practice mailbox: nothing reaches an outside
+// party, so there is no one to consent to sharing with.
+const OWN_RECIPIENT: Partial<Record<ActionType, string>> = {
+  fax: "mano-test-fax-line",
+  mail: "mano-practice-mailbox",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -163,7 +174,7 @@ export class RulesChecker implements Checker {
         canonicalRecipient(consent.recipient) === recipient &&
         normalizeLabel(consent.purpose) === purpose,
     );
-    if (!consented && recipient !== "" && purpose !== "") {
+    if (!consented && recipient !== "" && purpose !== "" && OWN_RECIPIENT[action.type] !== action.recipient) {
       problems.push(
         `The person has not agreed to share with ${action.recipient} for ${action.purpose}.`,
       );
@@ -208,6 +219,7 @@ export class RulesChecker implements Checker {
       ...schema.destinations,
       ...schema.content,
       ...schema.extra,
+      ...(schema.counts ?? []),
     ]);
     for (const key of Object.keys(payload)) {
       if (!known.has(key)) {
@@ -266,6 +278,16 @@ export class RulesChecker implements Checker {
       const value = payload[field];
       if (value === undefined) continue;
       if (typeof value !== "string" || value.trim() === "") {
+        problems.push(
+          `The "${field}" part of this ${type} action is not usable, so it cannot go ahead.`,
+        );
+      }
+    }
+
+    for (const field of schema.counts ?? []) {
+      const value = payload[field];
+      if (value === undefined) continue;
+      if (!Number.isInteger(value) || (value as number) < 1) {
         problems.push(
           `The "${field}" part of this ${type} action is not usable, so it cannot go ahead.`,
         );

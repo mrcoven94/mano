@@ -172,16 +172,24 @@ function fitted(box: { width: number; height: number }): { x: number; y: number;
   };
 }
 
-// Embedding a page keeps only what its content draws, so a form's filled-in
-// answers are drawn into the page first. A note, stamp or dynamic form that
-// cannot be carried over stops the send instead of going out without it.
+// Embedding a page keeps only what its content draws, within its full
+// media box and unrotated, so what goes out must match what the person
+// saw. A form's filled-in answers are drawn into the page first. A note,
+// stamp, dynamic form, crop or rotation stops the send instead of going
+// out changed.
 const HARMLESS_ANNOTATIONS = new Set(["/Link", "/Popup"]);
+const SAME_BOX_POINTS = 0.5;
 
-function drawFormsIntoPages(source: PDFDocument): void {
+function assertSentAsSeen(source: PDFDocument): void {
   const form = source.catalog.getAcroForm();
   if (form?.dict.has(PDFName.of("XFA"))) throw new Error("dynamic form");
   if (form) source.getForm().flatten();
   for (const page of source.getPages()) {
+    if (page.getRotation().angle % 360 !== 0) throw new Error("rotated page");
+    const [crop, media] = [page.getCropBox(), page.getMediaBox()];
+    if ((["x", "y", "width", "height"] as const).some((side) => Math.abs(crop[side] - media[side]) > SAME_BOX_POINTS)) {
+      throw new Error("cropped page");
+    }
     const annotations = page.node.Annots();
     for (let i = 0; i < (annotations?.size() ?? 0); i++) {
       // Flattening leaves a dangling entry for each widget it drew.
@@ -204,7 +212,7 @@ async function renderOutgoing(req: ActionRequest, name: string, bytes: Uint8Arra
   drawCover(out.addPage([LETTER.width, LETTER.height]), font, bold, req, name, documentHash);
   if (kind === "pdf") {
     const source = await PDFDocument.load(bytes);
-    drawFormsIntoPages(source);
+    assertSentAsSeen(source);
     const pages = await out.embedPdf(source, source.getPageIndices());
     for (const page of pages) {
       const { x, y, xScale, yScale } = fitted(page);
@@ -245,8 +253,8 @@ export async function prepareOutgoing(req: ActionRequest, type: OutboundType, pr
   try {
     return { ok: true, name: name.trim(), pdf: await renderOutgoing(req, name.trim(), bytes, req.document.hash) };
   } catch {
-    // The built-in fonts cover Western alphabets only, and some PDFs hold
-    // what cannot be carried over. Either is refused rather than sent changed.
+    // The built-in fonts cover Western alphabets only, and some PDFs cannot
+    // be sent as the person saw them. Either is refused rather than sent changed.
     return { ok: false, problem: `Mano could not print this ${what} exactly as written, so it was not prepared.` };
   }
 }
@@ -265,9 +273,17 @@ export async function downstreamKey(personId: string, idempotencyKey: string): P
   return `mano-${await sha256Hex(`${personId}:${idempotencyKey}`)}`;
 }
 
-// Runs a provider call under a deadline. A deadline that passes is a
-// TimeoutError, which the gateway reconciles: the provider may still have
-// acted. An answered 4xx means it did not act, except the two that only
+// A provider's answer, read in full under the deadline.
+export interface ProviderResponse {
+  ok: boolean;
+  status: number;
+  text: string;
+}
+
+// Runs a provider call under a deadline that covers the body too: an answer
+// that stalls after its headers is still a timeout. A deadline that passes
+// is a TimeoutError, which the gateway reconciles: the provider may still
+// have acted. An answered 4xx means it did not act, except the two that only
 // mean try later.
 export async function providerFetch(
   fetchFn: typeof fetch,
@@ -275,11 +291,12 @@ export async function providerFetch(
   init: RequestInit,
   timeoutMs: number,
   label: string,
-): Promise<Response> {
+): Promise<ProviderResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchFn(url, { ...init, signal: controller.signal });
+    const res = await fetchFn(url, { ...init, signal: controller.signal });
+    return { ok: res.ok, status: res.status, text: await res.text() };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") throw new TimeoutError(`${label} timed out.`);
     throw err;
@@ -288,7 +305,7 @@ export async function providerFetch(
   }
 }
 
-export function assertAccepted(res: Response, label: string): void {
+export function assertAccepted(res: ProviderResponse, label: string): void {
   if (res.ok) return;
   if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
     throw new DefiniteFailureError(`${label} rejected the request: ${res.status}`);
