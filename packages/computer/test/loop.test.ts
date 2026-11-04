@@ -80,6 +80,20 @@ describe("observe-act loop", () => {
     expect(computer.actions).toEqual([]);
   });
 
+  test("each turn logs its time and action types, and never a typed value", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const model = new FakeModelClient([
+      [computerCall("call-1", [{ type: "click", button: "left", x: 1, y: 2 }, { type: "type", text: "Maria Torres" }])],
+      [assistantMessage("ACCEPTED")],
+    ]);
+    await runLoop(new FakeComputer(), model, "task", { model: MODEL });
+    const logged = log.mock.calls.map((c) => String(c[0]));
+    log.mockRestore();
+    expect(logged).toHaveLength(1);
+    expect(JSON.parse(logged[0]!)).toMatchObject({ type: "mano_computer_turn", step: 1, actions: "click,type" });
+    expect(logged[0]).not.toMatch(/Maria/);
+  });
+
   test("a refused batch logs its key names and earlier turns, and never a typed value or an unknown word", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const model = new FakeModelClient([
