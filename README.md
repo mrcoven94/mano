@@ -31,7 +31,7 @@ Photo track, 10 synthetic households: Mano got 10 of 10 packets and missed 11 of
 
 What Mano missed:
 
-- **Deadlines.** Mano held no date on any letter. Its answer named no date on 425 of 426 held-out text letters, so a person reading those answers would not be told the deadline. The reply rules stopped it. Running the naming rule on each letter's exact text with no model named 0 of 426, which points at the rule and not at reading. That is an inference, because the run kept no per-letter data.
+- **Deadlines.** Mano held no date on any letter. Its answer named no date on 425 of 426 held-out text letters, so a person reading those answers would not be told the deadline. The reply rules in that run stopped it. Running that naming rule on each letter's exact text with no model named 0 of 426, which points at the rule and not at reading. That is an inference, because the run kept no per-letter data.
 - **Unsafe letters.** The 24 are 13 scam links and 11 planted instructions. Mano caught all 13 links with its link check and 1 planted instruction with the model. It missed the other 10 and also raised 10 false flags. These are probably the same 10 letters, turned by how the frozen adapter scores a link, which is also an inference.
 - **Packets.** Mano missed 9.
 - **What beat it.** The parser is a string matcher tuned on public wording. It beats Mano on packets, deadlines and unsafe letters. Mano beats it on false deadlines, 0 against 75, and on failures, 16 against 148. The general agent beats Mano on deadlines and unsafe letters at about one seventh of the cost.
@@ -49,21 +49,21 @@ Every model Mano calls at runtime is a Meta model. Meta's own API answers HTTP 4
 | Step | Meta model | Where it runs | On production today |
 | --- | --- | --- | --- |
 | Answering a text, with tools | Muse Spark Open (open weights), `meta-models/Muse-Spark-Open-816B-A42B` | Partner-provided inference on a Modal Shared Endpoint, with `meta/muse-spark-open` on OpenRouter as run-time backup | Running |
-| Reading a letter into cited fields | Muse Spark Open | The same route and backup | Running |
+| Reading a letter into cited fields, and saying which date the person must meet | Muse Spark Open | Modal Shared Endpoint, with OpenRouter as backup only when Modal fails before a response starts | Running. If the read fails on both, or Modal answers 200 and the response is lost, the person gets no date and is asked to send the photo again |
 | Finding the letter in the photo | SAM 3.1 | Meta's API | Not running, 402. On-device paper detection (plain code) takes its place |
 | Listening to a voice note | Muse Voice Transcribe, then Muse Spark Open | Meta's API, then OpenRouter | Muse Voice Transcribe is not running, 402. The backup is deployed and not confirmed live |
 | Filling the form with Mano's computer | Muse Spark Open, which reads screenshots and clicks points | Modal Shared Endpoint with no backup, driving a desktop on Modal | Running: three unbroken production runs, below. When the computer or its model stops (an error, the deadline, the step limit or a refused action), Mano drafts the renewal without the computer and says so. When the form refuses a value, the saved draft differs from the person's values, or no draft was saved, Mano prepares nothing |
 | Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes |
 | Crisis check, before the agent, on one short health question the keyword floor flags | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis |
 | Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Standby, on Muse Spark Open during the 402 |
-| Naming or holding a date | None, plain code | `packages/mail/src/naming.ts`, `packages/mail/src/gate.ts` | Running |
+| Checking the reader's date, and holding a deadline | None, plain code | `packages/mail/src/naming.ts`, `packages/mail/src/gate.ts` | Deployed, not confirmed on production yet |
 | Drafting the renewal | None for the form table | `apps/agent/agent/lib/forms.ts` | Running |
 | The person's yes and the filing to the sandbox portal | None, plain code | `apps/engine/src/gateway` | Running. Run a4c0ec45 on production recorded receipt SR-PPW4FECM, not simulated |
 | Reminder the day before an interview | None, plain code | `apps/engine/src/deadlines.ts` | Deployed |
 
-These parts are not Meta model calls: the keyword crisis floor that every text passes through, on-device paper detection, date naming, the deadline gate and field checks, the scam screen, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images.
+These parts are not Meta model calls: the keyword crisis floor that every text passes through, on-device paper detection, the checks on the reader's date, the deadline gate and field checks, the scam screen, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images.
 
-At this commit, the first reply names a date only when every sentence the rule stops on is on a closed list in `packages/mail/src/naming.ts`, and otherwise it asks with no date.
+At this commit, the reader says which date the person must meet and quotes the sentence that gives it. Code in `packages/mail/src/naming.ts` checks that the quote is in the letter and that the date is printed whole in it, is not negated, is not a count, is not the notice date and is not too far after it. The reply then asks the person to check that date, and only the gate in `packages/mail/src/gate.ts` holds a deadline. These rules overrule the reader: a scam, a planted instruction, a letter that says it is someone else's or no longer stands, wording that moves or replaces a date, a heading that reverses what follows, and two letters on one crop.
 
 A document is now labeled by what it was read as, and a renewal says so when it attaches no proof of income ([PR 195](https://github.com/mrcoven94/mano/pull/195)). That is merged and not confirmed on production yet.
 
@@ -140,7 +140,7 @@ Tests cover the three safety cases: a stale approval is refused (`apps/engine/te
 
 ## Known weaknesses
 
-- On unseen wording, Mano does not tell a person the deadline. The held-out result above is the measure of it. The synthetic letter in `pnpm judge` does hold its date, so that run does not show this.
+- The first held-out run measured the old rule, which named no date on 425 of 426 letters. The reader that replaced it ([PR 207](https://github.com/mrcoven94/mano/pull/207)) has no held-out result yet. The synthetic letter in `pnpm judge` holds its date through the gate, so that run does not exercise naming.
 - The deadline check reads one sentence at a time and has known gaps, listed in `packages/mail/test/gate-letters.test.ts`, such as a Re: line naming another program.
 - Mano missed 10 of 11 planted instructions in the held-out test, which ran no Guardian. Guardian has no held-out number of its own.
 - Computer fill on production rests on the runs above. The three runs skip the text line and the reminder and use one portal layout. The two runs on seeded layouts are too few to give a fill rate, and a fill has no model backup.
