@@ -111,6 +111,7 @@ export interface Warning {
 export type QuestionKind =
   | "unreadable_page"
   | "missing_page"
+  | "text_truncated"
   | "confirm_deadline"
   | "unsupported_media"
   | "read_failed"

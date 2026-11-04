@@ -439,8 +439,13 @@ export class ConversationDO implements DurableObject {
         logger: this.logger,
         nowMs: () => Date.now(),
       });
+      const batchMs = numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs);
       if (answer.result === "queued") {
-        await this.ctx.storage.setAlarm(Date.now() + numberEnv(this.env.TURN_BATCH_MS, DEFAULT_RUNNER_CONFIG.batchMs));
+        await this.ctx.storage.setAlarm(Date.now() + batchMs);
+      } else if (new SqlConversationStore(sql).pending().length > 0 && (await this.ctx.storage.getAlarm()) === null) {
+        // A failure after queuing bounces, and this redelivery finds the
+        // email already recorded: the turn still needs its alarm.
+        await this.ctx.storage.setAlarm(Date.now() + batchMs);
       }
       return Response.json(answer);
     }

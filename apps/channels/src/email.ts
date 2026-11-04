@@ -45,8 +45,13 @@ export const MAX_EMAIL_BYTES = 15_000_000;
 const MAX_FILE_BYTES = 10_000_000;
 export const MAX_EMAIL_FILES = 5;
 const MAX_TEXT_CHARS = 20_000;
-const MAX_HTML_CHARS = 2_000_000;
+const MAX_SUBJECT_CHARS = 300;
+// Below this an embedded image is taken for a logo. A page scanned so it
+// can be read is larger.
+const MIN_EMBEDDED_SCAN_BYTES = 30_000;
 const MAX_LINKS = 25;
+// Mail reads this type as text it must not hold a date from.
+const TRUNCATED_TEXT_TYPE = "text/plain; truncated=yes";
 // Each email can cost a text and a model reading, so a leaked address
 // cannot run far.
 export const MAX_EMAILS_PER_DAY = 10;
@@ -63,6 +68,7 @@ export const ARRIVED_PDF_TEXT =
   "A letter came to your Mano email as a PDF. I saved it, but I cannot read PDFs yet. Send me a photo or screenshot of it and I will read that.";
 export const PDF_TOO_TEXT = "It also has a PDF I saved but cannot read yet.";
 export const SKIPPED_TEXT = "It had other files I could not take.";
+export const TRUNCATED_TEXT = "It is too long for me to read in full, so I will not save a date from it. Ask the office for the dates.";
 export const LINK_TEXT = "A link in it did not pass my safety check, so do not open it.";
 
 export function addressFor(token: string, domain: string): string {
@@ -159,6 +165,7 @@ export interface EmailDelivery {
   files: EmailFile[];
   // Files left out by type, size or count.
   skipped: number;
+  truncated: boolean;
   linkFailed: boolean;
 }
 
@@ -166,7 +173,7 @@ export function parseEmailDelivery(raw: unknown): EmailDelivery | null {
   const d = raw as Partial<EmailDelivery> | null;
   if (typeof d?.handleHash !== "string" || typeof d.token !== "string" || typeof d.key !== "string" || !Array.isArray(d.files)) return null;
   if (!d.files.every((f) => typeof f?.mimeType === "string" && typeof f.contentB64 === "string")) return null;
-  return { handleHash: d.handleHash, token: d.token, key: d.key, files: d.files, skipped: Number(d.skipped) || 0, linkFailed: d.linkFailed === true };
+  return { handleHash: d.handleHash, token: d.token, key: d.key, files: d.files, skipped: Number(d.skipped) || 0, truncated: d.truncated === true, linkFailed: d.linkFailed === true };
 }
 
 export interface EmailAnswer {
@@ -192,9 +199,10 @@ function base64ToBytes(b64: string): Uint8Array {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }
 
-export function arrivalText(opts: { reading: boolean; pdf: boolean; skipped: boolean; linkFailed: boolean }): string {
+export function arrivalText(opts: { reading: boolean; pdf: boolean; skipped: boolean; truncated: boolean; linkFailed: boolean }): string {
   const parts = opts.reading ? [ARRIVED_TEXT, ...(opts.pdf ? [PDF_TOO_TEXT] : [])] : [ARRIVED_PDF_TEXT];
   if (opts.skipped) parts.push(SKIPPED_TEXT);
+  if (opts.truncated && opts.reading) parts.push(TRUNCATED_TEXT);
   if (opts.linkFailed) parts.push(LINK_TEXT);
   return parts.join(" ");
 }
@@ -202,24 +210,46 @@ export function arrivalText(opts: { reading: boolean; pdf: boolean; skipped: boo
 // Inside the person's conversation: the token must be this conversation's
 // current one, so an address ends the moment a delete clears it.
 export async function receiveEmail(delivery: EmailDelivery, deps: ReceiveDeps): Promise<EmailAnswer> {
-  const { sql, store, runner, documents, photoConverter, spend, logger, nowMs } = deps;
+  const { sql, store, documents, nowMs } = deps;
   const inbox = loadInbox(sql);
   if (!inbox || inbox.token !== delivery.token) return { result: "unknown" };
   const eventId = `email:${delivery.key}`;
   if (store.hasEvent(eventId)) return { result: "duplicate" };
   const meta = store.meta();
   if (meta.optedOut || meta.closed || (!meta.chatId && !meta.to)) return { result: "closed" };
+  if (!documents) return { result: "unavailable" };
   const day = dayKeyFor(nowMs());
   const today = inbox.dayKey === day ? inbox.dayCount : 0;
   if (today >= MAX_EMAILS_PER_DAY) return { result: "busy" };
-  if (!documents) return { result: "unavailable" };
+  // The slot is taken here, before the first await, so mail arriving at
+  // once cannot all read the same count. One that ends up refused gives it
+  // back, since it may be sent again.
+  sql.exec("UPDATE email_inbox SET day_key = ?, day_count = ? WHERE id = 1", day, today + 1);
+  const release = () => sql.exec("UPDATE email_inbox SET day_count = MAX(day_count - 1, 0) WHERE id = 1 AND day_key = ?", day);
+  try {
+    const answer = await storeAndQueue(delivery, documents, meta.generation, day, eventId, deps);
+    if (answer.result === "unavailable" || answer.result === "closed" || answer.result === "unknown") release();
+    return answer;
+  } catch (err) {
+    release();
+    throw err;
+  }
+}
 
-  const { generation } = meta;
+async function storeAndQueue(
+  delivery: EmailDelivery,
+  documents: DocumentStore,
+  generation: number,
+  day: string,
+  eventId: string,
+  deps: ReceiveDeps,
+): Promise<EmailAnswer> {
+  const { store, runner, photoConverter, spend, logger, nowMs } = deps;
   const stored: { id: string; mimeType: string }[] = [];
   let skipped = delivery.skipped;
   for (const [index, file] of delivery.files.entries()) {
     const raw = base64ToBytes(file.contentB64);
-    const form = file.mimeType === "text/plain" ? { bytes: raw, mimeType: file.mimeType } : await storedForm(raw, file.mimeType, photoConverter);
+    const form = file.mimeType.startsWith("text/plain") ? { bytes: raw, mimeType: file.mimeType } : await storedForm(raw, file.mimeType, photoConverter);
     const used = store.meta();
     const usedToday = used.byteDayKey === day ? used.byteDayCount : 0;
     const byteKey = `${delivery.handleHash}:${eventId}:${index}`;
@@ -244,23 +274,30 @@ export async function receiveEmail(delivery: EmailDelivery, deps: ReceiveDeps): 
   }
   if (stored.length === 0) return { result: "unavailable" };
   // A delete during the uploads wins; Engine refused anything after it.
-  if (store.meta().generation !== generation) return { result: "unknown" };
+  const uploaded = store.meta();
+  if (uploaded.generation !== generation) return { result: "unknown" };
+  // So does a STOP or a close. Nobody will be told, so the sender must be.
+  if (uploaded.optedOut || uploaded.closed) return { result: "closed" };
 
   const reading = stored.filter((d) => d.mimeType !== "application/pdf");
-  const text = arrivalText({ reading: reading.length > 0, pdf: reading.length < stored.length, skipped: skipped > 0, linkFailed: delivery.linkFailed });
-  // Counted before the text, so a failure after it never lets a sender run
-  // past the day's cap by retrying.
-  sql.exec("UPDATE email_inbox SET day_key = ?, day_count = ? WHERE id = 1", day, today + 1);
+  const text = arrivalText({
+    reading: reading.length > 0,
+    pdf: reading.length < stored.length,
+    skipped: skipped > 0,
+    truncated: delivery.truncated,
+    linkFailed: delivery.linkFailed,
+  });
   try {
     await runner.sendAgentText({ key: eventId, text, generation });
   } catch (err) {
     // The letter is stored, and the reading's own reply still reaches them.
     logger.warn("email_notice_failed", { err: errName(err) });
   }
-  logger.info("email_received", { files: stored.length, reading: reading.length, skipped, linkFailed: delivery.linkFailed });
-  // A STOP during the text must hold: an inbound here would clear it.
+  logger.info("email_received", { files: stored.length, reading: reading.length, skipped, truncated: delivery.truncated, linkFailed: delivery.linkFailed });
+  // Read once more after that await, with none until handleEvent has
+  // written: an inbound clears both STOP and a close.
   const now = store.meta();
-  if (reading.length === 0 || now.optedOut || now.generation !== generation) {
+  if (reading.length === 0 || now.optedOut || now.closed || now.generation !== generation) {
     store.recordEvent(eventId, "email", nowMs());
     return { result: "noted" };
   }
@@ -290,28 +327,95 @@ export async function receiveEmail(delivery: EmailDelivery, deps: ReceiveDeps): 
 export interface ParsedEmail {
   files: EmailFile[];
   skipped: number;
+  // The words were cut to fit, so what is missing could change what is kept.
+  truncated: boolean;
   links: string[];
 }
 
-const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", "#39": "'" };
+// Where a link's address can be written so that a browser still reads it.
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&", AMP: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", colon: ":", sol: "/", bsol: "\\", period: ".", Tab: "\t", NewLine: "\n",
+  num: "#", quest: "?", equals: "=", lowbar: "_", hyphen: "-", dash: "-", commat: "@", percnt: "%",
+};
 
-function htmlToText(html: string): string {
-  return html
-    .slice(0, MAX_HTML_CHARS)
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ")
-    .replace(/<(br|\/p|\/div|\/tr|\/li|\/h[1-6])\b[^>]*>/gi, "\n")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/g, (_, name: string) => ENTITIES[name]!)
+function fromCodePoint(code: number): string {
+  return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
+}
+
+// As a browser reads them: the semicolon is optional on a number.
+export function decodeEntities(text: string): string {
+  return text.replace(/&(?:#(\d{1,7});?|#[xX]([0-9a-fA-F]{1,6});?|([a-zA-Z]{2,8});)/g, (whole, dec?: string, hex?: string, name?: string) => {
+    if (dec) return fromCodePoint(Number(dec));
+    if (hex) return fromCodePoint(parseInt(hex, 16));
+    return NAMED_ENTITIES[name!] ?? whole;
+  });
+}
+
+const CLOSING_BLOCK: Record<string, RegExp> = { script: /<\/script\b/gi, style: /<\/style\b/gi };
+const BLOCK_TAG = /^\/?(?:br|p|div|table|tr|td|th|li|h[1-6])\b/i;
+
+// One pass with no backtracking, since the HTML is the sender's. A < with
+// no > after it is text, as it is to a browser; so is the rest of the page
+// after a script that never closes, which a browser would not show.
+export function htmlToText(html: string): string {
+  const parts: string[] = [];
+  let at = 0;
+  for (;;) {
+    const open = html.indexOf("<", at);
+    const close = open < 0 ? -1 : html.indexOf(">", open);
+    if (close < 0) {
+      parts.push(html.slice(at));
+      break;
+    }
+    parts.push(html.slice(at, open));
+    const tag = html.slice(open + 1, Math.min(close, open + 12));
+    const block = /^(script|style)\b/i.exec(tag)?.[1]?.toLowerCase();
+    if (block) {
+      const closing = CLOSING_BLOCK[block]!;
+      closing.lastIndex = close;
+      const end = closing.exec(html);
+      const after = end ? html.indexOf(">", end.index) : -1;
+      if (after < 0) break;
+      at = after + 1;
+      parts.push(" ");
+      continue;
+    }
+    parts.push(BLOCK_TAG.test(tag) ? "\n" : " ");
+    at = close + 1;
+  }
+  return decodeEntities(parts.join(""))
     .replace(/[ \t]+/g, " ")
     .replace(/\n\s*\n\s*/g, "\n\n")
     .trim();
 }
 
+const LINK_ATTRIBUTE = /(?:^|[\s"'/])(?:xlink:)?(?:href|action|formaction)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+// Places an attribute can point that are not a web page.
+const HARMLESS_SCHEME = /^(?:mailto|tel|sms|cid):/i;
+
+// One attribute's value as a browser would resolve it. Null for what is not
+// a link out of the email. Any other scheme is kept: the link check fails it.
+export function linkFromAttribute(value: string): string | null {
+  const url = decodeEntities(value)
+    .replace(/[\t\n\r]/g, "")
+    .trim()
+    .replace(/\\/g, "/");
+  if (!url || url.startsWith("#") || HARMLESS_SCHEME.test(url)) return null;
+  if (url.startsWith("//")) return `https:${url}`;
+  const web = /^(https?):\/*(.*)$/is.exec(url);
+  if (web) return `${web[1]!.toLowerCase()}://${web[2]}`;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return url;
+  return extractLinks(url).length > 0 ? url : null;
+}
+
 // A link's address can hide behind other words in HTML, so every one is
 // written out in the text and checked.
-function hrefsOf(html: string): string[] {
+function linksInAttributes(html: string): string[] {
   const out = new Set<string>();
-  for (const match of html.slice(0, MAX_HTML_CHARS).matchAll(/\bhref\s*=\s*["']?(https?:\/\/[^"'\s>]+)/gi)) out.add(match[1]!);
+  for (const match of html.matchAll(LINK_ATTRIBUTE)) {
+    const link = linkFromAttribute(match[1] ?? match[2] ?? match[3] ?? "");
+    if (link) out.add(link);
+  }
   return [...out];
 }
 
@@ -322,32 +426,41 @@ function toBytes(content: Email["attachments"][number]["content"]): Uint8Array {
 // Throws on a message the parser cannot read.
 export async function parseEmail(raw: Uint8Array): Promise<ParsedEmail> {
   const parsed = await PostalMime.parse(raw as Uint8Array<ArrayBuffer>);
-  const hrefs = hrefsOf(parsed.html ?? "");
-  const body = parsed.text?.trim() || htmlToText(parsed.html ?? "");
+  const html = parsed.html ?? "";
+  const visible = htmlToText(html);
+  const body = parsed.text?.trim() || visible;
+  const hrefs = linksInAttributes(html);
   const hidden = hrefs.filter((href) => !body.includes(href));
   const words = [body, ...(hidden.length ? [`Links in this email:\n${hidden.join("\n")}`] : [])].join("\n\n").trim();
+  // Every link counts, cut or not, and the HTML may say what the plain part
+  // does not.
+  const subject = parsed.subject ?? "";
+  const links = new Set([...extractLinks(subject), ...extractLinks(words), ...extractLinks(visible), ...hrefs]);
   const files: EmailFile[] = [];
   let skipped = 0;
-  let text = "";
+  let truncated = false;
   if (words) {
-    const head = [parsed.from?.address ? `From: ${parsed.from.address}` : "", parsed.subject ? `Subject: ${parsed.subject}` : ""].filter(Boolean).join("\n");
-    text = `${head}\n\n${words}`.trim().slice(0, MAX_TEXT_CHARS);
-    files.push({ mimeType: "text/plain", contentB64: bytesToBase64(new TextEncoder().encode(text)) });
+    const head = [parsed.from?.address ? `From: ${parsed.from.address}` : "", subject ? `Subject: ${subject.slice(0, MAX_SUBJECT_CHARS)}` : ""].filter(Boolean).join("\n");
+    const whole = `${head}\n\n${words}`.trim();
+    truncated = subject.length > MAX_SUBJECT_CHARS || whole.length > MAX_TEXT_CHARS;
+    files.push({ mimeType: truncated ? TRUNCATED_TEXT_TYPE : "text/plain", contentB64: bytesToBase64(new TextEncoder().encode(whole.slice(0, MAX_TEXT_CHARS))) });
   }
-  for (const attachment of parsed.attachments) {
-    // A logo in the signature is not a letter. An email that is only an
-    // embedded scan still has its scan read.
-    if (attachment.related && words) continue;
+  // Attached files come first, so an embedded image never takes their place.
+  const attachments = [...parsed.attachments.filter((a) => !a.related), ...parsed.attachments.filter((a) => a.related)];
+  for (const attachment of attachments) {
     const bytes = toBytes(attachment.content);
     // Read from the bytes' own signature, never from what the sender names.
     const mimeType = sniffMediaType(bytes);
+    // A logo in the signature is not a letter, and is not worth a word to
+    // the person. A scan embedded beside the words is both.
+    if (attachment.related && words && mimeType !== "application/pdf" && bytes.byteLength < MIN_EMBEDDED_SCAN_BYTES) continue;
     if (!mimeType || bytes.byteLength > MAX_FILE_BYTES || files.length >= MAX_EMAIL_FILES) {
       skipped += 1;
       continue;
     }
     files.push({ mimeType, contentB64: bytesToBase64(bytes) });
   }
-  return { files, skipped, links: extractLinks(text) };
+  return { files, skipped, truncated, links: [...links] };
 }
 
 // True when any link is blocked, cannot be looked up (rule 6), or is one
@@ -456,6 +569,7 @@ export async function handleEmail(
       key: await sha256Hex(raw),
       files: parsed.files,
       skipped: parsed.skipped,
+      truncated: parsed.truncated,
       linkFailed: await linksFail(parsed.links, checker),
     };
     const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));

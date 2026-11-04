@@ -20,13 +20,46 @@ export interface LinkCheckResult {
 // script. Numbers (1.2), single-letter trails (Section 4.b) and the
 // domain inside an email address, subdomains included, do not match.
 const LINK_PATTERN =
-  /\bhttps?:\/\/[^\s<>"')\]]+|\b(?<!@[\p{L}0-9.-]*)(?:www\.)?(?:[\p{L}0-9](?:[\p{L}0-9-]{0,61}[\p{L}0-9])?\.)+[\p{L}]{2,}(?::\d{1,5})?(?:\/[^\s<>"')\]]*)?/giu;
+  /\bhttps?:\/\/[^\s<>"')\]]+|\b(?<!@)(?:www\.)?(?:[\p{L}0-9](?:[\p{L}0-9-]{0,61}[\p{L}0-9])?\.)+[\p{L}]{2,}(?::\d{1,5})?(?:\/[^\s<>"')\]]*)?/giu;
 const TRAILING_PUNCT = /[.,;:!?)\]]+$/;
+const HOST_CHAR = /[\p{L}0-9.-]/u;
+// The longest host name there is. Past it, a match is treated as a link.
+const MAX_HOST_CHARS = 253;
+
+// True when a match without a scheme is the tail of an email address, as
+// example.test is in a@inbox.example.test. Checked here rather than with a
+// lookbehind in the pattern, which walks back from every candidate and is
+// quadratic on a long run of labels.
+function inEmailAddress(text: string, start: number): boolean {
+  for (let i = start - 1; i >= 0 && start - i <= MAX_HOST_CHARS; i--) {
+    const c = text[i]!;
+    if (c === "@") return true;
+    if (!HOST_CHAR.test(c)) return false;
+  }
+  return false;
+}
+
+function linkMatches(text: string): RegExpExecArray[] {
+  const matches: RegExpExecArray[] = [];
+  LINK_PATTERN.lastIndex = 0;
+  for (let m = LINK_PATTERN.exec(text); m; m = LINK_PATTERN.exec(text)) {
+    if (/^https?:/i.test(m[0]) || !inEmailAddress(text, m.index)) {
+      matches.push(m);
+      continue;
+    }
+    // Only the address's host is passed over: a path after it can hold a
+    // link of its own.
+    let end = m.index;
+    while (end < text.length && HOST_CHAR.test(text[end]!)) end++;
+    LINK_PATTERN.lastIndex = end;
+  }
+  return matches;
+}
 
 export function extractLinks(text: string): string[] {
   const found = new Set<string>();
-  for (const match of text.match(LINK_PATTERN) ?? []) {
-    const cleaned = match.replace(TRAILING_PUNCT, "");
+  for (const match of linkMatches(text)) {
+    const cleaned = match[0].replace(TRAILING_PUNCT, "");
     if (cleaned) found.add(cleaned);
   }
   return [...found];
@@ -112,7 +145,7 @@ export async function stripBlockedLinks(
   checker: LinkChecker,
   cleared: ReadonlySet<string> = new Set(),
 ): Promise<{ text: string; removed: number; cleared: Set<string> }> {
-  const matches = [...text.matchAll(LINK_PATTERN)].map((m) => ({
+  const matches = linkMatches(text).map((m) => ({
     start: m.index ?? 0,
     length: m[0].length,
     cleaned: m[0].replace(TRAILING_PUNCT, ""),

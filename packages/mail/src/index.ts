@@ -156,6 +156,9 @@ interface PipelinePage {
   image: NormalizedImage;
   // Set on a page that is an email's text; image is then a stand-in.
   text?: string;
+  // Only the first part of that text arrived, marked by the sender of the
+  // file in its type: text/plain; truncated=yes.
+  truncated?: boolean;
   frameTimeMs: number;
   rotationDegrees: number;
   extraction: PageExtraction | null;
@@ -226,7 +229,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       continue;
     }
     if (kind === "text") {
-      pages.push({ order: pages.length, file: file.name, crop: WHOLE_PAGE, image: TEXT_PAGE_IMAGE, text: new TextDecoder().decode(file.bytes), frameTimeMs: 0, rotationDegrees: 0, extraction: null, readFailed: false, dropped: [] });
+      pages.push({ order: pages.length, file: file.name, crop: WHOLE_PAGE, image: TEXT_PAGE_IMAGE, text: new TextDecoder().decode(file.bytes), truncated: /;\s*truncated=yes\b/i.test(file.mimeType), frameTimeMs: 0, rotationDegrees: 0, extraction: null, readFailed: false, dropped: [] });
       continue;
     }
     if (kind === "video" && file.bytes.length > MAX_VIDEO_BYTES) {
@@ -550,6 +553,14 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     if (pageReason) {
       reasons.push(pageReason);
       ownQuestion.add(pageReason);
+    }
+    // The same for text that was cut: what is missing may cancel or move a
+    // date in what is here.
+    if (members.some((m) => m.truncated)) {
+      const reason = "only the first part of this email was read";
+      reasons.push(reason);
+      ownQuestion.add(reason);
+      ask({ kind: "text_truncated", letterId, prompt: "Only the first part of this email was read. Ask the office for the dates.", citation: null });
     }
 
     // A proposal is high confidence only when all of these hold across

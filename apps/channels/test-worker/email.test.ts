@@ -109,6 +109,20 @@ describe("the email handler in workerd", () => {
     expect(await runInDurableObject(stub, async (_, state) => (await state.storage.getAlarm()) !== null)).toBe(true);
   });
 
+  it("restores a lost alarm when the email is delivered again", async () => {
+    const { stub, token } = await openConversation("alarm");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
+      String(input instanceof Request ? input.url : input).includes("/documents") ? Response.json({ id: "stored" }) : Response.json({ Status: 0, Answer: [{ data: "192.0.2.1" }] }),
+    );
+    const body = raw("Your renewal is due.");
+    await worker.email(deliver(addressFor(token, DOMAIN), body).message, workerEnv);
+    await runInDurableObject(stub, (_, state) => state.storage.deleteAlarm());
+    const again = deliver(addressFor(token, DOMAIN), body);
+    await worker.email(again.message, workerEnv);
+    expect(again.rejected()).toBeNull();
+    expect(await runInDurableObject(stub, async (_, state) => (await state.storage.getAlarm()) !== null)).toBe(true);
+  });
+
   it("ends the address on a delete", async () => {
     const { stub, token, name } = await openConversation("delete");
     await stub.fetch("https://conversation/internal/delete", { method: "POST", body: JSON.stringify({ handleHash: name }) });

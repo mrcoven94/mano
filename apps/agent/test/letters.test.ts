@@ -396,6 +396,14 @@ describe("a letter that came by email", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("holds no deadline from an email that was cut", async () => {
+    engine.putDocument(PERSON, EMAIL_DOC, words(RENEWAL_TEXT));
+    const cut = { documents: [{ id: EMAIL_DOC, mimeType: "text/plain; truncated=yes" }] };
+    const { body } = await send(photoTurn("turn_emailcut01", cut), deps([RENEWAL_PAGE]));
+    expect(engine.deadlineCalls).toHaveLength(0);
+    expect(body.text).toContain("I read only the first part of this email");
+  });
+
   it("says the email is saved when the reading fails, and does not ask the person to resend a photo they never sent", async () => {
     engine.putDocument(PERSON, EMAIL_DOC, words(RENEWAL_TEXT));
     const failing = { live: false, responses: async () => { throw new Error("402"); } };

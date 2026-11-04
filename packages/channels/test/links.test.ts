@@ -138,3 +138,31 @@ describe("stripBlockedLinks", () => {
     expect(firstUrl.startsWith("https://family.cloudflare-dns.com/dns-query")).toBe(true);
   });
 });
+
+describe("the domain of an email address", () => {
+  it("is not a link, subdomains included", () => {
+    expect(extractLinks("Write to letters+abc@inbox.example.test today.")).toEqual([]);
+    expect(extractLinks("Write to a@b.c.d.example.test today.")).toEqual([]);
+  });
+
+  it("does not hide a link beside it", () => {
+    expect(extractLinks("a@inbox.example.test or scam.example.com/login")).toEqual(["scam.example.com/login"]);
+    expect(extractLinks("a@inbox.example.test, scam.example.com")).toEqual(["scam.example.com"]);
+    expect(extractLinks("a_b.evil.example.com")).toEqual(["evil.example.com"]);
+    expect(extractLinks("a@b.example.com/evil.example.org")).toEqual(["evil.example.org"]);
+    expect(extractLinks("a@https://evil.example.com/x")).toEqual(["https://evil.example.com/x"]);
+  });
+
+  it("is left in place when a reply's links are stripped", async () => {
+    const checker = new LinkChecker({ fetchFn: (async () => new Response("down", { status: 500 })) as typeof fetch });
+    const out = await stripBlockedLinks("Write to a@inbox.example.test or scam.example.com.", checker);
+    expect(out.text).toBe(`Write to a@inbox.example.test or ${LINK_REMOVED}.`);
+    expect(out.removed).toBe(1);
+  });
+
+  it("takes linear time on a long run of labels after an @", () => {
+    const started = Date.now();
+    extractLinks(`@${"a.".repeat(200_000)}test`);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+});

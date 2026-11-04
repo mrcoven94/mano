@@ -16,6 +16,7 @@ import {
   REJECT_TOO_LARGE,
   REJECT_UNKNOWN,
   SKIPPED_TEXT,
+  TRUNCATED_TEXT,
   addressFor,
   clearInbox,
   ensureInboxToken,
@@ -447,5 +448,263 @@ describe("what the inbox refuses", () => {
     expect((await inbox.send(mime({ text: "One more" }))).rejected).toBe(REJECT_LATER);
     inbox.h.advance(24 * 3600 * 1000);
     expect((await inbox.send(mime({ text: "The next day" }))).rejected).toBeNull();
+  });
+});
+
+const gate = () => {
+  let open: () => void = () => undefined;
+  const opened = new Promise<void>((resolve) => (open = resolve));
+  return { opened, open };
+};
+
+describe("while an email is being stored", () => {
+  it("holds the day's cap for mail arriving at once", async () => {
+    const inbox = await openInbox();
+    const uploads = gate();
+    const put = inbox.h.documents.put.bind(inbox.h.documents);
+    inbox.h.documents.put = async (doc) => {
+      await uploads.opened;
+      return put(doc);
+    };
+    const sends = Array.from({ length: MAX_EMAILS_PER_DAY + 1 }, (_, i) => inbox.send(mime({ text: `Letter ${i}` })));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    uploads.open();
+    const outcomes = await Promise.all(sends);
+    expect(outcomes.filter((o) => o.rejected === null)).toHaveLength(MAX_EMAILS_PER_DAY);
+    expect(outcomes.filter((o) => o.rejected === REJECT_LATER)).toHaveLength(1);
+    expect(inbox.h.documents.docs.size).toBe(MAX_EMAILS_PER_DAY);
+  });
+
+  it("gives a slot back when nothing could be stored", async () => {
+    const inbox = await openInbox();
+    inbox.h.documents.refuse = true;
+    for (let i = 0; i < MAX_EMAILS_PER_DAY + 1; i++) expect((await inbox.send(mime({ text: `Failed ${i}` }))).rejected).toBe(REJECT_LATER);
+    inbox.h.documents.refuse = false;
+    for (let i = 0; i < MAX_EMAILS_PER_DAY; i++) expect((await inbox.send(mime({ text: `Letter ${i}` }))).rejected).toBeNull();
+  });
+
+  const closes = (h: Harness, id: string) => ({ ...inboundEvent({ id, occurredAtMs: h.now }), kind: "chat.closed" as const, rawType: "chat.closed", text: null });
+  const stops = (h: Harness, id: string) => inboundEvent({ id, occurredAtMs: h.now + 1, text: "STOP" });
+  const ends = [
+    { name: "a close", event: closes, field: "closed" as const },
+    { name: "a STOP", event: stops, field: "optedOut" as const },
+  ];
+
+  for (const { name, event, field } of ends) {
+    it(`does not reopen the conversation when ${name} lands during the upload, and bounces`, async () => {
+      const inbox = await openInbox();
+      const put = inbox.h.documents.put.bind(inbox.h.documents);
+      inbox.h.documents.put = async (doc) => {
+        await inbox.h.runner.handleEvent(event(inbox.h, "evt_end"), "webhook");
+        return put(doc);
+      };
+      const sends = inbox.h.channel.sends.length;
+      const out = await inbox.send(mime({ text: "Your renewal is due." }));
+      expect(out.rejected).toBe(REJECT_CLOSED);
+      expect(inbox.h.store.meta()[field]).toBe(true);
+      expect(inbox.h.store.pending().filter((p) => p.eventId.startsWith("email:"))).toEqual([]);
+      expect(inbox.h.channel.sends.filter((s) => s.text === ARRIVED_TEXT)).toHaveLength(0);
+      expect(inbox.h.channel.sends.length).toBeGreaterThanOrEqual(sends);
+    });
+
+    it(`does not reopen the conversation when ${name} lands during the arrival text`, async () => {
+      const inbox = await openInbox();
+      const send = inbox.h.runner.sendAgentText.bind(inbox.h.runner);
+      inbox.h.runner.sendAgentText = async (opts) => {
+        const sent = await send(opts);
+        await inbox.h.runner.handleEvent(event(inbox.h, "evt_end"), "webhook");
+        return sent;
+      };
+      await inbox.send(mime({ text: "Your renewal is due." }));
+      expect(inbox.h.store.meta()[field]).toBe(true);
+      expect(inbox.h.store.pending().filter((p) => p.eventId.startsWith("email:"))).toEqual([]);
+    });
+  }
+});
+
+describe("links an email tries to hide", () => {
+  const HOST = "benefits-unlock.example";
+  const blocked = () => {
+    const asked: string[] = [];
+    return {
+      asked,
+      dns: (host: string) => {
+        asked.push(host);
+        return Response.json({ Status: 0, Answer: [{ data: host === HOST ? "0.0.0.0" : "192.0.2.1" }] });
+      },
+    };
+  };
+  const forms: [string, string][] = [
+    ["a decimal entity in the scheme", `<a href="&#104;ttps://${HOST}/login">Open</a>`],
+    ["a decimal entity with no semicolon", `<a href="&#104ttps://${HOST}/login">Open</a>`],
+    ["a hex entity in the scheme", `<a href="&#x68;ttps://${HOST}/login">Open</a>`],
+    ["entities for the slashes", `<a href="https:&#47;&#47;${HOST}/login">Open</a>`],
+    ["hex entities for the slashes", `<a href="https:&#x2f;&#x2F;${HOST}/login">Open</a>`],
+    ["an entity for the colon", `<a href="https&#58;//${HOST}/login">Open</a>`],
+    ["a named colon and slashes", `<a href="https&colon;&sol;&sol;${HOST}/login">Open</a>`],
+    ["a tab inside the scheme", `<a href="ht&Tab;tps://${HOST}/login">Open</a>`],
+    ["no scheme", `<a href="//${HOST}/login">Open</a>`],
+    ["an entity in the host", `<a href="https://benefits-unlock&#46;example/login">Open</a>`],
+    ["capital letters", `<A HREF="HTTPS://${HOST}/login">Open</A>`],
+    ["no quotes", `<a href=https://${HOST}/login>Open</a>`],
+    ["spaces around the equals sign", `<a href \r\n = \r\n "https://${HOST}/login">Open</a>`],
+    ["backslashes", `<a href="https:\\\\${HOST}\\login">Open</a>`],
+    ["an image map", `<area href="https://${HOST}/login">`],
+    ["a form", `<form action="https://${HOST}/login"></form>`],
+    ["visible text in entities", `<p>Go to &#104;ttps://${HOST}/login today</p>`],
+  ];
+  for (const [name, html] of forms) {
+    it(`checks one written with ${name}`, async () => {
+      const { asked, dns } = blocked();
+      const inbox = await openInbox({ dns });
+      await inbox.send(mime({ html: `<p>Renew today.</p>${html}` }));
+      expect(asked).toContain(HOST);
+      expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${LINK_TEXT}`]);
+    });
+  }
+
+  it("fails a link that is not a web link at all", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ html: `<p>Renew.</p><a href="java&#115;cript:alert(1)">Open</a>` }));
+    expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${LINK_TEXT}`]);
+  });
+
+  it("leaves mailto, tel and in-page links alone", async () => {
+    const { asked, dns } = blocked();
+    const inbox = await openInbox({ dns });
+    await inbox.send(mime({ html: `<p>Renew.</p><a href="mailto:office@county.example">Mail</a><a href="tel:+15550100">Call</a><a href="#top">Top</a><img src="cid:logo">` }));
+    expect(asked).toEqual([]);
+    expect(inbox.sentAfterOpen()).toEqual([ARRIVED_TEXT]);
+  });
+
+  it("checks a link in the HTML part when the plain part is clean", async () => {
+    const { asked, dns } = blocked();
+    const inbox = await openInbox({ dns });
+    const raw = [
+      "From: County Office <office@county.example>",
+      "Subject: Your renewal",
+      'Content-Type: multipart/alternative; boundary="alt"',
+      "",
+      "--alt",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Renew today.",
+      "--alt",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      `<p>Renew today at ${HOST}/login</p>`,
+      "--alt--",
+      "",
+    ].join("\r\n");
+    await inbox.send(raw);
+    expect(asked).toContain(HOST);
+    expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${LINK_TEXT}`]);
+  });
+
+  it("checks a link past where the text is cut", async () => {
+    const { asked, dns } = blocked();
+    const inbox = await openInbox({ dns });
+    await inbox.send(mime({ text: `${"Renew today. ".repeat(3000)}\r\nhttps://${HOST}/login` }));
+    expect(asked).toContain(HOST);
+    expect(inbox.sentAfterOpen().join(" ")).toContain(LINK_TEXT);
+  });
+
+  it("stays fast on HTML built to make a scanner backtrack", async () => {
+    const inbox = await openInbox();
+    for (const html of ["<".repeat(1_000_000), "<script>".repeat(150_000), "<style x".repeat(150_000)]) {
+      const started = Date.now();
+      await inbox.send(mime({ html }));
+      expect(Date.now() - started).toBeLessThan(3000);
+    }
+  });
+});
+
+describe("a long email", () => {
+  const LONG = "Your case is being reviewed by the office. ".repeat(600);
+  const docText = (inbox: Awaited<ReturnType<typeof openInbox>>) => new TextDecoder().decode([...inbox.h.documents.docs.values()][0]!.bytes);
+
+  it("is marked as cut, and the person is told", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ text: `Your renewal is due November 20, 2026.\r\n${LONG}\r\nThat deadline is cancelled.` }));
+    expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${TRUNCATED_TEXT}`]);
+    expect(inbox.h.store.pending()[0]!.attachments[0]!.stored!.mimeType).toBe("text/plain; truncated=yes");
+    expect(docText(inbox)).not.toContain("cancelled");
+  });
+
+  it("is not marked when all of it fits", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ text: "Your renewal is due November 20, 2026." }));
+    expect(inbox.sentAfterOpen()).toEqual([ARRIVED_TEXT]);
+    expect(inbox.h.store.pending()[0]!.attachments[0]!.stored!.mimeType).toBe("text/plain");
+  });
+
+  it("keeps the body when the subject is what is long", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ subject: "Renewal ".repeat(4000), text: "Your renewal is due November 20, 2026." }));
+    expect(docText(inbox)).toContain("Your renewal is due November 20, 2026.");
+    expect(inbox.h.store.pending()[0]!.attachments[0]!.stored!.mimeType).toBe("text/plain; truncated=yes");
+    expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${TRUNCATED_TEXT}`]);
+  });
+
+  it("is marked when an HTML body is what is long", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ html: `<p>Your renewal is due.</p><p>${LONG}</p><p>Cancelled.</p>` }));
+    expect(inbox.h.store.pending()[0]!.attachments[0]!.stored!.mimeType).toBe("text/plain; truncated=yes");
+    expect(docText(inbox)).not.toContain("Cancelled");
+  });
+});
+
+describe("files inside an email", () => {
+  const b64 = (bytes: Uint8Array) => btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join("")).replace(/(.{76})/g, "$1\r\n");
+  const related = (image: Uint8Array) =>
+    [
+      "From: County Office <office@county.example>",
+      "Subject: Your renewal",
+      'Content-Type: multipart/related; boundary="rel"',
+      "",
+      "--rel",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      '<p>Please see your notice below.</p><img src="cid:part1">',
+      "--rel",
+      "Content-Type: image/jpeg",
+      "Content-ID: <part1>",
+      "Content-Disposition: inline",
+      "Content-Transfer-Encoding: base64",
+      "",
+      b64(image),
+      "--rel--",
+      "",
+    ].join("\r\n");
+  const jpegOf = (size: number) => {
+    const bytes = new Uint8Array(size);
+    bytes.set(JPEG);
+    return bytes;
+  };
+
+  it("keeps a scan embedded beside the words", async () => {
+    const inbox = await openInbox();
+    await inbox.send(related(jpegOf(200_000)));
+    expect(inbox.h.store.pending()[0]!.attachments.map((a) => a.stored!.mimeType)).toEqual(["text/plain", "image/jpeg"]);
+  });
+
+  it("leaves out a small logo embedded beside the words, and says nothing of it", async () => {
+    const inbox = await openInbox();
+    await inbox.send(related(jpegOf(4_000)));
+    expect(inbox.h.store.pending()[0]!.attachments.map((a) => a.stored!.mimeType)).toEqual(["text/plain"]);
+    expect(inbox.sentAfterOpen()).toEqual([ARRIVED_TEXT]);
+  });
+
+  it("reads every file of two emails in one batch, over more than one turn", async () => {
+    const inbox = await openInbox();
+    const photos = (tag: number) =>
+      [1, 2, 3].map((n) => attachment(`${tag}-${n}.jpg`, "image/jpeg", new Uint8Array([...JPEG, tag, n])));
+    await inbox.send(mime({ files: photos(1) }));
+    await inbox.send(mime({ files: photos(2) }));
+    expect(inbox.h.store.pending()).toHaveLength(2);
+    await runTurnAfterBatch(inbox.h);
+    expect(inbox.seen.flatMap((t) => t.documents ?? [])).toHaveLength(6);
+    for (const turn of inbox.seen) expect(turn.documents!.length).toBeLessThanOrEqual(5);
+    expect(inbox.h.store.pending()).toEqual([]);
   });
 });

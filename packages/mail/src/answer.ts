@@ -182,6 +182,7 @@ function kindOf(sentence: string, obligation: Obligation): DeadlineKind | null {
 const SCAM =
   "This letter looks like a scam. Do not pay, call, or open anything it lists. If you are not sure, call your office at a number you already trust.";
 const PLANTED = "Part of this letter tries to give me instructions. I did not follow them.";
+const TRUNCATED = "I read only the first part of this email, so I did not save a date from it. Ask the office for the dates.";
 const OFFICIAL = "If you need to call the office, use the number on your state's official site, not one from a letter.";
 const SEVERAL_DATES = "Your letter mentions more than one date, and I don't want to guess wrong. Which date does it say you need to meet?";
 const UNREAD = "I could not read the letter in your photo. Send it again with the whole page flat, in good light, and I will try once more.";
@@ -235,6 +236,7 @@ function letterAnswer(reading: MailReading, letter: Letter): { lines: string[]; 
   const send = categoriesOf(letter);
   if (send.length > 0) lines.push(`It asks you to send: ${listOf(send)}.`);
   if (warnings.some((w) => w.kind === "instruction_in_content")) lines.push(PLANTED);
+  if (reading.questions.some((q) => q.letterId === letter.id && q.kind === "text_truncated")) lines.push(TRUNCATED);
   lines.push(OFFICIAL);
   // The question goes last, so the reply ends on the one thing to answer.
   if (ask) lines.push(ask);

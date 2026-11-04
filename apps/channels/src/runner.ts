@@ -233,6 +233,28 @@ export function receiptChatMatches(rowChatId: string | null, receiptChatId: stri
 // so every reply goes back to the chat its own inputs came from. Items
 // with no chat fall back to the conversation's last known chat; items
 // addressed only by handle form their own turn, sent channel-scoped.
+// A turn stores and reads at most MAX_ATTACHMENTS_PER_TURN files, so a batch
+// with more runs as more turns and none is left unread. A cut comes only
+// before a message's first piece, which is the one holding its files, and
+// one message over the limit stays whole.
+export function chunkByAttachmentCap(
+  items: import("./store.js").PendingInbound[],
+  cap: number = MAX_ATTACHMENTS_PER_TURN,
+): import("./store.js").PendingInbound[][] {
+  const chunks: import("./store.js").PendingInbound[][] = [];
+  let count = 0;
+  for (const item of items) {
+    const files = item.attachments.length;
+    if (chunks.length === 0 || (files > 0 && count > 0 && count + files > cap)) {
+      chunks.push([]);
+      count = 0;
+    }
+    chunks.at(-1)!.push(item);
+    count += files;
+  }
+  return chunks;
+}
+
 export function partitionByChat(
   pending: import("./store.js").PendingInbound[],
   fallbackChatId: string | null,
@@ -718,7 +740,7 @@ export class ConversationRunner {
             }
             store.setPendingCrisis(asks.map((p) => p.eventId), crisis);
           }
-          for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP)) {
+          for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP).flatMap((c) => chunkByAttachmentCap(c))) {
             const items = chunk.map((item) => ({ ...item, crisis }));
             const turnMeta = store.meta();
             const turn = turnMeta.turn + 1;

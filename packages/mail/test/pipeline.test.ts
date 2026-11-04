@@ -7,6 +7,7 @@ import { answerReading, readMail, type MailReading } from "../src/index.js";
 import { ffmpegAvailable } from "../src/media.js";
 import { RecordedModelClient, recordedText, type ModelClient } from "../src/model.js";
 import { LETTERS } from "../scripts/letters.js";
+import { RENEWAL_PAGE, RENEWAL_TEXT } from "./letter-fixture.js";
 
 async function photo(): Promise<Buffer> {
   const { default: sharp } = await import("sharp");
@@ -2013,6 +2014,23 @@ describe("an email's text", () => {
     expect(reply.outcome).toBe("read");
     expect(reply.text).not.toContain("Social Security");
     expect(reply.text).not.toContain("scam@bad.example");
+  });
+
+  it("holds no date from a letter whose text was cut, and says so", async () => {
+    const read = async (mimeType: string) =>
+      answerReading(
+        await readMail([{ ...textFile, bytes: new TextEncoder().encode(RENEWAL_TEXT), mimeType }], {
+          personId: "person-1",
+          synthetic: true,
+          model: new RecordedModelClient([{ match: () => true, result: recordedText(RENEWAL_PAGE) }]),
+        }),
+      );
+    const whole = await read("text/plain");
+    expect(whole.deadlines.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
+    const cut = await read("text/plain; truncated=yes");
+    expect(cut.outcome).toBe("read");
+    expect(cut.deadlines).toEqual([]);
+    expect(cut.text).toContain("I read only the first part of this email");
   });
 
   it("keeps a closing email tag in the text from ending the block", async () => {
