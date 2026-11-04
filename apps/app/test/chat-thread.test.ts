@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "../lib/api/types";
-import { canSend, edgeKey, inDisplayOrder, listRows, mergeArrived, questionsToAcknowledge, showsThread, visibleEdges } from "../lib/chat-thread";
+import { canSend, crisisNoticeFor, deviceCrisisId, edgeKey, visibleMessageIds, inDisplayOrder, listRows, mergeArrived, questionsToAcknowledge, showsThread, visibleEdges } from "../lib/chat-thread";
 
 const message = (id: string, ask?: string): ChatMessage => ({
   id,
@@ -60,6 +60,37 @@ describe("visibleEdges", () => {
     const rows = listRows([message("a-2", "appr-1")]);
     const tokens = rows.map((item, i) => ({ item, isViewable: i !== 2 }));
     expect([...visibleEdges(tokens)]).toEqual([edgeKey("a-2", "bottom")]);
+  });
+});
+
+describe("crisisNoticeFor", () => {
+  const line = (id: string): ChatMessage => ({ ...message(id), text: `988 and 911 ${id}` });
+  const first = deviceCrisisId("2026-11-03T12:00:00.000Z");
+  const second = deviceCrisisId("2026-11-03T12:05:00.000Z");
+
+  it("shows the fixed line, in the same words, for a crisis reply not yet on screen", () => {
+    expect(crisisNoticeFor([message("a-1"), line(first)], new Set())).toEqual({ id: first, text: `988 and 911 ${first}` });
+  });
+
+  it("clears once the person has scrolled to it or dismissed it", () => {
+    expect(crisisNoticeFor([line(first)], new Set([first]))).toBeNull();
+  });
+
+  it("follows only the newest crisis reply", () => {
+    expect(crisisNoticeFor([line(first), line(second)], new Set([second]))).toBeNull();
+    expect(crisisNoticeFor([line(first), line(second)], new Set([first]))?.id).toBe(second);
+  });
+
+  it("shows nothing when there is no crisis reply", () => {
+    expect(crisisNoticeFor([message("a-1")], new Set())).toBeNull();
+  });
+});
+
+describe("visibleMessageIds", () => {
+  it("counts only message rows the list says are viewable", () => {
+    const rows = listRows([message("a-2", "appr-1"), message("a-1")]);
+    const tokens = rows.map((item) => ({ item, isViewable: item.key !== "a-1" }));
+    expect([...visibleMessageIds(tokens)]).toEqual(["a-2"]);
   });
 });
 

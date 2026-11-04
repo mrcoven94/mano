@@ -26,7 +26,7 @@ import { AuthError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { takeChatDraft } from "../../lib/chat-draft";
 import { trackCacheFile } from "../../lib/cache-files";
-import { EDGE_ON_SCREEN, canSend, inDisplayOrder, listRows, mergeArrived, questionsToAcknowledge, showsThread, visibleEdges, type ListRow } from "../../lib/chat-thread";
+import { EDGE_ON_SCREEN, canSend, crisisNoticeFor, inDisplayOrder, listRows, mergeArrived, questionsToAcknowledge, showsThread, visibleEdges, visibleMessageIds, type ListRow } from "../../lib/chat-thread";
 import { QuestionViewing } from "../../lib/question-viewing";
 import { useStrings } from "../../lib/i18n";
 import { submitMessage } from "../../lib/send";
@@ -136,9 +136,12 @@ export default function Chat() {
     const due = viewing.nextDueIn(now);
     if (due !== null) wake.current = setTimeout(() => pump.current(), due);
   });
+  const [crisisSettled, setCrisisSettled] = useState<ReadonlySet<string>>(new Set());
   const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: { item: ListRow; isViewable: boolean }[] }) => {
     viewing.setVisible(visibleEdges(viewableItems), Date.now());
     pump.current();
+    const onScreen = visibleMessageIds(viewableItems);
+    if (onScreen.size > 0) setCrisisSettled((current) => new Set([...current, ...onScreen]));
   }).current;
 
   // A viewing lasts while this tab shows with the app in the foreground.
@@ -390,6 +393,7 @@ export default function Chat() {
   }));
 
   const all = inDisplayOrder(thread, queuedAsMessages);
+  const crisisNotice = crisisNoticeFor(thread, crisisSettled);
   const shown = [...all].reverse();
   const heldCount = queued.filter((q) => q.held === true).length;
 
@@ -525,6 +529,20 @@ export default function Chat() {
           </View>
         ) : null}
 
+        {crisisNotice ? (
+          <View style={styles.crisisNotice} accessibilityRole="alert">
+            <Text style={[type.body, styles.flex]}>{crisisNotice.text}</Text>
+            <Pressable
+              onPress={() => setCrisisSettled((current) => new Set([...current, crisisNotice.id]))}
+              style={styles.iconBtn}
+              accessibilityRole="button"
+              accessibilityLabel={s.close}
+            >
+              <Ionicons name="close-outline" size={24} color={colors.text} />
+            </Pressable>
+          </View>
+        ) : null}
+
         <View style={styles.composer}>
           {/* Sending mail needs Engine's document routes, which the live app does not reach yet. */}
           {mode === "stand-in" ? (
@@ -564,6 +582,7 @@ export default function Chat() {
 
 const styles = StyleSheet.create({
   edge: { height: 1 },
+  crisisNotice: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.envelope },
   screen: { flex: 1, backgroundColor: colors.bg },
   flex: { flex: 1 },
   header: { paddingHorizontal: 20, paddingTop: 16, maxWidth: 640, width: "100%", alignSelf: "center" },

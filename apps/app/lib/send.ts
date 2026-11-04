@@ -10,6 +10,7 @@
 // sign-out takes this screen away first.
 
 import { crisisGate, crisisLineFor } from "@mano/persona/crisis";
+import { deviceCrisisId } from "./chat-thread";
 import { noteCrisisLine } from "./crisis-help";
 import { AuthError, type ChatMessage, type ManoClient, type NewAttachment, type Session } from "./api/types";
 import type { Outbox } from "./queue";
@@ -38,7 +39,7 @@ export async function submitMessage(
     const createdAt = new Date(Date.now() + 1000).toISOString();
     const line = crisisLineFor(text);
     noteCrisisLine(line, Date.now());
-    onReply?.({ id: `device-crisis-${createdAt}`, role: "agent", text: line, createdAt, attachments: [], status: "sent" });
+    onReply?.({ id: deviceCrisisId(createdAt), role: "agent", text: line, createdAt, attachments: [], status: "sent" });
   }
   if (!sessionUsable(session)) throw new AuthError();
   const item = await outbox.enqueue(session.personId, text, attachments);

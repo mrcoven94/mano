@@ -39,8 +39,24 @@ export function listRows(newestFirst: ChatMessage[]): ListRow[] {
   });
 }
 
+export function visibleMessageIds(tokens: { item: ListRow; isViewable: boolean }[]): Set<string> {
+  return new Set(tokens.filter((t) => t.isViewable && t.item.kind === "message").map((t) => t.item.key));
+}
+
 export function visibleEdges(tokens: { item: ListRow; isViewable: boolean }[]): Set<string> {
   return new Set(tokens.filter((t) => t.isViewable && t.item.kind === "edge").map((t) => t.item.key));
+}
+
+const DEVICE_CRISIS_PREFIX = "device-crisis-";
+
+export const deviceCrisisId = (createdAt: string): string => `${DEVICE_CRISIS_PREFIX}${createdAt}`;
+
+// The fixed line to pin above the composer: a person scrolled into history
+// would not otherwise see a crisis reply added at the bottom. It stays until
+// the newest crisis reply has been on screen or the person dismisses it.
+export function crisisNoticeFor(thread: ChatMessage[], settled: ReadonlySet<string>): { id: string; text: string } | null {
+  const newest = thread.filter((m) => m.id.startsWith(DEVICE_CRISIS_PREFIX)).at(-1);
+  return newest && !settled.has(newest.id) ? { id: newest.id, text: newest.text } : null;
 }
 
 // One send at a time, except that a slow send never holds back a message
