@@ -30,6 +30,13 @@ export interface Env {
   MANO_GUARDIAN_TOKEN?: string;
   MANO_GUARDIAN_KEY_ID?: string;
   MANO_GUARDIAN_KEY_SECRET?: string;
+  // Hold calls (src/calls/provider.ts parseCallConfig): our own numbers Mano
+  // may dial, the one person who may use it and the one phone it rings.
+  MANO_CALL_ALLOWED_NUMBERS?: string;
+  MANO_CALL_PERSON_ID?: string;
+  MANO_CALL_PERSON_NUMBER?: string;
+  MANO_CALL_HOLD_LIMIT_MINUTES?: string;
+  MANO_CALL_RING_LIMIT_SECONDS?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;
