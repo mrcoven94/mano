@@ -16,6 +16,7 @@
 //
 // Off unless MANO_TRY is "on" and the agent's URL and secret are set.
 import { GlimmerModelChecker } from "@mano/guardian";
+import { guardReply } from "@mano/persona";
 import { TRY_CALL_STATES, TRY_HANDLE_PREFIX, TRY_SCENARIOS, isTryPerson, mintHandleGrant, personIdForHandle, type TryEvent, type TryScenario } from "@mano/protocol";
 
 import { secretsEqual } from "../auth.js";
@@ -303,7 +304,10 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string
   };
   const replied = async (turn: TurnReply, without?: string): Promise<boolean> => {
     if (turn.http >= 400 || !turn.text) return false;
-    const text = shown(without ? turn.text.replace(without, "") : turn.text);
+    // The same voice guard the text line runs on every reply. Only on Mano's
+    // words: it removes names of models, which the panel must show.
+    const raw = without ? turn.text.replace(without, "") : turn.text;
+    const text = raw.trim() ? shown(guardReply(raw).text) : "";
     if (text) await log({ kind: "reply", text });
     return true;
   };
