@@ -20,7 +20,7 @@ const CONDITION_OPENING = /^(?:if|when|unless|once|should|in\s+case)\b/i;
 // time: every hit costs an ordinary letter its named date.
 const NOT_THEIRS = new RegExp(
   String.raw`\b(?:${phrases([
-    "addressed to (?!you\\b)",
+    "(?:notice|letter|instructions|this) (?:\\w+ ){0,4}addressed to (?!you\\b)",
     "copy of (?:the|a|an) (?:letter|notice) (?:sent|mailed|addressed)",
     "(?:sent|mailed|delivered|issued) to (?:your (?!address|home|mailing|last|current)|another )",
     "(?:notice|letter) (?:was |is )?(?:intended|meant) for", "not for you", "does not concern", "this is a test", "this is an example", "specimen",
@@ -35,7 +35,7 @@ const NO_LONGER_STANDS = new RegExp(
     "cancel+ed", "withdrawn", "rescinded", "void", "disregard", "sent in error", "by mistake", "superseded",
     "(?:corrected|revised|amended) notice", "(?:notice|letter|deadline|date|this) (?:\\w+ ){0,3}(?:does|do) not apply", "no longer (?:apply|applies|needed|required)",
     "need not", "no need to", "exempt(?:ed)?", "excused", "waived",
-    "(?:do|does) not (?:need|have) to (?:return|send|respond|reply|sign|submit|renew|do)", "don['’]t (?:need|have) to (?:return|send|respond|reply|sign|submit|renew|do)",
+    "(?:you|household) (?:do|does) not (?:need|have) to (?:return|send|respond|reply|sign|submit|renew|do)", "you don['’]t (?:need|have) to (?:return|send|respond|reply|sign|submit|renew|do)",
   ])})\b`,
   "i",
 );
@@ -78,7 +78,8 @@ const MOVES_THE_DATE = new RegExp(
 );
 // A heading that reverses what follows it, or a sentence that does.
 const REVERSES = /^(?:do\s+not|don['’]t|never)\b[^.]*:$|^instead\b/i;
-const NEGATED = /\b(?:not|never)\b|n['’]t\b/i;
+// "If we do not hear from you by" is the date to meet. "Do not return it by" is not.
+const NEGATED = /^(?:please\s+)?(?:do\s+not|don['’]t|never)\b/i;
 const COUNTED = /\b(?:within|in)\s+\S+\s+(?:\w+\s+)?(?:days?|weeks?|months?)\b/i;
 const PROOF_OF_PAYMENT = /\b(?:proof|copy|copies|receipt|evidence)\s+of\b/i;
 const LIST_MARKER = /^[-*•]\s*/;
@@ -101,7 +102,7 @@ function checked(date: string, sentence: string, letterText: string, noticeIso: 
   const written = normal(date);
   if (!quote || !written || !normal(letterText).includes(quote)) return null;
   const at = quote.indexOf(written);
-  if (at < 0 || NEGATED.test(quote.slice(0, at)) || COUNTED.test(quote)) return null;
+  if (at < 0 || NEGATED.test(quote) || COUNTED.test(quote)) return null;
   const verdict = gateSentence(sentence, noticeIso);
   return verdict.kind === "ask" && verdict.count ? null : isoOf(date, noticeIso);
 }

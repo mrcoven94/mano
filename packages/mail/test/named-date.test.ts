@@ -50,6 +50,7 @@ describe("the reader's date, in wording no rule covers, is named as a question",
     ["in hand", "To stay enrolled, have this in our hands by 11/20/2026.", "11/20/2026"],
     ["a table row", "Renewal packet: 14 November 2026", "14 November 2026"],
     ["until", "You have until November 23, 2026 to return your form.", "November 23, 2026"],
+    ["an if-not", "If we do not hear from you on your renewal by November 14, 2026, your coverage ends.", "November 14, 2026"],
   ])("%s", async (_name, sentence, date) => {
     const text = `${HEAD}${sentence}\n\nYour rights: ${APPEAL}`;
     const { text: said, named, held } = await reply(text, [{ date, sentence, for: "renewal" }]);
@@ -188,6 +189,7 @@ describe("the vetoes stay rules: a reader that names a date anyway is overruled"
     "This notice was sent in error.",
     "This notice does not apply to your household.",
     "Disregard this notice.",
+    "You do not need to return this form.",
   ])("not this person's, or no longer standing: %s", async (sentence) => {
     for (const body of [`${HEAD}${sentence}\n\n${TERSE}`, `${HEAD}${TERSE}\n\n${sentence}`]) {
       const { text: said, named, held } = await reply(body, meet);
@@ -229,8 +231,8 @@ describe("the vetoes stay rules: a reader that names a date anyway is overruled"
     expect(said).not.toContain("It looks like");
   });
 
-  it("the word sample on a street or a form does not make it a sample", async () => {
-    for (const extra of ["Orrivane County Office, 2577 Sample St, Trelvane", "A sample form is on our website."]) {
+  it("words about other people and forms do not make it someone else's letter", async () => {
+    for (const extra of ["Orrivane County Office, 2577 Sample St, Trelvane", "A sample form is on our website.", "Questions about the log can be addressed to Fenna Quillshore.", "Your doctors do not need to sign this page.", "For office use only."]) {
       expect((await reply(`${HEAD}${TERSE}\n\n${extra}`, meet)).named).toEqual(["November 20, 2026"]);
     }
   });
