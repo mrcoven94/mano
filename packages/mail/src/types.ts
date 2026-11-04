@@ -155,8 +155,8 @@ export interface Question {
 export type NamedDates =
   // One or two dates the person is told to meet, and any interview beside them.
   | { kind: "duty"; dates: NamedDate[]; interview: string | null }
-  // No duty: a request for a hearing or appeal with its own date.
-  | { kind: "hearing"; iso: string }
+  // No duty: a request for a hearing, appeal or review with its own date.
+  | { kind: "request"; iso: string }
   // No duty: a count from a date, shown with the count.
   | { kind: "window"; days: number; fromIso: string; resultIso: string }
   // Before the letter's own notice date.

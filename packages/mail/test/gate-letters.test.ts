@@ -1244,8 +1244,9 @@ describe("found in the last review: no moved date, and no label the letter did n
     ["reconsideration", "Submit your request for reconsideration by November 23, 2026."],
     ["an appeal", "File your appeal by November 23, 2026."],
   ])("a request for %s is never turned into another right", async (_name, sentence) => {
-    const text = `${HEAD}${sentence}`;
-    const { reply } = await firstAnswer(text, [sentence]);
+    const text = `${HEAD}${sentence} Otherwise your benefits end on December 20, 2026.`;
+    const { reply, held } = await firstAnswer(text, [sentence]);
+    expect(held).toEqual([]);
     expect(reply, reply).toContain("It looks like the date to send your request is November 23, 2026.");
     expect(reply.replace("letter about a hearing", ""), reply).not.toContain("hearing");
   });

@@ -187,11 +187,19 @@ function soleDate(question: Question): string | "unclear" | null {
 
 type DuePurpose = keyof AnswerWords["dueLooks"];
 
-// What a named date is for, in closed words: the sentence never reaches the reply.
+// What a named date is for, in closed words: the sentence never reaches the
+// reply. A label says what is owed, so proof of a payment is not a payment.
+const PROOF_OF = /\b(?:proof|copy|copies|receipt|evidence)\s+of\s+(?:your\s+)?(?:\w+\s+){0,2}(?:payment|renewal|recertification|redetermination|premium|bill)\b/i;
+const OWES_MONEY = /^(?:please\s+)?pay\b|\b(?:payment|premium|balance|bill)\s+(?:is|are)\s+due\b/i;
+const OWES_RENEWAL = /\b(?:renewal|recertification|redetermination)\b[^.;:]*\b(?:must|(?:is|are)\s+due)\b|\b(?:return|send|submit|complete|file)\s+(?:\w+\s+){0,3}(?:renewal|recertification|redetermination)\b|^renew\b/i;
+
 function purposeOf(date: NamedDate): DuePurpose {
+  if (PROOF_OF.test(date.sentence)) return "deadline";
   const kind = kindOf(date.sentence, date.obligation);
-  if (kind === "renewal" || kind === "recertification" || kind === "redetermination") return "renewal";
-  return kind === "payment" || kind === "documents" ? kind : "deadline";
+  if (kind === "documents") return "documents";
+  if (kind === "payment" && OWES_MONEY.test(date.sentence)) return "payment";
+  if ((kind === "renewal" || kind === "recertification" || kind === "redetermination") && OWES_RENEWAL.test(date.sentence)) return "renewal";
+  return "deadline";
 }
 
 function dutyQuestion(named: Extract<NamedDates, { kind: "duty" }>, w: AnswerWords, isPast: (iso: string) => boolean): string {
@@ -211,8 +219,8 @@ function namedQuestion(named: Exclude<NamedDates, { kind: "unsure" }>, w: Answer
       return w.passed(w.date(named.iso));
     case "duty":
       return dutyQuestion(named, w, isPast);
-    case "hearing":
-      return isPast(named.iso) ? w.passed(w.date(named.iso)) : w.askHearing(w.date(named.iso));
+    case "request":
+      return isPast(named.iso) ? w.passed(w.date(named.iso)) : w.askRequest(w.date(named.iso));
     case "window":
       return isPast(named.resultIso) ? w.passed(w.date(named.resultIso)) : w.askWindow(named.days, w.date(named.fromIso), w.date(named.resultIso));
   }

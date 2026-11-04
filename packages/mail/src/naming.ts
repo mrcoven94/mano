@@ -166,7 +166,7 @@ const ORDINARY: RegExp[] = [
   /^this\s+notice\s+covers\s+your\b/i,
   /^do\s+not\s+send\s+originals$/i,
   /^do\s+not\s+wait\s+for\s+the\s+mail$/i,
-  /^our\s+office\s+is\s+closed\b/i,
+  /^our\s+office\s+is\s+closed\b(?!.*\b(?:so|until|because|return|send|submit|deadline|due)\b)/i,
   /^you\s+can\s+request\s+(?:a|an)\b.*\bextension\b/i,
   // Warnings about money and secrets, on real letters and on scams alike. A
   // scam is screened on its own, before any of this.
@@ -182,7 +182,12 @@ const ADDRESSEE_LINE = /^(?:to|attn|attention)\s*:\s*(.+)$/i;
 // name or a sample form they do not make this letter a sample.
 const INCIDENTAL = /\b\d+\s+(?:Sample|Example)\s+(?:St|Street|Ave|Avenue|Rd|Road|Way|Blvd|Ln|Lane|Dr|Drive)\b|\bsample\s+(?:forms?|packets?|pages?)\b/gi;
 
+// More time, or a date moved. The gate does not always stop on these, and the
+// date before the move is the one Mano would otherwise name.
+const MOVES_THE_DATE = /\b(?:have|has|given)\s+until\b|\b(?:extended|moved|changed|postponed|pushed)\s+(?:to|until)\b|\bnow\s+due\b|\bgrace\s+period\b/i;
+
 function stopsNaming(raw: string, letterText: string): boolean {
+  if (MOVES_THE_DATE.test(raw)) return true;
   const masked = raw.replace(INCIDENTAL, "").trim();
   if (!hasQualifier(masked)) return false;
   const line = masked.replace(/[.!;,]+$/, "");
@@ -250,7 +255,7 @@ export function nameDates(letterText: string, noticeIso: string | null): NamedDa
   if (duties.size > 2) return null;
   if (duties.size > 0) return { kind: "duty", dates: [...duties.values()], interview: interviews.size === 1 ? [...interviews][0]! : null };
   if (unplaced || interviews.size > 0) return null;
-  if (appeals.size > 0) return appeals.size === 1 ? { kind: "hearing", iso: [...appeals][0]! } : null;
+  if (appeals.size > 0) return appeals.size === 1 ? { kind: "request", iso: [...appeals][0]! } : null;
   if (windows.length > 0) return windows.length === 1 ? { kind: "window", ...windows[0]! } : null;
   return late.length > 0 ? { kind: "passed", iso: [...late].sort().at(-1)! } : null;
 }
