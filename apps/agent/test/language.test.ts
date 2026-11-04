@@ -4,6 +4,8 @@ import { decisionLanguage, parseDecision } from "../agent/lib/decision.js";
 import { detectLanguage, languageFromProfile } from "../agent/lib/language.js";
 import { presentsExactly, renderQuestion, replayLine } from "../agent/lib/pending.js";
 import { FORMS } from "../agent/lib/forms.js";
+import { QUESTION_WORDS } from "../agent/lib/words.js";
+import { RECIPIENT_NAMES, UNNAMED_RECIPIENT } from "@mano/protocol";
 
 const DECLARATION = Object.values(FORMS)[0]!.declaration;
 const approval = {
@@ -115,24 +117,82 @@ describe("what language a person writes in", () => {
 });
 
 describe("the question in the person's language", () => {
+  const renewal = {
+    purpose: "Food benefits renewal",
+    recipient: "sandbox-agency-portal",
+    requestJson: JSON.stringify({
+      documentId: "doc-1",
+      attachmentLabel: "the letter you sent on November 4",
+      payload: { caseNumber: "WA-SNAP-0042117", fullName: "Rosa Testcase", phone: "253-555-0100", declaration: DECLARATION, attachment: "doc-1" },
+    }),
+  };
+
+  it("reads as one Spanish sentence, with the frozen values and declaration as they are", () => {
+    expect(renderQuestion(renewal, "es")).toBe(
+      "Listo para enviar: Renovación de beneficios de alimentos (para el portal de prueba de la Oficina Estatal de Renovación de Beneficios). " +
+        "Número de caso: WA-SNAP-0042117; Nombre legal completo: Rosa Testcase; Teléfono: 253-555-0100. " +
+        "Adjunto: la carta que envió el 4 de noviembre. " +
+        "Termina con una declaración que solo usted puede hacer. Significa que usted afirma, bajo pena de perjurio, que la información es verdadera, correcta y completa según su conocimiento. Así dice en inglés, igual que en el formulario: " +
+        `${DECLARATION} ` +
+        "Responda SÍ para hacer esta declaración usted y enviar exactamente esto, o NO para parar.",
+    );
+  });
+
   it.each([
-    ["es", "Listo para enviar:", "Responda SÍ", "dice en inglés"],
-    ["vi", "Sẵn sàng gửi:", "Trả lời CÓ", "bằng tiếng Anh"],
-    ["tl", "Handa nang ipadala:", "Sumagot ng OPO", "sa Ingles"],
-  ] as const)("%s asks in the language and keeps every approved value exact", (language, opens, asks, says) => {
-    const question = renderQuestion(approval, language);
+    ["vi", "Sẵn sàng gửi: Gia hạn phúc lợi thực phẩm (đến cổng thử nghiệm của Văn phòng Gia hạn Phúc lợi Tiểu bang).", "Số hồ sơ: WA-SNAP-0042117", "Đính kèm: thư bạn gửi ngày 4 tháng 11.", "Trả lời CÓ"],
+    ["tl", "Handa nang ipadala: Pag-renew ng benepisyo sa pagkain (sa test portal ng State Benefits Renewal Office).", "Numero ng kaso: WA-SNAP-0042117", "Kalakip: ang sulat na ipinadala mo noong Nobyembre 4.", "Sumagot ng OPO"],
+  ] as const)("reads in %s too", (language, opens, field, attached, asks) => {
+    const question = renderQuestion(renewal, language);
     expect(question.startsWith(opens)).toBe(true);
-    expect(question).toContain(asks);
-    expect(question).toContain(says);
-    // The form stays in English, its values and declaration word for word.
-    expect(question).toContain("Food benefits renewal");
-    expect(question).toContain("Rosa Testcase");
-    expect(question).toContain("253-555-0100");
-    expect(question).toContain("the letter you sent on November 2");
-    expect(question).toContain(DECLARATION);
-    // The text line carries it unchanged, or nothing could be approved.
-    expect(presentsExactly(question)).toBe(true);
+    for (const part of [field, attached, asks, "Rosa Testcase", "253-555-0100", DECLARATION]) expect(question).toContain(part);
+  });
+
+  it.each(["es", "vi", "tl"] as const)("%s has every form label, every office and every kind of attachment, and the text line carries it", (language) => {
+    const words = QUESTION_WORDS[language];
+    for (const form of Object.values(FORMS)) {
+      expect(words.purposes[form.purpose]).toBeTruthy();
+      for (const field of form.fields) expect(words.labels[field.label], field.label).toBeTruthy();
+    }
+    for (const name of [...Object.values(RECIPIENT_NAMES), UNNAMED_RECIPIENT]) expect(words.recipients[name], name).toBeTruthy();
+    for (const noun of ["letter", "photo", "PDF", "file"]) {
+      const question = renderQuestion({ ...renewal, requestJson: JSON.stringify({ documentId: "doc-1", attachmentLabel: `the ${noun} you sent on March 12`, payload: {} }) }, language);
+      expect(question).not.toContain("you sent");
+      expect(presentsExactly(question)).toBe(true);
+    }
+    expect(presentsExactly(renderQuestion(renewal, language))).toBe(true);
     expect(presentsExactly(replayLine("https://x.test/fill/1", language).replace(/https:\S+/, "").trim())).toBe(true);
+  });
+
+  // The demo's renewal goes with a letter and no pay stub. The person's yes
+  // covers that, so these words must reach them in every language.
+  it.each([
+    ["en", "With the letter you sent on November 4, and no proof of income attached."],
+    ["es", "Adjunto: la carta que envió el 4 de noviembre, y ningún comprobante de ingresos."],
+    ["vi", "Đính kèm: thư bạn gửi ngày 4 tháng 11, và không có giấy tờ chứng minh thu nhập."],
+    ["tl", "Kalakip: ang sulat na ipinadala mo noong Nobyembre 4, at walang katibayan ng kita."],
+  ] as const)("%s says when no proof of income goes", (language, line) => {
+    const noProof = { ...renewal, requestJson: JSON.stringify({ documentId: "doc-1", attachmentLabel: "the letter you sent on November 4, and no proof of income", payload: { fullName: "Rosa Testcase" } }) };
+    expect(renderQuestion(noProof, language)).toContain(line);
+    expect(presentsExactly(renderQuestion(noProof, language))).toBe(true);
+  });
+
+  it.each(["es", "vi", "tl"] as const)("%s keeps a label with any other ending whole, in English, and drops nothing", (language) => {
+    const label = "the letter you sent on November 4, and no pay stub";
+    const other = { ...renewal, requestJson: JSON.stringify({ documentId: "doc-1", attachmentLabel: label, payload: {} }) };
+    expect(renderQuestion(other, language)).toContain(label);
+  });
+
+  it("a purpose, label, office or attachment it has no words for stays in its exact English", () => {
+    const other = {
+      purpose: "Housing form",
+      recipient: "unknown-office",
+      requestJson: JSON.stringify({ documentId: "doc-1", attachmentLabel: "the scan from Tuesday", payload: { customField: "42" } }),
+    };
+    const question = renderQuestion(other, "es");
+    expect(question).toContain("Housing form (para una oficina que Mano no puede nombrar)");
+    expect(question).toContain("customField: 42");
+    expect(question).toContain("Adjunto: the scan from Tuesday.");
+    expect(renderQuestion({ ...other, requestJson: JSON.stringify({ documentId: "doc-1", payload: {} }) }, "es")).toContain("Adjunto: su documento.");
   });
 
   it("tells the person in their language what they swear to, and only for the declaration it knows", () => {

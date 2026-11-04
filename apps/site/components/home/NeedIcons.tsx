@@ -66,6 +66,15 @@ const ICONS: Record<string, React.ReactNode> = {
       <Face x={22} y={22} />
     </>
   ),
+  transport: (
+    <>
+      <rect {...S} fill="#8FB4FF" x="10" y="12" width="44" height="38" rx="8" />
+      <rect {...S} fill="#FFFDF9" x="16" y="19" width="32" height="14" rx="3" />
+      <circle {...S} fill="#FFE14A" cx="20" cy="52" r="5" />
+      <circle {...S} fill="#FFE14A" cx="44" cy="52" r="5" />
+      <Face x={32} y={24} />
+    </>
+  ),
   credit: (
     <>
       <rect {...S} fill="#DCE3FB" x="6" y="15" width="52" height="36" rx="7" />
@@ -159,5 +168,5 @@ export function NeedIcon({ k, size = 56 }: { k: string; size?: number }) {
 
 export const NEED_TINT: Record<string, string> = {
   rent: "#FDEBD8", food: "#FDE3DA", bills: "#FFF4B8", medicine: "#FCE4EC", childcare: "#F2EADB",
-  housing: "#FFF4B8", credit: "#DCE3FB", programs: "#E4E0F5", now: "#FFE14A",
+  housing: "#FFF4B8", transport: "#DCE3FB", credit: "#DCE3FB", programs: "#E4E0F5", now: "#FFE14A",
 };
