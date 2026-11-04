@@ -196,6 +196,101 @@ describe("model errors", () => {
   });
 });
 
+describe("OpenRouter as Modal's backup", () => {
+  const MODAL_ROOT = "https://example--ep-test-server.us-west.modal.direct";
+  const MODAL_URL = `${MODAL_ROOT}/v1/chat/completions`;
+  const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+  function settings(openRouterKey = "test-openrouter-key") {
+    vi.stubEnv("MANO_MODEL_PROVIDER", "modal");
+    vi.stubEnv("MODAL_ENDPOINT_URL", MODAL_ROOT);
+    vi.stubEnv("MODAL_PROXY_TOKEN", "wk-test.ws-test");
+    vi.stubEnv("OPENROUTER_API_KEY", openRouterKey);
+  }
+
+  // Modal's answer is scripted; OpenRouter's is a completion unless told.
+  function script(modal: () => Response | Promise<Response>, openRouter: () => Response = () => completion()) {
+    const calls: { url: string; auth: string | null; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), auth: new Headers(init?.headers).get("authorization"), body: JSON.parse(String(init?.body ?? "{}")) });
+      return String(url) === MODAL_URL ? modal() : openRouter();
+    });
+    return calls;
+  }
+
+  const routeLogs = () => logs.filter((line) => line.includes("mano_model_route")).map((line) => (JSON.parse(line) as { route: string }).route);
+
+  it.each([[429], [500], [503]])("answers from OpenRouter under its pin when Modal says %i, and logs the route", async (code) => {
+    settings();
+    const calls = script(() => new Response("{}", { status: code }));
+    const { model } = createMuseModel();
+    await generateText({ model, prompt: "hello", maxRetries: 0 });
+    expect(calls.map((c) => c.url)).toEqual([MODAL_URL, OPENROUTER_URL]);
+    expect(calls[1]!.auth).toBe("Bearer test-openrouter-key");
+    expect(calls[1]!.body.model).toBe("meta/muse-spark-open");
+    expect(calls[1]!.body.provider).toEqual({ sort: "latency", zdr: true, data_collection: "deny" });
+    expect(routeLogs()).toEqual(["openrouter"]);
+  });
+
+  it("answers from OpenRouter when Modal cannot be reached", async () => {
+    settings();
+    const calls = script(() => Promise.reject(new TypeError("fetch failed")));
+    await generateText({ model: createMuseModel().model, prompt: "hello", maxRetries: 0 });
+    expect(calls.map((c) => c.url)).toEqual([MODAL_URL, OPENROUTER_URL]);
+  });
+
+  it("answers from OpenRouter when Modal does not start answering in time", async () => {
+    settings();
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      vi.stubGlobal("fetch", (url: unknown, init?: RequestInit) => {
+        calls.push(String(url));
+        if (String(url) !== MODAL_URL) return Promise.resolve(completion());
+        return new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
+      });
+      const run = generateText({ model: createMuseModel().model, prompt: "hello", maxRetries: 0 });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await run;
+      expect(calls).toEqual([MODAL_URL, OPENROUTER_URL]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not touch OpenRouter when Modal answers, and logs that route", async () => {
+    settings();
+    const calls = script(() => completion());
+    await generateText({ model: createMuseModel().model, prompt: "hello" });
+    expect(calls.map((c) => c.url)).toEqual([MODAL_URL]);
+    expect(routeLogs()).toEqual(["modal"]);
+  });
+
+  it.each([[400], [401], [403]])("does not fall back when Modal refuses the request with %i", async (code) => {
+    settings();
+    const calls = script(() => new Response("{}", { status: code }));
+    await expect(generateText({ model: createMuseModel().model, prompt: "hello", maxRetries: 0 })).rejects.toThrow();
+    expect(calls.map((c) => c.url)).toEqual([MODAL_URL]);
+  });
+
+  it("ends the call when OpenRouter answers 402 too, and tries nothing else", async () => {
+    settings();
+    const calls = script(() => new Response("{}", { status: 503 }), () => new Response("{}", { status: 402 }));
+    await expect(generateText({ model: createMuseModel().model, prompt: "hello", maxRetries: 0 })).rejects.toMatchObject({ statusCode: 402 });
+    expect(calls.map((c) => c.url)).toEqual([MODAL_URL, OPENROUTER_URL]);
+  });
+
+  it("does not fall back without an OpenRouter key, and missing Modal settings still reach no model", async () => {
+    settings("");
+    const calls = script(() => new Response("{}", { status: 503 }));
+    await expect(generateText({ model: createMuseModel().model, prompt: "hello", maxRetries: 0 })).rejects.toThrow();
+    expect(calls.map((c) => c.url)).toEqual([MODAL_URL]);
+    settings();
+    vi.stubEnv("MODAL_PROXY_TOKEN", "");
+    expect(() => createMuseModel()).toThrow("Modal is chosen");
+  });
+});
+
 describe("OpenRouter switch", () => {
   function stubWithUrls(urls: string[]) {
     vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {

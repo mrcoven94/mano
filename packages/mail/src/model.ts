@@ -23,7 +23,8 @@ const OPEN_WEIGHT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" } as const);
 
 // The same open-weight model on a Modal Shared Endpoint, for
-// MANO_MODEL_PROVIDER=modal. Off unless chosen. Rule 7 allows it on the
+// MANO_MODEL_PROVIDER=modal, with OpenRouter as its backup when a call fails at
+// run time and OPENROUTER_API_KEY is set. Off unless chosen. Rule 7 allows it on the
 // strength of Modal's stated zero retention for this endpoint type; no request
 // carries a pin (November 4 entry in docs/decisions.md).
 export const MODAL_OPEN_WEIGHT_MODEL = "meta-models/Muse-Spark-Open-816B-A42B";
@@ -445,6 +446,8 @@ export interface OpenWeightClientOptions {
   // A Modal endpoint's URL, with apiKey as its proxy token. Without one,
   // OpenRouter. Anything off Modal's domain is refused.
   modalUrl?: string;
+  // OpenRouter's key, to read there when a Modal call fails at run time.
+  backupApiKey?: string | undefined;
   timeoutMs?: number;
   maxRetries?: number;
   fetchFn?: typeof fetch;
@@ -455,10 +458,21 @@ export interface OpenWeightClientOptions {
 // all with the one model. There is no model option and the only URL option
 // is held to Modal's domain, so rule 13's Meta-only limit and the OpenRouter
 // pin hold whatever the settings say.
+const MODAL_TIMEOUT_WITH_BACKUP_MS = 30_000;
+// A failure of the service. A refused request would fail again on the backup,
+// and a spent budget has no time for it.
+const SERVICE_DOWN = new Set<ModelFailureKind>(["timeout", "rate_limited", "server", "no_connection"]);
+
+// Which route answered a read, in fixed words, for the logs that report it.
+function logRoute(route: "modal" | "openrouter"): void {
+  console.log(JSON.stringify({ type: "mano_model_route", surface: "mail", route }));
+}
+
 export class OpenWeightModelClient implements ModelClient {
   readonly live = true;
   private transport: Transport;
   private route: OpenWeightRoute;
+  private backup: OpenWeightModelClient | null = null;
 
   constructor(opts: OpenWeightClientOptions) {
     this.transport = transportFrom(opts);
@@ -469,13 +483,28 @@ export class OpenWeightModelClient implements ModelClient {
     const url = modalChatUrl(opts.modalUrl);
     if (!url) throw new Error("A Modal endpoint URL must be https on Modal's own domain.");
     this.route = { url, model: MODAL_OPEN_WEIGHT_MODEL, pin: {} };
+    if (opts.backupApiKey) {
+      this.backup = new OpenWeightModelClient({ apiKey: opts.backupApiKey, ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}) });
+      // One short try, so the backup has time inside the file's budget.
+      this.transport = { ...this.transport, timeoutMs: MODAL_TIMEOUT_WITH_BACKUP_MS, maxRetries: 0 };
+    }
   }
 
   async responses(req: ResponsesRequest, opts: CallOptions = {}): Promise<ResponsesResult> {
     if (req.model === SEGMENT_MODEL) throw new SegmentationSkipped();
     if (req.model !== STANDARD_MODEL && req.model !== CONTRIBUTOR_MODEL) throw new Error(`Unknown model ID: ${req.model}.`);
     const { model } = this.route;
-    const data = await postJson(this.transport, this.route.url, openWeightBody(req, this.route), opts.deadline);
+    let data: unknown;
+    try {
+      data = await postJson(this.transport, this.route.url, openWeightBody(req, this.route), opts.deadline);
+    } catch (err) {
+      if (!this.backup || !SERVICE_DOWN.has(failureKindOf(err))) throw err;
+      // A failure here, a 402 included, ends the read as any model failure does.
+      const answer = await this.backup.responses(req, opts);
+      logRoute("openrouter");
+      return answer;
+    }
+    if (this.backup) logRoute("modal");
     const usage = extractUsage(data);
     return { text: openWeightText(data, { usage, model }), model, usage, raw: data };
   }
@@ -511,7 +540,7 @@ export function createModelClient(
   // the stand-in, which answers nothing, rather than the Meta Model API.
   if (env.MANO_MODEL_PROVIDER === "modal") {
     if (!env.MODAL_PROXY_TOKEN || !modalChatUrl(env.MODAL_ENDPOINT_URL)) return new RecordedModelClient([]);
-    return new OpenWeightModelClient({ apiKey: env.MODAL_PROXY_TOKEN, modalUrl: env.MODAL_ENDPOINT_URL, fetchFn: opts.fetchFn });
+    return new OpenWeightModelClient({ apiKey: env.MODAL_PROXY_TOKEN, modalUrl: env.MODAL_ENDPOINT_URL, backupApiKey: env.OPENROUTER_API_KEY, fetchFn: opts.fetchFn });
   }
   if (env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY) {
     return new OpenWeightModelClient({ apiKey: env.OPENROUTER_API_KEY, fetchFn: opts.fetchFn });
