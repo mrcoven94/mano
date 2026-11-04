@@ -22,6 +22,7 @@ export default function Footer() {
                 <li><Link href="/renewals">Renewals</Link></li>
                 <li><Link href="/#pricing">Pricing</Link></li>
                 <li><Link href="/#questions">Questions</Link></li>
+                <li><Link href="/sign-in">Sign in</Link></li>
               </ul>
             </nav>
             <nav aria-label="Teams">

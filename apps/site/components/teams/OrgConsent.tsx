@@ -24,7 +24,7 @@ export default function OrgConsent() {
       <p className="t-who">Dana&rsquo;s desk at Northside</p>
       <div className="sc-card">
         <div className="gd-head">
-          <div><p className="sc-label">Northside case 0418 · Food benefits renewal</p><strong>Maria Lopez, household of 3</strong></div>
+          <div><p className="sc-label">Northside case R-1042 · Food benefits renewal</p><strong>Maria Torres, household of 2</strong></div>
           <span className="sc-tag">Due Nov 14</span>
         </div>
         <ul className="oc-list">
