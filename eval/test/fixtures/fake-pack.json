@@ -1,0 +1,68 @@
+{
+  "fake": true,
+  "note": "FAKE pack for tests only. It exercises the private-pack loader without touching the real private pack, which the architect holds and which is published only after the final run.",
+  "version": 1,
+  "families": {
+    "zz": {
+      "needsIntro": "Paperwork wanted:",
+      "needsStyle": "bullets",
+      "needForm": "- {Form}, with ink still wet",
+      "needDoc": "- One (1) {Doc}, slightly crumpled",
+      "needAlt": "- Either your {A} or your {B}, dealer's choice",
+      "needWorkAlt": "- Your {A} or your {B}, hours circled in red",
+      "missingAgain": "P.S. Also wave your {Doc} at the camera on your way in.",
+      "missingAgainUtility": "P.S. Also wave your {Doc} at the camera on your way in.",
+      "subjectWord": "Memo",
+      "kinds": {
+        "medicaid_renewal": {
+          "subject": "{program}, again",
+          "greeting": "Esteemed {name},",
+          "lead": "The wheel turns and your {program} {coverage} needs its {formShort} once more. Have the whole {formShort} bundle on our desk {due1}.",
+          "interview": "We shall telephone you for your interview on {interview}. Should you miss our call, ring {tel} within 2 business days.",
+          "extra": null,
+          "consequence": "A bundle received {due2} means uninterrupted {coverage}. Otherwise your {program} {coverage} concludes on {end}.",
+          "closing": "Bureaucratically yours",
+          "enclosures": "Enclosures: {FormShort} form, prepaid pigeon"
+        },
+        "snap_recert": {
+          "subject": "{program}, again",
+          "greeting": "Esteemed {name},",
+          "lead": "The wheel turns and your {program} {coverage} needs its {formShort} once more. Have the whole {formShort} bundle on our desk {due1}.",
+          "interview": "We shall telephone you for your interview on {interview}. Should you miss our call, ring {tel} within 2 business days.",
+          "extra": null,
+          "consequence": "A bundle received {due2} means uninterrupted {coverage}. Otherwise your {program} {coverage} concludes on {end}.",
+          "closing": "Bureaucratically yours",
+          "enclosures": "Enclosures: {FormShort} form, prepaid pigeon"
+        },
+        "missing_docs": {
+          "subject": "One paper short",
+          "greeting": "Esteemed {name},",
+          "lead": "Your {program} file is one paper short: your {doc}. Remedy this {due1}.",
+          "interview": null,
+          "extra": "Owls accepted at {officeAddr} during business hours. Questions? {tel}.",
+          "consequence": "No {doc} {due2} and your case may close on {end}.",
+          "closing": "Bureaucratically yours",
+          "enclosures": null
+        },
+        "work_hours": {
+          "subject": "Prove you worked",
+          "greeting": "Esteemed {name},",
+          "lead": "Your {program} hours for this month must reach 80 and reach us {due1}.",
+          "interview": null,
+          "extra": "Illness and caregiving count as good cause; say so and show proof.",
+          "consequence": "Hours in {due2} change nothing. Otherwise benefits may shift starting {end}.",
+          "closing": "Bureaucratically yours",
+          "enclosures": null
+        },
+        "utility_shutoff": {
+          "subject": "The meter runs",
+          "greeting": "Esteemed {name},",
+          "lead": "You owe {amount} since {past}; the meter runs. Clear it {due1} or the lights learn otherwise.",
+          "middle": "Phone {utilTel} to pay or dicker over a plan. Past {end} with neither, shutoff plus a reconnection fee.",
+          "closing": "Bureaucratically yours",
+          "accountLine": "Ledger entry: {acct}"
+        }
+      }
+    }
+  }
+}

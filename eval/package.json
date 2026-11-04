@@ -1,0 +1,22 @@
+{
+  "name": "@mano/eval",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=25"
+  },
+  "scripts": {
+    "generate": "node src/cli-generate.mjs",
+    "freeze": "node src/cli-freeze.mjs",
+    "verify": "node src/cli-verify.mjs",
+    "baselines": "node src/cli-baselines.mjs",
+    "check": "node --test test/eval.test.mjs test/mano.test.mjs",
+    "heldout": "node src/cli-heldout.mjs"
+  },
+  "dependencies": {
+    "sharp": "^0.34.3",
+    "@mano/mail": "workspace:*",
+    "esbuild": "^0.28.2"
+  }
+}

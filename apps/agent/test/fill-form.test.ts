@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FakeModelClient, OpenWeightModelClient, type Computer, type ComputerAction } from "@mano/computer";
 
+import { z } from "zod";
+
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
 import { engineFrom, personIdFor, type Profile } from "../agent/lib/engine.js";
-import { FORMS, layoutOf, resolveForm } from "../agent/lib/forms.js";
+import { FORMS, fillFrom, layoutOf, resolveForm } from "../agent/lib/forms.js";
 import { readTextedPhotos } from "../agent/lib/letters.js";
 import { heldBack, presentsExactly, renderQuestion } from "../agent/lib/pending.js";
 import type { CheckInput } from "../../engine/src/gateway/checker.js";
@@ -379,6 +381,55 @@ describe("fill_form", () => {
     expect(String(out.note)).toContain("start_form_draft");
     expect(computer.visited).toEqual([]);
     expect(engine.approvals()).toHaveLength(0);
+  });
+
+  // Production, November 4: the person gave every value in one text, the model
+  // passed them as fullLegalName, mailingAddress and monthlyIncomeBeforeTaxes,
+  // the form dropped those names without a word, and it asked again.
+  describe("answers under names the form does not have", () => {
+    it("says so and lists the names, and neither uses nor keeps them", async () => {
+      engine.profile = { person: { address: {} }, household: [], income: [], programs: [] };
+      const out = await run("turn_names00001", { form: "food-renewal", answers: { fullLegalName: "Rosa Testcase", mailingAddress: "100 Sample St, Tacoma, WA 98402" } });
+      expect(out.status).toBe("wrong_field_names");
+      expect(out).not.toHaveProperty("question");
+      expect(out.note).toContain("fullLegalName, mailingAddress");
+      for (const name of ["caseNumber", "fullName", "dateOfBirth", "householdSize", "monthlyIncome", "address", "phone"]) expect(out.note).toContain(name);
+      expect(out.note).toMatch(/only what the person said/);
+      const kept = (await client().getProfileView()).profile;
+      expect(kept.person.fullName).toBeUndefined();
+      expect(computer.visited).toEqual([]);
+    });
+
+    it("never fills from the profile past a correction it could not place", async () => {
+      engine.profile = profile();
+      const out = await run("turn_names00002", { form: "food-renewal", answers: { mailingAddress: "9 New Road, Tacoma, WA 98402" } });
+      expect(out.status).toBe("wrong_field_names");
+      expect(computer.visited).toEqual([]);
+      expect(engine.approvals()).toHaveLength(0);
+    });
+
+    it("the same values under the form's names go straight through, with no question", async () => {
+      engine.profile = { ...profile(), person: { address: {} }, programs: [] };
+      const out = await run("turn_names00003", { form: "food-renewal", answers: { ...VALUES } });
+      expect(out.status).toBe("waiting_for_yes");
+    });
+
+    it("the tool tells the model the names before its first call, and to pass all it was told", () => {
+      const schema = JSON.stringify(z.toJSONSchema(fillForm.inputSchema as z.ZodType));
+      for (const name of ["caseNumber", "fullName", "dateOfBirth", "householdSize", "monthlyIncome", "address", "phone"]) expect(schema).toContain(name);
+      expect(schema).toMatch(/only what the person said/i);
+    });
+  });
+
+  describe("an answer it can read and one it cannot", () => {
+    it.each(["$1,940 a month", "1940 per month", "$1940 monthly", "$1940 a month before taxes", "$1940 al mes", "1940 mỗi tháng", "1940 kada buwan", "$1,940", "1940"])("%j is 1940 a month", (said) => {
+      expect(fillFrom(FORMS["food-renewal"], profile() as Profile, { monthlyIncome: said }).values.monthlyIncome).toBe("1940");
+    });
+
+    it.each(["$500 a week", "500 per week", "about 1900", "1900 or so", "$1900 a year", "depends"])("%j is asked about again", async (said) => {
+      engine.profile = profile();
+      expect(await run("turn_money00002", { form: "food-renewal", answers: { monthlyIncome: said } })).toMatchObject({ status: "needs_answer", field: "monthlyIncome" });
+    });
   });
 
   describe("someone with no letter on file yet", () => {
