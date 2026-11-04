@@ -19,6 +19,8 @@ import { GlimmerModelChecker } from "@mano/guardian";
 import { TRY_CALL_STATES, TRY_HANDLE_PREFIX, TRY_SCENARIOS, isTryPerson, mintHandleGrant, personIdForHandle, type TryEvent, type TryScenario } from "@mano/protocol";
 
 import { secretsEqual } from "../auth.js";
+import { documentAad, encryptForPerson } from "../crypto.js";
+import { documentR2Key, getDocumentBytes } from "../files.js";
 import { boundFetch } from "../fetch.js";
 import type { Env } from "../env.js";
 import { checkerSetting } from "../gateway/guardian.js";
@@ -52,10 +54,12 @@ const STUMP_WORDS = "Is this real? Should I do what it says?";
 type Leg = "photo" | "held" | "fill" | "yes" | "summary";
 // The most turns each leg can run, reserved when it claims the run.
 const LEG_TURNS: Record<Leg, number> = { photo: 1, held: 0, fill: FILL_ROUNDS, yes: 1, summary: 0 };
-const SCENARIOS: Record<TryScenario, { legs: Leg[]; words: string[]; needsGuardian: boolean }> = {
-  maria: { legs: ["photo", "held", "fill", "yes"], words: [], needsGuardian: true },
-  scam: { legs: ["photo", "summary"], words: [STUMP_WORDS], needsGuardian: false },
-  planted: { legs: ["photo", "summary"], words: [STUMP_WORDS], needsGuardian: false },
+const SCENARIOS: Record<TryScenario, { letter: string; legs: Leg[]; words: string[]; needsGuardian: boolean }> = {
+  maria: { letter: "maria", legs: ["photo", "held", "fill", "yes"], words: [], needsGuardian: true },
+  scam: { letter: "scam", legs: ["photo", "summary"], words: [STUMP_WORDS], needsGuardian: false },
+  planted: { letter: "planted", legs: ["photo", "summary"], words: [STUMP_WORDS], needsGuardian: false },
+  // Maria's filing, with the document changed before her yes reaches Engine.
+  changed: { letter: "maria", legs: ["photo", "held", "fill", "yes"], words: [], needsGuardian: true },
 };
 
 const AGENT_WAIT_MS = 100_000;
@@ -190,6 +194,23 @@ class Person {
     return { http: res.status, status: body?.status ?? "error", text: body?.text ?? "", approval: body?.approval, approvalId: body?.approvalId };
   }
 
+  // Changes the stored bytes of the document on the waiting approval, the way
+  // anything that altered a stored file would, and only for this run's own
+  // demo person. The gateway finds out on its own, at the yes.
+  async changeDocument(): Promise<boolean> {
+    if (!isTryPerson(this.personId)) return false;
+    const { json } = await this.engine("/approvals");
+    const documentId = approvalsOf(json).find((a) => a.status === "pending")?.documentId;
+    if (!documentId) return false;
+    const prefix = documentR2Key(this.personId, documentId, 0, "");
+    const key = (await this.env.FILES.list({ prefix })).objects[0]?.key;
+    const bytes = key ? await getDocumentBytes(this.env.FILES, this.env.ENCRYPTION_KEK_B64, this.personId, documentId, key) : null;
+    if (!key || !bytes) return false;
+    const changed = new Uint8Array([...bytes, 0x0a]);
+    await this.env.FILES.put(key, JSON.stringify(await encryptForPerson(changed, this.env.ENCRYPTION_KEK_B64, documentAad(this.personId, documentId))));
+    return true;
+  }
+
   async presented(approvalId: string, question: string): Promise<boolean> {
     const raw = JSON.stringify({
       handleHash: this.run.handleHash,
@@ -209,7 +230,7 @@ class Person {
   }
 }
 
-type Approval = { id: string; status?: string; outcome?: { receipt?: { externalId: string; simulated: boolean } | null } | null };
+type Approval = { id: string; status?: string; documentId?: string | null; outcome?: { receipt?: { externalId: string; simulated: boolean } | null } | null };
 
 const approvalsOf = (json: unknown): Approval[] => (json as { approvals?: Approval[] } | null)?.approvals ?? [];
 
@@ -239,10 +260,9 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string
 
   switch (leg) {
     case "photo": {
-      const { scenario } = person.run;
-      const { words } = SCENARIOS[scenario];
-      await log({ kind: "sent", letter: scenario, ...(words.length ? { text: words.join(" ") } : {}) });
-      const document = await person.upload(scenario);
+      const { letter, words } = SCENARIOS[person.run.scenario];
+      await log({ kind: "sent", letter, ...(words.length ? { text: words.join(" ") } : {}) });
+      const document = await person.upload(letter);
       if (!document) return fail("The letter did not reach Mano, so nothing ran.");
       const turn = await person.turn(words, [document]);
       if (!(await replied(turn))) return fail(`Mano did not answer this letter. The turn ended with HTTP ${turn.http}.`);
@@ -279,6 +299,10 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string
       return fail("Mano did not reach the question after five turns, so nothing was filed.");
     }
     case "yes": {
+      if (person.run.scenario === "changed") {
+        if (!(await person.changeDocument())) return fail("This renewal has no document to change, so the run stops here. Nothing was filed.");
+        await log({ kind: "note", text: "The demo changed one byte of the document Mano prepared, after Maria saw the question." });
+      }
       await log({ kind: "sent", text: "YES" });
       const turn = await person.turn(["YES"]);
       const answered = await replied(turn);
@@ -293,6 +317,8 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string
         await log({ kind: "outcome", ok: true, text: "Filed on the sandbox portal after Maria's yes." });
       } else if (receipt) {
         await log({ kind: "outcome", ok: false, text: "This deployment simulated the filing, so nothing reached the portal." });
+      } else if (approvals.some((a) => a.status === "stale")) {
+        await log({ kind: "outcome", ok: true, text: "Engine refused the yes because the document changed after the question. Nothing was filed." });
       } else if (!answered || approvals.some((a) => a.status === "approved")) {
         await log({ kind: "outcome", ok: false, text: UNVERIFIED });
       } else {
