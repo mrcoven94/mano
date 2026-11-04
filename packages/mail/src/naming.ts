@@ -137,16 +137,22 @@ const THIS_IS_FOR = /^[Tt]his\s+(?:letter|notice)\s+is\s+for\s+[A-Z][\w'-]+\s+[A
 const LETTER_SUBJECT = /\b(?:renewal|recertification|notice|review|benefits?|account|case|deadline|interview|coverage|change|denial|approval|due)\b/i;
 const SALUTATION = /^\s*dear\s+[^\n]{1,60}$/gim;
 
+const SALUTATION_END = /[\s:,]+$/;
+const HEADING_LEAD = /^(?:(?:notice|letter)\s+)?(?:for|re:)\s*/i;
+const ENDING_PERIOD = /\.$/;
+const ENDING_MARKS = /[.!;,]+$/;
+const COST_UNDONE = /\b(?:ignore|disregard|instead|extend\w*|continue\w*)\b/i;
+
 function appearsTwice(text: string, name: string): boolean {
   return text.split(name).length > 2;
 }
 
 function notTheirs(letterText: string, sentences: string[], verbatim: string[]): boolean {
-  const salutations = new Set((letterText.match(SALUTATION) ?? []).map((s) => s.trim().toLowerCase().replace(/[\s:,]+$/, "")));
+  const salutations = new Set((letterText.match(SALUTATION) ?? []).map((s) => s.trim().toLowerCase().replace(SALUTATION_END, "")));
   if (salutations.size > 1) return true;
   const otherPerson = (raw: string): boolean => {
     if (!NAMED_HEADING.test(raw)) return false;
-    const name = raw.replace(/^(?:(?:notice|letter)\s+)?(?:for|re:)\s*/i, "").replace(/\.$/, "");
+    const name = raw.replace(HEADING_LEAD, "").replace(ENDING_PERIOD, "");
     return !LETTER_SUBJECT.test(name) && !appearsTwice(letterText, name);
   };
   return verbatim.some(otherPerson) || sentences.some((s) => NOT_THEIRS.test(s) || THIS_IS_FOR.test(s) || (!CONDITION_OPENING.test(s) && NO_LONGER_STANDS.test(s)));
@@ -190,11 +196,11 @@ function stopsNaming(raw: string, letterText: string): boolean {
   if (MOVES_THE_DATE.test(raw)) return true;
   const masked = raw.replace(INCIDENTAL, "").trim();
   if (!hasQualifier(masked)) return false;
-  const line = masked.replace(/[.!;,]+$/, "");
+  const line = masked.replace(ENDING_MARKS, "");
   if (ORDINARY_HEADING.test(line) || ORDINARY.some((re) => re.test(line))) return false;
   if (HELP_OFFER.test(line) && !LIFTS_A_DUTY.test(line)) return false;
   const cost = line.match(MISSED_COSTS)?.[1];
-  if (cost && LOSES.test(cost) && !OUTCOME_REVERSED.test(cost) && !/\b(?:ignore|disregard|instead|extend\w*|continue\w*)\b/i.test(cost)) return false;
+  if (cost && LOSES.test(cost) && !OUTCOME_REVERSED.test(cost) && !COST_UNDONE.test(cost)) return false;
   const addressee = line.match(ADDRESSEE_LINE)?.[1];
   if (addressee && appearsTwice(letterText, addressee)) return false;
   if (NAMED_HEADING.test(line)) return false;
