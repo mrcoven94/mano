@@ -25,7 +25,7 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
     see: (
       <>
         <div className="hw-letter" aria-hidden="true">
-          <p>Sample County Human Services</p>
+          <p>Springfield County Food Assistance Office</p>
           <b>Notice of renewal</b>
           <i /><i /><i className="hl" /><i />
         </div>
@@ -60,9 +60,9 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
       <div className="hw-card">
         <p className="hw-card-h">Food benefits renewal</p>
         <dl className="hw-form">
-          <div><dt>Name</dt><dd>Maria Lopez</dd><small>From your ID</small></div>
-          <div><dt>Monthly income</dt><dd>$2,570</dd><small>From your pay stubs</small></div>
-          <div><dt>People at home</dt><dd>3</dd><small>From your household</small></div>
+          <div><dt>Name</dt><dd>Maria Torres</dd><small>From your ID</small></div>
+          <div><dt>Monthly income</dt><dd>$1,940</dd><small>From your pay stubs</small></div>
+          <div><dt>People at home</dt><dd>2</dd><small>From your household</small></div>
         </dl>
         <p className="hw-done"><mark>Filled from your vault.</mark> Nothing typed twice.</p>
       </div>
@@ -77,9 +77,9 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
     see: (
       <div className="hw-card">
         <ol className="hw-trail">
-          <li><b>You said yes</b><span>Oct 28</span></li>
-          <li><b>Filed on the practice portal</b><span>Oct 28</span></li>
-          <li className="ok"><b>Checked that it arrived. Confirmation SB-20481</b><span>Oct 28</span></li>
+          <li><b>You said yes</b><span>Nov 10</span></li>
+          <li><b>Filed on the practice portal</b><span>Nov 10</span></li>
+          <li className="ok"><b>Checked that it arrived. Confirmation SR-G6WYKQU8</b><span>Nov 10</span></li>
         </ol>
       </div>
     ),

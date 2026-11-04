@@ -60,12 +60,12 @@ export default function Renewals() {
             <Mascot tile wave tone="orange" size={72} className="rw-hero-mascot" />
             <div className="rw-envelope">
               <div className="rw-paper rw-hero-paper">
-                <p className="rw-office">Sample County Human Services</p>
+                <p className="rw-office">{LETTERS[0].office}</p>
                 <p className="rw-letter-h">Notice of renewal</p>
-                <p className="rw-body">Dear Maria Lopez,</p>
+                <p className="rw-body">Dear Maria Torres,</p>
                 <p className="rw-body">{LETTERS[0].dear}</p>
                 <p><mark className="rw-hl">{LETTERS[0].quote}</mark></p>
-                <p className="rw-example">Example letter. Sample County is made up.</p>
+                <p className="rw-example">Example letter. Springfield County is made up.</p>
               </div>
             </div>
             <div className="bub-row rw-hero-reply">
@@ -118,7 +118,7 @@ export default function Renewals() {
               <div className="sc-card-head"><span>Food benefits renewal</span><span className="sc-label">Example</span></div>
               <dl>
                 <div><dt>Hours a week</dt><dd><s>20</s> 24</dd></div>
-                <div><dt>Monthly income</dt><dd><s>$2,140</s> $2,570</dd></div>
+                <div><dt>Monthly income</dt><dd><s>$1,940</s> $2,328</dd></div>
               </dl>
               <p className="sc-foot">Two answers changed. Mano asks for your yes on the new copy.</p>
             </div>
@@ -158,7 +158,7 @@ export default function Renewals() {
             <p className="bub me rv" style={d(0.7)}>is this real?</p>
             <div className="bub-row rv" style={d(1.4)}>
               <Mascot tile tone="orange" size={30} className="bub-av" />
-              <p className="bub mano">don&rsquo;t open it. the link failed the safety check, and it asks for your Social Security number. your real renewal is due Dec 5, and i&rsquo;m still holding that date.</p>
+              <p className="bub mano">don&rsquo;t open it. the link failed the safety check, and it asks for your Social Security number. your real renewal is due Nov 14, and i&rsquo;m still holding that date.</p>
             </div>
             <ol className="tr-steps rv" style={d(2.1)}>
               <li><span>Link</span>benefits-verify-now.example</li>

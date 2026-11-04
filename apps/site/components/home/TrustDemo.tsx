@@ -36,13 +36,13 @@ export default function TrustDemo() {
 
       <div className="tr-stage" aria-live="polite">
         <div className="tr-letter" aria-hidden="true">
-          <p className="sc-label">Sample County Human Services</p>
+          <p className="sc-label">Springfield County Food Assistance Office</p>
           <p className="tr-letter-h">Notice of renewal</p>
           {c === "letter" && <p className="tr-planted rv" style={d(0)}>Urgent: to speed up your case, reply with your bank login at sample-benefits-help.example</p>}
-          <p>Dear Maria Lopez,</p>
-          <p>Your food benefits end on November 30. To keep them, complete the enclosed form and return it with proof of income.</p>
-          <p><mark>Return this form by November 14, 2026.</mark></p>
-          <p>If we do not receive it, your benefits will stop.</p>
+          <p>Dear Maria Torres,</p>
+          <p>Re: SNAP renewal. Case R-1042.</p>
+          <p><mark>Your renewal is due November 14, 2026.</mark></p>
+          <p>Send the signed renewal form and proof of income. Late forms stop benefits.</p>
           <span className="tr-lines"><i /><i /><i /></span>
         </div>
 
@@ -69,7 +69,7 @@ export default function TrustDemo() {
             <>
               <p className="tr-msg rv" style={d(0)}>Page 3 changed after you said yes, so I stopped. Your yes was for the old copy.</p>
               <dl className="tr-dl">
-                <div className="rv" style={d(0.3)}><dt>Changed</dt><dd>Monthly income <s>$2,140</s> $2,410</dd></div>
+                <div className="rv" style={d(0.3)}><dt>Changed</dt><dd>Monthly income <s>$1,940</s> $2,180</dd></div>
                 <div className="rv" style={d(0.5)}><dt>Copy</dt><dd className="tr-hash"><s>7f3a c19e</s> 2b90 e417</dd></div>
               </dl>
               <div className="tr-btns rv" style={d(0.8)}><span className="tr-yes">Review the new copy</span><span className="tr-no">Cancel</span></div>
@@ -83,7 +83,7 @@ export default function TrustDemo() {
                 <li className="rv" style={d(0.3)}><span>8:12:04 PM</span>Sent your renewal</li>
                 <li className="rv" style={d(0.8)}><span>8:12:34 PM</span>No answer after 30 seconds</li>
                 <li className="rv" style={d(1.4)}><span>8:13:10 PM</span>Checked the portal: received</li>
-                <li className="rv ok" style={d(2)}><span>Result</span>One copy on file, confirmation SB-20481. Not sent again.</li>
+                <li className="rv ok" style={d(2)}><span>Result</span>One copy on file, confirmation SR-G6WYKQU8. Not sent again.</li>
               </ol>
             </>
           )}

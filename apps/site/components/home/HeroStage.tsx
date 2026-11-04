@@ -13,17 +13,17 @@ const SCENES: { key: string; tab: string; how: string; phrase: string; thread: T
   {
     key: "spine", tab: "Keep your benefits", how: "Renews by text", phrase: "keeps food coming",
     thread: {
-      letter: { from: "Sample County Human Services", title: "Your food benefits end November 30", due: "Return your renewal by November 14.", note: "Phone interview: November 13 at 10:00 AM" },
+      letter: { from: "Springfield County Food Assistance Office", title: "SNAP renewal, case R-1042", due: "Your renewal is due November 14, 2026.", note: "Late forms stop benefits." },
       me: "Got a letter. My food benefits are ending?",
       read: "Your renewal is due Nov 14. That is the date that matters.",
       ask: "I filled it in. Send it to the practice portal? YES or NO",
-      answer: "Filed on the practice portal, not a real office. Confirmation SB\u201120481",
+      answer: "Filed on the practice portal, not a real office. Confirmation SR\u2011G6WYKQU8",
     },
   },
   {
     key: "rent", tab: "Pay rent", how: "Reads your notice", phrase: "helps you pay rent",
     thread: {
-      letter: { from: "Sample Property Management", title: "Late rent notice", due: "Pay the $400 you owe by November 10.", note: "Monthly rent: $1,150" },
+      letter: { from: "Springfield Property Management", title: "Late rent notice", due: "Pay the $400 you owe by November 10.", note: "Monthly rent: $1,150" },
       me: "Got this from my landlord. What does it mean?",
       read: "You owe $400 by Nov 10. That is the date that matters.",
       ask: YES_NO,
@@ -34,7 +34,7 @@ const SCENES: { key: string; tab: string; how: string; phrase: string; thread: T
   {
     key: "care", tab: "Find child care", how: "Holds your date", phrase: "finds child care",
     thread: {
-      letter: { from: "Sample County Child Care Office", title: "Your child care help is up for review", due: "Send proof of your work hours by December 1.", note: "Care on file: Mon to Fri, 7:30 to 4:00" },
+      letter: { from: "Springfield County Child Care Office", title: "Your child care help is up for review", due: "Send proof of your work hours by December 1.", note: "Care on file: Mon to Fri, 7:30 to 4:00" },
       me: "Got a letter about our daycare help.",
       read: "Send proof of your work hours by Dec 1. That is the date that matters.",
       ask: YES_NO,
@@ -45,7 +45,7 @@ const SCENES: { key: string; tab: string; how: string; phrase: string; thread: T
   {
     key: "lights", tab: "Keep the lights on", how: "Reminds you on time", phrase: "keeps the lights on",
     thread: {
-      letter: { from: "Sample Power", title: "Your energy assistance credit is ending", due: "Reapply by November 20, 2026 to keep your winter credit.", note: "Late applications are reviewed only if funds remain." },
+      letter: { from: "Springfield Power", title: "Your energy assistance credit is ending", due: "Reapply by November 20, 2026 to keep your winter credit.", note: "Late applications are reviewed only if funds remain." },
       me: "Is this about my power bill?",
       read: "Yes. Reapply by Nov 20 to keep your winter credit.",
       ask: YES_NO,
@@ -56,7 +56,7 @@ const SCENES: { key: string; tab: string; how: string; phrase: string; thread: T
   {
     key: "medicine", tab: "Get your medicine", how: "Reads your letter", phrase: "gets your medicine",
     thread: {
-      letter: { from: "Sample County Human Services", title: "It is time to renew your health coverage", due: "Send your renewal form by January 15, 2027.", note: "If we do not receive it, your coverage will end on January 31, 2027." },
+      letter: { from: "Springfield County Human Services", title: "It is time to renew your health coverage", due: "Send your renewal form by January 15, 2027.", note: "If we do not receive it, your coverage will end on January 31, 2027." },
       me: "Is my health coverage ending?",
       read: "Send your renewal form by Jan 15, or your coverage ends Jan 31.",
       ask: YES_NO,

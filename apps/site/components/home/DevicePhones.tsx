@@ -130,7 +130,7 @@ async function appScript(a: Act<AppState>) {
 
 export function AppPhone() {
   return (
-    <Slot label="The Mano app. Maria sees her food benefits renewal ready to send, reviews it and says yes. It files on the practice portal with confirmation SB-20481. Below it, health coverage is due January 31 with a reminder on January 17, and 3 letters were read this week with 1 scam blocked.">
+    <Slot label="The Mano app. Maria sees her food benefits renewal ready to send, reviews it and says yes. It files on the practice portal with confirmation SR-G6WYKQU8. Below it, health coverage is due January 31 with a reminder on January 17, and 3 letters were read this week with 1 scam blocked.">
       <Stage<AppState>
         {...size}
         initial={appStart}
@@ -149,7 +149,7 @@ export function AppPhone() {
               <div className="ev-card" data-hot={!s.filed || undefined}>
                 <small><Roll variant="fade">{s.filed ? "Filed" : "Ready to send"}</Roll></small>
                 <b>Food benefits renewal</b>
-                <span className="ev-meta"><Roll variant="fade">{s.filed ? "Practice portal, confirmation SB-20481" : "To the practice portal, not a real office"}</Roll></span>
+                <span className="ev-meta"><Roll variant="fade">{s.filed ? "Practice portal, confirmation SR-G6WYKQU8" : "To the practice portal, not a real office"}</Roll></span>
                 <span className="ev-review" data-target="review" data-hide={s.open || s.filed ? "" : undefined}>Review</span>
                 <div className="ev-approve" data-open={s.open || undefined}>
                   <div>

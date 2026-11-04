@@ -67,13 +67,13 @@ export default function Organizations() {
           ["Mano never sells personal data.", ""],
         ]}
         log={{
-          title: "Maria Lopez · Food benefits renewal",
+          title: "Maria Torres · Food benefits renewal",
           lines: [
             { at: "9:12", who: "Dana", role: "Case manager", text: "Asked Maria for her Oct 24 pay stub, for this renewal only." },
-            { at: "9:40", who: "Maria Lopez", text: "Shared the pay stub with Northside until Dec 31." },
+            { at: "9:40", who: "Maria Torres", text: "Shared the pay stub with Northside until Dec 31." },
             { at: "9:41", who: "Mano", mano: true, text: "Attached it to the renewal." },
             { at: "9:55", who: "Dana", role: "Case manager", text: "Approved the renewal." },
-            { at: "9:56", who: "Mano", mano: true, text: "Submitted it to Sample County, once." },
+            { at: "9:56", who: "Mano", mano: true, text: "Submitted it to Springfield County, once." },
           ],
         }}
       />

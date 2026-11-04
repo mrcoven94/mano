@@ -46,7 +46,7 @@ export default function ShareFlow() {
         <li className="share-step rv" style={d(0.9)}>
           <p className="share-n">The renewal is ready</p>
           <div className="share-card">
-            <p className="share-from"><NeedIcon k="check" size={34} /><span>Northside case 0418<small>Food benefits renewal</small></span></p>
+            <p className="share-from"><NeedIcon k="check" size={34} /><span>Northside case R-1042<small>Food benefits renewal</small></span></p>
             <p className="share-big">Ready to submit</p>
             <p className="share-small"><mark>4 of 4 pages.</mark> No phone tag. Maria can see who has her pay stub and stop sharing whenever she wants.</p>
           </div>

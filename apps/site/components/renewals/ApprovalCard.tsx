@@ -7,7 +7,7 @@ import Mascot from "@/components/Mascot";
 
 type View = "ready" | "pages" | "sent";
 
-const PAGES = ["Renewal form, page 1 of 4: household", "Renewal form, page 2 of 4: income", "Renewal form, page 3 of 4: expenses", "Renewal form, page 4 of 4: your signature", "Pay stub, Nov 7", "Pay stub, Nov 21"];
+const PAGES = ["Renewal form, page 1 of 4: household", "Renewal form, page 2 of 4: income", "Renewal form, page 3 of 4: expenses", "Renewal form, page 4 of 4: your signature", "Pay stub, Oct 10", "Pay stub, Oct 24"];
 const LABEL: Record<View, string> = { ready: "Ready to send", pages: "Your pages", sent: "Sent" };
 
 const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
@@ -48,12 +48,12 @@ export default function ApprovalCard() {
           <ol className="tr-steps">
             <li className="rv" style={d(0.3)}><span>8:12 PM</span>Sent to the practice portal</li>
             <li className="rv" style={d(0.8)}><span>8:13 PM</span>Checked the portal: received</li>
-            <li className="rv ok" style={d(1.3)}><span>Result</span>One copy on file, confirmation SB-20481. Due Dec 5, sent Nov 24.</li>
+            <li className="rv ok" style={d(1.3)}><span>Result</span>One copy on file, confirmation SR-G6WYKQU8. Due Nov 14, sent Nov 10.</li>
           </ol>
           <button className="tr-no rw-again" onClick={() => setView("ready")}>Start over</button>
         </>
       )}
-      <p className="rw-example">Example. Sample County is made up.</p>
+      <p className="rw-example">Example. Springfield County is made up.</p>
     </div>
   );
 }
