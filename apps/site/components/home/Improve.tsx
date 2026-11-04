@@ -69,7 +69,7 @@ export default function Improve() {
               <div className="im-recipe">
                 <div className="im-recipe-col rv" style={d(0.1)}>
                   <p className="sc-label">From the form</p>
-                  <b>Sample County child care form</b>
+                  <b>Springfield County child care form</b>
                   <ul>
                     {["Household size", "Monthly income", "Employer", "Hours of care", "Signature page"].map((f, n) => (
                       <li key={f} className="rv" style={d(0.3 + n * 0.15)}><span>{f}</span><span className="im-ok">Mapped</span></li>
@@ -79,7 +79,7 @@ export default function Improve() {
                 <div className="im-recipe-col rv" style={d(0.6)}>
                   <p className="sc-label">From Maria, kept private</p>
                   <ul>
-                    {["Works 24 hours a week", "Leo starts kindergarten in August", "Lease ends March 31"].map((f) => <li key={f}><span>{f}</span></li>)}
+                    {["Works 24 hours a week", "Sofia starts kindergarten in August", "Lease ends March 31"].map((f) => <li key={f}><span>{f}</span></li>)}
                   </ul>
                   <p className="im-foot">So Mano fills her next form from these and never asks her twice.</p>
                 </div>
@@ -94,7 +94,7 @@ export default function Improve() {
                   <li className="rv" style={d(0.7)}><span className="im-ok">Correct</span>Every page the county asks for is attached</li>
                   <li className="rv flag" style={d(1)}><span className="im-flag">Flagged</span>The county wants the signature page first</li>
                 </ul>
-                <div className="bub-row rv" style={d(1.6)}><Avatar /><p className="bub mano">Thanks, Dana. Sample County packets now start with the signature page.</p></div>
+                <div className="bub-row rv" style={d(1.6)}><Avatar /><p className="bub mano">Thanks, Dana. Springfield County packets now start with the signature page.</p></div>
               </div>
             )}
 

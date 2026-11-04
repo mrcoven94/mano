@@ -31,7 +31,7 @@ export default function Government() {
         phrase="stay covered"
         after=" and the backlog shrinks."
         lede="Many people lose benefits over a missed form, not because they stopped qualifying. Mano keeps renewals on time and brings your caseworkers complete cases, with every finding cited to your rule. Your staff decide, and Mano enters the result into the system you already run. Mano for government offices is coming soon."
-        stage={<Stage id="desk" label="Sample County Human Services" hint="Approve the case, or ask for more"><GovDesk /></Stage>}
+        stage={<Stage id="desk" label="Springfield County Food Assistance Office" hint="Approve the case, or ask for more"><GovDesk /></Stage>}
       >
         <a className="btn btn-primary btn-lg" href={MAIL}>Talk to us</a>
         <a className="btn btn-ghost btn-lg" href="#gov-start">How an office starts</a>
@@ -52,7 +52,7 @@ export default function Government() {
         </div>
       </section>
 
-      <Verified id="gov-vf" office="Sample County" />
+      <Verified id="gov-vf" office="Springfield County" />
 
       <Rules
         id="gov-rules"
@@ -66,7 +66,7 @@ export default function Government() {
           ["Your systems, seal and authority", "stay yours."],
         ]}
         log={{
-          title: "Case 0418 · Food benefits renewal",
+          title: "Case R-1042 · Food benefits renewal",
           lines: [
             { at: "10:41", who: "J. Park", role: "Eligibility worker", text: "Approved the renewal." },
             { at: "10:41", who: "Mano", mano: true, text: "Recorded the approval for this exact copy, before doing anything." },
@@ -86,7 +86,7 @@ export default function Government() {
           ["Find your profile", (
             <>
               <p className="sc-label">Independent profile · Not claimed</p>
-              <p className="share-big">Sample County Human Services</p>
+              <p className="share-big">Springfield County Food Assistance Office</p>
               <p className="share-small">Programs, hours and the documents you ask for, written from public sources. It cannot message residents, request records or send notices.</p>
             </>
           ), "programs"],

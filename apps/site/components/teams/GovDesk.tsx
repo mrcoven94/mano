@@ -8,19 +8,19 @@ import { Check, ManoHead, d } from "./Parts";
 type Phase = "review" | "approved" | "asked";
 
 const findings: [string, string, string][] = [
-  ["Income is under the limit", "$2,140 a month. The limit for 3 people is $2,610.", "Rule 4.2(b)"],
+  ["Income is under the limit", "$1,940 a month. The limit for 2 people is $2,280.", "Rule 4.2(b)"],
   ["Lives in the county", "Lease, page 1, matches the address on file.", "Rule 2.1"],
-  ["Household of 3", "Same as the last approved renewal.", "Rule 3.4"],
-  ["Signed on time", "Signed Oct 24. Due Nov 14.", "Rule 6.1"],
+  ["Household of 2", "Same as the last approved renewal.", "Rule 3.4"],
+  ["Signed on time", "Signed Nov 9. Due Nov 14.", "Rule 6.1"],
 ];
 const docs = ["Renewal form, 4 pages", "Pay stub, Oct 10", "Pay stub, Oct 24", "Lease"];
 
 const fields: [string, string][] = [
-  ["CASE NO", "0418"],
-  ["LAST NAME", "LOPEZ"],
+  ["CASE NO", "R-1042"],
+  ["LAST NAME", "TORRES"],
   ["FIRST NAME", "MARIA"],
-  ["HH SIZE", "3"],
-  ["GROSS INC", "2140.00"],
+  ["HH SIZE", "2"],
+  ["GROSS INC", "1940.00"],
   ["PROGRAM", "FS"],
   ["ACTION", "RECERT"],
   ["CERT THRU", "10/31/2027"],
@@ -28,7 +28,7 @@ const fields: [string, string][] = [
 
 const approvedLog: [string, string, string?][] = [
   ["10:42:03", "Approved by J. Park."],
-  ["10:42:05", "Opened case 0418 on screen 14"],
+  ["10:42:05", "Opened case R-1042 on screen 14"],
   ["10:42:11", "Entered household, income and dates"],
   ["10:42:14", "Attached 4 documents"],
   ["10:42:16", "Read the screen back: it matches the approved copy.", "ok"],
@@ -37,7 +37,7 @@ const approvedLog: [string, string, string?][] = [
 const askedLog: [string, string, string?][] = [
   ["10:42:03", "J. Park asked for a current proof of address"],
   ["10:42:04", "Asked Maria's Mano. It tells her what is needed and why."],
-  ["10:42:04", "Nothing entered. Case 0418 stays pending until it arrives.", "ok"],
+  ["10:42:04", "Nothing entered. Case R-1042 stays pending until it arrives.", "ok"],
 ];
 
 export default function GovDesk() {
@@ -53,7 +53,7 @@ export default function GovDesk() {
       <p className="t-who">The caseworker&rsquo;s screen</p>
       <div className="sc-card gd-case">
         <div className="gd-head">
-          <div><p className="sc-label">Food benefits renewal · Case 0418</p><strong>Maria Lopez, household of 3</strong></div>
+          <div><p className="sc-label">Food benefits renewal · Case R-1042</p><strong>Maria Torres, household of 2</strong></div>
           <span className={`sc-tag${phase === "approved" ? " ok" : ""}`}>{phase === "review" ? "Complete" : phase === "approved" ? "Approved" : "Asked for more"}</span>
         </div>
         <ul className="sc-rows">
@@ -87,7 +87,7 @@ export default function GovDesk() {
       <div className="gd-right">
         <p className="t-who">The office&rsquo;s own case system</p>
         <div className="gd-sys" role="img" aria-label={phase === "approved" ? "The office's older case system, filled in by the agent and not saved yet" : "The office's older case system, waiting"}>
-          <p className="gd-sys-head"><span>CASE MAINTENANCE · SCREEN 14</span><span>SAMPLE COUNTY</span></p>
+          <p className="gd-sys-head"><span>CASE MAINTENANCE · SCREEN 14</span><span>SPRINGFIELD COUNTY</span></p>
           <div className="gd-sys-body" key={phase}>
             {fields.map(([label, value], n) => (
               <p key={label}>
@@ -96,8 +96,8 @@ export default function GovDesk() {
               </p>
             ))}
             {phase === "review" && <p className="gd-wait">Waiting for a caseworker&rsquo;s approval. Nothing is entered before that.</p>}
-            {phase === "asked" && <p className="gd-wait rv" style={d(1.2)}>Nothing entered. Case 0418 stays pending.</p>}
-            {phase === "approved" && <p className="gd-saved rv" style={d(1.9 + fields.length * step)}>READY TO SAVE  0418  10:42:16</p>}
+            {phase === "asked" && <p className="gd-wait rv" style={d(1.2)}>Nothing entered. Case R-1042 stays pending.</p>}
+            {phase === "approved" && <p className="gd-saved rv" style={d(1.9 + fields.length * step)}>READY TO SAVE  R-1042  10:42:16</p>}
           </div>
           <p className="gd-sys-foot">F3 EXIT   F5 SAVE   F7 ATTACH</p>
         </div>
