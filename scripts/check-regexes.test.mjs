@@ -59,6 +59,13 @@ test("reports .test and .exec on a shared g or y regex", () => {
 test("reports .test on a g regex reached through a shared array", () => {
   assert.deepEqual(lines("const A = [/a/, /b/g];\nconst f = (s) => A.some((re) => re.test(s));\n"), [2]);
   assert.deepEqual(lines("const A = [/a/g];\nfunction f(s) {\n  for (const re of A) re.exec(s);\n}\n"), [3]);
+  assert.deepEqual(lines("const A = [/a/g];\nconst f = (s) => A[0].test(s);\n"), [2]);
+});
+
+test("RegExp keeps the flags of the regex it copies unless it is given new ones", () => {
+  assert.deepEqual(lines("const A = new RegExp(/a/g);\nconst f = (s) => A.test(s);\n"), [2]);
+  assert.deepEqual(lines("const A = new RegExp(/a/g, 'i');\nconst f = (s) => A.test(s);\n"), []);
+  assert.deepEqual(lines("const A = new RegExp(/a/i);\nconst f = (s) => A.test(s);\n"), []);
 });
 
 test("allows the calls that do not depend on lastIndex", () => {

@@ -44,8 +44,9 @@ function isStateful(node) {
   if (ts.isArrayLiteralExpression(value)) return value.elements.some(isStateful);
   if (!isRegexBuild(value)) return ts.isCallExpression(value) && ts.isIdentifier(value.expression) && value.arguments.length > 0 && isStateful(value.arguments[0]);
   if (value.kind === ts.SyntaxKind.RegularExpressionLiteral) return /[gy]/.test(value.text.slice(value.text.lastIndexOf("/")));
-  const flags = value.arguments?.[1];
-  return flags !== undefined && ts.isStringLiteralLike(flags) && /[gy]/.test(flags.text);
+  const [pattern, flags] = value.arguments ?? [];
+  if (flags === undefined) return pattern !== undefined && isStateful(pattern);
+  return ts.isStringLiteralLike(flags) && /[gy]/.test(flags.text);
 }
 
 // The array a name's values come from: `for (const re of LIST)` or `LIST.some((re) => ...)`.
@@ -129,10 +130,14 @@ export function scanFile(path, text, exportedElsewhere = new Set()) {
     if (isRegexBuild(node) && runsPerCall(node)) {
       found.push({ line: lineOf(node), message: "regex built inside a function; move it to a module-level const" });
     }
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression)) {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const method = node.expression.name.text;
-      const name = node.expression.expression.text;
-      const source = method === "test" || method === "exec" ? (shared.has(name) ? name : arrayBehind(name, node)) : null;
+      const receiver = node.expression.expression;
+      let source = null;
+      if (method === "test" || method === "exec") {
+        if (ts.isElementAccessExpression(receiver) && ts.isIdentifier(receiver.expression)) source = receiver.expression.text;
+        if (ts.isIdentifier(receiver)) source = shared.has(receiver.text) ? receiver.text : arrayBehind(receiver.text, node);
+      }
       if (source && shared.has(source)) {
         found.push({ line: lineOf(node), message: `.${method} on shared regex ${source} with the g or y flag leaks lastIndex between calls; drop the flag or use matchAll` });
       }
