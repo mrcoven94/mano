@@ -762,6 +762,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
           key: `reminder:${reminder.id}`,
           text: help?.text ?? reminder.text,
           generation: reminder.generation,
+          ...(help ? { noReplay: true } : {}),
         });
         outcome =
           result !== "retry"

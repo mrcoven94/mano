@@ -51,28 +51,17 @@ async function profileOf(res: Response) {
 }
 
 describe("profile: one structured record of the person", () => {
-  it("a member anyone but the person adds ends the confirmation; the person's own, or a detail on one on the roster, does not", async () => {
+  it("saying who lives there again is a new word from the person, even with nothing else changed", async () => {
     const h = handle("profile-roster");
-    const personId = personIdForHandle(h);
-    const stub = testEnv.PERSON_AGENT.get(testEnv.PERSON_AGENT.idFromName(personId)) as unknown as PersonAgent;
     const write = (key: string, fields: Record<string, unknown>) =>
       asAgent(h, "PATCH", "/profile", { idempotencyKey: key, source: "person", generation: 0, fields });
-    const confirmed = async () => (await profileOf(await asAgent(h, "GET", "/profile"))).person.householdConfirmed?.value;
     await write("r1", { "person.householdConfirmed": true });
-    await write("r2", { "household.kid.name": "Sam Example" });
-    expect(await confirmed()).toBe(true);
-    await runInDurableObject(stub as unknown as DurableObjectStub, (_i, state) => {
-      state.storage.sql.exec("INSERT INTO documents(id, name, hash, r2_key) VALUES ('doc-1', 'letter.txt', 'h', 'k')");
-    });
-    await stub.recordDocumentFacts(personId, { documentId: "doc-1", idempotencyKey: "r3", fields: { "household.kid.dateOfBirth": "2015-01-02" } });
-    expect(await confirmed()).toBe(true);
-    await stub.recordDocumentFacts(personId, { documentId: "doc-1", idempotencyKey: "r4", fields: { "household.new.name": "Lee Example", "household.new.relationship": "child" } });
-    expect(await confirmed()).toBeUndefined();
-    const again = await write("r5", { "person.householdConfirmed": true });
-    expect(again.status).toBe(200);
-    expect(await confirmed()).toBe(true);
-    const profile = await profileOf(await asAgent(h, "GET", "/profile"));
-    expect(profile.household.map((m) => m.id).sort()).toEqual(["kid", "new"]);
+    const first = (await profileOf(await asAgent(h, "GET", "/profile"))).person.householdConfirmed!;
+    await new Promise((r) => setTimeout(r, 5));
+    const again = (await (await write("r2", { "person.householdConfirmed": true })).json()) as { changed: string[] };
+    expect(again.changed).toEqual(["person.householdConfirmed"]);
+    const second = (await profileOf(await asAgent(h, "GET", "/profile"))).person.householdConfirmed!;
+    expect(Date.parse(second.updatedAt)).toBeGreaterThan(Date.parse(first.updatedAt));
   });
 
   it("starts empty in the contract's shape", async () => {

@@ -11,8 +11,10 @@
 //   person.address.line1|line2|city|state|zip  person.county  person.language
 //   person.householdConfirmed   (true once the person said who lives with them;
 //                                only source person sets it, and forgetting
-//                                any household member, or anyone else but the
-//                                person adding one, clears it)
+//                                any household member clears it. Its updatedAt
+//                                is when they last said it, and it is refused
+//                                if someone joined the roster while it was
+//                                being saved, since they did not see them)
 //   person.alwaysOn            (the person turned on the daily check for new
 //                                help, src/always-on.ts; only source person sets it)
 //   household.<id>.name|relationship|dateOfBirth
@@ -214,6 +216,12 @@ const TRUST_SQL = "(CASE source WHEN 'person' THEN 3 WHEN 'document' THEN 2 ELSE
 const UNDER = "(path = ? OR substr(path, 1, ?) = ?)";
 const under = (group: string) => [group, group.length + 1, `${group}.`];
 
+// Who is on the household roster, by entry.
+function rosterOf(sql: SqlExec): string {
+  const rows = sql.exec("SELECT path FROM profile_fields WHERE substr(path, 1, 10) = 'household.'").toArray() as { path: string }[];
+  return [...new Set(rows.map((r) => r.path.split(".")[1]))].sort().join(",");
+}
+
 // Changes with any write to the profile, a rewrite of the same value included:
 // each seal is new. Compared in the same step as an action decided on values
 // read earlier, since reading them means waiting on decryption.
@@ -336,7 +344,8 @@ export type PatchOutcome =
   | { status: "ok"; result: PatchResult }
   | { status: "invalid"; error: string }
   | { status: "conflict" }
-  | { status: "stale" };
+  | { status: "stale" }
+  | { status: "roster_moved" };
 
 export interface ProfileStoreDeps {
   sql: SqlExec;
@@ -440,13 +449,15 @@ export class ProfileStore {
     if (parsed.documentId && !this.deps.documentExists(parsed.documentId)) {
       return { status: "invalid", error: "documentId names no document of this person." };
     }
+    // Taken first, and kept across retries: who was on file when this arrived.
+    const roster = rosterOf(this.deps.sql);
     const requestHash = await sha256Hex(
       canonicalJson({ source: parsed.source, documentId: parsed.documentId, fields: (raw as { fields: unknown }).fields }),
     );
     await this.migrateMemoryOnce();
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.tryPatch(parsed, requestHash, generation);
+        return await this.tryPatch(parsed, requestHash, generation, roster);
       } catch (err) {
         if (!(err instanceof SnapshotMoved) || attempt >= 3) throw err;
       }
@@ -466,7 +477,7 @@ export class ProfileStore {
   // keep as a suggestion), seals what will be written, then writes in one
   // transaction that re-checks the key, the generation and that nothing it
   // compared against moved in between.
-  private async tryPatch(parsed: ParsedPatch, requestHash: string, generation: number): Promise<PatchOutcome> {
+  private async tryPatch(parsed: ParsedPatch, requestHash: string, generation: number, roster: string): Promise<PatchOutcome> {
     const early = this.recorded(parsed.idempotencyKey, requestHash);
     if (early) return early;
     const trust = TRUST[parsed.source];
@@ -483,7 +494,9 @@ export class ProfileStore {
       if (live && TRUST[live.source] > trust) {
         if (sameValue) unchanged.push(set.path);
         else suggested.push({ path: set.path, sealed: await this.deps.cipher.seal(set.path, JSON.stringify(set.value)) });
-      } else if (live && sameValue && live.source === parsed.source && (live.document_id ?? null) === parsed.documentId) {
+      } else if (live && sameValue && live.source === parsed.source && (live.document_id ?? null) === parsed.documentId && set.path !== "person.householdConfirmed") {
+        // Saying who lives there again is news even with the same value: it
+        // covers everyone on file now.
         unchanged.push(set.path);
       } else {
         changed.push({ path: set.path, sealed: await this.deps.cipher.seal(set.path, JSON.stringify(set.value)) });
@@ -495,6 +508,7 @@ export class ProfileStore {
       const late = this.recorded(parsed.idempotencyKey, requestHash);
       if (late) return late;
       if (generationOf(sql) !== generation) return { status: "stale" };
+      if (parsed.sets.some((s) => s.path === "person.householdConfirmed" && s.value === true) && rosterOf(sql) !== roster) return { status: "roster_moved" };
       const now = new Map(this.rows(setPaths).map((r) => [r.path, r.updated_at]));
       for (const path of setPaths) if (now.get(path) !== before.get(path)?.updated_at) throw new SnapshotMoved();
       for (const path of parsed.clears) {
@@ -511,14 +525,6 @@ export class ProfileStore {
         }
         sql.exec(`DELETE FROM profile_fields WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
         sql.exec(`DELETE FROM profile_suggestions WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
-      }
-      // A member the person did not name is not on the roster they confirmed.
-      const addsMember = (path: string) => {
-        const [collection, id] = path.split(".");
-        return collection === "household" && sql.exec(`SELECT 1 FROM profile_fields WHERE ${UNDER} LIMIT 1`, ...under(`household.${id}`)).toArray().length === 0;
-      };
-      if (parsed.source !== "person" && changed.some((c) => addsMember(c.path))) {
-        sql.exec("DELETE FROM profile_fields WHERE path = 'person.householdConfirmed'");
       }
       for (const c of changed) {
         retireLinkedNotes(sql, c.path, false);
@@ -643,6 +649,8 @@ export function profilePatchResponse(out: PatchAnswer): Response {
       return Response.json({ error: "This idempotency key was already used for other fields. Nothing was written." }, { status: 409 });
     case "stale":
       return Response.json({ error: "This conversation was deleted after the request was prepared. Nothing was written." }, { status: 409 });
+    case "roster_moved":
+      return Response.json({ error: "Someone was added to the household while this was being saved. Nothing was written. Ask the person who lives with them again." }, { status: 409 });
     case "unavailable":
       return Response.json({ error: "Profile storage is not configured." }, { status: 503 });
   }

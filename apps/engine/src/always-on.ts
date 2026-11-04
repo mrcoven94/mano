@@ -10,14 +10,18 @@
 // text only ever says "may" and what to check. A match needs the state, the
 // person's own word on who lives with them, and every income entry with an
 // amount and a frequency: anything missing or unsettled is no match, never a
-// guess. A letter that adds someone to the household ends that word until the
-// person gives it again (src/profile.ts), so a letter cannot widen the screen.
-// A program already on their profile is not news.
+// guess. Their word covers who was on file when they gave it, or whom they
+// named themselves: someone a letter adds later is not counted until they say
+// it again, so a letter cannot widen the screen. A program already on their
+// profile is not news.
 //
 // Each text is a reminder row keyed by generation, state and program, so it
 // goes out through the person's one delivery wake-up and Channels' agent-send
 // route like a deadline's nudge: Channels refuses it after STOP or on a closed
-// conversation, and its key dedupes a re-send. The row is the record that the
+// conversation, and its key dedupes a re-send. Unlike a nudge it is marked no
+// replay: Channels cannot read the flag or the person's hours, so a send the
+// provider did not accept is dropped rather than replayed later, and a missed
+// text is better than one after they said stop. The row is the record that the
 // program was raised: it is never planned again, whatever became of it, and
 // after a conversation delete the new generation starts over. A run plans at
 // most one text, and none while an earlier one is waiting or one was planned
@@ -73,13 +77,26 @@ function monthlyIncome(profile: Profile): number | null {
   return total;
 }
 
+// How many live there, counting the person, by their own word. Null when they
+// have not given it. A member with no name from before it and nothing from the
+// person is not one they vouched for. Strictly before: a leaf from the same
+// instant may have landed after it.
+function confirmedSize(profile: Profile): number | null {
+  const word = profile.person.householdConfirmed;
+  if (word?.value !== true || word.source !== "person") return null;
+  const covered = profile.household.filter(
+    (m) => [m.name, m.relationship, m.dateOfBirth].some((leaf) => leaf?.source === "person") || (m.name !== undefined && m.name.updatedAt < word.updatedAt),
+  );
+  return 1 + covered.length;
+}
+
 // Every catalog program this profile may qualify for and does not already
 // have, in catalog order.
 export function helpMatches(profile: Profile): HelpMatch[] {
   const state = profile.person.address.state?.value;
   const income = monthlyIncome(profile);
-  if (!state || income === null || profile.person.householdConfirmed?.value !== true) return [];
-  const householdSize = 1 + profile.household.length;
+  const householdSize = confirmedSize(profile);
+  if (!state || income === null || householdSize === null) return [];
   const matches: HelpMatch[] = [];
   for (const entry of listPrograms(state)) {
     if (!entry.name) continue;

@@ -1722,20 +1722,25 @@ export class ConversationRunner {
     }
     // A row stored before the voice guard shipped may hold text the guard
     // would change. Its key is bound to that exact payload, so it is
-    // never rewritten and never replayed. Never replaying is not the same
-    // as giving up: while the lookup is down the row stays uncertain, so
-    // the lookup retries with backoff and a delivery receipt can still
-    // settle it. It ends failed only once nothing can find it.
-    if (!this.isVoiced(opts.text)) {
+    // never rewritten and never replayed. A text its sender marked no
+    // replay is never replayed either: the sender holds a rule Channels
+    // cannot read, and only the sender's next attempt may decide. Never
+    // replaying is not the same as giving up: while the lookup is down the
+    // row stays uncertain, so the lookup retries with backoff and a delivery
+    // receipt can still settle it. It ends failed only once nothing can
+    // find it.
+    const noReplay = row?.tag === NO_REPLAY_TAG;
+    if (noReplay || !this.isVoiced(opts.text)) {
       if (lookupFailed) {
         const attempts = (store.outboundByKey(key)?.attempts ?? 0) + 1;
         store.updateOutbound(key, { state: "uncertain", attempts, updatedAtMs: nowMs() });
         logger.warn("send_still_uncertain", { handle: this.logHandle(), key, attempts });
         return finish({ key, state: "uncertain", code: null, fresh: false, counted: false });
       }
-      store.updateOutbound(key, { state: "failed", code: "unguarded_legacy", updatedAtMs: nowMs() });
-      logger.warn("send_failed", { handle: this.logHandle(), key, code: "unguarded_legacy", status: null });
-      return finish({ key, state: "failed", code: "unguarded_legacy", fresh: false, counted: false });
+      const code = noReplay ? "no_replay" : "unguarded_legacy";
+      store.updateOutbound(key, { state: "failed", code, updatedAtMs: nowMs() });
+      logger.warn("send_failed", { handle: this.logHandle(), key, code, status: null });
+      return finish({ key, state: "failed", code, fresh: false, counted: false });
     }
     // Read fresh after the lookup's await: a STOP, a close or a delete
     // that landed meanwhile stops the replay. The opt-out confirmation
@@ -1848,8 +1853,10 @@ export class ConversationRunner {
   // stops the send, so a deletion can never be followed by an old text.
   // Budget refusal returns instead of throwing so the caller answers 429
   // and the agent retries later; anything else terminal (unknown,
-  // closed, opted out, deleted) is a handled 200.
-  async sendAgentText(opts: { key: string; text: string; generation: number }): Promise<{
+  // closed, opted out, deleted) is a handled 200. noReplay: the provider
+  // gets one try, and a send not accepted answers failed instead of being
+  // replayed, on an alarm or otherwise.
+  async sendAgentText(opts: { key: string; text: string; generation: number; noReplay?: boolean }): Promise<{
     sent: boolean;
     reason?: "empty" | "unknown" | "closed" | "opted_out" | "budget" | "deleted" | "refused" | "failed";
     duplicate?: boolean;
@@ -1895,7 +1902,7 @@ export class ConversationRunner {
     try {
       this.checkGeneration(generation);
       // The same finalizeReply pass as every reply (it logs removed links).
-      const bubbles: import("./store.js").AnswerBubble[] = (await this.finalize(turn, text, false, "")).map((b) => ({ ...b, tag: "agent" }));
+      const bubbles: import("./store.js").AnswerBubble[] = (await this.finalize(turn, text, false, "")).map((b) => ({ ...b, tag: opts.noReplay ? NO_REPLAY_TAG : "agent" }));
       this.checkGeneration(generation);
       // Agent texts carry no reactions, so the epoch is only passed along.
       await this.sendBubbles(turn, bubbles, chatId, to, 0, generation, this.store.meta().decorationEpoch);
@@ -1961,6 +1968,9 @@ interface Eyes {
 function openSend(r: import("./store.js").OutboundRow): boolean {
   return !DECORATION_TAGS.has(r.tag) && (r.state === "uncertain" || r.state === "sending");
 }
+
+// A text its sender asked Channels not to replay.
+const NO_REPLAY_TAG = "agent_once";
 
 // Rows for reactions and the eyes, never for words.
 const DECORATION_TAGS: ReadonlySet<string> = new Set(["react", "eyes"]);

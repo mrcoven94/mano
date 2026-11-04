@@ -35,9 +35,9 @@ function stubFor(h: string) {
 }
 
 function recordChannels(answer: () => Response = () => Response.json({ sent: true })) {
-  const posts: { key: string; text: string }[] = [];
+  const posts: { key: string; text: string; noReplay?: boolean }[] = [];
   vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
-    posts.push(JSON.parse(String(init?.body)) as { key: string; text: string });
+    posts.push(JSON.parse(String(init?.body)) as { key: string; text: string; noReplay?: boolean });
     return answer();
   });
   return posts;
@@ -298,10 +298,84 @@ describe("the daily check", () => {
     expect(posts).toEqual([]);
 
     // The person says who lives with them, and only then is the child counted.
+    setClock(at(2, 12, 0, PACIFIC));
     expect((await patch(h, { "person.householdConfirmed": true })).status).toBe(200);
     await alarmsAt(h, at(3, 9, 30, PACIFIC));
     expect(posts.map((p) => p.key)).toEqual(["reminder:help:g0:CA:snap"]);
     expect(posts[0].text).toContain("household of 2");
+  });
+
+  it("a member a letter names after the person confirmed is not counted, with or without a name", async () => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    const h = handle("ao-uncounted");
+    await patch(h, { "person.address.state": "CA", "person.householdConfirmed": true, "income.job.amount": 900, "income.job.frequency": "monthly", "person.alwaysOn": true });
+    setClock(at(0, 13, 0, PACIFIC));
+    const out = await runInDurableObject(stubFor(h), async (instance, state) => {
+      state.storage.sql.exec("INSERT INTO documents(id, name, hash, r2_key) VALUES ('doc-1', 'letter.txt', 'h', 'k')");
+      return (instance as PersonAgent).recordDocumentFacts(personIdForHandle(h), {
+        documentId: "doc-1",
+        idempotencyKey: "uncounted",
+        fields: { "household.named.name": "Sam Example", "household.nameless.relationship": "child" },
+      });
+    });
+    expect(out.status).toBe("ok");
+    await alarmsAt(h, at(1, 9, 30, PACIFIC));
+    expect(posts).toHaveLength(1);
+    expect(posts[0].text).toContain("household of 1");
+  });
+
+  it("a confirmation in flight when a letter adds someone is refused, and writes nothing", async () => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    const h = handle("ao-inflight");
+    const personId = personIdForHandle(h);
+    await patch(h, { "person.address.state": "CA", "income.job.amount": 2000, "income.job.frequency": "monthly", "person.alwaysOn": true });
+    const out = await runInDurableObject(stubFor(h), async (instance, state) => {
+      const agent = instance as PersonAgent;
+      state.storage.sql.exec("INSERT INTO documents(id, name, hash, r2_key) VALUES ('doc-1', 'letter.txt', 'h', 'k')");
+      const real = crypto.subtle.encrypt.bind(crypto.subtle);
+      let landed = false;
+      // The confirmation is waiting on its seal when the letter's write lands.
+      const spy = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args) => {
+        if (!landed) {
+          landed = true;
+          const letter = await agent.recordDocumentFacts(personId, { documentId: "doc-1", idempotencyKey: "inflight-letter", fields: { "household.child.name": "Sam Example" } });
+          expect(letter.status).toBe("ok");
+        }
+        return real(...args);
+      });
+      const answer = await agent.patchProfile(personId, { idempotencyKey: "inflight-yes", source: "person", fields: { "person.householdConfirmed": true } });
+      spy.mockRestore();
+      return answer;
+    });
+    expect(out.status).toBe("roster_moved");
+    const { profile } = (await (await call(h, "GET", "/profile")).json()) as { profile: { person: { householdConfirmed?: unknown } } };
+    expect(profile.person.householdConfirmed).toBeUndefined();
+    await alarmsAt(h, at(1, 9, 30, PACIFIC));
+    expect(posts).toEqual([]);
+  });
+
+  it("marks its text no replay, and a deadline's nudge keeps Channels' retries", async () => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    const h = await personIn("ao-marked", "CA");
+    const made = await call(h, "POST", "/deadlines", {
+      title: "CalFresh renewal",
+      dueDate: dayPlus(1),
+      program: "CalFresh",
+      kind: "renewal",
+      source: { kind: "person" },
+      idempotencyKey: "marked",
+      generation: 0,
+    });
+    expect(made.status).toBe(201);
+    await alarmsAt(h, at(1, 9, 30, PACIFIC));
+    const help = posts.find((p) => p.key.startsWith("reminder:help:"));
+    const nudge = posts.find((p) => p.key.startsWith("reminder:nudge:"));
+    expect(help?.noReplay).toBe(true);
+    expect(nudge).toBeDefined();
+    expect(nudge?.noReplay).toBeUndefined();
   });
 
   it("a text held overnight is withdrawn when a correction means it no longer fits", async () => {
