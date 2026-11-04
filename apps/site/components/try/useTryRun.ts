@@ -40,6 +40,7 @@ export function useTryRun() {
   const [available, setAvailable] = useState<boolean | null>(TRY_DEV_RECORDED ? true : null);
   const seq = useRef(0);
   const alive = useRef(true);
+  const played = useRef(false);
 
   useEffect(() => {
     alive.current = true;
@@ -122,6 +123,13 @@ export function useTryRun() {
     setPhase("ended");
   }, [play]);
 
+  /* Paused, whether at load or on a press: say so, then play the real run once. */
+  useEffect(() => {
+    if (refusal !== "paused" || played.current) return;
+    played.current = true;
+    void playRecording();
+  }, [refusal, playRecording]);
+
   const start = useCallback(async (chosen: TryScenario) => {
     setScenario(chosen);
     setEvents([]);
@@ -152,8 +160,7 @@ export function useTryRun() {
     }
     if ("refused" in started) {
       setRefusal(started.refused);
-      if (started.refused === "paused") await playRecording();
-      else setPhase("idle");
+      if (started.refused !== "paused") setPhase("idle");
       return;
     }
     const id = started.runId;
@@ -175,7 +182,7 @@ export function useTryRun() {
       setSecondsLeft(null);
     }
     await drive(id);
-  }, [drive, play, playRecording]);
+  }, [drive, play]);
 
   const pressYes = useCallback(async () => {
     if (TRY_DEV_RECORDED) {
