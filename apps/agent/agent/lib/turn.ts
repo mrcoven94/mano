@@ -43,6 +43,10 @@ const MAX_PHOTOS = 10;
 export const TURN_BUDGET_MS = 95_000;
 // Below this much time left after a reading, the reading is the reply.
 const MODEL_MIN_MS = 15_000;
+// A yes keeps this much of the turn for the calls that handle its outcome: one
+// full Engine call. Past that it still asks, briefly, rather than not at all.
+const APPROVE_RESERVE_MS = 15_000;
+const APPROVE_MIN_MS = 1_000;
 // The reading and its deadline writes end this long before the turn does.
 const READ_MARGIN_MS = 3_000;
 const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,200}$/;
@@ -190,8 +194,10 @@ function defaultMailModel(): ModelClient {
   return mailModel;
 }
 
-async function answerYes(engine: PersonEngine, approvalId: string, words: OutcomeWords): Promise<string> {
-  const result = await engine.approve(approvalId);
+async function answerYes(engine: PersonEngine, approvalId: string, words: OutcomeWords, deadlineMs: number): Promise<string> {
+  // The confirmation is what the person is waiting for, so handling the outcome
+  // keeps its room inside the turn, under Channels' wait.
+  const result = await engine.approve(approvalId, Math.max(APPROVE_MIN_MS, deadlineMs - Date.now() - APPROVE_RESERVE_MS));
   switch (result.status) {
     case "completed":
     case "reconciled": {
@@ -272,9 +278,9 @@ async function alreadySent(engine: PersonEngine, approval: EngineApproval | null
   return words.alreadySent(receipt.externalId);
 }
 
-async function decide(engine: PersonEngine, approvalId: string, decision: "yes" | "no", words: OutcomeWords): Promise<TurnResponse> {
+async function decide(engine: PersonEngine, approvalId: string, decision: "yes" | "no", words: OutcomeWords, deadlineMs = Infinity): Promise<TurnResponse> {
   try {
-    if (decision === "yes") return reply(await answerYes(engine, approvalId, words));
+    if (decision === "yes") return reply(await answerYes(engine, approvalId, words, deadlineMs));
     return reply(await answerNo(engine, await engine.approval(approvalId), approvalId, words));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_decision_failed", decision, status: err instanceof EngineError ? err.status : null }));
@@ -328,6 +334,7 @@ async function decideTurn(
   turn: { firstReceivedAt: string; created: boolean },
   decision: "yes" | "no",
   words: OutcomeWords,
+  deadlineMs: number,
 ): Promise<TurnResponse | null> {
   // A YES with no answerable question: proposals not yet shown are never
   // approved.
@@ -337,7 +344,7 @@ async function decideTurn(
   if (bound?.kind === "model") return null;
   if (bound?.kind === "unshown") return unshown;
   if (bound?.kind === "approvals") {
-    if (decision === "yes") return decide(engine, bound.ids[0], "yes", words);
+    if (decision === "yes") return decide(engine, bound.ids[0], "yes", words, deadlineMs);
     return declineAll(engine, bound.ids, words);
   }
   // First attempt (or a retry whose first attempt bound nothing): only
@@ -362,7 +369,7 @@ async function decideTurn(
   }
   if (answerable) {
     await bind(engine, body.turnId, turn.firstReceivedAt, [answerable.approvalId]);
-    return decide(engine, answerable.approvalId, decision, words);
+    return decide(engine, answerable.approvalId, decision, words, deadlineMs);
   }
   const waiting = waitingProposals(approvals, engine.generation).filter((a) => Date.parse(a.createdAt) < arrived);
   if (waiting.length === 0) {
@@ -407,7 +414,7 @@ async function runTurn(
   await clock.time("close", () => closeReplaced(engine));
   if (decision) {
     await Promise.race([viewRead, new Promise((resolve) => setTimeout(resolve, LANGUAGE_WAIT_MS).unref?.())]);
-    const decided = await clock.time("decide", () => decideTurn(engine, body, turn, decision, OUTCOME_WORDS[language()]));
+    const decided = await clock.time("decide", () => decideTurn(engine, body, turn, decision, OUTCOME_WORDS[language()], deadlineMs));
     if (decided) return decided;
   }
   if (detected) {

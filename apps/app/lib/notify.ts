@@ -6,7 +6,7 @@
 import { Platform } from "react-native";
 import * as Notifications from "expo-notifications";
 import type { Approval, Deadline, ManoClient, Session } from "./api/types";
-import { planReminders } from "./reminders";
+import { planReminders, reminderData } from "./reminders";
 import { stringsFor, type Language } from "./strings";
 
 const CHANNEL_ID = "mano-reminders";
@@ -53,8 +53,8 @@ export async function refreshReminders(
   for (const item of plan) {
     const content =
       item.kind === "approval"
-        ? { title: s.reminderApprovalTitle, body: s.reminderApprovalBody, data: { kind: "approval" } }
-        : { title: s.reminderDeadlineTitle, body: s.reminderDeadlineBody, data: { kind: "deadline" } };
+        ? { title: s.reminderApprovalTitle, body: s.reminderApprovalBody, data: reminderData(item) }
+        : { title: s.reminderDeadlineTitle, body: s.reminderDeadlineBody, data: reminderData(item) };
     await Notifications.scheduleNotificationAsync({
       content,
       trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(item.fireAt) },

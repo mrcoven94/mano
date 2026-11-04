@@ -9,7 +9,8 @@
 // approval waits, a stale document included. "Ask Mano to change
 // something" sends nothing either: it opens the chat with the approval
 // quoted for the person to finish. Every load clears the last state, and
-// stale loads cannot overwrite it.
+// stale loads cannot overwrite it. An ID that is not on the list, as with an
+// old reminder's tap, says so and offers the list.
 
 import { useCallback, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
@@ -84,6 +85,8 @@ export default function ApprovalDetail() {
   const [linkBlocked, setLinkBlocked] = useState(false);
   const [receipt, setReceipt] = useState<ApproveResult | null>(null);
   const [failed, setFailed] = useState(false);
+  // The list loaded and this ID is not in it, as with an old reminder's tap.
+  const [missing, setMissing] = useState(false);
   const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const [no, setNo] = useState<NoState>(NO_IDLE);
@@ -98,6 +101,7 @@ export default function ApprovalDetail() {
     const mine = generation.current + 1;
     generation.current = mine;
     setFailed(false);
+    setMissing(false);
     setStale(false);
     setApproval(null);
     setKeyMates([]);
@@ -114,7 +118,10 @@ export default function ApprovalDetail() {
       if (generation.current !== mine) return;
       const found = all.find((a) => a.id === id) ?? null;
       setApproval(found);
-      if (!found) return;
+      if (!found) {
+        setMissing(true);
+        return;
+      }
       // The due date is context, never a condition: if deadlines cannot
       // load, the card simply leaves it out.
       void client
@@ -173,6 +180,7 @@ export default function ApprovalDetail() {
     setDueAt(null);
     setStale(false);
     setFailed(false);
+    setMissing(false);
   });
 
   const approve = async (): Promise<void> => {
@@ -290,6 +298,13 @@ export default function ApprovalDetail() {
       <Title>{s.approvalsTitle}</Title>
       {failed && !approval ? (
         <ErrorView title={s.errorTitle} body={s.errorBody} retry={() => void load()} retryTitle={s.retry} />
+      ) : missing ? (
+        <Card>
+          <Body>{s.approvalMissing}</Body>
+          <View style={styles.back}>
+            <Btn title={s.approvalsTitle} onPress={() => router.replace("/(tabs)/approvals")} />
+          </View>
+        </Card>
       ) : !approval ? (
         <LoadingView />
       ) : (
@@ -403,16 +418,13 @@ export default function ApprovalDetail() {
                           ? s.resultNeedsApproval
                           : s.resultSending}
               </Body>
-              {outcome === "sent" && receipt.receiptId ? (
-                <Muted>
-                  {s.receiptId}: {receipt.receiptId}
-                </Muted>
-              ) : null}
+              {outcome === "sent" ? <Body style={styles.next}>{s.receiptNext}</Body> : null}
               {outcome === "sent" && (receipt.simulated || mode === "stand-in") ? (
                 <Muted style={styles.match}>{s.receiptSimulated}</Muted>
               ) : null}
-              <View style={styles.back}>
+              <View style={[styles.back, styles.actions]}>
                 <Btn title={s.approvalsTitle} onPress={goBack} />
+                {outcome === "sent" ? <LinkBtn title={s.backToAgent} onPress={() => router.dismissTo("/(tabs)")} /> : null}
               </View>
             </Card>
           ) : no.phase === "answered" ? (
@@ -468,6 +480,7 @@ export default function ApprovalDetail() {
                 ) : null}
                 {doc && hashMatches ? <Row label={s.docHash} value={grouped(doc.hash)} mono /> : null}
                 <Row label={s.requestCheck} value={grouped(approval.requestHash)} mono />
+                {receipt && outcome === "sent" && receipt.receiptId ? <Row label={s.receiptId} value={receipt.receiptId} mono /> : null}
               </View>
             ) : null}
           </View>
@@ -520,5 +533,6 @@ const styles = StyleSheet.create({
   note: { marginBottom: 12 },
   actions: { gap: 8 },
   back: { marginTop: 16 },
+  next: { marginTop: 8 },
   pad: { height: 24 },
 });

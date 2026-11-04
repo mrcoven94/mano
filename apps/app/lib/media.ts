@@ -8,6 +8,7 @@ import { File } from "expo-file-system";
 import { deleteAsync } from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { b64encode } from "./base64";
+import { PermissionDeniedError } from "./permission-note";
 
 export interface PickedMedia {
   kind: "photo" | "video";
@@ -57,7 +58,7 @@ async function toPicked(
 // Several photos in one go, compressed for a slow connection.
 export async function pickMailPhotos(): Promise<PickedMedia[]> {
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (!permission.granted) throw new Error("Photo permission was not granted.");
+  if (!permission.granted) throw new PermissionDeniedError("library");
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ImagePicker.MediaTypeOptions.Images,
     allowsMultipleSelection: true,
@@ -70,7 +71,7 @@ export async function pickMailPhotos(): Promise<PickedMedia[]> {
 
 export async function takeMailPhoto(): Promise<PickedMedia | null> {
   const permission = await ImagePicker.requestCameraPermissionsAsync();
-  if (!permission.granted) throw new Error("Camera permission was not granted.");
+  if (!permission.granted) throw new PermissionDeniedError("camera");
   const result = await ImagePicker.launchCameraAsync({
     mediaTypes: ImagePicker.MediaTypeOptions.Images,
     base64: true,
@@ -82,7 +83,7 @@ export async function takeMailPhoto(): Promise<PickedMedia | null> {
 
 export async function pickMailVideo(): Promise<PickedMedia | null> {
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (!permission.granted) throw new Error("Photo permission was not granted.");
+  if (!permission.granted) throw new PermissionDeniedError("library");
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ImagePicker.MediaTypeOptions.Videos,
     allowsMultipleSelection: false,
@@ -94,7 +95,7 @@ export async function pickMailVideo(): Promise<PickedMedia | null> {
 
 export async function takeMailVideo(): Promise<PickedMedia | null> {
   const permission = await ImagePicker.requestCameraPermissionsAsync();
-  if (!permission.granted) throw new Error("Camera permission was not granted.");
+  if (!permission.granted) throw new PermissionDeniedError("camera");
   const result = await ImagePicker.launchCameraAsync({
     mediaTypes: ImagePicker.MediaTypeOptions.Videos,
     videoMaxDuration: 60,

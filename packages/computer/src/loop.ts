@@ -82,6 +82,7 @@ export async function runLoop(computer: Computer, model: ModelClient, task: stri
   ];
 
   const turns: string[] = [];
+  const started = Date.now();
   for (let step = 0; step < maxSteps; step++) {
     const pairs = history.filter(isComputerCall).length;
     if (pairs >= MAX_REPLAY_PAIRS) return { status: "step_budget", steps: step };
@@ -103,7 +104,11 @@ export async function runLoop(computer: Computer, model: ModelClient, task: stri
       logRefused(call.actions, turns);
       return { status: "refused", steps: step + 1 };
     }
-    turns.push(actions.map((a) => a.type).join(","));
+    const types = actions.map((a) => a.type).join(",");
+    turns.push(types);
+    // Action types and time only, never a value: a run past the fill's deadline
+    // never returns, so this is the only record of where its time went.
+    console.log(JSON.stringify({ type: "mano_computer_turn", step: step + 1, ms: Date.now() - started, actions: types }));
     options.onTurn?.({ step: step + 1, call: actions });
     await computer.act(actions);
     const output = {

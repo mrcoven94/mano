@@ -13,7 +13,11 @@ import { crisisGate, crisisLineFor } from "@mano/persona/crisis";
 import { deviceCrisisId } from "./chat-thread";
 import { noteCrisisLine } from "./crisis-help";
 import { AuthError, type ChatMessage, type ManoClient, type NewAttachment, type Session } from "./api/types";
-import type { Outbox } from "./queue";
+import type { Outbox, QueuedMessage } from "./queue";
+
+// One send of one queued message: started, answered, or not answered.
+export type SendPhase = "sending" | "sent" | "failed";
+export type SendWatcher = (item: QueuedMessage, phase: SendPhase) => void;
 
 export interface SubmitReport {
   opId: string;
@@ -33,6 +37,7 @@ export async function submitMessage(
   text: string,
   attachments: NewAttachment[],
   onReply?: (reply: ChatMessage) => void,
+  watch?: SendWatcher,
 ): Promise<SubmitReport> {
   if (crisisGate(text) !== "none") {
     // It shows before the message is queued but reads after it.
@@ -44,8 +49,28 @@ export async function submitMessage(
   if (!sessionUsable(session)) throw new AuthError();
   const item = await outbox.enqueue(session.personId, text, attachments);
   const report = await outbox.flush(session, async (queued) => {
-    const reply = await client.sendMessage(session, queued.text, queued.attachments, queued.id);
-    onReply?.(reply);
+    await sendWatched(client, session, queued, onReply, watch);
   });
   return { opId: item.id, sent: report.sent, kept: report.kept, held: report.held };
+}
+
+// Every send out of the outbox, so a screen hears how each one went
+// whichever flush carried it.
+export async function sendWatched(
+  client: ManoClient,
+  session: Session,
+  item: QueuedMessage,
+  onReply?: (reply: ChatMessage) => void,
+  watch?: SendWatcher,
+): Promise<void> {
+  watch?.(item, "sending");
+  let reply: ChatMessage;
+  try {
+    reply = await client.sendMessage(session, item.text, item.attachments, item.id);
+  } catch (err) {
+    watch?.(item, "failed");
+    throw err;
+  }
+  onReply?.(reply);
+  watch?.(item, "sent");
 }

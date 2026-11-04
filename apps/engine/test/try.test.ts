@@ -342,6 +342,20 @@ describe("a run", () => {
     expect(((await eventsOf(runId)).at(-1) as { text: string }).text).toMatch(/unverified/);
   });
 
+  it("waits for a filing that finishes after the turn gave up, and asks again only if it does not", async () => {
+    const res = await start("maria", uniqueSession(), uniqueIp());
+    const { runId } = (await res.json()) as { runId: string };
+    const script: Script = (texts) =>
+      texts[0]?.startsWith("Please fill") ? { status: "waiting_approval", text: "File it? YES or NO", approval: "File it? YES or NO", approvalId: "appr-1" } : { status: "replied", text: "I could not confirm that just now. Reply YES again to retry; it will not be sent twice." };
+    const press = (body = "{}") => call(`/try/runs/${runId}/next`, { method: "POST", body }, script);
+    await press();
+    await press();
+    await press();
+    // No approval on record in this scripted run, so there is nothing to wait for.
+    expect(await (await press(JSON.stringify({ press: "yes" }))).json()).toEqual({ next: "yes" });
+    expect((await eventsOf(runId)).some((e) => e.kind === "outcome")).toBe(false);
+  });
+
   // The agent is scripted, and its proposal and approval go to the real routes,
   // so the real gateway decides.
   const agentOnEngine = (): Script => {

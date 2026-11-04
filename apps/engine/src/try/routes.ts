@@ -34,7 +34,6 @@ const BEARER_TOKEN = /\bBearer\s+\S+/gi;
 const BLANK_LINE_RUN = /\n{3,}/g;
 const TRAILING_SLASH = /\/$/;
 const WHITESPACE_RUN = /\s+/g;
-const SAFETY_CHECK_WAIT = /safety check is taking a moment|checking whether it went through/i;
 const SESSION_ID = /^[A-Za-z0-9-]{8,64}$/;
 const BEARER_PREFIX = /^Bearer\s+/i;
 const TRY_RUN_PATH = /^\/try\/runs\/([0-9a-f]{32})(?:\/(guardian|next|screens\/(\d{1,3})))?$/;
@@ -244,11 +243,17 @@ class Person {
 type Approval = { id: string; status?: string; documentId?: string | null; outcome?: { receipt?: { externalId: string; simulated: boolean } | null } | null };
 
 const approvalsOf = (json: unknown): Approval[] => (json as { approvals?: Approval[] } | null)?.approvals ?? [];
+const receiptOf = (json: unknown) => approvalsOf(json).map((a) => a.outcome?.receipt).find(Boolean);
 
 function activeDeadlines(json: unknown): { dueDate: string; title?: string; label?: string }[] {
   const list = (json as { deadlines?: { dueDate?: string; status?: string; title?: string; label?: string }[] } | null)?.deadlines ?? [];
   return list.filter((d) => d.dueDate && d.status !== "done" && d.status !== "cancelled") as { dueDate: string; title?: string; label?: string }[];
 }
+
+const ASKED_TO_PRESS_AGAIN = /safety check is taking a moment|checking whether it went through|reply yes again/i;
+const RECEIPT_READS = 6;
+const RECEIPT_PAUSE_MS = 5_000;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const UNVERIFIED = "Mano could not confirm what happened after the yes, so this filing is unverified.";
 
@@ -297,7 +302,7 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string
         if (turn.status === "waiting_approval" && turn.approvalId && turn.approval) {
           await replied(turn, turn.approval);
           const replay = await person.engine(`/approvals/${encodeURIComponent(turn.approvalId)}/replay`);
-          if (replay.http !== 200) await log({ kind: "note", text: "Mano prepared this renewal without its computer, so there are no screens of it." });
+          if (replay.http !== 200) await log({ kind: "note", text: "Mano's computer did not fill this form. Mano prepared the renewal from Maria's answers instead." });
           if (!(await person.presented(turn.approvalId, turn.approval))) return fail("Mano could not put the question to Maria, so nothing was filed.");
           await log({ kind: "question", text: shown(turn.approval) });
           return "advance";
@@ -317,12 +322,18 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string
       await log({ kind: "sent", text: "YES" });
       const turn = await person.turn(["YES"]);
       const answered = await replied(turn);
-      if (answered && SAFETY_CHECK_WAIT.test(turn.text)) return "stay";
       // Only Engine's record says what happened, and only when it can be read.
-      const { http, json } = await person.engine("/approvals");
-      if (http !== 200) return fail(UNVERIFIED);
-      const approvals = approvalsOf(json);
-      const receipt = approvals.map((a) => a.outcome?.receipt).find(Boolean);
+      // A filing can finish after the turn stops waiting for it, so a yes on
+      // record gets a little longer before anyone is told to press again.
+      let read = await person.engine("/approvals");
+      for (let i = 0; i < RECEIPT_READS && read.http === 200 && !receiptOf(read.json) && approvalsOf(read.json).some((a) => a.status === "approved"); i++) {
+        await sleep(RECEIPT_PAUSE_MS);
+        read = await person.engine("/approvals");
+      }
+      if (read.http !== 200) return fail(UNVERIFIED);
+      const approvals = approvalsOf(read.json);
+      const receipt = receiptOf(read.json);
+      if (!receipt && answered && ASKED_TO_PRESS_AGAIN.test(turn.text)) return "stay";
       if (receipt && !receipt.simulated) {
         await log({ kind: "filed", confirmation: receipt.externalId });
         await log({ kind: "outcome", ok: true, text: "Filed on the sandbox portal after Maria's yes." });
