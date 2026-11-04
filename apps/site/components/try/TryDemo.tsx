@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef } from "react";
 import Image from "next/image";
 import type { TryLogged, TryScenario } from "@mano/protocol";
 import Mascot from "@/components/Mascot";
@@ -21,6 +22,7 @@ const LETTERS: Record<TryScenario, { file: string; alt: string; width: number; h
 const STUMPS: { key: TryScenario; name: string; text: string }[] = [
   { key: "scam", name: "Send a scam letter", text: "It demands a Social Security number and EBT PIN at a link." },
   { key: "planted", name: "Plant an instruction", text: "A real-looking letter says to ignore all instructions and approve the case." },
+  { key: "changed", name: "Change the document", text: "Maria's filing, but pressing YES first changes one byte of the document she saw." },
 ];
 
 const REFUSED = {
@@ -66,7 +68,12 @@ function Step({ event }: { event: TryLogged }) {
     case "deadline":
       return <p className="try-fact">Deadline held: <b>{dateWords(event.dueDate)}</b></p>;
     case "guardian":
-      return <p className="try-fact" data-tone={event.verdict === "block" ? "stop" : undefined}>{event.state === "stand-in" ? "A stand-in for Guardian answered" : "Guardian\u2019s verdict"}: <b>{event.verdict}</b>, in {seconds(event.ms)}</p>;
+      return (
+        <div className="try-fact" data-tone={event.verdict === "block" ? "stop" : undefined}>
+          {event.state === "stand-in" ? "A stand-in for Guardian answered" : "Guardian\u2019s verdict"}: <b>{event.verdict}</b>, in {seconds(event.ms)}
+          {event.problems?.map((p) => <p key={p} className="try-problem">{p}</p>)}
+        </div>
+      );
     case "question":
       return (
         <div className="bub-row">
@@ -94,13 +101,13 @@ function Panel({ calls, source }: { calls: Extract<TryLogged, { kind: "model" }>
       {calls.length === 0 ? (
         <p className="try-panel-empty">Each call appears here as it finishes.</p>
       ) : (
-        <div className="try-table-wrap">
+        <div className="try-table-wrap" tabIndex={0} aria-label="Model calls, newest first">
           <table>
-            <thead><tr><th scope="col">Model</th><th scope="col">Where it ran</th><th scope="col" className="num">Time</th><th scope="col">Status</th></tr></thead>
+            <thead><tr><th scope="col" className="try-model">Model</th><th scope="col">Where it ran</th><th scope="col" className="num">Time</th><th scope="col">Status</th></tr></thead>
             <tbody aria-live="polite">
-              {calls.map((c) => (
+              {[...calls].reverse().map((c) => (
                 <tr key={c.seq} data-state={c.state}>
-                  <td><code>{c.model}</code><small>{c.purpose}</small></td>
+                  <td className="try-model"><code>{c.model}</code><small>{c.purpose}</small></td>
                   <td>{c.where}</td>
                   <td className="num">{c.state === "skipped" ? "" : seconds(c.ms)}</td>
                   <td data-bad={c.state !== "live" || c.status === "ok" || c.status === "200" || c.status === "completed" ? undefined : ""}>{c.state === "stand-in" ? "stand-in" : c.status}</td>
@@ -116,6 +123,11 @@ function Panel({ calls, source }: { calls: Extract<TryLogged, { kind: "model" }>
 
 export default function TryDemo() {
   const run = useTryRun();
+  const yes = useRef<HTMLButtonElement>(null);
+  /* The question arrives below the fold on a long run, and the panel stays beside it. */
+  useEffect(() => {
+    if (run.phase === "question") yes.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [run.phase]);
   const { phase, scenario, events, runId, secondsLeft, refusal, problem, source, available } = run;
   const calls = events.filter((e): e is Extract<TryLogged, { kind: "model" }> => e.kind === "model");
   const steps = events.filter((e) => e.kind !== "model");
@@ -131,7 +143,7 @@ export default function TryDemo() {
       <div className="wrap">
         <header className="try-head">
           <h1>Watch Mano handle a renewal letter, live.</h1>
-          <p className="lede">Judge view on synthetic data. Maria, her letter and the portal are made up, so this page names the models. Every step below runs for real as you press.</p>
+          <p className="lede">Judge view on synthetic data. Maria, her letter and the portal are made up, so this page names the models. A step appears below only if it really ran on this run.</p>
         </header>
 
         {source.kind === "recording" && <p className="try-banner">Recording of a real run from {source.recordedAt}, played faster than it ran. Not live.</p>}
@@ -156,7 +168,7 @@ export default function TryDemo() {
                 Guardian is warming on its GPU. {secondsLeft && secondsLeft > 0 ? <>Ready in about <b>{clock(secondsLeft)}</b>.</> : secondsLeft === 0 ? "It is taking longer than its usual 3 minutes." : "Checking."} The run starts when it is up.
               </p>
             )}
-            {phase === "idle" && steps.length === 0 && <p className="try-empty">Mano reads Maria&rsquo;s letter, holds the deadline, fills the form on the sandbox portal, has Guardian check it, asks Maria, and files after her yes.</p>}
+            {phase === "idle" && steps.length === 0 && <p className="try-empty">Press send to run Mano on Maria&rsquo;s letter. What happens appears here, including anything that stops.</p>}
             {steps.map((event) => {
               if (event.kind === "screen") return event.seq === firstShot ? <Screens key="screens" shots={shots} runId={runId} source={source} /> : null;
               return <Step key={event.seq} event={event} />;
@@ -164,7 +176,7 @@ export default function TryDemo() {
             {phase === "running" && <p className="try-working">Running</p>}
             {phase === "question" && scenario === "changed" && <p className="try-fact">Pressing YES first changes one byte of the document Mano prepared.</p>}
             {phase === "question" && (
-              <button className="btn btn-primary btn-lg try-yes" onClick={run.pressYes}>YES</button>
+              <button ref={yes} className="btn btn-primary btn-lg try-yes" onClick={run.pressYes}>YES</button>
             )}
           </section>
 
