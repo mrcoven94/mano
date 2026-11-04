@@ -21,6 +21,12 @@ import { tracedFillDeps } from "../lib/try-trace.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { EARLIER_NOT_UPDATED_NOTE, EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, sameDraft, earlierFiling, type Draft } from "../lib/propose.js";
 
+function fieldNames(): string {
+  return Object.values(FORMS)
+    .map((form) => form.fields.map((f) => f.name).join(", "))
+    .join("; ");
+}
+
 const inputSchema = z.object({
   form: z
     .string()
@@ -30,7 +36,7 @@ const inputSchema = z.object({
   answers: z
     .record(z.string(), z.string().max(300))
     .optional()
-    .describe("Answers the person gave in this conversation, keyed by the field name a previous call asked about. Pass every answer so far on each call."),
+    .describe(`Only what the person said in this conversation, on every call, the first one too, in their words, under these exact names: ${fieldNames()}. Leave out anything they did not say.`),
 });
 
 // Test seam: tests drive the fill with a scripted computer and model.
@@ -85,6 +91,18 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
   if (!profile) {
     return { status: "unavailable", sent: false, note: "Mano cannot read this person's saved details yet. Prepare the renewal with start_form_draft from the person's answers instead." };
   }
+  // A name the form does not have would be dropped without a word, and the
+  // form would then ask for what the person just said, or fill past their
+  // correction. No guessing what a name meant: the model says it again.
+  const known = new Set([...form.fields.map((f) => f.name), "proof"]);
+  const unknown = Object.keys(input.answers ?? {}).filter((name) => !known.has(name));
+  if (unknown.length > 0) {
+    return {
+      status: "wrong_field_names",
+      sent: false,
+      note: `Nothing was used. This form has no ${unknown.join(", ")}. Call fill_form again right away with only what the person said, under these exact names: ${form.fields.map((f) => f.name).join(", ")}. Do not ask them anything yet.`,
+    };
+  }
   const filled = fillFrom(form, profile, input.answers ?? {});
   // Hearing that benefits are ending is not asking for a form. A renewal
   // starts from a document: with none on file and nothing answered yet, in
@@ -110,7 +128,7 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     const note =
       filled.missing.name === "proof"
         ? "The form needs a proof of income document and Mano has none on file yet. Ask this one question, and nothing else."
-        : "Ask this one question, and nothing else. Then call fill_form again with the answer added under this field name.";
+        : "If the person already said this, call fill_form again with their words under this field name, and do not ask. Otherwise ask this one question, and nothing else. Then call fill_form again with the answer added under this field name.";
     return { status: "needs_answer", field: filled.missing.name, question: filled.missing.question, sent: false, note };
   }
 

@@ -168,6 +168,22 @@ David Coven decides what gets built and owns the accounts. The code is written w
 - GPT Sol reviews every pull request at its current head, with a multi-model panel for changes that touch auth, personal data or anything that sends. Nothing merges on its author's word.
 - `AGENTS.md` is the full operating manual, and anyone can run the same process.
 
+## Eval
+
+The held-out test lives in `eval/`, frozen before anyone tunes prompts. Twenty development households are public (`eval/data/dev.json` plus answer keys in `eval/data/dev-answers.json`, which only the grader loads). One hundred households are held out: only hashes are committed, in the freeze record at `eval/data/heldout-hashes.json`, and scenarios regenerate at run time from the secret `MANO_EVAL_HELDOUT_SEED`.
+
+Letter wording comes from template packs. The public pack (`eval/src/pack-public.json`) renders the dev split. The held-out split renders only from a private pack of unseen families, loaded from the path in `MANO_EVAL_TEMPLATE_PACK`; the freeze record commits only its SHA-256, and the pack is published after the final run. The loader is tested with an obviously fake pack under `eval/test/fixtures/`.
+
+Two tracks: text (all letters as text) and photo (photographed letters as images). Mano and three baselines run each track in isolated subprocesses: a plain reminder tool, a deterministic string-matching parser (the honest bar), and a general agent (one generic prompt, real model run with a link-checker tool). Mano runs its real letter reader from `packages/mail`, which reads images only, so on the text track each letter's exact text is drawn on a clean page. Every child runs offline under Node's permission model (Node 25 or later); model calls go only through a parent-side IPC broker that holds the key and an allowlist. The report prints correct packets, missed and false deadlines, readable-copy requests, model versus enforced safety recognition, evidence requests, failures, and cost and time per scenario, with score splits per template group (public versus private).
+
+```sh
+pnpm --filter ./eval run check      # tests, no keys needed
+pnpm --filter ./eval run verify     # verify freeze (held-out check needs seed plus pack)
+pnpm eval:baselines                 # deterministic baselines; agent needs a key
+ws keys run -- pnpm eval:baselines  # all systems live on the dev split, both tracks
+pnpm --filter ./eval run heldout    # all systems on the held-out split; prints aggregates only
+```
+
 ## Prior work
 
 The site's state-by-state counts of offices and services come from Front Door, an earlier product by the same author, through its open data API, as a static snapshot in `apps/site/lib/coverage.ts`. Program facts come from official sources in `packages/programs`, and renewal forms are defined in `apps/agent/agent/lib/forms.ts`. Front Door's code is not part of this repository.
