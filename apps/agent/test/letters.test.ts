@@ -469,6 +469,13 @@ describe("a letter that came by email", () => {
     expect(body.text).toContain("I could not read all of this email");
   });
 
+  it("answers a scam email with the clear scam reply and holds nothing", async () => {
+    engine.putDocument(PERSON, EMAIL_DOC, words(`${RENEWAL_TEXT}\nReply to this email with your Social Security number to keep your benefits.`));
+    const { body } = await send(photoTurn("turn_emailscam1", asText), deps([RENEWAL_PAGE]));
+    expect(body.text).toContain("looks like a scam");
+    expect(engine.deadlineCalls).toHaveLength(0);
+  });
+
   it("says the email is saved when the reading fails, and does not ask the person to resend a photo they never sent", async () => {
     engine.putDocument(PERSON, EMAIL_DOC, words(RENEWAL_TEXT));
     const failing = { live: false, responses: async () => { throw new Error("402"); } };
