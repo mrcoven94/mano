@@ -47,7 +47,7 @@ const PLANS: Record<TryScenario, Key[]> = {
 const OPTIONAL = new Set<Key>(["guard2"]);
 
 const GUARDIAN = /guardian/i;
-const OK_STATUS = new Set(["ok", "200", "completed"]);
+export const OK_STATUS = new Set(["ok", "200", "completed"]);
 const READING = /read/i;
 const NO_DATE = /did not hold a date/i;
 const NOT_FILLED = /did not fill/i;
@@ -75,7 +75,7 @@ function settle(key: Key, e: TryLogged, done: Map<Key, Settled>, scenario: TrySc
         if (e.state === "stand-in") return { state: "warn", detail: "A stand-in read it" };
         return OK_STATUS.has(e.status) ? { state: "pass" } : { state: "stop", detail: `The reading call ended with ${e.status}` };
       }
-      if (e.kind === "reply") return { state: "pass" };
+      // A reply alone is no proof of a reading: Mano also replies to say it could not read the page.
       return null;
     case "date":
       if (e.kind === "deadline") return { state: "pass", detail: `Holding ${dateWords(e.dueDate)}` };
@@ -130,8 +130,7 @@ export function buildChecks(scenario: TryScenario, events: TryLogged[], mode: "i
       continue;
     }
     for (const key of plan) {
-      // The last reading call says how the reading went, so a retry updates it either way. A reply settles it only
-      // when no call did, since a reply after a failed call may be Mano saying it could not read.
+      // The last reading call says how the reading went, so a retry updates it either way.
       if (done.has(key) && !(key === "read" && e.kind === "model")) continue;
       const result = settle(key, e, done, scenario);
       if (!result) continue;
@@ -156,9 +155,13 @@ export function buildChecks(scenario: TryScenario, events: TryLogged[], mode: "i
   const checks: Check[] = [];
   for (const key of plan) {
     const settled = done.get(key);
-    if (!settled && OPTIONAL.has(key) && mode === "ended") continue;
-    const state: CheckState = settled ? settled.state : mode === "ended" ? "skipped" : mode === "live" && key === firstOpen ? "active" : "waiting";
-    checks.push({ key, title: TITLES[key], state, detail: settled?.detail, problems: settled?.problems, calls: calls.get(key)! });
+    const worked = calls.get(key)!;
+    if (!settled && OPTIONAL.has(key) && mode === "ended" && worked.length === 0) continue;
+    // Calls with no result logged: the check ran, and the page says its result is missing rather than hiding them.
+    const unreported = !settled && mode === "ended" && worked.some((c) => c.state !== "skipped");
+    const state: CheckState = settled ? settled.state : unreported ? "warn" : mode === "ended" ? "skipped" : mode === "live" && key === firstOpen ? "active" : "waiting";
+    const detail = settled?.detail ?? (unreported ? "It ran, but no result was logged" : undefined);
+    checks.push({ key, title: TITLES[key], state, detail, problems: settled?.problems, calls: worked });
   }
   return { checks, outcome };
 }

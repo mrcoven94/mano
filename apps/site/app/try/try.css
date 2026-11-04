@@ -115,6 +115,8 @@
 .try-call-bar{grid-column:1/-1;display:flex;gap:2px;height:4px}
 .try-call-bar i{display:block;flex:none;width:var(--w);border-radius:2px;background:#8EA2FF;animation:tryGrow .7s ease-out}
 .try-call[data-state=stand-in] .try-call-bar i{background:var(--hl)}
+.try-call-name em{font-style:normal;font-weight:600;color:#FF9A8C}
+.try-call[data-failed] .try-call-bar i{background:#FF7A6B}
 .try-call[data-state=skipped]{opacity:.55}
 .try-call[data-state=skipped] .try-call-bar{display:none}
 @keyframes tryGrow{from{width:0}}

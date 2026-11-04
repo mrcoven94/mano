@@ -5,7 +5,7 @@ import type { TryLogged, TryScenario } from "@mano/protocol";
 import Mascot from "@/components/Mascot";
 import { TRY_API } from "@/lib/try-client";
 import { useTryRun, type Phase, type Source } from "./useTryRun";
-import { buildChecks, modelName, type Check, type Outcome } from "./checks";
+import { OK_STATUS, buildChecks, modelName, type Check, type Outcome } from "./checks";
 
 /* withmano.com/try, the judge view. A visitor picks a preset synthetic letter and presses buttons; there is no text
    box and no upload. Three views of one event log: what Mano is looking at, the conversation, and the checks the run
@@ -192,6 +192,9 @@ function Thread({ events, phase, onYes }: { events: TryLogged[]; phase: Phase; o
   );
 }
 
+/* A call that ran and did not succeed; its status is shown, never only on hover. */
+const failed = (c: Check["calls"][number]) => c.state !== "skipped" && !OK_STATUS.has(c.status);
+
 /* Calls in a row from the same model for the same job read as one line, each call a segment of its bar. */
 const CALL_SCALE_MS = 16_000;
 type Call = Check["calls"][number];
@@ -200,7 +203,7 @@ function groupCalls(calls: Call[]): { calls: Call[]; ms: number }[] {
   for (const c of calls) {
     const last = groups[groups.length - 1];
     const head = last?.calls[0];
-    if (last && head && head.model === c.model && head.purpose === c.purpose && head.where === c.where && head.state === c.state) {
+    if (last && head && head.model === c.model && head.purpose === c.purpose && head.where === c.where && head.state === c.state && failed(head) === failed(c)) {
       last.calls.push(c);
       last.ms += c.ms;
     } else groups.push({ calls: [c], ms: c.ms });
@@ -240,8 +243,8 @@ function CheckRow({ check, phase }: { check: Check; phase: Phase }) {
         {groupCalls(check.calls).map((g) => {
           const head = g.calls[0]!;
           return (
-            <span key={head.seq} className="try-call" data-state={head.state} title={g.calls.map((c) => `${c.model} · ${c.where} · ${c.purpose} · ${c.status} · ${seconds(c.ms)}`).join("\n")}>
-              <span className="try-call-name">{modelName(head.model)}{g.calls.length > 1 && <b> &times;{g.calls.length}</b>}</span>
+            <span key={head.seq} className="try-call" data-state={head.state} data-failed={failed(head) || undefined} title={g.calls.map((c) => `${c.model} · ${c.where} · ${c.purpose} · ${c.status} · ${seconds(c.ms)}`).join("\n")}>
+              <span className="try-call-name">{modelName(head.model)}{g.calls.length > 1 && <b> &times;{g.calls.length}</b>}{failed(head) && <em> {head.status}</em>}</span>
               <span className="try-call-where">{head.state === "skipped" ? "not called" : head.where}</span>
               <span className="try-call-ms">{head.state === "skipped" ? "" : seconds(g.ms)}</span>
               <span className="try-call-bar" aria-hidden>
