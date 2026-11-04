@@ -210,6 +210,7 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
         return doneText(approval.purpose, approval.outcome.receipt);
       }
       if (approval?.status === "approved") return CHECKING;
+      console.warn(JSON.stringify({ type: "mano_yes_refused", status: result.status, approval: approval?.status ?? null }));
       await engine.clearPointer(approvalId);
       return "That approval can no longer be used, so nothing was sent. Want me to prepare it again?";
     }

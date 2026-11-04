@@ -175,6 +175,12 @@ describe("starting a form draft", () => {
     expect(outside).toEqual([]);
   });
 
+  it("cites the attached document as the draft's source, so the safety check can see where it came from", async () => {
+    photoOnFile("doc-letter", LETTER_BYTES);
+    expect((await draft("turn_draft0090")).status).toBe("waiting_for_yes");
+    expect(JSON.parse(engine.approvals().at(-1)!.requestJson).sources).toEqual([{ kind: "document", id: "doc-letter" }]);
+  });
+
   it("attaches the newest letter when more than one is on file", async () => {
     await letterOnFile("doc-old", LETTER_BYTES, "2026-11-20", Date.now() - 60_000);
     await letterOnFile("doc-new", LETTER_BYTES, "2026-11-10");
