@@ -215,6 +215,8 @@ describe("gateSentence reads the wording plain renewal letters use", () => {
     expect(isDeadlineLike("Your renewal is due")).toBe(true);
     expect(isDeadlineLike("Your case is due for payment")).toBe(true);
     expect(isDeadlineLike("Your case is due for renewal in 30 days")).toBe(true);
+    expect(isDeadlineLike("Your SNAP case is due for renewal on Friday")).toBe(true);
+    expect(isDeadlineLike("Your SNAP case is not due for renewal")).toBe(true);
   });
 });
 

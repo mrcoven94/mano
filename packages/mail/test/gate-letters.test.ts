@@ -55,7 +55,7 @@ const LETTERS: { id: string; notice: string; marks: string[]; result: Result; da
     id: "snap-renewal-due",
     notice: "November 3, 2026",
     marks: ["Return your signed renewal form by November 20, 2026."],
-    result: "held right",
+    result: "asked right date",
     date: "2026-11-20",
     text: `Orrivane County Household Assistance Office
 410 Pellovar Lane
@@ -205,8 +205,8 @@ VC-8. Send copies unless an original is specifically requested.`,
     id: "telephone-interview-appointment",
     notice: "November 3, 2026",
     marks: ["Appointment date: November 16, 2026"],
-    result: "date to know",
-    date: "2026-11-16",
+    result: "asked no date",
+    date: null,
     text: `Parnivar County Family Support Bureau
 504 Delvorn Way
 Quarvessa, Kelvessa 00045
@@ -522,7 +522,7 @@ describe("the twelve letters", () => {
   it("adds up to the counts in the pull request", () => {
     const counts: Record<string, number> = {};
     for (const { result } of LETTERS) counts[result] = (counts[result] ?? 0) + 1;
-    expect(counts).toEqual({ "held right": 3, "asked right date": 3, "asked no date": 4, "date to know": 1, "scam warning": 1 });
+    expect(counts).toEqual({ "held right": 2, "asked right date": 4, "asked no date": 5, "scam warning": 1 });
   });
 });
 
@@ -532,18 +532,12 @@ const DUTY = "Return your signed renewal form by November 20, 2026.";
 
 const HARMLESS = [
   "Review each entry and correct any information that is no longer accurate.",
-  "If we do not receive the renewal by the date above, SNAP benefits will stop.",
-  "If your signed form is not received by that date, benefits end at the close of that day.",
-  "This notice concerns SNAP only.",
   "Sign the certification on the last page, even if there are no changes.",
   "If you need help reading the packet, contact the renewal desk and provide your case number.",
   "If you have questions, contact this office.",
   "If you have questions, call (202) 555-0101.",
   "Contact the redetermination desk if you need another copy.",
   "If the item is unavailable, contact us before the return date to discuss other proof.",
-  "If you cannot attend, contact the scheduling desk to request another appointment.",
-  "Have your case number and income information available when you call.",
-  "Language assistance may be requested when arranging the interview.",
   "Send copies unless an original is specifically requested.",
 ];
 
@@ -615,6 +609,198 @@ describe("near-misses never hold a date", () => {
   it("marks a sentence the gate would hold, so each near-miss above is the rule's doing", async () => {
     const held = answerReading(await read(`${HEAD}${DUTY}`, NOTICE, everyDateSentence(`${HEAD}${DUTY}`))).deadlines;
     expect(held.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
+  });
+});
+
+// Letters found in review at e18fdc1, word for word, then more of each
+// family. A sentence must stop the letter wherever it sits, so each runs
+// with the reader marking every dated sentence and with it marking only
+// the duty.
+const TERSE = "Return your signed renewal form by November 20, 2026.";
+const OPENING = "Orrivane County Household Assistance Office\n\nNovember 3, 2026\n\n";
+const TEREN = `${OPENING}Dear Teren Valwick:\n\n`;
+
+describe("wrong holds from review never hold again", () => {
+  it.each([
+    ["an earlier cutoff by the date above", `${HEAD}If we do not receive your renewal by the date above, SNAP benefits will stop.\n\n${TERSE}`],
+    ["scope that contradicts the duty", `${HEAD}This notice concerns SNAP only.\n\nReturn your Medicaid renewal form by November 20, 2026.`],
+    ["a copy with a second salutation", `${TEREN}Enclosed is a copy of the letter addressed to your landlord.\n\nDear Lorna Talvek:\n\n- ${TERSE}`],
+    ["an example notice for a neighbor", `${TEREN}Example notice sent to your neighbor:\n\n- ${TERSE}`],
+    ["a named other addressee", `${TEREN}The instructions below are addressed to your neighbor Selvi Darnovel. This notice concerns SNAP only.\n\n${TERSE}`],
+    ["an exception after a help offer", `${HEAD}${TERSE} If you have questions, contact this office. Otherwise, you need not return the form.`],
+    ["a conflicting weekday", `${HEAD}Your SNAP case is due for renewal on Friday.\n\n${TERSE}`],
+  ])("%s", async (_name, text) => {
+    for (const marks of [everyDateSentence(text), [TERSE]]) {
+      const held = answerReading(await read(text, NOTICE, marks)).deadlines;
+      expect(held).toEqual([]);
+    }
+  });
+});
+
+describe("near-misses in the same families never hold", () => {
+  const family = (name: string, sentences: string[]) =>
+    describe(name, () => {
+      it.each(sentences)("%s", async (sentence) => {
+        for (const text of [`${HEAD}${sentence}\n\n${TERSE}`, `${HEAD}${TERSE}\n\n${sentence}`, `${HEAD}${TERSE} If you have questions, contact this office. ${sentence}`]) {
+          for (const marks of [everyDateSentence(text), [TERSE]]) {
+            expect(answerReading(await read(text, NOTICE, marks)).deadlines, text).toEqual([]);
+          }
+        }
+      });
+    });
+
+  family("a date the sentence points at but does not name", [
+    "If we do not receive your renewal by that date, SNAP benefits will stop.",
+    "If your signed form is not received by the date above, benefits end at the close of that day.",
+    "We must receive your renewal by the date above.",
+    "Return it by the date above.",
+    "Return the form by the date printed at the top of this notice.",
+    "Send it by the date on the enclosed form.",
+    "The date below is your last day.",
+    "Your form is late after this date.",
+    "Benefits stop on the same date.",
+    "Send your form by your review date.",
+    "We will send a new date.",
+    "A later deadline may apply.",
+  ]);
+
+  family("scope that may not match the duty", [
+    "This notice concerns Medicaid only.",
+    "This notice concerns SNAP.",
+    "This letter concerns your CHIP case.",
+    "This notice covers WIC.",
+    "This notice is about TANF.",
+    "This mailing is for your SNAP case.",
+    "This notice relates to your child care case.",
+  ]);
+
+  family("someone else's letter", [
+    "Enclosed is a copy of the letter sent to your spouse.",
+    "Attached is a copy of a notice for another household.",
+    "Sample letter.",
+    "SAMPLE NOTICE",
+    "This is an example of what we send.",
+    "Template for county use.",
+    "This letter is for Lorna Talvek.",
+    "To: Lorna Talvek",
+    "Attn: Lorna Talvek",
+    "cc: Lorna Talvek",
+    "Addressee: Lorna Talvek",
+    "Recipient: Selvi Darnovel",
+    "Instructions for Selvi Darnovel",
+    "Sent to your landlord.",
+    "Mailed to your roommate.",
+    "We wrote on behalf of your neighbor.",
+    "COPY",
+    "File copy.",
+    "Office copy.",
+    "Courtesy copy.",
+    "Duplicate.",
+    "For Lorna Talvek:",
+    "Lorna Talvek:",
+    "Notice for Lorna Talvek.",
+    "Re: Lorna Talvek",
+    "Not for you.",
+    "This notice does not concern you.",
+    "This is a test.",
+    "Practice notice.",
+    "For training use.",
+    "This notice was intended for another person.",
+  ]);
+
+  family("an exception or change in its own sentence", [
+    "Otherwise, you need not return the form.",
+    "You need not return the form.",
+    "You do not need to return the form.",
+    "You don't need to send anything.",
+    "You do not have to respond.",
+    "No need to respond.",
+    "A response is not necessary.",
+    "However, your household is exempt.",
+    "Your household is excused from this review.",
+    "This requirement is waived.",
+    "You may skip this form.",
+    "Instead, call us.",
+    "Alternatively, wait for our call.",
+    "You may send it later.",
+    "We have extended your time.",
+    "We will extend this period.",
+    "An extension is available.",
+    "The review was postponed.",
+    "Your renewal has been moved.",
+    "This replaces our last letter.",
+    "This notice supersedes our last letter.",
+    "This notice was sent in error.",
+    "This notice was sent by mistake.",
+    "This is a corrected notice.",
+    "This is a revised notice.",
+    "This is an amended notice.",
+    "Households that already renewed have nothing to do.",
+    "Households with no income can wait.",
+    "Anyone who renewed last month can stop here.",
+    "People who moved have a different process.",
+    "No response is needed.",
+    "No further steps are needed.",
+    "You have already renewed.",
+    "Previous notice.",
+    "Old notice.",
+    "Last year's notice.",
+    "This was last year's renewal.",
+    "This notice has expired.",
+    "Tentative.",
+    "This schedule is tentative.",
+    "This is an estimate.",
+    "Estimated.",
+    "Dates may change.",
+    "Some dates may change.",
+    "Dates are subject to change.",
+    "Your Medicaid case is under review.",
+    "Your SNAP renewal is complete.",
+    "We received your form.",
+    "We have your renewal.",
+    "Thank you for renewing.",
+    "You are all set.",
+    "Your case is closed.",
+    "Your benefits have ended.",
+    "You may keep your benefits without this form.",
+    "A caseworker will fill this out for you.",
+    "We will return this form for you.",
+    "Dependents may answer separately.",
+    "Some families can stop here.",
+    "Stop.",
+    "Please hold this form.",
+    "Hold this form until we call.",
+    "Keep this form until we call.",
+    "Your form is not late until December.",
+  ]);
+
+  family("a date not written as one", [
+    "Your SNAP case is due for renewal on Friday.",
+    "Your SNAP case is due for renewal next Friday.",
+    "Your SNAP case is due for renewal soon.",
+    "Your SNAP case is due for renewal this week.",
+    "Your SNAP case is due for renewal, Friday.",
+    "Your SNAP case is not due for renewal.",
+    "Your SNAP case was due for renewal.",
+    "Your SNAP case is due for review and closes Friday.",
+    "Your case is overdue for renewal.",
+    "Your SNAP case closes on Friday.",
+    "Benefits stop on the 15th.",
+    "Benefits stop at the end of the month.",
+  ]);
+});
+
+// These still hold, on main too. hasQualifier reads one sentence at a
+// time, so it cannot count salutations or compare programs, and its word
+// list cannot name every exception. it.fails turns red once one is fixed.
+describe("known gaps that need the whole letter", () => {
+  it.fails.each([
+    ["a second salutation alone", `${TEREN}Dear Lorna Talvek:\n\n- ${TERSE}`],
+    ["a subject for another program", `${HEAD}Re: Medicaid renewal\n\nReturn your SNAP renewal form by November 20, 2026.`],
+    ["an exception in wording the list does not name", `${HEAD}Your aunt handles this one.\n\n${TERSE}`],
+  ])("%s asks", async (_name, text) => {
+    const marks = [text.split("\n").at(-1)!.replace(/^- /, "")];
+    expect(answerReading(await read(text, NOTICE, marks)).deadlines).toEqual([]);
   });
 });
 
