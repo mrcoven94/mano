@@ -13,6 +13,7 @@ export async function POST(request: Request) {
     if ((err as Error).message === "Accounts are not configured.") {
       return NextResponse.json({ error: "Sign-in is not configured." }, { status: 503 });
     }
-    return NextResponse.json({ ok: true });
+    // Nothing here depends on whether the phone has an account, so this cannot reveal one.
+    return NextResponse.json({ error: "Something went wrong on our side." }, { status: 500 });
   }
 }

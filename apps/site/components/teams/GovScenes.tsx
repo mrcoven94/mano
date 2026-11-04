@@ -42,7 +42,7 @@ function PolicyScene() {
 
 function QueueScene() {
   const rows: [string, string, string, string, string][] = [
-    ["M. Lopez", "Food benefits renewal", "Complete", "4 rules checked, each one cited", ""],
+    ["M. Torres", "Food benefits renewal", "Complete", "4 rules checked, each one cited", ""],
     ["A. Haddad", "Child care help", "Complete", "5 rules checked, each one cited", ""],
     ["K. Brooks", "Emergency rent help", "Waiting on resident", "Asked for page 2 of the lease on Oct 25", "wait"],
     ["P. Ruiz", "Food benefits", "Needs a person", "Two pay stubs name different employers. Mano did not guess.", "flag"],
@@ -76,7 +76,7 @@ function NoticeScene() {
         <p>Pursuant to Section 6.1 of the program rules, the recertification submitted on the date indicated has been reviewed and continued eligibility has been determined to be in effect for the certification period stated herein, subject to the reporting requirements set forth in Section 8.</p>
       </div>
       <div className="sc-card">
-        <div className="sc-card-head"><ManoHead>Notice for Maria Lopez</ManoHead><span className="sc-label">Plain language · Español</span></div>
+        <div className="sc-card-head"><ManoHead>Notice for Maria Torres</ManoHead><span className="sc-label">Plain language · Español</span></div>
         <p className="t-notice-h rv" style={d(0.4)}>Su renovación fue aprobada.</p>
         <p className="t-notice rv" style={d(0.9)}>{plain}</p>
         <ul className="t-docs rv" style={d(1.8)}><li>Same facts as template 6.1</li><li>Reading level: grade 5</li><li>Language she asked for</li></ul>
