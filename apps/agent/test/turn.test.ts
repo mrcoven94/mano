@@ -1517,3 +1517,15 @@ describe("a person who writes in another language", () => {
     expect(no.body.text).toMatch(/^Sige, hindi ko ipinadala\./);
   });
 });
+
+describe("the model on the turn response", () => {
+  it("goes back to the signed caller when the deployment names it", async () => {
+    const res = await handleTurn(turn("turn_mod_0000001", "hello"), deps({ modelId: "muse-spark-1.3" }));
+    expect(((await res.json()) as { model?: string }).model).toBe("muse-spark-1.3");
+  });
+
+  it("is absent when it does not", async () => {
+    const res = await handleTurn(turn("turn_mod_0000002", "hello"), deps());
+    expect(await res.json()).not.toHaveProperty("model");
+  });
+});

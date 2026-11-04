@@ -259,28 +259,35 @@ const SPANISH = new RegExp(
 // danger. Plain phrases and no model, so this is a floor and not a reader:
 // a sentence it has no phrase for still reaches only the model's own rule.
 // Over-triggering is accepted, so "đói muốn chết" (starving) names 988 too.
+// Danger counts only when it is about a person: a benefit can be at risk too.
+const VI_PERSON = "(?<!của )(?:tôi|em|mình|chúng tôi|con tôi|gia đình tôi)";
+const TL_PERSON = "(?:ako|kami|ang buhay|ang anak|ang pamilya)";
 const VIETNAMESE = [
   "tự tử", "tự sát", "tự vẫn", "muốn chết", "thà chết", "không muốn sống", "không còn muốn sống", "hết muốn sống", "không thiết sống", "chán sống",
   "tự làm hại", "tự hại", "tự làm đau", "kết liễu", "kết thúc cuộc đời", "kết thúc cuộc sống", "kết thúc đời mình",
-  "đánh tôi", "đánh đập tôi", "đánh em", "đánh con tôi", "bị đánh(?! thuế| rơi| cắp)", "bạo hành", "hành hung", "đe dọa tôi", "dọa giết", "giết tôi", "cưỡng hiếp", "hiếp dâm",
-  "gặp nguy hiểm", "đang nguy hiểm", "nguy hiểm tính mạng", "nguy đến tính mạng", "tôi không an toàn", "cứu tôi", "cứu với",
+  "đánh tôi", "đánh đập tôi", "đánh em", "đánh con tôi", "bị đánh(?! thuế| rơi| cắp| giá| dấu| máy| thức| mất| số| vần)", "bạo hành", "hành hung", "đe dọa tôi", "dọa giết", "giết tôi", "cưỡng hiếp", "hiếp dâm",
+  "bóp cổ(?! tay| chân)", "siết cổ(?! tay| chân)", "thắt cổ(?! tay| chân)", "treo cổ",
+  `${VI_PERSON}(?: đang)? gặp nguy hiểm`, `${VI_PERSON} đang nguy hiểm`, "nguy hiểm tính mạng", "nguy đến tính mạng", "tôi không an toàn", "cứu tôi", "cứu với",
 ].join("|");
 // The same words typed with no marks, without any that then mean something
-// else: "tu tu" is also "từ từ" (slowly), and "bi danh" is "bí danh" (alias).
+// else: "tu tu" is also "từ từ" (slowly), "bi danh" is "bí danh" (alias),
+// "that co" is "thật có" (really has) and "treo co" is "treo cờ" (hang a flag).
 const VIETNAMESE_BARE = [
   "muon tu tu", "se tu tu", "tu sat", "muon chet", "khong muon song", "chan song", "ket lieu",
-  "danh toi", "dang danh", "bao hanh", "gap nguy hiem", "giet toi", "cuu toi",
+  "danh toi", "danh em", "danh con toi", "bao hanh", "(?<!cua )toi(?: dang)? gap nguy hiem", "giet toi", "cuu toi", "bop co(?! tay| chan)", "siet co(?! tay| chan)",
 ].join("|");
 const TAGALOG = [
   "magpakamatay", "magpapakamatay", "nagpakamatay", "nagpapakamatay",
   "(?:papatayin|patayin|pinapatay|sasaktan|saktan|sinasaktan|nasasaktan)(?: ko)? ang sarili(?: ko)?", "pumatay sa sarili",
   "gusto ko nang mamatay", "gusto ko na mamatay", "gusto kong mamatay", "gusto ko mamatay", "mamatay na lang", "mamamatay na lang", "magbigti", "maglaslas", "naglalaslas",
   "ayoko nang mabuhay", "ayoko na mabuhay", "ayaw ko nang mabuhay", "ayaw ko na mabuhay", "ayokong mabuhay", "wakasan ang buhay", "tapusin ang buhay",
-  "(?:binubugbog|binugbog|bubugbugin|sinasaktan|sinaktan|sasaktan|sinasampal|sinampal|sinusuntok|sinuntok|sinisipa|sinipa|pinapalo|pinalo|hinahampas|hinampas|ginugulpi|ginulpi|papatayin|pinagbabantaan|tinatakot|sinasakal|sinakal)(?: \\p{L}+){0,2} ako",
+  "(?:binubugbog|binugbog|bubugbugin|sinasaktan|sinaktan|sasaktan|sinasampal|sinampal|sinusuntok|sinuntok|sinisipa|sinipa|pinapalo|pinalo|hinahampas|hinampas|ginugulpi|ginulpi|papatayin|pinagbabantaan|sinasakal|sinakal|sasakalin)(?: \\p{L}+){0,2} ako",
   "gusto akong patayin", "ginahasa", "hinahalay", "hinalay",
-  "nasa panganib", "nasa peligro", "nanganganib", "delikado ako", "delikado ang buhay", "hindi ako ligtas", "saklolo",
+  `nasa panganib ${TL_PERSON}`, `nasa peligro ${TL_PERSON}`, `nanganganib ${TL_PERSON}`, "delikado ako", "delikado ang buhay", "hindi ako ligtas", "saklolo",
 ].join("|");
-const OTHER_LANGUAGES = new RegExp(String.raw`(?:^|\s)(?:${VIETNAMESE}|${TAGALOG})(?=\s|$)`, "u");
+// Being choked, in English and Spanish, which the lists above did not have.
+const CHOKING = String.raw`strangl\p{L}* me|me (?:est[áa] |quiere |va a |trat[óo] de |intent[óo] )?(?:ahorc\p{L}*|estrangul\p{L}*|asfixi\p{L}*)|(?:ahorcarme|estrangularme|asfixiarme)`;
+const OTHER_LANGUAGES = new RegExp(String.raw`(?:^|\s)(?:${VIETNAMESE}|${TAGALOG}|${CHOKING})(?=\s|$)`, "u");
 const OTHER_LANGUAGES_BARE = new RegExp(String.raw`(?:^|\s)(?:${VIETNAMESE_BARE})(?=\s|$)`, "u");
 
 // Lowercased words with every mark gone, and đ as d.
