@@ -11,13 +11,17 @@ import type { FillDeps } from "./computer-fill.js";
 
 const REPORT_MS = 3_000;
 const MAX_SCREENS = 24;
+const TRAILING_SLASH = /\/$/;
+const PROVIDER_PREFIX = /^(openrouter|modal|mano)\//;
+const META_PREFIX = /^meta\/(?=muse-spark-1|sam-)/;
+const META_API_MODEL = /^(muse-|sam-)/;
 
 async function report(body: Record<string, unknown>): Promise<void> {
   const base = process.env.ENGINE_URL;
   const token = process.env.MANO_ENGINE_AGENT_TOKEN;
   if (!base || !token) return;
   try {
-    await fetch(`${base.replace(/\/$/, "")}/try/report`, {
+    await fetch(`${base.replace(TRAILING_SLASH, "")}/try/report`, {
       method: "POST",
       signal: AbortSignal.timeout(REPORT_MS),
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -36,11 +40,11 @@ const STAND_IN = { model: "stand-in", where: "No model called", state: "stand-in
 // prefix an ID with its provider's name, and the where is never assumed from
 // the settings, so a backup route that answers is named as itself.
 export function identityOf(raw: string): Pick<Call, "model" | "where" | "state"> {
-  const id = raw.replace(/^(openrouter|modal|mano)\//, "").replace(/^meta\/(?=muse-spark-1|sam-)/, "");
+  const id = raw.replace(PROVIDER_PREFIX, "").replace(META_PREFIX, "");
   if (id.includes("stand-in")) return STAND_IN;
   if (id.startsWith("meta-models/")) return { model: id, where: "Modal", state: "live" };
   if (id === OPEN_WEIGHT_MODEL_ID) return { model: id, where: "OpenRouter, zero retention", state: "live" };
-  if (/^(muse-|sam-)/.test(id)) return { model: id, where: "Meta's API", state: "live" };
+  if (META_API_MODEL.test(id)) return { model: id, where: "Meta's API", state: "live" };
   return { model: id, where: "Not known", state: "live" };
 }
 
