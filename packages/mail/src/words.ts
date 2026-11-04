@@ -41,8 +41,6 @@ export interface AnswerWords {
   checkDate: string;
   twoDates(first: string, firstFor: string, second: string, secondFor: string): string;
   alsoInterview(date: string): string;
-  askRequest(date: string): string;
-  askWindow(days: number, from: string, result: string): string;
   notYours: string;
   askAnyDate: string;
   official: string;
@@ -121,8 +119,6 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     checkDate: "Please check that against your letter. Is that the date you need to meet?",
     twoDates: (first, firstFor, second, secondFor) => `Your letter gives two dates: ${first} for ${firstFor}, and ${second} for ${secondFor}. Please check them against your letter. Which one do you need to meet first?`,
     alsoInterview: (date) => `It also lists an interview on ${date}.`,
-    askRequest: (date) => `It looks like the date to send your request is ${date}. Please check that against your letter. Is that what it says?`,
-    askWindow: (days, from, result) => `It looks like you have ${days} days from ${from}, which would be ${result}. Please check that against your letter. Is that what it says?`,
     notYours: "Something on this letter says it may be for someone else or may no longer apply, so I am not treating its dates as yours. Is this letter for you, and is it still current?",
     askAnyDate: "I don't want to guess wrong about the date on this letter. Which date, if any, does it say you need to meet?",
     official: "If you need to call the office, use the number on your state's official site, not one from a letter.",
@@ -191,8 +187,6 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     checkDate: "Compruébelo en su carta, por favor. ¿Es esa la fecha que debe cumplir?",
     twoDates: (first, firstFor, second, secondFor) => `Su carta da dos fechas: el ${first} para ${firstFor}, y el ${second} para ${secondFor}. Compruébelas en su carta, por favor. ¿Cuál debe cumplir primero?`,
     alsoInterview: (date) => `También indica una entrevista el ${date}.`,
-    askRequest: (date) => `Parece que la fecha para enviar su solicitud es el ${date}. Compruébelo en su carta, por favor. ¿Es eso lo que dice?`,
-    askWindow: (days, from, result) => `Parece que tiene ${days} días a partir del ${from}, es decir, hasta el ${result}. Compruébelo en su carta, por favor. ¿Es eso lo que dice?`,
     notYours: "Algo en esta carta indica que puede ser para otra persona o que ya no aplica, así que no tomo sus fechas como suyas. ¿Esta carta es para usted y sigue vigente?",
     askAnyDate: "No quiero equivocarme con la fecha de esta carta. ¿Qué fecha, si hay alguna, dice que debe cumplir?",
     official: "Si necesita llamar a la oficina, use el número del sitio oficial de su estado, no uno de una carta.",
@@ -264,8 +258,6 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     checkDate: "Vui lòng đối chiếu với thư của bạn. Đó có phải là ngày bạn cần kịp không?",
     twoDates: (first, firstFor, second, secondFor) => `Thư của bạn có hai ngày: ${first} cho ${firstFor}, và ${second} cho ${secondFor}. Vui lòng đối chiếu với thư của bạn. Bạn cần kịp ngày nào trước?`,
     alsoInterview: (date) => `Thư cũng ghi một cuộc phỏng vấn vào ${date}.`,
-    askRequest: (date) => `Có vẻ hạn gửi yêu cầu của bạn là ${date}. Vui lòng đối chiếu với thư của bạn. Thư có nói vậy không?`,
-    askWindow: (days, from, result) => `Có vẻ bạn có ${days} ngày kể từ ${from}, tức là đến ${result}. Vui lòng đối chiếu với thư của bạn. Thư có nói vậy không?`,
     notYours: "Có chỗ trong thư cho thấy thư này có thể dành cho người khác hoặc không còn áp dụng, nên tôi không coi các ngày trong thư là của bạn. Thư này có phải cho bạn và vẫn còn hiệu lực không?",
     askAnyDate: "Tôi không muốn đoán sai ngày trong thư này. Thư nói bạn cần kịp ngày nào, nếu có?",
     official: "Nếu cần gọi văn phòng, hãy dùng số trên trang web chính thức của tiểu bang, không dùng số trong thư.",
@@ -334,8 +326,6 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     checkDate: "Pakitingnan ito sa sulat mo. Iyon ba ang petsang dapat mong habulin?",
     twoDates: (first, firstFor, second, secondFor) => `Dalawang petsa ang nasa sulat mo: ${first} para sa ${firstFor}, at ${second} para sa ${secondFor}. Pakitingnan ang mga ito sa sulat mo. Alin ang dapat mong habulin muna?`,
     alsoInterview: (date) => `May nakalista rin itong interview sa ${date}.`,
-    askRequest: (date) => `Mukhang ${date} ang huling araw para ipadala ang hiling mo. Pakitingnan ito sa sulat mo. Iyon ba ang sinasabi nito?`,
-    askWindow: (days, from, result) => `Mukhang may ${days} araw ka mula ${from}, ibig sabihin hanggang ${result}. Pakitingnan ito sa sulat mo. Iyon ba ang sinasabi nito?`,
     notYours: "May nakasaad sa sulat na maaaring para ito sa iba o hindi na ito naaangkop, kaya hindi ko itinuturing na iyo ang mga petsa nito. Para sa iyo ba ang sulat na ito, at kasalukuyan pa ba ito?",
     askAnyDate: "Ayokong magkamali sa petsa sa sulat na ito. Aling petsa, kung mayroon, ang sinasabi nitong dapat mong habulin?",
     official: "Kung kailangan mong tawagan ang opisina, gamitin ang numero sa opisyal na site ng iyong estado, hindi ang nasa sulat.",
