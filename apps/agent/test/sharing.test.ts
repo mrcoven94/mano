@@ -233,6 +233,28 @@ describe("LAP-863: Maria shares her renewal with her caseworker", () => {
     expect(engine.approvals().find((a) => a.id === approvalId)!.status).toBe("rejected");
   });
 
+  it("a failed grant she asked to stop is retired, so a later yes cannot run it again", async () => {
+    const office = new OfficeThatLosesTheFirst();
+    engine.filer = office;
+    const asked = await say("I want my caseworker to see my renewal");
+    await say("YES");
+    const approval = engine.approvals().find((a) => a.id === asked.approvalId)!;
+    // Recovery finds nothing delivered, and the safety check refuses a resend.
+    const checker = engine.checker;
+    engine.checker = { check: async () => ({ verdict: "block", problems: ["Refused by review."] }) };
+    await engine.person(PERSON).gateway.recoverAttempt(approval.idempotencyKey, new Date(), new Date(Date.now() + 60_000).toISOString());
+    engine.checker = checker;
+    expect(office.calls).toBe(1);
+    expect((await shares()).active).toEqual([]);
+
+    expect((await say("please stop sharing")).status).not.toBe("waiting_approval");
+    expect(engine.approvals().find((a) => a.id === asked.approvalId)!.status).toBe("retired");
+
+    await say("YES");
+    expect(office.calls).toBe(1);
+    expect((await shares()).active).toEqual([]);
+  });
+
   it("stop_sharing says what happened to the waiting question", async () => {
     await say("I want my caseworker to see my renewal");
     const client = engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch })!.forHandle(HANDLE, grant, 0);
@@ -250,28 +272,6 @@ describe("LAP-863: Maria shares her renewal with her caseworker", () => {
     await client.putTurn("turn_stopdirect2", new Date().toISOString());
     const out = (await stopSharing.execute({}, toolCtx({ handleHash: HANDLE, turnId: "turn_stopdirect2", grant, generation: 0, turnAtMs: Date.now() }))) as { status: string };
     expect(out.status).toBe("earlier_share_unresolved");
-  });
-
-  it("after a delete, her next reply says what the office keeps, once", async () => {
-    await say("I want my caseworker to see my renewal");
-    await say("YES");
-    request();
-    const res = await engine.fetch(`${ENGINE_URL}/api/persons/${PERSON}/conversation`, {
-      method: "DELETE",
-      headers: { authorization: `Bearer ${ENGINE_AGENT_TOKEN}`, "x-mano-handle-grant": grant, "content-type": "application/json" },
-      body: JSON.stringify({ generation: 1 }),
-    });
-    expect(res.status).toBe(200);
-    generation = 1;
-
-    const first = await say("hello again");
-    expect(first.text).toContain("can no longer open the documents you sent");
-    expect(first.text).toContain("still has the details you approved for your food benefits renewal");
-    expect(first.text).toContain("cannot recall");
-    expect(first.text).toContain("Okay.");
-    expect(guardReply(first.text).text).toBe(first.text);
-    expect((await say("hello once more")).text).toBe("Okay.");
-    expect((await shares()).active).toHaveLength(1);
   });
 
   it("a photo with no request waiting goes to the reading as usual", async () => {
@@ -334,6 +334,21 @@ describe("LAP-863: Maria shares her renewal with her caseworker", () => {
     expect((await shares()).active).toEqual([]);
   });
 });
+
+// The first delivery times out having reached nothing, and asking confirms
+// that. Any later delivery would go through.
+class OfficeThatLosesTheFirst implements Executor {
+  readonly simulated = true;
+  calls = 0;
+  async execute(_req: ActionRequest): Promise<{ externalId: string }> {
+    this.calls += 1;
+    if (this.calls === 1) throw new TimeoutError();
+    return { externalId: "delivered-late" };
+  }
+  async check(): Promise<CheckOutcome> {
+    return { found: false };
+  }
+}
 
 // Takes the delivery and never answers it: the attempt stays unknown.
 class SilentOffice implements Executor {

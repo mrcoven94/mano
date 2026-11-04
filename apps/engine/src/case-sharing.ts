@@ -11,11 +11,12 @@
 // ends every grant and closes every open request. The organization then
 // keeps the case with the values the person approved, until they stop
 // sharing, and a private record of which documents it was sent. Mano cannot
-// recall what its staff already saved, and says so on the person's next text
-// (Channels forgets how to reach them in the delete, so it cannot be sooner).
+// recall what its staff already saved, and says so in a text after the
+// person's next message (Channels forgets how to reach them in the delete,
+// so it cannot be sooner).
 import { recipientName } from "@mano/protocol";
 
-import { currentGeneration } from "./agents/agent-state.js";
+import { createReminder, currentGeneration } from "./agents/agent-state.js";
 
 interface SqlExec {
   exec(query: string, ...bindings: unknown[]): { toArray(): unknown[]; rowsWritten: number };
@@ -36,13 +37,15 @@ export function documentKindLabel(kind: unknown): string | null {
   return typeof kind === "string" && Object.hasOwn(DOCUMENT_KINDS, kind) ? DOCUMENT_KINDS[kind] : null;
 }
 
-// A reminder row delivers the text, so a request gets its retries and its
-// one send. Each organization chooses its own request IDs, so the ID names
-// the organization too. Reminders the person set are listed without these.
+// A reminder row delivers each text, so it gets retries, its one send and
+// Channels' answer. Each organization chooses its own request IDs, so the ID
+// names the organization too. Reminders the person set are listed without
+// these.
 const REQUEST_REMINDER_PREFIX = "case-request:";
+const NOTICE_REMINDER_PREFIX = "case-share-notice:";
 
-export function isRequestReminder(id: string): boolean {
-  return id.startsWith(REQUEST_REMINDER_PREFIX);
+export function isShareReminder(id: string): boolean {
+  return id.startsWith(REQUEST_REMINDER_PREFIX) || id.startsWith(NOTICE_REMINDER_PREFIX);
 }
 
 export function requestReminderId(recipient: string, requestId: string): string {
@@ -53,12 +56,16 @@ export function requestReminderId(recipient: string, requestId: string): string 
 // to Channels and waiting on a retry is withdrawn, as a stopped deadline's
 // nudge is: only a send already in Channels' hands can still land, and
 // Channels dedupes it.
-function withdrawRequestText(sql: SqlExec, recipient: string, requestId: string, nowMs: number): void {
+function withdrawText(sql: SqlExec, match: "id = ?" | "id LIKE ?", value: string, nowMs: number): void {
   sql.exec(
     "UPDATE reminders SET status = CASE WHEN status = 'sending' THEN 'withdrawn' ELSE 'cancelled' END, finished_at_ms = ?" +
-      " WHERE id = ? AND status IN ('scheduled', 'claimed', 'sending')",
-    nowMs, requestReminderId(recipient, requestId),
+      ` WHERE ${match} AND status IN ('scheduled', 'claimed', 'sending')`,
+    nowMs, value,
   );
+}
+
+function withdrawRequestText(sql: SqlExec, recipient: string, requestId: string, nowMs: number): void {
+  withdrawText(sql, "id = ?", requestReminderId(recipient, requestId), nowMs);
 }
 
 export function documentRequestText(recipient: string, purpose: string, label: string): string {
@@ -74,15 +81,22 @@ export function ensureCaseSharingTables(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS share_delete_notices(generation INTEGER PRIMARY KEY)`);
 }
 
+// Stands for every organization: an old revocation the migration could not
+// place stays in force for all of them.
+const ANY_ORGANIZATION = "*";
+
 // Revocations recorded before they were per organization name only the
-// case. The revoke's stored outbound message names the organization: the
-// message is stored before delivery, and the row is written after it.
+// case. A revoke's stored outbound message names the organization, and is
+// stored before delivery, so only one whose effect was applied counts: a
+// failed revoke to another organization leaves its message behind too.
 export function migrateRevokedCases(sql: SqlExec): void {
   if (sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'revoked_cases'").toArray().length === 0) return;
   const revoked = new Map(
     (sql.exec("SELECT case_id, revoked_at FROM revoked_cases").toArray() as { case_id: string; revoked_at: string }[]).map((r) => [r.case_id, r.revoked_at]),
   );
-  for (const row of sql.exec("SELECT message_json FROM outbound_consent").toArray() as { message_json: string }[]) {
+  const placed = new Set<string>();
+  const applied = "SELECT message_json FROM outbound_consent WHERE idempotency_key IN (SELECT idempotency_key FROM applied_effects)";
+  for (const row of sql.exec(applied).toArray() as { message_json: string }[]) {
     let message: { type?: string; caseId?: string; toAgentId?: string };
     try {
       message = JSON.parse(row.message_json) as typeof message;
@@ -92,13 +106,17 @@ export function migrateRevokedCases(sql: SqlExec): void {
     const at = message.caseId ? revoked.get(message.caseId) : undefined;
     if (message.type === "consent.revoke" && at && message.toAgentId) {
       sql.exec("INSERT OR IGNORE INTO revoked_shares VALUES (?, ?, ?)", message.toAgentId, message.caseId, at);
+      placed.add(message.caseId!);
     }
+  }
+  for (const [caseId, at] of revoked) {
+    if (!placed.has(caseId)) sql.exec("INSERT OR IGNORE INTO revoked_shares VALUES (?, ?, ?)", ANY_ORGANIZATION, caseId, at);
   }
   sql.exec("DROP TABLE revoked_cases");
 }
 
 export function shareRevoked(sql: SqlExec, recipient: string, caseId: string): boolean {
-  return sql.exec("SELECT 1 FROM revoked_shares WHERE recipient = ? AND case_id = ?", recipient, caseId).toArray().length > 0;
+  return sql.exec("SELECT 1 FROM revoked_shares WHERE recipient IN (?, ?) AND case_id = ?", recipient, ANY_ORGANIZATION, caseId).toArray().length > 0;
 }
 
 export function shareActive(sql: SqlExec, recipient: string, caseId: string, nowMs: number): boolean {
@@ -132,11 +150,13 @@ interface ShareRequest {
 
 // The approved action's effect on the person's records. Runs inside the
 // transaction that records the action's receipt, at most once per key: a
-// SQL error rolls the whole of it back.
+// SQL error rolls the whole of it back. approvalCurrent is false when a
+// conversation delete came between the person's yes and this outcome.
 export function applyShareOutcome(
   sql: SqlExec,
   approval: { recipient: string; purpose: string; requestJson: string; documentHash: string | null; documentId: string | null },
   nowMs: number,
+  approvalCurrent: boolean,
 ): void {
   let stored: { payload?: ShareRequest };
   try {
@@ -162,14 +182,18 @@ export function applyShareOutcome(
         ? null
         : 0;
     sql.exec("INSERT OR REPLACE INTO consents(recipient, case_id, purpose, expires_at_ms) VALUES (?, ?, ?, ?)", recipient, caseId, approval.purpose, expiresAtMs);
+    // The office has it after all, though the delete found nothing shared.
+    if (!approvalCurrent) oweDeleteNotice(sql);
   } else if (payload?.consent === "revoke") {
     sql.exec("DELETE FROM consents WHERE recipient = ? AND case_id = ?", recipient, caseId);
     sql.exec("INSERT OR IGNORE INTO revoked_shares VALUES (?, ?, ?)", recipient, caseId, new Date(nowMs).toISOString());
     const open = sql.exec("SELECT id FROM document_requests WHERE recipient = ? AND case_id = ? AND status = 'open'", recipient, caseId).toArray() as { id: string }[];
     sql.exec("UPDATE document_requests SET status = 'closed' WHERE recipient = ? AND case_id = ? AND status = 'open'", recipient, caseId);
     for (const { id } of open) withdrawRequestText(sql, recipient, id, nowMs);
+    withdrawText(sql, "id LIKE ?", `${NOTICE_REMINDER_PREFIX}%`, nowMs);
   } else if (payload?.consent === "provide") {
-    grantDocument(sql, recipient, caseId, approval);
+    // A yes from before a delete opens nothing, even if the same bytes are back.
+    if (approvalCurrent) grantDocument(sql, recipient, caseId, approval);
     const requestId = payload.requestId ?? "";
     sql.exec("UPDATE document_requests SET status = 'provided' WHERE recipient = ? AND id = ? AND status = 'open'", recipient, requestId);
     withdrawRequestText(sql, recipient, requestId, nowMs);
@@ -194,26 +218,33 @@ function grantDocument(sql: SqlExec, recipient: string, caseId: string, approval
 export function endDocumentAccess(sql: SqlExec, nowMs: number): void {
   sql.exec("DELETE FROM shared_documents");
   sql.exec("UPDATE document_requests SET status = 'closed' WHERE status = 'open'");
-  if (listShares(sql, nowMs).active.length > 0) {
-    sql.exec("INSERT OR IGNORE INTO share_delete_notices(generation) VALUES (?)", currentGeneration(sql));
-  }
+  if (listShares(sql, nowMs).active.length > 0) oweDeleteNotice(sql);
 }
 
-// What Mano owes the person after a delete, until a reply carried it.
-export function shareDeleteNotice(sql: SqlExec, nowMs: number): string | null {
-  const owed = sql.exec("SELECT 1 FROM share_delete_notices WHERE generation = ?", currentGeneration(sql)).toArray();
-  if (owed.length === 0) return null;
+function oweDeleteNotice(sql: SqlExec): void {
+  sql.exec("INSERT OR IGNORE INTO share_delete_notices(generation) VALUES (?)", currentGeneration(sql));
+}
+
+// Channels forgets how to reach a person in a delete and learns again from
+// their next message, so that is when the notice goes. It stays owed until
+// Channels says it sent one: a text waiting on a retry is left to finish,
+// and one Channels refused or gave up on goes again on the next message.
+// True when this queued one.
+export function queueDeleteNotice(sql: SqlExec, nowMs: number): boolean {
+  const generation = currentGeneration(sql);
+  if (sql.exec("SELECT 1 FROM share_delete_notices WHERE generation = ?", generation).toArray().length === 0) return false;
+  const prefix = `${NOTICE_REMINDER_PREFIX}${generation}:`;
+  const tries = (sql.exec("SELECT status FROM reminders WHERE id LIKE ?", `${prefix}%`).toArray() as { status: string }[]).map((r) => r.status);
+  if (tries.some((status) => ["sent", "scheduled", "claimed", "sending"].includes(status))) return false;
   const { active } = listShares(sql, nowMs);
-  if (active.length === 0) return null;
+  if (active.length === 0) return false;
   const offices = active.map((s) => {
     const name = recipientName(s.recipient);
     return `${name.charAt(0).toUpperCase()}${name.slice(1)} can no longer open the documents you sent, but it still has the details you approved for ${s.purpose}.`;
   });
-  return `Your history with Mano was deleted. ${offices.join(" ")} Mano cannot recall those or anything the office already saved. Say stop sharing to end its access to those details.`;
-}
-
-export function clearShareDeleteNotice(sql: SqlExec): void {
-  sql.exec("DELETE FROM share_delete_notices");
+  const text = `Your history with Mano was deleted. ${offices.join(" ")} Mano cannot recall those or anything the office already saved. Say stop sharing to end its access to those details.`;
+  createReminder(sql, { id: `${prefix}${tries.length}`, text, dueAtMs: nowMs, generation }, nowMs);
+  return true;
 }
 
 // One row per request: true only for the delivery that recorded it, so a

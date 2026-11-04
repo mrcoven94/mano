@@ -27,18 +27,17 @@ import { generateAgentKeypair, importAgentPrivateKey, resolveAgentKey } from "./
 import {
   applyShareOutcome,
   documentKindLabel,
-  clearShareDeleteNotice,
   documentRequestText,
   endDocumentAccess,
   ensureCaseSharingTables,
-  isRequestReminder,
+  isShareReminder,
   listShares,
   migrateRevokedCases,
   readableDocuments,
   recordDocumentRequest,
   requestReminderId,
+  queueDeleteNotice,
   shareActive,
-  shareDeleteNotice,
   shareRevoked,
 } from "../case-sharing.js";
 import { ConsentDeliveringExecutor } from "./person-executor.js";
@@ -633,7 +632,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // their deadline instead.
   async listReminders(verified: string) {
     await this.assertSubject(verified);
-    return listReminders(this.db()).filter((r) => !isNudge(r.id) && !isRequestReminder(r.id));
+    return listReminders(this.db()).filter((r) => !isNudge(r.id) && !isShareReminder(r.id));
   }
 
   // Deadlines Mano tracks itself (src/deadlines.ts). Their nudges are
@@ -798,8 +797,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const { turnId, receivedAt, generation } = parseTurnInput(input);
     const out = putTurnIfAbsent(this.db(), turnId, receivedAt, generation);
     if ("stale" in out) return STALE_STATE;
-    const shareNotice = shareDeleteNotice(this.db(), Date.now());
-    return shareNotice ? { ...out, shareNotice } : out;
+    if (queueDeleteNotice(this.db(), Date.now())) await this.armReminderWakeup();
+    return out;
   }
 
   async getTurn(verified: string, turnId: unknown) {
@@ -811,7 +810,6 @@ export class PersonAgent extends Agent<Env, PersonState> {
     await this.assertSubject(verified);
     const out = completeTurn(this.db(), requireIdentity(turnId), new Date().toISOString(), parseGenerationInput(input).generation);
     if (out && "stale" in out) return STALE_STATE;
-    if (out && (input as { shareNoticeShown?: unknown }).shareNoticeShown === true) clearShareDeleteNotice(this.db());
     return out;
   }
 
@@ -922,13 +920,15 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { recovered };
   }
 
-  // A share's consent effect (a grant or revocation), applied by the
+  // A share's effect (a grant, a revocation or a document), applied by the
   // gateway inside the transaction that records the share's receipt and
   // marks its attempt done, so no crash can separate the receipt from the
   // effect. It comes from the persisted original approval behind the key,
   // and runs at most once per key: a later receipt for the same key (a
   // late reconcile) finds its marker and changes nothing, so a revoked
-  // consent stays revoked.
+  // consent stays revoked. Inside that transaction a SQL error rolls it all
+  // back (no receipt, no done attempt, no marker), and the next lookup
+  // applies the effect once.
   private applyShareEffect(receipt: Receipt): void {
     const original = this.store.getApprovalByKey(receipt.idempotencyKey);
     if (!original || original.actionType !== "share") return;
@@ -937,7 +937,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       "INSERT INTO applied_effects(idempotency_key, external_id, applied_at) VALUES (?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING RETURNING idempotency_key",
       receipt.idempotencyKey, receipt.externalId, new Date().toISOString(),
     ).toArray().length === 1;
-    if (first) this.recordConsentOutcome(original);
+    if (first) applyShareOutcome(this.db(), original, Date.now(), this.store.approvalCurrent(original.id));
   }
 
   // Schedules a durable recovery run while any attempt is unresolved.
@@ -1073,13 +1073,6 @@ export class PersonAgent extends Agent<Env, PersonState> {
     await this.scheduleRecoveryIfUnresolved();
     this.syncState();
     return result;
-  }
-
-  // Runs inside the transaction that records the share's receipt: a SQL
-  // error propagates, so the whole transaction rolls back (no receipt, no
-  // done attempt, no marker) and the next lookup applies the effect once.
-  private recordConsentOutcome(approval: Approval) {
-    applyShareOutcome(this.db(), approval, Date.now());
   }
 
   async grantConsent(verified: string, input: GrantConsentInput) {

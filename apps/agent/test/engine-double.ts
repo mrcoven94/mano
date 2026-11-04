@@ -51,7 +51,7 @@ import {
   updateDeadline,
   type DeadlineCalls,
 } from "../../engine/src/deadlines.js";
-import { applyShareOutcome, clearShareDeleteNotice, endDocumentAccess, ensureCaseSharingTables, listShares, shareDeleteNotice } from "../../engine/src/case-sharing.js";
+import { applyShareOutcome, endDocumentAccess, ensureCaseSharingTables, listShares } from "../../engine/src/case-sharing.js";
 import { LocalRulesChecker, type Checker } from "../../engine/src/gateway/checker.js";
 import {
   REPLAY_LINK_PATH,
@@ -233,7 +233,7 @@ export class EngineDouble {
           checker: { check: (input) => this.checker.check(input) },
           onReceipt: (receipt) => {
             const original = store.getApprovalByKey(receipt.idempotencyKey);
-            if (original?.actionType === "share") applyShareOutcome(sql, original, this.now());
+            if (original?.actionType === "share") applyShareOutcome(sql, original, this.now(), store.approvalCurrent(original.id));
           },
         }),
         profile: new ProfileStore({
@@ -467,8 +467,7 @@ export class EngineDouble {
         const input = parseTurnInput(body);
         const out = putTurnIfAbsent(sql, input.turnId, input.receivedAt, input.generation);
         if ("stale" in out) return Response.json(STALE, { status: 409 });
-        const shareNotice = shareDeleteNotice(sql, this.now());
-        return Response.json(shareNotice ? { ...out, shareNotice } : out, { status: out.created ? 201 : 200 });
+        return Response.json(out, { status: out.created ? 201 : 200 });
       }
       const turnGet = rest.match(/^\/turns\/([^/]+)$/);
       if (turnGet && method === "GET") {
@@ -480,7 +479,6 @@ export class EngineDouble {
         const turn = completeTurn(sql, decodeURIComponent(complete[1]), nowIso(), parseGenerationInput(body).generation);
         if (turn && "stale" in turn) return Response.json(STALE, { status: 409 });
         if (!turn) return Response.json({ error: "Turn not found." }, { status: 404 });
-        if ((body as { shareNoticeShown?: unknown }).shareNoticeShown === true) clearShareDeleteNotice(sql);
         return Response.json({ turn });
       }
       if (rest === "/pending-approval" && method === "PUT") {

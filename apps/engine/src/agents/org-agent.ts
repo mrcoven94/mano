@@ -435,17 +435,26 @@ export class OrgAgent extends Agent<Env, OrgState> {
     if (typeof idempotencyKey !== "string" || !REQUEST_KEY.test(idempotencyKey)) return { status: "bad_input", reason: "A request needs an idempotency key." };
     const active = this.activeCase(caseId);
     if (!active) return { status: "not_shared" };
-    const stored = this.db().exec("SELECT case_id, message_json FROM document_requests WHERE id = ?", idempotencyKey).toArray()[0] as { case_id: string; message_json: string } | undefined;
-    if (stored && stored.case_id !== caseId) return { status: "bad_input", reason: "That idempotency key was used for another case." };
-    const message: ProtocolMessage = stored
-      ? (JSON.parse(stored.message_json) as ProtocolMessage)
-      : await this.signDocumentRequest(active, documentKind, idempotencyKey);
-    if (!stored) {
+    // A key names one request across this org, since the person's agent
+    // knows a request by org and key. Signing awaits, so another request
+    // under the key can store first: only the stored message is delivered,
+    // and only to the caller that asked for exactly it.
+    const storedRequest = () =>
+      this.db().exec("SELECT case_id, document_kind, message_json FROM document_requests WHERE id = ?", idempotencyKey).toArray()[0] as
+        | { case_id: string; document_kind: string; message_json: string }
+        | undefined;
+    if (!storedRequest()) {
+      const signed = await this.signDocumentRequest(active, documentKind, idempotencyKey);
       this.db().exec(
         "INSERT OR IGNORE INTO document_requests(id, case_id, document_kind, status, message_json, requested_at) VALUES (?, ?, ?, 'open', ?, ?)",
-        idempotencyKey, caseId, documentKind, JSON.stringify(message), message.createdAt,
+        idempotencyKey, caseId, documentKind, JSON.stringify(signed), signed.createdAt,
       );
     }
+    const stored = storedRequest();
+    if (stored?.case_id !== caseId || stored.document_kind !== documentKind) {
+      return { status: "bad_input", reason: "That idempotency key was used for another request." };
+    }
+    const message = JSON.parse(stored.message_json) as ProtocolMessage;
     const person = this.env.PERSON_AGENT.get(this.env.PERSON_AGENT.idFromName(active.personId)) as unknown as PersonAgent;
     let answer: { accepted: boolean };
     try {

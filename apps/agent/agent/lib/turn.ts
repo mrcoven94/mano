@@ -481,7 +481,7 @@ async function recordTurn(
   engine: PersonEngine,
   turnId: string,
   receivedAt: string,
-): Promise<{ turn: EngineTurn; created: boolean; previousReceivedAt: string | null; shareNotice: string | null } | null> {
+): Promise<{ turn: EngineTurn; created: boolean; previousReceivedAt: string | null } | null> {
   try {
     return await engine.putTurn(turnId, receivedAt);
   } catch (err) {
@@ -528,13 +528,11 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
 
   let turn: { firstReceivedAt: string; created: boolean };
   let starts: boolean;
-  let shareNotice: string | null;
   try {
     const recorded = await clock.time("ledger", () => recordTurn(engine, body.turnId, new Date(body.receivedAtMs).toISOString()));
     if (!recorded) return Response.json({ status: "stale", text: "" }, { status: 409 });
     turn = { firstReceivedAt: recorded.turn.firstReceivedAt, created: recorded.created };
     starts = conversationStarts(recorded);
-    shareNotice = recorded.shareNotice;
   } catch (err) {
     const status = err instanceof EngineError ? err.status : null;
     console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "ledger", status }));
@@ -553,14 +551,10 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
     console.warn(JSON.stringify({ type: "mano_turn_error", handle: body.handleHash, err: err instanceof Error ? err.name : "unknown" }));
     response = failure(502, "error");
   }
-  // What Engine owes the person after a delete leads the reply; a failed
-  // turn leaves it owed.
-  const noticeShown = response.httpStatus === 200 && shareNotice !== null && response.body.text !== "";
-  if (noticeShown) response.body.text = `${shareNotice}\n\n${response.body.text}`;
   // Nothing reads a turn's completion before the reply, and its failure
   // is ignored, so the reply does not wait for it where it can run on.
   if (response.httpStatus === 200) {
-    const completing = engine.completeTurn(body.turnId, noticeShown).catch(() => undefined);
+    const completing = engine.completeTurn(body.turnId).catch(() => undefined);
     if (deps.background) deps.background(completing);
     else await completing;
   }

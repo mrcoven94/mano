@@ -389,14 +389,13 @@ export class PersonEngine {
   // The turn as Engine first recorded it: firstReceivedAt never changes.
   // created is false when Engine already knew the turn (a retry or replay).
   // previousReceivedAt is the conversation's latest other turn, or null.
-  async putTurn(turnId: string, receivedAt: string): Promise<{ turn: EngineTurn; created: boolean; previousReceivedAt: string | null; shareNotice: string | null }> {
+  async putTurn(turnId: string, receivedAt: string): Promise<{ turn: EngineTurn; created: boolean; previousReceivedAt: string | null }> {
     const out = (await this.json("POST", "/turns", { turnId, receivedAt, generation: this.generation })) as {
       turn: EngineTurn;
       created: boolean;
       previousReceivedAt?: string | null;
-      shareNotice?: string;
     };
-    return { turn: out.turn, created: out.created, previousReceivedAt: out.previousReceivedAt ?? null, shareNotice: out.shareNotice ?? null };
+    return { turn: out.turn, created: out.created, previousReceivedAt: out.previousReceivedAt ?? null };
   }
 
   async getTurn(turnId: string): Promise<EngineTurn | null> {
@@ -412,9 +411,8 @@ export class PersonEngine {
     return ((await res.json()) as { turn: EngineTurn }).turn;
   }
 
-  // shareNoticeShown: this turn's reply carried what Engine owed the person.
-  async completeTurn(turnId: string, shareNoticeShown = false): Promise<void> {
-    await this.json("POST", `/turns/${encodeURIComponent(turnId)}/complete`, { generation: this.generation, ...(shareNoticeShown ? { shareNoticeShown } : {}) });
+  async completeTurn(turnId: string): Promise<void> {
+    await this.json("POST", `/turns/${encodeURIComponent(turnId)}/complete`, { generation: this.generation });
   }
 
   async getPointer(): Promise<EnginePointer | null> {

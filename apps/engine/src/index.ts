@@ -77,9 +77,7 @@
 //   POST /api/persons/:id/reminders            { id, text, dueAt, generation } (agent)
 //   GET  /api/persons/:id/reminders            (agent)
 //   POST /api/persons/:id/reminders/:rid/cancel  (agent)
-//   POST /api/persons/:id/turns                { turnId, receivedAt, generation } (agent); after a delete, shareNotice
-//                                              is what the reply owes the person about a share, until a complete
-//                                              says { shareNoticeShown: true }
+//   POST /api/persons/:id/turns                { turnId, receivedAt, generation } (agent)
 //   GET  /api/persons/:id/turns/:turnId        (agent)
 //   POST /api/persons/:id/turns/:turnId/complete  { generation } (agent)
 //   PUT  /api/persons/:id/pending-approval     { approvalId, generation } compare-and-set: only the latest proposal (agent)
