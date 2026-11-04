@@ -12,14 +12,14 @@ const STEPS: [gapMs: number, TryEvent][] = [
   [1400, { kind: "model", model: "meta/muse-spark-open", where: "OpenRouter, zero retention", purpose: "Mano's turn", ms: 1840, status: "ok", state: "live" }],
   [1000, { kind: "model", model: "meta/muse-spark-open", where: "OpenRouter, zero retention", purpose: "Mano's computer", ms: 2260, status: "completed", state: "live" }],
   [1200, { kind: "model", model: "muse-glimmer-30b", where: "Our GPU on Modal", purpose: "Guardian checks the action", ms: 4410, status: "200", state: "live" }],
-  [200, { kind: "guardian", verdict: "pass", ms: 4430, state: "live" }],
+  [200, { kind: "guardian", verdict: "pass", ms: 4430, state: "live", problems: [] }],
   [500, { kind: "reply", text: "I filled out your renewal. It is ready for your yes." }],
   [400, { kind: "question", text: "Send your food benefits renewal to the practice portal, not a real office? Reply YES or NO." }],
 ];
 const AFTER_YES: [number, TryEvent][] = [
   [200, { kind: "sent", text: "YES" }],
   [1500, { kind: "model", model: "muse-glimmer-30b", where: "Our GPU on Modal", purpose: "Guardian checks the action", ms: 4120, status: "200", state: "live" }],
-  [200, { kind: "guardian", verdict: "pass", ms: 4140, state: "live" }],
+  [200, { kind: "guardian", verdict: "pass", ms: 4140, state: "live", problems: [] }],
   [800, { kind: "reply", text: "Done. Sent: Food benefits renewal. Confirmation SR-DEVFIXTURE." }],
   [200, { kind: "filed", confirmation: "SR-DEVFIXTURE" }],
   [200, { kind: "outcome", ok: true, text: "Filed on the sandbox portal after Maria's yes." }],

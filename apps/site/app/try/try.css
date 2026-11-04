@@ -18,6 +18,7 @@
 .try-question{font-weight:600}
 .try-fact{color:var(--text);font-size:.96rem;padding:2px 8px}
 .try-fact[data-tone=stop]{color:var(--alert);font-weight:500}
+.try-problem{margin-top:4px;color:var(--muted);font-size:.9rem}
 .try-filed{padding:14px 18px;background:var(--hl);border-radius:12px;color:var(--text);font-size:1.05rem}
 .try-filed b{font-family:var(--font-mono),monospace;font-weight:600}
 .try-warming{color:var(--text);padding:6px 8px;font-size:1.02rem}

@@ -113,7 +113,7 @@ export class GuardianChecker implements Checker {
         const identity = !call.ok ? { model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, state: "live" as const } : standIn ? STAND_IN : { model: server ?? "not named", where: GUARDIAN_RUNS_ON, state: "live" as const };
         this.trace({ kind: "model", ...identity, purpose: "Guardian checks the action", ms: call.ms, status: call.status });
       }
-      this.trace({ kind: "guardian", verdict: model.verdict === "block" && !answered ? "warming" : model.verdict, ms: Date.now() - at, state: standIn ? "stand-in" : "live" });
+      this.trace({ kind: "guardian", verdict: model.verdict === "block" && !answered ? "warming" : model.verdict, ms: Date.now() - at, state: standIn ? "stand-in" : "live", problems: model.problems.slice(0, 3).map((p) => p.slice(0, 300)) });
     }
     if (model.verdict === "block") return answered ? { verdict: "block", problems } : { verdict: "block", problems, unavailable: true };
     return { verdict: SEVERITY[model.verdict] > SEVERITY[local.verdict] ? model.verdict : local.verdict, problems };

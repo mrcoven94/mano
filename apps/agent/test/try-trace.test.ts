@@ -59,6 +59,24 @@ describe("reports for the judge demo", () => {
     ]);
   });
 
+  it("never holds a fill up for a report, and closing waits for what is on its way", async () => {
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      await held;
+      reports.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return new Response(null, { status: 204 });
+    });
+    const computer = { screenshot: async () => new Uint8Array([9]), close: async () => undefined } as never;
+    const deps = tracedFillDeps({ computer, model: {}, modelId: "m", deadlineMs: 1, draftToken: "t" } as unknown as FillDeps, `handle-${DEMO}`) as FillDeps;
+    await deps.computer.screenshot();
+    expect(reports).toHaveLength(0);
+    const closing = deps.computer.close();
+    release();
+    await closing;
+    expect(reports).toHaveLength(1);
+  });
+
   it("names whichever route the step itself used", async () => {
     const trace = tryStepTrace(DEMO, { observe: () => undefined });
     step(trace, "modal/meta-models/Muse-Spark-Open-816B-A42B");
@@ -119,14 +137,15 @@ describe("reports for the judge demo", () => {
 
   it("reports each new screen once, and only the model call's own status", async () => {
     const shots = [new Uint8Array([1]), new Uint8Array([1]), new Uint8Array([2])];
-    const computer = { screenshot: async () => shots.shift()! } as never;
+    const computer = { screenshot: async () => shots.shift()!, close: async () => undefined } as never;
     const model = { createResponse: async () => ({ id: "r", status: "completed", output: [] }) };
     const deps = tracedFillDeps({ computer, model, modelId: "m", deadlineMs: 1, draftToken: "t" } as unknown as FillDeps, `handle-${DEMO}`) as FillDeps;
     await deps.computer.screenshot();
     await deps.computer.screenshot();
     await deps.computer.screenshot();
-    expect(reports.filter((r) => r.screenB64)).toHaveLength(2);
     await deps.model.createResponse({ model: "muse-spark-1.3" } as never);
+    await deps.computer.close();
+    expect(reports.filter((r) => r.screenB64)).toHaveLength(2);
     expect(reports.at(-1)!.model).toMatchObject({ model: "muse-spark-1.3", where: "Meta's API", purpose: "Mano's computer", status: "completed", state: "live" });
   });
 });

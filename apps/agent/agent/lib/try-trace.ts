@@ -9,7 +9,7 @@ import { isTryHandle, isTryPerson } from "@mano/protocol";
 import { BACKUP_ANSWERED, OPEN_WEIGHT_MODEL_ID, selectModelRoute } from "./muse.js";
 import type { FillDeps } from "./computer-fill.js";
 
-const REPORT_MS = 3_000;
+const REPORT_MS = 8_000;
 const MAX_SCREENS = 24;
 
 async function report(body: Record<string, unknown>): Promise<void> {
@@ -121,7 +121,9 @@ export function tracedMailModel(client: MailModel, handleHash: string): MailMode
   };
 }
 
-function tracedComputer(inner: Computer, handleHash: string): Computer {
+// A fill has 60 seconds, so reporting a screen never holds it up. Closing the
+// computer waits for what is still on its way.
+function tracedComputer(inner: Computer, handleHash: string, sending: Promise<void>[]): Computer {
   let reported = 0;
   let last: Uint8Array | null = null;
   return {
@@ -131,7 +133,7 @@ function tracedComputer(inner: Computer, handleHash: string): Computer {
       if (!same && reported < MAX_SCREENS) {
         last = png;
         reported += 1;
-        await report({ handleHash, screenB64: Buffer.from(png).toString("base64") });
+        sending.push(report({ handleHash, screenB64: Buffer.from(png).toString("base64") }));
       }
       return png;
     },
@@ -140,7 +142,10 @@ function tracedComputer(inner: Computer, handleHash: string): Computer {
     stageFile: (name, data) => inner.stageFile(name, data),
     fileUploadHint: () => inner.fileUploadHint(),
     liveViewUrl: () => inner.liveViewUrl(),
-    close: () => inner.close(),
+    close: async () => {
+      await Promise.all(sending);
+      await inner.close();
+    },
   };
 }
 
@@ -149,6 +154,7 @@ export function tracedFillDeps<T extends FillDeps | { unavailable: string }>(dep
   const handleHash = personId.slice("handle-".length);
   const inner: ComputerModel = deps.model;
   const purpose = "Mano's computer";
+  const sending: Promise<void>[] = [];
   const model: ComputerModel = {
     async createResponse(request) {
       const at = Date.now();
@@ -156,13 +162,13 @@ export function tracedFillDeps<T extends FillDeps | { unavailable: string }>(dep
         const response = await inner.createResponse(request);
         // The raw reply names the model that answered, when the host says.
         const named = (response as { model?: unknown }).model;
-        await reportCall(handleHash, { ...identityOf(typeof named === "string" && named ? named : request.model), purpose, ms: Date.now() - at, status: response.status });
+        sending.push(reportCall(handleHash, { ...identityOf(typeof named === "string" && named ? named : request.model), purpose, ms: Date.now() - at, status: response.status }));
         return response;
       } catch (err) {
-        await reportCall(handleHash, { ...identityOf(request.model), purpose, ms: Date.now() - at, status: "failed" });
+        sending.push(reportCall(handleHash, { ...identityOf(request.model), purpose, ms: Date.now() - at, status: "failed" }));
         throw err;
       }
     },
   };
-  return { ...deps, model, computer: tracedComputer(deps.computer, handleHash) };
+  return { ...deps, model, computer: tracedComputer(deps.computer, handleHash, sending) };
 }

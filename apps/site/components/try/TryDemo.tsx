@@ -66,7 +66,12 @@ function Step({ event }: { event: TryLogged }) {
     case "deadline":
       return <p className="try-fact">Deadline held: <b>{dateWords(event.dueDate)}</b></p>;
     case "guardian":
-      return <p className="try-fact" data-tone={event.verdict === "block" ? "stop" : undefined}>{event.state === "stand-in" ? "A stand-in for Guardian answered" : "Guardian\u2019s verdict"}: <b>{event.verdict}</b>, in {seconds(event.ms)}</p>;
+      return (
+        <div className="try-fact" data-tone={event.verdict === "block" ? "stop" : undefined}>
+          {event.state === "stand-in" ? "A stand-in for Guardian answered" : "Guardian\u2019s verdict"}: <b>{event.verdict}</b>, in {seconds(event.ms)}
+          {event.problems?.map((p) => <p key={p} className="try-problem">{p}</p>)}
+        </div>
+      );
     case "question":
       return (
         <div className="bub-row">
