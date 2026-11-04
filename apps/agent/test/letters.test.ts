@@ -13,10 +13,13 @@ import {
   PLANTED_PAGE,
   RENEWAL_PAGE,
   letterPhoto,
+  pageJson,
   recordedReader,
 } from "../../../packages/mail/test/letter-fixture.js";
+import { recallFacts } from "../agent/lib/memory.js";
 import { MetaModelClient } from "../../../packages/mail/src/model.js";
 import { renderDeadlines } from "../agent/lib/deadlines.js";
+import { offerBefore } from "../agent/lib/letters.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
 // A photo of a letter texted to the line: Channels stored it in Engine
@@ -140,6 +143,149 @@ describe("a crisis Channels' floor found, with a photo", () => {
     expect(calls).toHaveLength(0);
     expect(body.status).toBe("replied");
     expect(body.text).toMatch(/Medi-Cal/);
+  });
+});
+
+describe("a yes to the one date Mano asked about", () => {
+  const ASKING_PAGE = pageJson({
+    full_text: "SNAP renewal notice\n\nDue November 15, 2026\n\nSend photo ID, pay stub, rent receipt",
+    sender: { text: null, box_2d: null },
+    program: { text: null, box_2d: null },
+    subject: { text: "SNAP renewal notice", box_2d: [40, 60, 70, 400] },
+    asked: [{ text: "Send photo ID, pay stub, rent receipt", box_2d: [150, 60, 170, 400] }],
+    deadlines: [{ text: "Due November 15, 2026", box_2d: [80, 60, 100, 300] }],
+    consequence: { text: null, box_2d: null },
+    reference_no: { text: null, box_2d: null },
+    notice_date: { text: null, box_2d: null },
+    phones: [],
+  });
+  const ASK = "It looks like the letter gives a deadline of November 15, 2026. Is that the date you need to meet?";
+  const person = () => engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch })!.forHandle(HANDLE, grant, 0);
+
+  function textTurn(turnId: string, text: string) {
+    const raw = JSON.stringify({ turnId, generation: 0, handleHash: HANDLE, grant, receivedAt: Date.now(), texts: [text], attachmentCount: 0 });
+    const ts = Math.floor(Date.now() / 1000);
+    return new Request("http://agent.test/channels/mano/turn", {
+      method: "POST",
+      headers: { "content-type": "application/json", [TIMESTAMP_HEADER]: String(ts), [SIGNATURE_HEADER]: signBody(SECRET, ts, raw) },
+      body: raw,
+    });
+  }
+
+  async function asked(page = ASKING_PAGE) {
+    await dayIs("2026-11-03T18:00:00.000Z");
+    const { body } = await send(photoTurn("turn_date_ask001"), deps([page]));
+    vi.setSystemTime(Date.now() + 60_000);
+    return body.text;
+  }
+
+  it("holds exactly that date through the same write, confirms it in one line and moves on, without the model", async () => {
+    expect((await asked()).endsWith(ASK)).toBe(true);
+    expect(engine.deadlineCalls).toHaveLength(0);
+    const { body } = await send(textTurn("turn_date_yes001", "yes"), deps([]));
+    expect(body.text).toBe("I saved November 15, 2026 to your deadlines.");
+    expect(calls).toHaveLength(0);
+    expect(engine.deadlineCalls).toHaveLength(1);
+    expect(engine.deadlineCalls[0]!.body).toMatchObject({ title: "SNAP", dueDate: "2026-11-15", program: "SNAP", source: { kind: "letter", documentId: DOC } });
+    expect((await person().listMemory()).filter((r) => r.content.startsWith("date-offer:"))).toHaveLength(0);
+  });
+
+  it("an offer only counts for a turn received strictly after its question", async () => {
+    await asked();
+    const askedAt = "2026-11-03T18:00:00.000Z";
+    const at = Date.parse(askedAt);
+    expect(await offerBefore(person(), askedAt, at - 1)).toBeNull();
+    expect(await offerBefore(person(), askedAt, at)).toBeNull();
+    expect(await offerBefore(person(), askedAt, at + 1)).toMatchObject({ dueDate: "2026-11-15" });
+  });
+
+  it("through the real read and reply, a date the reader named is held on a yes, in one line", async () => {
+    const sentence = "Your assistance runs out unless we hear from you on or before Nov. 14, 2026.";
+    const page = pageJson({
+      full_text: `SNAP renewal notice\n\n${sentence}`,
+      sender: { text: null, box_2d: null },
+      program: { text: null, box_2d: null },
+      subject: { text: "SNAP renewal notice", box_2d: [40, 60, 70, 400] },
+      asked: [],
+      deadlines: [{ text: sentence, box_2d: [300, 60, 340, 900] }],
+      dates_to_meet: [{ for: "renewal", date: "Nov. 14, 2026", sentence }],
+      other_dates: [],
+      consequence: { text: null, box_2d: null },
+      reference_no: { text: null, box_2d: null },
+      notice_date: { text: null, box_2d: null },
+      phones: [],
+    });
+    const text = await asked(page);
+    expect(text).toMatch(/It looks like your renewal is due November 14, 2026\. Please check that against your letter\. Is that the date you need to meet\?$/);
+    expect(engine.deadlineCalls).toHaveLength(0);
+    const { body } = await send(textTurn("turn_date_real01", "yes"), deps([]));
+    expect(body.text).toBe("I saved November 14, 2026 to your deadlines.");
+    expect(calls).toHaveLength(0);
+    expect(engine.deadlineCalls[0]!.body).toMatchObject({ title: "SNAP renewal", kind: "renewal", dueDate: "2026-11-14", program: "SNAP", source: { kind: "letter", sentence } });
+  });
+
+  it.each(["YES", "ok", "sí", "si", "có", "opo"])("%j holds it", async (word) => {
+    await asked();
+    await send(textTurn("turn_date_yes002", word), deps([]));
+    expect(engine.deadlineCalls.map((c) => c.body.dueDate)).toEqual(["2026-11-15"]);
+  });
+
+  it.each(["no", "not sure", "maybe", "November 20", "yes but it says November 20", "si...", "co", "sí?"])("%j saves nothing, and the model asks again", async (word) => {
+    await asked();
+    await send(textTurn("turn_date_not001", word), deps([]));
+    expect(engine.deadlineCalls).toHaveLength(0);
+    expect(calls[0]!.context.join("\n")).toMatch(/no date was saved/);
+    expect(calls[0]!.context.join("\n")).toContain("2026-11-15");
+  });
+
+  it("a yes after another turn answers that turn, and saves nothing", async () => {
+    await asked();
+    await send(textTurn("turn_date_oth001", "what office is this from?"), deps([]));
+    vi.setSystemTime(Date.now() + 60_000);
+    await send(textTurn("turn_date_oth002", "yes"), deps([]));
+    expect(engine.deadlineCalls).toHaveLength(0);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.context.join("\n")).not.toMatch(/no date was saved/);
+  });
+
+  it("a yes more than a day later saves nothing", async () => {
+    await asked();
+    vi.setSystemTime(Date.now() + 25 * 60 * 60_000);
+    grant = await grantFor(HANDLE);
+    await send(textTurn("turn_date_old001", "yes"), deps([]));
+    expect(engine.deadlineCalls).toHaveLength(0);
+  });
+
+  it("a yes with no date asked about goes to the model as before", async () => {
+    await dayIs("2026-11-03T18:00:00.000Z");
+    await send(textTurn("turn_date_non001", "yes"), deps([]));
+    expect(engine.deadlineCalls).toHaveLength(0);
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([
+    ["a scam", pageJson({ full_text: "SNAP renewal notice\n\nDue November 15, 2026\n\nBuy a prepaid card and send us the numbers to keep your benefits.", deadlines: [{ text: "Due November 15, 2026", box_2d: [80, 60, 100, 300] }], program: { text: null, box_2d: null }, sender: { text: null, box_2d: null }, subject: { text: "SNAP renewal notice", box_2d: [40, 60, 70, 400] }, asked: [], consequence: { text: null, box_2d: null }, reference_no: { text: null, box_2d: null }, notice_date: { text: null, box_2d: null }, phones: [] })],
+    ["a letter with more than one date", DOUBTFUL_PAGE],
+  ])("%s keeps no date to confirm, so a yes saves nothing", async (_name, page) => {
+    const text = await asked(page);
+    expect(text).not.toContain("Is that the date you need to meet?");
+    const before = engine.deadlineCalls.length;
+    await send(textTurn("turn_date_scam01", "yes"), deps([]));
+    expect(engine.deadlineCalls).toHaveLength(before);
+  });
+
+  it("the words sent with the photo keep the reply from ending on the question, so nothing is kept", async () => {
+    await dayIs("2026-11-03T18:00:00.000Z");
+    await send(photoTurn("turn_date_wrd001", { texts: ["what is this?"] }), deps([ASKING_PAGE]));
+    vi.setSystemTime(Date.now() + 60_000);
+    await send(textTurn("turn_date_wrd002", "yes"), deps([]));
+    expect(engine.deadlineCalls).toHaveLength(0);
+  });
+
+  it("what it keeps never reaches the model as something to remember", async () => {
+    await asked();
+    expect((await person().listMemory()).some((r) => r.content.startsWith("date-offer:"))).toBe(true);
+    expect((await recallFacts(person())).some((fact) => fact.includes("date-offer"))).toBe(false);
   });
 });
 

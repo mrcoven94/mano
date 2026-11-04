@@ -7,6 +7,8 @@ import type { PersonEngine } from "./engine.js";
 export const MAX_RECALLED_FACTS = 50;
 export const MAX_FACT_CHARS = 500;
 const WHITESPACE_RUN = /\s+/g;
+// Mano's own records about the question asked last (lib/letters.ts), not facts.
+const HIDDEN_NOTE = /^(?:date-offer|unhooked-approval):/;
 
 export function normalizeFact(fact: string): string {
   return fact.trim().replace(WHITESPACE_RUN, " ").slice(0, MAX_FACT_CHARS);
@@ -18,7 +20,7 @@ function sameFact(a: string, b: string): boolean {
 
 export async function recallFacts(engine: PersonEngine): Promise<string[]> {
   const rows = await engine.listMemory();
-  return rows.map((r) => r.content).slice(-MAX_RECALLED_FACTS);
+  return rows.map((r) => r.content).filter((content) => !HIDDEN_NOTE.test(content)).slice(-MAX_RECALLED_FACTS);
 }
 
 // The time left before deadlineAt for one Engine call, or null when too

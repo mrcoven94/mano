@@ -32,7 +32,18 @@ export interface LetterReply {
   text: string;
   // Whether a letter was read (false: unread, failed, or not stored).
   read: boolean;
+  // The one date this reply's closing question names, as Mail said it.
+  offer?: HeldDeadline;
 }
+
+// A date Mano named and asked about is kept with the turn that asked, as a
+// memory note on the person's own record, so a deletion takes it, under a
+// prefix that never reaches the model.
+const OFFER_NOTE = "date-offer:";
+// Marks an approval a later question took the next yes from (unhookApproval).
+const UNHOOKED_NOTE = "unhooked-approval:";
+// A yes this much later is not an answer to that text.
+const OFFER_TTL_MS = 24 * 60 * 60_000;
 
 // Every model call stops at the turn's own deadline, so a slow reading
 // ends early with a question instead of running past the reply.
@@ -234,6 +245,7 @@ export async function readTextedPhotos(
   const deadline = deadlineAt - HOLD_RESERVE_MS;
   let text: string;
   let read = false;
+  let offer: HeldDeadline | null = null;
   try {
     const files = [];
     for (const photo of photos) {
@@ -256,6 +268,8 @@ export async function readTextedPhotos(
     read = answer.outcome === "read";
     const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt, w), markLetters(engine, reading, deadlineAt), rememberPayStubs(engine, reading, deadlineAt)]);
     text = [answer.text, ...held].join(" ");
+    // A line about another letter's date would follow the question.
+    offer = held.length === 0 ? (answer.asked ?? null) : null;
     if (read) {
       await rememberFact(engine, `From a letter photo: ${text}`, deadlineAt).catch((err: unknown) =>
         console.warn(JSON.stringify({ type: "mano_letters_remember_failed", status: err instanceof EngineError ? err.status : null })),
@@ -265,6 +279,75 @@ export async function readTextedPhotos(
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_letters_failed", err: err instanceof Error ? err.name : "unknown", latencyMs: Date.now() - started }));
     text = ANSWER_WORDS[language()].failed;
+    offer = null;
   }
-  return { text, read };
+  return { text, read, ...(offer ? { offer } : {}) };
+}
+
+// Replaces any earlier offer. A failed write only means a yes asks again.
+export async function keepOffer(engine: PersonEngine, held: HeldDeadline, askedAt: string): Promise<void> {
+  try {
+    await dropOffers(engine);
+    await engine.addMemory(`${OFFER_NOTE}${JSON.stringify({ held, askedAt })}`);
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_date_offer_failed", status: err instanceof EngineError ? err.status : null }));
+  }
+}
+
+// Takes the next yes from the approval question shown earlier, delivered or
+// still being reported: the mark stops a late report restoring the pointer. It
+// goes first, so a report either sees it or has its pointer cleared here. False
+// when that could not be confirmed.
+export async function unhookApproval(engine: PersonEngine): Promise<boolean> {
+  try {
+    const { pointer, latest } = await engine.getPending();
+    const id = latest?.approvalId ?? pointer?.approvalId;
+    if (id && !(await isUnhooked(engine, id))) await engine.addMemory(`${UNHOOKED_NOTE}${id}`);
+    if (pointer) await engine.clearPointer(pointer.approvalId);
+    return true;
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_unhook_failed", status: err instanceof EngineError ? err.status : null }));
+    return false;
+  }
+}
+
+export async function isUnhooked(engine: PersonEngine, approvalId: string): Promise<boolean> {
+  return (await engine.listMemory()).some((r) => r.content === `${UNHOOKED_NOTE}${approvalId}`);
+}
+
+// Lets the question count again, because this reply shows it again.
+export async function rehookApproval(engine: PersonEngine, approvalId: string): Promise<void> {
+  for (const row of await engine.listMemory()) if (row.content === `${UNHOOKED_NOTE}${approvalId}`) await engine.deleteMemory(row.id);
+}
+
+function isOfferNote(content: string): boolean {
+  return content.startsWith(OFFER_NOTE);
+}
+
+async function dropOffers(engine: PersonEngine): Promise<void> {
+  for (const row of await engine.listMemory()) if (isOfferNote(row.content)) await engine.deleteMemory(row.id);
+}
+
+// The date Mano asked about in this person's last turn, or null. Only the
+// turn right before this one counts, so a yes to anything else saves nothing.
+export async function offerBefore(engine: PersonEngine, previousReceivedAt: string | null, nowMs: number): Promise<HeldDeadline | null> {
+  if (!previousReceivedAt) return null;
+  try {
+    const row = (await engine.listMemory()).filter((r) => isOfferNote(r.content)).at(-1);
+    if (!row) return null;
+    const { held, askedAt } = JSON.parse(row.content.slice(OFFER_NOTE.length)) as { held: HeldDeadline; askedAt: string };
+    const at = Date.parse(askedAt);
+    return at === Date.parse(previousReceivedAt) && at < nowMs && nowMs - at <= OFFER_TTL_MS ? held : null;
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_date_offer_failed", err: err instanceof Error ? err.name : "unknown" }));
+    return null;
+  }
+}
+
+// A yes to the date Mano named: holds exactly that deadline, through the same
+// write as a date Mano trusts, so reminders follow. The words say what happened.
+export async function confirmOffer(engine: PersonEngine, held: HeldDeadline, askedAt: string, deadlineAt: number, language: ReplyLanguage): Promise<string> {
+  const [line] = await hold(engine, [held], askedAt, deadlineAt, ANSWER_WORDS[language]);
+  await dropOffers(engine).catch(() => console.warn(JSON.stringify({ type: "mano_date_offer_failed", step: "drop" })));
+  return line!;
 }

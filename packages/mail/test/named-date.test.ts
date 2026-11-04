@@ -44,6 +44,37 @@ const reply = async (text: string, meet: Meet[], other: Other[] = [], today?: st
   return { text: answer.text, named: answer.text.match(YEAR_DATE) ?? [], held: answer.deadlines.map((d) => d.dueDate) };
 };
 
+describe("the answer says which date its closing question names", () => {
+  const SENTENCE = "Your assistance runs out unless we hear from you on or before Nov. 14, 2026.";
+
+  it("one date the reader named, with what it is for and the letter's sentence", async () => {
+    const answer = answerReading(await read(`${HEAD}${SENTENCE}`, [{ date: "Nov. 14, 2026", sentence: SENTENCE, for: "renewal" }]));
+    expect(answer.text).toMatch(/Is that the date you need to meet\?$/);
+    expect(answer.deadlines).toEqual([]);
+    expect(answer.asked).toMatchObject({ dueDate: "2026-11-14", kind: "renewal", file: "letter.jpg" });
+    expect(answer.asked!.sentence).toMatch(/runs out unless we hear from you/);
+  });
+
+  it("no date when the question names two, or none", async () => {
+    const a = "Your renewal packet is needed by November 20, 2026.";
+    const b = "Pay stubs are needed by December 1, 2026.";
+    const two = answerReading(await read(`${HEAD}${a} ${b}`, [{ date: "November 20, 2026", sentence: a, for: "renewal" }, { date: "December 1, 2026", sentence: b, for: "documents" }]));
+    expect(two.text).toMatch(/\?$/);
+    expect(two.asked).toBeUndefined();
+    const none = answerReading(await read(HEAD, []));
+    expect(none.asked).toBeUndefined();
+  });
+
+  it("no date beside an interview, or on a date already past", async () => {
+    const past = answerReading(await read(`${HEAD}${SENTENCE}`, [{ date: "Nov. 14, 2026", sentence: SENTENCE, for: "renewal" }]), "en", "2026-12-01");
+    expect(past.asked).toBeUndefined();
+    const b = "Your phone interview is on November 18, 2026 at 10:30 AM.";
+    const beside = answerReading(await read(`${HEAD}${SENTENCE} ${b}`, [{ date: "Nov. 14, 2026", sentence: SENTENCE, for: "renewal" }], [{ date: "November 18, 2026", for: "interview" }]));
+    expect(beside.text).toContain("It also lists an interview");
+    expect(beside.asked).toBeUndefined();
+  });
+});
+
 describe("the reader's date, in wording no rule covers, is named as a question", () => {
   it.each([
     ["needed back", "We need the packet back in this office before we close on Friday, November 13, 2026.", "November 13, 2026"],
