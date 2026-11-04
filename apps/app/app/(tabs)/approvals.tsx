@@ -9,6 +9,7 @@ import { Badge, Body, Card, DemoBanner, EmptyView, ErrorView, LoadingView, Muted
 import type { Approval } from "../../lib/api/types";
 import { AuthError, EngineGapError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
+import { officeName, whatLabel } from "../../lib/approval-text";
 import { formatDate } from "../../lib/dates";
 import { useLanguage, useStrings } from "../../lib/i18n";
 import { syncReminders } from "../../lib/notify";
@@ -82,9 +83,10 @@ export default function Approvals() {
     >
       <Card>
         <Badge tone={statusTone(approval.status)}>{statusLabel(approval.status, s)}</Badge>
-        <Text style={[type.cardTitle, styles.purpose]}>{approval.purpose}</Text>
+        <Text style={[type.cardTitle, styles.purpose]}>{whatLabel(approval.actionType, s)}</Text>
+        <Muted>{approval.purpose}</Muted>
         <Muted>
-          {s.toLabel}: {approval.recipientName}
+          {s.toLabel}: {officeName(approval.recipientName, s)}
         </Muted>
         {approval.documentName ? <Muted>{approval.documentName}</Muted> : null}
         <Muted>

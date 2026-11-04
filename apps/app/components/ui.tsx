@@ -18,7 +18,8 @@ import {
   type ViewStyle,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useStrings } from "../lib/i18n";
+import { useLanguage, useStrings } from "../lib/i18n";
+import type { Language } from "../lib/strings";
 import { colors, fonts, radius, tapTarget, type } from "../lib/theme";
 
 // A pushed screen names its parent. With no history, as after a reload
@@ -216,6 +217,38 @@ export function DemoBanner({ text }: { text: string }) {
   );
 }
 
+// English or Spanish before there is an account: sign-in has to be readable
+// first. The same saved choice the Language screen sets. Each name is
+// written in its own language, so it is findable from either one.
+export function LanguageSwitch() {
+  const s = useStrings();
+  const { language, setLanguage } = useLanguage();
+  const options: { code: Language; label: string }[] = [
+    { code: "en", label: s.english },
+    { code: "es", label: s.spanish },
+  ];
+  return (
+    <View style={styles.languages} accessibilityRole="radiogroup" accessibilityLabel={s.languageTitle}>
+      {options.map((o) => {
+        const active = language === o.code;
+        return (
+          <Pressable
+            key={o.code}
+            onPress={() => void setLanguage(o.code).catch(() => undefined)}
+            accessibilityRole="radio"
+            accessibilityLabel={o.label}
+            accessibilityState={{ checked: active }}
+            aria-checked={active}
+            style={({ pressed }) => [styles.languageOption, pressed && styles.pressed]}
+          >
+            <Text style={active ? styles.languageActive : styles.languageOther}>{o.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 export function LoadingView() {
   return (
     <View style={styles.center}>
@@ -287,6 +320,10 @@ const styles = StyleSheet.create({
   badgeGreen: { backgroundColor: colors.greenSoft },
   badgeBlue: { backgroundColor: colors.penSoft },
   badgeText: { fontSize: 12, fontWeight: "600", color: colors.text },
+  languages: { flexDirection: "row", justifyContent: "flex-end", marginTop: -12, marginRight: -10, marginBottom: 4 },
+  languageOption: { minHeight: tapTarget, minWidth: tapTarget, paddingHorizontal: 10, alignItems: "center", justifyContent: "center" },
+  languageActive: { fontSize: 15, fontWeight: "600", color: colors.text },
+  languageOther: { fontSize: 15, fontWeight: "500", color: colors.pen, textDecorationLine: "underline" },
   demo: { backgroundColor: colors.hl, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 16 },
   demoText: { fontSize: 13, fontWeight: "600", color: colors.text },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },

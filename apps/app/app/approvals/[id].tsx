@@ -19,11 +19,11 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Body, Btn, Card, ErrorView, GhostBtn, LinkBtn, LoadingView, Muted, Screen, Title, useGoBack } from "../../components/ui";
 import { DocPreview, currentPlatform } from "../../components/doc";
 import { parseActionView, type ParsedAction } from "../../lib/action-view";
-import { fieldValue, leadLine } from "../../lib/approval-text";
+import { declarationIntro, fieldValue, leadLine, officeName, sentInEnglishNote, whatLabel } from "../../lib/approval-text";
 import { changeDraft, holdChatDraft } from "../../lib/chat-draft";
 import { approvalGate } from "../../lib/approve-gate";
 import { approveOutcome } from "../../lib/approve-result";
-import type { ActionType, Approval, ApprovalStatus, ApprovalDocument, ApproveResult, DeclineAnswer } from "../../lib/api/types";
+import type { Approval, ApprovalStatus, ApprovalDocument, ApproveResult, DeclineAnswer } from "../../lib/api/types";
 import { provenNotSent } from "../../lib/sent-proof";
 import { AuthError, StaleApprovalError } from "../../lib/api/types";
 import { useAuth, useClearOnSignOut } from "../../lib/auth";
@@ -33,15 +33,6 @@ import { useLanguage, useStrings } from "../../lib/i18n";
 import { syncReminders } from "../../lib/notify";
 import type { Strings } from "../../lib/strings";
 import { colors, radius, tapTarget, type } from "../../lib/theme";
-
-function whatLabel(action: ActionType, s: Strings): string {
-  if (action === "submit") return s.whatSubmit;
-  if (action === "send") return s.whatSend;
-  if (action === "share") return s.whatShare;
-  if (action === "call") return s.whatCall;
-  if (action === "mail") return s.whatMail;
-  return s.whatFax;
-}
 
 const UP_TO_EIGHT_CHARS = /.{1,8}/g;
 
@@ -274,6 +265,7 @@ export default function ApprovalDetail() {
       : provenNotSent([approval, ...keyMates])
     : false;
   const outcome = receipt ? approveOutcome(receipt) : null;
+  const englishNote = action && action.kind !== "unknown" ? sentInEnglishNote(action, language, s) : null;
 
   const handleLink = useCallback(
     async (url: string) => {
@@ -310,6 +302,7 @@ export default function ApprovalDetail() {
                 : whatLabel(approval.actionType, s)}
             </Text>
             <Body style={styles.purpose}>{action && action.kind !== "unknown" ? action.purpose : approval.purpose}</Body>
+            {englishNote ? <Muted style={styles.englishNote}>{englishNote}</Muted> : null}
             {approval.problems.map((p) => (
               <Text key={p} style={styles.problem}>
                 {p}
@@ -332,7 +325,7 @@ export default function ApprovalDetail() {
               <Body style={styles.purpose}>{s.requestUnknown}</Body>
             )}
             <View style={styles.dates}>
-              <Row label={s.toLabel} value={approval.recipientName} />
+              <Row label={s.toLabel} value={officeName(approval.recipientName, s)} />
               {action && action.kind !== "unknown" && action.attachment ? <Row label={s.attached} value={action.attachment} /> : null}
               {dueAt ? <Row label={s.dueAtOffice} value={formatDate(dueAt, language)} /> : null}
               {approval.status === "pending" && !receipt && no.phase !== "answered" ? (
@@ -344,7 +337,7 @@ export default function ApprovalDetail() {
             </View>
             {action && action.kind !== "unknown" && action.declaration ? (
               <View style={styles.declaration}>
-                <Text style={styles.declarationLabel}>{s.youSign}</Text>
+                <Text style={styles.declarationLabel}>{declarationIntro(action.declaration, s)}</Text>
                 <Text style={[type.body, styles.declarationText]}>{action.declaration}</Text>
               </View>
             ) : null}
@@ -419,14 +412,14 @@ export default function ApprovalDetail() {
                 <Muted style={styles.match}>{s.receiptSimulated}</Muted>
               ) : null}
               <View style={styles.back}>
-                <Btn title={s.tabsApprovals} onPress={goBack} />
+                <Btn title={s.approvalsTitle} onPress={goBack} />
               </View>
             </Card>
           ) : no.phase === "answered" ? (
             <Card>
               <Body>{s[noLine(no.answer)]}</Body>
               <View style={styles.back}>
-                <Btn title={s.tabsApprovals} onPress={goBack} />
+                <Btn title={s.approvalsTitle} onPress={goBack} />
               </View>
             </Card>
           ) : approval.status === "pending" ? (
@@ -504,6 +497,7 @@ const styles = StyleSheet.create({
   status: { marginBottom: 8 },
   lead: { color: colors.text },
   purpose: { color: colors.muted, marginTop: 4 },
+  englishNote: { marginTop: 4 },
   says: { marginTop: 20 },
   saysTitle: { color: colors.text, marginBottom: 8 },
   dates: { marginTop: 16 },
