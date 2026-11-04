@@ -171,7 +171,7 @@ export async function readTextedPhotos(
         console.warn(JSON.stringify({ type: "mano_letters_remember_failed", status: err instanceof EngineError ? err.status : null })),
       );
     }
-    console.log(JSON.stringify({ type: "mano_letters_read", photos: files.length, letters: reading.letters.length, held: answer.deadlines.length, latencyMs: Date.now() - started }));
+    console.log(JSON.stringify({ type: "mano_letters_read", photos: files.length, letters: reading.letters.length, held: answer.deadlines.length, asked: reading.questions.map((q) => q.kind), latencyMs: Date.now() - started }));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_letters_failed", err: err instanceof Error ? err.name : "unknown", latencyMs: Date.now() - started }));
     text = FAILED;

@@ -37,6 +37,9 @@ importers:
       eve:
         specifier: 0.79.1
         version: 0.79.1(ai@7.0.137(zod@4.6.7))
+      sharp:
+        specifier: ^0.34.3
+        version: 0.34.5
       zod:
         specifier: ^4.6.7
         version: 4.6.7
