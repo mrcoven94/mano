@@ -54,7 +54,6 @@ export default function ShareFlow() {
       </InView>
 
       <div className="share-links">
-        <Link href="/organizations">Case management for nonprofits</Link>
         <Link href="/government">Case management for government</Link>
         <Link href="/partners">Partners</Link>
       </div>

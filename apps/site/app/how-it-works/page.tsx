@@ -3,8 +3,11 @@ import Link from "next/link";
 import Mascot from "@/components/Mascot";
 import TextMano from "@/components/TextMano";
 import TextQr from "@/components/TextQr";
+import Everywhere from "@/components/home/Everywhere";
+import Improve from "@/components/home/Improve";
 import { NeedIcon } from "@/components/home/NeedIcons";
-import { REPO_URL, SMS_IS_PLACEHOLDER } from "@/lib/site";
+import OpenSource from "@/components/home/OpenSource";
+import { SMS_IS_PLACEHOLDER } from "@/lib/site";
 
 const title = "How Mano works";
 const description = "How Mano goes from one text to help that keeps coming: it finds what you qualify for, fills out the forms from your private vault, tracks every deadline and renews on time.";
@@ -157,6 +160,18 @@ export default function HowItWorks() {
         </div>
       </section>
 
+      <section className="h-dv" aria-labelledby="dv-h">
+        <div className="wrap">
+          <Everywhere />
+        </div>
+      </section>
+
+      <section className="h-improve" aria-labelledby="im-h">
+        <div className="wrap">
+          <Improve />
+        </div>
+      </section>
+
       <section className="hw-duo-wrap" aria-label="More">
         <div className="wrap hw-duo">
           <article className="hw-duo-card share">
@@ -166,13 +181,11 @@ export default function HowItWorks() {
             <div className="hw-chip"><NeedIcon k="clipboard" size={28} /><span><b>Pay stub, Oct 24</b> Shared with Northside until Dec 31</span></div>
             <Link className="btn btn-ghost" href="/organizations">How teams use Mano</Link>
           </article>
-          <article className="hw-duo-card repo">
-            <NeedIcon k="code" size={52} />
-            <h2>Anyone can check the work.</h2>
-            <p>The code is public. Mano will be tested on paperwork it has never seen, next to a reminder app and a general AI agent, and the results published, including what it gets wrong.</p>
-            <a className="btn btn-ghost" href={REPO_URL}>Read the code</a>
-          </article>
         </div>
+      </section>
+
+      <section id="open-source" className="h-open" aria-labelledby="open-h">
+        <OpenSource />
       </section>
 
       <section className="h-close" aria-labelledby="hw-cta-h">

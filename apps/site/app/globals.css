@@ -120,7 +120,7 @@ details.faq p{padding:0 0 22px;max-width:54ch;font-size:.98rem}
 @media (max-width:1240px){.header-cta .quiet.repo{display:none}}
 @media (max-width:1080px){
   .site-header .bar{gap:24px}
-  .faq-grid{grid-template-columns:1fr;gap:40px}
+  .faq-grid{grid-template-columns:1fr;gap:24px}
   .foot{grid-template-columns:1fr 1fr}
   .foot-card{padding:48px 28px 24px;border-radius:28px}
   .foot-mascot{right:28px}
@@ -134,7 +134,8 @@ details.faq p{padding:0 0 22px;max-width:54ch;font-size:.98rem}
 @media (max-width:720px){
   section{padding:88px 0}
   .wrap{padding:0 18px}
-  .foot{grid-template-columns:1fr}
+  .foot{grid-template-columns:1fr 1fr;gap:32px 16px}
+  .foot>div{grid-column:1/-1}
 }
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;animation-delay:0s!important;transition-duration:.01ms!important;scroll-behavior:auto!important}
@@ -142,13 +143,13 @@ details.faq p{padding:0 0 22px;max-width:54ch;font-size:.98rem}
 
 
 .faq-side{position:sticky;top:100px}
-.faq-ask{display:flex;align-items:center;gap:14px;margin-top:32px;max-width:380px;padding:18px;border-radius:22px;background:var(--pen-soft);text-decoration:none;transition:transform .3s cubic-bezier(.3,1.6,.5,1)}
+.faq-ask{display:flex;align-items:center;gap:14px;margin-top:20px;max-width:380px;padding:18px;border-radius:22px;background:var(--pen-soft);text-decoration:none;transition:transform .3s cubic-bezier(.3,1.6,.5,1)}
 .faq-ask:hover{transform:translateY(-3px) rotate(-1deg)}
 .faq-ask svg{flex:none;transform:rotate(-8deg)}
 .faq-ask b{display:block;font-weight:600;color:var(--text)}
 .faq-ask small{display:block;margin-top:2px;font-size:.9rem;color:var(--muted);line-height:1.4}
 @media (max-width:1080px){.faq-side{position:static}}
-.dv-stage .btn-ghost,.h-open .btn-ghost,.h-share .btn-ghost,.h-vault .btn-ghost,.t-steps .btn-ghost,.t-vf .btn-ghost{background:#fff}
+.dv-stage .btn-ghost,.h-open .btn-ghost,.h-share .btn-ghost,.t-steps .btn-ghost,.t-vf .btn-ghost{background:#fff}
 
 /* renewal banner: a slim bar above the header, gone for good once dismissed */
 .rb{position:relative;display:flex;align-items:center;justify-content:center;min-height:40px;padding:6px 48px;background:var(--bg2);font-size:.9rem;color:var(--text)}

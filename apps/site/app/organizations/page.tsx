@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Faq from "@/components/Faq";
+import ShareFlow from "@/components/home/ShareFlow";
 import OrgConsent from "@/components/teams/OrgConsent";
 import OrgScenes from "@/components/teams/OrgScenes";
 import Verified from "@/components/teams/Verified";
@@ -43,6 +44,12 @@ export default function Organizations() {
             <h2 id="org-more-h">The paperwork, done before you get to it.</h2>
           </div>
           <OrgScenes />
+        </div>
+      </section>
+
+      <section className="h-share" aria-labelledby="share-h">
+        <div className="wrap">
+          <ShareFlow />
         </div>
       </section>
 

@@ -6,7 +6,7 @@ import { NeedIcon, NEED_TINT } from "./NeedIcons";
 /* What people come to Mano for, as stickers. Pick a need to see the text a person sends, what Mano does and what they end up with.
    Every message here is made up. */
 
-const TILT = [-2, 1.5, -1, 2, -1.5, 1, -2.5, 1.5, -1];
+const TILT = [-2, 1.5, -1, 2, -1.5, 1];
 const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
 
 const NEEDS = [
@@ -17,9 +17,9 @@ const NEEDS = [
     get: "An application for rent help and a reply to your landlord, this week.",
   },
   {
-    key: "food", name: "Food and EBT", short: "Groceries this week",
+    key: "food", name: "Food and EBT", short: "SNAP and groceries",
     ask: "We're out of groceries and I don't get paid until Friday.",
-    steps: ["Finds a food pantry open tonight near you", "Applies for food benefits on an EBT card, and free school meals", "Renews your benefits before they stop"],
+    steps: ["Finds a food pantry open tonight near you", "Applies for SNAP food benefits on an EBT card, and free school meals", "Renews your benefits before they stop"],
     get: "Food tonight, and benefits on your EBT card every month if you're approved.",
   },
   {
@@ -46,24 +46,6 @@ const NEEDS = [
     steps: ["Puts you on every housing waitlist you qualify for", "Keeps each spot active so you don't get dropped", "Tells you when a unit opens and fills out the application"],
     get: "Your name on every list, kept active until a place opens.",
   },
-  {
-    key: "credit", name: "Credit", short: "Fix errors, build it back",
-    ask: "I got turned down for an apartment because of my credit.",
-    steps: ["Gets your free credit report and finds mistakes", "Writes the disputes for you to approve and send", "Reminds you before each bill is due"],
-    get: "Mistakes disputed, and bills paid on time from here on.",
-  },
-  {
-    key: "programs", name: "Government programs", short: "Everything you qualify for",
-    ask: "It's me and my two kids. What help can we get?",
-    steps: ["Checks every program you might qualify for from one conversation", "Applies to the ones you pick, all at once", "Tracks every decision and renewal date"],
-    get: "Every program you qualify for, applied to in one sitting.",
-  },
-  {
-    key: "now", name: "Get help now", short: "When it can't wait",
-    ask: "My car broke down, I missed two shifts and we have $20 until Friday.",
-    steps: ["Finds emergency cash help and food you can get today", "Tells you when they're open and what to bring", "Applies for longer-term help so next month is easier"],
-    get: "Help today, and a plan for next month.",
-  },
 ] as const;
 
 function Check() {
@@ -82,7 +64,7 @@ export default function Needs() {
     <div className="nd">
       <div className="h-head">
         <h2 id="nd-h">What do you need help with?</h2>
-        <p className="lede">Tell Mano what is going on in your own words. It finds the help you qualify for, applies and keeps it coming, so the bills get paid and you stay in your home. Pick one to see where Mano is headed. Today it reads your letters, tracks your deadlines and files food benefits renewals on a practice portal.</p>
+        <p className="lede">Tell Mano what is going on in your own words. Pick one to see where Mano is headed. Today it reads your letters, tracks your deadlines and files food benefits renewals on a practice portal.</p>
       </div>
 
       <div className="nd-grid">
@@ -109,8 +91,7 @@ export default function Needs() {
               <span className="sc-label">What you get</span>
               <p><mark style={d(2.5)}>{n.get}</mark></p>
             </div>
-            {n.key === "now" && <p className="nd-small rv" style={d(2.6)}>If anyone is in danger, call 911.</p>}
-          </div>
+                      </div>
         </div>
       </div>
     </div>

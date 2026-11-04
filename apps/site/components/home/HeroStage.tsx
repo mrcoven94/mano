@@ -17,7 +17,7 @@ const SCENES: { key: string; tab: string; how: string; phrase: string; thread: T
       me: "Got a letter. My food benefits are ending?",
       read: "Your renewal is due Nov 14. That is the date that matters.",
       ask: "I filled it in. Send it to the practice portal? YES or NO",
-      answer: "Filed on the practice portal, not a real office. Confirmation SB-20481",
+      answer: "Filed on the practice portal, not a real office. Confirmation SB\u201120481",
     },
   },
   {
@@ -101,7 +101,12 @@ export default function HeroStage() {
           <span className="sr-only">Mano is AI that keeps food coming, helps you pay rent, finds child care, keeps the lights on and gets your medicine.</span>
           <span aria-hidden="true">
             <span className="h-line">Mano <Mascot tile wave tone="orange" size="1em" className="h-mascot" /> is AI that</span>
-            <span className="h-line"><mark key={i} className="h-phrase">{SCENES[i].phrase}</mark>.</span>
+            {/* Every phrase stays in the same grid cell, so the tallest one sets the height and the buttons never move. */}
+            <span className="h-line h-phrases">
+              {SCENES.map((s, n) => (
+                <span key={s.key} data-on={n === i || undefined}><mark key={n === i ? "on" : "off"} className="h-phrase">{s.phrase}</mark>.</span>
+              ))}
+            </span>
           </span>
         </h1>
         <p className="h-lede">Rent, food, medicine, child care, light and water bills. Text Mano what is going on and it finds the help, fills out the forms and keeps the help coming.</p>
