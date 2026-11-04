@@ -23,9 +23,9 @@
     "eval/src/cleanup.mjs": "03c5c31ce967de6c4d86c8e94b273d905b84a4c797c475ed5258c56e79ac27e0",
     "eval/src/openrouter.mjs": "f2559880291f70fefdca74130bae635108780a733197ecc427f2318436fe60cb",
     "eval/src/pool.mjs": "31ef9b272246d88f0f6ec9e2cc4a34f91e10f38509208309640d2c20b4e56fd5",
-    "eval/src/mano-adapter.mjs": "47e343a97ed6e5b4389415bcb24413feac1380b2042db692ba22c33f00d828ad",
+    "eval/src/mano-adapter.mjs": "d5107d8740b764802573cd1f0809b361c92253a65257a96e3946e74a2b67ef11",
     "eval/src/build-mano.mjs": "06859d7ec5a30e1fa304c0aac931fd24dd1025c3c281bc7b047517dbbbebcb78",
-    "eval/src/tracks.mjs": "dbe2ea67f1e21b91b3bcbe285940aef616d3b7c2692b3ed6dea70ff3525d771f",
+    "eval/src/tracks.mjs": "d82e4a9306839ee9b78c8c05a0bd4a06132e5a123747684a098636b2f0aa4d87",
     "eval/src/baselines.mjs": "2506aba5f37cffad7c04dff397d78f9694bb22d053a0b2e2e894b17f5cab6b20",
     "eval/src/harness.mjs": "6cc6cc47e90e514d29099a0bbb143d1faffd68b6254c1599854d3a7bd68b1c10",
     "eval/src/grader.mjs": "c556302d2dcabb8a0a901dd88830a2905c13c2cfa54371c4492f3eb33932cc1d",
@@ -42,7 +42,7 @@
     "eval/src/systems/mano.mjs": "9e6ce5ea819a1aac9b24e3c4be168b99ca7081a7c623375bfefcab18e6ce8b23"
   },
   "mano": {
-    "bundle": "afa85583c24060c809fb58fcd5e94b9d1cd2b9ebc7e86c487a9855d498c9b8ea",
+    "bundle": "61802c344b2a7073aaa1266f66b7ef0f67109d06a7a57c2f4a0144b4d0c769f2",
     "pnpm-lock.yaml": "f50e035f0e8f5d203e0a6eb85ae3d4f6dbb6d20844aba4445adfb7649751fb3f",
     "packages/mail/package.json": "326ed464219ffc5244858b3e840e47a29e80a29d25170aca8527a21ead301886",
     "packages/mail/src/answer.ts": "3f0a9e976d443e6bfe828858f7abd07c0bf5b9725a2cc5fdd7a51658b91cb42b",
