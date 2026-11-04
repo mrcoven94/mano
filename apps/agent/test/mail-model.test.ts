@@ -14,6 +14,7 @@ const DOC = "g0t1i0-0123456789ab";
 
 let engine: EngineDouble;
 let modelBodies: { url: string; body: Record<string, unknown> }[];
+let modelMessage: Record<string, unknown>;
 
 async function photoTurn(turnId: string) {
   const raw = JSON.stringify({
@@ -48,13 +49,14 @@ async function sendPhoto(turnId: string) {
 beforeEach(async () => {
   engine = new EngineDouble();
   modelBodies = [];
+  modelMessage = { role: "assistant", content: RENEWAL_PAGE };
   engine.putDocument(PERSON, DOC, new Uint8Array(await letterPhoto()));
   vi.stubGlobal("fetch", (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (!url.startsWith("https://openrouter.ai/") && !url.startsWith("https://api.meta.ai/")) return engine.fetch(input, init);
     modelBodies.push({ url, body: JSON.parse(init?.body as string) as Record<string, unknown> });
     return new Response(
-      JSON.stringify({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: RENEWAL_PAGE } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+      JSON.stringify({ choices: [{ finish_reason: "stop", message: modelMessage }], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
       { status: 200 },
     );
   }) as typeof fetch);
@@ -84,6 +86,32 @@ describe("a texted photo under MANO_MODEL_PROVIDER=openrouter", () => {
     expect(engine.deadlineCalls[0]!.body).toMatchObject({ dueDate: "2026-11-20" });
     const fallback = JSON.parse(logs.find((l) => l.includes("mano_letters_segmentation_fallback"))!) as { why: string };
     expect(fallback.why).toMatch(/SAM 3\.1 was not called/);
+  });
+});
+
+describe("a service failure under MANO_MODEL_PROVIDER=openrouter", () => {
+  const SECRET = "sk-or-secret from the provider";
+
+  it.each([
+    ["a refusal", { role: "assistant", content: "", refusal: SECRET }, 1],
+    ["a refusal written as prose", { role: "assistant", content: `I cannot process images on this endpoint. ${SECRET}` }, 3],
+  ])("%s tells the person the read failed, not to retake the photo, and logs no provider text", async (_name, message, calls) => {
+    vi.stubEnv("MANO_MODEL_PROVIDER", "openrouter");
+    vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
+    modelMessage = message;
+    const logged: string[] = [];
+    for (const level of ["log", "info", "warn", "error", "debug"] as const) {
+      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => void logged.push(args.map(String).join(" ")));
+    }
+
+    const { text } = await sendPhoto("turn_mailmodel03");
+
+    expect(modelBodies).toHaveLength(calls);
+    expect(text).toMatch(/^I could not finish reading your photo just now\./);
+    expect(text).not.toMatch(/flat|good light|retake/i);
+    expect(text).not.toContain(SECRET);
+    expect(logged.join("\n")).not.toContain(SECRET);
+    expect(engine.deadlineCalls).toHaveLength(0);
   });
 });
 

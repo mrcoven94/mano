@@ -81,6 +81,7 @@ import {
   extraLetterExtraction,
   groupDeterministic,
   groupWithModel,
+  NoPageReading,
   readPage,
   type GroupablePage,
   type PageExtraction,
@@ -381,6 +382,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       addUsage(page.file, extraction.usage);
       return { kind: "read", extraction };
     } catch (err) {
+      if (err instanceof NoPageReading) addUsage(page.file, err.usage);
       return { kind: "failed", err };
     }
   });
@@ -405,6 +407,15 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       });
     } else {
       page.readFailed = true;
+      if (read.err instanceof NoPageReading) {
+        modelCalls.push({
+          model: read.err.model,
+          purpose: "read",
+          inputTokens: read.err.usage?.inputTokens ?? 0,
+          outputTokens: read.err.usage?.outputTokens ?? 0,
+          elapsedMs: read.err.elapsedMs,
+        });
+      }
       warnings.push({
         kind: "model_error",
         message: `Reading failed for a page in ${page.file} (${shortMessage(read.err)}).`,
@@ -414,7 +425,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       ask({
         kind: "read_failed",
         letterId: null,
-        prompt: `A page in ${page.file} could not be read. Try again, or retake the photo.`,
+        prompt: `A page in ${page.file} could not be read just now. Send it again.`,
         citation: null,
       });
     }

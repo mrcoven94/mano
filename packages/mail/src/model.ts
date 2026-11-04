@@ -256,6 +256,23 @@ async function postJson(transport: Transport, url: string, body: unknown, deadli
   throw safeError(lastErr);
 }
 
+// A 200 can still carry no answer. Both are service failures, not a bad
+// photo, and a refusal's own words are never repeated.
+function answerOr(text: string, refused: boolean): string {
+  if (refused) throw new ModelFailure("Model refused the request.");
+  if (text.trim() === "") throw new ModelFailure("Model returned no answer.");
+  return text;
+}
+
+function hasRefusalPart(data: unknown): boolean {
+  const output = (data as { output?: unknown } | null)?.output;
+  if (!Array.isArray(output)) return false;
+  return output.some((item) => {
+    const content = (item as { content?: unknown } | null)?.content;
+    return Array.isArray(content) && content.some((part) => (part as { type?: unknown } | null)?.type === "refusal");
+  });
+}
+
 export class MetaModelClient implements ModelClient {
   readonly live = true;
   readonly baseUrl: string;
@@ -280,7 +297,7 @@ export class MetaModelClient implements ModelClient {
     if (typeof status === "string" && status !== "completed") {
       throw new ModelFailure(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`);
     }
-    return { text: extractOutputText(data), model: req.model, usage: extractUsage(data), raw: data };
+    return { text: answerOr(extractOutputText(data), hasRefusalPart(data)), model: req.model, usage: extractUsage(data), raw: data };
   }
 }
 
@@ -330,14 +347,15 @@ function openWeightBody(req: ResponsesRequest): OpenWeightBody {
   };
 }
 
-// The text of exactly one choice that finished on its own, else null: a
-// reading cut off at the token cap is not a reading, even if it parses.
-function completedChoiceText(data: unknown): string | null {
+// The text of exactly one choice that finished on its own: a reading cut
+// off at the token cap is not a reading, even if it parses.
+function openWeightText(data: unknown): string {
   const choices = (data as { choices?: unknown } | null)?.choices;
-  if (!Array.isArray(choices) || choices.length !== 1) return null;
-  const choice = choices[0] as { finish_reason?: unknown; message?: { content?: unknown } } | null;
-  const content = choice?.message?.content;
-  return choice?.finish_reason === "stop" && typeof content === "string" ? content : null;
+  const choice = (Array.isArray(choices) && choices.length === 1 ? choices[0] : null) as { finish_reason?: unknown; message?: { content?: unknown; refusal?: unknown } } | null;
+  const message = choice?.message;
+  const refused = typeof message?.refusal === "string" && message.refusal.trim() !== "";
+  if (!choice || (choice.finish_reason !== "stop" && !refused)) throw new ModelFailure("Model run not completed.");
+  return answerOr(typeof message?.content === "string" ? message.content : "", refused);
 }
 
 export interface OpenWeightClientOptions {
@@ -363,9 +381,7 @@ export class OpenWeightModelClient implements ModelClient {
     if (req.model === SEGMENT_MODEL) throw new SegmentationSkipped();
     if (req.model !== STANDARD_MODEL && req.model !== CONTRIBUTOR_MODEL) throw new Error(`Unknown model ID: ${req.model}.`);
     const data = await postJson(this.transport, OPEN_WEIGHT_URL, openWeightBody(req), opts.deadline);
-    const text = completedChoiceText(data);
-    if (text === null) throw new ModelFailure("Model run not completed.");
-    return { text, model: OPEN_WEIGHT_MODEL, usage: extractUsage(data), raw: data };
+    return { text: openWeightText(data), model: OPEN_WEIGHT_MODEL, usage: extractUsage(data), raw: data };
   }
 }
 

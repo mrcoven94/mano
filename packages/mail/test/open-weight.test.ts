@@ -216,56 +216,200 @@ describe("the deadline gate decides, whatever the model says", () => {
   });
 });
 
-describe("a page that cannot be read asks, and never guesses a date", () => {
+const FAILED_READ = /^I could not finish reading your photo just now\./;
+const RETAKE = /flat|good light|retake/i;
+const SECRET = "sk-or-secret from the provider";
+
+// A service failure, seen where it matters: what the person is told.
+function expectFailedRead(reading: Awaited<ReturnType<typeof read>>) {
+  const answer = answerReading(reading);
+  expect(reading.questions.map((q) => q.kind)).toEqual(["read_failed"]);
+  expect(answer.outcome).toBe("unread");
+  expect(answer.text).toMatch(FAILED_READ);
+  expect(answer.text).not.toMatch(RETAKE);
+  expect(JSON.stringify(reading)).not.toMatch(/retake/i);
+  expect(answer.deadlines).toEqual([]);
+  expect(reading.datesToKnow).toEqual([]);
+  expect(answer.text).not.toMatch(/November 20|2026/);
+  expect(JSON.stringify(reading)).not.toContain(SECRET);
+}
+
+const refusing = (content: string | null, refusal: string) => () =>
+  new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { role: "assistant", content, refusal } }] }), { status: 200 });
+
+describe("a service failure on the open-weight path is a failed read, never a bad photo", () => {
   const unread = async (answers: (() => Response)[]) => {
     const { model, sent } = stub(answers);
-    const reading = await read(model);
-    return { reading, sent, answer: answerReading(reading) };
-  };
-  const expectAsks = ({ reading, answer }: Awaited<ReturnType<typeof unread>>) => {
-    expect(answer.deadlines).toEqual([]);
-    expect(reading.datesToKnow).toEqual([]);
-    expect(reading.questions.length).toBeGreaterThan(0);
-    expect(answer.text).not.toMatch(/November 20|2026/);
+    return { reading: await read(model), sent };
   };
 
-  it("prose with a date, on all three attempts", async () => {
-    const result = await unread([answering("The renewal is due November 20, 2026.")]);
-    expect(result.sent).toHaveLength(3);
-    expect(result.answer.outcome).toBe("unread");
-    expectAsks(result);
+  it("a refusal field, in fixed words, with no retry", async () => {
+    const { reading, sent } = await unread([refusing("", `I cannot process this image. ${SECRET}`)]);
+    expect(sent).toHaveLength(1);
+    expectFailedRead(reading);
+    expect(reading.warnings.find((w) => w.kind === "model_error")?.message).toMatch(/refused/);
   });
 
-  it("the model says the page is unreadable, with no retry", async () => {
-    const result = await unread([answering(pageJson({ readable: false, readability_note: "too dark", full_text: "", deadlines: [], sender: NIL }))]);
-    expect(result.sent).toHaveLength(1);
-    expectAsks(result);
+  it("a refusal field with null content", async () => {
+    const { reading, sent } = await unread([refusing(null, SECRET)]);
+    expect(sent).toHaveLength(1);
+    expectFailedRead(reading);
+  });
+
+  it("a refusal field beside content that parses, which is not trusted", async () => {
+    const { reading } = await unread([refusing(RENEWAL_PAGE, SECRET)]);
+    expectFailedRead(reading);
+  });
+
+  it.each([["empty", ""], ["blank", "  \n "]])("%s content, in fixed words, with no retry", async (_name, content) => {
+    const { reading, sent } = await unread([answering(content)]);
+    expect(sent).toHaveLength(1);
+    expectFailedRead(reading);
+    expect(reading.warnings.find((w) => w.kind === "model_error")?.message).toMatch(/no answer/);
+  });
+
+  it("a refusal written as prose, on all three attempts, counting what they spent", async () => {
+    const { reading, sent } = await unread([answering(`I cannot process images on this endpoint. ${SECRET}`)]);
+    expect(sent).toHaveLength(3);
+    expectFailedRead(reading);
+    expect(reading.stats.inputTokens).toBe(21);
+    expect(reading.stats.outputTokens).toBe(33);
+  });
+
+  it("prose with a date, on all three attempts", async () => {
+    const { reading, sent } = await unread([answering("The renewal is due November 20, 2026.")]);
+    expect(sent).toHaveLength(3);
+    expectFailedRead(reading);
+  });
+
+  it.each([
+    ["an error object", JSON.stringify({ error: SECRET })],
+    ["an empty object", "{}"],
+    ["an array", "[]"],
+    ["null", "null"],
+    ["a string", JSON.stringify(SECRET)],
+    ["readable as a string", pageJson({ readable: "true" })],
+    ["readable with no transcription", pageJson({ full_text: "" })],
+  ])("valid JSON that is not a reading: %s, on all three attempts", async (_name, content) => {
+    const { reading, sent } = await unread([answering(content)]);
+    expect(sent).toHaveLength(3);
+    expectFailedRead(reading);
   });
 
   it("an answer cut off at the token cap, even one that parses", async () => {
-    const result = await unread([() => completion(RENEWAL_PAGE, "length")]);
-    expect(result.sent).toHaveLength(1);
-    expectAsks(result);
+    const { reading, sent } = await unread([() => completion(RENEWAL_PAGE, "length")]);
+    expect(sent).toHaveLength(1);
+    expectFailedRead(reading);
   });
 
   it("a 200 that carries an error and no choices", async () => {
-    const result = await unread([() => new Response(JSON.stringify({ error: { code: 402, message: "credit is out for sk-or-secret" } }), { status: 200 })]);
-    expectAsks(result);
-    expect(JSON.stringify(result.reading)).not.toContain("sk-or-secret");
+    const { reading } = await unread([() => new Response(JSON.stringify({ error: { code: 402, message: SECRET } }), { status: 200 })]);
+    expectFailedRead(reading);
   });
 
   it("HTTP 402, in fixed words, never repeating the provider's text", async () => {
-    const result = await unread([() => new Response("credit is out for sk-or-secret", { status: 402 })]);
-    expect(result.sent).toHaveLength(1);
-    expectAsks(result);
-    expect(JSON.stringify(result.reading)).not.toContain("sk-or-secret");
-    expect(result.reading.warnings.find((w) => w.kind === "model_error")?.message).toMatch(/402 \(billing is not set up/);
+    const { reading, sent } = await unread([() => new Response(SECRET, { status: 402 })]);
+    expect(sent).toHaveLength(1);
+    expectFailedRead(reading);
+    expect(reading.warnings.find((w) => w.kind === "model_error")?.message).toMatch(/402 \(billing is not set up/);
   });
 
   it("a body that is not JSON", async () => {
-    const result = await unread([() => new Response("<html>sk-or-secret</html>", { status: 200 })]);
-    expectAsks(result);
-    expect(JSON.stringify(result.reading)).not.toContain("sk-or-secret");
+    const { reading } = await unread([() => new Response(`<html>${SECRET}</html>`, { status: 200 })]);
+    expectFailedRead(reading);
+  });
+
+  it("a bad answer followed by a real one still reads", async () => {
+    const { reading, sent } = await unread([answering("I cannot process images on this endpoint."), answering(RENEWAL_PAGE)]);
+    expect(sent).toHaveLength(2);
+    expect(answerReading(reading).deadlines.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
+  });
+});
+
+describe("a page the model truly could not read keeps the retake advice", () => {
+  it("readable false asks for a better photo, with no retry and no date", async () => {
+    const { model, sent } = stub([answering(pageJson({ readable: false, readability_note: "too dark", full_text: "", deadlines: [], sender: NIL }))]);
+    const reading = await read(model);
+    const answer = answerReading(reading);
+    expect(sent).toHaveLength(1);
+    expect(reading.questions.map((q) => q.kind)).toEqual(["unreadable_page"]);
+    expect(answer.text).toMatch(/flat, in good light/);
+    expect(answer.deadlines).toEqual([]);
+    expect(reading.warnings.map((w) => w.kind)).not.toContain("model_error");
+  });
+});
+
+// The retry loop is shared, so the Meta path is held to the same words,
+// through its own Responses shape and with SAM answering first.
+describe("the same faults on the Meta Model API path", () => {
+  const SAM = JSON.stringify({ detections: [{ box_2d: [80, 120, 950, 880], label: "letter", score: 0.9 }] });
+  const responses = (body: Record<string, unknown>) => new Response(JSON.stringify(body), { status: 200 });
+  const meta = (reads: Record<string, unknown>, sam: Record<string, unknown> = { status: "completed", output_text: SAM }) => {
+    const sent: string[] = [];
+    const fetchFn = (async (_url: string, init: RequestInit) => {
+      const { model } = JSON.parse(init.body as string) as { model: string };
+      sent.push(model);
+      return responses(model === "sam-3.1" ? sam : reads);
+    }) as unknown as typeof fetch;
+    return { sent, model: createModelClient({ META_MODEL_API_KEY: "test-meta-key" }, { synthetic: false, fetchFn }) };
+  };
+  const reads = (sent: string[]) => sent.filter((m) => m !== "sam-3.1");
+  const refusal = { status: "completed", output: [{ type: "message", content: [{ type: "refusal", refusal: `I cannot help. ${SECRET}` }] }] };
+
+  it("a refusal part, in fixed words, with no retry", async () => {
+    const { model, sent } = meta(refusal);
+    const reading = await read(model);
+    expect(reads(sent)).toHaveLength(1);
+    expectFailedRead(reading);
+    expect(reading.warnings.find((w) => w.kind === "model_error")?.message).toMatch(/refused/);
+  });
+
+  it("a refusal part beside text that parses, which is not trusted", async () => {
+    const { model } = meta({ status: "completed", output: [{ content: [{ type: "output_text", text: RENEWAL_PAGE }, { type: "refusal", refusal: SECRET }] }] });
+    expectFailedRead(await read(model));
+  });
+
+  it.each([
+    ["empty output_text", { status: "completed", output_text: "" }],
+    ["no output at all", { status: "completed" }],
+    ["an error body with no status", { error: { message: SECRET } }],
+  ])("%s, in fixed words, with no retry", async (_name, body) => {
+    const { model, sent } = meta(body);
+    const reading = await read(model);
+    expect(reads(sent)).toHaveLength(1);
+    expectFailedRead(reading);
+    expect(reading.warnings.find((w) => w.kind === "model_error")?.message).toMatch(/no answer/);
+  });
+
+  it("prose, on all three attempts", async () => {
+    const { model, sent } = meta({ status: "completed", output_text: `I cannot process images. ${SECRET}` });
+    const reading = await read(model);
+    expect(reads(sent)).toHaveLength(3);
+    expectFailedRead(reading);
+  });
+
+  it("a SAM refusal takes the on-device fallback in fixed words, and the page still reads", async () => {
+    const { model } = meta({ status: "completed", output_text: RENEWAL_PAGE }, refusal);
+    const reading = await read(model);
+    expect(reading.warnings.find((w) => w.kind === "segmentation_fallback")?.detail).toMatch(/refused/);
+    expect(JSON.stringify(reading)).not.toContain(SECRET);
+    expect(answerReading(reading).deadlines.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
+  });
+
+  it("attempts that gave no reading count against the file's token budget", async () => {
+    const boxes = Array.from({ length: 12 }, (_, i) => ({ box_2d: [i * 80, 100, i * 80 + 70, 900], label: "page", score: 0.9 }));
+    const costly = { status: "completed", output_text: "I cannot process images.", usage: { input_tokens: 40_000, output_tokens: 1 } };
+    const { model, sent } = meta(costly, { status: "completed", output_text: JSON.stringify({ detections: boxes }) });
+    const reading = await read(model);
+    expect(reading.questions.map((q) => q.kind)).toContain("budget_exceeded");
+    expect(reads(sent).length).toBeLessThan(12 * 3);
+  });
+
+  it("readable false keeps the retake advice", async () => {
+    const { model, sent } = meta({ status: "completed", output_text: pageJson({ readable: false, full_text: "", deadlines: [], sender: NIL }) });
+    const reading = await read(model);
+    expect(reads(sent)).toHaveLength(1);
+    expect(answerReading(reading).text).toMatch(/flat, in good light/);
   });
 });
 

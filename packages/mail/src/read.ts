@@ -234,19 +234,34 @@ export function extraLetterExtraction(page: PageExtraction): PageExtraction | nu
   };
 }
 
-export function parsePageExtraction(text: string): PageExtraction {
-  let data: unknown;
+// The JSON in an answer: the whole text, or the object inside prose or a
+// code fence. Undefined when there is none.
+function parseAnswer(text: string): unknown {
   try {
-    data = JSON.parse(text);
+    return JSON.parse(text);
   } catch {
     const span = text.match(/\{[\s\S]*\}/);
-    if (!span) return emptyExtraction();
+    if (!span) return undefined;
     try {
-      data = JSON.parse(span[0]);
+      return JSON.parse(span[0]);
     } catch {
-      return emptyExtraction();
+      return undefined;
     }
   }
+}
+
+// Only the model saying the page could not be read, or a transcription of
+// it, counts as a reading. Anything else is the service failing.
+function isPageReading(text: string): boolean {
+  const data = parseAnswer(text);
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return false;
+  const { readable, full_text: fullText } = data as Record<string, unknown>;
+  return readable === false || (readable === true && typeof fullText === "string" && fullText.trim() !== "");
+}
+
+export function parsePageExtraction(text: string): PageExtraction {
+  const data = parseAnswer(text);
+  if (data === undefined) return emptyExtraction();
   const o = (data ?? {}) as Record<string, unknown>;
   const base = emptyExtraction();
   return {
@@ -270,6 +285,22 @@ export function parsePageExtraction(text: string): PageExtraction {
   };
 }
 
+// The model answered every attempt with something that is not a reading.
+// In fixed words: the answers can carry provider text. It keeps what those
+// attempts spent, since they still count against the file's budget.
+export class NoPageReading extends Error {
+  readonly usage: PageExtraction["usage"];
+  readonly model: string;
+  readonly elapsedMs: number;
+  constructor(usage: PageExtraction["usage"], model: string, elapsedMs: number) {
+    super("The model's answers were not a reading of the page.");
+    this.name = "NoPageReading";
+    this.usage = usage;
+    this.model = model;
+    this.elapsedMs = elapsedMs;
+  }
+}
+
 export async function readPage(
   pageJpeg: Buffer,
   model: ModelClient,
@@ -281,7 +312,7 @@ export async function readPage(
   let inputTokens = 0;
   let outputTokens = 0;
   let sawUsage = false;
-  let answeredBy: string | undefined;
+  let answeredBy = readingModelFor(opts.synthetic);
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const res = await model.responses({
       model: readingModelFor(opts.synthetic),
@@ -308,32 +339,18 @@ export async function readPage(
       outputTokens += res.usage.outputTokens;
       sawUsage = true;
     }
-    // Retry only transport-level emptiness, never a real answer: a valid
+    // Retry only an answer that is not a reading, never a real one: a valid
     // readable:false stays a question for the person, not a retry.
-    if (extractJsonObject(last) !== null) break;
-  }
-  return {
-    ...parsePageExtraction(last),
-    usage: sawUsage ? { inputTokens, outputTokens } : null,
-    elapsedMs: Date.now() - started,
-    ...(answeredBy ? { model: answeredBy } : {}),
-  };
-}
-
-function extractJsonObject(text: string): string | null {
-  try {
-    JSON.parse(text);
-    return text;
-  } catch {
-    const span = text.match(/\{[\s\S]*\}/);
-    if (!span) return null;
-    try {
-      JSON.parse(span[0]);
-      return span[0];
-    } catch {
-      return null;
+    if (isPageReading(last)) {
+      return {
+        ...parsePageExtraction(last),
+        usage: sawUsage ? { inputTokens, outputTokens } : null,
+        elapsedMs: Date.now() - started,
+        model: answeredBy,
+      };
     }
   }
+  throw new NoPageReading(sawUsage ? { inputTokens, outputTokens } : null, answeredBy, Date.now() - started);
 }
 
 export interface GroupablePage {
