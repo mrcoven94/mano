@@ -96,6 +96,16 @@ describe("OpenRouter as Modal's backup for a read", () => {
     expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPENROUTER_URL]);
   });
 
+  it("refuses a redirect on Modal's call and on the backup's", async () => {
+    const seen: Array<RequestRedirect | undefined> = [];
+    const fetchFn = (async (url: string, init: RequestInit) => {
+      seen.push(init.redirect);
+      return url === MODAL_URL ? new Response("{}", { status: 503 }) : completion("from the backup");
+    }) as unknown as typeof fetch;
+    await createModelClient(SETTINGS, { synthetic: true, fetchFn }).responses(REQ);
+    expect(seen).toEqual(["error", "error"]);
+  });
+
   it("does not fall back without an OpenRouter key, and keeps Modal's retries", async () => {
     const { MODAL_PROXY_TOKEN, MODAL_ENDPOINT_URL, MANO_MODEL_PROVIDER } = SETTINGS;
     const { sent, model } = client(() => new Response("{}", { status: 503 }), { MODAL_PROXY_TOKEN, MODAL_ENDPOINT_URL, MANO_MODEL_PROVIDER });

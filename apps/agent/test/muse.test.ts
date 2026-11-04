@@ -3,7 +3,7 @@ import { inspect } from "node:util";
 import { APICallError, generateText, streamText } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createMuseModel } from "../agent/lib/muse.js";
+import { BACKUP_ANSWERED, createMuseModel } from "../agent/lib/muse.js";
 
 const MARKER = "SYNTHETIC-PRIVATE-MARKER-7f3a";
 
@@ -232,6 +232,28 @@ describe("OpenRouter as Modal's backup", () => {
     expect(routeLogs()).toEqual(["openrouter"]);
   });
 
+  it("marks the step the backup answered, generating and streaming, and leaves Modal's unmarked", async () => {
+    settings();
+    script(() => new Response("{}", { status: 503 }));
+    const marks: unknown[] = [];
+    const onStepFinish = (step: { providerMetadata?: { gateway?: { generationId?: unknown } } }) => void marks.push(step.providerMetadata?.gateway?.generationId);
+    await generateText({ model: createMuseModel().model, prompt: "hello", maxRetries: 0, onStepFinish });
+    expect(marks).toEqual([BACKUP_ANSWERED]);
+
+    vi.stubGlobal("fetch", async (url: unknown) =>
+      String(url) === MODAL_URL
+        ? new Response("{}", { status: 503 })
+        : new Response('data: {"id":"c","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\ndata: [DONE]\n\n', { status: 200, headers: { "content-type": "text/event-stream" } }),
+    );
+    const streamed = streamText({ model: createMuseModel().model, prompt: "hello", maxRetries: 0, onStepFinish });
+    for await (const _ of streamed.textStream);
+    expect(marks).toEqual([BACKUP_ANSWERED, BACKUP_ANSWERED]);
+
+    script(() => completion());
+    await generateText({ model: createMuseModel().model, prompt: "hello", onStepFinish });
+    expect(marks).toEqual([BACKUP_ANSWERED, BACKUP_ANSWERED, undefined]);
+  });
+
   it("answers from OpenRouter when Modal cannot be reached", async () => {
     settings();
     const calls = script(() => Promise.reject(new TypeError("fetch failed")));
@@ -258,7 +280,7 @@ describe("OpenRouter as Modal's backup", () => {
     }
   });
 
-  it("refuses redirects on Modal's call with a backup waiting, and leaves OpenRouter's as it was", async () => {
+  it("refuses redirects on Modal's call and on the backup's", async () => {
     settings();
     const redirects: Array<RequestRedirect | undefined> = [];
     vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
@@ -266,7 +288,7 @@ describe("OpenRouter as Modal's backup", () => {
       return String(url) === MODAL_URL ? new Response("{}", { status: 503 }) : completion();
     });
     await generateText({ model: createMuseModel().model, prompt: "hello", maxRetries: 0 });
-    expect(redirects).toEqual(["error", undefined]);
+    expect(redirects).toEqual(["error", "error"]);
   });
 
   it("does not touch OpenRouter when Modal answers, and logs that route", async () => {

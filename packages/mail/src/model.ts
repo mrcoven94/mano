@@ -490,6 +490,7 @@ export class OpenWeightModelClient implements ModelClient {
     this.transport = { ...this.transport, redirect: "error" };
     if (opts.backupApiKey) {
       this.backup = new OpenWeightModelClient({ apiKey: opts.backupApiKey, ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}) });
+      this.backup.transport = { ...this.backup.transport, redirect: "error" };
       // One short try, so the backup has time inside the file's budget.
       this.transport = { ...this.transport, timeoutMs: MODAL_TIMEOUT_WITH_BACKUP_MS, maxRetries: 0 };
     }

@@ -312,10 +312,20 @@ function logRoute(route: "modal" | "openrouter"): void {
   console.log(JSON.stringify({ type: "mano_model_route", surface: "agent", route }));
 }
 
+// Eve names a step's model when the step starts, before anyone has answered, so
+// a step the backup answered still starts under Modal's name. The one thing it
+// keeps from the call is this provider field on step.completed. No gateway is in
+// use on this route, so try-trace.ts reads it as this fixed mark.
+export const BACKUP_ANSWERED = "mano-route-openrouter";
+
 // Falls back only when a call fails before any of its answer has arrived, so
 // a person never gets part of one reply and all of another. A failure of the
 // backup, a 402 included, ends the call as any model failure does.
 function backupMiddleware(backup: ReturnType<typeof wrapLanguageModel>): LanguageModelMiddleware {
+  const marked = <T extends { providerMetadata?: unknown }>(part: T): T => ({
+    ...part,
+    providerMetadata: { ...(part.providerMetadata as object | undefined), gateway: { generationId: BACKUP_ANSWERED } },
+  });
   return {
     wrapGenerate: async ({ doGenerate, params }) => {
       try {
@@ -326,7 +336,7 @@ function backupMiddleware(backup: ReturnType<typeof wrapLanguageModel>): Languag
         if (!serviceDown(err)) throw err;
         const result = await backup.doGenerate(params);
         logRoute("openrouter");
-        return result;
+        return marked(result);
       }
     },
     wrapStream: async ({ doStream, params }) => {
@@ -338,7 +348,13 @@ function backupMiddleware(backup: ReturnType<typeof wrapLanguageModel>): Languag
         if (!serviceDown(err)) throw err;
         const result = await backup.doStream(params);
         logRoute("openrouter");
-        return result;
+        type Part = typeof result.stream extends ReadableStream<infer C> ? C : never;
+        const stream = result.stream.pipeThrough(
+          new TransformStream<Part, Part>({
+            transform: (part, controller) => controller.enqueue(part.type === "finish" ? marked(part) : part),
+          }),
+        );
+        return { ...result, stream };
       }
     },
   };
@@ -355,6 +371,6 @@ export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageM
     });
   const backupKey = route.name === "modal" ? process.env.OPENROUTER_API_KEY : undefined;
   if (!backupKey) return { model: metered(route, route.name === "modal" ? refuseRedirects : undefined), modelId: route.modelId };
-  const backup = metered({ name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: backupKey, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY });
+  const backup = metered({ name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: backupKey, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY }, refuseRedirects);
   return { model: wrapLanguageModel({ model: metered(route, limitedStart(MODAL_START_LIMIT_MS)), middleware: backupMiddleware(backup) }), modelId: route.modelId };
 }
