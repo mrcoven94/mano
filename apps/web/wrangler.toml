@@ -1,0 +1,33 @@
+name = "mano-web"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = false
+
+# The Expo web build. Only /api/* reaches the Worker; anything else is a file.
+[assets]
+directory = "../app/dist"
+binding = "ASSETS"
+html_handling = "auto-trailing-slash"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[[durable_objects.bindings]]
+name = "STATE"
+class_name = "WebState"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WebState"]
+
+[[send_email]]
+name = "EMAIL"
+allowed_sender_addresses = ["sign-in@withmano.com"]
+
+[vars]
+MANO_WEB_FROM = "sign-in@withmano.com"
+
+# Secrets (never commit values), set from the channels-production GitHub
+# environment in .github/workflows/deploy-web.yml:
+#   MANO_HANDLE_GRANT_SECRET, MANO_AGENT_SECRET, AGENT_URL, MANO_HANDLE_PEPPER

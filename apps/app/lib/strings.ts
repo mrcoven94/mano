@@ -13,6 +13,7 @@ export const en = {
 
   signInTitle: "Welcome to Mano",
   signInBody: "Mano applies for help, fills out forms, reads mail and keeps track of deadlines. Sign in with your email to meet your agent.",
+  signInLive: "Mano is an automated assistant. Here it does not yet share memory with your texts to Mano, and reminders go out only by text.",
   emailLabel: "Email address",
   emailPlaceholder: "you@example.com",
   sendCode: "Send sign-in code",
@@ -191,8 +192,8 @@ export const en = {
 
   errorTitle: "Something went wrong",
   errorBody: "Try again. If it keeps failing, your messages are saved on this phone.",
-  engineGapTitle: "Needs an engine update",
-  engineGapBody: "This screen needs a part of the engine that is not built yet. It works in demo mode.",
+  engineGapTitle: "Not here yet",
+  engineGapBody: "This part of Mano is not in the app or on the web yet. Ask Mano in the chat, and answer its questions there with YES or NO.",
   configErrorTitle: "Mano is not configured",
   configErrorBody: "This build needs an engine address or the demo flag to start.",
 } as const;
@@ -211,6 +212,7 @@ export const es: Strings = {
 
   signInTitle: "Bienvenido a Mano",
   signInBody: "Mano solicita ayuda, llena formularios, lee el correo y lleva las fechas límite. Inicie sesión con su correo para conocer a su agente.",
+  signInLive: "Mano es un asistente automatizado. Aquí todavía no comparte memoria con sus mensajes de texto a Mano, y los recordatorios solo llegan por texto.",
   emailLabel: "Correo electrónico",
   emailPlaceholder: "usted@ejemplo.com",
   sendCode: "Enviar código",
@@ -389,8 +391,8 @@ export const es: Strings = {
 
   errorTitle: "Algo salió mal",
   errorBody: "Inténtelo de nuevo. Si sigue fallando, sus mensajes están guardados en este teléfono.",
-  engineGapTitle: "Necesita una actualización del motor",
-  engineGapBody: "Esta pantalla necesita una parte del motor que aún no existe. Funciona en modo de demostración.",
+  engineGapTitle: "Todavía no está aquí",
+  engineGapBody: "Esta parte de Mano aún no está en la aplicación ni en la web. Pregúntele a Mano en el chat y responda allí a sus preguntas con SÍ o NO.",
   configErrorTitle: "Mano no está configurado",
   configErrorBody: "Esta versión necesita una dirección del motor o el modo de demostración para iniciar.",
 };

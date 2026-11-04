@@ -40,6 +40,7 @@ export default function SignIn() {
       {mode === "stand-in" ? <DemoBanner text={s.demoMode} /> : null}
       <Title>{s.signInTitle}</Title>
       <Body>{s.signInBody}</Body>
+      {mode === "live" ? <Muted style={styles.live}>{s.signInLive}</Muted> : null}
       <View style={styles.form}>
         <Field
           label={s.emailLabel}
@@ -57,5 +58,6 @@ export default function SignIn() {
 
 const styles = StyleSheet.create({
   form: { marginTop: 24 },
+  live: { marginTop: 12 },
   error: { color: colors.alert, marginBottom: 12 },
 });

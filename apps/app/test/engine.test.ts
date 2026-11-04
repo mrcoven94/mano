@@ -264,11 +264,30 @@ describe("EngineClient", () => {
     await expect(client.listApprovals(session)).rejects.toBeInstanceOf(AuthError);
   });
 
-  it("names the missing engine routes", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({}));
-    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
-    await expect(client.requestCode("a@b.c")).rejects.toMatchObject({ name: "EngineGapError", route: "POST /api/auth/request-code" });
-    await expect(client.listMessages(session)).rejects.toBeInstanceOf(EngineGapError);
+  it("signs in and reads the conversation from the server", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const path = url;
+      if (path.endsWith("/request-code")) return jsonResponse({ challengeId: "c1", maskedEmail: "m***@b.c" });
+      if (path.endsWith("/verify-code")) return jsonResponse(session);
+      return jsonResponse({ messages: [{ id: "m1", role: "agent", text: "Hi", createdAt: "2026-11-03T12:00:00.000Z" }] });
+    });
+    const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: fetchImpl as unknown as typeof fetch });
+    await expect(client.requestCode("a@b.c")).resolves.toEqual({ challengeId: "c1", maskedEmail: "m***@b.c" });
+    await expect(client.verifyCode("a@b.c", "c1", "123456")).resolves.toEqual(session);
+    await expect(client.listMessages(session)).resolves.toMatchObject([{ id: "m1", text: "Hi", attachments: [], status: "sent" }]);
+  });
+
+  it("shows a server's error in plain words", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: "Sign-in email is not turned on yet." }), { status: 503 }));
+    const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: fetchImpl });
+    await expect(client.requestCode("a@b.c")).rejects.toThrow("Sign-in email is not turned on yet.");
+  });
+
+  it("turns a 501 into a named gap, and names routes with no server", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: "not yet" }), { status: 501 }));
+    const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: fetchImpl });
+    await expect(client.listApprovals(session)).rejects.toMatchObject({ name: "EngineGapError" });
+    fetchImpl.mockClear();
     await expect(client.listDeadlines(session)).rejects.toBeInstanceOf(EngineGapError);
     await expect(client.listDocuments(session)).rejects.toBeInstanceOf(EngineGapError);
     await expect(client.listGrants(session)).rejects.toBeInstanceOf(EngineGapError);

@@ -457,14 +457,17 @@ export default function Chat() {
         ) : null}
 
         <View style={styles.composer}>
-          <Pressable
-            onPress={() => setAttachOpen((v) => !v)}
-            style={styles.iconBtn}
-            accessibilityRole="button"
-            accessibilityLabel={s.mailTitle}
-          >
-            <Ionicons name={attachOpen ? "close-outline" : "add-outline"} size={24} color={colors.text} />
-          </Pressable>
+          {/* Sending mail needs Engine's document routes, which the live app does not reach yet. */}
+          {mode === "stand-in" ? (
+            <Pressable
+              onPress={() => setAttachOpen((v) => !v)}
+              style={styles.iconBtn}
+              accessibilityRole="button"
+              accessibilityLabel={s.mailTitle}
+            >
+              <Ionicons name={attachOpen ? "close-outline" : "add-outline"} size={24} color={colors.text} />
+            </Pressable>
+          ) : null}
           <TextInput
             ref={inputRef}
             value={text}
