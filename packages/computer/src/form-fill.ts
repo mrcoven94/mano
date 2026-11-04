@@ -4,11 +4,12 @@
  */
 
 /**
- * About 1.5 times the most any fill took on Muse Spark Open with these words,
- * 14 turns across 46 fills of new layouts (median 5). The deadline below stops a
- * run that wanders, so a cap with room costs little. Replay holds 29 at most.
+ * On Muse Spark Open with these words a fill usually took 5 to 8 turns and the
+ * most that finished took 15. One accordion layout sometimes wanders and used up
+ * caps of 20 and 25, so more room would not save it. These turns took under 2
+ * seconds each, so 25 fits inside the deadline below, and replay holds 29 at most.
  */
-export const FILL_MAX_STEPS = 20;
+export const FILL_MAX_STEPS = 25;
 
 /**
  * Inside the agent's 90 second wait for a turn (SETTLE_TIMEOUT_MS), with room
