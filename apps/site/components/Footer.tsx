@@ -11,16 +11,14 @@ export default function Footer() {
           <div className="foot">
             <div>
               <Link href="/" className="brand"><Mascot size={30} tile tone="orange" className="brand-mark" />mano</Link>
-              <p className="foot-about">An agent for every person. It applies for help, reads your mail and keeps your help coming.</p>
+              <p className="foot-about">Mano reads your letters, tracks your deadlines and files renewals on a practice portal. It is free in this demo.</p>
               <a className="foot-text" href={SMS_HREF}>Text Mano at {SMS_NUMBER}</a>
             </div>
             <nav aria-label="Footer">
               <p className="foot-h">Mano</p>
               <ul>
-                <li><Link href="/">For people</Link></li>
                 <li><Link href="/how-it-works">How Mano works</Link></li>
                 <li><Link href="/renewals">Renewals</Link></li>
-                <li><Link href="/#pricing">Pricing</Link></li>
                 <li><Link href="/#questions">Questions</Link></li>
                 <li><Link href="/sign-in">Sign in</Link></li>
               </ul>
@@ -28,9 +26,9 @@ export default function Footer() {
             <nav aria-label="Teams">
               <p className="foot-h">Teams</p>
               <ul>
-                <li><Link href="/government">For government</Link></li>
-                <li><Link href="/organizations">For nonprofits</Link></li>
-                <li><Link href="/partners">Partners</Link></li>
+                <li><Link href="/government">Government offices</Link></li>
+                <li><Link href="/organizations">Nonprofits</Link></li>
+                <li><Link href="/partners">Outside services</Link></li>
               </ul>
             </nav>
             <nav aria-label="Open source">

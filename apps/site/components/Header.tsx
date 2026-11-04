@@ -7,11 +7,8 @@ import Mascot from "./Mascot";
 import TextMano from "./TextMano";
 
 const links = [
-  { href: "/", label: "For people", sub: "Free to start" },
-  { href: "/government", label: "For government", sub: "Case management" },
-  { href: "/organizations", label: "For nonprofits", sub: "Case management" },
-  { href: "/partners", label: "Partners", sub: "Offer your service" },
-  { href: "/#pricing", label: "Pricing", sub: "Free and Plus" },
+  { href: "/how-it-works", label: "How Mano works", sub: "From a photo to a filing" },
+  { href: "/renewals", label: "Renewals", sub: "Your letter came" },
 ];
 
 export default function Header() {
