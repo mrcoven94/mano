@@ -1,5 +1,5 @@
 /**
- * Sandbox portal: a fake state benefits portal that every Mano demo files
+ * Sandbox portal: a test state benefits portal that every Mano demo files
  * to. Mano never touches a real benefits site; it practices here.
  *
  * What it does: a three-step renewal application (household info, document

@@ -1,7 +1,7 @@
 import type { Mount } from "./layouts";
 import { DECLARATION, type FileMeta, type Household, type Submission, type SubmissionSummary } from "./store";
 
-export const TEST_BANNER = "TEST SYSTEM: this is a fake benefits portal for demos. No real benefits. No real data.";
+export const TEST_BANNER = "TEST SYSTEM for demos. No real benefits and no real data.";
 
 export function escapeHtml(value: string): string {
   return value
