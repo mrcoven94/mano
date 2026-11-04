@@ -58,14 +58,14 @@ Every model Mano calls at runtime is a Meta model. Meta's own API answers HTTP 4
 | Guardian checks each action, before the question and again at the yes | Muse Glimmer 30B (open weights) | Our own GPU on Modal | Running, with a cold start of about 3 minutes |
 | Crisis check, before the agent, on one short health question the keyword floor flags | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis |
 | Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open | Meta's API, then OpenRouter | Standby, on Muse Spark Open during the 402 |
-| Checking the reader's date, and holding a deadline | None, plain code | `packages/mail/src/naming.ts`, `packages/mail/src/gate.ts` | Running. The gate held the spine's letter in the production runs below. The reader's question was seen on production on two synthetic fixture letters ([PR 216](https://github.com/mrcoven94/mano/pull/216), still open), which is not a rate |
+| Checking the reader's date, and holding a deadline | None, plain code | `packages/mail/src/naming.ts`, `packages/mail/src/gate.ts` | Running. The gate held the spine's letter in the production runs below. The reader's question was seen on production on two synthetic fixture letters ([PR 216](https://github.com/mrcoven94/mano/pull/216)), which is not a rate |
 | Drafting the renewal | None for the form table | `apps/agent/agent/lib/forms.ts` | Running |
 | The person's yes and the filing to the sandbox portal | None, plain code | `apps/engine/src/gateway` | Running. Run a4c0ec45 on production recorded receipt SR-PPW4FECM, not simulated |
 | Reminder the day before an interview | None, plain code | `apps/engine/src/deadlines.ts` | Deployed |
 
 These parts are not Meta model calls: the keyword crisis floor that every text passes through, on-device paper detection, the checks on the reader's date, the deadline gate and field checks, the scam screen, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images.
 
-At this commit, the reader says which date the person must meet and quotes the sentence that gives it. Word checks in `packages/mail/src/naming.ts` test the quote and the date. They are heuristics with known gaps, so a wrong date can reach the question. What the code enforces is narrower: Mail's reply gives a date from the reader only as a question to check, and Mail saves a deadline only from the gate in `packages/mail/src/gate.ts`. A yes to that question is an ordinary turn for the model. No code saves it, and the model may record it with `track_deadline`, which does not check where a date came from. Rules that overrule the reader include a scam, a planted instruction, a letter that says it is someone else's or no longer stands, wording that moves or replaces a date, a heading that reverses what follows, and two letters on one crop. The gate held no date in either held-out run, and neither run validates naming on wording it had never met.
+At this commit, the reader says which date the person must meet and quotes the sentence that gives it. Word checks in `packages/mail/src/naming.ts` test the quote and the date. They are heuristics with known gaps, so a wrong date can reach the question. What the code enforces is narrower: Mail's reply gives a date from the reader as a question to check, or says that it has already passed or that the letter also lists an interview, and Mail saves a deadline only from the gate in `packages/mail/src/gate.ts`. With no filing question open, a yes to the date question is an ordinary turn for the model. No code saves the date, and the model may record it with `track_deadline`, which does not check where a date came from. With a filing question still open, a plain YES goes to that filing before any model turn, so a yes meant for the date can file it. Rules that overrule the reader include a scam, a planted instruction, a letter that says it is someone else's or no longer stands, wording that moves or replaces a date, a heading that reverses what follows, and two letters on one crop. The gate held no date in either held-out run, and neither run validates naming on wording it had never met.
 
 A document is now labeled by what it was read as, and a renewal says so when it attaches no proof of income ([PR 195](https://github.com/mrcoven94/mano/pull/195)). That is merged and not confirmed on production yet.
 
@@ -138,7 +138,7 @@ flowchart LR
 | `packages/accounts` | One person, one account: phone and email sign-in, linking and merge |
 | `packages/quality` | The answer-quality bench, `pnpm judge` and `pnpm spine:live` |
 | `apps/sandbox-portal` | The fake state benefits portal that every demo files to, under its own layout and generated ones |
-| `apps/site` | withmano.com and the live demo at `/try` |
+| `apps/site` | withmano.com, its pages for government, nonprofits and partners, and the live demo at `/try` |
 | `apps/app` | The resident app in React Native with Expo |
 | `eval` | The held-out test and its baselines |
 | `apps/web` | One Cloudflare Worker that serves the app's web build, with email sign-in and chat with Mano's agent. A message is the same agent turn the text line runs. Run its checks with `pnpm --filter @mano/web check` |
@@ -149,7 +149,8 @@ Tests cover the three safety cases: a stale approval is refused (`apps/engine/te
 
 - On held-out text, Mano named no date on 425 of 426 letters in the first run and on 53 of 420 in the second. The second run used the same wording pack after the first result was seen, so Mano has no result on wording it has never met. The synthetic letter in `pnpm judge` holds its date through the gate, so that run does not exercise naming.
 - Correct packets fell from 91 to 66 of 100 and evidence requested fell from 137 of 141 to 109 of 132 on the changed reader, and the cause is not found.
-- The word checks on the reader's date have known gaps. "Send your form within the next 14 days after November 20, 2026" passes them, so the question names November 20. If the person says yes, the model may save that date with reminders, and otherwise a yes saves nothing.
+- The word checks on the reader's date have known gaps. If the reader picks November 20 from "Send your form two weeks after November 20, 2026", the checks let it through and the question names the wrong date. If the person says yes, the model may save that date with reminders, and otherwise a yes saves nothing.
+- A yes meant for a date question can file a waiting renewal. If a filing question is still open and the person sends a new letter, a plain YES to the date question answers the filing question instead. It reaches only the practice portal.
 - The deadline check reads one sentence at a time and has known gaps, listed in `packages/mail/test/gate-letters.test.ts`, such as a Re: line naming another program.
 - Mano missed 10 unsafe letters in each held-out run, and those runs had no Guardian. Guardian has no held-out number of its own.
 - Computer fill on production rests on the runs above. The `pnpm spine:live` runs skip the text line and the reminder and use one portal layout. The two runs on seeded layouts are too few to give a fill rate, and a fill has no model backup.
@@ -171,10 +172,10 @@ A scam letter gets the warning first, and a single date in it appears only as th
 <!-- status:start -->
 | Piece | Status | URL | Last deploy |
 | --- | --- | --- | --- |
-| Site | live | https://withmano.com | 720c74b success 2026-11-04 |
+| Site | live | https://withmano.com | 1127a02 success 2026-11-04 |
 | Sandbox portal | live | https://sandbox.withmano.com/ | ba452d4 success 2026-11-04 |
-| Engine | live | https://engine.withmano.com/health | 1ab1cce success 2026-11-04 |
-| Channels | live | https://text.withmano.com/health | 535fae5 success 2026-11-04 |
+| Engine | live | https://engine.withmano.com/health | 1127a02 in_progress 2026-11-04 |
+| Channels | live | https://text.withmano.com/health | 1127a02 in_progress 2026-11-04 |
 | Guardian | live | no public URL | 5a6ba65 success 2026-11-03 |
 | Quality | in progress | not deployed yet | none |
 <!-- status:end -->
