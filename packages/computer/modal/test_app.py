@@ -355,6 +355,22 @@ class ControlServer(unittest.TestCase):
             self.assertFalse(self.control.authorized_header("Bearer ", ""))
             self.assertFalse(self.control.authorized_header("Bearer " + SECRET, ""))
 
+    def test_settle_waits_for_two_matching_screens_and_gives_up_at_its_limit(self):
+        with mock.patch.object(self.control, "SETTLE_PAUSE_SECONDS", 0):
+            shots = iter([b"loading 1", b"loading 2", b"page", b"page", b"never read"])
+            with mock.patch.object(self.control, "screenshot_bytes", lambda: next(shots)):
+                self.control.settle()
+            self.assertEqual(next(shots), b"never read")
+            with mock.patch.object(self.control, "SETTLE_SECONDS", 0.02), mock.patch.object(self.control, "screenshot_bytes", lambda: os.urandom(4)):
+                self.control.settle()
+
+    def test_a_click_waits_for_the_screen_and_typing_does_not(self):
+        with mock.patch.object(self.control, "settle") as settle:
+            self.assertEqual(self.call("POST", "/act", {"actions": [{"type": "type", "text": "x"}]}, SECRET), 200)
+            settle.assert_not_called()
+            self.assertEqual(self.call("POST", "/act", {"actions": [{"type": "click", "button": "left", "x": 1, "y": 1}]}, SECRET), 200)
+            settle.assert_called_once()
+
     def test_chromium_starts_with_http3_off(self):
         self.assertIn("--disable-quic", app.START_SH)
 

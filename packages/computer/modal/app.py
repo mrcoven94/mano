@@ -81,6 +81,8 @@ SECRET_SHA256 = os.environ.get("MANO_SESSION_SECRET_SHA256", "")
 PORTAL_ORIGIN = os.environ.get("MANO_PORTAL_ORIGIN", "")
 GOTO_ATTEMPTS = 2
 GOTO_WAIT_SECONDS = 6
+SETTLE_SECONDS = 5
+SETTLE_PAUSE_SECONDS = 0.6
 
 KEY_NAMES = {
     "Enter": "Return",
@@ -214,6 +216,22 @@ def screenshot_bytes():
         return handle.read()
 
 
+# Waits until two screens in a row match, so the next screenshot shows what the
+# actions did. Without it a model sees the old page after clicking Continue,
+# clicks again, and the portal refuses the draft as already in use. The tab's
+# spinner shows a page still loading, but only a sliver of it is on screen, so
+# the screens are compared well apart.
+def settle():
+    deadline = time.monotonic() + SETTLE_SECONDS
+    last = None
+    while time.monotonic() < deadline:
+        shot = screenshot_bytes()
+        if shot == last:
+            return
+        last = shot
+        time.sleep(SETTLE_PAUSE_SECONDS)
+
+
 def safe_name(name):
     cleaned = "".join(c if c.isalnum() or c in "._-" else "_" for c in name).strip("._")
     return cleaned or "upload"
@@ -278,6 +296,8 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     self.send_json(422, {"applied": applied, "error": str(exc)})
                     return
+                if any(action.get("type") in ("click", "double_click", "keypress") for action in actions):
+                    settle()
                 self.send_json(200, {"applied": applied})
             elif path == "/goto":
                 url = str(self.read_json().get("url", ""))
