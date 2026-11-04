@@ -241,6 +241,130 @@ describe("a due date's year", () => {
     expect(await track("November 3", "it was due November 3", turnAtMs)).toMatchObject({ status: "passed", today: "2026-11-04" });
   });
 
+  it("a number elsewhere in the message is not the date's year", async () => {
+    const turnAtMs = await at(TRACED);
+    for (const words of [
+      "My case number is 2024. Renewal due November 24",
+      "My birth date is 2000-01-24. My renewal is due November 24.",
+      "Next year I move. It is due November 24.",
+      "It is due November 24. In 2024 I missed one.",
+      "Tengo 2024 dólares de renta. Vence el 24 de noviembre.",
+    ]) {
+      expect(await track("2024-11-24", words, turnAtMs), words).toMatchObject({ dueDate: "2026-11-24", firstNudgeAt: "2026-11-10T18:00:00.000Z" });
+    }
+    expect(await track("2027-11-24", "Next year I move. It is due November 24.", turnAtMs)).toMatchObject({ dueDate: "2026-11-24" });
+  });
+
+  it("the same day in another year does not take over a date the person gave with no year", async () => {
+    const turnAtMs = await at(TRACED);
+    for (const words of ["My birth date is 2000-11-24. My renewal is due November 24.", "I was born November 24, 2000. My renewal is due November 24."]) {
+      expect(await track("2000-11-24", words, turnAtMs), words).toMatchObject({ dueDate: "2026-11-24", status: expect.not.stringMatching("passed") });
+    }
+  });
+
+  it("a year written any way the person writes one stays, even when the model leaves it out", async () => {
+    const turnAtMs = await at(TRACED);
+    for (const words of [
+      "due November 24 '27",
+      "due November 24, ’27",
+      "due November 24 twenty twenty-seven",
+      "due November 24, two thousand twenty seven",
+      "due November 24, two thousand and twenty-seven",
+      "due the 24th of November, 2027",
+      "due 24 November 2027",
+      "due 2027-11-24",
+      "due 11-24-2027",
+      "due 11.24.27",
+      "vence el 24 de noviembre de 2027",
+      "vence el 24 de noviembre del 2027",
+      "vence el 24/11/2027",
+      "vence el 24 de noviembre de dos mil veintisiete",
+    ]) {
+      for (const due of ["2027-11-24", "2024-11-24", "November 24"]) {
+        expect(await track(due, words, turnAtMs), `${words} / ${due}`).toMatchObject({ dueDate: "2027-11-24" });
+      }
+    }
+  });
+
+  it("the note names no missing year when the person gave one", async () => {
+    const turnAtMs = await at(TRACED);
+    const out = await track("2024-11-24", "due November 24 '27", turnAtMs);
+    expect(out.note ?? "").not.toMatch(/no year/);
+  });
+
+  it("relative years count next to the date, in English and Spanish", async () => {
+    const turnAtMs = await at(TRACED);
+    for (const words of [
+      "Mi renovación vence el 30 de septiembre del próximo año",
+      "vence el 30 de septiembre del ano que viene",
+      "vence el 30 de septiembre del año siguiente",
+      "vence el 30 de septiembre el año entrante",
+      "el próximo año, el 30 de septiembre",
+      "el año que viene el 30 de septiembre",
+      "vence el próximo 30 de septiembre",
+      "it is due September 30 next year",
+      "it is due September 30 of next year",
+      "next year on September 30",
+      "due next September 30",
+    ]) {
+      expect(await track("2027-09-30", words, turnAtMs), words).toMatchObject({ dueDate: "2027-09-30", status: expect.not.stringMatching("passed") });
+    }
+    for (const words of ["vence el 24 de noviembre de este año", "due November 24 this year"]) {
+      expect(await track("2027-11-24", words, turnAtMs), words).toMatchObject({ dueDate: "2026-11-24" });
+    }
+    for (const words of ["venció el 30 de septiembre del año pasado", "venció el 30 de septiembre del año anterior", "it was due September 30 last year"]) {
+      expect(await track("2025-09-30", words, turnAtMs), words).toMatchObject({ status: "passed", dueDate: "2025-09-30" });
+    }
+    expect(await track("2026-09-30", "venció el pasado 30 de septiembre", turnAtMs)).toMatchObject({ status: "passed", dueDate: "2026-09-30" });
+  });
+
+  it("reads the date itself in Spanish, as the person writes it", async () => {
+    const turnAtMs = await at(TRACED);
+    expect(await track("24 de noviembre", "vence el 24 de noviembre", turnAtMs)).toMatchObject({ dueDate: "2026-11-24" });
+    expect(await track("1 de diciembre", "vence el primero de diciembre", turnAtMs)).toMatchObject({ dueDate: "2026-12-01" });
+    expect(await track("30 de septiembre de 2027", "vence el 30 de septiembre de 2027", turnAtMs)).toMatchObject({ dueDate: "2027-09-30" });
+    expect(await track("sept 30", "vence el 30 de setiembre del próximo año", turnAtMs)).toMatchObject({ dueDate: "2027-09-30" });
+  });
+
+  it("asking gets an answer: a year alone, or a yes to the date Mano spelled out, makes it live", async () => {
+    const turnAtMs = await at(TRACED);
+    const first = { role: "user", content: "my renewal is September 30" };
+    expect(await track("2027-09-30", first.content, turnAtMs)).toMatchObject({ status: "passed" });
+    const asked = { role: "assistant", content: "September 30, 2026 has passed. Do you mean September 30, 2027?" };
+    const answering = async (answer: string) =>
+      (await trackDeadline.execute(
+        { title: "Food benefits renewal", due: "2027-09-30" },
+        toolCtx({ handleHash: HANDLE, turnId: "turn_year_0002", grant, generation: 0, turnAtMs, messages: [first, asked, { role: "user", content: answer }] }),
+      )) as Answer;
+    for (const answer of ["2027", "'27.", "next year", "Yes, next year", "del próximo año", "sí, el año que viene", "yes", "Sí", "correct", "September 30, 2027"]) {
+      expect(await answering(answer), answer).toMatchObject({ dueDate: "2027-09-30", status: expect.not.stringMatching("passed") });
+    }
+    for (const answer of ["no", "hmm", "my case number is 2027", "tomorrow"]) {
+      expect(await answering(answer), answer).toMatchObject({ status: "passed" });
+    }
+  });
+
+  it("two years for one date in one message makes Mano ask, and saves nothing", async () => {
+    const turnAtMs = await at(TRACED);
+    const out = await track("November 24", "It was November 24, 2027 or November 24, 2028, I am not sure", turnAtMs);
+    expect(out).toMatchObject({ status: "ask" });
+    expect(out.tell).toMatch(/which/i);
+    expect(engine.deadlinesOf(PERSON)).toEqual([]);
+    expect(await track("2028-11-24", "It was November 24, 2027 or November 24, 2028, I am not sure", turnAtMs)).toMatchObject({ dueDate: "2028-11-24" });
+  });
+
+  it("a newer message speaks for the date over an older one", async () => {
+    const turnAtMs = await at(TRACED);
+    const history = (...contents: string[]) => toolCtx({
+      handleHash: HANDLE, turnId: "turn_year_0003", grant, generation: 0, turnAtMs,
+      messages: contents.map((content) => ({ role: "user", content })),
+    });
+    const input = { title: "Food benefits renewal", due: "November 24" };
+    expect(await trackDeadline.execute(input, history("it was due November 24, 2025", "now it is due November 24"))).toMatchObject({ dueDate: "2026-11-24" });
+    expect(await trackDeadline.execute(input, history("it is due November 24, 2027", "please track November 24"))).toMatchObject({ dueDate: "2027-11-24" });
+    expect(await trackDeadline.execute(input, history("it is due November 24, 2027", "sorry, November 24, 2028"))).toMatchObject({ dueDate: "2028-11-24" });
+  });
+
   it("moving a deadline reads its date the same way, and a past date moves nothing", async () => {
     const turnAtMs = await at(TRACED);
     const { deadlineId } = (await track("2024-11-24", TRACED_WORDS, turnAtMs)) as unknown as Tracked;
