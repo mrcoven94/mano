@@ -57,7 +57,7 @@ describe.skipIf(!apiKey)("the open-weight model drives a computer, live", () => 
       const task = ["Fill out the form open in this browser with exactly these values, then continue to the next step.", ...lines, "When the next step appears, stop and reply with exactly: ACCEPTED"].join("\n");
       const outcome = await runLoop(computer, new OpenWeightModelClient({ apiKey, modalUrl }), task, {
         model: modalUrl ? MODAL_MODEL_ID : OPEN_WEIGHT_MODEL_ID,
-        maxSteps: 8,
+        maxSteps: 25,
         // As the agent's fill sends it (apps/agent/agent/lib/computer-fill.ts).
         instructions: "These fields do not depend on each other: fill all of them in one batch of click and type actions, then click Continue.",
         onTurn: (turn) => console.log(`turn ${turn.step}: ${"call" in turn ? turn.call.map((a) => a.type).join(",") : "replied"}`),

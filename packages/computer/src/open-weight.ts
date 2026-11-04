@@ -12,9 +12,8 @@
  *
  * The model, the zero-retention pin and the OpenRouter endpoint are constants.
  * The one other place this client can send a screenshot is a Modal Shared
- * Endpoint serving the same model, named by modalUrl and held to Modal's domain.
- * Rule 7 does not list that route, so it carries synthetic data only until
- * David changes that rule. This path never raises a safety check: there is no hosted
+ * Endpoint serving the same model, named by modalUrl and held to Modal's domain
+ * (rule 7, November 4 entry in docs/decisions.md). This path never raises a safety check: there is no hosted
  * tool to raise one. What holds instead is this parser, the loop's closed list
  * of keys and buttons, and the desktop, which binds no window manager keys and
  * reaches only the portal, whose browser pages save drafts and file nothing.
@@ -44,7 +43,8 @@ const MODAL_BODY = Object.freeze({
 });
 
 function modalApiRoot(raw: string): string {
-  const url = new URL(raw);
+  const url = URL.canParse(raw) ? new URL(raw) : null;
+  if (!url) throw new Error("this path reaches Modal only on its own endpoint domain");
   if (url.protocol !== "https:" || !url.hostname.endsWith(".modal.direct")) throw new Error("this path reaches Modal only on its own endpoint domain");
   return `${url.origin}/v1`;
 }
@@ -114,7 +114,9 @@ function parseAction(raw: unknown): ComputerAction {
     case "double_click":
       return { type: "double_click", ...point() };
     case "scroll":
-      return { type: "scroll", ...point(), scroll_x: within(a["scroll_x"] ?? 0, -MAX_SCROLL, MAX_SCROLL), scroll_y: within(a["scroll_y"] ?? 0, -MAX_SCROLL, MAX_SCROLL) };
+      // Where a scroll happens rarely matters, and the model sometimes leaves
+      // it out: that ended 2 of 16 live fills as bad coordinates.
+      return { type: "scroll", ...(a["x"] === undefined && a["y"] === undefined ? { x: SCREEN.width / 2, y: SCREEN.height / 2 } : point()), scroll_x: within(a["scroll_x"] ?? 0, -MAX_SCROLL, MAX_SCROLL), scroll_y: within(a["scroll_y"] ?? 0, -MAX_SCROLL, MAX_SCROLL) };
     case "type":
       if (typeof a["text"] !== "string") throw new Error("the model sent a type action with no text");
       return { type: "type", text: a["text"] };
@@ -210,7 +212,7 @@ function toOpenWeight(input: unknown[]): unknown[] {
 export interface OpenWeightModelOptions {
   apiKey: string;
   /** A Modal Shared Endpoint's URL, with apiKey as its proxy token. Without one, OpenRouter. */
-  modalUrl?: string;
+  modalUrl?: string | undefined;
   /** Injected for tests. */
   fetchImpl?: typeof fetch;
   retryDelaysMs?: number[];
@@ -221,8 +223,9 @@ export class OpenWeightModelClient implements ModelClient {
   private modelId: string;
 
   constructor({ modalUrl, ...options }: OpenWeightModelOptions) {
-    this.modelId = modalUrl ? MODAL_MODEL_ID : OPEN_WEIGHT_MODEL_ID;
-    this.inner = modalUrl
+    // Only leaving it out means OpenRouter: an empty URL is refused below.
+    this.modelId = modalUrl === undefined ? OPEN_WEIGHT_MODEL_ID : MODAL_MODEL_ID;
+    this.inner = modalUrl !== undefined
       ? new FetchModelClient({ ...options, baseUrl: modalApiRoot(modalUrl), body: MODAL_BODY })
       : new FetchModelClient({ ...options, baseUrl: OPEN_WEIGHT_BASE_URL, body: OPEN_WEIGHT_BODY });
   }
