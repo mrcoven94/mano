@@ -1115,6 +1115,9 @@ describe("what a PDF sends", () => {
       field.addToPage(page, { x: 72, y: 640, width: 300, height: 30 });
       page.node.removeAnnot(page.node.Annots()!.get(0) as never);
     }],
+    ["a page transparency group, which embedding drops", (doc, page) => {
+      page.node.set(PDFName.of("Group"), doc.context.obj({ Type: "Group", S: "Transparency", CS: "DeviceRGB" }));
+    }],
     ["a hidden field", hiddenField(2)],
     ["a field set not to view", hiddenField(32)],
     ["an invisible field", hiddenField(1)],

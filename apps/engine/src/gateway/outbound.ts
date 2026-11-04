@@ -175,11 +175,12 @@ function fitted(box: { width: number; height: number }): { x: number; y: number;
 
 // The one rule for a PDF: it goes out only if it is plain. Anything a viewer
 // can show differently from what is sent (a form field, a layer, a note, a
-// link, a crop, a rotation, a page away from the origin) means the person may
-// approve one thing and something else goes out, so it is refused before the
-// question and they are asked for a photo instead. What is left is drawn by
-// its page content alone, which is what embedding carries over. Completed
-// forms come back when there is a renderer to compare the result against.
+// link, a transparency group, a crop, a rotation, a page away from the origin)
+// means the person may approve one thing and something else goes out, so it is
+// refused before the question and they are asked for a photo instead. What is
+// left is drawn by its page content alone, which is what embedding carries
+// over. Completed forms come back when there is a renderer to compare the
+// result against.
 const NOT_PLAIN =
   "Mano only sends plain PDFs, and this one has parts that could go out looking different from what you saw, so it was not prepared. Send a photo of it instead.";
 const SAME_BOX_POINTS = 0.5;
@@ -193,6 +194,7 @@ async function isPlainPdf(bytes: Uint8Array): Promise<boolean> {
     return doc.getPages().every((page) => {
       const [crop, media] = [page.getCropBox(), page.getMediaBox()];
       return (
+        !page.node.has(PDFName.of("Group")) &&
         page.getRotation().angle % 360 === 0 &&
         Math.abs(media.x) <= SAME_BOX_POINTS &&
         Math.abs(media.y) <= SAME_BOX_POINTS &&
