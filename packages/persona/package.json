@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./crisis": "./src/crisis.ts"
   },
   "scripts": {
     "check": "tsc --noEmit && vitest run",
