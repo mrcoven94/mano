@@ -66,4 +66,7 @@ export default defineAgent({
   defaultTools: false,
   // No delegation: one agent answers the person directly.
   tool: false,
+  // sharp loads a native binary by a path it builds at run time, so a
+  // bundled copy cannot find it and every photo would go unread.
+  build: { externalDependencies: ["sharp"] },
 });
