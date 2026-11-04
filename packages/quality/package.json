@@ -18,7 +18,8 @@
     "rescore": "node --import ./src/register.ts src/bin/rescore.ts",
     "calibrate": "node --import ./src/register.ts src/bin/calibrate.ts",
     "compare": "node --import ./src/register.ts src/bin/compare.ts",
-    "judge": "tsx src/bin/judge.ts"
+    "judge": "tsx src/bin/judge.ts",
+    "spine:live": "node --import ./src/register.ts src/bin/spine-live.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
