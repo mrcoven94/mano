@@ -2,12 +2,14 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runLoop } from "../src/loop";
-import { OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient } from "../src/open-weight";
+import { MODAL_MODEL_ID, OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient } from "../src/open-weight";
 import { PlaywrightComputer } from "../src/playwright";
 
-const apiKey = process.env["OPENROUTER_API_KEY"] ?? "";
+// With both Modal settings the same probe runs on a Modal Shared Endpoint.
+const modalUrl = process.env["MODAL_ENDPOINT_URL"] || undefined;
+const apiKey = (modalUrl ? process.env["MODAL_PROXY_TOKEN"] : process.env["OPENROUTER_API_KEY"]) ?? "";
 
-if (!apiKey) console.log("probe:live open-weight computer skipped: OPENROUTER_API_KEY is not set.");
+if (!apiKey) console.log("probe:live open-weight computer skipped: no key for its route.");
 
 // A synthetic person, and the fields of the sandbox portal's first step.
 const VALUES: Record<string, [string, string]> = {
@@ -53,9 +55,9 @@ describe.skipIf(!apiKey)("the open-weight model drives a computer, live", () => 
       await computer.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`);
       const lines = Object.values(VALUES).map(([label, value]) => `${label}: ${value}`);
       const task = ["Fill out the form open in this browser with exactly these values, then continue to the next step.", ...lines, "When the next step appears, stop and reply with exactly: ACCEPTED"].join("\n");
-      const outcome = await runLoop(computer, new OpenWeightModelClient({ apiKey }), task, {
-        model: OPEN_WEIGHT_MODEL_ID,
-        maxSteps: 8,
+      const outcome = await runLoop(computer, new OpenWeightModelClient({ apiKey, modalUrl }), task, {
+        model: modalUrl ? MODAL_MODEL_ID : OPEN_WEIGHT_MODEL_ID,
+        maxSteps: 25,
         // As the agent's fill sends it (apps/agent/agent/lib/computer-fill.ts).
         instructions: "These fields do not depend on each other: fill all of them in one batch of click and type actions, then click Continue.",
         onTurn: (turn) => console.log(`turn ${turn.step}: ${"call" in turn ? turn.call.map((a) => a.type).join(",") : "replied"}`),
