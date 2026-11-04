@@ -24,7 +24,7 @@ export const metadata: Metadata = {
 
 const faqs: [string, string][] = [
   ["Is Mano really free?", "Keeping your help is always free: applications, notices, renewals, reminders, benefit tracking and mail scans have no limits. Plus is $8 a month or $60 a year for a support team that answers the same day and helps with appeals. Daily checks for new help, calls and waiting on hold are coming soon. Faxes and mailed letters are coming soon, at cost, and Mano will tell you the price first."],
-  ["Does Mano decide if I get help?", "No. The office that runs the program decides. Mano prepares your application, sends it after your yes and tells you what the office writes back."],
+  ["Does Mano decide if I get help?", "No. The office that runs the program decides. Mano prepares your application and sends it after your yes. Today that goes only to a practice portal, not a real office."],
   ["Who can see my information?", "Only the people and offices you choose, for the reason you choose. You can see who has access and take it back at any time. Mano cannot pull back copies that were already sent, and it tells you which ones those are."],
   ["Does Mano pretend to be me?", "No. Mano says it is an automated assistant whenever that could be in doubt. Anything it sends for you says \"Prepared with Mano, sent with (your name)'s approval.\" Mano never pretends to be you or to be a person."],
   ["What if a letter tells Mano to do something?", "Mano treats letters, forms and web pages as information, never as orders. It checks every link before opening it and will not open one that fails the check."],

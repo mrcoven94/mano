@@ -69,7 +69,7 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
   {
     short: "Keep track",
     title: "Mano sends it and keeps track",
-    text: "It submits the application after your yes, checks that the office got it, and tells you what they write back.",
+    text: "After your yes it submits the application and checks that it arrived. Today that goes only to a practice portal, not a real office. Send Mano the letter they write back and it explains it.",
     icon: "phone",
     tint: "#DCE3FB",
     see: (
