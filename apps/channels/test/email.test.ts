@@ -309,7 +309,7 @@ describe("a letter by email", () => {
 
   it("stores a photo and a PDF, and reads the photo", async () => {
     const inbox = await openInbox();
-    const out = await inbox.send(mime({ files: [attachment("scan.jpg", "image/jpeg", JPEG), attachment("notice.pdf", "application/pdf", PDF)] }));
+    const out = await inbox.send(mime({ subject: "", files: [attachment("scan.jpg", "image/jpeg", JPEG), attachment("notice.pdf", "application/pdf", PDF)] }));
     expect(out.rejected).toBeNull();
     expect(inbox.h.documents.docs.size).toBe(2);
     expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${PDF_TOO_TEXT} ${TRUNCATED_TEXT}`]);
@@ -319,7 +319,7 @@ describe("a letter by email", () => {
 
   it("says plainly that a PDF alone is saved and not read, with no turn", async () => {
     const inbox = await openInbox();
-    await inbox.send(mime({ files: [attachment("notice.pdf", "application/pdf", PDF)] }));
+    await inbox.send(mime({ subject: "", files: [attachment("notice.pdf", "application/pdf", PDF)] }));
     expect([...inbox.h.documents.docs.values()].map((d) => d.bytes)).toEqual([PDF]);
     expect(inbox.sentAfterOpen()).toEqual([ARRIVED_PDF_TEXT]);
     expect(inbox.h.store.pending()).toEqual([]);
@@ -435,7 +435,7 @@ describe("what the inbox refuses", () => {
 
   it("a message with nothing to read", async () => {
     const inbox = await openInbox();
-    expect((await inbox.send(mime({ text: "  ", files: [attachment("a.exe", "application/octet-stream", new Uint8Array([0x4d, 0x5a]))] }))).rejected).toBe(REJECT_EMPTY);
+    expect((await inbox.send(mime({ subject: "", text: "  ", files: [attachment("a.exe", "application/octet-stream", new Uint8Array([0x4d, 0x5a]))] }))).rejected).toBe(REJECT_EMPTY);
     expect(inbox.sentAfterOpen()).toEqual([]);
   });
 
@@ -709,8 +709,8 @@ describe("files inside an email", () => {
     const inbox = await openInbox();
     const photos = (tag: number) =>
       [1, 2, 3].map((n) => attachment(`${tag}-${n}.jpg`, "image/jpeg", new Uint8Array([...JPEG, tag, n])));
-    await inbox.send(mime({ files: photos(1) }));
-    await inbox.send(mime({ files: photos(2) }));
+    await inbox.send(mime({ subject: "", files: photos(1) }));
+    await inbox.send(mime({ subject: "", files: photos(2) }));
     expect(inbox.h.store.pending()).toHaveLength(2);
     await runTurnAfterBatch(inbox.h);
     expect(inbox.seen.flatMap((t) => t.documents ?? [])).toHaveLength(6);
@@ -887,7 +887,7 @@ describe("mail arriving at the same moment", () => {
     const three = new Uint8Array(3_000_000);
     three.set(PDF);
     three[100] = 3;
-    const raw = mime({ files: [attachment("a.pdf", "application/pdf", six), attachment("b.pdf", "application/pdf", three)] });
+    const raw = mime({ subject: "", files: [attachment("a.pdf", "application/pdf", six), attachment("b.pdf", "application/pdf", three)] });
     const put = inbox.h.documents.put.bind(inbox.h.documents);
     let calls = 0;
     inbox.h.documents.put = async (doc) => {
@@ -916,7 +916,7 @@ describe("an arrival text that does not go", () => {
     return state;
   };
   const tryOne = (inbox: Awaited<ReturnType<typeof openInbox>>) => sendOneOwedNotice(inbox.sql, inbox.h.store, inbox.h.runner, inbox.h.logger, () => inbox.h.now);
-  const pdfMail = (n = 0) => mime({ subject: `Notice ${n}`, files: [attachment("notice.pdf", "application/pdf", PDF)] });
+  const pdfMail = (n = 0) => mime({ subject: "", files: [attachment("notice.pdf", "application/pdf", new Uint8Array([...PDF, n]))] });
 
   it("stays owed for a PDF alone until it goes, and only once", async () => {
     const inbox = await openInbox();
@@ -1156,7 +1156,7 @@ describe("an email is stored whole or bounced", () => {
 
   it("marks an image alone when the HTML holds nothing it read", async () => {
     const inbox = await openInbox();
-    await inbox.send(mime({ html: `${"<br>".repeat(25_000)}<p>That deadline is cancelled.</p>`, files: [attachment("date.png", "image/png", PNG)] }));
+    await inbox.send(mime({ subject: "", html: `${"<br>".repeat(25_000)}<p>That deadline is cancelled.</p>`, files: [attachment("date.png", "image/png", PNG)] }));
     expect(inbox.h.store.pending()[0]!.attachments.map((a) => a.stored!.mimeType)).toEqual(["image/png; truncated=yes"]);
     expect(inbox.sentAfterOpen().join(" ")).toContain(TRUNCATED_TEXT);
   });
@@ -1291,3 +1291,90 @@ describe("an email in the same batch as the person's own text", () => {
     ]);
   });
 });
+
+describe("nothing an office wrote disappears without marking the email", () => {
+  const b64 = (bytes: Uint8Array) => bytesToBase64(bytes).replace(/(.{76})/g, "$1\r\n");
+  const related = (part: string[]) =>
+    [
+      "From: County Office <office@county.example>",
+      "Subject: Your renewal",
+      'Content-Type: multipart/related; boundary="rel"',
+      "",
+      "--rel",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      "<p>Your renewal is due November 20, 2026.</p>",
+      "--rel",
+      ...part,
+      "--rel--",
+      "",
+    ].join("\r\n");
+  const types = (inbox: Awaited<ReturnType<typeof openInbox>>) => inbox.h.store.pending()[0]!.attachments.map((a) => a.stored!.mimeType);
+  const text = (inbox: Awaited<ReturnType<typeof openInbox>>) => new TextDecoder().decode([...inbox.h.documents.docs.values()][0]!.bytes);
+
+  it("reads the subject of an email that is only an attachment", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ subject: "The attached renewal deadline is cancelled.", files: [attachment("notice.jpg", "image/jpeg", JPEG)] }));
+    expect(types(inbox)).toEqual(["text/plain", "image/jpeg"]);
+    expect(text(inbox)).toContain("The attached renewal deadline is cancelled.");
+  });
+
+  it("reads an email that is only a subject", async () => {
+    const inbox = await openInbox();
+    const out = await inbox.send(
+      "From: County Office <office@county.example>\r\nSubject: Your interview moved to December 1, 2026.\r\nContent-Type: text/plain\r\n\r\n\r\n",
+    );
+    expect(out.rejected).toBeNull();
+    expect(text(inbox)).toContain("Your interview moved to December 1, 2026.");
+  });
+
+  it("reads the subject beside a PDF it cannot read, and holds no date from it", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ subject: "Your renewal is due November 20, 2026.", files: [attachment("notice.pdf", "application/pdf", PDF)] }));
+    expect(types(inbox)).toEqual(["text/plain; truncated=yes"]);
+    expect(inbox.sentAfterOpen()).toEqual([`${ARRIVED_TEXT} ${PDF_TOO_TEXT} ${TRUNCATED_TEXT}`]);
+  });
+
+  it("marks the email when a text part with a Content-ID is left out", async () => {
+    const inbox = await openInbox();
+    await inbox.send(
+      related(["Content-Type: application/octet-stream", "Content-ID: <part1>", 'Content-Disposition: attachment; filename="update.txt"', "Content-Transfer-Encoding: base64", "", b64(new TextEncoder().encode("That deadline is cancelled."))]),
+    );
+    expect(types(inbox)).toEqual(["text/plain; truncated=yes"]);
+    expect(inbox.sentAfterOpen().join(" ")).toContain(SKIPPED_TEXT);
+    expect(inbox.sentAfterOpen().join(" ")).toContain(TRUNCATED_TEXT);
+  });
+
+  it("marks the email when a small embedded part only claims to be an image", async () => {
+    const inbox = await openInbox();
+    await inbox.send(
+      related(["Content-Type: image/jpeg", "Content-ID: <part1>", "Content-Disposition: inline", "Content-Transfer-Encoding: base64", "", b64(new TextEncoder().encode("That deadline is cancelled."))]),
+    );
+    expect(types(inbox)).toEqual(["text/plain; truncated=yes"]);
+  });
+
+  it("still leaves out a small embedded GIF logo without marking", async () => {
+    const inbox = await openInbox();
+    const gif = new Uint8Array([...new TextEncoder().encode("GIF89a"), 1, 0, 1, 0, 0, 0, 0]);
+    await inbox.send(related(["Content-Type: image/gif", "Content-ID: <logo>", "Content-Disposition: inline", "Content-Transfer-Encoding: base64", "", b64(gif)]));
+    expect(types(inbox)).toEqual(["text/plain"]);
+    expect(inbox.sentAfterOpen()).toEqual([ARRIVED_TEXT]);
+  });
+
+  it("marks an attached part of a kind it cannot take, and a part past the file limit", async () => {
+    const inbox = await openInbox();
+    await inbox.send(mime({ text: "Due November 20, 2026.", files: [attachment("update.txt", "text/plain", new TextEncoder().encode("That deadline is cancelled."))] }));
+    expect(types(inbox)).toEqual(["text/plain; truncated=yes"]);
+    const many = await openInbox();
+    await many.send(mime({ text: "Due November 20, 2026.", files: [1, 2, 3, 4, 5].map((n) => attachment(`${n}.jpg`, "image/jpeg", new Uint8Array([...JPEG, n]))) }));
+    expect(types(many)).toEqual(Array(5).fill(0).map((_, i) => (i === 0 ? "text/plain; truncated=yes" : "image/jpeg; truncated=yes")));
+  });
+
+  it("marks the email when more links than it keeps were left out of the text", async () => {
+    const inbox = await openInbox();
+    const anchors = Array.from({ length: 40 }, (_, i) => `<a href="https://site${i}.example/x">Open</a>`).join("");
+    await inbox.send(mime({ html: `<p>Renew.</p>${anchors}` }));
+    expect(types(inbox)).toEqual(["text/plain; truncated=yes"]);
+  });
+});
+

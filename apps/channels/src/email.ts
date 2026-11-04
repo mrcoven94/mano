@@ -534,6 +534,11 @@ export function htmlOnlySentences(plain: string, htmlText: string): string[] {
   return sentencesOf(htmlText).filter((s) => !inPlain.has(comparable(s)));
 }
 
+// GIF too: Mail cannot read one, but a signature logo is often one.
+function isImage(bytes: Uint8Array, sniffed: string | null): boolean {
+  return sniffed?.startsWith("image/") === true || /^GIF8[79]a/.test(String.fromCharCode(...bytes.subarray(0, 6)));
+}
+
 function toBytes(content: Email["attachments"][number]["content"]): Uint8Array {
   return typeof content === "string" ? new TextEncoder().encode(content) : new Uint8Array(content as ArrayBuffer);
 }
@@ -551,13 +556,15 @@ export async function parseEmail(raw: Uint8Array): Promise<ParsedEmail> {
   const hidden = html.hrefs.filter((href) => !body.includes(href));
   const words = [body, ...(hidden.length ? [`Links in this email:\n${hidden.join("\n")}`] : [])].join("\n\n").trim();
   // Every link counts, cut or not.
-  const subject = parsed.subject ?? "";
+  const subject = parsed.subject?.trim() ?? "";
   const links = new Set([...extractLinks(subject), ...extractLinks(words), ...html.hrefs]);
   const files: EmailFile[] = [];
   let skipped = 0;
   // Cut whether or not any words survived, so an attachment is marked too.
-  let truncated = !fullyRead || subject.length > MAX_SUBJECT_CHARS;
-  if (words) {
+  // Past MAX_LINKS the rest of the links were left out of the text.
+  let truncated = !fullyRead || subject.length > MAX_SUBJECT_CHARS || html.hrefs.length > MAX_LINKS;
+  // The subject counts as words: an office can say it all there.
+  if (words || subject) {
     const head = [parsed.from?.address ? `From: ${parsed.from.address}` : "", subject ? `Subject: ${subject.slice(0, MAX_SUBJECT_CHARS)}` : ""].filter(Boolean).join("\n");
     const whole = `${head}\n\n${words}`.trim();
     truncated ||= whole.length > MAX_TEXT_CHARS;
@@ -570,8 +577,10 @@ export async function parseEmail(raw: Uint8Array): Promise<ParsedEmail> {
     // Read from the bytes' own signature, never from what the sender names.
     const mimeType = sniffMediaType(bytes);
     // A logo in the signature is not a letter, and is not worth a word to
-    // the person. A scan embedded beside the words is both.
-    if (attachment.related && words && mimeType !== "application/pdf" && bytes.byteLength < MIN_EMBEDDED_SCAN_BYTES) continue;
+    // the person: the one part left out without marking the email, and only
+    // when its own bytes say it is an image. Every other part left out counts
+    // as skipped, which marks the email as partial.
+    if (attachment.related && words && isImage(bytes, mimeType) && bytes.byteLength < MIN_EMBEDDED_SCAN_BYTES) continue;
     if (!mimeType || bytes.byteLength > MAX_FILE_BYTES || files.length >= MAX_EMAIL_FILES) {
       skipped += 1;
       continue;
