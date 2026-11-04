@@ -71,6 +71,7 @@ const LEADING_DOLLAR = /^\$/;
 const COMMAS = /,/g;
 const DOLLAR_AMOUNT = /^\d+(\.\d{1,2})?$/;
 const TRAILING_SLASH = /\/$/;
+const COMMA_BREAK = /\s*,\s*/;
 
 // The text line shows a run of spaces as one, so a value is taken that way
 // before it is checked: what the question shows is what is filed.
@@ -173,7 +174,7 @@ function addressFields(value: string): ProfileFields {
   if (!ENDS_IN_ZIP.test(value) || value.length > ADDRESS_LINE_MAX) return {};
   const at = (part: string) => `person.address.${part}`;
   const found = usAddressParts(value);
-  const pieces = found?.rest.split(/\s*,\s*/).filter(Boolean) ?? [];
+  const pieces = found?.rest.split(COMMA_BREAK).filter(Boolean) ?? [];
   if (!found || pieces.length < 2) return { "person.address": null, [at("line1")]: value, ...(found ? { [at("state")]: found.state } : {}) };
   const line2 = pieces.slice(1, -1).join(", ");
   return { "person.address": null, [at("line1")]: pieces[0]!, ...(line2 ? { [at("line2")]: line2 } : {}), [at("city")]: pieces.at(-1)!, [at("state")]: found.state, [at("zip")]: found.zip };

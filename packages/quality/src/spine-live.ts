@@ -96,10 +96,24 @@ const MARIA = {
   phone: "(555) 010-0187",
 };
 
+const NOT_ALPHANUMERIC = /[^a-z0-9]/g;
+const AMOUNT_PUNCTUATION = /[$,\s]/g;
+const FILED_ROW = /<td class="label">([^<]*)<\/td><td>(.*?)<\/td>/g;
+const HTML_TAG = /<[^>]*>/g;
+const LETTER_RUN = /\p{L}+/gu;
+const LINK_IN_TEXT = /https?:\/\/\S+/g;
+const WHITESPACE_RUN = /\s+/g;
+const REPLAY_LINK = /https?:\/\/\S+\/fill\/[0-9a-f]{32}/;
+const REPLAY_SCREEN = /<img src="data:image\/png;base64,/g;
+const SAFETY_CHECK_WAIT = /safety check is taking a moment/i;
+const STILL_CHECKING = /checking/i;
+const CONFIRMATION = /Confirmation ([^\s.]+)/;
+const SIMULATED_FILING = /simulated filing/i;
+
 // What the portal must hold, by the label on its caseworker page. Punctuation
 // and case may differ, as in an address written with or without its comma; an
 // amount is compared as a number.
-const same = (a: string, b: string): boolean => a.toLowerCase().replace(/[^a-z0-9]/g, "") === b.toLowerCase().replace(/[^a-z0-9]/g, "");
+const same = (a: string, b: string): boolean => a.toLowerCase().replace(NOT_ALPHANUMERIC, "") === b.toLowerCase().replace(NOT_ALPHANUMERIC, "");
 const FILED: { label: string; expected: string; matches(value: string): boolean }[] = [
   { label: "Case number", expected: MARIA.caseNumber, matches: (v) => same(v, MARIA.caseNumber) },
   { label: "Applicant", expected: MARIA.fullName, matches: (v) => same(v, MARIA.fullName) },
@@ -107,13 +121,13 @@ const FILED: { label: string; expected: string; matches(value: string): boolean 
   { label: "Address", expected: MARIA.address, matches: (v) => same(v, MARIA.address) },
   { label: "Phone", expected: MARIA.phone, matches: (v) => same(v, MARIA.phone) },
   { label: "Household size", expected: MARIA.householdSize, matches: (v) => v.trim() === MARIA.householdSize },
-  { label: "Monthly income", expected: `$${MARIA.monthlyIncome}`, matches: (v) => Number(v.replace(/[$,\s]/g, "")) === Number(MARIA.monthlyIncome) },
+  { label: "Monthly income", expected: `$${MARIA.monthlyIncome}`, matches: (v) => Number(v.replace(AMOUNT_PUNCTUATION, "")) === Number(MARIA.monthlyIncome) },
   { label: "Declaration", expected: "made by the applicant", matches: (v) => v.startsWith("Made by the applicant") },
 ];
 
 // The label and value rows of the portal's caseworker page.
 export function filedRows(page: string): Map<string, string> {
-  return new Map([...page.matchAll(/<td class="label">([^<]*)<\/td><td>(.*?)<\/td>/g)].map((m) => [m[1]!, m[2]!.replace(/<[^>]*>/g, "")]));
+  return new Map([...page.matchAll(FILED_ROW)].map((m) => [m[1]!, m[2]!.replace(HTML_TAG, "")]));
 }
 
 const WORDS: Record<Lang, { opening: string; fill: string; yes: string; answers: [RegExp, string][] }> = {
@@ -161,13 +175,13 @@ const ENGLISH = new Set("the a an of that and in for with is my your it to you c
 // A plain word count, enough to tell which of the two languages a reply is
 // in. It does not grade the Spanish.
 export function looksSpanish(text: string): boolean {
-  const words = text.toLowerCase().match(/\p{L}+/gu) ?? [];
+  const words = text.toLowerCase().match(LETTER_RUN) ?? [];
   const spanish = words.filter((w) => SPANISH.has(w)).length;
   const english = words.filter((w) => ENGLISH.has(w)).length;
   return spanish > english;
 }
 
-const withoutLinks = (text: string): string => text.replace(/https?:\/\/\S+/g, "[link]");
+const withoutLinks = (text: string): string => text.replace(LINK_IN_TEXT, "[link]");
 
 class StepFailure extends Error {
   readonly http: number | null;
@@ -252,7 +266,7 @@ class Person {
     const raw = JSON.stringify({
       handleHash: this.handleHash,
       approvalId,
-      textHash: createHash("sha256").update(question.replace(/\s+/g, " ").trim()).digest("hex"),
+      textHash: createHash("sha256").update(question.replace(WHITESPACE_RUN, " ").trim()).digest("hex"),
       generation: 0,
       grant: await this.grant(),
     });
@@ -383,11 +397,11 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
       presented = true;
       // A question with no replay page was drafted without the computer. The
       // link is opened as the person opens it, with no credentials.
-      const link = turn.text.match(/https?:\/\/\S+\/fill\/[0-9a-f]{32}/)?.[0];
+      const link = turn.text.match(REPLAY_LINK)?.[0];
       if (!link?.startsWith(`${cfg.engineUrl}/`)) throw new StepFailure("no replay link in the question, so this draft was not filled on the desktop", turn.http, reply);
       const replay = await fetchImpl(link, { signal: AbortSignal.timeout(CALL_TIMEOUT_MS) });
       const page = await replay.text();
-      const screens = page.match(/<img src="data:image\/png;base64,/g)?.length ?? 0;
+      const screens = page.match(REPLAY_SCREEN)?.length ?? 0;
       if (replay.status !== 200 || !page.includes(REPLAY_WAITING) || screens === 0 || !page.includes(MARIA.caseNumber)) {
         throw new StepFailure(`the replay page did not show the fill: HTTP ${replay.status}, ${screens} screens`, replay.status, reply);
       }
@@ -400,13 +414,13 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
       while (attempts < YES_ATTEMPTS) {
         attempts += 1;
         turn = answered(await person.turn([yesWord]), `${yesWord} got no answer`);
-        if (!/safety check is taking a moment/i.test(turn.text) && !/checking/i.test(turn.text)) break;
+        if (!SAFETY_CHECK_WAIT.test(turn.text) && !STILL_CHECKING.test(turn.text)) break;
         if (attempts < YES_ATTEMPTS) await sleep(YES_PAUSE_MS);
       }
       const reply = withoutLinks(turn!.text);
-      const number = /Confirmation ([^\s.]+)/.exec(turn!.text)?.[1];
+      const number = CONFIRMATION.exec(turn!.text)?.[1];
       if (!number) throw new StepFailure(`${yesWord} did not file`, turn!.http, reply);
-      if (/simulated filing/i.test(turn!.text)) throw new StepFailure("the filing was simulated", turn!.http, reply);
+      if (SIMULATED_FILING.test(turn!.text)) throw new StepFailure("the filing was simulated", turn!.http, reply);
       const { json } = await person.engineGet("/approvals");
       const list = (json as { approvals?: { id: string; outcome?: { receipt?: { externalId: string; simulated: boolean } | null } }[] } | null)?.approvals ?? [];
       const receipt = list.find((a) => a.id === approvalId)?.outcome?.receipt;

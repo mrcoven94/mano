@@ -164,6 +164,8 @@ interface PipelinePage {
   dropped: DroppedField[];
 }
 
+const COUNTED_PERIOD = /\b\d{1,3}\s+(?:business\s+|calendar\s+|working\s+)?(?:days?|weeks?|months?)\b/i;
+
 export async function readMail(files: InputFile[], opts: ReadMailOptions): Promise<MailReading> {
   const started = Date.now();
   validateArgs(files, opts);
@@ -861,7 +863,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         const candidates = [...(q.candidates ?? []), ...(q.proposal?.others ?? [])];
         for (const c of candidates) {
           for (const date of c.dates) claimed.add(date);
-          counted ||= /\b\d{1,3}\s+(?:business\s+|calendar\s+|working\s+)?(?:days?|weeks?|months?)\b/i.test(c.sentence);
+          counted ||= COUNTED_PERIOD.test(c.sentence);
         }
         if (q.proposal) claimed.add(q.proposal.dueDate);
         counted ||= Boolean(q.proposal?.count);

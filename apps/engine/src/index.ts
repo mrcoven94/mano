@@ -205,6 +205,9 @@ export { putDocument, getDocumentBytes, documentR2Key } from "./files.js";
 export { InMemorySharedStore } from "./shared-store.js";
 export { sha256Hex } from "./hash.js";
 
+const ORG_CASE_PATH = /^\/cases\/([^/]+)(\/document-requests|\/documents\/[^/]+)?$/;
+const UNSAFE_IN_FILENAME = /["\r\n]/g;
+
 function personStub(env: Env, personId: string) {
   return env.PERSON_AGENT.get(env.PERSON_AGENT.idFromName(personId));
 }
@@ -899,7 +902,7 @@ const worker = {
         const cases = await org.listCases(orgId);
         return Response.json({ cases: cases.map(({ personId: _personId, ...shared }) => shared) });
       }
-      const caseMatch = rest.match(/^\/cases\/([^/]+)(\/document-requests|\/documents\/[^/]+)?$/);
+      const caseMatch = rest.match(ORG_CASE_PATH);
       if (caseMatch) {
         const caseId = decodeURIComponent(caseMatch[1]);
         const sub = caseMatch[2] ?? "";
@@ -923,7 +926,7 @@ const worker = {
           return new Response(base64ToBytes(document.contentB64) as BodyInit, {
             headers: {
               "content-type": "application/octet-stream",
-              "content-disposition": `attachment; filename="${document.name.replace(/["\r\n]/g, "_")}"`,
+              "content-disposition": `attachment; filename="${document.name.replace(UNSAFE_IN_FILENAME, "_")}"`,
               "cache-control": "no-store",
             },
           });

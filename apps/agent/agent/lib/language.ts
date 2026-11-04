@@ -34,8 +34,10 @@ const ALONE: Partial<Record<ReplyLanguage, Set<string>>> = {
   tl: new Set(["salamat", "kumusta"]),
 };
 
+const LETTER_RUN = /\p{L}+/gu;
+
 export function detectLanguage(text: string): ReplyLanguage | null {
-  const tokens = text.normalize("NFC").toLowerCase().match(/\p{L}+/gu) ?? [];
+  const tokens = text.normalize("NFC").toLowerCase().match(LETTER_RUN) ?? [];
   let best: ReplyLanguage | null = null;
   let bestHits = 0;
   let tied = false;
@@ -55,14 +57,19 @@ export function detectLanguage(text: string): ReplyLanguage | null {
 
 const NAMES: Record<ReplyLanguage, string> = { en: "English", es: "Spanish", vi: "Vietnamese", tl: "Tagalog" };
 
+const NAMES_ENGLISH = /english|ingl[eé]s/;
+const NAMES_SPANISH = /spanish|espa[nñ]ol|castellano/;
+const NAMES_VIETNAMESE = /vietnam|tiếng việt/;
+const NAMES_TAGALOG = /tagalog|filipino/;
+
 // What a language on the profile means, however it was written. Null for
 // one Mano has no closed words for: its fixed sentences stay in English.
 export function languageFromProfile(value: string | null | undefined): ReplyLanguage | null {
   const v = value?.normalize("NFC").toLowerCase() ?? "";
-  if (/english|ingl[eé]s/.test(v)) return "en";
-  if (/spanish|espa[nñ]ol|castellano/.test(v)) return "es";
-  if (/vietnam|tiếng việt/.test(v)) return "vi";
-  if (/tagalog|filipino/.test(v)) return "tl";
+  if (NAMES_ENGLISH.test(v)) return "en";
+  if (NAMES_SPANISH.test(v)) return "es";
+  if (NAMES_VIETNAMESE.test(v)) return "vi";
+  if (NAMES_TAGALOG.test(v)) return "tl";
   return null;
 }
 
