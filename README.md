@@ -35,12 +35,13 @@ Checked on macOS from a fresh clone and on Ubuntu in CI (`pnpm check`, which inc
 
 ## Each spine step and the Meta model behind it
 
-Every model Mano calls at runtime is a Meta model. Six spine steps below call one, and the other four are plain code.
+Every model Mano calls at runtime is a Meta model. Seven spine steps below call one, and the other four are plain code.
 
 | Spine step | Meta model | Where it runs | On production today | In `pnpm judge` |
 | --- | --- | --- | --- | --- |
 | Maria texts and Mano answers, with its tools | Muse Spark Open (open weights) | OpenRouter, zero-retention endpoints only | Running | Left out, Mano's words are printed |
-| Plain answer and crisis check, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter | Standby, on Muse Spark Open during the 402 | Left out |
+| Crisis check, before the agent, on one short health question that the keyword floor flags | Muse Spark 1.3, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter | Deployed, on Muse Spark Open during the 402. A failed check counts as a crisis | Left out |
+| Plain answer, when the agent cannot answer | Muse Spark 1.3, then Muse Spark Open when that fails | Meta's hosted API, then OpenRouter | Standby, on Muse Spark Open during the 402 | Left out |
 | Finding the letter in the photo | SAM 3.1 | Meta's hosted API | Not running, 402 | Live with your key, else a recording |
 | Reading the letter into cited fields | Muse Spark 1.3 | Meta's hosted API | Not running, 402 | Live with your key, else a recording |
 | Filling the form with Mano's computer | Muse Spark 1.3 computer use | Meta's hosted API, driving a desktop on Modal | Not running, 402 | Stand-in |
@@ -52,7 +53,7 @@ Every model Mano calls at runtime is a Meta model. Six spine steps below call on
 
 The route for agent turns is set in `apps/agent/agent/lib/muse.ts`. With `MANO_MODEL_PROVIDER=openrouter` and `OPENROUTER_API_KEY` set, a turn goes to `meta/muse-spark-open` with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight. With either setting missing, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. Production has both set until Meta's billing works (see the November 3 entry in `docs/decisions.md`).
 
-These parts are not Meta model calls: the deadline gate and field checks, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images. `pnpm judge` reads its synthetic letter with the `muse-spark-1.3-contributor` ID, which `AGENTS.md` allows only for synthetic data.
+These parts are not Meta model calls: the keyword crisis floor that every text passes through, the deadline gate and field checks, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images. `pnpm judge` reads its synthetic letter with the `muse-spark-1.3-contributor` ID, which `AGENTS.md` allows only for synthetic data.
 
 ## Live versus in progress
 
@@ -123,7 +124,7 @@ Guardian scales to zero when idle, and a check fails closed after 10 seconds. A 
 
 ## Run and deploy it yourself
 
-Each package runs with local stand-ins when its keys are missing (a fake model client, an in-memory store, a local link check) and says which parts are not live.
+Each package runs with local stand-ins when its keys are missing (a fake model client, an in-memory store, a local link check) and says which parts are not live. The sandbox portal also needs [wrangler](https://developers.cloudflare.com/workers/wrangler/) installed globally, because `pnpm install` does not add it for that package.
 
 ```sh
 pnpm install
