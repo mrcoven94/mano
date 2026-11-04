@@ -235,6 +235,7 @@ class PortalOnly(Service):
         self.assertEqual(policy["URLBlocklist"], ["*"])
         self.assertEqual(policy["URLAllowlist"], ["https://.portal.test"])
         self.assertEqual(policy["DeveloperToolsAvailability"], 2)
+        self.assertIs(policy["EncryptedClientHelloEnabled"], False)
 
     def test_no_portal_origin_means_no_desktops(self):
         for value in ("", "portal.test", "http://portal.test", "https://", "https://portal.test/apply", "https://user@portal.test", "https://portal.test?x=1"):

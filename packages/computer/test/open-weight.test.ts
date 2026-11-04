@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { runLoop } from "../src/loop";
 import { MODAL_MODEL_ID, OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient } from "../src/open-weight";
 import { FakeComputer, FAKE_PNG } from "./fake-computer";
@@ -77,6 +77,18 @@ describe("computer use on the open-weight model", () => {
     expect(bodies[0]!.model).toBe(MODAL_MODEL_ID);
     expect(bodies[0]!.provider).toBeUndefined();
     await expect(runLoop(new FakeComputer(), client, "Fill the form.", { model: OPEN_WEIGHT_MODEL_ID })).rejects.toThrow("open-weight");
+  });
+
+  test.each([
+    ["triple_click", "triple_click"],
+    ["Maria Torres", "other"],
+  ])("an action the tool does not have logs %j as %j and still stops the run", async (action, logged) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { client } = scripted([{ output: [fn("a", { actions: [{ type: action, x: 1, y: 1 }] })] }]);
+    await expect(run(client)).rejects.toThrow("does not have");
+    const line = String(warn.mock.calls[0]?.[0]);
+    warn.mockRestore();
+    expect(JSON.parse(line)).toEqual({ type: "mano_computer_unknown_action", action: logged });
   });
 
   test("a run: function calls reach the computer, and every request carries the pin, the model and each screen", async () => {

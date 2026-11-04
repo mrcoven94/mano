@@ -82,8 +82,12 @@ export class ModalComputer implements Computer {
   }
 
   async goto(url: string): Promise<void> {
+    const started = Date.now();
     const res = await this.control("/goto", { url });
     if (!res.ok) throw new Error(`goto failed with status ${res.status}`);
+    // The URL holds a draft ID, so it stays out of the log.
+    const body = (await res.json().catch(() => null)) as { loaded?: unknown } | null;
+    console.log(JSON.stringify({ type: "mano_computer_goto", loaded: body?.loaded === true, ms: Date.now() - started }));
   }
 
   async stageFile(name: string, data: Uint8Array): Promise<string> {

@@ -407,9 +407,12 @@ def parse_portal_origin(value: str) -> Portal:
 
 def chromium_policy(portal: Portal) -> dict:
     """URLBlocklist covers navigations of every kind (typed, redirected,
-    popups, form posts, file://). The leading dot keeps subdomains out."""
+    popups, form posts, file://). The leading dot keeps subdomains out.
+    Encrypted Client Hello is off because it hides the portal's name behind
+    its CDN's (cloudflare-ech.com, in the portal's own DNS record), and the
+    sandbox's outbound rule allows the portal by name."""
     exact = "https://." + portal.host + (":%d" % portal.port if portal.port else "")
-    return {"URLBlocklist": ["*"], "URLAllowlist": [exact], "DeveloperToolsAvailability": 2}
+    return {"URLBlocklist": ["*"], "URLAllowlist": [exact], "DeveloperToolsAvailability": 2, "EncryptedClientHelloEnabled": False}
 
 
 def profile_volume_name(person_id: str, key: str) -> str:
