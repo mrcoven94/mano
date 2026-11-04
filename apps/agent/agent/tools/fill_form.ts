@@ -85,6 +85,12 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     return { status: "needs_answer", field: bad.name, question: bad.question, sent: false, note: `That answer does not fit "${bad.label}". Ask this one question again, and nothing else.` };
   }
   if (filled.missing) {
+    // start_form_draft attaches a document on file; a fill takes only one
+    // the profile names, which needs Mail to have read it. Asking again
+    // for a photo already on file would never end.
+    if (filled.missing.name === "proof" && form === FORMS["food-renewal"] && (await engine.listDocuments()).some((d) => d.filing === "fileable")) {
+      return { status: "unavailable", sent: false, note: "The renewal can go with a document Mano already has on file. Prepare it with start_form_draft from the person's answers." };
+    }
     const note =
       filled.missing.name === "proof"
         ? "The form needs a proof of income document and Mano has none on file yet. Ask this one question, and nothing else."
@@ -119,6 +125,11 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     };
   }
   if (fill.status !== "filled") {
+    // The computer or its model never ran, which says nothing about the
+    // form, so the renewal can still be prepared without them.
+    if (fill.reason === "error" && form === FORMS["food-renewal"]) {
+      return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Prepare the renewal with start_form_draft from the person's answers instead." };
+    }
     return { status: "fill_failed", sent: false, note: "Mano could not finish filling the form on its computer, so nothing was prepared or sent. Say so and offer to try again." };
   }
 
