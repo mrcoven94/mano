@@ -69,6 +69,19 @@ describe("strings", () => {
     expect(`${en.receiptNext} ${es.receiptNext}`).not.toMatch(/will (approve|answer|reply|decide)|aprobará|responderá/i);
   });
 
+  it("keeps developer words out of everything a resident reads", () => {
+    const developerWords = /\bengine\b|stand-in|\bmotor\b|demo flag|not configured|idempot|\bpolicy\b/i;
+    for (const value of [...Object.values(en), ...Object.values(es)]) {
+      expect(value).not.toMatch(developerWords);
+    }
+  });
+
+  it("claims nothing but what the screen has proven when an approval is stopped", () => {
+    expect(en.blockedStopped).toContain("Nothing was sent");
+    expect(es.blockedStopped).toContain("No se envió nada");
+    expect(`${en.blockedStopped} ${es.blockedStopped}`).not.toMatch(/unsafe|inseguro/i);
+  });
+
   it("resolves both languages", () => {
     expect(stringsFor("en").send).toBe("Send");
     expect(stringsFor("es").send).toBe("Enviar");
