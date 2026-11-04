@@ -23,6 +23,7 @@ const LINK_PATTERN =
   /\bhttps?:\/\/[^\s<>"')\]]+|\b(?<!@)(?:www\.)?(?:[\p{L}0-9](?:[\p{L}0-9-]{0,61}[\p{L}0-9])?\.)+[\p{L}]{2,}(?::\d{1,5})?(?:\/[^\s<>"')\]]*)?/giu;
 const TRAILING_PUNCT = /[.,;:!?)\]]+$/;
 const HOST_CHAR = /[\p{L}0-9.-]/u;
+const HOST_RUN = /[\p{L}0-9.-]+/uy;
 // The longest host name there is. Past it, a match is treated as a link.
 const MAX_HOST_CHARS = 253;
 
@@ -49,9 +50,9 @@ function linkMatches(text: string): RegExpExecArray[] {
     }
     // Only the address's host is passed over: a path after it can hold a
     // link of its own.
-    let end = m.index;
-    while (end < text.length && HOST_CHAR.test(text[end]!)) end++;
-    LINK_PATTERN.lastIndex = end;
+    HOST_RUN.lastIndex = m.index;
+    HOST_RUN.test(text);
+    LINK_PATTERN.lastIndex = HOST_RUN.lastIndex;
   }
   return matches;
 }
