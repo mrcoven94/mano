@@ -37,10 +37,11 @@ const INSTRUCTION_PATTERNS: { re: RegExp; label: string }[] = [
 // end a link until the path starts. Wrapping punctuation is trimmed after.
 const LINK_RE = /https?:\/\/[^\s/?#\\]*(?:[/?#\\][^\s<>"')\]]*)?/gi;
 const WWW_RE = /\bwww\.(?=[a-z0-9-]+\.)[^\s/?#\\]*(?:[/?#\\][^\s<>"')\]]*)?/gi;
-// A name and an @ before a bare host: an email address never has a path, and
-// a personal one does not end its name in a top-level domain.
+// A name and an @ before a bare host: an email address never has a path or a
+// password, and a personal one does not end its name in a top-level domain.
+// A label run into an address ("Email:maria@county.gov") is not a password.
 const BARE_USERINFO_RE =
-  /(?<![\w.@/-])[A-Za-z0-9](?:[^\s@/<>"]{0,100}\.(?:gov|mil|com|org|net|us|info|help)(?=@)|[^\s@/<>"]{0,100}(?=@[^\s@/]+\/))@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}(?:\/[^\s<>"')\]]*)?/gi;
+  /(?<![\w.@/-])(?!(?:e-?mail|mailto|contact|to|from|cc|reply-to):)[A-Za-z0-9](?:[^\s@/<>"]{0,100}\.(?:gov|mil|com|org|net|us|info|help)(?=@)|[^\s@/<>":]{0,100}:[^\s@/<>"]{0,100}(?=@)|[^\s@/<>"]{0,100}(?=@[^\s@/]+\/))@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}(?:\/[^\s<>"')\]]*)?/gi;
 // A bare domain with no scheme or www ("benefits-unlock.help/login"),
 // on any lowercase top-level domain of two or more letters, so "Case
 // No." or "U.S." never match and neither does a missing space after a
@@ -270,12 +271,15 @@ const OFFICE_SENDS = /^\s*(?:we\s+(?:will|may|can)\s+(?:send|text|e-?mail|mail|m
 // have no premium or copay, and only some health programs have an enrollment
 // fee.
 const NO_FEE_AT_ALL = /\bfree\s+of\s+charge\b|\bfee\s+waivers?\b/gi;
+const RENT_CHARGE = /\brent\s+(?:fees?|charges?)\b/gi;
 const ALWAYS_REAL = /\boverpa\w+|\brepay\w*|\bpa(?:y|id)\s+(?:\w+\s+)?back\b|\brent\b|\bchild\s+support\b/i;
-const HEALTH_CHARGE = /\b(?:premiums?|co-?pay(?:s|ments?)?|coinsurance|share\s+of\s+cost|spend-?down|deductibles?|(?:family|parent)\s+fee)\b/i;
-const NAMED_REAL_FEE = /\b(?:premium|family|parent)\s+fee\b/gi;
-const ENROLLMENT_FEE = /\benrollment\s+fee\b/gi;
+const HEALTH_CHARGE = /\b(?:premiums?|co-?pay(?:s|ments?)?|coinsurance|share\s+of\s+cost|spend-?down|deductibles?|(?:family|parent)\s+(?:fee|charge))\b/i;
+const NAMED_REAL_FEE = /\b(?:premiums?|co-?pay(?:s|ments?)?|coinsurance|deductibles?|family|parent)\s+(?:fees?|charges?)\b/gi;
+const ENROLLMENT_FEE = /\benrollment\s+(?:fee|charge)\b/gi;
 const CHARGES_ENROLLMENT = /\b(?:chip|medicaid|kidscare|peachcare)\b/i;
 const NAMES_FOOD = new RegExp(String.raw`\b${FOOD}\b`, "i");
+const NAMES_HEALTH = /\b(?:medicaid|medi-?cal|chip|health\s+coverage)\b/i;
+const FOOD_PURPOSE = new RegExp(String.raw`^to\s+\w+.{0,40}\b${FOOD}\b`, "i");
 // A fee to someone else, or for a card, not to stay on the program.
 const OTHER_FEE = /\b(?:atms?|withdrawals?|surcharges?|transactions?|replacement|stores?|banks?|retailers?)\b/i;
 const NAMED_FEE_WORDS = String.raw`(?:processing|renewal|recertification|reinstatement|reactivation|activation|release|verification|unlock|enrollment)\s+fee`;
@@ -392,7 +396,7 @@ function linksIn(text: string, links: string[]): string[] {
 // charge. "Your premium payment of $25.00 is required" is null, and "Your
 // $39 premium includes a $25 fee to renew" keeps its fee.
 function chargedFor(clause: string, food: boolean, chargesEnrollment: boolean): string | null {
-  let rest = clause.replace(NO_FEE_AT_ALL, " ");
+  let rest = clause.replace(NO_FEE_AT_ALL, " ").replace(RENT_CHARGE, " rent ");
   let real = ALWAYS_REAL.test(rest);
   if (!food) {
     real ||= HEALTH_CHARGE.test(rest);
@@ -405,14 +409,23 @@ function chargedFor(clause: string, food: boolean, chargesEnrollment: boolean): 
   return real && !ANY_FEE.test(rest) ? null : rest;
 }
 
+// Whether a clause's charge is on food benefits: it names them, or it names no
+// health program and the clause beside it says that is what the charge is for
+// ("To keep your CalFresh, pay your $10 copay"). "Pay your Medicaid premium,
+// and return the SNAP form" is a real charge beside a food form.
+function onFood(clause: string, before: string | undefined, after: string | undefined): boolean {
+  if (NAMES_FOOD.test(clause)) return true;
+  if (NAMES_HEALTH.test(clause)) return false;
+  return [before, after].some((c) => c !== undefined && FOOD_PURPOSE.test(c));
+}
+
 function feeToKeep({ sentences, said }: Reading): string | null {
   if (!NAMES_BENEFITS.test(said)) return null;
   const chargesEnrollment = CHARGES_ENROLLMENT.test(said);
   for (const sentence of sentences) {
-    const food = NAMES_FOOD.test(sentence.clauses.join(" "));
     const clauses = sentence.clauses
       .filter((c) => !OTHER_FEE.test(c))
-      .map((c) => chargedFor(c, food, chargesEnrollment))
+      .map((c, k, all) => chargedFor(c, onFood(c, all[k - 1], all[k + 1]), chargesEnrollment))
       .filter((c): c is string => c !== null);
     // What was charged comes from what is left. What it was for may be in
     // a real charge's clause: "Pay a $25 fee plus your premium to keep ..."
@@ -486,6 +499,15 @@ function suspectLink({ sentences, links }: Reading): ContentFlag | null {
   return null;
 }
 
+// One pass, so no pattern below ever walks a long run of whitespace. Line
+// breaks still end a clause, and a blank line still ends a sentence.
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/g, (run) => {
+    const breaks = run.split("\n").length - 1;
+    return breaks === 0 ? " " : breaks === 1 ? "\n" : "\n\n";
+  });
+}
+
 // Heuristic scam screen over a whole letter, every page together.
 // Returns at most one flag, the clearest. The pipeline turns "scam" into a
 // scam_suspect warning, and that letter keeps no date. "suspect_link" is a
@@ -497,7 +519,7 @@ function suspectLink({ sentences, links }: Reading): ContentFlag | null {
 // the gate only reads deadlines, so it publishes a scam's "Pay $39 by" as
 // readily as a premium's unless this screen flags the letter first.
 export function screenScam(text: string): ContentFlag[] {
-  const { masked, links } = maskLinks(text);
+  const { masked, links } = maskLinks(collapseWhitespace(text));
   const demand = paymentDemand(masked);
   if (demand) {
     return [{ kind: "scam", label: "demands payment by gift or prepaid card, wire, crypto or a payment app", match: demand.replace(LINK_HOLE, (_m, k: string) => links[Number(k)]!) }];
