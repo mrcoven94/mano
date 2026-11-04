@@ -161,6 +161,13 @@ export function letterBlock(reply: LetterReply): string {
   return `<letter_reading>\n${data}\n</letter_reading>`;
 }
 
+// The earliest date it can be anywhere in the United States when the photo
+// arrived, so a date still live where the person is never reads as past.
+function dayBehind(receivedAt: string): string | undefined {
+  const at = Date.parse(receivedAt);
+  return Number.isNaN(at) ? undefined : new Date(at - 12 * 3_600_000).toISOString().slice(0, 10);
+}
+
 export async function readTextedPhotos(
   engine: PersonEngine,
   photos: TextedPhoto[],
@@ -195,7 +202,7 @@ export async function readTextedPhotos(
     const fallback = reading.warnings.find((w) => w.kind === "segmentation_fallback");
     if (fallback) console.log(JSON.stringify({ type: "mano_letters_segmentation_fallback", why: fallback.detail ?? null }));
     const w = ANSWER_WORDS[language()];
-    const answer = answerReading(reading, language());
+    const answer = answerReading(reading, language(), dayBehind(receivedAt));
     read = answer.outcome === "read";
     const [held] = await Promise.all([hold(engine, answer.deadlines, receivedAt, deadlineAt, w), markLetters(engine, reading, deadlineAt)]);
     text = [answer.text, ...held].join(" ");

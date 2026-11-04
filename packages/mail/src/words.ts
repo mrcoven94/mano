@@ -32,6 +32,16 @@ export interface AnswerWords {
   mentionsADate: string;
   mentionsSeveral: string;
   planted: string;
+  // A date the gate did not hold, named for the person to check.
+  dueLooks: Record<"renewal" | "documents" | "payment" | "deadline", (date: string) => string>;
+  dueFor: Record<"renewal" | "documents" | "payment" | "deadline", string>;
+  checkDate: string;
+  twoDates(first: string, firstFor: string, second: string, secondFor: string): string;
+  alsoInterview(date: string): string;
+  askRequest(date: string): string;
+  askWindow(days: number, from: string, result: string): string;
+  notYours: string;
+  askAnyDate: string;
   official: string;
   unread: string;
   failed: string;
@@ -98,6 +108,20 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     mentionsADate: "The letter mentions a date, and I have not confirmed it.",
     mentionsSeveral: "The letter mentions more than one date, and I have not confirmed any of them.",
     planted: "Part of this letter tries to give me instructions. I did not follow them.",
+    dueLooks: {
+      renewal: (date) => `It looks like your renewal is due ${date}.`,
+      documents: (date) => `It looks like the papers it asks for are due ${date}.`,
+      payment: (date) => `It looks like your payment is due ${date}.`,
+      deadline: (date) => `It looks like your deadline is ${date}.`,
+    },
+    dueFor: { renewal: "your renewal", documents: "the papers it asks for", payment: "your payment", deadline: "something it asks you to do" },
+    checkDate: "Please check that against your letter. Is that the date you need to meet?",
+    twoDates: (first, firstFor, second, secondFor) => `Your letter gives two dates: ${first} for ${firstFor}, and ${second} for ${secondFor}. Please check them against your letter. Which one do you need to meet first?`,
+    alsoInterview: (date) => `It also lists an interview on ${date}.`,
+    askRequest: (date) => `It looks like the date to send your request is ${date}. Please check that against your letter. Is that what it says?`,
+    askWindow: (days, from, result) => `It looks like you have ${days} days from ${from}, which would be ${result}. Please check that against your letter. Is that what it says?`,
+    notYours: "Something on this letter says it may be for someone else or may no longer apply, so I am not treating its dates as yours. Is this letter for you, and is it still current?",
+    askAnyDate: "I don't want to guess wrong about the date on this letter. Which date, if any, does it say you need to meet?",
     official: "If you need to call the office, use the number on your state's official site, not one from a letter.",
     unread: "I could not read the letter in your photo. Send it again with the whole page flat, in good light, and I will try once more.",
     failed: "I could not finish reading your photo just now. Send it again and I will try once more.",
@@ -148,6 +172,20 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     mentionsADate: "La carta menciona una fecha, y no la he confirmado.",
     mentionsSeveral: "La carta menciona más de una fecha, y no he confirmado ninguna.",
     planted: "Una parte de esta carta intenta darme instrucciones. No las seguí.",
+    dueLooks: {
+      renewal: (date) => `Parece que su renovación vence el ${date}.`,
+      documents: (date) => `Parece que los documentos que pide vencen el ${date}.`,
+      payment: (date) => `Parece que su pago vence el ${date}.`,
+      deadline: (date) => `Parece que su fecha límite es el ${date}.`,
+    },
+    dueFor: { renewal: "su renovación", documents: "los documentos que pide", payment: "su pago", deadline: "algo que le pide hacer" },
+    checkDate: "Compruébelo en su carta, por favor. ¿Es esa la fecha que debe cumplir?",
+    twoDates: (first, firstFor, second, secondFor) => `Su carta da dos fechas: el ${first} para ${firstFor}, y el ${second} para ${secondFor}. Compruébelas en su carta, por favor. ¿Cuál debe cumplir primero?`,
+    alsoInterview: (date) => `También indica una entrevista el ${date}.`,
+    askRequest: (date) => `Parece que la fecha para enviar su solicitud es el ${date}. Compruébelo en su carta, por favor. ¿Es eso lo que dice?`,
+    askWindow: (days, from, result) => `Parece que tiene ${days} días a partir del ${from}, es decir, hasta el ${result}. Compruébelo en su carta, por favor. ¿Es eso lo que dice?`,
+    notYours: "Algo en esta carta indica que puede ser para otra persona o que ya no aplica, así que no tomo sus fechas como suyas. ¿Esta carta es para usted y sigue vigente?",
+    askAnyDate: "No quiero equivocarme con la fecha de esta carta. ¿Qué fecha, si hay alguna, dice que debe cumplir?",
     official: "Si necesita llamar a la oficina, use el número del sitio oficial de su estado, no uno de una carta.",
     unread: "No pude leer la carta de su foto. Envíela de nuevo con toda la página plana y con buena luz, y lo intentaré otra vez.",
     failed: "No pude terminar de leer su foto ahora. Envíela de nuevo y lo intentaré otra vez.",
@@ -201,6 +239,20 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     mentionsADate: "Thư có nhắc đến một ngày, và tôi chưa xác nhận.",
     mentionsSeveral: "Thư nhắc đến nhiều ngày, và tôi chưa xác nhận ngày nào.",
     planted: "Một phần của thư này cố ra lệnh cho tôi. Tôi đã không làm theo.",
+    dueLooks: {
+      renewal: (date) => `Có vẻ việc gia hạn của bạn đến hạn ${date}.`,
+      documents: (date) => `Có vẻ các giấy tờ thư yêu cầu đến hạn ${date}.`,
+      payment: (date) => `Có vẻ khoản thanh toán của bạn đến hạn ${date}.`,
+      deadline: (date) => `Có vẻ hạn chót của bạn là ${date}.`,
+    },
+    dueFor: { renewal: "việc gia hạn", documents: "các giấy tờ thư yêu cầu", payment: "khoản thanh toán", deadline: "một việc thư yêu cầu" },
+    checkDate: "Vui lòng đối chiếu với thư của bạn. Đó có phải là ngày bạn cần kịp không?",
+    twoDates: (first, firstFor, second, secondFor) => `Thư của bạn có hai ngày: ${first} cho ${firstFor}, và ${second} cho ${secondFor}. Vui lòng đối chiếu với thư của bạn. Bạn cần kịp ngày nào trước?`,
+    alsoInterview: (date) => `Thư cũng ghi một cuộc phỏng vấn vào ${date}.`,
+    askRequest: (date) => `Có vẻ hạn gửi yêu cầu của bạn là ${date}. Vui lòng đối chiếu với thư của bạn. Thư có nói vậy không?`,
+    askWindow: (days, from, result) => `Có vẻ bạn có ${days} ngày kể từ ${from}, tức là đến ${result}. Vui lòng đối chiếu với thư của bạn. Thư có nói vậy không?`,
+    notYours: "Có chỗ trong thư cho thấy thư này có thể dành cho người khác hoặc không còn áp dụng, nên tôi không coi các ngày trong thư là của bạn. Thư này có phải cho bạn và vẫn còn hiệu lực không?",
+    askAnyDate: "Tôi không muốn đoán sai ngày trong thư này. Thư nói bạn cần kịp ngày nào, nếu có?",
     official: "Nếu cần gọi văn phòng, hãy dùng số trên trang web chính thức của tiểu bang, không dùng số trong thư.",
     unread: "Tôi không đọc được thư trong ảnh của bạn. Hãy gửi lại, để cả trang phẳng, đủ sáng, và tôi sẽ thử lại.",
     failed: "Tôi chưa đọc xong ảnh của bạn. Hãy gửi lại và tôi sẽ thử lại.",
@@ -251,6 +303,20 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     mentionsADate: "May binabanggit na petsa ang sulat, at hindi ko pa ito nakukumpirma.",
     mentionsSeveral: "Mahigit isang petsa ang binabanggit ng sulat, at wala pa akong nakukumpirma sa mga ito.",
     planted: "May bahagi ng sulat na ito na sumusubok mag-utos sa akin. Hindi ko iyon sinunod.",
+    dueLooks: {
+      renewal: (date) => `Mukhang ${date} ang huling araw ng pag-renew mo.`,
+      documents: (date) => `Mukhang ${date} ang huling araw ng mga papel na hinihingi nito.`,
+      payment: (date) => `Mukhang ${date} ang huling araw ng bayad mo.`,
+      deadline: (date) => `Mukhang ${date} ang huling araw mo.`,
+    },
+    dueFor: { renewal: "pag-renew mo", documents: "mga papel na hinihingi nito", payment: "bayad mo", deadline: "isang bagay na hinihingi nito" },
+    checkDate: "Pakitingnan ito sa sulat mo. Iyon ba ang petsang dapat mong habulin?",
+    twoDates: (first, firstFor, second, secondFor) => `Dalawang petsa ang nasa sulat mo: ${first} para sa ${firstFor}, at ${second} para sa ${secondFor}. Pakitingnan ang mga ito sa sulat mo. Alin ang dapat mong habulin muna?`,
+    alsoInterview: (date) => `May nakalista rin itong interview sa ${date}.`,
+    askRequest: (date) => `Mukhang ${date} ang huling araw para ipadala ang hiling mo. Pakitingnan ito sa sulat mo. Iyon ba ang sinasabi nito?`,
+    askWindow: (days, from, result) => `Mukhang may ${days} araw ka mula ${from}, ibig sabihin hanggang ${result}. Pakitingnan ito sa sulat mo. Iyon ba ang sinasabi nito?`,
+    notYours: "May nakasaad sa sulat na maaaring para ito sa iba o hindi na ito naaangkop, kaya hindi ko itinuturing na iyo ang mga petsa nito. Para sa iyo ba ang sulat na ito, at kasalukuyan pa ba ito?",
+    askAnyDate: "Ayokong magkamali sa petsa sa sulat na ito. Aling petsa, kung mayroon, ang sinasabi nitong dapat mong habulin?",
     official: "Kung kailangan mong tawagan ang opisina, gamitin ang numero sa opisyal na site ng iyong estado, hindi ang nasa sulat.",
     unread: "Hindi ko mabasa ang sulat sa larawan mo. Ipadala ulit na patag ang buong pahina at maliwanag, at susubukan ko ulit.",
     failed: "Hindi ko natapos basahin ang larawan mo ngayon. Ipadala ulit at susubukan ko ulit.",
