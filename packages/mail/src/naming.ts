@@ -24,7 +24,7 @@ const NOT_THEIRS = new RegExp(
     "copy of (?:the|a|an) (?:letter|notice) (?:sent|mailed|addressed)",
     "(?:sent|mailed|delivered|issued) to (?:your (?!address|home|mailing|last|current)|another )",
     "(?:notice|letter) (?:was |is )?(?:intended|meant) for", "not for you", "does not concern", "this is a test", "this is an example", "specimen",
-    "(?:sample|example|practice|training|template) (?:letter|notice)", "for training use", "template for",
+    "(?<!\\.)(?:sample|example|practice|training|template) (?:letter|notice)", "for training use", "template for",
   ])})\b|^(?:copy|duplicate|sample|(?:file|office|courtesy|agency|county) copy)$`,
   "i",
 );
@@ -90,8 +90,22 @@ function normal(text: string): string {
   return normalizeMonthAbbreviations(text).replace(WHITESPACE_RUN, " ").trim().replace(LIST_MARKER, "").replace(ENDING_MARKS, "").toLowerCase();
 }
 
+// A US letter's 11/09/2026 is November 9. The gate does not hold a date like this
+// because the order could be wrong, but the person checks a named date against
+// the letter. A two-digit year is this century.
+const US_NUMERIC = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4}|\d{2})$/;
+
+function usNumeric(written: string): string | null {
+  const m = written.trim().match(US_NUMERIC);
+  if (!m) return null;
+  const year = m[3]!.length === 2 ? `20${m[3]}` : m[3];
+  const iso = `${year}-${m[1]!.padStart(2, "0")}-${m[2]!.padStart(2, "0")}`;
+  const date = new Date(`${iso}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(iso) ? iso : null;
+}
+
 function isoOf(written: string, noticeIso: string | null): string | null {
-  return parseWrittenDate(written) ?? parseAllDates(written, noticeIso)[0] ?? null;
+  return parseWrittenDate(written) ?? usNumeric(written) ?? parseAllDates(written, noticeIso)[0] ?? null;
 }
 
 // The date the reader chose, when its own quote holds up: the sentence is in

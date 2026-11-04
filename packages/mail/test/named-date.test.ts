@@ -50,6 +50,8 @@ describe("the reader's date, in wording no rule covers, is named as a question",
     ["in hand", "To stay enrolled, have this in our hands by 11/20/2026.", "11/20/2026"],
     ["a table row", "Renewal packet: 14 November 2026", "14 November 2026"],
     ["until", "You have until November 23, 2026 to return your form.", "November 23, 2026"],
+    ["a numeric date either way round", "The routing direction must clear our intake gate by 3 p.m., 11/09/2026.", "11/09/2026"],
+    ["a two-digit year", "Return the packet, including all attachments, by 12/15/26.", "12/15/26"],
     ["an if-not", "If we do not hear from you on your renewal by November 14, 2026, your coverage ends.", "November 14, 2026"],
   ])("%s", async (_name, sentence, date) => {
     const text = `${HEAD}${sentence}\n\nYour rights: ${APPEAL}`;
@@ -112,6 +114,11 @@ describe("code checks what the reader says against the letter", () => {
     const { text: said, named, held } = await reply(body, [meet]);
     expect(held).toEqual([]);
     expect(named, said).toEqual([]);
+  });
+
+  it("a numeric date is read month first", async () => {
+    const s = "The form must clear our gate by 11/09/2026.";
+    expect((await reply(`${HEAD}${s}`, [{ date: "11/09/2026", sentence: s }])).text).toContain("November 9, 2026");
   });
 
   it("three dates name none: Mano does not pick among them", async () => {
@@ -232,7 +239,7 @@ describe("the vetoes stay rules: a reader that names a date anyway is overruled"
   });
 
   it("words about other people and forms do not make it someone else's letter", async () => {
-    for (const extra of ["Orrivane County Office, 2577 Sample St, Trelvane", "A sample form is on our website.", "Questions about the log can be addressed to Fenna Quillshore.", "Your doctors do not need to sign this page.", "For office use only."]) {
+    for (const extra of ["Orrivane County Office, 2577 Sample St, Trelvane", "A sample form is on our website.", "Questions about the log can be addressed to Fenna Quillshore.", "Your doctors do not need to sign this page.", "For office use only.", "Questions: hearthbasket.example Notice date: November 3, 2026"]) {
       expect((await reply(`${HEAD}${TERSE}\n\n${extra}`, meet)).named).toEqual(["November 20, 2026"]);
     }
   });
