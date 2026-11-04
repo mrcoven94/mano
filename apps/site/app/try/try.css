@@ -22,7 +22,8 @@
 .try-layout{padding:14px 18px;background:#fff;border-radius:12px;color:var(--text);font-size:.96rem}
 .try-layout a{color:var(--pen)}
 .try-filed{padding:14px 18px;background:var(--hl);border-radius:12px;color:var(--text);font-size:1.05rem}
-.try-filed b{font-family:var(--font-mono),monospace;font-weight:600}
+.try-filed b{font-weight:700}
+.try-filed code{font-family:var(--font-mono),monospace;font-weight:600}
 .try-warming{color:var(--text);padding:6px 8px;font-size:1.02rem}
 .try-warming b{font-variant-numeric:tabular-nums}
 .try-working{color:var(--faint);padding:2px 8px;font-size:.92rem;animation:tryPulse 1.6s ease-in-out infinite}

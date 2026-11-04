@@ -84,10 +84,12 @@ type Deps = { fetchImpl?: typeof fetch };
 
 const ledgerOf = (env: Env): TryLedger => env.TRY_LEDGER.get(env.TRY_LEDGER.idFromName("try")) as unknown as TryLedger;
 
+const VISITED_PATH = /^\/[A-Za-z0-9/_-]{1,200}$/;
+
 // The page shows this address, so the seed is not the run's ID, which lets its
 // holder press the run's buttons.
 async function scrambleUrl(env: Env, runId: string): Promise<string | null> {
-  const base = env.SANDBOX_BASE_URL?.replace(/\/$/, "");
+  const base = env.SANDBOX_BASE_URL?.replace(TRAILING_SLASH, "");
   return base ? `${base}/scramble/${(await sha256(`layout:${runId}`)).slice(0, 16)}/apply` : null;
 }
 
@@ -249,6 +251,22 @@ class Person {
   }
 }
 
+const DID_NOT_FILL = "Mano's computer did not fill this form. Mano prepared the renewal from Maria's answers instead.";
+const FILLED = "Mano's computer filled this form, and the portal saved what Mano will file.";
+
+// What the page may say about the fill. The claim of a form Mano had never seen
+// rests on the last address its computer opened in this run being this run's
+// layout, and a saved fill behind it. Anything less says what is known.
+async function fillResult(ledger: TryLedger, runId: string, filled: boolean, layoutUrl: string | null): Promise<TryEvent> {
+  if (!filled) return { kind: "fill", text: DID_NOT_FILL, newLayout: false };
+  if (!layoutUrl) return { kind: "fill", text: FILLED, newLayout: false };
+  const visits = (await ledger.read(runId, 0)).filter((e) => e.kind === "visited");
+  const last = visits.at(-1);
+  if (!last) return { kind: "fill", text: "Mano's computer filled a form, but this run has no record of which one.", newLayout: false };
+  if (last.path === new URL(layoutUrl).pathname) return { kind: "fill", text: "Mano's computer filled this run's layout, and the portal saved what Mano will file.", newLayout: true };
+  return { kind: "fill", text: "Mano's computer filled the portal's standard form, not this run's layout.", newLayout: false };
+}
+
 type Approval = { id: string; status?: string; documentId?: string | null; outcome?: { receipt?: { externalId: string; simulated: boolean } | null } | null };
 
 const approvalsOf = (json: unknown): Approval[] => (json as { approvals?: Approval[] } | null)?.approvals ?? [];
@@ -316,7 +334,7 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string
         if (turn.status === "waiting_approval" && turn.approvalId && turn.approval) {
           await replied(turn, turn.approval);
           const replay = await person.engine(`/approvals/${encodeURIComponent(turn.approvalId)}/replay`);
-          await log({ kind: "note", text: replay.http === 200 ? "Mano's computer filled this form, and the portal saved what Mano will file." : "Mano's computer did not fill this form. Mano prepared the renewal from Maria's answers instead." });
+          await log(await fillResult(ledger, runId, replay.http === 200, portal));
           if (!(await person.presented(turn.approvalId, turn.approval))) return fail("Mano could not put the question to Maria, so nothing was filed.");
           await log({ kind: "question", text: shown(turn.approval) });
           return "advance";
@@ -465,7 +483,7 @@ async function report(request: Request, env: Env): Promise<Response> {
   const token = request.headers.get("authorization")?.replace(BEARER_PREFIX, "") ?? "";
   if (!env.MANO_ENGINE_AGENT_TOKEN || !secretsEqual(token, env.MANO_ENGINE_AGENT_TOKEN)) return new Response("Forbidden", { status: 403 });
   if (Number(request.headers.get("content-length") ?? 0) > MAX_REPORT_BYTES) return new Response("Too large", { status: 413 });
-  const body = (await request.json().catch(() => null)) as { handleHash?: unknown; model?: unknown; screenB64?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as { handleHash?: unknown; model?: unknown; screenB64?: unknown; visited?: unknown } | null;
   const handleHash = body?.handleHash;
   if (typeof handleHash !== "string" || !isTryPerson(personIdForHandle(handleHash))) return new Response(null, { status: 204 });
   const ledger = ledgerOf(env);
@@ -475,6 +493,11 @@ async function report(request: Request, env: Env): Promise<Response> {
     const bytes = Uint8Array.from(atob(body.screenB64), (c) => c.charCodeAt(0));
     await env.FILES.put(reserved.key, bytes, { httpMetadata: { contentType: "image/png" } });
     await ledger.report(handleHash, { kind: "screen", n: reserved.n });
+    return new Response(null, { status: 204 });
+  }
+  if (body?.visited !== undefined) {
+    if (typeof body.visited !== "string" || !VISITED_PATH.test(body.visited)) return new Response("Bad report", { status: 400 });
+    await ledger.report(handleHash, { kind: "visited", path: body.visited });
     return new Response(null, { status: 204 });
   }
   const event = modelReport(body?.model);

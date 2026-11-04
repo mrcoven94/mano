@@ -23,6 +23,8 @@ export type TryEvent =
   | { kind: "deadline"; dueDate: string; label: string }
   | { kind: "screen"; n: number }
   | { kind: "layout"; url: string }
+  | { kind: "visited"; path: string }
+  | { kind: "fill"; text: string; newLayout: boolean }
   | { kind: "guardian"; verdict: string; ms: number; state: TryCallState; problems: string[] }
   | { kind: "question"; text: string }
   | { kind: "filed"; confirmation: string }

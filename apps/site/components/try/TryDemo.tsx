@@ -69,9 +69,13 @@ function Step({ event }: { event: TryLogged }) {
     case "layout":
       return (
         <div className="try-layout">
-          <b>A form Mano has never seen.</b> The portal built this layout for this run alone, and no integration exists for it. <a href={event.url}>Open the same page</a>
+          Mano is being sent to a layout the portal built for this run alone, with no integration behind it. <a href={event.url}>Open the same page</a>
         </div>
       );
+    case "fill":
+      return event.newLayout
+        ? <p className="try-filed"><b>A form Mano had never seen.</b> {event.text}</p>
+        : <p className="try-fact">{event.text}</p>;
     case "deadline":
       return <p className="try-fact">Deadline held: <b>{dateWords(event.dueDate)}</b></p>;
     case "guardian":
@@ -89,7 +93,7 @@ function Step({ event }: { event: TryLogged }) {
         </div>
       );
     case "filed":
-      return <p className="try-filed">Portal confirmation <b>{event.confirmation}</b></p>;
+      return <p className="try-filed">Portal confirmation <code>{event.confirmation}</code></p>;
     case "note":
       return <p className="try-fact">{event.text}</p>;
     case "outcome":
