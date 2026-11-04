@@ -470,12 +470,12 @@ describe("LAP-739: Engine's SQL store holds a key exactly when it would not draf
   });
 });
 
-// LAP-747. In Propel's test of general AI agents on real SNAP applications
-// (April 2026), the agents ticked the legal attestation themselves and
-// changed values on the way in (a phone number cut to 10 digits). Here
-// the renewal's declaration is made only by the person's own YES to the
-// question that showed it, and every value reaches the portal exactly as
-// the approval froze it.
+// LAP-747. In Propel's internal test of general AI agents on SNAP
+// applications, with no real applicants (April 2026), the agents ticked
+// the legal attestation themselves and changed values on the way in (a
+// phone number cut to 10 digits). Here the renewal's declaration is made
+// only by the person's own YES to the question that showed it, and every
+// value reaches the portal exactly as the approval froze it.
 describe("LAP-747: only the person's YES makes the declaration, and values are filed byte for byte", () => {
   it("the declaration in the executor is the portal's own, word for word", () => {
     expect(PORTAL_DECLARATION).toBe(DECLARATION);

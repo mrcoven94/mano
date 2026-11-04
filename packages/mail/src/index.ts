@@ -17,6 +17,13 @@
 // returns the recorded stand-in, which only answers explicitly
 // recorded requests and fails closed otherwise.
 //
+// With MANO_MODEL_PROVIDER=openrouter and OPENROUTER_API_KEY, every page
+// is read instead by Meta's open-weight Muse Spark Open on zero-retention
+// endpoints, for use while the Meta Model API is down. SAM 3.1 runs only
+// on that API, so it is skipped: each frame takes the on-device fallback
+// below, and the warning says why. Everything after the reading is the
+// same, the deadline gate included.
+//
 // Flow per file: decode to frames (one for photos, up to 30 for video
 // at 1 fps; truncation is reported and asked about, never silent),
 // segment each frame into pages (SAM 3.1, on-device paper detection,
@@ -48,6 +55,8 @@
 // the scam warning and no proposal, date to know or deadline question;
 // links, phones and addresses are never acted on here and come back
 // as warnings for the gateway.
+// A failure to decode asks for a better photo only when the decoder says
+// the file itself is unusable; anything else is a failed read.
 // Content failures never throw; only invalid arguments do. Each file
 // has a time and token budget, checked before every model call and
 // shared by its retries as one deadline; past it the file stops early
@@ -74,6 +83,7 @@ import {
   extraLetterExtraction,
   groupDeterministic,
   groupWithModel,
+  PageReadFailed,
   readPage,
   type GroupablePage,
   type PageExtraction,
@@ -99,7 +109,7 @@ import {
 } from "./gate.js";
 import { scanContent, screenScam, type ContentFlag } from "./safety.js";
 import { verifyExtraction, type DroppedField } from "./citations.js";
-import { readingModelFor } from "./model.js";
+import { ModelFailure, failureKindOf, readingModelFor } from "./model.js";
 import type {
   Box,
   Cited,
@@ -262,10 +272,22 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         });
         continue;
       }
+      if (err instanceof MediaError) {
+        ask({
+          kind: "unreadable_page",
+          letterId: null,
+          prompt: `Could not read ${file.name} (${shortMessage(err)}). Retake the photo with the letter flat and lit.`,
+          citation: null,
+        });
+        continue;
+      }
+      // Not a verdict on the file, so a broken deploy never tells someone
+      // to retake a good photo. The class only: a message can carry a path.
+      console.warn(JSON.stringify({ type: "mano_mail_decode_failed", errorClass: err instanceof Error ? err.constructor.name : "unknown" }));
       ask({
-        kind: "unreadable_page",
+        kind: "read_failed",
         letterId: null,
-        prompt: `Could not read ${file.name} (${shortMessage(err)}). Retake the photo with the letter flat and lit.`,
+        prompt: `${file.name} could not be read just now. Send it again.`,
         citation: null,
       });
       continue;
@@ -276,13 +298,15 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     const frameDets: Detection[][] = [];
     const methods = new Set<SegmentMethod>();
     const whys = new Set<string>();
+    let samSkipped = false;
     for (const frame of frames) {
       if (overBudget(file.name)) {
         askBudget(file.name);
         break;
       }
       const seg = await segmentFrame(frame.image, opts.model, { deadline: deadlineFor(file.name) });
-      modelCalls.push({
+      if (seg.method !== "sam" && !seg.samCalled) samSkipped = true;
+      else modelCalls.push({
         model: "sam-3.1",
         purpose: "segment",
         inputTokens: seg.usage?.inputTokens ?? 0,
@@ -301,7 +325,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       warnings.push({
         kind: "segmentation_fallback",
         message:
-          `SAM 3.1 returned nothing usable for ${file.name}; ` +
+          `SAM 3.1 ${samSkipped ? "was not called" : "returned nothing usable"} for ${file.name}; ` +
           (parts.length === 2 ? "some frames were split on-device and some read as one page." : `${parts[0]} instead.`),
         letterId: null,
         citation: null,
@@ -372,6 +396,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       addUsage(page.file, extraction.usage);
       return { kind: "read", extraction };
     } catch (err) {
+      if (err instanceof PageReadFailed) addUsage(page.file, err.usage);
       return { kind: "failed", err };
     }
   });
@@ -388,7 +413,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         page.dropped = verifyExtraction(extraction, extraction.fullText);
       }
       modelCalls.push({
-        model: readingModelFor(opts.synthetic),
+        model: extraction.model ?? readingModelFor(opts.synthetic),
         purpose: "read",
         inputTokens: extraction.usage?.inputTokens ?? 0,
         outputTokens: extraction.usage?.outputTokens ?? 0,
@@ -396,16 +421,26 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       });
     } else {
       page.readFailed = true;
+      if (read.err instanceof PageReadFailed && read.err.usage) {
+        modelCalls.push({
+          model: read.err.model,
+          purpose: "read",
+          inputTokens: read.err.usage.inputTokens,
+          outputTokens: read.err.usage.outputTokens,
+          elapsedMs: read.err.elapsedMs,
+        });
+      }
       warnings.push({
         kind: "model_error",
         message: `Reading failed for a page in ${page.file} (${shortMessage(read.err)}).`,
+        failure: read.err instanceof PageReadFailed ? read.err.kind : failureKindOf(read.err),
         letterId: null,
         citation: null,
       });
       ask({
         kind: "read_failed",
         letterId: null,
-        prompt: `A page in ${page.file} could not be read. Try again, or retake the photo.`,
+        prompt: `A page in ${page.file} could not be read just now. Send it again.`,
         citation: null,
       });
     }
@@ -444,6 +479,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
   if (ambiguous.length > 0) {
     const ambPages = groupable.filter((p) => ambiguous.includes(p.index));
     const blocked = ambPages.some((p) => overBudget(pages[p.index]!.file));
+    const groupStarted = Date.now();
     if (blocked) {
       ambPages.forEach((p) => groups.push([p.index]));
     } else try {
@@ -452,14 +488,23 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         deadline: Math.min(...ambPages.map((p) => deadlineFor(pages[p.index]!.file))),
       });
       modelCalls.push({
-        model: readingModelFor(opts.synthetic),
+        model: grouped.model,
         purpose: "group",
         inputTokens: grouped.usage?.inputTokens ?? 0,
         outputTokens: grouped.usage?.outputTokens ?? 0,
         elapsedMs: grouped.elapsedMs,
       });
       groups.push(...grouped.groups);
-    } catch {
+    } catch (err) {
+      if (err instanceof ModelFailure && err.billed?.usage) {
+        modelCalls.push({
+          model: err.billed.model,
+          purpose: "group",
+          inputTokens: err.billed.usage.inputTokens,
+          outputTokens: err.billed.usage.outputTokens,
+          elapsedMs: Date.now() - groupStarted,
+        });
+      }
       ambPages.forEach((p) => groups.push([p.index]));
     }
   }
@@ -803,8 +848,25 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
 
     // A letter flagged as a scam gets the scam warning and nothing that
     // treats its dates as real: no deadline, date to know or deadline
-    // question.
+    // question. The warning keeps the date it states, so a false alarm can
+    // still say it as a claim. A counted date is never named: neither the
+    // date it counts from nor the result is the letter's own deadline.
     if (warnings.some((w) => w.letterId === letterId && w.kind === "scam_suspect")) {
+      const claimed = new Set<string>();
+      let counted = false;
+      for (const d of datesToKnow) if (d.letterId === letterId) claimed.add(d.date);
+      for (const q of questions) {
+        if (q.letterId !== letterId) continue;
+        const candidates = [...(q.candidates ?? []), ...(q.proposal?.others ?? [])];
+        for (const c of candidates) {
+          for (const date of c.dates) claimed.add(date);
+          counted ||= /\b\d{1,3}\s+(?:business\s+|calendar\s+|working\s+)?(?:days?|weeks?|months?)\b/i.test(c.sentence);
+        }
+        if (q.proposal) claimed.add(q.proposal.dueDate);
+        counted ||= Boolean(q.proposal?.count);
+      }
+      const claim = counted || claimed.size > 1 ? "several" : [...claimed][0];
+      for (const w of warnings) if (w.letterId === letterId && w.kind === "scam_suspect" && claim) w.claimedDate = claim;
       const drop = <T extends { letterId: string | null }>(list: T[], gone: (item: T) => boolean): void => {
         for (let k = list.length - 1; k >= 0; k--) if (list[k]!.letterId === letterId && gone(list[k]!)) list.splice(k, 1);
       };
@@ -1090,6 +1152,14 @@ function flagToWarning(
         letterId,
         citation,
         detail: flag.detail,
+      };
+    case "suspect_link":
+      return {
+        kind: "link_suspect",
+        message: `Letter ${letterId} has a link that cannot be vouched for: ${flag.label} (${flag.match}).`,
+        letterId,
+        citation,
+        detail: flag.match,
       };
   }
 }

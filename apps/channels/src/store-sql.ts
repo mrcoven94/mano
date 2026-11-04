@@ -111,6 +111,8 @@ CREATE TABLE IF NOT EXISTS agent_sends (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 );
+-- What an earlier version's background uploads left, read only to
+-- remove that background once. Mano never sets one.
 CREATE TABLE IF NOT EXISTS chat_backgrounds (
   chat_key TEXT PRIMARY KEY,
   state TEXT NOT NULL,
@@ -552,10 +554,6 @@ export class SqlConversationStore implements ConversationStore {
     return (this.sql.exec("SELECT state FROM outbounds WHERE turn = ?", turn).toArray() as unknown as Array<{ state: OutboundRow["state"] }>).map(
       (r) => r.state,
     );
-  }
-
-  hasSentReply(turn: number): boolean {
-    return firstRow(this.sql.exec("SELECT 1 FROM outbounds WHERE turn = ? AND state = 'sent' AND tag != 'react' LIMIT 1", turn)) !== null;
   }
 
   holdReceipt(receipt: import("./store.js").HeldReceipt): void {

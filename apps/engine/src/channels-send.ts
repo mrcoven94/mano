@@ -19,6 +19,9 @@ export interface AgentSend {
   key: string;
   text: string;
   generation: number;
+  // Channels gives the provider one try and never replays it: Engine holds a
+  // rule Channels cannot read, so only Engine's next run may send it again.
+  noReplay?: boolean;
 }
 
 // sent: delivered. dropped: Channels refused it for good (unknown or
@@ -52,7 +55,7 @@ export async function sendToChannels(
   nowMs = Date.now(),
 ): Promise<SendOutcome> {
   if (!env.MANO_CHANNELS_URL || !env.MANO_ENGINE_SEND_SECRET) return "retry";
-  const raw = JSON.stringify({ handleHash: send.handleHash, key: send.key, text: send.text, generation: send.generation });
+  const raw = JSON.stringify({ handleHash: send.handleHash, key: send.key, text: send.text, generation: send.generation, ...(send.noReplay ? { noReplay: true } : {}) });
   const timestamp = String(Math.floor(nowMs / 1000));
   let res: Response;
   try {

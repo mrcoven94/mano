@@ -9,6 +9,9 @@ session and returned only to that caller; every control route needs it as
 a bearer token. The service keeps only the sandbox id, and the sandbox
 holds only the secret's SHA-256, so neither can hand the secret out.
 
+Keys. Fluxbox runs with an empty keys file, so no key or click reaches its
+launcher or menus. runLoop also refuses any key a form does not need.
+
 Storage. Each person's browser profile is its own Modal volume, mounted at
 /profile and nothing else. The volume name is an HMAC-SHA256 of the Engine
 person id under MANO_PROFILE_KEY, so ids never collapse into one profile
@@ -79,6 +82,7 @@ PORTAL_ORIGIN = os.environ.get("MANO_PORTAL_ORIGIN", "")
 
 KEY_NAMES = {
     "Enter": "Return",
+    "Backspace": "BackSpace",
     "ArrowLeft": "Left",
     "ArrowRight": "Right",
     "ArrowUp": "Up",
@@ -277,6 +281,11 @@ set -eu
 WIDTH=${WIDTH:-1280}
 HEIGHT=${HEIGHT:-800}
 export DISPLAY=:99
+# An empty keys file binds nothing. Fluxbox's defaults, used when the file is
+# missing, put a launcher that runs commands on Alt+F2 and menus on the desktop.
+export HOME=/root
+mkdir -p "$HOME/.fluxbox"
+: > "$HOME/.fluxbox/keys"
 mkdir -p /etc/chromium/policies/managed
 printf '%s' "$MANO_CHROMIUM_POLICY" > /etc/chromium/policies/managed/mano.json
 Xvfb :99 -screen 0 "${WIDTH}x${HEIGHT}x24" >/tmp/xvfb.log 2>&1 &

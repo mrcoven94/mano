@@ -8,7 +8,8 @@
   },
   "scripts": {
     "check": "tsc --noEmit && vitest run",
-    "test": "vitest run"
+    "test": "vitest run",
+    "probe:live": "vitest run --config vitest.live.config.ts"
   },
   "dependencies": {
     "playwright": "^1.55.0"

@@ -6,6 +6,7 @@ on:
       - "apps/engine/**"
       - "packages/protocol/**"
       - "packages/guardian/**"
+      - "packages/programs/**"
       - ".github/workflows/deploy-engine.yml"
   # Pull requests run only the validate job: lint this workflow and bundle
   # the worker with a dry run. No secrets, no deploy.
@@ -14,6 +15,7 @@ on:
       - "apps/engine/**"
       - "packages/protocol/**"
       - "packages/guardian/**"
+      - "packages/programs/**"
       - ".github/workflows/deploy-engine.yml"
   workflow_dispatch:
 permissions:

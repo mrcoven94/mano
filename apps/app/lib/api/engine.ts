@@ -1,9 +1,11 @@
-// Live engine adapter: ManoClient over the engine Worker's HTTP routes
-// (apps/engine/src/index.ts). Routes the engine does not serve yet throw
-// EngineGapError naming the missing route; the UI says so plainly and the
-// stand-in keeps those screens working.
+// Live adapter: ManoClient over HTTP. Sign-in and chat live on the web
+// Worker (apps/web), which EXPO_PUBLIC_ENGINE_URL points at; the rest is
+// Engine's route shape (apps/engine/src/index.ts). A route with no server
+// behind it yet throws EngineGapError naming it, and the UI says so
+// plainly: the web Worker answers 501 for those.
 
 import { b64encode } from "../base64";
+import { recipientName } from "../recipients";
 import { provenNotSent } from "../sent-proof";
 import type { Hasher } from "./standin";
 import type {
@@ -68,6 +70,16 @@ function filenameFromDisposition(header: string | null): string | null {
   return match?.[1] ?? null;
 }
 
+// A server error's words for the person, without the JSON around them.
+function errorText(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown };
+    return typeof parsed.error === "string" ? parsed.error : body;
+  } catch {
+    return body;
+  }
+}
+
 export class EngineClient implements ManoClient {
   readonly mode: EngineMode = "live";
   private baseUrl: string;
@@ -77,7 +89,8 @@ export class EngineClient implements ManoClient {
   constructor(options: EngineOptions) {
     this.baseUrl = options.baseUrl;
     this.sha256B64 = options.sha256B64;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    // Called as a method, the browser's fetch throws "Illegal invocation".
+    this.fetchImpl = options.fetchImpl ?? ((...args) => fetch(...args));
   }
 
   private async call(session: Session | null, path: string, init: RequestInit = {}): Promise<Response> {
@@ -91,27 +104,32 @@ export class EngineClient implements ManoClient {
       throw new Error(`Could not reach the engine: ${(err as Error).message}`, { cause: err });
     }
     if (res.status === 401 || res.status === 403) throw new AuthError();
+    if (res.status === 501) throw new EngineGapError(`${init.method ?? "GET"} ${path}`);
     return res;
   }
 
   private async json<T>(res: Response): Promise<T> {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(text || `The engine answered ${res.status}.`);
+      throw new Error(errorText(text) || `The engine answered ${res.status}.`);
     }
     return (await res.json()) as T;
   }
 
-  async requestCode(_email: string): Promise<{ challengeId: string; maskedEmail: string }> {
-    throw new EngineGapError("POST /api/auth/request-code");
+  async requestCode(email: string): Promise<{ challengeId: string; maskedEmail: string }> {
+    const res = await this.call(null, "/api/auth/request-code", { method: "POST", body: JSON.stringify({ email }) });
+    return this.json(res);
   }
 
-  async verifyCode(_email: string, _challengeId: string, _code: string): Promise<Session> {
-    throw new EngineGapError("POST /api/auth/verify-code");
+  async verifyCode(email: string, challengeId: string, code: string): Promise<Session> {
+    const res = await this.call(null, "/api/auth/verify-code", { method: "POST", body: JSON.stringify({ email, challengeId, code }) });
+    return this.json(res);
   }
 
-  async listMessages(_session: Session): Promise<ChatMessage[]> {
-    throw new EngineGapError("GET /api/persons/:id/conversation");
+  async listMessages(session: Session): Promise<ChatMessage[]> {
+    const res = await this.call(session, `/api/persons/${encodeURIComponent(session.personId)}/conversation`);
+    const out = await this.json<{ messages: { id: string; role: ChatMessage["role"]; text: string; createdAt: string; ask?: ChatMessage["ask"] }[] }>(res);
+    return out.messages.map((m) => ({ ...m, attachments: [], status: "sent" }));
   }
 
   async sendMessage(session: Session, text: string, attachments: NewAttachment[], opId?: string): Promise<ChatMessage> {
@@ -136,15 +154,26 @@ export class EngineClient implements ManoClient {
   }
 
   private async chatReply(res: Response): Promise<ChatMessage> {
-    const out = await this.json<{ reply: string }>(res);
+    const out = await this.json<{ id?: string; reply: string; createdAt?: string; ask?: ChatMessage["ask"] }>(res);
     return {
-      id: `live-${Date.now()}`,
+      id: out.id ?? `live-${Date.now()}`,
       role: "agent",
       text: out.reply,
-      createdAt: new Date().toISOString(),
+      createdAt: out.createdAt ?? new Date().toISOString(),
       attachments: [],
       status: "sent",
+      ...(out.ask ? { ask: out.ask } : {}),
     };
+  }
+
+  async acknowledgeQuestion(session: Session, approvalId: string, messageId: string): Promise<void> {
+    const res = await this.call(
+      session,
+      `/api/persons/${encodeURIComponent(session.personId)}/approvals/${encodeURIComponent(approvalId)}/shown`,
+      { method: "POST", body: JSON.stringify({ messageId }) },
+    );
+    // 409: the question is no longer waiting, so there is nothing to retry.
+    if (res.status !== 409) await this.json(res);
   }
 
   async listApprovals(session: Session): Promise<Approval[]> {
@@ -154,7 +183,8 @@ export class EngineClient implements ManoClient {
       id: a.id,
       actionType: a.actionType,
       recipient: a.recipient,
-      recipientName: a.recipient,
+      // Never the raw ID: the protocol's name, or that it has none.
+      recipientName: recipientName(a.recipient),
       purpose: a.purpose,
       documentHash: a.documentHash,
       documentId: a.documentId,

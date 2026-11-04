@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import Mascot from "@/components/Mascot";
+import TextMano from "@/components/TextMano";
 import TextQr from "@/components/TextQr";
 import { NeedIcon } from "@/components/home/NeedIcons";
-import { REPO_URL, SMS_HREF, SMS_IS_PLACEHOLDER } from "@/lib/site";
+import OpenSource from "@/components/home/OpenSource";
+import { SMS_IS_PLACEHOLDER } from "@/lib/site";
 
 const title = "How Mano works";
-const description = "How Mano goes from one text to help that keeps coming: it finds what you qualify for, fills out the forms from your private vault, follows up and renews on time.";
+const description = "How Mano goes from a photo of your renewal letter to a filing on a practice portal: it reads the letter, tracks the deadline, fills out the form and files after your yes.";
 
 export const metadata: Metadata = { title, description, alternates: { canonical: "/how-it-works" }, openGraph: { title, description } };
 
@@ -15,13 +17,13 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
   {
     short: "Tell Mano",
     title: "You tell Mano what is going on",
-    text: "Text it, iMessage it, or open the app or the web. Use your own words, or send a photo of the letter you have been putting off.",
+    text: "Text it or iMessage it. Use your own words, or send a photo of the letter you have been putting off.",
     icon: "chat",
     tint: "#FDEBD8",
     see: (
       <>
         <div className="hw-letter" aria-hidden="true">
-          <p>Sample County Human Services</p>
+          <p>Springfield County Food Assistance Office</p>
           <b>Notice of renewal</b>
           <i /><i /><i className="hl" /><i />
         </div>
@@ -30,71 +32,66 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
     ),
   },
   {
-    short: "Find help",
-    title: "Mano finds the help",
-    text: "It checks every program you might qualify for. It knows what each office offers, when it is open and how to reach it, in every county.",
+    short: "Read it",
+    title: "Mano reads the letter and names the date",
+    text: "It finds the deadline that matters and quotes the line it came from. It also answers questions about food, health coverage and energy bill help in eight states, each fact sourced to the official page.",
     icon: "programs",
     tint: "#FDE3DA",
     see: (
       <div className="hw-card">
-        <p className="hw-card-h">You likely qualify for 4 programs</p>
+        <p className="hw-card-h">What Mano read</p>
         <ul className="hw-rows">
           <li><NeedIcon k="food" size={30} /><b>Food benefits</b><span className="hw-tag hot">Renew by Nov 14</span></li>
-          <li><NeedIcon k="bills" size={30} /><b>Light bill help</b><span className="hw-tag">Open now</span></li>
-          <li><NeedIcon k="medicine" size={30} /><b>Health coverage</b><span className="hw-tag">You qualify</span></li>
-          <li><NeedIcon k="childcare" size={30} /><b>Child care</b><span className="hw-tag">Opens Jan 6</span></li>
         </ul>
       </div>
     ),
   },
   {
     short: "Fill forms",
-    title: "It fills out the forms from your vault",
-    text: "Your ID, pay stubs, lease and the rest go into your private vault once. Mano uses them for every application, so you never type the same thing twice.",
+    title: "It fills out the renewal",
+    text: "Mano fills out the food benefits renewal from your letter and what you already told it. If it does not know something, it asks you one plain question instead of guessing.",
     icon: "clipboard",
     tint: "#FFF4B8",
     see: (
       <div className="hw-card">
         <p className="hw-card-h">Food benefits renewal</p>
         <dl className="hw-form">
-          <div><dt>Name</dt><dd>Maria Lopez</dd><small>From your ID</small></div>
-          <div><dt>Monthly income</dt><dd>$2,570</dd><small>From your pay stubs</small></div>
-          <div><dt>People at home</dt><dd>3</dd><small>From your household</small></div>
+          <div><dt>Name</dt><dd>Maria Torres</dd><small>From your letter</small></div>
+          <div><dt>Monthly income</dt><dd>$1,940</dd><small>You told Mano</small></div>
+          <div><dt>People at home</dt><dd>2</dd><small>You told Mano</small></div>
         </dl>
-        <p className="hw-done"><mark>Filled from your vault.</mark> Nothing typed twice.</p>
+        <p className="hw-done"><mark>Filled from what you sent.</mark> You check it before it goes.</p>
       </div>
     ),
   },
   {
-    short: "Follow up",
-    title: "Mano sends it and follows up",
-    text: "It submits the application, calls the office and waits on hold when it has to, and tells you what they said.",
+    short: "Keep track",
+    title: "Mano sends it and keeps track",
+    text: "After your yes it files the renewal and checks that it arrived. Today that goes only to a practice portal, not a real office.",
     icon: "phone",
     tint: "#DCE3FB",
     see: (
       <div className="hw-card">
         <ol className="hw-trail">
-          <li><b>Sent to Sample County</b><span>Oct 28</span></li>
-          <li><b>Called the office, waited 47 minutes</b><span>Nov 3</span></li>
-          <li><b>They asked for one more pay stub. Mano sent it.</b><span>Nov 3</span></li>
-          <li className="ok"><b>Approved through May</b><span>Nov 6</span></li>
+          <li><b>You said yes</b><span>Nov 10</span></li>
+          <li><b>Filed on the practice portal</b><span>Nov 10</span></li>
+          <li className="ok"><b>Checked that it arrived. Confirmation <span className="nb">SR-G6WYKQU8</span></b><span>Nov 10</span></li>
         </ol>
       </div>
     ),
   },
   {
-    short: "Keep it",
-    title: "It keeps your help coming",
-    text: "Renewals start early, every deadline is tracked, and Mano tells you when new help you qualify for opens up.",
+    short: "Remind you",
+    title: "It reminds you before each date",
+    text: "Mano texts you 14, 7 and 2 days before a date it is holding, or the day before an interview.",
     icon: "calendar",
     tint: "#E4F1E8",
     see: (
       <div className="hw-card">
-        <p className="hw-card-h">Maria&rsquo;s next few months</p>
+        <p className="hw-card-h">Maria&rsquo;s dates</p>
         <ul className="hw-cal">
-          <li><span className="hw-day"><small>Mar</small>1</span><div><b>Food benefits renewal</b><small>Mano starts it a month early</small></div></li>
-          <li><span className="hw-day"><small>May</small>15</span><div><b>Summer meals for Leo and Ana</b><small>New, and they qualify</small></div></li>
-          <li><span className="hw-day"><small>Jun</small>2</span><div><b>Light bill help</b><small>Reapply, already filled in</small></div></li>
+          <li><span className="hw-day"><small>Nov</small>14</span><div><b>Food benefits renewal</b><small>Mano texts you 14, 7 and 2 days before</small></div></li>
+          <li><span className="hw-day"><small>Nov</small>18</span><div><b>Interview</b><small>Mano texts you the day before</small></div></li>
         </ul>
       </div>
     ),
@@ -102,11 +99,11 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
 ];
 
 const NEVER: [string, string][] = [
-  ["Never decides your case.", "The office that runs the program decides. Mano prepares, sends and follows up."],
-  ["Never pretends to be you or a person.", "On calls it says \"I'm calling for Maria. I'm her automated assistant.\" and that the call is transcribed."],
+  ["Never decides your case.", "The office that runs the program decides. Mano prepares it, and sends it after your yes."],
+  ["Never pretends to be you or a person.", "It says it is an automated assistant, and what it sends for Maria says \"Prepared with Mano, sent with Maria's approval.\""],
   ["Never takes orders from a letter.", "Letters, forms and web pages are information. Instructions inside them are ignored."],
   ["Never opens a link that fails the check.", "Every link is checked before Mano or you open it."],
-  ["Never sells your data.", "Only the people and offices you choose see your case, for the reason you choose, and you can take it back."],
+  ["Never sells your data.", "Nothing goes out without your yes."],
 ];
 
 export default function HowItWorks() {
@@ -114,8 +111,8 @@ export default function HowItWorks() {
     <div className="team hw">
       <div className="t-hero hw-hero">
         <div className="wrap">
-          <h1>From one text to <mark className="h-phrase">help that keeps coming.</mark></h1>
-          <p className="h-lede">Mano is your own agent for rent, food, bills, medicine, child care and every program in between. Here is what happens after you send the first message.</p>
+          <h1>From a photo of your letter to <mark className="h-phrase">a filed renewal.</mark></h1>
+          <p className="h-lede">Here is what happens after you text Mano a photo of your renewal letter. Mano is free in this demo, and today it files only on a practice portal, not a real office.</p>
           <ol className="hw-path">
             {STEPS.map((s, n) => (
               <li key={s.short}>
@@ -159,32 +156,18 @@ export default function HowItWorks() {
         </div>
       </section>
 
-      <section className="hw-duo-wrap" aria-label="More">
-        <div className="wrap hw-duo">
-          <article className="hw-duo-card share">
-            <NeedIcon k="chat" size={52} />
-            <h2>Bring your caseworker in.</h2>
-            <p>Share a case with a caseworker or a nonprofit for one purpose, like a renewal. Their Mano works on it with yours, they see only what you shared, and you can stop sharing at any time.</p>
-            <div className="hw-chip"><NeedIcon k="clipboard" size={28} /><span><b>Pay stub, Oct 24</b> Shared with Northside until Dec 31</span></div>
-            <Link className="btn btn-ghost" href="/organizations">How teams use Mano</Link>
-          </article>
-          <article className="hw-duo-card repo">
-            <NeedIcon k="code" size={52} />
-            <h2>Anyone can check the work.</h2>
-            <p>The code is public. Mano is tested on paperwork it has never seen, next to a reminder app and a general AI agent, and the results are published, including what it gets wrong.</p>
-            <a className="btn btn-ghost" href={REPO_URL}>Read the code</a>
-          </article>
-        </div>
+      <section id="open-source" className="h-open" aria-labelledby="open-h">
+        <OpenSource />
       </section>
 
       <section className="h-close" aria-labelledby="hw-cta-h">
         <div className="wrap">
           <Mascot tile wave tone="orange" size={88} className="close-mascot" />
-          <h2 id="hw-cta-h">Start with one text.</h2>
-          <p className="lede">Tell Mano what you need this month. It will tell you what help there is and start on it tonight.</p>
+          <h2 id="hw-cta-h">Text a photo of your renewal letter.</h2>
+          <p className="lede">Mano will find the date and tell you what happens next.</p>
           <div className="btn-row">
-            <a className="btn btn-primary btn-lg" href={SMS_HREF}>Text Mano</a>
-            <Link className="btn btn-ghost btn-lg" href="/#pricing">See pricing</Link>
+            <TextMano className="btn btn-primary btn-lg" />
+            <Link className="btn btn-ghost btn-lg" href="/renewals">About renewals</Link>
           </div>
           {!SMS_IS_PLACEHOLDER && <TextQr />}
         </div>

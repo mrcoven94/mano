@@ -1,6 +1,6 @@
 import type { SourceCitation } from "@mano/protocol";
 
-export type ActionType = "send" | "submit" | "call" | "fax" | "share";
+export type ActionType = "send" | "submit" | "call" | "fax" | "mail" | "share";
 export type PolicyDecision = "allow" | "ask" | "block";
 export type ActorKind = "foreground" | "background";
 
@@ -40,7 +40,9 @@ export interface Approval {
   documentHash: string | null;
   documentId: string | null;
   idempotencyKey: string;
-  status: "pending" | "approved" | "rejected" | "revoked" | "expired" | "stale" | "blocked";
+  // retired: was approved, then the person corrected the form after its
+  // filing failed or went unanswered; it is reconciled but never run again.
+  status: "pending" | "approved" | "retired" | "rejected" | "revoked" | "expired" | "stale" | "blocked";
   approvedByHumanId: string | null;
   // The person this approval belongs to, the frozen request it authorizes
   // (canonical JSON, executed verbatim), and the hash binding type,
@@ -87,6 +89,18 @@ export interface Attempt {
   actionType: ActionType;
   recipient: string;
   personId: string;
+  // Bumped by every write to the attempt, so a step that read it before an
+  // await can tell whether anything claimed or ran it since.
+  version?: number;
+  // The real provider this attempt began against, recorded when it starts,
+  // or null on a stand-in. It answers for the attempt from then on: with
+  // that provider gone, the attempt stays unknown, in any mode.
+  provider?: string | null;
+  // When lookups for this attempt began failing to give an answer, and when
+  // the recovery sweep looks again. Failing since a time with no next
+  // lookup means the sweep has stopped; a person's own YES still looks.
+  lookupFailingSince?: string | null;
+  nextLookupAt?: string | null;
 }
 
 export interface GatewayResult {
@@ -96,10 +110,17 @@ export interface GatewayResult {
   reason?: string;
   // Set on a refused approve: a newer proposal replaced this one.
   superseded?: true;
+  // Set on a completed answer that only reports a receipt another request
+  // already recorded. Nothing ran in this call, so a caller applies no
+  // effects for it (a consent grant is never re-recorded).
+  replayed?: true;
   // Set on a refused approve when the safety check could not answer. The
   // approval still waits, nothing ran, and the same approve may be sent
   // again later.
   retryable?: true;
+  // Set when a send could not be confirmed and will not be retried. The
+  // person is told, and only a fresh approval can send it again.
+  unconfirmed?: true;
 }
 
 // Where a drafted approval sits among the person's proposals: when the
@@ -117,6 +138,10 @@ export interface Executor {
   // True when this executor simulates outside systems instead of calling
   // them. Receipts carry the flag so drills never read as real filings.
   readonly simulated: boolean;
+  // The real outside provider this executor sends through, if it has one.
+  readonly provider?: string;
+  // Which real provider a new attempt for this request would begin against.
+  providerOf?(req: ActionRequest): string | null;
   // Runs the action. An execution may override the simulated label for
   // its own receipt when the action is real even though the executor is
   // a stand-in for other actions (consent delivery to a live org agent).
@@ -131,7 +156,7 @@ export interface Executor {
   // it. The gateway asks before it drafts an approval or executes, so a
   // person is never asked to approve an action that would then be
   // refused. An executor without it takes every request.
-  refuse?(req: ActionRequest): string | null;
+  refuse?(req: ActionRequest): string | null | Promise<string | null>;
   // Whether this executor could file a stored document of this media type
   // and size, without reading its bytes. The person's document list
   // answers it for each document so Mano attaches one the filing takes.
@@ -149,13 +174,33 @@ export interface StoredDocumentFacts {
 export type DocumentFiling = "fileable" | "too_large" | "wrong_type" | "size_unknown";
 
 // The recorded outcome for a key: found carries the outside ID, absent
-// means the executor confirms it never ran this key.
-export type CheckOutcome = { found: true; externalId: string } | { found: false };
+// means the executor confirms it never ran this key. simulated overrides
+// the executor's label for this receipt, as execute's result can.
+export type CheckOutcome = { found: true; externalId: string; simulated?: boolean } | { found: false };
 
 export class TimeoutError extends Error {
   constructor(msg = "executor timed out") {
     super(msg);
     this.name = "TimeoutError";
+  }
+}
+
+// The lookup answered and does not list a send that went to a provider
+// with no dedupe. It may still land, so it is neither found nor absent: the
+// attempt stays unknown and only a fresh approval can send again.
+export class UnconfirmedSendError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "UnconfirmedSendError";
+  }
+}
+
+// Another run owns this send. It sent nothing and changes nothing, and the
+// other run's outcome stands.
+export class NotTheSenderError extends Error {
+  constructor(msg = "Another request with this idempotency key is running.") {
+    super(msg);
+    this.name = "NotTheSenderError";
   }
 }
 

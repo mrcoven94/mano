@@ -1,6 +1,8 @@
 // Fills a form on the person's own computer: the hosted desktop (Modal)
-// or, for local runs, the Playwright stand-in. Each fill opens a fresh
-// draft on the sandbox portal, the model types the values the person will
+// or, for local runs, the Playwright stand-in. The model is the agent's:
+// Meta's open-weight model when MANO_MODEL_PROVIDER=openrouter, otherwise
+// the Meta Model API. Each fill opens a fresh draft on the sandbox portal,
+// the model types the values the person will
 // approve and moves to the form's next step, which saves the draft. The
 // portal's own checks run on the values. The fill then reads the draft
 // back from the portal and returns exactly what it saved; any difference
@@ -14,6 +16,7 @@ import { randomBytes } from "node:crypto";
 
 import {
   FetchModelClient,
+  OpenWeightModelClient,
   computerFromEnv,
   editsForm,
   recordFrames,
@@ -25,6 +28,7 @@ import {
 } from "@mano/computer";
 
 import type { FormSpec } from "./forms.js";
+import { selectModelRoute } from "./muse.js";
 
 // One screen of a fill, as the person sees it on the replay page. focus:
 // where Mano clicked before it typed, in screenshot pixels, so the page
@@ -58,14 +62,14 @@ const DEFAULT_DEADLINE_MS = 60_000;
 const DEFAULT_MODEL = "muse-spark-1.3";
 const CLOSE_WAIT_MS = 3_000;
 const READ_TIMEOUT_MS = 10_000;
-const DEFAULT_BASE_URL = "https://api.meta.ai/v1";
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const TRAILING_SLASH = /\/$/;
 const REJECTED_PREFIX = /^REJECTED:\s*/i;
 
 // The computer and model this deployment fills forms with, or why there is none.
 export function fillDepsFromEnv(personId: string, env: NodeJS.ProcessEnv = process.env): FillDeps | { unavailable: string } {
-  if (!env.META_MODEL_API_KEY) return { unavailable: "no model key" };
+  const route = selectModelRoute({}, env);
+  if (!route.apiKey) return { unavailable: "no model key" };
   if (!env.SANDBOX_PORTAL_DRAFT_TOKEN) return { unavailable: "no draft token" };
   if (!env.MODAL_COMPUTER_URL && env.COMPUTER_BACKEND !== "playwright") return { unavailable: "no computer configured" };
   const computer = computerFromEnv({
@@ -75,12 +79,13 @@ export function fillDepsFromEnv(personId: string, env: NodeJS.ProcessEnv = proce
     COMPUTER_PERSON_ID: personId,
     COMPUTER_PROFILE_DIR: env.COMPUTER_PROFILE_DIR,
   });
-  const model = new FetchModelClient({ baseUrl: env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL, apiKey: env.META_MODEL_API_KEY });
+  const openWeight = route.name === "openrouter";
+  const model = openWeight ? new OpenWeightModelClient({ apiKey: route.apiKey }) : new FetchModelClient({ baseUrl: route.baseURL, apiKey: route.apiKey });
   const deadline = Number(env.MANO_FILL_DEADLINE_MS);
   return {
     computer,
     model,
-    modelId: env.MANO_COMPUTER_MODEL ?? DEFAULT_MODEL,
+    modelId: openWeight ? route.modelId : (env.MANO_COMPUTER_MODEL ?? DEFAULT_MODEL),
     deadlineMs: Number.isFinite(deadline) && deadline > 0 ? deadline : DEFAULT_DEADLINE_MS,
     draftToken: env.SANDBOX_PORTAL_DRAFT_TOKEN,
   };
@@ -130,8 +135,12 @@ export function replayOf(frames: Frame[], form: FormSpec, values: Record<string,
   return steps.slice(0, end).slice(-MAX_REPLAY_STEPS);
 }
 
+// Says what ran on the one line every replay shows first. Both model paths
+// fit it, and it names neither: this page is for the person.
+const OPENED_CAPTION = "Mano opened the form. An AI model chose each step below from what it saw on the screen.";
+
 function captionFor(actions: ComputerAction[], labelOf: Map<string, string>): string {
-  if (actions.length === 0) return "Mano opened the form.";
+  if (actions.length === 0) return OPENED_CAPTION;
   const typed = actions.filter((a): a is Extract<ComputerAction, { type: "type" }> => a.type === "type").pop();
   if (typed) {
     const label = labelOf.get(typed.text.trim());

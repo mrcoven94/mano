@@ -205,7 +205,7 @@ describe("OpenRouter switch", () => {
     });
   }
 
-  it("sends Meta's open-weight model to OpenRouter pinned to zero retention", async () => {
+  it("sends Meta's open-weight model to OpenRouter pinned to zero retention, fastest first, at low effort", async () => {
     vi.stubEnv("MANO_MODEL_PROVIDER", "openrouter");
     vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
     const urls: string[] = [];
@@ -215,7 +215,8 @@ describe("OpenRouter switch", () => {
     expect(modelId).toBe("meta/muse-spark-open");
     expect(urls[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
     expect(bodies[0].model).toBe("meta/muse-spark-open");
-    expect(bodies[0].provider).toEqual({ zdr: true, data_collection: "deny" });
+    expect(bodies[0].provider).toEqual({ sort: "latency", zdr: true, data_collection: "deny" });
+    expect(bodies[0].reasoning).toEqual({ effort: "low" });
   });
 
   it("stays on the Meta Model API without an OpenRouter key", async () => {
@@ -228,5 +229,8 @@ describe("OpenRouter switch", () => {
     expect(urls[0]).toBe("https://api.meta.ai/v1/chat/completions");
     expect(bodies[0].model).toBe("muse-spark-1.3");
     expect(bodies[0].store).toBe(false);
+    expect(bodies[0].provider).toBeUndefined();
+    expect(bodies[0].reasoning).toBeUndefined();
+    expect(bodies[0].reasoning_effort).toBeUndefined();
   });
 });

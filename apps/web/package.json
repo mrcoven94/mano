@@ -1,0 +1,24 @@
+{
+  "name": "@mano/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Serves the resident app's web build and its sign-in and chat routes from one Cloudflare Worker.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "check": "tsc --noEmit && vitest run",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mano/channels": "workspace:*",
+    "@mano/persona": "workspace:*",
+    "@mano/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251001.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.30.0"
+  }
+}

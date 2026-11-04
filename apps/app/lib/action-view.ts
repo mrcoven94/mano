@@ -1,32 +1,67 @@
 // Typed, immutable view of a frozen approval request. The engine binds
 // the approval to requestJson and executes it verbatim, so the screen
 // shows every field the executor will use: type, recipient, purpose,
-// idempotency key, document and each payload entry. Anything that does
-// not match a known action shape comes back unknown, and the screen
-// refuses to approve it.
+// idempotency key, document and each payload entry. Payload entries
+// come back in the request's order with a string key for known names
+// (lib/strings.ts) and the raw name otherwise, so nothing is dropped.
+// Anything that does not match a known action shape comes back unknown,
+// and the screen refuses to approve it.
 
-export interface ActionRow {
-  label: string;
+import type { StringKey } from "./strings";
+
+export type KnownKind = "submit" | "send" | "share" | "call" | "fax" | "mail";
+
+// How the screen writes a value. Only the label and the number format
+// change; the words and digits are the request's own.
+export type FieldFormat = "text" | "money" | "date" | "consent";
+
+export interface ActionField {
+  key: string;
+  // A friendly label in the person's language, or null to show key.
+  label: StringKey | null;
   value: string;
+  format: FieldFormat;
 }
 
-export type ParsedAction =
-  | { kind: "submit" | "send" | "share" | "call" | "fax"; rows: ActionRow[] }
-  | { kind: "unknown"; reason: string };
+export interface KnownAction {
+  kind: KnownKind;
+  recipient: string;
+  purpose: string;
+  reference: string;
+  documentId: string | null;
+  // What the person states, in request order. Declaration and
+  // attachment are lifted out because the screen shows them on their own.
+  answers: ActionField[];
+  declaration: string | null;
+  attachment: string | null;
+}
 
-const ACTION_TYPES = new Set(["send", "submit", "call", "fax", "share"]);
+export type ParsedAction = KnownAction | { kind: "unknown"; reason: string };
 
-type KnownKind = "submit" | "send" | "share" | "call" | "fax";
+const ACTION_TYPES = new Set(["send", "submit", "call", "fax", "mail", "share"]);
 
-const LABELS: Record<string, string> = {
-  text: "Message",
-  body: "Message",
-  message: "Message",
-  to: "To",
-  consent: "Consent",
-  caseId: "Case",
-  scope: "Scope",
+// Payload names the agent and engine write today (apps/agent forms.ts,
+// pending.ts and the engine's share requests), mapped to labels.
+const LABELS: Record<string, { label: StringKey; format?: FieldFormat }> = {
+  caseNumber: { label: "fieldCase" },
+  caseId: { label: "fieldCase" },
+  fullName: { label: "fieldName" },
+  dateOfBirth: { label: "fieldBirth", format: "date" },
+  householdSize: { label: "fieldHousehold" },
+  monthlyIncome: { label: "fieldIncome", format: "money" },
+  address: { label: "fieldAddress" },
+  phone: { label: "fieldPhone" },
+  office: { label: "fieldOffice" },
+  text: { label: "fieldMessage" },
+  body: { label: "fieldMessage" },
+  message: { label: "fieldMessage" },
+  to: { label: "fieldTo" },
+  consent: { label: "fieldConsent", format: "consent" },
+  scope: { label: "fieldScope" },
 };
+
+const DECLARATION = "declaration";
+const ATTACHMENT = "attachment";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -45,10 +80,31 @@ function formatValue(value: unknown): string {
   }
 }
 
-function labelFor(key: string): string {
+// YYYY-MM-DD naming a day that exists, in a year from 1900 to this one,
+// so 1988-02-30 stays as written, and so does 0000-01-01, which would
+// otherwise read the same as 0001-01-01.
+function isCalendarDay(text: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  const date = new Date(`${text}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) return false;
+  const year = date.getUTCFullYear();
+  return year >= 1900 && year <= new Date().getUTCFullYear();
+}
+
+function fieldFor(key: string, value: unknown): ActionField {
   // hasOwnProperty, not lookup: LABELS["__proto__"] is the prototype.
-  if (Object.prototype.hasOwnProperty.call(LABELS, key)) return LABELS[key] as string;
-  return key;
+  const known = Object.prototype.hasOwnProperty.call(LABELS, key) ? LABELS[key] : undefined;
+  const text = formatValue(value);
+  const format = known?.format ?? "text";
+  // A money label only fits a plain amount and a date label only a real
+  // calendar day; anything else shows as text.
+  const fits =
+    format === "money"
+      ? /^(0|[1-9]\d{0,8})(\.\d{1,2})?$/.test(text)
+      : format === "date"
+        ? isCalendarDay(text)
+        : true;
+  return { key, label: known?.label ?? null, value: text, format: fits ? format : "text" };
 }
 
 export function parseActionView(requestJson: string): ParsedAction {
@@ -81,16 +137,24 @@ export function parseActionView(requestJson: string): ParsedAction {
       return { kind: "unknown", reason: "A share must name a case." };
     }
   }
-  const rows: ActionRow[] = [
-    { label: "To", value: formatValue(raw.recipient) },
-    { label: "Why", value: formatValue(raw.purpose) },
-    { label: "Reference", value: formatValue(raw.idempotencyKey) },
-  ];
-  if (typeof raw.documentId === "string" && raw.documentId) {
-    rows.push({ label: "Document", value: raw.documentId });
-  }
+  const answers: ActionField[] = [];
+  let declaration: string | null = null;
+  let attachment: string | null = null;
   for (const key of Object.keys(raw.payload)) {
-    rows.push({ label: labelFor(key), value: formatValue(raw.payload[key]) });
+    const value = raw.payload[key];
+    // Lifted out only as plain text; any other shape stays a row.
+    if (key === DECLARATION && typeof value === "string" && value) declaration = value;
+    else if (key === ATTACHMENT && typeof value === "string" && value) attachment = value;
+    else answers.push(fieldFor(key, value));
   }
-  return { kind, rows };
+  return {
+    kind,
+    recipient: raw.recipient,
+    purpose: raw.purpose,
+    reference: raw.idempotencyKey,
+    documentId: typeof raw.documentId === "string" && raw.documentId ? raw.documentId : null,
+    answers,
+    declaration,
+    attachment,
+  };
 }

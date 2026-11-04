@@ -51,6 +51,7 @@ import {
   updateDeadline,
   type DeadlineCalls,
 } from "../../engine/src/deadlines.js";
+import { applyShareOutcome, endDocumentAccess, ensureCaseSharingTables, listShares } from "../../engine/src/case-sharing.js";
 import { LocalRulesChecker, type Checker } from "../../engine/src/gateway/checker.js";
 import {
   REPLAY_LINK_PATH,
@@ -132,6 +133,7 @@ function sqlite() {
   ensureDeadlineTables(sql);
   ensureFillReplayTables(sql);
   ensureDocumentTables(sql);
+  ensureCaseSharingTables(sql);
   sql.exec(
     "CREATE TABLE IF NOT EXISTS memory(id TEXT PRIMARY KEY, content TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 0)",
   );
@@ -229,6 +231,10 @@ export class EngineDouble {
           linkCheck: async () => ({ allowed: true }),
           documents: this.documents,
           checker: { check: (input) => this.checker.check(input) },
+          onReceipt: (receipt) => {
+            const original = store.getApprovalByKey(receipt.idempotencyKey);
+            if (original?.actionType === "share") applyShareOutcome(sql, original, this.now(), store.approvalCurrent(original.id));
+          },
         }),
         profile: new ProfileStore({
           sql,
@@ -407,6 +413,13 @@ export class EngineDouble {
           await gateway.requestAction({ ...(split.request as object), personId }, new Date(this.now()), { generation, proposal }),
         );
       }
+      if (rest === "/approvals/fence" && method === "POST") {
+        if (!isGeneration(body.generation)) return Response.json({ error: "generation is required." }, { status: 400 });
+        const order = typeof body.turnId === "string" ? proposalOrderFor(sql, body.turnId) : null;
+        if (!order || typeof body.recipient !== "string") return Response.json({ error: "Unknown turn." }, { status: 400 });
+        const out = await gateway.fenceProposals(body.recipient, order, body.generation);
+        return out ? Response.json(out) : Response.json(STALE, { status: 409 });
+      }
       if (rest === "/approvals/supersede" && method === "POST") {
         if (!isGeneration(body.generation)) return Response.json({ error: "generation is required." }, { status: 400 });
         if (body.generation !== currentGeneration(sql)) return Response.json(STALE, { status: 409 });
@@ -431,9 +444,10 @@ export class EngineDouble {
         const token = await replayLinkToken({ sql, approvals: store, storage: this.replayStorage(personId) }, decodeURIComponent(replay[1]), this.now);
         return token ? Response.json({ path: `/fill/${token}` }) : Response.json({ error: "No replay." }, { status: 404 });
       }
-      const decision = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
+      const decision = rest.match(/^\/approvals\/([^/]+)\/(approve|reject|retire)$/);
       if (decision && method === "POST") {
         const id = decodeURIComponent(decision[1]);
+        if (decision[2] === "retire") return Response.json(await gateway.retireApproval(id, personId));
         return Response.json(decision[2] === "approve" ? await gateway.approveAndExecute(id, personId) : await gateway.rejectApproval(id, personId));
       }
       if (rest === "/reminders" && method === "POST") {
@@ -499,6 +513,7 @@ export class EngineDouble {
         const bytes = this.documentOwners.get(id) === personId ? this.documentBytes.get(id) : undefined;
         return bytes ? new Response(bytes as BodyInit, { headers: { "content-type": "application/octet-stream" } }) : Response.json({ error: "Document not found." }, { status: 404 });
       }
+      if (rest === "/shares" && method === "GET") return Response.json(listShares(sql, this.now()));
       if (rest === "/conversation" && method === "GET") return Response.json({ generation: currentGeneration(sql) });
       if (rest === "/conversation" && method === "DELETE") {
         const before = currentGeneration(sql);
@@ -506,6 +521,7 @@ export class EngineDouble {
         if (removed.generation > before) {
           removeDeadlines(sql, this.now());
           removeFillReplays(sql);
+          endDocumentAccess(sql, this.now());
         }
         await finishLinkCleanup(sql, async (keys) => keys.forEach((k) => this.replayLinks.delete(k)));
         return Response.json({ removed });

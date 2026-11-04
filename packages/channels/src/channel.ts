@@ -20,12 +20,10 @@ export interface Channel {
   // Adds a tapback to a message. Not a message: it spends none of the
   // provider's per-conversation send allowance.
   react(chatId: string, messageId: string, reaction: Reaction): Promise<void>;
-  // Sets the chat's background image. Optional: providers without one
-  // skip it. Throws ChannelFailed when it was not set and
-  // ChannelUncertain when it may have been.
-  setBackground?(chatId: string, image: Blob, signal?: AbortSignal): Promise<void>;
-  // Whether the chat has a background now, to settle an uncertain upload.
-  hasBackground?(chatId: string, signal?: AbortSignal): Promise<boolean>;
+  // Removes the chat's background image. Optional: providers without one
+  // skip it. Mano never sets a background; this only takes off one an
+  // earlier version put on. Throws when it may not have been removed.
+  clearBackground?(chatId: string, signal?: AbortSignal): Promise<void>;
   // Null when the provider has no record of the message.
   lookupMessage(chatId: string, messageId: string): Promise<ChannelMessageStatus | null>;
   listEvents(cursor: string | null, limit: number): Promise<ChannelEventPage>;

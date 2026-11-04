@@ -55,9 +55,19 @@ function fields(raw: unknown): Record<string, unknown> {
   return raw as Record<string, unknown>;
 }
 
+// A daily text's reminder ID (src/always-on.ts): generation, state, program. The
+// whole shape, since a person's own reminder may be named help:rent. Only the
+// check itself creates one.
+const HELP_TEXT_ID = /^help:g\d+:[A-Z]{2}:[a-z][a-z0-9_]*$/;
+
+export function isHelpText(reminderId: string): boolean {
+  return HELP_TEXT_ID.test(reminderId);
+}
+
 export function parseReminderInput(raw: unknown): { id: string; text: string; dueAtMs: number; generation: number } {
   const f = fields(raw);
   const id = requireIdentity(f.id);
+  if (isHelpText(id)) throw new AgentStateInputError("That reminder ID is reserved.");
   if (typeof f.text !== "string" || !f.text || f.text.length > MAX_REMINDER_TEXT) {
     throw new AgentStateInputError(`text must be 1 to ${MAX_REMINDER_TEXT} characters.`);
   }
@@ -142,7 +152,8 @@ export function currentGeneration(sql: SqlExec): number {
 // for Channels to dedupe. sent, dropped (Channels refused it for good, or
 // its conversation was deleted), failed (retries ran out), cancelled and
 // withdrawn (a deadline's nudge stopped after it was handed off, because
-// the deadline closed or moved: never handed off again) are final.
+// the deadline closed or moved, or replaced before it by a change to its
+// deadline: never handed off again) are final.
 export type ReminderStatus = "scheduled" | "claimed" | "sending" | "sent" | "dropped" | "failed" | "cancelled" | "withdrawn";
 
 export interface Reminder {

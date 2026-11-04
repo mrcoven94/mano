@@ -2,6 +2,8 @@
 // the file it came from, the page within its letter, and a box on that
 // page in 0-1000 coordinates (top-left origin).
 
+import type { ModelFailureKind } from "./model.js";
+
 export interface InputFile {
   bytes: Uint8Array;
   mimeType: string;
@@ -95,6 +97,7 @@ export type WarningKind =
   | "phone_unchecked"
   | "address_unchecked"
   | "scam_suspect"
+  | "link_suspect"
   | "conflicting_dates"
   | "segmentation_fallback"
   | "video_truncated"
@@ -106,6 +109,13 @@ export interface Warning {
   letterId: string | null;
   citation: Citation | null;
   detail?: string;
+  // On a model_error warning for a page: why the read failed, as a fixed
+  // kind safe to log.
+  failure?: ModelFailureKind | "not_a_reading";
+  // On a scam_suspect warning: the one date the letter states, or "several"
+  // when it states more or counts from one. Its dates leave the deadlines and
+  // dates to know, and the reply may name this one only as a claim.
+  claimedDate?: string;
 }
 
 export type QuestionKind =

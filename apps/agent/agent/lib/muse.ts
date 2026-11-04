@@ -12,7 +12,9 @@
 // MANO_MODEL_PROVIDER=openrouter (with OPENROUTER_API_KEY) switches the
 // agent to Meta's open-weight model through OpenRouter, pinned to
 // zero-retention endpoints that collect no data, the same pin as the text
-// line's fallback. It is for testing while the Meta Model API is down.
+// line's fallback, sorted by latency and at low reasoning effort. It is
+// for testing while the Meta Model API is down. Filling a form follows the
+// same switch (computer-fill.ts), on a client of its own.
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   APICallError,
@@ -30,6 +32,14 @@ export const OPEN_WEIGHT_MODEL_ID = "meta/muse-spark-open";
 // OpenRouter provider routing: only endpoints with zero data retention,
 // and no provider that stores or trains on what it is sent.
 const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" } as const);
+// Among those endpoints, the fastest to answer first. Low reasoning
+// effort: over greeting, SNAP and YES turns the open model reasoned for
+// a median of 245 tokens at its default and 40 at low, and the voice
+// evals held. The model cannot turn reasoning off.
+const OPENROUTER_BODY = Object.freeze({
+  provider: { sort: "latency", ...ZERO_RETENTION },
+  reasoning: { effort: "low" },
+} as const);
 // Reasoning alone burns ~600-1100 tokens on a greeting; 4096 leaves
 // room for reasoning plus tool calls plus a short reply.
 export const MAX_OUTPUT_TOKENS = 4096;
@@ -110,7 +120,7 @@ function meteringMiddleware(opts: {
       latencyMs,
       status,
     });
-  const logUsage = (finishReason: unknown, usage: unknown, latencyMs: number) => {
+  const logUsage = (finishReason: unknown, usage: unknown, latencyMs: number, ttftMs?: number) => {
     const u = (usage ?? {}) as { inputTokens?: { total?: number }; outputTokens?: { total?: number; reasoning?: number } };
     const inputTokens = tokenCount(u.inputTokens?.total);
     const outputTokens = tokenCount(u.outputTokens?.total);
@@ -123,6 +133,7 @@ function meteringMiddleware(opts: {
         outputTokens,
         reasoningTokens: tokenCount(u.outputTokens?.reasoning),
         latencyMs,
+        ...(ttftMs === undefined ? {} : { ttftMs }),
       }),
     );
     return { inputTokens, outputTokens };
@@ -168,6 +179,7 @@ function meteringMiddleware(opts: {
       // forwards a source rejection untouched, and that error carries
       // the request body. Every chunk and every failure passes here.
       const reader = result.stream.getReader();
+      let ttftMs: number | undefined;
       const stream = new ReadableStream<(typeof result.stream extends ReadableStream<infer C> ? C : never)>({
         async pull(controller) {
           let next: Awaited<ReturnType<typeof reader.read>>;
@@ -189,9 +201,10 @@ function meteringMiddleware(opts: {
             controller.enqueue({ ...chunk, error: sanitizeModelError(part.error) } as typeof chunk);
             return;
           }
+          if (ttftMs === undefined && typeof part?.type === "string" && part.type.endsWith("-delta")) ttftMs = elapsed();
           if (part?.type === "finish") {
             const latencyMs = elapsed();
-            const { inputTokens, outputTokens } = logUsage(part.finishReason, part.usage, latencyMs);
+            const { inputTokens, outputTokens } = logUsage(part.finishReason, part.usage, latencyMs, ttftMs);
             void record("ok", inputTokens, outputTokens, latencyMs);
           }
           controller.enqueue(chunk);
@@ -206,29 +219,34 @@ function meteringMiddleware(opts: {
 }
 
 interface ModelRoute {
-  name: string;
+  name: "meta" | "openrouter";
   baseURL: string;
+  // Empty when the chosen route has no key; the agent then runs a stand-in.
   apiKey: string;
   modelId: string;
   bodyExtra: Record<string, JSONValue>;
 }
 
+// The one place that picks the model path, for both createMuseModel and
+// the agent's stand-in check.
+export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKey"> = {}, env: NodeJS.ProcessEnv = process.env): ModelRoute {
+  return env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY
+    ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY }
+    : {
+        name: "meta",
+        baseURL: opts.baseUrl ?? env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL,
+        apiKey: opts.apiKey ?? env.META_MODEL_API_KEY ?? "",
+        modelId: STANDARD_MODEL_ID,
+        bodyExtra: { store: false },
+      };
+}
+
 export function createMuseModel(opts: MuseModelOptions = {}): { model: LanguageModel; modelId: string } {
-  const env = process.env;
-  const route: ModelRoute =
-    env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY
-      ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: { provider: ZERO_RETENTION } }
-      : {
-          name: "meta",
-          baseURL: opts.baseUrl ?? env.MANO_MODEL_BASE_URL ?? DEFAULT_BASE_URL,
-          apiKey: opts.apiKey ?? env.META_MODEL_API_KEY ?? "missing-key",
-          modelId: STANDARD_MODEL_ID,
-          bodyExtra: { store: false },
-        };
+  const route = selectModelRoute(opts);
   const provider = createOpenAICompatible({
     name: route.name,
     baseURL: route.baseURL,
-    apiKey: route.apiKey,
+    apiKey: route.apiKey || "missing-key",
     includeUsage: true,
   });
   const recorder = new UsageRecorder(opts.usageSink ? [opts.usageSink] : undefined);

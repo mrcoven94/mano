@@ -1,4 +1,6 @@
 import { draftFileKey, stagingAttemptKey, submissionFileKey, trackedOwner, type FileStore } from "./files";
+import { layoutHouseholdBody, layoutsIndexBody, mountFromPath, seedFromInput } from "./layouts";
+import { staffRoute } from "./staff";
 import {
   API_SCOPE_PREFIX,
   DECLARATION,
@@ -23,6 +25,7 @@ import {
   errorPage,
   homePage,
   householdPage,
+  layout,
   reviewPage,
   savedPage,
   timeoutPage,
@@ -41,6 +44,11 @@ export interface PortalConfig {
   portalToken?: string;
   /** Read-only token for GET /drafts/:id. Unset turns that route off; the filing token also reads drafts. */
   draftToken?: string;
+  /** Engine's address and the one organization staff sign in for. Unset turns /staff off. */
+  engineUrl?: string;
+  sandboxOrgId?: string;
+  /** Tests stand in for Engine here. */
+  engineFetch?: typeof fetch;
   now?: () => number;
 }
 
@@ -360,6 +368,15 @@ const HOUSEHOLD_LABELS: Record<keyof Household, string> = {
   householdSize: "Household size",
   monthlyIncome: "Monthly income",
 };
+
+/**
+ * True when the session holds every household field. A session saved before
+ * a field was added (the case number) goes back to step 1 to collect it.
+ */
+function hasHousehold(session: SessionData): session is SessionData & { household: Household } {
+  const household = session.household as Partial<Record<keyof Household, unknown>> | undefined;
+  return !!household && Object.keys(HOUSEHOLD_LABELS).every((field) => typeof household[field as keyof Household] === "string");
+}
 
 function validateHousehold(
   data: Record<string, string>,
@@ -789,12 +806,18 @@ export async function handleRequest(request: Request, store: Store, fileStore: F
 
 async function routeRequest(request: Request, store: Store, fileStore: FileStore, config: PortalConfig): Promise<Response> {
   const url = new URL(request.url);
-  const path = url.pathname;
+  const mount = mountFromPath(url.pathname);
+  // Past this line a layout's address is the plain route, under the same checks.
+  const path = mount?.rest ?? url.pathname;
+  const prefix = mount?.prefix ?? "";
+  const firstStep = (draftId: string | null, error?: string, previous?: Partial<Household>): string =>
+    mount ? layout("Renewal", layoutHouseholdBody(mount, draftId, error, previous), mount) : householdPage(draftId, error, previous);
   const method = request.method.toUpperCase();
 
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
   const allowed = await store.checkRateLimit(ip, nowMs(config), RATE_WINDOW_MS, config.rateLimitPerMinute);
   if (!allowed) return rateLimitedResponse(path);
+  if (path === "/staff" || path.startsWith("/staff/")) return staffRoute(request, path, method, config);
   // Filing, reconciling and the caseworker view take the filing token only.
   if (path === "/caseworker" || path.startsWith("/caseworker/") || path.startsWith("/submissions")) {
     const auth = await authState(request, config.portalToken, [config.portalToken]);
@@ -808,10 +831,20 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
 
   if (method === "GET" && path === "/") return html(homePage());
 
+  if (mount && mount.rest === null) return redirect(`${prefix}/apply`);
+
+  if (method === "GET" && path === "/layouts") return html(layout("Other layouts", layoutsIndexBody()));
+
+  if (method === "GET" && path === "/scramble") {
+    const seed = seedFromInput(url.searchParams.get("seed"), newId);
+    if (!seed) return html(errorPage("Bad seed", "A seed is 1 to 32 letters, numbers or dashes.", "/layouts", "Back to the layouts"), 400);
+    return redirect(`/scramble/${seed}/apply`);
+  }
+
   if (method === "GET" && path === "/apply") {
     const draftId = url.searchParams.get("draft");
     if (draftId !== null && !DRAFT_ID.test(draftId)) return html(errorPage("Bad draft number", DRAFT_ID_RULE, "/apply", "Start over"), 400);
-    return html(householdPage(draftId));
+    return html(firstStep(draftId));
   }
 
   if (method === "POST" && path === "/apply/household") {
@@ -823,9 +856,9 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
       if (typeof v === "string") fields[k] = v;
     }
     const requested = fields["draft"] || null;
-    if (requested !== null && !DRAFT_ID.test(requested)) return html(householdPage(null, DRAFT_ID_RULE, fields), 400);
+    if (requested !== null && !DRAFT_ID.test(requested)) return html(firstStep(null, DRAFT_ID_RULE, fields), 400);
     const parsed = validateHousehold(fields, config.maxFieldLength);
-    if (!parsed.household) return html(householdPage(requested, parsed.error, fields), 400);
+    if (!parsed.household) return html(firstStep(requested, parsed.error, fields), 400);
     let session = await loadLiveSession(request, store, fileStore, config);
     const draftId = requested ?? session?.draftId ?? newId();
     let isNew = false;
@@ -840,25 +873,25 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
       // A new session has no row to renew; it is created, never renewed.
       session.expiresAt = nowMs(config) + config.sessionTimeoutMinutes * 60 * 1000;
       await store.putSession(session);
-      return redirect("/apply/documents", sessionCookie(session.id));
+      return redirect(`${prefix}/apply/documents`, sessionCookie(session.id));
     }
     const fresh = await touchSession(store, session, config);
     if (!fresh) return timedOut();
-    return redirect("/apply/documents", sessionCookie(fresh.id));
+    return redirect(`${prefix}/apply/documents`, sessionCookie(fresh.id));
   }
 
   if (method === "GET" && path === "/apply/documents") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect(`${prefix}/apply`);
     if (!(await touchSession(store, session, config))) return timedOut();
-    return html(documentsPage());
+    return html(documentsPage(undefined, mount));
   }
 
   if (method === "POST" && path === "/apply/documents") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
+    if (!hasHousehold(session)) return redirect(`${prefix}/apply`);
     const capped = await readCappedBody(request, config.maxBodyBytes);
     if (!capped.ok) return tooLargeResponse(false);
     const form = await formRequestFromBytes(request, capped.bytes).formData();
@@ -870,7 +903,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     }
     if (!parsed.files) {
       if (!(await touchSession(store, session, config))) return timedOut();
-      return html(documentsPage(parsed.error), 400);
+      return html(documentsPage(parsed.error, mount), 400);
     }
     // Replacing the draft drops the previous draft objects. If that fails the
     // session keeps pointing at them and the new drafts go away instead.
@@ -883,27 +916,27 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
     }
     session.files = parsed.files;
     if (!(await touchSession(store, session, config))) return timedOut();
-    return redirect("/apply/review");
+    return redirect(`${prefix}/apply/review`);
   }
 
   if (method === "GET" && path === "/apply/review") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
-    if (session.files.length === 0) return redirect("/apply/documents");
+    if (!hasHousehold(session)) return redirect(`${prefix}/apply`);
+    if (session.files.length === 0) return redirect(`${prefix}/apply/documents`);
     if (!(await touchSession(store, session, config))) return timedOut();
-    return html(reviewPage(session.household, session.files));
+    return html(reviewPage(session.household, session.files, mount));
   }
 
   // The browser's Submit saves the draft and files nothing.
   if (method === "POST" && path === "/apply/submit") {
     const session = await loadLiveSession(request, store, fileStore, config);
     if (!session) return timedOut();
-    if (!session.household) return redirect("/apply");
-    if (session.files.length === 0) return redirect("/apply/documents");
+    if (!hasHousehold(session)) return redirect(`${prefix}/apply`);
+    if (session.files.length === 0) return redirect(`${prefix}/apply/documents`);
     if (!(await saveDraft(store, session, session.household, config))) return draftInUse();
     if (!(await touchSession(store, session, config))) return timedOut();
-    return html(savedPage(session.draftId));
+    return html(savedPage(session.draftId, mount));
   }
 
   const draftMatch = DRAFT_PATH.exec(path);

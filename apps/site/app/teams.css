@@ -267,6 +267,7 @@
 
 /* how Mano works */
 .hw-hero h1{max-width:14ch;margin-top:8px}
+.hw-hero .h-phrase{display:inline}
 .hw-hero .h-lede{margin-top:28px;max-width:56ch}
 .hw-path{list-style:none;margin:48px 0 0;padding:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}
 .hw-path a{display:grid;gap:10px;justify-items:start;padding:18px 18px 16px;border:3px solid #fff;border-radius:22px;text-decoration:none;color:var(--text);box-shadow:0 1px 2px rgba(18,18,18,.06),0 10px 22px -14px rgba(18,18,18,.22);transform:rotate(-1.2deg);transition:transform .3s cubic-bezier(.3,1.6,.5,1)}
@@ -330,24 +331,26 @@
 .hw-never b{display:block;font-weight:600;font-size:1.04rem;color:var(--text)}
 .hw-never li div span{display:block;margin-top:4px;font-size:.94rem;color:var(--muted);line-height:1.5}
 .hw-x{width:36px;height:36px;border-radius:50%;background:var(--alert-soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 4.5l7 7M11.5 4.5l-7 7' fill='none' stroke='%23B42318' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") center/16px no-repeat}
-.hw-duo{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.hw-duo{display:grid;gap:16px}
 .hw-duo-card{display:flex;flex-direction:column;align-items:flex-start;gap:14px;padding:36px;border-radius:32px}
 .hw-duo-card.share{background:var(--pen-soft)}
-.hw-duo-card.repo{background:var(--bg2)}
 .hw-duo-card h2{font-size:clamp(1.6rem,2.8vw,2.2rem);margin-top:6px}
 .hw-duo-card p{font-size:1.02rem;line-height:1.55;max-width:46ch;flex:1}
 .hw-duo-card .btn-ghost{background:#fff}
 .hw-chip{display:flex;align-items:center;gap:12px;padding:10px 16px 10px 10px;border-radius:16px;background:#fff;font-size:.88rem;color:var(--muted);box-shadow:0 1px 2px rgba(18,18,18,.05)}
 .hw-chip b{color:var(--text);font-weight:600;margin-right:4px}
-@media (max-width:1080px){.hw-path{gap:10px}.hw-path a{padding:14px}.hw-step{grid-template-columns:1fr;gap:28px}.hw-step:nth-child(even) .hw-body{order:0}.hw-never-grid{grid-template-columns:1fr;gap:32px}.hw-never-mascot{display:none}.hw-never-head h2{max-width:none}}
+@media (max-width:1080px){.hw-path{gap:10px}.hw-path a{padding:14px}.hw-step{grid-template-columns:minmax(0,1fr);gap:28px}.hw-step:nth-child(even) .hw-body{order:0}.hw-never-grid{grid-template-columns:1fr;gap:32px}.hw-never-mascot{display:none}.hw-never-head h2{max-width:none}}
 @media (max-width:860px){.hw-path{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;margin-left:-16px;margin-right:-16px;padding:8px 16px 14px;scrollbar-width:none}.hw-path::-webkit-scrollbar{display:none}.hw-path li{flex:0 0 150px;scroll-snap-align:start}}
 @media (max-width:720px){.hw-see{padding:20px;min-height:0;border-radius:24px}.hw-duo{grid-template-columns:1fr}.hw-duo-card{padding:28px 22px;border-radius:26px}.hw-form div{grid-template-columns:1fr auto}.hw-form dt{grid-column:1/-1;font-size:.8rem}}
+@media (max-width:380px){.hw-see{padding:12px}.hw-card{padding:16px 14px}}
 
 /* fact lists on team pages read as checked cards */
 .team .open-facts{margin-top:32px;gap:10px}
 .team .open-facts li{position:relative;padding:14px 18px 14px 56px;border-radius:18px;background:#fff;box-shadow:0 1px 2px rgba(18,18,18,.05)}
 .team .open-facts li::before{content:"";position:absolute;left:18px;top:15px;width:24px;height:24px;border-radius:50%;background:var(--text) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.4l2.9 2.8 6-6.4' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/13px no-repeat}
 .team .t-rules .open-facts li{background:var(--bg2);box-shadow:none}
+.team .os-facts li{padding:14px 18px 14px 14px;border-radius:20px}
+.team .os-facts li::before{display:none}
 
 /* activity log: who did what, when, in plain words */
 .t-log{background:#fff;border-radius:20px;padding:24px;box-shadow:var(--shadow-lg)}
@@ -401,3 +404,11 @@
 .t-tabs .h-tab[aria-selected="true"]::after{display:none}
 .t-tabs .h-tab-bar{bottom:0;height:4px;background:var(--hl)}
 @media (max-width:720px){.t-more .h-tabs.t-tabs{margin-left:0;margin-right:0;padding:0;gap:8px}.t-tabs .h-tab{padding:9px 14px;font-size:.92rem;white-space:normal}}
+
+/* The short page each kind of team gets until there is a product for them. */
+.t-today{padding-bottom:88px}
+.t-today h1{margin-top:20px;max-width:16em;font-size:clamp(2.2rem,5.4vw,4rem);line-height:1.05;text-wrap:balance}
+.t-today .h-lede{margin-top:20px}
+.t-today-list{display:grid;gap:12px;max-width:680px;margin-top:32px;padding:0;list-style:none}
+.t-today-list li{background:var(--bg2);border-radius:16px;padding:20px 24px;line-height:1.5}
+.t-today .h-ctas{justify-content:flex-start}

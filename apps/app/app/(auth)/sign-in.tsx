@@ -4,9 +4,11 @@
 import { useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Btn, Body, DemoBanner, Field, Muted, Screen, Title } from "../../components/ui";
+import { Btn, Body, Card, DemoBanner, Field, Muted, Screen, Title } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
+import { crisisLineForSignIn } from "../../lib/crisis-help";
 import { useStrings } from "../../lib/i18n";
+import { setPendingSignIn } from "../../lib/sign-in-flow";
 import { colors } from "../../lib/theme";
 
 const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -15,6 +17,7 @@ export default function SignIn() {
   const s = useStrings();
   const router = useRouter();
   const { client, mode } = useAuth();
+  const [crisisLine] = useState(() => crisisLineForSignIn(Date.now()));
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +32,8 @@ export default function SignIn() {
     setError(null);
     try {
       const out = await client.requestCode(trimmed);
-      router.push({ pathname: "/(auth)/verify", params: { email: trimmed, challengeId: out.challengeId } });
+      setPendingSignIn({ email: trimmed, challengeId: out.challengeId });
+      router.push("/(auth)/verify");
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -40,8 +44,14 @@ export default function SignIn() {
   return (
     <Screen>
       {mode === "stand-in" ? <DemoBanner text={s.demoMode} /> : null}
+      {crisisLine ? (
+        <Card>
+          <Body>{crisisLine}</Body>
+        </Card>
+      ) : null}
       <Title>{s.signInTitle}</Title>
       <Body>{s.signInBody}</Body>
+      {mode === "live" ? <Muted style={styles.live}>{s.signInLive}</Muted> : null}
       <View style={styles.form}>
         <Field
           label={s.emailLabel}
@@ -59,5 +69,6 @@ export default function SignIn() {
 
 const styles = StyleSheet.create({
   form: { marginTop: 24 },
+  live: { marginTop: 12 },
   error: { color: colors.alert, marginBottom: 12 },
 });

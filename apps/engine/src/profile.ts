@@ -12,6 +12,12 @@
 //   person.householdConfirmed   (true once the person said who lives with them;
 //                                only source person sets it, and forgetting
 //                                any household member clears it)
+//   person.alwaysOn            (the person turned on the daily check for new
+//                                help, src/always-on.ts; only source person sets it)
+//   person.householdSize   (how many live there, counting the person, when
+//                           they gave a number and not names; only source
+//                           person sets it or clears it, by forgetting it,
+//                           the household or any member)
 //   household.<id>.name|relationship|dateOfBirth
 //   income.<id>.memberId|source|amount|frequency   (memberId: a household id, or "self")
 //   programs.<id>.program|state|caseNumber|status
@@ -65,6 +71,8 @@ export interface Profile {
     county?: Leaf;
     language?: Leaf;
     householdConfirmed?: Leaf<boolean>;
+    alwaysOn?: Leaf<boolean>;
+    householdSize?: Leaf<number>;
   };
   household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];
   income: { id: string; memberId?: Leaf; source?: Leaf; amount?: Leaf<number>; frequency?: Leaf<Frequency> }[];
@@ -72,7 +80,7 @@ export interface Profile {
 }
 
 type Value = string | number | boolean;
-type Kind = "text" | "date" | "phone" | "email" | "state" | "zip" | "amount" | "frequency" | "member" | "flag";
+type Kind = "text" | "date" | "phone" | "email" | "state" | "zip" | "amount" | "frequency" | "member" | "flag" | "count";
 
 const MAX_TEXT = 200;
 const ENTRY_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -111,6 +119,7 @@ const NORMALIZE: Record<Kind, (raw: unknown) => Value | null> = {
   frequency: (raw) => (typeof raw === "string" && (FREQUENCIES as readonly string[]).includes(raw) ? raw : null),
   member: (raw) => (typeof raw === "string" && ENTRY_ID.test(raw) ? raw : null),
   flag: (raw) => (typeof raw === "boolean" ? raw : null),
+  count: (raw) => (typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 30 ? raw : null),
 };
 
 const PERSON_LEAVES: Record<string, Kind> = {
@@ -126,6 +135,8 @@ const PERSON_LEAVES: Record<string, Kind> = {
   "person.county": "text",
   "person.language": "text",
   "person.householdConfirmed": "flag",
+  "person.alwaysOn": "flag",
+  "person.householdSize": "count",
 };
 
 const ENTRY_LEAVES = {
@@ -193,8 +204,11 @@ export function parseProfilePatch(raw: unknown): ParsedPatch {
       continue;
     }
     if (target.kind === "group") throw new ProfileInputError(`${path} is a group; set its fields one by one.`);
-    if (path === "person.householdConfirmed" && source !== "person") {
+    if ((path === "person.householdConfirmed" || path === "person.householdSize") && source !== "person") {
       throw new ProfileInputError("Only the person can confirm who lives with them.");
+    }
+    if (path === "person.alwaysOn" && source !== "person") {
+      throw new ProfileInputError("Only the person can turn the daily check on or off.");
     }
     const clean = NORMALIZE[target.type](value);
     if (clean === null) throw new ProfileInputError(`${path} is not a valid ${target.type}.`);
@@ -212,6 +226,14 @@ const TRUST: Record<ProfileSource, number> = { person: 3, document: 2, agent: 1 
 const TRUST_SQL = "(CASE source WHEN 'person' THEN 3 WHEN 'document' THEN 2 ELSE 1 END)";
 const UNDER = "(path = ? OR substr(path, 1, ?) = ?)";
 const under = (group: string) => [group, group.length + 1, `${group}.`];
+
+// Changes with any write to the profile, a rewrite of the same value included:
+// each seal is new. Compared in the same step as an action decided on values
+// read earlier, since reading them means waiting on decryption.
+export function profileRevision(sql: SqlExec): string {
+  const rows = sql.exec("SELECT path, sealed FROM profile_fields ORDER BY path").toArray() as { path: string; sealed: string }[];
+  return rows.map((r) => `${r.path}\n${r.sealed}`).join("\n");
+}
 
 export function ensureProfileTables(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS profile_fields(
@@ -397,6 +419,12 @@ export class ProfileStore {
     return profile;
   }
 
+  // One leaf, opening nothing else: for code that runs on every wake.
+  async value(path: string): Promise<Value | undefined> {
+    const row = this.rows([path])[0];
+    return row ? this.open(row.path, row.sealed) : undefined;
+  }
+
   async suggestions(): Promise<Suggestion[]> {
     const rows = this.deps.sql
       .exec("SELECT path, source, sealed, document_id, suggested_at FROM profile_suggestions ORDER BY suggested_at, path")
@@ -490,10 +518,12 @@ export class ProfileStore {
         }[];
         for (const r of rows) retireLinkedNotes(sql, r.path, false);
         // A roster with someone forgotten is no longer the one the person
-        // confirmed.
-        if (rows.some((r) => r.path.startsWith("household."))) {
-          sql.exec("DELETE FROM profile_fields WHERE path = 'person.householdConfirmed'");
-        }
+        // confirmed. The count is their own number, and an empty roster has
+        // nothing to change, so those go only on their word.
+        const rosterChanged = rows.some((r) => r.path.startsWith("household."));
+        const personForgot = parsed.source === "person" && (path === "household" || rosterChanged);
+        if (rosterChanged || personForgot) sql.exec("DELETE FROM profile_fields WHERE path = 'person.householdConfirmed'");
+        if (personForgot) sql.exec("DELETE FROM profile_fields WHERE path = 'person.householdSize'");
         sql.exec(`DELETE FROM profile_fields WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
         sql.exec(`DELETE FROM profile_suggestions WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
       }

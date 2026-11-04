@@ -3,7 +3,7 @@
 export interface ResponseRequest {
   model: string;
   instructions: string;
-  tools: Array<{ type: string }>;
+  tools: Array<{ type: string; [key: string]: unknown }>;
   input: unknown[];
   store: boolean;
 }
@@ -24,6 +24,8 @@ export interface FetchModelOptions {
   fetchImpl?: typeof fetch;
   /** Backoff between transient retries. Defaults to 1s, 2s, 4s. */
   retryDelaysMs?: number[];
+  /** Sent with every request. The request's own fields win over these. */
+  body?: Readonly<Record<string, unknown>>;
 }
 
 const RETRYABLE_STATUSES = new Set([500, 502, 503, 504]);
@@ -36,16 +38,18 @@ export class FetchModelClient implements ModelClient {
   private apiKey: string;
   private fetchImpl: typeof fetch;
   private retryDelaysMs: number[];
+  private extraBody: Readonly<Record<string, unknown>>;
 
   constructor(options: FetchModelOptions) {
     this.baseUrl = options.baseUrl.replace(TRAILING_SLASH_RE, "");
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.retryDelaysMs = options.retryDelaysMs ?? [1000, 2000, 4000];
+    this.extraBody = options.body ?? {};
   }
 
   async createResponse(request: ResponseRequest): Promise<ResponsePayload> {
-    const body = JSON.stringify({ model: request.model, instructions: request.instructions, tools: request.tools, input: request.input, store: request.store });
+    const body = JSON.stringify({ ...this.extraBody, model: request.model, instructions: request.instructions, tools: request.tools, input: request.input, store: request.store });
     let attempt = 0;
     for (;;) {
       let res: Response;

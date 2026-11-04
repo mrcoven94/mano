@@ -96,6 +96,7 @@ const NOT_FILED: Record<Exclude<ActionType, "submit">, string> = {
   send: "send a message",
   call: "make a phone call",
   fax: "send a fax",
+  mail: "mail a letter",
   share: "share a case",
 };
 

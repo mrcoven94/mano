@@ -1,27 +1,44 @@
 "use client";
 
 import { useState } from "react";
+import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
+
+type FieldError = { at: "phone" | "code" | "email"; text: string };
+
+const OFFLINE = "Could not reach Mano. Check your connection and try again.";
+
+/* What a failed phone request says, by status. Only a 4xx on the code step means the code was wrong. */
+function failure(status: number, wrongCode: string): string {
+  if (status === 429) return "Too many tries. Wait a few minutes, then try again.";
+  if (status === 503) return "Sign-in is not available right now. Try again later.";
+  if (status >= 500) return "Something went wrong on our side. Try again in a minute.";
+  return wrongCode;
+}
 
 export default function SignInForm() {
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<FieldError | null>(null);
   const [emailBusy, setEmailBusy] = useState(false);
 
   async function requestCode() {
     setBusy(true);
-    setError("");
+    setError(null);
     try {
-      await fetch("/api/accounts/phone/request", {
+      const res = await fetch("/api/accounts/phone/request", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ phone }),
       });
+      if (!res.ok) {
+        setError({ at: "phone", text: failure(res.status, "Check the number and try again.") });
+        return;
+      }
       setSent(true);
     } catch {
-      setSent(true);
+      setError({ at: "phone", text: OFFLINE });
     } finally {
       setBusy(false);
     }
@@ -29,7 +46,7 @@ export default function SignInForm() {
 
   async function verify() {
     setBusy(true);
-    setError("");
+    setError(null);
     try {
       const res = await fetch("/api/accounts/phone/verify", {
         method: "POST",
@@ -37,10 +54,12 @@ export default function SignInForm() {
         body: JSON.stringify({ phone, code }),
       });
       if (!res.ok) {
-        setError("That code did not match. Check the text and try again.");
+        setError({ at: "code", text: failure(res.status, "That code did not match. Check the text and try again.") });
         return;
       }
       window.location.href = "/account";
+    } catch {
+      setError({ at: "code", text: OFFLINE });
     } finally {
       setBusy(false);
     }
@@ -48,7 +67,7 @@ export default function SignInForm() {
 
   async function startEmail(provider: "authkit" | "GoogleOAuth") {
     setEmailBusy(true);
-    setError("");
+    setError(null);
     try {
       // The server generates the login state. The client sends none.
       const res = await fetch("/api/accounts/email/start", {
@@ -56,12 +75,14 @@ export default function SignInForm() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ provider }),
       });
-      const data = (await res.json()) as { url?: string; error?: string };
+      const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
       if (!res.ok || !data.url) {
-        setError(data.error || "Email sign-in is not ready yet. Phone sign-in works now.");
+        setError({ at: "email", text: data.error || "Email sign-in is not ready yet. Phone sign-in works now." });
         return;
       }
       window.location.href = data.url;
+    } catch {
+      setError({ at: "email", text: OFFLINE });
     } finally {
       setEmailBusy(false);
     }
@@ -69,7 +90,6 @@ export default function SignInForm() {
 
   return (
     <div>
-      {error ? <div className="acct-error" role="alert">{error}</div> : null}
       <div className="acct-card">
         <h2>Phone</h2>
         <p>We text a 6-digit code. It expires in 10 minutes.</p>
@@ -82,7 +102,10 @@ export default function SignInForm() {
             placeholder="+1 555 010 0111"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
+            aria-invalid={error?.at === "phone" || undefined}
+            aria-describedby={error?.at === "phone" ? "signin-error" : undefined}
           />
+          {error?.at === "phone" ? <p id="signin-error" className="acct-field-error" role="alert">{error.text}</p> : null}
         </div>
         {!sent ? (
           <button className="btn btn-primary" onClick={requestCode} disabled={busy || !phone.trim()}>
@@ -100,7 +123,10 @@ export default function SignInForm() {
                 placeholder="123456"
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
+                aria-invalid={error?.at === "code" || undefined}
+                aria-describedby={error?.at === "code" ? "signin-error" : undefined}
               />
+              {error?.at === "code" ? <p id="signin-error" className="acct-field-error" role="alert">{error.text}</p> : null}
             </div>
             <div className="acct-row">
               <button className="btn btn-primary" onClick={verify} disabled={busy || code.trim().length < 6}>
@@ -124,8 +150,9 @@ export default function SignInForm() {
             Continue with Google
           </button>
         </div>
+        {error?.at === "email" ? <p className="acct-field-error acct-row-error" role="alert">{error.text}</p> : null}
       </div>
-      <p className="note">New here? Text Mano first. That creates your account, then sign in here with the same number.</p>
+      <p className="note">New here? Text Mano at <a className="sms-num" href={SMS_HREF}>{SMS_NUMBER}</a> first. That creates your account, then sign in here with the same number.</p>
     </div>
   );
 }

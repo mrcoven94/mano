@@ -11,12 +11,16 @@ import {
   APPROVED_NOTICE,
   APPROVE_FOLLOWUP,
   CASEWORKER_REQUEST,
+  CHANGE_REPLY,
+  CHANGE_REPLY_ES,
   DECLINE_REPLY,
   FALLBACK_REPLY,
   GREETING,
   MAIL_REPLY,
   MARIA,
   PAYSTUB_REPLY,
+  RENEWAL_ANSWERS,
+  RENEWAL_DECLARATION,
   approvalNoticePdfB64,
   approvalsReply,
   deadlinesReply,
@@ -163,7 +167,7 @@ export class StandInClient implements ManoClient {
       recipient: "sandbox:county-portal",
       purpose: "File your SNAP renewal for case R-1042",
       documentId: doc.meta.id,
-      payload: { caseId: "R-1042", office: "Springfield County SNAP office" },
+      payload: { ...RENEWAL_ANSWERS, declaration: RENEWAL_DECLARATION, attachment: "SNAP renewal packet" },
       idempotencyKey: "spine:renewal:maria-001",
       actor: "foreground",
       personId: MARIA.personId,
@@ -222,6 +226,10 @@ export class StandInClient implements ManoClient {
     this.checkSession(session);
     this.seed();
     return [...this.messages];
+  }
+
+  async acknowledgeQuestion(session: Session): Promise<void> {
+    this.checkSession(session);
   }
 
   async sendMessage(session: Session, text: string, attachments: NewAttachment[], opId?: string): Promise<ChatMessage> {
@@ -337,6 +345,11 @@ export class StandInClient implements ManoClient {
       return { text: PAYSTUB_REPLY, followUps: [APPROVED_NOTICE] };
     }
     const lower = text.toLowerCase();
+    // "Ask Mano to change something" opens the chat with these words.
+    // Only while the renewal waits: once decided, "nothing was sent" may be false.
+    const waiting = this.mailReceived && this.renewalStatus() === "pending";
+    if (waiting && lower.includes("please change")) return { text: CHANGE_REPLY, followUps: [] };
+    if (waiting && lower.includes("por favor cambie")) return { text: CHANGE_REPLY_ES, followUps: [] };
     if (lower.includes("deadline")) {
       const base = !this.mailReceived ? 0 : this.renewalApproved ? 1 : 2;
       const open = base + this.extraDeadlines.filter((d) => !d.done).length;

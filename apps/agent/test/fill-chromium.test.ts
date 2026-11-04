@@ -12,6 +12,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { FakeModelClient, PlaywrightComputer, type ComputerAction } from "@mano/computer";
 
+import { fillDepsFromEnv } from "../agent/lib/computer-fill.js";
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { engineFrom } from "../agent/lib/engine.js";
 import { FORMS } from "../agent/lib/forms.js";
@@ -161,9 +162,9 @@ describe.skipIf(!installed)("fill_form in real Chromium", () => {
         address: { line1: leaf("100 Sample St"), city: leaf("Tacoma"), state: leaf("WA"), zip: leaf("98402") },
         householdConfirmed: leaf(true),
       },
-      household: [{ id: "m1" }, { id: "m2" }],
+      household: [{ id: "m1", name: leaf("Ana Testcase") }, { id: "m2", name: leaf("Luis Testcase") }],
       income: [{ id: "i1", amount: { value: 1075, source: "document", documentId: "doc-stub", updatedAt: at }, frequency: leaf("biweekly") }],
-      programs: [{ id: "snap", program: leaf("SNAP"), caseNumber: leaf("WA-SNAP-0042117") }],
+      programs: [{ id: "snap", program: leaf("SNAP"), state: leaf("WA"), caseNumber: leaf("WA-SNAP-0042117") }],
     };
     Object.assign(portal, { hits: [], offsiteHits: [], authorizedFromBrowser: 0, submissions: [], mode: "sealed" });
     portal.drafts.clear();
@@ -217,6 +218,61 @@ describe.skipIf(!installed)("fill_form in real Chromium", () => {
     }
     expect(new Set(shots.map((png) => png.toString("base64"))).size).toBe(8);
     expect(shots[8]!.equals(shots[7]!)).toBe(true);
+  }, 60_000);
+
+  it("with the open-weight switch on, fill_form runs on that model under its pin, and each real screenshot reaches it", async () => {
+    const requests: { url: string; auth: string | null; body: Record<string, any> }[] = [];
+    const replies = [
+      [{ type: "reasoning", summary: [] }, { type: "function_call", id: "f1", call_id: "call-1", name: "computer", arguments: JSON.stringify({ actions: typing() }) }],
+      [{ type: "message", content: [{ type: "output_text", text: "ACCEPTED" }] }],
+    ];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith(ENGINE_URL)) return engine.fetch(input, init);
+      if (!url.startsWith("https://openrouter.ai/")) return realFetch(input, init);
+      requests.push({ url, auth: new Headers(init?.headers).get("authorization"), body: JSON.parse(String(init?.body)) });
+      return Response.json({ id: `resp-${requests.length}`, status: "completed", output: replies.shift() });
+    });
+    setFillDepsForTests((personId) => {
+      const deps = fillDepsFromEnv(personId, {
+        MANO_MODEL_PROVIDER: "openrouter",
+        OPENROUTER_API_KEY: "stub-open-weight-key",
+        META_MODEL_API_KEY: "stub-meta-key",
+        MANO_COMPUTER_MODEL: "not-meta/other-model",
+        COMPUTER_BACKEND: "playwright",
+        SANDBOX_PORTAL_DRAFT_TOKEN: DRAFT_TOKEN,
+      });
+      if ("computer" in deps) computer = deps.computer as PlaywrightComputer;
+      return deps;
+    });
+
+    const out = await run("turn_chrome003");
+
+    expect(out.status).toBe("waiting_for_yes");
+    expect(requests).toHaveLength(2);
+    for (const r of requests) {
+      expect(r.url).toBe("https://openrouter.ai/api/v1/responses");
+      expect(r.auth).toBe("Bearer stub-open-weight-key");
+      expect(r.body.model).toBe("meta/muse-spark-open");
+      expect(r.body.provider).toEqual({ sort: "latency", zdr: true, data_collection: "deny" });
+      expect(r.body.store).toBe(false);
+    }
+    // The second turn replays the batch and shows the form after Continue.
+    const images = requests[1]!.body.input.flatMap((m: { content?: { image_url?: string }[] }) => (m.content ?? []).flatMap((c) => c.image_url ?? []));
+    expect(images).toHaveLength(2);
+    const pngs = images.map((u: string) => Buffer.from(u.replace("data:image/png;base64,", ""), "base64"));
+    for (const png of pngs) expect([png.subarray(1, 4).toString(), png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual(["PNG", 1280, 800]);
+    expect(pngs[0]!.equals(pngs[1]!)).toBe(false);
+
+    // What reaches the person is what the portal saved, and nothing is filed.
+    const [approval] = engine.approvals();
+    expect(JSON.parse(approval.requestJson).payload.caseNumber).toBe("WA-SNAP-0042117");
+    expect(portal.submissions).toEqual([]);
+    expect(engine.executor.calls).toHaveLength(0);
+    const page = (await engine.replayPageAt((await client().replayLink(approval.id))!))!;
+    expect(page).toContain("An AI model chose each step below from what it saw on the screen.");
+    expect(page.replace(/<[^>]*>/g, "")).not.toMatch(/muse|openrouter|meta\b/i);
+    expect(page.match(/data:image\/png;base64,/g)).toHaveLength(9);
   }, 60_000);
 
   it("a form that sends the values off the portal sends nothing there, and the fill fails without preparing an approval", async () => {

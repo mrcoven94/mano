@@ -182,6 +182,21 @@ describe("update_profile", () => {
 });
 
 describe("the profile at the start of every turn", () => {
+  it("tells the model today's date in the person's zone, read at the time the turn arrived", async () => {
+    const toldAt = async (iso: string) => {
+      const resolve = (profileInstruction as unknown as { events: Record<string, (e: unknown, c: unknown) => Promise<{ content?: string } | null>> }).events["turn.started"];
+      return (await resolve({}, toolCtx({ handleHash: HANDLE, turnId: "turn_today0001", grant, generation: 0, turnAtMs: Date.parse(iso) })))?.content ?? "";
+    };
+    // No state on file is Pacific: still November 3, past midnight in UTC.
+    expect(await toldAt("2026-11-04T07:30:00.000Z")).toContain("Today is Tuesday, November 3, 2026");
+    await update({ person: { address: { state: "NY" } } });
+    expect(await toldAt("2026-11-04T04:30:00.000Z")).toContain("Today is Tuesday, November 3, 2026");
+    expect(await toldAt("2026-11-04T05:30:00.000Z")).toContain("Today is Wednesday, November 4, 2026");
+    // A profile that cannot be read still leaves the model the date.
+    engine.profileKeySet = false;
+    expect(await toldAt("2026-11-04T07:30:00.000Z")).toContain("Today is Tuesday, November 3, 2026");
+  });
+
   it("names the fields on file and missing, with no value in the system instruction", async () => {
     await update({
       person: { fullName: "Rosa Testcase", phone: "555-0100", address: { line1: "12 Sample Street", city: "Testville", state: "UT", zip: "84101" } },
@@ -358,5 +373,29 @@ describe("Sol's second review", () => {
     expect(call.context.join("\n")).toContain(`"entry":"income: Weekend cleaning"`);
     expect(out.summary).toContain("Diner job amount 1750");
     expect(out.summary).toContain("Weekend cleaning amount 320");
+  });
+});
+
+describe("the daily check flag", () => {
+  it("turns the daily check on and off, and says what it covers where the person lives", async () => {
+    await update({ person: { address: { state: "CA" } } }, "turn_check_state");
+    const on = (await update({ person: { alwaysOn: true } }, "turn_check_on")) as unknown as { saved: string[]; dailyCheck: string };
+    expect(on.saved).toEqual(["daily check"]);
+    expect(on.dailyCheck).toContain("It is on");
+    expect(on.dailyCheck).toContain("the office always decides");
+    const off = (await update({ person: { alwaysOn: false } }, "turn_check_off")) as unknown as { saved: string[]; dailyCheck?: string };
+    expect(off.saved).toEqual(["daily check"]);
+    expect(off.dailyCheck).toBeUndefined();
+  });
+
+  it("promises nothing from the daily check outside the catalog's states", async () => {
+    const elsewhere = (await update({ person: { alwaysOn: true, address: { state: "co" } } }, "turn_check_co")) as unknown as { dailyCheck: string };
+    expect(elsewhere.dailyCheck).toContain("will not find anything");
+    expect(elsewhere.dailyCheck).not.toContain("It is on");
+  });
+
+  it("asks for the state before promising anything from the daily check", async () => {
+    const unknown = (await update({ person: { alwaysOn: true } }, "turn_check_none")) as unknown as { dailyCheck: string };
+    expect(unknown.dailyCheck).toContain("Ask which state");
   });
 });

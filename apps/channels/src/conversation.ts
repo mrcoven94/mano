@@ -104,13 +104,6 @@ export function globalStateStub(env: Env): DurableObjectStub {
   return env.CHANNEL_STATE.get(env.CHANNEL_STATE.idFromName(GLOBAL_STATE_ID));
 }
 
-// Mano's chat background is off unless turned on: the first version did
-// not fill the screen on an iPhone and dimmed badly in dark mode (PR 74).
-export function chatBackgroundUrl(env: Env): string | null {
-  if (env.MANO_CHAT_BACKGROUND_ENABLED !== "true") return null;
-  return env.MANO_CHAT_BACKGROUND_URL?.trim() || null;
-}
-
 // One switch for every reaction and the eyes: on unless set to "false".
 export function reactionsEnabled(env: Env): boolean {
   return env.MANO_REACTIONS_ENABLED?.trim().toLowerCase() !== "false";
@@ -226,7 +219,7 @@ export class ConversationDO implements DurableObject {
   // Serializes turns across requests in one isolate, so an unfinished
   // row always means the last attempt died rather than a concurrent run.
   private turnChain: Promise<unknown> = Promise.resolve();
-  // Eyes and background work, outside the turn chain, kept across
+  // Eyes and background removal, outside the turn chain, kept across
   // requests so STOP and a delete can cancel what an earlier one started.
   private decorations: Decorations;
 
@@ -303,7 +296,6 @@ export class ConversationDO implements DurableObject {
         maxInboundAgeMs: DEFAULT_RUNNER_CONFIG.maxInboundAgeMs,
         mediaHosts: parseMediaHosts(this.env.BLOOIO_MEDIA_HOSTS),
         eyesAfterMs: numberEnv(this.env.TURN_EYES_AFTER_MS, DEFAULT_RUNNER_CONFIG.eyesAfterMs),
-        backgroundUrl: chatBackgroundUrl(this.env),
         reactionsEnabled: reactionsEnabled(this.env),
       },
     });
@@ -389,6 +381,7 @@ export class ConversationDO implements DurableObject {
         key?: unknown;
         text?: unknown;
         generation?: unknown;
+        noReplay?: unknown;
       } | null;
       if (
         !body ||
@@ -405,7 +398,7 @@ export class ConversationDO implements DurableObject {
       }
       const { runner } = this.runner(body.handleHash);
       try {
-        const result = await runner.sendAgentText({ key: body.key, text: body.text, generation: body.generation });
+        const result = await runner.sendAgentText({ key: body.key, text: body.text, generation: body.generation, noReplay: body.noReplay === true });
         if (!result.sent && result.reason === "budget") {
           return Response.json({ sent: false, reason: "budget" }, { status: 429 });
         }

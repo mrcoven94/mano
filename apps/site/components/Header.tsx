@@ -4,13 +4,11 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { REPO_URL } from "@/lib/site";
 import Mascot from "./Mascot";
+import TextMano from "./TextMano";
 
 const links = [
-  { href: "/", label: "For people", sub: "Free to start" },
-  { href: "/government", label: "For government", sub: "Case management" },
-  { href: "/organizations", label: "For nonprofits", sub: "Case management" },
-  { href: "/partners", label: "Partners", sub: "Offer your service" },
-  { href: "/#pricing", label: "Pricing", sub: "Free and Plus" },
+  { href: "/how-it-works", label: "How Mano works", sub: "From a photo to a filing" },
+  { href: "/renewals", label: "Renewals", sub: "Your letter came" },
 ];
 
 export default function Header() {
@@ -28,8 +26,9 @@ export default function Header() {
           ))}
         </nav>
         <div className="header-cta">
-          <a className="quiet" href={REPO_URL}>Open source</a>
-          <a className="btn btn-primary btn-sm" href="/#get-mano">Text Mano</a>
+          <Link className="quiet" href="/sign-in">Sign in</Link>
+          <a className="quiet repo" href={REPO_URL}>Open source</a>
+          <TextMano className="btn btn-primary btn-sm" align="end" />
           <details className="menu" ref={menu}>
             <summary aria-label="Menu"><span /></summary>
             <nav aria-label="Main" className="menu-panel">
@@ -38,8 +37,9 @@ export default function Header() {
                   {l.label} <small>{l.sub}</small>
                 </Link>
               ))}
+              <Link href="/sign-in" aria-current={path === "/sign-in" ? "page" : undefined}>Sign in <small>Your account</small></Link>
               <a href={REPO_URL}>Open source <small>GitHub</small></a>
-              <a className="btn btn-primary" href="/#get-mano" style={{ width: "100%", marginTop: 6 }}>Text Mano</a>
+              <TextMano align="end" />
             </nav>
           </details>
         </div>

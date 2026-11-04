@@ -170,6 +170,17 @@ describe("EngineClient", () => {
     expect(await client.decline(session, "appr-1")).toEqual({ status: "expired", notSent: false });
   });
 
+  it("names the recipient in words and never shows its raw ID as the name", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ approvals: [{ ...approvalRow, recipient: "sandbox-agency-portal" }, { ...approvalRow, id: "appr-2" }] }),
+    );
+    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
+    const [named, unnamed] = await client.listApprovals(session);
+    expect(named?.recipientName).toBe("the State Benefits Renewal Office test portal");
+    expect(named?.recipient).toBe("sandbox-agency-portal");
+    expect(unnamed?.recipientName).toBe("an office Mano has no name for");
+  });
+
   it("treats a row with no outcome on file as possibly sent", async () => {
     const { outcome: _outcome, ...bare } = approvalRow;
     void _outcome;
@@ -253,11 +264,66 @@ describe("EngineClient", () => {
     await expect(client.listApprovals(session)).rejects.toBeInstanceOf(AuthError);
   });
 
-  it("names the missing engine routes", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({}));
-    const client = new EngineClient({ baseUrl: "https://engine.test", sha256B64, fetchImpl: fetchImpl });
-    await expect(client.requestCode("a@b.c")).rejects.toMatchObject({ name: "EngineGapError", route: "POST /api/auth/request-code" });
-    await expect(client.listMessages(session)).rejects.toBeInstanceOf(EngineGapError);
+  it("signs in and reads the conversation from the server", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const path = url;
+      if (path.endsWith("/request-code")) return jsonResponse({ challengeId: "c1", maskedEmail: "m***@b.c" });
+      if (path.endsWith("/verify-code")) return jsonResponse(session);
+      return jsonResponse({ messages: [{ id: "m1", role: "agent", text: "Hi", createdAt: "2026-11-03T12:00:00.000Z" }] });
+    });
+    const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: fetchImpl as unknown as typeof fetch });
+    await expect(client.requestCode("a@b.c")).resolves.toEqual({ challengeId: "c1", maskedEmail: "m***@b.c" });
+    await expect(client.verifyCode("a@b.c", "c1", "123456")).resolves.toEqual(session);
+    await expect(client.listMessages(session)).resolves.toMatchObject([{ id: "m1", text: "Hi", attachments: [], status: "sent" }]);
+  });
+
+  it("calls the browser's fetch unbound, which throws when called as a method", async () => {
+    vi.stubGlobal("fetch", function (this: unknown) {
+      if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+      return Promise.resolve(jsonResponse({ challengeId: "c1", maskedEmail: "m***@b.c" }));
+    });
+    try {
+      const client = new EngineClient({ baseUrl: "https://web.test", sha256B64 });
+      await expect(client.requestCode("a@b.c")).resolves.toMatchObject({ challengeId: "c1" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the server's message ID and question on a reply and in the conversation", async () => {
+    const asked = { id: "a-1", reply: "Send it? Reply YES or NO.", createdAt: "2026-11-03T12:00:00.000Z", ask: { approvalId: "appr-1" } };
+    const fetchImpl = vi.fn(async () => jsonResponse(asked));
+    const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl });
+    await expect(client.sendMessage(session, "Send it", [], "op-1")).resolves.toMatchObject({ id: "a-1", ask: { approvalId: "appr-1" } });
+    const listed = vi.fn(async () => jsonResponse({ messages: [{ id: "a-1", role: "agent", text: "Send it?", createdAt: asked.createdAt, ask: asked.ask }] }));
+    const lister = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: listed });
+    await expect(lister.listMessages(session)).resolves.toMatchObject([{ id: "a-1", ask: { approvalId: "appr-1" } }]);
+  });
+
+  it("tells the server a question was displayed, and takes a closed question as done", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ ok: true }));
+    const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: fetchImpl });
+    await client.acknowledgeQuestion(session, "appr-1", "a-1");
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://web.test/api/persons/maria-001/approvals/appr-1/shown");
+    expect(init.body).toBe(JSON.stringify({ messageId: "a-1" }));
+    fetchImpl.mockResolvedValueOnce(new Response("{}", { status: 409 }));
+    await expect(client.acknowledgeQuestion(session, "appr-1", "a-1")).resolves.toBeUndefined();
+    fetchImpl.mockResolvedValueOnce(new Response("{}", { status: 503 }));
+    await expect(client.acknowledgeQuestion(session, "appr-1", "a-1")).rejects.toThrow();
+  });
+
+  it("shows a server's error in plain words", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: "Sign-in email is not turned on yet." }), { status: 503 }));
+    const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: fetchImpl });
+    await expect(client.requestCode("a@b.c")).rejects.toThrow("Sign-in email is not turned on yet.");
+  });
+
+  it("turns a 501 into a named gap, and names routes with no server", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: "not yet" }), { status: 501 }));
+    const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: fetchImpl });
+    await expect(client.listApprovals(session)).rejects.toMatchObject({ name: "EngineGapError" });
+    fetchImpl.mockClear();
     await expect(client.listDeadlines(session)).rejects.toBeInstanceOf(EngineGapError);
     await expect(client.listDocuments(session)).rejects.toBeInstanceOf(EngineGapError);
     await expect(client.listGrants(session)).rejects.toBeInstanceOf(EngineGapError);

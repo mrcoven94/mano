@@ -2,7 +2,7 @@
 // and voice notes. Offline messages wait in the outbox and send in order
 // when the engine is reachable again.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
 import {
   AppState,
   FlatList,
@@ -23,8 +23,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Btn, DemoBanner, EmptyView, LoadingView, Title } from "../../components/ui";
 import type { Attachment, ChatMessage, NewAttachment } from "../../lib/api/types";
 import { AuthError } from "../../lib/api/types";
-import { useAuth } from "../../lib/auth";
+import { useAuth, useClearOnSignOut } from "../../lib/auth";
+import { takeChatDraft } from "../../lib/chat-draft";
 import { trackCacheFile } from "../../lib/cache-files";
+import { EDGE_ON_SCREEN, canSend, crisisNoticeFor, inDisplayOrder, listRows, mergeArrived, questionsToAcknowledge, showsThread, visibleEdges, visibleMessageIds, type ListRow } from "../../lib/chat-thread";
+import { QuestionViewing } from "../../lib/question-viewing";
 import { useStrings } from "../../lib/i18n";
 import { submitMessage } from "../../lib/send";
 import { fileToB64, pickMailPhotos, pickMailVideo, takeMailPhoto, takeMailVideo, type PickedMedia } from "../../lib/media";
@@ -62,8 +65,8 @@ export default function Chat() {
   const s = useStrings();
   const { client, session, mode, outbox, personStore, signOut } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [arrived, setArrived] = useState<ChatMessage[]>([]);
   const [queued, setQueued] = useState<QueuedMessage[]>([]);
-  const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
@@ -75,12 +78,19 @@ export default function Chat() {
   const [voicePlaying, setVoicePlaying] = useState(false);
   const recorder = useAudioRecorder(RecordingPresets.LOW_QUALITY);
   const playerRef = useRef<AudioPlayer | null>(null);
-  const listRef = useRef<FlatList<ChatMessage>>(null);
+  const listRef = useRef<FlatList<ListRow>>(null);
+  const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
+
+  const keepReply = useCallback((reply: ChatMessage) => setArrived((current) => [...current, reply]), []);
+  useClearOnSignOut(() => setArrived([]));
+  const thread = useMemo(() => mergeArrived(messages, arrived), [messages, arrived]);
 
   const refresh = useCallback(async () => {
     if (!session || !outbox) return;
     try {
-      await outbox.flush(session, (item) => client.sendMessage(session, item.text, item.attachments, item.id));
+      await outbox.flush(session, async (item) => {
+        keepReply(await client.sendMessage(session, item.text, item.attachments, item.id));
+      });
     } catch (err) {
       if (err instanceof AuthError) {
         await signOut();
@@ -100,15 +110,87 @@ export default function Chat() {
       }
       setQueued(await outbox.list());
       setOfflineNote(true);
-    } finally {
-      setLoading(false);
     }
-  }, [client, session, outbox, signOut]);
+  }, [client, session, outbox, signOut, keepReply]);
 
   useFocusEffect(
     useCallback(() => {
       void refresh();
     }, [refresh]),
+  );
+
+  // What the person has had in front of them. The list reports which edge
+  // markers are on screen; a timer wakes when the next one finishes its
+  // dwell. FlatList refuses a viewability callback that changes, so that
+  // one is fixed for its life.
+  const viewing = useRef(new QuestionViewing()).current;
+  const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
+  const wake = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const focused = useRef(false);
+  const pump = useRef(() => {
+    if (wake.current) clearTimeout(wake.current);
+    wake.current = null;
+    const now = Date.now();
+    const next = viewing.seen(now);
+    setSeen((current) => (current.size === next.size ? current : next));
+    const due = viewing.nextDueIn(now);
+    if (due !== null) wake.current = setTimeout(() => pump.current(), due);
+  });
+  const [crisisSettled, setCrisisSettled] = useState<ReadonlySet<string>>(new Set());
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: { item: ListRow; isViewable: boolean }[] }) => {
+    viewing.setVisible(visibleEdges(viewableItems), Date.now());
+    pump.current();
+    const onScreen = visibleMessageIds(viewableItems);
+    if (onScreen.size > 0) setCrisisSettled((current) => new Set([...current, ...onScreen]));
+  }).current;
+
+  // A viewing lasts while this tab shows with the app in the foreground.
+  useFocusEffect(
+    useCallback(() => {
+      focused.current = true;
+      if (AppState.currentState === "active") viewing.enterForeground(Date.now());
+      pump.current();
+      return () => {
+        focused.current = false;
+        viewing.leaveForeground();
+        pump.current();
+      };
+    }, [viewing]),
+  );
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state: AppStateStatus) => {
+      if (state === "active" && focused.current) viewing.enterForeground(Date.now());
+      else if (state !== "active") viewing.leaveForeground();
+      pump.current();
+    });
+    return () => {
+      sub.remove();
+      if (wake.current) clearTimeout(wake.current);
+    };
+  }, [viewing]);
+
+  // Coming back to the app refreshes the thread, which runs this again.
+  const acknowledged = useRef(new Set<string>());
+  useFocusEffect(
+    useCallback(() => {
+      if (!session) return;
+      for (const { approvalId, messageId } of questionsToAcknowledge(thread, seen, AppState.currentState === "active", acknowledged.current)) {
+        acknowledged.current.add(messageId);
+        client.acknowledgeQuestion(session, approvalId, messageId).catch(() => acknowledged.current.delete(messageId));
+      }
+    }, [client, session, thread, seen]),
+  );
+
+  // A draft another screen handed over (an approval quoted for a change)
+  // lands in the composer for the person to finish; nothing sends itself.
+  useFocusEffect(
+    useCallback(() => {
+      if (!session) return;
+      const draft = takeChatDraft(session.token);
+      if (!draft) return;
+      setText((current) => (current.trim() ? `${current.trimEnd()}\n${draft}` : draft));
+      inputRef.current?.focus();
+    }, [session]),
   );
 
   useEffect(() => {
@@ -125,11 +207,13 @@ export default function Chat() {
     if (!body.trim() && attachments.length === 0) return false;
     setSending(true);
     try {
-      const report = await submitMessage(client, session, outbox, body.trim(), attachments);
+      const report = await submitMessage(client, session, outbox, body.trim(), attachments, keepReply);
       setText("");
       setQueued(await outbox.list());
       setOfflineNote(report.kept.length > 0);
-      await refresh();
+      // Not awaited: a stalled conversation must not lock the composer, or a
+      // later message that needs the crisis line could never be sent.
+      void refresh();
       return report.kept.length === 0;
     } catch (err) {
       if (err instanceof AuthError) {
@@ -308,7 +392,8 @@ export default function Chat() {
     status: "queued",
   }));
 
-  const all = [...messages, ...queuedAsMessages];
+  const all = inDisplayOrder(thread, queuedAsMessages);
+  const crisisNotice = crisisNoticeFor(thread, crisisSettled);
   const shown = [...all].reverse();
   const heldCount = queued.filter((q) => q.held === true).length;
 
@@ -341,20 +426,22 @@ export default function Chat() {
           ) : null}
         </View>
 
-        {loading ? (
+        {/* An inverted list draws its empty component upside down on the web. */}
+        {!showsThread(shown) ? (
           <View style={styles.empty}>
             <EmptyView body={s.agentEmpty} />
           </View>
         ) : (
           <FlatList
             ref={listRef}
-            data={shown}
-            keyExtractor={(m) => m.id}
+            data={listRows(shown)}
+            keyExtractor={(row) => row.key}
             inverted
             contentContainerStyle={styles.list}
             keyboardShouldPersistTaps="handled"
-            renderItem={({ item }) => <Bubble message={item} queuedLabel={s.queued} />}
-            ListEmptyComponent={<EmptyView body={s.agentEmpty} />}
+            renderItem={({ item }) => (item.kind === "edge" ? <View style={styles.edge} /> : <Bubble message={item.message} queuedLabel={s.queued} />)}
+            viewabilityConfig={EDGE_ON_SCREEN}
+            onViewableItemsChanged={onViewableItemsChanged}
           />
         )}
 
@@ -442,16 +529,34 @@ export default function Chat() {
           </View>
         ) : null}
 
+        {crisisNotice ? (
+          <View style={styles.crisisNotice} accessibilityRole="alert">
+            <Text style={[type.body, styles.flex]}>{crisisNotice.text}</Text>
+            <Pressable
+              onPress={() => setCrisisSettled((current) => new Set([...current, crisisNotice.id]))}
+              style={styles.iconBtn}
+              accessibilityRole="button"
+              accessibilityLabel={s.close}
+            >
+              <Ionicons name="close-outline" size={24} color={colors.text} />
+            </Pressable>
+          </View>
+        ) : null}
+
         <View style={styles.composer}>
-          <Pressable
-            onPress={() => setAttachOpen((v) => !v)}
-            style={styles.iconBtn}
-            accessibilityRole="button"
-            accessibilityLabel={s.mailTitle}
-          >
-            <Ionicons name={attachOpen ? "close-outline" : "add-outline"} size={24} color={colors.text} />
-          </Pressable>
+          {/* Sending mail needs Engine's document routes, which the live app does not reach yet. */}
+          {mode === "stand-in" ? (
+            <Pressable
+              onPress={() => setAttachOpen((v) => !v)}
+              style={styles.iconBtn}
+              accessibilityRole="button"
+              accessibilityLabel={s.mailTitle}
+            >
+              <Ionicons name={attachOpen ? "close-outline" : "add-outline"} size={24} color={colors.text} />
+            </Pressable>
+          ) : null}
           <TextInput
+            ref={inputRef}
             value={text}
             onChangeText={setText}
             placeholder={s.composerHint}
@@ -462,8 +567,8 @@ export default function Chat() {
           />
           <Pressable
             onPress={() => void sendNow(text, [])}
-            disabled={sending || !text.trim()}
-            style={[styles.sendBtn, (sending || !text.trim()) && styles.disabled]}
+            disabled={!canSend(text, sending)}
+            style={[styles.sendBtn, !canSend(text, sending) && styles.disabled]}
             accessibilityRole="button"
             accessibilityLabel={s.send}
           >
@@ -476,6 +581,8 @@ export default function Chat() {
 }
 
 const styles = StyleSheet.create({
+  edge: { height: 1 },
+  crisisNotice: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.envelope },
   screen: { flex: 1, backgroundColor: colors.bg },
   flex: { flex: 1 },
   header: { paddingHorizontal: 20, paddingTop: 16, maxWidth: 640, width: "100%", alignSelf: "center" },

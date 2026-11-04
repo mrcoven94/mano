@@ -19,7 +19,7 @@ function consent(revoked: boolean): Line[] {
   return [
     { t: [p("{")] },
     { t: [p("  "), k("type"), p(": "), s("consent.grant"), p(",")] },
-    { t: [p("  "), k("from"), p(": "), s("person:maria-lopez"), p(",")] },
+    { t: [p("  "), k("from"), p(": "), s("person:maria-torres"), p(",")] },
     { t: [p("  "), k("to"), p(": "), s("org:northside-family-center"), p(",")] },
     { t: [p("  "), k("purpose"), p(": "), s("food-benefits-renewal"), p(",")] },
     { t: [p("  "), k("documents"), p(": ["), s("pay-stub-2026-10-24"), p("],")] },
@@ -32,9 +32,9 @@ function consent(revoked: boolean): Line[] {
 }
 
 const LOG: Line[] = [
-  { t: [n("09:55"), p("  "), s("decide"), p("   approve renewal, case 0418")] },
+  { t: [n("09:55"), p("  "), s("decide"), p("   approve renewal, case R-1042")] },
   { t: [n("09:55"), p("  "), s("log"), p("      recipient, purpose, copy 7f3a")] },
-  { t: [n("09:56"), p("  "), s("act"), p("      submit to Sample County")] },
+  { t: [n("09:56"), p("  "), s("act"), p("      submit to Springfield County")] },
   { t: [n("09:56"), p("  "), s("check"), p("    received once, matches")], hot: true },
 ];
 
@@ -48,7 +48,7 @@ const RUN: Line[] = [
 const FACTS: [icon: string, title: string, text: string][] = [
   ["check", "Consent is a record.", "Every share names who, why and until when, and can be taken back."],
   ["clipboard", "Every action is logged first.", "Mano decides, writes it down, then acts. If anything is unclear, it stops."],
-  ["code", "Runs without our accounts.", "Every part works locally with stand-ins, so you can try it today."],
+  ["code", "Runs without our accounts.", "pnpm judge runs the renewal on your machine with no key, login or account."],
 ];
 
 const TABS = [["consent", "Consent"], ["log", "Action log"], ["run", "Run it"]] as const;
