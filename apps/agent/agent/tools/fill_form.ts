@@ -81,6 +81,17 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     return { status: "unavailable", sent: false, note: "Mano cannot read this person's saved details yet. Prepare the renewal with start_form_draft from the person's answers instead." };
   }
   const filled = fillFrom(form, profile, input.answers ?? {});
+  // Hearing that benefits are ending is not asking for a form. A renewal
+  // starts from a document: with none on file and nothing answered yet, the
+  // model asks for the letter instead of the form's first question.
+  const starting = form === FORMS["food-renewal"] && Object.keys(input.answers ?? {}).length === 0 && !filled.documentId && filled.missing?.name !== "proof";
+  if (starting && (await engine.listDocuments()).length === 0) {
+    return {
+      status: "needs_letter",
+      sent: false,
+      note: "No form was started. Ask for a photo of their letter, since it has the deadline and Mano reads it right away, and nothing else. If they have no letter, ask for a photo of their most recent pay stub.",
+    };
+  }
   await keepAnswers(engine, turn.turnId, form, profile, input.answers ?? {});
   const bad = filled.invalid[0];
   if (bad) {
@@ -158,7 +169,7 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
 
 export default defineTool({
   description:
-    "Fill out a form for the person: their food benefits renewal (form food-renewal) or a form on the sandbox portal. Call it as soon as they ask. It returns either one question to ask (ask exactly that, then call again with their answer added to answers) or the filled form, which it holds for their YES. It sends nothing.",
+    "Fill out a form for the person: their food benefits renewal (form food-renewal) or a form on the sandbox portal. Call it once they have sent their letter or ask you to fill out the form; saying benefits are ending is not asking. It returns either one question to ask (ask exactly that, then call again with their answer added to answers) or the filled form, which it holds for their YES. It sends nothing.",
   inputSchema,
   label: {
     start: () => "Fill out the form",

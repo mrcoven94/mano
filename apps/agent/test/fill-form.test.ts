@@ -378,6 +378,33 @@ describe("fill_form", () => {
     expect(engine.approvals()).toHaveLength(0);
   });
 
+  describe("someone with no letter on file yet", () => {
+    const emptyProfile = { person: { address: {} }, household: [], income: [], programs: [] };
+
+    // Production, November 4: "My food benefits are ending. Can you help?"
+    // came back as "What is your mailing address?" in one run of three.
+    it.each([[{ form: "food-renewal" }], [{ form: "food-renewal", answers: {} }]])("starts no form on %j: it asks for the letter, not their address", async (input) => {
+      engine.profile = emptyProfile;
+      const out = await run("turn_noletter01", input);
+      expect(out.status).toBe("needs_letter");
+      expect(out).not.toHaveProperty("question");
+      expect(out.note).toMatch(/photo of their letter/);
+      expect(computer.visited).toEqual([]);
+      expect(engine.approvals()).toHaveLength(0);
+    });
+
+    it("goes ahead once a photo is on file", async () => {
+      engine.profile = emptyProfile;
+      engine.putDocument(personIdFor(HANDLE), "doc-letter", new TextEncoder().encode(PAY_STUB));
+      expect((await run("turn_noletter02", { form: "food-renewal" })).status).toBe("needs_answer");
+    });
+
+    it("goes ahead when the person is already answering the form", async () => {
+      engine.profile = emptyProfile;
+      expect((await run("turn_noletter03", { form: "food-renewal", answers: { fullName: "Rosa Testcase" } })).status).toBe("needs_answer");
+    });
+  });
+
   it("asks for one missing field at a time, and again when an answer does not fit", async () => {
     const p = profile();
     delete (p.person as Record<string, unknown>).fullName;
