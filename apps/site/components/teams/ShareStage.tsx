@@ -60,7 +60,7 @@ function Screen({ view, leaving }: { view: View; leaving: boolean }) {
   return (
     <div className={leaving ? "ts-screen ts-leaving" : "ts-screen"}>
       <div className="ts-bar">sandbox.withmano.com/staff</div>
-      <div className="ts-body">
+      <div className="ts-body" key={view === "asked" ? "case" : view}>
         {view === "none" && (
           <>
             <h4>Cases shared with Sandbox County Human Services (test office)</h4>
@@ -70,7 +70,7 @@ function Screen({ view, leaving }: { view: View; leaving: boolean }) {
         {(view === "case" || view === "asked") && (
           <>
             <h4>Shared case</h4>
-            <p>Shared by the resident through Mano, with their approval, for your food benefits renewal. This is all the resident shared.</p>
+            <p><span className="ts-long">Shared by the resident through Mano, with their approval, for your food benefits renewal. </span>This is all the resident shared.</p>
             <table><tbody>{DETAILS.map(([k, v]) => <tr key={k}><th>{k}</th><td>{v}</td></tr>)}</tbody></table>
             <h5>What this office asked for</h5>
             <p className="ts-asked">{view === "asked" ? "Pay stub: open" : "Nothing yet."}</p>
