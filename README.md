@@ -69,7 +69,7 @@ A document is now labeled by what it was read as, and a renewal says so when it 
 
 ### Mano's computer on production
 
-Three unbroken production runs from 3:19 to 3:23 PM ET on November 4, 2026, by `pnpm spine:live`, on the Modal route, with Mano's computer filling the sandbox portal and Guardian allowing the filing at the yes:
+Three unbroken production runs from 3:19 to 3:23 PM ET on November 4, 2026, by `pnpm spine:live`, on the Modal route, with Mano's computer filling the sandbox portal and Guardian not blocking the filing at the yes:
 
 | Confirmation | Total time |
 | --- | --- |
@@ -209,7 +209,7 @@ Three parts are simulated even with a key. Guardian's verdict is recorded, becau
 `MANO_MODEL_PROVIDER` in `apps/agent/agent/lib/muse.ts` picks the route, and production sets it to `modal`.
 
 - `modal`, with `MODAL_ENDPOINT_URL` and `MODAL_PROXY_TOKEN`, sends turns, page reads and form fills to `meta-models/Muse-Spark-Open-816B-A42B` on a Modal Shared Endpoint. No request carries a pin on this route (see the November 4 entry in `docs/decisions.md`). With a setting missing or a URL off Modal's domain, it calls no model and does not fall back.
-- With `OPENROUTER_API_KEY` set as well, a turn or page read that times out, gets a 429 or 5xx, or loses its connection goes to `meta/muse-spark-open` on OpenRouter, and a log line with fixed words says which route answered. A form fill has no backup.
+- With `OPENROUTER_API_KEY` set as well, a turn or page read goes to `meta/muse-spark-open` on OpenRouter only when Modal fails before a response starts: no response within 30 seconds, a 429 or 5xx, or a lost connection. Once Modal has answered 200, a lost response does not go to OpenRouter, whether a turn is streaming, before or after its first token, or waiting on one whole answer, and the call fails. The one difference is a page read, whose 30 seconds also cover reading the body, so a body that stalls past them goes to OpenRouter. A log line with fixed words says which route answered. A form fill has no backup.
 - `openrouter`, with `OPENROUTER_API_KEY`, sends the same work to `meta/muse-spark-open` with `provider: { zdr: true, data_collection: "deny" }` on every request. OpenRouter sees each request in flight.
 - With no route set, a turn goes to `muse-spark-1.3` on Meta's API with `store: false`. That route is unavailable today, because Meta answers 402.
 
