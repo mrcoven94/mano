@@ -389,6 +389,33 @@ describe("the daily check", () => {
     expect(posts[0].text).toContain("household of 2");
   });
 
+  it("a person's own reminder named help:rent is theirs: it goes, is listed, and does not hold the check back", async () => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    const h = await personIn("ao-own-reminder", "CA");
+    const made = await call(h, "POST", "/reminders", { id: "help:rent", text: "Pay the rent", dueAt: new Date(at(1, 9, 0, PACIFIC)).toISOString(), generation: 0 });
+    expect(made.status).toBe(201);
+    await alarmsAt(h, at(1, 9, 0, PACIFIC));
+    expect(posts).toEqual([expect.objectContaining({ key: "reminder:help:rent", text: "Pay the rent" })]);
+    expect(posts[0].noReplay).toBeUndefined();
+    const listed = (await (await call(h, "GET", "/reminders")).json()) as { reminders: { id: string; status: string }[] };
+    expect(listed.reminders).toEqual([expect.objectContaining({ id: "help:rent", status: "sent" })]);
+    // The same day's check still raises its own program.
+    await alarmsAt(h, at(1, 9, 30, PACIFIC));
+    expect(posts.map((p) => p.key)).toEqual(["reminder:help:rent", "reminder:help:g0:CA:snap"]);
+  });
+
+  it.each(["help:g0:CA:snap", "help:g12:TX:liheap"])("a caller cannot create a reminder shaped like a daily text: %s", async (id) => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    const h = handle(`ao-shape-${id.length}`);
+    const made = await call(h, "POST", "/reminders", { id, text: "Not from the check", dueAt: new Date(at(0, 12, 1, PACIFIC)).toISOString(), generation: 0 });
+    expect(made.status).toBe(400);
+    await alarmsAt(h, at(0, 12, 1, PACIFIC));
+    expect(posts).toEqual([]);
+    expect(await helpRows(h)).toEqual([]);
+  });
+
   it("a number the person gave counts as the household", async () => {
     const posts = recordChannels();
     setClock(at(0, 12, 0, PACIFIC));

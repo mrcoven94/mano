@@ -46,7 +46,7 @@
 // Test: test/always-on.test.ts, through the real worker and the Durable Object
 // alarm.
 import { householdSizeOf, listPrograms, parseProgram, screenIncome } from "@mano/programs";
-import { createReminder, currentGeneration } from "./agents/agent-state.js";
+import { createReminder, currentGeneration, isHelpText } from "./agents/agent-state.js";
 import { addDays, deferReminder, localDate, timeZoneForState, zonedInstant, type NudgeTime } from "./deadlines.js";
 import { profileRevision, type Frequency, type Profile } from "./profile.js";
 
@@ -54,18 +54,15 @@ interface SqlExec {
   exec(query: string, ...bindings: unknown[]): { toArray(): unknown[]; rowsWritten: number };
 }
 
-const HELP_PREFIX = "help:";
 const WINDOW_OPENS_HOUR = 9;
 const WINDOW_CLOSES_HOUR = 20;
 const MONTHS_PER_YEAR = 12;
 const TIMES_A_MONTH: Record<Frequency, number> = { weekly: 52 / MONTHS_PER_YEAR, biweekly: 26 / MONTHS_PER_YEAR, monthly: 1, yearly: 1 / MONTHS_PER_YEAR };
 
+export { isHelpText };
+
 export function dailyCheckSends(env: { MANO_DAILY_CHECK_SENDS?: string }): boolean {
   return env.MANO_DAILY_CHECK_SENDS === "on";
-}
-
-export function isHelpText(reminderId: string): boolean {
-  return reminderId.startsWith(HELP_PREFIX);
 }
 
 export interface HelpMatch {
@@ -108,7 +105,7 @@ export function helpMatches(profile: Profile): HelpMatch[] {
 }
 
 function helpTextId(generation: number, match: HelpMatch): string {
-  return `${HELP_PREFIX}g${generation}:${match.key}`;
+  return `help:g${generation}:${match.key}`;
 }
 
 export function helpText(match: HelpMatch): string {
@@ -126,9 +123,9 @@ export function helpText(match: HelpMatch): string {
 export function planHelpText(sql: SqlExec, profile: Profile, generation: number, timeZone: string, nowMs: number): string | null {
   if (generation !== currentGeneration(sql)) return null;
   const today = localDate(nowMs, timeZone);
-  const earlier = sql
-    .exec("SELECT id, status, created_at_ms, finished_at_ms FROM reminders WHERE substr(id, 1, ?) = ?", HELP_PREFIX.length, HELP_PREFIX)
-    .toArray() as { id: string; status: string; created_at_ms: number; finished_at_ms: number | null }[];
+  const earlier = (
+    sql.exec("SELECT id, status, created_at_ms, finished_at_ms FROM reminders").toArray() as { id: string; status: string; created_at_ms: number; finished_at_ms: number | null }[]
+  ).filter((r) => isHelpText(r.id));
   // Finished counts too: a text held overnight goes the morning after it was planned.
   const busy = earlier.some(
     (r) => ["scheduled", "claimed", "sending"].includes(r.status) || localDate(Number(r.finished_at_ms ?? r.created_at_ms), timeZone) === today,
