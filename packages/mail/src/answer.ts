@@ -208,7 +208,14 @@ function scamLines(warning: Warning, w: AnswerWords): string[] {
   return [w.scam, date === "several" ? w.mentionsSeveral : w.claim(w.date(date)), w.checkWithOffice];
 }
 
-function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords): { lines: string[]; held: HeldDeadline | null } {
+// What Mano can say of a quiet letter in a pile: it saw no date. Not that the
+// letter can wait, which it cannot know. Only with no date anywhere in the
+// letter's text and no open question, on this letter or on the whole reading.
+function noDateFound(reading: MailReading, letter: Letter): boolean {
+  return letter.noDateInText === true && !reading.questions.some((q) => q.letterId === letter.id || q.letterId === null);
+}
+
+function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPile: boolean): { lines: string[]; held: HeldDeadline | null } {
   const warnings = reading.warnings.filter((w) => w.letterId === letter.id);
   const scam = warnings.find((w) => w.kind === "scam_suspect");
   if (scam) return { lines: scamLines(scam, w), held: null };
@@ -243,6 +250,7 @@ function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords): { l
   }
   const send = categoriesOf(letter);
   if (send.length > 0) lines.push(w.asksToSend(listOf(send.map((c) => w.categories[c]), w.and)));
+  if (inPile && noDateFound(reading, letter)) lines.push(w.noDateFound);
   if (warnings.some((warning) => warning.kind === "instruction_in_content")) lines.push(w.planted);
   lines.push(w.official);
   // The question goes last, so the reply ends on the one thing to answer.
@@ -261,7 +269,7 @@ export function answerReading(reading: MailReading, language: ReplyLanguage = "e
   const read = reading.letters.filter(wasRead);
   const failed = reading.questions.some((q) => q.kind === "read_failed" || q.kind === "budget_exceeded");
   if (read.length === 0) return { outcome: "unread", text: failed ? w.failed : w.unread, deadlines: [] };
-  const answers = read.map((letter) => letterAnswer(reading, letter, w));
+  const answers = read.map((letter) => letterAnswer(reading, letter, w, read.length > 1));
   const paragraphs = answers.map((a, i) => (answers.length > 1 ? `${w.letterNumber(i + 1)} ${a.lines.join(" ")}` : a.lines.join(" ")));
   const missed = read.length < reading.letters.length || reading.questions.some((q) => q.letterId === null && q.kind !== "video_truncated");
   if (missed) paragraphs.push(w.missedPart);
