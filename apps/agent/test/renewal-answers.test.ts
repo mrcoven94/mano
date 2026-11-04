@@ -466,6 +466,32 @@ describe("an answer that matches a value read from a document", () => {
 });
 
 describe("a household member read from a document", () => {
+  it("does not change the size she confirmed when it arrives after her confirmation", async () => {
+    engine.putDocument(PERSON, PHOTO, PNG);
+    await person().patchProfile({ idempotencyKey: "roster", source: "person", fields: { "household.leo.name": "Leo", "person.householdConfirmed": true } });
+    await new Promise((r) => setTimeout(r, 3));
+    await person().patchProfile({ idempotencyKey: "doc-mia", source: "document", documentId: PHOTO, fields: { "household.mia.name": "Mia" } });
+    expect(await draftValue("householdSize")).toBe("2");
+    expect(profileGuide(await person().getProfileView())).toContain("Household size: 2 including the person");
+  });
+
+  it("counts once she says the list on file is everyone, even if she had confirmed before", async () => {
+    engine.putDocument(PERSON, PHOTO, PNG);
+    await person().patchProfile({ idempotencyKey: "roster-2", source: "person", fields: { "household.leo.name": "Leo", "person.householdConfirmed": true } });
+    await new Promise((r) => setTimeout(r, 3));
+    await person().patchProfile({ idempotencyKey: "doc-mia-3", source: "document", documentId: PHOTO, fields: { "household.mia.name": "Mia" } });
+    await updateProfile.execute({ householdComplete: true }, toolCtx({ handleHash: HANDLE, turnId: "turn_renewal_all0", grant, generation: 0 }));
+    expect(await draftValue("householdSize")).toBe("3");
+  });
+
+  it("counts when it was on the list she confirmed", async () => {
+    engine.putDocument(PERSON, PHOTO, PNG);
+    await person().patchProfile({ idempotencyKey: "doc-mia-2", source: "document", documentId: PHOTO, fields: { "household.mia.name": "Mia" } });
+    await new Promise((r) => setTimeout(r, 3));
+    await person().patchProfile({ idempotencyKey: "confirm", source: "person", fields: { "person.householdConfirmed": true } });
+    expect(await draftValue("householdSize")).toBe("2");
+  });
+
   it("becomes her word when she says the same through update_profile", async () => {
     engine.putDocument(PERSON, PHOTO, PNG);
     await person().patchProfile({ idempotencyKey: "doc-kid", source: "document", documentId: PHOTO, fields: { "household.leo.name": "Leo", "household.leo.relationship": "son" } });

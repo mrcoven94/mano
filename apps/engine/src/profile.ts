@@ -14,8 +14,8 @@
 //                                any household member clears it)
 //   person.householdSize   (how many live there, counting the person, when
 //                           they gave a number and not names; only source
-//                           person sets it, and forgetting the household or
-//                           any member clears it)
+//                           person sets it or clears it, by forgetting it,
+//                           the household or any member)
 //   household.<id>.name|relationship|dateOfBirth
 //   income.<id>.memberId|source|amount|frequency   (memberId: a household id, or "self")
 //   programs.<id>.program|state|caseNumber|status
@@ -490,10 +490,12 @@ export class ProfileStore {
         }[];
         for (const r of rows) retireLinkedNotes(sql, r.path, false);
         // A roster with someone forgotten is no longer the one the person
-        // confirmed.
-        if (path === "household" || rows.some((r) => r.path.startsWith("household."))) {
-          sql.exec("DELETE FROM profile_fields WHERE path IN ('person.householdConfirmed', 'person.householdSize')");
-        }
+        // confirmed. The count is their own number, and an empty roster has
+        // nothing to change, so those go only on their word.
+        const rosterChanged = rows.some((r) => r.path.startsWith("household."));
+        const personForgot = parsed.source === "person" && (path === "household" || rosterChanged);
+        if (rosterChanged || personForgot) sql.exec("DELETE FROM profile_fields WHERE path = 'person.householdConfirmed'");
+        if (personForgot) sql.exec("DELETE FROM profile_fields WHERE path = 'person.householdSize'");
         sql.exec(`DELETE FROM profile_fields WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
         sql.exec(`DELETE FROM profile_suggestions WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
       }

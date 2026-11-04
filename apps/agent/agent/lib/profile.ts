@@ -96,7 +96,8 @@ export interface ProfileChanges {
 // The tool's input as Engine field paths. A household member changes only
 // by its ref: a new name is a new member, and a name already on file is
 // either someone else (a different relationship or birth date), the same
-// facts again (nothing to write), or a question for the model to settle
+// facts again (nothing to write, unless a document or note gave them and
+// this makes them the person's word), or a question for the model to settle
 // with a ref. New entries get a ref derived from the turn, so a retried
 // turn writes the same entry, not a second one.
 // pending: paths with a suggestion waiting. The person restating what is
@@ -128,7 +129,13 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
     set(`person.${key}`, value as string | undefined, FIELD_LABELS[`person.${key}`] ?? key);
   }
   for (const [key, value] of Object.entries(p.address ?? {})) set(`person.address.${key}`, value, "address");
-  if (input.householdComplete) set("person.householdConfirmed", true, "household");
+  if (input.householdComplete) {
+    set("person.householdConfirmed", true, "household");
+    // They said the list on file is everyone, so everyone on it is their word.
+    for (const m of current.household) {
+      if (m.name && m.name.source !== "person") set(`household.${m.id}.name`, m.name.value, m.name.value);
+    }
+  }
 
   // Members by ref, for income that names an earner; new ones join as added.
   const added: Member[] = [];
@@ -144,7 +151,8 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
         const nothingNew =
           (!m.relationship || match.relationship) && (!m.dateOfBirth || match.dateOfBirth) && !someoneElse(match);
         const settles = [...pending].some((path) => path.startsWith(`household.${match.id}.`));
-        if (nothingNew && !settles) return;
+        const promotes = [match.name, m.relationship ? match.relationship : undefined, m.dateOfBirth ? match.dateOfBirth : undefined].some((leaf) => leaf && leaf.source !== "person");
+        if (nothingNew && !settles && !promotes) return;
         if (!nothingNew) {
           throw new ProfileInputProblem(
             `${m.name} is already on file (${[match.relationship?.value, match.dateOfBirth?.value].filter(Boolean).join(", ") || "no details"}, ref ${match.id}). ` +
@@ -159,7 +167,7 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
     const who = stored?.name?.value ?? m.name ?? "household member";
     if (!stored) added.push({ id, ...(m.name ? { name: { value: m.name } as Leaf } : {}) });
     const namePath = `household.${id}.name`;
-    set(namePath, m.name && (!same(stored?.name?.value, m.name) || pending.has(namePath)) ? m.name : undefined, who);
+    set(namePath, m.name && (!same(stored?.name?.value, m.name) || pending.has(namePath) || stored?.name?.source !== "person") ? m.name : undefined, who);
     set(`household.${id}.relationship`, m.relationship, `${who}'s relationship`);
     set(`household.${id}.dateOfBirth`, m.dateOfBirth, `${who}'s date of birth`);
   });
@@ -269,9 +277,13 @@ export function confirmedByPerson(profile: Profile): boolean {
 }
 
 // How many live in the household, counting the person: a roster they
-// confirmed, else the number they gave, else unknown.
+// confirmed, else the number they gave, else unknown. Someone a document
+// named after they confirmed is not on the list they confirmed.
 export function householdSizeOf(profile: Profile): number | null {
-  if (confirmedByPerson(profile)) return profile.household.length + 1;
+  const confirmed = profile.person.householdConfirmed;
+  if (confirmed && confirmedByPerson(profile)) {
+    return profile.household.filter((m) => m.name?.source === "person" || (m.name?.updatedAt ?? "") <= confirmed.updatedAt).length + 1;
+  }
   return profile.person.householdSize?.value ?? null;
 }
 
@@ -379,7 +391,7 @@ export function profileGuide(view: ProfileView): string {
   const size = householdSizeOf(profile);
   lines.push(
     confirmedByPerson(profile)
-      ? `Household size: ${1 + others} including the person (they confirmed who lives with them).`
+      ? `Household size: ${size} including the person (they confirmed who lives with them).`
       : size !== null
         ? `Household size: ${size} including the person (the number they gave).`
         : `Household members on file besides the person: ${others}. The person has not confirmed who lives with them, so ask before using a household size, and save their answer with householdComplete.`,

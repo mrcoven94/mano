@@ -13,7 +13,7 @@
 
 import type { RecipientId } from "@mano/protocol";
 
-import type { Frequency, Profile } from "./engine.js";
+import type { Frequency, Leaf, Profile } from "./engine.js";
 import { confirmedByPerson, householdSizeOf } from "./profile.js";
 
 export interface FormField {
@@ -24,6 +24,8 @@ export interface FormField {
   question: string;
   // The value as the profile holds it. It is checked like any answer.
   fromProfile(profile: Profile): string | null;
+  // The leaves that value was read from, which say whose word it is.
+  readFrom(profile: Profile): (Leaf<unknown> | undefined)[];
   // The checked value, or null when the answer does not fit the field.
   parse(answer: string): string | null;
   // The Engine profile fields that keep this checked value, so fromProfile
@@ -101,17 +103,31 @@ function dollars(answer: string): string | null {
 
 const PER_MONTH: Record<Frequency, number> = { weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, yearly: 1 / 12 };
 
+// A value the person gave for a form stands until they change a fact it
+// summarizes. A document or a note ranks below their word, so neither
+// replaces it, however new.
+function stands(given: Leaf<unknown>, facts: (Leaf<unknown> | undefined)[]): boolean {
+  return !facts.some((f) => f?.source === "person" && f.updatedAt > given.updatedAt);
+}
+
 // The form asks for one household total. It is kept as its own entry and
-// never added to the others, which it already counts.
+// never added to the others, which it already counts. Changed to anything
+// but monthly, it is an entry like the others.
 const STATED_TOTAL = "stated-monthly-total";
 
-// The total the person gave, until an entry changes after it. Otherwise
-// unknown unless every entry has an amount and how often it comes: a total
-// that left one out would understate the household's income.
+function incomeOnFile(profile: Profile): { stated: Leaf<number> | null; entries: Profile["income"] } {
+  const own = profile.income.find((i) => i.id === STATED_TOTAL);
+  if (own?.frequency?.value !== "monthly" || !own.amount) return { stated: null, entries: profile.income };
+  const entries = profile.income.filter((i) => i !== own);
+  return { stated: stands(own.amount, entries.flatMap((i) => [i.amount, i.frequency])) ? own.amount : null, entries };
+}
+
+// The total the person gave, if it stands. Otherwise unknown unless every
+// entry has an amount and how often it comes: a total that left one out
+// would understate the household's income.
 function monthlyIncome(profile: Profile): string | null {
-  const stated = profile.income.find((i) => i.id === STATED_TOTAL)?.amount;
-  const entries = profile.income.filter((i) => i.id !== STATED_TOTAL);
-  if (stated && !entries.some((i) => (i.amount?.updatedAt ?? "") > stated.updatedAt)) return String(stated.value);
+  const { stated, entries } = incomeOnFile(profile);
+  if (stated) return String(stated.value);
   if (entries.length === 0) return null;
   let total = 0;
   for (const i of entries) {
@@ -144,22 +160,40 @@ function addressFields(value: string): ProfileFields {
   return { [at("line1")]: line1, [at("line2")]: line2 ?? null, [at("city")]: city!, [at("state")]: state!, [at("zip")]: zip! };
 }
 
-// The case number of the person's one food benefits case. Two different
-// numbers are not chosen between; the person is asked.
 const FOOD_PROGRAM = /\b(snap|calfresh|food)\b/i;
-function foodCaseNumber(profile: Profile): string | null {
-  const numbers = new Set(
-    profile.programs.flatMap((p) => (p.program && FOOD_PROGRAM.test(p.program.value) && p.caseNumber ? [p.caseNumber.value] : [])),
+// The entry that keeps the number the person gave when no one case on file
+// is the one to write it to, so no other case is changed.
+const GIVEN_CASE = "food";
+
+// The food cases this renewal could be: none in another state than hers.
+function foodCases(profile: Profile): Profile["programs"] {
+  const state = profile.person.address?.state?.value.toUpperCase();
+  return profile.programs.filter(
+    (p) => p.id !== GIVEN_CASE && p.program && FOOD_PROGRAM.test(p.program.value) && (!state || !p.state || p.state.value.toUpperCase() === state),
   );
+}
+
+function givenCase(profile: Profile): Leaf | null {
+  const given = profile.programs.find((p) => p.id === GIVEN_CASE)?.caseNumber;
+  return given && stands(given, foodCases(profile).map((p) => p.caseNumber)) ? given : null;
+}
+
+// The number she gave, if it stands, or the one number on her food cases.
+// Two different numbers are not chosen between; the person is asked.
+function foodCaseNumber(profile: Profile): string | null {
+  const given = givenCase(profile);
+  if (given) return given.value;
+  const numbers = new Set(foodCases(profile).flatMap((p) => (p.caseNumber ? [p.caseNumber.value] : [])));
   return numbers.size === 1 ? [...numbers][0]! : null;
 }
 
-// The number goes on every food case on file, since it answers which of
-// them is hers; with none on file it starts one.
+// Clearing an entry and setting it in one patch writes it as new even when
+// the value is the same, so the person restating it counts as their latest word.
 function caseNumberFields(value: string, profile: Profile): ProfileFields {
-  const onFile = profile.programs.filter((p) => p.program && FOOD_PROGRAM.test(p.program.value));
-  if (onFile.length === 0) return { "programs.food.program": "Food benefits", "programs.food.caseNumber": value };
-  return Object.fromEntries(onFile.map((p) => [`programs.${p.id}.caseNumber`, value]));
+  const given = `programs.${GIVEN_CASE}`;
+  const cases = foodCases(profile);
+  if (cases.length === 1) return { [`programs.${cases[0]!.id}.caseNumber`]: value, [given]: null };
+  return { [given]: null, [`${given}.program`]: "Food benefits", [`${given}.caseNumber`]: value };
 }
 
 // The pay stub or other document an income amount was read from.
@@ -179,6 +213,10 @@ const FOOD_RENEWAL: FormSpec = {
       label: "Case number",
       question: "What is the case number on your renewal letter?",
       fromProfile: foodCaseNumber,
+      readFrom: (p) => {
+        const given = givenCase(p);
+        return given ? [given] : foodCases(p).map((c) => c.caseNumber);
+      },
       parse: trimmed(40),
       toProfile: caseNumberFields,
     },
@@ -187,6 +225,7 @@ const FOOD_RENEWAL: FormSpec = {
       label: "Full legal name",
       question: "What is your full legal name, as it appears on your benefits letters?",
       fromProfile: (p) => p.person.fullName?.value ?? null,
+      readFrom: (p) => [p.person.fullName],
       parse: trimmed(200),
       toProfile: (value) => ({ "person.fullName": value }),
     },
@@ -195,6 +234,7 @@ const FOOD_RENEWAL: FormSpec = {
       label: "Date of birth",
       question: "What is your date of birth?",
       fromProfile: (p) => p.person.dateOfBirth?.value ?? null,
+      readFrom: (p) => [p.person.dateOfBirth],
       parse: isoDate,
       toProfile: (value) => ({ "person.dateOfBirth": value }),
     },
@@ -210,6 +250,7 @@ const FOOD_RENEWAL: FormSpec = {
         const size = householdSizeOf(p);
         return size === null ? null : String(size);
       },
+      readFrom: (p) => [confirmedByPerson(p) ? p.person.householdConfirmed : p.person.householdSize],
       parse: wholeNumber(1, 30),
       // A number that differs replaces the roster's confirmation: the list
       // on file is no longer everyone.
@@ -220,8 +261,15 @@ const FOOD_RENEWAL: FormSpec = {
       label: "Monthly income ($)",
       question: "About how much does your household earn in a month, before taxes?",
       fromProfile: monthlyIncome,
+      readFrom: (p) => {
+        const { stated, entries } = incomeOnFile(p);
+        return stated ? [stated] : entries.flatMap((i) => [i.amount, i.frequency]);
+      },
       parse: dollars,
+      // Cleared and set in one patch, so restating the same total is written
+      // as new and stands over an entry that changed since.
       toProfile: (value) => ({
+        [`income.${STATED_TOTAL}`]: null,
         [`income.${STATED_TOTAL}.source`]: "Household total the person gave",
         [`income.${STATED_TOTAL}.amount`]: Number(value),
         [`income.${STATED_TOTAL}.frequency`]: "monthly",
@@ -233,6 +281,10 @@ const FOOD_RENEWAL: FormSpec = {
       label: "Mailing address",
       question: "What is your mailing address, with city, state and ZIP?",
       fromProfile: mailingAddress,
+      readFrom: (p) => {
+        const a = p.person.address;
+        return [a.line1, a.line2, a.city, a.state, a.zip];
+      },
       parse: trimmed(300),
       toProfile: addressFields,
     },
@@ -241,6 +293,7 @@ const FOOD_RENEWAL: FormSpec = {
       label: "Phone number",
       question: "What phone number should the office use to reach you?",
       fromProfile: (p) => p.person.phone?.value ?? null,
+      readFrom: (p) => [p.person.phone],
       parse: phone,
       toProfile: (value) => ({ "person.phone": value }),
     },
@@ -309,14 +362,16 @@ export function fillFrom(form: FormSpec, profile: Profile, answers: Record<strin
 }
 
 // What the person's answers change on their profile, one entry per field:
-// the checked answers that differ from what the profile already gives.
+// every checked answer, unless the profile already gives that value as
+// their own word. One that only matches a document's value is still written,
+// so it becomes theirs and a later document can only suggest a change.
 export function answerChanges(form: FormSpec, profile: Profile, answers: Record<string, string>): { field: string; fields: ProfileFields }[] {
   return form.fields.flatMap((field) => {
     const answer = Object.hasOwn(answers, field.name) ? answers[field.name] : undefined;
     const value = answer === undefined ? null : field.parse(answer);
     if (value === null) return [];
     const onFile = field.fromProfile(profile);
-    if (onFile !== null && field.parse(onFile) === value) return [];
+    if (onFile !== null && field.parse(onFile) === value && field.readFrom(profile).every((leaf) => !leaf || leaf.source === "person")) return [];
     const fields = field.toProfile(value, profile);
     return Object.keys(fields).length > 0 ? [{ field: field.name, fields }] : [];
   });
