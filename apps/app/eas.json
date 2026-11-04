@@ -1,6 +1,7 @@
 {
   "cli": {
-    "version": ">= 16.0.0"
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
   },
   "build": {
     "development": {
@@ -11,11 +12,22 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "ios": {
+        "env": {
+          "EXPO_PUBLIC_ENGINE_URL": "https://app.withmano.com"
+        }
       }
     },
     "production": {
       "android": {
         "buildType": "app-bundle"
+      },
+      "ios": {
+        "autoIncrement": true,
+        "env": {
+          "EXPO_PUBLIC_ENGINE_URL": "https://app.withmano.com"
+        }
       }
     }
   },
