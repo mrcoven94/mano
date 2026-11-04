@@ -32,8 +32,15 @@ const INSTRUCTION_PATTERNS: { re: RegExp; label: string }[] = [
   { re: /system\s+prompt|developer\s+message/i, label: "references a system prompt or developer message" },
 ];
 
-const LINK_RE = /https?:\/\/[^\s<>"')\]]+/gi;
-const WWW_RE = /\bwww\.[a-z0-9-]+(\.[a-z0-9-]+)+[^\s<>"')\]]*/gi;
+// A browser reads the host and any name before it up to the first / ? # or
+// backslash, whatever else is in there, so an apostrophe or quote does not
+// end a link until the path starts. Wrapping punctuation is trimmed after.
+const LINK_RE = /https?:\/\/[^\s/?#\\]*(?:[/?#\\][^\s<>"')\]]*)?/gi;
+const WWW_RE = /\bwww\.(?=[a-z0-9-]+\.)[^\s/?#\\]*(?:[/?#\\][^\s<>"')\]]*)?/gi;
+// A name and an @ before a bare host: an email address never has a path, and
+// a personal one does not end its name in a top-level domain.
+const BARE_USERINFO_RE =
+  /(?<![\w.@/-])[A-Za-z0-9](?:[^\s@/<>"]{0,100}\.(?:gov|mil|com|org|net|us|info|help)(?=@)|[^\s@/<>"]{0,100}(?=@[^\s@/]+\/))@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}(?:\/[^\s<>"')\]]*)?/gi;
 // A bare domain with no scheme or www ("benefits-unlock.help/login"),
 // on any lowercase top-level domain of two or more letters, so "Case
 // No." or "U.S." never match and neither does a missing space after a
@@ -76,9 +83,9 @@ const LINK_HOLE = /\uE000(\d+)\uE001/g;
 function maskLinks(text: string): { masked: string; links: string[] } {
   const links: string[] = [];
   let masked = text;
-  for (const re of [LINK_RE, WWW_RE, BARE_DOMAIN_RE, CAPS_DOMAIN_RE]) {
+  for (const re of [LINK_RE, WWW_RE, BARE_USERINFO_RE, BARE_DOMAIN_RE, CAPS_DOMAIN_RE]) {
     masked = masked.replace(re, (m) => {
-      const url = m.replace(/[.,;:!?]+$/, "");
+      const url = m.replace(/[.,;:!?)\]'">]+$/, "");
       links.push(url);
       return `\uE000${links.length - 1}\uE001${m.slice(url.length)}`;
     });
@@ -257,28 +264,26 @@ const SECRET_BY_MESSAGE = new RegExp(
 );
 const OFFICE_SENDS = /^\s*(?:we\s+(?:will|may|can)\s+(?:send|text|e-?mail|mail|message)\s+(?:you|your|a|an|the)\b|your\s+(?:new\s+)?(?:pin|password|passcode)\s+will\s+be\s+sent\b)/i;
 // No government agency charges to renew SNAP or Medicaid, so a fee or an
-// amount for that counts. These real charges are taken out first, so one
-// beside it excuses nothing: they apply only where they exist. Food benefits
+// amount for that counts. A clause naming a real charge is about that charge,
+// amount and purpose included, so it leaves the reading whole, unless a fee
+// of its own remains. Real charges apply only where they exist. Food benefits
 // have no premium or copay, and only some health programs have an enrollment
 // fee.
-const CHARGE_PREFIX = String.raw`(?:(?:your|the|a|an|monthly|yearly|annual)\s+)*(?:${AMOUNT}\s+)?(?:(?:monthly|yearly|annual)\s+)?`;
-const CHARGE_SUFFIX = String.raw`(?:\s+fee)?(?:\s+(?:of|is|remains|amount\s+is)\s+${AMOUNT})?`;
-const ALWAYS_REAL = new RegExp(
-  String.raw`\boverpa\w+|\brepay\w*(?:\s+${AMOUNT})?|\bpa(?:y|id)\s+(?:\w+\s+)?back(?:\s+${AMOUNT})?|\bfree\s+of\s+charge\b|\b(?:your\s+)?rent(?:\s+of\s+${AMOUNT})?|\bchild\s+support(?:\s+of\s+${AMOUNT})?|\bfee\s+waivers?\b`,
-  "gi",
-);
-const HEALTH_CHARGE = new RegExp(String.raw`${CHARGE_PREFIX}\b(?:premiums?|co-?pay(?:s|ments?)?|coinsurance|share\s+of\s+cost|spend-?down|deductibles?|family\s+fee|parent\s+fee)\b${CHARGE_SUFFIX}`, "gi");
-const ENROLLMENT_FEE = new RegExp(String.raw`${CHARGE_PREFIX}\benrollment\s+fee\b${CHARGE_SUFFIX}`, "gi");
+const NO_FEE_AT_ALL = /\bfree\s+of\s+charge\b|\bfee\s+waivers?\b/gi;
+const ALWAYS_REAL = /\boverpa\w+|\brepay\w*|\bpa(?:y|id)\s+(?:\w+\s+)?back\b|\brent\b|\bchild\s+support\b/i;
+const HEALTH_CHARGE = /\b(?:premiums?|co-?pay(?:s|ments?)?|coinsurance|share\s+of\s+cost|spend-?down|deductibles?|(?:family|parent)\s+fee)\b/i;
+const NAMED_REAL_FEE = /\b(?:premium|family|parent)\s+fee\b/gi;
+const ENROLLMENT_FEE = /\benrollment\s+fee\b/gi;
 const CHARGES_ENROLLMENT = /\b(?:chip|medicaid|kidscare|peachcare)\b/i;
 const NAMES_FOOD = new RegExp(String.raw`\b${FOOD}\b`, "i");
 // A fee to someone else, or for a card, not to stay on the program.
-const OTHER_FEE = /\b(?:atm|withdrawals?|surcharges?|transactions?|replacement|stores?|banks?|retailers?)\b/i;
+const OTHER_FEE = /\b(?:atms?|withdrawals?|surcharges?|transactions?|replacement|stores?|banks?|retailers?)\b/i;
 const NAMED_FEE_WORDS = String.raw`(?:processing|renewal|recertification|reinstatement|reactivation|activation|release|verification|unlock|enrollment)\s+fee`;
 const NAMED_FEE = new RegExp(String.raw`\b${NAMED_FEE_WORDS}\b`, "i");
 // A fee clause that names nothing else, in a letter about benefits. "Your
 // vehicle registration renewal fee" or "fee for copies" names something else.
 const BARE_FEE = new RegExp(
-  String.raw`^(?:(?:and|plus|without|with|but|then|so)\s+)?(?:(?:you\s+(?:must|need\s+to|have\s+to)|please)\s+)?(?:(?:pay|send|remit)\s+)?(?:(?:a|an|the|this|your|one-time)\s+)*(?:${AMOUNT}\s+)?(?:one-time\s+)?${NAMED_FEE_WORDS}(?:\s+of\s+${AMOUNT}|\s+${AMOUNT})?(?:\s+(?:is|are|must\s+be)(?:\s+${AMOUNT}|\s+(?:required|due|needed|paid|owed))?|\s+applies)?(?:\s+(?:at|by|to|online|now|today|first)\b.*)?\W*$`,
+  String.raw`^(?:(?:and|plus|without|with|but|then|so)\s+)?(?:(?:you\s+(?:must|need\s+to|have\s+to)|please)\s+)?(?:(?:pay|send|remit)\s+)?(?:(?:a|an|the|this|your|one-time)\s+){0,3}(?:${AMOUNT}\s+)?(?:one-time\s+)?${NAMED_FEE_WORDS}(?:\s+of\s+${AMOUNT}|\s+${AMOUNT})?(?:\s+(?:is|are|must\s+be)(?:\s+${AMOUNT}|\s+(?:required|due|needed|paid|owed))?|\s+applies)?(?:\s+(?:at|by|to|online|now|today|first)\b.*)?\W*$`,
   "i",
 );
 const NO_CHARGE = /^(?:\$\s*0(?:\.00)?|none|waived|n\/a|free)\b/i;
@@ -308,8 +313,9 @@ const LOOKALIKE_AGENCY =
 const DRESSED_AS_GOVERNMENT = /(?:^|[.-])gov(?:t|ernment)?(?:[.-]|$)/;
 
 // A link built to hide where it goes: a name before the @ sign, a bare
-// address, a lookalike letter, a government name in the wrong place, or
-// something a browser cannot even read. No real office prints one.
+// address, a host with marks no real name has, a lookalike letter, a
+// government name in the wrong place, or something a browser cannot even
+// read. No real office prints one.
 function hidesWhereItGoes(link: string): boolean {
   let url: URL;
   try {
@@ -320,7 +326,7 @@ function hidesWhereItGoes(link: string): boolean {
   if (url.username || url.password) return true;
   const host = url.hostname.toLowerCase();
   if (isOfficial(host)) return false;
-  return /^\[|^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes("xn--") || DRESSED_AS_GOVERNMENT.test(host) || /\.gov(?:[/?#]|$)/i.test(url.pathname + url.search);
+  return /[^a-z0-9.-]|^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes("xn--") || DRESSED_AS_GOVERNMENT.test(host) || /\.gov(?:[/?#]|$)/i.test(url.pathname + url.search);
 }
 
 function isUnofficial(link: string): boolean {
@@ -382,13 +388,21 @@ function linksIn(text: string, links: string[]): string[] {
   return [...text.matchAll(LINK_HOLE)].map((m) => links[Number(m[1])]!);
 }
 
-// Takes the real charges out of a clause, so what is left is what the
-// sentence charges for anything else.
-function withoutRealCharges(clause: string, food: boolean, chargesEnrollment: boolean): string {
-  let rest = clause.replace(ALWAYS_REAL, " ");
-  if (!food) rest = rest.replace(HEALTH_CHARGE, " ");
-  if (!food && chargesEnrollment) rest = rest.replace(ENROLLMENT_FEE, " ");
-  return rest.replace(/\s+/g, " ").trim();
+// The clause as a charge for anything else, or null if it only names a real
+// charge. "Your premium payment of $25.00 is required" is null, and "Your
+// $39 premium includes a $25 fee to renew" keeps its fee.
+function chargedFor(clause: string, food: boolean, chargesEnrollment: boolean): string | null {
+  let rest = clause.replace(NO_FEE_AT_ALL, " ");
+  let real = ALWAYS_REAL.test(rest);
+  if (!food) {
+    real ||= HEALTH_CHARGE.test(rest);
+    rest = rest.replace(NAMED_REAL_FEE, " ");
+    if (chargesEnrollment && ENROLLMENT_FEE.test(rest)) {
+      real = true;
+      rest = rest.replace(ENROLLMENT_FEE, " ");
+    }
+  }
+  return real && !ANY_FEE.test(rest) ? null : rest;
 }
 
 function feeToKeep({ sentences, said }: Reading): string | null {
@@ -396,11 +410,16 @@ function feeToKeep({ sentences, said }: Reading): string | null {
   const chargesEnrollment = CHARGES_ENROLLMENT.test(said);
   for (const sentence of sentences) {
     const food = NAMES_FOOD.test(sentence.clauses.join(" "));
-    const clauses = sentence.clauses.filter((c) => !OTHER_FEE.test(c)).map((c) => withoutRealCharges(c, food, chargesEnrollment));
-    const whole = clauses.join(" ");
+    const clauses = sentence.clauses
+      .filter((c) => !OTHER_FEE.test(c))
+      .map((c) => chargedFor(c, food, chargesEnrollment))
+      .filter((c): c is string => c !== null);
+    // What was charged comes from what is left. What it was for may be in
+    // a real charge's clause: "Pay a $25 fee plus your premium to keep ..."
+    const purpose = sentence.clauses.join(" ");
     const charged =
       clauses.some((c, k) => !NO_CHARGE.test(clauses[k + 1] ?? "") && ((ANY_FEE.test(c) && TO_KEEP.test(c)) || (NAMED_FEE.test(c) && NAMES_BENEFITS.test(c)) || BARE_FEE.test(c))) ||
-      (HAND_OVER.test(whole) && (TO_KEEP.test(whole) || (NAMES_BENEFITS.test(whole) && THREAT.test(whole))));
+      (clauses.some((c) => HAND_OVER.test(c)) && (TO_KEEP.test(purpose) || (NAMES_BENEFITS.test(purpose) && THREAT.test(purpose))));
     if (charged) return sentence.original;
   }
   return null;
