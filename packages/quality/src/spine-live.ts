@@ -367,13 +367,16 @@ export async function runLive(cfg: LiveConfig): Promise<LiveRun> {
     async fill() {
       let say = words.fill;
       let turn = answered(await person.turn([say]), "the request to fill got no answer");
+      const replies = [turn.text];
       let rounds = 1;
       while (turn.status !== "waiting_approval" && rounds < FILL_ROUNDS) {
         say = nextAnswer(cfg.lang, turn.text);
         turn = answered(await person.turn([say]), "an answer to Mano's question got no reply");
+        replies.push(turn.text);
         rounds += 1;
       }
-      const reply = withoutLinks(turn.text);
+      // Every turn's words: an earlier reply can hold why the last one came.
+      const reply = withoutLinks(replies.join(" | "));
       if (turn.status !== "waiting_approval" || !turn.approvalId || !turn.approval) {
         throw new StepFailure(`no approval question after ${rounds} turns`, turn.http, reply);
       }
