@@ -404,6 +404,13 @@ test("a Modal reservation grows with the request and always has a token limit", 
   }
 });
 
+test("a Modal reservation counts each image, however short its URL", () => {
+  const image = { type: "image_url", image_url: { url: "https://x.test/a.jpg" } };
+  const plain = modalChatBody({ messages: [{ role: "user", content: [{ type: "text", text: "read" }] }], max_tokens: 100 });
+  const two = modalChatBody({ messages: [{ role: "user", content: [{ type: "text", text: "read" }, image, image] }], max_tokens: 100 });
+  assert.ok(modalReserveUsd(two) - modalReserveUsd(plain) >= 2 * 3000 * 1.25e-6);
+});
+
 test("a call over the Modal ceiling never reaches the network and stops the run", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mano-eval-ceiling-"));
   const script = join(dir, "over.mjs");
