@@ -392,8 +392,10 @@ async function runTurn(
 
   // A crisis is never answered with a document question.
   const crisis = body.texts.some(detectCrisis);
-  if (body.documents[0] && !crisis) {
-    const answered = await clock.time("share", () => answerRequestWithPhoto(engine, { turnId: body.turnId, turnAtMs }, body.documents[0]!.id));
+  if (body.documents.length > 0 && !crisis) {
+    const answered = await clock.time("share", () =>
+      answerRequestWithPhoto(engine, { turnId: body.turnId, turnAtMs }, body.documents.map((d) => d.id), body.attachmentCount),
+    );
     if (answered) return answerShown(answered);
   }
 
@@ -453,7 +455,8 @@ async function runTurn(
 
 // The reply to a photo that answers a waiting request: the exact question,
 // or plainly that nothing was sent.
-function answerShown(held: HoldResult): TurnResponse {
+function answerShown(held: HoldResult | { pickOne: string }): TurnResponse {
+  if ("pickOne" in held) return reply(held.pickOne);
   if (!held.held) return reply("I could not get that ready to send just now, so nothing was sent. Try sending the photo again in a moment.");
   return { httpStatus: 200, body: { status: "waiting_approval", text: held.question, approval: held.question, approvalId: held.approval.id } };
 }
@@ -478,7 +481,7 @@ async function recordTurn(
   engine: PersonEngine,
   turnId: string,
   receivedAt: string,
-): Promise<{ turn: EngineTurn; created: boolean; previousReceivedAt: string | null } | null> {
+): Promise<{ turn: EngineTurn; created: boolean; previousReceivedAt: string | null; shareNotice: string | null } | null> {
   try {
     return await engine.putTurn(turnId, receivedAt);
   } catch (err) {
@@ -525,11 +528,13 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
 
   let turn: { firstReceivedAt: string; created: boolean };
   let starts: boolean;
+  let shareNotice: string | null;
   try {
     const recorded = await clock.time("ledger", () => recordTurn(engine, body.turnId, new Date(body.receivedAtMs).toISOString()));
     if (!recorded) return Response.json({ status: "stale", text: "" }, { status: 409 });
     turn = { firstReceivedAt: recorded.turn.firstReceivedAt, created: recorded.created };
     starts = conversationStarts(recorded);
+    shareNotice = recorded.shareNotice;
   } catch (err) {
     const status = err instanceof EngineError ? err.status : null;
     console.warn(JSON.stringify({ type: "mano_turn_refused", reason: "ledger", status }));
@@ -548,10 +553,14 @@ export async function handleTurn(request: Request, deps: TurnDeps): Promise<Resp
     console.warn(JSON.stringify({ type: "mano_turn_error", handle: body.handleHash, err: err instanceof Error ? err.name : "unknown" }));
     response = failure(502, "error");
   }
+  // What Engine owes the person after a delete leads the reply; a failed
+  // turn leaves it owed.
+  const noticeShown = response.httpStatus === 200 && shareNotice !== null && response.body.text !== "";
+  if (noticeShown) response.body.text = `${shareNotice}\n\n${response.body.text}`;
   // Nothing reads a turn's completion before the reply, and its failure
   // is ignored, so the reply does not wait for it where it can run on.
   if (response.httpStatus === 200) {
-    const completing = engine.completeTurn(body.turnId).catch(() => undefined);
+    const completing = engine.completeTurn(body.turnId, noticeShown).catch(() => undefined);
     if (deps.background) deps.background(completing);
     else await completing;
   }

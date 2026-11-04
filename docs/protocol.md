@@ -38,7 +38,7 @@ A grant may carry `details`, the exact label and value pairs the resident read i
 
 An org that holds an active grant can ask for a document with `document.request`, signed by the org agent. `documentKind` is one of a closed list the resident's agent words itself, so staff text never reaches the resident. The resident's agent refuses a request when the case is not shared with that org.
 
-The answer is `document.provide`, signed by the resident's agent after the resident approved the matching gateway action for that exact document. `requestId` names the request it answers; the org refuses a document it did not ask for, or one on a case no longer shared. The bytes stay with the resident's agent, which checks the grant again on every read. Revoking ends those reads. It cannot recall what the org already read or saved, and Mano says so.
+The answer is `document.provide`, signed by the resident's agent after the resident approved the matching gateway action for that exact document. `requestId` names the request it answers; the org refuses a document it did not ask for, or one on a case no longer shared. The bytes stay with the resident's agent, which checks the grant again on every read: the stored document must still hash to what the resident approved, in the conversation they approved it in. Revoking ends those reads, and so does deleting the conversation, which leaves the org only the grant's `details` until the resident revokes. It cannot recall what the org already read or saved, and Mano says so.
 
 ## Delivery rules
 

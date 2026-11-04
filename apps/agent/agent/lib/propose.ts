@@ -255,7 +255,7 @@ async function oneAtATime<T>(turnId: string, run: () => Promise<T>): Promise<T> 
   }
 }
 
-async function rejected(engine: PersonEngine, approvalId: string): Promise<boolean> {
+export async function rejected(engine: PersonEngine, approvalId: string): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       if ((await engine.reject(approvalId)).status === "rejected") return true;

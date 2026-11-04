@@ -67,15 +67,18 @@ function oldestRequest(shares: EngineShare[]) {
 }
 
 // A photo the person texted while an organization waits on a document is
-// their answer to it: Mano asks, and it goes only after their YES. Null when
-// nothing waits, and the photo is read as usual. A stored photo that an
-// Engine outage keeps Mano from checking also reads as usual, and sends
-// nothing.
+// their answer to it: Mano asks, naming that photo, and it goes only after
+// their YES. A message with more than one photo is never guessed between: it
+// holds nothing and asks for the one they mean, so a YES can only ever send a
+// photo the question identified. Null when nothing waits, and the photo is
+// read as usual. A stored photo that an Engine outage keeps Mano from
+// checking also reads as usual, and sends nothing.
 export async function answerRequestWithPhoto(
   engine: PersonEngine,
   turn: { turnId: string; turnAtMs: number },
-  documentId: string,
-): Promise<HoldResult | null> {
+  documentIds: string[],
+  photoCount: number,
+): Promise<HoldResult | { pickOne: string } | null> {
   let shares: EngineShare[];
   try {
     shares = (await engine.listShares()).active;
@@ -85,10 +88,19 @@ export async function answerRequestWithPhoto(
   }
   const open = oldestRequest(shares);
   if (!open) return null;
+  const office = recipientName(open.share.recipient);
+  if (photoCount !== 1 || documentIds.length !== 1) {
+    return {
+      pickOne: `You sent ${Math.max(photoCount, documentIds.length)} photos, and ${office} asked for your ${open.request.label}. Nothing was sent. Send just the one photo you want them to have, by itself, and I will check with you first.`,
+    };
+  }
+  const documentId = documentIds[0]!;
+  const photo = (await engine.listDocuments()).find((d) => d.id === documentId);
+  if (!photo) return { held: false, status: "blocked", reason: "That photo is not on file." };
   return holdForYes(engine, { session: { turn: { id: turn.turnId } } }, turn, {
     type: "share",
     recipient: open.share.recipient,
-    purpose: `send your ${open.request.label} to ${recipientName(open.share.recipient)}`,
+    purpose: `send your ${open.request.label} to ${office}`,
     payload: {
       consent: "provide",
       caseId: open.share.caseId,
@@ -96,6 +108,7 @@ export async function answerRequestWithPhoto(
       documentKind: open.request.documentKind,
       label: open.request.label,
       sharedFor: open.share.purpose,
+      attachment: photo.label,
     },
     documentId,
   });

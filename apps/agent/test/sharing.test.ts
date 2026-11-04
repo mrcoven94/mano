@@ -8,7 +8,7 @@ import { handlePresented, handleTurn, type AgentTurnInput, type TurnDeps } from 
 import { heldOf, initialSettleState, reduceSettleEvent } from "../agent/lib/settle.js";
 import shareCase from "../agent/tools/share_case.js";
 import stopSharing from "../agent/tools/stop_sharing.js";
-import { DefiniteFailureError, type ActionRequest, type CheckOutcome, type Executor } from "../../engine/src/gateway/index.js";
+import { DefiniteFailureError, TimeoutError, type ActionRequest, type CheckOutcome, type Executor } from "../../engine/src/gateway/index.js";
 import { recordDocumentRequest } from "../../engine/src/case-sharing.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
@@ -21,6 +21,10 @@ const HANDLE = "c".repeat(64);
 const PERSON = personIdFor(HANDLE);
 const OFFICE = "the Sandbox County Human Services test office";
 const NOW = Date.now();
+// A PNG's signature: Engine reads a photo from its bytes.
+const PHOTO = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+const OTHER_PHOTO = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 4, 5, 6]);
+const DAY = new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", timeZone: "America/Los_Angeles" }).format(new Date());
 
 const PROFILE: Profile = {
   person: { fullName: { value: "Maria Testcase", source: "person" } as never, address: {} },
@@ -32,6 +36,7 @@ const PROFILE: Profile = {
 let engine: EngineDouble;
 let grant: string;
 let modelRuns: number;
+let generation: number;
 
 function signed(path: string, body: Record<string, unknown>): Request {
   const raw = JSON.stringify(body);
@@ -70,23 +75,24 @@ let turnNumber = 0;
 type Body = { status: string; text: string; approval?: string; approvalId?: string };
 
 // One text from Maria, with Channels' report of any question it sent.
-async function say(text: string | null, photoId?: string): Promise<Body> {
+async function say(text: string | null, photoId?: string | string[], attachmentCount?: number): Promise<Body> {
   turnNumber += 1;
+  const photos = photoId === undefined ? [] : [photoId].flat();
   const turnBody = {
     turnId: `turn_sharing${String(turnNumber).padStart(4, "0")}`,
-    generation: 0,
+    generation,
     handleHash: HANDLE,
     grant,
     receivedAt: Date.now(),
     texts: text ? [text] : [],
-    attachmentCount: photoId ? 1 : 0,
-    ...(photoId ? { documents: [{ id: photoId, mimeType: "image/png" }] } : {}),
+    attachmentCount: attachmentCount ?? photos.length,
+    ...(photos.length > 0 ? { documents: photos.map((id) => ({ id, mimeType: "image/png" })) } : {}),
   };
   const res = await handleTurn(signed("/channels/mano/turn", turnBody), deps());
   const body = (await res.json()) as Body;
   if (body.status === "waiting_approval") {
     const presented = await handlePresented(
-      signed("/channels/mano/presented", { handleHash: HANDLE, approvalId: body.approvalId, textHash: presentationHash(body.approval!), generation: 0, grant }),
+      signed("/channels/mano/presented", { handleHash: HANDLE, approvalId: body.approvalId, textHash: presentationHash(body.approval!), generation, grant }),
       { secret: SECRET, engine: deps().engine },
     );
     expect(presented.status).toBe(200);
@@ -105,7 +111,7 @@ const request = (id = "req-pay-stub-0001", caseId = currentCase()) =>
   });
 
 function shares() {
-  return engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch })!.forHandle(HANDLE, grant, 0).listShares();
+  return engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch })!.forHandle(HANDLE, grant, generation).listShares();
 }
 
 function currentCase(): string {
@@ -117,6 +123,7 @@ beforeEach(async () => {
   engine = new EngineDouble();
   engine.profile = PROFILE;
   modelRuns = 0;
+  generation = 0;
   grant = await grantFor(HANDLE);
   vi.stubEnv("ENGINE_URL", ENGINE_URL);
   vi.stubEnv("MANO_ENGINE_AGENT_TOKEN", ENGINE_AGENT_TOKEN);
@@ -163,11 +170,11 @@ describe("LAP-863: Maria shares her renewal with her caseworker", () => {
     await say("I want my caseworker to see my renewal");
     await say("YES");
     request();
-    engine.putDocument(PERSON, "photo-stub-1", new Uint8Array([1, 2, 3]));
+    engine.putDocument(PERSON, "photo-stub-1", PHOTO);
     const runs = modelRuns;
 
     const asked = await say(null, "photo-stub-1");
-    expect(asked.approval).toBe(`Ready to send the photo you just sent to ${OFFICE}, as your pay stub for your food benefits renewal. Reply YES to send exactly this, or NO to stop.`);
+    expect(asked.approval).toBe(`Ready to send the photo you sent on ${DAY} to ${OFFICE}, as your pay stub for your food benefits renewal. Reply YES to send exactly this, or NO to stop.`);
     expect(guardReply(asked.approval!).text).toBe(asked.approval);
     const { documentId, payload } = JSON.parse(engine.approvals().at(-1)!.requestJson) as { documentId: string; payload: { requestId: string } };
     expect(documentId).toBe("photo-stub-1");
@@ -177,6 +184,94 @@ describe("LAP-863: Maria shares her renewal with her caseworker", () => {
     expect((await say("YES")).text).toBe(`Done. I sent your pay stub to ${OFFICE}.`);
     expect((await shares()).active[0]!.openRequests).toEqual([]);
     expect(modelRuns).toBe(runs);
+  });
+
+  it("two photos in one message are never guessed between: she picks by sending one", async () => {
+    await say("I want my caseworker to see my renewal");
+    await say("YES");
+    request();
+    engine.putDocument(PERSON, "photo-stub-2", PHOTO);
+    engine.putDocument(PERSON, "photo-medical-2", OTHER_PHOTO);
+    const before = engine.approvals().length;
+
+    const asked = await say(null, ["photo-medical-2", "photo-stub-2"]);
+    expect(asked.status).not.toBe("waiting_approval");
+    expect(asked.text).toBe(
+      `You sent 2 photos, and ${OFFICE} asked for your pay stub. Nothing was sent. Send just the one photo you want them to have, by itself, and I will check with you first.`,
+    );
+    expect(engine.approvals()).toHaveLength(before);
+    expect((await say("YES")).status).not.toBe("waiting_approval");
+    expect((await shares()).active[0]!.openRequests).toHaveLength(1);
+
+    const one = await say(null, "photo-stub-2");
+    expect(one.status).toBe("waiting_approval");
+    expect(JSON.parse(engine.approvals().at(-1)!.requestJson).documentId).toBe("photo-stub-2");
+  });
+
+  it("a message with more photos than Channels stored is not guessed either", async () => {
+    await say("I want my caseworker to see my renewal");
+    await say("YES");
+    request();
+    engine.putDocument(PERSON, "photo-stub-3", PHOTO);
+    const asked = await say(null, "photo-stub-3", 2);
+    expect(asked.status).not.toBe("waiting_approval");
+    expect(asked.text).toContain("Nothing was sent");
+  });
+
+  it("stopping while the share question waits closes it, so a later yes shares nothing", async () => {
+    const asked = await say("I want my caseworker to see my renewal");
+    expect(asked.status).toBe("waiting_approval");
+    const approvalId = asked.approvalId!;
+
+    const stopped = await say("please stop sharing");
+    expect(stopped.status).not.toBe("waiting_approval");
+    expect(engine.approvals().find((a) => a.id === approvalId)!.status).toBe("rejected");
+    expect((await engine.fetch(`${ENGINE_URL}/api/persons/${PERSON}/pending-approval?generation=0`, { headers: { authorization: `Bearer ${ENGINE_AGENT_TOKEN}`, "x-mano-handle-grant": grant } }).then((r) => r.json()) as { pointer: unknown }).pointer).toBeNull();
+
+    await say("YES");
+    expect((await shares()).active).toEqual([]);
+    expect(engine.approvals().find((a) => a.id === approvalId)!.status).toBe("rejected");
+  });
+
+  it("stop_sharing says what happened to the waiting question", async () => {
+    await say("I want my caseworker to see my renewal");
+    const client = engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch })!.forHandle(HANDLE, grant, 0);
+    await client.putTurn("turn_stopdirect1", new Date().toISOString());
+    const out = (await stopSharing.execute({}, toolCtx({ handleHash: HANDLE, turnId: "turn_stopdirect1", grant, generation: 0, turnAtMs: Date.now() }))) as { status: string; note: string };
+    expect(out.status).toBe("question_closed");
+    expect(out.note).toContain("a YES will not share");
+  });
+
+  it("stop_sharing does not say nothing is shared while an approved grant is still being checked", async () => {
+    engine.filer = new SilentOffice();
+    await say("I want my caseworker to see my renewal");
+    await say("YES");
+    const client = engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch })!.forHandle(HANDLE, grant, 0);
+    await client.putTurn("turn_stopdirect2", new Date().toISOString());
+    const out = (await stopSharing.execute({}, toolCtx({ handleHash: HANDLE, turnId: "turn_stopdirect2", grant, generation: 0, turnAtMs: Date.now() }))) as { status: string };
+    expect(out.status).toBe("earlier_share_unresolved");
+  });
+
+  it("after a delete, her next reply says what the office keeps, once", async () => {
+    await say("I want my caseworker to see my renewal");
+    await say("YES");
+    request();
+    const res = await engine.fetch(`${ENGINE_URL}/api/persons/${PERSON}/conversation`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${ENGINE_AGENT_TOKEN}`, "x-mano-handle-grant": grant, "content-type": "application/json" },
+      body: JSON.stringify({ generation: 1 }),
+    });
+    expect(res.status).toBe(200);
+    generation = 1;
+
+    const first = await say("hello again");
+    expect(first.text).toContain("can no longer open the documents you sent");
+    expect(first.text).toContain("still has the details you approved for your food benefits renewal");
+    expect(first.text).toContain("cannot recall");
+    expect(first.text).toContain("Okay.");
+    expect(guardReply(first.text).text).toBe(first.text);
+    expect((await say("hello once more")).text).toBe("Okay.");
+    expect((await shares()).active).toHaveLength(1);
   });
 
   it("a photo with no request waiting goes to the reading as usual", async () => {
@@ -239,6 +334,17 @@ describe("LAP-863: Maria shares her renewal with her caseworker", () => {
     expect((await shares()).active).toEqual([]);
   });
 });
+
+// Takes the delivery and never answers it: the attempt stays unknown.
+class SilentOffice implements Executor {
+  readonly simulated = true;
+  async execute(_req: ActionRequest): Promise<{ externalId: string }> {
+    throw new TimeoutError();
+  }
+  async check(): Promise<CheckOutcome> {
+    throw new Error("office unreachable");
+  }
+}
 
 class RefusingOffice implements Executor {
   readonly simulated = true;

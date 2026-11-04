@@ -27,15 +27,18 @@ import { generateAgentKeypair, importAgentPrivateKey, resolveAgentKey } from "./
 import {
   applyShareOutcome,
   documentKindLabel,
+  clearShareDeleteNotice,
   documentRequestText,
-  documentShared,
+  endDocumentAccess,
   ensureCaseSharingTables,
   isRequestReminder,
   listShares,
   migrateRevokedCases,
+  readableDocuments,
   recordDocumentRequest,
   requestReminderId,
   shareActive,
+  shareDeleteNotice,
   shareRevoked,
 } from "../case-sharing.js";
 import { ConsentDeliveringExecutor } from "./person-executor.js";
@@ -795,7 +798,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const { turnId, receivedAt, generation } = parseTurnInput(input);
     const out = putTurnIfAbsent(this.db(), turnId, receivedAt, generation);
     if ("stale" in out) return STALE_STATE;
-    return out;
+    const shareNotice = shareDeleteNotice(this.db(), Date.now());
+    return shareNotice ? { ...out, shareNotice } : out;
   }
 
   async getTurn(verified: string, turnId: unknown) {
@@ -807,6 +811,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
     await this.assertSubject(verified);
     const out = completeTurn(this.db(), requireIdentity(turnId), new Date().toISOString(), parseGenerationInput(input).generation);
     if (out && "stale" in out) return STALE_STATE;
+    if (out && (input as { shareNoticeShown?: unknown }).shareNoticeShown === true) clearShareDeleteNotice(this.db());
     return out;
   }
 
@@ -862,6 +867,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
       if (out.generation > before) {
         removeDeadlines(this.db(), Date.now());
         removeFillReplays(this.db());
+        endDocumentAccess(this.db(), Date.now());
       }
       return out;
     });
@@ -1072,9 +1078,8 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // Runs inside the transaction that records the share's receipt: a SQL
   // error propagates, so the whole transaction rolls back (no receipt, no
   // done attempt, no marker) and the next lookup applies the effect once.
-  private recordConsentOutcome(approval: { recipient: string; purpose: string; requestJson: string }) {
-    const now = Date.now();
-    applyShareOutcome(this.db(), approval, now, (requestId) => cancelReminder(this.db(), requestReminderId(requestId), now));
+  private recordConsentOutcome(approval: Approval) {
+    applyShareOutcome(this.db(), approval, Date.now());
   }
 
   async grantConsent(verified: string, input: GrantConsentInput) {
@@ -1297,7 +1302,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         requestedAt: new Date(now).toISOString(),
       });
       if (fresh) {
-        createReminder(this.db(), { id: requestReminderId(msg.idempotencyKey), text: documentRequestText(msg.fromAgentId, purpose, label), dueAtMs: now, generation }, now);
+        createReminder(this.db(), { id: requestReminderId(msg.fromAgentId, msg.idempotencyKey), text: documentRequestText(msg.fromAgentId, purpose, label), dueAtMs: now, generation }, now);
       }
     });
     this.store.audit({ event: "case.document_requested", caseHash: await auditDigest(msg.caseId) });
@@ -1309,13 +1314,21 @@ export class PersonAgent extends Agent<Env, PersonState> {
   // staff. Checked here too: a revoked share reads nothing, whatever the
   // organization's records say.
   async readSharedDocument(recipient: string, caseId: string, documentId: string): Promise<{ name: string; contentB64: string } | null> {
-    if (!shareActive(this.db(), recipient, caseId, Date.now()) || !documentShared(this.db(), recipient, caseId, documentId)) return null;
-    const row = this.documentRow(documentId);
+    if (!shareActive(this.db(), recipient, caseId, Date.now())) return null;
+    const grant = readableDocuments(this.db(), recipient, caseId).find((d) => d.documentId === documentId);
+    const row = grant ? this.documentRow(documentId) : undefined;
     const bytes = row?.name ? await this.documentBytes(documentId) : null;
-    if (!row?.name || bytes == null) return null;
-    this.store.audit({ event: "case.document_read", caseHash: await auditDigest(caseId) });
+    if (!grant || !row?.name || bytes == null) return null;
     const raw = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
+    if ((await sha256Hex(raw)) !== grant.hash) return null;
+    this.store.audit({ event: "case.document_read", caseHash: await auditDigest(caseId) });
     return { name: row.name, contentB64: bytesToBase64(raw) };
+  }
+
+  // Which documents staff can still open on a case, for their screen.
+  async readableDocumentIds(recipient: string, caseId: string): Promise<string[]> {
+    if (!shareActive(this.db(), recipient, caseId, Date.now())) return [];
+    return readableDocuments(this.db(), recipient, caseId).map((d) => d.documentId);
   }
 
   async listShares(verified: string) {

@@ -406,10 +406,14 @@ export class OrgAgent extends Agent<Env, OrgState> {
       "SELECT id, document_kind, status, requested_at FROM document_requests WHERE case_id = ? ORDER BY requested_at",
       caseId,
     ).toArray() as unknown as { id: string; document_kind: string; status: string; requested_at: string }[];
-    const documents = this.db().exec(
+    // Only what the person's agent says can still be opened: a delete ends
+    // the documents here too. An agent that does not answer shows none.
+    const person = this.env.PERSON_AGENT.get(this.env.PERSON_AGENT.idFromName(active.personId)) as unknown as PersonAgent;
+    const readable = new Set(await person.readableDocumentIds(`org:${this.orgId}`, caseId).catch(() => [] as string[]));
+    const documents = (this.db().exec(
       "SELECT document_id, name, document_kind, provided_at FROM shared_documents WHERE case_id = ? ORDER BY provided_at",
       caseId,
-    ).toArray() as unknown as { document_id: string; name: string; document_kind: string; provided_at: string }[];
+    ).toArray() as unknown as { document_id: string; name: string; document_kind: string; provided_at: string }[]).filter((d) => readable.has(d.document_id));
     return {
       caseId: active.caseId,
       purpose: active.purpose,

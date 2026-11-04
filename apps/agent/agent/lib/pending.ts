@@ -133,7 +133,7 @@ function shareQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | 
     case "revoke":
       return `Ready to stop sharing ${String(share.sharedFor)} with ${office}. They lose access right away and cannot ask you for more. Stopping cannot recall what they already received. Reply YES to stop sharing, or NO to keep sharing.`;
     case "provide":
-      return `Ready to send the photo you just sent to ${office}, as your ${String(share.label)} for ${String(share.sharedFor)}. Reply YES to send exactly this, or NO to stop.`;
+      return `Ready to send ${String(share.attachment)} to ${office}, as your ${String(share.label)} for ${String(share.sharedFor)}. Reply YES to send exactly this, or NO to stop.`;
     default:
       return null;
   }
@@ -161,6 +161,10 @@ export function shareDone(approval: Pick<EngineApproval, "recipient" | "purpose"
 
 export function isShare(approval: Pick<EngineApproval, "requestJson">): boolean {
   return frozenShare(approval) !== null;
+}
+
+export function isShareGrant(approval: Pick<EngineApproval, "requestJson">): boolean {
+  return frozenShare(approval)?.consent === "grant";
 }
 
 export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">): string {

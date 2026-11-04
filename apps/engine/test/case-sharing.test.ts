@@ -2,6 +2,7 @@ import { SELF, env as testEnv, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
 import { mintSessionToken } from "../src/auth.js";
+import { applyShareOutcome } from "../src/case-sharing.js";
 import type { OrgAgent } from "../src/agents/org-agent.js";
 import type { PersonAgent } from "../src/agents/person-agent.js";
 
@@ -273,8 +274,8 @@ describe("LAP-863: sharing a case with a caseworker", () => {
       const sql = state.storage.sql;
       sql.exec("INSERT INTO document_requests VALUES (?, 'req-unsent', 'case-revoke', 'photo-id', 'open', ?)", `org:${org}`, new Date().toISOString());
       sql.exec(
-        "INSERT INTO reminders(id, text, due_at_ms, generation, status, next_at_ms, created_at_ms) VALUES ('case-request:req-unsent', 'unsent', ?, 0, 'scheduled', ?, ?)",
-        Date.now() + 3_600_000, Date.now() + 3_600_000, Date.now(),
+        "INSERT INTO reminders(id, text, due_at_ms, generation, status, next_at_ms, created_at_ms) VALUES (?, 'unsent', ?, 0, 'scheduled', ?, ?)",
+        `case-request:org:${org}:req-unsent`, Date.now() + 3_600_000, Date.now() + 3_600_000, Date.now(),
       );
     });
     const lateDraft = await propose(maria, org, "send your bank statement", { consent: "provide", caseId: "case-revoke", requestId: second, documentKind: "bank-statement" }, documentId);
@@ -289,7 +290,7 @@ describe("LAP-863: sharing a case with a caseworker", () => {
     expect((await approve(maria, lateDraft)).status).not.toBe("completed");
     const after = await runInDurableObject(agentOf(maria), (_i, state) => ({
       requests: state.storage.sql.exec("SELECT status FROM document_requests WHERE id IN (?, 'req-unsent')", second).toArray(),
-      text: state.storage.sql.exec("SELECT status FROM reminders WHERE id = 'case-request:req-unsent'").toArray(),
+      text: state.storage.sql.exec("SELECT status FROM reminders WHERE id = ?", `case-request:org:${org}:req-unsent`).toArray(),
     }));
     expect(after).toEqual({ requests: [{ status: "closed" }, { status: "closed" }], text: [{ status: "cancelled" }] });
     expect(texts.some((t) => t.key.includes("req-unsent"))).toBe(false);
@@ -372,6 +373,231 @@ describe("LAP-863: sharing a case with a caseworker", () => {
       SELF.fetch(`${BASE}/api/persons/${person.id}/shares`, { headers: { authorization: `Bearer ${AGENT_TOKEN}`, "x-mano-handle-grant": grantHeader } });
     expect((await read(maria)).status).toBe(200);
     expect((await read(ana)).status).toBe(403);
+  });
+});
+
+describe("LAP-863: a document grant is one approved document, in one conversation", () => {
+  const OTHER_PHOTO_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/AAAAEhgGAWe7PkAAAAABJRU5ErkJggg==";
+
+  function deleteConversation(person: Person, generation: number) {
+    return (async () =>
+      SELF.fetch(`${BASE}/api/persons/${person.id}/conversation`, {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${AGENT_TOKEN}`,
+          "x-mano-handle-grant": await mintHandleGrant(person.handle, GRANT_SECRET),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ generation }),
+      }))();
+  }
+
+  // Maria shares document D in answer to a request, with her yes.
+  async function sharedDocument(label: string) {
+    const maria = resident();
+    const org = unique(label);
+    const caseId = `case-${label}`;
+    recordTexts();
+    await grant(maria, org, caseId, { Name: "Maria Testcase" });
+    const key = `req-${crypto.randomUUID()}`;
+    expect((await askFor(org, caseId, "pay-stub", key)).status).toBe(201);
+    const id = `doc-${crypto.randomUUID()}`;
+    const stored = await asPerson(maria, "POST", "/documents", { name: "pay-stub.png", contentB64: PHOTO_B64, id });
+    expect(stored.status).toBe(200);
+    await yes(maria, org, "send your pay stub", { consent: "provide", caseId, requestId: key, documentKind: "pay-stub" }, id);
+    expect((await asStaff(org, "GET", `/cases/${caseId}/documents/${id}`)).status).toBe(200);
+    return { maria, org, caseId, id };
+  }
+
+  it("the old staff URL opens nothing after a delete, even with new bytes under the same ID", async () => {
+    const { maria, org, caseId, id } = await sharedDocument("reused");
+    expect((await deleteConversation(maria, 1)).status).toBe(200);
+    expect((await asStaff(org, "GET", `/cases/${caseId}/documents/${id}`)).status).toBe(404);
+
+    const again = await asPerson(maria, "POST", "/documents", { name: "medical-letter.png", contentB64: OTHER_PHOTO_B64, id });
+    expect(again.status).toBe(200);
+    const res = await asStaff(org, "GET", `/cases/${caseId}/documents/${id}`);
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain("medical-letter");
+  });
+
+  it("the same bytes under the same ID after a delete still need a new yes", async () => {
+    const { maria, org, caseId, id } = await sharedDocument("samebytes");
+    expect((await deleteConversation(maria, 1)).status).toBe(200);
+    expect((await asPerson(maria, "POST", "/documents", { name: "pay-stub.png", contentB64: PHOTO_B64, id })).status).toBe(200);
+    expect((await asStaff(org, "GET", `/cases/${caseId}/documents/${id}`)).status).toBe(404);
+  });
+
+  it("a stored document that no longer matches the approved hash opens nothing", async () => {
+    const { maria, org, caseId, id } = await sharedDocument("hash");
+    await runInDurableObject(agentOf(maria), (_i, state) => {
+      state.storage.sql.exec("UPDATE documents SET hash = ? WHERE id = ?", "0".repeat(64), id);
+    });
+    expect((await asStaff(org, "GET", `/cases/${caseId}/documents/${id}`)).status).toBe(404);
+  });
+
+  it("a grant is never written for a document the delete already removed", async () => {
+    const { maria, org, caseId, id } = await sharedDocument("racing");
+    const rows = await runInDurableObject(agentOf(maria), (_i, state) => {
+      const sql = state.storage.sql;
+      const hash = (sql.exec("SELECT hash FROM documents WHERE id = ?", id).toArray()[0] as { hash: string }).hash;
+      sql.exec("DELETE FROM shared_documents");
+      sql.exec("DELETE FROM documents WHERE id = ?", id);
+      applyShareOutcome(
+        sql as never,
+        {
+          recipient: `org:${org}`,
+          purpose: "send your pay stub",
+          documentHash: hash,
+          documentId: id,
+          requestJson: JSON.stringify({ payload: { consent: "provide", caseId, requestId: "r" }, documentId: id }),
+        },
+        Date.now(),
+      );
+      return sql.exec("SELECT * FROM shared_documents").toArray();
+    });
+    expect(rows).toEqual([]);
+  });
+
+  it("after a delete staff see only the approved values, and the person hears it once on their next text", async () => {
+    const { maria, org, caseId } = await sharedDocument("keeps");
+    const open = `req-${crypto.randomUUID()}`;
+    expect((await askFor(org, caseId, "bank-statement", open)).status).toBe(201);
+    expect((await deleteConversation(maria, 1)).status).toBe(200);
+
+    const view = (await (await asStaff(org, "GET", `/cases/${caseId}`)).json()) as CaseBody;
+    expect(view.case.details).toEqual([{ label: "Name", value: "Maria Testcase" }]);
+    expect(view.case.documents).toEqual([]);
+    expect((await shares(maria)).active[0]!.openRequests).toEqual([]);
+
+    const turns = async (turnId: string) => {
+      const headers = {
+        authorization: `Bearer ${AGENT_TOKEN}`,
+        "x-mano-handle-grant": await mintHandleGrant(maria.handle, GRANT_SECRET),
+        "content-type": "application/json",
+      };
+      const put = await SELF.fetch(`${BASE}/api/persons/${maria.id}/turns`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ turnId, receivedAt: new Date().toISOString(), generation: 1 }),
+      });
+      return { body: (await put.json()) as { shareNotice?: string }, headers };
+    };
+    const first = await turns("turn_notice_0001");
+    expect(first.body.shareNotice).toContain("can no longer open the documents you sent");
+    expect(first.body.shareNotice).toContain("still has the details you approved for your food benefits renewal");
+    expect(first.body.shareNotice).toContain("cannot recall");
+
+    // A retry before the reply went out still carries it.
+    expect((await turns("turn_notice_0001")).body.shareNotice).toBeDefined();
+    const done = await SELF.fetch(`${BASE}/api/persons/${maria.id}/turns/turn_notice_0001/complete`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ generation: 1, shareNoticeShown: true }),
+    });
+    expect(done.status).toBe(200);
+    expect((await turns("turn_notice_0002")).body.shareNotice).toBeUndefined();
+  });
+
+  it("a delete with nothing shared promises nothing", async () => {
+    const maria = resident();
+    expect((await deleteConversation(maria, 1)).status).toBe(200);
+    const put = await SELF.fetch(`${BASE}/api/persons/${maria.id}/turns`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${AGENT_TOKEN}`,
+        "x-mano-handle-grant": await mintHandleGrant(maria.handle, GRANT_SECRET),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ turnId: "turn_notice_none", receivedAt: new Date().toISOString(), generation: 1 }),
+    });
+    expect(((await put.json()) as { shareNotice?: string }).shareNotice).toBeUndefined();
+  });
+});
+
+describe("LAP-863: a request's text belongs to one organization and one open request", () => {
+  async function reminderStatuses(person: Person) {
+    return runInDurableObject(agentOf(person), (_i, state) =>
+      (state.storage.sql.exec("SELECT id, status FROM reminders WHERE id LIKE 'case-request:%' ORDER BY id").toArray() as { id: string; status: string }[]),
+    );
+  }
+
+  function channelsDown() {
+    vi.stubGlobal("fetch", async () => new Response("down", { status: 503 }));
+  }
+
+  async function makeDue(person: Person) {
+    await runInDurableObject(agentOf(person), (_i, state) => {
+      state.storage.sql.exec("UPDATE reminders SET next_at_ms = 0, claim_token = NULL, claimed_at_ms = NULL WHERE id LIKE 'case-request:%' AND status = 'sending'");
+    });
+  }
+
+  it("two organizations using one key each reach the person", async () => {
+    const maria = resident();
+    const [orgA, orgB] = [unique("county"), unique("nonprofit")];
+    await grant(maria, orgA, "case-key-a", { Name: "Maria Testcase" });
+    await grant(maria, orgB, "case-key-b", { Name: "Maria Testcase" });
+    const texts = recordTexts();
+    const key = `req-${crypto.randomUUID()}`;
+    expect((await askFor(orgA, "case-key-a", "pay-stub", key)).status).toBe(201);
+    expect((await askFor(orgB, "case-key-b", "photo-id", key)).status).toBe(201);
+    await (agentOf(maria) as unknown as PersonAgent).deliverDueReminders();
+    expect(new Set(texts.map((t) => t.key)).size).toBe(2);
+    expect(texts.map((t) => t.text).join(" ")).toContain("pay stub");
+    expect(texts.map((t) => t.text).join(" ")).toContain("photo ID");
+  });
+
+  it("revoking one organization leaves the other's text with the same key", async () => {
+    const maria = resident();
+    const [orgA, orgB] = [unique("county"), unique("nonprofit")];
+    await grant(maria, orgA, "case-keep-a", { Name: "Maria Testcase" });
+    await grant(maria, orgB, "case-keep-b", { Name: "Maria Testcase" });
+    channelsDown();
+    const key = `req-${crypto.randomUUID()}`;
+    expect((await askFor(orgA, "case-keep-a", "pay-stub", key)).status).toBe(201);
+    expect((await askFor(orgB, "case-keep-b", "photo-id", key)).status).toBe(201);
+    const agent = agentOf(maria) as unknown as PersonAgent;
+    await agent.deliverDueReminders();
+    await revoke(maria, orgA, "case-keep-a");
+
+    const texts = recordTexts();
+    await makeDue(maria);
+    await agent.deliverDueReminders();
+    expect(texts).toHaveLength(1);
+    expect(texts[0]!.text).toContain("photo ID");
+  });
+
+  it("a text waiting on a retry is withdrawn when the person stops sharing", async () => {
+    const maria = resident();
+    const org = unique("county");
+    await grant(maria, org, "case-retry", { Name: "Maria Testcase" });
+    channelsDown();
+    expect((await askFor(org, "case-retry")).status).toBe(201);
+    const agent = agentOf(maria) as unknown as PersonAgent;
+    await agent.deliverDueReminders();
+    expect((await reminderStatuses(maria)).map((r) => r.status)).toEqual(["sending"]);
+
+    await revoke(maria, org, "case-retry");
+    expect((await reminderStatuses(maria)).map((r) => r.status)).toEqual(["withdrawn"]);
+
+    const texts = recordTexts();
+    await makeDue(maria);
+    await agent.deliverDueReminders();
+    expect(texts).toEqual([]);
+  });
+
+  it("a text waiting on a retry is withdrawn when the person already answered", async () => {
+    const maria = resident();
+    const org = unique("county");
+    await grant(maria, org, "case-answered", { Name: "Maria Testcase" });
+    channelsDown();
+    const key = `req-${crypto.randomUUID()}`;
+    expect((await askFor(org, "case-answered", "pay-stub", key)).status).toBe(201);
+    const agent = agentOf(maria) as unknown as PersonAgent;
+    await agent.deliverDueReminders();
+    const documentId = await upload(maria);
+    await yes(maria, org, "send your pay stub", { consent: "provide", caseId: "case-answered", requestId: key, documentKind: "pay-stub" }, documentId);
+    expect((await reminderStatuses(maria)).map((r) => r.status)).toEqual(["withdrawn"]);
   });
 });
 
