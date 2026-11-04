@@ -303,7 +303,7 @@ class ControlServer(unittest.TestCase):
             self.control = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(self.control)
         self.ran = []
-        self.control.run = lambda *args: self.ran.append(args)
+        self.control.run = lambda *args: self.ran.append(args) or SimpleNamespace(stdout=b"A page - Chromium")
         self.control.screenshot_bytes = lambda: b"\x89PNG"
         self.control.UPLOADS = str(Path(tmp) / "uploads")
         self.server = self.control.ThreadingHTTPServer(("127.0.0.1", 0), self.control.Handler)
@@ -354,6 +354,54 @@ class ControlServer(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MANO_SESSION_SECRET_SHA256": ""}):
             self.assertFalse(self.control.authorized_header("Bearer ", ""))
             self.assertFalse(self.control.authorized_header("Bearer " + SECRET, ""))
+
+    def test_settle_waits_for_two_matching_screens_and_gives_up_at_its_limit(self):
+        with mock.patch.object(self.control, "SETTLE_PAUSE_SECONDS", 0):
+            shots = iter([b"loading 1", b"loading 2", b"page", b"page", b"never read"])
+            with mock.patch.object(self.control, "screenshot_bytes", lambda: next(shots)):
+                self.control.settle()
+            self.assertEqual(next(shots), b"never read")
+            with mock.patch.object(self.control, "SETTLE_SECONDS", 0.02), mock.patch.object(self.control, "screenshot_bytes", lambda: os.urandom(4)):
+                self.control.settle()
+
+    def test_a_click_waits_for_the_screen_and_typing_does_not(self):
+        with mock.patch.object(self.control, "settle") as settle:
+            self.assertEqual(self.call("POST", "/act", {"actions": [{"type": "type", "text": "x"}]}, SECRET), 200)
+            settle.assert_not_called()
+            self.assertEqual(self.call("POST", "/act", {"actions": [{"type": "click", "button": "left", "x": 1, "y": 1}]}, SECRET), 200)
+            settle.assert_called_once()
+
+    def test_chromium_starts_with_http3_off(self):
+        self.assertIn("--disable-quic", app.START_SH)
+
+    def test_a_page_counts_as_open_only_once_its_own_title_shows(self):
+        url = "https://sandbox.example.gov/apply?draft=abc"
+        for title, shown in (
+            ("", False),
+            ("about:blank - Chromium", False),
+            ("sandbox.example.gov/apply?draft=abc - Chromium", False),
+            ("Step 1 of 3 - State Benefits Renewal - Chromium", True),
+        ):
+            self.assertEqual(self.control.page_title_shown(title, url), shown, title)
+
+    def test_open_page_waits_for_the_page_and_opens_it_again_if_it_never_comes(self):
+        url = "https://sandbox.example.gov/apply"
+        with mock.patch.object(self.control, "run") as run, mock.patch.object(self.control, "GOTO_WAIT_SECONDS", 0.05), mock.patch.object(self.control.time, "sleep"):
+            titles = iter([b"about:blank - Chromium", b"Step 1 - Chromium"])
+
+            def answer(*args):
+                if "getwindowname" in args:
+                    return SimpleNamespace(stdout=next(titles))
+                return SimpleNamespace(stdout=b"")
+
+            run.side_effect = answer
+            self.assertTrue(self.control.open_page(url))
+            self.assertEqual(sum(1 for call in run.call_args_list if "Return" in call.args), 1)
+
+            run.reset_mock()
+            run.side_effect = lambda *args: SimpleNamespace(stdout=b"about:blank - Chromium" if "getwindowname" in args else b"")
+            self.assertFalse(self.control.open_page(url))
+            self.assertEqual(sum(1 for call in run.call_args_list if "Return" in call.args), 2)
 
     def test_each_form_key_reaches_xdotool_by_a_name_it_has(self):
         # xdotool ignores a name it does not know and exits 0, so a wrong one fails silently.

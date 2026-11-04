@@ -79,6 +79,10 @@ UPLOADS = "/uploads"
 SCREENSHOT_PATH = "/tmp/shot.png"
 SECRET_SHA256 = os.environ.get("MANO_SESSION_SECRET_SHA256", "")
 PORTAL_ORIGIN = os.environ.get("MANO_PORTAL_ORIGIN", "")
+GOTO_ATTEMPTS = 2
+GOTO_WAIT_SECONDS = 6
+SETTLE_SECONDS = 5
+SETTLE_PAUSE_SECONDS = 0.6
 
 KEY_NAMES = {
     "Enter": "Return",
@@ -125,6 +129,39 @@ def run(*args):
     return subprocess.run(
         args, env={**os.environ, "DISPLAY": DISPLAY}, capture_output=True, timeout=20, check=True
     )
+
+
+def window_title():
+    found = run("xdotool", "search", "--onlyvisible", "--class", "Chromium", "getwindowname")
+    return found.stdout.decode("utf-8", "replace").strip()
+
+
+# Chromium's window shows about:blank, then the address while a page loads, then
+# the page's own title.
+def page_title_shown(title, url):
+    host = urllib.parse.urlparse(url).hostname or ""
+    return bool(title) and "about:blank" not in title and host not in title
+
+
+# Opens a page and waits for it, so the first screenshot shows the page: a model
+# shown a blank one spends its turns waiting and reloading. A slow page is
+# opened once more, which is safe because /goto only reads. False if it never
+# showed; the caller's screenshot then says what is there.
+def open_page(url):
+    for _ in range(GOTO_ATTEMPTS):
+        run("xdotool", "key", "ctrl+l")
+        time.sleep(0.3)
+        run("xdotool", "type", "--delay", "5", "--", url)
+        run("xdotool", "key", "Return")
+        deadline = time.monotonic() + GOTO_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                if page_title_shown(window_title(), url):
+                    return True
+            except subprocess.SubprocessError:
+                pass
+            time.sleep(0.25)
+    return False
 
 
 def click_button(button):
@@ -177,6 +214,22 @@ def screenshot_bytes():
     run("scrot", "-o", "-z", SCREENSHOT_PATH)
     with open(SCREENSHOT_PATH, "rb") as handle:
         return handle.read()
+
+
+# Waits until two screens in a row match, so the next screenshot shows what the
+# actions did. Without it a model sees the old page after clicking Continue,
+# clicks again, and the portal refuses the draft as already in use. The tab's
+# spinner shows a page still loading, but only a sliver of it is on screen, so
+# the screens are compared well apart.
+def settle():
+    deadline = time.monotonic() + SETTLE_SECONDS
+    last = None
+    while time.monotonic() < deadline:
+        shot = screenshot_bytes()
+        if shot == last:
+            return
+        last = shot
+        time.sleep(SETTLE_PAUSE_SECONDS)
 
 
 def safe_name(name):
@@ -243,17 +296,15 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     self.send_json(422, {"applied": applied, "error": str(exc)})
                     return
+                if any(action.get("type") in ("click", "double_click", "keypress") for action in actions):
+                    settle()
                 self.send_json(200, {"applied": applied})
             elif path == "/goto":
                 url = str(self.read_json().get("url", ""))
                 if not PORTAL_ORIGIN or origin_of(url) != PORTAL_ORIGIN:
                     self.send_json(403, {"error": "only the portal may be opened"})
                     return
-                run("xdotool", "key", "ctrl+l")
-                time.sleep(0.3)
-                run("xdotool", "type", "--delay", "5", "--", url)
-                run("xdotool", "key", "Return")
-                self.send_json(200, {})
+                self.send_json(200, {"loaded": open_page(url)})
             elif path == "/stage":
                 body = self.read_json()
                 name = safe_name(str(body.get("name", "")))
@@ -303,7 +354,9 @@ if [ -f "$PREF" ]; then
   sed -i 's/"exited_cleanly":false/"exited_cleanly":true/;s/"exit_type":"Crashed"/"exit_type":"Normal"/' "$PREF"
 fi
 rm -f /profile/Default/SingletonLock /profile/Default/SingletonSocket /profile/Default/SingletonCookie
-chromium --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --no-default-browser-check \\
+# HTTP/3 fails through the sandbox's network rule (ERR_QUIC_PROTOCOL_ERROR on the
+# portal), and Chromium showed that error page in place of the form.
+chromium --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-quic --no-first-run --no-default-browser-check \\
   --user-data-dir=/profile \\
   --window-size="${WIDTH},${HEIGHT}" --window-position=0,0 --start-maximized \\
   about:blank >/tmp/chromium.log 2>&1 &
