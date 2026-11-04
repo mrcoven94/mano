@@ -2,6 +2,7 @@
 // provider. Webhook ingress verifies and enqueues; the queue consumer
 // routes events to one ConversationDO per handle; a cron reconciles
 // anything the webhook missed through the same queue.
+import { ENGINE_SEND_SIGNATURE_HEADER, ENGINE_SEND_TIMESTAMP_HEADER, verifyEngineSend } from "@mano/protocol";
 import {
   ATTACHMENT_RETENTION_MS,
   BlooioChannel,
@@ -11,6 +12,7 @@ import {
   hashChatId,
   hashHandle,
   lifecycleStateFor,
+  normalizeHandle,
   parseBlooioEvent,
   verifySignature,
   type Channel,
@@ -24,15 +26,26 @@ export { ConversationDO } from "./conversation.js";
 export { ChannelStateDO } from "./state.js";
 
 const WEBHOOK_PATH = "/webhooks/blooio";
+const AGENT_SEND_PATH = "/internal/agent-send";
 const RECONCILE_LIMIT = 100;
 const RECONCILE_MAX_PAGES = 5;
 const SWEEP_LIMIT = 1000;
 
 function workerChannel(env: Env): Channel {
   if (env.BLOOIO_API_KEY && env.BLOOIO_CHANNEL_ID) {
-    return new BlooioChannel({ apiKey: env.BLOOIO_API_KEY, channelId: env.BLOOIO_CHANNEL_ID });
+    return new BlooioChannel({ apiKey: env.BLOOIO_API_KEY, channelId: env.BLOOIO_CHANNEL_ID, baseUrl: env.BLOOIO_BASE_URL || undefined });
   }
   return new RecordingChannel();
+}
+
+// True only when both sides name a line and they differ. Anything
+// unverifiable is accepted: the signature is the real proof, this is
+// defense in depth.
+function wrongLine(address: string | null, lineNumber: string | undefined): boolean {
+  if (!address || !lineNumber) return false;
+  const want = normalizeHandle(lineNumber);
+  const got = normalizeHandle(address);
+  return !!want && !!got && want !== got;
 }
 
 // Ingress: read the raw body once, verify over the raw bytes, decode,
@@ -66,9 +79,21 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
     logger.info("webhook_ignored", { reason: "not_an_event", durationMs: Date.now() - started });
     return new Response("Ignored.", { status: 202 });
   }
-  if (event.channelId !== env.BLOOIO_CHANNEL_ID) {
+  // Our webhook is scoped to our line and the signature proves the event
+  // came through it, so a missing channel_id is accepted. A present but
+  // different id, or an address naming another line, is ignored.
+  if (event.channelId && event.channelId !== env.BLOOIO_CHANNEL_ID) {
     logger.info("webhook_ignored", {
       reason: "wrong_channel",
+      eventId: event.id,
+      type: event.rawType,
+      durationMs: Date.now() - started,
+    });
+    return new Response("Ignored.", { status: 202 });
+  }
+  if (wrongLine(event.channelAddress, env.MANO_TEXT_NUMBER)) {
+    logger.info("webhook_ignored", {
+      reason: "wrong_address",
       eventId: event.id,
       type: event.rawType,
       durationMs: Date.now() - started,
@@ -90,19 +115,36 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
 // route by their chat instead, through the route table the conversations
 // keep.
 export async function routeEvent(event: NormalizedEvent, env: Env): Promise<"routed" | "skipped"> {
+  const handleHash = await conversationFor(event, env);
+  if (!handleHash) return "skipped";
+  await deliverEvent(event, handleHash, env);
+  return "routed";
+}
+
+// The conversation an event belongs to, by handle hash, or null when it
+// is ignored or unroutable.
+export async function conversationFor(event: NormalizedEvent, env: Env): Promise<string | null> {
   const logger = createLogger();
-  if (event.kind === "ignored" || event.kind === "typing.started" || event.kind === "typing.stopped") {
+  if (event.kind === "ignored") {
     logger.info("event_skipped", { eventId: event.id, type: event.rawType });
-    return "skipped";
+    return null;
   }
   let handleHash = event.handle ? await hashHandle(event.handle, env.MANO_HANDLE_PEPPER) : null;
-  if (!handleHash && event.chatId && lifecycleStateFor(event.kind)) {
+  // Receipts, typing and reactions often name only the chat: they route
+  // through the chat table the conversations keep.
+  const routesByChat =
+    lifecycleStateFor(event.kind) !== null || event.kind === "typing.started" || event.kind === "typing.stopped" || event.kind === "reaction";
+  if (!handleHash && event.chatId && routesByChat) {
     handleHash = await routeForChat(env, event.chatId);
   }
   if (!handleHash) {
     logger.info("event_skipped", { eventId: event.id, type: event.rawType, reason: "unroutable" });
-    return "skipped";
+    return null;
   }
+  return handleHash;
+}
+
+async function deliverEvent(event: NormalizedEvent, handleHash: string, env: Env): Promise<void> {
   const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));
   const res = await stub.fetch("https://conversation/internal/event", {
     method: "POST",
@@ -110,8 +152,7 @@ export async function routeEvent(event: NormalizedEvent, env: Env): Promise<"rou
   });
   if (!res.ok) throw new Error(`Conversation route failed: ${res.status}`);
   const data = (await res.json()) as { result?: string };
-  logger.info("event_routed", { eventId: event.id, type: event.rawType, handle: handleHash, result: data.result ?? "unknown" });
-  return "routed";
+  createLogger().info("event_routed", { eventId: event.id, type: event.rawType, handle: handleHash, result: data.result ?? "unknown" });
 }
 
 async function routeForChat(env: Env, chatId: string): Promise<string | null> {
@@ -135,9 +176,12 @@ async function saveCursor(env: Env, cursor: string | null): Promise<void> {
 }
 
 // Reconciliation: page the provider's event feed since the last cursor
-// and enqueue anything for our line. A page the provider serves again
-// (no next cursor) is filtered through the seen high-watermark, so only
-// new events requeue; the DO event log dedupes the rest.
+// and enqueue anything for our line. Feed rows are thin (no channel,
+// text or sender), so inbound receipts hydrate their message before
+// queueing; anything else for our line queues directly. Skipped rows
+// are still marked seen so the cursor keeps moving, and a page the
+// provider serves again is filtered through the seen high-watermark,
+// so only new events requeue; the DO event log dedupes the rest.
 export async function reconcile(env: Env, channel?: Channel): Promise<{ pages: number; enqueued: number }> {
   const logger = createLogger();
   const feed = channel ?? workerChannel(env);
@@ -147,18 +191,27 @@ export async function reconcile(env: Env, channel?: Channel): Promise<{ pages: n
   for (let page = 0; page < RECONCILE_MAX_PAGES; page++) {
     const batch = await feed.listEvents(cursor, RECONCILE_LIMIT);
     pages += 1;
-    const ours = batch.events.filter((event) => event.channelId === env.BLOOIO_CHANNEL_ID);
-    const unseen = new Set(await checkUnseen(env, ours.map((event) => event.id)));
-    const queued: string[] = [];
-    for (const event of ours) {
+    const unseen = new Set(await checkUnseen(env, batch.events.map((event) => event.id)));
+    const seen: string[] = [];
+    for (const event of batch.events) {
       if (!unseen.has(event.id)) continue;
-      await env.EVENTS.send(event);
-      queued.push(event.id);
-      enqueued += 1;
+      const full = await hydrateForReconcile(feed, event, env, logger);
+      if (full === "paused") {
+        // Transient fetch failure: keep the cursor here so the next
+        // run retries this page; rows already handled stay marked.
+        await noteSeenIds(env, seen);
+        logger.info("reconciled", { pages, enqueued });
+        return { pages, enqueued };
+      }
+      if (full) {
+        await env.EVENTS.send(full);
+        enqueued += 1;
+      }
+      seen.push(event.id);
     }
     // Noted only after the queue accepted them: a throw above leaves
     // the page unmarked, and the next run retries it.
-    await noteSeenIds(env, queued);
+    await noteSeenIds(env, seen);
     // No next cursor means the feed is drained; keep the last cursor so
     // the next run resumes instead of rereading from the start.
     if (!batch.nextCursor) break;
@@ -167,6 +220,28 @@ export async function reconcile(env: Env, channel?: Channel): Promise<{ pages: n
   }
   logger.info("reconciled", { pages, enqueued });
   return { pages, enqueued };
+}
+
+// One feed row to zero or one queueable event. Thin inbound rows fetch
+// their message; rows already naming our line queue as parsed. Null
+// means seen and skipped (gone, unreadable, or another line's);
+// "paused" means the fetch failed transiently and the run must stop.
+async function hydrateForReconcile(
+  feed: Channel,
+  event: NormalizedEvent,
+  env: Env,
+  logger: ReturnType<typeof createLogger>,
+): Promise<NormalizedEvent | null | "paused"> {
+  if (event.channelId === env.BLOOIO_CHANNEL_ID) return event;
+  if (event.kind !== "message.received" || !event.chatId || !event.messageId) return null;
+  try {
+    const full = await feed.hydrateEvent(event);
+    if (!full || full.channelId !== env.BLOOIO_CHANNEL_ID) return null;
+    return full;
+  } catch (err) {
+    logger.warn("reconcile_paused", { err: errName(err) });
+    return "paused";
+  }
 }
 
 async function checkUnseen(env: Env, ids: string[]): Promise<string[]> {
@@ -187,6 +262,70 @@ async function noteSeenIds(env: Env, ids: string[]): Promise<void> {
 
 // Dead letters record the event ID and reason, then drop the body. The
 // full event, with its message text, never sits in the DLQ.
+// Each event is first resolved to its conversation, all at once. Then one
+// conversation's events are delivered in batch order (STOP before a later
+// message, typing started before stopped), whichever of chat or handle
+// named them, and different conversations are delivered at once. Each
+// message is acked or retried on its own.
+export async function routeInLanes(
+  messages: readonly Pick<Message<unknown>, "id" | "body" | "ack" | "retry">[],
+  resolve: (event: NormalizedEvent) => Promise<string | null>,
+  deliver: (event: NormalizedEvent, conversation: string) => Promise<void>,
+): Promise<void> {
+  const failed = (message: (typeof messages)[number], err: unknown) => {
+    createLogger().warn("event_route_failed", {
+      eventId: String((message.body as { id?: unknown } | null)?.id ?? "unknown"),
+      err: errName(err),
+    });
+    message.retry();
+  };
+  type Resolved = { conversation: string | null } | { err: unknown };
+  const settle = (message: (typeof messages)[number]): Promise<Resolved> =>
+    resolve(message.body as NormalizedEvent).then((conversation) => ({ conversation }), (err: unknown) => ({ err }));
+  const eventOf = (message: (typeof messages)[number]) => (message.body ?? {}) as Partial<NormalizedEvent>;
+  // Events that name a handle resolve on their own. A chat-only event (a
+  // receipt, typing, a reaction) takes the conversation of an earlier event
+  // in this batch with the same chat, since that event writes the chat's
+  // route only when it is delivered; otherwise it asks the route table.
+  const resolved: Resolved[] = new Array(messages.length);
+  await Promise.all(messages.map(async (message, i) => {
+    if (eventOf(message).handle) resolved[i] = await settle(message);
+  }));
+  await Promise.all(messages.map(async (message, i) => {
+    if (resolved[i]) return;
+    const chatId = eventOf(message).chatId;
+    for (let j = i - 1; j >= 0 && chatId; j--) {
+      const earlier = resolved[j];
+      if (eventOf(messages[j]!).chatId === chatId && eventOf(messages[j]!).handle && earlier && "conversation" in earlier && earlier.conversation) {
+        resolved[i] = { conversation: earlier.conversation };
+        return;
+      }
+    }
+    resolved[i] = await settle(message);
+  }));
+  const lanes = new Map<string, (typeof messages)[number][]>();
+  messages.forEach((message, i) => {
+    const r = resolved[i]!;
+    if ("err" in r) return failed(message, r.err);
+    if (r.conversation === null) return message.ack();
+    const lane = lanes.get(r.conversation);
+    if (lane) lane.push(message);
+    else lanes.set(r.conversation, [message]);
+  });
+  await Promise.all(
+    [...lanes].map(async ([conversation, lane]) => {
+      for (const message of lane) {
+        try {
+          await deliver(message.body as NormalizedEvent, conversation);
+          message.ack();
+        } catch (err) {
+          failed(message, err);
+        }
+      }
+    }),
+  );
+}
+
 export function handleDeadLetters(batch: MessageBatch<unknown>): void {
   const logger = createLogger();
   for (const message of batch.messages) {
@@ -199,8 +338,9 @@ export function handleDeadLetters(batch: MessageBatch<unknown>): void {
   }
 }
 
-// Stored attachments expire 30 days after upload. The cron deletes the
-// oldest batch each run until none remain.
+// Attachments older turns stored in Channels' own bucket expire 30 days
+// after upload. The cron deletes the oldest batch each run until none
+// remain. New photos go to the person's Engine documents (files.ts).
 export async function sweepExpiredFiles(files: FileStore, nowMs: number): Promise<{ deleted: number }> {
   const keys = await files.listOlderThan("persons/", nowMs - ATTACHMENT_RETENTION_MS, SWEEP_LIMIT);
   const deleted = keys.length > 0 ? await files.deleteKeys(keys) : 0;
@@ -208,11 +348,93 @@ export async function sweepExpiredFiles(files: FileStore, nowMs: number): Promis
   return { deleted };
 }
 
+// Engine-started deliveries (due reminders). Engine signs each with
+// MANO_ENGINE_SEND_SECRET over the method, this route's path, the
+// timestamp and the raw body (packages/protocol engine-send.ts); that
+// secret is accepted on this route only, and the agent's secret is not.
+// Then routed to the conversation, which sends through the normal
+// outbound path under the generation the reminder was set in. Terminal
+// outcomes answer 200 {sent:false, reason} with a non-empty reason, so
+// Engine drops them; budget (429) and anything uncertain ask it to retry.
+export async function handleAgentSend(request: Request, env: Env): Promise<Response> {
+  const started = Date.now();
+  const logger = createLogger();
+  const rawBytes = new Uint8Array(await request.arrayBuffer());
+  const check = await verifyEngineSend(
+    env.MANO_ENGINE_SEND_SECRET,
+    {
+      method: request.method.toUpperCase(),
+      path: new URL(request.url).pathname,
+      timestamp: request.headers.get(ENGINE_SEND_TIMESTAMP_HEADER),
+      signature: request.headers.get(ENGINE_SEND_SIGNATURE_HEADER),
+      body: rawBytes,
+    },
+    Math.floor(started / 1000),
+  );
+  if (!check.ok) {
+    logger.warn("agent_send_rejected", { reason: check.reason });
+    return new Response("Bad signature.", { status: 401 });
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(rawBytes));
+  } catch {
+    return new Response("Bad JSON.", { status: 400 });
+  }
+  const body = parsed as { handleHash?: unknown; key?: unknown; text?: unknown; generation?: unknown };
+  if (
+    typeof body.handleHash !== "string" ||
+    !body.handleHash ||
+    typeof body.key !== "string" ||
+    !body.key ||
+    typeof body.text !== "string" ||
+    !body.text ||
+    typeof body.generation !== "number" ||
+    !Number.isInteger(body.generation) ||
+    body.generation < 0
+  ) {
+    return new Response("Bad agent send.", { status: 400 });
+  }
+  const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(body.handleHash));
+  const res = await stub.fetch("https://conversation/internal/agent-send", {
+    method: "POST",
+    body: JSON.stringify({ handleHash: body.handleHash, key: body.key, text: body.text, generation: body.generation }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { sent?: unknown; reason?: unknown };
+  // A refusal must name its reason, or Engine could not tell it from an
+  // unreadable answer; anything else is reported as uncertain.
+  if (res.ok && data.sent !== true && (typeof data.reason !== "string" || !data.reason)) {
+    logger.warn("agent_send_unclear", { handle: body.handleHash, status: res.status });
+    return Response.json({ sent: false, reason: null }, { status: 502 });
+  }
+  logger.info("agent_send_routed", {
+    handle: body.handleHash,
+    sent: data.sent === true,
+    reason: typeof data.reason === "string" ? data.reason : null,
+    status: res.status,
+    durationMs: Date.now() - started,
+  });
+  return Response.json({ sent: data.sent ?? false, reason: data.reason ?? null }, { status: res.status });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === WEBHOOK_PATH) {
       return handleWebhook(request, env);
+    }
+    if (request.method === "POST" && url.pathname === AGENT_SEND_PATH) {
+      return handleAgentSend(request, env);
+    }
+    // Local end-to-end runs only: deletes one conversation by its handle.
+    // Exists only when MANO_DEV_ROUTES is "1", which no deployment sets.
+    if (env.MANO_DEV_ROUTES === "1" && request.method === "POST" && url.pathname === "/dev/delete") {
+      const body = (await request.json().catch(() => null)) as { handle?: unknown } | null;
+      const handle = typeof body?.handle === "string" ? normalizeHandle(body.handle) : null;
+      if (!handle) return new Response("Bad delete.", { status: 400 });
+      const handleHash = await hashHandle(handle, env.MANO_HANDLE_PEPPER);
+      const stub = env.CONVERSATION.get(env.CONVERSATION.idFromName(handleHash));
+      return stub.fetch("https://conversation/internal/delete", { method: "POST", body: JSON.stringify({ handleHash }) });
     }
     // Ok and nothing else: strangers must not learn which keys are set.
     if (request.method === "GET" && url.pathname === "/health") {
@@ -226,23 +448,22 @@ export default {
       handleDeadLetters(batch);
       return;
     }
-    for (const message of batch.messages) {
-      const event = message.body as NormalizedEvent;
-      try {
-        await routeEvent(event, env);
-        message.ack();
-      } catch (err) {
-        createLogger().warn("event_route_failed", {
-          eventId: String((event as { id?: unknown })?.id ?? "unknown"),
-          err: errName(err),
-        });
-        message.retry();
-      }
-    }
+    await routeInLanes(batch.messages, (event) => conversationFor(event, env), (event, conversation) => deliverEvent(event, conversation, env));
   },
 
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
-    await reconcile(env);
-    await sweepExpiredFiles(new R2FileStore(env.FILES), Date.now());
+    // A failing tick must log and end, never exception: an uncaught
+    // cron error is invisible except in tail, and it skips the sweep.
+    const logger = createLogger();
+    try {
+      await reconcile(env);
+    } catch (err) {
+      logger.warn("reconcile_failed", { err: errName(err) });
+    }
+    try {
+      await sweepExpiredFiles(new R2FileStore(env.FILES), Date.now());
+    } catch (err) {
+      logger.warn("sweep_failed", { err: errName(err) });
+    }
   },
 };

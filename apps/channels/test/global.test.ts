@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { GlobalLedger, MemoryGlobalStore } from "../src/global.js";
+import { GlobalLedger, MemoryGlobalStore, parseModelCosts } from "../src/global.js";
+
+describe("cost per model in the spend ledger", () => {
+  it("records what each model cost once per key, beside the total, for the day only", () => {
+    let now = Date.parse("2026-11-02T12:00:00Z");
+    const ledger = new GlobalLedger(new MemoryGlobalStore(), () => now, 5);
+    ledger.reserve("a:1", 1);
+    ledger.settle("a:1", 0.3, { "muse-spark-1.3": 0.1, "meta/muse-spark-open": 0.2 });
+    ledger.settle("a:1", 0.3, { "muse-spark-1.3": 0.1, "meta/muse-spark-open": 0.2 });
+    ledger.settle("b:1", 0.05, { "muse-spark-1.3": 0.05 });
+    ledger.settle("agent:k", 0.01);
+    const spent = ledger.spent();
+    expect(spent.spentUsd).toBeCloseTo(0.36);
+    expect(spent.byModel["muse-spark-1.3"]).toBeCloseTo(0.15);
+    expect(spent.byModel["meta/muse-spark-open"]).toBeCloseTo(0.2);
+    now += 24 * 3600 * 1000;
+    ledger.reserve("c:1", 1);
+    expect(ledger.spent().byModel).toEqual({});
+  });
+
+  it("drops malformed entries at the boundary and keeps the rest", () => {
+    expect(parseModelCosts({ "muse-spark-1.3": 0.1, bad: -1, worse: "1", "": 2, nan: Number.NaN })).toEqual({ "muse-spark-1.3": 0.1 });
+    expect(parseModelCosts([1, 2])).toBeUndefined();
+    expect(parseModelCosts(null)).toBeUndefined();
+    expect(parseModelCosts({ x: -1 })).toBeUndefined();
+  });
+});
 
 describe("GlobalLedger reservations", () => {
   it("holds worst-case cost so concurrent turns cannot overshoot", () => {

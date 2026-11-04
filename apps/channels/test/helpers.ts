@@ -1,3 +1,5 @@
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { Decorations } from "../src/decorations.js";
 import {
   RecordingChannel,
   StandInResponder,
@@ -6,10 +8,21 @@ import {
   type NormalizedEvent,
   type Responder,
 } from "@mano/channels";
-import { ConversationRunner, DEFAULT_RUNNER_CONFIG, type RunnerConfig, type SpendLedger } from "../src/runner.js";
+import { backgroundKey, ConversationRunner, DEFAULT_RUNNER_CONFIG, type RunnerConfig, type SpendLedger } from "../src/runner.js";
 import { GlobalLedger, MemoryGlobalStore } from "../src/global.js";
-import { MemoryStore } from "../src/store.js";
-import { MemoryFileStore } from "../src/files.js";
+import { MemoryStore, type ChatBackgroundState, type ConversationStore } from "../src/store.js";
+import type { DocumentStore } from "../src/files.js";
+
+// The person's Engine documents, in memory: what Channels stored, by ID.
+export class MemoryDocumentStore implements DocumentStore {
+  docs = new Map<string, { name: string; bytes: Uint8Array; generation: number }>();
+  refuse = false;
+  async put(doc: { id: string; name: string; bytes: Uint8Array; generation: number }): Promise<boolean> {
+    if (this.refuse) return false;
+    this.docs.set(doc.id, { name: doc.name, bytes: doc.bytes, generation: doc.generation });
+    return true;
+  }
+}
 
 export const TEST_PEPPER = "test-pepper-not-real";
 export const TEST_KEK_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
@@ -23,7 +36,9 @@ export interface Harness {
   store: MemoryStore;
   channel: RecordingChannel;
   responder: Responder;
-  files: MemoryFileStore;
+  // Eyes and background removal, run outside the turn.
+  decorations: Decorations;
+  documents: MemoryDocumentStore;
   ledger: GlobalLedger;
   lines: string[];
   logger: Logger;
@@ -38,6 +53,7 @@ export function inboundEvent(overrides: Partial<NormalizedEvent> & { id: string 
     rawType: "message.received",
     channelId: TEST_CHANNEL,
     channelType: "blooio",
+    channelAddress: null,
     chatId: TEST_CHAT,
     messageId: `msg_${overrides.id}`,
     group: null,
@@ -64,6 +80,7 @@ export function lifecycleEvent(
     rawType: kind,
     channelId: TEST_CHANNEL,
     channelType: "blooio",
+    channelAddress: null,
     chatId: TEST_CHAT,
     messageId,
     group: null,
@@ -86,21 +103,30 @@ export function makeHarness(
     byteBudget?: number;
     startMs?: number;
     fetchFn?: typeof fetch;
+    reportPresentation?: import("../src/runner.js").RunnerDeps["reportPresentation"];
+    // Another store behind the same interface, such as SqlConversationStore.
+    store?: ConversationStore;
+    // How long decoration work may run before it is cancelled.
+    decorationTimeoutMs?: number;
+    // The model check for one short health question; none fails closed.
+    crisisCheck?: import("@mano/persona").CrisisCheck | null;
+    photoConverter?: import("../src/files.js").PhotoConverter | null;
   } = {},
 ): Harness {
   const lines: string[] = [];
   const logger = createLogger((line) => lines.push(line));
-  const store = new MemoryStore();
+  const store = (opts.store ?? new MemoryStore()) as MemoryStore;
   const channel = new RecordingChannel();
   const responder = opts.responder ?? new StandInResponder(opts.replies ?? ["Thanks for writing. Here is what I found."]);
-  const files = new MemoryFileStore();
+  const documents = new MemoryDocumentStore();
   const batchMs = opts.config?.batchMs ?? DEFAULT_RUNNER_CONFIG.batchMs;
   const h: Harness = {
     runner: null as unknown as ConversationRunner,
     store,
     channel,
     responder,
-    files,
+    decorations: new Decorations({ timeoutMs: opts.decorationTimeoutMs }),
+    documents,
     ledger: null as unknown as GlobalLedger,
     lines,
     logger,
@@ -113,8 +139,8 @@ export function makeHarness(
   h.ledger = new GlobalLedger(new MemoryGlobalStore(), () => h.now, opts.budgetUsd ?? 5, opts.byteBudget);
   const spend: SpendLedger = {
     reserve: async (key: string, worstUsd: number) => h.ledger.reserve(key, worstUsd),
-    settle: async (key: string, actualUsd: number) => {
-      h.ledger.settle(key, actualUsd);
+    settle: async (key: string, actualUsd: number, byModel?: Record<string, number>) => {
+      h.ledger.settle(key, actualUsd, byModel);
     },
     release: async (key: string) => {
       h.ledger.release(key);
@@ -131,19 +157,46 @@ export function makeHarness(
     store,
     channel,
     responder,
-    files,
-    kekB64: TEST_KEK_B64,
+    documents,
+    photoConverter: opts.photoConverter ?? null,
     spend,
     logger,
     nowMs: () => h.now,
     fetchFn: opts.fetchFn ?? (async () => new Response("missing", { status: 404 })),
     config: { handleHash: TEST_HANDLE_HASH, ...DEFAULT_RUNNER_CONFIG, ...opts.config },
+    reportPresentation: opts.reportPresentation,
+    decorations: h.decorations,
+    crisisCheck: opts.crisisCheck ?? null,
   });
   return h;
+}
+
+// The record an earlier version's background upload left on a chat.
+export async function seedBackground(h: Harness, state: ChatBackgroundState, chatId = TEST_CHAT): Promise<void> {
+  h.store.saveChatBackground({ chatKey: await backgroundKey(chatId), state, attempts: 1, lockedUntilMs: 0, updatedAtMs: h.now - 60_000 });
 }
 
 export async function runTurnAfterBatch(h: Harness): Promise<void> {
   h.advance(h.batchMs + 100);
   const result = await h.runner.runDueTurn();
   if (result !== "ran") throw new Error(`Expected a turn to run, got ${result}.`);
+}
+
+// A Durable Object's SqlStorage over node:sqlite, so a test can run the
+// real SQL store and open it again as a restarted worker would.
+export function sqliteStorage(db: DatabaseSync): SqlStorage {
+  return {
+    exec(sql: string, ...params: unknown[]) {
+      const select = /^\s*(SELECT|WITH)\b/i.test(sql);
+      if (!select && params.length === 0 && sql.includes(";")) {
+        db.exec(sql);
+        return { toArray: () => [] };
+      }
+      const stmt = db.prepare(sql);
+      const args = params as SQLInputValue[];
+      if (select) return { toArray: () => stmt.all(...args) };
+      stmt.run(...args);
+      return { toArray: () => [] };
+    },
+  } as unknown as SqlStorage;
 }

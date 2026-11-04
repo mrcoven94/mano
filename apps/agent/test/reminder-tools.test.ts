@@ -1,0 +1,263 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { personIdFor } from "../agent/lib/engine.js";
+import cancelReminder from "../agent/tools/cancel_reminder.js";
+import listReminders from "../agent/tools/list_reminders.js";
+import remind from "../agent/tools/remind.js";
+import { toolCtx } from "./ctx.js";
+import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
+
+const HANDLE = "b".repeat(64);
+const PERSON = personIdFor(HANDLE);
+let engine: EngineDouble;
+let grant: string;
+
+function ctx(turnId: string) {
+  return toolCtx({ handleHash: HANDLE, turnId, grant, generation: 0 });
+}
+
+beforeEach(async () => {
+  engine = new EngineDouble();
+  grant = await grantFor(HANDLE);
+  vi.stubEnv("ENGINE_URL", ENGINE_URL);
+  vi.stubEnv("MANO_ENGINE_AGENT_TOKEN", ENGINE_AGENT_TOKEN);
+  vi.stubGlobal("fetch", engine.fetch);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
+describe("reminders in Engine", () => {
+  it("sets a reminder under the turn's deletion generation", async () => {
+    const out = await remind.execute({ text: "call the county", when: "tomorrow at 9" }, ctx("turn_aaaaaaaa3"));
+    expect(out).toMatchObject({ text: "call the county" });
+    const [saved] = engine.remindersOf(PERSON);
+    expect(saved).toMatchObject({ text: "Reminder: call the county", generation: 0, status: "scheduled" });
+  });
+
+  it("refuses when Engine is not configured", async () => {
+    vi.stubEnv("ENGINE_URL", "");
+    await expect(remind.execute({ text: "call the county", when: "tomorrow at 9" }, ctx("turn_aaaaaaaa1"))).rejects.toThrow(/not available/i);
+  });
+
+  it("a replayed or recovered turn never creates a second reminder", async () => {
+    const input = { text: "call the county", when: "tomorrow at 9" };
+    const first = await remind.execute(input, ctx("turn_replay0001"));
+    const again = await remind.execute(input, ctx("turn_replay0001"));
+    expect(again).toEqual(first);
+    expect(engine.remindersOf(PERSON)).toHaveLength(1);
+  });
+
+  it("two different reminders at the same time in one turn are both kept", async () => {
+    await remind.execute({ text: "call the office", when: "tomorrow at 9" }, ctx("turn_pair000001"));
+    const later = toolCtx({
+      handleHash: HANDLE,
+      turnId: "turn_pair000001",
+      grant,
+      messages: [
+        { role: "user", content: "remind me" },
+        { role: "assistant", content: [{ type: "tool-call", toolName: "remind", toolCallId: "c1", input: { text: "call the office", when: "tomorrow at 9" } }] },
+      ],
+    });
+    await remind.execute({ text: "bring the pay stub", when: "tomorrow at 9" }, later);
+    expect(engine.remindersOf(PERSON).map((r) => r.text).sort()).toEqual(["Reminder: bring the pay stub", "Reminder: call the office"]);
+  });
+
+  it("a turn without an ID cannot set a reminder", async () => {
+    const noTurn = { session: { auth: { current: { principalId: HANDLE, attributes: { grant, generation: "0" } } } } } as never;
+    await expect(remind.execute({ text: "call the county", when: "tomorrow at 9" }, noTurn)).rejects.toThrow();
+  });
+});
+
+describe("the zone a reminder is read in", () => {
+  // Saturday, October 31, 2026, 20:00 UTC: 13:00 in California, 16:00 in
+  // New York, 10:00 in Hawaii. Daylight time ends on the mainland
+  // overnight, so "tomorrow at 9" is 9:00 standard time there.
+  const SATURDAY = Date.UTC(2026, 9, 31, 20, 0, 0);
+  const livingIn = (state: string) => ({
+    person: { address: { state: { value: state, source: "person", updatedAt: "2026-10-30T00:00:00.000Z" } } },
+    household: [],
+    income: [],
+    programs: [],
+  });
+  const tomorrowAt9 = (turnId: string) =>
+    remind.execute({ text: "call the county", when: "tomorrow at 9" }, toolCtx({ handleHash: HANDLE, turnId, grant, turnAtMs: SATURDAY }));
+
+  it.each([
+    ["CA", "2026-11-01T17:00:00.000Z"],
+    ["NY", "2026-11-01T14:00:00.000Z"],
+    ["HI", "2026-11-01T19:00:00.000Z"],
+  ])("a person in %s gets 9:00 their time on Sunday", async (state, dueAt) => {
+    engine.profile = livingIn(state);
+    expect(await tomorrowAt9(`turn_zone${state}0001`)).toMatchObject({ dueAt });
+  });
+
+  it("a person with no state on file gets 9:00 Pacific", async () => {
+    expect(await tomorrowAt9("turn_zonenone001")).toMatchObject({ dueAt: "2026-11-01T17:00:00.000Z" });
+  });
+
+  it("an Engine that cannot serve profiles still sets it, at 9:00 Pacific", async () => {
+    engine.profileKeySet = false;
+    expect(await tomorrowAt9("turn_zonenokey01")).toMatchObject({ dueAt: "2026-11-01T17:00:00.000Z" });
+  });
+
+  it("a retry that reads a different zone keeps the one reminder the first attempt saved", async () => {
+    engine.profileKeySet = false;
+    const first = await tomorrowAt9("turn_zoneretry1");
+    engine.profileKeySet = true;
+    engine.profile = livingIn("NY");
+    const retry = toolCtx({ handleHash: HANDLE, turnId: "turn_zoneretry1", grant, turnAtMs: SATURDAY, eveTurn: "eve-turn-2" });
+    const again = await remind.execute({ text: "call the county", when: "tomorrow at 9" }, retry);
+    expect(again).toEqual(first);
+    expect(engine.remindersOf(PERSON)).toHaveLength(1);
+    expect(engine.remindersOf(PERSON)[0]).toMatchObject({ dueAt: "2026-11-01T17:00:00.000Z" });
+  });
+
+  it("a retry whose zone puts the time in the past still returns the reminder already set", async () => {
+    // Tuesday, November 3, 2026, 8:30 Pacific, 11:30 in New York. "Today at
+    // 9" is 17:00 UTC in Pacific; read again in New York it is 14:00 UTC, past.
+    const turnAtMs = Date.UTC(2026, 10, 3, 16, 30, 0);
+    const todayAt9 = (eveTurn: string) =>
+      remind.execute({ text: "call the county", when: "today at 9" }, toolCtx({ handleHash: HANDLE, turnId: "turn_zonepast01", grant, turnAtMs, eveTurn }));
+    engine.profileKeySet = false;
+    const first = await todayAt9("eve-turn-1");
+    engine.profileKeySet = true;
+    engine.profile = livingIn("NY");
+    // The first attempt saved the reminder but its wake-up was lost. The
+    // retry creates it again with exactly what is stored, the create that
+    // re-arms Engine's wake-up (Engine's test/agent-state-routes.test.ts).
+    const [saved] = engine.remindersOf(PERSON);
+    const creates: unknown[] = [];
+    const fetchEngine = engine.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/reminders") && init?.method === "POST") creates.push(JSON.parse(String(init.body)));
+      return fetchEngine(input, init);
+    });
+    expect(await todayAt9("eve-turn-2")).toEqual(first);
+    expect(creates).toEqual([{ id: saved.id, text: "Reminder: call the county", dueAt: "2026-11-03T17:00:00.000Z", generation: 0 }]);
+    expect(engine.remindersOf(PERSON)).toHaveLength(1);
+    expect(first).toMatchObject({ dueAt: "2026-11-03T17:00:00.000Z" });
+  });
+
+  it("a retry never answers for one reminder with another set for the same time", async () => {
+    const turnAtMs = Date.UTC(2026, 10, 3, 16, 30, 0);
+    const todayAt9 = (text: string, eveTurn: string) =>
+      remind.execute({ text, when: "today at 9" }, toolCtx({ handleHash: HANDLE, turnId: "turn_zonepair01", grant, turnAtMs, eveTurn }));
+    engine.profileKeySet = false;
+    await todayAt9("call the county", "eve-turn-1");
+    engine.profileKeySet = true;
+    engine.profile = livingIn("NY");
+    await expect(todayAt9("bring the pay stub", "eve-turn-2")).rejects.toThrow(/already passed/);
+    expect(engine.remindersOf(PERSON).map((r) => r.text)).toEqual(["Reminder: call the county"]);
+  });
+
+  it("a recovered reminder holds its place, so the next one for that time is still set", async () => {
+    const turnAtMs = Date.UTC(2026, 10, 3, 16, 30, 0);
+    const todayAt9 = (text: string, eveTurn: string) =>
+      remind.execute({ text, when: "today at 9" }, toolCtx({ handleHash: HANDLE, turnId: "turn_zoneplace1", grant, turnAtMs, eveTurn }));
+    engine.profileKeySet = false;
+    await todayAt9("call the county", "eve-turn-1");
+    engine.profileKeySet = true;
+    engine.profile = livingIn("NY");
+    await todayAt9("call the county", "eve-turn-2");
+    engine.profileKeySet = false;
+    expect(await todayAt9("bring the pay stub", "eve-turn-2")).toMatchObject({ text: "bring the pay stub", dueAt: "2026-11-03T17:00:00.000Z" });
+    expect(engine.remindersOf(PERSON).map((r) => r.text).sort()).toEqual(["Reminder: bring the pay stub", "Reminder: call the county"]);
+  });
+
+  it("a recovery racing another reminder for that time never answers for it", async () => {
+    const turnAtMs = Date.UTC(2026, 10, 3, 16, 30, 0);
+    const todayAt9 = (text: string, eveTurn: string) =>
+      remind.execute({ text, when: "today at 9" }, toolCtx({ handleHash: HANDLE, turnId: "turn_zonerace01", grant, turnAtMs, eveTurn }));
+    engine.profileKeySet = false;
+    await todayAt9("call the county", "eve-turn-1");
+    engine.profileKeySet = true;
+    engine.profile = livingIn("NY");
+    // In the retry the county call reads New York and recovers; the pay
+    // stub call's profile read fails, so it reads Pacific and claims place
+    // 0 while the recovery's reminder list is still on its way.
+    const fetchEngine = engine.fetch;
+    let profileReads = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/profile") && ++profileReads === 2) return Response.json({ error: "unavailable" }, { status: 503 });
+      if (url.endsWith("/reminders") && (init?.method ?? "GET") === "GET") await new Promise((r) => setTimeout(r, 50));
+      return fetchEngine(input, init);
+    });
+    const [county, payStub] = await Promise.all([todayAt9("call the county", "eve-turn-2"), todayAt9("bring the pay stub", "eve-turn-2")]);
+    expect(county).toMatchObject({ text: "call the county" });
+    expect(payStub).toMatchObject({ text: "bring the pay stub", dueAt: "2026-11-03T17:00:00.000Z" });
+    expect(engine.remindersOf(PERSON).map((r) => r.text).sort()).toEqual(["Reminder: bring the pay stub", "Reminder: call the county"]);
+  });
+});
+
+describe("reminder identity across attempts", () => {
+  const user = (text: string) => ({ role: "user", content: text });
+  const call = (items: unknown) => ({ role: "assistant", content: [{ type: "tool-call", toolName: "remind", toolCallId: "c1", input: items }] });
+  const result = { role: "tool", content: [{ type: "tool-result", toolName: "remind", toolCallId: "c1", output: {} }] };
+  const ask = user("Remind me in 2 minutes to call the county office.");
+
+  it("a retry finds the one it made, and another reminder for that time is never answered with it", async () => {
+    const turnAtMs = Date.now();
+    const first = toolCtx({ handleHash: HANDLE, turnId: "turn_word00001", grant, messages: [ask], turnAtMs });
+    const made = await remind.execute({ text: "call the county office", when: "in 2 minutes" }, first);
+    // The retry runs as a new attempt: the same message arrives again.
+    const retry = toolCtx({ handleHash: HANDLE, turnId: "turn_word00001", grant, messages: [ask, user("Set."), ask], eveTurn: "eve-turn-2", turnAtMs });
+    expect(await remind.execute({ text: "Call the county office.", when: "in 2 minutes" }, retry)).toEqual(made);
+    expect(engine.remindersOf(PERSON)).toHaveLength(1);
+    // Engine answers the new attempt's place 0 with the county reminder; the
+    // pay stub takes the next place instead of being reported as that one.
+    const other = toolCtx({ handleHash: HANDLE, turnId: "turn_word00001", grant, messages: [ask], eveTurn: "eve-turn-3", turnAtMs });
+    expect(await remind.execute({ text: "bring the pay stub", when: "in 2 minutes" }, other)).toMatchObject({ text: "bring the pay stub" });
+    expect(engine.remindersOf(PERSON).map((r) => r.text).sort()).toEqual(["Reminder: bring the pay stub", "Reminder: call the county office"]);
+  });
+
+  it("a different reminder for the same time later in the same turn is its own reminder", async () => {
+    const turnAtMs = Date.now();
+    const step1 = toolCtx({ handleHash: HANDLE, turnId: "turn_word00002", grant, messages: [ask], turnAtMs });
+    await remind.execute({ text: "call the county office", when: "in 2 minutes" }, step1);
+    const step2 = toolCtx({ handleHash: HANDLE, turnId: "turn_word00002", grant, messages: [ask, call({}), result], turnAtMs });
+    await remind.execute({ text: "bring the pay stub", when: "in 2 minutes" }, step2);
+    expect(engine.remindersOf(PERSON)).toHaveLength(2);
+  });
+});
+
+describe("parallel reminder calls in one model step", () => {
+  const ask = { role: "user", content: "Remind me tomorrow at 9 to call the office and to bring the pay stub." };
+  const stepCtx = (eveTurn: string) => toolCtx({ handleHash: HANDLE, turnId: "turn_para00001", grant, messages: [ask], eveTurn });
+
+  it("two different reminders in one step stay two, and a retry of that turn makes no third", async () => {
+    await Promise.all([
+      remind.execute({ text: "call the office", when: "tomorrow at 9" }, stepCtx("attempt-1")),
+      remind.execute({ text: "bring the pay stub", when: "tomorrow at 9" }, stepCtx("attempt-1")),
+    ]);
+    expect(engine.remindersOf(PERSON)).toHaveLength(2);
+    await Promise.all([
+      remind.execute({ text: "call the office", when: "tomorrow at 9" }, stepCtx("attempt-2")),
+      remind.execute({ text: "bring the pay stub", when: "tomorrow at 9" }, stepCtx("attempt-2")),
+    ]);
+    expect(engine.remindersOf(PERSON)).toHaveLength(2);
+  });
+});
+
+describe("cancelling", () => {
+  it("a cancelled reminder is never delivered", async () => {
+    const out = (await remind.execute({ text: "call the office", when: "in 2 minutes" }, ctx("turn_cancel0001"))) as { reminderId: string };
+    expect(await cancelReminder.execute({ reminderId: out.reminderId }, ctx("turn_cancel0002"))).toMatchObject({ cancelled: true });
+    engine.now = () => Date.now() + 10 * 60_000;
+    expect(engine.deliverDue(PERSON)).toEqual([]);
+    expect((await listReminders.execute({}, ctx("turn_cancel0003"))) as { reminders: unknown[] }).toEqual({ reminders: [] });
+  });
+
+  it("one already claimed for delivery is reported as on its way, not cancelled", async () => {
+    const out = (await remind.execute({ text: "call the office", when: "in 2 minutes" }, ctx("turn_cancel0004"))) as { reminderId: string };
+    engine.now = () => Date.now() + 10 * 60_000;
+    expect(engine.deliverDue(PERSON).map((r) => r.id)).toEqual([out.reminderId]);
+    expect(await cancelReminder.execute({ reminderId: out.reminderId }, ctx("turn_cancel0005"))).toMatchObject({
+      cancelled: false,
+      alreadySending: true,
+    });
+  });
+});

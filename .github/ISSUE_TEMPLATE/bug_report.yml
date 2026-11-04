@@ -1,0 +1,35 @@
+name: Bug report
+description: Tell us something in Mano is broken.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use synthetic details only. Never paste real names, documents, case numbers or phone numbers.
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did it happen?
+      options: [withmano.com, Resident app, Texting, Sandbox portal, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, and what Mano did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, with synthetic data, so someone else can see it too.
+    validations:
+      required: true

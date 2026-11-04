@@ -5,12 +5,22 @@ export interface Env {
   CHANNEL_STATE: DurableObjectNamespace;
   EVENTS: Queue<unknown>;
   FILES: R2Bucket;
+  // Cloudflare Images, which makes the JPEG copy of a HEIC, HEIF or WebP
+  // photo. Without it the photo is stored as sent and Mano asks for a
+  // screenshot when it needs one to file.
+  IMAGES?: ImagesBinding;
   BLOOIO_API_KEY: string;
   BLOOIO_CHANNEL_ID: string;
   BLOOIO_WEBHOOK_SECRET: string;
   MANO_HANDLE_PEPPER: string;
   ENCRYPTION_KEK_B64: string;
   META_MODEL_API_KEY?: string;
+  // The Standard model ID that answers real texts, set in wrangler.toml.
+  MANO_REPLY_MODEL?: string;
+  // Meta's open-weight model, asked when the Meta Model API is down. Off
+  // until OPENROUTER_API_KEY is set; the model ID is in wrangler.toml.
+  OPENROUTER_API_KEY?: string;
+  MANO_OPEN_WEIGHT_MODEL?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;
@@ -19,6 +29,33 @@ export interface Env {
   TURN_BATCH_MS?: string;
   TURN_INTERIM_MS?: string;
   BLOOIO_MEDIA_HOSTS?: string;
+  // How long a turn runs before the eyes go on the person's message.
+  TURN_EYES_AFTER_MS?: string;
+  // "false" turns off every reaction and the eyes.
+  MANO_REACTIONS_ENABLED?: string;
+  // Our line's own number or alias, checked against the channel_address
+  // on inbound webhooks when both are present. Public value; optional.
+  MANO_TEXT_NUMBER?: string;
+  // Mano's agent: answers turns when set, with the plain responder as
+  // fallback. The secret signs both directions of agent traffic.
+  // Provider API base URL override, for a local stand-in of the provider
+  // in end-to-end runs. Unset in production.
+  BLOOIO_BASE_URL?: string;
+  AGENT_URL?: string;
+  MANO_AGENT_SECRET?: string;
+  // Signs the per-turn handle grant the agent forwards to the engine, so
+  // the agent can act for the handle that just texted and no one else.
+  // The engine holds the same secret; the agent never does.
+  MANO_HANDLE_GRANT_SECRET?: string;
+  // Engine, for removing a deleted conversation's agent state. Channels'
+  // own Engine token opens only that route.
+  MANO_ENGINE_URL?: string;
+  // "1" opens POST /dev/delete for local end-to-end runs. Never set in a
+  // deployment.
+  MANO_DEV_ROUTES?: string;
+  // Verifies Engine's reminder deliveries on /internal/agent-send only.
+  MANO_ENGINE_SEND_SECRET?: string;
+  MANO_ENGINE_CHANNELS_TOKEN?: string;
 }
 
 export function numberEnv(value: string | undefined, fallback: number): number {

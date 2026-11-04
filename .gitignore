@@ -6,7 +6,10 @@ node_modules/
 .wrangler/
 .next/
 .vercel/
+.eve/
+.output/
 dist/
+.expo/
 coverage/
 *.log
 .DS_Store

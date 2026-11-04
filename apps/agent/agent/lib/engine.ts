@@ -1,0 +1,642 @@
+// Engine is the system of record: person memory, proposed actions and
+// their hash-bound approvals all live there. The agent calls Engine's
+// person routes with its own service token (MANO_ENGINE_AGENT_TOKEN) plus
+// the handle grant Channels signed for the turn. The grant names one
+// handle and expires within minutes, so the agent can act only for the
+// person who just texted; it never holds the secret that signs grants.
+import { personIdForHandle } from "@mano/protocol";
+
+import { engineRoute } from "./timings.js";
+
+const REQUEST_TIMEOUT_MS = 15_000;
+export const HANDLE_GRANT_HEADER = "x-mano-handle-grant";
+
+const boundFetch: typeof fetch = (...args) => globalThis.fetch(...args);
+
+export interface EngineConfig {
+  baseUrl: string;
+  agentToken: string;
+  fetchFn?: typeof fetch;
+}
+
+export function engineConfigFromEnv(env: NodeJS.ProcessEnv = process.env): EngineConfig | null {
+  if (!env.ENGINE_URL || !env.MANO_ENGINE_AGENT_TOKEN) return null;
+  return { baseUrl: env.ENGINE_URL.replace(/\/$/, ""), agentToken: env.MANO_ENGINE_AGENT_TOKEN };
+}
+
+// The Engine person a Channels handle maps to (Engine accepts a grant
+// only on this person's routes).
+export const personIdFor = personIdForHandle;
+
+export class EngineError extends Error {
+  constructor(readonly status: number) {
+    super(`Engine answered ${status}.`);
+    this.name = "EngineError";
+  }
+}
+
+export interface MemoryRow {
+  id: string;
+  content: string;
+}
+
+// The person's profile, as Engine's GET /profile returns it. Every leaf
+// says where it came from and when it changed.
+export type ProfileSource = "person" | "document" | "agent";
+export type Frequency = "weekly" | "biweekly" | "monthly" | "yearly";
+
+export interface Leaf<T = string> {
+  value: T;
+  source: ProfileSource;
+  documentId?: string;
+  updatedAt: string;
+}
+
+export interface Profile {
+  person: {
+    fullName?: Leaf;
+    dateOfBirth?: Leaf;
+    phone?: Leaf;
+    email?: Leaf;
+    address: { line1?: Leaf; line2?: Leaf; city?: Leaf; state?: Leaf; zip?: Leaf };
+    county?: Leaf;
+    language?: Leaf;
+    householdConfirmed?: Leaf<boolean>;
+  };
+  household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];
+  income: { id: string; memberId?: Leaf; source?: Leaf; amount?: Leaf<number>; frequency?: Leaf<Frequency> }[];
+  programs: { id: string; program?: Leaf; state?: Leaf; caseNumber?: Leaf; status?: Leaf }[];
+}
+
+// A value from a lower-trust source that differs from what is on file,
+// held until the person confirms it.
+export interface Suggestion {
+  path: string;
+  value: string | number | boolean;
+  source: ProfileSource;
+  documentId?: string;
+  suggestedAt: string;
+}
+
+export interface ProfileView {
+  profile: Profile;
+  suggestions: Suggestion[];
+}
+
+export interface ProfilePatchResult extends ProfileView {
+  changed: string[];
+  unchanged: string[];
+  cleared: string[];
+  suggested: string[];
+  replayed: boolean;
+}
+
+// A refused profile write: the fields did not fit (400), or the key was
+// used for other fields or the conversation was deleted (409).
+export class ProfileRefused extends Error {
+  constructor(
+    readonly status: number,
+    readonly reason: string,
+  ) {
+    super(reason);
+    this.name = "ProfileRefused";
+  }
+}
+
+export interface EngineApproval {
+  id: string;
+  status: string;
+  recipient: string;
+  purpose: string;
+  idempotencyKey: string;
+  requestJson: string;
+  requestHash: string;
+  createdAt: string;
+  expiresAt: string;
+  // What became of a consumed approval: the attempt's state and, once it
+  // settled, its receipt. Requested from Engine (see the PR 60 comment);
+  // absent means unknown, and the agent then never claims an outcome.
+  outcome?: {
+    attempt: "in_flight" | "unknown" | "failed" | "done" | null;
+    receipt: { externalId: string; simulated: boolean } | null;
+  };
+}
+
+// Engine's per-person agent state (reminders, turn ledger, approval
+// pointer), shapes as Engine's agent-state routes return them.
+export type ReminderStatus = "scheduled" | "sending" | "sent" | "dropped" | "failed" | "cancelled" | "withdrawn";
+
+export interface EngineReminder {
+  id: string;
+  text: string;
+  dueAt: string;
+  generation: number;
+  status: ReminderStatus;
+  attempts: number;
+}
+
+// The kinds of deadline Engine names in a nudge. With no kind, a nudge
+// names no action.
+export const DEADLINE_KINDS = ["renewal", "recertification", "redetermination", "interview", "hearing", "appeal", "payment", "documents"] as const;
+export type DeadlineKind = (typeof DEADLINE_KINDS)[number];
+
+// A deadline Engine tracks, as its /deadlines routes return it.
+export interface EngineDeadline {
+  id: string;
+  title: string;
+  dueDate: string;
+  program: string | null;
+  kind: DeadlineKind | null;
+  status: "open" | "done" | "cancelled";
+  timeZone: string;
+  previousDueDate: string | null;
+  nudges: { reminderId: string; at: string; daysBefore: number; status: ReminderStatus | "claimed"; text: string }[];
+}
+
+// A document Engine holds for the person, as GET /documents lists it:
+// this conversation's, newest first. mediaType is read from the bytes;
+// kind is what Mail found it to be; label names it to the person, such
+// as "the letter you sent on November 2". filing is whether Engine's
+// executor could file it: too large, the wrong kind of file, or of
+// unknown size when stored before Engine recorded sizes.
+export interface EngineDocument {
+  id: string;
+  kind: "letter" | null;
+  mediaType: string | null;
+  receivedAt: string;
+  label: string;
+  generation: number;
+  sizeBytes: number | null;
+  filing: "fileable" | "too_large" | "wrong_type" | "size_unknown";
+}
+
+export interface EngineDeadlineResult {
+  status: "created" | "existing" | "moved" | "updated" | "closed" | "done" | "cancelled";
+  deadline: EngineDeadline;
+  moved?: { from: string; to: string };
+  nudgesInFlight?: number;
+}
+
+export interface EngineTurn {
+  turnId: string;
+  firstReceivedAt: string;
+  status: "open" | "complete";
+  completedAt: string | null;
+}
+
+export interface EnginePointer {
+  approvalId: string;
+  generation: number;
+  setAt: string;
+}
+
+export interface EngineResult {
+  status: "completed" | "needs_approval" | "blocked" | "stale" | "reconciled" | "in_progress" | "rejected";
+  approval?: EngineApproval;
+  receipt?: { externalId: string; simulated: boolean };
+  reason?: string;
+  // A refused approve: a newer proposal replaced this one.
+  superseded?: true;
+  // A refused approve: the safety check could not answer. The approval
+  // still waits and nothing ran, so the same yes can be tried again.
+  retryable?: true;
+}
+
+// The person's newest drafted approval. Engine moves it only forward, in
+// the step that creates the approval, and approves no older draft.
+export interface EngineLatest {
+  approvalId: string;
+  receivedAt: string;
+  turnId: string;
+}
+
+// What the agent asks Engine to freeze for approval. Engine stamps the
+// person from the grant and owns hashing, policy and execution.
+export interface ActionProposal {
+  type: "submit" | "send" | "share";
+  recipient: string;
+  purpose: string;
+  payload: Record<string, unknown>;
+  idempotencyKey: string;
+  // A document in the person's Engine storage. Engine reads its bytes
+  // itself and binds their hash into the approval.
+  documentId?: string;
+}
+
+const RESULT_STATUSES = new Set(["completed", "needs_approval", "blocked", "stale", "reconciled", "in_progress", "rejected"]);
+
+function parseResult(value: unknown): EngineResult {
+  const v = (value ?? {}) as Record<string, unknown>;
+  if (typeof v.status !== "string" || !RESULT_STATUSES.has(v.status)) throw new EngineError(502);
+  return v as unknown as EngineResult;
+}
+
+// Engine's routes for one person, reached with the turn's handle grant.
+export class PersonEngine {
+  readonly personId: string;
+  private fetchFn: typeof fetch;
+  // Told each call's route label and time to response, for the turn's
+  // timing log line.
+  onCall?: (route: string, ms: number) => void;
+
+  // generation: the Channels deletion generation this turn runs under.
+  // Every write carries it and Engine re-checks it at the write, so
+  // nothing prepared before a deletion lands after it.
+  constructor(
+    private cfg: EngineConfig,
+    handleHash: string,
+    private grant: string,
+    readonly generation: number,
+  ) {
+    this.personId = personIdFor(handleHash);
+    this.fetchFn = cfg.fetchFn ?? boundFetch;
+  }
+
+  // timeoutMs: what is left of the caller's budget, when it has one.
+  private async call(method: string, path: string, body?: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
+    const started = Date.now();
+    try {
+      return await this.fetchFn(`${this.cfg.baseUrl}/api/persons/${encodeURIComponent(this.personId)}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${this.cfg.agentToken}`,
+          [HANDLE_GRANT_HEADER]: this.grant,
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, timeoutMs)),
+      });
+    } finally {
+      this.onCall?.(engineRoute(method, path), Date.now() - started);
+    }
+  }
+
+  private async json(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<unknown> {
+    const res = await this.call(method, path, body, timeoutMs);
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return res.json();
+  }
+
+  async listApprovals(): Promise<EngineApproval[]> {
+    const out = (await this.json("GET", "/approvals")) as { approvals?: unknown };
+    return Array.isArray(out.approvals) ? (out.approvals as EngineApproval[]) : [];
+  }
+
+  // Creates the reminder, or returns the one this ID already names. A
+  // conflict (same ID, different stored content) also returns the stored
+  // reminder; the caller compares its words with the ones it asked for.
+  async createReminder(input: { id: string; text: string; dueAt: string }): Promise<EngineReminder> {
+    const res = await this.call("POST", "/reminders", { ...input, generation: this.generation });
+    const body = (await res.json().catch(() => null)) as { reminder?: EngineReminder } | null;
+    // A 409 without a reminder is the generation fence: the conversation
+    // was deleted after this turn began.
+    if ((res.ok || res.status === 409) && body?.reminder) return body.reminder;
+    throw new EngineError(res.status);
+  }
+
+  async listReminders(): Promise<EngineReminder[]> {
+    const out = (await this.json("GET", "/reminders")) as { reminders?: unknown };
+    return Array.isArray(out.reminders) ? (out.reminders as EngineReminder[]) : [];
+  }
+
+  // null when Engine has no such reminder for this person.
+  async cancelReminder(id: string): Promise<{ reminder: EngineReminder; cancelled: boolean } | null> {
+    const res = await this.call("POST", `/reminders/${encodeURIComponent(id)}/cancel`);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return (await res.json()) as { reminder: EngineReminder; cancelled: boolean };
+  }
+
+  // Deadlines. null from list and track: this Engine has no deadline
+  // routes yet (404), so the agent says so and never invents one. null
+  // from update and cancel: no such deadline for this person.
+  async listDeadlines(): Promise<EngineDeadline[] | null> {
+    const res = await this.call("GET", "/deadlines");
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    const out = (await res.json()) as { deadlines?: unknown };
+    return Array.isArray(out.deadlines) ? (out.deadlines as EngineDeadline[]) : [];
+  }
+
+  async trackDeadline(input: {
+    title: string;
+    dueDate: string;
+    program?: string;
+    kind?: DeadlineKind;
+    idempotencyKey: string;
+  }): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("POST", "/deadlines", { ...input, source: { kind: "person" }, generation: this.generation });
+  }
+
+  async updateDeadline(id: string, patch: { dueDate?: string; title?: string; status?: "done" }): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("PATCH", `/deadlines/${encodeURIComponent(id)}`, patch);
+  }
+
+  async cancelDeadline(id: string): Promise<EngineDeadlineResult | null> {
+    return this.deadlineCall("DELETE", `/deadlines/${encodeURIComponent(id)}`);
+  }
+
+  private async deadlineCall(method: string, path: string, body?: unknown): Promise<EngineDeadlineResult | null> {
+    const res = await this.call(method, path, body);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    // Engine says what it refused (a date, or a title that does more than
+    // name the task) in words the model can act on.
+    if (res.status === 400) {
+      const out = (await res.json().catch(() => null)) as { error?: unknown } | null;
+      throw new Error(typeof out?.error === "string" ? out.error : "Engine refused that deadline.");
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return (await res.json()) as EngineDeadlineResult;
+  }
+
+  // The turn as Engine first recorded it: firstReceivedAt never changes.
+  // created is false when Engine already knew the turn (a retry or replay).
+  // previousReceivedAt is the conversation's latest other turn, or null.
+  async putTurn(turnId: string, receivedAt: string): Promise<{ turn: EngineTurn; created: boolean; previousReceivedAt: string | null }> {
+    const out = (await this.json("POST", "/turns", { turnId, receivedAt, generation: this.generation })) as {
+      turn: EngineTurn;
+      created: boolean;
+      previousReceivedAt?: string | null;
+    };
+    return { turn: out.turn, created: out.created, previousReceivedAt: out.previousReceivedAt ?? null };
+  }
+
+  async getTurn(turnId: string): Promise<EngineTurn | null> {
+    const res = await this.call("GET", `/turns/${encodeURIComponent(turnId)}`);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return ((await res.json()) as { turn: EngineTurn }).turn;
+  }
+
+  async completeTurn(turnId: string): Promise<void> {
+    await this.json("POST", `/turns/${encodeURIComponent(turnId)}/complete`, { generation: this.generation });
+  }
+
+  async getPointer(): Promise<EnginePointer | null> {
+    return (await this.getPending()).pointer;
+  }
+
+  // The pointer and the latest proposal, read together.
+  async getPending(): Promise<{ pointer: EnginePointer | null; latest: EngineLatest | null }> {
+    const out = (await this.json("GET", `/pending-approval?generation=${this.generation}`)) as {
+      pointer?: EnginePointer | null;
+      latest?: EngineLatest | null;
+    };
+    return { pointer: out.pointer ?? null, latest: out.latest ?? null };
+  }
+
+  // Compare-and-set: Engine moves the pointer only to the latest proposal;
+  // any other approval answers superseded and changes nothing. null when
+  // Engine refused: the approval is not this person's, or not of the
+  // current generation.
+  async setPointer(approvalId: string): Promise<{ pointer: EnginePointer | null; superseded: boolean } | null> {
+    const res = await this.call("PUT", "/pending-approval", { approvalId, generation: this.generation });
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return (await res.json()) as { pointer: EnginePointer | null; superseded: boolean };
+  }
+
+  // Compare-and-delete: clears only while the pointer still names this
+  // approval under this generation.
+  async clearPointer(approvalId: string): Promise<void> {
+    await this.json("DELETE", "/pending-approval", { approvalId, generation: this.generation });
+  }
+
+  async getConversationGeneration(): Promise<number> {
+    const out = (await this.json("GET", "/conversation")) as { generation?: unknown };
+    if (typeof out.generation !== "number") throw new EngineError(502);
+    return out.generation;
+  }
+
+  // Moves Engine to this turn's generation when Channels deleted the
+  // conversation but its own call to Engine never landed. A transition:
+  // at or past it, Engine changes nothing.
+  async advanceConversation(): Promise<void> {
+    await this.json("DELETE", "/conversation", { generation: this.generation });
+  }
+
+  async listMemory(timeoutMs?: number): Promise<MemoryRow[]> {
+    const out = (await this.json("GET", "/memory", undefined, timeoutMs)) as { memories?: unknown };
+    const rows = Array.isArray(out.memories) ? out.memories : [];
+    return rows
+      .map((r) => r as Record<string, unknown>)
+      .filter((r) => typeof r.id === "string" && typeof r.content === "string")
+      .map((r) => ({ id: r.id as string, content: r.content as string }));
+  }
+
+  async addMemory(content: string, timeoutMs?: number): Promise<string> {
+    const out = (await this.json("POST", "/memory", { content, source: "agent", generation: this.generation }, timeoutMs)) as { id?: unknown };
+    if (typeof out.id !== "string") throw new EngineError(502);
+    return out.id;
+  }
+
+  async deleteMemory(memoryId: string): Promise<void> {
+    await this.json("DELETE", `/memory/${encodeURIComponent(memoryId)}`);
+  }
+
+  async getProfileView(timeoutMs?: number): Promise<ProfileView> {
+    const out = (await this.json("GET", "/profile", undefined, timeoutMs)) as { profile?: Profile; suggestions?: Suggestion[] };
+    if (!out.profile || typeof out.profile !== "object") throw new EngineError(502);
+    return { profile: out.profile, suggestions: Array.isArray(out.suggestions) ? out.suggestions : [] };
+  }
+
+  // The profile alone, or null while Engine cannot serve it: 404 or 403
+  // from an Engine without the route, 503 from one without the key that
+  // seals profiles. Forms then fall back to asking the person.
+  async getProfile(): Promise<Profile | null> {
+    try {
+      return (await this.getProfileView()).profile;
+    } catch (err) {
+      if (err instanceof EngineError && [403, 404, 503].includes(err.status)) return null;
+      throw err;
+    }
+  }
+
+  // fields: path to value, or null to clear. Engine answers a retried key
+  // with the first answer and writes nothing.
+  async patchProfile(input: {
+    idempotencyKey: string;
+    source: ProfileSource;
+    documentId?: string;
+    fields: Record<string, string | number | boolean | null>;
+  }): Promise<ProfilePatchResult> {
+    const res = await this.call("PATCH", "/profile", { ...input, generation: this.generation });
+    const body = (await res.json().catch(() => null)) as (ProfilePatchResult & { error?: string }) | null;
+    if (res.ok && body?.profile) return body;
+    if ((res.status === 400 || res.status === 409) && typeof body?.error === "string") throw new ProfileRefused(res.status, body.error);
+    throw new EngineError(res.status);
+  }
+
+  // turnId: the turn this draft belongs to. Engine orders proposals by it.
+  async proposeAction(proposal: ActionProposal, turnId: string): Promise<EngineResult> {
+    return parseResult(
+      await this.json("POST", "/action", {
+        ...proposal,
+        actor: "foreground",
+        origin: "person",
+        generation: this.generation,
+        proposalTurn: turnId,
+      }),
+    );
+  }
+
+
+  async approve(approvalId: string): Promise<EngineResult> {
+    return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/approve`));
+  }
+
+  // One approval of this person, or null. Status "approved" means it was
+  // consumed: execution started, whatever the last answer said.
+  async approval(approvalId: string): Promise<EngineApproval | null> {
+    return (await this.listApprovals()).find((a) => a.id === approvalId) ?? null;
+  }
+
+  // Engine closes every waiting draft that is not the latest proposal,
+  // decided in one statement when it runs. The agent never names which:
+  // anything it read earlier may be out of date by then.
+  async supersede(): Promise<number> {
+    return ((await this.json("POST", "/approvals/supersede", { generation: this.generation })) as { closed: number }).closed;
+  }
+
+  async reject(approvalId: string): Promise<EngineResult> {
+    return parseResult(await this.json("POST", `/approvals/${encodeURIComponent(approvalId)}/reject`));
+  }
+
+  // Binds the screens of the fill behind a waiting approval, so the
+  // question can link to them. The link, or null when Engine refused:
+  // the approval no longer waits, or this Engine has no replay route.
+  async bindReplay(
+    approvalId: string,
+    replay: { labels: Record<string, string>; steps: { caption: string; png: Uint8Array; focus: { x: number; y: number } | null }[] },
+    timeoutMs?: number,
+  ): Promise<string | null> {
+    const body = {
+      generation: this.generation,
+      labels: replay.labels,
+      steps: replay.steps.map((s) => ({ caption: s.caption, pngB64: Buffer.from(s.png).toString("base64"), focus: s.focus })),
+    };
+    const res = await this.call("PUT", `/approvals/${encodeURIComponent(approvalId)}/replay`, body, timeoutMs);
+    if ([400, 404, 409].includes(res.status)) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return this.linkFrom(await res.json());
+  }
+
+  // The link to this approval's replay page while it opens, or null.
+  async replayLink(approvalId: string, timeoutMs?: number): Promise<string | null> {
+    const res = await this.call("GET", `/approvals/${encodeURIComponent(approvalId)}/replay`, undefined, timeoutMs);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return this.linkFrom(await res.json());
+  }
+
+  // Engine answers the page's path; the link is that path on the Engine
+  // address this agent uses, which is the one the person can open too.
+  private linkFrom(body: unknown): string | null {
+    const path = (body as { path?: unknown } | null)?.path;
+    return typeof path === "string" && /^\/fill\/[0-9a-f]{32}$/.test(path) ? `${this.cfg.baseUrl}${path}` : null;
+  }
+
+  // A photo Channels stored for this person, or null when Engine has none.
+  async getDocument(documentId: string, timeoutMs?: number): Promise<Uint8Array | null> {
+    const res = await this.call("GET", `/documents/${encodeURIComponent(documentId)}`, undefined, timeoutMs);
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new EngineError(res.status);
+    }
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  async listDocuments(): Promise<EngineDocument[]> {
+    const out = (await this.json("GET", "/documents")) as { documents?: unknown };
+    return Array.isArray(out.documents) ? (out.documents as EngineDocument[]) : [];
+  }
+
+  // Records what Mail found a stored photo to be.
+  async markDocument(documentId: string, kind: "letter", timeoutMs?: number): Promise<void> {
+    await this.json("PATCH", `/documents/${encodeURIComponent(documentId)}`, { kind, generation: this.generation }, timeoutMs);
+  }
+
+  // Holds a deadline. "unavailable" when Engine has no deadlines route
+  // yet (404); the same idempotency key is the same deadline. It carries
+  // the generation this turn started under (fixed when the turn was
+  // parsed, before any await), so Engine refuses it with 409 once the
+  // conversation was deleted or moved on.
+  async saveDeadline(input: DeadlineInput, timeoutMs?: number): Promise<"saved" | "unavailable"> {
+    const res = await this.call("POST", "/deadlines", { ...input, generation: this.generation }, timeoutMs);
+    await res.body?.cancel().catch(() => undefined);
+    if (res.status === 404) return "unavailable";
+    if (!res.ok) throw new EngineError(res.status);
+    return "saved";
+  }
+}
+
+// A deadline held from a letter, as the Deadlines contract names it.
+export interface DeadlineInput {
+  title: string;
+  dueDate: string;
+  program?: string;
+  kind?: string;
+  source: { kind: "letter"; documentId: string; sentence: string; receivedAt?: string };
+  idempotencyKey: string;
+}
+
+export interface Engine {
+  forHandle(handleHash: string, grant: string, generation: number): PersonEngine;
+}
+
+export function engineFrom(cfg: EngineConfig | null): Engine | null {
+  return cfg ? { forHandle: (handleHash, grant, generation) => new PersonEngine(cfg, handleHash, grant, generation) } : null;
+}
+
+export function engineFromEnv(): Engine | null {
+  return engineFrom(engineConfigFromEnv());
+}

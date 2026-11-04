@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BlooioChannel, parseBlooioEvent } from "../src/blooio.js";
-import { ChannelRefused, ChannelUncertain } from "../src/channel.js";
+import { ChannelFailed, ChannelRefused, ChannelUncertain } from "../src/channel.js";
 
 const CHANNEL_ID = "ch_test_line";
 const API_KEY = "test-key-not-real";
@@ -69,6 +69,46 @@ describe("parseBlooioEvent", () => {
       chatId: "chat_aaa",
       messageId: "msg_out_1",
     });
+  });
+
+  it("parses the 2026-10-01 webhook shape with no top-level id or channel_id", () => {
+    // Shape from the Blooio docs 2026-10-01 message.received example: the
+    // envelope carries type, api_version and created_at; data carries the
+    // message with sender, recipient, channel_address, chat_id, message_id
+    // and text, and no direction.
+    const event = parseBlooioEvent({
+      type: "message.received",
+      api_version: "2026-10-01",
+      created_at: 1730000000000,
+      organization_id: "org_EXAMPLE",
+      data: {
+        kind: "received",
+        message_type: "text",
+        text: "Hi Mano",
+        sender: "+15551234567",
+        recipient: "+15557654321",
+        channel_address: "+15557654321",
+        chat_id: "chat_EXAMPLE",
+        message_id: "msg_EXAMPLE",
+        protocol: "imessage",
+        attachments: [],
+      },
+    });
+    expect(event).toMatchObject({
+      id: "message.received:msg_EXAMPLE",
+      kind: "message.received",
+      channelId: null,
+      channelAddress: "+15557654321",
+      chatId: "chat_EXAMPLE",
+      messageId: "msg_EXAMPLE",
+      handle: "+15551234567",
+      direction: "inbound",
+      text: "Hi Mano",
+    });
+  });
+
+  it("still rejects an event with neither id nor message_id", () => {
+    expect(parseBlooioEvent({ type: "message.received", data: { text: "Hi" } })).toBeNull();
   });
 
   it("marks unknown types ignored and rejects junk", () => {
@@ -152,6 +192,28 @@ describe("BlooioChannel.send", () => {
     }
   });
 
+  it("fails terminally on a definitive 4xx without retrying", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(404, { code: "chat_not_found" }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    const err = await channel.send(input).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ChannelFailed);
+    expect((err as ChannelFailed).status).toBe(404);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a 408 uncertain and replays its key", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(408, { error: "timeout" }));
+    const channel = new BlooioChannel({
+      apiKey: API_KEY,
+      channelId: CHANNEL_ID,
+      fetchFn: fetchFn as typeof fetch,
+      sleepFn: async () => {},
+    });
+    const err = await channel.send(input).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ChannelUncertain);
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+  });
+
   it("retries 5xx under the same key, then reports uncertain", async () => {
     const fetchFn = vi.fn(async () => jsonResponse(503, { error: "unavailable" }));
     const channel = new BlooioChannel({
@@ -188,5 +250,141 @@ describe("BlooioChannel reads", () => {
     expect(page.events).toHaveLength(1);
     expect(page.events[0].id).toBe("evt_webhook_1");
     expect(page.nextCursor).toBeNull();
+  });
+
+  it("hydrates a thin feed item into an answerable event", async () => {
+    // Live shapes: the GET /events row carries no text or sender, and
+    // GET /chats/{chatId}/messages/{messageId} returns the full v4
+    // message object with channel_id, sender and text.
+    const thin = parseBlooioEvent({
+      id: "evt_feed_thin_1",
+      type: "message.received",
+      message_id: "AbC123xYz",
+      chat_id: "chat_feed_aaa",
+      channel_type: "blooio",
+      occurred_at: 1793243237808,
+      data: {},
+    });
+    expect(thin?.text).toBeNull();
+    const fetchFn = vi.fn(async (url: string) => {
+      expect(url).toBe("https://api.blooio.com/v4/chats/chat_feed_aaa/messages/AbC123xYz");
+      return jsonResponse(200, {
+        data: {
+          id: "AbC123xYz",
+          chat_id: "chat_feed_aaa",
+          channel_id: CHANNEL_ID,
+          channel_type: "blooio",
+          channel_address: "+18005550000",
+          protocol: "imessage",
+          direction: "inbound",
+          sender: "+15551234567",
+          recipient: "+18005550000",
+          contact: { contact_id: "ct_1", identifier: "+15551234567", name: null },
+          group: null,
+          type: "text",
+          text: "Do I qualify?",
+          status: "received",
+          attachments: [],
+          created_at: 1793243237808,
+        },
+      });
+    });
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as unknown as typeof fetch });
+    const full = await channel.hydrateEvent(thin!);
+    expect(full).toMatchObject({
+      id: "evt_feed_thin_1",
+      kind: "message.received",
+      channelId: CHANNEL_ID,
+      chatId: "chat_feed_aaa",
+      messageId: "AbC123xYz",
+      handle: "+15551234567",
+      direction: "inbound",
+      text: "Do I qualify?",
+    });
+  });
+
+  it("hydration returns null for gone messages and non-receipts, and throws when transient", async () => {
+    const thin = parseBlooioEvent({
+      id: "evt_feed_thin_2",
+      type: "message.received",
+      message_id: "AbC999",
+      chat_id: "chat_feed_aaa",
+      channel_type: "blooio",
+      occurred_at: 1793243237808,
+      data: {},
+    })!;
+    for (const status of [404, 403]) {
+      const fetchFn = vi.fn(async () => jsonResponse(status, { code: "gone" }));
+      const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+      await expect(channel.hydrateEvent(thin)).resolves.toBeNull();
+    }
+    const failing = vi.fn(async () => jsonResponse(503, { error: "unavailable" }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: failing as typeof fetch });
+    await expect(channel.hydrateEvent(thin)).rejects.toThrow();
+    const receipt = parseBlooioEvent({
+      id: "evt_feed_rcpt_1",
+      type: "message.delivered",
+      message_id: "msg_out_9",
+      chat_id: "chat_feed_aaa",
+      channel_type: "blooio",
+      occurred_at: 1793243237900,
+      data: {},
+    })!;
+    await expect(channel.hydrateEvent(receipt)).resolves.toBeNull();
+  });
+});
+
+describe("Blooio native iMessage calls (LAP-636)", () => {
+  it("adds a tapback on a message", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, { ok: true }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    await channel.react("chat_aaa", "msg_in_1", "love");
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.blooio.com/v4/chats/chat_aaa/messages/msg_in_1/reactions");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ reaction: "+love" });
+  });
+
+  it("adds an emoji reaction (LAP-508)", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, {}));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    await channel.react("chat_aaa", "msg_in_1", "🙏");
+    await channel.react("chat_aaa", "msg_in_1", "👀");
+    const calls = fetchFn.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(JSON.parse(calls[0]![1].body as string)).toEqual({ reaction: "+🙏" });
+    expect(calls[1]![0]).toBe("https://api.blooio.com/v4/chats/chat_aaa/messages/msg_in_1/reactions");
+    expect(JSON.parse(calls[1]![1].body as string)).toEqual({ reaction: "+👀" });
+  });
+
+  it("can remove a chat background and has no way to set one (LAP-850)", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, { data: { chat_id: "chat_aaa", removed: true } }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    await channel.clearBackground("chat_aaa");
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.blooio.com/v4/chats/chat_aaa/background");
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+    expect("setBackground" in channel).toBe(false);
+    const broken = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: (async () => jsonResponse(503, {})) as typeof fetch });
+    await expect(broken.clearBackground("chat_aaa")).rejects.toThrow();
+  });
+
+  it("sends reply_to when a reply answers an earlier message", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(201, { id: "msg_out_9", chat_id: "chat_aaa", status: "queued" }));
+    const channel = new BlooioChannel({ apiKey: API_KEY, channelId: CHANNEL_ID, fetchFn: fetchFn as typeof fetch });
+    await channel.send({ to: "+15550000001", chatId: "chat_aaa", text: "Friday, Nov 14.", idempotencyKey: "k1", replyTo: "msg_in_1" });
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ text: "Friday, Nov 14.", reply_to: "msg_in_1" });
+  });
+
+  it("parses a message.reaction webhook into the reaction, its action and the reacted message", () => {
+    const event = parseBlooioEvent({
+      type: "message.reaction",
+      created_at: Date.now(),
+      data: { chat_id: "chat_aaa", message_id: "msg_out_3", reaction: "love", action: "add", original_text: "Synthetic text." },
+    });
+    expect(event?.kind).toBe("reaction");
+    expect(event?.messageId).toBe("msg_out_3");
+    expect(event?.reaction).toEqual({ value: "love", action: "add" });
   });
 });

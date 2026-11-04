@@ -5,14 +5,23 @@ on:
     paths:
       - "apps/channels/**"
       - "packages/channels/**"
+      - "packages/persona/**"
+      - "packages/protocol/**"
       - ".github/workflows/deploy-channels.yml"
   workflow_dispatch:
 permissions:
   contents: read
+# Serialize deploys so two pushes cannot deploy over each other. Never cancel: a started deploy runs to the end.
+concurrency:
+  group: deploy-channels
+  cancel-in-progress: false
 jobs:
   deploy:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment:
+      name: channels-production
+      url: https://text.withmano.com/health
     defaults:
       run:
         working-directory: apps/channels
@@ -32,6 +41,11 @@ jobs:
           check "$MANO_HANDLE_PEPPER" MANO_HANDLE_PEPPER
           check "$ENCRYPTION_KEK_B64" ENCRYPTION_KEK_B64
           check "$META_MODEL_API_KEY" META_MODEL_API_KEY
+          check "$MANO_ENGINE_SEND_SECRET" MANO_ENGINE_SEND_SECRET
+          check "$MANO_ENGINE_CHANNELS_TOKEN" MANO_ENGINE_CHANNELS_TOKEN
+          check "$MANO_ENGINE_URL" MANO_ENGINE_URL
+          check "$MANO_AGENT_SECRET" MANO_AGENT_SECRET
+          check "$MANO_HANDLE_GRANT_SECRET" MANO_HANDLE_GRANT_SECRET
           exit $missing
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -41,10 +55,16 @@ jobs:
           MANO_HANDLE_PEPPER: ${{ secrets.MANO_HANDLE_PEPPER }}
           ENCRYPTION_KEK_B64: ${{ secrets.ENCRYPTION_KEK_B64 }}
           META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
+          MANO_ENGINE_SEND_SECRET: ${{ secrets.MANO_ENGINE_SEND_SECRET }}
+          MANO_ENGINE_CHANNELS_TOKEN: ${{ secrets.MANO_ENGINE_CHANNELS_TOKEN }}
+          MANO_ENGINE_URL: ${{ secrets.MANO_ENGINE_URL }}
+          MANO_AGENT_SECRET: ${{ secrets.MANO_AGENT_SECRET }}
+          MANO_HANDLE_GRANT_SECRET: ${{ secrets.MANO_HANDLE_GRANT_SECRET }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: pnpm
       - run: pnpm install --no-frozen-lockfile
         working-directory: .
       - run: pnpm --filter channels --filter @mano/channels run check
@@ -70,6 +90,11 @@ jobs:
           printf '%s' "$MANO_HANDLE_PEPPER" | pnpm exec wrangler secret put MANO_HANDLE_PEPPER
           printf '%s' "$ENCRYPTION_KEK_B64" | pnpm exec wrangler secret put ENCRYPTION_KEK_B64
           printf '%s' "$META_MODEL_API_KEY" | pnpm exec wrangler secret put META_MODEL_API_KEY
+          printf '%s' "$MANO_ENGINE_SEND_SECRET" | pnpm exec wrangler secret put MANO_ENGINE_SEND_SECRET
+          printf '%s' "$MANO_ENGINE_CHANNELS_TOKEN" | pnpm exec wrangler secret put MANO_ENGINE_CHANNELS_TOKEN
+          printf '%s' "$MANO_ENGINE_URL" | pnpm exec wrangler secret put MANO_ENGINE_URL
+          printf '%s' "$MANO_AGENT_SECRET" | pnpm exec wrangler secret put MANO_AGENT_SECRET
+          printf '%s' "$MANO_HANDLE_GRANT_SECRET" | pnpm exec wrangler secret put MANO_HANDLE_GRANT_SECRET
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -78,6 +103,11 @@ jobs:
           MANO_HANDLE_PEPPER: ${{ secrets.MANO_HANDLE_PEPPER }}
           ENCRYPTION_KEK_B64: ${{ secrets.ENCRYPTION_KEK_B64 }}
           META_MODEL_API_KEY: ${{ secrets.META_MODEL_API_KEY }}
+          MANO_ENGINE_SEND_SECRET: ${{ secrets.MANO_ENGINE_SEND_SECRET }}
+          MANO_ENGINE_CHANNELS_TOKEN: ${{ secrets.MANO_ENGINE_CHANNELS_TOKEN }}
+          MANO_ENGINE_URL: ${{ secrets.MANO_ENGINE_URL }}
+          MANO_AGENT_SECRET: ${{ secrets.MANO_AGENT_SECRET }}
+          MANO_HANDLE_GRANT_SECRET: ${{ secrets.MANO_HANDLE_GRANT_SECRET }}
       # BLOOIO_WEBHOOK_SECRET is set after webhook:create runs against the
       # deployed worker; re-run this workflow then. Until it is set the
       # webhook fails closed with 500.
@@ -94,6 +124,11 @@ jobs:
           maybe "$MANO_TEXT_DAILY_BUDGET_USD" MANO_TEXT_DAILY_BUDGET_USD
           maybe "$MANO_TEXT_USD_PER_1K_CHARS" MANO_TEXT_USD_PER_1K_CHARS
           maybe "$BLOOIO_MEDIA_HOSTS" BLOOIO_MEDIA_HOSTS
+          maybe "$MANO_TEXT_NUMBER" MANO_TEXT_NUMBER
+          # Turns on the open-weight fallback for when the Meta Model API is down.
+          maybe "$OPENROUTER_API_KEY" OPENROUTER_API_KEY
+          # Set once the agent is deployed; until then turns use the plain answer.
+          maybe "$AGENT_URL" AGENT_URL
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -104,3 +139,6 @@ jobs:
           MANO_TEXT_DAILY_BUDGET_USD: ${{ secrets.MANO_TEXT_DAILY_BUDGET_USD }}
           MANO_TEXT_USD_PER_1K_CHARS: ${{ secrets.MANO_TEXT_USD_PER_1K_CHARS }}
           BLOOIO_MEDIA_HOSTS: ${{ secrets.BLOOIO_MEDIA_HOSTS }}
+          MANO_TEXT_NUMBER: ${{ secrets.MANO_TEXT_NUMBER }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AGENT_URL: ${{ secrets.AGENT_URL }}

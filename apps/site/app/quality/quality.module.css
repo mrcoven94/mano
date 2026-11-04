@@ -1,0 +1,43 @@
+/* Staff quality page only. Uses the site's tokens from globals.css. */
+.page{padding-top:40px;padding-bottom:80px}
+.title{font-size:clamp(2rem,4vw,2.8rem)}
+.runline{margin-top:10px;color:var(--muted)}
+.section{margin-top:48px}
+.section h2{font-size:1.35rem;font-family:var(--font-sans),system-ui,sans-serif;font-weight:600;letter-spacing:-.01em;line-height:1.2}
+.section > p{margin-top:6px;font-size:.92rem}
+.alert{margin-top:20px;background:var(--alert-soft);color:var(--alert);border-radius:var(--radius-sm);padding:14px 18px;font-size:.92rem}
+.alert ul{margin:6px 0 0;padding-left:18px;display:grid;gap:2px}
+.alert li{font-size:.86rem;color:var(--text)}
+.alert code{font-family:var(--font-mono),ui-monospace,monospace;font-size:.8rem;color:var(--alert);font-weight:550}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:20px}
+.tile{background:var(--bg2);border-radius:var(--radius-sm);padding:16px 18px}
+.tile .label{font-size:.82rem;color:var(--muted)}
+.tile .value{font-size:1.7rem;font-weight:600;letter-spacing:-.02em;margin-top:4px;color:var(--text);font-variant-numeric:tabular-nums}
+.tile .sub{font-size:.8rem;color:var(--faint);margin-top:2px}
+.bad .value{color:var(--alert)}
+.good .value{color:var(--green)}
+.tableWrap{overflow-x:auto;margin-top:16px;border:1px solid var(--border);border-radius:var(--radius-sm)}
+.table{width:100%;border-collapse:collapse;font-size:.9rem;font-variant-numeric:tabular-nums}
+.table th{text-align:left;font-weight:500;color:var(--muted);background:var(--bg2);padding:10px 12px;white-space:nowrap}
+.table td{padding:10px 12px;border-top:1px solid var(--border);white-space:nowrap}
+.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-top:20px}
+.chart{border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px 16px}
+.chart h3{font-size:.95rem;font-weight:550}
+.chart .now{font-size:.82rem;color:var(--muted);margin-top:2px}
+.chart svg{width:100%;height:auto;margin-top:8px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font-size:.75rem;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
+.cases{display:grid;gap:12px;margin-top:16px}
+.case{border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px 16px}
+.case .head{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline}
+.case .id{font-family:var(--font-mono),ui-monospace,monospace;font-size:.82rem;color:var(--text)}
+.case .meta{font-size:.82rem;color:var(--muted)}
+.case .reason{font-size:.88rem;margin-top:6px}
+.bubbles{display:grid;gap:6px;margin-top:10px;max-width:640px}
+.bubble{background:var(--pen-soft);color:var(--text);border-radius:14px 14px 14px 4px;padding:8px 12px;font-size:.88rem;line-height:1.45;white-space:pre-wrap}
+.fails{margin:8px 0 0;padding-left:18px;font-size:.86rem;color:var(--muted)}
+.fails b{color:var(--alert);font-weight:550}
+.labels{margin:12px 0 0;padding-left:18px;font-size:.88rem;color:var(--muted);display:grid;gap:4px}
+.empty{margin-top:12px;font-size:.92rem}
+details.more summary{cursor:pointer;margin-top:12px;font-size:.9rem;color:var(--pen)}
+@media (max-width:640px){.page{padding-top:24px}.tile .value{font-size:1.4rem}}

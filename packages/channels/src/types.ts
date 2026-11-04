@@ -28,12 +28,18 @@ export interface EventGroup {
   name: string | null;
 }
 
+import type { Reaction, Tapback } from "@mano/persona";
+export type { Reaction, Tapback };
+
 export interface NormalizedEvent {
   id: string;
   kind: NormalizedEventKind;
   rawType: string;
   channelId: string | null;
   channelType: string | null;
+  // Our own line's address on this event (number or alias), when the
+  // provider includes it. Ingress checks it against MANO_TEXT_NUMBER.
+  channelAddress: string | null;
   chatId: string | null;
   messageId: string | null;
   // Set when the event belongs to a group chat. The worker records group
@@ -46,6 +52,9 @@ export interface NormalizedEvent {
   direction: EventDirection | null;
   text: string | null;
   attachments: EventAttachment[];
+  // On a reaction event: the tapback and whether it was added or removed.
+  // messageId is the message it sits on.
+  reaction?: { value: string; action: "add" | "remove" } | null;
   // Machine-readable provider code on failures and refusals.
   errorCode: string | null;
   errorMessage: string | null;
@@ -101,6 +110,8 @@ export interface ChannelSendInput {
   chatId: string | null;
   text: string;
   idempotencyKey: string;
+  // The inbound message this bubble answers, shown as an inline reply.
+  replyTo?: string | null;
 }
 
 export interface ChannelSendResult {

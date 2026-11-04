@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import Mascot from "@/components/Mascot";
 
-/* The five hero demos. Each one plays once when it mounts; --d is the delay before a piece appears.
+/* Four of the hero demos (the fifth, the spine, is SpineDemo.tsx). Each one plays once when it mounts; --d is the delay before a piece appears.
    Everyone and every office here is made up. */
 
 const d = (s: number) => ({ "--d": `${s}s` }) as React.CSSProperties;
@@ -83,36 +83,6 @@ export function FormScene() {
         </ul>
         <p className="sc-foot rv" style={d(5)}>The signature is yours. Mano never signs for you.</p>
       </div>
-    </div>
-  );
-}
-
-export function MailScene() {
-  return (
-    <div className="sc sc-mail">
-      <div className="sc-photo" aria-hidden="true">
-        <div className="env e1" /><div className="env e2" />
-        <div className="env e3"><span>SAMPLE COUNTY HUMAN SERVICES</span><i /><i /><i /></div>
-        <div className="scan" />
-        <p className="sc-label sc-photo-cap"><Mascot tile tone="orange" size={16} className="ts-av" />1 photo. 3 letters found.</p>
-      </div>
-      <ul className="sc-letters">
-        <li className="rv" style={d(1.6)}>
-          <span className="sc-label">Renewal</span>
-          <strong>Food benefits renewal</strong>
-          <p><mark>Due November 14.</mark> I filled it out from last year.</p>
-        </li>
-        <li className="rv" style={d(2.5)}>
-          <span className="sc-label">Bill</span>
-          <strong>Water bill, $96 past due</strong>
-          <p>You qualify for help paying it. I started the application.</p>
-        </li>
-        <li className="rv is-alert" style={d(3.4)}>
-          <span className="sc-label">Warning</span>
-          <strong>&ldquo;Verify your benefits&rdquo;</strong>
-          <p>It asks for your Social Security number at a link that failed the safety check. I did not open it.</p>
-        </li>
-      </ul>
     </div>
   );
 }

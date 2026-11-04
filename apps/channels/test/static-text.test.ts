@@ -7,8 +7,8 @@ import {
   INTERIM_BUBBLE,
   INTRO_BUBBLE,
   OPT_OUT_BUBBLE,
-  attachmentAck,
 } from "../src/text.js";
+import { PHOTO_FORMAT_TEXT, PHOTO_UNREAD_TEXT, PHOTO_UNSAVED_TEXT } from "@mano/channels";
 
 describe("static reply texts", () => {
   it("carry no links, so the send path needs no second sanitize", () => {
@@ -19,8 +19,9 @@ describe("static reply texts", () => {
       BUSY_BUBBLE,
       OPT_OUT_BUBBLE,
       APPROVAL_RECORDED_BUBBLE,
-      attachmentAck(1),
-      attachmentAck(5),
+      PHOTO_UNREAD_TEXT,
+      PHOTO_UNSAVED_TEXT,
+      PHOTO_FORMAT_TEXT,
     ];
     for (const text of texts) {
       expect(extractLinks(text)).toEqual([]);

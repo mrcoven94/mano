@@ -37,8 +37,24 @@ max_retries = 0
 binding = "FILES"
 bucket_name = "mano-channel-files"
 
+# Makes a JPEG copy of a texted HEIC, HEIF or WebP photo, since the
+# portal takes only PDF, PNG and JPEG (files.ts imagesConverter).
+[images]
+binding = "IMAGES"
+
 [triggers]
 crons = ["* * * * *"]
+
+# Real texts go only to a Standard model ID, with store: false.
+[vars]
+MANO_REPLY_MODEL = "muse-spark-1.3"
+# Meta's open-weight model, asked only when the Meta Model API is down
+# (402, 5xx, timeout), on zero-retention endpoints that collect no data.
+# Off until the OPENROUTER_API_KEY secret is set; empty this to turn it
+# off again with a push.
+MANO_OPEN_WEIGHT_MODEL = "meta/muse-spark-open"
+# One switch for every reaction and the eyes; "false" turns them all off.
+MANO_REACTIONS_ENABLED = "true"
 
 # Secrets (never commit values; set with wrangler secret put):
 #   BLOOIO_API_KEY, BLOOIO_CHANNEL_ID, BLOOIO_WEBHOOK_SECRET,
@@ -46,4 +62,15 @@ crons = ["* * * * *"]
 # Optional tuning (plain vars or secrets):
 #   CF_ACCOUNT_ID, AI_GATEWAY_ID, AI_GATEWAY_PROVIDER,
 #   MANO_TEXT_DAILY_BUDGET_USD, MANO_TEXT_USD_PER_1K_CHARS,
-#   TURN_BATCH_MS, TURN_INTERIM_MS, BLOOIO_MEDIA_HOSTS
+#   TURN_BATCH_MS, TURN_INTERIM_MS, TURN_EYES_AFTER_MS, BLOOIO_MEDIA_HOSTS,
+#   MANO_TEXT_NUMBER (our line's number, checked against channel_address)
+#   OPENROUTER_API_KEY (turns on the open-weight fallback above)
+# Mano's agent (all three set, or turns use the plain model answer):
+#   AGENT_URL (plain var, the agent's base URL), and the secrets
+#   MANO_AGENT_SECRET (signs agent traffic both ways, shared with the
+#   agent) and MANO_HANDLE_GRANT_SECRET (signs per-turn handle grants,
+#   shared with the engine, never the agent)
+# Engine: MANO_ENGINE_URL, MANO_ENGINE_CHANNELS_TOKEN (stores texted
+#   photos in the person's Engine documents and removes a deleted
+#   conversation's agent state) and MANO_ENGINE_SEND_SECRET (verifies
+#   Engine's reminder deliveries on /internal/agent-send only)

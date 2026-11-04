@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ChannelUncertain, RecordingChannel, idempotencyKeyFor } from "@mano/channels";
+import { ChannelUncertain, RecordingChannel, ResponderFailed, idempotencyKeyFor } from "@mano/channels";
 import { ConversationRunner, DEFAULT_RUNNER_CONFIG } from "../src/runner.js";
 import { INTRO_BUBBLE } from "../src/text.js";
 import {
@@ -161,6 +161,7 @@ describe("interrupted turns", () => {
       to: TEST_HANDLE,
       answerJson: opts.answerJson ?? null,
       costUsd: opts.costUsd ?? null,
+      costByModel: null,
       costSettled: opts.costSettled ?? false,
       attempts: 0,
       state: "started",
@@ -278,8 +279,7 @@ describe("delete", () => {
       store: h.store,
       channel: wiping as unknown as typeof h.channel,
       responder: h.responder,
-      files: h.files,
-      kekB64: TEST_KEK_B64,
+      documents: h.documents,
       spend: {
         reserve: async (key: string, worst: number) => h.ledger.reserve(key, worst),
         settle: async (key: string, actual: number) => void h.ledger.settle(key, actual),
@@ -529,7 +529,9 @@ describe("infrastructure retries", () => {
   });
 
   it("keeps the spend hold until a failed settlement succeeds", async () => {
+    // Budget 35 fits the $33.80 worst-case hold but not hold plus probe.
     const h = makeHarness({
+      budgetUsd: 35,
       config: { usdPer1kChars: 1 },
       responder: {
         name: "metered",
@@ -607,6 +609,20 @@ describe("refusals", () => {
     expect(h.store.meta().introduced).toBe(true);
   });
 
+  it("records a definitive failure once and finishes the turn", async () => {
+    const h = makeHarness({ replies: ["Answer."] });
+    const introKey = idempotencyKeyFor(TEST_HANDLE_HASH, 0, 1, 0);
+    const answerKey = idempotencyKeyFor(TEST_HANDLE_HASH, 0, 1, 1);
+    h.channel.scriptFailure(introKey, { kind: "fail", status: 404, code: "chat_not_found" });
+    h.channel.scriptFailure(answerKey, { kind: "fail", status: 404, code: "chat_not_found" });
+    await h.runner.handleEvent(inboundEvent({ id: "evt_1", text: "Hi.", occurredAtMs: h.now }), "webhook");
+    await runTurnAfterBatch(h);
+    expect(h.store.outboundByKey(introKey)).toMatchObject({ state: "failed", code: "chat_not_found" });
+    expect(h.store.outboundByKey(answerKey)).toMatchObject({ state: "failed", code: "chat_not_found" });
+    expect(h.runner.needsRetry()).toBe(false);
+    expect(await h.runner.runDueTurn()).toBe("idle");
+  });
+
   it("counts refused sends toward the per-handle limits, once", async () => {
     const h = makeHarness();
     const key = idempotencyKeyFor(TEST_HANDLE_HASH, 0, 1, 1);
@@ -629,6 +645,8 @@ describe("opt-out and close", () => {
     expect(h.channel.sends).toHaveLength(1);
     expect(await h.runner.handleEvent(inboundEvent({ id: "evt_stop2", text: "STOP", occurredAtMs: h.now }), "webhook")).toBe("opted-out");
     expect(h.channel.sends).toHaveLength(1);
+    // Re-engaging takes a message sent after the STOP.
+    h.advance(1000);
     expect(await h.runner.handleEvent(inboundEvent({ id: "evt_back", text: "Hello again.", occurredAtMs: h.now }), "webhook")).toBe("queued");
     await runTurnAfterBatch(h);
     expect(h.channel.sends.length).toBeGreaterThan(1);
@@ -653,7 +671,7 @@ describe("opt-out and close", () => {
 });
 
 describe("limits", () => {
-  it("says busy once an hour, then stays quiet", async () => {
+  it("says busy, with its safety line, to every message over the limit", async () => {
     const h = makeHarness();
     const meta = h.store.meta();
     meta.hourKey = new Date(h.now).toISOString().slice(0, 13);
@@ -666,7 +684,7 @@ describe("limits", () => {
     await h.runner.handleEvent(inboundEvent({ id: "evt_2", text: "Two.", occurredAtMs: h.now }), "webhook");
     await runTurnAfterBatch(h);
     const busy = h.channel.sends.filter((s) => s.text.includes("busy"));
-    expect(busy).toHaveLength(1);
+    expect(busy).toHaveLength(2);
     expect((h.responder as unknown as { prompts: unknown[] }).prompts).toHaveLength(0);
     h.advance(3600_000 + 1000);
     await h.runner.handleEvent(inboundEvent({ id: "evt_3", text: "Later.", occurredAtMs: h.now }), "webhook");
@@ -742,6 +760,19 @@ describe("log safety", () => {
     expect(logs).toContain("responder_failed");
     expect(logs).not.toContain("+15550009999");
     expect(logs).toContain('"err":"Error"');
+    expect(logs).toContain('"reason":null');
+    const starved = makeHarness({
+      responder: {
+        name: "starved",
+        maxAttempts: 1,
+        respond: async () => {
+          throw new ResponderFailed("Model run incomplete.", 1, 500, "run_incomplete");
+        },
+      },
+    });
+    await starved.runner.handleEvent(inboundEvent({ id: "evt_3", text: "Hi.", occurredAtMs: starved.now }), "webhook");
+    await runTurnAfterBatch(starved);
+    expect(starved.lines.join("\n")).toContain('"reason":"run_incomplete"');
     const h2 = makeHarness({ replies: ["Answer."] });
     await h2.runner.handleEvent(inboundEvent({ id: "evt_2", text: "Hi.", occurredAtMs: h2.now }), "webhook");
     h2.advance(h2.batchMs + 100);

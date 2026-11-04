@@ -1,0 +1,33 @@
+name: status
+# Checks the "live versus in progress" table in README.md against the live
+# health URLs and deploys, and posts the fresh table to the job summary. It
+# never writes to the repository: Actions here may not open pull requests, so
+# refresh README.md by running node scripts/status.mjs locally and committing.
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  deployments: read
+concurrency:
+  group: status
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Compare the README table with live status
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node scripts/status.mjs
+          { echo "## Live versus in progress"; echo; sed -n '/<!-- status:start -->/,/<!-- status:end -->/p' README.md | sed '1d;$d'; } >> "$GITHUB_STEP_SUMMARY"
+          if ! git diff --quiet README.md; then
+            echo "::warning::README.md status table is stale. Run node scripts/status.mjs and commit the result."
+          fi

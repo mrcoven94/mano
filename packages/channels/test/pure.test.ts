@@ -118,3 +118,19 @@ describe("budget", () => {
     expect(budgetAllows(4.0, 0.02, 5)).toBe(true);
   });
 });
+
+describe("splitBubbles, one thought per line (voice v2)", () => {
+  it("makes each line its own bubble", () => {
+    expect(splitBubbles("ok this one's written in fluent government\nplain version: Medicaid wants proof of income by Friday, Nov 14")).toEqual([
+      "ok this one's written in fluent government",
+      "plain version: Medicaid wants proof of income by Friday, Nov 14",
+    ]);
+  });
+
+  it("never makes more than 4 bubbles, and skips blank lines", () => {
+    const bubbles = splitBubbles("one\n\ntwo\nthree\nfour\nfive\nsix");
+    expect(bubbles).toHaveLength(4);
+    expect(bubbles.slice(0, 3)).toEqual(["one", "two", "three"]);
+    expect(bubbles[3]).toBe("four five six");
+  });
+});

@@ -6,7 +6,8 @@
     "node": ">=24"
   },
   "scripts": {
-    "check": "node scripts/check-markdown.mjs && pnpm -r --if-present run check",
-    "eval:baselines": "pnpm --filter ./eval run baselines"
+    "check": "node scripts/check-markdown.mjs && node --check scripts/status.mjs && pnpm -r --if-present run check",
+    "eval:baselines": "pnpm --filter ./eval run baselines",
+    "judge": "pnpm --filter @mano/quality judge"
   }
 }
