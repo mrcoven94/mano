@@ -110,13 +110,20 @@ const DATE = `(?<date>${DATE_PATTERN})`;
 // weekday count land on the wrong date.
 const COUNT = String.raw`within\s+(?<days>\d{1,3})\s+(?:calendar\s+)?days?\s+(?:of|from|after)`;
 
+const FROM_NOTICE = String.raw`${COUNT}\s+the\s+(?:date\s+of\s+this\s+(?:notice|letter)|notice\s+date(?:\s+printed\s+above)?)`;
+
 const FORMS: { form: DeadlineForm; re: RegExp }[] = [
   { form: "by", tail: String.raw`by\s+${DATE}` },
   { form: "on-or-before", tail: String.raw`on\s+or\s+before\s+${DATE}` },
   { form: "no-later-than", tail: String.raw`no\s+later\s+than\s+${DATE}` },
   { form: "within-days-of-date", tail: String.raw`${COUNT}\s+${DATE}` },
-  { form: "within-days-of-notice", tail: String.raw`${COUNT}\s+the\s+date\s+of\s+this\s+(?:notice|letter)` },
+  { form: "within-days-of-notice", tail: FROM_NOTICE },
 ].map(({ form, tail }) => ({ form: form as DeadlineForm, re: new RegExp(`^(?<duty>${DUTY})\\s+${tail}$`, "i") }));
+// Reaching the office is read only for a count, which never publishes.
+FORMS.push({
+  form: "within-days-of-notice",
+  re: new RegExp(String.raw`^(?<duty>your\s+${OWED_ITEM}\s+must\s+reach\s+the\s+review\s+office)\s+${FROM_NOTICE}$`, "i"),
+});
 FORMS.push({
   form: "due",
   re: new RegExp(String.raw`^(?<duty>your\s+${OWED_ITEM}\s+(?:is|are)\s+due)\s+(?:on\s+)?${DATE}$`, "i"),
@@ -129,7 +136,7 @@ const ANY_COUNT = String.raw`(?:\d{1,3}|${SPELLED_NUMBER})\s+(?:business\s+|cale
 const MONTH_WORD = String.raw`(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?`;
 const DEADLINE_LIKE: RegExp[] = [
   /\bdue\b(?!\s+to\b)/i,
-  /\b(?:deadline|postmarked)\b/i,
+  /\b(?:deadline|postmarked|overdue)\b/i,
   /\b(?:no|not)\s+later\s+than\b/i,
   /\bon\s+or\s+before\b/i,
   new RegExp(String.raw`\b(?:within|in)\s+${ANY_COUNT}`, "i"),
@@ -137,6 +144,8 @@ const DEADLINE_LIKE: RegExp[] = [
   new RegExp(String.raw`\byou\s+have\s+${ANY_COUNT}`, "i"),
   /\b(?:today|tonight|tomorrow)\b/i,
   /\b(?:next|this|by|before|until)\s+(?:week|month|business\s+day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
+  /\b(?:on|close[sd]?|ends?|stops?|expires?)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
+  /\b(?:on|by|before|until)\s+the\s+\d{1,2}(?:st|nd|rd|th)\b/i,
   /\bend\s+of\s+(?:the\s+)?(?:day|week|month)\b/i,
   /\b(?:as\s+soon\s+as\s+possible|asap|immediately|right\s+away)\b/i,
   new RegExp(String.raw`\bby\s+(?:\d|${MONTH_WORD}\s+\d)`, "i"),
@@ -144,6 +153,10 @@ const DEADLINE_LIKE: RegExp[] = [
   /\b\d{1,2}[/-]\d{1,2}[/-]\d{2}\b/,
   /\b\d{1,2}\/\d{1,2}\b(?!\/)/,
 ];
+
+function tidy(sentence: string): string {
+  return sentence.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "");
+}
 
 export function isDeadlineLike(sentence: string): boolean {
   return DEADLINE_LIKE.some((re) => re.test(sentence)) || findAmbiguousDate(sentence) !== null;
@@ -173,21 +186,75 @@ export function isDeadlineSentence(sentence: string): boolean {
 // Conditions, audiences and cancellations that make a deadline
 // someone else's, not yet owed, or withdrawn. Searched across the whole
 // letter, salutation and headings included, before anything is
-// stripped, one sentence at a time.
+// stripped, one sentence at a time. The gate reads each sentence alone,
+// so it cannot tell what "the date above" points at or whether a program
+// named here matches the duty; those stop the letter too. This list
+// can only catch wording it names: other wording for an exception does
+// not stop a letter.
 const QUALIFIER = new RegExp(
   String.raw`\b(?:${[
     "if applicable", "if", "only", "unless", "except", "when", "dear county staff", "staff",
     "office use", "caseworker use", "for county", "applies to", "does not apply", "not required",
     "cancelled", "canceled", "disregard", "void", "no longer", "ignore", "optional",
     "withdrawn", "rescinded", "no action", "not needed", "provided that", "providers",
+    // A date the sentence points at instead of naming, or a change of date.
+    "(?:the|that|this|said|same|stated|your|each|any|another) (?:[a-z-]+ ){0,2}date", "date (?:above|below)",
+    "(?:new|later|earlier|different|other|revised|corrected|updated) (?:[a-z]+ )?(?:date|deadline)",
+    // What the letter says it is about.
+    "this (?:notice|letter|mailing|form|packet) (?:concerns|covers|is about|is for|relates to)",
+    // Someone else's letter, or no one's.
+    "addressed to", "(?<!\\.)example", "sample", "specimen", "template", "draft",
+    "copy of (?:the|a|an|this) (?:letter|notice)", "(?:sent|mailed|delivered|issued) to (?:your|a|an|another)",
+    "instructions for", "on behalf of", "intended for", "addressee", "recipient", "another (?:person|household)",
+    "someone else", "neighbors?", "landlord", "roommate", "spouse", "^copy", "(?:file|office|courtesy|agency|county) copy",
+    "duplicate", "not for you", "does not concern", "this is a test", "practice", "training",
+    // The duty lifted, moved or replaced.
+    "otherwise", "need not", "(?:not|(?:do|does|did)n['\u2019]t) (?:need|have) to", "no need", "not necessary", "unnecessary", "however",
+    "instead", "alternatively", "exempt(?:ed)?", "excused", "waived?", "skip", "wait", "(?<!no )(?<!not )later",
+    "extend\\w*", "extension", "postpone\\w*", "moved", "reschedul\\w*", "replace\\w*", "supersede\\w*",
+    "in error", "mistake", "corrected", "revised", "amended", "already", "nothing", "no response", "no reply",
+    "no further", "previous", "old notice", "last year's", "expired", "tentative", "estimate[sd]?",
+    "(?:may|can|subject to) change", "under review", "(?:is|are) complete", "received your", "(?:we|office) ha(?:ve|s) your",
+    "thank you", "all set", "(?:is|are) closed", "(?:has|have) ended", "without this form", "for you", "separately",
+    "dependents", "some (?:families|households|people|dates)", "stop(?: here)?$", "hold this", "until we", "not late",
+    "(?:households?|people|persons|anyone|those|applicants|members|residents) (?:that|who|with|without)",
+    "(?:not|never|(?:do|does|did|wo|ca|would|should)n['\u2019]t)\\b[^.]{0,40}\\b(?:return|send|submit|respond|reply|renew|recertify|sign|apply|(?:file|mail) (?:it|them|the|this|your))",
   ]
     .map((w) => w.replace(/ /g, String.raw`\s+`))
-    .join("|")})\b`,
+    .join("|")})\b|\b(?:to|attn|attention|cc)\s*:`,
   "i",
 );
 
+// Whole sentences that carry one of those words and still leave the
+// letter's deadline alone: a help offer, or a word about copies, proof
+// or corrections. Each is closed, so any other condition, date or
+// outcome still stops the letter, and adding one needs a test that it
+// cannot change whether, when or for whom the deadline is owed.
+const CONTACT = String.raw`(?:contact|call)\s+(?:us|this\s+office|our\s+office|the\s+(?:(?:renewal|redetermination|recertification|scheduling|verification|hearing|benefits|county|review)\s+)?(?:desk|office|unit)|\(\d{3}\)\s*\d{3}-\d{4})`;
+const HELP_NEEDED = String.raw`you\s+(?:have\s+(?:any\s+)?questions|need\s+(?:help|assistance|another\s+copy|a\s+copy)(?:\s+(?:reading|completing|with)\s+(?:the|this|your)\s+(?:packet|form|notice|letter))?)`;
+const HARMLESS = new RegExp(
+  `^(?:${[
+    String.raw`if\s+${HELP_NEEDED},\s+${CONTACT}(?:\s+and\s+provide\s+your\s+case\s+number)?`,
+    String.raw`${CONTACT}\s+if\s+${HELP_NEEDED}`,
+    String.raw`if\s+the\s+item\s+is\s+unavailable,\s+${CONTACT}\s+before\s+the\s+return\s+date\s+to\s+discuss\s+other\s+proof`,
+    String.raw`send\s+copies\s+unless\s+an\s+original\s+is\s+(?:specifically\s+)?requested`,
+    String.raw`review\s+(?:each\s+entry|every\s+page|the\s+form|the\s+information)\s+and\s+(?:correct|change|update)\s+any\s+information\s+that\s+is\s+no\s+longer\s+(?:accurate|correct|current)`,
+    String.raw`sign\s+the\s+(?:certification|form)(?:\s+on\s+the\s+last\s+page)?,?\s+even\s+if\s+there\s+are\s+no\s+changes`,
+  ].join("|")})$`,
+  "i",
+);
+
+// A heading that names a person, who may not be the one reading.
+const NAMED_HEADING = /^(?:(?:(?:[Nn]otice|[Ll]etter)\s+)?[Ff]or\s+|[Rr][Ee]:\s*)[A-Z][\w'-]+\s+[A-Z][\w'-]+\.?$/;
+// A sentence ending in a colon is a heading for what follows, and the
+// gate cannot read what follows under it. Only a salutation may end so.
+const SALUTATION = /^dear(?:\s+[a-z][a-z.'-]*){1,5}\s*:$/i;
+
 export function hasQualifier(sentence: string): boolean {
-  return QUALIFIER.test(sentence);
+  const raw = sentence.trim();
+  if (raw.endsWith(":") && !SALUTATION.test(raw)) return true;
+  const exempt = !/[;,!]$/.test(raw) && HARMLESS.test(tidy(raw));
+  return !exempt && (QUALIFIER.test(tidy(raw)) || NAMED_HEADING.test(raw));
 }
 
 // A date to know states one plain date and names no duty: no
@@ -250,7 +317,7 @@ function matchForm(s: string): { form: DeadlineForm; groups: Record<string, stri
 
 // Gates one sentence as splitSentences returns it.
 export function gateSentence(sentence: string, noticeIso: string | null): GateVerdict {
-  const s = sentence.replace(/\s+/g, " ").trim().replace(/[\s.!;:,]+$/, "");
+  const s = tidy(sentence);
   if (findAmbiguousDate(s)) return { kind: "ask", reason: "ambiguous-date" };
   const match = matchForm(s);
   if (match) {
