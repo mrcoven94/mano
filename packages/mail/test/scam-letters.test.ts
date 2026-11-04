@@ -135,6 +135,10 @@ const CLEAR_SCAMS: [string, string, string | null][] = [
   ["a bare link with userinfo and no path", `${OFFICE}${RENEW} Renew at benefits.gov@evil.example.`, null],
   ["a bare link with a plain name and a path", `${OFFICE}${RENEW} Renew at renew@evil.example/renew.`, null],
   ["a www link with an apostrophe", `${OFFICE}${RENEW} Renew at www.ssa.gov'safe@evil.example/renew.`, null],
+  ["a bare link with a password", `${OFFICE}${RENEW} Renew at benefits.gov:pass@evil.com.`, null],
+  ["a bare link with a password and a path", `${OFFICE}${RENEW} Renew at renew:pass@evil.example/renew.`, null],
+  ["a premium charge on food benefits", `${OFFICE}Pay your $25 premium charge to keep your food benefits.`, null],
+  ["a copay, then a purpose on CalFresh", `${OFFICE}Pay your $10 copay, to keep your CalFresh.`, null],
 ];
 
 // An ordinary ask sent to an untrusted link. It may be a scam or a real
@@ -304,6 +308,12 @@ const REAL: [string, string, string | null, string | null][] = [
   ["a state login in double quotes", `${OFFICE}${RENEW} Log in at "https://mybenefits.ny.gov", then see your case.`, RENEW, "2026-11-20"],
   ["a state login in single quotes", `${OFFICE}${RENEW} Log in at 'https://mybenefits.ny.gov/case'.`, RENEW, "2026-11-20"],
   ["a state login in angle brackets", `${OFFICE}${RENEW} Log in at <https://mybenefits.ny.gov>.`, RENEW, "2026-11-20"],
+  ["a premium charge to keep Medicaid", `${OFFICE}Pay your $39 premium charge to keep your Medicaid. ${RENEW}`, RENEW, null],
+  ["a copay charge to keep Medicaid", `${OFFICE}Your $4 copay charge continues to keep your Medicaid active. ${RENEW}`, RENEW, null],
+  ["a Medicaid premium beside a SNAP form", `${OFFICE}Pay your Medicaid premium of $25 by November 20, 2026, and return the enclosed SNAP renewal form by the same date to keep your food benefits.`, null, null],
+  ["a Medicaid premium after a CalFresh purpose", `${OFFICE}To keep your CalFresh, pay your Medicaid premium of $25.`, null, null],
+  ["an email label with no space", `${OFFICE}${RENEW} Email:maria.lopez@dss.ca.gov`, RENEW, "2026-11-20"],
+  ["a mailto address", `${OFFICE}${RENEW} Write to mailto:maria.lopez@dss.ca.gov with questions.`, RENEW, "2026-11-20"],
 ];
 
 describe("clear scams", () => {
@@ -360,7 +370,7 @@ describe("the dev letters", () => {
   });
 });
 
-describe("long text with no punctuation", () => {
+describe("long text", () => {
   it.each(["your ", "monthly ", "the ", "premium ", "pay ", "not ", "send ", "$5 ", "to ", "https://", "www.", "a.b ", "'a", "a@", "@"])(
     "screens 100 KB of %j in under a second",
     (piece) => {
@@ -369,4 +379,10 @@ describe("long text with no punctuation", () => {
       expect(performance.now() - started).toBeLessThan(1000);
     },
   );
+
+  it.each([" ", "\t", "\n", " \n"])("screens a run of 100 KB of %j in under a second", (piece) => {
+    const started = performance.now();
+    screenScam(`Your Medicaid benefits.\n\nPlease${piece.repeat(Math.ceil(100_000 / piece.length))}pay`);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
 });
