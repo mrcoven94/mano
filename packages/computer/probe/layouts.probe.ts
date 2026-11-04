@@ -178,7 +178,7 @@ async function readDraft(id: string, token: string): Promise<Record<string, unkn
 function outcomeWords(outcome: LoopOutcome): string {
   if (outcome.status !== "done") return outcome.status;
   const reply = outcome.message.trim();
-  return /^ACCEPTED/i.test(reply) ? "accepted" : /^REJECTED:/i.test(reply) ? "rejected" : `other reply: ${reply.slice(0, 80)}`;
+  return /^ACCEPTED/i.test(reply) ? "accepted" : /^REJECTED:/i.test(reply) ? `rejected: ${reply.slice(9, 69).trim()}` : `other reply: ${reply.slice(0, 80)}`;
 }
 
 class OutOfCredit extends Error {}

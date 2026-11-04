@@ -5,7 +5,7 @@
 
 /**
  * About 1.5 times the most any fill took on Muse Spark Open with these words,
- * 13 turns across 26 fills of new layouts (median 5). The deadline below stops a
+ * 14 turns across 46 fills of new layouts (median 5). The deadline below stops a
  * run that wanders, so a cap with room costs little. Replay holds 29 at most.
  */
 export const FILL_MAX_STEPS = 20;
@@ -34,6 +34,6 @@ export function fillTask(fields: Array<{ label: string; value: string }>): strin
     "A long value can look cut off in a narrow field; that is fine, do not retype it.",
     "Once every value is entered, press the button that moves on, even if its name sounds final, because on this form it only saves a draft and files nothing.",
     "When a new page asks for something other than these values, such as attaching documents, stop and reply with exactly: ACCEPTED. Another step of these same fields is not the end.",
-    "If the form shows an error instead, stop and reply with REJECTED: and the error text.",
+    "If the form says a field is missing, enter that value and press again. If it refuses a value you entered as written, stop and reply with REJECTED: and the error text.",
   ].join("\n");
 }
