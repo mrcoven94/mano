@@ -1,3 +1,4 @@
+import type { Mount } from "./layouts";
 import { DECLARATION, type FileMeta, type Household, type Submission, type SubmissionSummary } from "./store";
 
 export const TEST_BANNER = "TEST SYSTEM: this is a fake benefits portal for demos. No real benefits. No real data.";
@@ -34,7 +35,28 @@ const OLD_STYLE = `
   a { color: #003399; }
 `;
 
-export function layout(title: string, body: string): string {
+/** What a page under another layout needs: its look and its address. */
+type Mounted = Pick<Mount, "prefix" | "layout">;
+
+export function layout(title: string, body: string, mount?: Mounted): string {
+  if (mount) {
+    const agency = escapeHtml(mount.layout.agency);
+    return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>${escapeHtml(title)} - ${agency}</title>
+<style>${mount.layout.css}</style></head>
+<body>
+<div class="banner">${escapeHtml(TEST_BANNER)}</div>
+<div class="wrap">
+<div class="masthead"><h1>${agency}</h1><p>${escapeHtml(mount.layout.intro)}</p></div>
+<div class="body">
+${body}
+</div>
+<div class="footer">${agency} is an invented agency. This is a test system for software demonstrations. Do not enter real personal information.</div>
+</div>
+</body>
+</html>`;
+  }
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><title>${escapeHtml(title)} - State Benefits Renewal</title>
@@ -58,6 +80,7 @@ export function homePage(): string {
     `<div class="notice"><b>Notice:</b> This demonstration portal accepts renewal applications from test residents only. It is not connected to any real benefits system.</div>
 <table class="form">
 <tr><td class="label">Renew your benefits</td><td>Fill out your yearly renewal online in three steps: household information, supporting documents, review. Submitting saves your application as a draft. The office files it and sends you a confirmation number.</td></tr>
+<tr><td class="label">Other layouts</td><td><a href="/layouts">The same renewal under layouts Mano has never seen</a>, for testing.</td></tr>
 <tr><td class="label">Caseworkers</td><td><a href="/caseworker">View submitted applications</a> (staff test view). <a href="/staff">Cases residents shared</a> (staff sign-in).</td></tr>
 </table>
 <p><a class="btn" style="text-decoration:none; display:inline-block; margin-top:10px;" href="/apply">Start renewal application</a></p>`,
@@ -87,14 +110,14 @@ ${draftId ? `<input type="hidden" name="draft" value="${escapeHtml(draftId)}">` 
   );
 }
 
-export function documentsPage(error?: string): string {
+export function documentsPage(error?: string, mount?: Mounted): string {
   const err = error ? `<div class="error"><b>Error:</b> ${escapeHtml(error)}</div>` : "";
   return layout(
     "Step 2 of 3: Documents",
     `<div class="steps">Step 1: Household &gt; <b>Step 2: Documents</b> &gt; Step 3: Review</div>
 ${err}
 <div class="notice"><b>Required:</b> attach a pay stub or proof of income (PDF, PNG or JPG, each under the posted size limit). Test files only.</div>
-<form method="post" action="/apply/documents" enctype="multipart/form-data">
+<form method="post" action="${escapeHtml(mount?.prefix ?? "")}/apply/documents" enctype="multipart/form-data">
 <table class="form">
 <tr><td class="label">Document 1</td><td><input type="file" name="document1"></td></tr>
 <tr><td class="label">Document 2 (optional)</td><td><input type="file" name="document2"></td></tr>
@@ -102,10 +125,24 @@ ${err}
 </table>
 <p><button class="btn" type="submit">Continue to Step 3</button></p>
 </form>`,
+    mount,
   );
 }
 
-export function reviewPage(household: Household, files: FileMeta[]): string {
+const PLAIN_LABELS: Array<[keyof Household, string]> = [
+  ["caseNumber", "Case number"],
+  ["fullName", "Full legal name"],
+  ["dateOfBirth", "Date of birth"],
+  ["address", "Mailing address"],
+  ["phone", "Phone number"],
+  ["householdSize", "People in household"],
+  ["monthlyIncome", "Monthly income ($)"],
+];
+
+export function reviewPage(household: Household, files: FileMeta[], mount?: Mounted): string {
+  const answers: Array<[keyof Household, string]> = mount
+    ? mount.layout.sections.flatMap((s) => s.fields.map((f): [keyof Household, string] => [f, mount.layout.labels[f]]))
+    : PLAIN_LABELS;
   const rows = files
     .map((f) => `<tr><td class="label">Attached file</td><td>${escapeHtml(f.name)} (${escapeHtml(f.type)}, ${f.size} bytes)</td></tr>`)
     .join("");
@@ -114,30 +151,26 @@ export function reviewPage(household: Household, files: FileMeta[]): string {
     `<div class="steps">Step 1: Household &gt; Step 2: Documents &gt; <b>Step 3: Review</b></div>
 <div class="notice"><b>Check every field.</b> Pressing Submit saves this application as a draft. Nothing is filed from this page. The office files it and sends the confirmation number.</div>
 <table class="form">
-<tr><td class="label">Case number</td><td>${escapeHtml(household.caseNumber)}</td></tr>
-<tr><td class="label">Full legal name</td><td>${escapeHtml(household.fullName)}</td></tr>
-<tr><td class="label">Date of birth</td><td>${escapeHtml(household.dateOfBirth)}</td></tr>
-<tr><td class="label">Mailing address</td><td>${escapeHtml(household.address)}</td></tr>
-<tr><td class="label">Phone number</td><td>${escapeHtml(household.phone)}</td></tr>
-<tr><td class="label">People in household</td><td>${escapeHtml(household.householdSize)}</td></tr>
-<tr><td class="label">Monthly income ($)</td><td>${escapeHtml(household.monthlyIncome)}</td></tr>
+${answers.map(([field, label]) => `<tr><td class="label">${escapeHtml(label)}</td><td>${escapeHtml(household[field])}</td></tr>`).join("\n")}
 ${rows}
 <tr><td class="label">Declaration</td><td>${escapeHtml(DECLARATION)} Only the applicant can make this declaration. The office records it when the renewal is filed, never from this page.</td></tr>
 </table>
-<form method="post" action="/apply/submit">
+<form method="post" action="${escapeHtml(mount?.prefix ?? "")}/apply/submit">
 <p><button class="btn" type="submit">Submit application</button></p>
 </form>`,
+    mount,
   );
 }
 
-export function savedPage(draftId: string): string {
+export function savedPage(draftId: string, mount?: Mounted): string {
   return layout(
     "Saved as a draft",
     `<div class="notice"><b>Your application was saved as a draft.</b> Nothing has been filed yet. The office files it and sends the confirmation number.</div>
 <table class="form">
 <tr><td class="label">Draft number</td><td><span class="key">${escapeHtml(draftId)}</span></td></tr>
 </table>
-<p><a href="/apply/review">Back to review</a> | <a href="/">Return to the home page</a></p>`,
+<p><a href="${escapeHtml(mount?.prefix ?? "")}/apply/review">Back to review</a> | <a href="/">Return to the home page</a></p>`,
+    mount,
   );
 }
 
