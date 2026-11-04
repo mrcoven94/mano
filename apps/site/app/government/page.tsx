@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Faq from "@/components/Faq";
 import ShareStage from "@/components/teams/ShareStage";
 import { TeamHero, Today, Rules, Close } from "@/components/teams/Parts";
-import { REPO_URL } from "@/lib/site";
+import { ISSUES_URL, REPO_URL } from "@/lib/site";
 
 const title = "Mano for government offices";
 const description = "Mano has no product for offices yet, and no office uses it. What runs today is a test on synthetic cases: a person shares one case with one test office and can stop. The protocol and the code are open source.";
@@ -65,7 +65,7 @@ export default function Government() {
 
       <Faq id="gov-questions" items={faqs} />
 
-      <Close id="gov-cta" title="Read how it works." text="The code, the protocol and the rules are public. Questions go to hello@withmano.com." />
+      <Close id="gov-cta" title="Read how it works." text={<>The code, the protocol and the rules are public. Questions go to the project&rsquo;s <a href={ISSUES_URL}>GitHub issues</a>, which anyone can read.</>} />
     </div>
   );
 }

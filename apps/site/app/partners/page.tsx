@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Faq from "@/components/Faq";
 import { TeamHero, Steps, Today, Close } from "@/components/teams/Parts";
 import { NeedIcon, NEED_TINT } from "@/components/home/NeedIcons";
-import { REPO_URL } from "@/lib/site";
+import { ISSUES_URL, REPO_URL } from "@/lib/site";
 
 const title = "Mano for partners";
 const description = "Mano has no partners today and connects to no outside service. This page says how outside services are planned to work, and what is real today: the open protocol, the action gateway and the open source code.";
@@ -101,7 +101,7 @@ export default function Partners() {
 
       <Faq id="pt-questions" items={faqs} />
 
-      <Close id="pt-cta" title="Read how it works." text="The code, the protocol and the plan are public. Questions go to hello@withmano.com." />
+      <Close id="pt-cta" title="Read how it works." text={<>The code, the protocol and the plan are public. Questions go to the project&rsquo;s <a href={ISSUES_URL}>GitHub issues</a>, which anyone can read.</>} />
     </div>
   );
 }

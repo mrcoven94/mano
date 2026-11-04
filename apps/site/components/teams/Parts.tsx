@@ -101,7 +101,7 @@ export function Rules({ id, title, lede, facts }: { id: string; title: string; l
   );
 }
 
-export function Close({ id, title, text }: { id: string; title: string; text: string }) {
+export function Close({ id, title, text }: { id: string; title: string; text: React.ReactNode }) {
   return (
     <section id={id} className="h-close" aria-labelledby={`${id}-h`}>
       <div className="wrap">

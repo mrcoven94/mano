@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Faq from "@/components/Faq";
 import ShareStage from "@/components/teams/ShareStage";
 import { TeamHero, Today, Rules, Close } from "@/components/teams/Parts";
-import { REPO_URL } from "@/lib/site";
+import { ISSUES_URL, REPO_URL } from "@/lib/site";
 
 const title = "Mano for nonprofits";
 const description = "Mano has no product for nonprofit teams yet, and no nonprofit uses it. The case sharing it would rest on runs today on synthetic cases with one test office. The code and the protocol are open source.";
@@ -61,7 +61,7 @@ export default function Organizations() {
 
       <Faq id="org-questions" items={faqs} />
 
-      <Close id="org-cta" title="Read how it works." text="The code, the protocol and the rules are public. Questions go to hello@withmano.com." />
+      <Close id="org-cta" title="Read how it works." text={<>The code, the protocol and the rules are public. Questions go to the project&rsquo;s <a href={ISSUES_URL}>GitHub issues</a>, which anyone can read.</>} />
     </div>
   );
 }
