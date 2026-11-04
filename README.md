@@ -12,6 +12,12 @@ Everything here uses synthetic people. Filings go only to our own sandbox agency
 - **By text:** text (801) 920-3370.
 - **From a clone, no key:** run `pnpm install`, then `pnpm judge`. It runs nine labeled steps on recorded model responses and says which parts are real or simulated.
 
+## A form Mano had never seen
+
+Open [withmano.com/try](https://withmano.com/try) and choose "Fill a form Mano has never seen". The sandbox portal generates a layout for that run. Mano has no integration with it: its computer reads screenshots, clicks points and types the person's values, then stops for approval.
+
+On November 4, 2026, all 6 production runs filled their own generated layout, and all 5 runs that pressed YES received a portal confirmation ([run table](https://github.com/mrcoven94/mano/pull/202#issuecomment-6641669631)). These were six seeds on our own portal in one afternoon, not a rate for forms in general. One run finished filling and reached the question, but its client was interrupted and no YES was pressed. In a separate local measurement, 41 of 43 fills were fully correct, with two stopping at the step limit and saving nothing. The measurements and their limits are below.
+
 ## The real numbers
 
 We ran the frozen held-out test twice on November 4, 2026, and both results stay published: the [first result](https://github.com/mrcoven94/mano/pull/1#issuecomment-6640378905) and the [disclosed second run](https://github.com/mrcoven94/mano/pull/1#issuecomment-6642247579). The second run does not replace the first. It is a second run on a changed reader, after the first result was seen, on the same wording pack with new households, so it is not a test on unseen wording.
@@ -36,7 +42,7 @@ Photo track, 10 synthetic households in each run: Mano got 10 of 10 packets in b
 What the two runs show:
 
 - **Deadlines improved on a changed reader.** Mano missed 70 of 405 on text against 410 of 411, with 0 false dates in both runs. Mano never held a date in either run. It now asks the person to check one. Its answer named no date on 425 of 426 text letters in the first run and on 53 of 420 in the second.
-- **Packets and evidence got worse.** Correct packets fell from 91 to 66 of 100, and evidence requested fell from 137 of 141 to 109 of 132. The cause is not found, and the run kept no per-letter data.
+- **Packets and evidence got worse.** Correct packets fell from 91 to 66 of 100, and evidence requested fell from 137 of 141 to 109 of 132. The run kept no per-letter data. Afterward, [PR 217](https://github.com/mrcoven94/mano/pull/217) reproduced a field-loss mechanism on public letters: the reader sometimes returned text with every citation box null, so citation checks discarded the sender, program and requested evidence together. The fix tells the reader to provide boxes and retries a boxless reading within the existing attempt limit. It named what letters required on 21 of 21 reads of two public households. Those were reads, not packets, and did not run the held-out grader. Neither held-out metric has been measured after the fix, so the regression remains published and its recovery is unproven.
 - **Unsafe letters did not move.** Mano caught 14 of 24 and then 15 of 25, with 10 missed and 10 false in each run. In the first run the misses look like a limit of how the frozen adapter scores a link, which is an inference and was not rechecked on this reader.
 - **Others still beat Mano.** The parser beats it on packets, 100 of 100, and on unsafe letters, 25 of 25. Mano is ahead of the parser on deadlines in the second run, 70 against 81 missed, and on false dates, 0 against 81. The general agent beats Mano on deadlines, 0 of 393 missed, and on unsafe letters, 25 of 25, at about one seventh of the cost. Mano beats it on packets, 66 against 10.
 
@@ -65,27 +71,35 @@ Every model Mano calls at runtime is a Meta model. Meta's own API answers HTTP 4
 
 These parts are not Meta model calls: the keyword crisis floor that every text passes through, on-device paper detection, the checks on the reader's date, the deadline gate and field checks, the scam screen, the form table, the voice guard, the action gateway and its local rules, the sandbox portal, reminders, link checks through Cloudflare DNS, message delivery through Blooio, storage in Durable Objects and R2, and HEIC conversion through Cloudflare Images.
 
-At this commit, the reader says which date the person must meet and quotes the sentence that gives it. Word checks in `packages/mail/src/naming.ts` test the quote and the date. They are heuristics with known gaps, so a wrong date can reach the question. What the code enforces is narrower: Mail's reply gives a date from the reader as a question to check, or says that it has already passed or that the letter also lists an interview, and Mail saves a deadline only from the gate in `packages/mail/src/gate.ts`. With no filing question open, a yes to the date question is an ordinary turn for the model. No code saves the date, and the model may record it with `track_deadline`, which does not check where a date came from. With a filing question still open, a plain YES goes to that filing before any model turn, so a yes meant for the date can file it. Rules that overrule the reader include a scam, a planted instruction, a letter that says it is someone else's or no longer stands, wording that moves or replaces a date, a heading that reverses what follows, and two letters on one crop. The gate held no date in either held-out run, and neither run validates naming on wording it had never met.
+At this commit, the reader says which date the person must meet and quotes the sentence that gives it. Word checks in `packages/mail/src/naming.ts` test the quote and the date. They are heuristics with known gaps, so a wrong date can reach the question. Mail's reply gives a date from the reader as a question to check, or says that it has already passed or that the letter also lists an interview. Mail saves a deadline automatically only from the gate in `packages/mail/src/gate.ts`.
 
-A document is now labeled by what it was read as, and a renewal says so when it attaches no proof of income ([PR 195](https://github.com/mrcoven94/mano/pull/195)). That is merged and not confirmed on production yet.
+After [PR 218](https://github.com/mrcoven94/mano/pull/218), when a photo-only reply ends with one date question, a typed yes in the very next turn, within a day, saves exactly that date without a model call. A letter's question takes the next answer away from any earlier filing approval; after the date is saved, Mano shows the waiting filing question again. Only a separate yes to that question files it. In the [production check](https://github.com/mrcoven94/mano/pull/218#issuecomment-6643758787) at 5:25 to 5:27 PM ET on November 4, two synthetic letters asked about November 20 and November 12, 2026. Each had no stored deadline before YES and exactly the named deadline afterward, with reminder rows scheduled. This did not test reminder delivery or the text line. A photo sent with words, several dates or an interview beside the date does not create this offer. A question the model asks in its own words still leaves an earlier filing approval answerable.
+
+Rules that overrule the reader include a scam, a planted instruction, a letter that says it is someone else's or no longer stands, wording that moves or replaces a date, a heading that reverses what follows, and two letters on one crop. The gate held no date in either held-out run, and neither run validates naming on wording it had never met.
+
+A document is now labeled by what it was read as, and a renewal says so when it attaches no proof of income ([PR 195](https://github.com/mrcoven94/mano/pull/195)). The no-proof attachment label appears in the production runs below; those runs do not test the other document classifications.
 
 ### Mano's computer on production
 
-Three unbroken production runs on the build at main 9e7fe5d4, the newest build we have run, from 3:50 to 3:55 PM ET on November 4, 2026, by `pnpm spine:live`, on the Modal route, with Mano's computer filling the sandbox portal and Guardian not blocking the filing at the yes:
+Three unbroken production runs on main at 1127a025, from 4:34 to 4:38 PM ET on November 4, 2026, by `pnpm spine:live`, on the Modal route, with Mano's computer filling the sandbox portal and Guardian not blocking the filing at the yes:
 
 | Confirmation | Total time | Turns to reach the question |
 | --- | --- | --- |
-| SR-MHS8KUMT | 95.4 s | 1 |
-| SR-ET57SCCT | 92.0 s | 2 |
-| SR-CKYWHZZ8 | 84.5 s | 4 |
+| SR-BBPM6CUS | 82.0 s | 1 |
+| SR-GBF3AHR7 | 67.4 s | 1 |
+| SR-5G4ZUJ22 | 68.5 s | 1 |
 
-The [run log](https://github.com/mrcoven94/mano/pull/202#issuecomment-6642021159) shows each step, including a replay page of 9 screens for each fill, and the sandbox portal holds all three filings. The log does not print Guardian's verdict: it shows Engine filing with Guardian as its checker, and Engine files on `pass` or `fix` and refuses on `block` or when the check fails. The build, the exit code of 0 and the hosted desktop come from the lead, not from the log. The driver calls the agent directly, so the text line and the reminder are not in these runs. The text line waits on a real text from the maintainer to confirm it.
+The [run log](https://github.com/mrcoven94/mano/pull/202#issuecomment-6642808370) shows each step, including a replay page of 9 or 10 screens for each fill, and the sandbox portal holds all three filings with Maria's values and letter. None of these three runs re-asked a value, which does not prove the re-ask is fixed. The log does not print Guardian's verdict: it shows Engine filing with Guardian as its checker, and Engine files on `pass` or `fix` and refuses on `block` or when the check fails. The driver calls the agent directly, so the text line and the reminder are not in these runs. The text line waits on a real text from the maintainer to confirm it.
 
-One run in Spanish passed on the same build: SR-6YNEF639, 73.8 s, answered with `sí`. It is one run, not a rate. The question is in Spanish, except the office's declaration, which it explains in Spanish and then quotes in English. The portal holds the filing, and the log is not published.
+After PR 218 deployed at main 0bea9c49, one further [production check](https://github.com/mrcoven94/mano/pull/218#issuecomment-6643758787) passed from 5:26 to 5:28 PM ET: SR-S3ESY5C7 in 71.5 s, with 9 screens. The portal check matched Maria's fields and letter byte for byte. It has the same limits as the three runs above, including no SMS or reminder delivery and no explicit Guardian verdict.
+
+The earlier build at 9e7fe5d4 passed three runs from 3:50 to 3:55 PM ET: SR-MHS8KUMT in 95.4 s, SR-ET57SCCT in 92.0 s and SR-CKYWHZZ8 in 84.5 s ([run log](https://github.com/mrcoven94/mano/pull/202#issuecomment-6642021159)). Mano re-asked a value in 2 of 3, once asking for income twice. The portal holds those filings too.
+
+One run in Spanish passed on 9e7fe5d4: SR-6YNEF639, 73.8 s, answered with `sí`. It is one run, not a rate. The question is in Spanish, except the office's declaration, which it explains in Spanish and then quotes in English. The portal holds the filing, and the log is not published.
 
 An earlier build passed three runs from 3:19 to 3:23 PM ET: SR-YZSXQYBF in 76.6 s, SR-KQSBQYV4 in 95.4 s and SR-VRAQZQYY in 83.4 s, with the same limits ([raw output](https://github.com/mrcoven94/mano/pull/202#issuecomment-6641513214)). The portal holds those filings too.
 
-The site owner also measured two production runs on separate seeded layouts, SR-DVDBTGFF through the API and SR-X6RM9KYY through the browser: 2 of 2 completed, after one earlier attempt was lost to a deploy, which is a small sample. The sandbox portal holds both filings, and its record does not show a layout. The [recording of SR-DVDBTGFF](apps/site/public/try/recording/run.json) shows its layout, the fill and Guardian's `pass` at the question and at the yes. For SR-X6RM9KYY, the layout and the fill, and for both runs the lost attempt, rest on the site owner's measurement, with no public record.
+The [six generated-layout runs](https://github.com/mrcoven94/mano/pull/202#issuecomment-6641669631) include SR-DVDBTGFF through the API and SR-X6RM9KYY through the browser, not two additional runs. The [recording of SR-DVDBTGFF](apps/site/public/try/recording/run.json) shows its layout, the fill and Guardian's `pass` at the question and at the yes. The [public events for SR-X6RM9KYY](https://engine.withmano.com/try/runs/d70221a407db33b57659bcc46cae64e3) show its generated layout, 9 screens, fill, both Guardian `pass` verdicts and confirmation. The sandbox portal holds all five confirmations from the six runs. Run 81d77f66 filled its layout and reached the question but never received YES; the site owner's report attributes the client interruption to an Engine deploy. That cause is not shown in the event log.
 
 ### Local measurement, not production: layouts it has not seen
 
@@ -148,13 +162,13 @@ Tests cover the three safety cases: a stale approval is refused (`apps/engine/te
 ## Known weaknesses
 
 - On held-out text, Mano named no date on 425 of 426 letters in the first run and on 53 of 420 in the second. The second run used the same wording pack after the first result was seen, so Mano has no result on wording it has never met. The synthetic letter in `pnpm judge` holds its date through the gate, so that run does not exercise naming.
-- Correct packets fell from 91 to 66 of 100 and evidence requested fell from 137 of 141 to 109 of 132 on the changed reader, and the cause is not found.
-- The word checks on the reader's date have known gaps. If the reader picks November 20 from "Send your form two weeks after November 20, 2026", the checks let it through and the question names the wrong date. If the person says yes, the model may save that date with reminders, and otherwise a yes saves nothing.
-- A yes meant for a date question can file a waiting renewal. If a filing question is still open and the person sends a new letter, a plain YES to the date question answers the filing question instead. It reaches only the practice portal.
+- Correct packets fell from 91 to 66 of 100 and evidence requested fell from 137 of 141 to 109 of 132 on the changed reader. PR 217 fixed a demonstrated citation-box field loss on public letters, but neither held-out metric has been measured after the fix.
+- The word checks on the reader's date have known gaps. If the reader picks November 20 from "Send your form two weeks after November 20, 2026", the checks let it through and the question names the wrong date. A yes confirming that question can save the wrong date with reminders. The code does not prove the reader picked correctly.
+- A letter's question no longer lets its answer file an earlier approval after PR 218, and an immediate typed yes saves one offered date. A question the model asks in its own words still leaves the earlier filing approval answerable, so a yes meant for that question can file it. It reaches only the practice portal.
 - The deadline check reads one sentence at a time and has known gaps, listed in `packages/mail/test/gate-letters.test.ts`, such as a Re: line naming another program.
 - Mano missed 10 unsafe letters in each held-out run, and those runs had no Guardian. Guardian has no held-out number of its own.
-- Computer fill on production rests on the runs above. The `pnpm spine:live` runs skip the text line and the reminder and use one portal layout. The two runs on seeded layouts are too few to give a fill rate, and a fill has no model backup.
-- The model may ask again for a value it already has before the fill. The driver sends every value in one message, and in the run log above Mano still asked in 2 of 3 runs, once asking for the income twice. [PR 215](https://github.com/mrcoven94/mano/pull/215) changes the cause, merged after those runs, and is not confirmed on production yet.
+- Computer fill on production rests on the runs above. The `pnpm spine:live` runs skip the text line and the reminder and use one portal layout. The six generated-layout runs are a small sample on our own portal, not a fill rate for forms in general, and a fill has no model backup.
+- The model may ask again for a value it already has before the fill. It did so in 2 of 3 production runs on 9e7fe5d4. After [PR 215](https://github.com/mrcoven94/mano/pull/215), none of the three runs on 1127a025 re-asked a value. Three runs do not prove the issue is fixed.
 - SAM 3.1 and Muse Voice Transcribe do not run while Meta's API answers 402, and voice notes have not been run live.
 - The Modal route carries no per-request retention pin. Zero retention there is Modal's stated policy for the endpoint type, and Modal sees each request in flight.
 - The estimate page in the spine in `AGENTS.md` is not built.
@@ -174,8 +188,8 @@ A scam letter gets the warning first, and a single date in it appears only as th
 | --- | --- | --- | --- |
 | Site | live | https://withmano.com | 1127a02 success 2026-11-04 |
 | Sandbox portal | live | https://sandbox.withmano.com/ | ba452d4 success 2026-11-04 |
-| Engine | live | https://engine.withmano.com/health | 1127a02 in_progress 2026-11-04 |
-| Channels | live | https://text.withmano.com/health | 1127a02 in_progress 2026-11-04 |
+| Engine | live | https://engine.withmano.com/health | 1127a02 success 2026-11-04 |
+| Channels | live | https://text.withmano.com/health | 1127a02 success 2026-11-04 |
 | Guardian | live | no public URL | 5a6ba65 success 2026-11-03 |
 | Quality | in progress | not deployed yet | none |
 <!-- status:end -->
