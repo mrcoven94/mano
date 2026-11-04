@@ -12,6 +12,12 @@ import { registerTemp } from "./cleanup.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+// Where sharp and the rest of the installed packages live.
+export async function installedPackages() {
+  const sharpDir = await realpath(join(here, "..", "node_modules", "sharp"));
+  return { sharpDir, installed: sharpDir.slice(0, sharpDir.indexOf("/node_modules/.pnpm/") + "/node_modules/.pnpm".length) };
+}
+
 export async function buildMano() {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "mano-eval-build-")));
   const unregister = registerTemp(dir);
@@ -26,8 +32,7 @@ export async function buildMano() {
     external: ["sharp", "heic-decode"],
     logLevel: "silent",
   });
-  const sharpDir = await realpath(join(here, "..", "node_modules", "sharp"));
-  const installed = sharpDir.slice(0, sharpDir.indexOf("/node_modules/.pnpm/") + "/node_modules/.pnpm".length);
+  const { sharpDir, installed } = await installedPackages();
   return {
     entry,
     sandbox: { allowAddons: true, allowFsRead: [installed], links: { sharp: sharpDir } },

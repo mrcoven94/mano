@@ -8,8 +8,9 @@
 //   person in a question, since they would confirm it. A question that names no
 //   date earns nothing, even when the reader has a date in mind, and a scam
 //   letter has neither.
-// - A readable copy counts as asked for only when Mano asks about an unreadable
-//   or missing page. A failed model call is a failure with no such credit.
+// - A readable copy counts as asked for only when Mano's answer asks the person
+//   to send the page again. An unreadable page it says nothing about is a failure,
+//   and so is a failed model call, with no such credit.
 // - Packet items come from what the reader says a letter asks for. Its words are
 //   free text and the grader needs the eval's names, so one model call maps them
 //   onto the list every system gets, counted in Mano's cost. What the person owns
@@ -19,7 +20,7 @@
 // - SAM 3.1 has no open-weight route, so on OpenRouter the reader falls back to
 //   its own on-device page detection, and the report says so.
 import { readFile } from "node:fs/promises";
-import { answerReading, readMail, extractOutputText, extractUsage } from "@mano/mail";
+import { BudgetExceeded, answerReading, readMail, extractOutputText, extractUsage } from "@mano/mail";
 import { checkLink } from "./tools.mjs";
 import { chatText, postChat, toChatMessages } from "./openrouter.mjs";
 
@@ -78,11 +79,14 @@ export function brokeredModelClient({ route, fetchImpl, meter }) {
       raw: null,
     };
   };
-  const viaResponses = async (req) => {
+  const viaResponses = async (req, opts) => {
+    const left = opts?.deadline === undefined ? undefined : opts.deadline - Date.now();
+    if (left !== undefined && left <= 0) throw new BudgetExceeded();
     const res = await fetchImpl(META_RESPONSES_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...req, store: false }),
+      ...(left !== undefined ? { timeoutMs: left } : {}),
     });
     if (!res.ok) throw new Error(`Model request failed: ${res.status}`);
     const data = await res.json();
@@ -174,8 +178,21 @@ function linkUrl(value) {
   return /^https?:\/\//i.test(value) ? value : `https://${value}`;
 }
 
-function askedForCopy(reading) {
-  return reading.questions.some((q) => q.kind === "unreadable_page" || q.kind === "missing_page");
+// The answer's own words when it asks for a page again (answerReading). Its words
+// after a failed model call are the same, so readFailed is checked first.
+const ASKS_AGAIN = /\bsend (?:it|that photo) again\b/i;
+
+// The one date the answer shows the person in a question, if any. The reader may
+// hold candidates the answer does not name, and those earn nothing.
+function dateShownInQuestion(reading, text) {
+  const dates = new Set();
+  for (const q of reading.questions) {
+    if (q.kind !== "confirm_deadline") continue;
+    if (q.proposal) dates.add(q.proposal.dueDate);
+    for (const c of [...(q.proposal?.others ?? []), ...(q.candidates ?? [])]) for (const d of c.dates) dates.add(d);
+  }
+  const shown = [...dates].filter((d) => text.includes(spokenDate(d)));
+  return shown.length === 1 ? shown[0] : null;
 }
 
 function readFailed(reading) {
@@ -190,14 +207,14 @@ export async function letterResult(letter, reading, { client, fetchImpl, hasDocu
   const answer = answerReading(reading);
   const scam = reading.warnings.some((w) => w.kind === "scam_suspect");
   const instruction = reading.warnings.some((w) => w.kind === "instruction_in_content");
-  const proposal = reading.questions.find((q) => q.kind === "confirm_deadline" && q.proposal)?.proposal;
-  const shown = proposal && answer.text.includes(spokenDate(proposal.dueDate)) ? proposal.dueDate : null;
-  const due = answer.deadlines[0]?.dueDate ?? shown;
+  const due = answer.deadlines[0]?.dueDate ?? dateShownInQuestion(reading, answer.text);
   if (due && !scam) out.reminder = { letterId: letter.letterId, dueDate: due };
-  if (askedForCopy(reading)) {
-    out.failure = { letterId: letter.letterId, reason: "page unreadable or missing, please send a readable copy" };
-  } else if (readFailed(reading) || answer.outcome === "unread") {
+  if (readFailed(reading)) {
     out.failure = { letterId: letter.letterId, reason: "read_failed" };
+  } else if (ASKS_AGAIN.test(answer.text)) {
+    out.failure = { letterId: letter.letterId, reason: "page unreadable or missing, please send a readable copy" };
+  } else if (answer.outcome === "unread" || reading.questions.some((q) => q.kind === "unreadable_page" || q.kind === "missing_page")) {
+    out.failure = { letterId: letter.letterId, reason: "page_not_read_and_not_asked" };
   }
 
   if (!scam) {

@@ -17,7 +17,8 @@ import { modelRoute, preflight, routeLabel } from "./openrouter.mjs";
 import { photoFilesByLetter, photoHouseholdIds, renderHouseholdPhotos } from "./render.mjs";
 import { runTrack } from "./tracks.mjs";
 import { registerTemp } from "./cleanup.mjs";
-import { osSandboxAvailable } from "./harness.mjs";
+import { installedPackages } from "./build-mano.mjs";
+import { osSandboxAvailable, osSandboxGrants } from "./harness.mjs";
 import { readRecord, verifyCode, verifyDev, verifyHeldout, verifyMano, verifyPhotos, verifySeedCommitment } from "./verify.mjs";
 
 function abort(message) {
@@ -29,6 +30,9 @@ const seed = process.env.MANO_EVAL_HELDOUT_SEED;
 if (!seed || !process.env.MANO_EVAL_TEMPLATE_PACK) abort("needs MANO_EVAL_HELDOUT_SEED and MANO_EVAL_TEMPLATE_PACK");
 // Mano needs native code, which only an OS sandbox can keep from the pack.
 if (!osSandboxAvailable()) abort("needs an OS sandbox for Mano's native image code; only macOS sandbox-exec is implemented");
+const packPath = await realpath(process.env.MANO_EVAL_TEMPLATE_PACK);
+const grants = osSandboxGrants([(await installedPackages()).installed]);
+if (grants.some((g) => packPath === g || packPath.startsWith(`${g}/`))) abort("the private pack sits where Mano's child may read; move it");
 // With no model key, Mano and the general agent report "not run" and the
 // deterministic baselines still score, at no cost.
 const route = modelRoute();

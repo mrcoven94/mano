@@ -30,7 +30,7 @@ await build({
   external: ["sharp", "heic-decode"],
   logLevel: "silent",
 });
-const { letterResult, splitNames } = await import(join(bundleDir, "adapter.mjs"));
+const { brokeredModelClient, letterResult, splitNames } = await import(join(bundleDir, "adapter.mjs"));
 
 const jsonResponse = (body, status = 200) => ({ ok: status < 400, status, json: async () => body });
 const LETTER = "County Human Services\n\nYour renewal must arrive by November 25, 2026.\n\nSend your pay stub.";
@@ -163,8 +163,31 @@ test("only an unreadable page earns the readable-copy credit, never a failed cal
     const res = await letterResult(letter, r, { client: noModel, fetchImpl: noNet, hasDocuments: [] });
     return gradeAll([{ householdId: "hh-900", status: "ok", reminders: [], packet: [], refused: [], enforced: [], requested: [], failures: [res.failure], toolCalls: [] }], answers).unreadableAsked;
   };
-  assert.equal(await score(reading({ questions: [{ id: "Q1", kind: "unreadable_page", letterId: "L1", prompt: "", citation: null }] })), 1);
+  const unread = reading({ questions: [{ id: "Q1", kind: "unreadable_page", letterId: "L1", prompt: "", citation: null }] });
+  unread.letters[0].fields.excerpt = "";
+  assert.equal(await score(unread), 1, "nothing was read, so the answer asks for the page again");
   assert.equal(await score(reading({ questions: [{ id: "Q1", kind: "read_failed", letterId: null, prompt: "", citation: null }] })), 0);
+  assert.equal(await score(reading({ questions: [{ id: "Q1", kind: "missing_page", letterId: "L1", prompt: "", citation: null }] })), 0, "the answer asks for nothing here");
+});
+
+test("a page Mano says nothing about is still a failure", async () => {
+  const r = await letterResult(letter, reading({ questions: [{ id: "Q1", kind: "missing_page", letterId: "L1", prompt: "", citation: null }] }), { client: noModel, fetchImpl: noNet, hasDocuments: [] });
+  assert.equal(r.failure.reason, "page_not_read_and_not_asked");
+});
+
+test("a date from a candidate counts when the answer shows it", async () => {
+  const q = { id: "Q1", kind: "confirm_deadline", letterId: "L1", prompt: "", citation: null, candidates: [{ sentence: "Return it by November 25, 2026.", dates: ["2026-11-25"], citation: null }] };
+  const r = await letterResult(letter, reading({ questions: [q] }), { client: noModel, fetchImpl: noNet, hasDocuments: [] });
+  assert.deepEqual(r.reminder, { letterId: "hh-900-L1", dueDate: "2026-11-25" });
+});
+
+test("the Meta route honors the reader's deadline", async () => {
+  const seen = [];
+  const client = brokeredModelClient({ route: "meta", meter: { add() {} }, fetchImpl: async (_u, o) => { seen.push(o); return jsonResponse({ output_text: "x", usage: null }); } });
+  await assert.rejects(client.responses({ model: "m", input: "x" }, { deadline: Date.now() - 1 }));
+  assert.equal(seen.length, 0, "an expired deadline makes no call");
+  await client.responses({ model: "m", input: "x" }, { deadline: Date.now() + 60000 });
+  assert.ok(seen[0].timeoutMs > 0 && seen[0].timeoutMs <= 60000);
 });
 
 test("the freeze pins Mano's reader and catches a change", async () => {
@@ -190,6 +213,9 @@ test("the OS sandbox stops what Node's permission model cannot", { skip: osSandb
   const answers = new URL("../data/dev-answers.json", import.meta.url).pathname;
   const dir = await realpath(await mkdtemp(join(tmpdir(), "mano-eval-os-")));
   const profile = osSandboxProfile(dir);
+  // Outside the home and session temp folders, like a pack someone put elsewhere.
+  const outside = join(await realpath("/private/var/tmp"), `mano-eval-fake-pack-${process.pid}.json`);
+  await writeFile(outside, "{}");
   const server = createServer((_q, a) => a.end("ok"));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${server.address().port}/`;
@@ -206,9 +232,12 @@ test("the OS sandbox stops what Node's permission model cannot", { skip: osSandb
     assert.match(await inside(`try { require("child_process").execFileSync("/bin/echo", ["RAN"], { stdio: "pipe" }); console.log("RAN"); } catch { console.log("DENIED"); }`), /DENIED/);
     assert.match(await inside(`try { require("fs").writeFileSync(${JSON.stringify(answers + ".probe")}, "x"); console.log("WROTE"); } catch (e) { console.log(e.code); }`), /EPERM/);
     assert.equal(existsSync(answers + ".probe"), false);
+    assert.match(await inside(`try { require("fs").readFileSync(${JSON.stringify(outside)}); console.log("READ"); } catch (e) { console.log(e.code); }`), /EPERM/, "a file outside home and temp is denied too");
+    assert.match(await inside(`console.log(require("fs").readdirSync("/System/Library/Fonts").length > 0 ? "FONTS" : "NONE");`), /FONTS/);
     assert.match(await inside(`require("fs").writeFileSync(${JSON.stringify(join(dir, "ok"))}, "x"); console.log("WROTE");`), /WROTE/);
   } finally {
     server.close();
+    await rm(outside, { force: true });
     await rm(dir, { recursive: true, force: true });
   }
 });

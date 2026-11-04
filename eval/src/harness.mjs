@@ -12,7 +12,7 @@
 import { fork, spawnSync } from "node:child_process";
 import { mkdtemp, writeFile, readFile, rm, mkdir, copyFile, realpath, stat, symlink } from "node:fs/promises";
 import { realpathSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { registerChild, registerTemp } from "./cleanup.mjs";
 import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody } from "./openrouter.mjs";
@@ -55,14 +55,26 @@ function sbString(p) {
   return JSON.stringify(p);
 }
 
+// What a child in the OS sandbox may read besides its run dir: the runtime, the
+// system libraries and fonts native image code needs, and readDirs. Everything
+// else is denied. A secret under one of these would be readable, so the held-out
+// run refuses a pack in any of them.
+export function osSandboxGrants(readDirs = [], execPath = process.execPath) {
+  const realExec = realpathSync(execPath);
+  const roots = [dirname(dirname(realExec))];
+  for (const prefix of ["/opt/homebrew", "/usr/local"]) {
+    if (realExec.startsWith(`${prefix}/`)) roots.push(prefix);
+  }
+  return [...readDirs, ...roots, "/System", "/usr/lib", "/usr/share", "/Library/Fonts", "/private/etc", "/private/var/db/timezone", "/dev"];
+}
+
 // Node's permission model does not cover native code, and a system that needs
 // sharp must load native code. On macOS the kernel then enforces the same limits
 // on everything in the process: no network, no exec, writes only to the run dir,
-// and no reading of the home folder, which holds the repo, or of temp folders,
-// which hold the pack during a run. File metadata stays readable so paths resolve.
+// and reads only from the grants. File metadata stays readable so paths resolve.
 export function osSandboxProfile(runDir, readDirs = [], execPath = process.execPath) {
   const realExec = realpathSync(execPath);
-  const allowRead = [runDir, ...readDirs, dirname(dirname(realExec))];
+  const allowRead = [runDir, ...osSandboxGrants(readDirs, execPath)];
   return [
     "(version 1)",
     "(allow default)",
@@ -71,8 +83,8 @@ export function osSandboxProfile(runDir, readDirs = [], execPath = process.execP
     `(allow process-exec (literal ${sbString(execPath)}) (literal ${sbString(realExec)}))`,
     "(deny file-write*)",
     `(allow file-write* (subpath ${sbString(runDir)}) (literal "/dev/null"))`,
-    `(deny file-read-data (subpath ${sbString(realpathSync(homedir()))}) (subpath "/private/tmp") (subpath "/private/var/folders"))`,
-    `(allow file-read-data ${allowRead.map((p) => `(subpath ${sbString(p)})`).join(" ")})`,
+    "(deny file-read-data)",
+    `(allow file-read-data (literal "/") ${allowRead.map((p) => `(subpath ${sbString(p)})`).join(" ")})`,
   ].join("\n");
 }
 
