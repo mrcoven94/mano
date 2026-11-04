@@ -27,7 +27,7 @@ The command runs nine steps in one process. Every line says `real` or `simulated
 
 - With no key, each model step uses its recorded response and says so, and the command exits 0. A recording answers only the input it was made for.
 - With your own `META_MODEL_API_KEY` set, SAM 3.1 and Muse Spark 1.3 run live on Meta's API.
-- If a live call fails (HTTP 402, for example), the step prints why and finishes on its recording, and the command exits 1.
+- If a live call fails (HTTP 402, for example), the step prints why, finishes on its recording when the recording matches, and stops otherwise. The command exits 1 either way.
 
 Three parts are simulated even with a key. Guardian's verdict is recorded, because Muse Glimmer runs on our own GPU. A stand-in for Mano's computer posts the same values to the portal's form, because the desktop runs on our Modal account. Maria's yes is scripted, because she is synthetic. The text line and Mano's agent turn are left out, and the output says so. Engine's action gateway and the sandbox portal run from their real code, on in-memory stores.
 
@@ -60,10 +60,10 @@ These parts are not Meta model calls: the keyword crisis floor that every text p
 <!-- status:start -->
 | Piece | Status | URL | Last deploy |
 | --- | --- | --- | --- |
-| Site | live | https://withmano.com | 703f4dd success 2026-11-04 |
-| Sandbox portal | live | https://sandbox.withmano.com/ | f9f6812 success 2026-11-04 |
-| Engine | live | https://engine.withmano.com/health | f9f6812 success 2026-11-04 |
-| Channels | live | https://text.withmano.com/health | 176bb27 success 2026-11-04 |
+| Site | live | https://withmano.com | c6edc52 success 2026-11-04 |
+| Sandbox portal | live | https://sandbox.withmano.com/ | c6edc52 success 2026-11-04 |
+| Engine | live | https://engine.withmano.com/health | c6edc52 success 2026-11-04 |
+| Channels | live | https://text.withmano.com/health | c6edc52 success 2026-11-04 |
 | Guardian | live | no public URL | 5a6ba65 success 2026-11-03 |
 | Quality | in progress | not deployed yet | none |
 <!-- status:end -->
@@ -124,14 +124,20 @@ Guardian scales to zero when idle, and a check fails closed after 10 seconds. A 
 
 ## Run and deploy it yourself
 
-Each package runs with local stand-ins when its keys are missing (a fake model client, an in-memory store, a local link check) and says which parts are not live. The sandbox portal also needs [wrangler](https://developers.cloudflare.com/workers/wrangler/) installed globally, because `pnpm install` does not add it for that package.
+What each app needs differs:
+
+- `apps/site`: with no keys, the sign-in routes run on stand-ins and print which parts are not live.
+- `apps/app`: it needs `EXPO_PUBLIC_ENGINE_URL` or `EXPO_PUBLIC_DEMO_MODE=true`, and otherwise shows "Mano is not configured". Demo mode uses recorded synthetic responses and says so on screen.
+- `apps/sandbox-portal`: it needs [wrangler](https://developers.cloudflare.com/workers/wrangler/) installed globally, because `pnpm install` does not add it for that package.
+- `apps/agent` and `apps/channels`: with no model key, a stand-in answers. The agent's turn route answers 503 without `ENGINE_URL` and `MANO_ENGINE_AGENT_TOKEN`.
+- `apps/engine`: with no model key, it refuses to answer unless `MANO_ENV=development` is set, as in `apps/engine/.dev.vars.example`, and then uses a labeled stand-in.
 
 ```sh
 pnpm install
 pnpm check
 pnpm --filter @mano/site dev
 pnpm --filter @mano/sandbox-portal dev
-pnpm --filter @mano/app start
+EXPO_PUBLIC_DEMO_MODE=true pnpm --filter @mano/app start
 ```
 
 Copy each app's `.env.example` to `.dev.vars` or `.env` to use your own keys. `META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live` checks Mano's voice against the real model with synthetic messages. To deploy your own copy, see the workflows in `.github/workflows/`.
