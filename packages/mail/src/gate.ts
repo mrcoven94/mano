@@ -254,10 +254,12 @@ const NAMED_HEADING = /^(?:(?:(?:[Nn]otice|[Ll]etter)\s+)?[Ff]or\s+|[Rr][Ee]:\s*
 // gate cannot read what follows under it. Only a salutation may end so.
 const SALUTATION = /^dear(?:\s+[a-z][a-z.'-]*){1,5}\s*:$/i;
 
+const ENDS_IN_BREAK = /[;,!]$/;
+
 export function hasQualifier(sentence: string): boolean {
   const raw = sentence.trim();
   if (raw.endsWith(":") && !SALUTATION.test(raw)) return true;
-  const exempt = !/[;,!]$/.test(raw) && HARMLESS.test(tidy(raw));
+  const exempt = !ENDS_IN_BREAK.test(raw) && HARMLESS.test(tidy(raw));
   return !exempt && (QUALIFIER.test(tidy(raw)) || NAMED_HEADING.test(raw));
 }
 

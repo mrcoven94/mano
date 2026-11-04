@@ -309,9 +309,12 @@ const CHOKING = String.raw`strangl\p{L}* me|me (?:est[áa] |quiere |va a |trat[�
 const OTHER_LANGUAGES = new RegExp(String.raw`(?:^|\s)(?:${VIETNAMESE}|${TAGALOG}|${CHOKING})(?=\s|$)`, "u");
 const OTHER_LANGUAGES_BARE = new RegExp(String.raw`(?:^|\s)(?:${VIETNAMESE_BARE})(?=\s|$)`, "u");
 
+const COMBINING_MARK = /\p{M}/gu;
+const D_WITH_STROKE = /đ/g;
+
 // Lowercased words with every mark gone, and đ as d.
 function unmarked(words: string): string {
-  return words.normalize("NFD").replace(/\p{M}/gu, "").replace(/đ/g, "d");
+  return words.normalize("NFD").replace(COMBINING_MARK, "").replace(D_WITH_STROKE, "d");
 }
 
 function accented(text: string): string {

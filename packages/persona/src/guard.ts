@@ -16,6 +16,7 @@ const WORD_EDGE = String.raw`(?:(?<=[\p{L}\p{N}])(?![\p{L}\p{N}])|(?<![\p{L}\p{N
 
 function uw(pattern: RegExp): RegExp {
   const flags = pattern.flags.includes("u") ? pattern.flags : `${pattern.flags}u`;
+  // regex-ok: every call is at module scope, once per guard pattern
   return new RegExp(pattern.source.replaceAll(String.raw`\b`, WORD_EDGE), flags);
 }
 
@@ -145,6 +146,7 @@ function buildIdPattern(modelIds: readonly string[]): RegExp | null {
   const ids = [...new Set(modelIds.flatMap((id) => [id, id.replace(CONTRIBUTOR_SUFFIX, "")]).filter((id) => id.length > 0))];
   if (ids.length === 0) return null;
   const loose = ids.map((id) => id.split(ID_SEPARATORS).map(escapePattern).join("[-_.\\s\\u2010-\\u2015]*"));
+  // regex-ok: from deployment config; idPattern builds each distinct list once
   return new RegExp(`(?<![\\w.-])(?:${loose.join("|")})(?![\\w-])`, "i");
 }
 
