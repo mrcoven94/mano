@@ -4,7 +4,7 @@ import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
 import { mintSessionToken } from "../src/auth.js";
 import { documentAad, encryptForPerson } from "../src/crypto.js";
 import { getDocumentBytes } from "../src/files.js";
-import { linkKey } from "../src/fill-replay.js";
+import { frozenFields, linkKey } from "../src/fill-replay.js";
 
 // A fill's replay: the agent binds the screens of a fill to the approval
 // it produced, Engine stores them encrypted for the person, and a link
@@ -366,5 +366,24 @@ describe("only the person's link opens the page", () => {
     expect((await open(url)).status).toBe(404);
     expect(await files().get(key)).toBeNull();
     expect((await files().list({ prefix: `persons/${person}/docs/` })).objects).toHaveLength(0);
+  });
+});
+
+describe("what the replay page calls the attached document", () => {
+  const request = (over: Record<string, unknown>) => JSON.stringify({ documentId: "doc-1", payload: { fullName: "Rosa Testcase", attachment: "doc-1" }, ...over });
+
+  it("shows the person's words and never the document's ID", () => {
+    const { fields, attached } = frozenFields(request({ attachmentLabel: "the letter you sent on November 4, and no proof of income" }), LABELS);
+    expect(attached).toBe(true);
+    expect(fields).toEqual([
+      { label: "Full legal name", value: "Rosa Testcase" },
+      { label: "Attached", value: "the letter you sent on November 4, and no proof of income" },
+    ]);
+  });
+
+  it("shows no row for a bare ID, and still reads a draft frozen with words in the payload", () => {
+    expect(frozenFields(request({}), LABELS).fields).toEqual([{ label: "Full legal name", value: "Rosa Testcase" }]);
+    const old = frozenFields(request({ payload: { attachment: "the letter you sent on November 2" } }), LABELS);
+    expect(old.fields).toEqual([{ label: "Attached", value: "the letter you sent on November 2" }]);
   });
 });
