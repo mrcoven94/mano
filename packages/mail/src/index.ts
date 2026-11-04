@@ -55,6 +55,8 @@
 // the scam warning and no proposal, date to know or deadline question;
 // links, phones and addresses are never acted on here and come back
 // as warnings for the gateway.
+// A failure to decode asks for a better photo only when the decoder says
+// the file itself is unusable; anything else is a failed read.
 // Content failures never throw; only invalid arguments do. Each file
 // has a time and token budget, checked before every model call and
 // shared by its retries as one deadline; past it the file stops early
@@ -270,10 +272,22 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         });
         continue;
       }
+      if (err instanceof MediaError) {
+        ask({
+          kind: "unreadable_page",
+          letterId: null,
+          prompt: `Could not read ${file.name} (${shortMessage(err)}). Retake the photo with the letter flat and lit.`,
+          citation: null,
+        });
+        continue;
+      }
+      // Not a verdict on the file, so a broken deploy never tells someone
+      // to retake a good photo. The class only: a message can carry a path.
+      console.warn(JSON.stringify({ type: "mano_mail_decode_failed", errorClass: err instanceof Error ? err.constructor.name : "unknown" }));
       ask({
-        kind: "unreadable_page",
+        kind: "read_failed",
         letterId: null,
-        prompt: `Could not read ${file.name} (${shortMessage(err)}). Retake the photo with the letter flat and lit.`,
+        prompt: `${file.name} could not be read just now. Send it again.`,
         citation: null,
       });
       continue;

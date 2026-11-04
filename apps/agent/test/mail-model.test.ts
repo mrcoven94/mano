@@ -115,6 +115,30 @@ describe("a service failure under MANO_MODEL_PROVIDER=openrouter", () => {
   });
 });
 
+describe("a broken deploy", () => {
+  it("never tells someone to retake a good photo when the image decoder cannot load", async () => {
+    vi.stubEnv("MANO_MODEL_PROVIDER", "openrouter");
+    vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
+    const logged: string[] = [];
+    for (const level of ["log", "info", "warn", "error", "debug"] as const) {
+      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => void logged.push(args.map(String).join(" ")));
+    }
+    vi.doMock("sharp", () => {
+      throw new Error('Could not load the "sharp" module using the linux-x64 runtime /var/task/secret-path');
+    });
+    try {
+      const { text } = await sendPhoto("turn_mailmodel04");
+      expect(text).toMatch(/^I could not finish reading your photo just now\./);
+      expect(text).not.toMatch(/flat|good light|retake/i);
+      expect(modelBodies).toHaveLength(0);
+      expect(logged.join("\n")).toContain('{"type":"mano_mail_decode_failed","errorClass":"Error"}');
+      expect(logged.join("\n")).not.toContain("secret-path");
+    } finally {
+      vi.doUnmock("sharp");
+    }
+  });
+});
+
 describe("a texted photo without the setting", () => {
   it("stays on the Meta Model API, SAM included", async () => {
     vi.stubEnv("MANO_MODEL_PROVIDER", "");
