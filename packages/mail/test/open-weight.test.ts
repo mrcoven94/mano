@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { answerReading, readMail } from "../src/index.js";
+import { normalizeImage } from "../src/media.js";
+import { segmentFrame } from "../src/segment.js";
 import { MetaModelClient, RecordedModelClient, createModelClient, type ResponsesRequest } from "../src/model.js";
-import { DOUBTFUL_PAGE, NIL, PLANTED_DEADLINE, PLANTED_DEADLINE_PAGE, RENEWAL_PAGE, letterPhoto, pageJson } from "./letter-fixture.js";
+import { DOUBTFUL_PAGE, NIL, PLANTED_DEADLINE, PLANTED_DEADLINE_PAGE, RENEWAL_PAGE, RENEWAL_TEXT, letterPhoto, pageJson } from "./letter-fixture.js";
 
 const KEY = "test-openrouter-key";
 const ENV = { MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: KEY };
@@ -326,6 +328,38 @@ describe("a service failure on the open-weight path is a failed read, never a ba
   });
 });
 
+describe("what a failed call was billed still counts on the open-weight path", () => {
+  const billed = (message: Record<string, unknown>, finishReason = "stop") => () =>
+    new Response(JSON.stringify({ choices: [{ finish_reason: finishReason, message: { role: "assistant", ...message } }], usage: { prompt_tokens: 1000, completion_tokens: 200 } }), { status: 200 });
+
+  it.each([
+    ["a refusal", billed({ content: "", refusal: "no" })],
+    ["empty content", billed({ content: "" })],
+    ["an answer cut off at the token cap", billed({ content: RENEWAL_PAGE }, "length")],
+  ])("%s is counted in the run's stats", async (_name, answer) => {
+    const { model } = stub([answer]);
+    const reading = await read(model);
+    expect(reading.questions.map((q) => q.kind)).toEqual(["read_failed"]);
+    expect(reading.stats.inputTokens).toBe(1000);
+    expect(reading.stats.outputTokens).toBe(200);
+    expect(reading.stats.modelCalls.map((c) => [c.purpose, c.model])).toEqual([["read", "meta/muse-spark-open"]]);
+  });
+
+  it("sums earlier attempts with the one that refused", async () => {
+    const { model, sent } = stub([billed({ content: "I cannot process images." }), billed({ content: "", refusal: "no" })]);
+    const reading = await read(model);
+    expect(sent).toHaveLength(2);
+    expect(reading.stats.inputTokens).toBe(2000);
+  });
+
+  it("an HTTP failure was not billed, so it counts no call", async () => {
+    const { model } = stub([() => new Response("nope", { status: 402 })]);
+    const reading = await read(model);
+    expect(reading.stats.modelCalls).toEqual([]);
+    expect(reading.stats.inputTokens).toBe(0);
+  });
+});
+
 describe("a page the model truly could not read keeps the retake advice", () => {
   it("readable false asks for a better photo, with no retry and no date", async () => {
     const { model, sent } = stub([answering(pageJson({ readable: false, readability_note: "too dark", full_text: "", deadlines: [], sender: NIL }))]);
@@ -405,11 +439,99 @@ describe("the same faults on the Meta Model API path", () => {
     expect(reads(sent).length).toBeLessThan(12 * 3);
   });
 
+  it.each([
+    ["refused", { status: "completed", output: [{ content: [{ type: "refusal", refusal: "no" }] }] }],
+    ["empty", { status: "completed", output_text: "" }],
+    ["incomplete", { status: "incomplete", output_text: "{" }],
+  ])("%s pages keep what they were billed, and the budget stops the file", async (_name, body) => {
+    const boxes = Array.from({ length: 12 }, (_, i) => ({ box_2d: [i * 80, 100, i * 80 + 70, 900], label: "page", score: 0.9 }));
+    const { model, sent } = meta({ ...body, usage: { input_tokens: 40_000, output_tokens: 1 } }, { status: "completed", output_text: JSON.stringify({ detections: boxes }) });
+    const reading = await read(model);
+    expect(reading.stats.inputTokens).toBeGreaterThanOrEqual(120_000);
+    expect(reading.questions.map((q) => q.kind)).toContain("budget_exceeded");
+    expect(reads(sent).length).toBeLessThan(12);
+  });
+
+  it("a refused SAM call still counts what it was billed, while the page falls back", async () => {
+    const { model } = meta(
+      { status: "completed", output_text: RENEWAL_PAGE, usage: { input_tokens: 5, output_tokens: 5 } },
+      { ...refusal, usage: { input_tokens: 700, output_tokens: 3 } },
+    );
+    const reading = await read(model);
+    expect(reading.stats.modelCalls.find((c) => c.purpose === "segment")).toMatchObject({ inputTokens: 700, outputTokens: 3 });
+    expect(reading.stats.inputTokens).toBe(705);
+  });
+
+  it("a refused grouping call still counts what it was billed, and the pages stand alone", async () => {
+    const boxes = [0, 1].map((i) => ({ box_2d: [i * 450 + 20, 100, i * 450 + 430, 900], label: "page", score: 0.9 }));
+    const page = pageJson({ full_text: `${RENEWAL_TEXT} Page 1 of 2`, reference_no: NIL, page_marker: { text: "Page 1 of 2", box_2d: [960, 400, 980, 600] } });
+    const purposes: string[] = [];
+    const fetchFn = (async (_url: string, init: RequestInit) => {
+      const req = JSON.parse(init.body as string) as { model: string; text?: { format?: { name?: string } } };
+      const purpose = req.text?.format?.name ?? "";
+      purposes.push(purpose);
+      if (purpose === "mail_detections") return responses({ status: "completed", output_text: JSON.stringify({ detections: boxes }) });
+      if (purpose === "mail_groups") return responses({ ...refusal, usage: { input_tokens: 300, output_tokens: 7 } });
+      return responses({ status: "completed", output_text: page, usage: { input_tokens: 10, output_tokens: 1 } });
+    }) as unknown as typeof fetch;
+    const reading = await read(createModelClient({ META_MODEL_API_KEY: "test-meta-key" }, { synthetic: false, fetchFn }));
+    expect(purposes).toContain("mail_groups");
+    expect(reading.stats.modelCalls.find((c) => c.purpose === "group")).toMatchObject({ inputTokens: 300, outputTokens: 7 });
+    expect(reading.letters).toHaveLength(2);
+    expect(JSON.stringify(reading)).not.toContain(SECRET);
+  });
+
   it("readable false keeps the retake advice", async () => {
     const { model, sent } = meta({ status: "completed", output_text: pageJson({ readable: false, full_text: "", deadlines: [], sender: NIL }) });
     const reading = await read(model);
     expect(reads(sent)).toHaveLength(1);
     expect(answerReading(reading).text).toMatch(/flat, in good light/);
+  });
+});
+
+// A retry that wakes past the deadline: the clock jumps while its backoff
+// waits, so the loop's deadline check throws, with no call left to make.
+describe("a retry that resumes past the deadline", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const lateRetry = async (run: (deadline: number) => Promise<unknown>) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const deadline = Date.now() + 1000;
+    const settled = run(deadline).then(
+      (value) => ({ value }),
+      (err: unknown) => ({ err }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    vi.setSystemTime(deadline + 1);
+    await vi.advanceTimersByTimeAsync(300);
+    return settled;
+  };
+  const leaking = (async () => {
+    throw new TypeError(`fetch failed: ${SECRET}`);
+  }) as unknown as typeof fetch;
+
+  it.each([
+    ["the open-weight client", { MANO_MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: KEY }],
+    ["the Meta client", { META_MODEL_API_KEY: "test-meta-key" }],
+  ])("%s throws fixed words", async (_name, env) => {
+    const model = createModelClient(env, { synthetic: false, fetchFn: leaking });
+    const result = await lateRetry((deadline) => model.responses({ model: "muse-spark-1.3", input: "hello" }, { deadline }));
+    expect(result).toHaveProperty("err");
+    const { message } = (result as { err: Error }).err;
+    expect(message).toBe("Model request failed: no connection.");
+    expect(message).not.toContain(SECRET);
+  });
+
+  it("never reaches a segmentation fallback's reason", async () => {
+    const image = await normalizeImage(await letterPhoto(), "image/jpeg");
+    const model = createModelClient({ META_MODEL_API_KEY: "test-meta-key" }, { synthetic: false, fetchFn: leaking });
+    const result = await lateRetry((deadline) => segmentFrame(image, model, { deadline }));
+    const seg = (result as { value: Awaited<ReturnType<typeof segmentFrame>> }).value;
+    expect(seg.method).not.toBe("sam");
+    expect(seg.method !== "sam" && seg.why).toMatch(/no connection/);
+    expect(JSON.stringify(seg.method !== "sam" && seg.why)).not.toContain(SECRET);
   });
 });
 

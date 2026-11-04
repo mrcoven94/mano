@@ -7,7 +7,7 @@
 // pipeline falls back to on-device paper detection, then the whole frame,
 // and says why.
 
-import { SEGMENT_MODEL, SegmentationSkipped, type ModelClient, type ResponsesResult } from "./model.js";
+import { ModelFailure, SEGMENT_MODEL, SegmentationSkipped, type ModelClient, type ResponsesResult } from "./model.js";
 import { detectPaperBoxes, iou, type NormalizedImage } from "./media.js";
 import type { Box } from "./types.js";
 
@@ -155,7 +155,8 @@ export async function segmentFrame(
   } catch (err) {
     if (err instanceof SegmentationSkipped) return localOrFullFrame(image, null, started, err.message, false);
     const message = err instanceof Error ? err.message : String(err);
-    return localOrFullFrame(image, null, started, `the SAM 3.1 call failed: ${message.slice(0, 240)}`);
+    const billed = err instanceof ModelFailure ? (err.billed?.usage ?? null) : null;
+    return localOrFullFrame(image, billed, started, `the SAM 3.1 call failed: ${message.slice(0, 240)}`);
   }
   const parsed = parseDetections(res.text);
   if (parsed.detections.length > 0) {

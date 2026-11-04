@@ -14,11 +14,17 @@ const SECRET = "/var/task/secret-path sk-or-secret";
 const RETAKE = /flat, in good light/;
 const FAILED_READ = /^I could not finish reading your photo just now\./;
 
-const noise = (format: "jpeg" | "png" | "webp") => sharp(randomBytes(600 * 600 * 3), { raw: { width: 600, height: 600, channels: 3 } })[format]().toBuffer();
+const noise = (format: "jpeg" | "png" | "webp" | "gif") => sharp(randomBytes(600 * 600 * 3), { raw: { width: 600, height: 600, channels: 3 } })[format]().toBuffer();
 const cut = (b: Buffer) => b.subarray(0, Math.floor(b.length * 0.6));
 const zeroAfterHeader = (b: Buffer) => {
   const out = Buffer.from(b);
   for (let i = 2000; i < out.length; i += 37) out[i] = 0xff;
+  return out;
+};
+
+const damageFrom = (b: Buffer, from: number, step: number, value: number) => {
+  const out = Buffer.from(b);
+  for (let i = from; i < out.length; i += step) out[i] = value;
   return out;
 };
 
@@ -76,6 +82,12 @@ describe("the decoder says this file is not a usable image", () => {
       ["a truncated PNG", cut(await noise("png")), "image/png"],
       ["a truncated WebP", cut(await noise("webp")), "image/webp"],
       ["a zero-size image", Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"></svg>'), "image/png"],
+      ["the first bytes of a JPEG", (await noise("jpeg")).subarray(0, 200), "image/jpeg"],
+      ["the first bytes of a PNG", (await noise("png")).subarray(0, 60), "image/png"],
+      ["a JPEG with a damaged header", damageFrom(await noise("jpeg"), 2, 3, 0x11), "image/jpeg"],
+      ["a PNG with a damaged header", damageFrom(await noise("png"), 8, 5, 0x7f), "image/png"],
+      ["the first bytes of a GIF", (await noise("gif")).subarray(0, 6), "image/png"],
+      ["broken SVG", Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><g>'), "image/png"],
       ["bytes that are not HEIC", Buffer.from("not a heic file at all, just words"), "image/heic"],
       ["a HEIC header with no image", Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from("ftypheic"), Buffer.alloc(40)]), "image/heic"],
     ];
@@ -86,6 +98,7 @@ describe("the decoder says this file is not a usable image", () => {
       captureLogs();
       const model = new RecordedModelClient([]);
       const reading = await readMail([{ bytes, mimeType, name: "doc-1" }], { personId: "p1", synthetic: false, model });
+      expect(reading.questions.map((q) => q.kind), name).toEqual(["unreadable_page"]);
       expectUnusable(reading, model);
       expect(reading.letters, name).toEqual([]);
       vi.restoreAllMocks();
@@ -166,6 +179,25 @@ describe("anything else that stops decoding is a failed read, never a bad photo"
       default: () => ({
         metadata: async () => {
           throw new Error(`worker died: Input buffer contains unsupported image format ${SECRET}`);
+        },
+      }),
+    }));
+    const { reading, text } = await readFresh(bytes, "image/jpeg");
+    expectServiceFailure(reading, text, "Error");
+  });
+
+  it.each([
+    ["out of memory in the JPEG loader", "Input buffer has corrupt header: VipsJpeg: Insufficient memory (case 0)"],
+    ["the prefix alone, with no cause", "Input buffer has corrupt header"],
+    ["a cause nobody has measured", `Input buffer has corrupt header: vips_something: new failure ${SECRET}`],
+    ["a known cause word later in the line", `Input buffer has corrupt header: worker died: VipsJpeg: premature end ${SECRET}`],
+  ])("the corrupt header prefix over an unknown cause: %s", async (_name, message) => {
+    captureLogs();
+    const bytes = await letterPhoto();
+    vi.doMock("sharp", () => ({
+      default: () => ({
+        metadata: async () => {
+          throw new Error(message);
         },
       }),
     }));

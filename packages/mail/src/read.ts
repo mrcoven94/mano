@@ -4,7 +4,7 @@
 // reference number when that is unambiguous, otherwise with one small
 // model call over the page summaries.
 
-import { readingModelFor, type ModelClient } from "./model.js";
+import { ModelFailure, readingModelFor, type ModelClient, type ResponsesResult } from "./model.js";
 import { clampBox } from "./media.js";
 import type { Box } from "./types.js";
 
@@ -285,16 +285,16 @@ export function parsePageExtraction(text: string): PageExtraction {
   };
 }
 
-// The model answered every attempt with something that is not a reading.
-// In fixed words: the answers can carry provider text. It keeps what those
-// attempts spent, since they still count against the file's budget.
-export class NoPageReading extends Error {
+// A page that ended with no reading, and what its attempts were billed,
+// since they still count against the file's budget. The words are this
+// package's own: an answer's text can carry provider text.
+export class PageReadFailed extends Error {
   readonly usage: PageExtraction["usage"];
   readonly model: string;
   readonly elapsedMs: number;
-  constructor(usage: PageExtraction["usage"], model: string, elapsedMs: number) {
-    super("The model's answers were not a reading of the page.");
-    this.name = "NoPageReading";
+  constructor(message: string, usage: PageExtraction["usage"], model: string, elapsedMs: number) {
+    super(message);
+    this.name = "PageReadFailed";
     this.usage = usage;
     this.model = model;
     this.elapsedMs = elapsedMs;
@@ -313,32 +313,45 @@ export async function readPage(
   let outputTokens = 0;
   let sawUsage = false;
   let answeredBy = readingModelFor(opts.synthetic);
+  const charge = (usage: PageExtraction["usage"]): void => {
+    if (!usage) return;
+    inputTokens += usage.inputTokens;
+    outputTokens += usage.outputTokens;
+    sawUsage = true;
+  };
+  const failure = (message: string): PageReadFailed =>
+    new PageReadFailed(message, sawUsage ? { inputTokens, outputTokens } : null, answeredBy, Date.now() - started);
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const res = await model.responses({
-      model: readingModelFor(opts.synthetic),
-      store: false,
-      input: [
-        { role: "system", content: [{ type: "input_text", text: READ_SYSTEM }] },
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: READ_USER },
-            { type: "input_image", image_url: `data:image/jpeg;base64,${pageJpeg.toString("base64")}`, detail: "high" },
-          ],
-        },
-      ],
-      text: { format: { type: "json_schema", name: "mail_page", schema: PAGE_SCHEMA, strict: true } },
-      // Two stacked letters need room for both transcriptions.
-      max_output_tokens: 8000,
-    }, { deadline: opts.deadline });
+    let res: ResponsesResult;
+    try {
+      res = await model.responses({
+        model: readingModelFor(opts.synthetic),
+        store: false,
+        input: [
+          { role: "system", content: [{ type: "input_text", text: READ_SYSTEM }] },
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: READ_USER },
+              { type: "input_image", image_url: `data:image/jpeg;base64,${pageJpeg.toString("base64")}`, detail: "high" },
+            ],
+          },
+        ],
+        text: { format: { type: "json_schema", name: "mail_page", schema: PAGE_SCHEMA, strict: true } },
+        // Two stacked letters need room for both transcriptions.
+        max_output_tokens: 8000,
+      }, { deadline: opts.deadline });
+    } catch (err) {
+      if (err instanceof ModelFailure && err.billed) {
+        answeredBy = err.billed.model;
+        charge(err.billed.usage);
+      }
+      throw failure(err instanceof Error ? err.message : String(err));
+    }
     last = res.text;
     answeredBy = res.model;
     // Usage sums across attempts: every retry spends tokens.
-    if (res.usage) {
-      inputTokens += res.usage.inputTokens;
-      outputTokens += res.usage.outputTokens;
-      sawUsage = true;
-    }
+    charge(res.usage);
     // Retry only an answer that is not a reading, never a real one: a valid
     // readable:false stays a question for the person, not a retry.
     if (isPageReading(last)) {
@@ -350,7 +363,7 @@ export async function readPage(
       };
     }
   }
-  throw new NoPageReading(sawUsage ? { inputTokens, outputTokens } : null, answeredBy, Date.now() - started);
+  throw failure("The model's answers were not a reading of the page.");
 }
 
 export interface GroupablePage {

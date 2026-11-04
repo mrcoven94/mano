@@ -83,7 +83,7 @@ import {
   extraLetterExtraction,
   groupDeterministic,
   groupWithModel,
-  NoPageReading,
+  PageReadFailed,
   readPage,
   type GroupablePage,
   type PageExtraction,
@@ -109,7 +109,7 @@ import {
 } from "./gate.js";
 import { scanContent, screenScam, type ContentFlag } from "./safety.js";
 import { verifyExtraction, type DroppedField } from "./citations.js";
-import { readingModelFor } from "./model.js";
+import { ModelFailure, readingModelFor } from "./model.js";
 import type {
   Box,
   Cited,
@@ -396,7 +396,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       addUsage(page.file, extraction.usage);
       return { kind: "read", extraction };
     } catch (err) {
-      if (err instanceof NoPageReading) addUsage(page.file, err.usage);
+      if (err instanceof PageReadFailed) addUsage(page.file, err.usage);
       return { kind: "failed", err };
     }
   });
@@ -421,12 +421,12 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       });
     } else {
       page.readFailed = true;
-      if (read.err instanceof NoPageReading) {
+      if (read.err instanceof PageReadFailed && read.err.usage) {
         modelCalls.push({
           model: read.err.model,
           purpose: "read",
-          inputTokens: read.err.usage?.inputTokens ?? 0,
-          outputTokens: read.err.usage?.outputTokens ?? 0,
+          inputTokens: read.err.usage.inputTokens,
+          outputTokens: read.err.usage.outputTokens,
           elapsedMs: read.err.elapsedMs,
         });
       }
@@ -478,6 +478,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
   if (ambiguous.length > 0) {
     const ambPages = groupable.filter((p) => ambiguous.includes(p.index));
     const blocked = ambPages.some((p) => overBudget(pages[p.index]!.file));
+    const groupStarted = Date.now();
     if (blocked) {
       ambPages.forEach((p) => groups.push([p.index]));
     } else try {
@@ -493,7 +494,16 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         elapsedMs: grouped.elapsedMs,
       });
       groups.push(...grouped.groups);
-    } catch {
+    } catch (err) {
+      if (err instanceof ModelFailure && err.billed?.usage) {
+        modelCalls.push({
+          model: err.billed.model,
+          purpose: "group",
+          inputTokens: err.billed.usage.inputTokens,
+          outputTokens: err.billed.usage.outputTokens,
+          elapsedMs: Date.now() - groupStarted,
+        });
+      }
       ambPages.forEach((p) => groups.push([p.index]));
     }
   }

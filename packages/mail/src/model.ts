@@ -154,7 +154,15 @@ class RetryableStatus extends Error {
 
 // An error whose words this client chose. Anything else (a transport or
 // runtime error) may quote what it was given, so it is replaced.
-class ModelFailure extends Error {}
+// When the model ran, billed says what it cost, so a failed call still
+// counts against a file's budget.
+export class ModelFailure extends Error {
+  readonly billed: { usage: ResponsesResult["usage"]; model: string } | null;
+  constructor(message: string, billed: ModelFailure["billed"] = null) {
+    super(message);
+    this.billed = billed;
+  }
+}
 
 function safeError(err: unknown): Error {
   if (err instanceof ModelFailure || err instanceof RetryableStatus) return err;
@@ -215,7 +223,7 @@ async function postJson(transport: Transport, url: string, body: unknown, deadli
   let lastErr: unknown;
   for (let attempt = 0; attempt <= transport.maxRetries; attempt++) {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw attempt === 0 ? new BudgetExceeded() : lastErr;
+    if (remaining <= 0) throw attempt === 0 ? new BudgetExceeded() : safeError(lastErr);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.min(transport.timeoutMs, remaining));
     try {
@@ -258,9 +266,9 @@ async function postJson(transport: Transport, url: string, body: unknown, deadli
 
 // A 200 can still carry no answer. Both are service failures, not a bad
 // photo, and a refusal's own words are never repeated.
-function answerOr(text: string, refused: boolean): string {
-  if (refused) throw new ModelFailure("Model refused the request.");
-  if (text.trim() === "") throw new ModelFailure("Model returned no answer.");
+function answerOr(text: string, refused: boolean, billed: ModelFailure["billed"]): string {
+  if (refused) throw new ModelFailure("Model refused the request.", billed);
+  if (text.trim() === "") throw new ModelFailure("Model returned no answer.", billed);
   return text;
 }
 
@@ -293,11 +301,13 @@ export class MetaModelClient implements ModelClient {
       throw new Error("Contributor models are only allowed for synthetic data.");
     }
     const data = await postJson(this.transport, `${this.baseUrl}/responses`, { ...req, store: false as const }, opts.deadline);
+    const usage = extractUsage(data);
+    const billed = { usage, model: req.model };
     const status = (data as { status?: unknown })?.status;
     if (typeof status === "string" && status !== "completed") {
-      throw new ModelFailure(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`);
+      throw new ModelFailure(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`, billed);
     }
-    return { text: answerOr(extractOutputText(data), hasRefusalPart(data)), model: req.model, usage: extractUsage(data), raw: data };
+    return { text: answerOr(extractOutputText(data), hasRefusalPart(data), billed), model: req.model, usage, raw: data };
   }
 }
 
@@ -349,13 +359,13 @@ function openWeightBody(req: ResponsesRequest): OpenWeightBody {
 
 // The text of exactly one choice that finished on its own: a reading cut
 // off at the token cap is not a reading, even if it parses.
-function openWeightText(data: unknown): string {
+function openWeightText(data: unknown, billed: ModelFailure["billed"]): string {
   const choices = (data as { choices?: unknown } | null)?.choices;
   const choice = (Array.isArray(choices) && choices.length === 1 ? choices[0] : null) as { finish_reason?: unknown; message?: { content?: unknown; refusal?: unknown } } | null;
   const message = choice?.message;
   const refused = typeof message?.refusal === "string" && message.refusal.trim() !== "";
-  if (!choice || (choice.finish_reason !== "stop" && !refused)) throw new ModelFailure("Model run not completed.");
-  return answerOr(typeof message?.content === "string" ? message.content : "", refused);
+  if (!choice || (choice.finish_reason !== "stop" && !refused)) throw new ModelFailure("Model run not completed.", billed);
+  return answerOr(typeof message?.content === "string" ? message.content : "", refused, billed);
 }
 
 export interface OpenWeightClientOptions {
@@ -381,7 +391,8 @@ export class OpenWeightModelClient implements ModelClient {
     if (req.model === SEGMENT_MODEL) throw new SegmentationSkipped();
     if (req.model !== STANDARD_MODEL && req.model !== CONTRIBUTOR_MODEL) throw new Error(`Unknown model ID: ${req.model}.`);
     const data = await postJson(this.transport, OPEN_WEIGHT_URL, openWeightBody(req), opts.deadline);
-    return { text: openWeightText(data), model: OPEN_WEIGHT_MODEL, usage: extractUsage(data), raw: data };
+    const usage = extractUsage(data);
+    return { text: openWeightText(data, { usage, model: OPEN_WEIGHT_MODEL }), model: OPEN_WEIGHT_MODEL, usage, raw: data };
   }
 }
 

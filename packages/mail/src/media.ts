@@ -87,12 +87,12 @@ export interface NormalizedImage {
 // What the decoders say about an input they cannot use, as measured on
 // truncated, corrupted and mislabeled files (sharp 0.34, heic-decode 2.1).
 // Anchored, so a wrapped error cannot pass as a verdict, and an unknown
-// message counts as the service failing.
+// message counts as the service failing. sharp puts "corrupt header" before
+// any loader error, out of memory included, so only the cause after it
+// counts.
 const UNUSABLE_INPUT = [
   /^Input buffer contains unsupported image format/,
-  /^Input buffer has corrupt header/,
-  /^VipsJpeg: (?:premature end|Corrupt JPEG)/,
-  /^pngload_buffer: libspng read error/,
+  /^(?:Input buffer has corrupt header: )?(?:VipsJpeg: (?:premature end|Corrupt JPEG)|pngload_buffer: (?:end of stream|libspng read error|invalid IHDR)|webp: unable to parse|gifload_buffer: Unexpected end|svgload_buffer: bad dimensions|glib: XML parse error)/,
   /^input buffer is not a HEIC image/,
   /^HEIF image not found/,
 ];
