@@ -53,8 +53,17 @@ export class WebState extends DurableObject<Env> {
   failTurn(...args: Parameters<WebStore["failTurn"]>) {
     return this.store.failTurn(...args);
   }
-  listMessages(...args: Parameters<WebStore["listMessages"]>) {
-    return this.store.listMessages(...args);
+  recordCrisis(...args: Parameters<WebStore["recordCrisis"]>) {
+    return this.store.recordCrisis(...args);
+  }
+  questionToReport(...args: Parameters<WebStore["questionToReport"]>) {
+    return this.store.questionToReport(...args);
+  }
+  settleQuestion(...args: Parameters<WebStore["settleQuestion"]>) {
+    return this.store.settleQuestion(...args);
+  }
+  listMessages() {
+    return this.store.listMessages();
   }
 }
 

@@ -290,6 +290,29 @@ describe("EngineClient", () => {
     }
   });
 
+  it("keeps the server's message ID and question on a reply and in the conversation", async () => {
+    const asked = { id: "a-1", reply: "Send it? Reply YES or NO.", createdAt: "2026-11-03T12:00:00.000Z", ask: { approvalId: "appr-1" } };
+    const fetchImpl = vi.fn(async () => jsonResponse(asked));
+    const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl });
+    await expect(client.sendMessage(session, "Send it", [], "op-1")).resolves.toMatchObject({ id: "a-1", ask: { approvalId: "appr-1" } });
+    const listed = vi.fn(async () => jsonResponse({ messages: [{ id: "a-1", role: "agent", text: "Send it?", createdAt: asked.createdAt, ask: asked.ask }] }));
+    const lister = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: listed });
+    await expect(lister.listMessages(session)).resolves.toMatchObject([{ id: "a-1", ask: { approvalId: "appr-1" } }]);
+  });
+
+  it("tells the server a question was displayed, and takes a closed question as done", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ ok: true }));
+    const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: fetchImpl });
+    await client.acknowledgeQuestion(session, "appr-1", "a-1");
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://web.test/api/persons/maria-001/approvals/appr-1/shown");
+    expect(init.body).toBe(JSON.stringify({ messageId: "a-1" }));
+    fetchImpl.mockResolvedValueOnce(new Response("{}", { status: 409 }));
+    await expect(client.acknowledgeQuestion(session, "appr-1", "a-1")).resolves.toBeUndefined();
+    fetchImpl.mockResolvedValueOnce(new Response("{}", { status: 503 }));
+    await expect(client.acknowledgeQuestion(session, "appr-1", "a-1")).rejects.toThrow();
+  });
+
   it("shows a server's error in plain words", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: "Sign-in email is not turned on yet." }), { status: 503 }));
     const client = new EngineClient({ baseUrl: "https://web.test", sha256B64, fetchImpl: fetchImpl });

@@ -154,7 +154,7 @@ Pull requests that can change what Mano says run the quality smoke: 28 synthetic
 
 ### Mano on the web
 
-`apps/web` is one Worker that serves the web build of `apps/app` and the routes it calls. Sign-in is a 6-digit code by email (Cloudflare Email Sending). A chat message is the same agent turn the text line runs, with the same voice guard, link check and approval question, so a person answers Mano's questions with YES or NO in the chat. Deadlines, documents, approvals as screens, and sending mail are not on the web yet and say so; they need an Engine session, which this Worker cannot open. A person who signs in by email does not yet share memory with their texts to Mano. Run its checks with `pnpm --filter @mano/web check`; `apps/web/scripts/sign-in-check.mjs` checks a deployed copy.
+`apps/web` is one Worker that serves the web build of `apps/app` and the routes it calls. Sign-in is a 6-digit code by email (Cloudflare Email Sending). A chat message is the same agent turn the text line runs, with the same voice guard, link check and approval question, so a person answers Mano's questions with YES or NO in the chat. A question becomes answerable only after the browser says it displayed the whole question, and a message about a crisis gets 988 and 911 even past a limit or during an outage. Deadlines, documents, approvals as screens, and sending mail are not on the web yet and say so; they need an Engine session, which this Worker cannot open. A person who signs in by email does not yet share memory with their texts to Mano. Run its checks with `pnpm --filter @mano/web check`; `apps/web/scripts/sign-in-check.mjs` checks a deployed copy.
 
 ### Accounts
 

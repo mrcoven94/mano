@@ -13,7 +13,8 @@ import { colors } from "../../lib/theme";
 export default function Verify() {
   const s = useStrings();
   const router = useRouter();
-  const pending = pendingSignIn();
+  // Read once: clearing it after sign-in must not redirect this screen back.
+  const [pending] = useState(pendingSignIn);
   const { client, mode, signIn } = useAuth();
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);

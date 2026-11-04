@@ -2,7 +2,7 @@
 // and voice notes. Offline messages wait in the outbox and send in order
 // when the engine is reachable again.
 
-import { useCallback, useEffect, useRef, useState, type ComponentRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
 import {
   AppState,
   FlatList,
@@ -23,9 +23,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Btn, DemoBanner, EmptyView, LoadingView, Title } from "../../components/ui";
 import type { Attachment, ChatMessage, NewAttachment } from "../../lib/api/types";
 import { AuthError } from "../../lib/api/types";
-import { useAuth } from "../../lib/auth";
+import { useAuth, useClearOnSignOut } from "../../lib/auth";
 import { takeChatDraft } from "../../lib/chat-draft";
 import { trackCacheFile } from "../../lib/cache-files";
+import { mergeArrived, questionsToAcknowledge } from "../../lib/chat-thread";
 import { useStrings } from "../../lib/i18n";
 import { submitMessage } from "../../lib/send";
 import { fileToB64, pickMailPhotos, pickMailVideo, takeMailPhoto, takeMailVideo, type PickedMedia } from "../../lib/media";
@@ -63,6 +64,7 @@ export default function Chat() {
   const s = useStrings();
   const { client, session, mode, outbox, personStore, signOut } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [arrived, setArrived] = useState<ChatMessage[]>([]);
   const [queued, setQueued] = useState<QueuedMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
@@ -79,10 +81,16 @@ export default function Chat() {
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
 
+  const keepReply = useCallback((reply: ChatMessage) => setArrived((current) => [...current, reply]), []);
+  useClearOnSignOut(() => setArrived([]));
+  const thread = useMemo(() => mergeArrived(messages, arrived), [messages, arrived]);
+
   const refresh = useCallback(async () => {
     if (!session || !outbox) return;
     try {
-      await outbox.flush(session, (item) => client.sendMessage(session, item.text, item.attachments, item.id));
+      await outbox.flush(session, async (item) => {
+        keepReply(await client.sendMessage(session, item.text, item.attachments, item.id));
+      });
     } catch (err) {
       if (err instanceof AuthError) {
         await signOut();
@@ -105,12 +113,25 @@ export default function Chat() {
     } finally {
       setLoading(false);
     }
-  }, [client, session, outbox, signOut]);
+  }, [client, session, outbox, signOut, keepReply]);
 
   useFocusEffect(
     useCallback(() => {
       void refresh();
     }, [refresh]),
+  );
+
+  // Runs after the thread is on screen, while this tab is the one showing.
+  // Coming back to the app refreshes the thread, which runs this again.
+  const acknowledged = useRef(new Set<string>());
+  useFocusEffect(
+    useCallback(() => {
+      if (!session || loading) return;
+      for (const { approvalId, messageId } of questionsToAcknowledge(thread, AppState.currentState === "active", acknowledged.current)) {
+        acknowledged.current.add(messageId);
+        client.acknowledgeQuestion(session, approvalId, messageId).catch(() => acknowledged.current.delete(messageId));
+      }
+    }, [client, session, thread, loading]),
   );
 
   // A draft another screen handed over (an approval quoted for a change)
@@ -139,7 +160,7 @@ export default function Chat() {
     if (!body.trim() && attachments.length === 0) return false;
     setSending(true);
     try {
-      const report = await submitMessage(client, session, outbox, body.trim(), attachments);
+      const report = await submitMessage(client, session, outbox, body.trim(), attachments, keepReply);
       setText("");
       setQueued(await outbox.list());
       setOfflineNote(report.kept.length > 0);
@@ -322,7 +343,7 @@ export default function Chat() {
     status: "queued",
   }));
 
-  const all = [...messages, ...queuedAsMessages];
+  const all = [...thread, ...queuedAsMessages];
   const shown = [...all].reverse();
   const heldCount = queued.filter((q) => q.held === true).length;
 

@@ -125,7 +125,7 @@ export class EngineClient implements ManoClient {
 
   async listMessages(session: Session): Promise<ChatMessage[]> {
     const res = await this.call(session, `/api/persons/${encodeURIComponent(session.personId)}/conversation`);
-    const out = await this.json<{ messages: { id: string; role: ChatMessage["role"]; text: string; createdAt: string }[] }>(res);
+    const out = await this.json<{ messages: { id: string; role: ChatMessage["role"]; text: string; createdAt: string; ask?: ChatMessage["ask"] }[] }>(res);
     return out.messages.map((m) => ({ ...m, attachments: [], status: "sent" }));
   }
 
@@ -151,15 +151,26 @@ export class EngineClient implements ManoClient {
   }
 
   private async chatReply(res: Response): Promise<ChatMessage> {
-    const out = await this.json<{ reply: string }>(res);
+    const out = await this.json<{ id?: string; reply: string; createdAt?: string; ask?: ChatMessage["ask"] }>(res);
     return {
-      id: `live-${Date.now()}`,
+      id: out.id ?? `live-${Date.now()}`,
       role: "agent",
       text: out.reply,
-      createdAt: new Date().toISOString(),
+      createdAt: out.createdAt ?? new Date().toISOString(),
       attachments: [],
       status: "sent",
+      ...(out.ask ? { ask: out.ask } : {}),
     };
+  }
+
+  async acknowledgeQuestion(session: Session, approvalId: string, messageId: string): Promise<void> {
+    const res = await this.call(
+      session,
+      `/api/persons/${encodeURIComponent(session.personId)}/approvals/${encodeURIComponent(approvalId)}/shown`,
+      { method: "POST", body: JSON.stringify({ messageId }) },
+    );
+    // 409: the question is no longer waiting, so there is nothing to retry.
+    if (res.status !== 409) await this.json(res);
   }
 
   async listApprovals(session: Session): Promise<Approval[]> {

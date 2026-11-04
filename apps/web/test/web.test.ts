@@ -45,7 +45,7 @@ function harness(): Harness {
     stateFor(name) {
       let store = stores.get(name);
       if (!store) {
-        store = new WebStore(sqlite());
+        store = new WebStore(sqlite(), () => clock.now);
         stores.set(name, store);
       }
       return store as unknown as StateStub;
@@ -184,23 +184,6 @@ describe("chat", () => {
     expect(h.agentCalls.map((c) => c.body.turnId)).toEqual([h.agentCalls[0].body.turnId, h.agentCalls[0].body.turnId]);
   });
 
-  it("reports a question shown word for word, and refuses one the guard would change", async () => {
-    const h = harness();
-    const { token, personId } = await signIn(h);
-    const approval = "Send your renewal to Sample County? Reply YES or NO.";
-    h.setAgent((url) =>
-      url.endsWith("/turn") ? Response.json({ status: "waiting_approval", text: approval, approval, approvalId: "appr-1" }) : Response.json({ ok: true }),
-    );
-    await handleApi(post(`/api/persons/${personId}/chat`, { message: "Send it", clientOpId: "op-1" }, token), h.env);
-    expect(h.agentCalls[1].url).toBe("https://agent.test/channels/mano/presented");
-    expect(h.agentCalls[1].body.approvalId).toBe("appr-1");
-
-    h.setAgent(() => Response.json({ status: "waiting_approval", text: "Reply YES", approval: "Something else https://x.test", approvalId: "appr-2" }));
-    const res = await handleApi(post(`/api/persons/${personId}/chat`, { message: "Send it again", clientOpId: "op-2" }, token), h.env);
-    expect(((await res.json()) as { reply: string }).reply).toContain("not asking you to approve it");
-    expect(h.agentCalls).toHaveLength(3);
-  });
-
   it("keeps people to their own routes and answers 501 for parts not on the web", async () => {
     const h = harness();
     const { token, personId } = await signIn(h);
@@ -210,5 +193,231 @@ describe("chat", () => {
     expect((await handleApi(new Request(`https://web.test/api/persons/${personId}/approvals`, { headers: { authorization: `Bearer ${token}` } }), h.env)).status).toBe(501);
     const expired = await mintWebSession(GRANT, personId, h.clock.now - 48 * 3600_000);
     expect((await handleApi(post(`/api/persons/${personId}/chat`, { message: "Hi" }, expired.token), h.env)).status).toBe(401);
+  });
+});
+
+const QUESTION = "Send your renewal to Sample County? Reply YES or NO.";
+const PRESENTED = "https://agent.test/channels/mano/presented";
+
+function asking(h: Harness, text = QUESTION, approval = QUESTION, approvalId = "appr-1"): void {
+  h.setAgent((url) => (url.endsWith("/turn") ? Response.json({ status: "waiting_approval", text, approval, approvalId }) : Response.json({ ok: true })));
+}
+
+const auth = (token: string) => ({ authorization: `Bearer ${token}` });
+const presentedCalls = (h: Harness) => h.agentCalls.filter((c) => c.url === PRESENTED);
+
+interface ChatJson {
+  id: string;
+  reply: string;
+  ask?: { approvalId: string };
+}
+
+async function chatJson(h: Harness, s: { token: string; personId: string }, message: string, op: string): Promise<ChatJson> {
+  const res = await handleApi(post(`/api/persons/${s.personId}/chat`, { message, clientOpId: op }, s.token), h.env);
+  expect(res.status).toBe(200);
+  return (await res.json()) as ChatJson;
+}
+
+const shown = (h: Harness, s: { token: string; personId: string }, approvalId: string, messageId: string, token = s.token) =>
+  handleApi(post(`/api/persons/${s.personId}/approvals/${approvalId}/shown`, { messageId }, token), h.env);
+
+describe("an approval question reaches the person whole", () => {
+  it("does not arm a question the bubble cap removed, and says it was not asked", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    asking(h, `${"Okay. ".repeat(500)}${QUESTION}`);
+    const out = await chatJson(h, s, "Send it", "op-1");
+    expect(out.reply).not.toContain(QUESTION);
+    expect(out.reply).toContain("not asking you to approve it");
+    expect(out.ask).toBeUndefined();
+    expect(presentedCalls(h)).toHaveLength(0);
+    const list = await handleApi(new Request(`https://web.test/api/persons/${s.personId}/conversation`, { headers: auth(s.token) }), h.env);
+    const { messages } = (await list.json()) as { messages: { ask?: unknown; text: string }[] };
+    expect(messages.every((m) => m.ask === undefined)).toBe(true);
+  });
+
+  it("refuses a question the guard would change, with no report", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    asking(h, "Reply YES", "Something else https://x.test", "appr-2");
+    const out = await chatJson(h, s, "Send it again", "op-2");
+    expect(out.reply).toContain("not asking you to approve it");
+    expect(out.ask).toBeUndefined();
+    expect(presentedCalls(h)).toHaveLength(0);
+  });
+});
+
+describe("a question counts as shown only when the browser says so", () => {
+  it("reports nothing until the signed-in browser acknowledges that approval on that message", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    asking(h);
+    const out = await chatJson(h, s, "Send it", "op-1");
+    expect(out.reply).toContain(QUESTION);
+    expect(out.ask).toEqual({ approvalId: "appr-1" });
+    expect(presentedCalls(h)).toHaveLength(0);
+
+    const res = await shown(h, s, "appr-1", out.id);
+    expect(res.status).toBe(200);
+    expect(presentedCalls(h)).toHaveLength(1);
+    expect(presentedCalls(h)[0].body.approvalId).toBe("appr-1");
+  });
+
+  it("offers the question again from the conversation after a lost response, until acknowledged", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    asking(h);
+    const out = await chatJson(h, s, "Send it", "op-1");
+    const read = async () => {
+      const list = await handleApi(new Request(`https://web.test/api/persons/${s.personId}/conversation`, { headers: auth(s.token) }), h.env);
+      return ((await list.json()) as { messages: { id: string; ask?: { approvalId: string } }[] }).messages;
+    };
+    expect((await read()).find((m) => m.id === out.id)?.ask).toEqual({ approvalId: "appr-1" });
+    expect(presentedCalls(h)).toHaveLength(0);
+    await shown(h, s, "appr-1", out.id);
+    expect((await read()).find((m) => m.id === out.id)?.ask).toBeUndefined();
+    const replay = await chatJson(h, s, "Send it", "op-1");
+    expect(replay.ask).toBeUndefined();
+  });
+
+  it("refuses another person, no session, an unknown approval and a different message", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    asking(h);
+    const out = await chatJson(h, s, "Send it", "op-1");
+    const otherPerson = `handle-${"b".repeat(64)}`;
+    const otherToken = (await mintWebSession(GRANT, otherPerson, h.clock.now)).token;
+    expect((await shown(h, s, "appr-1", out.id, otherToken)).status).toBe(403);
+    expect((await handleApi(post(`/api/persons/${s.personId}/approvals/appr-1/shown`, { messageId: out.id }), h.env)).status).toBe(401);
+    expect((await shown(h, s, "appr-9", out.id)).status).toBe(409);
+    expect((await shown(h, s, "appr-1", "u-op-1")).status).toBe(409);
+    expect(presentedCalls(h)).toHaveLength(0);
+  });
+
+  it("keeps the question open after an agent outage and closes it when the agent refuses", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    asking(h);
+    const out = await chatJson(h, s, "Send it", "op-1");
+    h.setAgent(() => Response.json({ ok: false }, { status: 503 }));
+    expect((await shown(h, s, "appr-1", out.id)).status).toBe(503);
+    h.setAgent(() => Response.json({ ok: false, reason: "mismatch" }, { status: 409 }));
+    expect((await shown(h, s, "appr-1", out.id)).status).toBe(409);
+    const calls = presentedCalls(h).length;
+    expect((await shown(h, s, "appr-1", out.id)).status).toBe(409);
+    expect(presentedCalls(h)).toHaveLength(calls);
+  });
+});
+
+describe("crisis help is never behind a limit or a failure", () => {
+  const CRISIS = "I want to kill myself";
+  const hasLine = (text: string) => expect(text).toMatch(/988[\s\S]*911/);
+
+  async function exhaust(h: Harness, s: { token: string; personId: string }): Promise<void> {
+    for (let i = 0; i < 60; i++) await chatJson(h, s, "Hi", `fill-${i}`);
+    expect((await handleApi(post(`/api/persons/${s.personId}/chat`, { message: "Hi", clientOpId: "over" }, s.token), h.env)).status).toBe(429);
+  }
+
+  it("answers past the turn limit, without the agent, and keeps it in the conversation", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    await exhaust(h, s);
+    const calls = h.agentCalls.length;
+    const out = await chatJson(h, s, CRISIS, "op-c");
+    hasLine(out.reply);
+    expect(h.agentCalls).toHaveLength(calls);
+    const list = await handleApi(new Request(`https://web.test/api/persons/${s.personId}/conversation`, { headers: auth(s.token) }), h.env);
+    const { messages } = (await list.json()) as { messages: { id: string; text: string }[] };
+    expect(messages.at(-1)?.id).toBe(out.id);
+    expect(messages.at(-2)?.text).toBe(CRISIS);
+  });
+
+  it("answers when the agent fails, throws, or the person's store is down", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    h.setAgent(() => Response.json({ status: "error", text: "" }, { status: 503 }));
+    hasLine((await chatJson(h, s, CRISIS, "op-1")).reply);
+    h.setAgent(() => {
+      throw new Error("network");
+    });
+    hasLine((await chatJson(h, s, CRISIS, "op-2")).reply);
+    h.env.stateFor = () => {
+      throw new Error("store down");
+    };
+    hasLine((await chatJson(h, s, CRISIS, "op-3")).reply);
+  });
+
+  it("answers with no session, a bad session, too long a message and no configuration", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    const route = `/api/persons/${s.personId}/chat`;
+    const read = async (req: Request) => {
+      const res = await handleApi(req, h.env);
+      expect(res.status).toBe(200);
+      hasLine(((await res.json()) as ChatJson).reply);
+    };
+    await read(post(route, { message: CRISIS }));
+    await read(post(route, { message: CRISIS }, "not-a-token"));
+    await read(post(route, { message: `${CRISIS} ${"x".repeat(5_000)}` }, s.token));
+    await read(post(route, { message: `${CRISIS} ${"x".repeat(50_000)}` }, s.token));
+    h.env.MANO_AGENT_SECRET = undefined;
+    await read(post(route, { message: CRISIS }, s.token));
+  });
+
+  it("puts the crisis line first on a normal turn and in Spanish when written in Spanish", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    const out = await chatJson(h, s, CRISIS, "op-1");
+    expect(out.reply.startsWith("I'm really glad you told me")).toBe(true);
+    h.setAgent(() => Response.json({ status: "error", text: "" }, { status: 503 }));
+    const es = await chatJson(h, s, "quiero matarme", "op-2");
+    expect(es.reply).toContain("988");
+    expect(es.reply).toContain("llama");
+  });
+
+  it("still answers ordinary messages with the plain limit and failure errors", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    h.setAgent(() => Response.json({ status: "error", text: "" }, { status: 503 }));
+    expect((await handleApi(post(`/api/persons/${s.personId}/chat`, { message: "Hi", clientOpId: "op-1" }, s.token), h.env)).status).toBe(503);
+  });
+});
+
+describe("rate windows use the time of admission", () => {
+  it("does not reset an exhausted counter when a body held from an earlier hour completes", async () => {
+    const h = harness();
+    const s = await signIn(h);
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        await held;
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ message: "Late", clientOpId: "late" })));
+        controller.close();
+      },
+    });
+    const late = handleApi(
+      new Request(`https://web.test/api/persons/${s.personId}/chat`, { method: "POST", headers: auth(s.token), body, duplex: "half" } as RequestInit),
+      h.env,
+    );
+    h.clock.now += 3600_000;
+    for (let i = 0; i < 60; i++) await chatJson(h, s, "Hi", `fill-${i}`);
+    const calls = h.agentCalls.length;
+    release?.();
+    expect((await late).status).toBe(429);
+    expect(h.agentCalls).toHaveLength(calls);
+    expect((await handleApi(post(`/api/persons/${s.personId}/chat`, { message: "Hi", clientOpId: "after" }, s.token), h.env)).status).toBe(429);
+  });
+
+  it("never moves a window backward, even if the clock does", () => {
+    let now = Date.parse("2026-11-03T12:30:00Z");
+    const store = new WebStore(sqlite(), () => now);
+    const allow = () => (store as unknown as { allow(key: string, limit: number, windowMs: number): boolean }).allow("k", 1, 3600_000);
+    expect(allow()).toBe(true);
+    expect(allow()).toBe(false);
+    now -= 3600_000;
+    expect(allow()).toBe(false);
+    now += 2 * 3600_000;
+    expect(allow()).toBe(true);
   });
 });

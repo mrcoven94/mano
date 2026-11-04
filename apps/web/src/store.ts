@@ -1,7 +1,9 @@
 // What the web keeps, in one SQLite Durable Object per name: "auth" holds
 // sign-in challenges and shared limits, "person:<id>" holds that person's
 // web conversation. The raw address is never stored; challenges hold only
-// its hash. Messages older than RETENTION_MS are removed on read.
+// its hash. Messages older than RETENTION_MS are removed on read. Every
+// time here is read inside the object when the call arrives, so a request
+// held open by a slow body cannot act with the time it started.
 
 export interface Sql {
   exec(query: string, ...params: unknown[]): { toArray(): unknown[] };
@@ -12,6 +14,14 @@ export interface WebMessage {
   role: "user" | "agent";
   text: string;
   createdAt: string;
+  // The approval question in this message while the browser has not yet
+  // said it displayed it.
+  ask?: { approvalId: string };
+}
+
+export interface ShownQuestion {
+  approvalId: string;
+  textHash: string;
 }
 
 export type TurnStart =
@@ -31,28 +41,40 @@ interface MessageRow {
   role: "user" | "agent";
   text: string;
   created_ms: number;
+  approval_id: string | null;
 }
 
+const MESSAGE_SELECT =
+  "SELECT m.id, m.role, m.text, m.created_ms, q.approval_id FROM messages m LEFT JOIN questions q ON q.message_id = m.id AND q.state = 'pending'";
+
 function toMessage(row: MessageRow): WebMessage {
-  return { id: row.id, role: row.role, text: row.text, createdAt: new Date(row.created_ms).toISOString() };
+  const message: WebMessage = { id: row.id, role: row.role, text: row.text, createdAt: new Date(row.created_ms).toISOString() };
+  if (row.approval_id) message.ask = { approvalId: row.approval_id };
+  return message;
 }
 
 export class WebStore {
-  constructor(private sql: Sql) {
+  constructor(
+    private sql: Sql,
+    private now: () => number = Date.now,
+  ) {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS challenges (id TEXT PRIMARY KEY, address_hash TEXT NOT NULL, expires_ms INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS counters (key TEXT PRIMARY KEY, window_ms INTEGER NOT NULL, count INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, created_ms INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS turns (op_id TEXT PRIMARY KEY, turn INTEGER NOT NULL, received_ms INTEGER NOT NULL, started_ms INTEGER NOT NULL, state TEXT NOT NULL, reply_id TEXT);
+      CREATE TABLE IF NOT EXISTS questions (approval_id TEXT PRIMARY KEY, message_id TEXT NOT NULL, text_hash TEXT NOT NULL, state TEXT NOT NULL);
     `);
   }
 
-  // One fixed window per key. False once the window's limit is spent.
-  allow(key: string, limit: number, windowMs: number, nowMs: number): boolean {
-    const window = nowMs - (nowMs % windowMs);
+  // One fixed window per key, read from this object's clock. A window only
+  // moves forward, so nothing can reset a spent one by arriving late.
+  allow(key: string, limit: number, windowMs: number): boolean {
+    const nowMs = this.now();
     const row = this.sql.exec("SELECT window_ms, count FROM counters WHERE key = ?", key).toArray()[0] as
       | { window_ms: number; count: number }
       | undefined;
+    const window = Math.max(nowMs - (nowMs % windowMs), row?.window_ms ?? 0);
     const count = row && row.window_ms === window ? row.count : 0;
     if (count >= limit) return false;
     this.sql.exec(
@@ -64,9 +86,10 @@ export class WebStore {
     return true;
   }
 
-  createChallenge(id: string, addressHash: string, expiresMs: number, nowMs: number): void {
+  createChallenge(id: string, addressHash: string, ttlMs: number): void {
+    const nowMs = this.now();
     this.sql.exec("DELETE FROM challenges WHERE expires_ms < ?", nowMs);
-    this.sql.exec("INSERT INTO challenges(id, address_hash, expires_ms) VALUES (?, ?, ?)", id, addressHash, expiresMs);
+    this.sql.exec("INSERT INTO challenges(id, address_hash, expires_ms) VALUES (?, ?, ?)", id, addressHash, nowMs + ttlMs);
   }
 
   dropChallenge(id: string): void {
@@ -75,11 +98,11 @@ export class WebStore {
 
   // Counts every wrong try and spends the challenge on a right one, so a
   // challenge opens one session and survives five guesses at most.
-  spendChallenge(id: string, addressHash: string, correct: boolean, nowMs: number): boolean {
+  spendChallenge(id: string, addressHash: string, correct: boolean): boolean {
     const row = this.sql.exec("SELECT address_hash, expires_ms, attempts, used FROM challenges WHERE id = ?", id).toArray()[0] as
       | { address_hash: string; expires_ms: number; attempts: number; used: number }
       | undefined;
-    if (!row || row.used || row.expires_ms <= nowMs || row.attempts >= MAX_ATTEMPTS || row.address_hash !== addressHash) return false;
+    if (!row || row.used || row.expires_ms <= this.now() || row.attempts >= MAX_ATTEMPTS || row.address_hash !== addressHash) return false;
     if (!correct) {
       this.sql.exec("UPDATE challenges SET attempts = attempts + 1 WHERE id = ?", id);
       return false;
@@ -88,13 +111,14 @@ export class WebStore {
     return true;
   }
 
-  beginTurn(opId: string, text: string, nowMs: number): TurnStart {
+  beginTurn(opId: string, text: string): TurnStart {
+    const nowMs = this.now();
     const row = this.sql.exec("SELECT turn, received_ms, started_ms, state, reply_id FROM turns WHERE op_id = ?", opId).toArray()[0] as
       | { turn: number; received_ms: number; started_ms: number; state: string; reply_id: string | null }
       | undefined;
     if (row?.state === "done" && row.reply_id) {
-      const reply = this.sql.exec("SELECT id, role, text, created_ms FROM messages WHERE id = ?", row.reply_id).toArray()[0] as MessageRow | undefined;
-      if (reply) return { kind: "answered", reply: toMessage(reply) };
+      const reply = this.message(row.reply_id);
+      if (reply) return { kind: "answered", reply };
     }
     if (row?.state === "running" && nowMs - row.started_ms < TURN_LEASE_MS) return { kind: "busy" };
     if (row) {
@@ -108,20 +132,58 @@ export class WebStore {
     return { kind: "run", turn, receivedAt: nowMs };
   }
 
-  finishTurn(opId: string, text: string, nowMs: number): WebMessage {
+  // Stores the reply and, when it carries a question that survived whole,
+  // the question waiting for the browser to say it displayed it.
+  finishTurn(opId: string, text: string, question: ShownQuestion | null): WebMessage {
     const id = `a-${opId}`;
-    this.sql.exec("INSERT OR REPLACE INTO messages(id, role, text, created_ms) VALUES (?, 'agent', ?, ?)", id, text, nowMs);
+    this.sql.exec("INSERT OR REPLACE INTO messages(id, role, text, created_ms) VALUES (?, 'agent', ?, ?)", id, text, this.now());
     this.sql.exec("UPDATE turns SET state = 'done', reply_id = ? WHERE op_id = ?", id, opId);
-    return { id, role: "agent", text, createdAt: new Date(nowMs).toISOString() };
+    if (question) {
+      this.sql.exec(
+        "INSERT OR REPLACE INTO questions(approval_id, message_id, text_hash, state) VALUES (?, ?, ?, 'pending')",
+        question.approvalId,
+        id,
+        question.textHash,
+      );
+    }
+    return this.message(id) as WebMessage;
   }
 
   failTurn(opId: string): void {
     this.sql.exec("UPDATE turns SET state = 'failed' WHERE op_id = ?", opId);
   }
 
-  listMessages(nowMs: number): WebMessage[] {
-    this.sql.exec("DELETE FROM messages WHERE created_ms < ?", nowMs - RETENTION_MS);
-    const rows = this.sql.exec("SELECT id, role, text, created_ms FROM messages ORDER BY seq DESC LIMIT ?", MAX_MESSAGES).toArray() as MessageRow[];
+  // The crisis line with no agent turn behind it, for a limit or a failure.
+  // The person's words are kept when they could be read; a repeat answers
+  // the same.
+  recordCrisis(opId: string, text: string, line: string): WebMessage {
+    const nowMs = this.now();
+    const last = this.sql.exec("SELECT COALESCE(MAX(turn), 0) AS turn FROM turns").toArray()[0] as { turn: number };
+    this.sql.exec("INSERT OR IGNORE INTO turns(op_id, turn, received_ms, started_ms, state) VALUES (?, ?, ?, ?, 'failed')", opId, last.turn + 1, nowMs, nowMs);
+    if (text) this.sql.exec("INSERT OR IGNORE INTO messages(id, role, text, created_ms) VALUES (?, 'user', ?, ?)", `u-${opId}`, text, nowMs);
+    return this.finishTurn(opId, line, null);
+  }
+
+  // The hash to report for this approval, only for the message that holds it.
+  questionToReport(approvalId: string, messageId: string): string | null {
+    const row = this.sql.exec("SELECT text_hash FROM questions WHERE approval_id = ? AND message_id = ? AND state = 'pending'", approvalId, messageId).toArray()[0] as
+      | { text_hash: string }
+      | undefined;
+    return row?.text_hash ?? null;
+  }
+
+  settleQuestion(approvalId: string, messageId: string, state: "reported" | "closed"): void {
+    this.sql.exec("UPDATE questions SET state = ? WHERE approval_id = ? AND message_id = ?", state, approvalId, messageId);
+  }
+
+  listMessages(): WebMessage[] {
+    this.sql.exec("DELETE FROM messages WHERE created_ms < ?", this.now() - RETENTION_MS);
+    const rows = this.sql.exec(`${MESSAGE_SELECT} ORDER BY m.seq DESC LIMIT ?`, MAX_MESSAGES).toArray() as MessageRow[];
     return rows.reverse().map(toMessage);
+  }
+
+  private message(id: string): WebMessage | null {
+    const row = this.sql.exec(`${MESSAGE_SELECT} WHERE m.id = ?`, id).toArray()[0] as MessageRow | undefined;
+    return row ? toMessage(row) : null;
   }
 }

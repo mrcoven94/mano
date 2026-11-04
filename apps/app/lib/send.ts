@@ -4,7 +4,7 @@
 // auth failure mid-flush drops the failed item and rethrows so the
 // caller signs out instead of stranding mail for the next resident.
 
-import { AuthError, type ManoClient, type NewAttachment, type Session } from "./api/types";
+import { AuthError, type ChatMessage, type ManoClient, type NewAttachment, type Session } from "./api/types";
 import type { Outbox } from "./queue";
 
 export interface SubmitReport {
@@ -24,11 +24,13 @@ export async function submitMessage(
   outbox: Outbox,
   text: string,
   attachments: NewAttachment[],
+  onReply?: (reply: ChatMessage) => void,
 ): Promise<SubmitReport> {
   if (!sessionUsable(session)) throw new AuthError();
   const item = await outbox.enqueue(session.personId, text, attachments);
-  const report = await outbox.flush(session, (queued) =>
-    client.sendMessage(session, queued.text, queued.attachments, queued.id),
-  );
+  const report = await outbox.flush(session, async (queued) => {
+    const reply = await client.sendMessage(session, queued.text, queued.attachments, queued.id);
+    onReply?.(reply);
+  });
   return { opId: item.id, sent: report.sent, kept: report.kept, held: report.held };
 }
