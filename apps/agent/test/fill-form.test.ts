@@ -404,16 +404,19 @@ describe("fill_form", () => {
     expect(engine.approvals()).toHaveLength(0);
   });
 
-  it("with no proof in the profile but a document on file, hands the renewal to start_form_draft without touching the computer", async () => {
+  it("with no proof in the profile but a document on file, fills on the computer and attaches that document, cited and named", async () => {
     const p = profile();
     p.income[0].amount = { value: 1075, source: "person", updatedAt: at } as never;
     engine.profile = p;
     engine.putDocument(personIdFor(HANDLE), "doc-letter", new TextEncoder().encode(PAY_STUB));
     const out = await run("turn_fill0031", { form: "food-renewal" });
-    expect(out.status).toBe("unavailable");
-    expect(out.note).toMatch(/start_form_draft/);
-    expect(model.requests).toHaveLength(0);
-    expect(engine.approvals()).toHaveLength(0);
+    expect(out.status).toBe("waiting_for_yes");
+    expect(model.requests.length).toBeGreaterThan(0);
+    const [held] = engine.approvals();
+    const frozen = JSON.parse(held.requestJson);
+    expect(frozen.documentId).toBe("doc-letter");
+    expect(frozen.sources).toEqual([{ kind: "document", id: "doc-letter" }]);
+    expect(frozen.payload.attachment).toEqual(expect.any(String));
   });
 
   it("when the computer's model refuses, hands the renewal to start_form_draft and prepares nothing", async () => {
