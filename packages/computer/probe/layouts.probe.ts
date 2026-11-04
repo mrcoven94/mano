@@ -6,17 +6,17 @@ import { describe, it } from "vitest";
 import { FILL_DEADLINE_MS, FILL_INSTRUCTIONS, FILL_MAX_STEPS, fillTask } from "../src/form-fill";
 import { runLoop, type LoopOutcome } from "../src/loop";
 import { FetchModelClient, type ModelClient, type ResponsePayload } from "../src/model";
-import { OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient } from "../src/open-weight";
+import { MODAL_MODEL_ID, OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient } from "../src/open-weight";
 import { PlaywrightComputer } from "../src/playwright";
+import { recordFrames } from "../src/recorder";
 
 /*
  * Does a fill work on a layout it has never seen? Runs one fill on each fixed
  * layout of the sandbox portal and on fresh seeded ones with a synthetic person,
  * reads back what the portal saved, and prints a row per layout. Misses stay in
  * the table. Filling saves a draft and files nothing. The task and instructions
- * are the agent's own (src/form-fill.ts), so one run gives both numbers: what it
- * did at this probe's looser limits, and what it did at the agent's. The agent
- * runs on the hosted desktop; this runs in local Chromium.
+ * are the agent's own (src/form-fill.ts). The agent runs on the hosted desktop;
+ * this runs in local Chromium.
  *
  * Run it against a sandbox portal you started, with its draft token set:
  *
@@ -25,10 +25,15 @@ import { PlaywrightComputer } from "../src/playwright";
  *
  * MEASURE_MODEL: standin (no model, no credit: it reads the page's HTML, so it
  * proves the plumbing and measures nothing), meta (Muse Spark 1.3, needs
- * META_MODEL_API_KEY), open (Muse Spark Open, needs OPENROUTER_API_KEY) or route
- * (whichever the agent's route picks: open with MANO_MODEL_PROVIDER=openrouter).
+ * META_MODEL_API_KEY), open (Muse Spark Open, on Modal with MODAL_ENDPOINT_URL
+ * and MODAL_PROXY_TOKEN, otherwise needs OPENROUTER_API_KEY) or route (whichever
+ * the agent's route picks: open with MANO_MODEL_PROVIDER=openrouter).
+ * MEASURE_LIMITS: agent (the fill's own step and time limits, and its recording
+ * of each screen), probe (looser, to see what those limits cost) or both, the
+ * default, which runs each layout twice and prints the rows side by side.
  * MEASURE_SCRAMBLES: how many seeded layouts, 0 to 5, default 5.
  * MEASURE_SEEDS: comma separated seeds to rerun; default is new ones each run.
+ * MEASURE_FIXED=0: leave out the fixed layouts, to rerun seeds alone.
  * MEASURE_OUT: a folder for results.json and each layout's last screen.
  * MEASURE_STANDIN_SWAP=1: the stand-in types two values into each other's
  * fields, to show the read-back catches a miss.
@@ -36,8 +41,11 @@ import { PlaywrightComputer } from "../src/playwright";
 const PORTAL = (process.env["MEASURE_PORTAL_URL"] ?? "").replace(/\/$/, "");
 const FIXED_LAYOUTS = ["larkmoor", "quillhaven", "tern-valley", "northbrine", "brambleford"];
 const MAX_SCRAMBLES = 5;
-const MAX_STEPS = 20;
-const LAYOUT_DEADLINE_MS = 180_000;
+const LIMITS = {
+  agent: { maxSteps: FILL_MAX_STEPS, deadlineMs: FILL_DEADLINE_MS, recorded: true },
+  probe: { maxSteps: 28, deadlineMs: 180_000, recorded: false },
+};
+type LimitsName = keyof typeof LIMITS;
 const META_MODEL_ID = "muse-spark-1.3";
 const META_BASE_URL = "https://api.meta.ai/v1";
 
@@ -59,6 +67,12 @@ const TASK = fillTask(PERSON.map((f) => ({ label: f.label, value: typedOf(f) }))
 function modelFromEnv(): { label: string; id: string; client?: ModelClient } {
   const wanted = process.env["MEASURE_MODEL"] ?? "standin";
   const openRoute = wanted === "open" || (wanted === "route" && process.env["MANO_MODEL_PROVIDER"] === "openrouter" && !!process.env["OPENROUTER_API_KEY"]);
+  const modalUrl = process.env["MODAL_ENDPOINT_URL"];
+  if (wanted === "open" && modalUrl) {
+    const apiKey = process.env["MODAL_PROXY_TOKEN"];
+    if (!apiKey) throw new Error("MODAL_ENDPOINT_URL needs MODAL_PROXY_TOKEN");
+    return { label: "muse-spark-open", id: MODAL_MODEL_ID, client: new OpenWeightModelClient({ apiKey, modalUrl }) };
+  }
   if (openRoute) {
     const apiKey = process.env["OPENROUTER_API_KEY"];
     if (!apiKey) throw new Error("MEASURE_MODEL=open needs OPENROUTER_API_KEY");
@@ -148,12 +162,14 @@ interface Row {
   missed: string[];
   seconds: number;
   steps: number;
-  /** All fields correct within what the agent's fill allows, on this same task. */
-  withinAgentLimits: boolean;
+  limits: LimitsName;
 }
 
+// Longer than the agent's 10 seconds: this also runs on a busy laptop.
+const READ_TIMEOUT_MS = 30_000;
+
 async function readDraft(id: string, token: string): Promise<Record<string, unknown> | null> {
-  const res = await fetch(`${PORTAL}/drafts/${id}`, { headers: { authorization: `Bearer ${token}` } });
+  const res = await fetch(`${PORTAL}/drafts/${id}`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`draft read answered ${res.status}, so nothing was measured`);
   return ((await res.json()) as { household: Record<string, unknown> }).household;
@@ -162,28 +178,36 @@ async function readDraft(id: string, token: string): Promise<Record<string, unkn
 function outcomeWords(outcome: LoopOutcome): string {
   if (outcome.status !== "done") return outcome.status;
   const reply = outcome.message.trim();
-  return /^ACCEPTED/i.test(reply) ? "accepted" : /^REJECTED:/i.test(reply) ? "rejected" : "other reply";
+  return /^ACCEPTED/i.test(reply) ? "accepted" : /^REJECTED:/i.test(reply) ? "rejected" : `other reply: ${reply.slice(0, 80)}`;
 }
 
 class OutOfCredit extends Error {}
 
-async function fillOne(layout: string, model: ReturnType<typeof modelFromEnv>, token: string, out: string | undefined): Promise<Row> {
+async function fillOne(layout: string, limits: LimitsName, model: ReturnType<typeof modelFromEnv>, token: string, out: string | undefined): Promise<Row> {
   const draft = randomBytes(32).toString("hex");
   const computer = new PlaywrightComputer({ allowedOrigins: [new URL(PORTAL).origin] });
   // Only the stand-in looks inside the page.
   const client = model.client ?? new StandInModel(() => (computer as unknown as { launched: { page: Page } }).launched.page);
+  const { maxSteps, deadlineMs, recorded } = LIMITS[limits];
+  // As the agent's fill runs it: a screen kept after each typed value.
+  const driven = recorded ? recordFrames(computer).computer : computer;
   const started = performance.now();
   let steps = 0;
+  let lastTurn = started;
   let outcome: string;
   let outOfCredit = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await computer.goto(`${PORTAL}${layout}/apply?draft=${draft}`);
-    const run = runLoop(computer, client, TASK, { model: model.id, maxSteps: MAX_STEPS, instructions: FILL_INSTRUCTIONS, onTurn: (turn) => (steps = turn.step) });
+    await driven.goto(`${PORTAL}${layout}/apply?draft=${draft}`);
+    const run = runLoop(driven, client, TASK, { model: model.id, maxSteps, instructions: FILL_INSTRUCTIONS, onTurn: (turn) => {
+        steps = turn.step;
+        lastTurn = performance.now();
+      } });
     run.catch(() => undefined);
-    const deadline = new Promise<"deadline">((resolve) => (timer = setTimeout(() => resolve("deadline"), LAYOUT_DEADLINE_MS)));
+    const deadline = new Promise<"deadline">((resolve) => (timer = setTimeout(() => resolve("deadline"), deadlineMs)));
     const result = await Promise.race([run, deadline]);
-    outcome = result === "deadline" ? result : outcomeWords(result);
+    // A deadline says where the time went: a stalled turn or many slow ones.
+    outcome = result === "deadline" ? `deadline, ${((performance.now() - lastTurn) / 1000).toFixed(0)}s since the last turn` : outcomeWords(result);
     if (result !== "deadline") steps = result.steps;
   } catch (err) {
     // The status code only: a model's error text can echo what it was sent.
@@ -194,18 +218,20 @@ async function fillOne(layout: string, model: ReturnType<typeof modelFromEnv>, t
     clearTimeout(timer);
   }
   const seconds = (performance.now() - started) / 1000;
-  if (out) await computer.screenshot().then((png) => writeFileSync(join(out, `${layout.replaceAll("/", "_")}.png`), png)).catch(() => undefined);
+  if (out) await computer.screenshot().then((png) => writeFileSync(join(out, `${limits}${layout.replaceAll("/", "_")}.png`), png)).catch(() => undefined);
   await computer.close();
   if (outOfCredit) throw new OutOfCredit();
-  const saved = await readDraft(draft, token);
+  const saved = await readDraft(draft, token).catch((err: unknown) => {
+    outcome = `draft not read: ${String(err).slice(0, 60)}`;
+    return null;
+  });
   const missed = PERSON.filter((f) => saved?.[f.name] !== f.value).map((f) => f.name);
-  const withinAgentLimits = missed.length === 0 && steps <= FILL_MAX_STEPS && seconds * 1000 <= FILL_DEADLINE_MS;
-  return { layout, model: model.label, outcome, correct: PERSON.length - missed.length, missed, seconds, steps, withinAgentLimits };
+  return { layout, limits, model: model.label, outcome, correct: PERSON.length - missed.length, missed, seconds, steps };
 }
 
 function rowLine(r: Row): string {
   const fields = `${r.correct}/${PERSON.length}`.padEnd(6);
-  return `${r.layout.padEnd(30)} ${fields} ${r.seconds.toFixed(1).padStart(7)}s ${String(r.steps).padStart(5)}  ${r.model.padEnd(20)} ${(r.withinAgentLimits ? "yes" : "no").padEnd(6)} ${r.outcome.padEnd(12)} ${r.missed.join(",")}`;
+  return `${r.layout.padEnd(30)} ${fields} ${r.seconds.toFixed(1).padStart(7)}s ${String(r.steps).padStart(5)}  ${r.model.padEnd(16)} ${r.limits.padEnd(6)} ${r.outcome.padEnd(12)} ${r.missed.join(",")}`;
 }
 
 describe.skipIf(!PORTAL)("fills on layouts it has never seen", () => {
@@ -223,36 +249,46 @@ describe.skipIf(!PORTAL)("fills on layouts it has never seen", () => {
       const count = Math.min(Number.isInteger(asked) && asked >= 0 ? asked : MAX_SCRAMBLES, MAX_SCRAMBLES);
       const given = (process.env["MEASURE_SEEDS"] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
       const seeds = given.length > 0 ? given.slice(0, MAX_SCRAMBLES) : Array.from({ length: count }, () => randomBytes(4).toString("hex"));
-      const layouts = [...FIXED_LAYOUTS.map((id) => `/v/${id}`), ...seeds.map((seed) => `/scramble/${seed}`)];
+      const fixed = process.env["MEASURE_FIXED"] === "0" ? [] : FIXED_LAYOUTS;
+      const layouts = [...fixed.map((id) => `/v/${id}`), ...seeds.map((seed) => `/scramble/${seed}`)];
       const out = process.env["MEASURE_OUT"];
       if (out) mkdirSync(out, { recursive: true });
 
       if (!model.client) console.log("STAND-IN RUN: it reads the page's HTML instead of the screen. These rows prove the plumbing and measure no model.");
-      console.log(`${"layout".padEnd(30)} ${"fields".padEnd(6)} ${"wall".padStart(8)} ${"steps".padStart(5)}  ${"model".padEnd(20)} ${"agent".padEnd(6)} ${"outcome".padEnd(12)} missed`);
+      console.log(`${"layout".padEnd(30)} ${"fields".padEnd(6)} ${"wall".padStart(8)} ${"steps".padStart(5)}  ${"model".padEnd(16)} ${"limits".padEnd(6)} ${"outcome".padEnd(12)} missed`);
+      const wanted = process.env["MEASURE_LIMITS"] ?? "both";
+      const runs = (Object.keys(LIMITS) as LimitsName[]).filter((name) => wanted === "both" || wanted === name);
+      if (runs.length === 0) throw new Error("MEASURE_LIMITS must be agent, probe or both");
       const rows: Row[] = [];
       let stopped = false;
-      for (const layout of layouts) {
-        try {
-          const row = await fillOne(layout, model, token, out);
-          rows.push(row);
-          console.log(rowLine(row));
-        } catch (err) {
-          if (!(err instanceof OutOfCredit)) throw err;
-          stopped = true;
-          console.log(`Stopped at ${layout}: the model answered 402, so it and the layouts after it were not run.`);
-          break;
+      layoutsLoop: for (const layout of layouts) {
+        for (const limits of runs) {
+          try {
+            const row = await fillOne(layout, limits, model, token, out);
+            rows.push(row);
+            console.log(rowLine(row));
+          } catch (err) {
+            if (!(err instanceof OutOfCredit)) throw err;
+            stopped = true;
+            console.log(`Stopped at ${layout}: the model answered 402, so it and the layouts after it were not run.`);
+            break layoutsLoop;
+          }
         }
       }
 
-      const correct = rows.reduce((sum, r) => sum + r.correct, 0);
-      const whole = rows.filter((r) => r.correct === PERSON.length);
-      const seconds = rows.map((r) => r.seconds).sort((a, b) => a - b);
-      const median = seconds.length > 0 ? `${seconds[Math.floor(seconds.length / 2)]!.toFixed(1)}s` : "none";
-      console.log(`Layouts run: ${rows.length} of ${layouts.length}${stopped ? " (stopped early)" : ""}. Fields correct: ${correct} of ${rows.length * PERSON.length}. Median wall: ${median}.`);
-      console.log(`Fully correct at the agent's limits (${FILL_MAX_STEPS} steps, ${FILL_DEADLINE_MS / 1000}s): ${rows.filter((r) => r.withinAgentLimits).length}. Fully correct at this probe's limits (${MAX_STEPS} steps, ${LAYOUT_DEADLINE_MS / 1000}s): ${whole.length}.`);
+      for (const limits of runs) {
+        const ran = rows.filter((r) => r.limits === limits);
+        const seconds = ran.map((r) => r.seconds).sort((a, b) => a - b);
+        const turns = ran.map((r) => r.steps).sort((a, b) => a - b);
+        const middle = <T>(sorted: T[]) => sorted[Math.floor(sorted.length / 2)];
+        const { maxSteps, deadlineMs } = LIMITS[limits];
+        console.log(
+          `${limits} limits (${maxSteps} steps, ${deadlineMs / 1000}s): ${ran.length} of ${layouts.length} layouts run${stopped ? ", stopped early" : ""}. Fully correct: ${ran.filter((r) => r.correct === PERSON.length).length}. Fields correct: ${ran.reduce((sum, r) => sum + r.correct, 0)} of ${ran.length * PERSON.length}. Median wall ${middle(seconds)?.toFixed(1) ?? "none"}s, median steps ${middle(turns) ?? "none"}, most steps ${turns.at(-1) ?? "none"}.`,
+        );
+      }
       if (seeds.length > 0) console.log(`Seeds: ${seeds.join(",")}`);
       if (out) writeFileSync(join(out, "results.json"), JSON.stringify({ portal: PORTAL, seeds, rows }, null, 2));
     },
-    (LAYOUT_DEADLINE_MS + 20_000) * (FIXED_LAYOUTS.length + MAX_SCRAMBLES),
+    (LIMITS.agent.deadlineMs + LIMITS.probe.deadlineMs + 40_000) * (FIXED_LAYOUTS.length + MAX_SCRAMBLES),
   );
 });
