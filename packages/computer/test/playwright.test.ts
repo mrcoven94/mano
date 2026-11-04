@@ -69,6 +69,38 @@ function recordingLauncher() {
   return launcher;
 }
 
+describe("playwright stand-in around a navigation", () => {
+  test("a batch that can navigate waits before the next screen, and typing alone does not", async () => {
+    const launcher = recordingLauncher();
+    const computer = new PlaywrightComputer({ launcher, allowedOrigins: ["http://portal.test"] });
+    await computer.act([{ type: "type", text: "a" }]);
+    expect(launcher.page.calls).toEqual(["type a"]);
+    await computer.act([{ type: "click", button: "left", x: 1, y: 2 }, { type: "type", text: "b" }]);
+    expect(launcher.page.calls.slice(1)).toEqual(["click 1,2 left x1", "type b", "wait 300"]);
+  });
+
+  test("a screenshot that hangs is tried once more within a short limit", async () => {
+    const launcher = recordingLauncher();
+    const computer = new PlaywrightComputer({ launcher, allowedOrigins: ["http://portal.test"] });
+    const limits: Array<number | undefined> = [];
+    let tries = 0;
+    launcher.page.screenshot = async (options) => {
+      limits.push(options?.timeout);
+      if (++tries === 1) throw new Error("page.screenshot: Timeout exceeded");
+      return Buffer.from([137, 80, 78, 71]);
+    };
+    expect(await computer.screenshot()).toEqual(new Uint8Array([137, 80, 78, 71]));
+    expect(limits).toEqual([8000, 8000]);
+    tries = 0;
+    launcher.page.screenshot = async () => {
+      tries++;
+      throw new Error("page.screenshot: Timeout exceeded");
+    };
+    await expect(computer.screenshot()).rejects.toThrow("Timeout");
+    expect(tries).toBe(2);
+  });
+});
+
 describe("playwright stand-in", () => {
   test("dispatches every action to the page", async () => {
     const page = stubPage();
@@ -104,6 +136,7 @@ describe("playwright stand-in", () => {
       "wheel 0,100",
       "type Maria",
       "wait 1500",
+      "wait 300",
     ]);
     const shot = await computer.screenshot();
     expect(shot[0]).toBe(137);

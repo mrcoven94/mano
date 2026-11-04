@@ -13,7 +13,7 @@ import { z } from "zod";
 
 import { fillDepsFromEnv, fillOnComputer, type FillDeps, type ReplayStep } from "../lib/computer-fill.js";
 import { EngineError, type PersonEngine } from "../lib/engine.js";
-import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
+import { FORMS, fillFrom, layoutOf, resolveForm, type FormSpec } from "../lib/forms.js";
 import { keepAnswers } from "../lib/form-answers.js";
 import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
 import { tracedFillDeps } from "../lib/try-trace.js";
@@ -116,7 +116,7 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     console.warn(JSON.stringify({ type: "mano_fill_unavailable", reason: deps.unavailable }));
     return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Prepare the renewal with start_form_draft from the person's answers instead." };
   }
-  const fill = await fillOnComputer(form, filled.values, portalUrl, deps);
+  const fill = await fillOnComputer(form, filled.values, portalUrl, deps, layoutOf(input.form, portalUrl));
   console.log(
     JSON.stringify({
       type: "mano_fill",

@@ -42,6 +42,7 @@ import { PlaywrightComputer } from "./playwright";
 
 export { isComputerCall, outputText, type ComputerAction, type ComputerCall, type SafetyCheck } from "./actions";
 export type { Computer, ComputerOptions } from "./computer";
+export { FILL_DEADLINE_MS, FILL_INSTRUCTIONS, FILL_MAX_STEPS, fillTask } from "./form-fill";
 export { LOOP_INSTRUCTIONS, runLoop, type LoopOptions, type LoopOutcome } from "./loop";
 export { FakeModelClient, FetchModelClient, type ModelClient, type ResponsePayload, type ResponseRequest } from "./model";
 export { MODAL_MODEL_ID, OPEN_WEIGHT_BASE_URL, OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient, type OpenWeightModelOptions } from "./open-weight";

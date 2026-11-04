@@ -346,11 +346,11 @@ const FOOD_RENEWAL: FormSpec = {
 
 export const FORMS: Record<string, FormSpec> = { [FOOD_RENEWAL.id]: FOOD_RENEWAL };
 
-// A form by its ID, or by its address on our sandbox portal. Any other
-// address is refused, so Mano never fills a real portal.
-export function resolveForm(ref: string, portalUrl: string | null): FormSpec | null {
-  const byId = Object.hasOwn(FORMS, ref.trim()) ? FORMS[ref.trim()] : undefined;
-  if (byId) return byId;
+// The portal serves a form's path under its test layouts too.
+const TEST_LAYOUT = /^(\/v\/[a-z-]+|\/scramble\/[A-Za-z0-9-]{1,32})(\/.*)$/;
+
+// Where an address sits on our sandbox portal, or null for any other address.
+function onPortal(ref: string, portalUrl: string | null): { layout: string; path: string } | null {
   if (!portalUrl) return null;
   let url: URL, portal: URL;
   try {
@@ -360,7 +360,23 @@ export function resolveForm(ref: string, portalUrl: string | null): FormSpec | n
     return null;
   }
   if (url.origin !== portal.origin) return null;
-  return Object.values(FORMS).find((f) => url.pathname.replace(TRAILING_SLASH, "") === f.path) ?? null;
+  const path = url.pathname.replace(TRAILING_SLASH, "");
+  const layout = TEST_LAYOUT.exec(path);
+  return layout ? { layout: layout[1]!, path: layout[2]! } : { layout: "", path };
+}
+
+// A form by its ID, or by its address on our sandbox portal, under a test
+// layout or not. Any other address is refused, so Mano never fills a real portal.
+export function resolveForm(ref: string, portalUrl: string | null): FormSpec | null {
+  const byId = Object.hasOwn(FORMS, ref.trim()) ? FORMS[ref.trim()] : undefined;
+  if (byId) return byId;
+  const found = onPortal(ref, portalUrl);
+  return found && (Object.values(FORMS).find((f) => found.path === f.path) ?? null);
+}
+
+// The test layout an address asks for, or "" for the form's plain page.
+export function layoutOf(ref: string, portalUrl: string | null): string {
+  return onPortal(ref, portalUrl)?.layout ?? "";
 }
 
 export interface FilledForm {
