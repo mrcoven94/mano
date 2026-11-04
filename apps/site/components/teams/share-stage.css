@@ -13,7 +13,8 @@
 .ts-stage .ts-bar{padding:10px 16px;background:var(--bg3);font-size:.86em;color:var(--muted)}
 .ts-stage .ss-stage[data-layout="compact"] .ts-bar{padding:5px 10px}
 .ts-stage .ts-body{padding:20px 24px;display:grid;gap:12px;animation:tsIn .35s ease both}
-@keyframes tsIn{from{opacity:0}to{opacity:1}}
+/* Not from 0: the kit holds animations at their first frame while the stage is offscreen, and the screen must never read as blank. */
+@keyframes tsIn{from{opacity:.4}to{opacity:1}}
 .ts-stage .ss-stage[data-still] .ts-body{animation:none}
 .ts-stage .ts-body>*{margin:0}
 .ts-stage .ss-stage[data-layout="compact"] .ts-long{display:none}
