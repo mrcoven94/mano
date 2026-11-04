@@ -18,19 +18,21 @@
 // instead of doing anything twice.
 import { createHash } from "node:crypto";
 
-import { createModelClient, type ModelClient } from "@mano/mail";
+import { REPLY_LANGUAGES, createModelClient, type ModelClient, type ReplyLanguage } from "@mano/mail";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
-import { profileContext } from "./profile.js";
-import { parseDecision } from "./decision.js";
-import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
+import { profileDataBlock, readProfileView } from "./profile.js";
+import { decisionLanguage, parseDecision } from "./decision.js";
+import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine, type ProfileView } from "./engine.js";
+import { detectLanguage, keepLanguage, languageFromProfile, shouldKeep } from "./language.js";
 import { LETTER_RULES, documentsContext, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
 import { closeReplaced, isShare, presentable, presentationHash, proposalsOf, renderQuestion, replayLine, shareDone, waitingFrom, waitingProposals } from "./pending.js";
 import { answerRequestWithPhoto } from "./sharing.js";
 import type { HoldResult } from "./propose.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 import { TurnClock } from "./timings.js";
+import { OUTCOME_WORDS, type OutcomeWords } from "./words.js";
 
 const MAX_TEXTS = 10;
 const MAX_TEXT_CHARS = 4000;
@@ -49,6 +51,8 @@ const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9:_-]{7,127}$/;
 const CONVERSATION_GAP_MS = 15 * 60_000;
 // The replay link is optional; asking Engine for it never holds the reply long.
 const REPLAY_LINK_MS = 5_000;
+// How long a YES or NO waits on the profile just to pick its language.
+const LANGUAGE_WAIT_MS = 2_000;
 
 export interface AgentTurnInput {
   handleHash: string;
@@ -170,26 +174,7 @@ function defaultMailModel(): ModelClient {
   return mailModel;
 }
 
-const CHECKING =
-  "I'm checking whether it went through. It will not be sent twice. Reply YES in a few minutes and I will check again.";
-
-// Engine keeps the approval waiting when the safety check could not
-// answer, so the question stays open for the next YES.
-const CHECK_STARTING =
-  "The safety check is taking a moment, so nothing was sent yet. Reply YES again in a few minutes and I will send it.";
-
-// A send that could not be confirmed is never sent again by a YES. The
-// question closes, so a new one can be prepared and answered on its own.
-const UNCONFIRMED =
-  "I could not confirm that went through, so I will not send it again on my own. If you want it sent, ask me to prepare it again and you can approve the new one.";
-
-function doneText(purpose: string, receipt: { externalId: string; simulated: boolean } | null | undefined): string {
-  const label = receipt?.simulated ? " This was a simulated filing." : "";
-  const confirmation = receipt ? ` Confirmation ${receipt.externalId}.` : "";
-  return `Done. Sent: ${purpose}.${confirmation}${label}`;
-}
-
-async function answerYes(engine: PersonEngine, approvalId: string): Promise<string> {
+async function answerYes(engine: PersonEngine, approvalId: string, words: OutcomeWords): Promise<string> {
   const result = await engine.approve(approvalId);
   switch (result.status) {
     case "completed":
@@ -197,22 +182,26 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       await engine.clearPointer(approvalId);
       const approval = result.approval ?? (await engine.approval(approvalId));
       const shared = approval ? shareDone(approval) : null;
-      return shared ?? doneText(approval?.purpose ?? "your request", result.receipt);
+      return shared ?? words.done(approval?.purpose ?? words.yourRequest, result.receipt);
     }
     case "stale":
       await engine.clearPointer(approvalId);
-      return "That changed after you saw it, so nothing was sent. Want me to prepare it again?";
+      return words.stale;
     case "in_progress":
-      return CHECKING;
+      return words.checking;
     default: {
-      if (result.retryable) return CHECK_STARTING;
+      // Engine keeps the approval waiting when the safety check could not
+      // answer, so the question stays open for the next YES.
+      if (result.retryable) return words.checkStarting;
       if (result.unconfirmed) {
+        // A send that could not be confirmed is never sent again by a YES. The
+        // question closes, so a new one can be prepared and answered on its own.
         await engine.clearPointer(approvalId);
-        return UNCONFIRMED;
+        return words.unconfirmed;
       }
       if (result.superseded) {
         await engine.clearPointer(approvalId);
-        return `${UPDATED} Ask me to show the latest.`;
+        return `${words.updated} ${words.showLatest}`;
       }
       // Not a definite outcome: Engine's own record decides. A consumed
       // approval whose attempt settled carries its receipt; one still
@@ -221,75 +210,61 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       // A receipt is read first, whatever the status: it went through.
       if (approval?.outcome?.receipt) {
         await engine.clearPointer(approvalId);
-        return doneText(approval.purpose, approval.outcome.receipt);
+        return words.done(approval.purpose, approval.outcome.receipt);
       }
       // A share the organization refused for good: nothing to wait for.
       if (approval && isShare(approval) && approval.outcome?.attempt === "failed") {
         await engine.clearPointer(approvalId);
-        return "That did not go through, so nothing was sent.";
+        return words.shareRefused;
       }
-      if (approval?.status === "approved") return CHECKING;
+      if (approval?.status === "approved") return words.checking;
       console.warn(JSON.stringify({ type: "mano_yes_refused", status: result.status, approval: approval?.status ?? null }));
       await engine.clearPointer(approvalId);
-      return "That approval can no longer be used, so nothing was sent. Want me to prepare it again?";
+      return words.refused;
     }
   }
 }
 
-async function answerNo(engine: PersonEngine, approval: EngineApproval | null, approvalId: string): Promise<string> {
-  const sent = await alreadySent(engine, approval, approvalId);
+async function answerNo(engine: PersonEngine, approval: EngineApproval | null, approvalId: string, words: OutcomeWords): Promise<string> {
+  const sent = await alreadySent(engine, approval, approvalId, words);
   if (sent) return sent;
   if (approval?.status === "approved") {
-    return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
+    return words.alreadyApproved;
   }
   const result = await engine.reject(approvalId);
   if (result.status === "rejected") {
     await engine.clearPointer(approvalId);
-    return "Okay, I did not send it. Nothing left Mano.";
+    return words.declined;
   }
   // Read again: the filing may have been recorded since the first read.
   const fresh = await engine.approval(approvalId);
-  const sentSince = await alreadySent(engine, fresh, approvalId);
+  const sentSince = await alreadySent(engine, fresh, approvalId, words);
   if (sentSince) return sentSince;
   if (fresh?.status === "approved") {
-    return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
+    return words.alreadyApproved;
   }
   await engine.clearPointer(approvalId);
-  return "That request had already expired or changed, so nothing was sent.";
+  return words.expired;
 }
 
 // A receipt is read before any status: the filing went through, so a NO
 // cannot cancel it and Mano never says nothing was sent.
-async function alreadySent(engine: PersonEngine, approval: EngineApproval | null, approvalId: string): Promise<string | null> {
+async function alreadySent(engine: PersonEngine, approval: EngineApproval | null, approvalId: string, words: OutcomeWords): Promise<string | null> {
   const receipt = approval?.outcome?.receipt;
   if (!receipt) return null;
   await engine.clearPointer(approvalId);
-  return `That one was already sent, so I cannot cancel it. Confirmation ${receipt.externalId}.`;
+  return words.alreadySent(receipt.externalId);
 }
 
-async function decide(engine: PersonEngine, approvalId: string, decision: "yes" | "no"): Promise<TurnResponse> {
+async function decide(engine: PersonEngine, approvalId: string, decision: "yes" | "no", words: OutcomeWords): Promise<TurnResponse> {
   try {
-    if (decision === "yes") return reply(await answerYes(engine, approvalId));
-    return reply(await answerNo(engine, await engine.approval(approvalId), approvalId));
+    if (decision === "yes") return reply(await answerYes(engine, approvalId, words));
+    return reply(await answerNo(engine, await engine.approval(approvalId), approvalId, words));
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_decision_failed", decision, status: err instanceof EngineError ? err.status : null }));
-    if (decision === "no") return reply("I could not confirm that just now, so reply NO again to cancel it.");
-    return reply("I could not confirm that just now. Reply YES again to retry; it will not be sent twice.");
+    return reply(decision === "no" ? words.retryNo : words.retryYes);
   }
 }
-
-// A YES with no answerable question: proposals not yet shown are never
-// approved.
-const UNSHOWN = reply("I haven't shown you that one yet, so nothing was approved and nothing was sent. Ask me to show it again.");
-
-const UPDATED = "I just updated that, so nothing was approved and nothing was sent.";
-
-// The answer to a YES or NO aimed at a question that has since been
-// replaced. The newer draft is never shown here: only a question that went
-// out with the reply of the turn that prepared it, and that Channels then
-// reported, can be answered, so a draft that was corrected away (and held
-// back only in some process's memory) can never surface on its own.
-const CHANGED = reply("The question you answered changed since you saw it, so nothing was sent. Tell me what you want to send.");
 
 // A YES or NO turn is bound, in Engine's turn ledger, to what its first
 // attempt decided: one ledger row per approval it acted on, or one row
@@ -322,13 +297,13 @@ async function bind(engine: PersonEngine, turnId: string, receivedAt: string, ta
 // A NO to several approvals at once (the ones a turn bound) answers with
 // the first outcome that is not a confirmed cancellation, so the person
 // never hears "nothing left Mano" unless Engine rejected every one.
-async function declineAll(engine: PersonEngine, ids: string[]): Promise<TurnResponse> {
+async function declineAll(engine: PersonEngine, ids: string[], words: OutcomeWords): Promise<TurnResponse> {
   let answer: TurnResponse | null = null;
   for (const id of ids) {
-    const one = await decide(engine, id, "no");
-    if (!answer || !/^Okay, I did not send it/.test(one.body.text)) answer = one;
+    const one = await decide(engine, id, "no", words);
+    if (!answer || one.body.text !== words.declined) answer = one;
   }
-  return answer ?? reply("Okay, I did not send it. Nothing left Mano.");
+  return answer ?? reply(words.declined);
 }
 
 async function decideTurn(
@@ -336,34 +311,42 @@ async function decideTurn(
   body: TurnBody,
   turn: { firstReceivedAt: string; created: boolean },
   decision: "yes" | "no",
+  words: OutcomeWords,
 ): Promise<TurnResponse | null> {
+  // A YES with no answerable question: proposals not yet shown are never
+  // approved.
+  const unshown = reply(words.unshown);
   const approvals = await engine.listApprovals();
   const bound = turn.created ? null : await boundDecision(engine, body.turnId, approvals);
   if (bound?.kind === "model") return null;
-  if (bound?.kind === "unshown") return UNSHOWN;
+  if (bound?.kind === "unshown") return unshown;
   if (bound?.kind === "approvals") {
-    if (decision === "yes") return decide(engine, bound.ids[0], "yes");
-    return declineAll(engine, bound.ids);
+    if (decision === "yes") return decide(engine, bound.ids[0], "yes", words);
+    return declineAll(engine, bound.ids, words);
   }
   // First attempt (or a retry whose first attempt bound nothing): only
   // Engine's latest proposal can be answered, and only once its question
   // was shown strictly before Channels received this message. A pointer to
   // anything older means the person last saw a question that has since
-  // been replaced: nothing is approved, and nothing new is shown.
+  // been replaced: nothing is approved, and nothing new is shown. The newer
+  // draft is never shown here: only a question that went out with the reply
+  // of the turn that prepared it, and that Channels then reported, can be
+  // answered, so a draft that was corrected away (and held back only in some
+  // process's memory) can never surface on its own.
   const arrived = Date.parse(turn.firstReceivedAt);
   const { pointer, latest } = await engine.getPending();
   if (pointer && pointer.approvalId !== latest?.approvalId) {
     await bind(engine, body.turnId, turn.firstReceivedAt, ["unshown"]);
-    return CHANGED;
+    return reply(words.changed);
   }
   const answerable = pointer && Date.parse(pointer.setAt) < arrived ? pointer : null;
   if (pointer && !answerable) {
     await bind(engine, body.turnId, turn.firstReceivedAt, ["unshown"]);
-    return UNSHOWN;
+    return unshown;
   }
   if (answerable) {
     await bind(engine, body.turnId, turn.firstReceivedAt, [answerable.approvalId]);
-    return decide(engine, answerable.approvalId, decision);
+    return decide(engine, answerable.approvalId, decision, words);
   }
   const waiting = waitingProposals(approvals, engine.generation).filter((a) => Date.parse(a.createdAt) < arrived);
   if (waiting.length === 0) {
@@ -372,10 +355,10 @@ async function decideTurn(
   }
   if (decision === "no") {
     await bind(engine, body.turnId, turn.firstReceivedAt, waiting.map((a) => a.id));
-    return declineAll(engine, waiting.map((a) => a.id));
+    return declineAll(engine, waiting.map((a) => a.id), words);
   }
   await bind(engine, body.turnId, turn.firstReceivedAt, ["unshown"]);
-  return UNSHOWN;
+  return unshown;
 }
 
 async function runTurn(
@@ -392,13 +375,26 @@ async function runTurn(
   // The profile, as data and never instructions (lib/profile.ts), is read
   // while the turn closes drafts, decides and reads photos, and is given
   // up before it could cut into the model's minimum. A decision answered
-  // without the model never uses it.
-  const profileRead = body.attachmentCount > 0 && body.texts.length === 0 ? null : profileContext(engine, deadlineMs - MODEL_MIN_MS - Date.now());
+  // without the model uses only its language.
+  const viewRead = readProfileView(engine, deadlineMs - MODEL_MIN_MS - Date.now());
+  let viewNow: ProfileView | null = null;
+  void viewRead.then((view) => (viewNow = view));
+  const said = body.texts.join(" ");
+  const detected = detectLanguage(said);
+  // The words of this turn lead, then what the profile holds so far, then
+  // English. Read when it is used: a slow profile costs the language, never
+  // time from the reply.
+  const language = (): ReplyLanguage => decisionLanguage(said) ?? detected ?? languageFromProfile(viewNow?.profile.person.language?.value) ?? "en";
   // Closing replaced drafts is retried at every turn until it lands.
   await clock.time("close", () => closeReplaced(engine));
   if (decision) {
-    const decided = await clock.time("decide", () => decideTurn(engine, body, turn, decision));
+    await Promise.race([viewRead, new Promise((resolve) => setTimeout(resolve, LANGUAGE_WAIT_MS).unref?.())]);
+    const decided = await clock.time("decide", () => decideTurn(engine, body, turn, decision, OUTCOME_WORDS[language()]));
     if (decided) return decided;
+  }
+  if (detected) {
+    const keeping = viewRead.then((view) => (view && shouldKeep(view, detected) ? keepLanguage(engine, body.turnId, detected) : undefined));
+    deps.background?.(keeping);
   }
 
   // A crisis is never answered with a document question.
@@ -418,13 +414,14 @@ async function runTurn(
   // The reading reaches the model only as data in the person's own turn.
   let letter: LetterReply | null = null;
   if (body.attachmentCount > 0) {
-    letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), turn.firstReceivedAt, deadlineMs - READ_MARGIN_MS);
+    letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), turn.firstReceivedAt, deadlineMs - READ_MARGIN_MS, language);
     if (body.texts.length === 0 || deadlineMs - Date.now() < MODEL_MIN_MS) return reply(letter.text);
     context.push(LETTER_RULES);
     message = `${message}\n\n${letterBlock(letter)}`;
   }
   // Read after the photos, so a letter this turn just read is marked.
-  const [profile, documents] = await clock.time("profile", () => Promise.all([profileRead, documentsContext(engine, deadlineMs - MODEL_MIN_MS - Date.now())]));
+  const [view, documents] = await clock.time("profile", () => Promise.all([viewRead, documentsContext(engine, deadlineMs - MODEL_MIN_MS - Date.now())]));
+  const profile = view && profileDataBlock(view);
   if (profile) context.push(profile);
   if (documents) context.push(documents);
   // Where earlier requests stand (instructions/requests.ts) reaches the
@@ -456,9 +453,9 @@ async function runTurn(
   // turn replaced, whether this turn is a replay or just slow.
   const [pending, link] = own ? await Promise.all([engine.getPending(), replayLinkOf(engine, own.id)]) : [null, null];
   const latest = pending?.latest ?? null;
-  const question = own && latest?.approvalId === own.id ? presentable(own) : null;
+  const question = own && latest?.approvalId === own.id ? (presentable(own, language()) ?? presentable(own)) : null;
   const proposed = question ? own : null;
-  const text = [letter?.text ?? "", settled.status === "failed" ? "" : settled.text, question ?? "", question && link ? replayLine(link) : ""]
+  const text = [letter?.text ?? "", settled.status === "failed" ? "" : settled.text, question ?? "", question && link ? replayLine(link, language()) : ""]
     .filter(Boolean)
     .join("\n\n");
   if (!text) return failure(502, "failed", settled.reason);
@@ -617,7 +614,9 @@ export async function handlePresented(request: Request, deps: { secret: string |
   const engine = deps.engine?.forHandle(handleHash, grant, generation);
   if (!engine) return Response.json({ ok: false, reason: "engine" }, { status: 503 });
   const approval = waitingProposals(await engine.listApprovals(), generation).find((a) => a.id === approvalId);
-  if (!approval || presentationHash(renderQuestion(approval)) !== textHash) {
+  // The question went out in one of Mano's languages. Each is rendered from
+  // what Engine froze, so a match still proves the frozen values were shown.
+  if (!approval || !REPLY_LANGUAGES.some((language) => presentationHash(renderQuestion(approval, language)) === textHash)) {
     console.warn(JSON.stringify({ type: "mano_presented_mismatch", handle: handleHash }));
     return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
   }

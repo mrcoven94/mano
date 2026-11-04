@@ -1408,3 +1408,112 @@ describe("turn timing log", () => {
     expect(line).not.toMatch(/heard about|turn_time/);
   });
 });
+
+describe("a person who writes in another language", () => {
+  const approved = () => engine.approvals().map((a) => JSON.parse(a.requestJson).payload);
+
+  // The fill double's profile, with a language already on it.
+  function languageOnFile(value: string, source: string) {
+    const profile = engine.profile as { person: Record<string, unknown> };
+    profile.person.language = { value, source, updatedAt: "2026-11-01T00:00:00Z" };
+  }
+
+  // A plain turn against the real profile store, and what it left there.
+  async function afterPlainTurn(turnId: string, text: string) {
+    engine.profile = null;
+    const kept: Promise<unknown>[] = [];
+    await send(turn(turnId, text), deps({ background: (work) => kept.push(work) }));
+    await Promise.all(kept);
+    return engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0).getProfileView();
+  }
+
+  it("gets the question in Spanish with the values exact, and a si files that version once", async () => {
+    const ask = await send(turn("turn_es_000000001", "Quiero mi renewal por favor"));
+    expect(ask.body.status).toBe("waiting_approval");
+    expect(ask.body.approval).toMatch(/^Listo para enviar: /);
+    expect(ask.body.approval).toContain("WA-SNAP-0042117");
+    expect(ask.body.approval).toContain("253-555-0100");
+    expect(approved()[0]).toMatchObject({ caseNumber: "WA-SNAP-0042117", phone: "253-555-0100" });
+
+    const yes = await send(turn("turn_es_00000000y", "s\u00ed"));
+    expect(yes.body.text).toMatch(/^Listo\. Enviado: /);
+    expect(engine.approvals()[0]!.status).not.toBe("pending");
+  });
+
+  it("gets the question in Vietnamese and Tagalog too", async () => {
+    const vi_ = await send(turn("turn_vi_000000001", "T\u00f4i c\u1ea7n renewal"));
+    expect(vi_.body.approval).toMatch(/^S\u1eb5n s\u00e0ng g\u1eedi: /);
+    expect((await send(turn("turn_vi_00000000y", "c\u00f3"))).body.text).toMatch(/^Xong\. /);
+
+    const tl = await send(turn("turn_tl_000000001", "Kailangan ko ng renewal po", OTHER));
+    expect(tl.body.approval).toMatch(/^Handa nang ipadala: /);
+    expect((await send(turn("turn_tl_00000000y", "opo", OTHER))).body.text).toMatch(/^Tapos na\. /);
+  });
+
+  it("keeps the language for a later short answer, from the profile", async () => {
+    languageOnFile("Spanish", "agent");
+    const ask = await send(turn("turn_es_000000003", "renewal 3"));
+    expect(ask.body.approval).toMatch(/^Listo para enviar: /);
+  });
+
+  it("saves the language it read below anything the person says", async () => {
+    const view = await afterPlainTurn("turn_es_000000002", "Hola, necesito ayuda con mis beneficios");
+    expect(view.profile.person.language).toMatchObject({ value: "Spanish", source: "agent" });
+  });
+
+  it("saves nothing for English", async () => {
+    const view = await afterPlainTurn("turn_en_000000002", "I need help with my food benefits");
+    expect(view.profile.person.language).toBeUndefined();
+  });
+
+  it("never touches a language the person stated, and still follows the words of this turn", async () => {
+    engine.profile = null;
+    const person = engineClient()!.forHandle(HANDLE, grants.get(HANDLE)!, 0);
+    await person.patchProfile({ idempotencyKey: "said-english", source: "person", fields: { "person.language": "English" } });
+    const kept: Promise<unknown>[] = [];
+    await send(turn("turn_es_000000004", "Hola, necesito ayuda con mis beneficios"), deps({ background: (work) => kept.push(work) }));
+    await Promise.all(kept);
+    const view = await person.getProfileView();
+    expect(view.profile.person.language).toMatchObject({ value: "English", source: "person" });
+    expect(view.suggestions).toEqual([]);
+
+    installFillDouble(engine);
+    languageOnFile("English", "person");
+    const ask = await send(turn("turn_es_000000014", "Hola, necesito mi renewal"));
+    expect(ask.body.approval).toMatch(/^Listo para enviar: /);
+  });
+
+  it("sends co, a question or a yes with a change to the model and files nothing", async () => {
+    await send(turn("turn_es_000000005", "Quiero mi renewal por favor"));
+    for (const [i, text] of ["co", "s\u00ed?", "si no", "s\u00ed pero cambia mi tel\u00e9fono"].entries()) {
+      const before = agentCalls.length;
+      await send(turn(`turn_es_00000010${i}`, text));
+      expect(agentCalls.length).toBe(before + 1);
+      expect(engine.approvals().filter((a) => a.status === "pending")).toHaveLength(1);
+    }
+  });
+
+  it("a si to a question that has since changed files nothing", async () => {
+    const { newer } = await replacedQuestion("turn_es_000000006", "turn_es_000000007");
+    const answer = await send(turn("turn_es_000000008", "s\u00ed"));
+    expect(answer.body.text).toMatch(/nada/i);
+    expect(engine.approvals().find((a) => a.id === newer.id)!.status).toBe("pending");
+  });
+
+  it("a report only counts when it is the frozen question, in one of Mano's languages", async () => {
+    const ask = await send(turn("turn_es_000000009", "Quiero mi renewal por favor"), deps(), { present: false });
+    const report = (textHash: string) =>
+      handlePresented(
+        signedAt("/channels/mano/presented", { handleHash: HANDLE, approvalId: ask.body.approvalId, textHash, generation: 0, grant: grants.get(HANDLE) }),
+        { secret: SECRET, engine: engineClient() },
+      );
+    expect((await report(presentationHash(`${ask.body.approval} cambiado`))).status).toBe(409);
+    expect((await report(presentationHash(ask.body.approval!))).status).toBe(200);
+  });
+
+  it("a NO in Spanish or Tagalog declines in that language", async () => {
+    await send(turn("turn_tl_000000002", "Kailangan ko ng renewal po"));
+    const no = await send(turn("turn_tl_00000000n", "hindi"));
+    expect(no.body.text).toMatch(/^Sige, hindi ko ipinadala\./);
+  });
+});

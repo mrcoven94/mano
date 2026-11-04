@@ -38,7 +38,7 @@ const POSSIBLE_CRISIS =
   /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut myself|cut my|cutting|slit\w*|wrists?|throw(?:ing)? myself|jump(?:ing)? off|kill myself|end it|end my life|(?:not|don'?t|do not) want to (?:live|be here)|better off dead)\b/;
 
 function normalize(text: string): string {
-  return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]/g, " ").replace(/\s+/g, " ")} `;
+  return ` ${text.normalize("NFC").toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]/g, " ").replace(/\s+/g, " ")} `;
 }
 
 // Wanting everything to end, "what's the point anymore", and taking a
@@ -255,13 +255,18 @@ const SPANISH = new RegExp(
   "u",
 );
 
+// Vietnamese and Tagalog, narrow and with no model behind them: words for
+// taking one's life, not wanting to live, and being beaten.
+const VIETNAMESE_TAGALOG =
+  /(?:^|\s)(?:tự tử|tự sát|muốn chết|không muốn sống|tự làm hại|kết liễu|đang bị đánh|magpakamatay|magpapakamatay|gusto ko nang mamatay|gusto kong mamatay|ayoko nang mabuhay|ayaw ko nang mabuhay|saktan ang sarili|sasaktan ko ang sarili|wakasan ang buhay|binubugbog ako)(?=\s|$)/u;
+
 function accented(text: string): string {
-  return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, " ").replace(/\s+/g, " ")} `;
+  return ` ${text.normalize("NFC").toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, " ").replace(/\s+/g, " ")} `;
 }
 
 export function spanishOrImplicitCrisis(text: string): boolean {
   const words = accented(text);
-  return IMPLICIT.test(words) || SPANISH.test(words);
+  return IMPLICIT.test(words) || SPANISH.test(words) || VIETNAMESE_TAGALOG.test(words);
 }
 
 // The gate into the model check (the lead's decision after Sol's second

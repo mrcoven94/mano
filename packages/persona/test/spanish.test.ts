@@ -90,3 +90,13 @@ describe("boundaries after accented letters", () => {
     }
   });
 });
+
+describe("the crisis floor in Vietnamese and Tagalog", () => {
+  it.each(["tôi muốn tự tử", "To\u0302i muo\u0302\u0301n chết", "tôi không muốn sống nữa", "Gusto ko nang mamatay", "magpapakamatay ako", "ayoko nang mabuhay", "binubugbog ako ng asawa ko"])("%j is a crisis", (text) => {
+    expect(crisisTurn(text)).toBe(true);
+  });
+
+  it.each(["Tôi cần giúp đỡ về phiếu thực phẩm", "tôi muốn gia hạn phúc lợi", "Kailangan ko ng tulong para sa pagkain po", "Ano ang gagawin ko sa sulat na ito"])("%j is not", (text) => {
+    expect(crisisTurn(text)).toBe(false);
+  });
+});
