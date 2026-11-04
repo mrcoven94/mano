@@ -167,6 +167,24 @@ describe("a due date's year", () => {
     nothingSaved();
   });
 
+  it("a date far ahead asks when next year's is the nearer one still to come", async () => {
+    const turnAtMs = await at(TRACED);
+    const out = await track("2028-01-05", turnAtMs);
+    expect(out).toMatchObject({ status: "ask" });
+    expect(out.question).toContain("January 5, 2027");
+    expect(out.question).toContain("January 5, 2028");
+    expect((await track("2028-09-30", turnAtMs)).question).toContain("September 30, 2027");
+    nothingSaved();
+    expect(await track("2028-01-05", turnAtMs, { yearConfirmed: true })).toMatchObject({ dueDate: "2028-01-05", status: "created" });
+  });
+
+  it("a far-off leap day with none nearer is saved, and the model must say the year", async () => {
+    const turnAtMs = await at(TRACED);
+    const out = await track("2028-02-29", turnAtMs);
+    expect(out).toMatchObject({ dueDate: "2028-02-29", status: "created" });
+    expect(out.note).toMatch(/with its year/);
+  });
+
   it("a date far ahead with no nearer one is saved, and the model must say the year", async () => {
     let turnAtMs = await at(TRACED);
     const nextYear = await track("2027-05-06", turnAtMs);
