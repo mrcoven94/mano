@@ -29,6 +29,7 @@ const INSTRUCTION_PATTERNS: { re: RegExp; label: string }[] = [
   { re: /keep\s+this\s+(letter|notice|message|information)\s+(secret|confidential)\s+from/i, label: "tells the reader to keep secrets from the person" },
   { re: /wire\s+(the\s+)?(money|payment|funds)\s+(now|immediately|today)/i, label: "presses for an immediate wire" },
   { re: /send\s+(payment|money|funds)\s+(via|through|to)\s+[a-z ]{1,30}(gift\s*card|bitcoin|crypto|wire)/i, label: "asks for payment by gift card, crypto or wire" },
+  { re: /instructions?\s+(?:for|to)\s+(?:the\s+|any\s+)?(?:automated|ai\b|assistant|reader|model|bot)|\b(?:automated|ai)\s+(?:reader|assistant)\b|^\s*assistant\s*:/im, label: "speaks to an automated reader" },
   { re: /system\s+prompt|developer\s+message/i, label: "references a system prompt or developer message" },
 ];
 

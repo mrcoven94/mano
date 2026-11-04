@@ -203,7 +203,7 @@ function dutyQuestion(named: Extract<NamedDates, { kind: "duty" }>, w: AnswerWor
   return [...interview, w.twoDates(w.date(first.iso), w.dueFor[purposeOf(first)], w.date(second.iso), w.dueFor[purposeOf(second)])].join(" ");
 }
 
-function namedQuestion(named: NamedDates, w: AnswerWords, isPast: (iso: string) => boolean): string {
+function namedQuestion(named: Exclude<NamedDates, { kind: "unsure" }>, w: AnswerWords, isPast: (iso: string) => boolean): string {
   switch (named.kind) {
     case "not-theirs":
       return w.notYours;
@@ -220,10 +220,12 @@ function namedQuestion(named: NamedDates, w: AnswerWords, isPast: (iso: string) 
 
 function heldBackQuestion(question: Question, planted: boolean, w: AnswerWords, today: string | undefined): string | null {
   const isPast = (iso: string): boolean => today !== undefined && iso < today;
-  // A letter that tries to instruct Mano can write a duty to get its date
-  // repeated, so ranking does not run on it.
-  if (question.named && (!planted || question.named.kind === "not-theirs")) return namedQuestion(question.named, w, isPast);
+  const named = question.named;
+  if (named?.kind === "not-theirs") return w.notYours;
   const date = soleDate(question);
+  // A letter that tries to instruct Mano can write a date to get it repeated.
+  if (planted || named?.kind === "unsure") return !date ? null : date === "unclear" ? w.severalDates : w.askAnyDate;
+  if (named) return namedQuestion(named, w, isPast);
   if (!date) return null;
   if (date === "unclear") return w.severalDates;
   return isPast(date) ? w.passed(w.date(date)) : w.askDate(w.date(date));

@@ -162,7 +162,9 @@ export type NamedDates =
   // Before the letter's own notice date.
   | { kind: "passed"; iso: string }
   // The letter says it is someone else's or no longer stands.
-  | { kind: "not-theirs" };
+  | { kind: "not-theirs" }
+  // Something on the letter could change whose date it is, or whether it holds.
+  | { kind: "unsure" };
 
 export interface NamedDate {
   iso: string;

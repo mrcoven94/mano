@@ -125,6 +125,7 @@ import type {
   LetterPage,
   MailReading,
   ModelCallStat,
+  NamedDates,
   Obligation,
   Question,
   ReadMailOptions,
@@ -766,7 +767,10 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       : null;
     if (proposal !== null || withheld.length > 0 || reasons.some((r) => !ownQuestion.has(r))) {
       const why = [...new Set(reasons)].join("; ");
-      const named = nameDates(letterText, noticeIso);
+      // Two letters read from one crop share one transcription, so a date in it
+      // may belong to the other letter.
+      const sharedCrop = members.some((m) => pages.some((p) => p.order !== m.order && p.file === m.file && p.crop === m.crop));
+      const named: NamedDates | null = sharedCrop ? { kind: "unsure" } : nameDates(letterText, noticeIso);
       ask({
         kind: "confirm_deadline",
         letterId,

@@ -249,7 +249,7 @@ const HARMLESS = new RegExp(
 );
 
 // A heading that names a person, who may not be the one reading.
-const NAMED_HEADING = /^(?:(?:(?:[Nn]otice|[Ll]etter)\s+)?[Ff]or\s+|[Rr][Ee]:\s*)[A-Z][\w'-]+\s+[A-Z][\w'-]+\.?$/;
+export const NAMED_HEADING = /^(?:(?:(?:[Nn]otice|[Ll]etter)\s+)?[Ff]or\s+|[Rr][Ee]:\s*)[A-Z][\w'-]+\s+[A-Z][\w'-]+\.?$/;
 // A sentence ending in a colon is a heading for what follows, and the
 // gate cannot read what follows under it. Only a salutation may end so.
 const SALUTATION = /^dear(?:\s+[a-z][a-z.'-]*){1,5}\s*:$/i;

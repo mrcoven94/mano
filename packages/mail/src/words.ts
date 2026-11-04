@@ -41,6 +41,7 @@ export interface AnswerWords {
   askHearing(date: string): string;
   askWindow(days: number, from: string, result: string): string;
   notYours: string;
+  askAnyDate: string;
   official: string;
   unread: string;
   failed: string;
@@ -120,6 +121,7 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     askHearing: (date) => `It looks like the date to ask for a hearing is ${date}. Please check that against your letter. Is that what it says?`,
     askWindow: (days, from, result) => `It looks like you have ${days} days from ${from}, which would be ${result}. Please check that against your letter. Is that what it says?`,
     notYours: "Something on this letter says it may be for someone else or may no longer apply, so I am not treating its dates as yours. Is this letter for you, and is it still current?",
+    askAnyDate: "I don't want to guess wrong about the date on this letter. Which date, if any, does it say you need to meet?",
     official: "If you need to call the office, use the number on your state's official site, not one from a letter.",
     unread: "I could not read the letter in your photo. Send it again with the whole page flat, in good light, and I will try once more.",
     failed: "I could not finish reading your photo just now. Send it again and I will try once more.",
@@ -183,6 +185,7 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     askHearing: (date) => `Parece que la fecha para pedir una audiencia es el ${date}. Compruébelo en su carta, por favor. ¿Es eso lo que dice?`,
     askWindow: (days, from, result) => `Parece que tiene ${days} días a partir del ${from}, es decir, hasta el ${result}. Compruébelo en su carta, por favor. ¿Es eso lo que dice?`,
     notYours: "Algo en esta carta indica que puede ser para otra persona o que ya no aplica, así que no tomo sus fechas como suyas. ¿Esta carta es para usted y sigue vigente?",
+    askAnyDate: "No quiero equivocarme con la fecha de esta carta. ¿Qué fecha, si hay alguna, dice que debe cumplir?",
     official: "Si necesita llamar a la oficina, use el número del sitio oficial de su estado, no uno de una carta.",
     unread: "No pude leer la carta de su foto. Envíela de nuevo con toda la página plana y con buena luz, y lo intentaré otra vez.",
     failed: "No pude terminar de leer su foto ahora. Envíela de nuevo y lo intentaré otra vez.",
@@ -249,6 +252,7 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     askHearing: (date) => `Có vẻ hạn để yêu cầu điều trần là ${date}. Vui lòng đối chiếu với thư của bạn. Thư có nói vậy không?`,
     askWindow: (days, from, result) => `Có vẻ bạn có ${days} ngày kể từ ${from}, tức là đến ${result}. Vui lòng đối chiếu với thư của bạn. Thư có nói vậy không?`,
     notYours: "Có chỗ trong thư cho thấy thư này có thể dành cho người khác hoặc không còn áp dụng, nên tôi không coi các ngày trong thư là của bạn. Thư này có phải cho bạn và vẫn còn hiệu lực không?",
+    askAnyDate: "Tôi không muốn đoán sai ngày trong thư này. Thư nói bạn cần kịp ngày nào, nếu có?",
     official: "Nếu cần gọi văn phòng, hãy dùng số trên trang web chính thức của tiểu bang, không dùng số trong thư.",
     unread: "Tôi không đọc được thư trong ảnh của bạn. Hãy gửi lại, để cả trang phẳng, đủ sáng, và tôi sẽ thử lại.",
     failed: "Tôi chưa đọc xong ảnh của bạn. Hãy gửi lại và tôi sẽ thử lại.",
@@ -312,6 +316,7 @@ export const ANSWER_WORDS: Record<ReplyLanguage, AnswerWords> = {
     askHearing: (date) => `Mukhang ${date} ang huling araw para humiling ng hearing. Pakitingnan ito sa sulat mo. Iyon ba ang sinasabi nito?`,
     askWindow: (days, from, result) => `Mukhang may ${days} araw ka mula ${from}, ibig sabihin hanggang ${result}. Pakitingnan ito sa sulat mo. Iyon ba ang sinasabi nito?`,
     notYours: "May nakasaad sa sulat na maaaring para ito sa iba o hindi na ito naaangkop, kaya hindi ko itinuturing na iyo ang mga petsa nito. Para sa iyo ba ang sulat na ito, at kasalukuyan pa ba ito?",
+    askAnyDate: "Ayokong magkamali sa petsa sa sulat na ito. Aling petsa, kung mayroon, ang sinasabi nitong dapat mong habulin?",
     official: "Kung kailangan mong tawagan ang opisina, gamitin ang numero sa opisyal na site ng iyong estado, hindi ang nasa sulat.",
     unread: "Hindi ko mabasa ang sulat sa larawan mo. Ipadala ulit na patag ang buong pahina at maliwanag, at susubukan ko ulit.",
     failed: "Hindi ko natapos basahin ang larawan mo ngayon. Ipadala ulit at susubukan ko ulit.",

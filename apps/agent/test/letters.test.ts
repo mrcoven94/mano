@@ -315,7 +315,7 @@ describe("a texted letter", () => {
 
   it("review blocker 1: a deadline sentence with an instruction and a phone reaches neither the reply nor the model", async () => {
     const { body } = await send(photoTurn("turn_letter0013", { texts: ["What is this?"] }), deps([PLANTED_DEADLINE_PAGE]));
-    expect(body.text).toContain("the letter gives a deadline of November 20, 2026");
+    expect(body.text).not.toContain("November 20, 2026");
     const everything = [body.text, calls[0]!.message, ...calls[0]!.context].join("\n");
     expect(everything).not.toMatch(/ignore previous/i);
     expect(everything).not.toContain("300-4000");
