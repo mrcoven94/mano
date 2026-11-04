@@ -28,6 +28,17 @@ import type { TryLedger, TryRun } from "./ledger.js";
 
 export type SelfFetch = (request: Request) => Promise<Response>;
 
+const LINE_WITH_REPLAY_LINK = /^.*https?:\/\/\S*\/fill\/\S*.*$/gim;
+const CREDENTIAL_SHAPED = /\b(sk|or|pk|rk)-[A-Za-z0-9_-]{16,}\b/g;
+const BEARER_TOKEN = /\bBearer\s+\S+/gi;
+const BLANK_LINE_RUN = /\n{3,}/g;
+const TRAILING_SLASH = /\/$/;
+const WHITESPACE_RUN = /\s+/g;
+const SAFETY_CHECK_WAIT = /safety check is taking a moment|checking whether it went through/i;
+const SESSION_ID = /^[A-Za-z0-9-]{8,64}$/;
+const BEARER_PREFIX = /^Bearer\s+/i;
+const TRY_RUN_PATH = /^\/try\/runs\/([0-9a-f]{32})(?:\/(guardian|next|screens\/(\d{1,3})))?$/;
+
 // Maria's answers, all made up, the same ones the live spine check uses.
 const MARIA = {
   caseNumber: "R-1042",
@@ -88,10 +99,10 @@ function cors(request: Request, env: Env): Record<string, string> {
 // its page, and anything shaped like a credential never leaves.
 export function shown(text: string): string {
   return text
-    .replace(/^.*https?:\/\/\S*\/fill\/\S*.*$/gim, "")
-    .replace(/\b(sk|or|pk|rk)-[A-Za-z0-9_-]{16,}\b/g, "[removed]")
-    .replace(/\bBearer\s+\S+/gi, "[removed]")
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(LINE_WITH_REPLAY_LINK, "")
+    .replace(CREDENTIAL_SHAPED, "[removed]")
+    .replace(BEARER_TOKEN, "[removed]")
+    .replace(BLANK_LINE_RUN, "\n\n")
     .trim()
     .slice(0, MAX_TEXT);
 }
@@ -183,7 +194,7 @@ class Person {
       attachmentCount: documents.length,
       documents,
     });
-    const base = this.env.MANO_AGENT_URL!.replace(/\/$/, "");
+    const base = this.env.MANO_AGENT_URL!.replace(TRAILING_SLASH, "");
     const res = await this.send(`${base}/channels/mano/turn`, {
       method: "POST",
       signal: AbortSignal.timeout(AGENT_WAIT_MS),
@@ -215,11 +226,11 @@ class Person {
     const raw = JSON.stringify({
       handleHash: this.run.handleHash,
       approvalId,
-      textHash: await sha256(question.replace(/\s+/g, " ").trim()),
+      textHash: await sha256(question.replace(WHITESPACE_RUN, " ").trim()),
       generation: 0,
       grant: await this.grant(),
     });
-    const base = this.env.MANO_AGENT_URL!.replace(/\/$/, "");
+    const base = this.env.MANO_AGENT_URL!.replace(TRAILING_SLASH, "");
     const res = await this.send(`${base}/channels/mano/presented`, {
       method: "POST",
       signal: AbortSignal.timeout(ENGINE_WAIT_MS),
@@ -306,7 +317,7 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string
       await log({ kind: "sent", text: "YES" });
       const turn = await person.turn(["YES"]);
       const answered = await replied(turn);
-      if (answered && /safety check is taking a moment|checking whether it went through/i.test(turn.text)) return "stay";
+      if (answered && SAFETY_CHECK_WAIT.test(turn.text)) return "stay";
       // Only Engine's record says what happened, and only when it can be read.
       const { http, json } = await person.engine("/approvals");
       if (http !== 200) return fail(UNVERIFIED);
@@ -348,7 +359,7 @@ const json = (body: unknown, status: number, headers: Record<string, string> = {
 async function start(request: Request, env: Env, headers: Record<string, string>): Promise<Response> {
   const body = (await request.json().catch(() => null)) as { scenario?: unknown; session?: unknown } | null;
   const scenario = TRY_SCENARIOS.find((s) => s === body?.scenario);
-  const session = typeof body?.session === "string" && /^[A-Za-z0-9-]{8,64}$/.test(body.session) ? body.session : null;
+  const session = typeof body?.session === "string" && SESSION_ID.test(body.session) ? body.session : null;
   if (!scenario || !session) return json({ error: "Unknown scenario." }, 400, headers);
   // The address is only ever kept as a keyed hash.
   const ip = await sha256(`${env.MANO_HANDLE_GRANT_SECRET}:${request.headers.get("cf-connecting-ip") ?? "unknown"}`);
@@ -427,7 +438,7 @@ function modelReport(value: unknown): TryEvent | null {
 }
 
 async function report(request: Request, env: Env): Promise<Response> {
-  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+  const token = request.headers.get("authorization")?.replace(BEARER_PREFIX, "") ?? "";
   if (!env.MANO_ENGINE_AGENT_TOKEN || !secretsEqual(token, env.MANO_ENGINE_AGENT_TOKEN)) return new Response("Forbidden", { status: 403 });
   if (Number(request.headers.get("content-length") ?? 0) > MAX_REPORT_BYTES) return new Response("Too large", { status: 413 });
   const body = (await request.json().catch(() => null)) as { handleHash?: unknown; model?: unknown; screenB64?: unknown } | null;
@@ -464,7 +475,7 @@ export async function tryRoute(request: Request, env: Env, self: SelfFetch, deps
   if (request.method === "POST" && !headers["access-control-allow-origin"]) return json({ error: "Forbidden." }, 403);
   if (url.pathname === "/try/runs" && request.method === "POST") return start(request, env, headers);
 
-  const match = url.pathname.match(/^\/try\/runs\/([0-9a-f]{32})(?:\/(guardian|next|screens\/(\d{1,3})))?$/);
+  const match = url.pathname.match(TRY_RUN_PATH);
   if (!match) return json({ error: "Not found." }, 404, headers);
   const runId = match[1]!;
   const ledger = ledgerOf(env);

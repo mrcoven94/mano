@@ -427,7 +427,6 @@ mark{background:none;color:inherit}
 .vt-pick:hover{transform:translateY(-2px)}
 .vt-pick[aria-pressed="true"]{background:var(--text);color:#fff}
 
-/* reach: one dot per county, powered by Front Door */
 .h-reach{background:var(--pen-soft)}
 .rc .lede a,.rc-note a{color:var(--pen);text-underline-offset:3px}
 .rc-stage{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:32px;align-items:center}

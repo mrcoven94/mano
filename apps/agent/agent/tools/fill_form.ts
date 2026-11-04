@@ -13,7 +13,7 @@ import { z } from "zod";
 
 import { fillDepsFromEnv, fillOnComputer, type FillDeps, type ReplayStep } from "../lib/computer-fill.js";
 import { EngineError, type PersonEngine } from "../lib/engine.js";
-import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
+import { FORMS, fillFrom, layoutOf, resolveForm, type FormSpec } from "../lib/forms.js";
 import { keepAnswers } from "../lib/form-answers.js";
 import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
 import { tracedFillDeps } from "../lib/try-trace.js";
@@ -53,6 +53,9 @@ async function shareReplay(engine: PersonEngine, approvalId: string, form: FormS
     console.warn(JSON.stringify({ type: "mano_replay_failed", status: err instanceof EngineError ? err.status : null }));
   }
 }
+
+// Ways a fill ends that say nothing about the form or what it saved.
+const COMPUTER_STOPPED = new Set(["error", "deadline", "step_budget", "refused"]);
 
 async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext) {
   const turn = requireTurn(ctx);
@@ -116,7 +119,7 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     console.warn(JSON.stringify({ type: "mano_fill_unavailable", reason: deps.unavailable }));
     return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Prepare the renewal with start_form_draft from the person's answers instead." };
   }
-  const fill = await fillOnComputer(form, filled.values, portalUrl, deps);
+  const fill = await fillOnComputer(form, filled.values, portalUrl, deps, layoutOf(input.form, portalUrl));
   console.log(
     JSON.stringify({
       type: "mano_fill",
@@ -138,9 +141,10 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     };
   }
   if (fill.status !== "filled") {
-    // The computer or its model never ran, which says nothing about the
-    // form, so the renewal can still be prepared without them.
-    if (fill.reason === "error" && form === FORMS["food-renewal"]) {
+    // The computer or its model stopped, which says nothing about the form,
+    // so the renewal can still be prepared without them. Offering to try again
+    // here can leave a person asking forever and never reach their yes.
+    if (COMPUTER_STOPPED.has(fill.reason) && form === FORMS["food-renewal"]) {
       return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Prepare the renewal with start_form_draft from the person's answers instead." };
     }
     return { status: "fill_failed", sent: false, note: "Mano could not finish filling the form on its computer, so nothing was prepared or sent. Say so and offer to try again." };

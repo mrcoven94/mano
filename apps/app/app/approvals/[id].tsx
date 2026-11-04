@@ -35,10 +35,12 @@ import { syncReminders } from "../../lib/notify";
 import type { Strings } from "../../lib/strings";
 import { colors, radius, tapTarget, type } from "../../lib/theme";
 
+const UP_TO_EIGHT_CHARS = /.{1,8}/g;
+
 // A full hash in groups of eight, so it wraps on a phone and is easy
 // to compare piece by piece.
 function grouped(hash: string): string {
-  return hash.match(/.{1,8}/g)?.join(" ") ?? hash;
+  return hash.match(UP_TO_EIGHT_CHARS)?.join(" ") ?? hash;
 }
 
 // Shown above the lead line once the request is no longer waiting; while

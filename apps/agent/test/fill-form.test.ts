@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FakeModelClient, type Computer, type ComputerAction } from "@mano/computer";
+import { FakeModelClient, OpenWeightModelClient, type Computer, type ComputerAction } from "@mano/computer";
 
 import fillForm, { setFillDepsForTests } from "../agent/tools/fill_form.js";
 import { fillDepsFromEnv, replayOf } from "../agent/lib/computer-fill.js";
 import { engineFrom, personIdFor, type Profile } from "../agent/lib/engine.js";
-import { FORMS } from "../agent/lib/forms.js";
+import { FORMS, layoutOf, resolveForm } from "../agent/lib/forms.js";
 import { heldBack, presentsExactly, renderQuestion } from "../agent/lib/pending.js";
 import { toolCtx } from "./ctx.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
@@ -349,7 +349,7 @@ describe("fill_form", () => {
     engine.profile = profile();
     model = new FakeModelClient([[call([{ type: "keypress", keys: ["alt", "F2"] }, { type: "type", text: "touch /tmp/mano-escape" }])]]);
     const out = await run("turn_fill0041", { form: "food-renewal" });
-    expect(out.status).toBe("fill_failed");
+    expect(out.status).toBe("unavailable");
     expect(computer.acted).toEqual([]);
     expect(engine.approvals()).toHaveLength(0);
   });
@@ -470,6 +470,24 @@ describe("fill_form", () => {
     expect(frozen.payload.attachment).toEqual(expect.any(String));
   });
 
+  it.each([
+    ["runs out of steps", { type: "wait" }],
+    ["presses a key a form does not need", { type: "keypress", keys: ["ctrl", "l"] }],
+  ])("when the computer %s, hands the renewal to start_form_draft and prepares nothing", async (_name, action) => {
+    engine.profile = profile();
+    let call = 0;
+    model = {
+      createResponse: async () => {
+        call += 1;
+        return { id: `r${call}`, status: "completed", output: [{ type: "computer_call", id: `c${call}`, call_id: `c${call}`, actions: [action], pending_safety_checks: [], status: "completed" }] };
+      },
+    } as never;
+    const out = await run("turn_fill0033", { form: "food-renewal" });
+    expect(out.status).toBe("unavailable");
+    expect(out.note).toMatch(/start_form_draft/);
+    expect(engine.approvals()).toHaveLength(0);
+  });
+
   it("when the computer's model refuses, hands the renewal to start_form_draft and prepares nothing", async () => {
     engine.profile = profile();
     model = { createResponse: async () => { throw new Error("model request failed with status 402"); } } as never;
@@ -477,6 +495,45 @@ describe("fill_form", () => {
     expect(out.status).toBe("unavailable");
     expect(out.note).toMatch(/start_form_draft/);
     expect(engine.approvals()).toHaveLength(0);
+  });
+
+  it.each(["/scramble/judge-1", "/v/larkmoor"])("fills the test layout at %s by its address, reads the draft as usual and files nothing", async (layout) => {
+    engine.profile = profile();
+    const out = await run("turn_layout01", { form: `${PORTAL}${layout}/apply` });
+    expect(out.status).toBe("waiting_for_yes");
+    expect(computer.visited[0]).toMatch(new RegExp(`^${PORTAL}${layout}/apply\\?draft=[0-9a-f]{32,128}$`));
+    expect(portal.reads).toHaveLength(1);
+    expect(engine.approvals()[0].status).toBe("pending");
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  it.each([
+    "https://real-benefits.example.gov/scramble/judge-1/apply",
+    "https://real-benefits.example.gov/v/larkmoor/apply",
+    "http://portal.test.example.gov/scramble/judge-1/apply",
+    "http://portal.test:8080/scramble/judge-1/apply",
+    "https://portal.test/scramble/judge-1/apply",
+  ])("refuses a layout's path on another origin: %s", async (form) => {
+    engine.profile = profile();
+    const out = await run("turn_layout02", { form });
+    expect(out.status).toBe("unknown_form");
+    expect(computer.visited).toEqual([]);
+  });
+
+  it.each(["/scramble/judge-1/caseworker", "/scramble/bad_seed!/apply", "/v/Larkmoor/apply", "/v/larkmoor/../../caseworker", "/v/larkmoor/submissions", "/scramble/apply"])(
+    "refuses what is not a layout of the form: %s",
+    (path) => {
+      expect(resolveForm(`${PORTAL}${path}`, PORTAL)).toBeNull();
+    },
+  );
+
+  it("takes only the layout from an address, nothing else it carries", () => {
+    const ref = `http://someone:secret@portal.test/scramble/judge-1/apply?draft=${"a".repeat(64)}#x`;
+    expect(resolveForm(ref, PORTAL)?.id).toBe("food-renewal");
+    expect(layoutOf(ref, PORTAL)).toBe("/scramble/judge-1");
+    expect(layoutOf("food-renewal", PORTAL)).toBe("");
+    expect(layoutOf(`${PORTAL}/apply`, PORTAL)).toBe("");
+    expect(layoutOf("https://real-benefits.example.gov/scramble/judge-1/apply", PORTAL)).toBe("");
   });
 
   it("refuses any address that is not the sandbox portal", async () => {
@@ -679,7 +736,12 @@ describe("the computer and portal a deployment fills with", () => {
 
     expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined })).toEqual({ unavailable: "no model key" });
     const modal = { ...env, MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://example--ep-test-server.us-west.modal.direct" };
-    expect(fillDepsFromEnv("person-abc", { ...modal, MODAL_PROXY_TOKEN: "wk-test.ws-test" })).toEqual({ unavailable: "no computer on this model route" });
+    const onModal = fillDepsFromEnv("person-abc", { ...modal, MODAL_PROXY_TOKEN: "wk-test.ws-test", MANO_COMPUTER_MODEL: "not-meta/other-model" });
+    if ("unavailable" in onModal) throw new Error("expected a fill on the Modal route");
+    expect(onModal.model).toBeInstanceOf(OpenWeightModelClient);
+    expect(onModal.modelId).toBe("meta-models/Muse-Spark-Open-816B-A42B");
+    await onModal.model.createResponse({ ...request, model: onModal.modelId });
+    expect(urls.at(-1)).toBe("https://example--ep-test-server.us-west.modal.direct/v1/responses");
     expect(fillDepsFromEnv("person-abc", modal)).toEqual({ unavailable: "no model key" });
     expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined, MANO_MODEL_PROVIDER: "openrouter" })).toEqual({ unavailable: "no model key" });
   });

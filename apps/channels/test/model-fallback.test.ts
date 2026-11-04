@@ -170,6 +170,162 @@ describe("what each model cost survives a failed settlement and a restart (PR 10
   });
 });
 
+describe("the fallback on Modal, only when it is chosen", () => {
+  const MODAL_ROOT = "https://example--ep-test-server.us-west.modal.direct";
+  const MODAL_URL = `${MODAL_ROOT}/v1/chat/completions`;
+  const base = { META_MODEL_API_KEY: "test-key-not-real", MANO_REPLY_MODEL: PRIMARY, MANO_OPEN_WEIGHT_MODEL: OPEN } as Env;
+  const modal = { MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: `${MODAL_ROOT}/`, MODAL_PROXY_TOKEN: "wk-test.ws-test" };
+  afterEach(() => vi.unstubAllGlobals());
+
+  function net(answer: string) {
+    const calls: Array<{ url: string; authorization: string | null }> = [];
+    vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), authorization: new Headers(init?.headers).get("authorization") });
+      return String(url) === PRIMARY_URL ? new Response("{}", { status: 402 }) : openResponse(answer);
+    });
+    return calls;
+  }
+
+  it("answers a text on a 402 with no OpenRouter key, and never calls OpenRouter when it has one", async () => {
+    for (const env of [{ ...base, ...modal }, { ...base, ...modal, OPENROUTER_API_KEY: "test-open-key-not-real" }]) {
+      const calls = net("Here to help.");
+      const responder = buildResponder(env as Env, undefined, { breaker: new PrimaryBreaker() });
+      expect((await responder.respond({ texts: ["hi"], attachmentCount: 0 })).text).toBe("Here to help.");
+      expect(calls.map((c) => c.url)).toEqual([PRIMARY_URL, MODAL_URL]);
+      expect(calls[1]!.authorization).toBe("Bearer wk-test.ws-test");
+    }
+  });
+
+  it("never sends minimal reasoning, which Modal refuses with a 400", async () => {
+    const efforts: unknown[] = [];
+    vi.stubGlobal("fetch", async (_url: unknown, init?: RequestInit) => {
+      efforts.push((JSON.parse(String(init?.body)) as { reasoning: { effort: unknown } }).reasoning.effort);
+      return openResponse("Here to help.");
+    });
+    const { client } = buildOpenWeight({ ...base, ...modal } as Env)!;
+    await client.ask({ instructions: "x", input: [{ role: "user", content: "hi" }], maxTokens: 10, effort: "minimal" });
+    await client.ask({ instructions: "x", input: [{ role: "user", content: "hi" }], maxTokens: 10, effort: "medium" });
+    expect(efforts).toEqual(["low", "medium"]);
+  });
+
+  it("answers the crisis check on a 402 the same way", async () => {
+    const calls = net("no");
+    const check = buildCrisisCheck({ ...base, ...modal } as Env, new PrimaryBreaker());
+    expect(await check!.ask("Should I stop taking my blood pressure pills?", AbortSignal.timeout(3000))).toBe("no");
+    expect(calls.map((c) => c.url)).toContain(MODAL_URL);
+  });
+
+  describe("with OpenRouter as the backup", () => {
+    const withBackup = { ...base, ...modal, OPENROUTER_API_KEY: "test-open-key-not-real" } as Env;
+    const ASK = { instructions: "x", input: [{ role: "user" as const, content: "hi" }], maxTokens: 10, effort: "minimal" as const };
+
+    function script(modalAnswer: () => Response | Promise<Response>, backupAnswer: () => Response = () => openResponse("From the backup.")) {
+      const sent: Array<{ url: string; body: Record<string, unknown> }> = [];
+      vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
+        sent.push({ url: String(url), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+        return String(url) === MODAL_URL ? modalAnswer() : backupAnswer();
+      });
+      return sent;
+    }
+
+    it.each([[429], [500], [503]])("answers from OpenRouter under its pin when Modal says %i, and logs the route", async (code) => {
+      const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+      const sent = script(() => new Response("{}", { status: code }));
+      const answer = await buildOpenWeight(withBackup)!.client.ask(ASK);
+      expect(answer.text).toBe("From the backup.");
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPEN_URL]);
+      expect(sent[1]!.body.model).toBe(OPEN);
+      expect(sent[1]!.body.provider).toEqual({ zdr: true, data_collection: "deny" });
+      expect(logs.mock.calls.map((c) => String(c[0]))).toEqual([JSON.stringify({ type: "mano_model_route", surface: "text_line", route: "openrouter" })]);
+      logs.mockRestore();
+    });
+
+    it("answers from OpenRouter when Modal cannot be reached", async () => {
+      const sent = script(() => Promise.reject(new TypeError("no connection")));
+      expect((await buildOpenWeight(withBackup)!.client.ask(ASK)).text).toBe("From the backup.");
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPEN_URL]);
+    });
+
+    it("does not touch OpenRouter when Modal answers, and logs that route", async () => {
+      const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+      const sent = script(() => openResponse("From Modal."));
+      expect((await buildOpenWeight(withBackup)!.client.ask(ASK)).text).toBe("From Modal.");
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL]);
+      expect(logs.mock.calls.map((c) => String(c[0]))).toEqual([JSON.stringify({ type: "mano_model_route", surface: "text_line", route: "modal" })]);
+      logs.mockRestore();
+    });
+
+    it.each([[400], [401], [403]])("does not fall back when Modal refuses the request with %i", async (code) => {
+      const sent = script(() => new Response("{}", { status: code }));
+      await expect(buildOpenWeight(withBackup)!.client.ask(ASK)).rejects.toMatchObject({ reason: `http_${code}` });
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL]);
+    });
+
+    it("ends in the plain failure when OpenRouter answers 402 too, and tries nothing else", async () => {
+      const sent = script(() => new Response("{}", { status: 503 }), () => new Response("{}", { status: 402 }));
+      await expect(buildOpenWeight(withBackup)!.client.ask(ASK)).rejects.toMatchObject({ reason: "http_402" });
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPEN_URL]);
+    });
+
+    it("follows no redirect on either route, and a redirect from Modal fails without going to the backup", async () => {
+      const seen: Array<string | undefined> = [];
+      const urls: string[] = [];
+      vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => {
+        urls.push(String(url));
+        seen.push(init?.redirect);
+        return String(url) === MODAL_URL && urls.length === 1 ? new Response(null, { status: 307, headers: { location: "https://elsewhere.example/" } }) : new Response("{}", { status: 503 });
+      });
+      await expect(buildOpenWeight(withBackup)!.client.ask(ASK)).rejects.toMatchObject({ reason: "http_307" });
+      expect(urls).toEqual([MODAL_URL]);
+      await expect(buildOpenWeight(withBackup)!.client.ask(ASK)).rejects.toMatchObject({ reason: "http_503" });
+      expect(urls.slice(1)).toEqual([MODAL_URL, OPEN_URL]);
+      expect(seen).toEqual(["manual", "manual", "manual"]);
+    });
+
+    it("does not fall back without an OpenRouter key", async () => {
+      const sent = script(() => new Response("{}", { status: 503 }));
+      await expect(buildOpenWeight({ ...base, ...modal } as Env)!.client.ask(ASK)).rejects.toMatchObject({ reason: "http_503" });
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL]);
+    });
+
+    it("answers the text whole through the responder when Modal is down", async () => {
+      const sent = script(() => new Response("{}", { status: 503 }), () => openResponse("Here to help."));
+      const inner = globalThis.fetch;
+      vi.stubGlobal("fetch", async (url: unknown, init?: RequestInit) => (String(url) === PRIMARY_URL ? new Response("{}", { status: 402 }) : inner(url as RequestInfo, init)));
+      const responder = buildResponder(withBackup, undefined, { breaker: new PrimaryBreaker() });
+      expect((await responder.respond({ texts: ["hi"], attachmentCount: 0 })).text).toBe("Here to help.");
+      expect(sent.map((s) => s.url)).toEqual([MODAL_URL, OPEN_URL]);
+    });
+  });
+
+  it("is off by default: Modal settings alone change nothing", () => {
+    const { MANO_MODEL_PROVIDER: _chosen, ...settings } = modal;
+    expect(buildOpenWeight({ ...base, ...settings } as Env)).toBeUndefined();
+    const calls = net("Here to help.");
+    return buildOpenWeight({ ...base, ...settings, OPENROUTER_API_KEY: "test-open-key-not-real" } as Env)!
+      .client.ask({ instructions: "x", input: [{ role: "user", content: "hi" }], maxTokens: 10, effort: "low" })
+      .then(() => expect(calls.map((c) => c.url)).toEqual([OPEN_URL]));
+  });
+
+  it.each([
+    ["no token", { ...modal, MODAL_PROXY_TOKEN: "" }],
+    ["no URL", { ...modal, MODAL_ENDPOINT_URL: "" }],
+    ["a URL off Modal's domain", { ...modal, MODAL_ENDPOINT_URL: "https://example.com" }],
+    ["a URL that only looks like Modal's domain", { ...modal, MODAL_ENDPOINT_URL: "https://x.modal.direct.example.com" }],
+    ["a plain http URL", { ...modal, MODAL_ENDPOINT_URL: "http://example--ep-test-server.us-west.modal.direct" }],
+    ["a URL that does not parse", { ...modal, MODAL_ENDPOINT_URL: "not a url" }],
+  ])("has no fallback when Modal is chosen with %s, even with an OpenRouter key", (_name, settings) => {
+    expect(buildOpenWeight({ ...base, ...settings } as Env)).toBeUndefined();
+    expect(buildOpenWeight({ ...base, ...settings, OPENROUTER_API_KEY: "test-open-key-not-real" } as Env)).toBeUndefined();
+  });
+
+  it("still refuses a model ID that is not Meta's, or a -contributor ID", () => {
+    expect(buildOpenWeight({ ...base, ...modal, MANO_OPEN_WEIGHT_MODEL: "openai/gpt-4o" } as Env)).toBeUndefined();
+    expect(buildOpenWeight({ ...base, ...modal, MANO_OPEN_WEIGHT_MODEL: "meta/muse-spark-1.3-contributor" } as Env)).toBeUndefined();
+    expect(buildOpenWeight({ ...base, ...modal, MANO_OPEN_WEIGHT_MODEL: "" } as Env)).toBeUndefined();
+  });
+});
+
 describe("the worker turns the fallback on only with OPENROUTER_API_KEY", () => {
   const base = { META_MODEL_API_KEY: "test-key-not-real", MANO_REPLY_MODEL: PRIMARY, MANO_OPEN_WEIGHT_MODEL: OPEN } as Env;
   afterEach(() => vi.unstubAllGlobals());
