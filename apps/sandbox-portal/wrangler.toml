@@ -31,3 +31,6 @@ MAX_BODY_BYTES = "25165824"
 MAX_FIELD_LENGTH = "500"
 RATE_LIMIT_PER_MINUTE = "60"
 SLOW_MAX_CONCURRENT = "5"
+# Staff at /staff work the cases residents shared with this one test office.
+MANO_ENGINE_URL = "https://engine.withmano.com"
+SANDBOX_ORG_ID = "sandbox-county"

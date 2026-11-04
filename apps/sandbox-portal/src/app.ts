@@ -1,4 +1,5 @@
 import { draftFileKey, stagingAttemptKey, submissionFileKey, trackedOwner, type FileStore } from "./files";
+import { staffRoute } from "./staff";
 import {
   API_SCOPE_PREFIX,
   DECLARATION,
@@ -41,6 +42,11 @@ export interface PortalConfig {
   portalToken?: string;
   /** Read-only token for GET /drafts/:id. Unset turns that route off; the filing token also reads drafts. */
   draftToken?: string;
+  /** Engine's address and the one organization staff sign in for. Unset turns /staff off. */
+  engineUrl?: string;
+  sandboxOrgId?: string;
+  /** Tests stand in for Engine here. */
+  engineFetch?: typeof fetch;
   now?: () => number;
 }
 
@@ -795,6 +801,7 @@ async function routeRequest(request: Request, store: Store, fileStore: FileStore
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
   const allowed = await store.checkRateLimit(ip, nowMs(config), RATE_WINDOW_MS, config.rateLimitPerMinute);
   if (!allowed) return rateLimitedResponse(path);
+  if (path === "/staff" || path.startsWith("/staff/")) return staffRoute(request, path, method, config);
   // Filing, reconciling and the caseworker view take the filing token only.
   if (path === "/caseworker" || path.startsWith("/caseworker/") || path.startsWith("/submissions")) {
     const auth = await authState(request, config.portalToken, [config.portalToken]);
