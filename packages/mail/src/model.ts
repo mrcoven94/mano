@@ -1,18 +1,26 @@
 // Small client for the Meta Model API Responses endpoint. The mail
 // pipeline only needs responses(request) -> response, so that is the
-// whole interface. Two implementations: MetaModelClient for live calls
-// and RecordedModelClient, a stand-in that replays recorded responses
-// so tests and keyless runs stay deterministic.
+// whole interface. Three implementations: MetaModelClient for live calls,
+// OpenWeightModelClient for live calls while the Meta Model API is down,
+// and RecordedModelClient, a stand-in that replays recorded responses so
+// tests and keyless runs stay deterministic.
 //
 // Model IDs: real resident content goes only to standard IDs
-// (muse-spark-1.3 for reading, sam-3.1 for segmentation). The cheaper
-// -contributor ID is allowed only for synthetic data.
+// (muse-spark-1.3 for reading, sam-3.1 for segmentation), or to Meta's
+// open-weight Muse Spark Open on zero-retention endpoints (AGENTS.md rule
+// 7). The cheaper -contributor ID is allowed only for synthetic data.
 
 export const STANDARD_MODEL = "muse-spark-1.3";
 export const CONTRIBUTOR_MODEL = "muse-spark-1.3-contributor";
 export const SEGMENT_MODEL = "sam-3.1";
 
 export const DEFAULT_BASE_URL = "https://api.meta.ai/v1";
+
+export const OPEN_WEIGHT_MODEL = "meta/muse-spark-open";
+const OPEN_WEIGHT_URL = "https://openrouter.ai/api/v1/chat/completions";
+// OpenRouter provider routing: only endpoints with zero data retention,
+// and no provider that stores or trains on what it is sent.
+const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" } as const);
 
 export type ModelContent =
   | { type: "input_text"; text: string }
@@ -57,6 +65,15 @@ export class BudgetExceeded extends Error {
   constructor() {
     super("Model call skipped: the file's time budget is spent.");
     this.name = "BudgetExceeded";
+  }
+}
+
+// A SAM request on a path that has no SAM. No call was made, and
+// segmentFrame falls back on-device with this as the reason.
+export class SegmentationSkipped extends Error {
+  constructor() {
+    super("SAM 3.1 was not called: it runs only on the Meta Model API, and this run reads with Muse Spark Open.");
+    this.name = "SegmentationSkipped";
   }
 }
 
@@ -173,26 +190,83 @@ function failed(status: number): string {
   return `Model request failed: ${status}${why ? ` (${why})` : ""}`;
 }
 
+interface Transport {
+  apiKey: string;
+  timeoutMs: number;
+  maxRetries: number;
+  fetchFn: typeof fetch;
+}
+
+function transportFrom(opts: { apiKey: string; timeoutMs?: number; maxRetries?: number; fetchFn?: typeof fetch }): Transport {
+  if (!opts.apiKey) throw new Error("A model API key is required.");
+  return {
+    apiKey: opts.apiKey,
+    timeoutMs: opts.timeoutMs ?? 60000,
+    maxRetries: opts.maxRetries ?? 2,
+    // workerd throws "Illegal invocation" when fetch runs with any
+    // receiver but the global, and transport.fetchFn(...) passes the object.
+    fetchFn: opts.fetchFn ?? ((input, init) => globalThis.fetch(input, init)),
+  };
+}
+
+// POST one JSON body and return the answer as parsed JSON. Timeouts, 429s
+// and 5xxs retry inside the shared deadline; every error is in fixed words.
+async function postJson(transport: Transport, url: string, body: unknown, deadline: number = Infinity): Promise<unknown> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= transport.maxRetries; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw attempt === 0 ? new BudgetExceeded() : lastErr;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.min(transport.timeoutMs, remaining));
+    try {
+      const res = await transport.fetchFn(url, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          authorization: `Bearer ${transport.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        clearTimeout(timer);
+        await res.body?.cancel().catch(() => undefined);
+        if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
+        throw new ModelFailure(failed(res.status));
+      }
+      try {
+        return await res.json();
+      } catch {
+        // A parse error quotes the body it could not read.
+        throw new ModelFailure(`Model response was not readable: ${res.status}`);
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err;
+      const backoff = 200 * 2 ** attempt;
+      if (attempt < transport.maxRetries && isRetryable(err) && Date.now() + backoff < deadline) {
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
+      }
+      throw safeError(err);
+    }
+  }
+  throw safeError(lastErr);
+}
+
 export class MetaModelClient implements ModelClient {
   readonly live = true;
   readonly baseUrl: string;
-  private apiKey: string;
+  private transport: Transport;
   private allowExtra: Set<string>;
-  private timeoutMs: number;
-  private maxRetries: number;
-  private fetchFn: typeof fetch;
   private synthetic: boolean;
 
   constructor(opts: MetaClientOptions) {
-    if (!opts.apiKey) throw new Error("A model API key is required.");
-    this.apiKey = opts.apiKey;
+    this.transport = transportFrom(opts);
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
     this.allowExtra = new Set(opts.allowExtra ?? []);
-    this.timeoutMs = opts.timeoutMs ?? 60000;
-    this.maxRetries = opts.maxRetries ?? 2;
-    // workerd throws "Illegal invocation" when fetch runs with any
-    // receiver but the global, and this.fetchFn(...) passes the client.
-    this.fetchFn = opts.fetchFn ?? ((input, init) => globalThis.fetch(input, init));
     this.synthetic = opts.synthetic ?? false;
   }
 
@@ -201,61 +275,104 @@ export class MetaModelClient implements ModelClient {
     if (!this.synthetic && isContributorId(req.model)) {
       throw new Error("Contributor models are only allowed for synthetic data.");
     }
-    const body = { ...req, store: false as const };
-    let lastErr: unknown;
-    const deadline = opts.deadline ?? Infinity;
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw attempt === 0 ? new BudgetExceeded() : lastErr;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), Math.min(this.timeoutMs, remaining));
-      try {
-        const res = await this.fetchFn(`${this.baseUrl}/responses`, {
-          method: "POST",
-          signal: controller.signal,
-          headers: {
-            authorization: `Bearer ${this.apiKey}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) {
-          clearTimeout(timer);
-          await res.body?.cancel().catch(() => undefined);
-          if (res.status === 429 || res.status >= 500) throw new RetryableStatus(res.status);
-          throw new ModelFailure(failed(res.status));
-        }
-        let data: unknown;
-        try {
-          data = await res.json();
-        } catch {
-          // A parse error quotes the body it could not read.
-          throw new ModelFailure(`Model response was not readable: ${res.status}`);
-        } finally {
-          clearTimeout(timer);
-        }
-        const status = (data as { status?: unknown })?.status;
-        if (typeof status === "string" && status !== "completed") {
-          throw new ModelFailure(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`);
-        }
-        return { text: extractOutputText(data), model: req.model, usage: extractUsage(data), raw: data };
-      } catch (err) {
-        clearTimeout(timer);
-        lastErr = err;
-        const backoff = 200 * 2 ** attempt;
-        if (attempt < this.maxRetries && isRetryable(err) && Date.now() + backoff < deadline) {
-          await new Promise((r) => setTimeout(r, backoff));
-          continue;
-        }
-        throw safeError(err);
-      }
+    const data = await postJson(this.transport, `${this.baseUrl}/responses`, { ...req, store: false as const }, opts.deadline);
+    const status = (data as { status?: unknown })?.status;
+    if (typeof status === "string" && status !== "completed") {
+      throw new ModelFailure(`Model run ${RUN_STATES.has(status) ? status : "not completed"}.`);
     }
-    throw safeError(lastErr);
+    return { text: extractOutputText(data), model: req.model, usage: extractUsage(data), raw: data };
+  }
+}
+
+type ChatPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } };
+
+interface ChatMessage {
+  role: ModelInputItem["role"];
+  content: string | ChatPart[];
+}
+
+// Everything a request to the open-weight model can carry. Built field by
+// field, so nothing on a request reaches the body unmapped, and the model
+// and pin are constants no option or setting can change.
+interface OpenWeightBody {
+  model: typeof OPEN_WEIGHT_MODEL;
+  messages: ChatMessage[];
+  max_tokens?: number;
+  response_format?: { type: "json_schema"; json_schema: Omit<JsonSchemaFormat, "type"> };
+  provider: typeof ZERO_RETENTION;
+}
+
+function chatMessage(item: ModelInputItem): ChatMessage {
+  const parts = item.content.map((part): ChatPart =>
+    part.type === "input_text"
+      ? { type: "text", text: part.text }
+      : { type: "image_url", image_url: { url: part.image_url, ...(part.detail ? { detail: part.detail } : {}) } },
+  );
+  const [only] = parts;
+  return { role: item.role, content: parts.length === 1 && only?.type === "text" ? only.text : parts };
+}
+
+function openWeightBody(req: ResponsesRequest): OpenWeightBody {
+  const input: ModelInputItem[] = typeof req.input === "string" ? [{ role: "user", content: [{ type: "input_text", text: req.input }] }] : req.input;
+  const format = req.text?.format;
+  const messages = input.map(chatMessage);
+  // OpenRouter prefers endpoints that list response_format, but one that
+  // does not can still take the request and ignore it, and two of the
+  // zero-retention endpoints do not list it. The words keep those answers
+  // readable; readPage's parser and retry handle the rest.
+  if (format) messages.unshift({ role: "system", content: `Answer with one JSON object and nothing else, matching this JSON schema: ${JSON.stringify(format.schema)}` });
+  return {
+    model: OPEN_WEIGHT_MODEL,
+    messages,
+    ...(req.max_output_tokens === undefined ? {} : { max_tokens: req.max_output_tokens }),
+    ...(format ? { response_format: { type: "json_schema" as const, json_schema: { name: format.name, schema: format.schema, ...(format.strict === undefined ? {} : { strict: format.strict }) } } } : {}),
+    provider: ZERO_RETENTION,
+  };
+}
+
+// The text of exactly one choice that finished on its own, else null: a
+// reading cut off at the token cap is not a reading, even if it parses.
+function completedChoiceText(data: unknown): string | null {
+  const choices = (data as { choices?: unknown } | null)?.choices;
+  if (!Array.isArray(choices) || choices.length !== 1) return null;
+  const choice = choices[0] as { finish_reason?: unknown; message?: { content?: unknown } } | null;
+  const content = choice?.message?.content;
+  return choice?.finish_reason === "stop" && typeof content === "string" ? content : null;
+}
+
+export interface OpenWeightClientOptions {
+  apiKey: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+  fetchFn?: typeof fetch;
+}
+
+// Meta's open-weight model through OpenRouter, while the Meta Model API
+// cannot answer. It takes Mail's reading requests only and answers them
+// all with the one model. There is no base URL or model option, so rule
+// 13's Meta-only limit and rule 7's pin hold whatever the settings say.
+export class OpenWeightModelClient implements ModelClient {
+  readonly live = true;
+  private transport: Transport;
+
+  constructor(opts: OpenWeightClientOptions) {
+    this.transport = transportFrom(opts);
+  }
+
+  async responses(req: ResponsesRequest, opts: CallOptions = {}): Promise<ResponsesResult> {
+    if (req.model === SEGMENT_MODEL) throw new SegmentationSkipped();
+    if (req.model !== STANDARD_MODEL && req.model !== CONTRIBUTOR_MODEL) throw new Error(`Unknown model ID: ${req.model}.`);
+    const data = await postJson(this.transport, OPEN_WEIGHT_URL, openWeightBody(req), opts.deadline);
+    const text = completedChoiceText(data);
+    if (text === null) throw new ModelFailure("Model run not completed.");
+    return { text, model: OPEN_WEIGHT_MODEL, usage: extractUsage(data), raw: data };
   }
 }
 
 export interface ModelClientEnv {
   META_MODEL_API_KEY?: string;
+  MANO_MODEL_PROVIDER?: string;
+  OPENROUTER_API_KEY?: string;
   CF_ACCOUNT_ID?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_PROVIDER?: string;
@@ -275,7 +392,10 @@ export function baseUrlFromEnv(env: ModelClientEnv): string {
 export function createModelClient(
   env: ModelClientEnv,
   opts: { synthetic: boolean; fetchFn?: typeof fetch } = { synthetic: false },
-): MetaModelClient | RecordedModelClient {
+): MetaModelClient | OpenWeightModelClient | RecordedModelClient {
+  if (env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY) {
+    return new OpenWeightModelClient({ apiKey: env.OPENROUTER_API_KEY, fetchFn: opts.fetchFn });
+  }
   if (!env.META_MODEL_API_KEY) return new RecordedModelClient([]);
   const allowExtra = (env.MODEL_ALLOWLIST_EXTRA ?? "")
     .split(",")

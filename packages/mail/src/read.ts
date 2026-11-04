@@ -47,6 +47,8 @@ export interface PageExtraction {
   extraLetter: ExtraLetter | null;
   usage: { inputTokens: number; outputTokens: number } | null;
   elapsedMs: number;
+  // The model that answered, which a client may choose.
+  model?: string;
 }
 
 function fieldProp(description: string): Record<string, unknown> {
@@ -279,6 +281,7 @@ export async function readPage(
   let inputTokens = 0;
   let outputTokens = 0;
   let sawUsage = false;
+  let answeredBy: string | undefined;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const res = await model.responses({
       model: readingModelFor(opts.synthetic),
@@ -298,6 +301,7 @@ export async function readPage(
       max_output_tokens: 8000,
     }, { deadline: opts.deadline });
     last = res.text;
+    answeredBy = res.model;
     // Usage sums across attempts: every retry spends tokens.
     if (res.usage) {
       inputTokens += res.usage.inputTokens;
@@ -312,6 +316,7 @@ export async function readPage(
     ...parsePageExtraction(last),
     usage: sawUsage ? { inputTokens, outputTokens } : null,
     elapsedMs: Date.now() - started,
+    ...(answeredBy ? { model: answeredBy } : {}),
   };
 }
 
@@ -493,7 +498,7 @@ export async function groupWithModel(
   pages: GroupablePage[],
   model: ModelClient,
   opts: { synthetic: boolean; deadline?: number },
-): Promise<{ groups: number[][]; usage: PageExtraction["usage"]; elapsedMs: number }> {
+): Promise<{ groups: number[][]; usage: PageExtraction["usage"]; elapsedMs: number; model: string }> {
   const started = Date.now();
   const summaries = pages.map((p) => {
     const e = p.extraction;
@@ -549,9 +554,9 @@ export async function groupWithModel(
     for (const p of pages) {
       if (!seen.has(p.index)) groups.push([p.index]);
     }
-    return { groups: validateGroups(pages, groups), usage: res.usage, elapsedMs };
+    return { groups: validateGroups(pages, groups), usage: res.usage, elapsedMs, model: res.model };
   } catch {
-    return { groups: pages.map((p) => [p.index]), usage: res.usage, elapsedMs };
+    return { groups: pages.map((p) => [p.index]), usage: res.usage, elapsedMs, model: res.model };
   }
 }
 

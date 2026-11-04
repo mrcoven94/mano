@@ -3,10 +3,11 @@
 // text prompt, asking for detections with boxes in 0-1000 coordinates
 // under a strict schema. The answer is checked against that schema and a
 // detection missing any part is dropped, never repaired. When SAM is
-// unreachable or returns nothing usable, the pipeline falls back to
-// on-device paper detection, then the whole frame, and says why.
+// unreachable, skipped by the client or returns nothing usable, the
+// pipeline falls back to on-device paper detection, then the whole frame,
+// and says why.
 
-import { SEGMENT_MODEL, type ModelClient, type ResponsesResult } from "./model.js";
+import { SEGMENT_MODEL, SegmentationSkipped, type ModelClient, type ResponsesResult } from "./model.js";
 import { detectPaperBoxes, iou, type NormalizedImage } from "./media.js";
 import type { Box } from "./types.js";
 
@@ -24,10 +25,11 @@ interface Segmented {
   elapsedMs: number;
 }
 
-// A fallback always says why SAM's boxes were not used.
+// A fallback always says why SAM's boxes were not used. samCalled is
+// false when the client skipped SAM, so no call is counted.
 export type SegmentResult =
   | (Segmented & { method: "sam" })
-  | (Segmented & { method: Exclude<SegmentMethod, "sam">; why: string });
+  | (Segmented & { method: Exclude<SegmentMethod, "sam">; why: string; samCalled: boolean });
 
 const SEGMENT_SCHEMA = {
   type: "object",
@@ -151,6 +153,7 @@ export async function segmentFrame(
       max_output_tokens: 2000,
     }, { deadline: opts.deadline });
   } catch (err) {
+    if (err instanceof SegmentationSkipped) return localOrFullFrame(image, null, started, err.message, false);
     const message = err instanceof Error ? err.message : String(err);
     return localOrFullFrame(image, null, started, `the SAM 3.1 call failed: ${message.slice(0, 240)}`);
   }
@@ -166,6 +169,7 @@ async function localOrFullFrame(
   usage: SegmentResult["usage"],
   started: number,
   why: string,
+  samCalled = true,
 ): Promise<SegmentResult> {
   try {
     const local = await detectPaperBoxes(image);
@@ -174,6 +178,7 @@ async function localOrFullFrame(
         detections: local.map((l) => ({ box: l.box, label: "page", score: l.score })),
         method: "local",
         why,
+        samCalled,
         usage,
         elapsedMs: Date.now() - started,
       };
@@ -181,5 +186,5 @@ async function localOrFullFrame(
   } catch {
     // Fall through to the whole frame.
   }
-  return { detections: [fullFrameDetection()], method: "full-frame", why, usage, elapsedMs: Date.now() - started };
+  return { detections: [fullFrameDetection()], method: "full-frame", why, samCalled, usage, elapsedMs: Date.now() - started };
 }

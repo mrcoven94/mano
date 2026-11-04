@@ -17,6 +17,13 @@
 // returns the recorded stand-in, which only answers explicitly
 // recorded requests and fails closed otherwise.
 //
+// With MANO_MODEL_PROVIDER=openrouter and OPENROUTER_API_KEY, every page
+// is read instead by Meta's open-weight Muse Spark Open on zero-retention
+// endpoints, for use while the Meta Model API is down. SAM 3.1 runs only
+// on that API, so it is skipped: each frame takes the on-device fallback
+// below, and the warning says why. Everything after the reading is the
+// same, the deadline gate included.
+//
 // Flow per file: decode to frames (one for photos, up to 30 for video
 // at 1 fps; truncation is reported and asked about, never silent),
 // segment each frame into pages (SAM 3.1, on-device paper detection,
@@ -276,13 +283,15 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
     const frameDets: Detection[][] = [];
     const methods = new Set<SegmentMethod>();
     const whys = new Set<string>();
+    let samSkipped = false;
     for (const frame of frames) {
       if (overBudget(file.name)) {
         askBudget(file.name);
         break;
       }
       const seg = await segmentFrame(frame.image, opts.model, { deadline: deadlineFor(file.name) });
-      modelCalls.push({
+      if (seg.method !== "sam" && !seg.samCalled) samSkipped = true;
+      else modelCalls.push({
         model: "sam-3.1",
         purpose: "segment",
         inputTokens: seg.usage?.inputTokens ?? 0,
@@ -301,7 +310,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       warnings.push({
         kind: "segmentation_fallback",
         message:
-          `SAM 3.1 returned nothing usable for ${file.name}; ` +
+          `SAM 3.1 ${samSkipped ? "was not called" : "returned nothing usable"} for ${file.name}; ` +
           (parts.length === 2 ? "some frames were split on-device and some read as one page." : `${parts[0]} instead.`),
         letterId: null,
         citation: null,
@@ -388,7 +397,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         page.dropped = verifyExtraction(extraction, extraction.fullText);
       }
       modelCalls.push({
-        model: readingModelFor(opts.synthetic),
+        model: extraction.model ?? readingModelFor(opts.synthetic),
         purpose: "read",
         inputTokens: extraction.usage?.inputTokens ?? 0,
         outputTokens: extraction.usage?.outputTokens ?? 0,
@@ -452,7 +461,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         deadline: Math.min(...ambPages.map((p) => deadlineFor(pages[p.index]!.file))),
       });
       modelCalls.push({
-        model: readingModelFor(opts.synthetic),
+        model: grouped.model,
         purpose: "group",
         inputTokens: grouped.usage?.inputTokens ?? 0,
         outputTokens: grouped.usage?.outputTokens ?? 0,
