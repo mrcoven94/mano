@@ -5,15 +5,18 @@
 // come back in the request's order with a string key for known names
 // (lib/strings.ts) and the raw name otherwise, so nothing is dropped.
 // Anything that does not match a known action shape comes back unknown,
-// and the screen refuses to approve it.
+// and the screen refuses to approve it. An unknown action's reason is for
+// tests and logs; the screen shows its own line in the person's language.
 
 import type { StringKey } from "./strings";
 
 export type KnownKind = "submit" | "send" | "share" | "call" | "fax" | "mail";
 
 // How the screen writes a value. Only the label and the number format
-// change; the words and digits are the request's own.
-export type FieldFormat = "text" | "money" | "date" | "consent";
+// change; the words and digits are the request's own. A true or false, a
+// null and a value with no text form have no words of their own, so the
+// screen supplies them in the person's language.
+export type FieldFormat = "text" | "money" | "date" | "consent" | "flag" | "empty" | "unreadable";
 
 export interface ActionField {
   key: string;
@@ -69,14 +72,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 // Full values, never truncated: the approval covers the whole request
 // hash, so the screen shows the whole value and scrolls to fit it.
-function formatValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean" || value == null) return String(value);
-  if (Array.isArray(value) && value.every((v) => typeof v === "string")) return value.join(", ");
+function formatValue(value: unknown): { text: string; format?: FieldFormat } {
+  if (typeof value === "string") return { text: value };
+  if (typeof value === "number") return { text: String(value) };
+  if (typeof value === "boolean") return { text: String(value), format: "flag" };
+  if (value == null) return { text: "", format: "empty" };
+  if (Array.isArray(value) && value.every((v) => typeof v === "string")) return { text: value.join(", ") };
   try {
-    return JSON.stringify(value) ?? "[unreadable]";
+    const json = JSON.stringify(value) as string | undefined;
+    return json === undefined ? { text: "", format: "unreadable" } : { text: json };
   } catch {
-    return "[unreadable]";
+    return { text: "", format: "unreadable" };
   }
 }
 
@@ -94,7 +100,8 @@ function isCalendarDay(text: string): boolean {
 function fieldFor(key: string, value: unknown): ActionField {
   // hasOwnProperty, not lookup: LABELS["__proto__"] is the prototype.
   const known = Object.prototype.hasOwnProperty.call(LABELS, key) ? LABELS[key] : undefined;
-  const text = formatValue(value);
+  const { text, format: shape } = formatValue(value);
+  if (shape) return { key, label: known?.label ?? null, value: text, format: shape };
   const format = known?.format ?? "text";
   // A money label only fits a plain amount and a date label only a real
   // calendar day; anything else shows as text.

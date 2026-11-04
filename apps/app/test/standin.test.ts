@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { CHANGE_REPLY, CHANGE_REPLY_ES, DECLINE_REPLY } from "../lib/api/maria";
+import { DEMO_WORDS } from "../lib/api/maria";
 import { parseActionView } from "../lib/action-view";
 import { StandInClient } from "../lib/api/standin";
 import { AuthError, StaleApprovalError, type Session } from "../lib/api/types";
@@ -18,6 +18,65 @@ async function signIn(client: StandInClient): Promise<Session> {
   const { challengeId } = await client.requestCode("maria.torres@example.com");
   return client.verifyCode("maria.torres@example.com", challengeId, "123456");
 }
+
+describe("stand-in language", () => {
+  function languageClient(language: { now: "en" | "es" }): StandInClient {
+    return new StandInClient({ sha256B64, latencyMs: 0, now: () => new Date("2026-10-28T12:00:00.000Z"), language: () => language.now });
+  }
+  const photo = { kind: "photo" as const, name: "carta.jpg", mimeType: "image/jpeg", bytesB64: b64encode(utf8ToBytes("fake-photo-bytes")) };
+
+  it("has every line in both languages", () => {
+    expect(Object.keys(DEMO_WORDS.es).sort()).toEqual(Object.keys(DEMO_WORDS.en).sort());
+  });
+
+  it("answers in Spanish from the first message through approval", async () => {
+    const client = languageClient({ now: "es" });
+    const session = await signIn(client);
+    const [greeting] = await client.listMessages(session);
+    expect(greeting?.text).toBe(DEMO_WORDS.es.greeting);
+    const reply = await client.sendMessage(session, "Fotografié mi correo", [photo]);
+    expect(reply.text).toBe(DEMO_WORDS.es.mailReply);
+    const deadlines = await client.listDeadlines(session);
+    expect(deadlines.map((d) => d.title).sort()).toEqual([DEMO_WORDS.es.electricDeadline.title, DEMO_WORDS.es.renewalDeadline.title].sort());
+    const [approval] = await client.listApprovals(session);
+    await client.approve(session, approval!.id, { documentHash: approval!.documentHash, requestHash: approval!.requestHash });
+    const texts = (await client.listMessages(session)).map((m) => m.text);
+    expect(texts).toContain(DEMO_WORDS.es.approveFollowup);
+    expect(texts).toContain(DEMO_WORDS.es.caseworkerRequest);
+    expect((await client.listDeadlines(session)).map((d) => d.title)).toContain(DEMO_WORDS.es.paystubDeadline.title);
+    expect((await client.sendMessage(session, "¿Cuáles son mis fechas?", [])).text).toBe(DEMO_WORDS.es.deadlinesReply(2));
+    expect((await client.listGrants(session))[0]?.scope).toEqual(DEMO_WORDS.es.grantScope);
+  });
+
+  it("keeps the frozen request the same in any language, so switching never makes it stale", async () => {
+    const language: { now: "en" | "es" } = { now: "es" };
+    const client = languageClient(language);
+    const session = await signIn(client);
+    await client.sendMessage(session, "Fotografié mi correo", [photo]);
+    const [shownInSpanish] = await client.listApprovals(session);
+    language.now = "en";
+    const [shownInEnglish] = await client.listApprovals(session);
+    expect(shownInEnglish?.requestHash).toBe(shownInSpanish?.requestHash);
+    expect(shownInEnglish?.documentHash).toBe(shownInSpanish?.documentHash);
+    const result = await client.approve(session, shownInSpanish!.id, { documentHash: shownInSpanish!.documentHash, requestHash: shownInSpanish!.requestHash });
+    expect(result.status).toBe("completed");
+  });
+
+  it("says no in the language of the moment", async () => {
+    const client = languageClient({ now: "es" });
+    const session = await signIn(client);
+    await client.sendMessage(session, "Fotografié mi correo", [photo]);
+    const [approval] = await client.listApprovals(session);
+    await client.decline(session, approval!.id);
+    expect((await client.listMessages(session)).map((m) => m.text)).toContain(DEMO_WORDS.es.declineReply);
+  });
+
+  it("speaks English when it is told nothing", async () => {
+    const client = makeClient();
+    const session = await signIn(client);
+    expect((await client.listMessages(session))[0]?.text).toBe(DEMO_WORDS.en.greeting);
+  });
+});
 
 describe("stand-in sign-in", () => {
   it("masks the email on request and accepts any 6-digit code", async () => {
@@ -102,9 +161,9 @@ describe("Maria spine run", () => {
     const photo = b64encode(utf8ToBytes("fake-photo-bytes"));
     await client.sendMessage(session, "I photographed my mail", [{ kind: "photo", name: "mail.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
     const en = await client.sendMessage(session, 'About "File your SNAP renewal for case R-1042": please change my phone number', []);
-    expect(en.text).toBe(CHANGE_REPLY);
+    expect(en.text).toBe(DEMO_WORDS.en.changeReply);
     const es = await client.sendMessage(session, 'Sobre "File your SNAP renewal for case R-1042": por favor cambie mi teléfono', []);
-    expect(es.text).toBe(CHANGE_REPLY_ES);
+    expect(es.text).toBe(DEMO_WORDS.es.changeReply);
     const [approval] = await client.listApprovals(session);
     expect(approval?.status).toBe("pending");
     expect(approval?.attempted).toBe(false);
@@ -118,7 +177,7 @@ describe("Maria spine run", () => {
     const [approval] = await client.listApprovals(session);
     await client.approve(session, approval!.id, { documentHash: approval!.documentHash, requestHash: approval!.requestHash });
     const reply = await client.sendMessage(session, 'About "File your SNAP renewal for case R-1042": please change my address', []);
-    expect(reply.text).not.toBe(CHANGE_REPLY);
+    expect(reply.text).not.toBe(DEMO_WORDS.en.changeReply);
     expect(reply.text).not.toContain("Nothing was sent");
   });
 
@@ -165,7 +224,7 @@ describe("Maria spine run", () => {
     const [after] = await client.listApprovals(session);
     expect(after?.status).toBe("rejected");
     const messages = await client.listMessages(session);
-    expect(messages.filter((m) => m.text === DECLINE_REPLY)).toHaveLength(1);
+    expect(messages.filter((m) => m.text === DEMO_WORDS.en.declineReply)).toHaveLength(1);
     expect(messages.some((m) => m.text.includes("pay stub"))).toBe(false);
     await expect(
       client.approve(session, approval.id, { documentHash: approval.documentHash, requestHash: approval.requestHash }),
@@ -190,12 +249,12 @@ describe("Maria spine run", () => {
       if (yesOutcome.status === "fulfilled") {
         expect(noOutcome).toEqual({ status: "fulfilled", value: { status: "approved", notSent: false } });
         expect(after?.status).toBe("approved");
-        expect(messages.some((m) => m.text === DECLINE_REPLY)).toBe(false);
+        expect(messages.some((m) => m.text === DEMO_WORDS.en.declineReply)).toBe(false);
       } else {
         expect(noOutcome).toEqual({ status: "fulfilled", value: { status: "rejected", notSent: true } });
         expect(yesOutcome.reason).toBeInstanceOf(StaleApprovalError);
         expect(after?.status).toBe("rejected");
-        expect(messages.filter((m) => m.text === DECLINE_REPLY)).toHaveLength(1);
+        expect(messages.filter((m) => m.text === DEMO_WORDS.en.declineReply)).toHaveLength(1);
       }
     }
   });
@@ -209,7 +268,7 @@ describe("Maria spine run", () => {
     if (!approval) throw new Error("expected an approval");
     const answers = await Promise.all([client.decline(session, approval.id), client.decline(session, approval.id)]);
     expect(answers.map((a) => a.status)).toEqual(["rejected", "rejected"]);
-    expect((await client.listMessages(session)).filter((m) => m.text === DECLINE_REPLY)).toHaveLength(1);
+    expect((await client.listMessages(session)).filter((m) => m.text === DEMO_WORDS.en.declineReply)).toHaveLength(1);
   });
 
   it("answers a NO after a YES with the approval's real status", async () => {
@@ -221,7 +280,7 @@ describe("Maria spine run", () => {
     if (!approval?.documentHash) throw new Error("expected a bound approval");
     await client.approve(session, approval.id, { documentHash: approval.documentHash, requestHash: approval.requestHash });
     expect(await client.decline(session, approval.id)).toEqual({ status: "approved", notSent: false });
-    expect((await client.listMessages(session)).some((m) => m.text === DECLINE_REPLY)).toBe(false);
+    expect((await client.listMessages(session)).some((m) => m.text === DEMO_WORDS.en.declineReply)).toBe(false);
   });
 
   it("brings the caseworker request after approval and closes on the pay stub", async () => {
