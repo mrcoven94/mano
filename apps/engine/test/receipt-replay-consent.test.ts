@@ -142,3 +142,35 @@ describe("LAP-747: a consent write that fails rolls back the receipt with it", (
     expect(markers).toEqual({ n: 1 });
   });
 });
+
+// Review round 15: G's response was lost, so its effect never ran. R then
+// completes, and G reconciles for the first time. A recorded revocation
+// wins: the grant's first application restores nothing.
+describe("LAP-747: a revocation already recorded wins over a grant that reconciles later", () => {
+  it("G's response is lost, R completes, G reconciles: the consent stays revoked", async () => {
+    const name = "lap747-lost-grant";
+    const ns = testEnv.PERSON_AGENT as DurableObjectNamespace;
+    const stub = ns.get(ns.idFromName(name));
+    const person = personStub(name);
+    const orgAgentId = "org:lap747-lost-county";
+    const grant = await person.grantConsent(name, { orgAgentId, purpose: "renewal", scope: ["documents"], caseId: "case-lap747-lost" });
+    const key = grant.approval!.idempotencyKey;
+    expect((await person.approve(grant.approval!.id, name)).status).toBe("completed");
+
+    // As if G's response had been lost: the org holds it, Engine recorded nothing.
+    await runInDurableObject(stub, (instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec("DELETE FROM receipts WHERE idempotency_key = ?", key);
+      sql.exec("DELETE FROM applied_effects WHERE idempotency_key = ?", key);
+      sql.exec("DELETE FROM consents");
+      (instance as unknown as { store: { updateAttempt(k: string, s: string): void } }).store.updateAttempt(key, "unknown");
+    });
+
+    const revoke = await person.revokeConsent(name, { orgAgentId, caseId: "case-lap747-lost" });
+    expect((await person.approve(revoke.approval!.id, name)).status).toBe("completed");
+
+    const late = await person.approve(grant.approval!.id, name);
+    expect(late.status).toBe("reconciled");
+    expect(await consents(name)).toHaveLength(0);
+  });
+});

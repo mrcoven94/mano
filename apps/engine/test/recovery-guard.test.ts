@@ -1,6 +1,6 @@
 import { env as testEnv, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { ActionGateway, DefiniteFailureError, MemoryApprovalStore, TimeoutError } from "../src/gateway/index.js";
+import { ActionGateway, DefiniteFailureError, MemoryApprovalStore, TimeoutError, contentHashOf, parseActionRequest } from "../src/gateway/index.js";
 import type { ActionRequest, CheckOutcome, Executor } from "../src/gateway/index.js";
 import { SqlApprovalStore, ensureGatewayTables } from "../src/gateway/sql-store.js";
 
@@ -521,5 +521,29 @@ describe("LAP-747: a replayed filing answers its receipt before the fence", () =
     await gateway.fenceProposals("sandbox-agency-portal", order("turn-b", now - 1000), 0);
     expect(await gateway.requestAction(k, new Date(), { proposal: order("turn-a", now - 2000) })).toMatchObject({ status: "completed", receipt: { externalId: filed.receipt!.externalId } });
     expect(office.posts).toHaveLength(1);
+  });
+});
+
+describe("LAP-747: the second fence check answers a receipt too", () => {
+  it("a receipt and a fence that both land during the safety check: the receipt wins", async () => {
+    const order = (turnId: string, ms: number) => ({ receivedAt: new Date(ms).toISOString(), turnId });
+    const now = Date.now();
+    let pause: Promise<void> | null = null;
+    const checker = { check: async () => { if (pause) await pause; return { verdict: "pass" as const, problems: [] }; } };
+    const store = new MemoryApprovalStore();
+    const gateway = new ActionGateway(store, new Office(), { checker });
+    const k = proposal();
+    let resume!: () => void;
+    pause = new Promise<void>((r) => (resume = r));
+    const late = gateway.requestAction(k, new Date(), { proposal: order("turn-a", now - 2000) });
+    await new Promise((r) => setTimeout(r, 0));
+    pause = null;
+    store.putReceipt({
+      id: "r1", idempotencyKey: k.idempotencyKey, actionType: "submit", recipient: k.recipient,
+      status: "completed", externalId: "RECEIVED-1", simulated: true, requestHash: await contentHashOf(parseActionRequest(k)), createdAt: new Date().toISOString(),
+    });
+    await gateway.fenceProposals(k.recipient, order("turn-b", now - 1000), 0);
+    resume();
+    expect(await late).toMatchObject({ status: "completed", receipt: { externalId: "RECEIVED-1" } });
   });
 });

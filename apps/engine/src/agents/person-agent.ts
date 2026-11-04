@@ -1064,6 +1064,9 @@ export class PersonAgent extends Agent<Env, PersonState> {
     const caseId = stored.payload?.caseId;
     if (typeof caseId !== "string" || !caseId) return;
     if (stored.payload?.consent === "grant") {
+      // A revocation already recorded for this case wins: a grant whose
+      // response was lost and that reconciles after it never restores it.
+      if (this.revokedLocally(caseId)) return;
       // Parsed to epoch milliseconds at write time; an unreadable
       // value fails closed as already expired.
       const raw = stored.payload?.expiresAt;

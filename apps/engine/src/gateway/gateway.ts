@@ -733,7 +733,11 @@ export class ActionGateway {
         expiresAt: win.expiresAt.toISOString(),
         escalated: win.escalated,
       };
-      if (opts.proposal && this.store.proposalFenced(req.recipient, opts.proposal)) return SUPERSEDED;
+      // Rechecked with no await before the insert: the fence may have landed
+      // during the checks above, and a receipt may have too. A receipt wins.
+      if (opts.proposal && this.store.proposalFenced(req.recipient, opts.proposal)) {
+        return this.receiptReuse(req, contentHash, keyHash) ?? SUPERSEDED;
+      }
       const holder = this.store.createApprovalForKey(approval, generation, opts.proposal);
       if (!holder) return STALE;
       if (holder.id === approval.id) return { status: "needs_approval", approval };
