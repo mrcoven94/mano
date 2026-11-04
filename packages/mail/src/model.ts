@@ -288,7 +288,10 @@ async function postJson(transport: Transport, url: string, body: unknown, deadli
       }
       try {
         return await res.json();
-      } catch {
+      } catch (err) {
+        // The body stalled until the timer aborted it. Not retried: the
+        // answer may already be running up its bill.
+        if (err instanceof Error && err.name === "AbortError") throw new ModelFailure("Model request timed out.", "timeout");
         // A parse error quotes the body it could not read.
         throw new ModelFailure(`Model response was not readable: ${res.status}`, "unreadable_response");
       } finally {

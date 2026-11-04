@@ -143,6 +143,27 @@ describe("MetaModelClient", () => {
     expect(failureKindOf(new Error("Maria Santos"))).toBe("other");
   });
 
+  it("a body that stalls after its headers is a timeout, tried once", async () => {
+    const fetchFn = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = new ReadableStream({
+        start(controller) {
+          init.signal!.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+        },
+      });
+      return new Response(body, { status: 200 });
+    });
+    const client = new MetaModelClient({ apiKey: "k", timeoutMs: 20, maxRetries: 2, fetchFn: fetchFn as unknown as typeof fetch });
+    const err = await client.responses({ model: "muse-spark-1.3", input: "hi" }).catch((e: unknown) => e);
+    expect(failureKindOf(err)).toBe("timeout");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("a body that arrives whole but is not JSON stays unreadable", async () => {
+    const client = new MetaModelClient({ apiKey: "k", maxRetries: 0, fetchFn: (async () => new Response("<html>Maria Santos</html>", { status: 200 })) as typeof fetch });
+    const err = await client.responses({ model: "muse-spark-1.3", input: "hi" }).catch((e: unknown) => e);
+    expect(failureKindOf(err)).toBe("unreadable_response");
+  });
+
   it("no connection and a timeout are fixed failure kinds", async () => {
     const offline = new MetaModelClient({ apiKey: "k", maxRetries: 0, fetchFn: (async () => { throw new TypeError("fetch failed"); }) as typeof fetch });
     expect(failureKindOf(await offline.responses({ model: "muse-spark-1.3", input: "hi" }).catch((e: unknown) => e))).toBe("no_connection");
