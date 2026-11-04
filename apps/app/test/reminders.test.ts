@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planReminders } from "../lib/reminders";
+import { notificationRoute, planReminders, reminderData } from "../lib/reminders";
 import type { Approval, Deadline } from "../lib/api/types";
 
 const NOW = new Date("2026-10-28T12:00:00.000Z").getTime();
@@ -69,5 +69,22 @@ describe("planReminders", () => {
   it("caps each kind at ten", () => {
     const many = Array.from({ length: 12 }, (_, i) => approval({ id: `a-${i}` }));
     expect(planReminders(many, [], NOW)).toHaveLength(10);
+  });
+});
+
+describe("a reminder's tap", () => {
+  it("carries the approval's ID, so the tap opens that approval", () => {
+    const data = reminderData({ kind: "approval", id: "appr-7", fireAt: 1 });
+    expect(notificationRoute(data)).toEqual({ pathname: "/approvals/[id]", params: { id: "appr-7" } });
+  });
+
+  it("opens the deadlines list for a deadline", () => {
+    expect(notificationRoute(reminderData({ kind: "deadline", id: "ddl-1", fireAt: 1 }))).toBe("/(tabs)/deadlines");
+  });
+
+  it("falls back to the approvals list with no usable ID", () => {
+    for (const data of [{ kind: "approval" }, { kind: "approval", approvalId: "" }, { kind: "approval", approvalId: 7 }, {}, null, undefined]) {
+      expect(notificationRoute(data)).toBe("/(tabs)/approvals");
+    }
   });
 });

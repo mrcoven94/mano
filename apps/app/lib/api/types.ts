@@ -38,7 +38,9 @@ export interface NewAttachment {
   bytesB64: string;
 }
 
-export type MessageStatus = "queued" | "sent" | "failed";
+// "sending" is mail on its way right now: it says nothing about whether it
+// has arrived.
+export type MessageStatus = "queued" | "sending" | "sent" | "failed";
 
 export interface ChatMessage {
   id: string;
@@ -112,6 +114,9 @@ export interface Deadline {
   dueAt: string;
   relatedApprovalId: string | null;
   done: boolean;
+  // What a photo from the person would settle, so the card can offer it. A
+  // closed list, so the words stay in the app's own strings.
+  photoOf?: "pay-stub";
 }
 
 export interface DocMeta {

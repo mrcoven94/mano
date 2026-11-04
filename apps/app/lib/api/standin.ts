@@ -263,6 +263,7 @@ export class StandInClient implements ManoClient {
       createdAt: this.iso(),
       attachments: [],
       status: "sent",
+      ...(reply.ask ? { ask: { approvalId: reply.ask } } : {}),
     };
     this.messages.push(agentMsg);
     for (const followUp of reply.followUps) {
@@ -282,7 +283,7 @@ export class StandInClient implements ManoClient {
   private async scriptedReply(
     text: string,
     attachments: NewAttachment[],
-  ): Promise<{ text: string; followUps: string[] }> {
+  ): Promise<{ text: string; followUps: string[]; ask?: string }> {
     const hasMail = attachments.some((a) => a.kind === "photo" || a.kind === "video");
     if (hasMail && !this.mailReceived) {
       this.mailReceived = true;
@@ -311,7 +312,7 @@ export class StandInClient implements ManoClient {
           bytesB64: b64encode(utf8ToBytes(electricBillText())),
         },
       );
-      return { text: this.words.mailReply, followUps: [] };
+      return { text: this.words.mailReply, followUps: [], ask: APPROVAL_ID };
     }
     if (hasMail && this.renewalApproved && !this.paystubReceived) {
       this.paystubReceived = true;
@@ -341,6 +342,9 @@ export class StandInClient implements ManoClient {
         },
         bytesB64: noticeB64,
       });
+      this.extraDeadlines = this.extraDeadlines.map((d) =>
+        d.id === "ddl-paystub" ? { id: d.id, dueAt: d.dueAt, relatedApprovalId: null, done: true, ...this.words.paystubDeadlineDone } : d,
+      );
       // The county answer lands right after in the recorded run.
       return { text: this.words.paystubReply, followUps: [this.words.approvedNotice] };
     }
@@ -348,15 +352,16 @@ export class StandInClient implements ManoClient {
     // "Ask Mano to change something" opens the chat with these words.
     // Only while the renewal waits: once decided, "nothing was sent" may be false.
     const waiting = this.mailReceived && this.renewalStatus() === "pending";
-    if (waiting && lower.includes("please change")) return { text: DEMO_WORDS.en.changeReply, followUps: [] };
-    if (waiting && lower.includes("por favor cambie")) return { text: DEMO_WORDS.es.changeReply, followUps: [] };
+    if (waiting && lower.includes("please change")) return { text: DEMO_WORDS.en.changeReply, followUps: [], ask: APPROVAL_ID };
+    if (waiting && lower.includes("por favor cambie")) return { text: DEMO_WORDS.es.changeReply, followUps: [], ask: APPROVAL_ID };
     if (lower.includes("deadline") || lower.includes("fecha")) {
       const base = !this.mailReceived ? 0 : this.renewalApproved ? 1 : 2;
       const open = base + this.extraDeadlines.filter((d) => !d.done).length;
       return { text: this.words.deadlinesReply(open), followUps: [] };
     }
     if (lower.includes("approv") || lower.includes("aprob")) {
-      return { text: this.words.approvalsReply(this.mailReceived && this.renewalStatus() === "pending" ? 1 : 0), followUps: [] };
+      const pending = this.mailReceived && this.renewalStatus() === "pending";
+      return { text: this.words.approvalsReply(pending ? 1 : 0), followUps: [], ...(pending ? { ask: APPROVAL_ID } : {}) };
     }
     if (lower.includes("hola") || lower.includes("espa")) {
       return { text: "Claro, hablamos español. Fotografíe su correo para empezar, o pregúnteme por sus fechas límite.", followUps: [] };
@@ -426,6 +431,7 @@ export class StandInClient implements ManoClient {
       dueAt: "2026-11-12T17:00:00.000Z",
       relatedApprovalId: null,
       done: false,
+      photoOf: "pay-stub",
     });
     return this.renewalApproved;
   }
@@ -458,6 +464,15 @@ export class StandInClient implements ManoClient {
 
   // --- deadlines ---
 
+  // The renewal's line follows the decision, so a card never says it waits
+  // once it does not.
+  private renewalWords(): { title: string; detail: string } {
+    const status = this.renewalStatus();
+    if (status === "approved") return this.words.renewalDeadlineApproved;
+    if (status === "rejected") return this.words.renewalDeadlineDeclined;
+    return this.words.renewalDeadline;
+  }
+
   async listDeadlines(session: Session): Promise<Deadline[]> {
     await this.wait();
     this.checkSession(session);
@@ -466,7 +481,7 @@ export class StandInClient implements ManoClient {
     const base: Deadline[] = [
       {
         id: "ddl-renewal",
-        ...this.words.renewalDeadline,
+        ...this.renewalWords(),
         dueAt: "2026-11-15T17:00:00.000Z",
         relatedApprovalId: APPROVAL_ID,
         done: this.renewalApproved !== null,

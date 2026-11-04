@@ -312,6 +312,61 @@ describe("Maria spine run", () => {
     expect(notice?.mimeType).toBe("application/pdf");
   });
 
+  it("links every reply that points at a waiting approval to that approval", async () => {
+    const client = makeClient();
+    const session = await signIn(client);
+    expect((await client.sendMessage(session, "any approvals?", [])).ask).toBeUndefined();
+    const photo = b64encode(utf8ToBytes("fake-photo-bytes"));
+    const reply = await client.sendMessage(session, "mail", [{ kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: photo }]);
+    const [approval] = await client.listApprovals(session);
+    expect(reply.ask).toEqual({ approvalId: approval?.id });
+    expect((await client.sendMessage(session, "any approvals?", [])).ask).toEqual({ approvalId: approval?.id });
+    expect((await client.sendMessage(session, "please change my income", [])).ask).toEqual({ approvalId: approval?.id });
+    expect((await client.listMessages(session)).find((m) => m.id === reply.id)?.ask).toEqual({ approvalId: approval?.id });
+    await client.approve(session, approval!.id, { documentHash: approval!.documentHash, requestHash: approval!.requestHash });
+    expect((await client.sendMessage(session, "any approvals?", [])).ask).toBeUndefined();
+  });
+
+  for (const language of ["en", "es"] as const) {
+    describe(`deadline words in ${language}`, () => {
+      const words = DEMO_WORDS[language];
+      const photo = { kind: "photo" as const, name: "m.jpg", mimeType: "image/jpeg", bytesB64: b64encode(utf8ToBytes("fake-photo-bytes")) };
+      async function withMail() {
+        const client = new StandInClient({ sha256B64, latencyMs: 0, language: () => language });
+        const session = await signIn(client);
+        await client.sendMessage(session, "mail", [photo]);
+        const [approval] = await client.listApprovals(session);
+        const renewal = async () => (await client.listDeadlines(session)).find((d) => d.id === "ddl-renewal");
+        return { client, session, approval: approval!, renewal };
+      }
+
+      it("says the renewal waits only while it does", async () => {
+        const { client, session, approval, renewal } = await withMail();
+        expect(await renewal()).toMatchObject({ done: false, detail: words.renewalDeadline.detail });
+        await client.approve(session, approval.id, { documentHash: approval.documentHash, requestHash: approval.requestHash });
+        expect(await renewal()).toMatchObject({ done: true, ...words.renewalDeadlineApproved });
+        expect(words.renewalDeadlineApproved.detail).not.toBe(words.renewalDeadline.detail);
+      });
+
+      it("keeps a declined renewal open and says nothing was sent", async () => {
+        const { client, session, approval, renewal } = await withMail();
+        await client.decline(session, approval.id);
+        expect(await renewal()).toMatchObject({ done: false, ...words.renewalDeadlineDeclined });
+      });
+
+      it("asks for the pay stub photo until one is sent, then closes the deadline", async () => {
+        const { client, session, approval } = await withMail();
+        await client.approve(session, approval.id, { documentHash: approval.documentHash, requestHash: approval.requestHash });
+        const stub = async () => (await client.listDeadlines(session)).find((d) => d.id === "ddl-paystub");
+        expect(await stub()).toMatchObject({ done: false, photoOf: "pay-stub", relatedApprovalId: null });
+        await client.sendMessage(session, "pay stub", [photo]);
+        const closed = await stub();
+        expect(closed).toMatchObject({ done: true, ...words.paystubDeadlineDone });
+        expect(closed?.photoOf).toBeUndefined();
+      });
+    });
+  }
+
   it("answers deadline and approval questions from current state", async () => {
     const client = makeClient();
     const session = await signIn(client);

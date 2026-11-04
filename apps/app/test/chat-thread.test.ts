@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "../lib/api/types";
-import { canSend, crisisNoticeFor, deviceCrisisId, edgeKey, visibleMessageIds, inDisplayOrder, listRows, mergeArrived, questionsToAcknowledge, showsThread, visibleEdges } from "../lib/chat-thread";
+import { canSend, crisisNoticeFor, deviceCrisisId, edgeKey, visibleMessageIds, inDisplayOrder, isMailSend, listRows, mergeArrived, pendingMessages, questionsToAcknowledge, showsThread, threadView, visibleEdges } from "../lib/chat-thread";
+import type { QueuedMessage } from "../lib/queue";
 
 const message = (id: string, ask?: string): ChatMessage => ({
   id,
@@ -115,5 +116,50 @@ describe("inDisplayOrder", () => {
     const at = (id: string, createdAt: string): ChatMessage => ({ ...message(id), createdAt });
     const ordered = inDisplayOrder([at("a-1", "2026-11-03T12:00:00.000Z"), at("device-crisis", "2026-11-03T12:05:01.000Z")], [at("q-1", "2026-11-03T12:05:00.000Z")]);
     expect(ordered.map((m) => m.id)).toEqual(["a-1", "q-1", "device-crisis"]);
+  });
+});
+
+describe("threadView", () => {
+  it("shows a loading view, not the empty card, until the first read finishes", () => {
+    expect(threadView([], false)).toBe("loading");
+    expect(threadView([], true)).toBe("empty");
+  });
+
+  it("shows a queued message or crisis line at once, even while loading", () => {
+    expect(threadView([message("crisis")], false)).toBe("thread");
+  });
+});
+
+describe("mail on its way", () => {
+  const queuedItem = (id: string): QueuedMessage => ({
+    id,
+    personId: "alice",
+    text: "mail",
+    attachments: [{ kind: "photo", name: "m.jpg", mimeType: "image/jpeg", bytesB64: "AA==" }],
+    createdAt: "2026-11-03T12:00:00.000Z",
+    attempts: 0,
+  });
+
+  it("counts photos and video as mail, and a voice note or plain text as not", () => {
+    expect(isMailSend([{ kind: "photo" }])).toBe(true);
+    expect(isMailSend([{ kind: "video" }])).toBe(true);
+    expect(isMailSend([{ kind: "voice" }])).toBe(false);
+    expect(isMailSend([])).toBe(false);
+  });
+
+  it("never labels the mail on its way as waiting for a connection, and lists it once", () => {
+    const rows = pendingMessages([queuedItem("q-1"), queuedItem("q-2")], { item: queuedItem("q-1"), answered: false });
+    expect(rows.map((m) => [m.id, m.status])).toEqual([
+      ["q-2", "queued"],
+      ["q-1", "sending"],
+    ]);
+  });
+
+  it("puts failed mail back to waiting once nothing is on its way", () => {
+    expect(pendingMessages([queuedItem("q-1")], null).map((m) => m.status)).toEqual(["queued"]);
+  });
+
+  it("keeps answered mail on screen with no waiting label until the thread is read again", () => {
+    expect(pendingMessages([], { item: queuedItem("q-1"), answered: true }).map((m) => [m.id, m.status])).toEqual([["q-1", "sending"]]);
   });
 });

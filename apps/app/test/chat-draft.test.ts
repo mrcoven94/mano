@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changeDraft, holdChatDraft, takeChatDraft } from "../lib/chat-draft";
+import { changeDraft, holdChatDraft, holdMailAsk, takeChatDraft, takeMailAsk } from "../lib/chat-draft";
 
 describe("chat draft handoff", () => {
   it("hands the quoted approval to the same session once", () => {
@@ -12,5 +12,14 @@ describe("chat draft handoff", () => {
     holdChatDraft("t-1", "About x");
     expect(takeChatDraft("t-2")).toBeNull();
     expect(takeChatDraft("t-1")).toBeNull();
+  });
+
+  it("hands a deadline's photo ask to the same session once, and never to another", () => {
+    holdMailAsk("t-1", "pay-stub");
+    expect(takeMailAsk("t-1")).toBe("pay-stub");
+    expect(takeMailAsk("t-1")).toBeNull();
+    holdMailAsk("t-1", "pay-stub");
+    expect(takeMailAsk("t-2")).toBeNull();
+    expect(takeMailAsk("t-1")).toBeNull();
   });
 });
