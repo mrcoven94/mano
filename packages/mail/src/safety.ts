@@ -69,25 +69,25 @@ export function findInstructions(text: string): ContentFlag[] {
   return flags;
 }
 
+// Words are read with links masked, so a word in a link
+// ("/scam-prevention", "lawyers-fee.example") is never read as prose.
+const LINK_HOLE = /\uE000(\d+)\uE001/g;
+
+function maskLinks(text: string): { masked: string; links: string[] } {
+  const links: string[] = [];
+  let masked = text;
+  for (const re of [LINK_RE, WWW_RE, BARE_DOMAIN_RE, CAPS_DOMAIN_RE]) {
+    masked = masked.replace(re, (m) => {
+      const url = m.replace(/[.,;:!?]+$/, "");
+      links.push(url);
+      return `\uE000${links.length - 1}\uE001${m.slice(url.length)}`;
+    });
+  }
+  return { masked, links };
+}
+
 export function findLinks(text: string): ContentFlag[] {
-  const flags: ContentFlag[] = [];
-  const seen = new Set<string>();
-  const collect = (re: RegExp, source = text) => {
-    for (const m of source.matchAll(re)) {
-      const url = m[0].replace(/[.,;:!?]+$/, "");
-      if (!seen.has(url)) {
-        seen.add(url);
-        flags.push({ kind: "link", label: "link needs a safety check before use", match: url });
-      }
-    }
-  };
-  collect(LINK_RE);
-  collect(WWW_RE);
-  // Bare domains outside the links already found.
-  const rest = text.replace(LINK_RE, (m) => " ".repeat(m.length)).replace(WWW_RE, (m) => " ".repeat(m.length));
-  collect(BARE_DOMAIN_RE, rest);
-  collect(CAPS_DOMAIN_RE, rest);
-  return flags;
+  return [...new Set(maskLinks(text).links)].map((url) => ({ kind: "link", label: "link needs a safety check before use", match: url }));
 }
 
 export function findPhones(text: string): ContentFlag[] {
@@ -178,65 +178,127 @@ function paymentDemand(text: string): string | null {
   return null;
 }
 
-// One clause of a sentence. A period or colon inside "$39.00" or a link
-// does not end it. A conjunction does, so "Beware of scams and pay $39"
-// keeps its demand when the warning is set aside. Patterns cap its length
-// so text with no punctuation stays linear: uncapped took 12 s on 20 KB.
-const CLAUSE = String.raw`(?:(?!\b(?:and|but|so|then|instead|unless|until|if|or|without)\b)(?:[^.!?,;:\n]|[.:?!](?=\S)))`;
-// Clauses that are not a demand on the person: the letter says nothing is
-// owed, warns about people who ask, or speaks to whoever reads it, which
-// is a planted instruction the reply never carries. Only the clause is
-// set aside, so "this is not a scam" clears nothing else in its sentence.
-const NOT_ASKED = new RegExp(
-  String.raw`\b(?:never|not|no|don't|doesn't|won't)\b(?!\s+(?:forget|delay|ignore|miss|wait|lose|fail)\b)${CLAUSE}{0,160}?` +
-    String.raw`\b(?:pay|pays|paying|payment|payments|fees?|charges?|costs?|money|social\s+security|ssn|password|pin|log\s*in|login|verify)\b${CLAUSE}{0,160}`,
-  "gi",
+// A letter is read clause by clause. A comma, semicolon, colon, line break
+// or conjunction ends a clause, but a colon before a link does not, so "Free
+// legal help: <link>" stays whole. A conjunction stays on its clause, so
+// "if you do not pay" still reads as a condition.
+const CLAUSE_BREAK =
+  /,(?=\s)|;|:(?=\s+(?!\uE000))|\n|\s+(?=(?:and|but|plus|so|then|instead|unless|until|if|or|nor|without|while|because|except|along\s+with|as\s+well\s+as|in\s+addition\s+to|together\s+with)\s)/i;
+// Says nothing is owed or asked. Not "do not forget to pay", "no later
+// than", "by not paying", or a condition ("if you do not pay").
+const NEGATED = new RegExp(
+  String.raw`^(?!\s*(?:if|unless)\b).*(?<!\bby\s)\b(?:never|not|no|none|don['’]t|doesn['’]t|won['’]t|cannot|can['’]t)\b(?!\s+(?:only|forget|delay|ignore|miss|wait|lose|fail|later|benefits)\b)[^\uE000]{0,120}?` +
+    String.raw`\b(?:pay|pays|paying|payment|payments|fees?|charges?|costs?|money|social\s+security|ssn|password|pin|log\s*in|login|verify)\b` +
+    String.raw`|\b(?:no\s+one|nobody)\b`,
+  "i",
 );
-const WARNS = new RegExp(
-  String.raw`${CLAUSE}{0,160}\b(?:scam(?:s|mers?)?|fraud|beware|imposters?|(?:someone|anyone)\s+(?:who|asks?|calls?|says?|claims?|tells?)|tell\s+the\s+(?:resident|person|user|client|recipient))\b${CLAUSE}{0,160}`,
-  "gi",
-);
-// A cost the person pays someone else, not the sender. Set aside unless
-// its own clause carries a link, which makes that link the way to pay.
-const COST_SHARE = new RegExp(String.raw`${CLAUSE}{0,160}\b(?:co-?pays?|share\s+of\s+cost|spend-?down|deductibles?|medical\s+bills|rent|landlords?|providers?|pharmac(?:y|ies)|utilit(?:y|ies))\b${CLAUSE}{0,160}`, "gi");
-// A referral printed on real notices. Its link is not a way to pay, and
-// a label's colon does not end it ("Free legal help: lawhelp.example").
-const REFERRAL = new RegExp(
-  String.raw`${CLAUSE}{0,160}\b(?:legal\s+(?:help|aid|services?|assistance|advice)|lawyers?|attorneys?|interpreters?|civil\s+rights|food\s+(?:banks?|pantr(?:y|ies)))\b(?:[^.!?,;\n]|[.?!](?=\S)){0,160}`,
-  "gi",
-);
+// A negation covers "or give your PIN" and "or password by email", and a
+// clause with no action of its own. "Never use a check, pay $39" keeps its
+// demand.
+const ACTION = /\b(?:pay|remit|send|mail|give|text|e-?mail|reply|enter|verify|confirm|log\s*in|sign\s*in|click|go|visit|call|buy|wire|update)\b/i;
+// Speaks to whoever reads the letter: a planted instruction (rule 4), which
+// is evidence and which the reply never carries. It is no demand on the
+// person, so its letter keeps its deadline.
+const PLANTED_ASIDE = /\b(?:tell|ask|instruct|advise|direct|inform)\s+(?:the|this|your)\s+(?:resident|person|user|client|recipient|reader)\b/i;
+// A sentence that warns the reader about other people. Its first clause may
+// describe what they ask for, but the sentence holds no demand of its own
+// and no link. "To prevent fraud, verify ..." is not one.
+const WARNS_READER =
+  /^(?:please\s+)?(?:beware|be\s+(?:careful|aware|alert)|watch\s+out|warning)\b|^(?:scammers?|imposters?|impostors?|fraudsters?|thieves|criminals)\b|^(?:if|when)\s+(?:someone|anyone|a\s+(?:caller|person|stranger|website|text|message|call))\b|^(?:anyone|someone)\s+(?:who\s+(?:asks?|calls?|says?|tells?|claims?|texts?|e-?mails?|wants?|demands?)|asking)\b|\b(?:is|are|may\s+be|could\s+be)\s+(?:a\s+)?(?:scams?|scammers?|fraud)\W*$/i;
+// A referral printed on real notices. Its link is not a way to pay.
+const REFERRAL = /\b(?:legal\s+(?:help|aid|services?|assistance|advice)|lawyers?|attorneys?|interpreters?|civil\s+rights|food\s+(?:banks?|pantr(?:y|ies))|report\s+(?:scams?|fraud|abuse))\b/i;
+// A cost the person pays someone else, not the sender.
+const COST_SHARE = /\b(?:co-?pays?|share\s+of\s+cost|spend-?down|deductibles?|medical\s+bills|rent|landlords?|providers?|pharmac(?:y|ies)|utilit(?:y|ies))\b/i;
 
-const BENEFITS = String.raw`(?:benefits?|snap|food\s+stamps|calfresh|ebt|medicaid|medi-?cal)`;
+const FOOD = String.raw`(?:snap|food\s+stamps|food\s+benefits?|food\s+assistance|basic\s+food|calfresh|ebt)`;
+const BENEFITS = String.raw`(?:benefits?|${FOOD}|medicaid|medi-?cal)`;
+const AMOUNT = String.raw`(?:\$\s*[1-9][\d,]*(?:\.\d{1,2})?|\b(?:[1-9][\d,]*(?:\.\d{2})?|[a-z]+(?:-[a-z]+)?)\s+(?:dollars|usd)\b)`;
+const NOT_A_PAYMENT = String.raw`(?!\s+(?:nothing|no|attention|stubs?|periods?|dates?|for\s+(?:food|groceries|child\s+care|rent|housing|utilities|heat|energy|medical|health|prescriptions))\b)`;
 // Paying the sender. A mention ("you pay", "your premium is $39"), a
 // conditional ("you may have to pay them back"), a list item ("2. Pay
 // stubs") and what a benefit pays for are not demands.
-const PAY_DEMAND =
-  /(?:^|[:;,]\s*|\b(?:and|then|please|now|must|need\s+to|(?<!\bmay\s)have\s+to|required\s+to|forget\s+to|remember\s+to|sure\s+to)\s+)(?:pay|remit)\b(?!\s+(?:nothing|no|attention|stubs?|periods?|dates?|for\s+(?:food|groceries|child\s+care|rent|housing|utilities|heat|energy|medical|health|prescriptions))\b)|\b(?:send|mail)\s+(?:us\s+)?\$\s*\d|\b(?:amount|balance|total)\s+(?:due|owed)\b|\bpayment\s+(?:of\s+\$|is\s+(?:due|required))|\$\s*\d[\d,.]*\s+(?:is\s+)?(?:due|owed|required)\b|\bmake\s+(?:a|your)\s+payment\b|\byou\s+owe\b/im;
+const PAY_DEMAND = new RegExp(
+  String.raw`^(?:(?:and|then|please|now|but|or|so|just|simply|also|first)\s+)*(?:pay|remit)\b${NOT_A_PAYMENT}` +
+    String.raw`|\b(?:must|needs?\s+to|(?<!\bmay\s)have\s+to|has\s+to|required\s+to|forget\s+to|remember\s+to|sure\s+to)\s+(?:pay|remit)\b${NOT_A_PAYMENT}` +
+    String.raw`|(?<!\b(?:you|they|we|who|may|can|will|would|to|not)\s)\bpay\s+\$\s*\d` +
+    String.raw`|\b(?:send|mail)\s+(?:us\s+)?\$\s*\d|\b(?:amount|balance|total)\s+(?:due|owed)\b|\bpayment\s+(?:of\s+\$|is\s+(?:due|required))` +
+    String.raw`|\$\s*\d[\d,.]*\s+(?:is\s+)?(?:due|owed|required)\b|\bmake\s+(?:a|your)\s+payment\b|\byou\s+owe\b`,
+  "i",
+);
+// A link given as the way to pay, however softly it is put.
+const PAY_ROUTE = new RegExp(String.raw`(?<!\b(?:benefits?|help|helps|you)\s)\bpay(?:ments?)?\b${NOT_A_PAYMENT}[^\uE000]{0,80}\uE000`, "i");
 // Asking for proof is ordinary, so these need the link beside them: in
 // the same sentence, or a next sentence that only points to it. "You can
 // also apply online at" is the letter's other way to apply. The office
-// verifying something itself is not an ask.
+// verifying something itself is not an ask, and a header above an ask is
+// not its subject, so a named office counts only with a verb of its own.
 const POINTER = /^(?:go\s+to|visit|click|tap|open|use|follow|here|link)\b|^\S+$/i;
 const VERIFY_ASK = new RegExp(
-  String.raw`(?<!\b(?:we|county|office|agency|state|caseworker)\s+(?:(?!you\b)\w+\s+){0,5})\b(?:verify|confirm|validate|reactivate|unlock|claim|update)\s+(?:your\s+|the\s+)?(?:[\w$,.-]+\s+){0,2}?(?:${BENEFITS}|account|identity|eligibility|case|card|information|info|details)\b`,
+  String.raw`(?<!\bwe\s+(?:(?!you\b)\w+\s+){0,5}|\b(?:county|office|agency|state|caseworker|department)\s+(?:will|must|may|can|needs?\s+to|has\s+to|wants?\s+to)\s+(?:\w+\s+){0,2})` +
+    String.raw`\b(?:verify|confirm|validate|reactivate|unlock|claim|update)\s+(?:your\s+|the\s+)?(?:[\w$,.-]+\s+){0,2}?(?:${BENEFITS}|account|identity|eligibility|case|card|information|info|details)\b`,
   "i",
 );
 const SECRET_ASK = /\b(?:log\s*in|login|sign\s*in\s+(?:at|to|here|with)|password|passcode|pin|social\s+security\s+number|ssn|card\s+number|bank\s+account|routing\s+number)\b/i;
-// A real office never takes these by text or email, or a PIN any way.
-const SECRET_BY_MESSAGE =
-  /(?<!\bwe\s+(?:\w+\s+){0,2})\b(?:text|e-?mail|reply\s+with|message|send|give|read|tell)\b[^.!?\n]{0,40}\byour\b[^.!?\n]{0,20}\b(?:pin|password|passcode)\b|\b(?:text|e-?mail|reply\s+with|message)\b[^.!?\n]{0,40}\b(?:social\s+security\s+number|ssn|bank\s+account|routing\s+number)\b/i;
-// No government agency charges to renew SNAP or Medicaid. Premiums,
-// copays and CHIP enrollment fees are real, and a hearing notice says
-// benefits kept during an appeal may have to be paid back.
-const REAL_CHARGE = /\bpremiums?\b|co-?pay|share\s+of\s+cost|spend-?down|enrollment\s+fee|deductible|overpa|free\s+of\s+charge|\brepay|\bpa(?:y|id)\s+(?:\w+\s+)?back\b/i;
-const NAMED_FEE = /\b(?:processing|renewal|recertification|reinstatement|reactivation|activation|release|verification|unlock)\s+fee\b/i;
-// Money the person hands over. An amount alone may be what they receive.
-const MONEY = String.raw`(?:\b(?:pay|send|mail|remit)\b[^.!?\n]{0,20}\$\s*\d|\$\s*\d[\d,.]*\s+(?:\w+\s+)?(?:fee|charge|payment)\b|\bfees?\b|\bcharges?\b)`;
-const KEEP = String.raw`\bto\s+(?:keep|renew|continue|maintain|reinstate|restore|reactivate|activate|release|unlock)\b`;
-const FEE_TO_KEEP = new RegExp(
-  String.raw`${MONEY}[^.!?\n]{0,60}${KEEP}[^.!?\n]{0,40}\b${BENEFITS}\b|${KEEP}[^.!?\n]{0,40}\b${BENEFITS}\b[^.!?\n]{0,60}${MONEY}`,
+// A real office never takes these by text or email, or a PIN any way. The
+// method may come before or after the secret, and an email address or phone
+// number is a method. A letter saying the office will send one is not an ask.
+const MESSAGED_SECRET = String.raw`(?:social\s+security\s+(?:number|no\.?|#)|s\.?s\.?n\b\.?|ss#|bank\s+account(?:\s+number)?|routing\s+number|pin|password|passcode|ebt\s+card\s+number)`;
+const HANDED_SECRET = String.raw`(?:pin|password|passcode|ebt\s+card\s+number)`;
+const HANDING = String.raw`(?:send|sending|provide|give|share|submit|confirm|verify|enter|include|forward|(?:must|should|needs?\s+to|has\s+to|have\s+to)\s+be\s+sent)`;
+const MESSAGE_APP = String.raw`(?:\b(?:by|via|through|over|in\s+an?|using|on)\s+(?:a\s+)?(?:text(?:\s+message)?|e-?mail|sms|message|whatsapp|telegram|messenger)\b)`;
+const ADDRESS = String.raw`\bto\s+(?:[^\s@]+@[^\s@]+|\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})`;
+const NOT_THE_SECRET = String.raw`(?:(?!\b(?:about|for|regarding|if)\b).)`;
+const SECRET_BY_MESSAGE = new RegExp(
+  String.raw`\b${HANDING}\b.{0,40}?\b${MESSAGED_SECRET}.{0,80}${MESSAGE_APP}|${MESSAGE_APP}.{0,40}\b${HANDING}\b.{0,40}?\b${MESSAGED_SECRET}|${MESSAGED_SECRET}.{0,40}\b(?:must|should|needs?\s+to|has\s+to|have\s+to)\s+be\s+sent\b.{0,40}${MESSAGE_APP}` +
+    String.raw`|\b(?:send|sending|give|share|forward)\b${NOT_THE_SECRET}{0,40}?\b${MESSAGED_SECRET}.{0,40}${ADDRESS}` +
+    String.raw`|\b(?:text|e-?mail|message|sms|reply(?:\s+to\s+this\s+\w+)?\s+with)\s+(?:(?!about\b|for\b|regarding\b|on\b|if\b)\S+\s+){0,4}?\b${MESSAGED_SECRET}` +
+    String.raw`|\b(?:send|give|read|tell|share)\b${NOT_THE_SECRET}{0,40}\byour\b.{0,20}\b${HANDED_SECRET}\b`,
   "i",
 );
+const OFFICE_SENDS = /^\s*(?:we\s+(?:will|may|can)\s+(?:send|text|e-?mail|mail|message)\s+(?:you|your|a|an|the)\b|your\s+(?:new\s+)?(?:pin|password|passcode)\s+will\s+be\s+sent\b)/i;
+// No government agency charges to renew SNAP or Medicaid, so a fee or an
+// amount for that counts. These real charges are taken out first, so one
+// beside it excuses nothing: they apply only where they exist. Food benefits
+// have no premium or copay, and only some health programs have an enrollment
+// fee.
+const CHARGE_PREFIX = String.raw`(?:(?:your|the|a|an|monthly|yearly|annual)\s+)*(?:${AMOUNT}\s+)?(?:(?:monthly|yearly|annual)\s+)?`;
+const CHARGE_SUFFIX = String.raw`(?:\s+fee)?(?:\s+(?:of|is|remains|amount\s+is)\s+${AMOUNT})?`;
+const ALWAYS_REAL = new RegExp(
+  String.raw`\boverpa\w+|\brepay\w*(?:\s+${AMOUNT})?|\bpa(?:y|id)\s+(?:\w+\s+)?back(?:\s+${AMOUNT})?|\bfree\s+of\s+charge\b|\b(?:your\s+)?rent(?:\s+of\s+${AMOUNT})?|\bchild\s+support(?:\s+of\s+${AMOUNT})?|\bfee\s+waivers?\b`,
+  "gi",
+);
+const HEALTH_CHARGE = new RegExp(String.raw`${CHARGE_PREFIX}\b(?:premiums?|co-?pay(?:s|ments?)?|coinsurance|share\s+of\s+cost|spend-?down|deductibles?|family\s+fee|parent\s+fee)\b${CHARGE_SUFFIX}`, "gi");
+const ENROLLMENT_FEE = new RegExp(String.raw`${CHARGE_PREFIX}\benrollment\s+fee\b${CHARGE_SUFFIX}`, "gi");
+const CHARGES_ENROLLMENT = /\b(?:chip|medicaid|kidscare|peachcare)\b/i;
+const NAMES_FOOD = new RegExp(String.raw`\b${FOOD}\b`, "i");
+// A fee to someone else, or for a card, not to stay on the program.
+const OTHER_FEE = /\b(?:atm|withdrawals?|surcharges?|transactions?|replacement|stores?|banks?|retailers?)\b/i;
+const NAMED_FEE_WORDS = String.raw`(?:processing|renewal|recertification|reinstatement|reactivation|activation|release|verification|unlock|enrollment)\s+fee`;
+const NAMED_FEE = new RegExp(String.raw`\b${NAMED_FEE_WORDS}\b`, "i");
+// A fee clause that names nothing else, in a letter about benefits. "Your
+// vehicle registration renewal fee" or "fee for copies" names something else.
+const BARE_FEE = new RegExp(
+  String.raw`^(?:(?:and|plus|without|with|but|then|so)\s+)?(?:(?:you\s+(?:must|need\s+to|have\s+to)|please)\s+)?(?:(?:pay|send|remit)\s+)?(?:(?:a|an|the|this|your|one-time)\s+)*(?:${AMOUNT}\s+)?(?:one-time\s+)?${NAMED_FEE_WORDS}(?:\s+of\s+${AMOUNT}|\s+${AMOUNT})?(?:\s+(?:is|are|must\s+be)(?:\s+${AMOUNT}|\s+(?:required|due|needed|paid|owed))?|\s+applies)?(?:\s+(?:at|by|to|online|now|today|first)\b.*)?\W*$`,
+  "i",
+);
+const NO_CHARGE = /^(?:\$\s*0(?:\.00)?|none|waived|n\/a|free)\b/i;
+const ANY_FEE = /(?<!\bin\s)\b(?:fees?|charges?)\b/i;
+// Money handed over. "Send your $120 rent receipt" and "your pay of $300"
+// name a paper or an income, not a payment.
+const HAND_OVER = new RegExp(
+  String.raw`(?<!\b(?:your|my|take-home|monthly|gross|net)\s)\b(?:pays?|paying)\b${NOT_A_PAYMENT}.{0,30}?(?:${AMOUNT}|\bfees?\b|\bcharges?\b)` +
+    String.raw`|\b(?:sends?|sending|mails?|remits?|wires?)\s+(?:us\s+|in\s+|a\s+|a\s+total\s+of\s+|a\s+payment\s+of\s+)?${AMOUNT}|\b(?:sends?|mails?|remits?)\b.{0,20}\b(?:fees?|payment|money)\b` +
+    String.raw`|${AMOUNT}\s+(?:\S+\s+){0,2}?(?:fees?|charges?|payment)\b|${AMOUNT}\s+(?:is|are)\s+(?:required|due|owed|needed)\b|\b(?:payment|fee)\s+of\s+${AMOUNT}|\bcosts?\s+${AMOUNT}|\b(?:fees?|charges?)\b.{0,30}\b(?:required|due|owed|needed|must\s+be\s+paid)\b` +
+    String.raw`|^(?:please\s+)?(?:renew|keep|reinstate|restore|reactivate|unlock)\b.{0,40}\bfor\s+${AMOUNT}`,
+  "i",
+);
+// Keeping a program going, in any form of the verb. "Renewal" is a noun
+// that names papers and other bills, so it does not count.
+const TO_KEEP = new RegExp(
+  String.raw`\b(?:keep(?:s|ing)?|renew(?:s|ing)?|continu(?:e|es|ing)|maintain(?:s|ing)?|reinstat(?:e|es|ing)|restor(?:e|es|ing)|reactivat(?:e|es|ing)|activat(?:e|es|ing)|releas(?:e|es|ing)|unlock(?:s|ing)?)\b.{0,40}\b${BENEFITS}\b`,
+  "i",
+);
+const THREAT = /\b(?:unless|until|without|failure\s+to|fail\s+to|if\s+you\s+(?:do\s+not|don['’]t))\b|\b(?:will|would|may|can)\s+(?:not\s+)?(?:end|stop|close|lose|be\s+\w+ed)\b|\blose\s+your\b/i;
 const NAMES_BENEFITS = new RegExp(String.raw`\b${BENEFITS}\b`, "i");
 // Offices no government has, in the words a fake one picks. Real names
 // stay out: Ohio has a Department of Medicaid and USCIS a National
@@ -245,69 +307,141 @@ const LOOKALIKE_AGENCY =
   /\b(?:u\.?s\.?|united\s+states|federal|national|american|government)\s+(?:benefits?|food\s+benefits?|food\s+stamps?|snap|ebt|medicaid|welfare)\s+(?:department|dept\.?|office|administration|agency|bureau|authority|commission|board)\b|\bdepartment\s+of\s+(?:benefits|food\s+stamps|snap)\b/i;
 const DRESSED_AS_GOVERNMENT = /(?:^|[.-])gov(?:t|ernment)?(?:[.-]|$)/;
 
-function firstUnofficialLink(text: string): string | null {
-  for (const link of findLinks(text)) {
-    const host = hostOf(link.match);
-    if (!host || !isOfficial(host)) return link.match;
+// A link built to hide where it goes: a name before the @ sign, a bare
+// address, a lookalike letter, a government name in the wrong place, or
+// something a browser cannot even read. No real office prints one.
+function hidesWhereItGoes(link: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(link.includes("://") ? link : `https://${link}`);
+  } catch {
+    return true;
+  }
+  if (url.username || url.password) return true;
+  const host = url.hostname.toLowerCase();
+  if (isOfficial(host)) return false;
+  return /^\[|^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes("xn--") || DRESSED_AS_GOVERNMENT.test(host) || /\.gov(?:[/?#]|$)/i.test(url.pathname + url.search);
+}
+
+function isUnofficial(link: string): boolean {
+  const host = hostOf(link);
+  return !host || !isOfficial(host);
+}
+
+interface Sentence {
+  original: string;
+  // The clauses that ask something of the person.
+  clauses: string[];
+  // Without referrals, whose links are not where a demand sends anyone.
+  reachable: string;
+}
+
+// A letter's sentences, read with its links masked.
+interface Reading {
+  sentences: Sentence[];
+  links: string[];
+  // Every clause that asks something of the person, one per line.
+  said: string;
+}
+
+function readLetter(masked: string, links: string[]): Reading {
+  const unmask = (s: string): string => s.replace(LINK_HOLE, (_m, k: string) => links[Number(k)]!);
+  // "S.S.N." and "Social Security no." do not end a sentence.
+  const parts = masked.split(/(?<=[.!?])(?<!\bno\.|\bs\.s\.n\.)\s+|\n\s*\n/i).map((s) => s.trim()).filter(Boolean);
+  const clausesOf = (s: string): string[] => s.split(CLAUSE_BREAK).map((c) => c.trim()).filter(Boolean);
+  const warns = (s: string): boolean => {
+    const [first, ...rest] = clausesOf(s);
+    return (
+      WARNS_READER.test(s) &&
+      !/\uE000/.test(s) &&
+      !PAY_DEMAND.test(first ?? "") &&
+      !rest.some((c) => PAY_DEMAND.test(c) || HAND_OVER.test(c) || /\$\s*\d/.test(c))
+    );
+  };
+  const sentences = parts.map((part, i) => {
+    // "Asked to pay a fee? It is a scam." The question is part of the warning.
+    const warning = warns(part) || (part.endsWith("?") && warns(parts[i + 1] ?? ""));
+    const kept: string[] = [];
+    let negated = false;
+    for (const clause of warning ? [] : clausesOf(part)) {
+      if (PLANTED_ASIDE.test(clause)) continue;
+      if (NEGATED.test(clause)) {
+        negated = true;
+        continue;
+      }
+      if (negated && (/^(?:or|nor)\b/i.test(clause) || !ACTION.test(clause))) continue;
+      negated = false;
+      kept.push(clause);
+    }
+    return { original: unmask(part), clauses: kept, reachable: kept.filter((c) => !REFERRAL.test(c)).join("\n") };
+  });
+  return { sentences, links, said: sentences.flatMap((s) => s.clauses).join("\n") };
+}
+
+function linksIn(text: string, links: string[]): string[] {
+  return [...text.matchAll(LINK_HOLE)].map((m) => links[Number(m[1])]!);
+}
+
+// Takes the real charges out of a clause, so what is left is what the
+// sentence charges for anything else.
+function withoutRealCharges(clause: string, food: boolean, chargesEnrollment: boolean): string {
+  let rest = clause.replace(ALWAYS_REAL, " ");
+  if (!food) rest = rest.replace(HEALTH_CHARGE, " ");
+  if (!food && chargesEnrollment) rest = rest.replace(ENROLLMENT_FEE, " ");
+  return rest.replace(/\s+/g, " ").trim();
+}
+
+function feeToKeep({ sentences, said }: Reading): string | null {
+  if (!NAMES_BENEFITS.test(said)) return null;
+  const chargesEnrollment = CHARGES_ENROLLMENT.test(said);
+  for (const sentence of sentences) {
+    const food = NAMES_FOOD.test(sentence.clauses.join(" "));
+    const clauses = sentence.clauses.filter((c) => !OTHER_FEE.test(c)).map((c) => withoutRealCharges(c, food, chargesEnrollment));
+    const whole = clauses.join(" ");
+    const charged =
+      clauses.some((c, k) => !NO_CHARGE.test(clauses[k + 1] ?? "") && ((ANY_FEE.test(c) && TO_KEEP.test(c)) || (NAMED_FEE.test(c) && NAMES_BENEFITS.test(c)) || BARE_FEE.test(c))) ||
+      (HAND_OVER.test(whole) && (TO_KEEP.test(whole) || (NAMES_BENEFITS.test(whole) && THREAT.test(whole))));
+    if (charged) return sentence.original;
   }
   return null;
 }
 
-// A letter's sentences with what is not a demand on the person set aside.
-interface Said {
-  originals: string[];
-  said: string[];
-  // Without referrals, whose links are not where a demand sends anyone.
-  reachable: string[];
-}
-
-function saidIn(text: string): Said {
-  const originals = text.split(/(?<=[.!?])\s+|\n\s*\n/).map((s) => s.trim()).filter(Boolean);
-  const said = originals.map((s) => s.replace(NOT_ASKED, " ").replace(WARNS, " "));
-  return { originals, said, reachable: said.map((s) => s.replace(REFERRAL, " ")) };
-}
-
 // Asks no real office makes, or a sender that is not one. A link is not
 // needed for any of these, and the letter's dates are not worth repeating.
-function clearScam({ originals, said, reachable }: Said): ContentFlag | null {
-  const find = (test: (s: string) => boolean): string | null => {
-    const k = said.findIndex(test);
-    return k < 0 ? null : originals[k]!;
-  };
+function clearScam(reading: Reading): ContentFlag | null {
+  const { sentences, links, said } = reading;
   const scam = (label: string, match: string): ContentFlag => ({ kind: "scam", label, match });
-  const dressed = findLinks(reachable.join("\n")).find((l) => {
-    const host = hostOf(l.match);
-    return host && !isOfficial(host) && DRESSED_AS_GOVERNMENT.test(host);
-  });
-  if (dressed) return scam("link dressed as a government site", dressed.match);
-  const letter = said.join("\n");
-  const lookalike = letter.match(LOOKALIKE_AGENCY);
+  const hiding = sentences.flatMap((s) => linksIn(s.clauses.join("\n"), links)).find(hidesWhereItGoes);
+  if (hiding) return scam("link that hides where it goes", hiding);
+  const lookalike = said.match(LOOKALIKE_AGENCY);
   if (lookalike) return scam("names an agency that does not exist", lookalike[0]);
-  const secret = find((s) => SECRET_BY_MESSAGE.test(s));
-  if (secret) return scam("asks for a Social Security number, PIN or password by message", secret);
-  if (NAMES_BENEFITS.test(letter)) {
-    const fee = find((s) => !REAL_CHARGE.test(s) && (NAMED_FEE.test(s) || FEE_TO_KEEP.test(s)));
-    if (fee) return scam("charges a fee to keep or renew benefits", fee);
-  }
+  const secret = sentences.find((s) => {
+    const whole = s.clauses.join(" ");
+    return !/\bfax/i.test(whole) && !OFFICE_SENDS.test(whole) && SECRET_BY_MESSAGE.test(whole);
+  });
+  if (secret) return scam("asks for a Social Security number, PIN or password by message", secret.original);
+  const fee = feeToKeep(reading);
+  if (fee) return scam("charges a fee to keep or renew benefits", fee);
   return null;
 }
 
 // Pressure to pay or verify, with an unofficial link or a warning off the
 // person's own office.
-function urgentScam(text: string): ContentFlag | null {
-  const lower = text.toLowerCase();
+function urgentScam({ sentences, links, said }: Reading): ContentFlag | null {
+  const lower = said.toLowerCase();
   const urgency = URGENCY_WORDS.filter((w) => lower.includes(w));
   if (urgency.length === 0) return null;
-  const asksPayment = /pay\b|payment|verify|confirm\s+your|update\s+your\s+(account|information|benefits)/i.test(text);
-  if (!asksPayment) return null;
+  // "Send your pay stubs right away" or "so we can verify your income" is
+  // ordinary, whatever link the letter also prints.
+  const asks = /\bverify\s+now\b/i.test(said) || VERIFY_ASK.test(said) || SECRET_ASK.test(said) || said.split("\n").some((c) => PAY_DEMAND.test(c));
+  if (!asks) return null;
+  const detail = `urgency words: ${urgency.slice(0, 3).join(", ")}`;
   // A real office never tells the person not to contact it.
-  const cutOff = text.match(/\b(?:do\s+not|don't|never)\s+(?:call|contact|phone|visit)\s+(?:the\s+|your\s+)?(?:county|office|agency|state|caseworker|benefits\s+office)\b[^.!?\n]*/i);
-  if (cutOff) {
-    return { kind: "scam", label: "urgent verification ask that tells the person not to contact their office", match: cutOff[0], detail: `urgency words: ${urgency.slice(0, 3).join(", ")}` };
-  }
-  const link = firstUnofficialLink(text);
+  const cutOff = sentences.map((s) => s.original.match(/\b(?:do\s+not|don't|never)\s+(?:call|contact|phone|visit)\s+(?:the\s+|your\s+)?(?:county|office|agency|state|caseworker|benefits\s+office)\b[^.!?\n]*/i)).find(Boolean);
+  if (cutOff) return { kind: "scam", label: "urgent verification ask that tells the person not to contact their office", match: cutOff[0], detail };
+  const link = sentences.flatMap((s) => linksIn(s.reachable, links)).find(isUnofficial);
   if (!link) return null;
-  return { kind: "scam", label: "urgent payment or verification ask with an unofficial link", match: link, detail: `urgency words: ${urgency.slice(0, 3).join(", ")}` };
+  return { kind: "scam", label: "urgent payment or verification ask with an unofficial link", match: link, detail };
 }
 
 // An ordinary ask (pay, verify, log in, give a Social Security number)
@@ -315,15 +449,19 @@ function urgentScam(text: string): ContentFlag | null {
 // Only the link is suspect: a county on a plain .org or a premium's
 // payment vendor reads the same, so the person is warned off the link and
 // told to check the date, which stays out of Mano's deadlines.
-function suspectLink({ said, reachable }: Said): ContentFlag | null {
-  const link = firstUnofficialLink(reachable.join("\n"));
+function suspectLink({ sentences, links }: Reading): ContentFlag | null {
+  const link = sentences.flatMap((s) => linksIn(s.reachable, links)).find(isUnofficial);
   if (!link) return null;
-  const pays = said.some((s) => PAY_DEMAND.test(s.replace(COST_SHARE, (clause) => (findLinks(clause).length > 0 ? clause : " "))));
+  // A cost paid to someone else is no demand, unless its own clause carries
+  // the link, which makes that link the way to pay.
+  const pays = sentences.some((s) =>
+    s.clauses.some((c) => (PAY_DEMAND.test(c) && (!COST_SHARE.test(c) || /\uE000/.test(c))) || (PAY_ROUTE.test(c) && !REFERRAL.test(c) && linksIn(c, links).some(isUnofficial))),
+  );
   if (pays) return { kind: "suspect_link", label: "payment demand with an unofficial link", match: link };
-  for (const [k, s] of reachable.entries()) {
-    if (!VERIFY_ASK.test(s) && !SECRET_ASK.test(s)) continue;
-    const next = reachable[k + 1] ?? "";
-    const near = firstUnofficialLink(POINTER.test(next.trim()) ? `${s}\n${next}` : s);
+  for (const [k, s] of sentences.entries()) {
+    if (!VERIFY_ASK.test(s.reachable) && !SECRET_ASK.test(s.reachable)) continue;
+    const next = sentences[k + 1]?.reachable ?? "";
+    const near = linksIn(POINTER.test(next.trim()) ? `${s.reachable}\n${next}` : s.reachable, links).find(isUnofficial);
     if (near) return { kind: "suspect_link", label: "asks to verify benefits or log in at an unofficial link", match: near };
   }
   return null;
@@ -340,12 +478,13 @@ function suspectLink({ said, reachable }: Said): ContentFlag | null {
 // the gate only reads deadlines, so it publishes a scam's "Pay $39 by" as
 // readily as a premium's unless this screen flags the letter first.
 export function screenScam(text: string): ContentFlag[] {
-  const demand = paymentDemand(text);
+  const { masked, links } = maskLinks(text);
+  const demand = paymentDemand(masked);
   if (demand) {
-    return [{ kind: "scam", label: "demands payment by gift or prepaid card, wire, crypto or a payment app", match: demand }];
+    return [{ kind: "scam", label: "demands payment by gift or prepaid card, wire, crypto or a payment app", match: demand.replace(LINK_HOLE, (_m, k: string) => links[Number(k)]!) }];
   }
-  const said = saidIn(text);
-  const flag = clearScam(said) ?? urgentScam(text) ?? suspectLink(said);
+  const reading = readLetter(masked, links);
+  const flag = clearScam(reading) ?? urgentScam(reading) ?? suspectLink(reading);
   return flag ? [flag] : [];
 }
 
