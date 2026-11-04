@@ -81,7 +81,7 @@ import {
   updateDeadline,
   type DeadlineResult,
 } from "../deadlines.js";
-import { gateHelpText, isHelpText, nextCheckAt, planHelpText, standingOf, type HelpStanding } from "../always-on.js";
+import { dailyCheckSends, gateHelpText, isHelpText, nextCheckAt, planHelpText, standingOf, type HelpStanding } from "../always-on.js";
 
 // A delivery run holds its claim this long; a run that crashed is
 // reclaimed after it. Retries back off from 30 seconds to an hour and
@@ -797,9 +797,9 @@ export class PersonAgent extends Agent<Env, PersonState> {
   private async helpStanding(reminder: { id: string; generation: number }): Promise<HelpStanding> {
     const revision = profileRevision(this.db());
     try {
-      return standingOf(await this.profileStore()?.read(), reminder, revision);
+      return standingOf(await this.profileStore()?.read(), reminder, revision, dailyCheckSends(this.env));
     } catch {
-      return standingOf(null, reminder, revision);
+      return standingOf(null, reminder, revision, dailyCheckSends(this.env));
     }
   }
 
@@ -836,6 +836,10 @@ export class PersonAgent extends Agent<Env, PersonState> {
     try {
       const generation = currentGeneration(this.db());
       const { on, timeZone } = await this.alwaysOnSetting();
+      if (on && !dailyCheckSends(this.env)) {
+        this.store.audit({ event: "always_on.sends_off" });
+        return;
+      }
       const profile = on ? await this.profileStore()?.read() : null;
       if (!profile) return;
       const planned = planHelpText(this.db(), profile, generation, timeZone, Date.now());

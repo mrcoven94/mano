@@ -388,3 +388,44 @@ describe("Blooio native iMessage calls (LAP-636)", () => {
     expect(event?.reaction).toEqual({ value: "love", action: "add" });
   });
 });
+
+describe("a send marked once", () => {
+  function counted(respond: () => Response) {
+    let posts = 0;
+    let sleeps = 0;
+    const channel = new BlooioChannel({
+      apiKey: "key",
+      channelId: "ch",
+      fetchFn: (async () => {
+        posts += 1;
+        return respond();
+      }) as typeof fetch,
+      sleepFn: async () => {
+        sleeps += 1;
+      },
+    });
+    return { channel, posts: () => posts, sleeps: () => sleeps };
+  }
+  const input = { to: "+15550001001", chatId: "chat_1", text: "hello", idempotencyKey: "key_1" };
+
+  it("is one POST: a 503 is not tried again and waits for nothing", async () => {
+    const c = counted(() => new Response("down", { status: 503 }));
+    await expect(c.channel.send({ ...input, once: true })).rejects.toBeInstanceOf(ChannelUncertain);
+    expect(c.posts()).toBe(1);
+    expect(c.sleeps()).toBe(0);
+  });
+
+  it("is one POST when the network fails", async () => {
+    const c = counted(() => {
+      throw new Error("network");
+    });
+    await expect(c.channel.send({ ...input, once: true })).rejects.toBeInstanceOf(ChannelUncertain);
+    expect(c.posts()).toBe(1);
+  });
+
+  it("every other send keeps its three", async () => {
+    const c = counted(() => new Response("down", { status: 503 }));
+    await expect(c.channel.send(input)).rejects.toBeInstanceOf(ChannelUncertain);
+    expect(c.posts()).toBe(3);
+  });
+});

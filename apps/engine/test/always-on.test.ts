@@ -101,6 +101,62 @@ const helpRows = (h: string) =>
     state.storage.sql.exec("SELECT id, status FROM reminders WHERE id LIKE 'help:%' ORDER BY id").toArray() as { id: string; status: string }[],
   );
 
+// As wrangler.toml ships it: MANO_DAILY_CHECK_SENDS unset or anything but "on".
+function checkSends(h: string, value: string | undefined) {
+  return runInDurableObject(stubFor(h), (instance) => {
+    (instance as unknown as { env: Record<string, unknown> }).env.MANO_DAILY_CHECK_SENDS = value;
+  });
+}
+
+describe("MANO_DAILY_CHECK_SENDS", () => {
+  afterEach(() => {
+    (testEnv as unknown as Record<string, unknown>).MANO_DAILY_CHECK_SENDS = "on";
+  });
+
+  it.each([undefined, "off", "true", ""])("as %j the check runs and sends nothing, marks nothing raised, and sends once it is on", async (value) => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    const h = await personIn(`ao-flag-${String(value)}-x`, "CA");
+    await checkSends(h, value);
+    await alarmsAt(h, at(1, 9, 30, PACIFIC));
+    expect(posts).toEqual([]);
+    expect(await helpRows(h)).toEqual([]);
+    expect(await checkTimes(h)).toEqual([at(2, 9, 30, PACIFIC)]);
+
+    await checkSends(h, "on");
+    await alarmsAt(h, at(2, 9, 30, PACIFIC));
+    expect(posts.map((p) => p.key)).toEqual(["reminder:help:g0:CA:snap"]);
+  });
+
+  it("turned off with a text already waiting, holds it without raising or losing it", async () => {
+    const posts = recordChannels();
+    const zone = "America/New_York";
+    setClock(at(0, 12, 0, zone));
+    const h = await personIn("ao-flag-held", "NY");
+    await checkSends(h, "on");
+    await alarmsAt(h, at(1, 22, 30, zone));
+    expect(await helpRows(h)).toEqual([{ id: "help:g0:NY:snap", status: "scheduled" }]);
+    await checkSends(h, "off");
+    await alarmsAt(h, at(2, 9, 0, zone));
+    expect(posts).toEqual([]);
+    expect(await helpRows(h)).toEqual([{ id: "help:g0:NY:snap", status: "scheduled" }]);
+    await checkSends(h, "on");
+    await alarmsAt(h, at(3, 9, 0, zone));
+    expect(posts.map((p) => p.key)).toEqual(["reminder:help:g0:NY:snap"]);
+  });
+
+  it("a deadline's nudge goes either way", async () => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    const h = await personIn("ao-flag-nudge", "CA");
+    await checkSends(h, "off");
+    const made = await call(h, "POST", "/deadlines", { title: "CalFresh renewal", dueDate: dayPlus(1), program: "CalFresh", kind: "renewal", source: { kind: "person" }, idempotencyKey: "flag-nudge", generation: 0 });
+    expect(made.status).toBe(201);
+    await alarmsAt(h, at(1, 9, 30, PACIFIC));
+    expect(posts.map((p) => p.key.split(":")[1])).toEqual(["nudge"]);
+  });
+});
+
 describe("the daily check", () => {
   it("runs at the nudge time in the person's zone, texts once, and a second run sends nothing", async () => {
     const posts = recordChannels();
@@ -273,59 +329,77 @@ describe("the daily check", () => {
     expect(await checkTimes(h)).toEqual([]);
   });
 
-  it("a letter that adds someone to the household does not widen the screen until the person confirms", async () => {
+  // The household as PR 153 defines it: who the person named, by any leaf.
+  async function letter(h: string, key: string, fields: Record<string, unknown>) {
+    const out = await runInDurableObject(stubFor(h), async (instance, state) => {
+      state.storage.sql.exec("INSERT OR IGNORE INTO documents(id, name, hash, r2_key) VALUES ('doc-1', 'letter.txt', 'h', 'k')");
+      return (instance as PersonAgent).recordDocumentFacts(personIdForHandle(h), { documentId: "doc-1", idempotencyKey: key, fields });
+    });
+    expect(out.status).toBe("ok");
+  }
+  const single = (income: number) => ({ "person.address.state": "CA", "person.householdConfirmed": true, "income.job.amount": income, "income.job.frequency": "monthly", "person.alwaysOn": true });
+
+  it("a letter that adds someone does not widen the screen, and confirming again does not count them until the person names them", async () => {
     const posts = recordChannels();
     setClock(at(0, 12, 0, PACIFIC));
     // Confirmed single at $2,000 a month: over CalFresh's lowest limit for one
     // ($1,729), under it for two ($2,345).
     const h = handle("ao-letter");
-    expect(
-      (await patch(h, { "person.address.state": "CA", "person.householdConfirmed": true, "income.job.amount": 2000, "income.job.frequency": "monthly", "person.alwaysOn": true })).status,
-    ).toBe(200);
+    expect((await patch(h, single(2000))).status).toBe(200);
+    await letter(h, "letter-1", { "household.child.name": "Sam Example" });
     await alarmsAt(h, at(1, 9, 30, PACIFIC));
     expect(posts).toEqual([]);
 
-    const added = await runInDurableObject(stubFor(h), async (instance, state) => {
-      state.storage.sql.exec("INSERT INTO documents(id, name, hash, r2_key) VALUES ('doc-1', 'letter.txt', 'h', 'k')");
-      return (instance as PersonAgent).recordDocumentFacts(personIdForHandle(h), {
-        documentId: "doc-1",
-        idempotencyKey: `patch-${++keyCount}`,
-        fields: { "household.child.name": "Sam Example" },
-      });
-    });
-    expect(added.status).toBe("ok");
+    setClock(at(1, 12, 0, PACIFIC));
+    expect((await patch(h, { "person.householdConfirmed": true })).status).toBe(200);
     await alarmsAt(h, at(2, 9, 30, PACIFIC));
     expect(posts).toEqual([]);
 
-    // The person says who lives with them, and only then is the child counted.
     setClock(at(2, 12, 0, PACIFIC));
-    expect((await patch(h, { "person.householdConfirmed": true })).status).toBe(200);
+    expect((await patch(h, { "household.child.name": "Sam Example" })).status).toBe(200);
     await alarmsAt(h, at(3, 9, 30, PACIFIC));
     expect(posts.map((p) => p.key)).toEqual(["reminder:help:g0:CA:snap"]);
     expect(posts[0].text).toContain("household of 2");
   });
 
-  it("a member a letter names after the person confirmed is not counted, with or without a name", async () => {
+  it("a member a letter names is not counted, with or without a name", async () => {
     const posts = recordChannels();
     setClock(at(0, 12, 0, PACIFIC));
     const h = handle("ao-uncounted");
-    await patch(h, { "person.address.state": "CA", "person.householdConfirmed": true, "income.job.amount": 900, "income.job.frequency": "monthly", "person.alwaysOn": true });
-    setClock(at(0, 13, 0, PACIFIC));
-    const out = await runInDurableObject(stubFor(h), async (instance, state) => {
-      state.storage.sql.exec("INSERT INTO documents(id, name, hash, r2_key) VALUES ('doc-1', 'letter.txt', 'h', 'k')");
-      return (instance as PersonAgent).recordDocumentFacts(personIdForHandle(h), {
-        documentId: "doc-1",
-        idempotencyKey: "uncounted",
-        fields: { "household.named.name": "Sam Example", "household.nameless.relationship": "child" },
-      });
-    });
-    expect(out.status).toBe("ok");
+    await patch(h, single(900));
+    await letter(h, "uncounted", { "household.named.name": "Sam Example", "household.nameless.relationship": "child" });
     await alarmsAt(h, at(1, 9, 30, PACIFIC));
     expect(posts).toHaveLength(1);
     expect(posts[0].text).toContain("household of 1");
   });
 
-  it("a confirmation in flight when a letter adds someone is refused, and writes nothing", async () => {
+  it("a member the person vouched for stays counted when a later letter corrects their name", async () => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    const h = handle("ao-corrected-name");
+    await patch(h, single(2000));
+    await letter(h, "sam-1", { "household.sam.name": "Sam Example" });
+    setClock(at(0, 13, 0, PACIFIC));
+    // They said who Sam is without restating the name, so the name stays the letter's.
+    expect((await patch(h, { "household.sam.relationship": "son" })).status).toBe(200);
+    setClock(at(0, 14, 0, PACIFIC));
+    await letter(h, "sam-2", { "household.sam.name": "Samuel Example" });
+    await alarmsAt(h, at(1, 9, 30, PACIFIC));
+    expect(posts).toHaveLength(1);
+    expect(posts[0].text).toContain("household of 2");
+  });
+
+  it("a number the person gave counts as the household", async () => {
+    const posts = recordChannels();
+    setClock(at(0, 12, 0, PACIFIC));
+    const h = handle("ao-number");
+    await patch(h, { "person.address.state": "CA", "person.householdSize": 2, "income.job.amount": 2000, "income.job.frequency": "monthly", "person.alwaysOn": true });
+    await alarmsAt(h, at(1, 9, 30, PACIFIC));
+    expect(posts).toHaveLength(1);
+    expect(posts[0].text).toContain("household of 2");
+  });
+
+  it("a confirmation in flight when a letter adds someone does not count them", async () => {
     const posts = recordChannels();
     setClock(at(0, 12, 0, PACIFIC));
     const h = handle("ao-inflight");
@@ -340,8 +414,8 @@ describe("the daily check", () => {
       const spy = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args) => {
         if (!landed) {
           landed = true;
-          const letter = await agent.recordDocumentFacts(personId, { documentId: "doc-1", idempotencyKey: "inflight-letter", fields: { "household.child.name": "Sam Example" } });
-          expect(letter.status).toBe("ok");
+          const written = await agent.recordDocumentFacts(personId, { documentId: "doc-1", idempotencyKey: "inflight-letter", fields: { "household.child.name": "Sam Example" } });
+          expect(written.status).toBe("ok");
         }
         return real(...args);
       });
@@ -349,9 +423,7 @@ describe("the daily check", () => {
       spy.mockRestore();
       return answer;
     });
-    expect(out.status).toBe("roster_moved");
-    const { profile } = (await (await call(h, "GET", "/profile")).json()) as { profile: { person: { householdConfirmed?: unknown } } };
-    expect(profile.person.householdConfirmed).toBeUndefined();
+    expect(out.status).toBe("ok");
     await alarmsAt(h, at(1, 9, 30, PACIFIC));
     expect(posts).toEqual([]);
   });

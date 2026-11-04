@@ -8,12 +8,11 @@
 //
 // The catalog never proves anyone qualifies (the agency decides), so the
 // text only ever says "may" and what to check. A match needs the state, the
-// person's own word on who lives with them, and every income entry with an
-// amount and a frequency: anything missing or unsettled is no match, never a
-// guess. Their word covers who was on file when they gave it, or whom they
-// named themselves: someone a letter adds later is not counted until they say
-// it again, so a letter cannot widen the screen. A program already on their
-// profile is not news.
+// household size by householdSizeOf (the one rule, in @mano/programs: whom the
+// person named or the number they gave, so a letter cannot widen the screen),
+// and every income entry with an amount and a frequency: anything missing or
+// unsettled is no match, never a guess. A program already on their profile is
+// not news.
 //
 // Each text is a reminder row keyed by generation, state and program, so it
 // goes out through the person's one delivery wake-up and Channels' agent-send
@@ -27,6 +26,13 @@
 // most one text, and none while an earlier one is waiting or one was planned
 // or sent today, so three new programs are three days of one text, not three at once.
 //
+// MANO_DAILY_CHECK_SENDS must be "on" for any of this to reach a person. It
+// ships off, because Channels has to understand no replay before Engine sends
+// one of these: turn it on in a one-line change to wrangler.toml once both
+// Workers carry this code, and set it back to "off" the same way to stop. While
+// it is off the check still runs, plans nothing and marks nothing raised, and a
+// text already waiting holds, so each program is still told once it is on.
+//
 // The check runs at the nudge time (MANO_NUDGE_TIME) in the zone of the
 // person's state. Right before each handoff the profile is read and the text
 // screened again, because it may have waited overnight: with the flag off or
@@ -39,7 +45,7 @@
 //
 // Test: test/always-on.test.ts, through the real worker and the Durable Object
 // alarm.
-import { listPrograms, parseProgram, screenIncome } from "@mano/programs";
+import { householdSizeOf, listPrograms, parseProgram, screenIncome } from "@mano/programs";
 import { createReminder, currentGeneration } from "./agents/agent-state.js";
 import { addDays, deferReminder, localDate, timeZoneForState, zonedInstant, type NudgeTime } from "./deadlines.js";
 import { profileRevision, type Frequency, type Profile } from "./profile.js";
@@ -53,6 +59,10 @@ const WINDOW_OPENS_HOUR = 9;
 const WINDOW_CLOSES_HOUR = 20;
 const MONTHS_PER_YEAR = 12;
 const TIMES_A_MONTH: Record<Frequency, number> = { weekly: 52 / MONTHS_PER_YEAR, biweekly: 26 / MONTHS_PER_YEAR, monthly: 1, yearly: 1 / MONTHS_PER_YEAR };
+
+export function dailyCheckSends(env: { MANO_DAILY_CHECK_SENDS?: string }): boolean {
+  return env.MANO_DAILY_CHECK_SENDS === "on";
+}
 
 export function isHelpText(reminderId: string): boolean {
   return reminderId.startsWith(HELP_PREFIX);
@@ -77,25 +87,12 @@ function monthlyIncome(profile: Profile): number | null {
   return total;
 }
 
-// How many live there, counting the person, by their own word. Null when they
-// have not given it. A member with no name from before it and nothing from the
-// person is not one they vouched for. Strictly before: a leaf from the same
-// instant may have landed after it.
-function confirmedSize(profile: Profile): number | null {
-  const word = profile.person.householdConfirmed;
-  if (word?.value !== true || word.source !== "person") return null;
-  const covered = profile.household.filter(
-    (m) => [m.name, m.relationship, m.dateOfBirth].some((leaf) => leaf?.source === "person") || (m.name !== undefined && m.name.updatedAt < word.updatedAt),
-  );
-  return 1 + covered.length;
-}
-
 // Every catalog program this profile may qualify for and does not already
 // have, in catalog order.
 export function helpMatches(profile: Profile): HelpMatch[] {
   const state = profile.person.address.state?.value;
   const income = monthlyIncome(profile);
-  const householdSize = confirmedSize(profile);
+  const householdSize = householdSizeOf(profile);
   if (!state || income === null || householdSize === null) return [];
   const matches: HelpMatch[] = [];
   for (const entry of listPrograms(state)) {
@@ -154,18 +151,20 @@ export interface HelpStanding {
   text: string | null;
   timeZone: string;
   revision: string;
+  sends: boolean;
 }
 
-export function standingOf(profile: Profile | null | undefined, reminder: { id: string; generation: number }, revision: string): HelpStanding {
+export function standingOf(profile: Profile | null | undefined, reminder: { id: string; generation: number }, revision: string, sends: boolean): HelpStanding {
   const state = profile?.person.address.state?.value;
   const match = profile?.person.alwaysOn?.value === true ? helpMatches(profile).find((m) => helpTextId(reminder.generation, m) === reminder.id) : undefined;
-  return { text: match ? helpText(match) : null, timeZone: timeZoneForState(state), revision };
+  return { text: match ? helpText(match) : null, timeZone: timeZoneForState(state), revision, sends };
 }
 
 // The check a delivery run makes on each claimed text, in the same step as its
 // handoff. null: it goes. deferred: the profile changed after it was read, so
-// it waits for the next run, or it is outside the person's hours and waits for
-// the next 9:00. withdrawn: it no longer stands.
+// it waits for the next run; sends are off, so it looks again tomorrow; or it
+// is outside the person's hours and waits for the next 9:00. withdrawn: it no
+// longer stands.
 export function gateHelpText(sql: SqlExec, reminderId: string, token: string, nowMs: number, standing: HelpStanding): "withdrawn" | "deferred" | null {
   if (profileRevision(sql) !== standing.revision) {
     deferReminder(sql, reminderId, token, nowMs);
@@ -180,6 +179,10 @@ export function gateHelpText(sql: SqlExec, reminderId: string, token: string, no
   }
   const today = localDate(nowMs, standing.timeZone);
   const opens = zonedInstant(today, WINDOW_OPENS_HOUR, 0, standing.timeZone);
+  if (!standing.sends) {
+    deferReminder(sql, reminderId, token, zonedInstant(addDays(today, 1), WINDOW_OPENS_HOUR, 0, standing.timeZone));
+    return "deferred";
+  }
   if (nowMs >= opens && nowMs < zonedInstant(today, WINDOW_CLOSES_HOUR, 0, standing.timeZone)) return null;
   deferReminder(sql, reminderId, token, nowMs < opens ? opens : zonedInstant(addDays(today, 1), WINDOW_OPENS_HOUR, 0, standing.timeZone));
   return "deferred";

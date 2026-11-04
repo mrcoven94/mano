@@ -1657,7 +1657,14 @@ export class ConversationRunner {
     }
     store.updateOutbound(key, { state: "sending", updatedAtMs: nowMs() });
     try {
-      const result = await channel.send({ to: opts.to ?? "", chatId: opts.chatId, text: opts.text, idempotencyKey: key, replyTo: opts.replyTo ?? null });
+      const result = await channel.send({
+        to: opts.to ?? "",
+        chatId: opts.chatId,
+        text: opts.text,
+        idempotencyKey: key,
+        replyTo: opts.replyTo ?? null,
+        ...(opts.tag === NO_REPLAY_TAG ? { once: true } : {}),
+      });
       // The conversation may have been deleted mid-send. Never write the
       // result into a newer generation.
       this.checkGeneration(generation);

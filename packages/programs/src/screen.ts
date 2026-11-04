@@ -24,6 +24,32 @@ export interface Screen {
   note: string;
 }
 
+// What the household count reads from a profile. Agent and Engine each hold
+// their own copy of the profile type; both fit this.
+interface SaidBy {
+  source: string;
+}
+export interface HouseholdOnFile {
+  person: { householdConfirmed?: SaidBy & { value: boolean }; householdSize?: { value: number } };
+  household: { name?: SaidBy; relationship?: SaidBy; dateOfBirth?: SaidBy }[];
+}
+
+// Only the person's own word confirms who lives with them.
+export function confirmedByPerson(profile: HouseholdOnFile): boolean {
+  const leaf = profile.person.householdConfirmed;
+  return leaf?.value === true && leaf.source === "person";
+}
+
+// How many live in the household, counting the person: a roster they
+// confirmed, else the number they gave, else unknown. A roster counts only
+// who they named: someone only a document or note named is not their word.
+export function householdSizeOf(profile: HouseholdOnFile): number | null {
+  if (confirmedByPerson(profile)) {
+    return profile.household.filter((m) => [m.name, m.relationship, m.dateOfBirth].some((leaf) => leaf?.source === "person")).length + 1;
+  }
+  return profile.person.householdSize?.value ?? null;
+}
+
 // The published row for this size, or the last row plus the published
 // increment for each person past it. Null when the source gives neither.
 export function limitAt(table: Pick<LimitTable, "bySize" | "eachAdditional">, size: number): number | null {

@@ -299,11 +299,14 @@ describe("a text marked no replay", () => {
     expect(h.store.outboundByKey(key)).toMatchObject({ state: "failed", code: "no_replay" });
   });
 
-  it("goes out as usual when the provider accepts it", async () => {
+  it("goes out as usual when the provider accepts it, told to try once", async () => {
     const { h, recover } = downProvider();
     recover();
     expect(await h.runner.sendAgentText({ key: "k", text: TEXT, generation: 0, noReplay: true })).toEqual({ sent: true });
     expect(h.channel.sends).toHaveLength(1);
+    expect(h.channel.sends[0].once).toBe(true);
+    expect(await h.runner.sendAgentText({ key: "other", text: TEXT, generation: 0 })).toEqual({ sent: true });
+    expect(h.channel.sends[1].once).toBeUndefined();
   });
 
   it("every other agent text keeps its replay", async () => {

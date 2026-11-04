@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { limitAt, listPrograms, lookupProgram, screenIncome, type Household } from "../src/index.js";
+import { householdSizeOf, limitAt, listPrograms, lookupProgram, screenIncome, type Household } from "../src/index.js";
 
 describe("lookupProgram", () => {
   it("finds a program by state code and federal name", () => {
@@ -200,5 +200,26 @@ describe("a screen never promises and never says over the limit", () => {
         }
       }
     }
+  });
+});
+
+describe("householdSizeOf", () => {
+  const person = { source: "person" };
+  const document = { source: "document" };
+  const confirmed = { value: true, source: "person" };
+
+  it("a confirmed roster counts the person and who they named, by any leaf", () => {
+    expect(householdSizeOf({ person: { householdConfirmed: confirmed }, household: [] })).toBe(1);
+    expect(householdSizeOf({ person: { householdConfirmed: confirmed }, household: [{ name: person }, { name: document, relationship: person }] })).toBe(3);
+  });
+
+  it("someone only a document named does not count, however often it corrects them", () => {
+    expect(householdSizeOf({ person: { householdConfirmed: confirmed }, household: [{ name: document }, { relationship: document }] })).toBe(1);
+  });
+
+  it("with no confirmed roster it is the number they gave, else unknown", () => {
+    expect(householdSizeOf({ person: { householdSize: { value: 4 } }, household: [{ name: person }] })).toBe(4);
+    expect(householdSizeOf({ person: {}, household: [{ name: person }] })).toBeNull();
+    expect(householdSizeOf({ person: { householdConfirmed: { value: true, source: "document" } }, household: [] })).toBeNull();
   });
 });

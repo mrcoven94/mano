@@ -51,19 +51,6 @@ async function profileOf(res: Response) {
 }
 
 describe("profile: one structured record of the person", () => {
-  it("saying who lives there again is a new word from the person, even with nothing else changed", async () => {
-    const h = handle("profile-roster");
-    const write = (key: string, fields: Record<string, unknown>) =>
-      asAgent(h, "PATCH", "/profile", { idempotencyKey: key, source: "person", generation: 0, fields });
-    await write("r1", { "person.householdConfirmed": true });
-    const first = (await profileOf(await asAgent(h, "GET", "/profile"))).person.householdConfirmed!;
-    await new Promise((r) => setTimeout(r, 5));
-    const again = (await (await write("r2", { "person.householdConfirmed": true })).json()) as { changed: string[] };
-    expect(again.changed).toEqual(["person.householdConfirmed"]);
-    const second = (await profileOf(await asAgent(h, "GET", "/profile"))).person.householdConfirmed!;
-    expect(Date.parse(second.updatedAt)).toBeGreaterThan(Date.parse(first.updatedAt));
-  });
-
   it("starts empty in the contract's shape", async () => {
     const profile = await profileOf(await asPerson("profile-empty", "GET", "/profile"));
     expect(profile).toEqual({ person: { address: {} }, household: [], income: [], programs: [] });

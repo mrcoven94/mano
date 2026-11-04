@@ -220,12 +220,6 @@ const TRUST_SQL = "(CASE source WHEN 'person' THEN 3 WHEN 'document' THEN 2 ELSE
 const UNDER = "(path = ? OR substr(path, 1, ?) = ?)";
 const under = (group: string) => [group, group.length + 1, `${group}.`];
 
-// Who is on the household roster, by entry.
-function rosterOf(sql: SqlExec): string {
-  const rows = sql.exec("SELECT path FROM profile_fields WHERE substr(path, 1, 10) = 'household.'").toArray() as { path: string }[];
-  return [...new Set(rows.map((r) => r.path.split(".")[1]))].sort().join(",");
-}
-
 // Changes with any write to the profile, a rewrite of the same value included:
 // each seal is new. Compared in the same step as an action decided on values
 // read earlier, since reading them means waiting on decryption.
@@ -348,8 +342,7 @@ export type PatchOutcome =
   | { status: "ok"; result: PatchResult }
   | { status: "invalid"; error: string }
   | { status: "conflict" }
-  | { status: "stale" }
-  | { status: "roster_moved" };
+  | { status: "stale" };
 
 export interface ProfileStoreDeps {
   sql: SqlExec;
@@ -453,15 +446,13 @@ export class ProfileStore {
     if (parsed.documentId && !this.deps.documentExists(parsed.documentId)) {
       return { status: "invalid", error: "documentId names no document of this person." };
     }
-    // Taken first, and kept across retries: who was on file when this arrived.
-    const roster = rosterOf(this.deps.sql);
     const requestHash = await sha256Hex(
       canonicalJson({ source: parsed.source, documentId: parsed.documentId, fields: (raw as { fields: unknown }).fields }),
     );
     await this.migrateMemoryOnce();
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.tryPatch(parsed, requestHash, generation, roster);
+        return await this.tryPatch(parsed, requestHash, generation);
       } catch (err) {
         if (!(err instanceof SnapshotMoved) || attempt >= 3) throw err;
       }
@@ -481,7 +472,7 @@ export class ProfileStore {
   // keep as a suggestion), seals what will be written, then writes in one
   // transaction that re-checks the key, the generation and that nothing it
   // compared against moved in between.
-  private async tryPatch(parsed: ParsedPatch, requestHash: string, generation: number, roster: string): Promise<PatchOutcome> {
+  private async tryPatch(parsed: ParsedPatch, requestHash: string, generation: number): Promise<PatchOutcome> {
     const early = this.recorded(parsed.idempotencyKey, requestHash);
     if (early) return early;
     const trust = TRUST[parsed.source];
@@ -498,9 +489,7 @@ export class ProfileStore {
       if (live && TRUST[live.source] > trust) {
         if (sameValue) unchanged.push(set.path);
         else suggested.push({ path: set.path, sealed: await this.deps.cipher.seal(set.path, JSON.stringify(set.value)) });
-      } else if (live && sameValue && live.source === parsed.source && (live.document_id ?? null) === parsed.documentId && set.path !== "person.householdConfirmed") {
-        // Saying who lives there again is news even with the same value: it
-        // covers everyone on file now.
+      } else if (live && sameValue && live.source === parsed.source && (live.document_id ?? null) === parsed.documentId) {
         unchanged.push(set.path);
       } else {
         changed.push({ path: set.path, sealed: await this.deps.cipher.seal(set.path, JSON.stringify(set.value)) });
@@ -512,7 +501,6 @@ export class ProfileStore {
       const late = this.recorded(parsed.idempotencyKey, requestHash);
       if (late) return late;
       if (generationOf(sql) !== generation) return { status: "stale" };
-      if (parsed.sets.some((s) => s.path === "person.householdConfirmed" && s.value === true) && rosterOf(sql) !== roster) return { status: "roster_moved" };
       const now = new Map(this.rows(setPaths).map((r) => [r.path, r.updated_at]));
       for (const path of setPaths) if (now.get(path) !== before.get(path)?.updated_at) throw new SnapshotMoved();
       for (const path of parsed.clears) {
@@ -655,8 +643,6 @@ export function profilePatchResponse(out: PatchAnswer): Response {
       return Response.json({ error: "This idempotency key was already used for other fields. Nothing was written." }, { status: 409 });
     case "stale":
       return Response.json({ error: "This conversation was deleted after the request was prepared. Nothing was written." }, { status: 409 });
-    case "roster_moved":
-      return Response.json({ error: "Someone was added to the household while this was being saved. Nothing was written. Ask the person who lives with them again." }, { status: 409 });
     case "unavailable":
       return Response.json({ error: "Profile storage is not configured." }, { status: 503 });
   }

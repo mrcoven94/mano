@@ -12,7 +12,7 @@
 // only which fields are on file or missing, never a value.
 import { createHash } from "node:crypto";
 
-import { STATES } from "@mano/programs";
+import { STATES, confirmedByPerson, householdSizeOf } from "@mano/programs";
 import { timeZoneForState } from "@mano/protocol";
 
 import type { Frequency, Leaf, PersonEngine, Profile, ProfileView, Suggestion } from "./engine.js";
@@ -36,6 +36,8 @@ export interface ProfileInput {
   programs?: { ref?: string; program?: string; state?: string; caseNumber?: string; status?: string }[];
   forget?: string[];
 }
+
+export { confirmedByPerson, householdSizeOf };
 
 // A change the model asked for that cannot be applied as given. The
 // message goes back to the model.
@@ -305,22 +307,6 @@ function suggestionPlace(s: Suggestion, profile: Profile): { ref?: string; entry
 function suggestionText(s: Suggestion, profile: Profile): string {
   const place = suggestionPlace(s, profile);
   return `${place.entryName ? `${place.entryName} ` : ""}${place.field} ${String(s.value)} from ${FROM[s.source]}`;
-}
-
-// Only the person's own word confirms who lives with them.
-export function confirmedByPerson(profile: Profile): boolean {
-  const leaf = profile.person.householdConfirmed;
-  return leaf?.value === true && leaf.source === "person";
-}
-
-// How many live in the household, counting the person: a roster they
-// confirmed, else the number they gave, else unknown. A roster counts only
-// who they named: someone only a document or note named is not their word.
-export function householdSizeOf(profile: Profile): number | null {
-  if (confirmedByPerson(profile)) {
-    return profile.household.filter((m) => [m.name, m.relationship, m.dateOfBirth].some((leaf) => leaf?.source === "person")).length + 1;
-  }
-  return profile.person.householdSize?.value ?? null;
 }
 
 function isEmpty(profile: Profile): boolean {
