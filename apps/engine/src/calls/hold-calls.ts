@@ -17,7 +17,7 @@ const MENU = /^[0-9*#wW]{1,32}$/;
 // a call Mano still means to hold or has just bridged.
 const CAP_MARGIN_SECONDS = 2 * 3600;
 
-export type HoldLimit = { id: string; kind: "hold_limit" | "ring_limit" };
+export type HoldLimit = { id: string; attempt: string; kind: "hold_limit" | "ring_limit" };
 export type HoldAudit = `hold_call.${HoldCall["state"]}` | "hold_call.hang_up_failed" | "hold_call.effect_failed";
 
 export interface HoldCallDeps {
@@ -110,6 +110,7 @@ export class HoldCalls {
     if (active) throw new DefiniteFailureError("Mano is already on a call for this person.");
 
     const now = Date.now();
+    const attempt = crypto.randomUUID();
     this.write({
       id,
       personId: req.personId,
@@ -118,10 +119,12 @@ export class HoldCalls {
       menu: parsed.menu,
       generation: this.deps.generation(),
       startedAtMs: now,
+      attempt,
+      simulated: services.provider.simulated,
       state: "dialing",
       officeCallId: null,
     });
-    await this.deps.schedule(new Date(now + services.config.holdLimitMs), { id, kind: "hold_limit" });
+    await this.deps.schedule(new Date(now + services.config.holdLimitMs), { id, attempt, kind: "hold_limit" });
     await this.deps.audit("hold_call.dialing", id);
     try {
       const { providerCallId } = await services.provider.placeCall({
@@ -129,7 +132,9 @@ export class HoldCalls {
         holdCallId: id,
         personId: req.personId,
         leg: "office",
-        idempotencyKey: `${id}:office`,
+        // Per attempt: a provider that remembers its refusal must still take
+        // the retry. An unknown outcome never reaches a second dial.
+        idempotencyKey: `${id}:${attempt}:office`,
         maxSeconds: this.capSeconds(services),
       });
       await this.apply(id, { kind: "placed", leg: "office", providerCallId });
@@ -148,7 +153,7 @@ export class HoldCalls {
   async check(idempotencyKey: string, personId: string): Promise<CheckOutcome> {
     const call = this.read(await this.idFor(idempotencyKey, personId));
     if (!call) return { found: false };
-    if (call.officeCallId) return { found: true, externalId: call.officeCallId };
+    if (call.officeCallId) return { found: true, externalId: call.officeCallId, simulated: call.simulated };
     throw new Error("The outcome of this dial is not known yet.");
   }
 
@@ -156,8 +161,9 @@ export class HoldCalls {
     return this.apply(event.holdCallId, { kind: event.kind, leg: event.leg, providerCallId: event.providerCallId }, event.eventId);
   }
 
-  onLimit(limit: HoldLimit): Promise<void> {
-    return this.apply(limit.id, { kind: limit.kind });
+  async onLimit(limit: HoldLimit): Promise<void> {
+    if (this.read(limit.id)?.attempt !== limit.attempt) return;
+    await this.apply(limit.id, { kind: limit.kind });
   }
 
   // One window of hold audio. The state is read again after the model
@@ -175,12 +181,17 @@ export class HoldCalls {
   }
 
   // The conversation was deleted: end any live call and keep nothing about
-  // who was called.
+  // who was called. The rows stay with only their opaque IDs, because a dial
+  // in flight can still name a leg, and that leg has to be hung up.
   async conversationDeleted(): Promise<void> {
     const active = this.activeId();
+    this.deps.transaction(() => {
+      for (const row of this.deps.sql.exec("SELECT call_json FROM hold_calls").toArray() as { call_json: string }[]) {
+        this.write({ ...(JSON.parse(row.call_json) as HoldCall), officeName: "", officeNumber: "", menu: null });
+      }
+      this.deps.sql.exec("DELETE FROM hold_call_events");
+    });
     if (active) await this.apply(active, { kind: "deleted" });
-    this.deps.sql.exec("DELETE FROM hold_calls");
-    this.deps.sql.exec("DELETE FROM hold_call_events");
   }
 
   private capSeconds(services: CallServices): number {
@@ -207,6 +218,7 @@ export class HoldCalls {
   private async run(call: HoldCall, effects: HoldEffect[]): Promise<void> {
     const services = this.deps.services();
     for (const effect of effects) {
+      if (!this.stillApplies(call.id, effect)) continue;
       try {
         await this.runOne(call, effect, services);
       } catch {
@@ -220,6 +232,24 @@ export class HoldCalls {
         await this.apply(call.id, { kind: "provider_failed" });
         return;
       }
+    }
+  }
+
+  // Audits and timers before an effect let other events in, so a step's
+  // effects may be out of date by the time they run. Nothing awaits between
+  // this check and the provider call.
+  private stillApplies(id: string, effect: HoldEffect): boolean {
+    const call = this.read(id);
+    switch (effect.do) {
+      case "dial_person":
+        return call?.state === "ringing_person" && call.personCallId === null;
+      case "bridge":
+        return call?.state === "bridged" && call.officeCallId === effect.officeCallId && call.personCallId === effect.personCallId;
+      case "send_dtmf":
+      case "listen":
+        return call?.state === "holding";
+      default:
+        return true;
     }
   }
 
@@ -237,14 +267,14 @@ export class HoldCalls {
       case "listen":
         return services.provider.startListening(effect.callId);
       case "arm_ring_limit":
-        return this.deps.schedule(new Date(Date.now() + services.config.ringLimitMs), { id: call.id, kind: "ring_limit" });
+        return this.deps.schedule(new Date(Date.now() + services.config.ringLimitMs), { id: call.id, attempt: call.attempt, kind: "ring_limit" });
       case "dial_person": {
         const { providerCallId } = await services.provider.placeCall({
           to: services.config.personNumber,
           holdCallId: call.id,
           personId: call.personId,
           leg: "person",
-          idempotencyKey: `${call.id}:person`,
+          idempotencyKey: `${call.id}:${call.attempt}:person`,
           maxSeconds: this.capSeconds(services),
         });
         return this.apply(call.id, { kind: "placed", leg: "person", providerCallId });

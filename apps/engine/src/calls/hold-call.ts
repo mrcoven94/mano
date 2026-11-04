@@ -22,6 +22,11 @@ interface Base {
   menu: string | null;
   generation: number;
   startedAtMs: number;
+  // One dial of this call. Its timers carry it, so a timer left by a refused
+  // dial never ends the retry.
+  attempt: string;
+  // Whether a stand-in placed this call, kept for the receipt of a reconcile.
+  simulated: boolean;
 }
 
 export type HoldCall = Base &
@@ -75,8 +80,8 @@ function end(call: HoldCall, reason: EndReason, alreadyDown?: Leg): { call: Hold
 }
 
 function base(call: HoldCall): Base {
-  const { id, personId, officeName, officeNumber, menu, generation, startedAtMs } = call;
-  return { id, personId, officeName, officeNumber, menu, generation, startedAtMs };
+  const { id, personId, officeName, officeNumber, menu, generation, startedAtMs, attempt, simulated } = call;
+  return { id, personId, officeName, officeNumber, menu, generation, startedAtMs, attempt, simulated };
 }
 
 // A retried or late input that no longer applies changes nothing, so a

@@ -1,10 +1,11 @@
-import { SELF, env as testEnv, runDurableObjectAlarm } from "cloudflare:test";
+import { SELF, env as testEnv, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mintHandleGrant, personIdForHandle } from "@mano/protocol";
 import type { PersonAgent } from "../src/agents/person-agent.js";
 import { endText, looksLikeHuman, stepHoldCall, type EndReason, type HoldCall } from "../src/calls/hold-call.js";
-import { parseCallConfig, setCallServicesForTests, type CallEvent, type CallProvider, type CallServices, type PlaceCall } from "../src/calls/provider.js";
-import { DefiniteFailureError, TimeoutError } from "../src/gateway/index.js";
+import { HoldCalls, type HoldAudit, type HoldLimit } from "../src/calls/hold-calls.js";
+import { createCallServices, parseCallConfig, setCallServicesForTests, type CallEvent, type CallProvider, type CallServices, type PlaceCall } from "../src/calls/provider.js";
+import { DefiniteFailureError, TimeoutError, setExecutorFactoryForTests, type ActionRequest } from "../src/gateway/index.js";
 
 // Hold for me through the real agent, gateway, worker route and timers, with
 // a fake phone company and a fake transcriber. Nothing here proves a real
@@ -21,9 +22,13 @@ class FakeProvider implements CallProvider {
   placed: PlaceCall[] = [];
   failPlace: Error | null = null;
   failBridge = false;
+  // While set, a dial stays pending. Polled rather than awaited, because a
+  // test and the agent run in different request contexts.
+  holdDial = false;
 
   async placeCall(call: PlaceCall) {
     this.placed.push(call);
+    while (this.holdDial) await new Promise((r) => setTimeout(r, 5));
     if (this.failPlace) throw this.failPlace;
     this.ops.push(`place ${call.leg} ${call.to}`);
     return { providerCallId: `${call.leg}-leg` };
@@ -151,6 +156,7 @@ async function afterLimit(h: Harness, done: () => boolean) {
 
 afterEach(() => {
   setCallServicesForTests(null);
+  setExecutorFactoryForTests(null);
   vi.unstubAllGlobals();
 });
 
@@ -379,6 +385,199 @@ describe("a dial with an unknown outcome", () => {
   });
 });
 
+describe("deleting the conversation while a dial is pending", () => {
+  async function deleteDuringDial(h: Harness) {
+    h.provider.holdDial = true;
+    const asked = await request(h);
+    const approving = h.call("POST", `/approvals/${asked.approval!.id}/approve`);
+    await vi.waitFor(() => expect(h.provider.placed).toHaveLength(1), { timeout: 5000, interval: 10 });
+    await h.agent.deleteConversation(h.person, { generation: 1 });
+    return { approving };
+  }
+
+  it("hangs up the leg the dial returns", async () => {
+    const h = setup();
+    const { approving } = await deleteDuringDial(h);
+    expect(h.provider.ops).not.toContain("hang_up office-leg");
+    h.provider.holdDial = false;
+    await approving;
+    expect(h.provider.ops).toContain("hang_up office-leg");
+  });
+
+  it("hangs up a leg a late webhook names, once, and when the dial returns it does not hang up again", async () => {
+    const h = setup();
+    const { approving } = await deleteDuringDial(h);
+    await webhook(h, "office", "answered", "late");
+    expect(h.provider.ops.filter((op) => op === "hang_up office-leg")).toHaveLength(1);
+    h.provider.holdDial = false;
+    await approving;
+    expect(h.provider.ops.filter((op) => op === "hang_up office-leg")).toHaveLength(1);
+  });
+
+  it("keeps nothing about who was called", async () => {
+    const h = setup();
+    const { approving } = await deleteDuringDial(h);
+    h.provider.holdDial = false;
+    await approving;
+    const rows = await runInDurableObject(h.stub, (_agent, state) => state.storage.sql.exec("SELECT call_json FROM hold_calls").toArray());
+    expect(rows).toHaveLength(1);
+    expect(JSON.stringify(rows)).not.toContain("Sandbox Benefits Office");
+    expect(JSON.stringify(rows)).not.toContain(OFFICE);
+  });
+});
+
+describe("effects that wait while the call moves on", () => {
+  const heardPerson = async () => "hello, this is Sam";
+
+  // A HoldCalls on the agent's own storage whose timers and audit log can be
+  // paused at one point, so an event can land between a step and its effects.
+  function paused(h: Harness, state: DurableObjectState, at: { limit?: HoldLimit["kind"]; audit?: HoldAudit }) {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const seen = { reached: false };
+    const stop = async () => {
+      seen.reached = true;
+      await gate;
+    };
+    const calls = new HoldCalls({
+      sql: state.storage.sql,
+      transaction: (fn) => state.storage.transactionSync(fn),
+      services: createCallServices,
+      generation: () => 0,
+      schedule: async (_at, limit) => {
+        if (limit.kind === at.limit) await stop();
+      },
+      text: async () => {},
+      audit: async (event) => {
+        if (event === at.audit) await stop();
+      },
+    });
+    const req: ActionRequest = {
+      type: "call",
+      recipient: "Sandbox Benefits Office",
+      purpose: "ask why the renewal is late",
+      payload: { phoneNumber: OFFICE },
+      idempotencyKey: "paused-1",
+      actor: "foreground",
+      personId: h.person,
+    };
+    const event = (leg: "office" | "person", kind: "answered" | "hung_up", eventId: string) =>
+      calls.onEvent({ eventId, holdCallId: holdCallId(h), personId: h.person, leg, kind, providerCallId: `${leg}-leg` });
+    const reached = async () => {
+      while (!seen.reached) await new Promise((r) => setTimeout(r, 1));
+    };
+    return { calls, req, event, reached, release };
+  }
+
+  it.each([
+    ["the ring limit is being armed", { limit: "ring_limit" as const }],
+    ["the audit log is being written", { audit: "hold_call.ringing_person" as const }],
+  ])("does not dial the person when the office hung up while %s", async (_name, at) => {
+    const h = setup({}, heardPerson);
+    await runInDurableObject(h.stub, async (_agent, state) => {
+      const p = paused(h, state, at);
+      await p.calls.begin(p.req);
+      await p.event("office", "answered", "e1");
+      const hearing = p.calls.onAudio(holdCallId(h), new Uint8Array([1]));
+      await p.reached();
+      await p.event("office", "hung_up", "e2");
+      p.release();
+      await hearing;
+    });
+    expect(h.provider.ops.filter((op) => op.startsWith("place person"))).toEqual([]);
+  });
+
+  it("does not bridge when the office hung up while the audit log was being written", async () => {
+    const h = setup({}, heardPerson);
+    await runInDurableObject(h.stub, async (_agent, state) => {
+      const p = paused(h, state, { audit: "hold_call.bridged" });
+      await p.calls.begin(p.req);
+      await p.event("office", "answered", "e1");
+      await p.calls.onAudio(holdCallId(h), new Uint8Array([1]));
+      const answering = p.event("person", "answered", "e2");
+      await p.reached();
+      await p.event("office", "hung_up", "e3");
+      p.release();
+      await answering;
+    });
+    expect(h.provider.ops.filter((op) => op.startsWith("bridge"))).toEqual([]);
+    expect(h.provider.ops).toContain("hang_up person-leg");
+  });
+});
+
+describe("a retry after the provider refused the dial", () => {
+  it("is not ended by the failed attempt's timer", async () => {
+    const h = setup({ holdLimitMs: 1500 });
+    h.provider.failPlace = new DefiniteFailureError("refused");
+    const asked = await request(h);
+    await h.call("POST", `/approvals/${asked.approval!.id}/approve`);
+    h.provider.failPlace = null;
+    setCallServicesForTests({
+      provider: h.provider,
+      transcriber: { transcribe: async () => "" },
+      config: { allowedNumbers: new Set([OFFICE]), personId: h.person, personNumber: PHONE, holdLimitMs: 3_600_000, ringLimitMs: 45_000 },
+    });
+    const retried = (await (await h.call("POST", `/approvals/${asked.approval!.id}/approve`)).json()) as { status: string };
+    expect(retried.status).toBe("completed");
+
+    await new Promise((r) => setTimeout(r, 2600));
+    await runDurableObjectAlarm(h.stub);
+    expect(h.provider.ops).not.toContain("hang_up office-leg");
+    await webhook(h, "office", "answered", "e1");
+    expect(h.provider.ops).toContain("listen office-leg");
+  });
+
+  it("gives the provider a new command key, so a refused dial is not replayed", async () => {
+    const h = setup();
+    h.provider.failPlace = new DefiniteFailureError("refused");
+    const asked = await request(h);
+    await h.call("POST", `/approvals/${asked.approval!.id}/approve`);
+    h.provider.failPlace = null;
+    await h.call("POST", `/approvals/${asked.approval!.id}/approve`);
+    const [first, second] = h.provider.placed;
+    expect(second!.idempotencyKey).not.toBe(first!.idempotencyKey);
+  });
+});
+
+describe("a reconciled call's receipt", () => {
+  function unknownDial() {
+    const h = setup();
+    // A real filing executor underneath: only the call provider is a stand-in.
+    setExecutorFactoryForTests(() => ({
+      simulated: false,
+      async execute() {
+        throw new Error("a call must not reach the filing executor");
+      },
+      async check() {
+        throw new Error("a call must not reconcile against the filing executor");
+      },
+    }));
+    h.provider.failPlace = new TimeoutError();
+    return h;
+  }
+
+  it("says simulated when a stand-in provider placed the call, after a recovery sweep", async () => {
+    const h = unknownDial();
+    const asked = await request(h);
+    await h.call("POST", `/approvals/${asked.approval!.id}/approve`);
+    await webhook(h, "office", "answered", "e1");
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await h.agent.recoverStrandedAttempts(0)).recovered.map((r) => r.status)).toEqual(["reconciled"]);
+    const list = (await (await h.call("GET", "/approvals")).json()) as { approvals: { id: string; outcome: { receipt: { simulated: boolean } | null } }[] };
+    expect(list.approvals.find((a) => a.id === asked.approval!.id)?.outcome.receipt?.simulated).toBe(true);
+  });
+
+  it("says simulated when a stand-in provider placed the call, after a second yes", async () => {
+    const h = unknownDial();
+    const asked = await request(h);
+    await h.call("POST", `/approvals/${asked.approval!.id}/approve`);
+    await webhook(h, "office", "answered", "e1");
+    const again = (await (await h.call("POST", `/approvals/${asked.approval!.id}/approve`)).json()) as { status: string; receipt?: { simulated: boolean } };
+    expect(again.status).toBe("reconciled");
+    expect(again.receipt?.simulated).toBe(true);
+  });
+});
+
 describe("with no provider set up", () => {
   it("has no webhook route and reports calls off", async () => {
     expect((await SELF.fetch("https://engine.test/webhooks/calls", { method: "POST", body: "{}" })).status).toBe(404);
@@ -396,6 +595,8 @@ describe("the state machine's late events", () => {
     menu: null,
     generation: 0,
     startedAtMs: 0,
+    attempt: "a",
+    simulated: true,
     state: "dialing",
     officeCallId: null,
   };

@@ -6,6 +6,7 @@ import type {
   ActionRequest,
   Approval,
   Attempt,
+  CheckOutcome,
   Executor,
   GatewayResult,
   LatestProposal,
@@ -1066,7 +1067,7 @@ export class ActionGateway {
   // unknown and blocks. A failed lookup is never treated as "did not
   // happen".
   private async reconcileUnknown(req: ActionRequest, now: Date, keyHash: AuditDigest): Promise<ReconcileOutcome> {
-    let outcome: { found: true; externalId: string } | { found: false };
+    let outcome: CheckOutcome;
     try {
       outcome = await this.executor.check(req.idempotencyKey, req.personId);
     } catch (err) {
@@ -1083,7 +1084,7 @@ export class ActionGateway {
     }
     if (outcome.found) {
       const attempt = this.store.getAttempt(req.idempotencyKey);
-      const receipt = await this.makeReceipt(req, "reconciled", outcome.externalId, undefined, now, attempt);
+      const receipt = await this.makeReceipt(req, "reconciled", outcome.externalId, outcome.simulated, now, attempt);
       this.settle(receipt);
       this.store.audit({ event: "gateway.reconciled", keyHash });
       return { kind: "settled", result: { status: "reconciled", receipt } };
@@ -1252,7 +1253,7 @@ export class ActionGateway {
     // No stored request exists on the allow path, so recovery reconciles
     // only: found settles with a receipt built from the attempt row,
     // absent marks the key failed so a fresh request retries cleanly.
-    let outcome: { found: true; externalId: string } | { found: false };
+    let outcome: CheckOutcome;
     try {
       outcome = await this.executor.check(key, attempt.personId);
     } catch (err) {
@@ -1270,7 +1271,7 @@ export class ActionGateway {
         recipient: attempt.recipient,
         status: "reconciled",
         externalId: outcome.externalId,
-        simulated: attempt.actionType === "share" ? false : this.executor.simulated,
+        simulated: attempt.actionType === "share" ? false : (outcome.simulated ?? this.executor.simulated),
         requestHash: attempt.requestHash,
         createdAt: now.toISOString(),
       };
