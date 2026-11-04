@@ -5,7 +5,7 @@ import { engineFrom, personIdFor } from "../agent/lib/engine.js";
 import { readTextedPhotos } from "../agent/lib/letters.js";
 import { FORMS, fillFrom } from "../agent/lib/forms.js";
 import type { Profile } from "../agent/lib/engine.js";
-import { presentsExactly, renderQuestion } from "../agent/lib/pending.js";
+import { heldBack, presentsExactly, proposedIn, renderQuestion } from "../agent/lib/pending.js";
 import { SandboxExecutor, createExecutor } from "../../engine/src/gateway/executors.js";
 import { DOUBTFUL_PAGE, RENEWAL_PAGE, letterPhoto, recordedReader } from "../../../packages/mail/test/letter-fixture.js";
 import { DEFAULT_CONFIG, handleRequest } from "../../sandbox-portal/src/app";
@@ -470,5 +470,136 @@ describe("LAP-747: Mano asks instead of guessing", () => {
     expect(bytes(filed.fullName)).toEqual(bytes("María José Núñez-O'Brien"));
     expect(bytes(filed.caseNumber)).toEqual(bytes("WA-SNAP 0042117/B"));
     expect(bytes(filed.address)).toEqual(bytes("12 Calle Ñandú, Apt #3 & 4, Tacoma, WA 98402"));
+  });
+});
+
+// LAP-747 follow-up, from review of the merged PR.
+describe("LAP-747: corrections and spacing", () => {
+  it("a correction that does not fit closes the draft shown, so a YES to it files nothing until the new one is answered", async () => {
+    const portal = realPortal();
+    engine.filer = portal.executor;
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    const shown = await draft("turn_fix000001");
+    expect(shown.status).toBe("waiting_for_yes");
+
+    const fix = await draft("turn_fix000002", { ...fields, phone: "253-555-01422" }, Date.now() + 10);
+    expect(fix).toMatchObject({ status: "needs_answer", field: "phone" });
+    expect((await client().approval(String(shown.approvalId)))?.status).toBe("rejected");
+    expect((await client().approve(String(shown.approvalId))).status).not.toBe("completed");
+    expect(portal.posts).toEqual([]);
+
+    const fixed = await draft("turn_fix000003", { ...fields, phone: "253-555-0199" }, Date.now() + 20);
+    expect(fixed.status).toBe("waiting_for_yes");
+    expect((await client().approve(String(fixed.approvalId))).status).toBe("completed");
+    expect(portal.posts).toHaveLength(1);
+    expect(portal.posts[0]!.household.phone).toBe("253-555-0199");
+  });
+
+  it("a correction later in the same turn closes that turn's draft, so the reply carries no question for it", async () => {
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    const at = Date.now();
+    expect((await draft("turn_same000001", fields, at)).status).toBe("waiting_for_yes");
+    const fix = await draft("turn_same000001", { ...fields, phone: "253-555-01422" }, at);
+    expect(fix).toMatchObject({ status: "needs_answer", field: "phone" });
+    const approvals = await client().listApprovals();
+    expect(approvals.map((a) => a.status)).toEqual(["rejected"]);
+    expect(proposedIn(approvals, 0, "turn_same000001")).toBeNull();
+  });
+
+  // A same-turn correction that throws partway (Engine's document list
+  // answers 503) still closes the draft it was correcting, or holds it back
+  // when Engine will not close it either.
+  it.each([
+    { name: "closes", down: /\/documents$/, after: "rejected", held: false },
+    { name: "holds back", down: /\/(documents|reject)$/, after: "pending", held: true },
+  ])("a correction that throws in the same turn $name the draft it was correcting", async ({ down, after, held }) => {
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    const at = Date.now();
+    const turnId = held ? "turn_thr000002" : "turn_thr000001";
+    expect((await draft(turnId, fields, at)).status).toBe("waiting_for_yes");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      down.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await expect(draft(turnId, { ...fields, phone: "253-555-0199" }, at)).rejects.toThrow();
+    vi.stubGlobal("fetch", engine.fetch);
+    const [approval] = await client().listApprovals();
+    expect(approval!.status).toBe(after);
+    expect(heldBack(turnId, approval!.id)).toBe(held);
+  });
+
+  // Review round 1: a correction in a later turn when Engine will not
+  // close the version she was shown. She is told it still waits and a YES
+  // would send it as it was; her next form call closes it.
+  it("a later correction that cannot close the shown draft says so plainly, and the next call closes it", async () => {
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    const shown = await draft("turn_late000001");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) =>
+      /\/(reject|fence)$/.test(new URL(String(input)).pathname) ? new Response("unavailable", { status: 503 }) : engine.fetch(input, init),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fix = await draft("turn_late000002", { ...fields, phone: "253-555-0199" }, Date.now() + 10);
+    vi.stubGlobal("fetch", engine.fetch);
+    expect(fix.status).toBe("draft_failed");
+    expect(String(fix.note)).toMatch(/still waiting, that a YES would send it as it was, and that they should send their correction again/);
+    expect((await client().approval(String(shown.approvalId)))?.status).toBe("pending");
+
+    const again = await draft("turn_late000003", { ...fields, phone: "253-555-0199" }, Date.now() + 20);
+    expect(again.status).toBe("waiting_for_yes");
+    expect((await client().approval(String(shown.approvalId)))?.status).toBe("rejected");
+  });
+
+  // Review round 13: turn A's valid draft is paused at /documents; a newer
+  // turn B corrects the phone to one that does not fit and only asks a
+  // question. When A resumes, its old phone must not become the latest
+  // version a YES would file.
+  it("a correction in a newer turn fences the form: an older turn's draft that resumes after it is refused", async () => {
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    let release!: () => void;
+    let reached!: () => void;
+    const atDocuments = new Promise<void>((r) => (reached = r));
+    const gate = new Promise<void>((r) => (release = r));
+    let paused = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!paused && new URL(String(input)).pathname.endsWith("/documents") && (init?.method ?? "GET") === "GET") {
+        paused = true;
+        reached();
+        await gate;
+      }
+      return engine.fetch(input, init);
+    });
+    const start = Date.now();
+    const a = draft("turn_fenceA0001", fields, start);
+    await atDocuments;
+    const b = await draft("turn_fenceB0001", { ...fields, phone: "253-555-01422" }, start + 10);
+    expect(b).toMatchObject({ status: "needs_answer", field: "phone" });
+    release();
+    const resumed = await a;
+    vi.stubGlobal("fetch", engine.fetch);
+    expect(resumed.status).not.toBe("waiting_for_yes");
+    expect((await client().listApprovals()).filter((x) => x.status === "pending")).toEqual([]);
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
+  it("a name typed with two spaces is shown and filed with one, so it can still be put to her YES", async () => {
+    const portal = realPortal();
+    engine.filer = portal.executor;
+    engine.profileKeySet = false;
+    await letterOnFile("doc-letter", LETTER_BYTES);
+    // A draft is held for her YES only when the text line shows its question word for word.
+    const out = await draft("turn_space00001", { ...fields, fullName: "Maria  Santos", phone: "253  555 0100" });
+    expect(out.status).toBe("waiting_for_yes");
+    const [approval] = await client().listApprovals();
+    const question = renderQuestion(approval!);
+    expect(question).toContain("Full legal name: Maria Santos;");
+    expect(presentsExactly(question)).toBe(true);
+    expect((await client().approve(approval!.id)).status).toBe("completed");
+    expect(portal.posts[0]!.household.fullName).toBe("Maria Santos");
+    expect(portal.posts[0]!.household.phone).toBe("253 555 0100");
   });
 });

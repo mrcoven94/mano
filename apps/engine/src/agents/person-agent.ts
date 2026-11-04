@@ -7,7 +7,7 @@ import {
 } from "@mano/protocol";
 import type { Env } from "../env.js";
 import { ActionGateway, DefiniteFailureError, SqlApprovalStore, approvalFromRow, checkerSetting, contentHashOf, createExecutor, ensureDeliveryTable, ensureGatewayTables, gatewayChecker, outboundProviders, OutboundRouter, outboundPricing, recordDeliveryEvent, withOutboundPrice, type DeliveryEvent } from "../gateway/index.js";
-import type { ActionRequest, Approval, CheckOutcome, ProposalOrder } from "../gateway/index.js";
+import type { ActionRequest, Approval, CheckOutcome, ProposalOrder, Receipt } from "../gateway/index.js";
 import type { ProtocolMessage } from "@mano/protocol";
 import { extractEvidence, wrapEvidenceForModel } from "../evidence.js";
 import { getDocumentBytes, putDocument, sweepDocuments } from "../files.js";
@@ -123,6 +123,24 @@ export interface PersonState {
 
 const ORG_AGENT_ID = /^org:([A-Za-z0-9_-]+)$/;
 
+// The action keys whose consent effect was applied: one row per key,
+// written in the transaction that records the share's receipt and applies
+// its effect, so an effect is applied at most once. Every share receipt on
+// file therefore has its effect applied: those from before this table had
+// it applied when they were recorded, and are marked here, idempotently,
+// on every start.
+export function ensureAppliedEffects(storage: Pick<DurableObjectStorage, "sql" | "transactionSync">): void {
+  const sql = storage.sql;
+  storage.transactionSync(() => {
+    sql.exec(`CREATE TABLE IF NOT EXISTS applied_effects(idempotency_key TEXT PRIMARY KEY, external_id TEXT NOT NULL, applied_at TEXT NOT NULL)`);
+    sql.exec(
+      "INSERT INTO applied_effects(idempotency_key, external_id, applied_at)" +
+        " SELECT idempotency_key, external_id, created_at FROM receipts WHERE action_type = 'share'" +
+        " ON CONFLICT (idempotency_key) DO NOTHING",
+    );
+  });
+}
+
 export class PersonAgent extends Agent<Env, PersonState> {
   initialState: PersonState = { personId: "", approvals: [], consents: [], reminders: [] };
 
@@ -137,7 +155,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.store = new SqlApprovalStore(ctx.storage.sql);
+    this.store = new SqlApprovalStore(ctx.storage.sql, (fn) => ctx.storage.transactionSync(fn));
     this.executor = new ConsentDeliveringExecutor(
       new OutboundRouter(createExecutor(env), outboundProviders(env), (key) => this.store.getAttempt(key)?.actionType ?? null),
       (req) => this.deliverShare(req),
@@ -153,6 +171,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         documents: {
           getBytes: (documentId) => this.documentBytes(documentId),
         },
+        onReceipt: (receipt) => this.applyShareEffect(receipt),
       },
     );
     ctx.blockConcurrencyWhile(async () => {
@@ -178,6 +197,7 @@ export class PersonAgent extends Agent<Env, PersonState> {
         sql.exec(`DROP TABLE consents`);
       }
       sql.exec(`CREATE TABLE IF NOT EXISTS consents(recipient TEXT NOT NULL, case_id TEXT NOT NULL, purpose TEXT NOT NULL, PRIMARY KEY (recipient, case_id))`);
+      ensureAppliedEffects(ctx.storage);
       try {
         sql.exec(`ALTER TABLE consents ADD COLUMN expires_at TEXT`);
       } catch {
@@ -882,24 +902,27 @@ export class PersonAgent extends Agent<Env, PersonState> {
       const result = await this.gateway.recoverAttempt(attempt.key, now, cutoff);
       if (!result) continue;
       recovered.push({ key: attempt.key, status: result.status });
-      // Recovery executes shares outside approve(), so their consent
-      // effects apply here, from the persisted original approval.
-      if ((result.status === "completed" || result.status === "reconciled") && result.receipt) {
-        await this.applyShareOutcome(result.receipt.idempotencyKey);
-      }
     }
     if (recovered.length > 0) this.syncState();
     return { recovered };
   }
 
-  // Applies the share outcome behind an idempotency key: the consent
-  // effect of the consumed approval that claimed it. Recovery runs this
-  // after executing a stranded share. Idempotent and safe to repeat.
-  async applyShareOutcome(idempotencyKey: string): Promise<{ applied: boolean }> {
-    const original = this.store.getApprovalByKey(idempotencyKey);
-    if (!original || original.actionType !== "share") return { applied: false };
-    this.recordConsentOutcome(original);
-    return { applied: true };
+  // A share's consent effect (a grant or revocation), applied by the
+  // gateway inside the transaction that records the share's receipt and
+  // marks its attempt done, so no crash can separate the receipt from the
+  // effect. It comes from the persisted original approval behind the key,
+  // and runs at most once per key: a later receipt for the same key (a
+  // late reconcile) finds its marker and changes nothing, so a revoked
+  // consent stays revoked.
+  private applyShareEffect(receipt: Receipt): void {
+    const original = this.store.getApprovalByKey(receipt.idempotencyKey);
+    if (!original || original.actionType !== "share") return;
+    // RETURNING reports the insert; a key already applied returns no row.
+    const first = this.db().exec(
+      "INSERT INTO applied_effects(idempotency_key, external_id, applied_at) VALUES (?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING RETURNING idempotency_key",
+      receipt.idempotencyKey, receipt.externalId, new Date().toISOString(),
+    ).toArray().length === 1;
+    if (first) this.recordConsentOutcome(original);
   }
 
   // Schedules a durable recovery run while any attempt is unresolved.
@@ -999,6 +1022,21 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return { closed };
   }
 
+  // A form call from turnId is correcting the recipient's form: drafts
+  // from turns received before it are refused from now on and the waiting
+  // ones closed, ordered by Engine's own turn ledger.
+  async fenceProposals(verified: string, input: { recipient?: unknown; turnId?: unknown }, generation?: number) {
+    await this.assertSubject(verified);
+    if (typeof input.recipient !== "string" || !input.recipient || typeof input.turnId !== "string") return { error: "Body needs a recipient and a turnId." } as const;
+    const g = generation ?? currentGeneration(this.db());
+    const order = proposalOrderFor(this.db(), input.turnId);
+    if (!order) return { error: "Unknown turn." } as const;
+    const out = await this.gateway.fenceProposals(input.recipient, order, g);
+    if (!out) return STALE_STATE;
+    this.syncState();
+    return out;
+  }
+
   async reject(approvalId: string, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.rejectApproval(approvalId, verified);
@@ -1006,51 +1044,57 @@ export class PersonAgent extends Agent<Env, PersonState> {
     return result;
   }
 
+  async retire(approvalId: string, verified: string) {
+    await this.assertSubject(verified);
+    const result = await this.gateway.retireApproval(approvalId, verified);
+    this.syncState();
+    return result;
+  }
+
   async approve(approvalId: string, verified: string) {
     await this.assertSubject(verified);
     const result = await this.gateway.approveAndExecute(approvalId, verified);
-    if (result.status === "completed" || result.status === "reconciled") {
-      // Consent effects come from the persisted original approval behind
-      // the key, never from whichever approval triggered the outcome.
-      const key = result.receipt?.idempotencyKey;
-      const row = key ? this.store.getApprovalByKey(key) : null;
-      if (row?.actionType === "share") this.recordConsentOutcome(row);
-    }
     this.store.audit({ event: "gateway.approve", approvalHash: await auditDigest(approvalId), status: result.status });
     await this.scheduleRecoveryIfUnresolved();
     this.syncState();
     return result;
   }
 
+  // Runs inside the transaction that records the share's receipt: a SQL
+  // error propagates, so the whole transaction rolls back (no receipt, no
+  // done attempt, no marker) and the next lookup applies the effect once.
   private recordConsentOutcome(approval: { recipient: string; purpose: string; requestJson: string }) {
+    let stored: { payload?: { consent?: string; caseId?: string; expiresAt?: string } };
     try {
-      const stored = JSON.parse(approval.requestJson) as {
-        payload?: { consent?: string; caseId?: string; expiresAt?: string };
-      };
-      const caseId = stored.payload?.caseId;
-      if (typeof caseId !== "string" || !caseId) return;
-      if (stored.payload?.consent === "grant") {
-        // Parsed to epoch milliseconds at write time; an unreadable
-        // value fails closed as already expired.
-        const raw = stored.payload?.expiresAt;
-        const expiresAtMs = typeof raw === "string" && Number.isFinite(new Date(raw).getTime())
-          ? new Date(raw).getTime()
-          : raw === undefined
-            ? null
-            : 0;
-        this.db().exec(
-          "INSERT OR REPLACE INTO consents(recipient, case_id, purpose, expires_at_ms) VALUES (?, ?, ?, ?)",
-          approval.recipient,
-          caseId,
-          approval.purpose,
-          expiresAtMs,
-        );
-      } else if (stored.payload?.consent === "revoke") {
-        this.db().exec("DELETE FROM consents WHERE recipient = ? AND case_id = ?", approval.recipient, caseId);
-        this.db().exec("INSERT OR IGNORE INTO revoked_cases VALUES (?, ?)", caseId, new Date().toISOString());
-      }
+      stored = JSON.parse(approval.requestJson) as typeof stored;
     } catch {
-      // Approval JSON is written by the gateway; ignore unreadable rows.
+      // Approval JSON is written by the gateway; an unreadable row has no effect to apply.
+      return;
+    }
+    const caseId = stored.payload?.caseId;
+    if (typeof caseId !== "string" || !caseId) return;
+    if (stored.payload?.consent === "grant") {
+      // A revocation already recorded for this case wins: a grant whose
+      // response was lost and that reconciles after it never restores it.
+      if (this.revokedLocally(caseId)) return;
+      // Parsed to epoch milliseconds at write time; an unreadable
+      // value fails closed as already expired.
+      const raw = stored.payload?.expiresAt;
+      const expiresAtMs = typeof raw === "string" && Number.isFinite(new Date(raw).getTime())
+        ? new Date(raw).getTime()
+        : raw === undefined
+          ? null
+          : 0;
+      this.db().exec(
+        "INSERT OR REPLACE INTO consents(recipient, case_id, purpose, expires_at_ms) VALUES (?, ?, ?, ?)",
+        approval.recipient,
+        caseId,
+        approval.purpose,
+        expiresAtMs,
+      );
+    } else if (stored.payload?.consent === "revoke") {
+      this.db().exec("DELETE FROM consents WHERE recipient = ? AND case_id = ?", approval.recipient, caseId);
+      this.db().exec("INSERT OR IGNORE INTO revoked_cases VALUES (?, ?)", caseId, new Date().toISOString());
     }
   }
 

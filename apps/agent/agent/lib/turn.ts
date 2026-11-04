@@ -26,7 +26,7 @@ import { profileContext } from "./profile.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
 import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
-import { closeReplaced, presentationHash, presentsExactly, proposalsOf, proposedIn, renderQuestion, replayLine, waitingProposals } from "./pending.js";
+import { closeReplaced, presentable, presentationHash, proposalsOf, renderQuestion, replayLine, waitingFrom, waitingProposals } from "./pending.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 import { TurnClock } from "./timings.js";
 
@@ -204,13 +204,12 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       // approval whose attempt settled carries its receipt; one still
       // unknown keeps the pointer until Engine reconciles it.
       const approval = await engine.approval(approvalId);
-      if (approval?.status === "approved") {
-        if (approval.outcome?.attempt === "done" && approval.outcome.receipt) {
-          await engine.clearPointer(approvalId);
-          return doneText(approval.purpose, approval.outcome.receipt);
-        }
-        return CHECKING;
+      // A receipt is read first, whatever the status: it went through.
+      if (approval?.outcome?.receipt) {
+        await engine.clearPointer(approvalId);
+        return doneText(approval.purpose, approval.outcome.receipt);
       }
+      if (approval?.status === "approved") return CHECKING;
       await engine.clearPointer(approvalId);
       return "That approval can no longer be used, so nothing was sent. Want me to prepare it again?";
     }
@@ -218,6 +217,8 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
 }
 
 async function answerNo(engine: PersonEngine, approval: EngineApproval | null, approvalId: string): Promise<string> {
+  const sent = await alreadySent(engine, approval, approvalId);
+  if (sent) return sent;
   if (approval?.status === "approved") {
     return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
   }
@@ -226,11 +227,24 @@ async function answerNo(engine: PersonEngine, approval: EngineApproval | null, a
     await engine.clearPointer(approvalId);
     return "Okay, I did not send it. Nothing left Mano.";
   }
-  if ((await engine.approval(approvalId))?.status === "approved") {
+  // Read again: the filing may have been recorded since the first read.
+  const fresh = await engine.approval(approvalId);
+  const sentSince = await alreadySent(engine, fresh, approvalId);
+  if (sentSince) return sentSince;
+  if (fresh?.status === "approved") {
     return "That one was already approved, so I cannot cancel it. I'm checking whether it went through. Reply YES and I will check again.";
   }
   await engine.clearPointer(approvalId);
   return "That request had already expired or changed, so nothing was sent.";
+}
+
+// A receipt is read before any status: the filing went through, so a NO
+// cannot cancel it and Mano never says nothing was sent.
+async function alreadySent(engine: PersonEngine, approval: EngineApproval | null, approvalId: string): Promise<string | null> {
+  const receipt = approval?.outcome?.receipt;
+  if (!receipt) return null;
+  await engine.clearPointer(approvalId);
+  return `That one was already sent, so I cannot cancel it. Confirmation ${receipt.externalId}.`;
 }
 
 async function decide(engine: PersonEngine, approvalId: string, decision: "yes" | "no"): Promise<TurnResponse> {
@@ -250,16 +264,12 @@ const UNSHOWN = reply("I haven't shown you that one yet, so nothing was approved
 
 const UPDATED = "I just updated that, so nothing was approved and nothing was sent.";
 
-// The answer to a YES or NO that was aimed at a replaced question: the
-// latest one, shown now as a question of its own, when it still waits,
-// with the line linking to its replay as when it was first shown.
-function updated(engine: PersonEngine, approvals: EngineApproval[], latest: { approvalId: string } | null, link: string | null): TurnResponse {
-  const waiting = latest ? waitingProposals(approvals, engine.generation).find((a) => a.id === latest.approvalId) : undefined;
-  const question = waiting ? renderQuestion(waiting) : null;
-  if (!waiting || !question || !presentsExactly(question)) return reply(`${UPDATED} Ask me to show the latest.`);
-  const text = [`${UPDATED} Here's the latest.`, question, link ? replayLine(link) : ""].filter(Boolean).join("\n\n");
-  return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: waiting.id } };
-}
+// The answer to a YES or NO aimed at a question that has since been
+// replaced. The newer draft is never shown here: only a question that went
+// out with the reply of the turn that prepared it, and that Channels then
+// reported, can be answered, so a draft that was corrected away (and held
+// back only in some process's memory) can never surface on its own.
+const CHANGED = reply("The question you answered changed since you saw it, so nothing was sent. Tell me what you want to send.");
 
 // A YES or NO turn is bound, in Engine's turn ledger, to what its first
 // attempt decided: one ledger row per approval it acted on, or one row
@@ -319,20 +329,12 @@ async function decideTurn(
   // Engine's latest proposal can be answered, and only once its question
   // was shown strictly before Channels received this message. A pointer to
   // anything older means the person last saw a question that has since
-  // been replaced: nothing is approved, and they get the latest one.
+  // been replaced: nothing is approved, and nothing new is shown.
   const arrived = Date.parse(turn.firstReceivedAt);
   const { pointer, latest } = await engine.getPending();
   if (pointer && pointer.approvalId !== latest?.approvalId) {
     await bind(engine, body.turnId, turn.firstReceivedAt, ["unshown"]);
-    // Read again after the binding write: a newer draft may have replaced
-    // the latest one while it ran. The link counts only for the draft that
-    // is still the latest.
-    const [now, current, link] = await Promise.all([
-      engine.getPending(),
-      engine.listApprovals(),
-      latest ? replayLinkOf(engine, latest.approvalId) : null,
-    ]);
-    return updated(engine, current, now.latest, now.latest && now.latest.approvalId === latest?.approvalId ? link : null);
+    return CHANGED;
   }
   const answerable = pointer && Date.parse(pointer.setAt) < arrived ? pointer : null;
   if (pointer && !answerable) {
@@ -415,13 +417,16 @@ async function runTurn(
     throw err;
   }
   const after = await engine.listApprovals();
-  const own = proposedIn(after, body.generation, body.turnId);
+  // Only a draft this turn proposed and its last form call left waiting is
+  // shown; Engine's listing only confirms it still waits.
+  const heldNow = new Set(settled.held ?? []);
+  const own = waitingFrom(after, body.generation, body.turnId).find((a) => heldNow.has(a.id)) ?? null;
   // Only Engine's latest proposal is ever shown: never a draft a newer
   // turn replaced, whether this turn is a replay or just slow.
   const [pending, link] = own ? await Promise.all([engine.getPending(), replayLinkOf(engine, own.id)]) : [null, null];
   const latest = pending?.latest ?? null;
-  const proposed = own && latest?.approvalId === own.id && presentsExactly(renderQuestion(own)) ? own : null;
-  const question = proposed ? renderQuestion(proposed) : null;
+  const question = own && latest?.approvalId === own.id ? presentable(own) : null;
+  const proposed = question ? own : null;
   const text = [letter?.text ?? "", settled.status === "failed" ? "" : settled.text, question ?? "", question && link ? replayLine(link) : ""]
     .filter(Boolean)
     .join("\n\n");
@@ -576,6 +581,12 @@ export async function handlePresented(request: Request, deps: { secret: string |
   if (!approval || presentationHash(renderQuestion(approval)) !== textHash) {
     console.warn(JSON.stringify({ type: "mano_presented_mismatch", handle: handleHash }));
     return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });
+  }
+  // A draft held back after a correction is never made answerable, even
+  // when Channels reports it from before: it is closed like a replaced one.
+  if (!presentable(approval)) {
+    await engine.reject(approval.id).catch(() => console.warn(JSON.stringify({ type: "mano_close_failed", count: 1 })));
+    return Response.json({ ok: true, superseded: true });
   }
   const set = await engine.setPointer(approvalId);
   if (!set) return Response.json({ ok: false, reason: "mismatch" }, { status: 409 });

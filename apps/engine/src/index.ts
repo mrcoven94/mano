@@ -38,9 +38,14 @@
 //                                              proposalTurn names the turn an agent draft belongs to
 //   GET  /api/persons/:id/approvals
 //   POST /api/persons/:id/approvals/supersede     { generation } closes every waiting draft but the latest
+//   POST /api/persons/:id/approvals/fence     { generation, recipient, turnId } a form call of turnId corrects
+//                                              the recipient's form: drafts from older turns are refused and closed
 //   POST /api/persons/:id/approvals/:aid/approve  a YES; retryable:true when the safety check could not
 //                                              answer and the approval still waits for another YES
 //   POST /api/persons/:id/approvals/:aid/reject  a NO: ends a pending approval
+//   POST /api/persons/:id/approvals/:aid/retire  the person corrected the form after this filing failed or
+//                                              went unanswered: never run again (completed with its receipt
+//                                              when it went through, in_progress while one is in flight)
 //   PUT  /api/persons/:id/approvals/:aid/replay   { generation, labels, steps: [{ caption, pngB64 }] } (agent):
 //                                              the screens of the fill behind a waiting approval; first bind wins.
 //                                              201 or 200 with { path } of the page, 404 no approval,
@@ -771,6 +776,17 @@ export default {
         if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
         return profilePatchResponse(await agent.patchProfile(subject, read.value, generation));
       }
+      if (rest === "/approvals/fence" && request.method === "POST") {
+        const read = await readCappedJson(request, MAX_ACTION_BODY);
+        if (!read.ok) return read.response;
+        const body = (read.value ?? {}) as { generation?: unknown; recipient?: unknown; turnId?: unknown };
+        const generation = writeGeneration(service, body.generation);
+        if (generation === "invalid") return Response.json({ error: "Body needs a generation." }, { status: 400 });
+        const out = await agent.fenceProposals(subject, body, generation);
+        if (isStale(out)) return STALE();
+        if ("error" in out) return Response.json(out, { status: 400 });
+        return Response.json(out);
+      }
       if (rest === "/approvals/supersede" && request.method === "POST") {
         const read = await readCappedJson(request, MAX_ACTION_BODY);
         if (!read.ok) return read.response;
@@ -780,11 +796,15 @@ export default {
         if (isStale(out)) return STALE();
         return Response.json(out);
       }
-      const decisionMatch = rest.match(/^\/approvals\/([^/]+)\/(approve|reject)$/);
+      const decisionMatch = rest.match(/^\/approvals\/([^/]+)\/(approve|reject|retire)$/);
       if (decisionMatch && request.method === "POST") {
         const approvalId = decodeURIComponent(decisionMatch[1]);
         const result =
-          decisionMatch[2] === "approve" ? await agent.approve(approvalId, subject) : await agent.reject(approvalId, subject);
+          decisionMatch[2] === "approve"
+            ? await agent.approve(approvalId, subject)
+            : decisionMatch[2] === "reject"
+              ? await agent.reject(approvalId, subject)
+              : await agent.retire(approvalId, subject);
         return Response.json(result);
       }
       // No model route: the agent calls the model client itself with the
