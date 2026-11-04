@@ -5,24 +5,23 @@ import Mascot, { Wave } from "@/components/Mascot";
 import TextMano from "@/components/TextMano";
 import { smsHref } from "@/lib/site";
 
-/* Two plans, the full side by side folded under them, then the support that comes with Plus. Keeping help is free for everyone; Plus adds unlimited applications, a Mano that
-   works every day without being asked, and a support team. Faxes and mail cost real money, so they are at cost on both. */
+/* Two plans, the full side by side folded under them, then the support that comes with Plus. Applying and keeping help are free for everyone; Plus adds a support team, and daily
+   checks for new help are coming. Faxes and mail, once ready, cost real money, so they are at cost on both. */
 
 const FREE = [
-  "5 applications a month",
+  "Unlimited applications",
+  "Forms filled on websites by its own computer",
   "Unlimited notices, read and explained",
   "Unlimited renewals, deadlines and reminders",
   "Unlimited benefit tracking",
-  "Its own email inbox, so offices write to Mano directly",
+  "Its own email inbox, so offices write to Mano directly, coming soon",
   "Unlimited mail scans and documents",
-  "Text, iMessage, the app and the web",
+  "Text and iMessage, with the app and the web coming soon",
 ];
 
 const PLUS: [string, string][] = [
-  ["Unlimited applications.", "Every program you qualify for, as many as you need, every month."],
-  ["Always on.", "Mano checks your accounts and portals every day, finds new help you qualify for and starts renewals early, without being asked."],
-  ["Its own computer.", "Mano creates and signs in to your county, landlord and utility accounts."],
-  ["Calls and waiting on hold.", "Mano calls the office for you and hands you the phone when a person picks up."],
+  ["Always on, coming soon.", "Mano will check every day for new help you qualify for."],
+  ["Calls and waiting on hold, coming soon.", "Mano will wait on hold for you and hand you the phone when a person picks up."],
   ["A support team that knows your case.", "Real people, ready when you need more than Mano."],
 ];
 
@@ -38,20 +37,20 @@ const SUPPORT: [string, string, string][] = [
 type Cell = string | boolean;
 const ROWS: [string, [string, Cell, Cell][]][] = [
   ["Getting help", [
-    ["Applications", "5 a month", "Unlimited"],
+    ["Applications", "Unlimited", "Unlimited"],
     ["Programs checked for you", "Every one", "Every one"],
     ["Notices read and explained", "Unlimited", "Unlimited"],
     ["Renewals, deadlines and reminders", "Unlimited", "Unlimited"],
     ["Benefit tracking", "Unlimited", "Unlimited"],
-    ["Its own email inbox", true, true],
+    ["Its own email inbox, coming soon", true, true],
     ["Mail scans and documents", "Unlimited", "Unlimited"],
   ]],
   ["Mano does it for you", [
-    ["Always on, checks every day", false, true],
-    ["Its own computer for websites and accounts", false, true],
-    ["Calls and waiting on hold", false, true],
+    ["Always on, checks every day, coming soon", false, true],
+    ["Its own computer for websites", true, true],
+    ["Calls and waiting on hold, coming soon", false, true],
     ["Credit disputes", "Written for you", "Written and followed up"],
-    ["Faxes and mailed letters", "At cost", "At cost"],
+    ["Faxes and mailed letters, coming soon", "At cost", "At cost"],
   ]],
   ["Support", [
     ["Same-day answers from a person", false, true],
@@ -61,7 +60,7 @@ const ROWS: [string, [string, Cell, Cell][]][] = [
     ["Yearly checkup", false, true],
   ]],
   ["Always included", [
-    ["Share a case with your caseworker", true, true],
+    ["Share a case with your caseworker, coming soon", true, true],
   ]],
 ];
 
@@ -76,7 +75,7 @@ export default function Pricing() {
     <>
       <div className="h-head">
         <h2 id="pricing-h">Keeping your help is free, always.</h2>
-        <p className="lede">Notices, renewals, tracking, mail and Mano&rsquo;s own email inbox are free for everyone, with 5 applications a month. Plus is $8 a month for unlimited applications, a Mano that works every day without being asked and a support team that knows your case.</p>
+        <p className="lede">Applications, notices, renewals, tracking and mail are free for everyone. Plus is $8 a month for a support team that knows your case. Daily checks for new help are coming soon.</p>
       </div>
 
       <div className="price-grid">
@@ -96,7 +95,7 @@ export default function Pricing() {
           <div className="price-top">
             <h3>Plus</h3>
             <PlusPrice />
-            <p>Mano works every day, and people back it up.</p>
+            <p>People who know your case back Mano up.</p>
           </div>
           <ul className="price-rich">
             <li>Everything in Free</li>
@@ -143,7 +142,7 @@ export default function Pricing() {
           ))}
         </ul>
       </div>
-      <p className="price-note">Faxes and mailed letters cost what the post office and phone company charge. Mano tries the free way first and tells you the price before anything costs money. Organizations pay per staff seat. <Link href="/organizations">See plans for teams</Link></p>
+      <p className="price-note">Faxes and mailed letters are coming soon. They will cost what the post office and phone company charge, and Mano will tell you the price first. Organizations pay per staff seat. <Link href="/organizations">See plans for teams</Link></p>
     </>
   );
 }

@@ -35,7 +35,7 @@ const PROMISES: [string, string][] = [
 
 const faqs: [string, string][] = [
   ["Does Mano cost anything?", "Keeping your help is always free. Reading your letters, holding dates, reminders and renewals have no limits and need no card. Pricing on the home page shows what Plus adds."],
-  ["Do I need an app?", `No. Text Mano at ${SMS_NUMBER} from any phone that can text. You can also use Mano on the web.`],
+  ["Do I need an app?", `No. Text Mano at ${SMS_NUMBER} from any phone that can text. Mano on the web is coming soon.`],
   ["Is it safe to give Mano my Social Security number?", "Mano never asks for it through a link. When a form needs it, the form goes out only after you see it and say yes. If a text or letter asks for it at a link, send it to Mano first and it will check."],
   ["Will Mano send anything without asking me?", "No. Mano shows you who it is for, why and the exact pages, and waits for your yes. If anything changes after that, it asks again."],
 ];
