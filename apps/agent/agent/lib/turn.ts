@@ -19,6 +19,7 @@
 import { createHash } from "node:crypto";
 
 import { createModelClient, type ModelClient } from "@mano/mail";
+import { isEmailDocument } from "@mano/protocol";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyRequest } from "./auth.js";
 import { CRISIS_LINE, detectCrisis } from "./crisis.js";
@@ -28,7 +29,7 @@ import { EngineError, type Engine, type EngineApproval, type EngineTurn, type Pe
 import { emailAddressLine, parseEmailAddress } from "./email-address.js";
 import { LETTER_RULES, documentsContext, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
 import { closeReplaced, isShare, presentable, presentationHash, proposalsOf, renderQuestion, replayLine, shareDone, waitingFrom, waitingProposals } from "./pending.js";
-import { answerRequestWithPhoto } from "./sharing.js";
+import { answerRequestWithPhoto, openRequestNote } from "./sharing.js";
 import type { HoldResult } from "./propose.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 import { TurnClock } from "./timings.js";
@@ -407,7 +408,10 @@ async function runTurn(
 
   // A crisis is never answered with a document question.
   const crisis = body.texts.some(detectCrisis);
-  if (body.documents.length > 0 && !crisis) {
+  // Channels gives an email its own turn. It is read as a letter and never
+  // answers a request: a stranger's mail must not start a question that sends.
+  const emailed = body.documents.some((d) => isEmailDocument(d.id));
+  if (body.documents.length > 0 && !crisis && !emailed) {
     const answered = await clock.time("share", () =>
       answerRequestWithPhoto(engine, { turnId: body.turnId, turnAtMs }, body.documents.map((d) => d.id), body.attachmentCount),
     );
@@ -423,6 +427,10 @@ async function runTurn(
   let letter: LetterReply | null = null;
   if (body.attachmentCount > 0) {
     letter = await readTextedPhotos(engine, body.documents, deps.mailModel ?? defaultMailModel(), turn.firstReceivedAt, deadlineMs - READ_MARGIN_MS);
+    if (emailed && !crisis) {
+      const note = await openRequestNote(engine);
+      if (note) letter = { ...letter, text: `${letter.text} ${note}` };
+    }
     if (body.texts.length === 0 || deadlineMs - Date.now() < MODEL_MIN_MS) return reply(letter.text);
     context.push(LETTER_RULES);
     message = `${message}\n\n${letterBlock(letter)}`;

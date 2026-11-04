@@ -11,7 +11,7 @@
 // changed to fit: a value that is missing, or does not fit its field,
 // becomes one plain question, asked in the form's order of importance.
 
-import { usAddressParts, usStateInAddress, type RecipientId } from "@mano/protocol";
+import { isEmailDocument, usAddressParts, usStateInAddress, type RecipientId } from "@mano/protocol";
 
 import type { Frequency, Leaf, Profile } from "./engine.js";
 import { ENDS_IN_ZIP, STATED_TOTAL, addressChangedBeside, addressIsWhole, confirmedByPerson, householdSizeOf } from "./profile.js";
@@ -387,7 +387,8 @@ export function fillFrom(form: FormSpec, saved: Profile, answers: Record<string,
     values[field.name] = value;
   }
   missing = first ?? missing;
-  const documentId = form.proof.fromProfile(profile);
+  const named = form.proof.fromProfile(profile);
+  const documentId = named && !isEmailDocument(named) ? named : null;
   if (!documentId) missing ??= { name: "proof", label: form.proof.label, question: form.proof.question };
   return { values, documentId, missing, invalid };
 }

@@ -21,6 +21,7 @@
 // attached document by its label, which the draft freezes, so the person
 // sees what their yes sends.
 import { defineTool, type ToolContext } from "eve/tools";
+import { isEmailDocument } from "@mano/protocol";
 import { z } from "zod";
 
 import type { EngineDocument, PersonEngine, Profile } from "../lib/engine.js";
@@ -60,7 +61,9 @@ function unfileableQuestion(newest: EngineDocument): string {
 // newest first: the one fill_form would attach (a profile value was read
 // from it) if Engine could file it, else the newest it could file.
 async function proofOnFile(engine: PersonEngine): Promise<{ proof: EngineDocument | null; newest: EngineDocument | null; profile: Profile | null }> {
-  const [profile, documents] = await Promise.all([engine.getProfile(), engine.listDocuments()]);
+  const [profile, listed] = await Promise.all([engine.getProfile(), engine.listDocuments()]);
+  // What came by email is read, never attached: the person did not choose it.
+  const documents = listed.filter((d) => !isEmailDocument(d.id));
   const fileable = documents.filter((d) => d.filing === "fileable");
   const fromProfile = profile ? RENEWAL.proof.fromProfile(profile) : null;
   return { proof: fileable.find((d) => d.id === fromProfile) ?? fileable[0] ?? null, newest: documents[0] ?? null, profile };

@@ -61,6 +61,13 @@ async function list(h: string): Promise<Listed[]> {
 const SENT_ON = /^the (photo|letter|PDF|file) you sent on (January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}$/;
 
 describe("the person's document list", () => {
+  it("names a document that came by email as that, never as one the person sent", async () => {
+    const h = handle("email-label");
+    expect((await upload(h, "email-g0-0123456789abcdef01234567-0", new TextEncoder().encode("%PDF-1.4 synthetic"))).status).toBe(200);
+    const [doc] = await list(h);
+    expect(doc!.label).toMatch(/^the PDF that came by email on /);
+  });
+
   it("lists every stored document newest first, with when it arrived, its media type and a plain label", async () => {
     const h = handle("list-order");
     for (const [id, bytes] of [["g0t1i0-first1", PNG], ["g0t2i0-second", PDF], ["g0t3i0-third1", HEIC], ["g0t4i0-fourth", JPEG]] as const) {

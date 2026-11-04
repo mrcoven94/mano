@@ -75,6 +75,21 @@ function oldestRequest(shares: EngineShare[]) {
     .sort((a, b) => a.request.requestedAt.localeCompare(b.request.requestedAt))[0];
 }
 
+// What to say of a waiting request when a letter came by email. An email is
+// never the answer to one, since anyone can send it, so this says only what
+// the request is and how the person can answer it themselves. Null when none
+// waits or Engine cannot say.
+export async function openRequestNote(engine: PersonEngine): Promise<string | null> {
+  try {
+    const open = oldestRequest((await engine.listShares()).active);
+    if (!open) return null;
+    return `Separately, ${recipientName(open.share.recipient)} asked for your ${open.request.label}. Nothing from this email went to them. To answer it, text me a photo of it by itself and I will check with you first.`;
+  } catch {
+    console.warn(JSON.stringify({ type: "mano_shares_unread" }));
+    return null;
+  }
+}
+
 // A photo the person texted while an organization waits on a document is
 // their answer to it: Mano asks, naming that photo, and it goes only after
 // their YES. A message with more than one photo is never guessed between: it

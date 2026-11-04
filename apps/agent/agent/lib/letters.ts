@@ -13,6 +13,7 @@
 // invented: a failed or slow reading says so and offers to try again.
 import { createHash } from "node:crypto";
 
+import { isEmailDocument } from "@mano/protocol";
 import { answerReading, readMail, type HeldDeadline, type MailReading, type ModelClient } from "@mano/mail";
 
 import { daysLeft } from "./deadlines.js";
@@ -30,8 +31,6 @@ const HOLD_RESERVE_MS = 5_000;
 const UNSAVED = "I could not save your photo, so I have not read it. Please send it again.";
 const FAILED = "I could not finish reading your photo just now. Send it again and I will try once more.";
 const EMAIL_FAILED = "I saved that email but could not finish reading it just now. Send me a photo of it, or ask the office to send it again.";
-// Channels names every document it stores from an email this way.
-const fromEmail = (photo: TextedPhoto): boolean => photo.id.startsWith("email-");
 
 export interface LetterReply {
   // How the reply opens: Mano's words from the letter's cited fields.
@@ -146,9 +145,13 @@ const DOCUMENTS_SHOWN = 5;
 // leaves a remembered fact, so the note points there.
 export function documentsNote(documents: EngineDocument[]): string | null {
   if (documents.length === 0) return null;
-  const lines = documents.slice(0, DOCUMENTS_SHOWN).map((d) => `- ${d.label}: ${d.filing === "fileable" ? "can be attached to a filing" : "cannot be attached to a filing"}.`);
+  const lines = documents.slice(0, DOCUMENTS_SHOWN).map((d) =>
+    isEmailDocument(d.id)
+      ? `- ${d.label}: came by email, so it cannot be attached to a filing or sent.`
+      : `- ${d.label}: ${d.filing === "fileable" ? "can be attached to a filing" : "cannot be attached to a filing"}.`,
+  );
   return [
-    "Photos and files this person sent, which Mano has on file, newest first:",
+    "Photos and files Mano has on file for this person, newest first:",
     ...lines,
     'Each of these arrived, even one Mano could not read, so never say one did not arrive or was not received. What Mano read from a photo is in what you remember, as "From a letter photo". If nothing there comes from it, say it is on file and you could not read it, and never guess what it says.',
   ].join("\n");
@@ -188,7 +191,7 @@ export async function readTextedPhotos(
   if (photos.length === 0) return { text: UNSAVED, read: false };
   const started = Date.now();
   const deadline = deadlineAt - HOLD_RESERVE_MS;
-  const emailed = photos.some(fromEmail);
+  const emailed = photos.some((photo) => isEmailDocument(photo.id));
   let text: string;
   let read = false;
   try {

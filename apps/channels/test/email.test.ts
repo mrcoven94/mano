@@ -1150,3 +1150,18 @@ describe("comparing the plain part and the HTML part", () => {
     expect(htmlOnlySentences("Pay $10.", "Pay $100.")).toEqual(["Pay $100."]);
   });
 });
+
+describe("an email in the same batch as the person's own text", () => {
+  it("runs as its own turn, so a YES is still a YES and no words mix with the letter", async () => {
+    const inbox = await openInbox();
+    await inbox.h.runner.handleEvent(inboundEvent({ id: "evt_words", occurredAtMs: inbox.h.now, text: "YES" }), "webhook");
+    await inbox.send(mime({ text: "Your renewal is due." }));
+    await inbox.h.runner.handleEvent(inboundEvent({ id: "evt_more", occurredAtMs: inbox.h.now, text: "Thanks" }), "webhook");
+    await runTurnAfterBatch(inbox.h);
+    expect(inbox.seen.map((t) => ({ texts: t.texts, files: t.documents?.length ?? 0 }))).toEqual([
+      { texts: ["YES"], files: 0 },
+      { texts: [], files: 1 },
+      { texts: ["Thanks"], files: 0 },
+    ]);
+  });
+});

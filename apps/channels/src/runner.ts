@@ -238,18 +238,23 @@ export function receiptChatMatches(rowChatId: string | null, receiptChatId: stri
 // A turn stores and reads at most MAX_ATTACHMENTS_PER_TURN files, so a batch
 // with more runs as more turns and none is left unread. A cut comes only
 // before a message's first piece, which is the one holding its files, and
-// one message over the limit stays whole.
-export function chunkByAttachmentCap(
+// one message over the limit stays whole. An email always gets a turn of its
+// own: it is not the person's, so it never shares one with their words, a YES
+// or a photo they sent.
+export function chunkByFiles(
   items: import("./store.js").PendingInbound[],
   cap: number = MAX_ATTACHMENTS_PER_TURN,
 ): import("./store.js").PendingInbound[][] {
+  const fromEmail = (item: import("./store.js").PendingInbound) => item.attachments.some((a) => a.stored);
   const chunks: import("./store.js").PendingInbound[][] = [];
   let count = 0;
+  let email = false;
   for (const item of items) {
     const files = item.attachments.length;
-    if (chunks.length === 0 || (files > 0 && count > 0 && count + files > cap)) {
+    if (chunks.length === 0 || fromEmail(item) !== email || (files > 0 && count > 0 && count + files > cap)) {
       chunks.push([]);
       count = 0;
+      email = fromEmail(item);
     }
     chunks.at(-1)!.push(item);
     count += files;
@@ -742,7 +747,7 @@ export class ConversationRunner {
             }
             store.setPendingCrisis(asks.map((p) => p.eventId), crisis);
           }
-          for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP).flatMap((c) => chunkByAttachmentCap(c))) {
+          for (const chunk of chunkByTextCap(group, TURN_TEXT_CAP).flatMap((c) => chunkByFiles(c))) {
             const items = chunk.map((item) => ({ ...item, crisis }));
             const turnMeta = store.meta();
             const turn = turnMeta.turn + 1;

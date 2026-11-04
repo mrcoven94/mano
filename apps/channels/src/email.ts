@@ -33,6 +33,7 @@ import {
   type Logger,
   type NormalizedEvent,
 } from "@mano/channels";
+import { emailDocumentId } from "@mano/protocol";
 import { sniffMediaType, storedForm, type DocumentStore, type PhotoConverter } from "./files.js";
 import type { ConversationRunner, SpendLedger } from "./runner.js";
 import type { ConversationStore } from "./store.js";
@@ -220,10 +221,6 @@ export interface ReceiveDeps {
   nowMs: () => number;
 }
 
-export function documentIdFor(generation: number, key: string, index: number): string {
-  return `email-g${generation}-${key.slice(0, 24)}-${index}`;
-}
-
 function base64ToBytes(b64: string): Uint8Array {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }
@@ -380,7 +377,7 @@ async function storeAndQueue(
   const { sql, store, runner, spend, logger, nowMs } = deps;
   const stored: { id: string; mimeType: string }[] = [];
   for (const [index, form] of forms.entries()) {
-    const id = documentIdFor(generation, delivery.key, index);
+    const id = emailDocumentId(generation, delivery.key, index);
     const saved = await documents.put({ id, name: id, bytes: form.bytes, generation }).catch((err: unknown) => {
       logger.warn("email_store_failed", { err: errName(err) });
       return false;

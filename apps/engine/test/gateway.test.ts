@@ -33,6 +33,17 @@ function gatewayWithDoc(content: string) {
 }
 
 describe("action gateway", () => {
+  it("blocks any action that would send a document that came by email", async () => {
+    const id = "email-g0-0123456789abcdef01234567-0";
+    const docs = new MapDocumentStore(new Map([[id, "A letter a stranger emailed."]]));
+    const exec = new InMemoryExecutor();
+    const gw = new ActionGateway(new MemoryApprovalStore(), exec, { documents: docs });
+    const result = await gw.requestAction(baseReq({ documentId: id }));
+    expect(result.status).toBe("blocked");
+    expect(result.approval).toBeUndefined();
+    expect(exec.calls).toEqual([]);
+  });
+
   it("blocks a stale approval after a document edit", async () => {
     const { docs, exec, gw } = gatewayWithDoc("Form v1: Maria Lopez, renewal");
     const first = await gw.requestAction(baseReq());
