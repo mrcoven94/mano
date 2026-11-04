@@ -203,22 +203,30 @@ function dutyQuestion(named: Extract<NamedDates, { kind: "duty" }>, w: AnswerWor
   return [...interview, w.twoDates(w.date(first.iso), w.dueFor[purposeOf(first)], w.date(second.iso), w.dueFor[purposeOf(second)])].join(" ");
 }
 
+function namedQuestion(named: NamedDates, w: AnswerWords, isPast: (iso: string) => boolean): string {
+  switch (named.kind) {
+    case "not-theirs":
+      return w.notYours;
+    case "passed":
+      return w.passed(w.date(named.iso));
+    case "duty":
+      return dutyQuestion(named, w, isPast);
+    case "hearing":
+      return isPast(named.iso) ? w.passed(w.date(named.iso)) : w.askHearing(w.date(named.iso));
+    case "window":
+      return isPast(named.resultIso) ? w.passed(w.date(named.resultIso)) : w.askWindow(named.days, w.date(named.fromIso), w.date(named.resultIso));
+  }
+}
+
 function heldBackQuestion(question: Question, planted: boolean, w: AnswerWords, today: string | undefined): string | null {
   const isPast = (iso: string): boolean => today !== undefined && iso < today;
-  const sole = soleDate(question);
-  // A letter that tries to instruct Mano can state a date to get it repeated.
-  if (planted) return sole || question.named ? w.severalDates : null;
-  const named = question.named;
-  if (named?.kind === "not-theirs") return w.notYours;
-  if (named?.kind === "passed") return w.passed(w.date(named.iso));
-  if (named?.kind === "duty") return dutyQuestion(named, w, isPast);
-  if (named?.kind === "hearing") return isPast(named.iso) ? w.passed(w.date(named.iso)) : w.askHearing(w.date(named.iso));
-  if (named?.kind === "window") {
-    return isPast(named.resultIso) ? w.passed(w.date(named.resultIso)) : w.askWindow(named.days, w.date(named.fromIso), w.date(named.resultIso));
-  }
-  if (!sole) return null;
-  if (sole === "unclear") return w.severalDates;
-  return isPast(sole) ? w.passed(w.date(sole)) : w.askDate(w.date(sole));
+  // A letter that tries to instruct Mano can write a duty to get its date
+  // repeated, so ranking does not run on it.
+  if (question.named && (!planted || question.named.kind === "not-theirs")) return namedQuestion(question.named, w, isPast);
+  const date = soleDate(question);
+  if (!date) return null;
+  if (date === "unclear") return w.severalDates;
+  return isPast(date) ? w.passed(w.date(date)) : w.askDate(w.date(date));
 }
 
 // The date stays the letter's claim: it is said, never held, since the

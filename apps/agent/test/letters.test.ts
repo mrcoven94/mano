@@ -184,11 +184,11 @@ describe("a texted letter", () => {
     expect(context).toMatch(/letter_reading block/);
   });
 
-  it("asks one question quoting the sentence when the gate does not publish the deadline, and holds nothing", async () => {
+  it("asks one question naming the date when the gate does not publish the deadline, and holds nothing", async () => {
     const { body } = await send(photoTurn("turn_letter0002"), deps([DOUBTFUL_PAGE]));
     expect(engine.deadlineCalls).toHaveLength(0);
-    expect(body.text).toMatch(/Your letter mentions more than one date, and I don't want to guess wrong\. Which date does it say you need to meet\?$/);
-    expect(body.text).not.toContain("November 20");
+    expect(body.text).toMatch(/It looks like your renewal is due November 20, 2026\. Please check that against your letter\. Is that the date you need to meet\?$/);
+    expect(body.text).not.toContain("December 31");
     expect(body.text).not.toContain("to your deadlines");
   });
 
