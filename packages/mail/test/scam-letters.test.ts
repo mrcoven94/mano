@@ -11,6 +11,7 @@ const NOTICE = "Notice date November 2, 2026";
 const OFFICE = `County Office\n${NOTICE}\n\n`;
 const PAY = "Pay $39.00 by November 20, 2026.";
 const RENEW = "Your renewal is due November 20, 2026.";
+const CHECK = "Check with your office, at a phone number or office you already know.";
 const WARNING =
   "This letter looks like a scam. Do not pay, call, or open anything it lists. If you are not sure, call your office at a number you already trust.";
 
@@ -139,6 +140,7 @@ const CLEAR_SCAMS: [string, string, string | null][] = [
   ["a bare link with a password and a path", `${OFFICE}${RENEW} Renew at renew:pass@evil.example/renew.`, null],
   ["a premium charge on food benefits", `${OFFICE}Pay your $25 premium charge to keep your food benefits.`, null],
   ["a copay, then a purpose on CalFresh", `${OFFICE}Pay your $10 copay, to keep your CalFresh.`, null],
+  ["a Social Security number by text, beside a fax machine", `${OFFICE}${RENEW} Send your SSN by text to (555) 300-4000, because our fax machine is broken.`, RENEW],
 ];
 
 // An ordinary ask sent to an untrusted link. It may be a scam or a real
@@ -314,16 +316,64 @@ const REAL: [string, string, string | null, string | null][] = [
   ["a Medicaid premium after a CalFresh purpose", `${OFFICE}To keep your CalFresh, pay your Medicaid premium of $25.`, null, null],
   ["an email label with no space", `${OFFICE}${RENEW} Email:maria.lopez@dss.ca.gov`, RENEW, "2026-11-20"],
   ["a mailto address", `${OFFICE}${RENEW} Write to mailto:maria.lopez@dss.ca.gov with questions.`, RENEW, "2026-11-20"],
+  ["proof of child care payments", `${OFFICE}To keep your benefits, send proof that you pay $150 each week for child care. ${RENEW}`, RENEW, null],
+  ["proof of child care payments, threat second", `${OFFICE}Your benefits may stop unless you send proof that you pay $150 each week for child care.`, null, null],
+  ["a share of cost charge", `${OFFICE}Pay the share of cost charge of $50 to keep your Medicaid. ${RENEW}`, RENEW, null],
+  ["a Social Security number by fax", `${OFFICE}Fax your SSN to (555) 100-2000. ${RENEW}`, RENEW, "2026-11-20"],
 ];
 
 describe("clear scams", () => {
-  it.each(CLEAR_SCAMS)("warns plainly about %s and says no date", async (_name, text, deadline) => {
+  // The dates a letter states, besides its notice date.
+  const datesIn = (text: string): string[] => [...new Set(text.match(/(?:November|December) \d+, 2026/g) ?? [])].filter((d) => d !== "November 2, 2026");
+
+  it.each(CLEAR_SCAMS)("warns plainly about %s and states no date as fact", async (_name, text, deadline) => {
     const { reading, answer } = await read(text, deadline);
     expect(reading.warnings.map((w) => w.kind)).toContain("scam_suspect");
-    expect(answer.text).toBe(WARNING);
+    const [date, more] = datesIn(text);
+    expect(answer.text).toBe(date && !more ? `${WARNING} The letter claims a deadline of ${date}, and I have not confirmed it. ${CHECK}` : WARNING);
     expect(answer.deadlines).toEqual([]);
     expect(reading.datesToKnow).toEqual([]);
     expect(reading.questions.filter((q) => q.kind === "confirm_deadline")).toEqual([]);
+  });
+
+  it("names no date when a scam letter gives more than one, and says to check", async () => {
+    const { answer } = await read(`${OFFICE}Pay a $25 fee to keep your Medicaid by November 20, 2026 or by December 1, 2026.`, null);
+    expect(answer.text).toBe(`${WARNING} The letter mentions more than one date, and I have not confirmed any of them. ${CHECK}`);
+    expect(answer.deadlines).toEqual([]);
+  });
+
+  it("does not name a date Mano counted for a scam letter", async () => {
+    const { answer } = await read(`${OFFICE}Pay a $25 fee to keep your Medicaid within 10 days of November 5, 2026.`, null);
+    expect(answer.text).not.toMatch(/claims a deadline/);
+    expect(answer.text).not.toContain("November 15");
+    expect(answer.deadlines).toEqual([]);
+  });
+
+  it("names a real letter's date as a claim when it trips a clear signal by mistake", async () => {
+    const { answer } = await read(`${OFFICE}${RENEW} Your SNAP processing fee is $25.`, RENEW);
+    expect(answer.text).toBe(`${WARNING} The letter claims a deadline of November 20, 2026, and I have not confirmed it. ${CHECK}`);
+    expect(answer.text).not.toMatch(/It is due|remind/);
+  });
+
+  it("warns each letter on its own, and holds nothing from the scam", async () => {
+    const reading = await readMail(
+      [
+        { bytes: await letterPhoto(), mimeType: "image/jpeg", name: "doc-1" },
+        { bytes: await letterPhoto(), mimeType: "image/jpeg", name: "doc-2" },
+      ],
+      {
+        personId: "p1",
+        synthetic: true,
+        model: recordedReader([
+          pageJson({ full_text: `${OFFICE}Pay a $25 fee to keep your Medicaid by December 1, 2026.`, reference_no: { text: "A-1", box_2d: [110, 220, 130, 350] }, deadlines: [] }),
+          pageJson({ reference_no: { text: "B-2", box_2d: [110, 220, 130, 350] } }),
+        ]),
+      },
+    );
+    const answer = answerReading(reading);
+    expect(answer.text).toContain("The letter claims a deadline of December 1, 2026, and I have not confirmed it.");
+    expect(answer.text).toContain("It is due November 20, 2026.");
+    expect(answer.deadlines.map((d) => d.dueDate)).toEqual(["2026-11-20"]);
   });
 });
 
@@ -346,9 +396,9 @@ describe("a suspect link beside an ordinary ask", () => {
     expect(answer.text).not.toMatch(/November|December/);
   });
 
-  it("a clear scam signal beats a suspect link, so its date is never said", async () => {
+  it("a clear scam signal beats a suspect link, so the reply is the scam warning", async () => {
     const { answer } = await read(`${OFFICE}${PAY} Pay online at https://benefit-pay.example/case. A $25 processing fee is required to renew your SNAP benefits.`, PAY);
-    expect(answer.text).toBe(WARNING);
+    expect(answer.text).toBe(`${WARNING} The letter claims a deadline of November 20, 2026, and I have not confirmed it. ${CHECK}`);
     expect(answer.deadlines).toEqual([]);
   });
 });
