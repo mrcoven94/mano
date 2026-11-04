@@ -17,7 +17,11 @@ export class HoldCallExecutor implements Executor {
     this.simulated = inner.simulated;
   }
 
-  refuse(req: ActionRequest): string | null {
+  providerOf(req: ActionRequest): string | null {
+    return this.inner.providerOf?.(req) ?? null;
+  }
+
+  refuse(req: ActionRequest): string | null | Promise<string | null> {
     if (req.type === "call" && this.calls.live()) return this.calls.refuse(req);
     return this.inner.refuse?.(req) ?? null;
   }

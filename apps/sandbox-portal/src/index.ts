@@ -16,8 +16,10 @@
  * /submissions/:key reports received (with the packet digest) or not_found,
  * so the action gateway reconciles after a timeout instead of filing twice.
  * Slow mode stores first, then holds the response past the caller's timeout.
- * /caseworker lists filed submissions for staff. Every page is labeled as a
- * test system.
+ * /caseworker lists filed submissions for staff. /staff is the sign-in for the
+ * test office residents share cases with: it shows what Engine says that office
+ * may see, asks residents for documents and answers nothing once they revoke
+ * (src/staff.ts). Every page is labeled as a test system.
  *
  * Tokens: SANDBOX_PORTAL_TOKEN files, reconciles, opens the caseworker view
  * and reads drafts; only the office's filing service holds it. The optional
@@ -48,6 +50,8 @@ export interface Env {
   FILES: R2Bucket;
   SANDBOX_PORTAL_TOKEN?: string;
   SANDBOX_PORTAL_DRAFT_TOKEN?: string;
+  MANO_ENGINE_URL?: string;
+  SANDBOX_ORG_ID?: string;
   SESSION_TIMEOUT_MINUTES?: string;
   SLOW_MS_DEFAULT?: string;
   MAX_UPLOAD_BYTES?: string;
@@ -76,6 +80,8 @@ function configFromEnv(env: Env): PortalConfig {
     slowMaxConcurrent: num(env.SLOW_MAX_CONCURRENT, 5),
     ...(env.SANDBOX_PORTAL_TOKEN ? { portalToken: env.SANDBOX_PORTAL_TOKEN } : {}),
     ...(env.SANDBOX_PORTAL_DRAFT_TOKEN ? { draftToken: env.SANDBOX_PORTAL_DRAFT_TOKEN } : {}),
+    ...(env.MANO_ENGINE_URL ? { engineUrl: env.MANO_ENGINE_URL } : {}),
+    ...(env.SANDBOX_ORG_ID ? { sandboxOrgId: env.SANDBOX_ORG_ID } : {}),
   };
 }
 

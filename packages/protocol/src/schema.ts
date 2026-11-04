@@ -83,6 +83,9 @@ export const schemasByType: Record<string, object> = {
       documentId: { type: "string" },
       documentHash: { type: "string" },
       r2Key: { type: "string" },
+      requestId: { type: "string" },
+      documentKind: { type: "string" },
+      name: { type: "string" },
     },
   },
   decision: {
@@ -110,6 +113,14 @@ export const schemasByType: Record<string, object> = {
       purpose: { type: "string" },
       scope: { type: "array", items: { type: "string" } },
       expiresAt: { type: "string" },
+      details: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["label", "value"],
+          properties: { label: { type: "string" }, value: { type: "string" } },
+        },
+      },
     },
   },
   "consent.revoke": {

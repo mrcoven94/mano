@@ -35,7 +35,7 @@ function profile() {
     income: [
       { id: "i1", memberId: leaf("self"), source: leaf("job"), amount: { value: 1075, source: "document", documentId: "doc-stub", updatedAt: at }, frequency: leaf("biweekly") },
     ],
-    programs: [{ id: "snap", program: leaf("SNAP"), caseNumber: leaf("WA-SNAP-0042117") }],
+    programs: [{ id: "snap", program: leaf("SNAP"), state: leaf("WA"), caseNumber: leaf("WA-SNAP-0042117") }],
   };
 }
 

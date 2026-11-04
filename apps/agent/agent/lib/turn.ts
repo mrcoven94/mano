@@ -26,8 +26,10 @@ import { profileContext } from "./profile.js";
 import { parseDecision } from "./decision.js";
 import { EngineError, type Engine, type EngineApproval, type EngineTurn, type PersonEngine } from "./engine.js";
 import { emailAddressLine, parseEmailAddress } from "./email-address.js";
-import { LETTER_RULES, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
-import { closeReplaced, presentable, presentationHash, proposalsOf, renderQuestion, replayLine, waitingFrom, waitingProposals } from "./pending.js";
+import { LETTER_RULES, documentsContext, letterBlock, readTextedPhotos, type LetterReply, type TextedPhoto } from "./letters.js";
+import { closeReplaced, isShare, presentable, presentationHash, proposalsOf, renderQuestion, replayLine, shareDone, waitingFrom, waitingProposals } from "./pending.js";
+import { answerRequestWithPhoto } from "./sharing.js";
+import type { HoldResult } from "./propose.js";
 import { SettleTimeout, type SettleResult } from "./settle.js";
 import { TurnClock } from "./timings.js";
 
@@ -180,6 +182,11 @@ const CHECKING =
 const CHECK_STARTING =
   "The safety check is taking a moment, so nothing was sent yet. Reply YES again in a few minutes and I will send it.";
 
+// A send that could not be confirmed is never sent again by a YES. The
+// question closes, so a new one can be prepared and answered on its own.
+const UNCONFIRMED =
+  "I could not confirm that went through, so I will not send it again on my own. If you want it sent, ask me to prepare it again and you can approve the new one.";
+
 function doneText(purpose: string, receipt: { externalId: string; simulated: boolean } | null | undefined): string {
   const label = receipt?.simulated ? " This was a simulated filing." : "";
   const confirmation = receipt ? ` Confirmation ${receipt.externalId}.` : "";
@@ -192,8 +199,9 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
     case "completed":
     case "reconciled": {
       await engine.clearPointer(approvalId);
-      const purpose = result.approval?.purpose ?? (await engine.approval(approvalId))?.purpose ?? "your request";
-      return doneText(purpose, result.receipt);
+      const approval = result.approval ?? (await engine.approval(approvalId));
+      const shared = approval ? shareDone(approval) : null;
+      return shared ?? doneText(approval?.purpose ?? "your request", result.receipt);
     }
     case "stale":
       await engine.clearPointer(approvalId);
@@ -202,6 +210,10 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       return CHECKING;
     default: {
       if (result.retryable) return CHECK_STARTING;
+      if (result.unconfirmed) {
+        await engine.clearPointer(approvalId);
+        return UNCONFIRMED;
+      }
       if (result.superseded) {
         await engine.clearPointer(approvalId);
         return `${UPDATED} Ask me to show the latest.`;
@@ -214,6 +226,11 @@ async function answerYes(engine: PersonEngine, approvalId: string): Promise<stri
       if (approval?.outcome?.receipt) {
         await engine.clearPointer(approvalId);
         return doneText(approval.purpose, approval.outcome.receipt);
+      }
+      // A share the organization refused for good: nothing to wait for.
+      if (approval && isShare(approval) && approval.outcome?.attempt === "failed") {
+        await engine.clearPointer(approvalId);
+        return "That did not go through, so nothing was sent.";
       }
       if (approval?.status === "approved") return CHECKING;
       console.warn(JSON.stringify({ type: "mano_yes_refused", status: result.status, approval: approval?.status ?? null }));
@@ -388,8 +405,17 @@ async function runTurn(
     if (decided) return decided;
   }
 
+  // A crisis is never answered with a document question.
+  const crisis = body.texts.some(detectCrisis);
+  if (body.documents.length > 0 && !crisis) {
+    const answered = await clock.time("share", () =>
+      answerRequestWithPhoto(engine, { turnId: body.turnId, turnAtMs }, body.documents.map((d) => d.id), body.attachmentCount),
+    );
+    if (answered) return answerShown(answered);
+  }
+
   const context: string[] = [];
-  if (body.texts.some(detectCrisis)) context.push(CRISIS_LINE);
+  if (crisis) context.push(CRISIS_LINE);
   // A texted photo is read first and answered in this same reply. With no
   // words that answer is the whole reply; the crisis line still leads
   // through Channels' finalize when the turn is a crisis.
@@ -401,9 +427,11 @@ async function runTurn(
     context.push(LETTER_RULES);
     message = `${message}\n\n${letterBlock(letter)}`;
   }
-  const profile = await clock.time("profile", async () => profileRead);
+  // Read after the photos, so a letter this turn just read is marked.
+  const [profile, documents] = await clock.time("profile", () => Promise.all([profileRead, documentsContext(engine, deadlineMs - MODEL_MIN_MS - Date.now())]));
   if (profile) context.push(profile);
   if (body.emailAddress) context.push(emailAddressLine(body.emailAddress));
+  if (documents) context.push(documents);
   // Where earlier requests stand (instructions/requests.ts) reaches the
   // model as a system instruction, never as part of the person's message.
   let settled: SettleResult;
@@ -441,6 +469,14 @@ async function runTurn(
   if (!text) return failure(502, "failed", settled.reason);
   if (!proposed || !question) return reply(text, letter ? "replied" : settled.status);
   return { httpStatus: 200, body: { status: "waiting_approval", text, approval: question, approvalId: proposed.id } };
+}
+
+// The reply to a photo that answers a waiting request: the exact question,
+// or plainly that nothing was sent.
+function answerShown(held: HoldResult | { pickOne: string }): TurnResponse {
+  if ("pickOne" in held) return reply(held.pickOne);
+  if (!held.held) return reply("I could not get that ready to send just now, so nothing was sent. Try sending the photo again in a moment.");
+  return { httpStatus: 200, body: { status: "waiting_approval", text: held.question, approval: held.question, approvalId: held.approval.id } };
 }
 
 // The replay page of a filled form, or null: a question without a link

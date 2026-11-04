@@ -16,6 +16,7 @@ import {
   letterPhoto,
   recordedReader,
 } from "../../../packages/mail/test/letter-fixture.js";
+import { renderDeadlines } from "../agent/lib/deadlines.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
 // A photo of a letter texted to the line: Channels stored it in Engine
@@ -82,11 +83,21 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
+// The fixture letter's deadline is a fixed date; a turn that depends on
+// where today falls against it names its own day.
+async function dayIs(iso: string) {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.parse(iso));
+  grant = await grantFor(HANDLE);
+}
+
 describe("a texted letter", () => {
   it("is answered in the same reply: what it is, the deadline, what to send, and the deadline is held in Engine", async () => {
+    await dayIs("2026-11-03T18:00:00.000Z");
     const { status, body } = await send(photoTurn("turn_letter0001"), deps([RENEWAL_PAGE]));
     expect(status).toBe(200);
     expect(body.text).toMatch(/^This is a Medi-Cal renewal letter\. It is due November 20, 2026\./);
@@ -174,6 +185,18 @@ describe("a texted letter", () => {
     expect(body.text).not.toContain("I saved");
     expect(body.text).toContain("I could not save November 20, 2026 to your deadlines just now.");
     expect(engine.deadlineCalls).toHaveLength(1);
+  });
+
+  it("a letter whose date has gone by says so instead of promising a reminder", async () => {
+    await dayIs("2026-12-01T18:00:00.000Z");
+    const { body } = await send(photoTurn("turn_letter0020"), deps([RENEWAL_PAGE]));
+    expect(body.text).toContain("It is due November 20, 2026.");
+    expect(body.text).not.toContain("I saved");
+    expect(body.text).toContain("November 20, 2026 has already passed, so no reminder will go out.");
+    // Kept as what the letter said: the model reads it as "was due".
+    const [kept] = engine.deadlinesOf(PERSON);
+    expect(kept).toMatchObject({ dueDate: "2026-11-20", nudges: [] });
+    expect(renderDeadlines([kept!], Date.now())).toContain("was due 2026-11-20");
   });
 
   it("a retried turn holds the same deadline once", async () => {

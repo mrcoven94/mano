@@ -29,7 +29,7 @@ export function senderPerson(fromAgentId: string): string {
   return fromAgentId.startsWith("person:") ? fromAgentId.slice("person:".length) : fromAgentId;
 }
 
-export type ConsentEventType = "share" | "revoke";
+export type ConsentEventType = "share" | "revoke" | "document";
 
 // A delivery's full scope. Keys are caller-controlled, so two people
 // (or a grant and a revoke) can share one; the person and the event

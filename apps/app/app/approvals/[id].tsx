@@ -39,6 +39,7 @@ function whatLabel(action: ActionType, s: Strings): string {
   if (action === "send") return s.whatSend;
   if (action === "share") return s.whatShare;
   if (action === "call") return s.whatCall;
+  if (action === "mail") return s.whatMail;
   return s.whatFax;
 }
 
@@ -315,7 +316,7 @@ export default function ApprovalDetail() {
             {action && action.kind !== "unknown" ? (
               <View style={styles.says}>
                 <Text style={[type.cardTitle, styles.saysTitle]}>
-                  {action.kind === "submit" || action.kind === "fax" ? s.saysForm : s.saysOther}
+                  {action.kind === "submit" || action.kind === "fax" || action.kind === "mail" ? s.saysForm : s.saysOther}
                 </Text>
                 {action.answers.map((field, index) => (
                   <Row
