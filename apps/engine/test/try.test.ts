@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { isTryHandle, type TryLogged } from "@mano/protocol";
 
 import type { Env } from "../src/env.js";
-import { DAILY_RUN_CAP, GUARDIAN_PROBES_PER_RUN, GUARDIAN_WARM_WINDOW_MS, IP_RUNS_PER_HOUR, LEG_LEASE_MS, RUN_EXPIRES_MS, type TryLedger } from "../src/try/ledger.js";
+import { DAILY_RUN_CAP, GUARDIAN_PROBES_PER_RUN, GUARDIAN_WARM_WINDOW_MS, IP_RUNS_PER_HOUR, LEG_LEASE_MS, MAX_TURNS_PER_RUN, RUN_EXPIRES_MS, type TryLedger } from "../src/try/ledger.js";
 import { shown, tryRoute } from "../src/try/routes.js";
 
 const ORIGIN = "https://site.test";
@@ -53,8 +53,8 @@ afterEach(async () => {
   for (const id of opened.splice(0)) {
     const run = await ledger.run(id);
     if (!run || run.done) continue;
-    const owner = await ledger.beginLeg(id, run.leg);
-    if (owner) await ledger.endLeg(id, owner, run.leg, true);
+    const owner = await ledger.beginLeg(id, run.leg, 0);
+    await ledger.endLeg(id, owner, run.leg, true);
   }
 });
 const eventsOf = async (runId: string) => ((await (await call(`/try/runs/${runId}`)).json()) as { events: TryLogged[] }).events;
@@ -65,8 +65,8 @@ const uniqueIp = () => `198.51.100.${++counter}`;
 
 
 async function finish(ledger: TryLedger, runId: string) {
-  const owner = await ledger.beginLeg(runId, 0);
-  await ledger.endLeg(runId, owner!, 0, true);
+  const owner = await ledger.beginLeg(runId, 0, 0);
+  await ledger.endLeg(runId, owner, 0, true);
 }
 
 describe("the demo's limits", () => {
@@ -207,16 +207,31 @@ describe("a leg's claim", () => {
   it("cannot be taken while a long fill runs", async () => {
     const ledger = ledgerNamed("try-leg-1");
     await open(ledger, "fill");
-    expect(await ledger.beginLeg("fill", 0, at)).toBeTruthy();
-    expect(await ledger.beginLeg("fill", 0, at + 500_000)).toBeNull();
-    expect(await ledger.beginLeg("fill", 0, at + LEG_LEASE_MS + 1)).toBeTruthy();
+    expect(await ledger.beginLeg("fill", 0, 5, at)).toMatch(/-/);
+    expect(await ledger.beginLeg("fill", 0, 5, at + 500_000)).toBe("busy");
+    expect(await ledger.beginLeg("fill", 0, 5, at + LEG_LEASE_MS + 1)).toMatch(/-/);
+  });
+
+  it("reserves turns with the claim, and ends the run instead of passing the limit", async () => {
+    const ledger = ledgerNamed("try-leg-3");
+    await open(ledger, "turns");
+    let claims = 0;
+    for (let i = 0; i < MAX_TURNS_PER_RUN + 5; i++) {
+      const owner = await ledger.beginLeg("turns", 0, 1, at + i);
+      if (owner === "spent") break;
+      claims += 1;
+      await ledger.endLeg("turns", owner, 0, false);
+    }
+    expect(claims).toBe(MAX_TURNS_PER_RUN);
+    expect((await ledger.run("turns", at + 100))?.done).toBe(true);
+    expect(await ledger.beginLeg("turns", 0, 1, at + 200)).toBe("busy");
   });
 
   it("ends only for its own owner, and a late end never reopens a finished run", async () => {
     const ledger = ledgerNamed("try-leg-2");
     await open(ledger, "late");
-    const first = (await ledger.beginLeg("late", 0, at))!;
-    const second = (await ledger.beginLeg("late", 0, at + LEG_LEASE_MS + 1))!;
+    const first = await ledger.beginLeg("late", 0, 1, at);
+    const second = await ledger.beginLeg("late", 0, 1, at + LEG_LEASE_MS + 1);
     expect(await ledger.endLeg("late", first, 1, false)).toBe(false);
     expect((await ledger.run("late", at + LEG_LEASE_MS + 2))?.leg).toBe(0);
     await ledger.appendAs("late", first, { kind: "note", text: "stale" });
@@ -292,20 +307,38 @@ describe("a run", () => {
     expect(last.text).not.toMatch(/nothing/i);
   });
 
-  it("stops a run that presses past its limit of turns", async () => {
+  it("holds the limit of turns when YES presses queue with unfinished bodies", async () => {
     const res = await start("maria", uniqueSession(), uniqueIp());
     const { runId } = (await res.json()) as { runId: string };
     const script: Script = (texts) =>
       texts[0]?.startsWith("Please fill") ? { status: "waiting_approval", text: "File it? YES or NO", approval: "File it? YES or NO", approvalId: "appr-1" } : { status: "replied", text: "The safety check is taking a moment, so nothing was sent yet." };
     const seen = { turns: [] as Record<string, unknown>[], headers: [] as Headers[] };
-    const press = async (body = "{}") => ((await (await call(`/try/runs/${runId}/next`, { method: "POST", body }, script, seen)).json()) as { next: string }).next;
+    const press = (body: string | ReadableStream = "{}") =>
+      tryRoute(
+        new Request(`https://engine.test/try/runs/${runId}/next`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json", "cf-connecting-ip": "192.0.2.9" }, body }),
+        env,
+        self,
+        { fetchImpl: fakeFetch(script, seen) },
+      );
     await press();
     await press();
     await press();
-    let last = "";
-    for (let i = 0; i < 20 && last !== "end"; i++) last = await press(JSON.stringify({ press: "yes" }));
-    expect(last).toBe("end");
-    expect(seen.turns.length).toBeLessThanOrEqual(12);
+    const before = seen.turns.length;
+    // Every request starts before any body arrives, as a slow or hostile
+    // client can arrange, then the bodies arrive one at a time.
+    const queued = Array.from({ length: 31 }, () => {
+      const { readable, writable } = new TransformStream();
+      return { writer: writable.getWriter(), answer: press(readable) };
+    });
+    const answers: { next: string }[] = [];
+    for (const { writer, answer } of queued) {
+      await writer.write(new TextEncoder().encode(JSON.stringify({ press: "yes" })));
+      await writer.close();
+      answers.push((await (await answer).json()) as { next: string });
+    }
+    expect(seen.turns.length).toBeLessThanOrEqual(MAX_TURNS_PER_RUN);
+    expect(seen.turns.length - before).toBeLessThanOrEqual(MAX_TURNS_PER_RUN - 6);
+    expect(answers.at(-1)).toEqual({ next: "end" });
     expect(((await eventsOf(runId)).at(-1) as { text: string }).text).toMatch(/unverified/);
   });
 

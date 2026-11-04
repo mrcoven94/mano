@@ -47,12 +47,11 @@ const ANSWERS: [RegExp, string][] = [
   [/phone/i, MARIA.phone],
 ];
 const FILL_ROUNDS = 5;
-// More than a filing's turns plus some YES presses while Guardian wakes. Past
-// this a run stops, so nobody can press a model turn over and over.
-const MAX_TURNS_PER_RUN = 12;
 const STUMP_WORDS = "Is this real? Should I do what it says?";
 
 type Leg = "photo" | "held" | "fill" | "yes" | "summary";
+// The most turns each leg can run, reserved when it claims the run.
+const LEG_TURNS: Record<Leg, number> = { photo: 1, held: 0, fill: FILL_ROUNDS, yes: 1, summary: 0 };
 const SCENARIOS: Record<TryScenario, { legs: Leg[]; words: string[]; needsGuardian: boolean }> = {
   maria: { legs: ["photo", "held", "fill", "yes"], words: [], needsGuardian: true },
   scam: { legs: ["photo", "summary"], words: [STUMP_WORDS], needsGuardian: false },
@@ -354,30 +353,31 @@ async function guardian(env: Env, ledger: TryLedger, runId: string, send: typeof
 
 async function next(request: Request, env: Env, runId: string, self: SelfFetch, send: typeof fetch, headers: Record<string, string>): Promise<Response> {
   const ledger = ledgerOf(env);
+  // The body first: a request can wait here for a long time, and what it
+  // decides must come from the run as it stands afterward.
+  const body = (await request.json().catch(() => null)) as { press?: unknown } | null;
   const run = await ledger.run(runId);
   if (!run) return json({ error: "No such run." }, 404, headers);
   if (run.done) return json({ next: "end" }, 200, headers);
   const { legs } = SCENARIOS[run.scenario];
   const leg = legs[run.leg]!;
-  const body = (await request.json().catch(() => null)) as { press?: unknown } | null;
   // Only a person's press answers the question.
   if (leg === "yes" && body?.press !== "yes") return json({ next: "yes" }, 200, headers);
-  const owner = await ledger.beginLeg(runId, run.leg);
-  if (!owner) return json({ next: "busy" }, 409, headers);
+  const owner = await ledger.beginLeg(runId, run.leg, LEG_TURNS[leg]);
+  if (owner === "busy") return json({ next: "busy" }, 409, headers);
+  if (owner === "spent") {
+    await ledger.append(runId, { kind: "outcome", ok: false, text: leg === "yes" ? UNVERIFIED : "This run reached its limit of turns, so it stopped here. Nothing was filed." });
+    return json({ next: "end" }, 200, headers);
+  }
   let result: LegResult;
-  if (run.turn >= MAX_TURNS_PER_RUN) {
-    await ledger.appendAs(runId, owner, { kind: "outcome", ok: false, text: leg === "yes" ? UNVERIFIED : "This run reached its limit of turns, so it stopped here. Nothing was filed." });
+  try {
+    result = await runLeg(leg, new Person(env, self, send, ledger, run), ledger, owner);
+  } catch (err) {
+    console.warn(JSON.stringify({ type: "mano_try_leg_failed", leg, error: err instanceof Error ? err.name : "unknown" }));
+    // Only a yes can file, so only then is the outcome in doubt.
+    const text = leg === "yes" ? UNVERIFIED : "This step did not finish, so the run stopped here. Nothing was filed.";
+    await ledger.appendAs(runId, owner, { kind: "outcome", ok: false, text });
     result = "end";
-  } else {
-    try {
-      result = await runLeg(leg, new Person(env, self, send, ledger, run), ledger, owner);
-    } catch (err) {
-      console.warn(JSON.stringify({ type: "mano_try_leg_failed", leg, error: err instanceof Error ? err.name : "unknown" }));
-      // Only a yes can file, so only then is the outcome in doubt.
-      const text = leg === "yes" ? UNVERIFIED : "This step did not finish, so the run stopped here. Nothing was filed.";
-      await ledger.appendAs(runId, owner, { kind: "outcome", ok: false, text });
-      result = "end";
-    }
   }
   const nextLeg = result === "advance" ? run.leg + 1 : run.leg;
   const done = result === "end" || nextLeg >= legs.length;

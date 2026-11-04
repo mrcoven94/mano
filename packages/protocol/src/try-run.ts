@@ -22,7 +22,7 @@ export type TryEvent =
   | { kind: "reply"; text: string }
   | { kind: "deadline"; dueDate: string; label: string }
   | { kind: "screen"; n: number }
-  | { kind: "guardian"; verdict: string; ms: number }
+  | { kind: "guardian"; verdict: string; ms: number; state: TryCallState }
   | { kind: "question"; text: string }
   | { kind: "filed"; confirmation: string }
   | { kind: "model"; model: string; where: string; purpose: string; ms: number; status: string; state: TryCallState }

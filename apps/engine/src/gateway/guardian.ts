@@ -66,6 +66,7 @@ type GuardianOptions = ConstructorParameters<typeof GlimmerModelChecker>[0];
 export type GuardianTrace = (event: TryEvent) => void;
 const GUARDIAN_MODEL_NAME = "muse-glimmer-30b";
 const GUARDIAN_RUNS_ON = "Our GPU on Modal";
+const STAND_IN = { model: "stand-in", where: "No model called", state: "stand-in" } as const;
 
 export class GuardianChecker implements Checker {
   private readonly warmer: GlimmerModelChecker;
@@ -84,6 +85,7 @@ export class GuardianChecker implements Checker {
     if (local.verdict === "block") return local;
     const send = this.options.fetchImpl ?? boundFetch;
     let answered = false;
+    const calls: { ms: number; status: string; ok: boolean }[] = [];
     const guardian = new GlimmerModelChecker({
       ...this.options,
       fetchImpl: async (...args) => {
@@ -91,10 +93,10 @@ export class GuardianChecker implements Checker {
         try {
           const response = await send(...args);
           answered = response.ok;
-          this.trace?.({ kind: "model", model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, purpose: "Guardian checks the action", ms: Date.now() - at, status: response.status === 503 ? "503, warming" : String(response.status), state: "live" });
+          calls.push({ ms: Date.now() - at, status: response.status === 503 ? "503, warming" : String(response.status), ok: response.ok });
           return response;
         } catch (err) {
-          this.trace?.({ kind: "model", model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, purpose: "Guardian checks the action", ms: Date.now() - at, status: "no answer", state: "live" });
+          calls.push({ ms: Date.now() - at, status: "no answer", ok: false });
           throw err;
         }
       },
@@ -102,7 +104,17 @@ export class GuardianChecker implements Checker {
     const at = Date.now();
     const [model] = await Promise.all([guardian.check(input), this.warmer.warm()]);
     const problems = [...local.problems, ...model.problems];
-    this.trace?.({ kind: "guardian", verdict: model.verdict === "block" && !answered ? "warming" : model.verdict, ms: Date.now() - at });
+    if (this.trace) {
+      // Who answered, as the server says. A call it did not answer has only
+      // the address it was sent to.
+      const server = guardian.serverInfo?.model.id;
+      const standIn = server !== undefined && /stand-?in/i.test(server);
+      for (const call of calls) {
+        const identity = !call.ok ? { model: GUARDIAN_MODEL_NAME, where: GUARDIAN_RUNS_ON, state: "live" as const } : standIn ? STAND_IN : { model: server ?? "not named", where: GUARDIAN_RUNS_ON, state: "live" as const };
+        this.trace({ kind: "model", ...identity, purpose: "Guardian checks the action", ms: call.ms, status: call.status });
+      }
+      this.trace({ kind: "guardian", verdict: model.verdict === "block" && !answered ? "warming" : model.verdict, ms: Date.now() - at, state: standIn ? "stand-in" : "live" });
+    }
     if (model.verdict === "block") return answered ? { verdict: "block", problems } : { verdict: "block", problems, unavailable: true };
     return { verdict: SEVERITY[model.verdict] > SEVERITY[local.verdict] ? model.verdict : local.verdict, problems };
   }

@@ -12,6 +12,9 @@ import type { Env } from "../env.js";
 export const DAILY_RUN_CAP = 60;
 export const IP_RUNS_PER_HOUR = 8;
 export const MAX_ACTIVE_RUNS = 4;
+// A filing's turns plus some YES presses while Guardian wakes. Each leg reserves
+// the turns it may use when it claims the run, so no timing can pass this.
+export const MAX_TURNS_PER_RUN = 12;
 // The longest one leg can take: filling a form runs up to five turns of 100
 // seconds each, with the reads around them. Another request can claim a leg
 // only after this, once its first request is certainly gone.
@@ -59,7 +62,7 @@ export class TryLedger extends DurableObject<Env> {
         id TEXT PRIMARY KEY, session TEXT NOT NULL, ip TEXT NOT NULL, handle TEXT NOT NULL UNIQUE, scenario TEXT NOT NULL,
         leg INTEGER NOT NULL DEFAULT 0, turn INTEGER NOT NULL DEFAULT 0, doc INTEGER NOT NULL DEFAULT 0, screens INTEGER NOT NULL DEFAULT 0,
         done INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL, leg_started_at INTEGER, leg_owner TEXT,
-        guardian_probes INTEGER NOT NULL DEFAULT 0, guardian_probed_at INTEGER, guardian_ready INTEGER NOT NULL DEFAULT 0);
+        turns_reserved INTEGER NOT NULL DEFAULT 0, guardian_probes INTEGER NOT NULL DEFAULT 0, guardian_probed_at INTEGER, guardian_ready INTEGER NOT NULL DEFAULT 0);
       CREATE INDEX IF NOT EXISTS runs_started ON runs (started_at);
       CREATE TABLE IF NOT EXISTS events (run TEXT NOT NULL, seq INTEGER NOT NULL, at INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (run, seq));
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
@@ -128,22 +131,30 @@ export class TryLedger extends DurableObject<Env> {
     };
   }
 
-  // Claims one leg of a run, so a double press or a retried request cannot
-  // run it twice at once. The token it returns is the claim: null when another
-  // request holds the leg or the run is over.
-  beginLeg(id: string, leg: number, now = Date.now()): string | null {
+  // Claims one leg of a run and reserves the turns it may use, in one step, so
+  // a double press or a queue of requests cannot run it twice at once or pass
+  // the run's limit. The token it returns is the claim. "busy" when another
+  // request holds the leg or the run moved on. "spent" when the turns would
+  // pass the limit, which ends the run.
+  beginLeg(id: string, leg: number, turns: number, now = Date.now()): string | "busy" | "spent" {
     const owner = crypto.randomUUID();
+    const free = "id = ? AND leg = ? AND done = 0 AND (leg_started_at IS NULL OR leg_started_at < ?)";
     const claimed = this.sql
       .exec(
-        "UPDATE runs SET leg_started_at = ?, leg_owner = ? WHERE id = ? AND leg = ? AND done = 0 AND (leg_started_at IS NULL OR leg_started_at < ?) RETURNING id",
+        `UPDATE runs SET leg_started_at = ?, leg_owner = ?, turns_reserved = turns_reserved + ? WHERE ${free} AND turns_reserved + ? <= ? RETURNING id`,
         now,
         owner,
+        turns,
         id,
         leg,
         now - LEG_LEASE_MS,
+        turns,
+        MAX_TURNS_PER_RUN,
       )
       .toArray();
-    return claimed.length === 1 ? owner : null;
+    if (claimed.length === 1) return owner;
+    const spent = this.sql.exec(`UPDATE runs SET done = 1, leg_owner = NULL, leg_started_at = NULL WHERE ${free} RETURNING id`, id, leg, now - LEG_LEASE_MS).toArray();
+    return spent.length === 1 ? "spent" : "busy";
   }
 
   // Ends only the caller's own claim, and never reopens a finished run. False
