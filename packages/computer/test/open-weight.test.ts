@@ -46,6 +46,8 @@ describe("computer use on the open-weight model", () => {
     const replayed = (bodies[1]!.input as { type?: string; arguments?: string }[]).find((item) => item.type === "function_call");
     expect(JSON.parse(replayed!.arguments!).actions.slice(0, 2)).toMatchObject([{ x: 227, y: 98 }, { x: 500, y: 500 }]);
     expect(JSON.stringify((bodies[0]!.tools as unknown[])[0])).toContain("0 to 1000");
+    expect((bodies[0] as unknown as { instructions: string }).instructions).toContain("grid from 0 to 1000");
+    expect((bodies[0] as unknown as { instructions: string }).instructions).not.toContain("Coordinates are pixels");
   });
 
   test("a run: function calls reach the computer, and every request carries the pin, the model and each screen", async () => {
