@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signBody } from "../agent/lib/auth.js";
-import { engineFrom, personIdFor } from "../agent/lib/engine.js";
+import { engineFrom, personIdFor, type Profile } from "../agent/lib/engine.js";
 import { FORMS, fillFrom } from "../agent/lib/forms.js";
 import { presentationHash } from "../agent/lib/pending.js";
 import { profileGuide, summarizeProfile } from "../agent/lib/profile.js";
@@ -131,6 +131,8 @@ async function photo(): Promise<Body> {
 async function draftValue(field: string): Promise<string | undefined> {
   return fillFrom(FORMS["food-renewal"]!, (await person().getProfile())!, {}).values[field];
 }
+
+const caseOf = async (id: string) => (await person().getProfile())!.programs.find((p) => p.id === id)?.caseNumber?.value;
 
 const askedAbout = (reply: string) => Object.keys(QUESTIONS).filter((field) => QUESTIONS[field]!.test(reply));
 
@@ -271,10 +273,12 @@ describe("keeping an answer", () => {
     expect(byProgram).toEqual({ CalFresh: "NEW-2", "Medi-Cal": "MC-9" });
   });
 
-  it("settles two food cases on the one number she gives", async () => {
+  it("takes the number she gives between two food cases, and changes neither", async () => {
     await person().patchProfile({ idempotencyKey: "seed-two", source: "person", fields: { "programs.a.program": "SNAP", "programs.a.caseNumber": "A-1", "programs.b.program": "CalFresh", "programs.b.caseNumber": "B-2" } });
     await fill({ caseNumber: "B-2" });
     expect(await draftValue("caseNumber")).toBe("B-2");
+    expect(await caseOf("a")).toBe("A-1");
+    expect(await caseOf("b")).toBe("B-2");
   });
 
   it("loses only the value Engine refuses, and the form goes on", async () => {
@@ -322,6 +326,153 @@ describe("keeping an answer", () => {
     expect(view.profile.household).toEqual([]);
     expect(summarizeProfile(view)).toContain("Household of 3");
     expect(profileGuide(view)).toContain("Household size: 3 including the person");
+  });
+});
+
+describe("two food cases in two states", () => {
+  const fill = (answers: Record<string, string>) => text("my answer", { tool: "fill_form", answers });
+  const seed = (extra: Record<string, string> = {}) =>
+    person().patchProfile({
+      idempotencyKey: "seed-states",
+      source: "person",
+      fields: { "programs.wa.program": "SNAP", "programs.wa.state": "WA", "programs.wa.caseNumber": "WA-1", "programs.ca.program": "CalFresh", "programs.ca.state": "CA", "programs.ca.caseNumber": "CA-9", ...extra },
+    });
+
+  it("leaves the other state's case alone when she answers with no address on file, and does not ask again", async () => {
+    await seed();
+    await fill({ caseNumber: "WA-1" });
+    expect(await caseOf("wa")).toBe("WA-1");
+    expect(await caseOf("ca")).toBe("CA-9");
+    expect(await draftValue("caseNumber")).toBe("WA-1");
+  });
+
+  it("uses and corrects only the case for the state she lives in", async () => {
+    await seed({ "person.address.state": "WA" });
+    expect(await draftValue("caseNumber")).toBe("WA-1");
+    await fill({ caseNumber: "WA-2" });
+    expect(await caseOf("wa")).toBe("WA-2");
+    expect(await caseOf("ca")).toBe("CA-9");
+    expect(await draftValue("caseNumber")).toBe("WA-2");
+  });
+
+  it("does not put a new state's number on an old state's case", async () => {
+    await person().patchProfile({ idempotencyKey: "seed-moved", source: "person", fields: { "programs.wa.program": "SNAP", "programs.wa.state": "WA", "programs.wa.caseNumber": "WA-1", "person.address.state": "CA" } });
+    expect(await draftValue("caseNumber")).toBeUndefined();
+    await fill({ caseNumber: "CA-9" });
+    expect(await caseOf("wa")).toBe("WA-1");
+    expect(await draftValue("caseNumber")).toBe("CA-9");
+  });
+
+  it("lets her change her answer back after a case on file changed", async () => {
+    await seed();
+    await fill({ caseNumber: "WA-1" });
+    await new Promise((r) => setTimeout(r, 3));
+    await person().patchProfile({ idempotencyKey: "fix-wa", source: "person", fields: { "programs.wa.caseNumber": "WA-5" } });
+    expect(await draftValue("caseNumber")).toBeUndefined();
+    await fill({ caseNumber: "WA-5" });
+    expect(await draftValue("caseNumber")).toBe("WA-5");
+    expect(await caseOf("ca")).toBe("CA-9");
+  });
+});
+
+describe("the monthly total she gave", () => {
+  const fill = (answers: Record<string, string>) => text("my answer", { tool: "fill_form", answers });
+  const tick = () => new Promise((r) => setTimeout(r, 3));
+
+  it("gives way when only how often a job pays is corrected", async () => {
+    await person().patchProfile({ idempotencyKey: "seed-weekly", source: "person", fields: { "income.job.source": "diner", "income.job.amount": 500, "income.job.frequency": "weekly" } });
+    await fill({ monthlyIncome: "1800" });
+    expect(await draftValue("monthlyIncome")).toBe("1800");
+    await tick();
+    await person().patchProfile({ idempotencyKey: "fix-monthly", source: "person", fields: { "income.job.frequency": "monthly" } });
+    expect(await draftValue("monthlyIncome")).toBe("500");
+  });
+
+  it("stands again when she restates the same total after an entry changed", async () => {
+    await fill({ monthlyIncome: "1800" });
+    await tick();
+    await person().patchProfile({ idempotencyKey: "new-job-2", source: "person", fields: { "income.job.source": "bakery", "income.job.amount": 2000, "income.job.frequency": "monthly" } });
+    expect(await draftValue("monthlyIncome")).toBe("2000");
+    await tick();
+    await fill({ monthlyIncome: "1800" });
+    expect(await draftValue("monthlyIncome")).toBe("1800");
+  });
+
+  it("is not replaced by a document read after it, which ranks below her word", async () => {
+    engine.putDocument(PERSON, PHOTO, PNG);
+    await fill({ monthlyIncome: "1800" });
+    await tick();
+    await person().patchProfile({ idempotencyKey: "stub", source: "document", documentId: PHOTO, fields: { "income.stub.source": "diner", "income.stub.amount": 900, "income.stub.frequency": "weekly" } });
+    expect(await draftValue("monthlyIncome")).toBe("1800");
+  });
+
+  it("counts by its own frequency if she changes it to something other than monthly", async () => {
+    await fill({ monthlyIncome: "1800" });
+    await tick();
+    await person().patchProfile({ idempotencyKey: "per-week", source: "person", fields: { "income.stated-monthly-total.amount": 500, "income.stated-monthly-total.frequency": "weekly" } });
+    expect(await draftValue("monthlyIncome")).toBe("2167");
+  });
+});
+
+describe("an answer that matches a value read from a document", () => {
+  const fill = (answers: Record<string, string>) => text("my answer", { tool: "fill_form", answers });
+  const fromDocument = (key: string, fields: Record<string, string | number>) => person().patchProfile({ idempotencyKey: key, source: "document", documentId: PHOTO, fields });
+
+  beforeEach(() => engine.putDocument(PERSON, PHOTO, PNG));
+
+  it("becomes her word, so a later document only suggests a change", async () => {
+    await fromDocument("doc-1", { "person.fullName": "Maria Lopez" });
+    await fill({ fullName: "Maria Lopez" });
+    expect((await person().getProfile())!.person.fullName).toMatchObject({ value: "Maria Lopez", source: "person" });
+
+    await fromDocument("doc-2", { "person.fullName": "Maria Garcia" });
+    const view = await person().getProfileView();
+    expect(view.profile.person.fullName).toMatchObject({ value: "Maria Lopez", source: "person" });
+    expect(view.suggestions.map((s) => [s.path, s.value])).toEqual([["person.fullName", "Maria Garcia"]]);
+  });
+
+  it.each([
+    ["dateOfBirth", "1985-03-14", { "person.dateOfBirth": "1985-03-14" }, (p: Profile) => p.person.dateOfBirth?.source],
+    ["phone", "(202) 555-0142", { "person.phone": "(202) 555-0142" }, (p: Profile) => p.person.phone?.source],
+    ["address", "12 Oak St, Fresno, CA 93721", { "person.address.line1": "12 Oak St", "person.address.city": "Fresno", "person.address.state": "CA", "person.address.zip": "93721" }, (p: Profile) => p.person.address.zip?.source],
+    ["address", "703 Frendle Path, Drelvessa, Kelvessa 00042", { "person.address.line1": "703 Frendle Path, Drelvessa, Kelvessa 00042" }, (p: Profile) => p.person.address.line1?.source],
+    ["caseNumber", "VE-1", { "programs.snap.program": "SNAP", "programs.snap.caseNumber": "VE-1" }, (p: Profile) => p.programs[0]?.caseNumber?.source],
+  ] as [string, string, Record<string, string>, (p: Profile) => string | undefined][])("promotes %s (%s) to her word", async (field, answer, fields, sourceOf) => {
+    await fromDocument(`doc-${field}`, fields);
+    await fill({ [field]: answer });
+    expect(sourceOf((await person().getProfile())!)).toBe("person");
+  });
+
+  it("makes a total matching a pay stub hers, so a later stub does not change it", async () => {
+    await fromDocument("stub-1", { "income.stub.source": "diner", "income.stub.amount": 1800, "income.stub.frequency": "monthly" });
+    await fill({ monthlyIncome: "1800" });
+    await new Promise((r) => setTimeout(r, 3));
+    await fromDocument("stub-2", { "income.stub.amount": 2500 });
+    expect(await draftValue("monthlyIncome")).toBe("1800");
+  });
+
+  it("writes nothing when the value on file is already her word", async () => {
+    await person().patchProfile({ idempotencyKey: "own", source: "person", fields: { "person.fullName": "Maria Lopez" } });
+    const before = (await person().getProfile())!.person.fullName;
+    const patches: string[] = [];
+    vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PATCH") patches.push(String(url));
+      return engine.fetch(url, init);
+    });
+    await fill({ fullName: "Maria Lopez" });
+    expect(patches).toEqual([]);
+    expect((await person().getProfile())!.person.fullName).toEqual(before);
+  });
+});
+
+describe("a household member read from a document", () => {
+  it("becomes her word when she says the same through update_profile", async () => {
+    engine.putDocument(PERSON, PHOTO, PNG);
+    await person().patchProfile({ idempotencyKey: "doc-kid", source: "document", documentId: PHOTO, fields: { "household.leo.name": "Leo", "household.leo.relationship": "son" } });
+    await updateProfile.execute({ household: [{ name: "Leo", relationship: "son" }] }, toolCtx({ handleHash: HANDLE, turnId: "turn_renewal_leo0", grant, generation: 0 }));
+    const [leo] = (await person().getProfile())!.household;
+    expect(leo!.name).toMatchObject({ value: "Leo", source: "person" });
+    expect(leo!.relationship).toMatchObject({ value: "son", source: "person" });
   });
 });
 

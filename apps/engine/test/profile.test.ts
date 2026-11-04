@@ -457,6 +457,47 @@ describe("profile: the household size a person gives", () => {
   });
 });
 
+describe("profile: the household size is cleared only on the person's word", () => {
+  const seeded = async (tag: string) => {
+    const h = handle(tag);
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "seed", source: "person", generation: 0, fields: { "person.householdSize": 3 } });
+    return h;
+  };
+  const size = async (h: string) => (await profileOf(await asAgent(h, "GET", "/profile"))).person.householdSize?.value;
+
+  it("a lower-trust clear of an empty household leaves it", async () => {
+    const h = await seeded("size-agent-empty");
+    const out = await asAgent(h, "PATCH", "/profile", { idempotencyKey: "low", source: "agent", generation: 0, fields: { household: null } });
+    expect(out.status).toBe(200);
+    expect(await size(h)).toBe(3);
+  });
+
+  it("a lower-trust clear of its own member leaves it", async () => {
+    const h = await seeded("size-agent-member");
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "add", source: "agent", generation: 0, fields: { "household.leo.name": "Leo" } });
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "low", source: "agent", generation: 0, fields: { household: null } });
+    expect((await profileOf(await asAgent(h, "GET", "/profile"))).household).toEqual([]);
+    expect(await size(h)).toBe(3);
+  });
+
+  it("a lower-trust clear of an empty household leaves her confirmation that she lives alone", async () => {
+    const h = handle("confirm-agent-empty");
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "seed", source: "person", generation: 0, fields: { "person.householdConfirmed": true } });
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "low", source: "agent", generation: 0, fields: { household: null } });
+    expect((await profileOf(await asAgent(h, "GET", "/profile"))).person.householdConfirmed?.value).toBe(true);
+  });
+
+  it("the person forgetting the household clears it, and deleting the conversation does too", async () => {
+    const h = await seeded("size-person-forget");
+    await asAgent(h, "PATCH", "/profile", { idempotencyKey: "own", source: "person", generation: 0, fields: { household: null } });
+    expect(await size(h)).toBeUndefined();
+
+    const d = await seeded("size-person-delete");
+    expect((await asAgent(d, "DELETE", "/conversation", { generation: 1 }, CHANNELS_TOKEN)).status).toBe(200);
+    expect(await size(d)).toBeUndefined();
+  });
+});
+
 describe("profile: one person's fields written at the same time", () => {
   it("each land, the way the form tools keep several answers", async () => {
     const h = handle("profile-concurrent");
