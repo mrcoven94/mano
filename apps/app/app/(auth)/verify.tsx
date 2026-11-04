@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Redirect, useRouter } from "expo-router";
-import { Btn, Body, DemoBanner, Field, Screen, Title } from "../../components/ui";
+import { Btn, Body, DemoBanner, Field, LanguageSwitch, Screen, Title } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 import { useStrings } from "../../lib/i18n";
 import { pendingSignIn, setPendingSignIn } from "../../lib/sign-in-flow";
@@ -47,6 +47,7 @@ export default function Verify() {
 
   return (
     <Screen>
+      <LanguageSwitch />
       {mode === "stand-in" ? <DemoBanner text={s.demoMode} /> : null}
       <Title>{s.codeTitle}</Title>
       <Body>

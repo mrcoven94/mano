@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Btn, Body, Card, DemoBanner, Field, Muted, Screen, Title } from "../../components/ui";
+import { Btn, Body, Card, DemoBanner, Field, LanguageSwitch, Muted, Screen, Title } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 import { crisisLineForSignIn } from "../../lib/crisis-help";
 import { useStrings } from "../../lib/i18n";
@@ -34,8 +34,9 @@ export default function SignIn() {
       const out = await client.requestCode(trimmed);
       setPendingSignIn({ email: trimmed, challengeId: out.challengeId });
       router.push("/(auth)/verify");
-    } catch (err) {
-      setError((err as Error).message);
+    } catch {
+      // A failure's own text is English and written for developers.
+      setError(s.codeNotSent);
     } finally {
       setBusy(false);
     }
@@ -43,6 +44,7 @@ export default function SignIn() {
 
   return (
     <Screen>
+      <LanguageSwitch />
       {mode === "stand-in" ? <DemoBanner text={s.demoMode} /> : null}
       {crisisLine ? (
         <Card>

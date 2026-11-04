@@ -38,6 +38,7 @@ export default function LanguageScreen() {
             onPress={() => void pick(o.code)}
             accessibilityRole="radio"
             accessibilityState={{ checked: language === o.code }}
+            aria-checked={language === o.code}
             style={[styles.row, language === o.code && styles.active]}
           >
             <Text style={[type.body, styles.label]}>{o.label}</Text>
