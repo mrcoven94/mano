@@ -73,12 +73,18 @@ describe("POST /api/persons/:id/approvals/:approvalId/reject", () => {
   it("does not reject an approval that already ran or does not exist", async () => {
     const personId = "live1-ran";
     const approvalId = await pendingApproval(personId);
-    const approve = await call(personId, `/approvals/${approvalId}/approve`, { method: "POST" });
-    expect(((await approve.json()) as { status: string }).status).toBe("completed");
+    const approve = (await (await call(personId, `/approvals/${approvalId}/approve`, { method: "POST" })).json()) as {
+      status: string;
+      receipt?: { externalId: string };
+    };
+    expect(approve.status).toBe("completed");
+    // A NO on a filing that already went through rejects nothing and
+    // answers its receipt (LAP-747: a receipt is answered before any refusal).
     const late = (await (await call(personId, `/approvals/${approvalId}/reject`, { method: "POST" })).json()) as {
       status: string;
+      receipt?: { externalId: string };
     };
-    expect(late.status).toBe("blocked");
+    expect(late).toMatchObject({ status: "completed", receipt: { externalId: approve.receipt!.externalId } });
     const missing = (await (await call(personId, `/approvals/${crypto.randomUUID()}/reject`, { method: "POST" })).json()) as {
       status: string;
       reason?: string;

@@ -11,8 +11,8 @@ const INSTALL = `git clone ${REPO_URL}\ncd mano && pnpm install\npnpm check`;
 
 const TABS = [
   { key: "text", icon: "phone", sub: "Any phone", label: "Text or iMessage", title: "No app needed.", text: "Any phone that can text works. Send Mano a photo of a letter or ask a question, the same way you would text a friend." },
-  { key: "app", icon: "app", sub: "Early access", label: "iPhone and Android", title: "Everything in one place.", text: "The app shows what is ready to send, what is due next and every letter Mano has read for you." },
-  { key: "web", icon: "laptop", sub: "Any browser", label: "Computer", title: "Pick up where you left off.", text: "Open Mano in any browser to read long forms on a bigger screen, print copies or upload a stack of documents." },
+  { key: "app", icon: "app", sub: "Android early access, iPhone coming soon", label: "iPhone and Android", title: "Everything in one place.", text: "The app shows what is ready to send, what is due next and every letter Mano has read for you." },
+  { key: "web", icon: "laptop", sub: "Coming soon", label: "Computer", title: "Pick up where you left off.", text: "Open Mano in any browser to read long forms on a bigger screen, print copies or upload a stack of documents." },
   { key: "own", icon: "code", sub: "Open source", label: "Run your own", title: "Download the whole system.", text: "Mano is open source. An agency, nonprofit or developer can download it, read every line and run their own copy." },
 ] as const;
 
@@ -129,7 +129,7 @@ export default function Everywhere() {
           {k === "app" && (
             <Phone title="Good evening, Maria" input="Ask Mano anything">
               <div className="dv-card hot rv" style={d(0.1)}><small>Ready to send</small><b>Food benefits renewal</b><span className="dv-pill">Review</span></div>
-              <div className="dv-card rv" style={d(0.35)}><small>Due next</small><b>Health coverage, Jan 31</b><span className="dv-meta">Mano starts Jan 6</span></div>
+              <div className="dv-card rv" style={d(0.35)}><small>Due next</small><b>Health coverage, Jan 31</b><span className="dv-meta">Reminder Jan 17</span></div>
               <div className="dv-card rv" style={d(0.6)}><small>Mail</small><b>3 letters read this week</b><span className="dv-meta">1 scam blocked</span></div>
               <div className="dv-card rv" style={d(0.85)}><small>Shared</small><b>Northside Family Center</b><span className="dv-meta">Renewal only</span></div>
             </Phone>

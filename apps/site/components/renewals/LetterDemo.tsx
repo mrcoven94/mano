@@ -61,7 +61,7 @@ export default function LetterDemo() {
           )}
           {beat >= 2 && (
             <>
-              <p className="sc-label rw-later rv" style={d(0)}>{L.remind[0]}, 9:00 AM</p>
+              <p className="sc-label rw-later rv" style={d(0)}>{L.remind[0]}, 10:00 AM</p>
               <div className="bub-row rv" style={d(0.4)}>
                 <Mascot tile tone="orange" size={30} className="bub-av" />
                 <p className="bub mano">reminder: your {L.program} renewal is due {L.date}. want me to fill out the form now? you check it before anything is sent.</p>

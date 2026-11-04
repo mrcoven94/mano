@@ -25,8 +25,8 @@ const NEEDS = [
   {
     key: "bills", name: "Light and water bills", short: "Keep the lights on",
     ask: "The power company sent a shutoff notice, and the water bill is late too.",
-    steps: ["Reads both notices and finds the shutoff dates", "Applies for help paying your power and water bills", "Calls the power company for a payment plan and waits on hold"],
-    get: "A payment plan and bill help applications in before the shutoff date.",
+    steps: ["Reads both notices and finds the shutoff dates", "Applies for help paying your power and water bills", "Drafts a payment plan request to the power company for you to approve"],
+    get: "A payment plan request and bill help applications in before the shutoff date.",
   },
   {
     key: "medicine", name: "Medicine and care", short: "Prescriptions and doctor visits",
@@ -61,7 +61,7 @@ const NEEDS = [
   {
     key: "now", name: "Get help now", short: "When it can't wait",
     ask: "My car broke down, I missed two shifts and we have $20 until Friday.",
-    steps: ["Finds emergency cash help and food you can get today", "Calls ahead so you know they're open and what to bring", "Applies for longer-term help so next month is easier"],
+    steps: ["Finds emergency cash help and food you can get today", "Tells you when they're open and what to bring", "Applies for longer-term help so next month is easier"],
     get: "Help today, and a plan for next month.",
   },
 ] as const;
@@ -82,7 +82,7 @@ export default function Needs() {
     <div className="nd">
       <div className="h-head">
         <h2 id="nd-h">What do you need help with?</h2>
-        <p className="lede">Tell Mano what is going on in your own words. It finds the help you qualify for, applies and keeps it coming, so the bills get paid and you stay in your home. Pick one to see how.</p>
+        <p className="lede">Tell Mano what is going on in your own words. It finds the help you qualify for, applies and keeps it coming, so the bills get paid and you stay in your home. Pick one to see where Mano is headed. Today it reads your letters, tracks your deadlines and files food benefits renewals on a practice portal.</p>
       </div>
 
       <div className="nd-grid">
