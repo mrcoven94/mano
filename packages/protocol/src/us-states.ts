@@ -83,21 +83,28 @@ export function usStateCode(name: string): string | null {
   return CODE_BY_FORM.get(plain(name)) ?? null;
 }
 
-// The state an address names just before its ZIP, or null, in which case the
-// caller must ask rather than guess. The longest name wins, so West Virginia
-// is not Virginia. Two letters in mixed case are a street word ("12 Oak Ct
-// 93721") unless they sit in their own place: street, city, state.
-export function usStateInAddress(address: string): string | null {
-  const before = /^(.+?),?\s*\d{5}(?:-\d{4})?$/.exec(address.trim())?.[1];
-  if (!before) return null;
+// What an address says before its state, the state, and the ZIP, or null when
+// it names no state just before a ZIP, in which case the caller must ask
+// rather than guess. The longest name wins, so West Virginia is not Virginia.
+// Two letters in mixed case are a street word ("12 Oak Ct 93721") unless they
+// sit in their own place: street, city, state.
+export function usAddressParts(address: string): { rest: string; state: string; zip: string } | null {
+  const [, before, zip] = /^(.*?),?\s*\b(\d{5}(?:-\d{4})?)$/.exec(address.trim()) ?? [];
+  if (!before || !zip) return null;
   const inOwnPlace = before.split(",").length >= 3;
-  const words = before.slice(before.lastIndexOf(",") + 1).trim().split(/\s+/);
+  const lastComma = before.lastIndexOf(",");
+  const head = before.slice(0, Math.max(lastComma, 0)).trim();
+  const words = before.slice(lastComma + 1).trim().split(/\s+/);
   for (let n = Math.min(words.length, LONGEST_FORM); n > 0; n--) {
     const phrase = words.slice(-n).join(" ");
-    const code = usStateCode(phrase);
-    if (!code) continue;
-    const streetWord = plain(phrase).length === 2 && phrase !== phrase.toUpperCase() && !(inOwnPlace && n === words.length);
-    return streetWord ? null : code;
+    const state = usStateCode(phrase);
+    if (!state) continue;
+    if (plain(phrase).length === 2 && phrase !== phrase.toUpperCase() && !(inOwnPlace && n === words.length)) return null;
+    return { rest: [head, words.slice(0, -n).join(" ")].filter(Boolean).join(", "), state, zip };
   }
   return null;
+}
+
+export function usStateInAddress(address: string): string | null {
+  return usAddressParts(address)?.state ?? null;
 }

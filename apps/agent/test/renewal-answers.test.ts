@@ -675,6 +675,11 @@ describe("review of 7b4a5b7: a correction is never lost", () => {
       expect(await draftValue("address")).toBe(readBack);
     });
 
+    it("does not mistake a first line that ends in digits for a whole address", async () => {
+      await fill({ address: "PO Box 12345, Fresno, California 93721" });
+      expect(await draftValue("address")).toBe("PO Box 12345, Fresno, CA 93721");
+    });
+
     it("takes a ZIP correction after a state written out", async () => {
       await fill({ address: "12 Oak St, Fresno, California 93721" });
       await update({ person: { address: { zip: "93722" } } }, "turn_review7_zip001");

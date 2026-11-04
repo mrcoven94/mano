@@ -11,10 +11,10 @@
 // changed to fit: a value that is missing, or does not fit its field,
 // becomes one plain question, asked in the form's order of importance.
 
-import { usStateInAddress, type RecipientId } from "@mano/protocol";
+import { usAddressParts, usStateInAddress, type RecipientId } from "@mano/protocol";
 
 import type { Frequency, Leaf, Profile } from "./engine.js";
-import { STATED_TOTAL, confirmedByPerson, householdSizeOf } from "./profile.js";
+import { ENDS_IN_ZIP, STATED_TOTAL, addressIsWhole, confirmedByPerson, householdSizeOf } from "./profile.js";
 
 export interface FormField {
   // The form's own input name, which the filing carries.
@@ -26,6 +26,10 @@ export interface FormField {
   fromProfile(profile: Profile): string | null;
   // The leaves that value was read from, which say whose word it is.
   readFrom(profile: Profile): (Leaf<unknown> | undefined)[];
+  // The value this field's own answer left, where fromProfile can also work
+  // one out from other facts. A value worked out is not the person's answer,
+  // and later facts can change it, so their answer is still saved.
+  kept?(profile: Profile): string | null;
   // The checked value, or null when the answer does not fit the field.
   parse(answer: string): string | null;
   // The Engine profile fields that keep this checked value, so fromProfile
@@ -135,29 +139,31 @@ function monthlyIncome(profile: Profile): string | null {
   return String(Math.round(total));
 }
 
-const ENDS_IN_ZIP = /\b\d{5}(-\d{4})?$/;
-const ADDRESS_PARTS = /^(.+?), (?:(.+), )?([^,]+), ([A-Za-z]{2}),? (\d{5}(?:-\d{4})?)$/;
 // What Engine keeps in one line of text.
 const ADDRESS_LINE_MAX = 200;
 
-// An address given in one line that could not be split into parts, or that
-// writes its state out, is kept whole on its first line, so it files as the
-// person typed it, and is complete if it ends in a ZIP.
+// Her whole address stands as she gave it, whatever a document adds around
+// it. A part she changed beside it leaves it unclear, so she is asked. A
+// document's second line does not join an address that is her word.
 function mailingAddress(profile: Profile): string | null {
   const a = profile.person.address;
   if (!a?.line1) return null;
-  if (!a.city || !a.state || !a.zip) return ENDS_IN_ZIP.test(a.line1.value) ? a.line1.value : null;
-  return [a.line1.value, a.line2?.value, a.city.value, `${a.state.value} ${a.zip.value}`].filter(Boolean).join(", ");
+  if (addressIsWhole(a)) return a.line1.value;
+  if (!a.city || !a.state || !a.zip) return ENDS_IN_ZIP.test(a.line1.value) && a.city?.source !== "person" && a.zip?.source !== "person" ? a.line1.value : null;
+  const line2 = a.line1.source !== "person" || a.line2?.source === "person" ? a.line2?.value : undefined;
+  return [a.line1.value, line2, a.city.value, `${a.state.value} ${a.zip.value}`].filter(Boolean).join(", ");
 }
 
-// Nothing without a ZIP: part of an address must not replace a whole one.
+// Split where a street, a city and a state can be told apart, and kept whole
+// where they cannot. Nothing without a ZIP: part of an address must not
+// replace a whole one.
 function addressFields(value: string): ProfileFields {
   if (!ENDS_IN_ZIP.test(value) || value.length > ADDRESS_LINE_MAX) return {};
   const at = (part: string) => `person.address.${part}`;
-  const state = usStateInAddress(value);
-  const [, line1, line2, city, , zip] = ADDRESS_PARTS.exec(value) ?? [];
-  if (!line1 || !state) return { [at("line1")]: value, [at("line2")]: null, [at("city")]: null, [at("state")]: state, [at("zip")]: null };
-  return { [at("line1")]: line1, [at("line2")]: line2 ?? null, [at("city")]: city!, [at("state")]: state, [at("zip")]: zip! };
+  const found = usAddressParts(value);
+  const pieces = found?.rest.split(/\s*,\s*/).filter(Boolean) ?? [];
+  if (!found || pieces.length < 2) return { [at("line1")]: value, [at("line2")]: null, [at("city")]: null, [at("state")]: found?.state ?? null, [at("zip")]: null };
+  return { [at("line1")]: pieces[0]!, [at("line2")]: pieces.slice(1, -1).join(", ") || null, [at("city")]: pieces.at(-1)!, [at("state")]: found.state, [at("zip")]: found.zip };
 }
 
 // The profile as this call's answers leave it, for the state the case
@@ -172,11 +178,19 @@ function withAnsweredState(profile: Profile, answers: Record<string, string>): P
 
 const FOOD_PROGRAM = /\b(snap|calfresh|food)\b/i;
 
+// The state the case number depends on. Her whole address that names no state
+// leaves it unknown, whatever state a document fills in beside it.
+function stateOnFile(profile: Profile): string | null {
+  const a = profile.person.address;
+  if (!a?.state || (addressIsWhole(a) && a.state.source !== "person")) return null;
+  return a.state.value.toUpperCase();
+}
+
 // The person's food cases in the state on file. A case counts only for its
 // own state, so a number never reaches another state's filing: with the
 // state unknown, or a case with no state, the person is asked.
 function foodCases(profile: Profile): Profile["programs"] {
-  const state = profile.person.address?.state?.value.toUpperCase();
+  const state = stateOnFile(profile);
   if (!state) return [];
   return profile.programs.filter((p) => p.program && FOOD_PROGRAM.test(p.program.value) && p.state?.value.toUpperCase() === state);
 }
@@ -191,14 +205,19 @@ function foodCaseNumber(profile: Profile): string | null {
 // which it then belongs to, or a new one. Nothing is kept where that is not
 // clear: the form still has the answer, and a later call asks.
 function caseNumberFields(value: string, profile: Profile): ProfileFields {
-  const state = profile.person.address?.state?.value.toUpperCase();
+  const state = stateOnFile(profile);
   if (!state) return {};
   const cases = foodCases(profile);
   if (cases.length > 1) return {};
   if (cases[0]) return { [`programs.${cases[0].id}.caseNumber`]: value };
   const stateless = profile.programs.filter((p) => p.program && FOOD_PROGRAM.test(p.program.value) && !p.state);
   if (stateless.length === 1) return { [`programs.${stateless[0]!.id}.caseNumber`]: value, [`programs.${stateless[0]!.id}.state`]: state };
-  const id = `programs.food-${state.toLowerCase()}`;
+  // A key no entry on file holds, since an entry's state can be corrected
+  // after it is named. A retried turn finds its own entry among her cases.
+  const taken = new Set(profile.programs.map((p) => p.id));
+  let n = 1;
+  while (taken.has(`food-${state.toLowerCase()}-${n}`)) n++;
+  const id = `programs.food-${state.toLowerCase()}-${n}`;
   return { [`${id}.program`]: "Food benefits", [`${id}.state`]: state, [`${id}.caseNumber`]: value };
 }
 
@@ -267,9 +286,10 @@ const FOOD_RENEWAL: FormSpec = {
       label: "Monthly income ($)",
       question: "About how much does your household earn in a month, before taxes?",
       fromProfile: monthlyIncome,
-      readFrom: (p) => {
-        const { stated, entries } = incomeOnFile(p);
-        return stated ? [stated] : entries.flatMap((i) => [i.amount, i.frequency]);
+      readFrom: (p) => [incomeOnFile(p).stated ?? undefined],
+      kept: (p) => {
+        const { stated } = incomeOnFile(p);
+        return stated ? String(stated.value) : null;
       },
       parse: dollars,
       toProfile: (value) => ({
@@ -379,8 +399,12 @@ export function answerChanges(form: FormSpec, saved: Profile, answers: Record<st
     const answer = Object.hasOwn(answers, field.name) ? answers[field.name] : undefined;
     const value = answer === undefined ? null : field.parse(answer);
     if (value === null) return [];
-    const onFile = field.fromProfile(profile);
-    if (onFile !== null && field.parse(onFile) === value && field.readFrom(profile).every((leaf) => !leaf || leaf.source === "person")) return [];
+    // Fields that depend on the answered address are judged as it leaves
+    // them; the address itself against what is saved, or a correction to
+    // only its state would look like nothing changed.
+    const before = field.name === form.asksFirst ? saved : profile;
+    const onFile = (field.kept ?? field.fromProfile)(before);
+    if (onFile !== null && field.parse(onFile) === value && field.readFrom(before).every((leaf) => !leaf || leaf.source === "person")) return [];
     const fields = field.toProfile(value, profile);
     return Object.keys(fields).length > 0 ? [{ field: field.name, fields }] : [];
   });
