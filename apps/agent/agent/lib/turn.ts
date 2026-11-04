@@ -440,6 +440,9 @@ async function runTurn(
   // and anything else asks again.
   const offered = body.attachmentCount === 0 && !body.crisis ? await offerBefore(engine, turn.previousReceivedAt, turnAtMs) : null;
   if (decision) await Promise.race([viewRead, new Promise((resolve) => setTimeout(resolve, LANGUAGE_WAIT_MS).unref?.())]);
+  // This answer acts on no approval, including when it is replayed after the
+  // waiting approval has been shown again. Bind it before saving or replying.
+  if (offered && decision) await bind(engine, body.turnId, turn.firstReceivedAt, ["model"]);
   if (offered && decision === "yes") {
     return clock.time("confirm", async () => withWaitingQuestion(engine, await confirmOffer(engine, offered, turn.previousReceivedAt!, deadlineMs, language()), language()));
   }

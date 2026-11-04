@@ -1471,9 +1471,10 @@ describe("a date question and an approval question at once", () => {
     "SNAP renewal notice\n\nDue November 15, 2026\n\nOr due November 20, 2026",
   );
 
-  async function photo(turnId: string, page: string, opts: { texts?: string[]; fetchFn?: typeof fetch } = {}) {
-    engine.putDocument(personIdFor(HANDLE), DOC, new Uint8Array(await letterPhoto()));
-    const request = signedAt("/channels/mano/turn", { turnId, generation: 0, handleHash: HANDLE, grant: grants.get(HANDLE), receivedAt: Date.now(), texts: opts.texts ?? [], attachmentCount: 1, documents: [{ id: DOC, mimeType: "image/jpeg" }] });
+  async function photo(turnId: string, page: string, opts: { texts?: string[]; fetchFn?: typeof fetch; documentId?: string } = {}) {
+    const documentId = opts.documentId ?? DOC;
+    engine.putDocument(personIdFor(HANDLE), documentId, new Uint8Array(await letterPhoto()));
+    const request = signedAt("/channels/mano/turn", { turnId, generation: 0, handleHash: HANDLE, grant: grants.get(HANDLE), receivedAt: Date.now(), texts: opts.texts ?? [], attachmentCount: 1, documents: [{ id: documentId, mimeType: "image/jpeg" }] });
     const client = opts.fetchFn ? engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: opts.fetchFn }) : engineClient();
     const runAgent = async () => ({ status: "replied" as const, text: "It is a renewal letter.", reason: "stop" });
     return send(request, deps({ mailModel: recordedReader([page]), engine: client, runAgent }));
@@ -1520,6 +1521,21 @@ describe("a date question and an approval question at once", () => {
     expect(engine.approvals().find((a) => a.id === ask.body.approvalId)!.status).toBe("pending");
     expect(filed()).toHaveLength(0);
     expect(engine.deadlineCalls).toHaveLength(0);
+  });
+
+  it("a replayed no about a date never rejects an approval shown again later", async () => {
+    const ask = await send(turn("turn_clash_00091", "Please file my renewal"));
+    await photo("turn_clash_00092", ONE_DATE);
+    const no = turn("turn_clash_00093", "NO");
+    await send(no.clone());
+    await photo("turn_clash_00094", ONE_DATE, { documentId: "g0t2i0-0123456789ab" });
+    const yes = await send(turn("turn_clash_00095", "YES"), deps(), { present: false });
+    expect(yes.body.status).toBe("waiting_approval");
+    expect(yes.body.approvalId).toBe(ask.body.approvalId);
+    await send(no.clone());
+    expect(engine.approvals().find((a) => a.id === ask.body.approvalId)!.status).toBe("pending");
+    expect(filed()).toHaveLength(0);
+    expect(engine.deadlineCalls).toHaveLength(1);
   });
 
   it("a yes after a letter asked which of its dates files nothing", async () => {

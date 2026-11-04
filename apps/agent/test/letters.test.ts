@@ -19,6 +19,7 @@ import {
 import { recallFacts } from "../agent/lib/memory.js";
 import { MetaModelClient } from "../../../packages/mail/src/model.js";
 import { renderDeadlines } from "../agent/lib/deadlines.js";
+import { offerBefore } from "../agent/lib/letters.js";
 import { ENGINE_AGENT_TOKEN, ENGINE_URL, EngineDouble, grantFor } from "./engine-double.js";
 
 // A photo of a letter texted to the line: Channels stored it in Engine
@@ -187,6 +188,15 @@ describe("a yes to the one date Mano asked about", () => {
     expect(engine.deadlineCalls).toHaveLength(1);
     expect(engine.deadlineCalls[0]!.body).toMatchObject({ title: "SNAP", dueDate: "2026-11-15", program: "SNAP", source: { kind: "letter", documentId: DOC } });
     expect((await person().listMemory()).filter((r) => r.content.startsWith("date-offer:"))).toHaveLength(0);
+  });
+
+  it("an offer only counts for a turn received strictly after its question", async () => {
+    await asked();
+    const askedAt = "2026-11-03T18:00:00.000Z";
+    const at = Date.parse(askedAt);
+    expect(await offerBefore(person(), askedAt, at - 1)).toBeNull();
+    expect(await offerBefore(person(), askedAt, at)).toBeNull();
+    expect(await offerBefore(person(), askedAt, at + 1)).toMatchObject({ dueDate: "2026-11-15" });
   });
 
   it("through the real read and reply, a date the reader named is held on a yes, in one line", async () => {

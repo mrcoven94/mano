@@ -337,7 +337,7 @@ export async function offerBefore(engine: PersonEngine, previousReceivedAt: stri
     if (!row) return null;
     const { held, askedAt } = JSON.parse(row.content.slice(OFFER_NOTE.length)) as { held: HeldDeadline; askedAt: string };
     const at = Date.parse(askedAt);
-    return at === Date.parse(previousReceivedAt) && nowMs - at <= OFFER_TTL_MS ? held : null;
+    return at === Date.parse(previousReceivedAt) && at < nowMs && nowMs - at <= OFFER_TTL_MS ? held : null;
   } catch (err) {
     console.warn(JSON.stringify({ type: "mano_date_offer_failed", err: err instanceof Error ? err.name : "unknown" }));
     return null;
