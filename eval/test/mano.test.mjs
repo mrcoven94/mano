@@ -200,7 +200,6 @@ const answer = new Promise((resolve) => process.on("message", (m) => { if (m && 
 process.send({ channel: "mano-eval-broker", id: 1, url: "https://openrouter.ai/api/v1/chat/completions", method: "POST", headers: {}, body: "{}" });
 const m = await answer;
 await writeFile(out, JSON.stringify([{ householdId: "hh-900", transport: m.transport, error: m.error }]));
-process.disconnect();
 `);
   try {
     const { outputs } = await withOpenRouterEnv(() => runSystem(probe, [HOUSEHOLD], { broker: true, fetchImpl: async () => { throw new Error("secret text from the provider"); } }));
@@ -245,7 +244,6 @@ process.send({ channel: "mano-eval-broker", id: 1, url: "https://openrouter.ai/a
 setTimeout(() => process.send({ channel: "mano-eval-broker", cancel: 1 }), 100);
 const m = await answer;
 await writeFile(out, JSON.stringify([{ householdId: "hh-900", ok: m.ok }]));
-process.disconnect();
 `);
   let aborted = false;
   const fetchImpl = (_u, o) => new Promise((_resolve, reject) => o.signal.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")); }));
@@ -347,7 +345,6 @@ const ask = (id, body) => new Promise((resolve) => {
 const good = await ask(1, JSON.stringify({ models: ["other/model"], route: "fallback", provider: { zdr: false, data_collection: "allow" }, messages: [] }));
 const bad = await ask(2, JSON.stringify({ model: "other/model", messages: [] }));
 await writeFile(out, JSON.stringify([{ householdId: "hh-900", good: good.ok, bad: bad.ok, why: bad.error }]));
-process.disconnect();
 `);
   const seen = [];
   try {
