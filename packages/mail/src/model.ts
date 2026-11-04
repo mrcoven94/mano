@@ -20,7 +20,7 @@ export const OPEN_WEIGHT_MODEL = "meta/muse-spark-open";
 const OPEN_WEIGHT_URL = "https://openrouter.ai/api/v1/chat/completions";
 // OpenRouter provider routing: only endpoints with zero data retention,
 // and no provider that stores or trains on what it is sent.
-const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" } as const);
+export const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" } as const);
 
 // The same open-weight model on a Modal Shared Endpoint, for
 // MANO_MODEL_PROVIDER=modal, with OpenRouter as its backup when a call fails at

@@ -133,6 +133,7 @@ import type {
 export type { InputFile, MailReading, ReadMailOptions };
 export * from "./types.js";
 export * from "./model.js";
+export { makePrivateTmpDir, releasePrivateTmpDir } from "./media.js";
 export { parseWrittenDate, parseAllDates } from "./dates.js";
 export { gateSentence } from "./gate.js";
 export { scanContent, findInstructions, findLinks, findPhones, screenScam } from "./safety.js";
