@@ -502,6 +502,161 @@ describe("a household member read from a document", () => {
   });
 });
 
+describe("review of f808af6: a letter never becomes her word", () => {
+  const update = (input: Parameters<typeof updateProfile.execute>[0], turnId: string) =>
+    updateProfile.execute(input, toolCtx({ handleHash: HANDLE, turnId, grant, generation: 0 })) as Promise<{ saved?: string[]; forgotten?: string[] }>;
+  const documentNames = async (...names: string[]) => {
+    engine.putDocument(PERSON, PHOTO, PNG);
+    await person().patchProfile({ idempotencyKey: "doc-names", source: "document", documentId: PHOTO, fields: Object.fromEntries(names.map((n) => [`household.${n.toLowerCase()}.name`, n])) });
+  };
+
+  it("forgetting a member while saying it is just her leaves that member gone and a household of one", async () => {
+    await documentNames("Eve");
+    await update({ forget: ["eve"], householdComplete: true }, "turn_review_forget1");
+    const profile = (await person().getProfile())!;
+    expect(profile.household).toEqual([]);
+    expect(profile.person.householdConfirmed?.value).toBe(true);
+    expect(await draftValue("householdSize")).toBe("1");
+  });
+
+  it("forgetting the whole household while saying it is just her does the same", async () => {
+    await documentNames("Eve");
+    await update({ forget: ["household"], householdComplete: true }, "turn_review_forget2");
+    expect((await person().getProfile())!.household).toEqual([]);
+    expect(await draftValue("householdSize")).toBe("1");
+  });
+
+  it("just me and my son leaves a member only a document named as the document's, and not counted", async () => {
+    await documentNames("Eve");
+    await update({ household: [{ name: "Leo", relationship: "son" }], householdComplete: true }, "turn_review_leo0001");
+    const profile = (await person().getProfile())!;
+    expect(profile.household.find((m) => m.id === "eve")?.name?.source).toBe("document");
+    expect(await draftValue("householdSize")).toBe("2");
+  });
+
+  it("confirming with no names counts no one only a document named", async () => {
+    await documentNames("Eve");
+    await update({ householdComplete: true }, "turn_review_conf001");
+    expect((await person().getProfile())!.household[0]?.name?.source).toBe("document");
+    expect(await draftValue("householdSize")).toBe("1");
+  });
+
+  it("naming a member a document gave makes that one hers and counts them", async () => {
+    await documentNames("Eve", "Mia");
+    await update({ household: [{ name: "Eve" }], householdComplete: true }, "turn_review_name001");
+    const byName = Object.fromEntries((await person().getProfile())!.household.map((m) => [m.name?.value, m.name?.source]));
+    expect(byName).toEqual({ Eve: "person", Mia: "document" });
+    expect(await draftValue("householdSize")).toBe("2");
+  });
+
+  it("forget wins over naming the same member, and the size is asked rather than confirmed", async () => {
+    await documentNames("Eve");
+    await update({ forget: ["eve"], household: [{ ref: "eve", name: "Eve" }], householdComplete: true }, "turn_review_both001");
+    const profile = (await person().getProfile())!;
+    expect(profile.household).toEqual([]);
+    expect(profile.person.householdConfirmed).toBeUndefined();
+    expect(await draftValue("householdSize")).toBeUndefined();
+  });
+});
+
+describe("review of f808af6: a case number belongs to one state", () => {
+  const fill = (answers: Record<string, string>) => text("my answer", { tool: "fill_form", answers });
+  const update = (input: Parameters<typeof updateProfile.execute>[0], turnId: string) =>
+    updateProfile.execute(input, toolCtx({ handleHash: HANDLE, turnId, grant, generation: 0 }));
+  const WA = "12 Pine St, Tacoma, WA 98401";
+  const CA = "12 Oak St, Fresno, CA 93721";
+
+  it("does not carry a number to a new state's renewal", async () => {
+    await fill({ address: WA, caseNumber: "WA-1" });
+    expect(await draftValue("caseNumber")).toBe("WA-1");
+    await update({ person: { address: { line1: "12 Oak St", city: "Fresno", state: "CA", zip: "93721" } } }, "turn_review_move001");
+    expect(await draftValue("caseNumber")).toBeUndefined();
+  });
+
+  it("does not put a number given before any state on a later state's renewal", async () => {
+    await fill({ caseNumber: "WA-1" });
+    await update({ person: { address: { line1: "12 Oak St", city: "Fresno", state: "CA", zip: "93721" } } }, "turn_review_move002");
+    expect(await draftValue("caseNumber")).toBeUndefined();
+  });
+
+  it("uses the older case on file for the state she moved to", async () => {
+    await person().patchProfile({ idempotencyKey: "older-ca", source: "person", fields: { "programs.ca.program": "CalFresh", "programs.ca.state": "CA", "programs.ca.caseNumber": "CA-OLD", "person.address.state": "WA" } });
+    await fill({ caseNumber: "WA-1" });
+    await update({ person: { address: { state: "CA" } } }, "turn_review_move003");
+    expect(await draftValue("caseNumber")).toBe("CA-OLD");
+    expect(await caseOf("ca")).toBe("CA-OLD");
+  });
+
+  it("asks when the state is no longer known", async () => {
+    await fill({ address: WA, caseNumber: "WA-1" });
+    await update({ forget: ["address"] }, "turn_review_forgeta");
+    expect(await draftValue("caseNumber")).toBeUndefined();
+  });
+
+  it("routes a number by an address given in the same call", async () => {
+    await person().patchProfile({ idempotencyKey: "wa-case", source: "person", fields: { "person.address.state": "WA", "programs.wa.program": "SNAP", "programs.wa.state": "WA", "programs.wa.caseNumber": "WA-1" } });
+    await fill({ caseNumber: "CA-9", address: CA });
+    expect(await caseOf("wa")).toBe("WA-1");
+    expect(await draftValue("caseNumber")).toBe("CA-9");
+  });
+
+  it("does not read another state's number for a call that gives a new address", async () => {
+    await person().patchProfile({ idempotencyKey: "wa-case-2", source: "person", fields: { "person.address.state": "WA", "programs.wa.program": "SNAP", "programs.wa.state": "WA", "programs.wa.caseNumber": "WA-1" } });
+    const reply = await fill({ address: CA, fullName: "Nivra Pellorin", dateOfBirth: "03/14/1985", householdSize: "3", monthlyIncome: "1800", phone: "(202) 555-0142" });
+    expect(reply.text).toMatch(QUESTIONS.caseNumber!);
+  });
+
+  it("update_profile does not put a number on another state's case", async () => {
+    await person().patchProfile({ idempotencyKey: "wa-case-3", source: "person", fields: { "person.address.state": "CA", "programs.wa.program": "SNAP", "programs.wa.state": "WA", "programs.wa.caseNumber": "WA-1" } });
+    await update({ programs: [{ program: "SNAP", caseNumber: "CA-9" }] }, "turn_review_prog001");
+    expect(await caseOf("wa")).toBe("WA-1");
+    expect(await draftValue("caseNumber")).toBe("CA-9");
+  });
+
+  it("reads the state from an address with no commas", async () => {
+    await fill({ address: "12 Oak St Fresno CA 93721", caseNumber: "CA-9" });
+    const { address } = (await person().getProfile())!.person;
+    expect(address.state?.value).toBe("CA");
+    expect(await draftValue("address")).toBe("12 Oak St Fresno CA 93721");
+    expect(await draftValue("caseNumber")).toBe("CA-9");
+  });
+});
+
+describe("review of f808af6: a total she corrected does not come back", () => {
+  const fill = (answers: Record<string, string>) => text("my answer", { tool: "fill_form", answers });
+  const update = (input: Parameters<typeof updateProfile.execute>[0], turnId: string) =>
+    updateProfile.execute(input, toolCtx({ handleHash: HANDLE, turnId, grant, generation: 0 })) as Promise<{ forgotten?: string[] }>;
+
+  it("asks after the job that replaced it is forgotten", async () => {
+    await fill({ monthlyIncome: "1800" });
+    await update({ income: [{ source: "bakery", amount: 2000, frequency: "monthly" }] }, "turn_review_job0001");
+    expect(await draftValue("monthlyIncome")).toBe("2000");
+    const job = (await person().getProfile())!.income.find((i) => i.source?.value === "bakery")!;
+    await update({ forget: [job.id] }, "turn_review_job0002");
+    expect(await draftValue("monthlyIncome")).toBeUndefined();
+  });
+
+  it("asks when a job on file is forgotten after she gave the total", async () => {
+    await update({ income: [{ source: "bakery", amount: 2000, frequency: "monthly" }] }, "turn_review_job0003");
+    const job = (await person().getProfile())!.income[0]!;
+    await fill({ monthlyIncome: "1800" });
+    await update({ forget: [job.id] }, "turn_review_job0004");
+    expect(await draftValue("monthlyIncome")).toBeUndefined();
+  });
+
+  it("gives way to a frequency corrected through update_profile, and restating brings it back", async () => {
+    await update({ income: [{ source: "diner", amount: 500, frequency: "weekly" }] }, "turn_review_job0005");
+    const job = (await person().getProfile())!.income[0]!;
+    await fill({ monthlyIncome: "1800" });
+    expect(await draftValue("monthlyIncome")).toBe("1800");
+    const out = await update({ income: [{ ref: job.id, frequency: "monthly" }] }, "turn_review_job0006");
+    expect(await draftValue("monthlyIncome")).toBe("500");
+    expect(out.forgotten).toEqual([]);
+    await fill({ monthlyIncome: "1800" });
+    expect(await draftValue("monthlyIncome")).toBe("1800");
+  });
+});
+
 describe("a photo Mano could not read", () => {
   it("is known to the model on the next turn as arrived and on file", async () => {
     const reply = await photo();
