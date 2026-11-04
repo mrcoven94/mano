@@ -118,7 +118,7 @@ details.faq p{padding:0 0 22px;max-width:54ch;font-size:.98rem}
 .legal p{color:var(--faint);max-width:720px}
 
 /* responsive */
-@media (max-width:1240px){.header-cta .quiet.repo{display:none}}
+@media (max-width:1400px){.header-cta .quiet.repo{display:none}}
 @media (max-width:1080px){
   .site-header .bar{gap:24px}
   .faq-grid{grid-template-columns:1fr;gap:24px}
@@ -126,7 +126,7 @@ details.faq p{padding:0 0 22px;max-width:54ch;font-size:.98rem}
   .foot-card{padding:48px 28px 24px;border-radius:28px}
   .foot-mascot{right:28px}
 }
-@media (max-width:1060px){
+@media (max-width:1240px){
   .header-cta .quiet{display:none}
   .mainnav{display:none}
   .menu{display:block}

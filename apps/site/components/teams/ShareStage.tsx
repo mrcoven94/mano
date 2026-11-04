@@ -20,14 +20,12 @@ const STOPPED = "Stopped. They can't see anything new. They keep what they alrea
 const DETAILS: [string, string][] = [["Name", "Maria Torres"], ["Program", "Food benefits"], ["Case number", "R-1042"], ["Renewal due", "2026-11-14"]];
 
 type View = "none" | "case" | "asked" | "gone";
-type S = { me: boolean; ask: boolean; yes: boolean; shared: boolean; request: boolean; stop: boolean; askStop: boolean; yes2: boolean; stopped: boolean; view: View; leaving: boolean };
+type S = { ask: boolean; yes: boolean; shared: boolean; request: boolean; stop: boolean; askStop: boolean; yes2: boolean; stopped: boolean; view: View; leaving: boolean };
 
-const initial: S = { me: false, ask: false, yes: false, shared: false, request: false, stop: false, askStop: false, yes2: false, stopped: false, view: "none", leaving: false };
+const initial: S = { ask: false, yes: false, shared: false, request: false, stop: false, askStop: false, yes2: false, stopped: false, view: "none", leaving: false };
 
 async function script(a: Act<S>) {
-  await a.wait(900);
-  await a.set({ me: true });
-  await a.wait(1100);
+  await a.wait(1400);
   a.mark("ask");
   await a.set({ ask: true });
   await a.wait(2600);
@@ -100,7 +98,7 @@ export default function ShareStage() {
               height={500}
               compact={{ below: 720, width: 358, height: 600 }}
               initial={initial}
-              poster={{ ...initial, me: true, ask: true, yes: true, shared: true, view: "case" }}
+              poster={{ ...initial, ask: true, yes: true, shared: true, view: "case" }}
               script={script}
               play="loop"
               accent="#1A6FE0"
@@ -118,7 +116,7 @@ export default function ShareStage() {
                       </div>
                       <Thread className={s.leaving ? "sp-thread sp-leaving" : "sp-thread"}>
                         <Stamp><b>Today</b> 9:41 PM</Stamp>
-                        {s.me && <Bubble from="me">Can my caseworker see my renewal?</Bubble>}
+                        <Bubble from="me">Can my caseworker see my renewal?</Bubble>
                         {s.ask && <Bubble from="them">{ASK_SHARE}</Bubble>}
                         {s.yes && <Bubble from="me">Yes</Bubble>}
                         {s.shared && <Bubble from="them">Shared.</Bubble>}
