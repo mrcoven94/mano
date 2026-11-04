@@ -200,7 +200,13 @@ function scamLines(warning: Warning, w: AnswerWords): string[] {
   return [w.scam, date === "several" ? w.mentionsSeveral : w.claim(w.date(date)), w.checkWithOffice];
 }
 
-function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords): { lines: string[]; held: HeldDeadline | null } {
+// A letter in a pile that can wait: plain type, nothing asked, no date, no
+// stated consequence. Telling someone so is a claim, so any doubt says nothing.
+function canWait(letter: Letter, type: LetterType, send: SendCategory[], question: Question | undefined): boolean {
+  return type === "other" && send.length === 0 && !letter.fields.consequence && !letter.fields.deadlineText && !question?.proposal && !question?.candidates?.length;
+}
+
+function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPile: boolean): { lines: string[]; held: HeldDeadline | null } {
   const warnings = reading.warnings.filter((w) => w.letterId === letter.id);
   const scam = warnings.find((w) => w.kind === "scam_suspect");
   if (scam) return { lines: scamLines(scam, w), held: null };
@@ -235,6 +241,7 @@ function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords): { l
   }
   const send = categoriesOf(letter);
   if (send.length > 0) lines.push(w.asksToSend(listOf(send.map((c) => w.categories[c]), w.and)));
+  if (inPile && canWait(letter, type, send, question)) lines.push(w.canWait);
   if (warnings.some((warning) => warning.kind === "instruction_in_content")) lines.push(w.planted);
   lines.push(w.official);
   // The question goes last, so the reply ends on the one thing to answer.
@@ -253,7 +260,7 @@ export function answerReading(reading: MailReading, language: ReplyLanguage = "e
   const read = reading.letters.filter(wasRead);
   const failed = reading.questions.some((q) => q.kind === "read_failed" || q.kind === "budget_exceeded");
   if (read.length === 0) return { outcome: "unread", text: failed ? w.failed : w.unread, deadlines: [] };
-  const answers = read.map((letter) => letterAnswer(reading, letter, w));
+  const answers = read.map((letter) => letterAnswer(reading, letter, w, read.length > 1));
   const paragraphs = answers.map((a, i) => (answers.length > 1 ? `${w.letterNumber(i + 1)} ${a.lines.join(" ")}` : a.lines.join(" ")));
   const missed = read.length < reading.letters.length || reading.questions.some((q) => q.letterId === null && q.kind !== "video_truncated");
   if (missed) paragraphs.push(w.missedPart);
