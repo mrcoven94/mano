@@ -124,6 +124,17 @@ const CLEAR_SCAMS: [string, string, string | null][] = [
   ["S.S.N. with periods by text", `${OFFICE}Send your S.S.N. by text to (555) 300-4000.`, null],
   ["a Social Security no. by email", `${OFFICE}Provide your Social Security no. by email.`, null],
   ["a hidden link inside a referral", `${OFFICE}${RENEW} Free legal help at https://legalaid.gov@evil.example/help.`, null],
+  // A real charge beside a fee keeps the fee.
+  ["a fee inside a premium's clause", `${OFFICE}Your $39 premium includes a $25 fee to renew your Medicaid.`, null],
+  ["an unnamed fee beside a premium", `${OFFICE}Pay a $25 fee plus your $39 premium to keep your Medicaid.`, null],
+  // Whatever a browser reads as a name before the host is a hidden link.
+  ["a link with an apostrophe in its userinfo", `${OFFICE}${RENEW} Renew at https://ssa.gov'safe@evil.example/renew.`, null],
+  ["a link with a quote in its userinfo", `${OFFICE}${RENEW} Renew at https://ssa.gov"x@evil.example/renew.`, null],
+  ["a host with an apostrophe", `${OFFICE}${RENEW} Renew at https://ssa.gov'safe.evil.example/renew.`, null],
+  ["a bare link with userinfo and a path", `${OFFICE}${RENEW} Renew at benefits.gov@evil.example/renew.`, null],
+  ["a bare link with userinfo and no path", `${OFFICE}${RENEW} Renew at benefits.gov@evil.example.`, null],
+  ["a bare link with a plain name and a path", `${OFFICE}${RENEW} Renew at renew@evil.example/renew.`, null],
+  ["a www link with an apostrophe", `${OFFICE}${RENEW} Renew at www.ssa.gov'safe@evil.example/renew.`, null],
 ];
 
 // An ordinary ask sent to an untrusted link. It may be a scam or a real
@@ -283,6 +294,16 @@ const REAL: [string, string, string | null, string | null][] = [
   // Pay words beside a link that are not a way to pay.
   ["benefit payments listed at a site", `${OFFICE}Your benefit payments are listed at https://county.example/case. ${RENEW}`, RENEW, "2026-11-20"],
   ["help paying a bill at a site", `${OFFICE}Programs that help pay your heating bill are at https://energy-aid.example/apply. ${RENEW}`, RENEW, "2026-11-20"],
+  // A real charge with its amount and its purpose.
+  ["a premium payment required to keep Medicaid", `${OFFICE}Your premium payment of $25.00 is required to keep your Medicaid. ${RENEW}`, RENEW, "2026-11-20"],
+  ["an amount in premiums to keep Medicaid", `${OFFICE}To keep your Medicaid, pay $39.00 in premiums. ${RENEW}`, RENEW, "2026-11-20"],
+  ["monthly rent to a landlord to keep housing benefits", `${OFFICE}To keep your housing benefits, pay your $500 monthly rent to your landlord. ${RENEW}`, RENEW, "2026-11-20"],
+  // Links a browser reads as what they say, and addresses that are addresses.
+  ["a caseworker's dotted email", `${OFFICE}${RENEW} Email maria.lopez@dss.ca.gov with questions.`, RENEW, "2026-11-20"],
+  ["a state login in parentheses", `${OFFICE}${RENEW} Log in (https://mybenefits.ny.gov) to see your case.`, RENEW, "2026-11-20"],
+  ["a state login in double quotes", `${OFFICE}${RENEW} Log in at "https://mybenefits.ny.gov", then see your case.`, RENEW, "2026-11-20"],
+  ["a state login in single quotes", `${OFFICE}${RENEW} Log in at 'https://mybenefits.ny.gov/case'.`, RENEW, "2026-11-20"],
+  ["a state login in angle brackets", `${OFFICE}${RENEW} Log in at <https://mybenefits.ny.gov>.`, RENEW, "2026-11-20"],
 ];
 
 describe("clear scams", () => {
@@ -335,4 +356,15 @@ describe("the dev letters", () => {
   it.each(LETTERS.map((l) => [l.id, l] as const))("%s is flagged only if it is written as a scam", (_id, letter) => {
     expect(screenScam(letter.pages.join("\n\n")).length > 0).toBe(letter.scam);
   });
+});
+
+describe("long text with no punctuation", () => {
+  it.each(["your ", "monthly ", "the ", "premium ", "pay ", "not ", "send ", "$5 ", "to ", "https://", "www.", "a.b ", "'a", "a@", "@"])(
+    "screens 100 KB of %j in under a second",
+    (piece) => {
+      const started = performance.now();
+      screenScam(`Your Medicaid benefits.\n\n${piece.repeat(Math.ceil(100_000 / piece.length))}`);
+      expect(performance.now() - started).toBeLessThan(1000);
+    },
+  );
 });
