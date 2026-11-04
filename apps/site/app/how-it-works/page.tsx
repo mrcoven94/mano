@@ -3,8 +3,11 @@ import Link from "next/link";
 import Mascot from "@/components/Mascot";
 import TextMano from "@/components/TextMano";
 import TextQr from "@/components/TextQr";
+import Everywhere from "@/components/home/Everywhere";
+import Improve from "@/components/home/Improve";
 import { NeedIcon } from "@/components/home/NeedIcons";
-import { REPO_URL, SMS_IS_PLACEHOLDER } from "@/lib/site";
+import OpenSource from "@/components/home/OpenSource";
+import { SMS_IS_PLACEHOLDER } from "@/lib/site";
 
 const title = "How Mano works";
 const description = "How Mano goes from one text to help that keeps coming: it finds what you qualify for, fills out the forms from your private vault, tracks every deadline and renews on time.";
@@ -22,7 +25,7 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
     see: (
       <>
         <div className="hw-letter" aria-hidden="true">
-          <p>Sample County Human Services</p>
+          <p>Springfield County Food Assistance Office</p>
           <b>Notice of renewal</b>
           <i /><i /><i className="hl" /><i />
         </div>
@@ -38,12 +41,11 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
     tint: "#FDE3DA",
     see: (
       <div className="hw-card">
-        <p className="hw-card-h">You likely qualify for 4 programs</p>
+        <p className="hw-card-h">What Mano looked up for you</p>
         <ul className="hw-rows">
           <li><NeedIcon k="food" size={30} /><b>Food benefits</b><span className="hw-tag hot">Renew by Nov 14</span></li>
-          <li><NeedIcon k="bills" size={30} /><b>Light bill help</b><span className="hw-tag">Open now</span></li>
-          <li><NeedIcon k="medicine" size={30} /><b>Health coverage</b><span className="hw-tag">You qualify</span></li>
-          <li><NeedIcon k="childcare" size={30} /><b>Child care</b><span className="hw-tag">Opens Jan 6</span></li>
+          <li><NeedIcon k="bills" size={30} /><b>Light bill help</b><span className="hw-tag">Reapply by Nov 20</span></li>
+          <li><NeedIcon k="medicine" size={30} /><b>Health coverage</b><span className="hw-tag">Renew by Jan 15</span></li>
         </ul>
       </div>
     ),
@@ -58,9 +60,9 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
       <div className="hw-card">
         <p className="hw-card-h">Food benefits renewal</p>
         <dl className="hw-form">
-          <div><dt>Name</dt><dd>Maria Lopez</dd><small>From your ID</small></div>
-          <div><dt>Monthly income</dt><dd>$2,570</dd><small>From your pay stubs</small></div>
-          <div><dt>People at home</dt><dd>3</dd><small>From your household</small></div>
+          <div><dt>Name</dt><dd>Maria Torres</dd><small>From your ID</small></div>
+          <div><dt>Monthly income</dt><dd>$1,940</dd><small>From your pay stubs</small></div>
+          <div><dt>People at home</dt><dd>2</dd><small>From your household</small></div>
         </dl>
         <p className="hw-done"><mark>Filled from your vault.</mark> Nothing typed twice.</p>
       </div>
@@ -75,9 +77,9 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
     see: (
       <div className="hw-card">
         <ol className="hw-trail">
-          <li><b>Sent to Sample County</b><span>Oct 28</span></li>
-          <li><b>They asked for one more pay stub. Mano sent it.</b><span>Nov 3</span></li>
-          <li className="ok"><b>Approved through May</b><span>Nov 6</span></li>
+          <li><b>You said yes</b><span>Nov 10</span></li>
+          <li><b>Filed on the practice portal</b><span>Nov 10</span></li>
+          <li className="ok"><b>Checked that it arrived. Confirmation <span className="nb">SR-G6WYKQU8</span></b><span>Nov 10</span></li>
         </ol>
       </div>
     ),
@@ -93,7 +95,7 @@ const STEPS: { short: string; title: string; text: string; icon: string; tint: s
         <p className="hw-card-h">Maria&rsquo;s next few months</p>
         <ul className="hw-cal">
           <li><span className="hw-day"><small>Mar</small>1</span><div><b>Food benefits renewal</b><small>Mano texts you 14 days before</small></div></li>
-          <li><span className="hw-day"><small>Jun</small>2</span><div><b>Light bill help</b><small>Reapply, already filled in</small></div></li>
+          <li><span className="hw-day"><small>Jun</small>2</span><div><b>Light bill help</b><small>Mano texts you 14 days before</small></div></li>
         </ul>
       </div>
     ),
@@ -158,6 +160,18 @@ export default function HowItWorks() {
         </div>
       </section>
 
+      <section className="h-dv" aria-labelledby="dv-h">
+        <div className="wrap">
+          <Everywhere />
+        </div>
+      </section>
+
+      <section className="h-improve" aria-labelledby="im-h">
+        <div className="wrap">
+          <Improve />
+        </div>
+      </section>
+
       <section className="hw-duo-wrap" aria-label="More">
         <div className="wrap hw-duo">
           <article className="hw-duo-card share">
@@ -167,13 +181,11 @@ export default function HowItWorks() {
             <div className="hw-chip"><NeedIcon k="clipboard" size={28} /><span><b>Pay stub, Oct 24</b> Shared with Northside until Dec 31</span></div>
             <Link className="btn btn-ghost" href="/organizations">How teams use Mano</Link>
           </article>
-          <article className="hw-duo-card repo">
-            <NeedIcon k="code" size={52} />
-            <h2>Anyone can check the work.</h2>
-            <p>The code is public. Mano will be tested on paperwork it has never seen, next to a reminder app and a general AI agent, and the results published, including what it gets wrong.</p>
-            <a className="btn btn-ghost" href={REPO_URL}>Read the code</a>
-          </article>
         </div>
+      </section>
+
+      <section id="open-source" className="h-open" aria-labelledby="open-h">
+        <OpenSource />
       </section>
 
       <section className="h-close" aria-labelledby="hw-cta-h">

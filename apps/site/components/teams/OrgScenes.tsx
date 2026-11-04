@@ -7,7 +7,7 @@ import { ManoHead, ManoSays, d } from "./Parts";
 
 function MorningScene() {
   const rows: [string, string, string, string, string][] = [
-    ["Maria Lopez", "Food benefits renewal", "Drafted from the case file. Due Nov 14.", "Draft ready", "pen"],
+    ["Maria Torres", "Food benefits renewal", "Drafted from the case file. Due Nov 14.", "Draft ready", "pen"],
     ["Sam Nguyen", "Job training grant", "All 3 documents matched to the rules.", "Draft ready", "pen"],
     ["Jo Chen", "Rent help", "Asked Jo for page 2 of the lease on Oct 25.", "Waiting on Jo", "wait"],
     ["Ana Reyes", "Child care help", "Two income amounts disagree. Mano did not pick one.", "Needs you", "flag"],
@@ -35,7 +35,7 @@ function MorningScene() {
 const PROGRAMS: { name: string; rules: [string, string][]; ask: string; done: string }[] = [
   {
     name: "Emergency rent",
-    rules: [["Budget", "$120,000"], ["Award", "Up to $1,500, once a year"], ["Who qualifies", "Renters in Sample County with a late notice"], ["Proof", "The notice and the lease"]],
+    rules: [["Budget", "$120,000"], ["Award", "Up to $1,500, once a year"], ["Who qualifies", "Renters in Springfield County with a late notice"], ["Proof", "The notice and the lease"]],
     ask: "Northside can cover up to $1,500 of rent when there is a late notice. You have one from Oct 3. Want me to apply?",
     done: "Done. I sent your notice and lease. Northside will decide within 3 days.",
   },
@@ -47,14 +47,14 @@ const PROGRAMS: { name: string; rules: [string, string][]; ask: string; done: st
   },
   {
     name: "Cash aid",
-    rules: [["Budget", "$60,000"], ["Award", "Up to $400, once"], ["Who qualifies", "Anyone in Sample County facing a sudden loss of income"], ["Proof", "One pay stub or a letter from work"]],
+    rules: [["Budget", "$60,000"], ["Award", "Up to $400, once"], ["Who qualifies", "Anyone in Springfield County facing a sudden loss of income"], ["Proof", "One pay stub or a letter from work"]],
     ask: "Northside has emergency cash, up to $400, for a sudden loss of income. Your hours were cut. Want me to apply?",
     done: "Done. I attached your last pay stub. Northside will decide within 2 days.",
   },
   {
     name: "Child care",
     rules: [["Budget", "$50,000"], ["Award", "Up to $500 a month"], ["Who qualifies", "Working parents with a child under 5"], ["Proof", "A pay stub and the provider's name"]],
-    ask: "Northside helps pay for child care, up to $500 a month, for working parents. Leo is 4. Want me to apply?",
+    ask: "Northside helps pay for child care, up to $500 a month, for working parents. Sofia is 4. Want me to apply?",
     done: "Done. I added Little Oaks as your provider. Northside will decide within 5 days.",
   },
   {
@@ -123,14 +123,14 @@ function TrailScene() {
   const steps: [string, string, string, boolean][] = [
     ["Dana approved the draft", "Northside, Oct 27", "9:12 AM", true],
     ["Maria said yes", "Food benefits renewal", "9:40 AM", true],
-    ["Submitted to Sample County", "Received as case 0418. Checked once, sent once.", "9:41 AM", true],
+    ["Submitted to Springfield County", "Received as case R-1042. Checked once, sent once.", "9:41 AM", true],
     ["County approved the renewal", "J. Park, eligibility worker", "Oct 29", true],
     ["Notice explained to Maria", "In Spanish, the language she asked for", "Oct 29", false],
   ];
   return (
     <div className="sc">
       <div className="sc-card">
-        <div className="sc-card-head"><span>Maria Lopez · Food benefits renewal</span><span className="sc-label">From draft to decision</span></div>
+        <div className="sc-card-head"><span>Maria Torres · Food benefits renewal</span><span className="sc-label">From draft to decision</span></div>
         <ol className="t-trail">
           {steps.map(([t, s, ts, ok], n) => (
             <li key={t} className={`rv${ok ? " ok" : ""}`} style={d(0.3 + n * 0.55)}>
