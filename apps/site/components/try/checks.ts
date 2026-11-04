@@ -72,8 +72,8 @@ function settle(key: Key, e: TryLogged, done: Map<Key, Settled>, scenario: TrySc
     case "read":
       // state says where a call ran, not whether it worked; the status says that.
       if (e.kind === "model" && READING.test(e.purpose) && e.state !== "skipped") {
-        if (!OK_STATUS.has(e.status)) return { state: "stop", detail: `The reading call ended with ${e.status}` };
-        return e.state === "live" ? { state: "pass" } : { state: "warn", detail: "A stand-in read it" };
+        if (e.state === "stand-in") return { state: "warn", detail: "A stand-in read it" };
+        return OK_STATUS.has(e.status) ? { state: "pass" } : { state: "stop", detail: `The reading call ended with ${e.status}` };
       }
       if (e.kind === "reply") return { state: "pass" };
       return null;
@@ -128,30 +128,25 @@ export function buildChecks(scenario: TryScenario, events: TryLogged[], mode: "i
       continue;
     }
     for (const key of plan) {
-      // Only another reading call can clear a failed one; a reply after it may be Mano saying it could not read.
-      if (done.has(key) && !(key === "read" && done.get(key)!.state === "stop" && e.kind === "model")) continue;
+      // The last reading call says how the reading went, so a retry updates it either way. A reply settles it only
+      // when no call did, since a reply after a failed call may be Mano saying it could not read.
+      if (done.has(key) && !(key === "read" && e.kind === "model")) continue;
       const result = settle(key, e, done, scenario);
       if (!result) continue;
       done.set(key, { ...result, seq: e.seq });
     }
   }
 
-  /* Each model call goes under the check it worked for: Guardian's under the nearest Guardian check, the others under
-     the first check still open when the call finished. */
+  /* Each model call goes under the check it worked for: Guardian's under the check before or after Maria's yes, the
+     others under the first check still open when the call finished. */
   const calls = new Map<Key, Model[]>(plan.map((k) => [k, []]));
-  const guards: Key[] = plan.filter((k) => k === "guard" || k === "guard2");
-  const others = plan.filter((k) => !guards.includes(k));
+  const yesAt = events.find((e) => e.kind === "sent" && e.text?.trim().toUpperCase() === "YES")?.seq ?? Infinity;
+  const others = plan.filter((k) => k !== "guard" && k !== "guard2");
   for (const e of events) {
     if (e.kind !== "model") continue;
     let home: Key;
-    if (isGuardianCall(e) && guards.length) {
-      const settled = guards.filter((k) => done.has(k));
-      home = settled.length
-        ? settled.reduce((a, b) => (Math.abs(done.get(a)!.seq - e.seq) <= Math.abs(done.get(b)!.seq - e.seq) ? a : b))
-        : guards[0]!;
-    } else {
-      home = others.find((k) => !done.has(k) || done.get(k)!.seq >= e.seq) ?? others[others.length - 1]!;
-    }
+    if (isGuardianCall(e) && plan.includes("guard")) home = e.seq > yesAt && plan.includes("guard2") ? "guard2" : "guard";
+    else home = others.find((k) => !done.has(k) || done.get(k)!.seq >= e.seq) ?? others[others.length - 1]!;
     calls.get(home)!.push(e);
   }
 
