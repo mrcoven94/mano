@@ -257,3 +257,22 @@ describe("the reader's answer never holds anything", () => {
     expect(answerReading(page).text).not.toContain("It looks like");
   });
 });
+
+// The demo letter, word for word. A read can leave the gate holding the date or
+// asking, and either way the person is told November 14, 2026.
+describe("the demo letter names its date on every read", () => {
+  const DUE = "Your renewal is due November 14, 2026.";
+  const LETTER = `Springfield County Food Assistance Office\nNotice date November 2, 2026\n\nMaria Torres\n418 Alder St Apt 3\nSpringfield, IL 62701\n\nRe: SNAP renewal\nCase R-1042\n\n${DUE}\nSend the signed renewal form and proof of income.\nLate forms stop benefits.\nQuestions? Call (555) 010-0142.\n\nThis is a synthetic letter made for the Mano demo.`;
+  const meet = [{ date: "November 14, 2026", sentence: DUE, for: "renewal" }];
+
+  it("when the reader marks the sentence for the gate", async () => {
+    const answer = answerReading(await read(LETTER, meet, [], [DUE]));
+    expect(answer.text).toContain("November 14, 2026");
+  });
+
+  it("when it does not", async () => {
+    const answer = answerReading(await read(LETTER, meet));
+    expect(answer.deadlines).toEqual([]);
+    expect(answer.text).toContain("It looks like your renewal is due November 14, 2026.");
+  });
+});
