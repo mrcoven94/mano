@@ -411,6 +411,43 @@ describe("a run", () => {
     return { runId, press };
   };
 
+  it("sends a scrambled run to a layout of its own, and says whether the computer filled", async () => {
+    const withPortal = { ...env, SANDBOX_BASE_URL: "https://portal.test/" } as Env;
+    const res = await start("scramble", uniqueSession(), uniqueIp());
+    const { runId } = (await res.json()) as { runId: string };
+    const seen = { turns: [] as Record<string, unknown>[], headers: [] as Headers[] };
+    const script: Script = (texts) =>
+      texts[0]?.startsWith("Please fill") ? { status: "waiting_approval", text: "File it? YES or NO", approval: "File it? YES or NO", approvalId: "appr-1" } : { status: "replied", text: "Your renewal is due November 14." };
+    const press = () =>
+      tryRoute(new Request(`https://engine.test/try/runs/${runId}/next`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: "{}" }), withPortal, self, { fetchImpl: fakeFetch(script, seen) });
+    await press();
+    await press();
+    await press();
+    const events = await eventsOf(runId);
+    const { url } = events.find((e) => e.kind === "layout") as { url: string };
+    expect(url).toMatch(/^https:\/\/portal\.test\/scramble\/[0-9a-f]{16}\/apply$/);
+    expect(url).not.toContain(runId);
+    expect(String((seen.turns.at(-1)!.texts as string[])[0])).toContain(url);
+    expect(events.some((e) => e.kind === "note" && e.text.includes("did not fill"))).toBe(true);
+  });
+
+  it("asks again when Mano answers with no question this demo knows", async () => {
+    const res = await start("maria", uniqueSession(), uniqueIp());
+    const { runId } = (await res.json()) as { runId: string };
+    const seen = { turns: [] as Record<string, unknown>[], headers: [] as Headers[] };
+    let fills = 0;
+    const script: Script = (texts) => {
+      if (!texts[0]?.startsWith("Please fill")) return { status: "replied", text: "Your renewal is due November 14." };
+      fills += 1;
+      return fills === 1 ? { status: "replied", text: "I'm starting your renewal now." } : { status: "waiting_approval", text: "File it? YES or NO", approval: "File it? YES or NO", approvalId: "appr-1" };
+    };
+    const press = () => call(`/try/runs/${runId}/next`, { method: "POST", body: "{}" }, script, seen);
+    await press();
+    await press();
+    expect(await (await press()).json()).toEqual({ next: "yes" });
+    expect(fills).toBe(2);
+  });
+
   it("has the gateway refuse a yes when the document changed after the question", async () => {
     const { runId, press } = await toQuestion("changed", agentOnEngine());
     expect(await (await press(JSON.stringify({ press: "yes" }))).json()).toEqual({ next: "end" });

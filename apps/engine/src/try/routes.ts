@@ -70,6 +70,8 @@ const SCENARIOS: Record<TryScenario, { letter: string; legs: Leg[]; words: strin
   planted: { letter: "planted", legs: ["photo", "summary"], words: [STUMP_WORDS], needsGuardian: false },
   // Maria's filing, with the document changed before her yes reaches Engine.
   changed: { letter: "maria", legs: ["photo", "held", "fill", "yes"], words: [], needsGuardian: true },
+  // Maria's filing on a portal layout made from a fresh seed for this run.
+  scramble: { letter: "maria", legs: ["photo", "held", "fill", "yes"], words: [], needsGuardian: true },
 };
 
 const AGENT_WAIT_MS = 100_000;
@@ -81,6 +83,13 @@ const MAX_LABEL = 120;
 type Deps = { fetchImpl?: typeof fetch };
 
 const ledgerOf = (env: Env): TryLedger => env.TRY_LEDGER.get(env.TRY_LEDGER.idFromName("try")) as unknown as TryLedger;
+
+// The page shows this address, so the seed is not the run's ID, which lets its
+// holder press the run's buttons.
+async function scrambleUrl(env: Env, runId: string): Promise<string | null> {
+  const base = env.SANDBOX_BASE_URL?.replace(/\/$/, "");
+  return base ? `${base}/scramble/${(await sha256(`layout:${runId}`)).slice(0, 16)}/apply` : null;
+}
 
 function enabled(env: Env): boolean {
   return env.MANO_TRY === "on" && Boolean(env.MANO_AGENT_URL && env.MANO_AGENT_SECRET && env.MANO_HANDLE_GRANT_SECRET && env.MANO_ENGINE_AGENT_TOKEN && env.MANO_ENGINE_CHANNELS_TOKEN);
@@ -133,7 +142,7 @@ class Person {
   readonly personId: string;
 
   constructor(
-    private env: Env,
+    readonly env: Env,
     private self: SelfFetch,
     private send: typeof fetch,
     private ledger: TryLedger,
@@ -295,22 +304,26 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string
       return "advance";
     }
     case "fill": {
-      let say = FILL_WORDS;
+      // A scrambled run sends Mano to a layout made for this run alone. The
+      // portal builds the page from the seed on request.
+      const portal = person.run.scenario === "scramble" ? await scrambleUrl(person.env, person.run.id) : null;
+      if (portal) await log({ kind: "layout", url: portal });
+      const fillWords = portal ? `Please fill out my renewal on this form: ${portal} ${FILL_WORDS.replace("Please fill out my renewal now. ", "")}` : FILL_WORDS;
+      let say = fillWords;
       for (let round = 0; round < FILL_ROUNDS; round++) {
         await log({ kind: "sent", text: say });
         const turn = await person.turn([say]);
         if (turn.status === "waiting_approval" && turn.approvalId && turn.approval) {
           await replied(turn, turn.approval);
           const replay = await person.engine(`/approvals/${encodeURIComponent(turn.approvalId)}/replay`);
-          if (replay.http !== 200) await log({ kind: "note", text: "Mano's computer did not fill this form. Mano prepared the renewal from Maria's answers instead." });
+          await log({ kind: "note", text: replay.http === 200 ? "Mano's computer filled this form, and the portal saved what Mano will file." : "Mano's computer did not fill this form. Mano prepared the renewal from Maria's answers instead." });
           if (!(await person.presented(turn.approvalId, turn.approval))) return fail("Mano could not put the question to Maria, so nothing was filed.");
           await log({ kind: "question", text: shown(turn.approval) });
           return "advance";
         }
         if (!(await replied(turn))) return fail(`Mano did not answer. The turn ended with HTTP ${turn.http}.`);
-        const answer = ANSWERS.find(([asked]) => asked.test(turn.text))?.[1];
-        if (!answer) return fail("Mano asked something this demo has no preset answer for, so the run stops here. Nothing was filed.");
-        say = answer;
+        // With no question this demo can answer, Maria asks again.
+        say = ANSWERS.find(([asked]) => asked.test(turn.text))?.[1] ?? fillWords;
       }
       return fail("Mano did not reach the question after five turns, so nothing was filed.");
     }
