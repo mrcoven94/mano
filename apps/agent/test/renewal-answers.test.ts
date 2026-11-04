@@ -53,6 +53,7 @@ let engine: EngineDouble;
 let grant: string;
 let seen: AgentTurnInput[];
 let turns: number;
+let statuses: string[];
 
 const client = () => engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch })!;
 const person = () => client().forHandle(HANDLE, grant, 0);
@@ -67,26 +68,30 @@ function signed(path: string, body: Record<string, unknown>): Request {
   });
 }
 
-// The model's whole turn: the one recorded tool call, then the question
-// the tool told it to ask, word for word.
-function modelCalling(call: Call | null) {
+// The model's whole turn: its tool calls in order, then the question the
+// last one told it to ask, word for word.
+function modelCalling(calls: Call[]) {
   return async (input: AgentTurnInput) => {
     seen.push(input);
-    if (!call) return { status: "replied" as const, text: "Noted.", reason: "stop" };
+    if (calls.length === 0) return { status: "replied" as const, text: "Noted.", reason: "stop" };
     const ctx = toolCtx({ handleHash: input.handleHash, turnId: input.turnId, grant: input.grant, generation: input.generation, turnAtMs: input.turnAtMs });
     const state = initialSettleState(input.turnId);
-    const output = (call.tool === "fill_form"
-      ? await fillForm.execute({ form: "food-renewal", answers: call.answers }, ctx)
-      : await startFormDraft.execute({ answers: call.answers }, ctx)) as { question?: string; note?: string };
-    reduceSettleEvent(state, { type: "action.result", data: { status: "completed", result: { kind: "tool-result", callId: "c", toolName: call.tool, output } } });
+    let output: { status?: string; question?: string; note?: string } = {};
+    for (const call of calls) {
+      output = (call.tool === "fill_form"
+        ? await fillForm.execute({ form: "food-renewal", answers: call.answers }, ctx)
+        : await startFormDraft.execute({ answers: call.answers }, ctx)) as typeof output;
+      statuses.push(`${call.tool}:${output.status}`);
+      reduceSettleEvent(state, { type: "action.result", data: { status: "completed", result: { kind: "tool-result", callId: "c", toolName: call.tool, output } } });
+    }
     return { status: "replied" as const, text: output.question ?? output.note ?? "", reason: "stop", held: heldOf(state) };
   };
 }
 
-async function text(words: string, call: Call | null = null): Promise<Body> {
+async function text(words: string, ...calls: Call[]): Promise<Body> {
   const res = await handleTurn(
     signed("/channels/mano/turn", { turnId: `turn_renewal_${String(++turns).padStart(4, "0")}`, generation: 0, handleHash: HANDLE, grant, receivedAt: Date.now(), texts: [words], attachmentCount: 0 }),
-    { secret: SECRET, engine: client(), runAgent: modelCalling(call) },
+    { secret: SECRET, engine: client(), runAgent: modelCalling(calls) },
   );
   const body = (await res.json()) as Body;
   if (body.status === "waiting_approval") {
@@ -115,7 +120,7 @@ async function photo(): Promise<Body> {
       attachmentCount: 1,
       documents: [{ id: PHOTO, mimeType: "image/png" }],
     }),
-    { secret: SECRET, engine: client(), runAgent: modelCalling(null), mailModel: recordedReader([]) },
+    { secret: SECRET, engine: client(), runAgent: modelCalling([]), mailModel: recordedReader([]) },
   );
   await new Promise((r) => setTimeout(r, 3));
   return (await res.json()) as Body;
@@ -133,6 +138,7 @@ beforeEach(async () => {
   engine = new EngineDouble();
   seen = [];
   turns = 0;
+  statuses = [];
   vi.stubEnv("ENGINE_URL", ENGINE_URL);
   vi.stubEnv("MANO_ENGINE_AGENT_TOKEN", ENGINE_AGENT_TOKEN);
   vi.stubEnv("MANO_PORTAL_URL", "http://portal.test");
@@ -179,7 +185,9 @@ describe("the answers she texts for her renewal", () => {
     for (const [field, value] of RECORDED) await text(value, { tool: "fill_form", answers: { [field]: value } });
     await photo();
 
-    const ready = await text("ok I sent the pay stub. please finish the renewal", { tool: "start_form_draft", answers: {} });
+    statuses = [];
+    const ready = await text("ok I sent the pay stub. please finish the renewal", { tool: "fill_form", answers: {} }, { tool: "start_form_draft", answers: {} });
+    expect(statuses).toEqual(["fill_form:unavailable", "start_form_draft:waiting_for_yes"]);
     expect(ready.status).toBe("waiting_approval");
     const yes = await text("YES");
     expect(yes.text).toMatch(/^Done\./);
@@ -290,7 +298,7 @@ describe("keeping an answer", () => {
     const again = async () =>
       handleTurn(
         signed("/channels/mano/turn", { turnId: "turn_renewal_retry", generation: 0, handleHash: HANDLE, grant, receivedAt: Date.now(), texts: ["Nivra Pellorin"], attachmentCount: 0 }),
-        { secret: SECRET, engine: client(), runAgent: modelCalling({ tool: "fill_form", answers }) },
+        { secret: SECRET, engine: client(), runAgent: modelCalling([{ tool: "fill_form", answers }]) },
       );
     expect((await again()).status).toBe(200);
     const first = (await person().getProfile())!.person.fullName;
