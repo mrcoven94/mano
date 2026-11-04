@@ -137,7 +137,7 @@ export default function TryDemo() {
       <div className="wrap">
         <header className="try-head">
           <h1>Watch Mano handle a renewal letter, live.</h1>
-          <p className="lede">Judge view on synthetic data. Maria, her letter and the portal are made up, so this page names the models. Every step below runs for real as you press.</p>
+          <p className="lede">Judge view on synthetic data. Maria, her letter and the portal are made up, so this page names the models. A step appears below only if it really ran on this run.</p>
         </header>
 
         {source.kind === "recording" && <p className="try-banner">Recording of a real run from {source.recordedAt}, played faster than it ran. Not live.</p>}
@@ -162,7 +162,7 @@ export default function TryDemo() {
                 Guardian is warming on its GPU. {secondsLeft && secondsLeft > 0 ? <>Ready in about <b>{clock(secondsLeft)}</b>.</> : secondsLeft === 0 ? "It is taking longer than its usual 3 minutes." : "Checking."} The run starts when it is up.
               </p>
             )}
-            {phase === "idle" && steps.length === 0 && <p className="try-empty">Mano reads Maria&rsquo;s letter, holds the deadline, fills the form on the sandbox portal, has Guardian check it, asks Maria, and files after her yes.</p>}
+            {phase === "idle" && steps.length === 0 && <p className="try-empty">Press send to run Mano on Maria&rsquo;s letter. What happens appears here, including anything that stops.</p>}
             {steps.map((event) => {
               if (event.kind === "screen") return event.seq === firstShot ? <Screens key="screens" shots={shots} runId={runId} source={source} /> : null;
               return <Step key={event.seq} event={event} />;

@@ -302,7 +302,7 @@ async function runLeg(leg: Leg, person: Person, ledger: TryLedger, owner: string
         if (turn.status === "waiting_approval" && turn.approvalId && turn.approval) {
           await replied(turn, turn.approval);
           const replay = await person.engine(`/approvals/${encodeURIComponent(turn.approvalId)}/replay`);
-          if (replay.http !== 200) await log({ kind: "note", text: "Mano's computer did not finish this form, so Mano prepared the renewal from Maria's answers." });
+          if (replay.http !== 200) await log({ kind: "note", text: "Mano's computer did not fill this form. Mano prepared the renewal from Maria's answers instead." });
           if (!(await person.presented(turn.approvalId, turn.approval))) return fail("Mano could not put the question to Maria, so nothing was filed.");
           await log({ kind: "question", text: shown(turn.approval) });
           return "advance";
