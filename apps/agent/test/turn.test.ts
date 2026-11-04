@@ -603,6 +603,71 @@ describe("approval by text", () => {
     expect(fixed.body.approval).toContain("Phone number: 253-555-0199");
   });
 
+  // Review round 16: a fresh instance retries the preparing turn with the
+  // corrected phone. It must not adopt the waiting draft with the old phone.
+  async function freshInstance() {
+    vi.resetModules();
+    const [other, tool, double] = await Promise.all([import("../agent/lib/turn.js"), import("../agent/tools/fill_form.js"), import("./fill-double.js")]);
+    double.installFillDouble(engine);
+    return { other, retryFill: (input: AgentTurnInput) => {
+      const ctx = toolCtx({ handleHash: input.handleHash, turnId: input.turnId, grant: input.grant, generation: input.generation, turnAtMs: input.turnAtMs, eveTurn: "eve-turn-2" });
+      return tool.default.execute(draft({ phone: "253-555-0199" }), ctx);
+    } };
+  }
+
+  it("a replay in a fresh instance with a corrected value closes the old draft and shows only the new one", async () => {
+    const preparing = turn("turn_rep_0000001", "Please file my renewal");
+    await send(preparing.clone(), deps(), { present: false });
+    const [old] = engine.approvals();
+    expect(JSON.parse(old!.requestJson).payload.phone).toBe(fields.phone);
+
+    const { other, retryFill } = await freshInstance();
+    const d = deps({
+      runAgent: async (input) => {
+        const run = formRun(input.turnId);
+        run.note("completed", await retryFill(input));
+        return { status: "replied" as const, text: "It is ready for your yes.", reason: "stop", held: run.held() };
+      },
+    });
+    const body = (await (await other.handleTurn(preparing, d)).json()) as Body;
+    expect(body.status).toBe("waiting_approval");
+    expect(body.approval).toContain("Phone number: 253-555-0199");
+    expect(body.text).not.toContain(fields.phone);
+    expect(engine.approvals().find((a) => a.id === old!.id)?.status).toBe("rejected");
+
+    const fresh = engine.approvals().find((a) => a.id === body.approvalId)!;
+    expect((await present(fresh)).status).toBe(200);
+    await new Promise((r) => setTimeout(r, 3));
+    expect((await send(turn("turn_rep_000000Y", "YES"))).body.text).toMatch(/^Done/);
+    expect(engine.executor.calls.map((c) => c.payload.phone)).toEqual(["253-555-0199"]);
+  });
+
+  it("when the replay cannot close the old draft, neither version is shown and a YES files nothing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const preparing = turn("turn_rep_0000002", "Please file my renewal");
+    await send(preparing.clone(), deps(), { present: false });
+    const { other, retryFill } = await freshInstance();
+    const reachable = engine.fetch;
+    const d = deps({
+      runAgent: async (input) => {
+        vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) =>
+          /\/reject$/.test(new URL(String(url)).pathname) ? new Response("unavailable", { status: 503 }) : reachable(url, init),
+        );
+        const run = formRun(input.turnId);
+        run.note("completed", await retryFill(input));
+        vi.stubGlobal("fetch", reachable);
+        return { status: "replied" as const, text: "I could not update that just now.", reason: "stop", held: run.held() };
+      },
+    });
+    const body = (await (await other.handleTurn(preparing, d)).json()) as Body;
+    expect(body.status).not.toBe("waiting_approval");
+    expect(body.text).not.toContain("Reply YES");
+    expect(engine.approvals().map((a) => a.status)).toEqual(["pending"]);
+    await new Promise((r) => setTimeout(r, 3));
+    await other.handleTurn(turn("turn_rep_00000Y2", "YES"), deps());
+    expect(engine.executor.calls).toHaveLength(0);
+  });
+
   it("once recovery settles the approved filing as failed, the correction is prepared without another YES", async () => {
     const portal = new FlakyPortal();
     portal.refuseRetries = true;

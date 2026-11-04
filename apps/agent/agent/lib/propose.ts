@@ -69,12 +69,23 @@ export async function holdForYes(
       }
       continue;
     }
-    // A replay finds the approval its first attempt made: still waiting,
-    // it is answered again; closed, nothing new is proposed.
+    // A replay finds the approval its first attempt made. The same content:
+    // still waiting, it is answered again; closed, nothing new is proposed.
+    // Different content was replaced by this call: it is closed, or held
+    // back if Engine will not close it, and the new version takes the next
+    // place, so an old value is never shown for a corrected one.
     if (holder) {
-      if (holder.status === "pending") approval = holder;
-      else outcome = { status: holder.status, reason: "This draft was already answered or closed." };
-      break;
+      if (sameDraft(holder, draft)) {
+        if (holder.status === "pending") approval = holder;
+        else outcome = { status: holder.status, reason: "This draft was already answered or closed." };
+        break;
+      }
+      if (holder.status === "pending" && !(await rejected(engine, holder.id))) {
+        holdBack({ approvalId: holder.id });
+        console.warn(JSON.stringify({ type: "mano_close_failed", count: 1 }));
+        return { held: false, status: "not_closed", note: NOT_CLOSED_NOTE };
+      }
+      continue;
     }
     const result = await engine.proposeAction({ ...draft, idempotencyKey: key }, turn.turnId);
     if (result.status === "needs_approval" && result.approval) approval = result.approval;

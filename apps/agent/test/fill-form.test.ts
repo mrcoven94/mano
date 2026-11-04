@@ -292,14 +292,14 @@ describe("fill_form", () => {
     expect(page).toContain("<dt>People in household</dt><dd>3</dd>");
   });
 
-  it("a retry that filled different values binds no screens to the approval the first attempt froze", async () => {
+  it("a retry that filled different values closes the approval the first attempt froze and holds the new version", async () => {
     engine.profile = profile();
     engine.replayFailure = 500;
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const first = await run("turn_fill0033", { form: "food-renewal" });
 
     // The profile changed before the retry, so the retry types a different
-    // household size than the approval froze.
+    // household size than the first attempt froze.
     engine.replayFailure = null;
     const grown = profile();
     grown.household.push({ id: "m3", name: leaf("Eva Testcase"), relationship: leaf("child") });
@@ -307,11 +307,13 @@ describe("fill_form", () => {
     model = new FakeModelClient([[call(typing({ ...VALUES, householdSize: "4" }))], [say("ACCEPTED")]]);
     const retry = (await fillForm.execute({ form: "food-renewal" }, retryCtx("turn_fill0033", "eve-turn-2"))) as Record<string, unknown>;
 
-    // The question still asks about what the first attempt froze, and YES
-    // sends that, so no screen of the retry's values may stand beside it.
-    expect(retry).toMatchObject({ status: "waiting_for_yes", approvalId: first.approvalId });
-    const [approval] = engine.approvals();
-    expect(JSON.parse(approval.requestJson).payload.householdSize).toBe("3");
+    // The question and the YES are for what the retry filled, with its screens.
+    expect(retry.status).toBe("waiting_for_yes");
+    expect(retry.approvalId).not.toBe(first.approvalId);
+    expect(engine.approvals().find((a) => a.id === first.approvalId)?.status).toBe("rejected");
+    const fresh = engine.approvals().find((a) => a.id === retry.approvalId)!;
+    expect(JSON.parse(fresh.requestJson).payload.householdSize).toBe("4");
+    expect(await engine.replayPageAt((await client().replayLink(fresh.id))!)).toContain("<dt>People in household</dt><dd>4</dd>");
     expect(await client().replayLink(String(first.approvalId))).toBeNull();
   });
 
