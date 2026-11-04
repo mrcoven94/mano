@@ -221,6 +221,8 @@ export interface ActionProposal {
   // A document in the person's Engine storage. Engine reads its bytes
   // itself and binds their hash into the approval.
   documentId?: string;
+  // Where the draft's content came from, for the safety check.
+  sources?: { kind: "document" | "message" | "profile" | "program"; id: string }[];
 }
 
 const RESULT_STATUSES = new Set(["completed", "needs_approval", "blocked", "stale", "reconciled", "in_progress", "rejected"]);
