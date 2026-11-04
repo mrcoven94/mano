@@ -25,6 +25,7 @@ import { z } from "zod";
 
 import type { EngineDocument, PersonEngine, Profile } from "../lib/engine.js";
 import { FORMS, fillFrom } from "../lib/forms.js";
+import { keepAnswers } from "../lib/form-answers.js";
 import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
 import { personEngine, requireTurn, type TurnIdentity } from "../lib/person.js";
 import { EARLIER_NOT_UPDATED_NOTE, EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, earlierFiling } from "../lib/propose.js";
@@ -74,6 +75,7 @@ async function prepare(engine: PersonEngine, turn: TurnIdentity, ctx: ToolContex
   }
   const { proof, newest, profile } = await proofOnFile(engine);
   const filled = fillFrom(RENEWAL, profile ?? NO_PROFILE, answers);
+  if (profile) await keepAnswers(engine, turn.turnId, RENEWAL, profile, answers);
   const unfit = filled.invalid[0];
   if (unfit) {
     return { status: "needs_answer", field: unfit.name, question: unfit.question, sent: false, note: `That answer does not fit "${unfit.label}". Ask this one question again, and nothing else.` };

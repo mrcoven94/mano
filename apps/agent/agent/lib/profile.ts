@@ -54,7 +54,11 @@ const FIELD_LABELS: Record<string, string> = {
   "person.county": "county",
   "person.language": "language",
   "person.householdConfirmed": "household",
+  "person.householdSize": "household",
 };
+
+// The income entry that keeps the monthly total the person gave for a form.
+export const STATED_TOTAL = "stated-monthly-total";
 
 // Plain names the model may pass to forget, and the path each clears.
 const FORGET_TARGETS: Record<string, string> = {
@@ -95,7 +99,8 @@ export interface ProfileChanges {
 // The tool's input as Engine field paths. A household member changes only
 // by its ref: a new name is a new member, and a name already on file is
 // either someone else (a different relationship or birth date), the same
-// facts again (nothing to write), or a question for the model to settle
+// facts again (nothing to write, unless a document or note gave them and
+// this makes them the person's word), or a question for the model to settle
 // with a ref. New entries get a ref derived from the turn, so a retried
 // turn writes the same entry, not a second one.
 // pending: paths with a suggestion waiting. The person restating what is
@@ -131,6 +136,7 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
 
   // Members by ref, for income that names an earner; new ones join as added.
   const added: Member[] = [];
+  let namedSomeoneNew = false;
   (input.household ?? []).forEach((m, i) => {
     const turnRef = newRef(turnId, "household", i, m.name ?? "");
     let id = refIn(current.household, m.ref, "household");
@@ -143,7 +149,8 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
         const nothingNew =
           (!m.relationship || match.relationship) && (!m.dateOfBirth || match.dateOfBirth) && !someoneElse(match);
         const settles = [...pending].some((path) => path.startsWith(`household.${match.id}.`));
-        if (nothingNew && !settles) return;
+        const promotes = [match.name, m.relationship ? match.relationship : undefined, m.dateOfBirth ? match.dateOfBirth : undefined].some((leaf) => leaf && leaf.source !== "person");
+        if (nothingNew && !settles && !promotes) return;
         if (!nothingNew) {
           throw new ProfileInputProblem(
             `${m.name} is already on file (${[match.relationship?.value, match.dateOfBirth?.value].filter(Boolean).join(", ") || "no details"}, ref ${match.id}). ` +
@@ -157,8 +164,9 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
     const stored = current.household.find((e) => e.id === id);
     const who = stored?.name?.value ?? m.name ?? "household member";
     if (!stored) added.push({ id, ...(m.name ? { name: { value: m.name } as Leaf } : {}) });
+    if (m.name && stored?.name?.source !== "person") namedSomeoneNew = true;
     const namePath = `household.${id}.name`;
-    set(namePath, m.name && (!same(stored?.name?.value, m.name) || pending.has(namePath)) ? m.name : undefined, who);
+    set(namePath, m.name && (!same(stored?.name?.value, m.name) || pending.has(namePath) || stored?.name?.source !== "person") ? m.name : undefined, who);
     set(`household.${id}.relationship`, m.relationship, `${who}'s relationship`);
     set(`household.${id}.dateOfBirth`, m.dateOfBirth, `${who}'s date of birth`);
   });
@@ -185,17 +193,55 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
     set(`income.${id}.frequency`, inc.frequency, "income");
   });
 
+  // A case number belongs to one state: one given with none named is for
+  // the state they live in, and never lands on another state's case.
+  const livesIn = input.person?.address?.state ?? current.person.address?.state?.value;
   (input.programs ?? []).forEach((prog, i) => {
+    const state = prog.state ?? livesIn;
     const id =
       refIn(current.programs, prog.ref, "programs") ??
-      current.programs.find((e) => prog.program && same(e.program?.value, prog.program) && (!prog.state || same(e.state?.value, prog.state)))?.id ??
-      newRef(turnId, "programs", i, `${prog.program ?? ""}\n${prog.state ?? ""}`);
-    const name = prog.program ?? current.programs.find((e) => e.id === id)?.program?.value ?? "program";
+      current.programs.find((e) => prog.program && same(e.program?.value, prog.program) && (!state || !e.state || same(e.state.value, state)))?.id ??
+      newRef(turnId, "programs", i, `${prog.program ?? ""}\n${state ?? ""}`);
+    const stored = current.programs.find((e) => e.id === id);
+    const name = prog.program ?? stored?.program?.value ?? "program";
     set(`programs.${id}.program`, prog.program, name);
-    set(`programs.${id}.state`, prog.state, `${name} state`);
+    set(`programs.${id}.state`, prog.state ?? (prog.caseNumber && !stored?.state ? livesIn : undefined), `${name} state`);
     set(`programs.${id}.caseNumber`, prog.caseNumber, `${name} case number`);
     set(`programs.${id}.status`, prog.status, `${name} status`);
   });
+
+  // Forget always wins: nothing is written back under what they forgot. A
+  // member they both forgot and named leaves the list unsettled, so it is
+  // not confirmed and the size is asked.
+  const forgotten = Object.keys(fields).filter((path) => fields[path] === null);
+  for (const path of Object.keys(fields)) {
+    if (fields[path] === null || !forgotten.some((gone) => path === gone || path.startsWith(`${gone}.`))) continue;
+    delete fields[path];
+    if (path.startsWith("household.")) delete fields["person.householdConfirmed"];
+  }
+
+  // Someone they newly name may not be in a number they gave earlier, so the
+  // size is asked. It goes silently, as below.
+  if (namedSomeoneNew && current.person.householdSize) {
+    fields["person.householdSize"] = null;
+    labels["person.householdSize"] = "";
+  }
+
+  // A real change to what another entry pays, or forgetting one, ends a total
+  // they gave for a form. Saying the same thing again, or renaming a job, does
+  // not. It goes silently: this is not something they asked to forget.
+  const total = `income.${STATED_TOTAL}`;
+  const incomeChanged = Object.keys(fields).some((path) => {
+    if (!path.startsWith("income.") || path.startsWith(total)) return false;
+    if (fields[path] === null) return true;
+    const [, id, field] = path.split(".");
+    if (field !== "amount" && field !== "frequency") return false;
+    return current.income.find((e) => e.id === id)?.[field]?.value !== fields[path];
+  });
+  if (incomeChanged && current.income.some((e) => e.id === STATED_TOTAL)) {
+    fields[total] = null;
+    labels[total] = "";
+  }
 
   return { fields, labels };
 }
@@ -213,11 +259,32 @@ function money(amount: number): string {
   return `$${amount.toLocaleString("en-US", { minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 })}`;
 }
 
+export const ENDS_IN_ZIP = /\b\d{5}(-\d{4})?$/;
+
+// A first line of the person's that ends in a ZIP, and a part of theirs written
+// after it: the two may disagree, so the address is theirs to settle. Parts
+// given with the first line carry its time (a form writes an address in one
+// patch), so a PO box with its city and ZIP does not count.
+export function addressChangedBeside(a: Profile["person"]["address"]): boolean {
+  if (a.line1?.source !== "person" || !ENDS_IN_ZIP.test(a.line1.value)) return false;
+  const { updatedAt } = a.line1;
+  return [a.line2, a.city, a.state, a.zip].some((part) => part?.source === "person" && part.updatedAt > updatedAt);
+}
+
+// An address the person gave in one line that could not be split: kept whole
+// on its first line, with no city or ZIP of their own beside it. A first line
+// that only ends in digits, such as a PO box, has their city and ZIP beside it.
+export function addressIsWhole(a: Profile["person"]["address"]): boolean {
+  return a.line1?.source === "person" && ENDS_IN_ZIP.test(a.line1.value) && a.city?.source !== "person" && a.zip?.source !== "person" && !addressChangedBeside(a);
+}
+
 function addressOf(profile: Profile): string | null {
   const a = profile.person.address;
+  if (addressIsWhole(a)) return a.line1!.value;
   const street = [a.line1?.value, a.line2?.value].filter(Boolean).join(" ");
   const cityLine = [a.city?.value, [a.state?.value, a.zip?.value].filter(Boolean).join(" ")].filter(Boolean).join(", ");
-  const text = [street, cityLine].filter(Boolean).join(", ");
+  // An address kept whole on its first line already names its state.
+  const text = !a.city && !a.zip && street ? street : [street, cityLine].filter(Boolean).join(", ");
   return text || null;
 }
 
@@ -267,8 +334,18 @@ export function confirmedByPerson(profile: Profile): boolean {
   return leaf?.value === true && leaf.source === "person";
 }
 
+// How many live in the household, counting the person: a roster they
+// confirmed, else the number they gave, else unknown. A roster counts only
+// who they named: someone only a document or note named is not their word.
+export function householdSizeOf(profile: Profile): number | null {
+  if (confirmedByPerson(profile)) {
+    return profile.household.filter((m) => [m.name, m.relationship, m.dateOfBirth].some((leaf) => leaf?.source === "person")).length + 1;
+  }
+  return profile.person.householdSize?.value ?? null;
+}
+
 function isEmpty(profile: Profile): boolean {
-  return PERSON_FIELDS.every(([, get]) => !get(profile).value) && !profile.household.length && !profile.income.length && !profile.programs.length;
+  return PERSON_FIELDS.every(([, get]) => !get(profile).value) && !profile.person.householdSize && !profile.household.length && !profile.income.length && !profile.programs.length;
 }
 
 // The profile as data for the model: plain JSON, keyed by our own field
@@ -290,6 +367,7 @@ export function profileData(view: ProfileView): Record<string, unknown> {
       from: from(m.name ?? m.relationship),
     })),
     householdConfirmed: confirmedByPerson(profile),
+    ...(profile.person.householdSize ? { householdSize: householdSizeOf(profile) } : {}),
     income: profile.income.map((inc) => ({
       ref: inc.id,
       earner: !inc.memberId || inc.memberId.value === "self" ? "the person" : (profile.household.find((m) => m.id === inc.memberId?.value)?.name?.value ?? "a household member"),
@@ -367,10 +445,13 @@ export function profileGuide(view: ProfileView): string {
   if (onFile.length) lines.push(`On file now: ${onFile.join(", ")}.`);
   if (missing.length) lines.push(`Not on file yet: ${missing.join(", ")}.`);
   const others = profile.household.length;
+  const size = householdSizeOf(profile);
   lines.push(
     confirmedByPerson(profile)
-      ? `Household size: ${1 + others} including the person (they confirmed who lives with them).`
-      : `Household members on file besides the person: ${others}. The person has not confirmed who lives with them, so ask before using a household size, and save their answer with householdComplete.`,
+      ? `Household size: ${size} including the person (they confirmed who lives with them).`
+      : size !== null
+        ? `Household size: ${size} including the person (the number they gave).`
+        : `Household members on file besides the person: ${others}. The person has not confirmed who lives with them, so ask before using a household size, and save their answer with householdComplete.`,
   );
   if (view.suggestions.length) lines.push(`Waiting for the person to confirm: ${view.suggestions.length} item${view.suggestions.length === 1 ? "" : "s"}.`);
   return lines.join("\n");
@@ -403,6 +484,7 @@ export function summarizeProfile(view: ProfileView): string {
       `Household: ${profile.household.map((m) => [m.name?.value ?? "someone", m.relationship ? `(${m.relationship.value})` : null].filter(Boolean).join(" ")).join(", ")}`,
     );
   }
+  if (profile.person.householdSize && !confirmedByPerson(profile)) sentences.push(`Household of ${profile.person.householdSize.value}`);
   if (profile.income.length) sentences.push(`Income: ${profile.income.map((inc) => incomeText(profile, inc, profile.household.length > 0 ? "you" : null)).join("; ")}`);
   if (profile.programs.length) {
     sentences.push(
