@@ -13,7 +13,8 @@
 // agent to Meta's open-weight model through OpenRouter, pinned to
 // zero-retention endpoints that collect no data, the same pin as the text
 // line's fallback, sorted by latency and at low reasoning effort. It is
-// for testing while the Meta Model API is down.
+// for testing while the Meta Model API is down. Filling a form follows the
+// same switch (computer-fill.ts), on a client of its own.
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   APICallError,
@@ -228,8 +229,7 @@ interface ModelRoute {
 
 // The one place that picks the model path, for both createMuseModel and
 // the agent's stand-in check.
-export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKey"> = {}): ModelRoute {
-  const env = process.env;
+export function selectModelRoute(opts: Pick<MuseModelOptions, "baseUrl" | "apiKey"> = {}, env: NodeJS.ProcessEnv = process.env): ModelRoute {
   return env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY
     ? { name: "openrouter", baseURL: OPENROUTER_BASE_URL, apiKey: env.OPENROUTER_API_KEY, modelId: OPEN_WEIGHT_MODEL_ID, bodyExtra: OPENROUTER_BODY }
     : {

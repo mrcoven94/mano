@@ -534,3 +534,13 @@ mark{background:none;color:inherit}
 }
 @media (max-width:720px){.cmp{width:calc(100% - 16px);margin:0 8px 8px;font-size:.88rem}.cmp th,.cmp td{padding:12px 10px}.cmp td,.cmp thead th{width:27%}.price{padding:32px 24px 28px}}
 @media (max-width:360px){.price{padding-left:16px;padding-right:16px}.price-cta{padding:0 14px}}
+
+/* The hero's one line and what Mano does today. */
+.h-hero h1.h-one{font-size:clamp(2.6rem,7vw,6rem);line-height:1.02;text-wrap:balance;max-width:14em}
+.h-today{padding:88px 0 0}
+.h-today h2{text-align:center}
+.h-today-list{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:32px;padding:0;list-style:none}
+.h-today-list li{display:flex;flex-direction:column;gap:10px;background:var(--bg2);border-radius:20px;padding:28px}
+.h-today-list b{font-size:1.14rem;line-height:1.25}
+.h-today-list span{color:var(--muted);line-height:1.5}
+@media (max-width:800px){.h-today{padding-top:56px}.h-today-list{grid-template-columns:1fr}}

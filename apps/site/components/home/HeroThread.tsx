@@ -5,9 +5,8 @@ import Mascot from "@/components/Mascot";
 import "./spine.css";
 
 /* The hero demo as one looping text thread: a person sends a photo of a letter, Mano names the one date, asks a plain
-   yes or no, she says yes, and Mano does what it does today. The letter beside the phone is the paper she photographed;
-   its date line is marked when Mano names it. Only the food benefits renewal is filed, on the practice portal; the
-   others hold the date and say what is coming. Every person, office and confirmation number is made up.
+   yes or no, she says yes, and Mano files on the practice portal. The letter beside the phone is the paper she
+   photographed; its date line is marked when Mano names it. Every person, office and confirmation number is made up.
    Built on the Stageshow kit in components/stageshow. */
 
 export type ThreadScene = {
@@ -23,9 +22,6 @@ export type ThreadScene = {
 type S = { photo: boolean; thinking: boolean; deadline: boolean; ask: boolean; yes: boolean; filing: boolean; filed: boolean; last: boolean; leaving: boolean };
 
 const initial: S = { photo: false, thinking: false, deadline: false, ask: false, yes: false, filing: false, filed: false, last: false, leaving: false };
-
-/* One loop, for the hero tab's progress bar. The carousel itself moves on when the loop reports its end. */
-export const threadSeconds = (scene: ThreadScene) => (scene.last ? 16.2 : 14.6);
 
 async function script(a: Act<S>, scene: ThreadScene, onLoop: () => void) {
   await a.wait(1400);
