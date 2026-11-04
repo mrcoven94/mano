@@ -35,15 +35,19 @@
 .try-panel h2 span{font-variant-numeric:tabular-nums}
 .try-panel-note{margin-top:8px;color:var(--hl);font-size:.88rem}
 .try-panel-empty{margin-top:16px;color:#BAC4D8;font-size:.94rem}
-.try-table-wrap{margin-top:12px;overflow-x:auto}
-.try-panel table{width:100%;border-collapse:collapse;font-size:.86rem}
-.try-panel th{padding:0 8px 8px 0;text-align:left;font-weight:500;color:#BAC4D8}
+.try-table-wrap{margin-top:12px;max-height:calc(100vh - 190px);overflow:auto}
+.try-panel table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.86rem}
+.try-panel th.try-model{width:42%}
+.try-panel th:nth-child(2){width:26%}
+.try-panel th:nth-child(3){width:11%}
+.try-panel td{overflow-wrap:anywhere}
+.try-panel th{position:sticky;top:0;padding:0 8px 8px 0;text-align:left;font-weight:500;color:#BAC4D8;background:#14213D}
 .try-panel td{padding:8px 8px 8px 0;vertical-align:top;color:#fff}
 .try-panel tbody tr{animation:tryRow 1.6s ease-out}
 @keyframes tryRow{0%{background:rgba(255,225,74,.32)}100%{background:transparent}}
-.try-panel code{display:block;font-family:var(--font-mono),monospace;font-size:.84rem;white-space:nowrap}
+.try-panel code{display:block;font-family:var(--font-mono),monospace;font-size:.8rem}
 .try-panel small{display:block;margin-top:2px;color:#BAC4D8;font-size:.78rem}
-.try-panel .num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.try-panel .num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;padding-right:12px}
 .try-panel td[data-bad]{color:#FFB4A8;font-weight:600}
 .try-panel tr[data-state=skipped] td,.try-panel tr[data-state=skipped] code{color:#BAC4D8}
 .try-panel tr[data-state=stand-in] td{color:var(--hl)}

@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef } from "react";
 import Image from "next/image";
 import type { TryLogged, TryScenario } from "@mano/protocol";
 import Mascot from "@/components/Mascot";
@@ -100,13 +101,13 @@ function Panel({ calls, source }: { calls: Extract<TryLogged, { kind: "model" }>
       {calls.length === 0 ? (
         <p className="try-panel-empty">Each call appears here as it finishes.</p>
       ) : (
-        <div className="try-table-wrap">
+        <div className="try-table-wrap" tabIndex={0} aria-label="Model calls, newest first">
           <table>
-            <thead><tr><th scope="col">Model</th><th scope="col">Where it ran</th><th scope="col" className="num">Time</th><th scope="col">Status</th></tr></thead>
+            <thead><tr><th scope="col" className="try-model">Model</th><th scope="col">Where it ran</th><th scope="col" className="num">Time</th><th scope="col">Status</th></tr></thead>
             <tbody aria-live="polite">
-              {calls.map((c) => (
+              {[...calls].reverse().map((c) => (
                 <tr key={c.seq} data-state={c.state}>
-                  <td><code>{c.model}</code><small>{c.purpose}</small></td>
+                  <td className="try-model"><code>{c.model}</code><small>{c.purpose}</small></td>
                   <td>{c.where}</td>
                   <td className="num">{c.state === "skipped" ? "" : seconds(c.ms)}</td>
                   <td data-bad={c.state !== "live" || c.status === "ok" || c.status === "200" || c.status === "completed" ? undefined : ""}>{c.state === "stand-in" ? "stand-in" : c.status}</td>
@@ -122,6 +123,11 @@ function Panel({ calls, source }: { calls: Extract<TryLogged, { kind: "model" }>
 
 export default function TryDemo() {
   const run = useTryRun();
+  const yes = useRef<HTMLButtonElement>(null);
+  /* The question arrives below the fold on a long run, and the panel stays beside it. */
+  useEffect(() => {
+    if (run.phase === "question") yes.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [run.phase]);
   const { phase, scenario, events, runId, secondsLeft, refusal, problem, source, available } = run;
   const calls = events.filter((e): e is Extract<TryLogged, { kind: "model" }> => e.kind === "model");
   const steps = events.filter((e) => e.kind !== "model");
@@ -170,7 +176,7 @@ export default function TryDemo() {
             {phase === "running" && <p className="try-working">Running</p>}
             {phase === "question" && scenario === "changed" && <p className="try-fact">Pressing YES first changes one byte of the document Mano prepared.</p>}
             {phase === "question" && (
-              <button className="btn btn-primary btn-lg try-yes" onClick={run.pressYes}>YES</button>
+              <button ref={yes} className="btn btn-primary btn-lg try-yes" onClick={run.pressYes}>YES</button>
             )}
           </section>
 
