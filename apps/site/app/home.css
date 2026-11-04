@@ -536,7 +536,7 @@ mark{background:none;color:inherit}
 /* Find, apply and track today. */
 .h-today{padding:88px 0 0}
 .h-today h2,.h-today .lede{text-align:center}
-.h-today .lede{margin-top:16px}
+.h-today .lede{margin:16px auto 0}
 .h-today-list{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:32px;padding:0;list-style:none}
 .h-today-list li{display:flex;flex-direction:column;gap:10px;background:var(--bg2);border-radius:20px;padding:28px}
 .h-today-list b{font-size:1.14rem;line-height:1.25}
