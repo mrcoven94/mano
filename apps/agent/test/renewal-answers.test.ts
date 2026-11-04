@@ -784,6 +784,127 @@ describe("review of 7b4a5b7: a correction is never lost", () => {
   });
 });
 
+describe("review of f883faa: a later word from her is not ignored", () => {
+  const fill = (answers: Record<string, string>) => text("my answer", { tool: "fill_form", answers });
+  const update = (input: Parameters<typeof updateProfile.execute>[0], turnId: string) =>
+    updateProfile.execute(input, toolCtx({ handleHash: HANDLE, turnId, grant, generation: 0 })) as Promise<{ forgotten?: string[] }>;
+  const WHOLE = "12 Oak St Fresno California 93721";
+
+  describe("a part beside a whole address", () => {
+    it.each([
+      ["a second line", { line2: "Apt 9" }],
+      ["a state", { state: "WA" }],
+      ["a city", { city: "Sacramento" }],
+      ["a ZIP", { zip: "95814" }],
+      ["a city, state and ZIP", { city: "Sacramento", state: "CA", zip: "95814" }],
+    ])("%s leaves the address to be asked, once", async (_what, address) => {
+      await fill({ address: WHOLE });
+      await update({ person: { address } }, "turn_review8_part01");
+      expect(await draftValue("address")).toBeUndefined();
+
+      const asked = await text("is it ready?", { tool: "fill_form", answers: {} });
+      expect(askedAbout(asked.text)).toEqual(["address"]);
+
+      await fill({ address: WHOLE });
+      expect(await draftValue("address")).toBe(WHOLE);
+      const again = await text("is it ready?", { tool: "fill_form", answers: {} });
+      expect(askedAbout(again.text)).not.toContain("address");
+    });
+
+    it("leaves no filing with California on the address and a WA case number", async () => {
+      await person().patchProfile({ idempotencyKey: "wa-case-8", source: "person", fields: { "programs.wa.program": "SNAP", "programs.wa.state": "WA", "programs.wa.caseNumber": "WA-1" } });
+      await fill({ address: WHOLE });
+      await update({ person: { address: { state: "WA" } } }, "turn_review8_part02");
+      const filled = fillFrom(FORMS["food-renewal"]!, (await person().getProfile())!, {});
+      expect(filled.values.address).toBeUndefined();
+      expect(filled.missing?.name).toBe("address");
+    });
+
+    it("clears the part when she gives the whole address again", async () => {
+      await fill({ address: WHOLE });
+      await update({ person: { address: { line2: "Apt 9", city: "Sacramento" } } }, "turn_review8_part03");
+      await fill({ address: WHOLE });
+      const { address } = (await person().getProfile())!.person;
+      expect([address.line1?.value, address.line2, address.city, address.state?.value, address.zip]).toEqual([WHOLE, undefined, undefined, "CA", undefined]);
+    });
+
+    it("is still ignored from a document", async () => {
+      engine.putDocument(PERSON, PHOTO, PNG);
+      await fill({ address: WHOLE });
+      await person().patchProfile({ idempotencyKey: "doc-part", source: "document", documentId: PHOTO, fields: { "person.address.line2": "Apt 9", "person.address.zip": "95814" } });
+      expect(await draftValue("address")).toBe(WHOLE);
+    });
+
+    it("does not disturb a split address, whose parts can be corrected one at a time", async () => {
+      await fill({ address: "12 Oak St, Fresno, CA 93721" });
+      await update({ person: { address: { line2: "Apt 9" } } }, "turn_review8_part04");
+      expect(await draftValue("address")).toBe("12 Oak St, Apt 9, Fresno, CA 93721");
+    });
+
+    it("does not disturb a first line that ends in digits, with its parts given together", async () => {
+      await fill({ address: "PO Box 12345, Fresno, CA 93721" });
+      await new Promise((r) => setTimeout(r, 3));
+      expect(await draftValue("address")).toBe("PO Box 12345, Fresno, CA 93721");
+    });
+
+    it("re-answering a split address after a correction takes the answer", async () => {
+      await fill({ address: "12 Oak St, Apt 4, Fresno, CA 93721" });
+      await fill({ address: "12 Oak St, Fresno, CA 93721" });
+      const { address } = (await person().getProfile())!.person;
+      expect(address.line2).toBeUndefined();
+      expect(await draftValue("address")).toBe("12 Oak St, Fresno, CA 93721");
+    });
+  });
+
+  describe("a household number, then a member she names", () => {
+    it("retires the number, so the size is asked", async () => {
+      await fill({ householdSize: "2" });
+      expect(await draftValue("householdSize")).toBe("2");
+      const out = await update({ household: [{ name: "Mia", relationship: "daughter" }] }, "turn_review8_mia001");
+      expect(await draftValue("householdSize")).toBeUndefined();
+      expect((await person().getProfile())!.person.householdSize).toBeUndefined();
+      expect(out.forgotten).toEqual([]);
+    });
+
+    it("takes the new number she then gives", async () => {
+      await fill({ householdSize: "2" });
+      await update({ household: [{ name: "Mia" }] }, "turn_review8_mia002");
+      await fill({ householdSize: "3" });
+      expect(await draftValue("householdSize")).toBe("3");
+    });
+
+    it("counts by the roster when she names them and says that is everyone", async () => {
+      await fill({ householdSize: "2" });
+      await update({ household: [{ name: "Mia" }, { name: "Leo" }], householdComplete: true }, "turn_review8_mia003");
+      expect(await draftValue("householdSize")).toBe("3");
+    });
+
+    it("retires the number when she names someone only a document named", async () => {
+      engine.putDocument(PERSON, PHOTO, PNG);
+      await person().patchProfile({ idempotencyKey: "doc-eve", source: "document", documentId: PHOTO, fields: { "household.eve.name": "Eve" } });
+      await fill({ householdSize: "2" });
+      await update({ household: [{ name: "Eve" }] }, "turn_review8_mia004");
+      expect(await draftValue("householdSize")).toBeUndefined();
+    });
+
+    it("keeps the number when a document names a member, which is not her word", async () => {
+      engine.putDocument(PERSON, PHOTO, PNG);
+      await fill({ householdSize: "2" });
+      await person().patchProfile({ idempotencyKey: "doc-eve-2", source: "document", documentId: PHOTO, fields: { "household.eve.name": "Eve" } });
+      expect(await draftValue("householdSize")).toBe("2");
+    });
+
+    it("keeps the number when she only says more about someone she already named", async () => {
+      await update({ household: [{ name: "Leo" }] }, "turn_review8_mia005");
+      await fill({ householdSize: "2" });
+      const leo = (await person().getProfile())!.household[0]!;
+      await update({ household: [{ ref: leo.id, relationship: "son" }] }, "turn_review8_mia006");
+      await update({ household: [{ name: "Leo" }] }, "turn_review8_mia007");
+      expect(await draftValue("householdSize")).toBe("2");
+    });
+  });
+});
+
 describe("a member a document or note writes without a name", () => {
   const own = (key: string, fields: Record<string, string | boolean>) => person().patchProfile({ idempotencyKey: key, source: "person", fields });
   const fromDocument = (key: string, fields: Record<string, string>) => person().patchProfile({ idempotencyKey: key, source: "document", documentId: PHOTO, fields });
