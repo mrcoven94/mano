@@ -14,7 +14,7 @@ export default function Organizations() {
       items={[
         ["Case sharing.", "The code to share one case for one purpose, and to stop sharing, is written. It has run only with a synthetic person."],
         ["The open protocol.", "The format agents use to work a shared case is public, with a written spec in the repository."],
-        ["Run your own copy.", "Mano is MIT licensed, and every part runs locally with stand-ins when keys are missing."],
+        ["Run your own copy.", "Mano is MIT licensed. The README says what each part needs."],
       ]}
     />
   );

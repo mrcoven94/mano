@@ -13,7 +13,7 @@ export default function Partners() {
       lede="Mano today is a text line for one person renewing food benefits. It runs on synthetic cases and files only on a practice portal, never with a real office."
       items={[
         ["Read how it works.", "The code is public and MIT licensed, so you can see what Mano does with every message."],
-        ["Run your own copy.", "Every part runs locally with stand-ins when keys are missing."],
+        ["Run your own copy.", "The README says what each part needs."],
       ]}
     />
   );
