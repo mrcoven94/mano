@@ -11,6 +11,10 @@ export interface ActionRequest {
   // Document bytes always come from server storage, never from the caller,
   // so the request carries only the document ID.
   documentId?: string;
+  // What the question calls that document, which the person reads. The payload
+  // holds only the document's ID, so the safety check reads a reference, not
+  // a sentence. Frozen and bound into the approval with the rest.
+  attachmentLabel?: string;
   payload: Record<string, unknown>;
   idempotencyKey: string;
   actor: ActorKind;
