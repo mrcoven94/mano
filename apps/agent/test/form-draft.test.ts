@@ -382,7 +382,7 @@ describe("LAP-747: Mano asks instead of guessing", () => {
       expect(Object.keys(filled.values).sort()).toEqual(Object.keys(answers).sort());
       answers[filled.missing.name] = fields[filled.missing.name]!;
     }
-    expect(asked).toEqual(["caseNumber", "fullName", "dateOfBirth", "householdSize", "monthlyIncome", "address", "phone"]);
+    expect(asked).toEqual(["address", "caseNumber", "fullName", "dateOfBirth", "householdSize", "monthlyIncome", "phone"]);
   });
 
   it("a mistyped phone number on file is asked about, never cut to 10 digits", () => {
@@ -403,10 +403,11 @@ describe("LAP-747: Mano asks instead of guessing", () => {
 
   it("two different food case numbers on file are asked about, never chosen between", () => {
     const p = empty();
+    p.person.address = { line1: leaf("100 Sample St"), city: leaf("Tacoma"), state: leaf("WA"), zip: leaf("98402") };
     p.programs = [
-      { id: "snap", program: leaf("SNAP"), caseNumber: leaf("WA-SNAP-0042117") },
-      { id: "calfresh", program: leaf("CalFresh"), caseNumber: leaf("CF-778812") },
-      { id: "medicaid", program: leaf("Medicaid"), caseNumber: leaf("MC-1") },
+      { id: "snap", program: leaf("SNAP"), state: leaf("WA"), caseNumber: leaf("WA-SNAP-0042117") },
+      { id: "calfresh", program: leaf("CalFresh"), state: leaf("WA"), caseNumber: leaf("CF-778812") },
+      { id: "medicaid", program: leaf("Medicaid"), state: leaf("WA"), caseNumber: leaf("MC-1") },
     ];
     expect(fillFrom(RENEWAL, p, {}).missing?.name).toBe("caseNumber");
     p.programs.splice(1, 1);
@@ -457,6 +458,7 @@ describe("LAP-747: Mano asks instead of guessing", () => {
       documentId: "doc-letter",
       fields: {
         "programs.snap.program": "SNAP",
+        "programs.snap.state": "WA",
         "programs.snap.caseNumber": "WA-SNAP 0042117/B",
         "person.address.line1": "12 Calle Ñandú, Apt #3 & 4",
         "person.address.city": "Tacoma",

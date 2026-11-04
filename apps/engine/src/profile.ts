@@ -12,6 +12,10 @@
 //   person.householdConfirmed   (true once the person said who lives with them;
 //                                only source person sets it, and forgetting
 //                                any household member clears it)
+//   person.householdSize   (how many live there, counting the person, when
+//                           they gave a number and not names; only source
+//                           person sets it or clears it, by forgetting it,
+//                           the household or any member)
 //   household.<id>.name|relationship|dateOfBirth
 //   income.<id>.memberId|source|amount|frequency   (memberId: a household id, or "self")
 //   programs.<id>.program|state|caseNumber|status
@@ -65,6 +69,7 @@ export interface Profile {
     county?: Leaf;
     language?: Leaf;
     householdConfirmed?: Leaf<boolean>;
+    householdSize?: Leaf<number>;
   };
   household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];
   income: { id: string; memberId?: Leaf; source?: Leaf; amount?: Leaf<number>; frequency?: Leaf<Frequency> }[];
@@ -72,7 +77,7 @@ export interface Profile {
 }
 
 type Value = string | number | boolean;
-type Kind = "text" | "date" | "phone" | "email" | "state" | "zip" | "amount" | "frequency" | "member" | "flag";
+type Kind = "text" | "date" | "phone" | "email" | "state" | "zip" | "amount" | "frequency" | "member" | "flag" | "count";
 
 const MAX_TEXT = 200;
 const ENTRY_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -104,6 +109,7 @@ const NORMALIZE: Record<Kind, (raw: unknown) => Value | null> = {
   frequency: (raw) => (typeof raw === "string" && (FREQUENCIES as readonly string[]).includes(raw) ? raw : null),
   member: (raw) => (typeof raw === "string" && ENTRY_ID.test(raw) ? raw : null),
   flag: (raw) => (typeof raw === "boolean" ? raw : null),
+  count: (raw) => (typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 30 ? raw : null),
 };
 
 const PERSON_LEAVES: Record<string, Kind> = {
@@ -119,6 +125,7 @@ const PERSON_LEAVES: Record<string, Kind> = {
   "person.county": "text",
   "person.language": "text",
   "person.householdConfirmed": "flag",
+  "person.householdSize": "count",
 };
 
 const ENTRY_LEAVES = {
@@ -186,7 +193,7 @@ export function parseProfilePatch(raw: unknown): ParsedPatch {
       continue;
     }
     if (target.kind === "group") throw new ProfileInputError(`${path} is a group; set its fields one by one.`);
-    if (path === "person.householdConfirmed" && source !== "person") {
+    if ((path === "person.householdConfirmed" || path === "person.householdSize") && source !== "person") {
       throw new ProfileInputError("Only the person can confirm who lives with them.");
     }
     const clean = NORMALIZE[target.type](value);
@@ -483,10 +490,12 @@ export class ProfileStore {
         }[];
         for (const r of rows) retireLinkedNotes(sql, r.path, false);
         // A roster with someone forgotten is no longer the one the person
-        // confirmed.
-        if (rows.some((r) => r.path.startsWith("household."))) {
-          sql.exec("DELETE FROM profile_fields WHERE path = 'person.householdConfirmed'");
-        }
+        // confirmed. The count is their own number, and an empty roster has
+        // nothing to change, so those go only on their word.
+        const rosterChanged = rows.some((r) => r.path.startsWith("household."));
+        const personForgot = parsed.source === "person" && (path === "household" || rosterChanged);
+        if (rosterChanged || personForgot) sql.exec("DELETE FROM profile_fields WHERE path = 'person.householdConfirmed'");
+        if (personForgot) sql.exec("DELETE FROM profile_fields WHERE path = 'person.householdSize'");
         sql.exec(`DELETE FROM profile_fields WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
         sql.exec(`DELETE FROM profile_suggestions WHERE ${UNDER} AND ${TRUST_SQL} <= ?`, ...under(path), trust);
       }
