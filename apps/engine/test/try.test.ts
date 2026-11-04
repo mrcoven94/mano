@@ -411,6 +411,85 @@ describe("a run", () => {
     return { runId, press };
   };
 
+  describe("a scrambled run's claim", () => {
+    const withPortal = { ...env, SANDBOX_BASE_URL: "https://portal.test/" } as Env;
+    const reportVisit = (handleHash: unknown, visited: string) =>
+      tryRoute(new Request("https://engine.test/try/report", { method: "POST", headers: { authorization: "Bearer test-agent-token-not-real", "content-type": "application/json" }, body: JSON.stringify({ handleHash, visited }) }), withPortal, self);
+
+    // visited: the address the agent's computer reports, given the run's own layout.
+    const run = async (replay: number, visited: (layoutPath: string) => string | null) => {
+      const res = await start("scramble", uniqueSession(), uniqueIp());
+      const { runId } = (await res.json()) as { runId: string };
+      const seen = { turns: [] as Record<string, unknown>[], headers: [] as Headers[] };
+      const script: Script = async (texts, body) => {
+        if (!texts[0]?.startsWith("Please fill")) return { status: "replied", text: "Your renewal is due November 14." };
+        const url = String(texts[0].match(/https:\S+/)?.[0]);
+        const path = visited(new URL(url).pathname);
+        if (path) expect((await reportVisit(body.handleHash, path)).status).toBe(204);
+        return { status: "waiting_approval", text: "File it? YES or NO", approval: "File it? YES or NO", approvalId: "appr-1" };
+      };
+      const engine = (request: Request) => (new URL(request.url).pathname.endsWith("/replay") ? Promise.resolve(new Response("{}", { status: replay })) : self(request));
+      for (let i = 0; i < 3; i++) {
+        await tryRoute(new Request(`https://engine.test/try/runs/${runId}/next`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: "{}" }), withPortal, engine, { fetchImpl: fakeFetch(script, seen) });
+      }
+      const events = await eventsOf(runId);
+      return { runId, seen, events, fill: events.find((e) => e.kind === "fill") as { text: string; newLayout: boolean } };
+    };
+
+    it("gets a layout of its own, on a seed that is not the run's ID", async () => {
+      const { runId, seen, events } = await run(404, () => null);
+      const { url } = events.find((e) => e.kind === "layout") as { url: string };
+      expect(url).toMatch(/^https:\/\/portal\.test\/scramble\/[0-9a-f]{16}\/apply$/);
+      expect(url).not.toContain(runId);
+      expect(String((seen.turns.at(-1)!.texts as string[])[0])).toContain(url);
+    });
+
+    it("claims a new form only when the computer's last address was this run's layout", async () => {
+      const { fill } = await run(200, (layout) => layout);
+      expect(fill).toEqual(expect.objectContaining({ newLayout: true, text: expect.stringContaining("this run's layout") }));
+    });
+
+    it("says standard form when the fill went to the default address, even with a replay", async () => {
+      const { fill } = await run(200, () => "/apply");
+      expect(fill.newLayout).toBe(false);
+      expect(fill.text).toContain("standard form");
+    });
+
+    it("does not claim another run's layout", async () => {
+      const { fill } = await run(200, () => "/scramble/0000000000000000/apply");
+      expect(fill.newLayout).toBe(false);
+    });
+
+    it("says it does not know when no address was reported", async () => {
+      const { fill } = await run(200, () => null);
+      expect(fill.newLayout).toBe(false);
+      expect(fill.text).toContain("no record");
+    });
+
+    it("says the computer did not fill when no fill was saved, whatever it opened", async () => {
+      const { fill } = await run(404, (layout) => layout);
+      expect(fill.newLayout).toBe(false);
+      expect(fill.text).toContain("did not fill");
+    });
+  });
+
+  it("asks again when Mano answers with no question this demo knows", async () => {
+    const res = await start("maria", uniqueSession(), uniqueIp());
+    const { runId } = (await res.json()) as { runId: string };
+    const seen = { turns: [] as Record<string, unknown>[], headers: [] as Headers[] };
+    let fills = 0;
+    const script: Script = (texts) => {
+      if (!texts[0]?.startsWith("Please fill")) return { status: "replied", text: "Your renewal is due November 14." };
+      fills += 1;
+      return fills === 1 ? { status: "replied", text: "I'm starting your renewal now." } : { status: "waiting_approval", text: "File it? YES or NO", approval: "File it? YES or NO", approvalId: "appr-1" };
+    };
+    const press = () => call(`/try/runs/${runId}/next`, { method: "POST", body: "{}" }, script, seen);
+    await press();
+    await press();
+    expect(await (await press()).json()).toEqual({ next: "yes" });
+    expect(fills).toBe(2);
+  });
+
   it("has the gateway refuse a yes when the document changed after the question", async () => {
     const { runId, press } = await toQuestion("changed", agentOnEngine());
     expect(await (await press(JSON.stringify({ press: "yes" }))).json()).toEqual({ next: "end" });
