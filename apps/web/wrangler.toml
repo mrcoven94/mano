@@ -2,8 +2,11 @@ name = "mano-web"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 compatibility_flags = ["nodejs_compat"]
-workers_dev = true
+# Served only on the custom domain: no workers.dev URL and no preview URLs,
+# so the account subdomain is never used.
+workers_dev = false
 preview_urls = false
+routes = [{ pattern = "app.withmano.com", custom_domain = true }]
 
 # The Expo web build. Only /api/* reaches the Worker; anything else is a file.
 [assets]

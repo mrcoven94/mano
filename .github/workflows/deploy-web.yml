@@ -1,10 +1,11 @@
 name: deploy-web
 # Builds the resident app for the web and deploys it with its sign-in and chat
 # routes (apps/web). It reuses the agent and handle grant secrets Channels
-# already holds in the channels-production environment and adds none.
+# already holds in the channels-production environment and adds none. Sign-in
+# emails need withmano.com onboarded to Cloudflare Email Sending once, by hand.
 on:
   push:
-    branches: [main, lap-862-web-app]
+    branches: [main]
     paths:
       - "apps/web/**"
       - "apps/app/**"
@@ -27,7 +28,7 @@ concurrency:
   group: deploy-web-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
   cancel-in-progress: false
 env:
-  WEB_URL: https://mano-web.scholarfund.workers.dev
+  WEB_URL: https://app.withmano.com
 jobs:
   validate:
     if: github.event_name == 'pull_request'
