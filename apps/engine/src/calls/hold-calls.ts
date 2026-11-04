@@ -9,7 +9,7 @@
 // covers a hang up that is lost.
 import { DefiniteFailureError, type ActionRequest, type CheckOutcome } from "../gateway/types.js";
 import { sha256Hex } from "../hash.js";
-import { endText, looksLikeHuman, stepHoldCall, type HoldCall, type HoldEffect, type HoldInput } from "./hold-call.js";
+import { endText, knownLeg, legDialed, legRefused, looksLikeHuman, settled, stepHoldCall, type HoldCall, type HoldEffect, type HoldInput, type Leg } from "./hold-call.js";
 import { isPhoneNumber, type CallEvent, type CallServices } from "./provider.js";
 
 const MENU = /^[0-9*#wW]{1,32}$/;
@@ -69,15 +69,15 @@ export class HoldCalls {
     return row ? (JSON.parse(row.call_json) as HoldCall) : null;
   }
 
-  // A call blocks a replacement until it ended with its office leg known. An
-  // ended call with no known leg may still be up, and a live one's end may
-  // never be reported, so both stop blocking when the provider's cap has passed.
+  // A call blocks a replacement until it ended and every leg is confirmed down.
+  // A hang up can fail and a leg's end may never be reported, so the block also
+  // stops when the last leg's cap has passed.
   private write(call: HoldCall): void {
     this.deps.sql.exec(
       "INSERT INTO hold_calls(id, call_json, blocks_until_ms) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET call_json = excluded.call_json, blocks_until_ms = excluded.blocks_until_ms",
       call.id,
       JSON.stringify(call),
-      call.state === "ended" && call.officeCallId ? 0 : call.liveUntilMs,
+      settled(call) ? 0 : call.liveUntilMs,
     );
   }
 
@@ -134,7 +134,6 @@ export class HoldCalls {
     // after the person was told the call failed. Only a new approval redials.
     if (existing) throw new DefiniteFailureError("That call is over. Mano needs a new yes to try again.");
     if (this.blocked(now)) throw new DefiniteFailureError("Mano is already on a call for this person.");
-    const capSeconds = this.capSeconds(services);
     this.write({
       id,
       personId: req.personId,
@@ -145,35 +144,47 @@ export class HoldCalls {
       startedAtMs,
       attempt,
       simulated: services.provider.simulated,
-      liveUntilMs: now + capSeconds * 1000 + CAP_SETTLE_MS,
+      liveUntilMs: 0,
+      legs: { office: "none", person: "none" },
       state: "dialing",
       officeCallId: null,
     });
-    let placed: { providerCallId: string };
+    // A refused first dial leaves no call at all, and a retry starts clean.
+    return this.dial(id, "office", parsed.officeNumber, services, () => this.deps.sql.exec("DELETE FROM hold_calls WHERE id = ?", id));
+  }
+
+  // Dials one leg. Up to the provider call nothing awaits, so a caller's check
+  // of the state still holds when the dial begins, and the leg counts as
+  // possibly up from that moment.
+  private async dial(id: string, leg: Leg, to: string, services: CallServices, onRefused: () => void): Promise<string> {
+    const call = this.read(id)!;
+    const maxSeconds = this.capSeconds(services);
+    this.write(legDialed(call, leg, Date.now() + maxSeconds * 1000 + CAP_SETTLE_MS));
+    let providerCallId: string;
     try {
-      placed = await services.provider.placeCall({
-        to: parsed.officeNumber,
+      ({ providerCallId } = await services.provider.placeCall({
+        to,
         holdCallId: id,
-        personId: req.personId,
-        leg: "office",
+        personId: call.personId,
+        leg,
         // Per attempt: a provider that remembers its refusal must still take
         // the retry. An unknown outcome never reaches a second dial.
-        idempotencyKey: `${id}:${attempt}:office`,
-        maxSeconds: capSeconds,
-      });
+        idempotencyKey: `${id}:${call.attempt}:${leg}`,
+        maxSeconds,
+      }));
     } catch (err) {
-      // A webhook already proved this call, whatever the dial's answer says.
-      const proven = this.read(id)?.officeCallId;
+      // A webhook already proved this leg, whatever the dial's answer says.
+      const latest = this.read(id);
+      const proven = latest && knownLeg(latest, leg);
       if (proven) return proven;
-      // The provider refused, so no call exists and a retry starts clean.
-      // Any other failure leaves the row: the call may be up, so it keeps
-      // blocking until a webhook proves it or its cap has passed.
-      if ((err as Error)?.name === "DefiniteFailureError") this.deps.sql.exec("DELETE FROM hold_calls WHERE id = ?", id);
+      // A refusal means no leg exists. Any other failure leaves it possibly
+      // up, so it blocks until a webhook proves it or its cap has passed.
+      if ((err as Error)?.name === "DefiniteFailureError") onRefused();
       throw err;
     }
     // If the call ended during the dial, this hangs up the leg it returned.
-    await this.apply(id, { kind: "placed", leg: "office", providerCallId: placed.providerCallId });
-    return placed.providerCallId;
+    await this.apply(id, { kind: "placed", leg, providerCallId });
+    return providerCallId;
   }
 
   // The gateway's reconcile lookup. A row with no office leg means the dial's
@@ -253,8 +264,9 @@ export class HoldCalls {
       try {
         await this.runOne(call, effect, services);
       } catch {
-        // A hang up that fails is covered by the provider's cap. Anything
-        // else leaves the call in a state Mano did not intend, so it ends.
+        // A hang up that fails leaves its leg open, which keeps blocking a
+        // replacement until a webhook confirms it or its cap has passed.
+        // Anything else leaves the call in a state Mano did not intend, so it ends.
         if (effect.do === "hang_up") {
           await this.deps.audit("hold_call.hang_up_failed", call.id);
           continue;
@@ -273,7 +285,7 @@ export class HoldCalls {
     const call = this.read(id);
     switch (effect.do) {
       case "dial_person":
-        return call?.state === "ringing_person" && call.personCallId === null;
+        return call?.state === "ringing_person" && call.personCallId === null && call.legs.person === "none";
       case "bridge":
         return call?.state === "bridged" && call.officeCallId === effect.officeCallId && call.personCallId === effect.personCallId;
       case "send_dtmf":
@@ -299,21 +311,17 @@ export class HoldCalls {
         return services.provider.startListening(effect.callId);
       case "arm_ring_limit":
         return this.deps.schedule(new Date(Date.now() + services.config.ringLimitMs), { id: call.id, attempt: call.attempt, kind: "ring_limit" });
-      case "dial_person": {
-        const { providerCallId } = await services.provider.placeCall({
-          to: services.config.personNumber,
-          holdCallId: call.id,
-          personId: call.personId,
-          leg: "person",
-          idempotencyKey: `${call.id}:${call.attempt}:person`,
-          maxSeconds: this.capSeconds(services),
+      case "dial_person":
+        await this.dial(call.id, "person", services.config.personNumber, services, () => {
+          const latest = this.read(call.id);
+          if (latest) this.write(legRefused(latest, "person"));
         });
-        return this.apply(call.id, { kind: "placed", leg: "person", providerCallId });
-      }
+        return;
       case "bridge":
         return services.provider.bridge(effect.officeCallId, effect.personCallId);
       case "hang_up":
-        return services.provider.hangUp(effect.callId);
+        await services.provider.hangUp(effect.callId);
+        return this.apply(call.id, { kind: "hung_up", leg: effect.leg, providerCallId: effect.callId });
     }
   }
 }

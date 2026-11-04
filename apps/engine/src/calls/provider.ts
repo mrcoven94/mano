@@ -36,6 +36,8 @@ export interface CallProvider {
   // Starts sending this leg's audio to Engine in short windows.
   startListening(providerCallId: string): Promise<void>;
   bridge(officeCallId: string, personCallId: string): Promise<void>;
+  // Resolves only when the leg is gone or going, and must settle in bounded
+  // time. Mano treats the leg as possibly up until it does.
   hangUp(providerCallId: string): Promise<void>;
   // Checks the webhook's signature. "reject" for a bad one, "ignore" for a
   // genuine event Mano does not act on.

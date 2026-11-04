@@ -4,6 +4,13 @@
 // output, so no effect can speak on the line. Text heard on the line is
 // reduced to one boolean before it gets here and is never kept.
 
+export type Leg = "office" | "person";
+
+// What is known about one leg, under the same rules for both. none: no dial
+// began, or the provider refused it. open: a dial began and the leg may be up.
+// down: a webhook or a finished hang up confirmed it is gone.
+export type LegStatus = "none" | "open" | "down";
+
 export type EndReason =
   | "completed"
   | "no_human"
@@ -27,8 +34,9 @@ interface Base {
   attempt: string;
   // Whether a stand-in placed this call, kept for the receipt of a reconcile.
   simulated: boolean;
-  // By the provider's own cap, the latest any leg of this call can be up.
+  // By the provider's own caps, the latest any leg of this call can be up.
   liveUntilMs: number;
+  legs: Record<Leg, LegStatus>;
 }
 
 export type HoldCall = Base &
@@ -39,8 +47,6 @@ export type HoldCall = Base &
     | { state: "bridged"; officeCallId: string; personCallId: string }
     | { state: "ended"; reason: EndReason; officeCallId: string | null; personCallId: string | null }
   );
-
-export type Leg = "office" | "person";
 
 export type HoldInput =
   | { kind: "placed"; leg: Leg; providerCallId: string }
@@ -59,12 +65,12 @@ export type HoldEffect =
   | { do: "arm_ring_limit" }
   | { do: "dial_person" }
   | { do: "bridge"; officeCallId: string; personCallId: string }
-  | { do: "hang_up"; callId: string }
+  | { do: "hang_up"; leg: Leg; callId: string }
   | { do: "text"; reason: EndReason };
 
 export const MAX_LISTEN_FAILURES = 3;
 
-function knownLeg(call: HoldCall, leg: Leg): string | null {
+export function knownLeg(call: HoldCall, leg: Leg): string | null {
   if (leg === "office") return call.officeCallId;
   return "personCallId" in call ? call.personCallId : null;
 }
@@ -75,15 +81,33 @@ function end(call: HoldCall, reason: EndReason, alreadyDown?: Leg): { call: Hold
   const officeCallId = call.officeCallId;
   const personCallId = knownLeg(call, "person");
   const effects: HoldEffect[] = [];
-  if (officeCallId && alreadyDown !== "office") effects.push({ do: "hang_up", callId: officeCallId });
-  if (personCallId && alreadyDown !== "person") effects.push({ do: "hang_up", callId: personCallId });
+  if (officeCallId && alreadyDown !== "office") effects.push({ do: "hang_up", leg: "office", callId: officeCallId });
+  if (personCallId && alreadyDown !== "person") effects.push({ do: "hang_up", leg: "person", callId: personCallId });
   effects.push({ do: "text", reason });
-  return { call: { ...base(call), state: "ended", reason, officeCallId, personCallId }, effects };
+  const legs = alreadyDown ? { ...call.legs, [alreadyDown]: "down" } : call.legs;
+  return { call: { ...base(call), legs, state: "ended", reason, officeCallId, personCallId }, effects };
+}
+
+// A dial of this leg is about to begin. The call may now be up until the later
+// of its old limit and this leg's own cap.
+export function legDialed(call: HoldCall, leg: Leg, capUntilMs: number): HoldCall {
+  return { ...call, legs: { ...call.legs, [leg]: "open" }, liveUntilMs: Math.max(call.liveUntilMs, capUntilMs) };
+}
+
+// The provider refused this leg's dial, so it was never up.
+export function legRefused(call: HoldCall, leg: Leg): HoldCall {
+  return { ...call, legs: { ...call.legs, [leg]: "none" } };
+}
+
+// Whether a call no longer stands in the way of another: it ended and no leg
+// may still be up.
+export function settled(call: HoldCall): boolean {
+  return call.state === "ended" && call.legs.office !== "open" && call.legs.person !== "open";
 }
 
 function base(call: HoldCall): Base {
-  const { id, personId, officeName, officeNumber, menu, generation, startedAtMs, attempt, simulated, liveUntilMs } = call;
-  return { id, personId, officeName, officeNumber, menu, generation, startedAtMs, attempt, simulated, liveUntilMs };
+  const { id, personId, officeName, officeNumber, menu, generation, startedAtMs, attempt, simulated, liveUntilMs, legs } = call;
+  return { id, personId, officeName, officeNumber, menu, generation, startedAtMs, attempt, simulated, liveUntilMs, legs };
 }
 
 // A retried or late input that no longer applies changes nothing, so a
@@ -92,15 +116,21 @@ export function stepHoldCall(call: HoldCall, input: HoldInput): { call: HoldCall
   const same = { call, effects: [] as HoldEffect[] };
   if (call.state === "ended") {
     if (input.kind !== "placed" && input.kind !== "answered" && input.kind !== "hung_up") return same;
-    const known = knownLeg(call, input.leg);
-    if (known === input.providerCallId) return same;
+    const { leg, providerCallId } = input;
+    const known = knownLeg(call, leg);
+    const down = input.kind === "hung_up";
+    // Another ID than the one on record says nothing about this leg, but it
+    // is on a call Mano ended, so unless it is already gone, hang it up.
+    if (known && known !== providerCallId) {
+      return { call, effects: down ? [] : [{ do: "hang_up", leg, callId: providerCallId }] };
+    }
+    if (known) return down ? { call: { ...call, legs: { ...call.legs, [leg]: "down" } }, effects: [] } : same;
     // The call ended before this leg's ID was known, so nothing hung it up.
-    // The first ID is kept as proof the dial happened. Unless the leg already
-    // went down on its own, hang it up.
-    const key = input.leg === "office" ? "officeCallId" : "personCallId";
+    // The ID is kept as proof the dial happened.
+    const key = leg === "office" ? "officeCallId" : "personCallId";
     return {
-      call: known ? call : { ...call, [key]: input.providerCallId },
-      effects: input.kind === "hung_up" ? [] : [{ do: "hang_up", callId: input.providerCallId }],
+      call: { ...call, [key]: providerCallId, legs: { ...call.legs, [leg]: down ? "down" : "open" } },
+      effects: down ? [] : [{ do: "hang_up", leg, callId: providerCallId }],
     };
   }
   if (input.kind === "deleted" || input.kind === "provider_failed") return end(call, input.kind);
