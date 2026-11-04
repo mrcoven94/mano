@@ -142,11 +142,14 @@ export function useTryRun() {
     seq.current = 0;
 
     if (TRY_DEV_RECORDED) {
+      // `?recording` replays the committed real run; otherwise the made-up fixture for the chosen scenario.
+      if (new URLSearchParams(window.location.search).has("recording")) { await playRecording(); return; }
       const { devBeforeYes } = await import("./dev-fixture");
       setSource({ kind: "dev" });
       setPhase("running");
-      await play(devBeforeYes());
-      setPhase("question");
+      const before = devBeforeYes(chosen);
+      await play(before.events);
+      setPhase(before.asks ? "question" : "ended");
       return;
     }
 
@@ -184,18 +187,18 @@ export function useTryRun() {
       setSecondsLeft(null);
     }
     await drive(id);
-  }, [drive, play]);
+  }, [drive, play, playRecording]);
 
   const pressYes = useCallback(async () => {
     if (TRY_DEV_RECORDED) {
       const { devAfterYes } = await import("./dev-fixture");
       setPhase("running");
-      await play(devAfterYes());
+      await play(devAfterYes(scenario));
       setPhase("ended");
       return;
     }
     if (runId) await drive(runId, "yes");
-  }, [drive, play, runId]);
+  }, [drive, play, runId, scenario]);
 
   return { phase, scenario, events, runId, secondsLeft, refusal, problem, source, available, start, pressYes };
 }
