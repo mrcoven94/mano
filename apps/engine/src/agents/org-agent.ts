@@ -396,6 +396,14 @@ export class OrgAgent extends Agent<Env, OrgState> {
   // org: never shared, revoked and expired all read the same.
   async getCase(verifiedOrg: string, caseId: string): Promise<CaseView | null> {
     await this.assertOrg(verifiedOrg);
+    const before = this.activeCase(caseId);
+    if (!before) return null;
+    // Only what the person's agent says can still be opened: a delete ends
+    // the documents here too. An agent that does not answer shows none.
+    const person = this.env.PERSON_AGENT.get(this.env.PERSON_AGENT.idFromName(before.personId)) as unknown as PersonAgent;
+    const readable = new Set(await person.readableDocumentIds(`org:${this.orgId}`, caseId).catch(() => [] as string[]));
+    // A revoke can land during that wait. Everything staff see is read from
+    // here on, with no wait before it leaves.
     const active = this.activeCase(caseId);
     if (!active) return null;
     const share = this.db().exec(
@@ -406,10 +414,6 @@ export class OrgAgent extends Agent<Env, OrgState> {
       "SELECT id, document_kind, status, requested_at FROM document_requests WHERE case_id = ? ORDER BY requested_at",
       caseId,
     ).toArray() as unknown as { id: string; document_kind: string; status: string; requested_at: string }[];
-    // Only what the person's agent says can still be opened: a delete ends
-    // the documents here too. An agent that does not answer shows none.
-    const person = this.env.PERSON_AGENT.get(this.env.PERSON_AGENT.idFromName(active.personId)) as unknown as PersonAgent;
-    const readable = new Set(await person.readableDocumentIds(`org:${this.orgId}`, caseId).catch(() => [] as string[]));
     const documents = (this.db().exec(
       "SELECT document_id, name, document_kind, provided_at FROM shared_documents WHERE case_id = ? ORDER BY provided_at",
       caseId,
@@ -504,7 +508,11 @@ export class OrgAgent extends Agent<Env, OrgState> {
     if (row.length === 0) return null;
     const person = this.env.PERSON_AGENT.get(this.env.PERSON_AGENT.idFromName(active.personId)) as unknown as PersonAgent;
     const document = await person.readSharedDocument(`org:${this.orgId}`, caseId, documentId);
-    if (document) this.audit({ event: "case.document_read", caseHash: await auditDigest(caseId) });
+    if (!document) return null;
+    const caseHash = await auditDigest(caseId);
+    // A revoke can land during those waits: the bytes stay here.
+    if (!this.activeCase(caseId)) return null;
+    this.audit({ event: "case.document_read", caseHash });
     return document;
   }
 

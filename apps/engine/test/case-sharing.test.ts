@@ -809,6 +809,82 @@ describe("LAP-863: a document read checks access after its last wait", () => {
   });
 });
 
+describe("LAP-863: a staff read of a case checks access after its last wait", () => {
+  // Staff open the case, and something happens while the office waits on the
+  // person's agent for which documents can still be opened.
+  async function viewWhile(label: string, during: (maria: Person, org: string, caseId: string) => Promise<unknown>) {
+    return whileWaiting(label, during, (agent, org, caseId) => agent.getCase(org, caseId), "readableDocumentIds");
+  }
+
+  async function whileWaiting<T>(
+    label: string,
+    during: (maria: Person, org: string, caseId: string) => Promise<unknown>,
+    read: (agent: Pick<OrgAgent, "getCase" | "readDocument">, org: string, caseId: string, documentId: string) => Promise<T>,
+    method: "readableDocumentIds" | "readSharedDocument",
+  ): Promise<T> {
+    const maria = resident();
+    const org = unique(label);
+    const caseId = `case-${label}`;
+    recordTexts();
+    await grant(maria, org, caseId, { Name: "Maria Testcase" });
+    const key = `req-${crypto.randomUUID()}`;
+    expect((await askFor(org, caseId, "pay-stub", key)).status).toBe(201);
+    const documentId = await upload(maria);
+    await yes(maria, org, "send your pay stub", { consent: "provide", caseId, requestId: key, documentKind: "pay-stub" }, documentId);
+    const ns = testEnv.ORG_AGENT as DurableObjectNamespace;
+    return runInDurableObject(ns.get(ns.idFromName(org)), async (instance) => {
+      const agent = instance as unknown as Pick<OrgAgent, "getCase" | "readDocument"> & { env: { PERSON_AGENT: DurableObjectNamespace } };
+      const realEnv = agent.env;
+      let happened = false;
+      agent.env = {
+        ...realEnv,
+        PERSON_AGENT: {
+          idFromName: (name: string) => realEnv.PERSON_AGENT.idFromName(name),
+          get: (id: DurableObjectId) => {
+            const person = realEnv.PERSON_AGENT.get(id) as unknown as PersonAgent;
+            return {
+              [method]: async (...args: [string, string, string]) => {
+                const answer = await (person[method] as (...a: [string, string, string]) => Promise<unknown>)(...args);
+                if (!happened) {
+                  happened = true;
+                  await during(maria, org, caseId);
+                }
+                return answer;
+              },
+            };
+          },
+        } as unknown as DurableObjectNamespace,
+      };
+      return read(agent, org, caseId, documentId);
+    });
+  }
+
+  it("a revoke that lands during the read shows nothing", async () => {
+    const view = await viewWhile("viewrevoke", (maria, org, caseId) => revoke(maria, org, caseId));
+    expect(view).toBeNull();
+  });
+
+  it("with nothing in the way the read answers", async () => {
+    const view = await viewWhile("viewplain", async () => undefined);
+    expect(view?.details).toEqual([{ label: "Name", value: "Maria Testcase" }]);
+  });
+
+  it("a revoke that lands while a document is on its way to staff keeps the bytes", async () => {
+    const out = await whileWaiting(
+      "docrevoke",
+      (maria, org, caseId) => revoke(maria, org, caseId),
+      (agent, org, caseId, documentId) => agent.readDocument(org, caseId, documentId),
+      "readSharedDocument",
+    );
+    expect(out).toBeNull();
+  });
+
+  it("with nothing in the way the document answers", async () => {
+    const out = await whileWaiting("docplain", async () => undefined, (agent, org, caseId, documentId) => agent.readDocument(org, caseId, documentId), "readSharedDocument");
+    expect(out).toMatchObject({ name: "pay-stub.png" });
+  });
+});
+
 describe("LAP-863: a request's text belongs to one organization and one open request", () => {
   async function reminderStatuses(person: Person) {
     return runInDurableObject(agentOf(person), (_i, state) =>
