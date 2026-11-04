@@ -12,6 +12,7 @@ export const MODAL_MODEL = "meta-models/Muse-Spark-Open-816B-A42B";
 const MODAL_USD_PER_TOKEN = { prompt: 1.25e-6, cached: 0.15e-6, completion: 4.25e-6 };
 const MODAL_DEFAULT_MAX_TOKENS = 8000;
 const BODY_BYTES_PER_TOKEN = 2;
+const RESERVED_TOKENS_PER_IMAGE = 3000;
 const META_RESPONSES_URL = "https://api.meta.ai/v1/responses";
 const PREFLIGHT_TIMEOUT_MS = 60000;
 const MAX_RETRIES = 2;
@@ -83,9 +84,12 @@ export function modalCostUsd(usage) {
 }
 
 // The most one request could cost: every token it allows, and a prompt estimated
-// from the body's size. Two bytes per token is more than text or an encoded image takes.
+// from the body's size. Two bytes per token is more than text takes, but a short
+// image URL says nothing about the image, so each image part reserves its own tokens.
 export function modalReserveUsd(body) {
-  const promptTokens = Math.ceil(Buffer.byteLength(JSON.stringify(body)) / BODY_BYTES_PER_TOKEN);
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const images = messages.flatMap((m) => (Array.isArray(m?.content) ? m.content : [])).filter((part) => part?.type === "image_url").length;
+  const promptTokens = Math.ceil(Buffer.byteLength(JSON.stringify(body)) / BODY_BYTES_PER_TOKEN) + images * RESERVED_TOKENS_PER_IMAGE;
   return promptTokens * MODAL_USD_PER_TOKEN.prompt + body.max_tokens * MODAL_USD_PER_TOKEN.completion;
 }
 
