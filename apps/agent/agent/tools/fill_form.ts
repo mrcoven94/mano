@@ -54,6 +54,9 @@ async function shareReplay(engine: PersonEngine, approvalId: string, form: FormS
   }
 }
 
+// Ways a fill ends that say nothing about the form or what it saved.
+const COMPUTER_STOPPED = new Set(["error", "deadline", "step_budget", "refused"]);
+
 async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext) {
   const turn = requireTurn(ctx);
   const engine = personEngine(ctx);
@@ -138,9 +141,10 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     };
   }
   if (fill.status !== "filled") {
-    // The computer or its model never ran, which says nothing about the
-    // form, so the renewal can still be prepared without them.
-    if (fill.reason === "error" && form === FORMS["food-renewal"]) {
+    // The computer or its model stopped, which says nothing about the form,
+    // so the renewal can still be prepared without them. Offering to try again
+    // here can leave a person asking forever and never reach their yes.
+    if (COMPUTER_STOPPED.has(fill.reason) && form === FORMS["food-renewal"]) {
       return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Prepare the renewal with start_form_draft from the person's answers instead." };
     }
     return { status: "fill_failed", sent: false, note: "Mano could not finish filling the form on its computer, so nothing was prepared or sent. Say so and offer to try again." };
