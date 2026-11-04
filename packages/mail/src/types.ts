@@ -145,6 +145,29 @@ export interface Question {
   // and on letters flagged as scams. Nothing is scheduled until the
   // person confirms.
   proposal?: DeadlineProposal;
+  // On a confirm_deadline question: what the first reply may name. Absent
+  // when the letter gives nothing it can name.
+  named?: NamedDates;
+}
+
+// What the first reply may name when the gate held nothing, always as a
+// question. Naming holds nothing: only the gate's grammar does.
+export type NamedDates =
+  // One or two dates the person is told to meet, and any interview beside them.
+  | { kind: "duty"; dates: NamedDate[]; interview: string | null }
+  // No duty: a request for a hearing or appeal with its own date.
+  | { kind: "hearing"; iso: string }
+  // No duty: a count from a date, shown with the count.
+  | { kind: "window"; days: number; fromIso: string; resultIso: string }
+  // Before the letter's own notice date.
+  | { kind: "passed"; iso: string }
+  // The letter says it is someone else's or no longer stands.
+  | { kind: "not-theirs" };
+
+export interface NamedDate {
+  iso: string;
+  sentence: string;
+  obligation: Obligation;
 }
 
 export interface DeadlineProposal {

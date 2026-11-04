@@ -131,11 +131,11 @@ describe("answerReading builds the reply from closed fields only", () => {
     expect(answer.text).not.toContain("December 1");
   });
 
-  it("a held-back deadline with other dates on the letter asks which date, naming none", async () => {
+  it("a held-back deadline with an outcome date beside it names the deadline as a question and holds nothing", async () => {
     const answer = await answerFor([DOUBTFUL_PAGE]);
     expect(answer.deadlines).toEqual([]);
-    expect(answer.text.endsWith(SEVERAL)).toBe(true);
-    expect(answer.text).not.toMatch(/November 20|December 31/);
+    expect(answer.text).toMatch(/It looks like your renewal is due November 20, 2026\. Please check that against your letter\. Is that the date you need to meet\?$/);
+    expect(answer.text).not.toContain("December 31");
     expect(answer.text.match(/\?/g)).toHaveLength(1);
   });
 

@@ -107,6 +107,7 @@ import {
   type AskReason,
   type DayCount,
 } from "./gate.js";
+import { dutyDate, nameDates } from "./naming.js";
 import { scanContent, screenScam, type ContentFlag } from "./safety.js";
 import { verifyExtraction, type DroppedField } from "./citations.js";
 import { ModelFailure, failureKindOf, readingModelFor } from "./model.js";
@@ -765,6 +766,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
       : null;
     if (proposal !== null || withheld.length > 0 || reasons.some((r) => !ownQuestion.has(r))) {
       const why = [...new Set(reasons)].join("; ");
+      const named = nameDates(letterText, noticeIso);
       ask({
         kind: "confirm_deadline",
         letterId,
@@ -778,6 +780,7 @@ export async function readMail(files: InputFile[], opts: ReadMailOptions): Promi
         citation: proposal?.citation ?? withheld.find((c) => c.citation)?.citation ?? null,
         candidates: withheld,
         ...(proposal ? { proposal } : {}),
+        ...(named ? { named } : {}),
       });
     }
 
@@ -1216,10 +1219,14 @@ function pickProposal(
     .filter((p) => isDeadlineSentence(p.sentence))
     .map((pick) => {
       const v = gateSentence(pick.sentence, noticeIso);
-      if (v.kind === "deadline") return { pick, tier: 0, dueDate: v.iso, count: null };
-      if (v.kind === "ask" && v.count) return { pick, tier: 1, dueDate: v.count.resultIso, count: v.count };
+      // A date the person must meet, then a date the sentence states, then a
+      // window counted from the notice date. An appeal right is never first.
+      if (v.kind === "deadline") return { pick, tier: v.obligation === "appeal" ? 2 : 0, dueDate: v.iso, count: null };
+      if (v.kind === "ask" && v.count) return { pick, tier: 3, dueDate: v.count.resultIso, count: v.count };
       const dates = parseAllDates(pick.sentence, noticeIso);
-      return dates.length === 1 ? { pick, tier: 2, dueDate: dates[0]!, count: null } : null;
+      if (dates.length !== 1) return null;
+      const stated = dutyDate(pick.sentence) !== null && obligationOf(pick.sentence) !== "appeal";
+      return { pick, tier: stated ? 1 : 2, dueDate: dates[0]!, count: null };
     })
     .filter((x): x is NonNullable<typeof x> => x !== null && chronologyOf(x.dueDate, noticeIso) === "ok")
     .sort((a, b) => a.tier - b.tier);

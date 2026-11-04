@@ -915,6 +915,21 @@ describe("an ordinary letter's first reply names the date that matters", () => {
     }
   });
 
+  // The gate stops a whole letter on the word "sample", wherever it sits. That
+  // guard stays for holds. It says nothing about a real letter's date.
+  it.each([
+    ["an office on Sample St", `${HEAD}${TERSE}\n\nOrrivane County Office, 2577 Sample St, Trelvane`],
+    ["a sample form in the footer", `${HEAD}${TERSE}\n\nA sample form is on our website.`],
+    ["a footer about a sample packet", `${HEAD}${TERSE}\n\nForm SN-14. See the sample packet in our lobby.`],
+  ])("the word sample in %s holds nothing and still names the date", async (_name, text) => {
+    for (const marks of [everyDateSentence(text), [TERSE]]) {
+      const { reply, named, held } = await firstAnswer(text, marks);
+      expect(held).toEqual([]);
+      expect(named, reply).toEqual(["November 20, 2026"]);
+      expect(reply, reply).toContain("It looks like your renewal is due November 20, 2026.");
+    }
+  });
+
   it("says a scheduled interview beside the date, and never as the headline", async () => {
     const text = ordinary("Return everything by November 20, 2026. Your phone interview is scheduled for November 18, 2026 at 10:30 AM.");
     const { reply } = await firstAnswer(text, [APPEAL]);
@@ -965,7 +980,7 @@ describe("an ordinary letter's first reply names the date that matters", () => {
     "income-verification-missing": "November 18, 2026",
     "denial-relative-appeal": "December 3, 2026",
     "tanf-reduction-hearing": "November 23, 2026",
-    "telephone-interview-appointment": null,
+    "telephone-interview-appointment": "November 16, 2026",
     "snap-approval-no-action": null,
     "benefits-retention-fee-scam": null,
     "tentative-review-window": null,
@@ -997,7 +1012,10 @@ describe("a date that is not this person's live deadline never reads as one", ()
   it.each([
     ["addressed to someone else", `${TEREN}The instructions below are addressed to your neighbor Selvi Darnovel.\n\n${TERSE}`],
     ["a copy of someone else's letter", `${TEREN}Enclosed is a copy of the letter sent to your spouse.\n\n${TERSE}`],
-    ["a second salutation", `${TEREN}Dear Lorna Talvek:\n\n${TERSE}`],
+    ["a second salutation", `${TEREN}Dear Lorna Talvek:\n\n${TERSE} Otherwise your benefits end on December 20, 2026.`],
+    ["a sample notice", `${HEAD}SAMPLE NOTICE\n\n${TERSE}`],
+    ["stamped sample", `${HEAD}SAMPLE\n\n${TERSE}`],
+    ["called a sample letter", `${HEAD}This is a sample letter.\n\n${TERSE}`],
     ["an example notice", `${TEREN}Example notice for your records.\n\n${TERSE}`],
     ["a letter for a named person", `${HEAD}This letter is for Lorna Talvek.\n\n${TERSE}`],
     ["a cancelled notice", `${HEAD}This notice is cancelled.\n\n${TERSE}`],

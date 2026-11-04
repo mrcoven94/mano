@@ -4,13 +4,13 @@
 // the gate published, and what to send as categories. No free text from
 // the letter ever reaches the reply, so no phone number, link, address or
 // instruction can, however the letter writes it. A deadline the gate did
-// not publish becomes one question that names a date only when the letter
-// gives exactly one with no doubt around it. A scam letter gets a plain
-// warning, and a letter whose only trouble is a link a warning about the
-// link. Either way its date is said only as what the letter claims, to check
+// not publish becomes one question that names the date src/naming.ts found
+// the person must meet, or the one date the letter gives with no doubt around
+// it. A scam letter gets a plain warning, and a letter whose only trouble is a
+// link a warning about the link. Either way its date is said only as what the letter claims, to check
 // with the office, so a false alarm never takes a real date away and a real
 // scam's date is never stated as fact. Mano holds no deadline from either.
-import type { Letter, LetterFields, MailReading, Obligation, Question, Warning } from "./types.js";
+import type { Letter, LetterFields, MailReading, NamedDate, NamedDates, Obligation, Question, Warning } from "./types.js";
 import { ANSWER_WORDS, type AnswerWords, type ReplyLanguage } from "./words.js";
 
 // What a held deadline is for, when the published sentence says.
@@ -185,11 +185,40 @@ function soleDate(question: Question): string | "unclear" | null {
   return dates.size === 1 && !doubted ? [...dates][0]! : "unclear";
 }
 
-function heldBackQuestion(question: Question, w: AnswerWords): string | null {
-  const date = soleDate(question);
-  if (!date) return null;
-  if (date === "unclear") return w.severalDates;
-  return w.askDate(w.date(date));
+type DuePurpose = keyof AnswerWords["dueLooks"];
+
+// What a named date is for, in closed words: the sentence never reaches the reply.
+function purposeOf(date: NamedDate): DuePurpose {
+  const kind = kindOf(date.sentence, date.obligation);
+  if (kind === "renewal" || kind === "recertification" || kind === "redetermination") return "renewal";
+  return kind === "payment" || kind === "documents" ? kind : "deadline";
+}
+
+function dutyQuestion(named: Extract<NamedDates, { kind: "duty" }>, w: AnswerWords, isPast: (iso: string) => boolean): string {
+  const live = named.dates.filter((d) => !isPast(d.iso));
+  const [first, second] = live;
+  if (!first) return w.passed(w.date(named.dates.map((d) => d.iso).sort().at(-1)!));
+  const interview = named.interview && !isPast(named.interview) ? [w.alsoInterview(w.date(named.interview))] : [];
+  if (!second) return [...interview, w.dueLooks[purposeOf(first)](w.date(first.iso)), w.checkDate].join(" ");
+  return [...interview, w.twoDates(w.date(first.iso), w.dueFor[purposeOf(first)], w.date(second.iso), w.dueFor[purposeOf(second)])].join(" ");
+}
+
+function heldBackQuestion(question: Question, planted: boolean, w: AnswerWords, today: string | undefined): string | null {
+  const isPast = (iso: string): boolean => today !== undefined && iso < today;
+  const sole = soleDate(question);
+  // A letter that tries to instruct Mano can state a date to get it repeated.
+  if (planted) return sole || question.named ? w.severalDates : null;
+  const named = question.named;
+  if (named?.kind === "not-theirs") return w.notYours;
+  if (named?.kind === "passed") return w.passed(w.date(named.iso));
+  if (named?.kind === "duty") return dutyQuestion(named, w, isPast);
+  if (named?.kind === "hearing") return isPast(named.iso) ? w.passed(w.date(named.iso)) : w.askHearing(w.date(named.iso));
+  if (named?.kind === "window") {
+    return isPast(named.resultIso) ? w.passed(w.date(named.resultIso)) : w.askWindow(named.days, w.date(named.fromIso), w.date(named.resultIso));
+  }
+  if (!sole) return null;
+  if (sole === "unclear") return w.severalDates;
+  return isPast(sole) ? w.passed(w.date(sole)) : w.askDate(w.date(sole));
 }
 
 // The date stays the letter's claim: it is said, never held, since the
@@ -215,7 +244,7 @@ function noDateFound(reading: MailReading, letter: Letter): boolean {
   return letter.noDateInText === true && !reading.questions.some((q) => q.letterId === letter.id || q.letterId === null);
 }
 
-function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPile: boolean): { lines: string[]; held: HeldDeadline | null } {
+function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPile: boolean, today: string | undefined): { lines: string[]; held: HeldDeadline | null } {
   const warnings = reading.warnings.filter((w) => w.letterId === letter.id);
   const scam = warnings.find((w) => w.kind === "scam_suspect");
   if (scam) return { lines: scamLines(scam, w), held: null };
@@ -246,7 +275,7 @@ function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPi
     const next = NEXT_RENEWAL.test(proposal.sentence) && (kind === "renewal" || kind === "recertification");
     lines.push(next ? w.nextDue(kind, w.date(proposal.dueDate)) : w.due(w.date(proposal.dueDate)));
   } else if (question) {
-    ask = heldBackQuestion(question, w);
+    ask = heldBackQuestion(question, warnings.some((warning) => warning.kind === "instruction_in_content"), w, today);
   }
   const send = categoriesOf(letter);
   if (send.length > 0) lines.push(w.asksToSend(listOf(send.map((c) => w.categories[c]), w.and)));
@@ -264,12 +293,14 @@ function wasRead(letter: Letter): boolean {
   return f.excerpt.trim().length > 0 || f.asked.length > 0 || [f.sender, f.program, f.subject, f.deadlineText].some(Boolean);
 }
 
-export function answerReading(reading: MailReading, language: ReplyLanguage = "en"): MailAnswer {
+// today (YYYY-MM-DD), when the caller knows it, keeps a date already past
+// from being asked about as if it were live.
+export function answerReading(reading: MailReading, language: ReplyLanguage = "en", today?: string): MailAnswer {
   const w = ANSWER_WORDS[language];
   const read = reading.letters.filter(wasRead);
   const failed = reading.questions.some((q) => q.kind === "read_failed" || q.kind === "budget_exceeded");
   if (read.length === 0) return { outcome: "unread", text: failed ? w.failed : w.unread, deadlines: [] };
-  const answers = read.map((letter) => letterAnswer(reading, letter, w, read.length > 1));
+  const answers = read.map((letter) => letterAnswer(reading, letter, w, read.length > 1, today));
   const paragraphs = answers.map((a, i) => (answers.length > 1 ? `${w.letterNumber(i + 1)} ${a.lines.join(" ")}` : a.lines.join(" ")));
   const missed = read.length < reading.letters.length || reading.questions.some((q) => q.letterId === null && q.kind !== "video_truncated");
   if (missed) paragraphs.push(w.missedPart);
