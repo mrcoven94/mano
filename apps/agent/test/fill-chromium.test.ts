@@ -113,6 +113,8 @@ function typing(): ComputerAction[] {
     { type: "wait" } as ComputerAction,
   ];
 }
+// The open-weight model's coordinates: a grid of 0 to 1000 across the screen.
+const onGrid = (actions: ComputerAction[]) => actions.map((a) => ("x" in a && "y" in a ? { ...a, x: (a.x * 1000) / 1280, y: (a.y * 1000) / 800 } : a));
 const call = (id: string, actions: ComputerAction[]) => ({ type: "computer_call", id, call_id: id, actions, pending_safety_checks: [], status: "completed" });
 const say = (text: string) => ({ type: "message", content: [{ type: "output_text", text }] });
 
@@ -223,7 +225,7 @@ describe.skipIf(!installed)("fill_form in real Chromium", () => {
   it("with the open-weight switch on, fill_form runs on that model under its pin, and each real screenshot reaches it", async () => {
     const requests: { url: string; auth: string | null; body: Record<string, any> }[] = [];
     const replies = [
-      [{ type: "reasoning", summary: [] }, { type: "function_call", id: "f1", call_id: "call-1", name: "computer", arguments: JSON.stringify({ actions: typing() }) }],
+      [{ type: "reasoning", summary: [] }, { type: "function_call", id: "f1", call_id: "call-1", name: "computer", arguments: JSON.stringify({ actions: onGrid(typing()) }) }],
       [{ type: "message", content: [{ type: "output_text", text: "ACCEPTED" }] }],
     ];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {

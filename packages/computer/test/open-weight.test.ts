@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { runLoop } from "../src/loop";
-import { OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient } from "../src/open-weight";
+import { MODAL_MODEL_ID, OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient } from "../src/open-weight";
 import { FakeComputer, FAKE_PNG } from "./fake-computer";
 
 type Body = { model: string; tools: Array<Record<string, unknown>>; input: Array<Record<string, any>>; store: boolean; provider: unknown; reasoning: unknown; max_output_tokens: number; instructions: string };
@@ -25,19 +25,73 @@ function scripted(replies: Array<{ output: unknown[]; status?: string }>) {
 const run = (client: OpenWeightModelClient, computer = new FakeComputer()) => runLoop(computer, client, "Fill the form.", { model: OPEN_WEIGHT_MODEL_ID });
 
 describe("computer use on the open-weight model", () => {
+  test("the model's 0 to 1000 grid becomes pixels on the screen, and its own numbers replay", async () => {
+    const computer = new FakeComputer();
+    const { client, bodies } = scripted([
+      { output: [fn("a", { actions: [{ type: "click", x: 227, y: 98 }, { type: "double_click", x: 500, y: 500 }, { type: "scroll", x: 1000, y: 1000, scroll_y: 300 }] })] },
+      { output: [say("ACCEPTED")] },
+    ]);
+
+    expect(await run(client, computer)).toEqual({ status: "done", message: "ACCEPTED", steps: 2 });
+
+    // The first click is the Case number field, whose centre on the 1280 by
+    // 800 screen is (291, 79): where the live model aimed.
+    expect(computer.actions).toEqual([
+      [
+        { type: "click", button: "left", x: 291, y: 78 },
+        { type: "double_click", x: 640, y: 400 },
+        { type: "scroll", x: 1279, y: 799, scroll_x: 0, scroll_y: 300 },
+      ],
+    ]);
+    const replayed = (bodies[1]!.input as { type?: string; arguments?: string }[]).find((item) => item.type === "function_call");
+    expect(JSON.parse(replayed!.arguments!).actions.slice(0, 2)).toMatchObject([{ x: 227, y: 98 }, { x: 500, y: 500 }]);
+    expect(JSON.stringify((bodies[0]!.tools as unknown[])[0])).toContain("0 to 1000");
+    expect((bodies[0] as unknown as { instructions: string }).instructions).toContain("grid from 0 to 1000");
+    expect((bodies[0] as unknown as { instructions: string }).instructions).not.toContain("Coordinates are pixels");
+  });
+
+  test("a scroll with no point scrolls at the middle of the screen, and a scroll with half a point is refused", async () => {
+    const { client } = scripted([{ output: [fn("a", { actions: [{ type: "scroll", scroll_y: 300 }] })] }, { output: [say("ACCEPTED")] }]);
+    const computer = new FakeComputer();
+    await run(client, computer);
+    expect(computer.actions[0]).toEqual([{ type: "scroll", x: 640, y: 400, scroll_x: 0, scroll_y: 300 }]);
+    const half = scripted([{ output: [fn("a", { actions: [{ type: "scroll", x: 1, scroll_y: 300 }] })] }]);
+    await expect(run(half.client)).rejects.toThrow("bad coordinate");
+  });
+
+  test("on Modal it sends Modal's model to that endpoint with no pin, and refuses any URL off Modal's domain", async () => {
+    for (const modalUrl of ["", "not a url", "https://example.com", "https://x.modal.direct.example.com", "http://a.modal.direct"]) {
+      expect(() => new OpenWeightModelClient({ apiKey: "k", modalUrl })).toThrow("Modal");
+    }
+    const bodies: Body[] = [];
+    const urls: string[] = [];
+    const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+      urls.push(String(input));
+      bodies.push(JSON.parse(String(init?.body)) as Body);
+      expect(init?.redirect).toBe("error");
+      return Response.json({ id: "r1", status: "completed", output: [say("ACCEPTED")] });
+    }) as typeof fetch;
+    const client = new OpenWeightModelClient({ apiKey: "wk.ws", modalUrl: "https://a--ep-b-server.us-west.modal.direct/", fetchImpl, retryDelaysMs: [] });
+    await runLoop(new FakeComputer(), client, "Fill the form.", { model: MODAL_MODEL_ID });
+    expect(urls[0]).toBe("https://a--ep-b-server.us-west.modal.direct/v1/responses");
+    expect(bodies[0]!.model).toBe(MODAL_MODEL_ID);
+    expect(bodies[0]!.provider).toBeUndefined();
+    await expect(runLoop(new FakeComputer(), client, "Fill the form.", { model: OPEN_WEIGHT_MODEL_ID })).rejects.toThrow("open-weight");
+  });
+
   test("a run: function calls reach the computer, and every request carries the pin, the model and each screen", async () => {
     const computer = new FakeComputer();
     const { client, bodies, urls } = scripted([
-      { output: [{ type: "reasoning", summary: [] }, fn("a", { actions: [{ type: "click", x: 10.4, y: 20.6 }, { type: "type", text: "Rosa Testcase" }, { type: "keypress", keys: ["ctrl", "a"] }] })] },
-      { output: [fn("b", { actions: [{ type: "scroll", x: 1, y: 2, scroll_y: 300 }, { type: "wait" }] })] },
+      { output: [{ type: "reasoning", summary: [] }, fn("a", { actions: [{ type: "click", x: 100, y: 500 }, { type: "type", text: "Rosa Testcase" }, { type: "keypress", keys: ["ctrl", "a"] }] })] },
+      { output: [fn("b", { actions: [{ type: "scroll", x: 500, y: 250, scroll_y: 300 }, { type: "wait" }] })] },
       { output: [say("ACCEPTED")] },
     ]);
 
     expect(await run(client, computer)).toEqual({ status: "done", message: "ACCEPTED", steps: 3 });
 
     expect(computer.actions).toEqual([
-      [{ type: "click", button: "left", x: 10, y: 21 }, { type: "type", text: "Rosa Testcase" }, { type: "keypress", keys: ["ctrl", "a"] }],
-      [{ type: "scroll", x: 1, y: 2, scroll_x: 0, scroll_y: 300 }, { type: "wait" }],
+      [{ type: "click", button: "left", x: 128, y: 400 }, { type: "type", text: "Rosa Testcase" }, { type: "keypress", keys: ["ctrl", "a"] }],
+      [{ type: "scroll", x: 640, y: 200, scroll_x: 0, scroll_y: 300 }, { type: "wait" }],
     ]);
     expect(urls).toEqual(Array(3).fill("https://openrouter.ai/api/v1/responses"));
     for (const body of bodies) {
@@ -166,7 +220,7 @@ describe("computer use on the open-weight model", () => {
 
   test.each([
     ["a right click", { type: "click", button: "right", x: 1, y: 1 }],
-    ["a click off the screen", { type: "click", x: 1280, y: 1 }],
+    ["a click off the grid", { type: "click", x: 1001, y: 1 }],
     ["a negative coordinate", { type: "double_click", x: 1, y: -1 }],
     ["a click with no y", { type: "click", x: 1 }],
     ["a runaway scroll", { type: "scroll", x: 1, y: 1, scroll_y: 1_000_000 }],

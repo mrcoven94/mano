@@ -2,6 +2,14 @@ export interface Env {
   PERSON_AGENT: DurableObjectNamespace;
   ORG_AGENT: DurableObjectNamespace;
   FILES: R2Bucket;
+  // The judge demo (src/try): its ledger, and "on" to run it. The agent's URL
+  // and signing secret let a press run a turn, and MANO_TRY_ORIGIN lists the
+  // pages that may press, comma separated. The first also serves the letters.
+  TRY_LEDGER: DurableObjectNamespace;
+  MANO_TRY?: string;
+  MANO_TRY_ORIGIN?: string;
+  MANO_AGENT_URL?: string;
+  MANO_AGENT_SECRET?: string;
   META_MODEL_API_KEY: string;
   ENCRYPTION_KEK_B64: string;
   SESSION_SECRET?: string;

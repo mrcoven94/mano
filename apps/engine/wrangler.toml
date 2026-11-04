@@ -11,12 +11,17 @@ routes = [{ pattern = "engine.withmano.com", custom_domain = true }]
 [durable_objects]
 bindings = [
   { name = "PERSON_AGENT", class_name = "PersonAgent" },
-  { name = "ORG_AGENT", class_name = "OrgAgent" }
+  { name = "ORG_AGENT", class_name = "OrgAgent" },
+  { name = "TRY_LEDGER", class_name = "TryLedger" }
 ]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["PersonAgent", "OrgAgent"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["TryLedger"]
 
 [[r2_buckets]]
 binding = "FILES"
@@ -34,6 +39,10 @@ SANDBOX_MAX_UPLOAD_BYTES = "5242880"
 # stop it later, change this line to "off" and merge: the check keeps running,
 # sends nothing, and a text already waiting holds.
 MANO_DAILY_CHECK_SENDS = "off"
+# The judge demo at withmano.com/try (src/try). It stays off until MANO_AGENT_URL
+# and MANO_AGENT_SECRET are set. To stop it, change this line to "off" and merge.
+MANO_TRY = "on"
+MANO_TRY_ORIGIN = "https://withmano.com"
 
 # Secrets (never commit values):
 #   wrangler secret put META_MODEL_API_KEY  (reads from stdin)
@@ -44,6 +53,8 @@ MANO_DAILY_CHECK_SENDS = "off"
 #   wrangler secret put MANO_HANDLE_GRANT_SECRET  (Channels signs handle grants with it)
 #   wrangler secret put MANO_ENGINE_CHANNELS_TOKEN  (Channels' token for the conversation delete)
 #   wrangler secret put MANO_ENGINE_SEND_SECRET  (signs reminder sends to Channels' agent-send route)
+#   MANO_AGENT_URL, MANO_AGENT_SECRET  (the agent's base URL and the secret
+#   its turn route checks, for the judge demo; Channels holds the same secret)
 #   MANO_CHANNELS_URL (Channels' base URL, https://text.withmano.com in production)
 #   MANO_NUDGE_TIME (optional, local HH:MM deadline nudges go out, default 10:00)
 #   EXECUTOR_MODE (simulated or sandbox), plus SANDBOX_BASE_URL and

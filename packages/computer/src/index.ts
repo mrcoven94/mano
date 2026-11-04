@@ -44,7 +44,7 @@ export { isComputerCall, outputText, type ComputerAction, type ComputerCall, typ
 export type { Computer, ComputerOptions } from "./computer";
 export { LOOP_INSTRUCTIONS, runLoop, type LoopOptions, type LoopOutcome } from "./loop";
 export { FakeModelClient, FetchModelClient, type ModelClient, type ResponsePayload, type ResponseRequest } from "./model";
-export { OPEN_WEIGHT_BASE_URL, OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient, type OpenWeightModelOptions } from "./open-weight";
+export { MODAL_MODEL_ID, OPEN_WEIGHT_BASE_URL, OPEN_WEIGHT_MODEL_ID, OpenWeightModelClient, type OpenWeightModelOptions } from "./open-weight";
 export { ModalComputer, type ModalComputerOptions } from "./modal";
 export { PlaywrightComputer, type BrowserLauncher, type LaunchedPage, type PageLike, type PlaywrightComputerOptions } from "./playwright";
 export { editsForm, recordFrames, type Frame } from "./recorder";

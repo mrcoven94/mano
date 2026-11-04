@@ -16,6 +16,7 @@ import { EngineError, type PersonEngine } from "../lib/engine.js";
 import { FORMS, fillFrom, resolveForm, type FormSpec } from "../lib/forms.js";
 import { keepAnswers } from "../lib/form-answers.js";
 import { ATTACHMENT, DECLARATION } from "../lib/pending.js";
+import { tracedFillDeps } from "../lib/try-trace.js";
 import { personEngine, requireTurn } from "../lib/person.js";
 import { EARLIER_NOT_UPDATED_NOTE, EARLIER_UNRESOLVED_NOTE, NOT_CLOSED_NOTE, SHOWN_NOT_CLOSED_NOTE, closeEarlier, correcting, holdForYes, sameDraft, earlierFiling, type Draft } from "../lib/propose.js";
 
@@ -81,6 +82,18 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     return { status: "unavailable", sent: false, note: "Mano cannot read this person's saved details yet. Prepare the renewal with start_form_draft from the person's answers instead." };
   }
   const filled = fillFrom(form, profile, input.answers ?? {});
+  // Hearing that benefits are ending is not asking for a form. A renewal
+  // starts from a document: with none on file and nothing answered yet, in
+  // this call or saved from an earlier one, the model asks for the letter
+  // instead of the form's first question.
+  const starting = form === FORMS["food-renewal"] && Object.keys(filled.values).length === 0 && filled.invalid.length === 0 && !filled.documentId && filled.missing?.name !== "proof";
+  if (starting && (await engine.listDocuments()).length === 0) {
+    return {
+      status: "needs_letter",
+      sent: false,
+      note: "No form was started. Ask for a photo of their letter, since it has the deadline and Mano reads it right away, and nothing else. If they have no letter, ask for a photo of their most recent pay stub.",
+    };
+  }
   await keepAnswers(engine, turn.turnId, form, profile, input.answers ?? {});
   const bad = filled.invalid[0];
   if (bad) {
@@ -98,7 +111,7 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
     return { status: "needs_answer", field: filled.missing.name, question: filled.missing.question, sent: false, note };
   }
 
-  const deps = depsForTests ? depsForTests(engine.personId) : fillDepsFromEnv(engine.personId);
+  const deps = tracedFillDeps(depsForTests ? depsForTests(engine.personId) : fillDepsFromEnv(engine.personId), engine.personId);
   if ("unavailable" in deps) {
     console.warn(JSON.stringify({ type: "mano_fill_unavailable", reason: deps.unavailable }));
     return { status: "unavailable", sent: false, note: "Mano's computer is not available right now, so the form was not filled. Prepare the renewal with start_form_draft from the person's answers instead." };
@@ -158,7 +171,7 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
 
 export default defineTool({
   description:
-    "Fill out a form for the person: their food benefits renewal (form food-renewal) or a form on the sandbox portal. Call it as soon as they ask. It returns either one question to ask (ask exactly that, then call again with their answer added to answers) or the filled form, which it holds for their YES. It sends nothing.",
+    "Fill out a form for the person: their food benefits renewal (form food-renewal) or a form on the sandbox portal. Call it once they have sent their letter or ask you to fill out the form; saying benefits are ending is not asking. It returns either one question to ask (ask exactly that, then call again with their answer added to answers) or the filled form, which it holds for their YES. It sends nothing.",
   inputSchema,
   label: {
     start: () => "Fill out the form",

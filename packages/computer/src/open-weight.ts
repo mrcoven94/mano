@@ -10,14 +10,16 @@
  * reply is accepted whole or not at all: it must say it completed, hold only
  * items this path offers, and every call and action in it must parse.
  *
- * Nothing but the API key is an option here. The model, the zero-retention
- * pin and the endpoint are constants, so this client cannot send a screenshot
- * anywhere else. This path never raises a safety check: there is no hosted
+ * The model, the zero-retention pin and the OpenRouter endpoint are constants.
+ * The one other place this client can send a screenshot is a Modal Shared
+ * Endpoint serving the same model, named by modalUrl and held to Modal's domain
+ * (rule 7, November 4 entry in docs/decisions.md). This path never raises a safety check: there is no hosted
  * tool to raise one. What holds instead is this parser, the loop's closed list
  * of keys and buttons, and the desktop, which binds no window manager keys and
  * reaches only the portal, whose browser pages save drafts and file nothing.
  */
 import { isComputerCall, type ComputerAction, type ComputerCall } from "./actions";
+import { PIXEL_COORDINATES } from "./loop";
 import { FetchModelClient, type ModelClient, type ResponsePayload, type ResponseRequest } from "./model";
 
 export const OPEN_WEIGHT_BASE_URL = "https://openrouter.ai/api/v1";
@@ -32,9 +34,33 @@ const OPEN_WEIGHT_BODY = Object.freeze({
   max_output_tokens: 4096,
 });
 
+export const MODAL_MODEL_ID = "meta-models/Muse-Spark-Open-816B-A42B";
+
+// Modal has no per-request routing to pin: its security page says Shared
+// Endpoints keep no request or response payloads.
+const MODAL_BODY = Object.freeze({
+  reasoning: OPEN_WEIGHT_BODY.reasoning,
+  max_output_tokens: OPEN_WEIGHT_BODY.max_output_tokens,
+});
+
+function modalApiRoot(raw: string): string {
+  const url = URL.canParse(raw) ? new URL(raw) : null;
+  if (!url) throw new Error("this path reaches Modal only on its own endpoint domain");
+  if (url.protocol !== "https:" || !url.hostname.endsWith(".modal.direct")) throw new Error("this path reaches Modal only on its own endpoint domain");
+  return `${url.origin}/v1`;
+}
+
 const TOOL_NAME = "computer";
 // Both backends' default, and fills never change it.
 const SCREEN = Object.freeze({ width: 1280, height: 800 });
+// The model aims on a 0 to 1000 grid, whatever it is told: asked for pixels on
+// a 1280 by 800 screen, it clicked a field centred at (291, 79) at (227, 98),
+// which landed each value one field too low. So the tool states the grid and
+// this file converts, in both directions, since a call replays as it was made.
+const GRID = 1000;
+const toPixel = (value: number, size: number): number => Math.min(size - 1, Math.round((value * size) / GRID));
+const toGrid = (value: number, size: number): number => Math.round((value * GRID) / size);
+const GRID_COORDINATES = "Coordinates are on a grid from 0 to 1000 across and down the screenshot you were last shown: (0, 0) is the top-left. Click the center of the target element.";
 // Far past any form, and short of the thousands of wheel clicks a huge value
 // would queue on the desktop.
 const MAX_SCROLL = 5000;
@@ -45,7 +71,7 @@ const COMPUTER_TOOL = Object.freeze({
   type: "function",
   name: TOOL_NAME,
   description:
-    `Act on the browser: runs these actions in order, then you are shown the new screen. The screen is ${SCREEN.width} by ${SCREEN.height} pixels. x and y are pixels on it, with (0, 0) at the top-left, never fractions or a scaled grid.`,
+    "Act on the browser: runs these actions in order, then you are shown the new screen. x and y are on a grid from 0 to 1000 across and down the screen, with (0, 0) at the top-left, whatever the screen's size.",
   parameters: {
     type: "object",
     properties: {
@@ -81,7 +107,7 @@ function parseAction(raw: unknown): ComputerAction {
     if (typeof value !== "number" || !(value >= min && value <= max)) throw new Error("the model sent an action with a bad coordinate");
     return Math.round(value);
   };
-  const point = () => ({ x: within(a["x"], 0, SCREEN.width - 1), y: within(a["y"], 0, SCREEN.height - 1) });
+  const point = () => ({ x: toPixel(within(a["x"], 0, GRID), SCREEN.width), y: toPixel(within(a["y"], 0, GRID), SCREEN.height) });
   switch (a["type"]) {
     case "click":
       // Never run a right click as a left one.
@@ -90,7 +116,9 @@ function parseAction(raw: unknown): ComputerAction {
     case "double_click":
       return { type: "double_click", ...point() };
     case "scroll":
-      return { type: "scroll", ...point(), scroll_x: within(a["scroll_x"] ?? 0, -MAX_SCROLL, MAX_SCROLL), scroll_y: within(a["scroll_y"] ?? 0, -MAX_SCROLL, MAX_SCROLL) };
+      // Where a scroll happens rarely matters, and the model sometimes leaves
+      // it out: that ended 2 of 16 live fills as bad coordinates.
+      return { type: "scroll", ...(a["x"] === undefined && a["y"] === undefined ? { x: SCREEN.width / 2, y: SCREEN.height / 2 } : point()), scroll_x: within(a["scroll_x"] ?? 0, -MAX_SCROLL, MAX_SCROLL), scroll_y: within(a["scroll_y"] ?? 0, -MAX_SCROLL, MAX_SCROLL) };
     case "type":
       if (typeof a["text"] !== "string") throw new Error("the model sent a type action with no text");
       return { type: "type", text: a["text"] };
@@ -156,7 +184,7 @@ function fromOpenWeight(output: unknown[]): unknown[] {
 }
 
 // OpenRouter's request schema requires detail on every image. High, because
-// the model picks pixels on this screen.
+// the model picks points on this screen.
 function screen(imageUrl: unknown) {
   return { type: "input_image", detail: "high", image_url: imageUrl };
 }
@@ -167,7 +195,8 @@ function screen(imageUrl: unknown) {
 function toOpenWeight(input: unknown[]): unknown[] {
   return input.flatMap((item) => {
     if (isComputerCall(item)) {
-      return [{ type: "function_call", call_id: item.call_id, name: TOOL_NAME, arguments: JSON.stringify({ actions: item.actions }) }];
+      const actions = item.actions.map((a) => ("x" in a && "y" in a ? { ...a, x: toGrid(a.x, SCREEN.width), y: toGrid(a.y, SCREEN.height) } : a));
+      return [{ type: "function_call", call_id: item.call_id, name: TOOL_NAME, arguments: JSON.stringify({ actions }) }];
     }
     const entry = item as { role?: unknown; content?: unknown; type?: unknown; call_id?: unknown; output?: { image_url?: unknown } };
     if (entry.type === "computer_call_output") {
@@ -182,8 +211,15 @@ function toOpenWeight(input: unknown[]): unknown[] {
   });
 }
 
+// A redirect must not carry a person's screenshots and values to another host.
+function refusingRedirects(fetchImpl: typeof fetch): typeof fetch {
+  return (input, init) => fetchImpl(input, { ...init, redirect: "error" });
+}
+
 export interface OpenWeightModelOptions {
   apiKey: string;
+  /** A Modal Shared Endpoint's URL, with apiKey as its proxy token. Without one, OpenRouter. */
+  modalUrl?: string | undefined;
   /** Injected for tests. */
   fetchImpl?: typeof fetch;
   retryDelaysMs?: number[];
@@ -191,14 +227,19 @@ export interface OpenWeightModelOptions {
 
 export class OpenWeightModelClient implements ModelClient {
   private inner: FetchModelClient;
+  private modelId: string;
 
-  constructor(options: OpenWeightModelOptions) {
-    this.inner = new FetchModelClient({ ...options, baseUrl: OPEN_WEIGHT_BASE_URL, body: OPEN_WEIGHT_BODY });
+  constructor({ modalUrl, ...options }: OpenWeightModelOptions) {
+    // Only leaving it out means OpenRouter: an empty URL is refused below.
+    this.modelId = modalUrl === undefined ? OPEN_WEIGHT_MODEL_ID : MODAL_MODEL_ID;
+    this.inner = modalUrl !== undefined
+      ? new FetchModelClient({ ...options, fetchImpl: refusingRedirects(options.fetchImpl ?? fetch), baseUrl: modalApiRoot(modalUrl), body: MODAL_BODY })
+      : new FetchModelClient({ ...options, baseUrl: OPEN_WEIGHT_BASE_URL, body: OPEN_WEIGHT_BODY });
   }
 
   async createResponse(request: ResponseRequest): Promise<ResponsePayload> {
-    if (request.model !== OPEN_WEIGHT_MODEL_ID) throw new Error("this path runs only Meta's open-weight model");
-    const response = await this.inner.createResponse({ ...request, tools: [COMPUTER_TOOL], input: toOpenWeight(request.input), store: false });
+    if (request.model !== this.modelId) throw new Error("this path runs only Meta's open-weight model");
+    const response = await this.inner.createResponse({ ...request, instructions: request.instructions.replace(PIXEL_COORDINATES, GRID_COORDINATES), tools: [COMPUTER_TOOL], input: toOpenWeight(request.input), store: false });
     // Failed, cut off by the output cap, or no status at all: nothing in it runs.
     if (response.status !== "completed") throw new Error("the model's reply did not complete");
     return { ...response, output: fromOpenWeight(response.output) };
