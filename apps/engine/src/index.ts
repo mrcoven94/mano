@@ -54,6 +54,8 @@
 //   GET  /api/persons/:id/approvals/:aid/replay   { path } of the replay page while its link opens and the
 //                                              approval still waits, unexpired and latest, under the
 //                                              version the fill was bound to; else 404
+//   POST /webhooks/calls                       the phone company's call events, signature checked by the
+//                                              provider (src/calls); 404 until a provider is set up
 //   GET  /fill/:token                          the replay page (src/fill-replay.ts): the token is the only key,
 //                                              and the page asks the approval again on every view
 //   GET  /api/persons/:id/memory
@@ -170,6 +172,7 @@ import {
   type ReplayLinkEntry,
 } from "./fill-replay.js";
 import { parseDocumentMark } from "./documents.js";
+import { createCallServices } from "./calls/provider.js";
 
 export { PersonAgent, OrgAgent };
 export { ActionGateway, MemoryApprovalStore, InMemoryExecutor } from "./gateway/index.js";
@@ -302,10 +305,12 @@ export interface LiveStatus {
   files: "bound" | "missing";
   kek: boolean;
   checker: CheckerSetting["kind"];
+  calls: "off" | "stand-in" | "live";
 }
 
 export function liveStatus(env: Env): LiveStatus {
   const hasKey = Boolean(env.META_MODEL_API_KEY);
+  const calls = createCallServices();
   return {
     model: hasKey ? "meta" : "stand-in",
     modelVia: !hasKey ? "none" : env.CF_ACCOUNT_ID && env.AI_GATEWAY_ID ? "ai-gateway" : "direct",
@@ -313,6 +318,7 @@ export function liveStatus(env: Env): LiveStatus {
     files: env.FILES ? "bound" : "missing",
     kek: Boolean(env.ENCRYPTION_KEK_B64),
     checker: checkerSetting(env).kind,
+    calls: !calls ? "off" : calls.provider.simulated ? "stand-in" : "live",
   };
 }
 
@@ -443,6 +449,22 @@ async function handleAgentState(
 // A replay page by its link. The token's hash names the person and the
 // approval; the person's agent checks its own row holds the same token.
 // Anything else, an expired link included, gets the same 404 page.
+const CALL_WEBHOOK_PATH = "/webhooks/calls";
+
+// The phone company's events about a hold call. With no provider set up the
+// route does not exist. A signature that does not check is refused, and an
+// event for anyone but the configured person never reaches an agent.
+async function callWebhook(env: Env, request: Request): Promise<Response> {
+  const services = createCallServices();
+  if (!services) return new Response("Not found.", { status: 404 });
+  const event = await services.provider.parseWebhook(request);
+  if (event === "reject") return new Response("Bad signature.", { status: 401 });
+  if (event !== "ignore" && event.personId === services.config.personId) {
+    await (personStub(env, event.personId) as unknown as PersonAgent).holdCallEvent(event);
+  }
+  return new Response(null, { status: 204 });
+}
+
 async function fillReplayResponse(env: Env, pathname: string): Promise<Response> {
   const unavailable = (status: number) => new Response(renderReplayPage({ state: "missing" }), { status, headers: REPLAY_PAGE_HEADERS });
   const token = REPLAY_LINK_PATH.exec(pathname)?.[1];
@@ -477,6 +499,11 @@ export default {
     if (url.pathname === "/fill" || url.pathname.startsWith("/fill/")) {
       if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed.", { status: 405 });
       return fillReplayResponse(env, url.pathname);
+    }
+
+    if (url.pathname === CALL_WEBHOOK_PATH) {
+      if (request.method !== "POST") return new Response("Method not allowed.", { status: 405 });
+      return callWebhook(env, request);
     }
 
     // Outside development, a partly configured engine answers only
