@@ -259,6 +259,39 @@ describe("a due date's year", () => {
     expect(await track("2026-11-03", turnAtMs)).toMatchObject({ status: "ask", today: "2026-11-04" });
   });
 
+  it("a leap day years off asks with the first real one, never an Engine error", async () => {
+    const turnAtMs = await at(TRACED);
+    const out = await track("2032-02-29", turnAtMs);
+    expect(out).toMatchObject({ status: "ask" });
+    expect(out.question).toContain("February 29, 2028");
+    expect(out.question).toContain("February 29, 2032");
+    nothingSaved();
+  });
+
+  it("a date past Engine's two-year limit asks, confirmed or not, and the last day inside it saves", async () => {
+    let turnAtMs = await at(TRACED);
+    for (const due of ["2031-01-05", "2029-01-05", "2028-11-03"]) {
+      expect(await track(due, turnAtMs, { yearConfirmed: true }), due).toMatchObject({ status: "ask", tell: expect.stringContaining("two years") });
+    }
+    expect(await track("2032-02-29", turnAtMs, { yearConfirmed: true })).toMatchObject({ status: "ask" });
+    nothingSaved();
+    expect(await track("2028-11-02", turnAtMs, { yearConfirmed: true })).toMatchObject({ dueDate: "2028-11-02", status: "created" });
+    // Guam's today is a day ahead of UTC's, which Engine counts from.
+    engine.profile = livingIn("GU");
+    turnAtMs = await at("2026-11-03T15:00:00.000Z");
+    expect(await track("2028-11-03", turnAtMs, { yearConfirmed: true })).toMatchObject({ dueDate: "2028-11-03", status: "created" });
+  });
+
+  it("moving a deadline to today, past its reminder time, says no reminder will go out", async () => {
+    const turnAtMs = await at("2026-11-04T07:30:00.000Z");
+    const { deadlineId } = (await track("2026-11-24", turnAtMs)) as unknown as Tracked;
+    const moved = await updateDeadline.execute({ deadlineId, due: "2026-11-03" }, turn(turnAtMs));
+    expect(moved).toMatchObject({ status: "moved", dueDate: "2026-11-03", nextNudgeAt: null });
+    expect((moved as { note?: string }).note).toMatch(/no reminder/);
+    const renamed = await updateDeadline.execute({ deadlineId, title: "Food benefits packet" }, turn(turnAtMs));
+    expect((renamed as { note?: string }).note).toBeUndefined();
+  });
+
   it("moving a deadline follows the same rule", async () => {
     const turnAtMs = await at(TRACED);
     const { deadlineId } = (await track("2024-11-24", turnAtMs)) as unknown as Tracked;
