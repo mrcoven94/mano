@@ -62,6 +62,7 @@ export interface Profile {
     county?: Leaf;
     language?: Leaf;
     householdConfirmed?: Leaf<boolean>;
+    alwaysOn?: Leaf<boolean>;
     householdSize?: Leaf<number>;
   };
   household: { id: string; name?: Leaf; relationship?: Leaf; dateOfBirth?: Leaf }[];

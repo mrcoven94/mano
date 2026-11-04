@@ -381,6 +381,7 @@ export class ConversationDO implements DurableObject {
         key?: unknown;
         text?: unknown;
         generation?: unknown;
+        noReplay?: unknown;
       } | null;
       if (
         !body ||
@@ -397,7 +398,7 @@ export class ConversationDO implements DurableObject {
       }
       const { runner } = this.runner(body.handleHash);
       try {
-        const result = await runner.sendAgentText({ key: body.key, text: body.text, generation: body.generation });
+        const result = await runner.sendAgentText({ key: body.key, text: body.text, generation: body.generation, noReplay: body.noReplay === true });
         if (!result.sent && result.reason === "budget") {
           return Response.json({ sent: false, reason: "budget" }, { status: 429 });
         }

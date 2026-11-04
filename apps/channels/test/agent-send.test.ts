@@ -255,6 +255,84 @@ describe("runner.sendAgentText", () => {
   });
 });
 
+describe("a text marked no replay", () => {
+  const TEXT = "Mano's daily check found something new.";
+  function downProvider() {
+    const h = makeHarness();
+    const meta = h.store.meta();
+    meta.chatId = "chat_agent";
+    meta.to = "+15550001001";
+    h.store.saveMeta(meta);
+    const realSend = h.channel.send.bind(h.channel);
+    let attempts = 0;
+    let down = true;
+    h.channel.send = async (msg) => {
+      attempts += 1;
+      if (down) throw new Error("provider down");
+      return realSend(msg);
+    };
+    return { h, attempts: () => attempts, recover: () => (down = false) };
+  }
+
+  it("is tried once: an outcome not known is dropped, and nothing replays it after the provider recovers", async () => {
+    const { h, attempts, recover } = downProvider();
+    expect(await h.runner.sendAgentText({ key: "reminder:help:g0:CA:snap", text: TEXT, generation: 0, noReplay: true })).toEqual({ sent: false, reason: "failed" });
+    expect(attempts()).toBe(1);
+    recover();
+    await h.runner.resolveUncertain();
+    expect(h.runner.needsRetry()).toBe(false);
+    // An inbound text fires the alarm's run, which resolves open sends first.
+    await h.runner.runDueTurn();
+    // Engine's own retry under the same key gets the same answer.
+    expect(await h.runner.sendAgentText({ key: "reminder:help:g0:CA:snap", text: TEXT, generation: 0, noReplay: true })).toEqual({ sent: false, reason: "failed" });
+    expect(attempts()).toBe(1);
+    expect(h.channel.sends).toHaveLength(0);
+  });
+
+  it("left sending by a crash is never replayed", async () => {
+    const { h, attempts, recover } = downProvider();
+    const key = idempotencyKeyFor(TEST_HANDLE_HASH, 0, 7, 1, "agent_once");
+    h.store.addOutbound({ key, turn: 7, part: 1, tag: "agent_once", text: TEXT, attempts: 0, state: "sending", code: null, chatId: "chat_agent", messageId: null, createdAtMs: 0, updatedAtMs: 0 });
+    recover();
+    await h.runner.resolveUncertain();
+    expect(attempts()).toBe(0);
+    expect(h.store.outboundByKey(key)).toMatchObject({ state: "failed", code: "no_replay" });
+  });
+
+  it("goes out as usual when the provider accepts it, told to try once", async () => {
+    const { h, recover } = downProvider();
+    recover();
+    expect(await h.runner.sendAgentText({ key: "k", text: TEXT, generation: 0, noReplay: true })).toEqual({ sent: true });
+    expect(h.channel.sends).toHaveLength(1);
+    expect(h.channel.sends[0].once).toBe(true);
+    expect(await h.runner.sendAgentText({ key: "other", text: TEXT, generation: 0 })).toEqual({ sent: true });
+    expect(h.channel.sends[1].once).toBeUndefined();
+  });
+
+  it("every other agent text keeps its replay", async () => {
+    const { h, attempts, recover } = downProvider();
+    await expect(h.runner.sendAgentText({ key: "nudge", text: TEXT, generation: 0 })).rejects.toThrow();
+    const before = attempts();
+    recover();
+    await h.runner.resolveUncertain();
+    expect(attempts()).toBe(before + 1);
+    expect(h.channel.sends).toHaveLength(1);
+  });
+
+  it("the route passes the mark to the conversation, and only a real true", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const env = agentEnv(async (_url, init) => {
+      bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return Response.json({ sent: true });
+    });
+    const send = { handleHash: "h".repeat(64), key: "k", text: "t", generation: 0 };
+    await handleAgentSend(await signedSend({ ...send, noReplay: true }), env);
+    await handleAgentSend(await signedSend({ ...send, noReplay: "yes" }), env);
+    await handleAgentSend(await signedSend(send), env);
+    expect(bodies.map((b) => b.noReplay === true)).toEqual([true, false, false]);
+  });
+});
+
 describe("the receive time a turn carries to the agent", () => {
   it("is when Channels received the turn's latest message", async () => {
     const seen: TurnInput[] = [];
