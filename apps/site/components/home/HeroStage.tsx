@@ -6,7 +6,8 @@ import TextMano from "@/components/TextMano";
 
 /* The hero: one headline whose highlighted need follows the demo below it. Each tab names the need and what Mano does
    for it today, and only the food benefits renewal is filed, on the practice portal. Scenes advance when their loop ends
-   while the stage is on screen; choosing a tab stops that. */
+   while the stage is on screen; choosing a tab or moving focus into the tabs stops that, so arrow keys start from the
+   tab the keyboard is on. */
 
 /* The question Mano really sends after reading a date (checkDate in packages/mail/src/words.ts). */
 const CHECK_DATE = "Please check that against your letter. Is that the date you need to meet?";
@@ -124,7 +125,7 @@ export default function HeroStage() {
           <span className="h-sticker-bubble">Hi, I&rsquo;m Mano. Watch me work.</span>
           <Mascot tile wave tone="orange" size={64} />
         </div>
-        <div className="h-tabs" role="tablist" aria-label="What Mano does" onKeyDown={onKey}>
+        <div className="h-tabs" role="tablist" aria-label="What Mano does" onKeyDown={onKey} onFocus={() => setAuto(false)}>
           {SCENES.map((s, n) => (
             <button
               key={s.key}
