@@ -3,6 +3,7 @@ export * from "./signing.js";
 export * from "./schema.js";
 export * from "./canonical.js";
 export * from "./handle-grant.js";
+export * from "./try-run.js";
 export * from "./engine-send.js";
 export * from "./recipients.js";
 export * from "./time-zones.js";

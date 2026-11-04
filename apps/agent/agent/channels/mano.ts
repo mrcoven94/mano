@@ -14,6 +14,7 @@ import { engineFromEnv } from "../lib/engine.js";
 import { selectModelRoute } from "../lib/muse.js";
 import { settleStream, startIndexFor, type StreamEventLike } from "../lib/settle.js";
 import { AgentMarks } from "../lib/timings.js";
+import { tryStepTrace } from "../lib/try-trace.js";
 import { handlePresented, handleTurn } from "../lib/turn.js";
 
 export const TURN_PATH = "/channels/mano/turn";
@@ -74,10 +75,12 @@ export default defineChannel({
           const stream = (await session.getEventStream({ startIndex })) as unknown as ReadableStream<StreamEventLike>;
           timings.send = Date.now() - sending;
           const marks = new AgentMarks(sending);
+          const trace = tryStepTrace(handleHash, marks);
           try {
-            return await settleStream(stream, { timeoutMs: Math.max(1_000, Math.min(SETTLE_TIMEOUT_MS, deadlineMs - Date.now())), marks, turnId });
+            return await settleStream(stream, { timeoutMs: Math.max(1_000, Math.min(SETTLE_TIMEOUT_MS, deadlineMs - Date.now())), marks: trace, turnId });
           } finally {
             marks.write(timings);
+            await trace.flush();
           }
         },
       }),
