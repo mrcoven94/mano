@@ -399,6 +399,21 @@ describe("fill_form", () => {
       expect((await run("turn_noletter02", { form: "food-renewal" })).status).toBe("needs_answer");
     });
 
+    it("a returning person with a saved answer and no document gets the next question", async () => {
+      engine.profile = { ...emptyProfile, person: { address: {}, fullName: leaf("Rosa Testcase") } };
+      expect((await run("turn_noletter04", { form: "food-renewal" })).status).toBe("needs_answer");
+    });
+
+    it("an answer that does not fit is asked about again, not met with a request for the letter", async () => {
+      engine.profile = emptyProfile;
+      expect(await run("turn_noletter06", { form: "food-renewal", answers: { dateOfBirth: "someday" } })).toMatchObject({ status: "needs_answer", field: "dateOfBirth" });
+    });
+
+    it("what is saved beside the form, such as a language, does not count as starting it", async () => {
+      engine.profile = { ...emptyProfile, person: { address: {}, language: leaf("Spanish") } };
+      expect((await run("turn_noletter05", { form: "food-renewal" })).status).toBe("needs_letter");
+    });
+
     it("goes ahead when the person is already answering the form", async () => {
       engine.profile = emptyProfile;
       expect((await run("turn_noletter03", { form: "food-renewal", answers: { fullName: "Rosa Testcase" } })).status).toBe("needs_answer");

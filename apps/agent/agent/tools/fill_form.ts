@@ -82,9 +82,10 @@ async function fillAndHold(input: z.infer<typeof inputSchema>, ctx: ToolContext)
   }
   const filled = fillFrom(form, profile, input.answers ?? {});
   // Hearing that benefits are ending is not asking for a form. A renewal
-  // starts from a document: with none on file and nothing answered yet, the
-  // model asks for the letter instead of the form's first question.
-  const starting = form === FORMS["food-renewal"] && Object.keys(input.answers ?? {}).length === 0 && !filled.documentId && filled.missing?.name !== "proof";
+  // starts from a document: with none on file and nothing answered yet, in
+  // this call or saved from an earlier one, the model asks for the letter
+  // instead of the form's first question.
+  const starting = form === FORMS["food-renewal"] && Object.keys(filled.values).length === 0 && filled.invalid.length === 0 && !filled.documentId && filled.missing?.name !== "proof";
   if (starting && (await engine.listDocuments()).length === 0) {
     return {
       status: "needs_letter",
