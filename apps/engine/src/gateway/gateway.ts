@@ -503,6 +503,7 @@ export async function freezeActionRequest(
     recipient: req.recipient,
     purpose: req.purpose,
     payload: req.payload,
+    ...(req.attachmentLabel !== undefined ? { attachmentLabel: req.attachmentLabel } : {}),
     document: documentB64,
     personId: req.personId,
     idempotencyKey: req.idempotencyKey,

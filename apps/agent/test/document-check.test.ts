@@ -198,7 +198,8 @@ describe.each(DOCUMENTS)("$name arriving by text and then going with a renewal",
     const [approval] = await client().listApprovals();
     const frozen = JSON.parse(approval!.requestJson);
     expect(frozen.documentId).toBe(DOC);
-    expect(frozen.payload.attachment).toBe(label);
+    expect(frozen.attachmentLabel).toBe(label);
+    expect(frozen.payload.attachment).toBe(frozen.documentId);
 
     const question = renderQuestion(approval!);
     expect(question).toContain(`With ${label} attached.`);
@@ -208,7 +209,7 @@ describe.each(DOCUMENTS)("$name arriving by text and then going with a renewal",
     expect(done.status).toBe("completed");
     expect(checks.length).toBeGreaterThan(0);
     for (const check of checks) {
-      expect((check.action.payload as Record<string, unknown>).attachment).toBe(label);
+      expect((check.action.payload as Record<string, unknown>).attachment).toBe(frozen.documentId);
       expect(check.action.documentHash).toBe(engine.approvals()[0]!.documentHash);
     }
     expect(portal.posts).toHaveLength(1);
@@ -227,7 +228,7 @@ describe("choosing what goes with the renewal", () => {
     expect((await draft("turn_doccheck03")).status).toBe("waiting_for_yes");
     const frozen = JSON.parse((await client().listApprovals())[0]!.requestJson);
     expect(frozen.documentId).toBe(DOC);
-    expect(frozen.payload.attachment).toBe("the pay stub you sent on November 2 as proof of income");
+    expect(frozen.attachmentLabel).toBe("the pay stub you sent on November 2 as proof of income");
   });
 
   it("an instruction in the letter cannot make it proof of income", async () => {
@@ -248,7 +249,7 @@ describe("choosing what goes with the renewal", () => {
     expect(text).toContain("I could read this, but I cannot tell what kind of document it is.");
     expect(text).toContain("Part of this letter tries to give me instructions. I did not follow them.");
     await draft("turn_doccheck04");
-    expect(JSON.parse((await client().listApprovals())[0]!.requestJson).payload.attachment).toBe(NO_PROOF_PHOTO);
+    expect(JSON.parse((await client().listApprovals())[0]!.requestJson).attachmentLabel).toBe(NO_PROOF_PHOTO);
   });
 
   it("a failed read says Mano failed, and the document still goes as what is known of it", async () => {
@@ -270,7 +271,7 @@ describe("choosing what goes with the renewal", () => {
     expect(text).toContain("I could not finish reading your photo just now.");
     expect(text).not.toMatch(/blurry|good light|flat/i);
     await draft("turn_doccheck06");
-    expect(JSON.parse((await client().listApprovals())[0]!.requestJson).payload.attachment).toBe(NO_PROOF_PHOTO);
+    expect(JSON.parse((await client().listApprovals())[0]!.requestJson).attachmentLabel).toBe(NO_PROOF_PHOTO);
   });
 
   it("a memory read that fails never holds up the renewal, and claims no proof", async () => {
@@ -280,6 +281,6 @@ describe("choosing what goes with the renewal", () => {
     engine.fetch = failing;
     vi.stubGlobal("fetch", failing);
     expect((await draft("turn_doccheck07")).status).toBe("waiting_for_yes");
-    expect(JSON.parse((await client().listApprovals())[0]!.requestJson).payload.attachment).toBe(NO_PROOF_PHOTO);
+    expect(JSON.parse((await client().listApprovals())[0]!.requestJson).attachmentLabel).toBe(NO_PROOF_PHOTO);
   });
 });

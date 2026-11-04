@@ -139,8 +139,9 @@ async function payStubsOnFile(engine: PersonEngine): Promise<Set<string>> {
 
 export interface Attachment {
   document: EngineDocument;
-  // Frozen in the draft. Guardian reads it in the payload and the question
-  // shows it, so both say the same thing about what the person's yes sends.
+  // Frozen in the draft as attachmentLabel, for the question the person reads.
+  // Guardian reads the document's ID in the payload: it held this sentence
+  // against the filing as an instruction.
   label: string;
 }
 
