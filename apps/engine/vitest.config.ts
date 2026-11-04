@@ -14,6 +14,7 @@ export const TEST_BINDINGS = {
   MANO_ENGINE_SEND_SECRET: "test-engine-send-secret-not-real",
   MANO_NUDGE_TIME: "09:30",
   LOB_WEBHOOK_SECRET: "test-mail-webhook-secret-not-real",
+  SANDBOX_PORTAL_TOKEN: "test-portal-token-not-real",
 };
 
 export default defineConfig({

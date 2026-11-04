@@ -112,7 +112,65 @@ export function waitingProposals(approvals: EngineApproval[], generation: number
   return proposalsOf(approvals, generation).filter((a) => a.status === "pending" && a.id !== exceptId);
 }
 
+// A share action's words, one per effect, from what Engine froze. Null for
+// any other action.
+function frozenShare(approval: Pick<EngineApproval, "requestJson">): Record<string, unknown> | null {
+  try {
+    const payload = (JSON.parse(approval.requestJson) as { payload?: Record<string, unknown> }).payload;
+    return typeof payload?.consent === "string" ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function shareQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">, share: Record<string, unknown>): string | null {
+  const office = recipientName(approval.recipient);
+  switch (share.consent) {
+    case "grant": {
+      const details = ((share.details ?? []) as { label: string; value: string }[]).map((d) => `${d.label}: ${d.value}`);
+      return `Ready to share ${approval.purpose} with ${office}: ${details.join("; ")}. They can also ask you for documents, and nothing else goes to them without your yes. Reply YES to share exactly this, or NO to stop.`;
+    }
+    case "revoke":
+      return `Ready to stop sharing ${String(share.sharedFor)} with ${office}. They lose access right away and cannot ask you for more. Stopping cannot recall what they already received. Reply YES to stop sharing, or NO to keep sharing.`;
+    case "provide":
+      return `Ready to send ${String(share.attachment)} to ${office}, as your ${String(share.label)} for ${String(share.sharedFor)}. Reply YES to send exactly this, or NO to stop.`;
+    default:
+      return null;
+  }
+}
+
+function sentence(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+// What Mano says once a share action went through. Null for any other action.
+export function shareDone(approval: Pick<EngineApproval, "recipient" | "purpose" | "requestJson">): string | null {
+  const share = frozenShare(approval);
+  const office = recipientName(approval.recipient);
+  switch (share?.consent) {
+    case "grant":
+      return `Done. ${sentence(office)} can now see what you shared for ${approval.purpose}. Tell me any time if you want to stop sharing.`;
+    case "revoke":
+      return `Done. ${sentence(office)} can no longer see ${String(share.sharedFor)} or ask you for more. Stopping cannot recall what they already received.`;
+    case "provide":
+      return `Done. I sent your ${String(share.label)} to ${office}.`;
+    default:
+      return null;
+  }
+}
+
+export function isShare(approval: Pick<EngineApproval, "requestJson">): boolean {
+  return frozenShare(approval) !== null;
+}
+
+export function isShareGrant(approval: Pick<EngineApproval, "requestJson">): boolean {
+  return frozenShare(approval)?.consent === "grant";
+}
+
 export function renderQuestion(approval: Pick<EngineApproval, "purpose" | "recipient" | "requestJson">): string {
+  const share = frozenShare(approval);
+  const shared = share && shareQuestion(approval, share);
+  if (shared) return shared;
   let payload: Record<string, unknown> = {};
   let attached: string | null = null;
   let declaration: string | null = null;
@@ -187,7 +245,9 @@ export function requestStatus(approvals: EngineApproval[], generation: number, a
   // A receipt is read first, whatever the status: it was filed.
   const receipt = latest.outcome?.receipt;
   const state = receipt
-    ? `the person approved it and it was filed, confirmation ${receipt.externalId}${receipt.simulated ? " (a simulated filing)" : ""}`
+    ? isShare(latest)
+      ? "the person approved it and it went through"
+      : `the person approved it and it was filed, confirmation ${receipt.externalId}${receipt.simulated ? " (a simulated filing)" : ""}`
     : latest.outcome?.lookupsEnded
       ? "the person approved it, Mano could not confirm it went through and has stopped checking, and it will not be sent again without a new approval"
       : latest.status === "approved"

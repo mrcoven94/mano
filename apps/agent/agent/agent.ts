@@ -19,6 +19,10 @@
 // says it is unavailable without them; the model then prepares the
 // renewal with start_form_draft from the person's answers.
 //
+// share_case and stop_sharing hold a share with the one test office for the
+// person's YES (lib/sharing.ts), and a photo sent while that office waits on
+// a document is asked about the same way.
+//
 // Engine also holds the agent's own state for each person (reminders
 // and tracked deadlines, whose texts its alarm delivers through Channels,
 // the turn ledger and the approval pointer), so the agent keeps no store

@@ -1675,10 +1675,10 @@ describe("readMail deadline proposals", () => {
       expect.arrayContaining([
         'the letter says "Child care receipts if you pay for child care"',
         'the letter says "If your recertification is late, your benefits may stop after December 31, 2026."',
-        'the letter says "If you need help, call (555) 254-7040."',
         'the letter also mentions December 31, 2026, in "If your recertification is late, your benefits may stop after December 31, 2026."',
       ]),
     );
+    expect(reasons).not.toContain('the letter says "If you need help, call (555) 254-7040."');
   });
 
   it("never proposes for a letter flagged as a scam", async () => {

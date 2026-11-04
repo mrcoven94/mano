@@ -9,7 +9,15 @@ export const RECIPIENT_NAMES = {
   // Rule 2: the only places a fax or a letter can go for now.
   "mano-test-fax-line": "the Mano test fax line",
   "mano-practice-mailbox": "a practice mailbox where nothing is really mailed",
+  // Our own fake office, the only organization a case can be shared with.
+  "org:sandbox-county": "the Sandbox County Human Services test office",
 } as const;
+
+// In a revocation's record: it stands for every organization.
+export const ANY_RECIPIENT = "*";
+
+export const SANDBOX_ORG_ID = "sandbox-county";
+export const SANDBOX_ORG_AGENT_ID = `org:${SANDBOX_ORG_ID}`;
 
 export type RecipientId = keyof typeof RECIPIENT_NAMES;
 
