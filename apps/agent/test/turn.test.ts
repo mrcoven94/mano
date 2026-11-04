@@ -815,7 +815,10 @@ describe("a YES while the safety check is starting", () => {
     useGuardian();
     await send(turn("turn_cold_ask006", "Please file my renewal"));
     guardianMode = "block";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const yes = await send(turn("turn_cold_yes006", "YES"));
+    expect(warn.mock.calls.map(([m]) => String(m))).toContain(JSON.stringify({ type: "mano_yes_refused", status: "blocked", approval: "pending" }));
+    warn.mockRestore();
     expect(yes.body.text).toBe("That approval can no longer be used, so nothing was sent. Want me to prepare it again?");
     expect(pointerOf()).toBeNull();
     expect(engine.executor.calls).toHaveLength(0);
