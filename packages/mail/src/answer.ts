@@ -208,10 +208,11 @@ function scamLines(warning: Warning, w: AnswerWords): string[] {
   return [w.scam, date === "several" ? w.mentionsSeveral : w.claim(w.date(date)), w.checkWithOffice];
 }
 
-// A letter in a pile that can wait: plain type, nothing asked, no date, no
-// stated consequence. Telling someone so is a claim, so any doubt says nothing.
-function canWait(letter: Letter, type: LetterType, send: SendCategory[], question: Question | undefined): boolean {
-  return type === "other" && send.length === 0 && !letter.fields.consequence && !letter.fields.deadlineText && !question?.proposal && !question?.candidates?.length;
+// What Mano can say of a quiet letter in a pile: it saw no date. Not that the
+// letter can wait, which it cannot know. Only with no date anywhere in the
+// letter's text and no open question, on this letter or on the whole reading.
+function noDateFound(reading: MailReading, letter: Letter): boolean {
+  return letter.noDateInText === true && !reading.questions.some((q) => q.letterId === letter.id || q.letterId === null);
 }
 
 function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPile: boolean): { lines: string[]; held: HeldDeadline | null } {
@@ -249,7 +250,7 @@ function letterAnswer(reading: MailReading, letter: Letter, w: AnswerWords, inPi
   }
   const send = categoriesOf(letter);
   if (send.length > 0) lines.push(w.asksToSend(listOf(send.map((c) => w.categories[c]), w.and)));
-  if (inPile && canWait(letter, type, send, question)) lines.push(w.canWait);
+  if (inPile && noDateFound(reading, letter)) lines.push(w.noDateFound);
   if (warnings.some((warning) => warning.kind === "instruction_in_content")) lines.push(w.planted);
   lines.push(w.official);
   // The question goes last, so the reply ends on the one thing to answer.

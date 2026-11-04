@@ -72,6 +72,8 @@ export interface Letter {
   id: string;
   pages: LetterPage[];
   fields: LetterFields;
+  // Every page was read and no text on them holds a date.
+  noDateInText?: boolean;
 }
 
 // The duty a deadline puts on the resident: respond, appeal, renew,
