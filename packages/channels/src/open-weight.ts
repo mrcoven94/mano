@@ -16,8 +16,11 @@ const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" } as c
 // How long the primary is skipped once a reply call found it down.
 export const PRIMARY_SKIP_MS = 5 * 60 * 1000;
 
+const META_MODEL_ID_RE = /^meta(?:-llama)?\/[a-z0-9]/i;
+const TRAILING_SLASH_RE = /\/$/;
+
 export function isMetaModelId(model: string): boolean {
-  return /^meta(?:-llama)?\/[a-z0-9]/i.test(model);
+  return META_MODEL_ID_RE.test(model);
 }
 
 // The Meta Model API is down for a call when it answers 402 (billing) or
@@ -99,7 +102,7 @@ export class OpenWeightClient {
     if (!isMetaModelId(opts.model)) throw new Error("The fallback runs on a Meta model ID only.");
     this.apiKey = opts.apiKey;
     this.model = opts.model;
-    this.baseUrl = (opts.baseUrl ?? OPEN_WEIGHT_BASE_URL).replace(/\/$/, "");
+    this.baseUrl = (opts.baseUrl ?? OPEN_WEIGHT_BASE_URL).replace(TRAILING_SLASH_RE, "");
     this.timeoutMs = opts.timeoutMs ?? 90000;
     this.fetchFn = opts.fetchFn ?? boundFetch;
   }

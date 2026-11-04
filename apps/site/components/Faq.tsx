@@ -5,6 +5,8 @@ import { SMS_HREF, SMS_NUMBER } from "@/lib/site";
 const linkNumber = (text: string) =>
   text.split(SMS_NUMBER).flatMap((part, i) => (i ? [<a key={i} className="sms-num" href={SMS_HREF}>{SMS_NUMBER}</a>, part] : [part]));
 
+const LESS_THAN = /</g;
+
 export default function Faq({ id = "questions", title = "Questions", intro, items }: { id?: string; title?: string; intro?: string; items: [string, string][] }) {
   return (
     <section id={id} aria-labelledby={`${id}-h`}>
@@ -14,7 +16,7 @@ export default function Faq({ id = "questions", title = "Questions", intro, item
           "@context": "https://schema.org",
           "@type": "FAQPage",
           mainEntity: items.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: a } })),
-        }).replace(/</g, "\\u003c") }}
+        }).replace(LESS_THAN, "\\u003c") }}
       />
       <div className="wrap faq-grid">
         <div className="faq-side">

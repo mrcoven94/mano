@@ -11,6 +11,8 @@ import { useStrings } from "../../lib/i18n";
 import { setPendingSignIn } from "../../lib/sign-in-flow";
 import { colors } from "../../lib/theme";
 
+const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
 export default function SignIn() {
   const s = useStrings();
   const router = useRouter();
@@ -22,7 +24,7 @@ export default function SignIn() {
 
   const submit = async (): Promise<void> => {
     const trimmed = email.trim();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(trimmed)) {
+    if (!EMAIL_SHAPE.test(trimmed)) {
       setError(s.invalidEmail);
       return;
     }

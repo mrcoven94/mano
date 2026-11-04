@@ -1,21 +1,26 @@
 // Handles name the other party: a phone number or an Apple ID email. Both
 // are normalized here so one person maps to one conversation.
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const NON_PHONE_CHARS_RE = /[^0-9+]/g;
+const E164_RE = /^\+[1-9][0-9]{6,14}$/;
+const BARE_PHONE_DIGITS_RE = /^[0-9]{7,15}$/;
+
 export function normalizeHandle(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   if (trimmed.includes("@")) {
     const lower = trimmed.toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lower)) return null;
+    if (!EMAIL_RE.test(lower)) return null;
     return lower;
   }
-  const digits = trimmed.replace(/[^0-9+]/g, "");
+  const digits = trimmed.replace(NON_PHONE_CHARS_RE, "");
   if (!digits) return null;
   if (digits.startsWith("+")) {
-    if (!/^\+[1-9][0-9]{6,14}$/.test(digits)) return null;
+    if (!E164_RE.test(digits)) return null;
     return digits;
   }
-  if (!/^[0-9]{7,15}$/.test(digits)) return null;
+  if (!BARE_PHONE_DIGITS_RE.test(digits)) return null;
   return `+${digits}`;
 }
 

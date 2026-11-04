@@ -3,6 +3,8 @@
 // Channels Worker's service binding, and deletes the Channels
 // conversation when an account is deleted. Never log the handle or code.
 
+const TRAILING_SLASH_RE = /\/$/;
+
 export interface ChannelsPort {
   // Send a sign-in code. Message text is fixed in codes.ts.
   sendCode(toE164: string, message: string): Promise<void>;
@@ -69,7 +71,7 @@ export class HttpChannels implements ChannelsPort {
 
   constructor(baseUrl: string, apiKey: string, fetchFn: typeof fetch = fetch) {
     if (!baseUrl || !apiKey) throw new Error("Accounts are not configured.");
-    this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.baseUrl = baseUrl.replace(TRAILING_SLASH_RE, "");
     this.apiKey = apiKey;
     this.fetchFn = fetchFn;
   }

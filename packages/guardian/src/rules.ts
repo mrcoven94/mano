@@ -23,8 +23,12 @@ const SOURCE_KINDS: ReadonlySet<string> = new Set([
   "program",
 ]);
 
+const WHITESPACE_RUN_RE = /\s+/g;
+const URI_SCHEME_RE = /^([A-Za-z][A-Za-z0-9+.-]*):/;
+const AUTHORITY_END_RE = /[/?#]/;
+
 function normalizeLabel(text: string): string {
-  return text.trim().toLowerCase().replace(/\s+/g, " ");
+  return text.trim().toLowerCase().replace(WHITESPACE_RUN_RE, " ");
 }
 
 // Canonical destination for consent and destination matching. URIs keep
@@ -32,14 +36,14 @@ function normalizeLabel(text: string): string {
 // lowercased. Anything else is a plain label matched case-insensitively.
 export function canonicalRecipient(raw: string): string {
   const text = raw.trim();
-  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(text);
+  const scheme = URI_SCHEME_RE.exec(text);
   if (scheme?.[1] === undefined) {
-    return text.toLowerCase().replace(/\s+/g, " ");
+    return text.toLowerCase().replace(WHITESPACE_RUN_RE, " ");
   }
   const rest = text.slice(scheme[1].length + 1);
   if (rest.startsWith("//")) {
     const afterSlashes = rest.slice(2);
-    const end = afterSlashes.search(/[/?#]/);
+    const end = afterSlashes.search(AUTHORITY_END_RE);
     const authority = end === -1 ? afterSlashes : afterSlashes.slice(0, end);
     const remainder = end === -1 ? "" : afterSlashes.slice(end);
     return `${scheme[1].toLowerCase()}://${authority.toLowerCase()}${remainder}`;

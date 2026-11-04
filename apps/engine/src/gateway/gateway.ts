@@ -447,13 +447,15 @@ export interface GatewayOptions {
   onReceipt?: (receipt: Receipt) => void;
 }
 
+const HTTP_URL_START = /^https?:\/\//i;
+
 // Every URL the action could touch: the recipient plus every URL anywhere
 // in the payload, including links inside message text and nested objects.
 // The gateway checks all of them before acting.
 export function collectActionUrls(req: ActionRequest): string[] {
   const urls = new Set<string>();
   const pushText = (value: string) => {
-    if (/^https?:\/\//i.test(value.trim())) urls.add(value.trim());
+    if (HTTP_URL_START.test(value.trim())) urls.add(value.trim());
     for (const found of extractHttpUrls(value)) urls.add(found);
   };
   const walk = (value: unknown) => {

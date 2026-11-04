@@ -37,8 +37,14 @@ const BENEFITS_DANGER = /\bin danger of (?:losing|being)\b/g;
 const POSSIBLE_CRISIS =
   /\b(?:danger\w*|safe|unsafe|hurt\w*|hit|hits|hitting|beat\w*|abus\w*|kill\w*|die|dying|dead|suicid\w*|scared|afraid|terrified|threat\w*|really bad|emergency|weapon|gun|knife|bleeding|attack\w*|chok\w*|overdos\w*|pills?|hang|hanging|noose|cut myself|cut my|cutting|slit\w*|wrists?|throw(?:ing)? myself|jump(?:ing)? off|kill myself|end it|end my life|(?:not|don'?t|do not) want to (?:live|be here)|better off dead)\b/;
 
+const CURLY_APOSTROPHE = /[’]/g;
+const NOT_ASCII_WORD_CHAR = /[^a-z0-9' ]/g;
+const NOT_WORD_CHAR = /[^\p{L}\p{N}' ]/gu;
+const WHITESPACE_RUN = /\s+/g;
+const WHITESPACE = /\s+/;
+
 function normalize(text: string): string {
-  return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]/g, " ").replace(/\s+/g, " ")} `;
+  return ` ${text.toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_ASCII_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
 }
 
 // Wanting everything to end, "what's the point anymore", and taking a
@@ -68,8 +74,11 @@ export function mightBeCrisis(text: string): boolean {
   return isCrisis(text) || POSSIBLE_CRISIS.test(normalize(text).replace(BENEFITS_DANGER, " "));
 }
 
+const NUMBER_988 = /\b988\b/;
+const NUMBER_911 = /\b911\b/;
+
 export function namesCrisisLines(reply: string): boolean {
-  return /\b988\b/.test(reply) && /\b911\b/.test(reply);
+  return NUMBER_988.test(reply) && NUMBER_911.test(reply);
 }
 
 // The reply a crisis turn sends: the model's own words when they name
@@ -120,7 +129,7 @@ const REPEAT_FILLER = new Set(
 );
 
 function wordsOf(text: string): string[] {
-  return text.toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, " ").split(/\s+/).filter(Boolean);
+  return text.toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_WORD_CHAR, " ").split(WHITESPACE).filter(Boolean);
 }
 
 function callShape(sentence: string): CallShape {
@@ -143,17 +152,21 @@ function callShape(sentence: string): CallShape {
 // "Call or text 988 now", "If you're in danger right now, call 911".
 // Another action for a number ("text 911"), another number, an action
 // or a question all stay.
+const QUESTION_MARK = /[?¿]/;
+const DIGIT = /\d/;
+const SPACE_AFTER_SENTENCE = /(?<=[.!?])\s+/;
+
 function repeatsTheLine(sentence: string, lineSentences: readonly CallShape[]): boolean {
-  if (/[?¿]/.test(sentence)) return false;
+  if (QUESTION_MARK.test(sentence)) return false;
   const shape = callShape(sentence);
   if (shape.unpaired || shape.pairs.size === 0 || shape.pairs.has("none 988") || shape.pairs.has("none 911")) return false;
-  if ([...shape.words].some((w) => /\d/.test(w))) return false;
+  if ([...shape.words].some((w) => DIGIT.test(w))) return false;
   return lineSentences.some((ls) => [...shape.pairs].every((p) => ls.pairs.has(p)) && [...shape.words].every((w) => ls.words.has(w)));
 }
 
 function withoutRepeats(bubble: string, lineSentences: readonly CallShape[]): string {
   return bubble
-    .split(/(?<=[.!?])\s+/)
+    .split(SPACE_AFTER_SENTENCE)
     .filter((sentence) => !repeatsTheLine(sentence, lineSentences))
     .join(" ")
     .trim();
@@ -171,14 +184,18 @@ const SAFETY_QUESTIONS_ES = new Set([
   "hay alguien contigo", "hay alguien contigo ahora",
 ]);
 
+const ENDS_IN_PUNCTUATION = /[.!?…]$/;
+const LEADING_INVERTED_QUESTION = /^¿/;
+const UNACCENTED_ESTAS = /estas/g;
+
 function askSafety(bubble: string): string {
   return bubble
-    .split(/(?<=[.!?])\s+/)
+    .split(SPACE_AFTER_SENTENCE)
     .map((sentence) => {
       // A sentence that already ends in . ! ? or … stays as written.
-      if (/[.!?…]$/.test(sentence.trim())) return sentence;
-      const bare = sentence.replace(/^¿/, "").trim();
-      const key = bare.toLowerCase().replace(/estas/g, "estás");
+      if (ENDS_IN_PUNCTUATION.test(sentence.trim())) return sentence;
+      const bare = sentence.replace(LEADING_INVERTED_QUESTION, "").trim();
+      const key = bare.toLowerCase().replace(UNACCENTED_ESTAS, "estás");
       if (SAFETY_QUESTIONS_EN.has(key)) return `${bare}?`;
       if (SAFETY_QUESTIONS_ES.has(key)) return `¿${bare}?`;
       return sentence;
@@ -216,11 +233,13 @@ const BENEFITS_CUT_SENTENCE = new RegExp(
 // Newlines are spaces here, so a line break never makes a template
 // sentence out of part of a longer one ("they cut my benefits\nand my
 // throat"). Sentences end only at . ! or ? before whitespace or the end.
+const SENTENCE_END = /(?<=[.!?])(?:\s+|$)/;
+
 function sentencesOf(text: string): string[] {
   return text
-    .replace(/[’]/g, "'")
-    .replace(/\s+/g, " ")
-    .split(/(?<=[.!?])(?:\s+|$)/)
+    .replace(CURLY_APOSTROPHE, "'")
+    .replace(WHITESPACE_RUN, " ")
+    .split(SENTENCE_END)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
@@ -256,7 +275,7 @@ const SPANISH = new RegExp(
 );
 
 function accented(text: string): string {
-  return ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/[^\p{L}\p{N}' ]/gu, " ").replace(/\s+/g, " ")} `;
+  return ` ${text.toLowerCase().replace(CURLY_APOSTROPHE, "'").replace(NOT_WORD_CHAR, " ").replace(WHITESPACE_RUN, " ")} `;
 }
 
 export function spanishOrImplicitCrisis(text: string): boolean {
@@ -277,10 +296,10 @@ const OPENS_ES = /^¿\s*(?:debo|deber[íi]a|es|puedo|puede|pueden|se puede|tengo
 const INTENT = /(?:^|\s)(?:i want|i'm going to|im going to|i am going to|i'll|i will|i wish|i hope|so i|because|cause|quiero|voy a|ojal[áa]|porque)(?=\s|$)/iu;
 
 export function isOneHealthQuestion(text: string): boolean {
-  const trimmed = text.trim().replace(/[’]/g, "'");
+  const trimmed = text.trim().replace(CURLY_APOSTROPHE, "'");
   if (trimmed.length > MAX_QUESTION_CHARS) return false;
   if (sentencesOf(trimmed).length !== 1 || !trimmed.endsWith("?")) return false;
-  if (trimmed.split(/\s+/).length > MAX_QUESTION_WORDS) return false;
+  if (trimmed.split(WHITESPACE).length > MAX_QUESTION_WORDS) return false;
   const opens = trimmed.startsWith("¿") ? OPENS_ES.test(trimmed) : OPENS_EN.test(trimmed);
   if (!opens) return false;
   return !INTENT.test(accented(trimmed));
@@ -312,8 +331,10 @@ export const CRISIS_CHECK_INSTRUCTIONS =
   "Answer with exactly one word, in lowercase: yes or no.";
 
 // The person's text as the check sees it: inside delimiters it cannot close.
+const MESSAGE_TAG = /<\/?message>/gi;
+
 export function crisisCheckInput(text: string): string {
-  return `<message>\n${text.replace(/<\/?message>/gi, " ")}\n</message>`;
+  return `<message>\n${text.replace(MESSAGE_TAG, " ")}\n</message>`;
 }
 
 export const CRISIS_CHECK_TIMEOUT_MS = 3000;
@@ -346,8 +367,11 @@ export function plainLatin(text: string): boolean {
   return PLAIN_LATIN.test(normalizeCurly(text));
 }
 
+const CURLY_SINGLE_QUOTE = /[\u2018\u2019]/g;
+const CURLY_DOUBLE_QUOTE = /[\u201C\u201D]/g;
+
 function normalizeCurly(text: string): string {
-  return text.replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"');
+  return text.replace(CURLY_SINGLE_QUOTE, "'").replace(CURLY_DOUBLE_QUOTE, '"');
 }
 
 export function mentionsInstructions(text: string): boolean {
