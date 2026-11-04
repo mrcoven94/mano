@@ -16,6 +16,8 @@ const MENU = /^[0-9*#wW]{1,32}$/;
 // Past the hold limit and the ring limit, so the provider's cap never cuts
 // a call Mano still means to hold or has just bridged.
 const CAP_MARGIN_SECONDS = 2 * 3600;
+// Slack on the provider's cap before a call is treated as certainly over.
+const CAP_SETTLE_MS = 5 * 60_000;
 
 export type HoldLimit = { id: string; attempt: string; kind: "hold_limit" | "ring_limit" };
 export type HoldAudit = `hold_call.${HoldCall["state"]}` | "hold_call.hang_up_failed" | "hold_call.effect_failed";
@@ -50,7 +52,7 @@ function parseCall(req: ActionRequest, services: CallServices): Parsed {
 
 export class HoldCalls {
   constructor(private deps: HoldCallDeps) {
-    deps.sql.exec(`CREATE TABLE IF NOT EXISTS hold_calls(id TEXT PRIMARY KEY, call_json TEXT NOT NULL, active INTEGER NOT NULL)`);
+    deps.sql.exec(`CREATE TABLE IF NOT EXISTS hold_calls(id TEXT PRIMARY KEY, call_json TEXT NOT NULL, blocks_until_ms INTEGER NOT NULL)`);
     deps.sql.exec(`CREATE TABLE IF NOT EXISTS hold_call_events(event_key TEXT PRIMARY KEY, call_id TEXT NOT NULL)`);
   }
 
@@ -67,18 +69,20 @@ export class HoldCalls {
     return row ? (JSON.parse(row.call_json) as HoldCall) : null;
   }
 
+  // A call blocks a replacement until it ended with its office leg known. An
+  // ended call with no known leg may still be up, and a live one's end may
+  // never be reported, so both stop blocking when the provider's cap has passed.
   private write(call: HoldCall): void {
     this.deps.sql.exec(
-      "INSERT INTO hold_calls(id, call_json, active) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET call_json = excluded.call_json, active = excluded.active",
+      "INSERT INTO hold_calls(id, call_json, blocks_until_ms) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET call_json = excluded.call_json, blocks_until_ms = excluded.blocks_until_ms",
       call.id,
       JSON.stringify(call),
-      call.state === "ended" ? 0 : 1,
+      call.state === "ended" && call.officeCallId ? 0 : call.liveUntilMs,
     );
   }
 
-  private activeId(): string | null {
-    const row = this.deps.sql.exec("SELECT id FROM hold_calls WHERE active = 1 LIMIT 1").toArray()[0] as { id: string } | undefined;
-    return row?.id ?? null;
+  private blocked(now: number): boolean {
+    return this.deps.sql.exec("SELECT 1 FROM hold_calls WHERE blocks_until_ms > ? LIMIT 1", now).toArray().length > 0;
   }
 
   private idFor(idempotencyKey: string, personId: string): Promise<string> {
@@ -94,40 +98,60 @@ export class HoldCalls {
     return parsed.ok ? null : parsed.problem;
   }
 
-  // Places the approved call and returns the office leg's ID.
+  // Places the approved call and returns the office leg's ID. Everything that
+  // awaits comes first and stores nothing, so a failure or a delete there
+  // leaves nothing to clean up. The checks, the row and the start of the dial
+  // then happen with no await between them, so a row always means a dial began.
   async begin(req: ActionRequest): Promise<string> {
     const services = this.deps.services();
     if (!services) throw new DefiniteFailureError("Mano cannot place calls here.");
     const parsed = parseCall(req, services);
     if (!parsed.ok) throw new DefiniteFailureError(parsed.problem);
+    // The gateway checked the approval with no await before this line. A
+    // delete is what revokes an approval, and it moves the generation.
+    const generation = this.deps.generation();
     const id = await this.idFor(req.idempotencyKey, req.personId);
-    const existing = this.read(id);
-    if (existing) {
-      if (existing.officeCallId) return existing.officeCallId;
-      throw new Error("The outcome of this dial is not known yet.");
-    }
-    const active = this.activeId();
-    if (active) throw new DefiniteFailureError("Mano is already on a call for this person.");
-
-    const now = Date.now();
     const attempt = crypto.randomUUID();
+    const startedAtMs = Date.now();
+    const holdUntilMs = startedAtMs + services.config.holdLimitMs;
+    try {
+      // A timer left behind by a call that never starts names an attempt no
+      // row holds, so it does nothing.
+      await this.deps.schedule(new Date(holdUntilMs), { id, attempt, kind: "hold_limit" });
+      await this.deps.audit("hold_call.dialing", id);
+    } catch {
+      throw new DefiniteFailureError("Mano could not set up the call, so nothing was dialed.");
+    }
+
+    if (this.deps.generation() !== generation) throw new DefiniteFailureError("The conversation was deleted, so nothing was dialed.");
+    // Past this, the timer has already fired on nothing and no limit would end the call.
+    const now = Date.now();
+    if (now >= holdUntilMs) throw new DefiniteFailureError("The call took too long to set up, so nothing was dialed.");
+    const existing = this.read(id);
+    if (existing?.officeCallId) return existing.officeCallId;
+    if (existing && now < existing.liveUntilMs) throw new Error("The outcome of this dial is not known yet.");
+    // Recovery runs this again on its own once check() reads absent, hours
+    // after the person was told the call failed. Only a new approval redials.
+    if (existing) throw new DefiniteFailureError("That call is over. Mano needs a new yes to try again.");
+    if (this.blocked(now)) throw new DefiniteFailureError("Mano is already on a call for this person.");
+    const capSeconds = this.capSeconds(services);
     this.write({
       id,
       personId: req.personId,
       officeName: req.recipient,
       officeNumber: parsed.officeNumber,
       menu: parsed.menu,
-      generation: this.deps.generation(),
-      startedAtMs: now,
+      generation,
+      startedAtMs,
       attempt,
       simulated: services.provider.simulated,
+      liveUntilMs: now + capSeconds * 1000 + CAP_SETTLE_MS,
       state: "dialing",
       officeCallId: null,
     });
-    await this.deps.schedule(new Date(now + services.config.holdLimitMs), { id, attempt, kind: "hold_limit" });
-    await this.deps.audit("hold_call.dialing", id);
+    let placed: { providerCallId: string };
     try {
-      const { providerCallId } = await services.provider.placeCall({
+      placed = await services.provider.placeCall({
         to: parsed.officeNumber,
         holdCallId: id,
         personId: req.personId,
@@ -135,25 +159,32 @@ export class HoldCalls {
         // Per attempt: a provider that remembers its refusal must still take
         // the retry. An unknown outcome never reaches a second dial.
         idempotencyKey: `${id}:${attempt}:office`,
-        maxSeconds: this.capSeconds(services),
+        maxSeconds: capSeconds,
       });
-      await this.apply(id, { kind: "placed", leg: "office", providerCallId });
-      return providerCallId;
     } catch (err) {
+      // A webhook already proved this call, whatever the dial's answer says.
+      const proven = this.read(id)?.officeCallId;
+      if (proven) return proven;
       // The provider refused, so no call exists and a retry starts clean.
-      // Any other failure leaves the row: a webhook may still prove the call
-      // happened, and check() stays unknown until then.
+      // Any other failure leaves the row: the call may be up, so it keeps
+      // blocking until a webhook proves it or its cap has passed.
       if ((err as Error)?.name === "DefiniteFailureError") this.deps.sql.exec("DELETE FROM hold_calls WHERE id = ?", id);
       throw err;
     }
+    // If the call ended during the dial, this hangs up the leg it returned.
+    await this.apply(id, { kind: "placed", leg: "office", providerCallId: placed.providerCallId });
+    return placed.providerCallId;
   }
 
   // The gateway's reconcile lookup. A row with no office leg means the dial's
-  // outcome is unknown, which is never the same as absent.
+  // outcome is unknown, which is never the same as absent, until the provider's
+  // cap has passed: nothing can still be up, and begin() settles the attempt
+  // as failed without dialing, so it stops being retried.
   async check(idempotencyKey: string, personId: string): Promise<CheckOutcome> {
     const call = this.read(await this.idFor(idempotencyKey, personId));
     if (!call) return { found: false };
     if (call.officeCallId) return { found: true, externalId: call.officeCallId, simulated: call.simulated };
+    if (Date.now() >= call.liveUntilMs) return { found: false };
     throw new Error("The outcome of this dial is not known yet.");
   }
 
@@ -184,14 +215,14 @@ export class HoldCalls {
   // who was called. The rows stay with only their opaque IDs, because a dial
   // in flight can still name a leg, and that leg has to be hung up.
   async conversationDeleted(): Promise<void> {
-    const active = this.activeId();
+    const calls = this.deps.sql.exec("SELECT call_json FROM hold_calls").toArray().map((row) => JSON.parse(row.call_json as string) as HoldCall);
     this.deps.transaction(() => {
-      for (const row of this.deps.sql.exec("SELECT call_json FROM hold_calls").toArray() as { call_json: string }[]) {
-        this.write({ ...(JSON.parse(row.call_json) as HoldCall), officeName: "", officeNumber: "", menu: null });
-      }
+      for (const call of calls) this.write({ ...call, officeName: "", officeNumber: "", menu: null });
       this.deps.sql.exec("DELETE FROM hold_call_events");
     });
-    if (active) await this.apply(active, { kind: "deleted" });
+    for (const call of calls) {
+      if (call.state !== "ended") await this.apply(call.id, { kind: "deleted" });
+    }
   }
 
   private capSeconds(services: CallServices): number {

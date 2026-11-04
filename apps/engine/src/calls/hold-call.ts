@@ -27,6 +27,8 @@ interface Base {
   attempt: string;
   // Whether a stand-in placed this call, kept for the receipt of a reconcile.
   simulated: boolean;
+  // By the provider's own cap, the latest any leg of this call can be up.
+  liveUntilMs: number;
 }
 
 export type HoldCall = Base &
@@ -80,8 +82,8 @@ function end(call: HoldCall, reason: EndReason, alreadyDown?: Leg): { call: Hold
 }
 
 function base(call: HoldCall): Base {
-  const { id, personId, officeName, officeNumber, menu, generation, startedAtMs, attempt, simulated } = call;
-  return { id, personId, officeName, officeNumber, menu, generation, startedAtMs, attempt, simulated };
+  const { id, personId, officeName, officeNumber, menu, generation, startedAtMs, attempt, simulated, liveUntilMs } = call;
+  return { id, personId, officeName, officeNumber, menu, generation, startedAtMs, attempt, simulated, liveUntilMs };
 }
 
 // A retried or late input that no longer applies changes nothing, so a
@@ -89,13 +91,17 @@ function base(call: HoldCall): Base {
 export function stepHoldCall(call: HoldCall, input: HoldInput): { call: HoldCall; effects: HoldEffect[] } {
   const same = { call, effects: [] as HoldEffect[] };
   if (call.state === "ended") {
-    // The call ended before this leg's ID was known, so that leg was never
-    // hung up. Hang it up now and keep the ID.
-    if ((input.kind === "placed" || input.kind === "answered") && knownLeg(call, input.leg) !== input.providerCallId) {
-      const key = input.leg === "office" ? "officeCallId" : "personCallId";
-      return { call: { ...call, [key]: input.providerCallId }, effects: [{ do: "hang_up", callId: input.providerCallId }] };
-    }
-    return same;
+    if (input.kind !== "placed" && input.kind !== "answered" && input.kind !== "hung_up") return same;
+    const known = knownLeg(call, input.leg);
+    if (known === input.providerCallId) return same;
+    // The call ended before this leg's ID was known, so nothing hung it up.
+    // The first ID is kept as proof the dial happened. Unless the leg already
+    // went down on its own, hang it up.
+    const key = input.leg === "office" ? "officeCallId" : "personCallId";
+    return {
+      call: known ? call : { ...call, [key]: input.providerCallId },
+      effects: input.kind === "hung_up" ? [] : [{ do: "hang_up", callId: input.providerCallId }],
+    };
   }
   if (input.kind === "deleted" || input.kind === "provider_failed") return end(call, input.kind);
   if (input.kind === "placed" || input.kind === "answered" || input.kind === "hung_up") {

@@ -58,7 +58,9 @@ function setup(over: Partial<CallServices["config"]> = {}, heard: () => Promise<
   const provider = new FakeProvider();
   const sent: { handleHash: string; key: string; text: string }[] = [];
   vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
-    sent.push(JSON.parse(String(init?.body)));
+    // The stub is global, so an earlier test's alarm can land here too.
+    const body = JSON.parse(String(init?.body)) as (typeof sent)[number];
+    if (body.handleHash === handle) sent.push(body);
     return Response.json({ sent: true });
   });
   setCallServicesForTests({
@@ -89,6 +91,16 @@ function setup(over: Partial<CallServices["config"]> = {}, heard: () => Promise<
 }
 
 type Harness = ReturnType<typeof setup>;
+
+// The services are global, so a short timer this test leaves running would
+// fire during a later test and hang up on that test's provider.
+function useLongLimits(h: Harness) {
+  setCallServicesForTests({
+    provider: h.provider,
+    transcriber: { transcribe: async () => "" },
+    config: { allowedNumbers: new Set([OFFICE]), personId: h.person, personNumber: PHONE, holdLimitMs: 3_600_000, ringLimitMs: 45_000 },
+  });
+}
 
 async function request(h: Harness, payload: Record<string, unknown> = { phoneNumber: OFFICE }, key = "call-1") {
   const res = await h.call("POST", "/action", {
@@ -133,7 +145,6 @@ async function hear(h: Harness) {
 async function textSent(h: Harness): Promise<string> {
   await vi.waitFor(() => expect(h.sent.length).toBeGreaterThan(0), { timeout: 8000, interval: 50 });
   expect(h.sent).toHaveLength(1);
-  expect(h.sent[0]!.handleHash).toBe(h.handle);
   return h.sent[0]!.text;
 }
 
@@ -426,48 +437,54 @@ describe("deleting the conversation while a dial is pending", () => {
   });
 });
 
+// A HoldCalls on the agent's own storage whose timers and audit log can be
+// paused at one point, so an event can land between a step and its effects.
+function paused(h: Harness, state: DurableObjectState, at: { limit?: HoldLimit["kind"]; audit?: HoldAudit; failing?: boolean }) {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const seen = { reached: false };
+  const stop = async () => {
+    if (at.failing) throw new Error("storage failed");
+    seen.reached = true;
+    await gate;
+  };
+  const conversation = { generation: 0 };
+  const calls = new HoldCalls({
+    sql: state.storage.sql,
+    transaction: (fn) => state.storage.transactionSync(fn),
+    services: createCallServices,
+    generation: () => conversation.generation,
+    schedule: async (_at, limit) => {
+      if (limit.kind === at.limit) await stop();
+    },
+    text: async () => {},
+    audit: async (event) => {
+      if (event === at.audit) await stop();
+    },
+  });
+  const req: ActionRequest = {
+    type: "call",
+    recipient: "Sandbox Benefits Office",
+    purpose: "ask why the renewal is late",
+    payload: { phoneNumber: OFFICE },
+    idempotencyKey: "paused-1",
+    actor: "foreground",
+    personId: h.person,
+  };
+  const event = (leg: "office" | "person", kind: "answered" | "hung_up", eventId: string) =>
+    calls.onEvent({ eventId, holdCallId: holdCallId(h), personId: h.person, leg, kind, providerCallId: `${leg}-leg` });
+  const reached = async () => {
+    while (!seen.reached) await new Promise((r) => setTimeout(r, 1));
+  };
+  const deleteConversation = () => {
+    conversation.generation += 1;
+    return calls.conversationDeleted();
+  };
+  return { calls, req, event, reached, release, deleteConversation };
+}
+
 describe("effects that wait while the call moves on", () => {
   const heardPerson = async () => "hello, this is Sam";
-
-  // A HoldCalls on the agent's own storage whose timers and audit log can be
-  // paused at one point, so an event can land between a step and its effects.
-  function paused(h: Harness, state: DurableObjectState, at: { limit?: HoldLimit["kind"]; audit?: HoldAudit }) {
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    const seen = { reached: false };
-    const stop = async () => {
-      seen.reached = true;
-      await gate;
-    };
-    const calls = new HoldCalls({
-      sql: state.storage.sql,
-      transaction: (fn) => state.storage.transactionSync(fn),
-      services: createCallServices,
-      generation: () => 0,
-      schedule: async (_at, limit) => {
-        if (limit.kind === at.limit) await stop();
-      },
-      text: async () => {},
-      audit: async (event) => {
-        if (event === at.audit) await stop();
-      },
-    });
-    const req: ActionRequest = {
-      type: "call",
-      recipient: "Sandbox Benefits Office",
-      purpose: "ask why the renewal is late",
-      payload: { phoneNumber: OFFICE },
-      idempotencyKey: "paused-1",
-      actor: "foreground",
-      personId: h.person,
-    };
-    const event = (leg: "office" | "person", kind: "answered" | "hung_up", eventId: string) =>
-      calls.onEvent({ eventId, holdCallId: holdCallId(h), personId: h.person, leg, kind, providerCallId: `${leg}-leg` });
-    const reached = async () => {
-      while (!seen.reached) await new Promise((r) => setTimeout(r, 1));
-    };
-    return { calls, req, event, reached, release };
-  }
 
   it.each([
     ["the ring limit is being armed", { limit: "ring_limit" as const }],
@@ -505,6 +522,177 @@ describe("effects that wait while the call moves on", () => {
   });
 });
 
+describe("the first dial, around every await before it", () => {
+  const rowCount = (state: DurableObjectState) => state.storage.sql.exec("SELECT id FROM hold_calls").toArray().length;
+  const named = (name: string) => expect.objectContaining({ name });
+
+  it("does not dial or keep a row when the conversation is deleted while the ID is hashed", async () => {
+    const h = setup();
+    await runInDurableObject(h.stub, async (_agent, state) => {
+      const p = paused(h, state, {});
+      const beginning = p.calls.begin(p.req);
+      await p.deleteConversation();
+      await expect(beginning).rejects.toEqual(named("DefiniteFailureError"));
+      expect(rowCount(state)).toBe(0);
+    });
+    expect(h.provider.placed).toEqual([]);
+  });
+
+  it.each([
+    ["the hold limit is armed", { limit: "hold_limit" as const }],
+    ["the dial is logged", { audit: "hold_call.dialing" as const }],
+  ])("does not dial or keep a row when the conversation is deleted while %s", async (_name, at) => {
+    const h = setup();
+    await runInDurableObject(h.stub, async (_agent, state) => {
+      const p = paused(h, state, at);
+      const beginning = p.calls.begin(p.req);
+      await p.reached();
+      await p.deleteConversation();
+      p.release();
+      await expect(beginning).rejects.toEqual(named("DefiniteFailureError"));
+      expect(rowCount(state)).toBe(0);
+    });
+    expect(h.provider.placed).toEqual([]);
+  });
+
+  it.each([
+    ["arming the hold limit", { limit: "hold_limit" as const, failing: true }],
+    ["logging the dial", { audit: "hold_call.dialing" as const, failing: true }],
+  ])("leaves nothing behind when %s fails, so the next call can go", async (_name, at) => {
+    const h = setup();
+    await runInDurableObject(h.stub, async (_agent, state) => {
+      const p = paused(h, state, at);
+      await expect(p.calls.begin(p.req)).rejects.toEqual(named("DefiniteFailureError"));
+      expect(rowCount(state)).toBe(0);
+      await expect(p.calls.check(p.req.idempotencyKey, h.person)).resolves.toEqual({ found: false });
+      expect(h.provider.placed).toEqual([]);
+
+      const next = paused(h, state, {});
+      await next.calls.begin({ ...next.req, idempotencyKey: "paused-2" });
+    });
+    expect(h.provider.placed).toHaveLength(1);
+  });
+
+  it("does not dial when the hold limit passed before the dial could start", async () => {
+    const h = setup({ holdLimitMs: 1 });
+    await runInDurableObject(h.stub, async (_agent, state) => {
+      const p = paused(h, state, { audit: "hold_call.dialing" });
+      const beginning = p.calls.begin(p.req);
+      await p.reached();
+      await new Promise((r) => setTimeout(r, 5));
+      p.release();
+      await expect(beginning).rejects.toEqual(named("DefiniteFailureError"));
+    });
+    expect(h.provider.placed).toEqual([]);
+  });
+
+  it("dials once when two calls reach the dial together", async () => {
+    const h = setup();
+    await runInDurableObject(h.stub, async (_agent, state) => {
+      const p = paused(h, state, {});
+      const results = await Promise.allSettled([p.calls.begin(p.req), p.calls.begin({ ...p.req, idempotencyKey: "paused-2" })]);
+      expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    });
+    expect(h.provider.placed).toHaveLength(1);
+  });
+});
+
+describe("a dial that fails after a webhook proved the call", () => {
+  it.each([
+    ["refused", () => new DefiniteFailureError("refused")],
+    ["timed out", () => new TimeoutError()],
+  ])("keeps the call and answers with its leg when the dial %s", async (_name, failure) => {
+    const h = setup();
+    h.provider.holdDial = true;
+    const asked = await request(h);
+    const approving = h.call("POST", `/approvals/${asked.approval!.id}/approve`);
+    await vi.waitFor(() => expect(h.provider.placed).toHaveLength(1), { timeout: 5000, interval: 10 });
+    await webhook(h, "office", "answered", "e1");
+    h.provider.failPlace = failure();
+    h.provider.holdDial = false;
+    const done = (await (await approving).json()) as { status: string; receipt?: { externalId: string } };
+    expect(done.status).toBe("completed");
+    expect(done.receipt?.externalId).toBe("office-leg");
+    await webhook(h, "office", "hung_up", "e2");
+    expect(h.provider.ops).toEqual(["listen office-leg"]);
+    await expect(request(h, { phoneNumber: OFFICE }, "call-2")).resolves.toMatchObject({ status: "needs_approval" });
+  });
+});
+
+describe("a dial the provider may have accepted but never named", () => {
+  // Times the dial out, then lets the real hold limit end the call.
+  async function unknownThenLimit() {
+    // Timers fire on whole seconds, so a shorter limit can beat the dial's row.
+    const h = setup({ holdLimitMs: 2000 });
+    h.provider.failPlace = new TimeoutError();
+    const asked = await request(h);
+    await h.call("POST", `/approvals/${asked.approval!.id}/approve`);
+    await afterLimit(h, () => h.sent.length > 0);
+    expect(await textSent(h)).toContain("could not get through");
+    h.provider.failPlace = null;
+    useLongLimits(h);
+    return h;
+  }
+
+  async function approveAnother(h: Harness) {
+    const asked = await request(h, { phoneNumber: OFFICE }, "call-2");
+    return (await (await h.call("POST", `/approvals/${asked.approval!.id}/approve`)).json()) as { status: string; reason?: string };
+  }
+
+  it("blocks a replacement after the hold limit, since the first may still be up", async () => {
+    const h = await unknownThenLimit();
+    const second = await approveAnother(h);
+    expect(second.status).toBe("blocked");
+    expect(second.reason).toContain("already on a call");
+    expect(h.provider.placed).toHaveLength(1);
+  });
+
+  it("records a late hung_up as proof, with no hang up, and reconciles", async () => {
+    const h = await unknownThenLimit();
+    await webhook(h, "office", "hung_up", "late");
+    expect(h.provider.ops).toEqual([]);
+    expect((await h.agent.recoverStrandedAttempts(0)).recovered.map((r) => r.status)).toEqual(["reconciled"]);
+    expect((await approveAnother(h)).status).toBe("completed");
+  });
+
+  it("hangs up a late answer and then allows a replacement", async () => {
+    const h = await unknownThenLimit();
+    await webhook(h, "office", "answered", "late");
+    expect(h.provider.ops).toEqual(["hang_up office-leg"]);
+    expect((await approveAnother(h)).status).toBe("completed");
+  });
+
+  it("stops blocking and reads as absent once the provider's cap has certainly passed", async () => {
+    const h = await unknownThenLimit();
+    // The cap is hours away and the clock cannot be moved in here, so only
+    // the stored time is moved.
+    await runInDurableObject(h.stub, (_agent, state) => {
+      const row = state.storage.sql.exec("SELECT id, call_json FROM hold_calls").toArray()[0] as { id: string; call_json: string };
+      const call = { ...JSON.parse(row.call_json), liveUntilMs: Date.now() - 1 };
+      state.storage.sql.exec("UPDATE hold_calls SET call_json = ?, blocks_until_ms = ? WHERE id = ?", JSON.stringify(call), call.liveUntilMs, row.id);
+    });
+    const swept = await h.agent.recoverStrandedAttempts(0);
+    expect(swept.recovered.map((r) => r.status)).toEqual(["blocked"]);
+    expect(h.provider.placed).toHaveLength(1);
+    expect((await h.agent.recoverStrandedAttempts(0)).recovered).toEqual([]);
+    expect((await approveAnother(h)).status).toBe("completed");
+  });
+
+  it("does not let a bridged call whose end was never reported block forever", async () => {
+    const h = setup({}, async () => "hello, this is Sam");
+    await approve(h);
+    await webhook(h, "office", "answered", "e1");
+    await hear(h);
+    await webhook(h, "person", "answered", "e2");
+    await runInDurableObject(h.stub, (_agent, state) => {
+      const row = state.storage.sql.exec("SELECT id, call_json FROM hold_calls").toArray()[0] as { id: string; call_json: string };
+      const call = { ...JSON.parse(row.call_json), liveUntilMs: Date.now() - 1 };
+      state.storage.sql.exec("UPDATE hold_calls SET call_json = ?, blocks_until_ms = ? WHERE id = ?", JSON.stringify(call), call.liveUntilMs, row.id);
+    });
+    expect((await approveAnother(h)).status).toBe("completed");
+  });
+});
+
 describe("a retry after the provider refused the dial", () => {
   it("is not ended by the failed attempt's timer", async () => {
     const h = setup({ holdLimitMs: 1500 });
@@ -512,11 +700,7 @@ describe("a retry after the provider refused the dial", () => {
     const asked = await request(h);
     await h.call("POST", `/approvals/${asked.approval!.id}/approve`);
     h.provider.failPlace = null;
-    setCallServicesForTests({
-      provider: h.provider,
-      transcriber: { transcribe: async () => "" },
-      config: { allowedNumbers: new Set([OFFICE]), personId: h.person, personNumber: PHONE, holdLimitMs: 3_600_000, ringLimitMs: 45_000 },
-    });
+    useLongLimits(h);
     const retried = (await (await h.call("POST", `/approvals/${asked.approval!.id}/approve`)).json()) as { status: string };
     expect(retried.status).toBe("completed");
 
@@ -597,6 +781,7 @@ describe("the state machine's late events", () => {
     startedAtMs: 0,
     attempt: "a",
     simulated: true,
+    liveUntilMs: 0,
     state: "dialing",
     officeCallId: null,
   };
@@ -617,6 +802,16 @@ describe("the state machine's late events", () => {
       expect(stepHoldCall(bridged, { kind }).effects).toEqual([]);
     }
     expect(stepHoldCall(bridged, { kind: "hung_up", leg: "office", providerCallId: "other" }).call.state).toBe("bridged");
+  });
+
+  it("records a late hung_up's ID with no hang up, and hangs up only a leg still up", () => {
+    const ended = stepHoldCall(dialing, { kind: "hold_limit" }).call;
+    const down = stepHoldCall(ended, { kind: "hung_up", leg: "office", providerCallId: "o" });
+    expect(down.effects).toEqual([]);
+    expect(down.call.officeCallId).toBe("o");
+    const stray = stepHoldCall(down.call, { kind: "answered", leg: "office", providerCallId: "other" });
+    expect(stray.effects).toEqual([{ do: "hang_up", callId: "other" }]);
+    expect(stray.call.officeCallId).toBe("o");
   });
 
   it("hangs up the person's leg when the office hangs up while it rings", () => {
