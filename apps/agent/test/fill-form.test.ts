@@ -636,6 +636,9 @@ describe("the computer and portal a deployment fills with", () => {
     expect(urls).toEqual(["https://openrouter.ai/api/v1/responses", "https://api.meta.ai/v1/responses"]);
 
     expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined })).toEqual({ unavailable: "no model key" });
+    const modal = { ...env, MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://example--ep-test-server.us-west.modal.direct" };
+    expect(fillDepsFromEnv("person-abc", { ...modal, MODAL_PROXY_TOKEN: "wk-test.ws-test" })).toEqual({ unavailable: "no computer on this model route" });
+    expect(fillDepsFromEnv("person-abc", modal)).toEqual({ unavailable: "no model key" });
     expect(fillDepsFromEnv("person-abc", { ...env, META_MODEL_API_KEY: undefined, MANO_MODEL_PROVIDER: "openrouter" })).toEqual({ unavailable: "no model key" });
   });
 
