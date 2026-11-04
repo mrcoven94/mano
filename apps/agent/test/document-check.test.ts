@@ -76,7 +76,8 @@ const CHILD_CARE = misnamed("utility_bill", "Child Care Subsidy", "Your renewal 
 const FOOD_SERVICES = misnamed("id", "Food and Nutrition Services", "Your renewal is due November 20, 2026.");
 const STRANGE_WITH_DUTY = misnamed("unknown", "Child Care Subsidy", "Your renewal is due November 20, 2026.");
 // The reader marked nothing, and the date is recovered from the transcription.
-const STUB_WITH_RECOVERED_DATE = notALetter("pay_stub", "Sample Works LLC\nNet pay $850.00\nYour renewal is due November 20, 2026.", "Sample Works LLC");
+// The reader names no date on this one, so the reply asks and names none.
+const STUB_WITH_RECOVERED_DATE = JSON.stringify({ ...JSON.parse(notALetter("pay_stub", "Sample Works LLC\nNet pay $850.00\nYour renewal is due November 20, 2026.", "Sample Works LLC")), dates_to_meet: [], other_dates: [] });
 const SHUTOFF = misnamed("utility_bill", "Electric service", "Pay $61.40 by November 20, 2026 to avoid shutoff.", []);
 const BILL_AMOUNT_DUE = misnamed("utility_bill", "Electric service", "Amount due $61.40 by November 20, 2026.", ["Pay the amount due"]);
 // What the reader returned live for a pay stub: its address line trips the
