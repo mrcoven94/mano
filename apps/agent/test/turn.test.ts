@@ -1512,6 +1512,16 @@ describe("a date question and an approval question at once", () => {
     expect(engine.deadlineCalls).toHaveLength(0);
   });
 
+  it("a no about an unrelated letter leaves the earlier approval waiting", async () => {
+    const ask = await send(turn("turn_clash_00081", "Please file my renewal"));
+    const unrelated = askingPage([], "SNAP renewal notice\n\nThis letter is for another person.");
+    expect((await photo("turn_clash_00082", unrelated)).body.text).toMatch(/Is this letter for you, and is it still current\?$/);
+    await send(turn("turn_clash_00083", "NO"));
+    expect(engine.approvals().find((a) => a.id === ask.body.approvalId)!.status).toBe("pending");
+    expect(filed()).toHaveLength(0);
+    expect(engine.deadlineCalls).toHaveLength(0);
+  });
+
   it("a yes after a letter asked which of its dates files nothing", async () => {
     const ask = await send(turn("turn_clash_00031", "Please file my renewal"));
     expect((await photo("turn_clash_00032", TWO_DATES)).body.text).toMatch(/\?$/);

@@ -377,6 +377,12 @@ async function decideTurn(
     return null;
   }
   if (decision === "no") {
+    // A letter's later question also takes the next no. Its answer must not
+    // reject approvals whose question was deliberately unhooked.
+    if (latest && await isUnhooked(engine, latest.approvalId)) {
+      await bind(engine, body.turnId, turn.firstReceivedAt, ["model"]);
+      return null;
+    }
     await bind(engine, body.turnId, turn.firstReceivedAt, waiting.map((a) => a.id));
     return declineAll(engine, waiting.map((a) => a.id), words);
   }
