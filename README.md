@@ -114,6 +114,10 @@ META_MODEL_API_KEY=... pnpm --filter @mano/channels probe:live
 
 With `OPENROUTER_API_KEY` set, the same command also sends one synthetic text to the open-weight fallback, with the Meta Model API played as down.
 
+### Mano's email inbox
+
+Each person can have a private address, `letters+<token>@<MANO_EMAIL_DOMAIN>`, where the token is random and holds nothing about them. Offices write to it, and `apps/channels/src/email.ts` checks the address, size and sender, stores the words and any photos or PDFs in the person's Engine documents, texts the person, and queues a turn that reads them with Mail like a photo. Nothing in an email is treated as the person's words or as permission, and a link that fails the check is called out and never repeated. PDFs are saved but not read yet. Mano sends no email. The inbox stays off until `MANO_EMAIL_DOMAIN` is set, which should wait until Cloudflare Email Routing sends `letters@` on that domain to this Worker, with subaddressing on.
+
 ## Packages and apps
 
 | Path | What | Status |
