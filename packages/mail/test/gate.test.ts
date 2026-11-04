@@ -161,15 +161,6 @@ describe("gateSentence reads which of the person's own papers", () => {
 });
 
 describe("gateSentence reads the wording a plain letter uses", () => {
-  it("publishes a checklist lead-in and reaching this office", () => {
-    expect(gateSentence("After review of the checklist, send the requested proof so that it reaches this office by November 18, 2026.", NOTICE)).toEqual({
-      kind: "deadline",
-      iso: "2026-11-18",
-      form: "by",
-      obligation: "respond",
-    });
-  });
-
   it("counts from the notice date printed above, and still asks", () => {
     const sentence = "Your request must reach the review office within 30 calendar days after the notice date printed above.";
     expect(gateSentence(sentence, "2026-11-03")).toEqual({
@@ -207,6 +198,8 @@ describe("gateSentence reads the wording a plain letter uses", () => {
     "\u2022 Return the form by December 4, 2026.",
     "* Return the form by December 4, 2026.",
     "Return the complete signed form by December 4, 2026.",
+    "After review of the checklist, send the requested proof by November 18, 2026.",
+    "Send the requested proof so that it reaches this office by November 18, 2026.",
     "After review of the checklist, we will send the requested proof by November 18, 2026.",
     "After review of the checklist, do not send the requested proof by November 18, 2026.",
     "After review of the case, send the requested proof by November 18, 2026.",

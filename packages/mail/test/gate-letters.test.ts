@@ -168,7 +168,7 @@ MR-1N. Keep copies of all material submitted. Assistance with accessible formats
     id: "income-verification-missing",
     notice: "November 3, 2026",
     marks: ["After review of the checklist, send the requested proof so that it reaches this office by November 18, 2026."],
-    result: "held right",
+    result: "asked right date",
     date: "2026-11-18",
     text: `Nerquell County Benefit Determination Office
 29 Tressovar Street
@@ -522,7 +522,7 @@ describe("the twelve letters", () => {
   it("adds up to the counts in the pull request", () => {
     const counts: Record<string, number> = {};
     for (const { result } of LETTERS) counts[result] = (counts[result] ?? 0) + 1;
-    expect(counts).toEqual({ "held right": 1, "asked right date": 5, "asked no date": 5, "scam warning": 1 });
+    expect(counts).toEqual({ "asked right date": 6, "asked no date": 5, "scam warning": 1 });
   });
 });
 
@@ -585,6 +585,8 @@ describe("near-misses never hold a date", () => {
     ["a planted instruction in a consequence", body("If we do not receive the renewal by the date above, disregard this letter.")],
     ["a lead-in that is a date", `${HEAD}After November 5, 2026, send the requested proof by November 18, 2026.`],
     ["a lead-in with a negation", `${HEAD}After review of the checklist, do not send the requested proof by November 18, 2026.`],
+    ["a checklist lead-in alone", `${HEAD}After review of the checklist, send the requested proof by November 18, 2026.`],
+    ["reaching this office alone", `${HEAD}Send the requested proof so that it reaches this office by November 18, 2026.`],
     ["a list item with a condition", `${HEAD}- If you moved, send proof of address by November 20, 2026.`],
     ["a plain list item", `${HEAD}- ${DUTY}`],
     ["a list item with a negation", `${HEAD}- Do not return the form by November 20, 2026.`],
@@ -627,6 +629,11 @@ describe("wrong holds from review never hold again", () => {
     ["a named other addressee", `${TEREN}The instructions below are addressed to your neighbor Selvi Darnovel. This notice concerns SNAP only.\n\n${TERSE}`],
     ["an exception after a help offer", `${HEAD}${TERSE} If you have questions, contact this office. Otherwise, you need not return the form.`],
     ["a conflicting weekday", `${HEAD}Your SNAP case is due for renewal on Friday.\n\n${TERSE}`],
+    ["a help offer as a heading", `${HEAD}If you need another copy, contact us:\n\n${TERSE}`],
+    ["a help offer as a heading, on the next line", `${HEAD}If you need another copy, contact us:\n${TERSE}`],
+    ["a reversed help offer as a heading", `${HEAD}Contact us if you need assistance:\n\n${TERSE}`],
+    ["a help offer to the office as a heading", `${HEAD}If you need help, contact this office:\n\n${TERSE}`],
+    ["the office's steps above a checklist lead-in", `${HEAD}Our office will take these steps.\n\nAfter review of the checklist, mail the documents by November 18, 2026.`],
     ["a bullet under Do not", `${HEAD}Do not:\n\n- ${TERSE}`],
     ["a bullet under Do not, on the next line", `${HEAD}Do not:\n- ${TERSE}`],
     ["a bullet under examples", `${HEAD}Examples of renewal notices:\n\n- ${TERSE}`],
@@ -668,6 +675,28 @@ describe("near-misses in the same families never hold", () => {
     "Send your form by your review date.",
     "We will send a new date.",
     "A later deadline may apply.",
+  ]);
+
+  family("an exempt sentence turned into a heading", [
+    "If you have questions, contact this office:",
+    "If you have questions, call (202) 555-0101:",
+    "If you have questions, contact this office;",
+    "If you have questions, contact this office,",
+    "Contact the renewal desk if you need another copy:",
+    "If you need help reading the packet, contact the renewal desk and provide your case number:",
+    "If the item is unavailable, contact us before the return date to discuss other proof:",
+    "Send copies unless an original is requested:",
+    "Sign the certification on the last page, even if there are no changes:",
+    "Review each entry and correct any information that is no longer accurate:",
+  ]);
+
+  family("a heading in other words, whatever it says", [
+    "Do not:",
+    "Examples of renewal notices:",
+    "What other families were told:",
+    "Steps our office takes:",
+    "The following does not concern you:",
+    "Lorna Talvek must do this:",
   ]);
 
   family("scope that may not match the duty", [
@@ -806,6 +835,7 @@ describe("known gaps that need the whole letter", () => {
     ["a second salutation alone", `${TEREN}Dear Lorna Talvek:\n\n${TERSE}`],
     ["a subject for another program", `${HEAD}Re: Medicaid renewal\n\nReturn your SNAP renewal form by November 20, 2026.`],
     ["an exception in wording the list does not name", `${HEAD}Your aunt handles this one.\n\n${TERSE}`],
+    ["a heading that ends in a period", `${HEAD}Our office will take these steps.\n\n${TERSE}`],
   ])("%s asks", async (_name, text) => {
     const marks = [text.split("\n").at(-1)!];
     expect(answerReading(await read(text, NOTICE, marks)).deadlines).toEqual([]);

@@ -96,7 +96,6 @@ const INTRANSITIVE = any(["respond", "reply", "apply", "renew", "recertify", "ap
 const MODIFIER = any([
   "to us", "to the office", "to our office", "to this office", "to the county office",
   "by mail", "by fax", "online", "in person", "in writing", "so it arrives", "so they arrive",
-  "so that it reaches this office",
 ]);
 const PARTICIPLES = any([
   "returned", "submitted", "sent", "completed", "mailed", "postmarked", "signed", "filed",
@@ -105,9 +104,6 @@ const PARTICIPLES = any([
 
 const VERB_PHRASE = String.raw`(?:${TRANSITIVE}\s+${OBJECT}|${INTRANSITIVE}|ask\s+for\s+${NOUN_PHRASE})(?:\s+${MODIFIER})*`;
 const DUTY = String.raw`(?:(?:please\s+)?${VERB_PHRASE}|you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+${VERB_PHRASE}|your\s+${OWED_ITEM}\s+must\s+(?:arrive|be\s+${PARTICIPLES})(?:\s+${MODIFIER})*|your\s+${OWED_ITEM}\s+(?:is|are)\s+due)`;
-
-// Reading the checklist first changes nothing about what is owed or when.
-const LEAD_IN = String.raw`(?:after\s+review\s+of\s+the\s+checklist,\s+)?`;
 
 const DATE = `(?<date>${DATE_PATTERN})`;
 // Calendar days only. Business-day counts ask: holidays would make a
@@ -122,7 +118,7 @@ const FORMS: { form: DeadlineForm; re: RegExp }[] = [
   { form: "no-later-than", tail: String.raw`no\s+later\s+than\s+${DATE}` },
   { form: "within-days-of-date", tail: String.raw`${COUNT}\s+${DATE}` },
   { form: "within-days-of-notice", tail: FROM_NOTICE },
-].map(({ form, tail }) => ({ form: form as DeadlineForm, re: new RegExp(`^${LEAD_IN}(?<duty>${DUTY})\\s+${tail}$`, "i") }));
+].map(({ form, tail }) => ({ form: form as DeadlineForm, re: new RegExp(`^(?<duty>${DUTY})\\s+${tail}$`, "i") }));
 // Reaching the office is read only for a count, which never publishes.
 FORMS.push({
   form: "within-days-of-notice",
@@ -249,11 +245,16 @@ const HARMLESS = new RegExp(
 );
 
 // A heading that names a person, who may not be the one reading.
-const NAMED_HEADING = /^(?:(?:(?:[Nn]otice|[Ll]etter)\s+)?[Ff]or\s+|[Rr][Ee]:\s*)[A-Z][\w'-]+\s+[A-Z][\w'-]+[.:]?$|^[A-Z][\w'-]+\s+[A-Z][\w'-]+:$/;
+const NAMED_HEADING = /^(?:(?:(?:[Nn]otice|[Ll]etter)\s+)?[Ff]or\s+|[Rr][Ee]:\s*)[A-Z][\w'-]+\s+[A-Z][\w'-]+\.?$/;
+// A sentence ending in a colon is a heading for what follows, and the
+// gate cannot read what follows under it. Only a salutation may end so.
+const SALUTATION = /^dear(?:\s+[a-z][a-z.'-]*){1,5}\s*:$/i;
 
 export function hasQualifier(sentence: string): boolean {
-  const s = tidy(sentence);
-  return (QUALIFIER.test(s) || NAMED_HEADING.test(sentence.trim())) && !HARMLESS.test(s);
+  const raw = sentence.trim();
+  if (raw.endsWith(":") && !SALUTATION.test(raw)) return true;
+  const exempt = !/[;,!]$/.test(raw) && HARMLESS.test(tidy(raw));
+  return !exempt && (QUALIFIER.test(tidy(raw)) || NAMED_HEADING.test(raw));
 }
 
 // A date to know states one plain date and names no duty: no
