@@ -305,6 +305,18 @@ importers:
         specifier: ^4.30.0
         version: 4.153.0(@cloudflare/workers-types@4.20260702.1)(@types/node@22.20.5)
 
+  eval:
+    dependencies:
+      '@mano/mail':
+        specifier: workspace:*
+        version: link:../packages/mail
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
+      sharp:
+        specifier: ^0.34.3
+        version: 0.34.5
+
   packages/accounts:
     devDependencies:
       '@types/node':
