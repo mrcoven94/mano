@@ -15,7 +15,7 @@ import { buildMano, manoBundleHash } from "../src/build-mano.mjs";
 import { gradeAll } from "../src/grader.mjs";
 import { osSandboxAvailable, osSandboxProfile, runSystem } from "../src/harness.mjs";
 import { readRecord, verifyMano } from "../src/verify.mjs";
-import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody, preflight, toChatMessages, ZERO_RETENTION } from "../src/openrouter.mjs";
+import { OPEN_WEIGHT_MODEL, modelRoute, pinnedChatBody, preflight, toChatMessages, ZERO_RETENTION, MODAL_MODEL } from "../src/openrouter.mjs";
 
 // The adapter imports @mano/mail, which is TypeScript, so it loads the way the
 // run loads it: bundled.
@@ -360,6 +360,50 @@ await writeFile(out, JSON.stringify([{ householdId: "hh-900", good: good.ok, bad
     assert.ok(seen[0].signal, "the request can be stopped");
     assert.match(seen[0].headers.authorization, /^Bearer /);
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the broker sends Modal calls with its token and model, and prices them", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mano-eval-modal-"));
+  const probe = join(dir, "probe.mjs");
+  const chat = "https://ep-test.us-west.modal.direct/v1/chat/completions";
+  await writeFile(probe, `import { writeFile } from "node:fs/promises";
+const args = process.argv.slice(2);
+const out = args[args.indexOf("--out") + 1];
+const ask = (id, url, body) => new Promise((resolve) => {
+  const on = (m) => { if (m && m.id === id) { process.off("message", on); resolve(m); } };
+  process.on("message", on);
+  process.send({ channel: "mano-eval-broker", id, url, method: "POST", headers: {}, body });
+});
+const good = await ask(1, "${chat}", JSON.stringify({ provider: { zdr: true }, usage: { include: true }, reasoning: { exclude: true }, messages: [], max_tokens: 100 }));
+const other = await ask(2, "${chat}", JSON.stringify({ model: "other/model", messages: [] }));
+const router = await ask(3, "https://openrouter.ai/api/v1/chat/completions", JSON.stringify({ messages: [] }));
+const liar = await ask(4, "${chat}", JSON.stringify({ messages: [], max_tokens: 100 }));
+await writeFile(out, JSON.stringify([{ householdId: "hh-900", good: good.ok, cost: good.json?.usage?.cost, other: other.ok, router: router.ok, liar: liar.ok }]));
+`);
+  const seen = [];
+  const saved = { ...process.env };
+  Object.assign(process.env, { MANO_MODEL_PROVIDER: "modal", MODAL_ENDPOINT_URL: "https://ep-test.us-west.modal.direct", MODAL_PROXY_TOKEN: "test-modal-token" });
+  try {
+    let n = 0;
+    const { outputs } = await runSystem(probe, [HOUSEHOLD], { broker: true, fetchImpl: async (u, o) => {
+      seen.push({ url: u, ...o });
+      n++;
+      return jsonResponse({ model: n === 1 ? MODAL_MODEL : "other/model", choices: [], usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 } });
+    } });
+    assert.equal(outputs[0].good, true);
+    assert.equal(outputs[0].cost, 1000 * 1.25e-6 + 500 * 4.25e-6);
+    assert.equal(outputs[0].other, false, "another model is refused");
+    assert.equal(outputs[0].router, false, "the other route is refused");
+    assert.equal(outputs[0].liar, false, "an answer from another model is refused");
+    assert.equal(seen.length, 2, "refused calls never reach the network");
+    const sent = JSON.parse(seen[0].body);
+    assert.equal(sent.model, MODAL_MODEL);
+    for (const k of ["provider", "usage", "reasoning"]) assert.equal(sent[k], undefined, k);
+    assert.equal(seen[0].headers.authorization, "Bearer test-modal-token");
+  } finally {
+    process.env = saved;
     await rm(dir, { recursive: true, force: true });
   }
 });

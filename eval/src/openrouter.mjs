@@ -3,23 +3,40 @@
 // child sends requests in this shape and the parent broker re-applies the pin,
 // so a system under test cannot reach an endpoint that keeps data.
 // Set MANO_MODEL_PROVIDER=openrouter with OPENROUTER_API_KEY to select it.
+// MANO_MODEL_PROVIDER=modal with MODAL_ENDPOINT_URL and MODAL_PROXY_TOKEN selects
+// the same open-weight model on a Modal Shared Endpoint, Mail's own route for it.
 export const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 export const OPEN_WEIGHT_MODEL = "meta/muse-spark-open";
 export const ZERO_RETENTION = Object.freeze({ zdr: true, data_collection: "deny" });
+export const MODAL_MODEL = "meta-models/Muse-Spark-Open-816B-A42B";
+const MODAL_USD_PER_TOKEN = { prompt: 1.25e-6, cached: 0.15e-6, completion: 4.25e-6 };
 const META_RESPONSES_URL = "https://api.meta.ai/v1/responses";
 const PREFLIGHT_TIMEOUT_MS = 60000;
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1500;
 
+// The endpoint's chat URL, or null unless it is https on Modal's own domain.
+export function modalChatUrl(env = process.env) {
+  try {
+    const url = new URL(env.MODAL_ENDPOINT_URL ?? "");
+    return url.protocol === "https:" && url.hostname.endsWith(".modal.direct") ? `${url.origin}/v1/chat/completions` : null;
+  } catch {
+    return null;
+  }
+}
+
 // The one route selector, read in the parent. The child learns the answer
 // over the broker hello because its environment is scrubbed.
 export function modelRoute(env = process.env) {
+  // Chosen with a setting missing, no model runs: it never falls back to another route.
+  if (env.MANO_MODEL_PROVIDER === "modal") return modalChatUrl(env) && env.MODAL_PROXY_TOKEN ? "modal" : null;
   if (env.MANO_MODEL_PROVIDER === "openrouter" && env.OPENROUTER_API_KEY) return "openrouter";
   return env.META_MODEL_API_KEY ? "meta" : null;
 }
 
 export function routeLabel(route, date = new Date().toLocaleDateString("en-CA")) {
   if (route === "openrouter") return `live ${OPEN_WEIGHT_MODEL} through OpenRouter, zero-retention endpoints, ${date}, synthetic data`;
+  if (route === "modal") return `live ${MODAL_MODEL} on a Modal Shared Endpoint, no per-request retention pin (Modal states zero data retention), ${date}, synthetic data`;
   if (route === "meta") return `live Meta Model API, muse-spark-1.3-contributor, ${date}, synthetic data`;
   return "offline (no model key)";
 }
@@ -44,6 +61,26 @@ export function pinnedChatBody(body) {
     provider: { ...picked(body?.provider, PROVIDER_FIELDS), ...ZERO_RETENTION },
     usage: { include: true },
   };
+}
+
+// Mail's Modal request: the listed fields with this model, and none of
+// OpenRouter's own. Both live systems run at the endpoint's default effort.
+export function modalChatBody(body) {
+  const { reasoning: _reasoning, ...fields } = picked(body, CHAT_FIELDS);
+  return { ...fields, model: MODAL_MODEL };
+}
+
+// Modal reports tokens and no price, so the parent prices them at its published rates.
+export function modalCostUsd(usage) {
+  const prompt = usage?.prompt_tokens ?? 0;
+  const cached = Math.min(usage?.prompt_tokens_details?.cached_tokens ?? 0, prompt);
+  const completion = Math.max(usage?.completion_tokens ?? 0, (usage?.total_tokens ?? 0) - prompt);
+  return (prompt - cached) * MODAL_USD_PER_TOKEN.prompt + cached * MODAL_USD_PER_TOKEN.cached + completion * MODAL_USD_PER_TOKEN.completion;
+}
+
+// The most one request could cost: a large prompt and every token it allows.
+export function modalReserveUsd(body) {
+  return 20000 * MODAL_USD_PER_TOKEN.prompt + (body.max_tokens ?? 8000) * MODAL_USD_PER_TOKEN.completion;
 }
 
 function chatPart(part) {
@@ -97,12 +134,12 @@ function retryable(status) {
 // One chat call with bounded retries for load and transport failures. Returns
 // the parsed body, or null once retries run out or the status is final.
 // A body with an error and no choices counts as a failed attempt.
-export async function postChat(body, { fetchImpl = fetch, maxRetries = MAX_RETRIES, delayMs = RETRY_DELAY_MS, deadline } = {}) {
+export async function postChat(body, { fetchImpl = fetch, maxRetries = MAX_RETRIES, delayMs = RETRY_DELAY_MS, deadline, url = OPENROUTER_CHAT_URL } = {}) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
     if (deadline !== undefined && Date.now() >= deadline) return null;
     try {
-      const res = await fetchImpl(OPENROUTER_CHAT_URL, {
+      const res = await fetchImpl(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
@@ -129,7 +166,14 @@ export async function postChat(body, { fetchImpl = fetch, maxRetries = MAX_RETRI
 export async function preflight(route, { env = process.env, fetchImpl = fetch, timeoutMs = PREFLIGHT_TIMEOUT_MS } = {}) {
   if (route === null) return { ok: true, status: null };
   const openRouter = route === "openrouter";
-  const call = openRouter
+  const modal = route === "modal";
+  const call = modal
+    ? {
+        url: modalChatUrl(env),
+        key: env.MODAL_PROXY_TOKEN,
+        body: modalChatBody({ messages: [{ role: "user", content: "Reply with the word ok." }], max_tokens: 2000 }),
+      }
+    : openRouter
     ? {
         url: OPENROUTER_CHAT_URL,
         key: env.OPENROUTER_API_KEY,
@@ -149,7 +193,7 @@ export async function preflight(route, { env = process.env, fetchImpl = fetch, t
     });
     if (!res.ok) return { ok: false, status: res.status };
     const data = await res.json();
-    const usable = openRouter ? chatText(data).length > 0 : Boolean(data?.output_text || data?.output?.length);
+    const usable = openRouter || modal ? chatText(data).length > 0 : Boolean(data?.output_text || data?.output?.length);
     return { ok: usable, status: res.status };
   } catch {
     return { ok: false, status: null };

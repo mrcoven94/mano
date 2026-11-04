@@ -5,7 +5,9 @@
 // Held-out letters and answers stay in memory. Held-out photos go to a temp dir
 // outside the repo, removed when the run ends. Answers never reach a system.
 // Run: MANO_EVAL_HELDOUT_SEED and MANO_EVAL_TEMPLATE_PACK set, plus either
-// MANO_MODEL_PROVIDER=openrouter with OPENROUTER_API_KEY, or META_MODEL_API_KEY:
+// MANO_MODEL_PROVIDER=openrouter with OPENROUTER_API_KEY, or
+// MANO_MODEL_PROVIDER=modal with MODAL_ENDPOINT_URL, MODAL_PROXY_TOKEN and
+// MANO_EVAL_CEILING_USD (the run stops itself there), or META_MODEL_API_KEY:
 // pnpm --filter ./eval run heldout
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -18,7 +20,7 @@ import { photoFilesByLetter, photoHouseholdIds, renderHouseholdPhotos } from "./
 import { runTrack } from "./tracks.mjs";
 import { registerTemp } from "./cleanup.mjs";
 import { installedPackages } from "./build-mano.mjs";
-import { osSandboxAvailable, osSandboxGrants } from "./harness.mjs";
+import { modalSpendReport, osSandboxAvailable, osSandboxGrants } from "./harness.mjs";
 import { readRecord, verifyCode, verifyDev, verifyHeldout, verifyMano, verifyPhotos, verifySeedCommitment } from "./verify.mjs";
 
 function abort(message) {
@@ -63,7 +65,7 @@ const label = routeLabel(route);
 console.log("# Mano held-out eval");
 console.log(`model: ${label}`);
 console.log(`code: ${head}, freeze ${record.frozen}, manifest ${record.manifest.slice(0, 16)}`);
-if (route === "openrouter") console.log("not run: SAM 3.1 page segmentation (Meta Model API only); Mano used its on-device page detection");
+if (route === "openrouter" || route === "modal") console.log("not run: SAM 3.1 page segmentation (Meta Model API only); Mano used its on-device page detection");
 console.log("not run: Guardian (the reading path takes no action for it to check)");
 console.log("");
 
@@ -84,4 +86,5 @@ try {
   await rm(dir, { recursive: true, force: true });
   unregister();
 }
+if (route === "modal") console.log(`model spend counted from tokens: ${JSON.stringify(modalSpendReport())}`);
 console.log("held-out: done");
