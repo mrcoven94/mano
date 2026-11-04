@@ -42,7 +42,7 @@ What the two runs show:
 
 Neither run tests Guardian. Guardian and the action gateway did not run, because reading takes no action for them to check. The unsafe columns count only whether a letter's text was flagged and whether a link check blocked its link. Both runs test reading and answering only, not forms, approvals, Guardian or the text line.
 
-How they were produced: the harness is in [PR 1](https://github.com/mrcoven94/mano/pull/1). The first run used commit 1bf8fd1b4ad94e31901e077b1f475ab73eafd42a with Mail at main 169801f2, and the second used df3993ddd5cab5e28859a92f06c0c73e25dd26c6 with Mail at main 9e7fe5d4. Each ran once, with every model call on Muse Spark Open on a Modal Shared Endpoint. Any reader change after 9e7fe5d4 is not in these numbers. The seed and pack are not published, so nobody outside can rerun either run yet, and the output is aggregate, with no per-letter list of misses. Showing what happens on new wording needs a new pack written by someone not building Mano.
+How they were produced: the harness is in `eval/`, merged in [PR 1](https://github.com/mrcoven94/mano/pull/1). The first run used commit 1bf8fd1b4ad94e31901e077b1f475ab73eafd42a with Mail at main 169801f2, and the second used df3993ddd5cab5e28859a92f06c0c73e25dd26c6 with Mail at main 9e7fe5d4. Each ran once, with every model call on Muse Spark Open on a Modal Shared Endpoint. Any reader change after 9e7fe5d4 is not in these numbers. The seed and pack are not published, so nobody outside can rerun either run yet, and the output is aggregate, with no per-letter list of misses. Showing what happens on new wording needs a new pack written by someone not building Mano.
 
 ## The models as they run today
 
@@ -71,7 +71,7 @@ A document is now labeled by what it was read as, and a renewal says so when it 
 
 ### Mano's computer on production
 
-Three unbroken production runs on the current build, from 3:50 to 3:55 PM ET on November 4, 2026, by `pnpm spine:live`, on the Modal route, with Mano's computer filling the sandbox portal and Guardian not blocking the filing at the yes:
+Three unbroken production runs on the build at main 9e7fe5d4, the newest build we have run, from 3:50 to 3:55 PM ET on November 4, 2026, by `pnpm spine:live`, on the Modal route, with Mano's computer filling the sandbox portal and Guardian not blocking the filing at the yes:
 
 | Confirmation | Total time | Turns to reach the question |
 | --- | --- | --- |
@@ -79,7 +79,7 @@ Three unbroken production runs on the current build, from 3:50 to 3:55 PM ET on 
 | SR-ET57SCCT | 92.0 s | 2 |
 | SR-CKYWHZZ8 | 84.5 s | 4 |
 
-The [run log](https://github.com/mrcoven94/mano/pull/202#issuecomment-6642021159) shows each step, including a replay page of 9 screens for each fill, and the sandbox portal holds all three filings. The log does not print Guardian's verdict: it shows Engine filing with Guardian as its checker, and Engine files on `pass` or `fix` and refuses on `block` or when the check fails. The build (main at 9e7fe5d4), the exit code of 0 and the hosted desktop come from the lead, not from the log. The driver calls the agent directly, so the text line and the reminder are not in these runs. The text line waits on a real text from the maintainer to confirm it.
+The [run log](https://github.com/mrcoven94/mano/pull/202#issuecomment-6642021159) shows each step, including a replay page of 9 screens for each fill, and the sandbox portal holds all three filings. The log does not print Guardian's verdict: it shows Engine filing with Guardian as its checker, and Engine files on `pass` or `fix` and refuses on `block` or when the check fails. The build, the exit code of 0 and the hosted desktop come from the lead, not from the log. The driver calls the agent directly, so the text line and the reminder are not in these runs. The text line waits on a real text from the maintainer to confirm it.
 
 One run in Spanish passed on the same build: SR-6YNEF639, 73.8 s, answered with `sí`. It is one run, not a rate. The question is in Spanish, except the office's declaration, which it explains in Spanish and then quotes in English. The portal holds the filing, and the log is not published.
 
@@ -140,6 +140,7 @@ flowchart LR
 | `apps/sandbox-portal` | The fake state benefits portal that every demo files to, under its own layout and generated ones |
 | `apps/site` | withmano.com and the live demo at `/try` |
 | `apps/app` | The resident app in React Native with Expo |
+| `eval` | The held-out test and its baselines |
 | `apps/web` | One Cloudflare Worker that serves the app's web build, with email sign-in and chat with Mano's agent. A message is the same agent turn the text line runs. Run its checks with `pnpm --filter @mano/web check` |
 
 Tests cover the three safety cases: a stale approval is refused (`apps/engine/test/sandbox-portal-contract.test.ts`), a timeout is reconciled before any retry (`apps/engine/test/blocker-7-single-flight.test.ts`), and a scam link is caught (`packages/quality/test/checks.test.ts`, `packages/mail/test/safety.test.ts`). The tests for asking instead of guessing and for the person's declaration are in `apps/agent/test/form-draft.test.ts` and `apps/engine/test/sandbox-portal-contract.test.ts`. The reasons behind each choice are in `docs/decisions.md`.
@@ -152,7 +153,7 @@ Tests cover the three safety cases: a stale approval is refused (`apps/engine/te
 - The deadline check reads one sentence at a time and has known gaps, listed in `packages/mail/test/gate-letters.test.ts`, such as a Re: line naming another program.
 - Mano missed 10 unsafe letters in each held-out run, and those runs had no Guardian. Guardian has no held-out number of its own.
 - Computer fill on production rests on the runs above. The `pnpm spine:live` runs skip the text line and the reminder and use one portal layout. The two runs on seeded layouts are too few to give a fill rate, and a fill has no model backup.
-- The model may ask again for a value it already has before the fill. The driver sends every value in one message, and in the run log above Mano still asked in 2 of 3 runs, once asking for the income twice.
+- The model may ask again for a value it already has before the fill. The driver sends every value in one message, and in the run log above Mano still asked in 2 of 3 runs, once asking for the income twice. [PR 215](https://github.com/mrcoven94/mano/pull/215) changes the cause, merged after those runs, and is not confirmed on production yet.
 - SAM 3.1 and Muse Voice Transcribe do not run while Meta's API answers 402, and voice notes have not been run live.
 - The Modal route carries no per-request retention pin. Zero retention there is Modal's stated policy for the endpoint type, and Modal sees each request in flight.
 - The estimate page in the spine in `AGENTS.md` is not built.
@@ -261,7 +262,7 @@ David Coven decides what gets built and owns the accounts. The code is written w
 
 The held-out test lives in `eval/`, frozen before anyone tunes prompts. Twenty development households are public (`eval/data/dev.json` plus answer keys in `eval/data/dev-answers.json`, which only the grader loads). One hundred households are held out: only hashes are committed, in the freeze record at `eval/data/heldout-hashes.json`, and scenarios regenerate at run time from the secret `MANO_EVAL_HELDOUT_SEED`.
 
-Letter wording comes from template packs. The public pack (`eval/src/pack-public.json`) renders the dev split. The held-out split renders only from a private pack of unseen families, loaded from the path in `MANO_EVAL_TEMPLATE_PACK`; the freeze record commits only its SHA-256, and the pack is published after the final run. The loader is tested with an obviously fake pack under `eval/test/fixtures/`.
+Letter wording comes from template packs. The public pack (`eval/src/pack-public.json`) renders the dev split. The held-out split renders only from a private pack of unseen families, loaded from the path in `MANO_EVAL_TEMPLATE_PACK`; the freeze record commits only its SHA-256, and the pack is not published. The loader is tested with an obviously fake pack under `eval/test/fixtures/`.
 
 Two tracks: text (all letters as text) and photo (photographed letters as images). Mano and three baselines run each track in isolated subprocesses: a plain reminder tool, a deterministic string-matching parser (the honest bar), and a general agent (one generic prompt, real model run with a link-checker tool). Mano runs its real letter reader from `packages/mail`, which reads images only, so on the text track each letter's exact text is drawn on a clean page. Every child runs offline under Node's permission model (Node 25 or later); model calls go only through a parent-side IPC broker that holds the key and an allowlist. The report prints correct packets, missed and false deadlines, readable-copy requests, model versus enforced safety recognition, evidence requests, failures, and cost and time per scenario, with score splits per template group (public versus private).
 
