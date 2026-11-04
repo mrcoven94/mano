@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { AuthError, UnreconciledSendError, type ManoClient, type Session } from "../lib/api/types";
+import { AuthError, UnreconciledSendError, type ChatMessage, type ManoClient, type Session } from "../lib/api/types";
 import { MemoryStore } from "../lib/kv";
 import { Outbox } from "../lib/queue";
+import { crisisLineForSignIn, forgetCrisisLine } from "../lib/crisis-help";
 import { submitMessage } from "../lib/send";
 
 function sessionFor(personId: string, expiresAt = new Date(Date.now() + 3600_000).toISOString()): Session {
@@ -83,5 +84,70 @@ describe("submitMessage", () => {
     expect(second.sent).toHaveLength(2);
     expect(seen[0]).toBe(seen[1]);
     expect(seen[2]).toBe(second.opId);
+  });
+
+  describe("crisis help on the device", () => {
+    const CRISIS = "I want to kill myself";
+
+    it("shows 988 and 911 when a held send keeps the message from the server", async () => {
+      const { client, mock } = stubClient(async () => ({ id: "x" }));
+      const outbox = new Outbox(new MemoryStore());
+      const session = sessionFor("alice");
+      const held = await outbox.enqueue(session.personId, "earlier", []);
+      await outbox.flush(session, () => Promise.reject(new UnreconciledSendError(held.id)));
+      mock.mockClear();
+
+      const replies: ChatMessage[] = [];
+      const report = await submitMessage(client, session, outbox, CRISIS, [], (r) => replies.push(r));
+      expect(mock).not.toHaveBeenCalled();
+      expect(report.sent).toHaveLength(0);
+      expect(replies).toHaveLength(1);
+      expect(replies[0]?.role).toBe("agent");
+      expect(replies[0]?.text).toMatch(/988[\s\S]*911/);
+    });
+
+    it("shows them with no network and with an expired session", async () => {
+      const replies: ChatMessage[] = [];
+      const down = stubClient(() => Promise.reject(new Error("offline")));
+      await submitMessage(down.client, sessionFor("alice"), new Outbox(new MemoryStore()), CRISIS, [], (r) => replies.push(r));
+      expect(replies).toHaveLength(1);
+      const expired = { ...sessionFor("alice"), expiresAt: new Date(Date.now() - 1000).toISOString() };
+      await expect(submitMessage(down.client, expired, new Outbox(new MemoryStore()), CRISIS, [], (r) => replies.push(r))).rejects.toBeInstanceOf(AuthError);
+      expect(replies).toHaveLength(2);
+    });
+
+    it("dates the line after the message that prompted it, so it reads in order", async () => {
+      const { client } = stubClient(() => Promise.reject(new Error("offline")));
+      const outbox = new Outbox(new MemoryStore());
+      const replies: ChatMessage[] = [];
+      await submitMessage(client, sessionFor("alice"), outbox, CRISIS, [], (r) => replies.push(r));
+      const [queued] = await outbox.list();
+      expect(new Date(replies[0]?.createdAt ?? 0).getTime()).toBeGreaterThan(new Date(queued?.createdAt ?? Infinity).getTime());
+    });
+
+    it("keeps only the line for the sign-in screen when the session has expired or an older send gets a 401", async () => {
+      forgetCrisisLine();
+      const expired = { ...sessionFor("alice"), expiresAt: new Date(Date.now() - 1000).toISOString() };
+      await expect(submitMessage(stubClient(async () => ({ id: "x" })).client, expired, new Outbox(new MemoryStore()), CRISIS, [])).rejects.toBeInstanceOf(AuthError);
+      const kept = crisisLineForSignIn(Date.now());
+      expect(kept).toMatch(/988[\s\S]*911/);
+      expect(kept).not.toContain(CRISIS);
+
+      forgetCrisisLine();
+      const session = sessionFor("alice");
+      const outbox = new Outbox(new MemoryStore());
+      await outbox.enqueue(session.personId, "older", []);
+      const refused = stubClient(() => Promise.reject(new AuthError()));
+      await expect(submitMessage(refused.client, session, outbox, CRISIS, [])).rejects.toBeInstanceOf(AuthError);
+      expect(crisisLineForSignIn(Date.now())).toMatch(/988[\s\S]*911/);
+      forgetCrisisLine();
+    });
+
+    it("adds nothing for an ordinary message", async () => {
+      const { client } = stubClient(async () => ({ id: "x" }));
+      const replies: ChatMessage[] = [];
+      await submitMessage(client, sessionFor("alice"), new Outbox(new MemoryStore()), "Hi", [], (r) => replies.push(r));
+      expect(replies.every((r) => !/988/.test(r.text))).toBe(true);
+    });
   });
 });

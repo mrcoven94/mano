@@ -11,6 +11,7 @@ import { deleteAsync } from "expo-file-system/legacy";
 import * as Notifications from "expo-notifications";
 import type { ResolvedClient } from "./client";
 import { EncryptedStore } from "./cipher";
+import { forgetCrisisLine } from "./crisis-help";
 import { ExpoCipherFactory } from "./cipher-expo";
 import type { EngineMode, ManoClient, Session } from "./api/types";
 import { msUntilExpiry } from "./dates";
@@ -108,6 +109,7 @@ export function AuthProvider({ children, initial }: { children: ReactNode; initi
         // Never let a new resident inherit the previous one's stores.
         await signOut();
       }
+      forgetCrisisLine();
       await tokenStore.set(SESSION_KEY, JSON.stringify(next));
       await tokenStore.set(PERSON_KEY, next.personId);
       generationRef.current += 1;

@@ -3,20 +3,25 @@
 
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Redirect, useRouter } from "expo-router";
 import { Btn, Body, DemoBanner, Field, Screen, Title } from "../../components/ui";
 import { useAuth } from "../../lib/auth";
 import { useStrings } from "../../lib/i18n";
+import { pendingSignIn, setPendingSignIn } from "../../lib/sign-in-flow";
 import { colors } from "../../lib/theme";
 
 export default function Verify() {
   const s = useStrings();
   const router = useRouter();
-  const { email, challengeId } = useLocalSearchParams<{ email: string; challengeId: string }>();
+  // Read once: clearing it after sign-in must not redirect this screen back.
+  const [pending] = useState(pendingSignIn);
   const { client, mode, signIn } = useAuth();
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (!pending) return <Redirect href="/(auth)/sign-in" />;
+  const { email, challengeId } = pending;
 
   const submit = async (): Promise<void> => {
     if (!/^\d{6}$/.test(code.trim())) {
@@ -26,8 +31,9 @@ export default function Verify() {
     setBusy(true);
     setError(null);
     try {
-      const session = await client.verifyCode(email ?? "", challengeId ?? "", code.trim());
+      const session = await client.verifyCode(email, challengeId, code.trim());
       await signIn(session);
+      setPendingSignIn(null);
       router.replace("/(tabs)");
     } catch {
       setError(s.signInFailed);

@@ -214,6 +214,20 @@ export interface EngineLatest {
 
 // What the agent asks Engine to freeze for approval. Engine stamps the
 // person from the grant and owns hashing, policy and execution.
+// What the person shares, as GET /shares lists it. Every organization has
+// its own rows: stopping with one says nothing about another.
+export interface EngineShare {
+  recipient: string;
+  caseId: string;
+  purpose: string;
+  openRequests: { id: string; documentKind: string; label: string; requestedAt: string }[];
+}
+
+export interface EngineShares {
+  active: EngineShare[];
+  revoked: { recipient: string; caseId: string }[];
+}
+
 export interface ActionProposal {
   type: "submit" | "send" | "share";
   recipient: string;
@@ -505,6 +519,10 @@ export class PersonEngine {
   }
 
   // turnId: the turn this draft belongs to. Engine orders proposals by it.
+  async listShares(): Promise<EngineShares> {
+    return (await this.json("GET", "/shares")) as EngineShares;
+  }
+
   async proposeAction(proposal: ActionProposal, turnId: string): Promise<EngineResult> {
     return parseResult(
       await this.json("POST", "/action", {
@@ -628,12 +646,12 @@ export class PersonEngine {
   // the generation this turn started under (fixed when the turn was
   // parsed, before any await), so Engine refuses it with 409 once the
   // conversation was deleted or moved on.
-  async saveDeadline(input: DeadlineInput, timeoutMs?: number): Promise<"saved" | "unavailable"> {
+  async saveDeadline(input: DeadlineInput, timeoutMs?: number): Promise<EngineDeadlineResult | "unavailable"> {
     const res = await this.call("POST", "/deadlines", { ...input, generation: this.generation }, timeoutMs);
+    if (res.ok) return (await res.json()) as EngineDeadlineResult;
     await res.body?.cancel().catch(() => undefined);
     if (res.status === 404) return "unavailable";
-    if (!res.ok) throw new EngineError(res.status);
-    return "saved";
+    throw new EngineError(res.status);
   }
 }
 

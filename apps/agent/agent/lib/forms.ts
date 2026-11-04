@@ -14,7 +14,7 @@
 import { usAddressParts, usStateInAddress, type RecipientId } from "@mano/protocol";
 
 import type { Frequency, Leaf, Profile } from "./engine.js";
-import { ENDS_IN_ZIP, STATED_TOTAL, addressIsWhole, confirmedByPerson, householdSizeOf } from "./profile.js";
+import { ENDS_IN_ZIP, STATED_TOTAL, addressChangedBeside, addressIsWhole, confirmedByPerson, householdSizeOf } from "./profile.js";
 
 export interface FormField {
   // The form's own input name, which the filing carries.
@@ -143,11 +143,12 @@ function monthlyIncome(profile: Profile): string | null {
 const ADDRESS_LINE_MAX = 200;
 
 // Her whole address stands as she gave it, whatever a document adds around
-// it. A part she changed beside it leaves it unclear, so she is asked. A
-// document's second line does not join an address that is her word.
+// it. Any part she gives after it leaves it unconfirmed, so she is asked for
+// the complete address. A document's second line does not join an address
+// that is her word.
 function mailingAddress(profile: Profile): string | null {
   const a = profile.person.address;
-  if (!a?.line1) return null;
+  if (!a?.line1 || addressChangedBeside(a)) return null;
   if (addressIsWhole(a)) return a.line1.value;
   if (!a.city || !a.state || !a.zip) return ENDS_IN_ZIP.test(a.line1.value) && a.city?.source !== "person" && a.zip?.source !== "person" ? a.line1.value : null;
   const line2 = a.line1.source !== "person" || a.line2?.source === "person" ? a.line2?.value : undefined;
@@ -156,14 +157,16 @@ function mailingAddress(profile: Profile): string | null {
 
 // Split where a street, a city and a state can be told apart, and kept whole
 // where they cannot. Nothing without a ZIP: part of an address must not
-// replace a whole one.
+// replace a whole one. The old address is cleared in the same patch, so every
+// part is written as new, with one time, whatever stayed the same.
 function addressFields(value: string): ProfileFields {
   if (!ENDS_IN_ZIP.test(value) || value.length > ADDRESS_LINE_MAX) return {};
   const at = (part: string) => `person.address.${part}`;
   const found = usAddressParts(value);
   const pieces = found?.rest.split(/\s*,\s*/).filter(Boolean) ?? [];
-  if (!found || pieces.length < 2) return { [at("line1")]: value, [at("line2")]: null, [at("city")]: null, [at("state")]: found?.state ?? null, [at("zip")]: null };
-  return { [at("line1")]: pieces[0]!, [at("line2")]: pieces.slice(1, -1).join(", ") || null, [at("city")]: pieces.at(-1)!, [at("state")]: found.state, [at("zip")]: found.zip };
+  if (!found || pieces.length < 2) return { "person.address": null, [at("line1")]: value, ...(found ? { [at("state")]: found.state } : {}) };
+  const line2 = pieces.slice(1, -1).join(", ");
+  return { "person.address": null, [at("line1")]: pieces[0]!, ...(line2 ? { [at("line2")]: line2 } : {}), [at("city")]: pieces.at(-1)!, [at("state")]: found.state, [at("zip")]: found.zip };
 }
 
 // The profile as this call's answers leave it, for the state the case

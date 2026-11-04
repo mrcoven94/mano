@@ -1,0 +1,109 @@
+name: deploy-web
+# Builds the resident app for the web and deploys it with its sign-in and chat
+# routes (apps/web). It reuses the agent and handle grant secrets Channels
+# already holds in the channels-production environment and adds none. Sign-in
+# emails need withmano.com onboarded to Cloudflare Email Sending once, by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "apps/app/**"
+      - "packages/channels/**"
+      - "packages/persona/**"
+      - "packages/protocol/**"
+      - ".github/workflows/deploy-web.yml"
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "apps/app/**"
+      - "packages/channels/**"
+      - "packages/persona/**"
+      - "packages/protocol/**"
+      - ".github/workflows/deploy-web.yml"
+permissions:
+  contents: read
+# Serialize deploys so two pushes cannot deploy over each other. Never cancel: a started deploy runs to the end.
+concurrency:
+  group: deploy-web-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  cancel-in-progress: false
+env:
+  WEB_URL: https://app.withmano.com
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint this workflow
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/repo" --workdir /repo rhysd/actionlint:1.7.7 -color .github/workflows/deploy-web.yml
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile
+      - name: Build the web app
+        run: pnpm --filter @mano/app export:web
+        env:
+          EXPO_PUBLIC_ENGINE_URL: ${{ env.WEB_URL }}
+      - name: Bundle the worker without deploying
+        run: pnpm exec wrangler deploy --dry-run --outdir "$RUNNER_TEMP/web-dry-run"
+        working-directory: apps/web
+
+  deploy:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: channels-production
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @mano/web check
+      - name: Build the web app
+        run: pnpm --filter @mano/app export:web
+        env:
+          # Production always talks to the live routes: the stand-in runs only
+          # without this address, and this build never sets the demo flag.
+          EXPO_PUBLIC_ENGINE_URL: ${{ env.WEB_URL }}
+      - name: Refuse a build that is not pointed at the live routes
+        run: grep -lq "$WEB_URL" apps/app/dist/_expo/static/js/web/*.js
+      - name: Deploy
+        run: pnpm exec wrangler deploy
+        working-directory: apps/web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Set secrets
+        shell: bash
+        working-directory: apps/web
+        run: |
+          set -euo pipefail
+          for name in MANO_HANDLE_GRANT_SECRET MANO_AGENT_SECRET AGENT_URL MANO_HANDLE_PEPPER; do
+            if [ -z "${!name}" ]; then echo "::error::missing required secret $name"; exit 1; fi
+            printf '%s' "${!name}" | pnpm exec wrangler secret put "$name"
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MANO_HANDLE_GRANT_SECRET: ${{ secrets.MANO_HANDLE_GRANT_SECRET }}
+          MANO_AGENT_SECRET: ${{ secrets.MANO_AGENT_SECRET }}
+          AGENT_URL: ${{ secrets.AGENT_URL }}
+          MANO_HANDLE_PEPPER: ${{ secrets.MANO_HANDLE_PEPPER }}
+      - name: Check the live URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 20); do
+            page=$(curl -s -o /dev/null -w '%{http_code}' "$WEB_URL/sign-in" || true)
+            api=$(curl -s -o /dev/null -w '%{http_code}' "$WEB_URL/api/persons/x/conversation" || true)
+            echo "sign-in $page, signed-out api $api"
+            if [ "$page" = "200" ] && [ "$api" = "401" ]; then exit 0; fi
+            sleep 6
+          done
+          exit 1

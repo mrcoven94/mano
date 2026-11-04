@@ -182,6 +182,21 @@ describe("update_profile", () => {
 });
 
 describe("the profile at the start of every turn", () => {
+  it("tells the model today's date in the person's zone, read at the time the turn arrived", async () => {
+    const toldAt = async (iso: string) => {
+      const resolve = (profileInstruction as unknown as { events: Record<string, (e: unknown, c: unknown) => Promise<{ content?: string } | null>> }).events["turn.started"];
+      return (await resolve({}, toolCtx({ handleHash: HANDLE, turnId: "turn_today0001", grant, generation: 0, turnAtMs: Date.parse(iso) })))?.content ?? "";
+    };
+    // No state on file is Pacific: still November 3, past midnight in UTC.
+    expect(await toldAt("2026-11-04T07:30:00.000Z")).toContain("Today is Tuesday, November 3, 2026");
+    await update({ person: { address: { state: "NY" } } });
+    expect(await toldAt("2026-11-04T04:30:00.000Z")).toContain("Today is Tuesday, November 3, 2026");
+    expect(await toldAt("2026-11-04T05:30:00.000Z")).toContain("Today is Wednesday, November 4, 2026");
+    // A profile that cannot be read still leaves the model the date.
+    engine.profileKeySet = false;
+    expect(await toldAt("2026-11-04T07:30:00.000Z")).toContain("Today is Tuesday, November 3, 2026");
+  });
+
   it("names the fields on file and missing, with no value in the system instruction", async () => {
     await update({
       person: { fullName: "Rosa Testcase", phone: "555-0100", address: { line1: "12 Sample Street", city: "Testville", state: "UT", zip: "84101" } },

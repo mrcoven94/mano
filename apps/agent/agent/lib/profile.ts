@@ -141,6 +141,7 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
 
   // Members by ref, for income that names an earner; new ones join as added.
   const added: Member[] = [];
+  let namedSomeoneNew = false;
   (input.household ?? []).forEach((m, i) => {
     const turnRef = newRef(turnId, "household", i, m.name ?? "");
     let id = refIn(current.household, m.ref, "household");
@@ -168,6 +169,7 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
     const stored = current.household.find((e) => e.id === id);
     const who = stored?.name?.value ?? m.name ?? "household member";
     if (!stored) added.push({ id, ...(m.name ? { name: { value: m.name } as Leaf } : {}) });
+    if (m.name && stored?.name?.source !== "person") namedSomeoneNew = true;
     const namePath = `household.${id}.name`;
     set(namePath, m.name && (!same(stored?.name?.value, m.name) || pending.has(namePath) || stored?.name?.source !== "person") ? m.name : undefined, who);
     set(`household.${id}.relationship`, m.relationship, `${who}'s relationship`);
@@ -223,6 +225,13 @@ export function profileChanges(input: ProfileInput, current: Profile, turnId: st
     if (path.startsWith("household.")) delete fields["person.householdConfirmed"];
   }
 
+  // Someone they newly name may not be in a number they gave earlier, so the
+  // size is asked. It goes silently, as below.
+  if (namedSomeoneNew && current.person.householdSize) {
+    fields["person.householdSize"] = null;
+    labels["person.householdSize"] = "";
+  }
+
   // A real change to what another entry pays, or forgetting one, ends a total
   // they gave for a form. Saying the same thing again, or renaming a job, does
   // not. It goes silently: this is not something they asked to forget.
@@ -269,11 +278,21 @@ function money(amount: number): string {
 
 export const ENDS_IN_ZIP = /\b\d{5}(-\d{4})?$/;
 
+// A first line of the person's that ends in a ZIP, and a part of theirs written
+// after it: the two may disagree, so the address is theirs to settle. Parts
+// given with the first line carry its time (a form writes an address in one
+// patch), so a PO box with its city and ZIP does not count.
+export function addressChangedBeside(a: Profile["person"]["address"]): boolean {
+  if (a.line1?.source !== "person" || !ENDS_IN_ZIP.test(a.line1.value)) return false;
+  const { updatedAt } = a.line1;
+  return [a.line2, a.city, a.state, a.zip].some((part) => part?.source === "person" && part.updatedAt > updatedAt);
+}
+
 // An address the person gave in one line that could not be split: kept whole
 // on its first line, with no city or ZIP of their own beside it. A first line
 // that only ends in digits, such as a PO box, has their city and ZIP beside it.
 export function addressIsWhole(a: Profile["person"]["address"]): boolean {
-  return a.line1?.source === "person" && ENDS_IN_ZIP.test(a.line1.value) && a.city?.source !== "person" && a.zip?.source !== "person";
+  return a.line1?.source === "person" && ENDS_IN_ZIP.test(a.line1.value) && a.city?.source !== "person" && a.zip?.source !== "person" && !addressChangedBeside(a);
 }
 
 function addressOf(profile: Profile): string | null {
