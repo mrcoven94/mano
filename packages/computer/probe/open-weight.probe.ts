@@ -56,6 +56,8 @@ describe.skipIf(!apiKey)("the open-weight model drives a computer, live", () => 
       const outcome = await runLoop(computer, new OpenWeightModelClient({ apiKey }), task, {
         model: OPEN_WEIGHT_MODEL_ID,
         maxSteps: 8,
+        // As the agent's fill sends it (apps/agent/agent/lib/computer-fill.ts).
+        instructions: "These fields do not depend on each other: fill all of them in one batch of click and type actions, then click Continue.",
         onTurn: (turn) => console.log(`turn ${turn.step}: ${"call" in turn ? turn.call.map((a) => a.type).join(",") : "replied"}`),
       });
       console.log(`open-weight computer probe: ${outcome.status}, ${outcome.steps} turns, ${Math.round(performance.now() - started)} ms`);

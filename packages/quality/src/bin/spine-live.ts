@@ -1,13 +1,15 @@
 // spine:live: Maria's whole renewal on a deployed Mano, from the first text to
 // the portal's confirmation number, on a new synthetic handle each run. It
 // spends model credit and files on the sandbox portal.
-// Usage: pnpm spine:live [--runs N] [--lang en|es] [--yes <word>] [--json]
+// Usage: pnpm spine:live [--runs N] [--lang en|es] [--yes <word>] [--past-fill] [--json]
 // Needs MANO_AGENT_URL, MANO_ENGINE_URL, MANO_PORTAL_URL, MANO_AGENT_SECRET,
 // MANO_HANDLE_GRANT_SECRET, MANO_ENGINE_CHANNELS_TOKEN, MANO_ENGINE_AGENT_TOKEN,
 // SANDBOX_PORTAL_TOKEN, MANO_GUARDIAN_URL, MANO_GUARDIAN_TOKEN,
 // MANO_GUARDIAN_KEY_ID and MANO_GUARDIAN_KEY_SECRET from the environment. It
 // waits for the deployed Guardian to come up before the fill.
 // --runs stops at the first failure. --json prints one object and nothing else.
+// --past-fill carries on to YES after a draft with no computer fill behind it,
+// to see the rest of the path; that run still fails.
 // Exits 0 only when every run passed every step, 1 when a step failed, 2 on bad
 // usage or missing settings.
 
@@ -27,6 +29,7 @@ try {
       runs: { type: "string", default: "1" },
       lang: { type: "string", default: "en" },
       yes: { type: "string" },
+      "past-fill": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
     },
   }).values;
@@ -64,6 +67,7 @@ const config: LiveConfig = {
   portalToken: env("SANDBOX_PORTAL_TOKEN"),
   lang: args.lang as Lang,
   ...(args.yes ? { yesWord: args.yes } : {}),
+  ...(args["past-fill"] ? { pastFill: true } : {}),
   warmGuardian: () => guardian.warm!(),
   ...(args.json ? {} : { onStep: print }),
 };

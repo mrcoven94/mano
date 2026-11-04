@@ -136,6 +136,7 @@ export * from "./model.js";
 export { parseWrittenDate, parseAllDates } from "./dates.js";
 export { gateSentence } from "./gate.js";
 export { scanContent, findInstructions, findLinks, findPhones, screenScam } from "./safety.js";
+export { ANSWER_WORDS, REPLY_LANGUAGES, type AnswerWords, type ReplyLanguage } from "./words.js";
 export { answerReading, type DeadlineKind, type HeldDeadline, type LetterType, type MailAnswer, type SendCategory } from "./answer.js";
 export { qualityAnswerPath, qualityDeadlineReader } from "./quality.js";
 

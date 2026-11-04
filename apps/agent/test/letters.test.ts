@@ -94,6 +94,55 @@ async function dayIs(iso: string) {
   grant = await grantFor(HANDLE);
 }
 
+describe("a texted letter for someone who writes in another language", () => {
+  it.each([
+    ["Spanish", "Esta es una carta de renovación de Medi-Cal. Vence el 20 de noviembre de 2026.", "Guardé el 20 de noviembre de 2026 en sus fechas límite."],
+    ["Vietnamese", "Đây là thư gia hạn Medi-Cal. Hạn chót là ngày 20 tháng 11 năm 2026.", "Tôi đã lưu ngày 20 tháng 11 năm 2026 vào danh sách hạn chót của bạn."],
+    ["Tagalog", "Ito ay sulat ng pag-renew ng Medi-Cal. Ang huling araw ay Nobyembre 20, 2026.", "Na-save ko ang Nobyembre 20, 2026 sa iyong mga deadline."],
+  ])("is answered in %s when the profile says so, and the deadline Mano holds is the same date", async (language, opens, saved) => {
+    await dayIs("2026-11-03T18:00:00.000Z");
+    const person = engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: engine.fetch })!.forHandle(HANDLE, grant, 0);
+    await person.patchProfile({ idempotencyKey: `lang-${language}`, source: "person", fields: { "person.language": language } });
+    const { body } = await send(photoTurn("turn_letter_lang"), deps([RENEWAL_PAGE]));
+    expect(body.text.startsWith(opens)).toBe(true);
+    expect(body.text).toContain(saved);
+    expect(engine.deadlineCalls[0]!.body).toMatchObject({ title: "Medi-Cal renewal", kind: "renewal", dueDate: "2026-11-20" });
+  });
+
+  it("follows the language of the words sent with the photo", async () => {
+    await dayIs("2026-11-03T18:00:00.000Z");
+    const { body } = await send(photoTurn("turn_letter_lang2", { texts: ["Hola, qué dice esta carta"] }), deps([RENEWAL_PAGE]));
+    expect(body.text.startsWith("Esta es una carta de renovación de Medi-Cal.")).toBe(true);
+  });
+});
+
+describe("a crisis Channels' floor found, with a photo", () => {
+  function crisisPhotoTurn(turnId: string, text: string) {
+    const raw = JSON.stringify({
+      turnId, generation: 0, handleHash: HANDLE, grant, receivedAt: Date.now(), texts: [text], attachmentCount: 1, documents: [{ id: DOC, mimeType: "image/jpeg" }], crisis: true,
+    });
+    const ts = Math.floor(Date.now() / 1000);
+    return new Request("http://agent.test/channels/mano/turn", {
+      method: "POST",
+      headers: { "content-type": "application/json", [TIMESTAMP_HEADER]: String(ts), [SIGNATURE_HEADER]: signBody(SECRET, ts, raw) },
+      body: raw,
+    });
+  }
+
+  it("tells the model, in a language the agent's own words do not cover", async () => {
+    await send(crisisPhotoTurn("turn_crisis_tl_01", "Papatayin ko ang sarili ko"), deps([RENEWAL_PAGE]));
+    expect(calls[0]!.context.join("\n")).toMatch(/988/);
+  });
+
+  it("with no time left for the model, answers with the letter alone, for Channels to open with the line", async () => {
+    await dayIs("2026-11-03T18:00:00.000Z");
+    const { body } = await send(crisisPhotoTurn("turn_crisis_vi_01", "Chồng tôi đang đánh tôi"), deps([RENEWAL_PAGE], { turnBudgetMs: 10_000 }));
+    expect(calls).toHaveLength(0);
+    expect(body.status).toBe("replied");
+    expect(body.text).toMatch(/Medi-Cal/);
+  });
+});
+
 describe("a texted letter", () => {
   it("is answered in the same reply: what it is, the deadline, what to send, and the deadline is held in Engine", async () => {
     await dayIs("2026-11-03T18:00:00.000Z");
@@ -419,11 +468,13 @@ describe("the profile read on a photo turn", () => {
     expect(totalMs).toBeLessThan(6_500);
   }, 30_000);
 
-  it("a photo with no words does not read the profile", async () => {
+  it("a photo with no words reads the profile only for its language, and never waits for it", async () => {
     const d = deps([], { mailModel: slowLetter(1_000) });
-    d.engine = engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: profileAfter(0) });
-    const { body } = await timedTurn(photoTurn("turn_letter0020"), d);
+    d.engine = engineFrom({ baseUrl: ENGINE_URL, agentToken: ENGINE_AGENT_TOKEN, fetchFn: profileAfter(null) });
+    const { body, totalMs } = await timedTurn(photoTurn("turn_letter0020"), d);
     expect(body.text).toMatch(/^This is a Medi-Cal renewal letter\./);
-    expect(profileGets).toBe(0);
+    expect(profileGets).toBe(1);
+    expect(calls).toHaveLength(0);
+    expect(totalMs).toBeLessThan(2_500);
   }, 30_000);
 });
